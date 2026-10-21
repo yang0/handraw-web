@@ -2,7 +2,7 @@
 
 module Handraw
   class Wallet < ActiveRecord::Base
-    self.table_name = "handraw_wallets"
+    self.table_name = 'handraw_wallets'
     belongs_to :user
 
     def self.for_user(user_id)
@@ -15,8 +15,9 @@ module Handraw
         existing = Ledger.find_by(user_id: user_id, event_key: key)
         return existing if existing
         if amount.negative? && !force && (wallet.locked || wallet.balance + amount < 0)
-          raise Handraw::RuleError, "积分不足或账户已冻结"
+          raise Handraw::RuleError, '积分不足或账户已冻结'
         end
+
         wallet.balance += amount
         wallet.locked = true if wallet.balance.negative?
         wallet.save!

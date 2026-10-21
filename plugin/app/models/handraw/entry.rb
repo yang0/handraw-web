@@ -2,24 +2,24 @@
 
 module Handraw
   class Entry < ActiveRecord::Base
-    self.table_name = "handraw_entries"
+    self.table_name = 'handraw_entries'
 
     KINDS = %w[work experience style layout package].freeze
     belongs_to :user
     belongs_to :topic
-    has_many :collections, class_name: "Handraw::Collection", dependent: :destroy
-    has_many :events, class_name: "Handraw::Event", dependent: :destroy
-    has_many :unlocks, class_name: "Handraw::Unlock", dependent: :restrict_with_error
+    has_many :collections, class_name: 'Handraw::Collection', dependent: :destroy
+    has_many :events, class_name: 'Handraw::Event', dependent: :destroy
+    has_many :unlocks, class_name: 'Handraw::Unlock', dependent: :restrict_with_error
     validates :kind, inclusion: { in: KINDS }
     validates :title, length: { in: 5..160 }
     validates :summary, length: { in: 10..4000 }
     validates :license, length: { in: 5..2000 }
     validates :public_id, :content_digest, presence: true, uniqueness: true
 
-    scope :visible, -> {
-      joins(topic: :category).where(status: "published")
-        .where(topics: { deleted_at: nil, archetype: "regular", visible: true })
-        .where(categories: { read_restricted: false })
+    scope :visible, lambda {
+      joins(topic: :category).where(status: 'published')
+                             .where(topics: { deleted_at: nil, archetype: 'regular', visible: true })
+                             .where(categories: { read_restricted: false })
     }
 
     def bundled?
@@ -51,7 +51,7 @@ module Handraw
         collected: viewer ? collections.where(user_id: viewer.id).exists? : false,
         unlocked: accessible_to?(viewer),
         collection_count: collections.count,
-        created_at: created_at,
+        created_at: created_at
       }
     end
 
@@ -60,7 +60,7 @@ module Handraw
     end
 
     def exploration_limit
-      visitors = qualified_events.where(kind: "detail").distinct.count(:user_id)
+      visitors = qualified_events.where(kind: 'detail').distinct.count(:user_id)
       collectors = collections.joins(:user).where(users: { active: true, staged: false }).count
       if visitors >= 2 || collectors.positive?
         SiteSetting.handraw_exploration_extended
@@ -70,15 +70,15 @@ module Handraw
     end
 
     def exploring?
-      qualified_events.where(kind: "impression").distinct.count(:user_id) < exploration_limit
+      qualified_events.where(kind: 'impression').distinct.count(:user_id) < exploration_limit
     end
 
     def quality_score
-      impressions = qualified_events.where(kind: "impression").distinct.count(:user_id)
-      visitors = qualified_events.where(kind: "detail").distinct.count(:user_id)
+      impressions = qualified_events.where(kind: 'impression').distinct.count(:user_id)
+      visitors = qualified_events.where(kind: 'detail').distinct.count(:user_id)
       saved = collections.joins(:user).where(users: { active: true, staged: false }).count
       votes = qualified_events.where(kind: %w[useful not_useful])
-      useful = votes.where(kind: "useful").count
+      useful = votes.where(kind: 'useful').count
       ((saved + 1.0) / ([visitors, saved].max + 10) +
         (useful + 2.0) / (votes.count + 4)) / 2 +
         [visitors.to_f / (impressions + 10), 1].min * 0.01

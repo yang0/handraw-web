@@ -26,3 +26,52 @@ jobs:
         with:
           ruby-version: '3.4'
       - run: find plugin -name '*.rb' -print0 | xargs -0 -n1 ruby -c
+  discourse-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+    env:
+      RAILS_ENV: test
+      RAILS_DB: handraw_web_test
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      DISCOURSE_DB_HOST: 127.0.0.1
+      DISCOURSE_DB_USERNAME: postgres
+      DISCOURSE_DB_PASSWORD: postgres
+      DISCOURSE_REDIS_DB: 13
+      LOAD_PLUGINS: 1
+      BUNDLE_IGNORE_CONFIG: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: web
+      - uses: actions/checkout@v4
+        with:
+          repository: yang0/discourse
+          ref: f3758bd5a691a1fd8fb92f3fdbf1a22ec86650ac
+          path: discourse
+      - run: cp -R web/plugin discourse/plugins/handraw-community
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4.7'
+          bundler-cache: true
+          working-directory: discourse
+      - name: Prepare disposable database
+        working-directory: discourse
+        run: bin/rake db:create db:schema:load db:migrate
+      - name: Exercise requests and business rules
+        working-directory: discourse
+        run: bin/rspec plugins/handraw-community/spec
+      - name: Exercise real concurrent transactions
+        working-directory: discourse
+        run: bin/rails runner ../web/ops/concurrency-check.rb

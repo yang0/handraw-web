@@ -3,6 +3,7 @@
 raise "Must use isolated test database" unless ActiveRecord::Base.connection.current_database == "handraw_web_test"
 SiteSetting.handraw_enabled = true
 SiteSetting.handraw_public_submissions = true
+RateLimiter.disable
 suffix = SecureRandom.hex(4)
 author = User.create!(username: "hwa_#{suffix}", email: "hwa_#{suffix}@example.test", password: SecureRandom.base64(32), active: true)
 buyer = User.create!(username: "hwb_#{suffix}", email: "hwb_#{suffix}@example.test", password: SecureRandom.base64(32), active: true)

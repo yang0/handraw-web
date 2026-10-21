@@ -2,7 +2,7 @@
 
 module Handraw
   class Audit < ActiveRecord::Base
-    self.table_name = "handraw_audits"
+    self.table_name = 'handraw_audits'
     belongs_to :user
   end
 end

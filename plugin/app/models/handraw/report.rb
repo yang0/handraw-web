@@ -2,8 +2,8 @@
 
 module Handraw
   class Report < ActiveRecord::Base
-    self.table_name = "handraw_reports"
+    self.table_name = 'handraw_reports'
     belongs_to :user
-    belongs_to :entry, class_name: "Handraw::Entry"
+    belongs_to :entry, class_name: 'Handraw::Entry'
   end
 end

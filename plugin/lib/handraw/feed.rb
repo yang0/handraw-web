@@ -7,23 +7,28 @@ module Handraw
       scope = scope.where(kind: kind) if Entry::KINDS.include?(kind)
       if search.present?
         pattern = "%#{Entry.sanitize_sql_like(search.to_s.first(100))}%"
-        scope = scope.where("handraw_entries.title ILIKE :query OR handraw_entries.summary ILIKE :query", query: pattern)
+        scope = scope.where('handraw_entries.title ILIKE :query OR handraw_entries.summary ILIKE :query',
+                            query: pattern)
       end
       page = [[page.to_i, 1].max, 50].min
       candidates = scope.order(created_at: :desc).limit(500).to_a
-      counts = Event.where(entry_id: candidates.map(&:id), qualified: true).group(:entry_id, :kind).distinct.count(:user_id)
+      counts = Event.where(entry_id: candidates.map(&:id), qualified: true).group(:entry_id,
+                                                                                  :kind).distinct.count(:user_id)
       saves = Collection.where(entry_id: candidates.map(&:id)).joins(:user)
-        .where(users: { active: true, staged: false }).group(:entry_id).count
-      exploration = ->(entry) {
-        limit = counts.fetch([entry.id, "detail"], 0) >= 2 || saves.fetch(entry.id, 0).positive? ?
-          SiteSetting.handraw_exploration_extended : SiteSetting.handraw_exploration_initial
-        counts.fetch([entry.id, "impression"], 0) < limit
+                        .where(users: { active: true, staged: false }).group(:entry_id).count
+      exploration = lambda { |entry|
+        limit = if counts.fetch([entry.id, 'detail'], 0) >= 2 || saves.fetch(entry.id, 0).positive?
+                  SiteSetting.handraw_exploration_extended
+                else
+                  SiteSetting.handraw_exploration_initial
+                end
+        counts.fetch([entry.id, 'impression'], 0) < limit
       }
-      score = ->(entry) {
+      score = lambda { |entry|
         saved = saves.fetch(entry.id, 0)
-        visitors = counts.fetch([entry.id, "detail"], 0)
-        useful = counts.fetch([entry.id, "useful"], 0)
-        votes = useful + counts.fetch([entry.id, "not_useful"], 0)
+        visitors = counts.fetch([entry.id, 'detail'], 0)
+        useful = counts.fetch([entry.id, 'useful'], 0)
+        votes = useful + counts.fetch([entry.id, 'not_useful'], 0)
         ((saved + 1.0) / ([visitors, saved].max + 10) + (useful + 2.0) / (votes + 4)) / 2
       }
       exploring = candidates.select(&exploration).sort_by(&:created_at).uniq(&:user_id)
@@ -37,6 +42,7 @@ module Handraw
       pattern.cycle.take(page * 20).each do |bucket|
         entry = (queues[bucket] + fallback).find { |item| !chosen.include?(item) && authors[item.user_id] < 2 }
         next unless entry
+
         chosen << entry
         authors[entry.user_id] += 1
         authors.clear if chosen.size % 20 == 0
@@ -50,6 +56,7 @@ module Handraw
       loop do
         batch = groups.values.filter_map(&:shift)
         break if batch.empty?
+
         result.concat(batch)
       end
       result

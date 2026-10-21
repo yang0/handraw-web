@@ -14,7 +14,7 @@ module Handraw
     end
 
     def self.in_groups?(user, setting)
-      ids = setting.to_s.split("|").map(&:to_i)
+      ids = setting.to_s.split('|').map(&:to_i)
       ids.present? && user.groups.where(id: ids).exists?
     end
 

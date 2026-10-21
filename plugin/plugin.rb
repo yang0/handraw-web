@@ -10,16 +10,16 @@
 enabled_site_setting :handraw_enabled
 
 module ::Handraw
-  PLUGIN_NAME = "handraw-community"
+  PLUGIN_NAME = 'handraw-community'
 end
 
-require_relative "lib/handraw/engine"
-require_relative "lib/handraw/access"
-require_relative "lib/handraw/economy"
-require_relative "lib/handraw/feed"
-require_relative "lib/handraw/bundle_store"
+require_relative 'lib/handraw/engine'
+require_relative 'lib/handraw/access'
+require_relative 'lib/handraw/economy'
+require_relative 'lib/handraw/feed'
+require_relative 'lib/handraw/bundle_store'
 
 after_initialize do
-  Discourse::Application.routes.append { mount ::Handraw::Engine, at: "/studio" }
-  require_relative "app/jobs/scheduled/handraw_maintenance"
+  Discourse::Application.routes.append { mount ::Handraw::Engine, at: '/studio' }
+  require_relative 'app/jobs/scheduled/handraw_maintenance'
 end
