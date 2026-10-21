@@ -38,6 +38,34 @@ RSpec.describe Handraw::PortalController do
     end
   end
 
+  describe '#impressions' do
+    it 'accepts a visible batch once per day and ignores self impressions' do
+      sign_in(buyer)
+      samples = [{ id: resource.public_id, visible_ms: 2000, visible_ratio: 0.5 }]
+      2.times do
+        post '/studio/api/impressions.json', params: { entries: samples }
+        expect(response.status).to eq(204)
+      end
+      expect(resource.events.where(user_id: buyer.id, kind: 'impression', qualified: true).count).to eq(1)
+      sign_in(author)
+      post '/studio/api/impressions.json', params: { entries: samples }
+      expect(resource.events.where(user_id: author.id).count).to eq(0)
+    end
+  end
+
+  describe 'forum navigation' do
+    it 'keeps the site navigation on the forum and topic pages' do
+      headers = { 'User-Agent' => 'Mozilla/5.0 Chrome/130.0 Safari/537.36' }
+      get '/latest', headers: headers
+      expect(response.status).to eq(200)
+      expect(response.body).to include('data-surface="forum"', 'data-site-section="forum" aria-current="page"')
+      Fabricate(:post, topic: topic, user: author)
+      get topic.relative_url, headers: headers
+      expect(response.status).to eq(200)
+      expect(response.body).to include('data-surface="forum"')
+    end
+  end
+
   describe '#unlock' do
     before { sign_in(buyer) }
 
@@ -125,6 +153,14 @@ RSpec.describe Handraw::PortalController do
   end
 
   describe '#create' do
+    it 'accepts a simple submission without asking the author to choose a board or license' do
+      sign_in(reviewer)
+      post '/studio/api/entries.json', params: { entry: { kind: 'experience', title: '一个清楚的创作经验标题',
+                                                         summary: '先选择目标，再记录步骤，最后贴上结果，帮助其他创作者复用方法。' } }
+      expect(response.status).to eq(201)
+      expect(Handraw::Entry.find_by!(public_id: response.parsed_body.fetch('id')).license).to include('联系原作者')
+    end
+
     it 'publishes a public contribution with its discussion and rejects duplicate content' do
       sign_in(reviewer)
       payload = { kind: 'experience', title: '水彩风格的三步创作过程',

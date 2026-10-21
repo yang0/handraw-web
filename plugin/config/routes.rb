@@ -2,9 +2,10 @@
 
 Handraw::Engine.routes.draw do
   root to: 'portal#index'
-  get '/assets/:name', to: 'portal#asset', constraints: { name: /portal\.(js|css)/ }
+  get '/assets/:name', to: 'portal#asset', constraints: { name: /(?:portal\.(js|css)|navigation\.css)/ }
   get '/api/boot', to: 'portal#boot'
   get '/api/feed', to: 'portal#feed'
+  post '/api/impressions', to: 'portal#impressions'
   get '/api/creators/:username', to: 'portal#creator'
   get '/api/library', to: 'portal#library'
   get '/api/wallet', to: 'portal#wallet'

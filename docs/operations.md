@@ -20,6 +20,18 @@
 
 预览库为 `handraw_web_preview`，测试库为 `handraw_web_test`；分别使用 Redis 数据库 12、13。预览只监听 127.0.0.1:3010，不启动邮件或后台任务工作进程，通过 `ops/web.ps1 preview` 建立隧道。按需启动 `ops/preview-server.sh`，验收后停止，降低内存占用。
 
+## 导航与公开文件
+
+主导航的唯一模板是 `plugin/public/navigation.html`，样式在 `navigation.css`。门户与论坛均从该模板渲染；发布时为静态画廊生成同一导航，原画廊的筛选及二级导航保留。
+
+`ops/build_public.py` 只发布白名单里的公开资产及画廊页面，不复制完整插件、配置或数据。输出在 `/home/yang0/handraw-data/public/releases/SHA`。门户和论坛的静态资产使用带版本目录的 static 域名；画廊由 `public/current/gallery` 提供，发布健康检查成功后切换，回滚时跟随版本切换。
+
+首次设置使用 `ops/public_routes.py` 分别生成主域名和 static 域名的 Nginx 候选配置。备份现有配置，执行 `nginx -t` 后重载。主域名 `/gallery/` 转向 static 域名；画廊、图片和数据缺失时直接返回 404，避免进入论坛服务。保留既有上传、帖子和 API 路由，不修改全站限流阈值。
+
+`ops/initialize_public_content.rb` 仅把指定的既有公开帖子加入门户索引，保留原帖、原作者和原时间，标记“来自论坛”。不会创建新帖子、虚构互动或发放自动贡献奖励。脚本可重复执行，已存在的门户内容不会覆盖。
+
+服务器测试使用独立 Discourse worktree 和测试数据库；仅复用已安装的只读依赖及构建缓存。`ops/test-server.sh` 不切换生产插件链接。
+
 ## 故障操作
 
 - 先访问 `/latest` 判断原论坛是否可用，再检查 `/studio/api/boot`。

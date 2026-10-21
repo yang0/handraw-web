@@ -22,13 +22,17 @@ module Handraw
     def index
       nonce = ContentSecurityPolicy.nonce_placeholder(response.headers, request_env: request.env)
       page = File.read(Handraw::Engine.root.join('public', 'index.html'))
+      page = page.sub('<!-- handraw-navigation -->', Handraw::Navigation.render)
       page = page.sub('<script src="/studio/assets/portal.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/portal.js\"")
+      if release_version.match?(/\A[0-9a-f]{40}\z/)
+        page = page.gsub('/studio/assets/', "https://static.handraw-style.com/handraw-web/releases/#{release_version}/assets/")
+      end
       render body: page, content_type: 'text/html', layout: false
     end
 
     def asset
       name = params[:name]
-      raise Discourse::NotFound if %w[portal.js portal.css].exclude?(name)
+      raise Discourse::NotFound if %w[portal.js portal.css navigation.css].exclude?(name)
 
       send_file Handraw::Engine.root.join('public', name), disposition: 'inline',
                                                            type: name.end_with?('.js') ? 'text/javascript' : 'text/css'
@@ -40,7 +44,8 @@ module Handraw
         participant: Access.participant?(current_user),
         reviewer: Access.reviewer?(current_user),
         pilot: !SiteSetting.handraw_public_submissions,
-        official: { styles: '/gallery/index.html', layouts: '/gallery/layouts.html' },
+        official: { styles: 'https://static.handraw-style.com/gallery/index.html',
+                    layouts: 'https://static.handraw-style.com/gallery/layouts.html' },
         rules: {
           welcome: SiteSetting.handraw_welcome_credits,
           settlement_days: SiteSetting.handraw_settlement_days,
@@ -85,7 +90,9 @@ module Handraw
     def create
       RateLimiter.new(current_user, 'handraw-post', 10, 1.day).performed!
       data = params.require(:entry).permit(:kind, :title, :summary, :cover_url, :license, :category_id, :paid_opt_in)
-      category = Category.find(data[:category_id])
+      category_name = { 'work' => '实战作品与爆款', 'experience' => '创作交流' }.fetch(data[:kind], '手绘skill')
+      category_id = data[:category_id].presence || Category.find_by(name: category_name)&.id || SiteSetting.uncategorized_category_id
+      category = Category.find(category_id)
       raise Discourse::InvalidAccess if category.read_restricted || !guardian.can_create_topic_on_category?(category)
 
       cover = safe_cover(data[:cover_url])
@@ -101,7 +108,7 @@ module Handraw
           title: data[:title],
           summary: data[:summary],
           cover_url: cover,
-          license: data[:license],
+          license: data[:license].presence || '供学习欣赏，其他用途及转载请先联系原作者。',
           paid_opt_in: !!ActiveModel::Type::Boolean.new.cast(data[:paid_opt_in]),
           content_digest: digest
         )
@@ -174,6 +181,22 @@ module Handraw
         Event.create_or_find_by!(entry_id: entry.id, user_id: current_user.id, kind: kind,
                                  day: Date.current) do |record|
           record.qualified = Access.qualified?(current_user)
+        end
+      end
+      head :no_content
+    end
+
+    def impressions
+      raise Discourse::InvalidAccess unless Access.verified?(current_user)
+
+      RateLimiter.new(current_user, 'handraw-impressions', 60, 1.minute).performed!
+      samples = Array(params[:entries]).first(20).select do |sample|
+        sample.is_a?(ActionController::Parameters) && sample[:visible_ms].to_i >= 2000 && sample[:visible_ratio].to_f >= 0.5
+      end
+      ids = samples.map { |sample| sample[:id].to_s }.uniq
+      Entry.visible.where(public_id: ids).where.not(user_id: current_user.id).find_each do |record|
+        Event.create_or_find_by!(entry_id: record.id, user_id: current_user.id, kind: 'impression', day: Date.current) do |event|
+          event.qualified = Access.qualified?(current_user)
         end
       end
       head :no_content

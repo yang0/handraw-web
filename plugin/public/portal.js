@@ -10,7 +10,7 @@
     sort: "recommended",
     mine: "owned",
     entries: [],
-    resourceTab: "community",
+    resourceTab: "official",
     view: "home",
   };
   const labels = {
@@ -18,9 +18,23 @@
     experience: "经验",
     style: "画风",
     layout: "图型",
-    package: "资源包",
   };
-  let csrf;
+  let csrfPromise;
+  const getCache = new Map();
+  const pendingGets = new Map();
+  let cooldownUntil = 0;
+  async function getCsrf() {
+    csrfPromise ||= fetch("/session/csrf.json", { credentials: "same-origin" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("暂时无法确认登录状态，请稍后再试");
+        return (await response.json()).csrf;
+      })
+      .catch((error) => {
+        csrfPromise = null;
+        throw error;
+      });
+    return csrfPromise;
+  }
   let activeRequest = 0;
   const timers = new WeakMap();
 
@@ -47,36 +61,62 @@
   }
 
   async function api(path, options = {}) {
-    const headers = {
-      "X-Requested-With": "XMLHttpRequest",
-      Accept: "application/json",
-      ...options.headers,
+    const read = !options.method || options.method === "GET";
+    if (read && getCache.get(path)?.expires > Date.now())
+      return getCache.get(path).value;
+    if (read && pendingGets.has(path)) return pendingGets.get(path);
+    const request = async (retried = false) => {
+      if (cooldownUntil > Date.now())
+        await new Promise((resolve) =>
+          setTimeout(resolve, cooldownUntil - Date.now())
+        );
+      const headers = {
+        "X-Requested-With": "XMLHttpRequest",
+        Accept: "application/json",
+        ...options.headers,
+      };
+      if (!read) {
+        headers["X-CSRF-Token"] = await getCsrf();
+        if (!(options.body instanceof FormData))
+          headers["Content-Type"] = "application/json";
+      }
+      const response = await fetch(`/studio/api${path}`, {
+        credentials: "same-origin",
+        ...options,
+        headers,
+      });
+      if (response.status === 429) {
+        const seconds = Math.max(
+          1,
+          Math.min(60, Number(response.headers.get("Retry-After")) || 10)
+        );
+        cooldownUntil = Date.now() + seconds * 1000;
+        if (read && !retried) return request(true);
+        throw new Error(`操作较快，请在 ${seconds} 秒后再试。`);
+      }
+      if (response.status === 204) return null;
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok)
+        throw new Error(
+          result.errors?.join("；") ||
+            (response.status === 403
+              ? "请登录获准参与的账号后再操作"
+              : "操作未完成，请稍后重试")
+        );
+      if (read)
+        getCache.set(path, { value: result, expires: Date.now() + 15000 });
+      return result;
     };
-    if (options.method && options.method !== "GET") {
-      csrf ||= (
-        await fetch("/session/csrf.json", { credentials: "same-origin" }).then(
-          (response) => response.json()
-        )
-      ).csrf;
-      headers["X-CSRF-Token"] = csrf;
-      if (!(options.body instanceof FormData))
-        headers["Content-Type"] = "application/json";
+    const pending = request();
+    if (read) pendingGets.set(path, pending);
+    try {
+      const value = await pending;
+      if (!read && !path.endsWith("/events") && path !== "/impressions")
+        getCache.clear();
+      return value;
+    } finally {
+      if (read) pendingGets.delete(path);
     }
-    const response = await fetch(`/studio/api${path}`, {
-      credentials: "same-origin",
-      ...options,
-      headers,
-    });
-    if (response.status === 204) return null;
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok)
-      throw new Error(
-        result.errors?.join("；") ||
-          (response.status === 403
-            ? "请登录获准参与的账号后再操作"
-            : "操作未完成，请稍后重试")
-      );
-    return result;
   }
 
   async function action(button, callback) {
@@ -143,76 +183,142 @@
     );
   }
 
-  async function share() {
-    if (!needUser()) return;
-    if (!state.boot.participant)
+  async function share(kind = null) {
+    if (!kind || typeof kind !== "string") {
+      return modal(
+        "你想分享什么？",
+        el("p", { class: "hw-help" }, "作品、制作方法，或你整理的画风与图型。"),
+        el(
+          "div",
+          { class: "hw-share-choices" },
+          ...[
+            ["work", "晒作品", "上传一张图，说说你画了什么。"],
+            ["experience", "写经验", "教程、创作过程、踩过的坑，都可以写。"],
+            [
+              "style",
+              "分享画风或图型",
+              "分享你用过的提示词、画风描述或排版方法。",
+            ],
+          ].map(
+            ([value, title, description]) =>
+              button("", () => share(value), true).appendChild(
+                el(
+                  "span",
+                  {},
+                  el("strong", {}, title),
+                  el("small", {}, description)
+                )
+              ).parentElement
+          )
+        )
+      );
+    }
+    if (state.boot.user && !state.boot.participant)
       return modal(
         "创作者试运行",
         el(
           "p",
           {},
-          "目前正在小范围试运行。你仍可浏览、收藏和参与论坛讨论；发布资格由管理员开通。"
+          "目前由试运行创作者发布。你可以先收藏喜欢的内容，或到论坛交流。"
         ),
         el("a", { href: "/latest", class: "hw-text-link" }, "前往论坛")
       );
-    const form = el(
-      "form",
-      {},
-      selectField("kind", "分享什么", Object.entries(labels)),
-      field("title", "给这次分享一个标题"),
-      field("summary", "创作说明／经验正文（公开展示）", "textarea"),
-      field("image", "上传封面图片", "file", false),
-      field("cover_url", "或填写本站图片地址", "url", false),
-      selectField(
-        "category_id",
-        "讨论板块",
-        state.boot.categories.map(([id, name]) => [id, name])
-      ),
-      field(
-        "license",
-        "授权与使用范围",
-        "textarea",
-        true,
-        "允许个人和商业创作输出；未经作者许可，请勿转售或再次分发资源原包。"
-      ),
-      field("bundle", "可选：上传完整资源包（ZIP）", "file", false),
-      el(
-        "p",
-        { class: "hw-help" },
-        "画风／图型包应包含 manifest.json、中英文定义与三个不同主题的使用示例。完整资源包经过版主审核后开放下载。"
-      ),
-      el(
-        "label",
-        { class: "hw-check" },
-        el("input", { name: "paid_opt_in", type: "checkbox" }),
-        `申请积分下载并同意动态价格：初始 ${state.boot.rules.initial_price} 分，范围 ${state.boot.rules.min_price}–${state.boot.rules.max_price} 分，每 ${state.boot.rules.price_days} 天最多调整一档。取消勾选则保持免费。`
-      ),
+    const resource = ["style", "layout"].includes(kind);
+    const titleLabel =
+      kind === "work"
+        ? "作品标题"
+        : kind === "experience"
+          ? "经验标题"
+          : "给画风／图型起个名字";
+    const bodyLabel =
+      kind === "work"
+        ? "创作说明（选填）"
+        : kind === "experience"
+          ? "写下你的方法"
+          : "画风描述／提示词／布局要点";
+    const titleField = field("title", titleLabel);
+    titleField.querySelector("input").placeholder =
+      kind === "work"
+        ? "例如：用水彩画了一间街角咖啡馆"
+        : kind === "experience"
+          ? "例如：我是怎样让 AI 画出的文字更清楚的"
+          : "例如：温暖的纸感水彩";
+    const bodyField = field("summary", bodyLabel, "textarea", kind !== "work");
+    bodyField.querySelector("textarea").placeholder =
+      kind === "work"
+        ? "用了什么画风？有什么想说的？"
+        : kind === "experience"
+          ? "想做什么 → 怎么做的 → 最后效果如何。写清一个小经验就很好。"
+          : "粘贴你用过的提示词，或描述色彩、笔触和排版。附一张实际效果图更容易理解。";
+    const form = el("form", { class: "hw-share-form" });
+    if (!state.boot.user)
+      form.append(
+        el(
+          "p",
+          { class: "hw-help" },
+          "登录后即可发布。先看看适合分享哪些内容。"
+        )
+      );
+    const fields = el("fieldset", { disabled: !state.boot.user });
+    if (resource)
+      fields.append(
+        selectField("kind", "分享类型", [
+          ["style", "画风"],
+          ["layout", "图型／排版"],
+        ])
+      );
+    fields.append(titleField);
+    const imageField = field(
+      "image",
+      kind === "work" ? "上传作品图片" : "配一张效果图（选填）",
+      "file",
+      kind === "work"
+    );
+    imageField.querySelector("input").accept =
+      "image/png,image/jpeg,image/webp";
+    if (kind === "work") fields.append(imageField, bodyField);
+    else fields.append(bodyField, imageField);
+    if (resource) {
+      const advanced = el(
+        "details",
+        { class: "hw-advanced" },
+        el("summary", {}, "附上可导入 Skill 的定义（选填）"),
+        el(
+          "p",
+          { class: "hw-help" },
+          "有从 Skill 导出的画风或图型文件，可以附在这里。没有文件也能分享描述与效果图。"
+        ),
+        field("bundle", "Skill 导出的 ZIP 文件", "file", false),
+        field("license", "补充使用范围（选填）", "textarea", false)
+      );
+      advanced.querySelector('[name="bundle"]').accept = ".zip";
+      fields.append(advanced);
+    }
+    fields.append(
       el(
         "label",
         { class: "hw-check" },
         el("input", { name: "rights", type: "checkbox", required: true }),
-        "我有权分享这些内容，并确认公开正文不包含私人信息或需要解锁的完整资源。"
-      ),
-      el("p", { class: "hw-form-error", role: "alert" }),
-      el("button", { class: "hw-button", type: "submit" }, "发布分享 ↗")
+        "我有权分享以上内容。使用范围以作者说明为准。"
+      )
     );
-    form.elements.image.accept = "image/png,image/jpeg,image/webp";
-    form.elements.bundle.accept = ".zip";
+    form.append(fields, el("p", { class: "hw-form-error", role: "alert" }));
+    const submit = el(
+      "button",
+      { class: "hw-button", type: "submit" },
+      state.boot.user ? "发布分享" : "登录后发布"
+    );
+    form.append(submit);
     form.elements.title.minLength = 5;
-    form.elements.summary.minLength = 10;
+    if (kind !== "work") form.elements.summary.minLength = 10;
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const submit = form.querySelector('[type="submit"]');
+      if (!needUser()) return;
       await action(submit, async () => {
         const data = new FormData(form);
-        let cover = String(data.get("cover_url") || "");
+        let cover = "";
         const image = data.get("image");
         if (image?.size) {
-          csrf ||= (
-            await fetch("/session/csrf.json").then((response) =>
-              response.json()
-            )
-          ).csrf;
           const imageForm = new FormData();
           imageForm.append("type", "composer");
           imageForm.append("synchronous", "true");
@@ -221,28 +327,32 @@
             method: "POST",
             credentials: "same-origin",
             headers: {
-              "X-CSRF-Token": csrf,
+              "X-CSRF-Token": await getCsrf(),
               "X-Requested-With": "XMLHttpRequest",
             },
             body: imageForm,
           });
           const upload = await response.json();
           if (!response.ok || !upload.url)
-            throw new Error(upload.errors?.join("；") || "封面上传失败");
-          cover = upload.url;
-          if (cover.startsWith("//")) cover = `https:${cover}`;
+            throw new Error(
+              upload.errors?.join("；") || "图片上传失败，请稍后再试"
+            );
+          cover = upload.url.startsWith("//")
+            ? `https:${upload.url}`
+            : upload.url;
         }
         const entry = await api("/entries", {
           method: "POST",
           body: JSON.stringify({
             entry: {
-              kind: data.get("kind"),
+              kind: resource ? data.get("kind") : kind,
               title: data.get("title"),
-              summary: data.get("summary"),
+              summary:
+                String(data.get("summary") || "").trim() ||
+                "作者分享的创作作品，欢迎在原帖交流制作方法。",
               cover_url: cover,
-              category_id: data.get("category_id"),
-              license: data.get("license"),
-              paid_opt_in: data.get("paid_opt_in") === "on",
+              license: data.get("license") || undefined,
+              paid_opt_in: false,
             },
           }),
         });
@@ -257,9 +367,9 @@
             });
           } catch (error) {
             modal(
-              "分享已发布，资源包尚未上传",
+              "分享已发布，定义文件未上传",
               el("p", {}, error.message),
-              button("前往我的创作补传", () => {
+              button("到我的创作补充", () => {
                 $("#modal").close();
                 navigate("mine");
               })
@@ -269,10 +379,18 @@
         }
         $("#modal").close();
         navigate("mine");
-        tell("分享已发布。资源包审核通过后会开放下载。");
+        tell("分享已发布。");
       });
     });
-    modal("分享你的创作", form);
+    modal(
+      kind === "work"
+        ? "晒作品"
+        : kind === "experience"
+          ? "写经验"
+          : "分享画风或图型",
+      form,
+      button("重新选择分享类型", () => share(), true)
+    );
   }
 
   async function save(entry, node) {
@@ -284,9 +402,7 @@
     node.textContent = entry.collected ? "已收藏 ♥" : "收藏 ♡";
     node.setAttribute("aria-pressed", String(entry.collected));
     tell(
-      entry.collected
-        ? "已收藏。完整资源解锁后可同步到 Skill。"
-        : "已取消收藏，已解锁资格仍然保留。"
+      entry.collected ? "已加入我的收藏。" : "已取消收藏，已解锁资格仍然保留。"
     );
   }
 
@@ -311,7 +427,7 @@
         el(
           "p",
           { class: "hw-help" },
-          `${labels[entry.kind]} · ${entry.author.name || entry.author.username} · v${entry.version}${entry.featured ? " · 编辑精选" : ""}`
+          `${labels[entry.kind] || "资料"}${entry.source_label ? " · " + entry.source_label : ""} · ${entry.author.name || entry.author.username} · v${entry.version}${entry.featured ? " · 编辑精选" : ""}`
         )
       );
       body.push(el("p", { class: "hw-detail-text" }, entry.summary));
@@ -332,7 +448,7 @@
                 class: "hw-button",
                 href: `/studio/api/entries/${id}/download`,
               },
-              "下载资源包 ↓"
+              "下载画风／图型定义 ↓"
             )
           );
         else
@@ -366,7 +482,7 @@
         el(
           "a",
           { class: "hw-text-link", href: entry.topic_url },
-          "讨论与补充 →"
+          entry.source_label ? "阅读原帖与讨论 →" : "讨论与补充 →"
         )
       );
       body.push(actions);
@@ -410,7 +526,8 @@
         );
       }
       if (state.boot.user?.id === entry.author.id)
-        body.push(bundleUpload(entry));
+        if (["style", "layout"].includes(entry.kind))
+          body.push(bundleUpload(entry));
       body.push(el("p", { class: "hw-license" }, `授权说明：${entry.license}`));
       modal(entry.title, ...body);
     } catch (error) {
@@ -422,7 +539,7 @@
     const input = el("input", {
       type: "file",
       accept: ".zip",
-      "aria-label": "选择更新资源包",
+      "aria-label": "选择画风／图型定义文件",
     });
     return el(
       "div",
@@ -430,20 +547,21 @@
       el(
         "p",
         { class: "hw-help" },
-        "更新完整资源包后将重新审核；原解锁用户保留获取资格。"
+        "如需让别人导入 Skill，可附上 Skill 导出的定义文件。更新后会重新审核。"
       ),
       input,
       button(
-        "上传／更新资源包",
+        "补充／更新定义文件",
         async () => {
-          if (!input.files[0]) throw new Error("请先选择 ZIP 资源包");
+          if (!input.files[0])
+            throw new Error("请选择 Skill 导出的 ZIP 定义文件");
           const form = new FormData();
           form.append("file", input.files[0]);
           await api(`/entries/${entry.id}/bundle`, {
             method: "POST",
             body: form,
           });
-          tell("资源包已上传，等待版主审核。");
+          tell("定义文件已上传，等待版主审核。");
           $("#modal").close();
         },
         true
@@ -513,7 +631,7 @@
       el(
         "p",
         { class: "hw-work__kind" },
-        `${labels[entry.kind]}${entry.verified ? " / 已验证" : ""}${entry.paid ? ` / ${entry.price} 积分` : ""}`
+        `${labels[entry.kind] || "资料"}${entry.source_label ? " / " + entry.source_label : ""}${entry.verified ? " / 已验证" : ""}${entry.paid ? ` / ${entry.price} 积分` : ""}`
       ),
       el(
         "h3",
@@ -551,6 +669,36 @@
     return node;
   }
 
+  const seenImpressions = new Set();
+  const pendingImpressions = new Set();
+  let impressionFlush;
+  async function flushImpressions() {
+    const ids = [...pendingImpressions].slice(0, 20);
+    ids.forEach((id) => pendingImpressions.delete(id));
+    try {
+      await api("/impressions", {
+        method: "POST",
+        body: JSON.stringify({
+          entries: ids.map((id) => ({
+            id,
+            visible_ms: 2000,
+            visible_ratio: 0.5,
+          })),
+        }),
+      });
+    } catch (_) {
+      ids.forEach((id) => seenImpressions.delete(id));
+    }
+    if (pendingImpressions.size)
+      impressionFlush = setTimeout(flushImpressions, 500);
+  }
+  function queueImpression(id) {
+    if (seenImpressions.has(id)) return;
+    seenImpressions.add(id);
+    pendingImpressions.add(id);
+    clearTimeout(impressionFlush);
+    impressionFlush = setTimeout(flushImpressions, 500);
+  }
   const impressionObserver =
     typeof IntersectionObserver !== "undefined"
       ? new IntersectionObserver(
@@ -565,15 +713,12 @@
                 timers.set(
                   record.target,
                   setTimeout(() => {
-                    if (document.visibilityState !== "visible") return;
-                    api(`/entries/${record.target.dataset.entryId}/events`, {
-                      method: "POST",
-                      body: JSON.stringify({
-                        kind: "impression",
-                        visible_ms: 2000,
-                        visible_ratio: 0.5,
-                      }),
-                    }).catch(() => {});
+                    if (
+                      !record.target.isConnected ||
+                      document.visibilityState !== "visible"
+                    )
+                      return;
+                    queueImpression(record.target.dataset.entryId);
                     impressionObserver.unobserve(record.target);
                   }, 2000)
                 );
@@ -642,7 +787,7 @@
         ? el("div", { class: "hw-grid" }, entries.map(card))
         : empty(
             "第一份分享，正在等你",
-            "作品、经验、画风与图型，都能成为别人的下一次灵感。",
+            "晒一张作品，或写下你的制作方法。",
             button("分享我的创作 ↗", share)
           )
     );
@@ -784,8 +929,8 @@
     $("#toolbar").replaceChildren(
       ...tabs(
         [
-          ["community", "社区资源"],
-          ["official", "官方资源"],
+          ["official", "官方画风与图型"],
+          ["community", "社区分享"],
           ["collected", "我的收藏"],
         ],
         state.resourceTab,
@@ -801,7 +946,9 @@
       return;
     }
     if (state.resourceTab === "official") {
-      const response = await fetch("/data/styles.json");
+      const response = await fetch(
+        "https://static.handraw-style.com/data/styles.json?web=2"
+      );
       if (!response.ok)
         throw new Error("官方资源暂时无法加载，可直接访问画廊。");
       const styles = await response.json();
@@ -820,9 +967,27 @@
         el(
           "div",
           { class: "hw-resource-intro" },
-          el("a", { href: "/gallery/index.html" }, "全部官方画风 ↗"),
-          el("a", { href: "/gallery/layouts.html" }, "全部官方图型 ↗"),
-          el("a", { href: "/gallery/tutorials.html" }, "提示词拼装器 ↗")
+          el(
+            "a",
+            {
+              href: "https://static.handraw-style.com/gallery/index.html?web=2",
+            },
+            "全部官方画风 ↗"
+          ),
+          el(
+            "a",
+            {
+              href: "https://static.handraw-style.com/gallery/layouts.html?web=2",
+            },
+            "全部官方图型 ↗"
+          ),
+          el(
+            "a",
+            {
+              href: "https://static.handraw-style.com/gallery/tutorials.html?web=2",
+            },
+            "提示词拼装器 ↗"
+          )
         ),
         el(
           "div",
@@ -833,7 +998,10 @@
               { class: "hw-work" },
               el(
                 "a",
-                { href: "/gallery/index.html", class: "hw-work__visual" },
+                {
+                  href: "https://static.handraw-style.com/gallery/index.html?web=2",
+                  class: "hw-work__visual",
+                },
                 el("img", {
                   class: "hw-work__image",
                   src: `https://img.handraw-style.com/images/individual/${item.number.split("-")[0]}/${item.number}.webp`,
@@ -864,8 +1032,18 @@
       el(
         "div",
         { class: "hw-resource-intro" },
-        el("a", { href: "/gallery/index.html" }, "官方画风 ↗"),
-        el("a", { href: "/gallery/layouts.html" }, "官方图型 ↗"),
+        el(
+          "a",
+          { href: "https://static.handraw-style.com/gallery/index.html?web=2" },
+          "官方画风 ↗"
+        ),
+        el(
+          "a",
+          {
+            href: "https://static.handraw-style.com/gallery/layouts.html?web=2",
+          },
+          "官方图型 ↗"
+        ),
         el("span", {}, "收藏免费，精选资源解锁后可导入 Skill。")
       )
     );
@@ -1010,10 +1188,10 @@
     activeRequest += 1;
     state.view = new URLSearchParams(location.search).get("view") || "home";
     const titles = {
-      home: "值得被看见的创作",
-      works: "作品，先让画面说话",
-      experience: "把做成的方法分享出来",
-      resources: "为下一次创作，找到好资源",
+      home: "作品与经验",
+      works: "作品",
+      experience: "经验与教程",
+      resources: "画风与图型",
       mine: "我的创作",
       wallet: "积分与记录",
       review: "版主工作台",
@@ -1058,18 +1236,6 @@
     if (state.view === "wallet") return showWallet();
     if (state.view === "review") return showReview();
     if (state.view === "resources") return showResources();
-    if (state.view === "home")
-      $("#toolbar").append(
-        ...tabs(
-          [["", "为你发现"], ...Object.entries(labels)],
-          state.kind,
-          (kind) => {
-            state.kind = kind;
-            state.page = 1;
-            loadFeed().catch((error) => tell(error.message));
-          }
-        )
-      );
     const order = el(
       "select",
       { "aria-label": "内容排序", class: "hw-search" },

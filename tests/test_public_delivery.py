@@ -1,0 +1,54 @@
+import importlib.util
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).parents[1]
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / 'ops' / f'{name}.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class PublicDeliveryTests(unittest.TestCase):
+    def test_gallery_overlay_keeps_existing_content_and_original_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plugin = root / 'plugin'
+            (plugin / 'public').mkdir(parents=True)
+            (plugin / 'REVISION').write_text('a' * 40)
+            for name in ('portal.js', 'portal.css', 'navigation.css', 'navigation.html'):
+                (plugin / 'public' / name).write_text((ROOT / 'plugin/public' / name).read_text(encoding='utf-8'), encoding='utf-8')
+            (plugin / 'public' / 'private.key').write_text('never publish')
+            static = root / 'static'
+            (static / 'gallery').mkdir(parents=True)
+            original = '<html><head></head><body><nav class="site-nav">Original filters</nav><img src="../../../images/layouts/SC-001.webp"></body></html>'
+            source = static / 'gallery/layouts.html'
+            source.write_text(original)
+            (static / 'gallery' / 'private.key').write_text('never publish')
+            target = root / 'output'
+            load('build_public').build(plugin, target, static)
+            page = (target / 'gallery/layouts.html').read_text(encoding='utf-8')
+            self.assertEqual(source.read_text(), original)
+            self.assertIn('data-site-section="resources" aria-current="page"', page)
+            self.assertIn('Original filters', page)
+            self.assertIn('https://img.handraw-style.com/images/layouts/SC-001.webp', page)
+            self.assertFalse((target / 'assets/private.key').exists())
+            self.assertFalse((target / 'gallery/private.key').exists())
+
+    def test_static_routes_keep_missing_gallery_files_outside_the_forum(self):
+        module = load('public_routes')
+        original = 'server {\n    location / {\n        proxy_pass http://forum;\n    }\n}'
+        public = module.configure(original, 'static')
+        self.assertIn('try_files $uri =404;', public)
+        self.assertIn('proxy_pass http://forum;', public)
+        self.assertEqual(module.configure(public, 'static'), public)
+        main = module.configure(original, 'main')
+        self.assertIn('return 302 https://static.handraw-style.com$uri?web=2&$args;', main)
+
+
+if __name__ == '__main__':
+    unittest.main()

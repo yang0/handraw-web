@@ -52,7 +52,8 @@ module Handraw
         collected: viewer ? collections.where(user_id: viewer.id).exists? : false,
         unlocked: accessible_to?(viewer),
         collection_count: collections.count,
-        created_at: created_at
+        created_at: created_at,
+        source_label: metadata['imported_from_forum'] ? '来自论坛' : nil
       }
     end
 

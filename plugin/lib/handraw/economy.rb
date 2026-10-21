@@ -33,6 +33,8 @@ module Handraw
     end
 
     def self.contribution!(entry)
+      return if entry.metadata['imported_from_forum']
+
       entry.with_lock do
         users = entry.qualified_events.where(kind: 'useful').distinct.pluck(:user_id)
         return if users.size < SiteSetting.handraw_contribution_confirmations

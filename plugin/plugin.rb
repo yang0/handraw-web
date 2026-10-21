@@ -18,6 +18,10 @@ require_relative 'lib/handraw/access'
 require_relative 'lib/handraw/economy'
 require_relative 'lib/handraw/feed'
 require_relative 'lib/handraw/bundle_store'
+require_relative 'lib/handraw/navigation'
+
+register_html_builder('server:before-head-close') { |_controller| Handraw::Navigation.stylesheet }
+register_html_builder('server:after-body-open') { |_controller| Handraw::Navigation.render(active: 'forum', surface: 'forum') }
 
 after_initialize do
   Discourse::Application.routes.append { mount ::Handraw::Engine, at: '/studio' }

@@ -4,6 +4,7 @@ umask 077
 WEB=/home/yang0/projectHome/handraw-web
 CORE=/home/yang0/projectHome/discourse
 STATE=/home/yang0/handraw-data/deployment
+PUBLIC=/home/yang0/handraw-data/public
 export PATH="/home/yang0/.local/bin:/home/yang0/.local/share/mise/installs/ruby/3.4.2/bin:/home/yang0/.nvm/versions/node/v24.14.0/bin:$PATH"
 mkdir -p "$STATE" "$WEB/.local/releases"
 exec 9>"$STATE/deploy.lock"
@@ -20,6 +21,10 @@ activate() {
   test -f "$WEB/.local/releases/$release/plugin/plugin.rb"
   ln -s "$WEB/.local/releases/$release/plugin" "$CORE/plugins/handraw-community.next"
   mv -Tf "$CORE/plugins/handraw-community.next" "$CORE/plugins/handraw-community"
+  if test -d "$PUBLIC/releases/$release"; then
+    ln -s "$PUBLIC/releases/$release" "$PUBLIC/current.next"
+    mv -Tf "$PUBLIC/current.next" "$PUBLIC/current"
+  fi
   sudo -n supervisorctl restart discourse:discourse-web discourse:discourse-sidekiq
 }
 
@@ -67,6 +72,9 @@ deploy)
   mkdir -p "$release"
   git archive "$commit" plugin | tar -x -C "$release"
   printf '%s\n' "$commit" > "$release/plugin/REVISION"
+  mkdir -p "$PUBLIC/releases"
+  chmod 755 "$PUBLIC" "$PUBLIC/releases"
+  python3 "$WEB/ops/build_public.py" "$release/plugin" "$PUBLIC/releases/$commit" /home/yang0/projectHome/handraw-static
   find "$release/plugin" -name '*.rb' -print0 | xargs -0 -n1 ruby -c > "$STATE/syntax-check.log"
   backup="$STATE/database-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
   sudo -n -u postgres pg_dump discourse | gzip > "$backup"
@@ -90,6 +98,8 @@ deploy)
     if test -n "$previous"; then activate "$previous"; else restore_initial_forum; fi
     exit 1
   fi
+  ln -s "$PUBLIC/releases/$commit" "$PUBLIC/current.next"
+  mv -Tf "$PUBLIC/current.next" "$PUBLIC/current"
   test -z "$previous" || printf '%s\n' "$previous" > "$STATE/previous"
   printf '%s\n' "$commit" > "$STATE/current"
   fingerprint_core > "$STATE/core-baseline"

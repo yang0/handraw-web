@@ -20,6 +20,8 @@ module Handraw
       saves = Collection.where(entry_id: candidates.map(&:id)).joins(:user)
                         .where(users: { active: true, staged: false }).group(:entry_id).count
       exploration = lambda { |entry|
+        next false if entry.metadata['imported_from_forum']
+
         limit = if counts.fetch([entry.id, 'detail'], 0) >= SiteSetting.handraw_exploration_detail_threshold || saves.fetch(entry.id, 0).positive?
                   SiteSetting.handraw_exploration_extended
                 else
