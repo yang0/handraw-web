@@ -6,7 +6,7 @@
 
 `ops/web.ps1 update` 拒绝脏工作区并只快进拉取；`status` 显示两端版本；`deploy -Commit SHA` 推送已提交代码并发布指定版本；`rollback` 恢复上一版本代码，不降级数据库。
 
-运行依赖：Windows PowerShell、Git、OpenSSH；服务器沿用现有 Ruby、PostgreSQL、Redis、Nginx 和 Supervisor。
+运行依赖：Windows PowerShell、Git、GitHub CLI、OpenSSH；部署命令会检查指定提交的 GitHub 自动检查已经成功。服务器沿用现有 Ruby、PostgreSQL、Redis、Nginx 和 Supervisor。
 
 ## 数据边界
 

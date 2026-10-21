@@ -23,6 +23,12 @@ if ($Action -eq 'update') {
     if (-not $Commit) { $Commit = & git rev-parse HEAD }
     if ($Commit -notmatch '^[0-9a-f]{40}$') { throw 'Use a full 40-character commit SHA.' }
     Invoke-Checked git @('push','origin','main')
+    $checksJson = & gh run list --repo yang0/handraw-web --workflow checks.yml --commit $Commit --limit 1 --json status,conclusion
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to verify GitHub checks. Deployment stopped.' }
+    $checks = @($checksJson | ConvertFrom-Json)
+    if ($checks.Count -ne 1 -or $checks[0].status -ne 'completed' -or $checks[0].conclusion -ne 'success') {
+        throw 'This commit has not passed GitHub checks. Wait for a successful run before deployment.'
+    }
     Invoke-Checked ssh @($Server,"bash /home/yang0/projectHome/handraw-web/ops/server-deploy.sh deploy $Commit")
 } elseif ($Action -eq 'rollback') {
     Invoke-Checked ssh @($Server,'bash /home/yang0/projectHome/handraw-web/ops/server-deploy.sh rollback')
