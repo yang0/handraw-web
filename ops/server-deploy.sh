@@ -23,6 +23,14 @@ activate() {
   sudo -n supervisorctl restart discourse:discourse-web discourse:discourse-sidekiq
 }
 
+restore_initial_forum() {
+  if test -L "$CORE/plugins/handraw-community"; then
+    mv "$CORE/plugins/handraw-community" "$STATE/failed-initial-plugin-$(date -u +%Y%m%dT%H%M%SZ)"
+  fi
+  sudo -n supervisorctl restart discourse:discourse-web discourse:discourse-sidekiq
+  echo 'Initial extension detached; original forum restored. Additive tables and backup retained.' >&2
+}
+
 healthy() {
   local expected=${1:-}
   for attempt in $(seq 1 30); do
@@ -67,7 +75,7 @@ deploy)
   ln -s "$release/plugin" "$CORE/plugins/handraw-community.next"
   mv -Tf "$CORE/plugins/handraw-community.next" "$CORE/plugins/handraw-community"
   if ! (cd "$CORE" && RAILS_ENV=production SCHEMA="$STATE/production-structure.sql" bin/rake db:migrate); then
-    if test -n "$previous"; then activate "$previous"; fi
+    if test -n "$previous"; then activate "$previous"; else restore_initial_forum; fi
     echo 'Migration failed. Database backup preserved; no destructive down migration was run.' >&2
     exit 1
   fi
@@ -75,7 +83,7 @@ deploy)
   printf '%s\n' "$commit" > "$STATE/candidate"
   sudo -n supervisorctl restart discourse:discourse-web discourse:discourse-sidekiq
   if ! healthy "$commit"; then
-    if test -n "$previous"; then activate "$previous"; else echo 'Initial deployment needs operator inspection; feature remains disabled unless explicitly enabled.' >&2; fi
+    if test -n "$previous"; then activate "$previous"; else restore_initial_forum; fi
     exit 1
   fi
   test -z "$previous" || printf '%s\n' "$previous" > "$STATE/previous"
