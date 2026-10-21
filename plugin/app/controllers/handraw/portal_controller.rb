@@ -4,6 +4,8 @@ module Handraw
   class PortalController < ::ApplicationController
     requires_plugin Handraw::PLUGIN_NAME
     skip_before_action :check_xhr
+    # This allowlisted action serves public static JavaScript to same-origin script tags.
+    skip_after_action :verify_same_origin_request, only: :asset
     before_action :require_enabled
     before_action :ensure_logged_in, except: %i[index asset boot feed show creator]
     before_action :ensure_participant, only: %i[create upload_bundle welcome unlock]

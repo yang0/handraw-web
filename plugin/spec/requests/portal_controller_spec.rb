@@ -30,6 +30,14 @@ RSpec.describe Handraw::PortalController do
     end
   end
 
+  describe '#asset' do
+    it 'serves the public portal script to browser script tags' do
+      get '/studio/assets/portal.js'
+      expect(response.status).to eq(200)
+      expect(response.media_type).to eq('text/javascript')
+    end
+  end
+
   describe '#unlock' do
     before { sign_in(buyer) }
 
