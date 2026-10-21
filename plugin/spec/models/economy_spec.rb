@@ -15,6 +15,21 @@ RSpec.describe Handraw::Economy do
   before { SiteSetting.handraw_enabled = true }
 
   describe '.reprice!' do
+    it 'uses configurable initial prices and feedback thresholds' do
+      SiteSetting.handraw_price_initial = 15
+      SiteSetting.handraw_price_min_ratings = 1
+      SiteSetting.handraw_price_step = 3
+      fresh = resource.dup
+      fresh.public_id = SecureRandom.uuid
+      fresh.content_digest = SecureRandom.hex(32)
+      fresh.save!
+      expect(fresh.price).to eq(15)
+      user = Fabricate(:user, active: true, created_at: 14.days.ago)
+      fresh.events.create!(user: user, kind: 'not_useful', qualified: true, day: Date.current)
+      described_class.reprice!(fresh)
+      expect(fresh.reload.price).to eq(12)
+    end
+
     it 'keeps the price stable with too little evidence and observes the weekly cooldown' do
       described_class.reprice!(resource)
       expect(resource.reload.price).to eq(10)

@@ -184,7 +184,7 @@
         "label",
         { class: "hw-check" },
         el("input", { name: "paid_opt_in", type: "checkbox" }),
-        "申请积分下载并同意动态价格：初始 10 分，范围 5–30 分，每七天最多调整一档。取消勾选则保持免费。"
+        `申请积分下载并同意动态价格：初始 ${state.boot.rules.initial_price} 分，范围 ${state.boot.rules.min_price}–${state.boot.rules.max_price} 分，每 ${state.boot.rules.price_days} 天最多调整一档。取消勾选则保持免费。`
       ),
       el(
         "label",
@@ -343,7 +343,7 @@
                 if (
                   !confirm(
                     entry.price
-                      ? `确认使用 ${entry.price} 积分解锁？作者获得 80%，同一资源后续下载与更新免费。`
+                      ? `确认使用 ${entry.price} 积分解锁？作者获得 ${state.boot.rules.author_percent}%，同一资源后续下载与更新免费。`
                       : "确认免费获取并添加到已解锁资源？"
                   )
                 )
@@ -678,34 +678,41 @@
       el(
         "p",
         { class: "hw-help" },
-        `待结算收益 ${wallet.pending} 分 · 解锁资源的作者收益在七天后结算${wallet.frozen ? " · 当前账户已冻结" : ""}`
+        `待结算收益 ${wallet.pending} 分 · 解锁资源的作者收益在 ${state.boot.rules.settlement_days} 天后结算${wallet.frozen ? " · 当前账户已冻结" : ""}`
       ),
     ];
     if (!wallet.welcome_claimed && state.boot.participant)
       children.push(
-        button("完成新人任务，领取 10 积分", async () => {
-          modal(
-            "欢迎开始创作",
-            el(
-              "p",
-              {},
-              "收藏免费；部分精选资源需积分解锁。请分享自己有权发布的作品，按真实使用体验反馈，不通过互刷获取积分。"
-            ),
-            el(
-              "a",
-              { href: "/guidelines", target: "_blank", class: "hw-text-link" },
-              "阅读社区准则 ↗"
-            ),
-            button("我已了解，开始参与", async () => {
-              await api("/welcome", {
-                method: "POST",
-                body: JSON.stringify({ accepted: true }),
-              });
-              $("#modal").close();
-              showWallet();
-            })
-          );
-        })
+        button(
+          `完成新人任务，领取 ${state.boot.rules.welcome} 积分`,
+          async () => {
+            modal(
+              "欢迎开始创作",
+              el(
+                "p",
+                {},
+                "收藏免费；部分精选资源需积分解锁。请分享自己有权发布的作品，按真实使用体验反馈，不通过互刷获取积分。"
+              ),
+              el(
+                "a",
+                {
+                  href: "/guidelines",
+                  target: "_blank",
+                  class: "hw-text-link",
+                },
+                "阅读社区准则 ↗"
+              ),
+              button("我已了解，开始参与", async () => {
+                await api("/welcome", {
+                  method: "POST",
+                  body: JSON.stringify({ accepted: true }),
+                });
+                $("#modal").close();
+                showWallet();
+              })
+            );
+          }
+        )
       );
     const rows = wallet.entries.map((item) =>
       el(

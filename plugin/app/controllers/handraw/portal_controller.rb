@@ -41,6 +41,16 @@ module Handraw
         reviewer: Access.reviewer?(current_user),
         pilot: !SiteSetting.handraw_public_submissions,
         official: { styles: '/gallery/index.html', layouts: '/gallery/layouts.html' },
+        rules: {
+          welcome: SiteSetting.handraw_welcome_credits,
+          settlement_days: SiteSetting.handraw_settlement_days,
+          author_percent: SiteSetting.handraw_author_share_percent,
+          initial_price: SiteSetting.handraw_price_initial.clamp(SiteSetting.handraw_price_min,
+                                                               [SiteSetting.handraw_price_max, SiteSetting.handraw_price_min].max),
+          min_price: SiteSetting.handraw_price_min,
+          max_price: [SiteSetting.handraw_price_max, SiteSetting.handraw_price_min].max,
+          price_days: SiteSetting.handraw_price_window_days
+        },
         categories: Category.secured(guardian).where(read_restricted: false).order(:position).pluck(:id, :name),
         release: release_version
       }

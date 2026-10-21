@@ -18,7 +18,7 @@ module Handraw
       saves = Collection.where(entry_id: candidates.map(&:id)).joins(:user)
                         .where(users: { active: true, staged: false }).group(:entry_id).count
       exploration = lambda { |entry|
-        limit = if counts.fetch([entry.id, 'detail'], 0) >= 2 || saves.fetch(entry.id, 0).positive?
+        limit = if counts.fetch([entry.id, 'detail'], 0) >= SiteSetting.handraw_exploration_detail_threshold || saves.fetch(entry.id, 0).positive?
                   SiteSetting.handraw_exploration_extended
                 else
                   SiteSetting.handraw_exploration_initial
@@ -36,7 +36,16 @@ module Handraw
       quality = candidates.reject(&exploration).sort_by { |entry| -score.call(entry) }
       featured = candidates.select(&:featured).sort_by { |entry| -score.call(entry) }
       queues = { quality: diversify(quality), explore: diversify(exploring), featured: diversify(featured) }
-      pattern = %i[quality explore quality featured quality explore quality featured quality explore]
+      weights = { quality: SiteSetting.handraw_feed_quality_weight,
+                  explore: SiteSetting.handraw_feed_explore_weight,
+                  featured: SiteSetting.handraw_feed_featured_weight }
+      progress = Hash.new(0)
+      pattern = Array.new(weights.values.sum) do
+        weights.each { |bucket, weight| progress[bucket] += weight }
+        bucket = progress.max_by { |_key, value| value }.first
+        progress[bucket] -= weights.values.sum
+        bucket
+      end
       chosen = []
       authors = Hash.new(0)
       fallback = diversify((quality + exploring + featured).uniq)

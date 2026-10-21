@@ -10,7 +10,7 @@ module Handraw
     end
 
     def self.qualified?(user)
-      verified?(user) && user.created_at <= 7.days.ago
+      verified?(user) && user.created_at <= SiteSetting.handraw_qualified_account_days.days.ago
     end
 
     def self.in_groups?(user, setting)

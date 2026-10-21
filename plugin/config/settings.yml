@@ -30,6 +30,70 @@ handraw:
   handraw_exploration_extended:
     default: 100
     min: 1
+  handraw_exploration_detail_threshold:
+    default: 2
+    min: 1
+  handraw_feed_quality_weight:
+    default: 5
+    min: 1
+    max: 100
+  handraw_feed_explore_weight:
+    default: 3
+    min: 1
+    max: 100
+  handraw_feed_featured_weight:
+    default: 2
+    min: 1
+    max: 100
+  handraw_qualified_account_days:
+    default: 7
+    min: 0
+  handraw_contribution_confirmations:
+    default: 3
+    min: 1
+  handraw_author_share_percent:
+    default: 80
+    min: 0
+    max: 100
+  handraw_settlement_days:
+    default: 7
+    min: 1
+  handraw_price_initial:
+    default: 10
+    min: 0
+  handraw_price_min:
+    default: 5
+    min: 0
+  handraw_price_max:
+    default: 30
+    min: 0
+  handraw_price_step:
+    default: 5
+    min: 1
+  handraw_price_window_days:
+    default: 7
+    min: 1
+  handraw_price_min_unlocks:
+    default: 10
+    min: 1
+  handraw_price_min_ratings:
+    default: 5
+    min: 1
+  handraw_price_min_visitors:
+    default: 50
+    min: 1
+  handraw_price_raise_useful_percent:
+    default: 80
+    min: 0
+    max: 100
+  handraw_price_lower_useful_percent:
+    default: 60
+    min: 0
+    max: 100
+  handraw_price_max_complaint_percent:
+    default: 5
+    min: 0
+    max: 100
   handraw_private_storage:
     default: "/home/yang0/handraw-data/private"
   handraw_max_bundle_megabytes:

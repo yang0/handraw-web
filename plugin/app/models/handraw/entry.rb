@@ -15,6 +15,7 @@ module Handraw
     validates :summary, length: { in: 10..4000 }
     validates :license, length: { in: 5..2000 }
     validates :public_id, :content_digest, presence: true, uniqueness: true
+    before_validation :set_initial_price, on: :create
 
     scope :visible, lambda {
       joins(topic: :category).where(status: 'published')
@@ -62,7 +63,7 @@ module Handraw
     def exploration_limit
       visitors = qualified_events.where(kind: 'detail').distinct.count(:user_id)
       collectors = collections.joins(:user).where(users: { active: true, staged: false }).count
-      if visitors >= 2 || collectors.positive?
+      if visitors >= SiteSetting.handraw_exploration_detail_threshold || collectors.positive?
         SiteSetting.handraw_exploration_extended
       else
         SiteSetting.handraw_exploration_initial
@@ -82,6 +83,16 @@ module Handraw
       ((saved + 1.0) / ([visitors, saved].max + 10) +
         (useful + 2.0) / (votes.count + 4)) / 2 +
         [visitors.to_f / (impressions + 10), 1].min * 0.01
+    end
+
+    private
+
+    def set_initial_price
+      return if price_changed?
+
+      lower = SiteSetting.handraw_price_min
+      upper = [SiteSetting.handraw_price_max, lower].max
+      self.price = SiteSetting.handraw_price_initial.clamp(lower, upper)
     end
   end
 end
