@@ -1,5 +1,6 @@
 en:
   site_settings:
+    handraw_generation_daily_limit: "Daily online image submission allowance per pilot creator"
     handraw_enabled: "Enable the Handraw portal and community resources"
     handraw_pilot_group_ids: "Pilot creator groups allowed to publish and unlock resources"
     handraw_reviewer_group_ids: "Groups allowed to review resources and disputes"

@@ -5,46 +5,86 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta
       name="description"
-      content="发现手绘风作品，分享创作经验，把喜欢的画风与图型带进自己的创作。"
+      content="探索视觉画风、图型与配色，组合创作指令，分享自己的作品。"
     />
-    <title>手绘风 · 创作与分享</title>
+    <title>手绘风 · 找到喜欢的画风</title>
     <link rel="stylesheet" href="/studio/assets/navigation.css" />
     <link rel="stylesheet" href="/studio/assets/portal.css" />
     <script src="/studio/assets/image-loader.js" defer></script>
+    <script src="/studio/assets/discover.js" defer></script>
     <script src="/studio/assets/portal.js" defer></script>
   </head>
   <body>
     <a class="hw-skip" href="#main">跳转到内容</a>
     <!-- handraw-navigation -->
     <main id="main" tabindex="-1">
-      <section class="hw-hero" id="hero" aria-labelledby="hero-title">
-        <div
-          class="hw-hero__image"
-          role="img"
-          aria-label="官方画风库的手绘创作示例"
-        ></div>
+      <section
+        class="hw-hero hw-home-hero"
+        id="hero"
+        aria-labelledby="hero-title"
+      >
         <div class="hw-hero__copy">
-          <p class="hw-eyebrow">创作有回响，灵感有出处</p>
-          <h1 id="hero-title">手绘风<span>把灵感，画出来。</span></h1>
-          <p class="hw-hero__intro">
-            晒一张作品，分享一个方法，或找到下一次创作的画风。
+          <p class="hw-eyebrow">HANDRAW · 为每一个想创作的人</p>
+          <h1 id="hero-title">找到喜欢的画风，<br /><em>把想法画出来。</em></h1>
+          <p class="hw-hero__intro" id="home-intro">
+            从画风、图型与配色开始，找到适合你的视觉表达。
           </p>
           <div class="hw-actions">
-            <button class="hw-button" id="share">开始分享 <span>↗</span></button
-            ><a
-              class="hw-text-link"
-              href="/studio?view=resources"
-              data-view="resources"
-              >探索画风与图型 →</a
+            <a class="hw-button" href="/studio?view=explore" data-view="explore"
+              >探索画风 <span aria-hidden="true">↗</span></a
+            >
+            <a
+              class="hw-button hw-button--quiet"
+              href="/studio?view=create"
+              data-view="create"
+              >打开创作台</a
             >
           </div>
+          <form class="hw-home-search" id="home-search" action="/studio">
+            <input type="hidden" name="view" value="explore" />
+            <label class="hw-sr-only" for="home-query"
+              >搜索画风名称、编号或关键词</label
+            >
+            <input
+              id="home-query"
+              name="q"
+              type="search"
+              placeholder="水彩、国风，或 FA-001"
+              maxlength="100"
+            />
+            <button type="submit" aria-label="搜索画风">
+              搜索 <span aria-hidden="true">→</span>
+            </button>
+          </form>
+          <p class="hw-hero-note">免费浏览 · 无需记编号 · 从一个想法开始</p>
         </div>
-        <a
-          class="hw-hero__credit"
-          href="https://static.handraw-style.com/gallery/index.html?web=2"
-          >画风来自官方资源库 ↗</a
-        >
+        <div class="hw-hero-art" aria-label="官方画风示例">
+          <a
+            class="hw-hero-art__main"
+            href="/studio?view=explore&amp;id=FB-006"
+            data-view="explore"
+            ><img
+              data-hw-src="https://img.handraw-style.com/images/individual/FB/FB-006.webp"
+              alt="奇妙绘本画风示例 FB-006"
+              width="420"
+              height="520"
+            /><span>画风不止一种，表达也可以。</span></a
+          >
+          <a
+            class="hw-hero-art__detail"
+            href="/studio?view=explore&amp;id=FI-032"
+            data-view="explore"
+            ><img
+              data-hw-src="https://img.handraw-style.com/images/individual/FI/FI-032.webp"
+              alt="生活随拍画风示例 FI-032"
+              width="220"
+              height="260"
+            /><span>也可以，像生活一样自然。</span></a
+          >
+          <span class="hw-art-note">来自官方画风库的真实示例</span>
+        </div>
       </section>
+      <div id="home-sections"></div>
       <section class="hw-workspace">
         <div class="hw-section-heading">
           <div>
@@ -72,7 +112,7 @@
     </main>
     <footer class="hw-footer">
       <a class="hw-brand" href="/studio">手绘风</a>
-      <p>每一次分享，都让下一次创作更容易。</p>
+      <p>找到画风，开始创作，让灵感彼此连接。</p>
       <a
         href="https://github.com/yang0/handraw-style"
         target="_blank"

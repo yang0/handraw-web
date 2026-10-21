@@ -7,7 +7,7 @@ paths = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
 issues = []
 for name in filter(None, paths):
     path = Path(name)
-    if name.startswith(("web/", "statics/", ".local/", "backups/")) or path.name in {"community_auth.json", ".env", "credentials.json"}:
+    if name.startswith(("web/", "statics/", ".local/", "backups/")) or path.name in {"community_auth.json", ".env", "credentials.json", "image-service.json"}:
         issues.append(f"Private/runtime file tracked: {name}")
     if path.suffix in {".pem", ".key", ".sql", ".zip", ".gz"}:
         issues.append(f"Sensitive/generated artifact tracked: {name}")

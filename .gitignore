@@ -3,6 +3,7 @@
 /需求.md
 /.local/
 /artifacts/
+/plugin/public/composer.html
 /backups/
 /.env
 /.env.*
@@ -15,6 +16,7 @@ node_modules/
 *.key
 community_auth.json
 credentials.json
+image-service.json
 *.log
 *.zip
 *.tar.gz

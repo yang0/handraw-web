@@ -43,4 +43,41 @@ Handraw::Wallet.change!(buyer.id, 10, key: "concurrency-second", reason: "Isolat
 overspend_errors = parallel_unlock(resources.drop(1), buyer)
 raise "Concurrent overspend" unless overspend_errors == 1 && Handraw::Wallet.for_user(buyer.id).balance.zero?
 raise "Incorrect sale count" unless Handraw::Unlock.where(user_id: buyer.id).count == 2
-puts JSON.generate(concurrent_retry: "passed", concurrent_overspend: "passed", final_balance: 0)
+SiteSetting.handraw_generation_daily_limit = 2
+upstream_ids = Queue.new
+Handraw::ImageService.define_singleton_method(:enabled?) { true }
+Handraw::ImageService.define_singleton_method(:request) do |_path, payload:|
+  upstream_ids << payload[:client_task_id]
+  { 'status' => 'queued' }
+end
+
+def parallel_generations(user_id, client_ids)
+  errors = Queue.new
+  results = Queue.new
+  gate = Queue.new
+  threads = client_ids.map do |client_id|
+    Thread.new do
+      gate.pop
+      ActiveRecord::Base.connection_pool.with_connection do
+        results << Handraw::ImageService.submit(User.find(user_id), client_id: client_id,
+          prompt: 'A cat sitting by the window in a simple ink illustration.', title: 'Test cat', ratio: '1:1')
+      end
+    rescue Handraw::RuleError => error
+      errors << error.message
+    end
+  end
+  client_ids.size.times { gate << true }
+  threads.each(&:value)
+  [errors, results]
+end
+
+client_id = SecureRandom.uuid
+errors, results = parallel_generations(buyer.id, [client_id, client_id])
+raise 'Generation retry consumed two submissions' unless errors.empty? && Handraw::ImageService.store(buyer)['submitted'] == 1
+first = results.pop
+raise 'Generation retry changed the upstream task key' unless results.pop['id'] == first['id']
+raise 'Generation retry duplicated the upstream task' unless [upstream_ids.pop, upstream_ids.pop].uniq == [first['id']]
+Handraw::ImageService.update(buyer, first['id'], 'status' => 'error')
+errors, results = parallel_generations(buyer.id, [SecureRandom.uuid, SecureRandom.uuid])
+raise 'Concurrent generation exceeded the daily allowance' unless errors.size == 1 && results.size == 1 && Handraw::ImageService.store(buyer)['submitted'] == 2
+puts JSON.generate(concurrent_retry: 'passed', concurrent_overspend: 'passed', generation_retry: 'passed', generation_quota: 'passed', final_balance: 0)

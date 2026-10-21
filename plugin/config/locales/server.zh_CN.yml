@@ -1,5 +1,6 @@
 zh_CN:
   site_settings:
+    handraw_generation_daily_limit: "每位试运行创作者每日可提交的在线生图次数"
     handraw_enabled: "启用手绘风门户与社区资源功能"
     handraw_pilot_group_ids: "获准发布及积分解锁的试运行创作者群组"
     handraw_reviewer_group_ids: "获准审核精选、资源和争议的版主群组"

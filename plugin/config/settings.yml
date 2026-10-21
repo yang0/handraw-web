@@ -1,6 +1,10 @@
 handraw:
   handraw_enabled:
     default: false
+  handraw_generation_daily_limit:
+    default: 3
+    min: 1
+    max: 20
   handraw_pilot_group_ids:
     type: group_list
     default: ""

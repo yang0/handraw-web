@@ -27,7 +27,7 @@ RSpec.describe Handraw::PortalController do
       expect(response.body).to include('手绘风')
       expect(response.body).to include('/studio/assets/image-loader.js')
       get '/studio', params: { view: 'experience' }
-      expect(response.body).to include('id="hero" hidden', 'data-site-section="experience" aria-current="page"')
+      expect(response.body).to include('id="hero" hidden', 'data-site-section="community" aria-current="page"')
       get '/latest.json'
       expect(response.status).to eq(200)
     end
@@ -41,6 +41,36 @@ RSpec.describe Handraw::PortalController do
       get '/studio/assets/image-loader.js'
       expect(response.status).to eq(200)
       expect(response.media_type).to eq('text/javascript')
+    end
+  end
+
+  describe 'online generation access' do
+    it 'requires login and preserves ownership through submit and history routes' do
+      get '/studio/api/generations.json'
+      expect(response.status).to eq(403)
+      sign_in(buyer)
+      Handraw::ImageService.stubs(:enabled?).returns(true)
+      Handraw::ImageService.stubs(:request).returns('status' => 'queued')
+      post '/studio/api/generations.json', params: {
+        client_id: SecureRandom.uuid, prompt: '一只在窗边晒太阳的小猫', title: '窗边小猫', ratio: '1:1'
+      }
+      expect(response.status).to eq(200)
+      id = response.parsed_body['id']
+      get '/studio/api/generations.json'
+      expect(response.parsed_body['tasks'].map { |task| task['id'] }).to include(id)
+      sign_in(author)
+      get '/studio/api/generations.json'
+      expect(response.parsed_body['tasks']).to eq([])
+      get "/studio/api/generations/#{id}/image", params: { index: '0' }
+      expect(response.status).to eq(404)
+    end
+
+    it 'does not grant generation rights to a signed-in account outside the pilot' do
+      SiteSetting.handraw_public_submissions = false
+      sign_in(buyer)
+      Handraw::ImageService.expects(:submit).never
+      post '/studio/api/generations.json', params: { client_id: SecureRandom.uuid, prompt: '一只猫咪', ratio: '1:1' }
+      expect(response.status).to eq(403)
     end
   end
 
@@ -65,7 +95,7 @@ RSpec.describe Handraw::PortalController do
       headers = { 'User-Agent' => 'Mozilla/5.0 Chrome/130.0 Safari/537.36' }
       get '/latest', headers: headers
       expect(response.status).to eq(200)
-      expect(response.body).to include('data-surface="forum"', 'data-site-section="forum" aria-current="page"')
+      expect(response.body).to include('data-surface="forum"', 'data-site-section="community" aria-current="page"')
       Fabricate(:post, topic: topic, user: author)
       get topic.relative_url, headers: headers
       expect(response.status).to eq(200)

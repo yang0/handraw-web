@@ -190,7 +190,7 @@
     );
   }
 
-  async function share(kind = null) {
+  async function share(kind = null, initial = null) {
     if (!kind || typeof kind !== "string") {
       return modal(
         "你想分享什么？",
@@ -285,6 +285,24 @@
       "image/png,image/jpeg,image/webp";
     if (kind === "work") fields.append(imageField, bodyField);
     else fields.append(bodyField, imageField);
+    if (initial && kind === "work") {
+      titleField.querySelector("input").value = String(
+        initial.title || "",
+      ).slice(0, 120);
+      bodyField.querySelector("textarea").value = String(initial.summary || "");
+      if (initial.image instanceof File) {
+        const files = new DataTransfer();
+        files.items.add(initial.image);
+        imageField.querySelector("input").files = files.files;
+        imageField.append(
+          el(
+            "p",
+            { class: "hw-help" },
+            "已附上刚刚生成的图片；发布前请确认标题与使用说明。",
+          ),
+        );
+      }
+    }
     if (resource) {
       const advanced = el(
         "details",
@@ -1134,27 +1152,58 @@
     );
   }
 
+  const discover = window.HandrawDiscover({
+    state,
+    el,
+    button,
+    modal,
+    tell,
+    api,
+    share,
+    navigate,
+    card,
+  });
+
   async function render() {
     activeRequest += 1;
-    state.view = new URLSearchParams(location.search).get("view") || "home";
+    const params = new URLSearchParams(location.search);
+    const requested = params.get("view") || "home";
+    state.view = params.has("creator")
+      ? "creator"
+      : requested === "resources"
+        ? "explore"
+        : requested;
     const titles = {
-      home: "作品与经验",
-      works: "作品",
-      experience: "经验与教程",
-      resources: "画风与图型",
+      home: "找到喜欢的画风",
+      creator: "创作者主页",
+      explore: "探索视觉灵感",
+      create: "创作台",
+      learn: "从这里开始",
+      community: "创作社区",
+      works: "社区作品",
+      experience: "经验分享",
       mine: "我的创作",
       wallet: "积分与记录",
       review: "版主工作台",
     };
-    $("#hero").hidden = state.view !== "home";
+    const isHome = state.view === "home";
+    document.body.dataset.view = state.view;
+    $("#hero").hidden = !isHome;
+    $("#home-sections").hidden = !isHome;
+    $(".hw-workspace").hidden = isHome;
     $("#discussions-section").hidden = ![
-      "home",
+      "community",
       "works",
       "experience",
     ].includes(state.view);
     $("#section-title").textContent = titles[state.view] || titles.home;
-    $("#section-label").textContent =
-      state.view === "home" ? "COMMUNITY / 社区发现" : "HANDRAW / 创作社区";
+    $("#section-label").textContent = [
+      "community",
+      "works",
+      "experience",
+    ].includes(state.view)
+      ? "COMMUNITY / 创作社区"
+      : "HANDRAW / 开始创作";
     document.title = `${titles[state.view] || titles.home} · 手绘风`;
     $("#toolbar").replaceChildren();
     $("#heading-actions").replaceChildren();
@@ -1163,29 +1212,52 @@
     $("#content").replaceChildren(
       el("p", { class: "hw-spinner" }, "正在加载…"),
     );
+    const active = ["works", "experience", "community", "creator"].includes(
+      state.view,
+    )
+      ? "community"
+      : state.view;
     document.querySelectorAll(".hw-nav [data-view]").forEach((item) => {
-      if (item.dataset.view === state.view)
+      if (item.dataset.view === active)
         item.setAttribute("aria-current", "page");
       else item.removeAttribute("aria-current");
     });
-    if (state.boot.reviewer)
-      $("#heading-actions").append(
-        el(
-          "a",
-          {
-            href: "/studio?view=review",
-            "data-view": "review",
-            class: "hw-text-link",
-          },
-          "版主工作台 →",
-        ),
-      );
-    if (state.view !== "home")
-      $("#heading-actions").append(button("分享 ↗", share, true));
+    if (state.boot.reviewer) $("#heading-actions").append(linkReview());
+    if (isHome) {
+      await discover.home();
+      const entry = params.get("entry");
+      if (entry) await openEntry(entry);
+      return;
+    }
+    if (state.view === "explore") return discover.explore();
+    if (state.view === "create") return discover.create();
+    if (state.view === "learn") return discover.learn();
+    $("#heading-actions").append(button("分享创作 ↗", share, true));
     if (state.view === "mine") return showMine();
     if (state.view === "wallet") return showWallet();
     if (state.view === "review") return showReview();
-    if (state.view === "resources") return showResources();
+    if (["community", "works", "experience"].includes(state.view)) {
+      state.kind =
+        state.view === "works"
+          ? "work"
+          : state.view === "experience"
+            ? "experience"
+            : ["experience", "resource"].includes(params.get("kind"))
+              ? params.get("kind")
+              : "work";
+      $("#toolbar").append(
+        ...tabs(
+          [
+            ["work", "作品广场"],
+            ["experience", "经验分享"],
+            ["resource", "画风与图型"],
+          ],
+          state.kind,
+          (value) => navigate("community", { kind: value }),
+        ),
+        el("a", { href: "/latest", class: "hw-tab" }, "交流讨论 ↗"),
+      );
+    }
     const order = el(
       "select",
       { "aria-label": "内容排序", class: "hw-search" },
@@ -1226,23 +1298,41 @@
     if (id) await openEntry(id);
   }
 
-  function navigate(view) {
+  function linkReview() {
+    return el(
+      "a",
+      {
+        href: "/studio?view=review",
+        "data-view": "review",
+        class: "hw-text-link",
+      },
+      "版主工作台 →",
+    );
+  }
+  function navigate(view, values = {}) {
+    const params = new URLSearchParams(values);
+    params.set("view", view);
     history.pushState(
       {},
       "",
-      view === "home" ? "/studio" : `/studio?view=${view}`,
+      view === "home" ? "/studio" : `/studio?${params}`,
     );
+    $("#modal").close();
     state.page = 1;
     render().catch((error) => tell(error.message));
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
   document.addEventListener("click", (event) => {
     const link = event.target.closest("a[data-view]");
     if (link && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
-      navigate(link.dataset.view);
+      navigate(link.dataset.view, new URL(link.href).searchParams);
     }
   });
-  $("#share").addEventListener("click", share);
+  $("#home-search").addEventListener("submit", (event) => {
+    event.preventDefault();
+    navigate("explore", { q: $("#home-query").value.trim().slice(0, 100) });
+  });
   $("#close-modal").addEventListener("click", () => $("#modal").close());
   $("#more").addEventListener("click", () => {
     state.page += 1;

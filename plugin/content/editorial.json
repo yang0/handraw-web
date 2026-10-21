@@ -1,0 +1,234 @@
+{
+  "featured": [
+    {
+      "id": "FA-001",
+      "legacy": "001",
+      "kind": "style",
+      "name": "Playful Deadpan Doodle",
+      "group": "FA 国际社论幽默 / Editorial & Humor Doodle",
+      "description": "松散黑线、怪萌人物、少量点色、白底、日常吐槽与尴尬幽默；人物轮廓优先于细节堆砌，脸型、头身比例与手脚形状要形成清楚而独立的视觉语言；表情偏冷脸、尴尬或突然夸张，姿态要有明确喜剧节奏，避免统一的可爱微笑。",
+      "image": "https://img.handraw-style.com/images/individual/FA/FA-001.webp",
+      "title": "日常，也值得画下来",
+      "caption": "松散墨线与一点幽默"
+    },
+    {
+      "id": "FB-006",
+      "legacy": "041",
+      "kind": "style",
+      "name": "Bendy Absurd Storybook",
+      "group": "FB 经典绘本叙事 / Picture Book & Watercolor",
+      "description": "极端比例、弯曲结构、怪生物、流动线条、疯狂想象。",
+      "image": "https://img.handraw-style.com/images/individual/FB/FB-006.webp",
+      "title": "走进奇妙绘本",
+      "caption": "想象力丰富的童话世界"
+    },
+    {
+      "id": "FC-029",
+      "legacy": "276",
+      "kind": "style",
+      "name": "Clean Airy Flat Vector Illustration",
+      "group": "FC 现代平面艺术 / Modern Graphic & Pop",
+      "description": "轮廓清晰的大面积平涂色块塑造形体；造型适度概括与圆润几何化，保留关键识别特征；每个区域最多两级平面明暗与清晰硬边阴影，通过色块明度、冷暖和面积对比表现空间层次；色彩明亮清爽、柔和通透，纯净平滑的画面质感；极简主义、简洁现代，具有轻盈的现代商业插画与编辑插画感",
+      "image": "https://img.handraw-style.com/images/individual/FC/FC-029.webp",
+      "title": "清透的生活切片",
+      "caption": "轻盈色块，干净又明亮"
+    },
+    {
+      "id": "FD-001",
+      "legacy": "083",
+      "kind": "style",
+      "name": "Dynamic East-Asian Ink Editorial",
+      "group": "FD 日本当代插画 / Japanese Contemporary & Manga",
+      "description": "流动墨线、东方笔意、强动作、现代 Editorial；保留明显手绘笔压、停顿与轻微不齐整感，让轮廓产生真实纸上绘制的节奏；线条带书写性与留白意识，衣褶、发丝和姿势顺势流动，东方感来自形与节奏。",
+      "image": "https://img.handraw-style.com/images/individual/FD/FD-001.webp",
+      "title": "日常里的小小故事",
+      "caption": "发现人物与场景的关系"
+    },
+    {
+      "id": "FE-053",
+      "legacy": "193",
+      "kind": "style",
+      "name": "Cantonese Dim-Sum Guochao",
+      "group": "FE 新国风与传统工艺 / Chinese Traditional & Folk Craft",
+      "description": "岭南元素、点心、暖橙青绿、生活国潮。",
+      "image": "https://img.handraw-style.com/images/individual/FE/FE-053.webp",
+      "title": "一盅两件，人间烟火",
+      "caption": "温暖的广式早茶国潮"
+    },
+    {
+      "id": "FF-001",
+      "legacy": "217",
+      "kind": "style",
+      "name": "Stylized 3D Cartoon Personality",
+      "group": "FF 3D黏土毛毡与纸雕 / 3D Clay, Felt & Papercraft",
+      "description": "奇想风格化3D卡通美学、夸张头身比例、富有表现力的大眼、独特剪影轮廓与精细触感材质纹理；具有现代动画长片质感。",
+      "image": "https://img.handraw-style.com/images/individual/FF/FF-001.webp",
+      "title": "把灵感捏成小世界",
+      "caption": "有触感的立体视觉"
+    },
+    {
+      "id": "FH-001",
+      "legacy": "155",
+      "kind": "style",
+      "name": "Editorial Doodle",
+      "group": "FH 先锋实验与综合媒介 / Mixed Media & Impasto Arts",
+      "description": "随手黑线、少量点色、人物 + 概念、白底。",
+      "image": "https://img.handraw-style.com/images/individual/FH/FH-001.webp",
+      "title": "几笔画出一个想法",
+      "caption": "简单线条，也能表达观点"
+    },
+    {
+      "id": "FI-032",
+      "legacy": "363",
+      "kind": "style",
+      "name": "iPhone 17 Candid Everyday Snapshot Photography",
+      "group": "FI 写实摄影与视觉大片 / Realistic, Photography & Cinematic Styles",
+      "description": "真实手机抓拍；iPhone原相机直出质感；自然环境光与现场氛围；生动生活瞬间；细腻真实肤质与高动态范围；轻微自然景深；无过度修饰真实感。",
+      "image": "https://img.handraw-style.com/images/individual/FI/FI-032.webp",
+      "title": "记录随手的美好",
+      "caption": "自然光下的生活瞬间"
+    }
+  ],
+  "templates": [
+    {
+      "id": "social",
+      "title": "做一张社媒图",
+      "description": "一个主题，一张图，把想说的话讲清楚。",
+      "mode": "graphic-text",
+      "style": "FC-029",
+      "layout": "SC-001",
+      "color": "C-07",
+      "theme": "分享三个让生活更有松弛感的小习惯",
+      "ratio": "3:4"
+    },
+    {
+      "id": "cover",
+      "title": "给文章一张好封面",
+      "description": "让标题与画面，一起传达文章的想法。",
+      "mode": "article-cover",
+      "style": "FH-001",
+      "layout": "",
+      "color": "C-25",
+      "theme": "让 AI 成为你的创作搭档",
+      "ratio": "16:9"
+    },
+    {
+      "id": "story",
+      "title": "画一个温暖的故事",
+      "description": "从一个小场景开始，找到自己的表达。",
+      "mode": "pure",
+      "style": "FB-006",
+      "layout": "",
+      "color": "",
+      "theme": "雨天的小书店，一只猫在窗边等老朋友",
+      "ratio": "3:4"
+    }
+  ],
+  "guides": [
+    {
+      "id": "start",
+      "title": "第一次来，从哪里开始？",
+      "summary": "选画风、写主题、开始创作，三分钟走一遍。",
+      "minutes": 3,
+      "steps": [
+        [
+          "先看效果，再挑画风",
+          "打开探索，选一张让你喜欢的示例图。详情里的编号是这套画风的稳定标识，不必记住，点击“使用此画风”即可带入创作台。"
+        ],
+        [
+          "写清楚你想画什么",
+          "描述主体、正在做什么、在哪里。例如“雨天的小书店，一只猫在窗边等老朋友”。先讲清内容，再决定图型与配色。"
+        ],
+        [
+          "完成后再决定是否分享",
+          "可以复制指令在已安装 Skill 的 AI 助手中使用。在线生图入口会显示当前账号是否可用；分享作品由你主动发起。"
+        ]
+      ]
+    },
+    {
+      "id": "choose",
+      "title": "画风、图型、配色怎么选？",
+      "summary": "三个选择，分别解决画面气质、结构和颜色。",
+      "minutes": 2,
+      "steps": [
+        [
+          "画风决定视觉语言",
+          "墨线、水彩、平面色块、立体材质、写实摄影，各自有不同的笔触和质感。先用示例图判断，不必认识参考作者。"
+        ],
+        [
+          "图型决定信息怎么摆",
+          "社媒卡、信息图、分镜、IP 定位卡、电商主图等各有适用场景。纯插画可不指定图型，避免不必要的排版约束。"
+        ],
+        [
+          "配色可以留空",
+          "想保持某种品牌色或情绪时再指定配色。不指定时沿用画风的色彩语言，先减少变量。"
+        ]
+      ]
+    },
+    {
+      "id": "skill",
+      "title": "在自己的 AI 助手里使用 Skill",
+      "summary": "网页看效果，Skill 执行创作，编号保持一致。",
+      "minutes": 4,
+      "steps": [
+        [
+          "安装公开项目",
+          "打开页脚的开源 Skill 项目，按项目 README 选择与你的 AI 工具对应的安装方法。网页不需要你下载资源 ZIP。"
+        ],
+        [
+          "复制创作指令",
+          "在创作台选择画风并填写主题，复制指令给已安装 Skill 的助手。示例：“风格：FA-001，主题：窗台晒太阳的猫咪”。"
+        ],
+        [
+          "保留自己的创作记录",
+          "把最终成图、实际使用的模型与指令保存在自己的工程里。分享时可以只公开作品，也可以自愿补充创作方法。"
+        ]
+      ]
+    },
+    {
+      "id": "share",
+      "title": "怎样分享一份有用的创作？",
+      "summary": "一张真实成图，加上一点可复用的经验。",
+      "minutes": 2,
+      "steps": [
+        [
+          "晒作品",
+          "上传真实成图，起一个容易理解的标题。说明用了什么画风，或讲讲你最满意的地方。"
+        ],
+        [
+          "写经验",
+          "写清“想做什么 → 怎么做 → 效果如何”。一个具体的小经验比泛泛而谈更容易帮助别人。"
+        ],
+        [
+          "分享画风或图型",
+          "直接填写描述、提示词或排版要点，并配上实际效果图。补充允许怎样使用，保留来源与署名，不需要制作 ZIP。"
+        ]
+      ]
+    },
+    {
+      "id": "faq",
+      "title": "常见问题与图片加载",
+      "summary": "图片暂未显示、编号和效果不一致时怎么办？",
+      "minutes": 2,
+      "steps": [
+        [
+          "图片暂未显示",
+          "页面会分批加载附近图片，不会一次请求整套图库。先稍等；出现重试提示后再主动重试，避免连续刷新。"
+        ],
+        [
+          "同一画风为什么效果不同",
+          "模型、主题、参考图、比例都会影响结果。画风定义描述视觉特征，示例用于理解方向，不承诺逐像素复现。"
+        ],
+        [
+          "旧编号还能用吗",
+          "探索支持现有标准编号及已收录的旧数字编号。遇到无法识别的编号，可到社区讨论并附上使用的版本与完整错误。"
+        ]
+      ]
+    }
+  ],
+  "counts": {
+    "style": 365,
+    "layout": 167,
+    "color": 36
+  }
+}

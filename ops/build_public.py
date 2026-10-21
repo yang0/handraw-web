@@ -12,12 +12,13 @@ def build(plugin: Path, target: Path, static_root: Path):
     gallery = target / 'gallery'
     assets.mkdir(parents=True, exist_ok=True)
     gallery.mkdir(parents=True, exist_ok=True)
-    for name in ('portal.js', 'portal.css', 'navigation.css', 'image-loader.js'):
+    for name in ('portal.js', 'portal.css', 'navigation.css', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css'):
         shutil.copyfile(plugin / 'public' / name, assets / name)
+    shutil.copyfile(plugin / 'content/catalog.json', assets / 'catalog.json')
     revision = (plugin / 'REVISION').read_text().strip()
     navigation = (plugin / 'public/navigation.html').read_text(encoding='utf-8')
     navigation = navigation.replace('data-surface="portal"', 'data-surface="gallery"')
-    navigation = navigation.replace('data-site-section="resources"', 'data-site-section="resources" aria-current="page"')
+    navigation = navigation.replace('data-site-section="explore"', 'data-site-section="explore" aria-current="page"')
     style = f'<link rel="stylesheet" href="https://static.handraw-style.com/handraw-web/releases/{revision}/assets/navigation.css">'
     loader = f'<script src="https://static.handraw-style.com/handraw-web/releases/{revision}/assets/image-loader.js" defer></script>'
     for source in (static_root / 'gallery').iterdir():
@@ -30,8 +31,12 @@ def build(plugin: Path, target: Path, static_root: Path):
         page = re.sub(r'<link[^>]+handraw-web/assets/navigation\.css[^>]*>', '', page)
         # Remove the legacy five-URL error fallback (including its load listener).
         page = re.sub(r'<script>\s*\(function\(\)\s*\{\s*function fixImg\(img\).*?</script>', '', page, flags=re.S)
-        page = page.replace('</head>', style + loader + '</head>', 1)
-        page = re.sub(r'(<body\b[^>]*>)', lambda match: match[0] + navigation, page, count=1)
+        refinement = f'<link rel="stylesheet" href="https://static.handraw-style.com/handraw-web/releases/{revision}/assets/gallery-refinement.css"><script src="https://static.handraw-style.com/handraw-web/releases/{revision}/assets/gallery-refinement.js" defer></script>'
+        page = page.replace('</head>', style + loader + refinement + '</head>', 1)
+        page_navigation = navigation
+        if source.name == 'tutorials.html':
+            page_navigation = page_navigation.replace('data-site-section="explore" aria-current="page"', 'data-site-section="explore"').replace('data-site-section="create"', 'data-site-section="create" aria-current="page"')
+        page = re.sub(r'(<body\b[^>]*>)', lambda match: match[0] + page_navigation, page, count=1)
         # These exports used checkout-relative paths and retried several missing URLs per image.
         page = re.sub(r'(?:\.\./)+images/', 'https://img.handraw-style.com/images/', page)
         # No remote image URL is assigned to src until it reaches the visible queue.
@@ -43,6 +48,10 @@ def build(plugin: Path, target: Path, static_root: Path):
         page = re.sub(r'href="((?:index|layouts|colors|assets|tutorials|characters)\.html)(?:\?[^"#]*)?(#[^"]*)?"',
                       lambda match: f'href="{match[1]}?v={revision}{match[2] or ""}"', page)
         (gallery / source.name).write_text(page, encoding='utf-8')
+        if source.name == 'tutorials.html':
+            composer = page.replace('</body>', f'<script src="/studio/assets/composer-bridge.js?v={revision}"></script></body>')
+            (assets / 'composer.html').write_text(composer, encoding='utf-8')
+            (plugin / 'public/composer.html').write_text(composer, encoding='utf-8')
     for path in [target, assets, gallery, *target.rglob('*')]:
         path.chmod(0o755 if path.is_dir() else 0o644)
 

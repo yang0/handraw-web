@@ -8,7 +8,7 @@ module Handraw
     skip_after_action :verify_same_origin_request, only: :asset
     before_action :require_enabled
     before_action :ensure_logged_in, except: %i[index asset boot feed show creator]
-    before_action :ensure_participant, only: %i[create upload_bundle welcome unlock]
+    before_action :ensure_participant, only: %i[create upload_bundle welcome unlock generation_create generation_retry]
     before_action :ensure_reviewer, only: %i[review_queue review refund freeze_wallet review_download]
 
     rescue_from Handraw::RuleError do |error|
@@ -22,12 +22,17 @@ module Handraw
     def index
       nonce = ContentSecurityPolicy.nonce_placeholder(response.headers, request_env: request.env)
       page = File.read(Handraw::Engine.root.join('public', 'index.html'))
-      view = params[:view].to_s.presence || 'home'
-      active = %w[home works experience resources mine].include?(view) ? view : nil
+      view = params[:creator].present? ? 'creator' : (params[:view].to_s.presence || 'home')
+      active = case view
+               when 'resources', 'explore' then 'explore'
+               when 'works', 'experience', 'community', 'creator' then 'community'
+               when 'create', 'learn' then view
+               end
       page = page.sub('<!-- handraw-navigation -->', Handraw::Navigation.render(active: active))
       page = page.sub('id="hero"', 'id="hero" hidden') unless view == 'home'
       page = page.sub('<script src="/studio/assets/portal.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/portal.js\"")
       page = page.sub('<script src="/studio/assets/image-loader.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/image-loader.js\"")
+      page = page.sub('<script src="/studio/assets/discover.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/discover.js\"")
       if release_version.match?(/\A[0-9a-f]{40}\z/)
         page = page.gsub('/studio/assets/', "https://static.handraw-style.com/handraw-web/releases/#{release_version}/assets/")
       end
@@ -36,10 +41,11 @@ module Handraw
 
     def asset
       name = params[:name]
-      raise Discourse::NotFound if %w[portal.js portal.css navigation.css image-loader.js].exclude?(name)
+      raise Discourse::NotFound if %w[portal.js portal.css navigation.css image-loader.js discover.js composer-bridge.js composer.html catalog.json].exclude?(name)
 
-      send_file Handraw::Engine.root.join('public', name), disposition: 'inline',
-                                                           type: name.end_with?('.js') ? 'text/javascript' : 'text/css'
+      path = Handraw::Engine.root.join(name == 'catalog.json' ? 'content' : 'public', name)
+      send_file path, disposition: 'inline',
+                                                           type: name.end_with?('.json') ? 'application/json' : name.end_with?('.js') ? 'text/javascript' : name.end_with?('.html') ? 'text/html' : 'text/css'
     end
 
     def boot
@@ -61,8 +67,34 @@ module Handraw
           price_days: SiteSetting.handraw_price_window_days
         },
         categories: Category.secured(guardian).where(read_restricted: false).order(:position).pluck(:id, :name),
+        editorial: JSON.parse(File.read(Handraw::Engine.root.join('content', 'editorial.json'))),
+        generation: { enabled: ImageService.enabled?, available: ImageService.enabled? && Access.participant?(current_user),
+                      daily_limit: SiteSetting.handraw_generation_daily_limit },
         release: release_version
       }
+    end
+
+    def generation_create
+      RateLimiter.new(current_user, 'handraw-generation-submit', 10, 1.minute).performed!
+      render json: ImageService.submit(current_user, client_id: params[:client_id], prompt: params[:prompt],
+                                                    title: params[:title], ratio: params[:ratio])
+    end
+
+    def generation_index
+      RateLimiter.new(current_user, 'handraw-generation-poll', 10, 1.minute).performed!
+      response.headers['Cache-Control'] = 'private, no-store'
+      render json: ImageService.list(current_user, refresh: params[:refresh] == '1')
+    end
+
+    def generation_retry
+      RateLimiter.new(current_user, 'handraw-generation-confirm', 5, 1.minute).performed!
+      render json: ImageService.dispatch(current_user, params[:id])
+    end
+
+    def generation_image
+      bytes, media_type = ImageService.image(current_user, params[:id], params[:index])
+      response.headers['Cache-Control'] = 'private, no-store'
+      send_data bytes, type: media_type, disposition: 'inline'
     end
 
     def feed

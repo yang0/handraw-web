@@ -20,20 +20,23 @@ class PublicDeliveryTests(unittest.TestCase):
             plugin = root / 'plugin'
             (plugin / 'public').mkdir(parents=True)
             (plugin / 'REVISION').write_text('a' * 40)
-            for name in ('portal.js', 'portal.css', 'navigation.css', 'navigation.html', 'image-loader.js'):
+            for name in ('portal.js', 'portal.css', 'navigation.css', 'navigation.html', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css'):
                 (plugin / 'public' / name).write_text((ROOT / 'plugin/public' / name).read_text(encoding='utf-8'), encoding='utf-8')
+            (plugin / 'content').mkdir()
+            (plugin / 'content/catalog.json').write_text((ROOT / 'plugin/content/catalog.json').read_text(encoding='utf-8'), encoding='utf-8')
             (plugin / 'public' / 'private.key').write_text('never publish')
             static = root / 'static'
             (static / 'gallery').mkdir(parents=True)
             original = '<html><head><script>(function() { function fixImg(img) { retryMissingURLs(); } })();</script></head><body><nav class="site-nav">Original filters</nav><img src="../../../images/layouts/SC-001.webp"><script>preview.src = card.dataset.image;</script></body></html>'
             source = static / 'gallery/layouts.html'
             source.write_text(original)
+            (static / 'gallery/tutorials.html').write_text('<html><head></head><body><p>Existing composer</p></body></html>')
             (static / 'gallery' / 'private.key').write_text('never publish')
             target = root / 'output'
             load('build_public').build(plugin, target, static)
             page = (target / 'gallery/layouts.html').read_text(encoding='utf-8')
             self.assertEqual(source.read_text(), original)
-            self.assertIn('data-site-section="resources" aria-current="page"', page)
+            self.assertIn('data-site-section="explore" aria-current="page"', page)
             self.assertIn('Original filters', page)
             self.assertIn('https://img.handraw-style.com/images/layouts/SC-001.webp', page)
             self.assertIn('data-hw-src="https://img.handraw-style.com/images/layouts/SC-001.webp"', page)
@@ -42,6 +45,8 @@ class PublicDeliveryTests(unittest.TestCase):
             self.assertIn('/assets/image-loader.js', page)
             self.assertNotIn('retryMissingURLs', page)
             self.assertIn('HandrawImages.set(preview, card.dataset.image)', page)
+            self.assertIn('/studio/assets/composer-bridge.js', (target / 'assets/composer.html').read_text(encoding='utf-8'))
+            self.assertIn('data-site-section="create" aria-current="page"', (target / 'gallery/tutorials.html').read_text(encoding='utf-8'))
             self.assertFalse((target / 'assets/private.key').exists())
             self.assertFalse((target / 'gallery/private.key').exists())
 
