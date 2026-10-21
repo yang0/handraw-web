@@ -54,6 +54,7 @@ jobs:
       DISCOURSE_REDIS_DB: 13
       LOAD_PLUGINS: 1
       BUNDLE_IGNORE_CONFIG: 1
+      HANDRAW_PRIVATE_STORAGE: /tmp/handraw-test-private
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,12 +70,14 @@ jobs:
           ruby-version: '3.4.7'
           bundler-cache: true
           working-directory: discourse
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
       - uses: pnpm/action-setup@v4
         with:
           version: '12.11.2'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: discourse/pnpm-lock.yaml
       - name: Install locked asset processor dependencies
         working-directory: discourse
         run: pnpm install --frozen-lockfile
