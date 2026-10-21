@@ -40,6 +40,11 @@
 
   function el(tag, attributes = {}, ...children) {
     const element = document.createElement(tag);
+    if (tag === "img" && attributes.src) {
+      attributes = { ...attributes, "data-hw-src": attributes.src };
+      attributes.src =
+        "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%224%22 height=%223%22%3E%3Cpath fill=%22%23eeeae2%22 d=%22M0 0h4v3H0z%22/%3E%3C/svg%3E";
+    }
     for (const [key, value] of Object.entries(attributes)) {
       if (key.startsWith("on")) element.addEventListener(key.slice(2), value);
       else if (key === "class") element.className = value;
@@ -50,7 +55,9 @@
     for (const child of children.flat()) {
       if (child !== null && child !== undefined)
         element.append(
-          child instanceof Node ? child : document.createTextNode(String(child))
+          child instanceof Node
+            ? child
+            : document.createTextNode(String(child)),
         );
     }
     return element;
@@ -68,7 +75,7 @@
     const request = async (retried = false) => {
       if (cooldownUntil > Date.now())
         await new Promise((resolve) =>
-          setTimeout(resolve, cooldownUntil - Date.now())
+          setTimeout(resolve, cooldownUntil - Date.now()),
         );
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
@@ -88,7 +95,7 @@
       if (response.status === 429) {
         const seconds = Math.max(
           1,
-          Math.min(60, Number(response.headers.get("Retry-After")) || 10)
+          Math.min(60, Number(response.headers.get("Retry-After")) || 10),
         );
         cooldownUntil = Date.now() + seconds * 1000;
         if (read && !retried) return request(true);
@@ -101,7 +108,7 @@
           result.errors?.join("；") ||
             (response.status === 403
               ? "请登录获准参与的账号后再操作"
-              : "操作未完成，请稍后重试")
+              : "操作未完成，请稍后重试"),
         );
       if (read)
         getCache.set(path, { value: result, expires: Date.now() + 15000 });
@@ -136,7 +143,7 @@
     const node = el(
       "button",
       { type: "button", class: `hw-button${quiet ? " hw-button--quiet" : ""}` },
-      text
+      text,
     );
     node.addEventListener("click", () => action(node, () => callback(node)));
     return node;
@@ -166,7 +173,7 @@
       "div",
       { class: "hw-field" },
       el("label", { for: `field-${name}` }, label),
-      control
+      control,
     );
   }
 
@@ -178,8 +185,8 @@
       el(
         "select",
         { id: `field-${name}`, name },
-        choices.map(([value, text]) => el("option", { value }, text))
-      )
+        choices.map(([value, text]) => el("option", { value }, text)),
+      ),
     );
   }
 
@@ -206,11 +213,11 @@
                   "span",
                   {},
                   el("strong", {}, title),
-                  el("small", {}, description)
-                )
-              ).parentElement
-          )
-        )
+                  el("small", {}, description),
+                ),
+              ).parentElement,
+          ),
+        ),
       );
     }
     if (state.boot.user && !state.boot.participant)
@@ -219,9 +226,9 @@
         el(
           "p",
           {},
-          "目前由试运行创作者发布。你可以先收藏喜欢的内容，或到论坛交流。"
+          "目前由试运行创作者发布。你可以先收藏喜欢的内容，或到论坛交流。",
         ),
-        el("a", { href: "/latest", class: "hw-text-link" }, "前往论坛")
+        el("a", { href: "/latest", class: "hw-text-link" }, "前往论坛"),
       );
     const resource = ["style", "layout"].includes(kind);
     const titleLabel =
@@ -256,8 +263,8 @@
         el(
           "p",
           { class: "hw-help" },
-          "登录后即可发布。先看看适合分享哪些内容。"
-        )
+          "登录后即可发布。先看看适合分享哪些内容。",
+        ),
       );
     const fields = el("fieldset", { disabled: !state.boot.user });
     if (resource)
@@ -265,14 +272,14 @@
         selectField("kind", "分享类型", [
           ["style", "画风"],
           ["layout", "图型／排版"],
-        ])
+        ]),
       );
     fields.append(titleField);
     const imageField = field(
       "image",
       kind === "work" ? "上传作品图片" : "配一张效果图（选填）",
       "file",
-      kind === "work"
+      kind === "work",
     );
     imageField.querySelector("input").accept =
       "image/png,image/jpeg,image/webp";
@@ -282,22 +289,9 @@
       const advanced = el(
         "details",
         { class: "hw-advanced" },
-        el("summary", {}, "附上可导入 Skill 的定义（选填）"),
-        el(
-          "p",
-          { class: "hw-help" },
-          "有从 Skill 导出的画风或图型文件，可以附在这里。没有文件也能分享描述与效果图。"
-        ),
-        field("bundle", "Skill 导出的 ZIP 文件", "file", false),
-        field("license", "补充使用范围（选填）", "textarea", false),
-        el(
-          "label",
-          { class: "hw-check" },
-          el("input", { name: "paid_opt_in", type: "checkbox" }),
-          `申请审核后开启积分下载：初始 ${state.boot.rules.initial_price} 分，范围 ${state.boot.rules.min_price}–${state.boot.rules.max_price} 分，每 ${state.boot.rules.price_days} 天最多调整一档。我同意按使用反馈自动调价。`
-        )
+        el("summary", {}, "补充使用说明（选填）"),
+        field("license", "允许怎样使用这份分享？", "textarea", false),
       );
-      advanced.querySelector('[name="bundle"]').accept = ".zip";
       fields.append(advanced);
     }
     fields.append(
@@ -305,14 +299,14 @@
         "label",
         { class: "hw-check" },
         el("input", { name: "rights", type: "checkbox", required: true }),
-        "我有权分享以上内容。使用范围以作者说明为准。"
-      )
+        "我有权分享以上内容。使用范围以作者说明为准。",
+      ),
     );
     form.append(fields, el("p", { class: "hw-form-error", role: "alert" }));
     const submit = el(
       "button",
       { class: "hw-button", type: "submit" },
-      state.boot.user ? "发布分享" : "登录后发布"
+      state.boot.user ? "发布分享" : "登录后发布",
     );
     form.append(submit);
     form.elements.title.minLength = 5;
@@ -341,7 +335,7 @@
           const upload = await response.json();
           if (!response.ok || !upload.url)
             throw new Error(
-              upload.errors?.join("；") || "图片上传失败，请稍后再试"
+              upload.errors?.join("；") || "图片上传失败，请稍后再试",
             );
           cover = upload.url.startsWith("//")
             ? `https:${upload.url}`
@@ -358,31 +352,10 @@
                 "作者分享的创作作品，欢迎在原帖交流制作方法。",
               cover_url: cover,
               license: data.get("license") || undefined,
-              paid_opt_in: resource && data.get("paid_opt_in") === "on",
+              paid_opt_in: false,
             },
           }),
         });
-        const bundle = data.get("bundle");
-        if (bundle?.size) {
-          const upload = new FormData();
-          upload.append("file", bundle);
-          try {
-            await api(`/entries/${entry.id}/bundle`, {
-              method: "POST",
-              body: upload,
-            });
-          } catch (error) {
-            modal(
-              "分享已发布，定义文件未上传",
-              el("p", {}, error.message),
-              button("到我的创作补充", () => {
-                $("#modal").close();
-                navigate("mine");
-              })
-            );
-            return;
-          }
-        }
         $("#modal").close();
         navigate("mine");
         tell("分享已发布。");
@@ -395,7 +368,7 @@
           ? "写经验"
           : "分享画风或图型",
       form,
-      button("重新选择分享类型", () => share(), true)
+      button("重新选择分享类型", () => share(), true),
     );
   }
 
@@ -408,7 +381,7 @@
     node.textContent = entry.collected ? "已收藏 ♥" : "收藏 ♡";
     node.setAttribute("aria-pressed", String(entry.collected));
     tell(
-      entry.collected ? "已加入我的收藏。" : "已取消收藏，已解锁资格仍然保留。"
+      entry.collected ? "已加入我的收藏。" : "已取消收藏，已解锁资格仍然保留。",
     );
   }
 
@@ -427,14 +400,14 @@
             class: "hw-detail-image",
             src: entry.cover_url,
             alt: entry.title,
-          })
+          }),
         );
       body.push(
         el(
           "p",
           { class: "hw-help" },
-          `${labels[entry.kind] || "资料"}${entry.source_label ? " · " + entry.source_label : ""} · ${entry.author.name || entry.author.username} · v${entry.version}${entry.featured ? " · 编辑精选" : ""}`
-        )
+          `${labels[entry.kind] || "资料"}${entry.source_label ? " · " + entry.source_label : ""} · ${entry.author.name || entry.author.username} · v${entry.version}${entry.featured ? " · 编辑精选" : ""}`,
+        ),
       );
       body.push(el("p", { class: "hw-detail-text" }, entry.summary));
       const actions = el("div", { class: "hw-actions" });
@@ -442,9 +415,17 @@
         button(
           entry.collected ? "已收藏 ♥" : "收藏 ♡",
           (node) => save(entry, node),
-          true
-        )
+          true,
+        ),
       );
+      if (["style", "layout"].includes(entry.kind))
+        actions.append(
+          button("复制描述与提示词", async () => {
+            await navigator.clipboard.writeText(entry.summary);
+            tell("已复制，可以带入创作台使用。");
+          }),
+        );
+      // Keep access to previously published attachments; new shares use text and images.
       if (entry.bundle_available) {
         if (entry.unlocked)
           actions.append(
@@ -454,8 +435,8 @@
                 class: "hw-button",
                 href: `/studio/api/entries/${id}/download`,
               },
-              "下载画风／图型定义 ↓"
-            )
+              "获取已有附件 ↓",
+            ),
           );
         else
           actions.append(
@@ -467,7 +448,7 @@
                   !confirm(
                     entry.price
                       ? `确认使用 ${entry.price} 积分解锁？作者获得 ${state.boot.rules.author_percent}%，同一资源后续下载与更新免费。`
-                      : "确认免费获取并添加到已解锁资源？"
+                      : "确认免费获取并添加到已解锁资源？",
                   )
                 )
                   return;
@@ -480,16 +461,16 @@
                 });
                 await refreshAccount();
                 await openEntry(id);
-              }
-            )
+              },
+            ),
           );
       }
       actions.append(
         el(
           "a",
           { class: "hw-text-link", href: entry.topic_url },
-          entry.source_label ? "阅读原帖与讨论 →" : "讨论与补充 →"
-        )
+          entry.source_label ? "阅读原帖与讨论 →" : "讨论与补充 →",
+        ),
       );
       body.push(actions);
       if (entry.paid)
@@ -497,8 +478,8 @@
           el(
             "p",
             { class: "hw-help" },
-            `${entry.price_reason}。一次解锁后，重复下载与更新不再扣分。`
-          )
+            `${entry.price_reason}。一次解锁后，重复下载与更新不再扣分。`,
+          ),
         );
       if (state.boot.user && state.boot.user.id !== entry.author.id) {
         body.push(
@@ -514,7 +495,7 @@
                 });
                 tell("使用反馈已记录，谢谢分享真实体验。");
               },
-              true
+              true,
             ),
             button(
               "使用后不太有用",
@@ -525,54 +506,17 @@
                 });
                 tell("反馈已记录。");
               },
-              true
+              true,
             ),
-            button("报告问题", () => report(entry), true)
-          )
+            button("报告问题", () => report(entry), true),
+          ),
         );
       }
-      if (state.boot.user?.id === entry.author.id)
-        if (["style", "layout"].includes(entry.kind))
-          body.push(bundleUpload(entry));
       body.push(el("p", { class: "hw-license" }, `授权说明：${entry.license}`));
       modal(entry.title, ...body);
     } catch (error) {
       tell(error.message);
     }
-  }
-
-  function bundleUpload(entry) {
-    const input = el("input", {
-      type: "file",
-      accept: ".zip",
-      "aria-label": "选择画风／图型定义文件",
-    });
-    return el(
-      "div",
-      { class: "hw-field" },
-      el(
-        "p",
-        { class: "hw-help" },
-        "如需让别人导入 Skill，可附上 Skill 导出的定义文件。更新后会重新审核。"
-      ),
-      input,
-      button(
-        "补充／更新定义文件",
-        async () => {
-          if (!input.files[0])
-            throw new Error("请选择 Skill 导出的 ZIP 定义文件");
-          const form = new FormData();
-          form.append("file", input.files[0]);
-          await api(`/entries/${entry.id}/bundle`, {
-            method: "POST",
-            body: form,
-          });
-          tell("定义文件已上传，等待版主审核。");
-          $("#modal").close();
-        },
-        true
-      )
-    );
   }
 
   function report(entry) {
@@ -589,7 +533,7 @@
         });
         $("#modal").close();
         tell("问题已提交，可在原帖继续补充证据。");
-      })
+      }),
     );
   }
 
@@ -603,7 +547,7 @@
         onclick: (event) =>
           action(event.currentTarget, () => save(entry, event.currentTarget)),
       },
-      entry.collected ? "已收藏 ♥" : "收藏 ♡"
+      entry.collected ? "已收藏 ♥" : "收藏 ♡",
     );
     const node = el("article", {
       class: `hw-work${entry.cover_url ? "" : " hw-work--text"}`,
@@ -629,15 +573,15 @@
           }),
           entry.featured
             ? el("span", { class: "hw-work__badge" }, "精选")
-            : null
-        )
+            : null,
+        ),
       );
     }
     node.append(
       el(
         "p",
         { class: "hw-work__kind" },
-        `${labels[entry.kind] || "资料"}${entry.source_label ? " / " + entry.source_label : ""}${entry.verified ? " / 已验证" : ""}${entry.paid ? ` / ${entry.price} 积分` : ""}`
+        `${labels[entry.kind] || "资料"}${entry.source_label ? " / " + entry.source_label : ""}${entry.verified ? " / 已验证" : ""}${entry.paid ? ` / ${entry.price} 积分` : ""}`,
       ),
       el(
         "h3",
@@ -651,9 +595,9 @@
               openEntry(entry.id);
             },
           },
-          entry.title
-        )
-      )
+          entry.title,
+        ),
+      ),
     );
     if (!entry.cover_url)
       node.append(el("p", { class: "hw-work__abstract" }, entry.summary));
@@ -666,10 +610,10 @@
           {
             href: `/studio?creator=${encodeURIComponent(entry.author.username)}`,
           },
-          `@${entry.author.username}`
+          `@${entry.author.username}`,
         ),
-        saveButton
-      )
+        saveButton,
+      ),
     );
     impressionObserver?.observe(node);
     return node;
@@ -726,12 +670,12 @@
                       return;
                     queueImpression(record.target.dataset.entryId);
                     impressionObserver.unobserve(record.target);
-                  }, 2000)
+                  }, 2000),
                 );
               }
             }
           },
-          { threshold: [0, 0.5] }
+          { threshold: [0, 0.5] },
         )
       : null;
 
@@ -741,7 +685,7 @@
       { class: "hw-empty" },
       el("strong", {}, title),
       el("p", {}, subtitle),
-      cta || null
+      cta || null,
     );
   }
 
@@ -755,8 +699,8 @@
           "aria-pressed": String(id === current),
           onclick: () => callback(id),
         },
-        name
-      )
+        name,
+      ),
     );
   }
 
@@ -769,7 +713,7 @@
           ? "experience"
           : state.kind;
     const data = await api(
-      `/feed?${new URLSearchParams({ kind, page: state.page, q: state.search, sort: state.sort })}`
+      `/feed?${new URLSearchParams({ kind, page: state.page, q: state.search, sort: state.sort })}`,
     );
     if (request !== activeRequest) return;
     state.entries = append ? state.entries.concat(data.entries) : data.entries;
@@ -781,9 +725,9 @@
           "li",
           {},
           el("a", { href: topic.url }, topic.title),
-          el("span", {}, `${Math.max(0, topic.posts_count - 1)} 条回复`)
-        )
-      )
+          el("span", {}, `${Math.max(0, topic.posts_count - 1)} 条回复`),
+        ),
+      ),
     );
   }
 
@@ -794,8 +738,8 @@
         : empty(
             "第一份分享，正在等你",
             "晒一张作品，或写下你的制作方法。",
-            button("分享我的创作 ↗", share)
-          )
+            button("分享我的创作 ↗", share),
+          ),
     );
   }
 
@@ -810,13 +754,13 @@
           href: "/studio?view=wallet",
           "data-view": "wallet",
         },
-        `${wallet.balance} 积分`
+        `${wallet.balance} 积分`,
       ),
       el(
         "a",
         { href: "/studio?view=mine", "data-view": "mine" },
-        state.boot.user.name || state.boot.user.username
-      )
+        state.boot.user.name || state.boot.user.username,
+      ),
     );
     return wallet;
   }
@@ -830,7 +774,7 @@
       el(
         "p",
         { class: "hw-help" },
-        `待结算收益 ${wallet.pending} 分 · 解锁资源的作者收益在 ${state.boot.rules.settlement_days} 天后结算${wallet.frozen ? " · 当前账户已冻结" : ""}`
+        `待结算收益 ${wallet.pending} 分 · 解锁资源的作者收益在 ${state.boot.rules.settlement_days} 天后结算${wallet.frozen ? " · 当前账户已冻结" : ""}`,
       ),
     ];
     if (!wallet.welcome_claimed && state.boot.participant)
@@ -843,7 +787,7 @@
               el(
                 "p",
                 {},
-                "收藏免费；部分精选资源需积分解锁。请分享自己有权发布的作品，按真实使用体验反馈，不通过互刷获取积分。"
+                "收藏免费；部分精选资源需积分解锁。请分享自己有权发布的作品，按真实使用体验反馈，不通过互刷获取积分。",
               ),
               el(
                 "a",
@@ -852,7 +796,7 @@
                   target: "_blank",
                   class: "hw-text-link",
                 },
-                "阅读社区准则 ↗"
+                "阅读社区准则 ↗",
               ),
               button("我已了解，开始参与", async () => {
                 await api("/welcome", {
@@ -861,10 +805,10 @@
                 });
                 $("#modal").close();
                 showWallet();
-              })
+              }),
             );
-          }
-        )
+          },
+        ),
       );
     const rows = wallet.entries.map((item) =>
       el(
@@ -872,8 +816,8 @@
         {},
         el("td", {}, new Date(item.created_at).toLocaleString("zh-CN")),
         el("td", {}, item.reason),
-        el("td", {}, `${item.amount > 0 ? "+" : ""}${item.amount}`)
-      )
+        el("td", {}, `${item.amount > 0 ? "+" : ""}${item.amount}`),
+      ),
     );
     const table = el(
       "table",
@@ -884,10 +828,10 @@
         el(
           "tr",
           {},
-          ["时间", "说明", "积分变动"].map((text) => el("th", {}, text))
-        )
+          ["时间", "说明", "积分变动"].map((text) => el("th", {}, text)),
+        ),
       ),
-      el("tbody", {}, rows)
+      el("tbody", {}, rows),
     );
     children.push(el("div", { class: "hw-table-wrapper" }, table));
     $("#content").replaceChildren(...children);
@@ -910,8 +854,8 @@
         (value) => {
           state.mine = value;
           showMine().catch((error) => tell(error.message));
-        }
-      )
+        },
+      ),
     );
     const items =
       state.mine === "collected"
@@ -925,8 +869,8 @@
         el(
           "p",
           { class: "hw-help" },
-          "收藏仅保存预览。解锁后下载 ZIP，或在 Skill 中输入“同步我的收藏”，选择导入并离线使用。取消收藏不影响已解锁资格。"
-        )
+          "收藏保存喜欢的作品、画风和图型，方便下次查找。打开分享即可查看描述与提示词。取消收藏不影响已有解锁资格。",
+        ),
       );
   }
 
@@ -943,8 +887,8 @@
         (value) => {
           state.resourceTab = value;
           showResources().catch((error) => tell(error.message));
-        }
-      )
+        },
+      ),
     );
     if (state.resourceTab === "collected") {
       state.mine = "collected";
@@ -953,7 +897,7 @@
     }
     if (state.resourceTab === "official") {
       const response = await fetch(
-        "https://static.handraw-style.com/data/styles.json?web=2"
+        "https://static.handraw-style.com/data/styles.json?web=2",
       );
       if (!response.ok)
         throw new Error("官方资源暂时无法加载，可直接访问画廊。");
@@ -978,22 +922,22 @@
             {
               href: "https://static.handraw-style.com/gallery/index.html?web=2",
             },
-            "全部官方画风 ↗"
+            "全部官方画风 ↗",
           ),
           el(
             "a",
             {
               href: "https://static.handraw-style.com/gallery/layouts.html?web=2",
             },
-            "全部官方图型 ↗"
+            "全部官方图型 ↗",
           ),
           el(
             "a",
             {
               href: "https://static.handraw-style.com/gallery/tutorials.html?web=2",
             },
-            "提示词拼装器 ↗"
-          )
+            "提示词拼装器 ↗",
+          ),
         ),
         el(
           "div",
@@ -1013,17 +957,17 @@
                   src: `https://img.handraw-style.com/images/individual/${item.number.split("-")[0]}/${item.number}.webp`,
                   alt: item.reference,
                   loading: "lazy",
-                })
+                }),
               ),
               el(
                 "p",
                 { class: "hw-work__kind" },
-                `官方画风 / ${item.number} / 免费`
+                `官方画风 / ${item.number} / 免费`,
               ),
-              el("h3", {}, item.reference)
-            )
-          )
-        )
+              el("h3", {}, item.reference),
+            ),
+          ),
+        ),
       );
       return;
     }
@@ -1031,8 +975,8 @@
     if (request !== activeRequest) return;
     renderEntries(
       data.entries.filter((item) =>
-        ["style", "layout", "package"].includes(item.kind)
-      )
+        ["style", "layout", "package"].includes(item.kind),
+      ),
     );
     $("#content").prepend(
       el(
@@ -1041,17 +985,17 @@
         el(
           "a",
           { href: "https://static.handraw-style.com/gallery/index.html?web=2" },
-          "官方画风 ↗"
+          "官方画风 ↗",
         ),
         el(
           "a",
           {
             href: "https://static.handraw-style.com/gallery/layouts.html?web=2",
           },
-          "官方图型 ↗"
+          "官方图型 ↗",
         ),
-        el("span", {}, "收藏免费，精选资源解锁后可导入 Skill。")
-      )
+        el("span", {}, "收藏喜欢的画风与图型，复制描述与提示词开始创作。"),
+      ),
     );
   }
 
@@ -1077,7 +1021,7 @@
           el(
             "p",
             { class: "hw-help" },
-            `${labels[entry.kind]} / ${entry.status} / ${entry.featured ? "已精选" : "待精选"} / ${entry.has_bundle ? "有资源包" : "无资源包"} / ${entry.paid_opt_in ? "申请积分下载" : "免费分享"}`
+            `${labels[entry.kind]} / ${entry.status} / ${entry.featured ? "已精选" : "待精选"} / ${entry.has_bundle ? "有历史附件" : "无历史附件"} / ${entry.paid_opt_in ? "申请积分下载" : "免费分享"}`,
           ),
           el("p", {}, entry.summary),
           el(
@@ -1088,7 +1032,7 @@
               () => {
                 location.href = entry.topic_url;
               },
-              true
+              true,
             ),
             entry.has_bundle
               ? el(
@@ -1097,30 +1041,30 @@
                     class: "hw-button hw-button--quiet",
                     href: `/studio/api/entries/${entry.id}/review-download`,
                   },
-                  "下载审核包"
+                  "查看历史附件",
                 )
               : null,
             button(
               entry.featured ? "取消精选" : "设为精选",
               () =>
                 reviewAction(entry, entry.featured ? "unfeature" : "feature"),
-              true
+              true,
             ),
             button(
               "验证并开放下载",
               () => reviewAction(entry, "approve_download"),
-              true
+              true,
             ),
             button("暂停", () => reviewAction(entry, "pause"), true),
-            button("恢复展示", () => reviewAction(entry, "restore"), true)
-          )
-        )
-      )
+            button("恢复展示", () => reviewAction(entry, "restore"), true),
+          ),
+        ),
+      ),
     );
     const reports = el("section", {}, el("h3", {}, "待处理问题与申诉"));
     for (const item of data.reports) {
       const entry = data.entries.find(
-        (record) => record.internal_id === item.entry_id
+        (record) => record.internal_id === item.entry_id,
       );
       reports.append(
         el(
@@ -1137,7 +1081,7 @@
                     reviewAction(entry, "confirm_report", {
                       report_id: item.id,
                     }),
-                  true
+                  true,
                 ),
                 button(
                   "驳回举报",
@@ -1145,11 +1089,11 @@
                     reviewAction(entry, "dismiss_report", {
                       report_id: item.id,
                     }),
-                  true
-                )
+                  true,
+                ),
               )
-            : null
-        )
+            : null,
+        ),
       );
     }
     $("#content").append(reports, el("h3", {}, "积分解锁与退款"));
@@ -1161,7 +1105,7 @@
           el(
             "p",
             {},
-            `交易 #${sale.id} / 资源 #${sale.entry_id} / ${sale.amount} 积分 / ${sale.settled_at ? "已结算" : "待结算"}`
+            `交易 #${sale.id} / 资源 #${sale.entry_id} / ${sale.amount} 积分 / ${sale.settled_at ? "已结算" : "待结算"}`,
           ),
           button(
             "确认退款",
@@ -1174,9 +1118,9 @@
               });
               await showReview();
             },
-            true
-          )
-        )
+            true,
+          ),
+        ),
       );
     $("#content").append(
       el("h3", {}, "最近审核记录"),
@@ -1184,9 +1128,9 @@
         el(
           "p",
           { class: "hw-help" },
-          `${new Date(audit.created_at).toLocaleString("zh-CN")} · ${audit.action} · ${audit.reason}`
-        )
-      )
+          `${new Date(audit.created_at).toLocaleString("zh-CN")} · ${audit.action} · ${audit.reason}`,
+        ),
+      ),
     );
   }
 
@@ -1217,7 +1161,7 @@
     $("#more").hidden = true;
     tell("");
     $("#content").replaceChildren(
-      el("p", { class: "hw-spinner" }, "正在加载…")
+      el("p", { class: "hw-spinner" }, "正在加载…"),
     );
     document.querySelectorAll(".hw-nav [data-view]").forEach((item) => {
       if (item.dataset.view === state.view)
@@ -1233,8 +1177,8 @@
             "data-view": "review",
             class: "hw-text-link",
           },
-          "版主工作台 →"
-        )
+          "版主工作台 →",
+        ),
       );
     if (state.view !== "home")
       $("#heading-actions").append(button("分享 ↗", share, true));
@@ -1246,7 +1190,7 @@
       "select",
       { "aria-label": "内容排序", class: "hw-search" },
       el("option", { value: "recommended" }, "社区推荐"),
-      el("option", { value: "latest" }, "最新投稿")
+      el("option", { value: "latest" }, "最新投稿"),
     );
     order.value = state.sort;
     order.addEventListener("change", () => {
@@ -1286,7 +1230,7 @@
     history.pushState(
       {},
       "",
-      view === "home" ? "/studio" : `/studio?view=${view}`
+      view === "home" ? "/studio" : `/studio?view=${view}`,
     );
     state.page = 1;
     render().catch((error) => tell(error.message));
@@ -1305,7 +1249,7 @@
     loadFeed(true).catch((error) => tell(error.message));
   });
   window.addEventListener("popstate", () =>
-    render().catch((error) => tell(error.message))
+    render().catch((error) => tell(error.message)),
   );
   api("/boot")
     .then(async (boot) => {
@@ -1321,8 +1265,8 @@
         empty(
           "暂时无法加载",
           "请稍后重试，或先前往现有论坛。",
-          el("a", { href: "/latest", class: "hw-button" }, "前往论坛 →")
-        )
+          el("a", { href: "/latest", class: "hw-button" }, "前往论坛 →"),
+        ),
       );
     });
 })();

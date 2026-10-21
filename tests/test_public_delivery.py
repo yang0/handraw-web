@@ -20,12 +20,12 @@ class PublicDeliveryTests(unittest.TestCase):
             plugin = root / 'plugin'
             (plugin / 'public').mkdir(parents=True)
             (plugin / 'REVISION').write_text('a' * 40)
-            for name in ('portal.js', 'portal.css', 'navigation.css', 'navigation.html'):
+            for name in ('portal.js', 'portal.css', 'navigation.css', 'navigation.html', 'image-loader.js'):
                 (plugin / 'public' / name).write_text((ROOT / 'plugin/public' / name).read_text(encoding='utf-8'), encoding='utf-8')
             (plugin / 'public' / 'private.key').write_text('never publish')
             static = root / 'static'
             (static / 'gallery').mkdir(parents=True)
-            original = '<html><head></head><body><nav class="site-nav">Original filters</nav><img src="../../../images/layouts/SC-001.webp"></body></html>'
+            original = '<html><head><script>(function() { function fixImg(img) { retryMissingURLs(); } })();</script></head><body><nav class="site-nav">Original filters</nav><img src="../../../images/layouts/SC-001.webp"><script>preview.src = card.dataset.image;</script></body></html>'
             source = static / 'gallery/layouts.html'
             source.write_text(original)
             (static / 'gallery' / 'private.key').write_text('never publish')
@@ -36,6 +36,12 @@ class PublicDeliveryTests(unittest.TestCase):
             self.assertIn('data-site-section="resources" aria-current="page"', page)
             self.assertIn('Original filters', page)
             self.assertIn('https://img.handraw-style.com/images/layouts/SC-001.webp', page)
+            self.assertIn('data-hw-src="https://img.handraw-style.com/images/layouts/SC-001.webp"', page)
+            self.assertNotIn('<img src="https:', page)
+            self.assertIn('<img src="data:image/svg+xml,', page)
+            self.assertIn('/assets/image-loader.js', page)
+            self.assertNotIn('retryMissingURLs', page)
+            self.assertIn('HandrawImages.set(preview, card.dataset.image)', page)
             self.assertFalse((target / 'assets/private.key').exists())
             self.assertFalse((target / 'gallery/private.key').exists())
 

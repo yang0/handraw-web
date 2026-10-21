@@ -25,6 +25,7 @@ RSpec.describe Handraw::PortalController do
       get '/studio'
       expect(response.status).to eq(200)
       expect(response.body).to include('手绘风')
+      expect(response.body).to include('/studio/assets/image-loader.js')
       get '/studio', params: { view: 'experience' }
       expect(response.body).to include('id="hero" hidden', 'data-site-section="experience" aria-current="page"')
       get '/latest.json'
@@ -35,6 +36,9 @@ RSpec.describe Handraw::PortalController do
   describe '#asset' do
     it 'serves the public portal script to browser script tags' do
       get '/studio/assets/portal.js'
+      expect(response.status).to eq(200)
+      expect(response.media_type).to eq('text/javascript')
+      get '/studio/assets/image-loader.js'
       expect(response.status).to eq(200)
       expect(response.media_type).to eq('text/javascript')
     end

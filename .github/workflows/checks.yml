@@ -18,6 +18,7 @@ jobs:
           node-version: '24'
       - run: python -m unittest discover -s tests -v
       - run: node --check plugin/public/portal.js
+      - run: node --check plugin/public/image-loader.js && node tests/test_image_loader.cjs
       - run: bash -n ops/server-deploy.sh ops/preview-server.sh ops/setup-preview.sh ops/test-server.sh
       - name: Check tracked files
         run: python ops/check_release.py

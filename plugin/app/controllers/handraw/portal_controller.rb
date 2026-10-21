@@ -27,6 +27,7 @@ module Handraw
       page = page.sub('<!-- handraw-navigation -->', Handraw::Navigation.render(active: active))
       page = page.sub('id="hero"', 'id="hero" hidden') unless view == 'home'
       page = page.sub('<script src="/studio/assets/portal.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/portal.js\"")
+      page = page.sub('<script src="/studio/assets/image-loader.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/image-loader.js\"")
       if release_version.match?(/\A[0-9a-f]{40}\z/)
         page = page.gsub('/studio/assets/', "https://static.handraw-style.com/handraw-web/releases/#{release_version}/assets/")
       end
@@ -35,7 +36,7 @@ module Handraw
 
     def asset
       name = params[:name]
-      raise Discourse::NotFound if %w[portal.js portal.css navigation.css].exclude?(name)
+      raise Discourse::NotFound if %w[portal.js portal.css navigation.css image-loader.js].exclude?(name)
 
       send_file Handraw::Engine.root.join('public', name), disposition: 'inline',
                                                            type: name.end_with?('.js') ? 'text/javascript' : 'text/css'
