@@ -20,7 +20,10 @@ module Handraw
     end
 
     def index
-      render file: Handraw::Engine.root.join('public', 'index.html'), layout: false, content_type: 'text/html'
+      nonce = ContentSecurityPolicy.nonce_placeholder(response.headers, request_env: request.env)
+      page = File.read(Handraw::Engine.root.join('public', 'index.html'))
+      page = page.sub('<script src="/studio/assets/portal.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/portal.js\"")
+      render body: page, content_type: 'text/html', layout: false
     end
 
     def asset
