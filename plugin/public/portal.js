@@ -289,7 +289,13 @@
           "有从 Skill 导出的画风或图型文件，可以附在这里。没有文件也能分享描述与效果图。"
         ),
         field("bundle", "Skill 导出的 ZIP 文件", "file", false),
-        field("license", "补充使用范围（选填）", "textarea", false)
+        field("license", "补充使用范围（选填）", "textarea", false),
+        el(
+          "label",
+          { class: "hw-check" },
+          el("input", { name: "paid_opt_in", type: "checkbox" }),
+          `申请审核后开启积分下载：初始 ${state.boot.rules.initial_price} 分，范围 ${state.boot.rules.min_price}–${state.boot.rules.max_price} 分，每 ${state.boot.rules.price_days} 天最多调整一档。我同意按使用反馈自动调价。`
+        )
       );
       advanced.querySelector('[name="bundle"]').accept = ".zip";
       fields.append(advanced);
@@ -352,7 +358,7 @@
                 "作者分享的创作作品，欢迎在原帖交流制作方法。",
               cover_url: cover,
               license: data.get("license") || undefined,
-              paid_opt_in: false,
+              paid_opt_in: resource && data.get("paid_opt_in") === "on",
             },
           }),
         });
