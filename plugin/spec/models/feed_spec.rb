@@ -16,6 +16,8 @@ RSpec.describe Handraw::Feed do
       end
       results = described_class.call(kind: 'work')
       expect(results.map(&:id)).to contain_exactly(entries[0].id, entries[2].id)
+      expect(described_class.call(kind: 'work', search: '真实用户').map(&:id)).to contain_exactly(*entries.map(&:id))
+      expect(described_class.call(kind: 'work', sort: 'latest').map(&:id)).to eq(entries.reverse.map(&:id))
     end
   end
 end

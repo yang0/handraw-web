@@ -57,7 +57,7 @@ module Handraw
     end
 
     def feed
-      entries = Feed.call(kind: params[:kind], page: params[:page], search: params[:q])
+      entries = Feed.call(kind: params[:kind], page: params[:page], search: params[:q], sort: params[:sort])
       topics = TopicQuery.new(current_user, per_page: 6).list_latest.topics
       render json: {
         entries: entries.map { |entry| entry.public_payload(current_user) },

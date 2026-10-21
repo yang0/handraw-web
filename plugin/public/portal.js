@@ -7,6 +7,7 @@
     page: 1,
     kind: "",
     search: "",
+    sort: "recommended",
     mine: "owned",
     entries: [],
     resourceTab: "community",
@@ -617,7 +618,7 @@
           ? "experience"
           : state.kind;
     const data = await api(
-      `/feed?${new URLSearchParams({ kind, page: state.page, q: state.search })}`
+      `/feed?${new URLSearchParams({ kind, page: state.page, q: state.search, sort: state.sort })}`
     );
     if (request !== activeRequest) return;
     state.entries = append ? state.entries.concat(data.entries) : data.entries;
@@ -1069,6 +1070,19 @@
           }
         )
       );
+    const order = el(
+      "select",
+      { "aria-label": "内容排序", class: "hw-search" },
+      el("option", { value: "recommended" }, "社区推荐"),
+      el("option", { value: "latest" }, "最新投稿")
+    );
+    order.value = state.sort;
+    order.addEventListener("change", () => {
+      state.sort = order.value;
+      state.page = 1;
+      loadFeed().catch((error) => tell(error.message));
+    });
+    $("#toolbar").append(order);
     const search = el("input", {
       class: "hw-search",
       type: "search",

@@ -20,6 +20,8 @@ RSpec.describe Handraw::Economy do
       SiteSetting.handraw_price_min_ratings = 1
       SiteSetting.handraw_price_step = 3
       fresh = resource.dup
+      fresh.topic = Fabricate(:topic, user: author)
+      fresh.created_at = 8.days.ago
       fresh.public_id = SecureRandom.uuid
       fresh.content_digest = SecureRandom.hex(32)
       fresh.save!

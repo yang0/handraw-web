@@ -2,7 +2,7 @@
 
 module Handraw
   module Feed
-    def self.call(kind: nil, page: 1, search: nil)
+    def self.call(kind: nil, page: 1, search: nil, sort: nil)
       scope = Entry.visible.includes(:user)
       scope = scope.where(kind: kind) if Entry::KINDS.include?(kind)
       scope = scope.where(kind: %w[style layout package]) if kind == 'resource'
@@ -12,6 +12,8 @@ module Handraw
                             query: pattern)
       end
       page = [[page.to_i, 1].max, 50].min
+      return scope.order(created_at: :desc).offset((page - 1) * 20).limit(20).to_a if search.present? || sort == 'latest'
+
       candidates = scope.order(created_at: :desc).limit(500).to_a
       counts = Event.where(entry_id: candidates.map(&:id), qualified: true).group(:entry_id,
                                                                                   :kind).distinct.count(:user_id)
