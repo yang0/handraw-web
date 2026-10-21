@@ -24,9 +24,11 @@ activate() {
 }
 
 healthy() {
+  local expected=${1:-}
   for attempt in $(seq 1 30); do
-    if curl --fail --silent --max-time 10 -H 'Host: handraw-style.com' http://127.0.0.1:3000/studio/api/boot > "$STATE/health.json" &&
-       curl --fail --silent --max-time 10 -H 'Host: handraw-style.com' http://127.0.0.1:3000/latest.json > /dev/null; then return 0; fi
+    if curl --fail --silent --max-time 10 -H 'Host: handraw-style.com' -H 'X-Forwarded-Proto: https' http://127.0.0.1:3000/studio/api/boot > "$STATE/health.json" &&
+       python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert not sys.argv[2] or data["release"] == sys.argv[2]' "$STATE/health.json" "$expected" &&
+       curl --fail --silent --max-time 10 -H 'Host: handraw-style.com' -H 'X-Forwarded-Proto: https' http://127.0.0.1:3000/latest.json > /dev/null; then return 0; fi
     sleep 2
   done
   return 1
@@ -56,6 +58,7 @@ deploy)
   release="$WEB/.local/releases/$commit"
   mkdir -p "$release"
   git archive "$commit" plugin | tar -x -C "$release"
+  printf '%s\n' "$commit" > "$release/plugin/REVISION"
   find "$release/plugin" -name '*.rb' -print0 | xargs -0 -n1 ruby -c > "$STATE/syntax-check.log"
   backup="$STATE/database-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
   sudo -n -u postgres pg_dump discourse | gzip > "$backup"
@@ -71,7 +74,7 @@ deploy)
   (cd "$CORE" && RAILS_ENV=production bin/rails runner "$WEB/ops/configure-production.rb")
   printf '%s\n' "$commit" > "$STATE/candidate"
   sudo -n supervisorctl restart discourse:discourse-web discourse:discourse-sidekiq
-  if ! healthy; then
+  if ! healthy "$commit"; then
     if test -n "$previous"; then activate "$previous"; else echo 'Initial deployment needs operator inspection; feature remains disabled unless explicitly enabled.' >&2; fi
     exit 1
   fi
@@ -86,7 +89,7 @@ rollback)
   [[ "$previous" =~ ^[0-9a-f]{40}$ ]]
   test -z "$(git status --porcelain)" || { echo 'Dirty checkout; refusing rollback'; exit 1; }
   activate "$previous"
-  if ! healthy; then activate "$current"; echo 'Rollback health check failed; restored current release'; exit 1; fi
+  if ! healthy "$previous"; then activate "$current"; echo 'Rollback health check failed; restored current release'; exit 1; fi
   printf '%s\n' "$previous" > "$STATE/current"
   printf '%s\n' "$current" > "$STATE/previous"
   fingerprint_core > "$STATE/core-baseline"

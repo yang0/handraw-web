@@ -42,7 +42,7 @@ module Handraw
         pilot: !SiteSetting.handraw_public_submissions,
         official: { styles: '/gallery/index.html', layouts: '/gallery/layouts.html' },
         categories: Category.secured(guardian).where(read_restricted: false).order(:position).pluck(:id, :name),
-        release: ENV.fetch('HANDRAW_RELEASE', 'development')
+        release: release_version
       }
     end
 
@@ -337,6 +337,11 @@ module Handraw
     end
 
     private
+
+    def release_version
+      revision = Handraw::Engine.root.join('REVISION')
+      ENV['HANDRAW_RELEASE'].presence || (revision.file? ? revision.read.strip : 'development')
+    end
 
     def require_enabled
       raise Discourse::NotFound unless SiteSetting.handraw_enabled
