@@ -25,6 +25,8 @@ RSpec.describe Handraw::PortalController do
       get '/studio'
       expect(response.status).to eq(200)
       expect(response.body).to include('手绘风')
+      get '/studio', params: { view: 'experience' }
+      expect(response.body).to include('id="hero" hidden', 'data-site-section="experience" aria-current="page"')
       get '/latest.json'
       expect(response.status).to eq(200)
     end

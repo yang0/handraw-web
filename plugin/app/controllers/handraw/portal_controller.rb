@@ -22,7 +22,10 @@ module Handraw
     def index
       nonce = ContentSecurityPolicy.nonce_placeholder(response.headers, request_env: request.env)
       page = File.read(Handraw::Engine.root.join('public', 'index.html'))
-      page = page.sub('<!-- handraw-navigation -->', Handraw::Navigation.render)
+      view = params[:view].to_s.presence || 'home'
+      active = %w[home works experience resources mine].include?(view) ? view : nil
+      page = page.sub('<!-- handraw-navigation -->', Handraw::Navigation.render(active: active))
+      page = page.sub('id="hero"', 'id="hero" hidden') unless view == 'home'
       page = page.sub('<script src="/studio/assets/portal.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/portal.js\"")
       if release_version.match?(/\A[0-9a-f]{40}\z/)
         page = page.gsub('/studio/assets/', "https://static.handraw-style.com/handraw-web/releases/#{release_version}/assets/")

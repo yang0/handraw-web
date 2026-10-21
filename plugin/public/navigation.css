@@ -62,13 +62,13 @@
   gap: 28px;
   flex: 1;
 }
-.hw-nav a {
+.hw-header .hw-nav a {
   padding-block: 8px;
   white-space: nowrap;
   color: #65675d;
 }
-.hw-nav a:hover,
-.hw-nav a[aria-current="page"] {
+.hw-header .hw-nav a:hover,
+.hw-header .hw-nav a[aria-current="page"] {
   color: var(--accent);
 }
 .hw-nav a[aria-current="page"] {
@@ -91,6 +91,9 @@
 
 .hw-header[data-surface="forum"] .hw-account {
   display: none;
+}
+.hw-header .hw-brand {
+  color: #252722;
 }
 
 .hw-header[data-surface="forum"] ~ #main .d-header .title {
