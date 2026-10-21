@@ -185,7 +185,7 @@ class Client:
         base = self.profile.get("base_url", BASE_URL).rstrip("/")
         if base != BASE_URL:
             raise ValueError("社区同步只向 https://handraw-style.com 发送凭据")
-        jar = http.cookiejar.MozillaCookieJar(str(home() / "community_cookies.txt"))
+        jar = http.cookiejar.LWPCookieJar(str(home() / "community_cookies.txt"))
         if Path(jar.filename).exists():
             jar.load(ignore_discard=True, ignore_expires=False)
         self.opener = urllib.request.build_opener(SameOriginRedirect(), urllib.request.HTTPCookieProcessor(jar))

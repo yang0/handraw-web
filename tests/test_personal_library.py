@@ -1,8 +1,10 @@
 import hashlib
+import http.cookiejar
 import importlib.util
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 from pathlib import Path
 
@@ -27,6 +29,20 @@ class LibraryTests(unittest.TestCase):
             for entry, value in (extra or {}).items():
                 archive.writestr(entry, value)
         return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_client_reuses_existing_community_share_cookie_format(self):
+        (self.root / "community_auth.json").write_text('{}', encoding="utf-8")
+        jar = http.cookiejar.LWPCookieJar(str(self.root / "community_cookies.txt"))
+        cookie = http.cookiejar.Cookie(0, "_t", "test-session", None, False,
+                                       "handraw-style.com", False, False, "/", True,
+                                       True, None, True, None, None, {}, False)
+        jar.set_cookie(cookie)
+        jar.save(ignore_discard=True)
+        with patch.dict(module.os.environ, {"HANDRAW_PROFILE_HOME": str(self.root)}):
+            client = module.Client()
+        processor = next(handler for handler in client.opener.handlers
+                         if isinstance(handler, module.urllib.request.HTTPCookieProcessor))
+        self.assertEqual([(c.name, c.value) for c in processor.cookiejar], [("_t", "test-session")])
 
     def test_import_is_idempotent_and_available_after_network_is_gone(self):
         path, digest = self.bundle()
