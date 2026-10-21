@@ -3,10 +3,28 @@ import argparse
 from pathlib import Path
 
 
+def gallery_entry(text):
+    marker = '# handraw-gallery-entry-v1'
+    if marker in text:
+        return text
+    routes = '''    # handraw-gallery-entry-v1
+    location = /gallery {
+        return 302 https://static.handraw-style.com/gallery/index.html$is_args$args;
+    }
+    location = /gallery/ {
+        return 302 https://static.handraw-style.com/gallery/index.html$is_args$args;
+    }
+'''
+    target = '    location ^~ /gallery/ {'
+    if text.count(target) != 1:
+        raise ValueError('Expected one gallery route')
+    return text.replace(target, routes + target, 1)
+
+
 def configure(text, surface):
     marker = '# handraw-public-routes-v2'
     if marker in text:
-        return text
+        return gallery_entry(text)
     if text.count('    location / {') != 1:
         raise ValueError('Expected one existing catch-all location')
     if surface == 'main':
@@ -47,7 +65,7 @@ def configure(text, surface):
         try_files $uri =404;
     }
 '''
-    return text.replace('    location / {', routes + '\n    location / {', 1)
+    return gallery_entry(text.replace('    location / {', routes + '\n    location / {', 1))
 
 
 if __name__ == '__main__':

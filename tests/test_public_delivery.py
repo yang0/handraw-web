@@ -57,8 +57,14 @@ class PublicDeliveryTests(unittest.TestCase):
         self.assertIn('try_files $uri =404;', public)
         self.assertIn('proxy_pass http://forum;', public)
         self.assertEqual(module.configure(public, 'static'), public)
+        self.assertIn('location = /gallery/ {', public)
+        self.assertIn('location = /gallery {', public)
+        self.assertIn('/gallery/index.html$is_args$args;', public)
+        legacy = public[0:public.index('    # handraw-gallery-entry-v1')] + public[public.index('    location ^~ /gallery/ {'):]
+        self.assertEqual(module.configure(legacy, 'static'), public)
         main = module.configure(original, 'main')
         self.assertIn('return 302 https://static.handraw-style.com$uri?web=2&$args;', main)
+        self.assertIn('location = /gallery/ {', main)
 
 
 if __name__ == '__main__':
