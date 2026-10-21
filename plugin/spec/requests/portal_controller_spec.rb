@@ -55,6 +55,7 @@ RSpec.describe Handraw::PortalController do
 
   describe 'forum navigation' do
     it 'keeps the site navigation on the forum and topic pages' do
+      LetterAvatar.stubs(:version).returns('navigation-test')
       headers = { 'User-Agent' => 'Mozilla/5.0 Chrome/130.0 Safari/537.36' }
       get '/latest', headers: headers
       expect(response.status).to eq(200)
