@@ -55,6 +55,7 @@ jobs:
       LOAD_PLUGINS: 1
       BUNDLE_IGNORE_CONFIG: 1
       HANDRAW_PRIVATE_STORAGE: /tmp/handraw-test-private
+      DISCOURSE_ENABLE_VIPS_IMAGE_PROCESSING: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,6 +66,10 @@ jobs:
           ref: f3758bd5a691a1fd8fb92f3fdbf1a22ec86650ac
           path: discourse
       - run: cp -R web/plugin discourse/plugins/handraw-community
+      - name: Install forum image runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libvips-dev
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4.7'
