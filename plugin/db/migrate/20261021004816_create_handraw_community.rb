@@ -40,7 +40,7 @@ class CreateHandrawCommunity < ActiveRecord::Migration[8.0]
     create_table :handraw_wallets do |table|
       table.bigint :user_id, null: false
       table.integer :balance, null: false, default: 0
-      table.boolean :frozen, null: false, default: false
+      table.boolean :locked, null: false, default: false
       table.timestamps null: false
     end
     add_index :handraw_wallets, :user_id, unique: true
@@ -85,7 +85,7 @@ class CreateHandrawCommunity < ActiveRecord::Migration[8.0]
       table.datetime :settle_at, null: false
       table.datetime :settled_at
       table.datetime :refunded_at
-      table.boolean :frozen, null: false, default: false
+      table.boolean :held, null: false, default: false
       table.timestamps null: false
     end
     add_index :handraw_unlocks, [:user_id, :entry_id], unique: true

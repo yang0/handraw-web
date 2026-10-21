@@ -68,6 +68,7 @@ deploy)
     echo 'Migration failed. Database backup preserved; no destructive down migration was run.' >&2
     exit 1
   fi
+  (cd "$CORE" && RAILS_ENV=production bin/rails runner "$WEB/ops/configure-production.rb")
   printf '%s\n' "$commit" > "$STATE/candidate"
   sudo -n supervisorctl restart discourse:discourse-web discourse:discourse-sidekiq
   if ! healthy; then

@@ -14,11 +14,11 @@ module Handraw
       wallet.with_lock do
         existing = Ledger.find_by(user_id: user_id, event_key: key)
         return existing if existing
-        if amount.negative? && !force && (wallet.frozen || wallet.balance + amount < 0)
+        if amount.negative? && !force && (wallet.locked || wallet.balance + amount < 0)
           raise Handraw::RuleError, "积分不足或账户已冻结"
         end
         wallet.balance += amount
-        wallet.frozen = true if wallet.balance.negative?
+        wallet.locked = true if wallet.balance.negative?
         wallet.save!
         Ledger.create!(user_id: user_id, entry_id: entry_id, amount: amount, event_key: key, reason: reason)
       end

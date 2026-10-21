@@ -14,10 +14,12 @@ export HANDRAW_PRIVATE_STORAGE=/home/yang0/handraw-data/test-private
 export SCHEMA=/home/yang0/handraw-data/test-structure.sql
 cd /home/yang0/projectHome/discourse
 test "$RAILS_DB" = handraw_web_test
-bin/rake db:create
-test -f "$SCHEMA" || cp db/structure.sql "$SCHEMA"
+sudo -n -u postgres dropdb --if-exists handraw_web_test
+sudo -n -u postgres createdb -O yang0 handraw_web_test
+sudo -n -u postgres psql handraw_web_test -c 'CREATE EXTENSION vector; CREATE EXTENSION hstore; CREATE EXTENSION unaccent; CREATE EXTENSION pg_trgm;'
+cp db/structure.sql "$SCHEMA"
 # Extension ownership stays with postgres; only the dedicated test schema copy is adjusted.
 sed -i '/^COMMENT ON EXTENSION /d' "$SCHEMA"
-bin/rake db:schema:load
-bin/rake db:migrate
+bin/rake db:schema:load db:migrate
 bin/rspec plugins/handraw-community/spec --format documentation
+bin/rails runner /home/yang0/projectHome/handraw-web/ops/concurrency-check.rb

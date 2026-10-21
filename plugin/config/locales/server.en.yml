@@ -1,0 +1,15 @@
+en:
+  site_settings:
+    handraw_enabled: "Enable the Handraw portal and community resources"
+    handraw_pilot_group_ids: "Pilot creator groups allowed to publish and unlock resources"
+    handraw_reviewer_group_ids: "Groups allowed to review resources and disputes"
+    handraw_public_submissions: "Allow all verified users to publish and unlock resources"
+    handraw_welcome_credits: "One-time onboarding reward"
+    handraw_contribution_credits: "Reward for a contribution recognized by three eligible users"
+    handraw_daily_contribution_limit: "Daily contribution reward limit per author"
+    handraw_featured_credits: "First editorial selection reward"
+    handraw_verified_resource_credits: "Reward for a verified free reusable resource"
+    handraw_exploration_initial: "Initial qualified impression target"
+    handraw_exploration_extended: "Extended qualified impression target"
+    handraw_private_storage: "Protected bundle directory outside public web roots"
+    handraw_max_bundle_megabytes: "Maximum uploaded resource archive size in MB"

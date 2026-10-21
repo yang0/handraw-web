@@ -10,8 +10,8 @@ module Handraw
 
     def settle!
       with_lock do
-        return if settled_at || refunded_at || frozen || settle_at > Time.current
-        return if Wallet.for_user(author_id).frozen
+        return if settled_at || refunded_at || held || settle_at > Time.current
+        return if Wallet.for_user(author_id).locked
         Wallet.change!(
           author_id,
           author_amount,
@@ -39,7 +39,7 @@ module Handraw
             force: true,
           )
         end
-        update!(refunded_at: Time.current, frozen: true)
+        update!(refunded_at: Time.current, held: true)
         Audit.create!(user_id: reviewer.id, entry_id: entry_id, action: "refund", reason: reason, details: { unlock_id: id })
       end
     end

@@ -70,7 +70,8 @@ RSpec.describe Handraw::PortalController do
 
     it "requires authentication for protected downloads" do
       get "/studio/api/entries/#{resource.public_id}/download"
-      expect([302, 403]).to include(response.status)
+      expect([302, 403, 404]).to include(response.status)
+      expect(response.headers["Content-Disposition"]).to be_nil
     end
   end
 

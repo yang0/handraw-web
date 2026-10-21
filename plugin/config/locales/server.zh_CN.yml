@@ -1,0 +1,15 @@
+zh_CN:
+  site_settings:
+    handraw_enabled: "启用手绘风门户与社区资源功能"
+    handraw_pilot_group_ids: "获准发布及积分解锁的试运行创作者群组"
+    handraw_reviewer_group_ids: "获准审核精选、资源和争议的版主群组"
+    handraw_public_submissions: "向所有已验证用户开放发布及积分解锁"
+    handraw_welcome_credits: "新人任务的一次性奖励积分"
+    handraw_contribution_credits: "三名有效用户认可原创贡献后的奖励积分"
+    handraw_daily_contribution_limit: "每位作者每日最多领取的原创贡献奖励次数"
+    handraw_featured_credits: "首次精选奖励积分"
+    handraw_verified_resource_credits: "免费画风与图型通过复用验证后的奖励积分"
+    handraw_exploration_initial: "新投稿首轮有效曝光目标"
+    handraw_exploration_extended: "获得初步反馈后的有效曝光目标"
+    handraw_private_storage: "受保护资源存储目录，必须位于网站公开目录之外"
+    handraw_max_bundle_megabytes: "允许上传的 ZIP 资源包最大大小（MB）"

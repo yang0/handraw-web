@@ -156,7 +156,7 @@ module Handraw
       account = Wallet.for_user(current_user.id)
       render json: {
         balance: account.balance,
-        frozen: account.frozen,
+        frozen: account.locked,
         welcome_claimed: Ledger.exists?(user_id: current_user.id, event_key: "welcome"),
         pending: Unlock.active.where(author_id: current_user.id, settled_at: nil).sum(:author_amount),
         entries: Ledger.where(user_id: current_user.id).order(id: :desc).limit(100)
@@ -210,7 +210,7 @@ module Handraw
         reports: Report.where(status: "open").order(created_at: :asc).limit(100)
           .as_json(only: %i[id entry_id user_id reason status]),
         unlocks: Unlock.where(refunded_at: nil).order(id: :desc).limit(100)
-          .as_json(only: %i[id entry_id user_id author_id amount author_amount settled_at frozen]),
+          .as_json(only: %i[id entry_id user_id author_id amount author_amount settled_at held]),
         audits: Audit.order(id: :desc).limit(100).as_json(only: %i[user_id entry_id action reason details created_at]),
       }
     end
@@ -293,7 +293,7 @@ module Handraw
       frozen = ActiveModel::Type::Boolean.new.cast(params.require(:frozen))
       raise RuleError, "请先补足追回的积分" if !frozen && account.balance.negative?
       account.with_lock do
-        account.update!(frozen: frozen)
+        account.update!(locked: frozen)
         Audit.create!(user_id: current_user.id, action: "freeze_wallet", reason: reason,
           details: { account_user_id: account.user_id, frozen: frozen })
       end
