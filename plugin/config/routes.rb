@@ -1,0 +1,27 @@
+# frozen_string_literal: true
+
+Handraw::Engine.routes.draw do
+  root to: "portal#index"
+  get "/assets/:name", to: "portal#asset", constraints: { name: /portal\.(js|css)/ }
+  get "/api/boot", to: "portal#boot"
+  get "/api/feed", to: "portal#feed"
+  get "/api/creators/:username", to: "portal#creator"
+  get "/api/library", to: "portal#library"
+  get "/api/wallet", to: "portal#wallet"
+  post "/api/welcome", to: "portal#welcome"
+  post "/api/entries", to: "portal#create"
+  get "/api/entries/:id", to: "portal#show"
+  post "/api/entries/:id/collection", to: "portal#collect"
+  delete "/api/entries/:id/collection", to: "portal#uncollect"
+  post "/api/entries/:id/events", to: "portal#event"
+  post "/api/entries/:id/bundle", to: "portal#upload_bundle"
+  get "/api/entries/:id/review-download", to: "portal#review_download"
+  post "/api/entries/:id/appeal", to: "portal#appeal"
+  post "/api/entries/:id/unlock", to: "portal#unlock"
+  get "/api/entries/:id/download", to: "portal#download"
+  post "/api/entries/:id/report", to: "portal#report"
+  get "/api/review", to: "portal#review_queue"
+  post "/api/entries/:id/review", to: "portal#review"
+  post "/api/unlocks/:id/refund", to: "portal#refund"
+  post "/api/wallets/:id/freeze", to: "portal#freeze_wallet"
+end

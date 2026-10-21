@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="发现手绘风作品，分享创作经验，把喜欢的画风与图型带进自己的创作。">
+  <title>手绘风 · 创作与分享</title>
+  <link rel="stylesheet" href="/studio/assets/portal.css">
+  <script src="/studio/assets/portal.js" defer></script>
+</head>
+<body>
+  <a class="hw-skip" href="#main">跳转到内容</a>
+  <header class="hw-header">
+    <a class="hw-brand" href="/studio" aria-label="手绘风首页"><span class="hw-brand__seal">绘</span>手绘风<span class="hw-brand__en">HANDRAW</span></a>
+    <nav class="hw-nav" aria-label="网站栏目">
+      <a href="/studio" data-view="home">首页</a>
+      <a href="/studio?view=works" data-view="works">作品</a>
+      <a href="/studio?view=experience" data-view="experience">经验</a>
+      <a href="/studio?view=resources" data-view="resources">资源库</a>
+      <a href="/latest">论坛 ↗</a>
+      <a href="/studio?view=mine" data-view="mine">我的创作</a>
+    </nav>
+    <div class="hw-account" id="account"><a href="/login">登录</a></div>
+  </header>
+  <main id="main" tabindex="-1">
+    <section class="hw-hero" id="hero" aria-labelledby="hero-title">
+      <div class="hw-hero__image" role="img" aria-label="官方画风库的手绘创作示例"></div>
+      <div class="hw-hero__copy">
+        <p class="hw-eyebrow">创作有回响，灵感有出处</p>
+        <h1 id="hero-title">手绘风<span>把灵感，画出来。</span></h1>
+        <p class="hw-hero__intro">分享你的作品与方法，发现下一次创作的可能。</p>
+        <div class="hw-actions"><button class="hw-button" id="share">分享我的创作 <span>↗</span></button><a class="hw-text-link" href="/studio?view=resources" data-view="resources">探索画风与图型 →</a></div>
+      </div>
+      <a class="hw-hero__credit" href="/gallery/index.html">画风来自官方资源库 ↗</a>
+    </section>
+    <section class="hw-workspace">
+      <div class="hw-section-heading"><div><p class="hw-eyebrow" id="section-label">COMMUNITY / 社区发现</p><h2 id="section-title">值得被看见的创作</h2></div><div class="hw-heading-actions" id="heading-actions"></div></div>
+      <div id="toolbar" class="hw-toolbar"></div>
+      <p id="notice" class="hw-notice" role="status"></p>
+      <div id="content" class="hw-content"><p class="hw-empty">正在加载创作…</p></div>
+      <button class="hw-button hw-button--quiet" id="more" hidden>继续发现 ↓</button>
+    </section>
+    <section class="hw-discussions" id="discussions-section"><div class="hw-section-heading"><h2>社区正在聊</h2><a class="hw-text-link" href="/latest">进入论坛 →</a></div><ul id="discussions"></ul></section>
+  </main>
+  <footer class="hw-footer"><a class="hw-brand" href="/studio">手绘风</a><p>每一次分享，都让下一次创作更容易。</p><a href="https://github.com/yang0/handraw-style" target="_blank" rel="noopener noreferrer">开源 Skill ↗</a><a href="/guidelines">社区准则</a><span id="release"></span></footer>
+  <dialog id="modal" class="hw-modal" aria-labelledby="modal-title"><div class="hw-modal__heading"><h2 id="modal-title"></h2><button class="hw-close" id="close-modal" aria-label="关闭">×</button></div><div id="modal-body"></div></dialog>
+</body>
+</html>

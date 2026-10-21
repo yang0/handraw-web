@@ -1,0 +1,38 @@
+handraw:
+  handraw_enabled:
+    default: false
+  handraw_pilot_group_ids:
+    type: group_list
+    default: ""
+  handraw_reviewer_group_ids:
+    type: group_list
+    default: ""
+  handraw_public_submissions:
+    default: false
+  handraw_welcome_credits:
+    default: 10
+    min: 0
+  handraw_contribution_credits:
+    default: 3
+    min: 0
+  handraw_daily_contribution_limit:
+    default: 3
+    min: 0
+  handraw_featured_credits:
+    default: 20
+    min: 0
+  handraw_verified_resource_credits:
+    default: 30
+    min: 0
+  handraw_exploration_initial:
+    default: 30
+    min: 1
+  handraw_exploration_extended:
+    default: 100
+    min: 1
+  handraw_private_storage:
+    default: "/home/yang0/handraw-data/private"
+  handraw_max_bundle_megabytes:
+    default: 25
+    min: 1
+    max: 100
