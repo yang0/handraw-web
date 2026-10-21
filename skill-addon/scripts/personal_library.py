@@ -193,7 +193,8 @@ class Client:
     def fetch(self, path: str, maximum: int = MAX_ARCHIVE) -> bytes:
         if not path.startswith("/studio/api/") or path.startswith("//") or ".." in path:
             raise ValueError("下载地址不属于本站资源 API")
-        headers = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
+        headers = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest",
+                   "User-Agent": "HandRawStudio/1.0"}
         if self.profile.get("api_key"):
             headers["Api-Key"] = self.profile["api_key"]
             username = self.profile.get("username", "")
