@@ -5,6 +5,7 @@ module Handraw
     def self.call(kind: nil, page: 1, search: nil)
       scope = Entry.visible.includes(:user)
       scope = scope.where(kind: kind) if Entry::KINDS.include?(kind)
+      scope = scope.where(kind: %w[style layout package]) if kind == 'resource'
       if search.present?
         pattern = "%#{Entry.sanitize_sql_like(search.to_s.first(100))}%"
         scope = scope.where('handraw_entries.title ILIKE :query OR handraw_entries.summary ILIKE :query',

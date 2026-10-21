@@ -736,7 +736,9 @@
 
   async function showMine() {
     if (!needUser()) return;
+    const request = ++activeRequest;
     const data = await api("/library");
+    if (request !== activeRequest) return;
     $("#toolbar").replaceChildren(
       ...tabs(
         [
@@ -770,6 +772,7 @@
   }
 
   async function showResources() {
+    const request = ++activeRequest;
     $("#toolbar").replaceChildren(
       ...tabs(
         [
@@ -794,6 +797,7 @@
       if (!response.ok)
         throw new Error("官方资源暂时无法加载，可直接访问画廊。");
       const styles = await response.json();
+      if (request !== activeRequest) return;
       const selected = [
         "FA-001",
         "FB-006",
@@ -841,7 +845,8 @@
       );
       return;
     }
-    const data = await api("/feed");
+    const data = await api("/feed?kind=resource");
+    if (request !== activeRequest) return;
     renderEntries(
       data.entries.filter((item) =>
         ["style", "layout", "package"].includes(item.kind)
@@ -994,6 +999,7 @@
   }
 
   async function render() {
+    activeRequest += 1;
     state.view = new URLSearchParams(location.search).get("view") || "home";
     const titles = {
       home: "值得被看见的创作",

@@ -66,6 +66,15 @@ jobs:
           ruby-version: '3.4.7'
           bundler-cache: true
           working-directory: discourse
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '12.11.2'
+      - name: Install locked asset processor dependencies
+        working-directory: discourse
+        run: pnpm install --frozen-lockfile
       - name: Prepare disposable database
         working-directory: discourse
         run: bin/rake db:create db:schema:load db:migrate

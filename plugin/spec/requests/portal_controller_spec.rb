@@ -108,6 +108,21 @@ RSpec.describe Handraw::PortalController do
     end
   end
 
+  describe '#create' do
+    it 'publishes a public contribution with its discussion and rejects duplicate content' do
+      sign_in(reviewer)
+      payload = { kind: 'experience', title: '水彩风格的三步创作过程',
+                  summary: '先明确使用场景，再选择视觉语言，最后用不同主题验证复用效果。',
+                  license: '允许学习参考，转载请联系原作者。', category_id: topic.category_id }
+      post '/studio/api/entries.json', params: { entry: payload }
+      expect(response.status).to eq(201)
+      created = Handraw::Entry.find_by!(public_id: response.parsed_body.fetch('id'))
+      expect(created.topic.user_id).to eq(reviewer.id)
+      post '/studio/api/entries.json', params: { entry: payload }
+      expect(response.status).to eq(422)
+    end
+  end
+
   describe '#refund' do
     it 'returns buyer credits, cancels pending author income, and is idempotent' do
       Handraw::Wallet.change!(buyer.id, 10, key: 'test-grant', reason: '测试积分')
