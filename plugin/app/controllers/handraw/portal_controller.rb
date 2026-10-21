@@ -92,7 +92,7 @@ module Handraw
           summary: data[:summary],
           cover_url: cover,
           license: data[:license],
-          paid_opt_in: ActiveModel::Type::Boolean.new.cast(data[:paid_opt_in]),
+          paid_opt_in: !!ActiveModel::Type::Boolean.new.cast(data[:paid_opt_in]),
           content_digest: digest
         )
         # Validate before creating the discussion so malformed drafts have no external effects.
@@ -264,7 +264,8 @@ module Handraw
           record.verified = true
           record.download_approved = true
           record.featured = true
-          award = record.paid_opt_in ? SiteSetting.handraw_featured_credits : SiteSetting.handraw_verified_resource_credits
+          reusable_free = !record.paid_opt_in && %w[style layout].include?(record.kind)
+          award = reusable_free ? SiteSetting.handraw_verified_resource_credits : SiteSetting.handraw_featured_credits
           Economy.editorial_award!(record, award)
         when 'pause', 'hide'
           record.status = action == 'hide' ? 'hidden' : 'paused'
@@ -319,7 +320,8 @@ module Handraw
     end
 
     def freeze_wallet
-      account = Wallet.find_by!(user_id: params[:id])
+      target = User.find(params[:id])
+      account = Wallet.for_user(target.id)
       raise RuleError, '不能修改自己的冻结状态' if account.user_id == current_user.id
 
       reason = params.require(:reason).to_s.strip
@@ -356,7 +358,10 @@ module Handraw
     end
 
     def entry
-      @entry ||= Entry.visible.find_by!(public_id: params[:id]).tap { |record| guardian.ensure_can_see!(record.topic) }
+      @entry ||= Entry.find_by!(public_id: params[:id]).tap do |record|
+        Entry.visible.find(record.id) unless current_user&.id == record.user_id
+        guardian.ensure_can_see!(record.topic)
+      end
     end
 
     def safe_cover(value)

@@ -71,6 +71,15 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(imported["section"], "collected")
         self.assertEqual(self.library.get(owned["id"])["section"], "owned")
 
+    def test_only_owned_definitions_can_be_updated(self):
+        owned = self.library.create("style", "纸感水彩", "自然晕染。", "Natural washes.", "允许个人与商业创作。")
+        updated = self.library.update(owned["id"], name="我的水彩二版", version="1.1.0")
+        self.assertEqual(updated["version"], "1.1.0")
+        path, digest = self.bundle()
+        collected = self.library.import_bundle(path, digest, "community-001")
+        with self.assertRaisesRegex(ValueError, "只能修改"):
+            self.library.update(collected["id"], name="冒充原创")
+
 
 if __name__ == "__main__":
     unittest.main()

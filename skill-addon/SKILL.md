@@ -17,6 +17,7 @@ python scripts/personal_library.py import path/to/resource.zip --sha256 <从网�
 python scripts/personal_library.py sync --list-only
 python scripts/personal_library.py sync --id <社区资源ID>
 python scripts/personal_library.py show <资源ID>
+python scripts/personal_library.py update <自己创建的资源ID> --zh "修改后的中文定义" --en "Updated English definition" --version 1.1.0
 python scripts/personal_library.py fork <资源ID> --name "我的改编"
 python scripts/personal_library.py export <自己创建的资源ID> --output path/to/resource.zip
 ```
@@ -29,3 +30,4 @@ python scripts/personal_library.py export <自己创建的资源ID> --output pat
 - 使用收藏出图时，读取 `show` 返回的中英文定义并加入现有提示词，保留用户主题与官方图型／画风约束；明确标注个人资源的名称、ID 与来源。
 - `fork` 只生成本地副本并保留来源。对外发布前检查原授权；不能因进入“我的画风／图型”而声称原创或获得再次分发权。
 - 私人资源永不自动上传。社区分享使用 `community-share`；网页投稿入口为 `https://handraw-style.com/studio`。
+- `create` 和 `update` 可重复使用 `--example "主题及验证证据"`，打包保留三个不同主题的复用示例，以供社区版主验证。

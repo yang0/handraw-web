@@ -70,6 +70,22 @@ RSpec.describe Handraw::PortalController do
   end
 
   describe '#download' do
+    it 'delivers the actual private attachment only after unlocking and forbids public caching' do
+      FileUtils.mkdir_p(Handraw::BundleStore.root)
+      Tempfile.create(['handraw-private', '.zip'], Handraw::BundleStore.root) do |file|
+        file.write('private resource attachment')
+        file.flush
+        resource.update!(bundle_key: File.basename(file.path), bundle_sha256: Digest::SHA256.file(file.path).hexdigest)
+        Handraw::Wallet.change!(buyer.id, 10, key: 'download-seed', reason: '测试积分')
+        Handraw::Economy.unlock!(resource, buyer, 10, 1)
+        sign_in(buyer)
+        get "/studio/api/entries/#{resource.public_id}/download"
+        expect(response.status).to eq(200)
+        expect(response.body).to eq('private resource attachment')
+        expect(response.headers['Cache-Control']).to include('private', 'no-store')
+      end
+    end
+
     it 'denies the protected attachment to a signed-in user without an entitlement' do
       sign_in(buyer)
       get "/studio/api/entries/#{resource.public_id}/download"

@@ -64,13 +64,27 @@ class Library:
             if not resource.get("prompt_zh") or not resource.get("prompt_en"):
                 raise ValueError("画风／图型需要中英文定义")
 
-    def create(self, kind: str, name: str, zh: str, en: str, license_text: str, origin: dict | None = None) -> dict:
+    def create(self, kind: str, name: str, zh: str, en: str, license_text: str, origin: dict | None = None,
+               examples: list[str] | None = None) -> dict:
         resource = {"id": f"mine:{uuid.uuid4()}", "kind": kind, "name": name,
                     "prompt_zh": zh, "prompt_en": en, "license": license_text, "version": "1.0.0",
-                    "section": "owned", "origin": origin, "created_at": datetime.now(timezone.utc).isoformat()}
+                    "section": "owned", "origin": origin, "examples": examples or [],
+                    "created_at": datetime.now(timezone.utc).isoformat()}
         self.validate_resource(resource)
         data = self.index()
         data["resources"].append(resource)
+        self.write(data)
+        return resource
+
+    def update(self, resource_id: str, **changes) -> dict:
+        data = self.index()
+        resource = next((item for item in data["resources"] if item["id"] == resource_id), None)
+        if not resource or resource["section"] != "owned":
+            raise ValueError("只能修改自己创建的资源；收藏请先创建派生副本")
+        allowed = {"name", "prompt_zh", "prompt_en", "license", "version", "examples"}
+        resource.update({key: value for key, value in changes.items() if key in allowed and value is not None})
+        self.validate_resource(resource)
+        resource["updated_at"] = datetime.now(timezone.utc).isoformat()
         self.write(data)
         return resource
 
@@ -228,6 +242,11 @@ def main():
     create = commands.add_parser("create")
     for name in ("kind", "name", "zh", "en", "license"):
         create.add_argument("--" + name, required=True)
+    create.add_argument("--example", action="append", default=[])
+    update = commands.add_parser("update"); update.add_argument("id")
+    for name in ("name", "zh", "en", "license", "version"):
+        update.add_argument("--" + name)
+    update.add_argument("--example", action="append")
     importing = commands.add_parser("import")
     importing.add_argument("bundle", type=Path)
     importing.add_argument("--sha256", required=True)
@@ -239,7 +258,10 @@ def main():
     library = Library(args.root)
     if args.command == "list": result = library.index()
     elif args.command == "show": result = library.get(args.id)
-    elif args.command == "create": result = library.create(args.kind, args.name, args.zh, args.en, args.license)
+    elif args.command == "create": result = library.create(args.kind, args.name, args.zh, args.en, args.license, examples=args.example)
+    elif args.command == "update": result = library.update(args.id, name=args.name, prompt_zh=args.zh,
+                                                           prompt_en=args.en, license=args.license,
+                                                           version=args.version, examples=args.example)
     elif args.command == "import": result = library.import_bundle(args.bundle, args.sha256, args.source_id)
     elif args.command == "fork": result = library.fork(args.id, args.name)
     elif args.command == "export": result = library.export(args.id, args.output)
