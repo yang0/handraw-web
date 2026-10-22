@@ -66,6 +66,7 @@ module Handraw
       input = hash(values).stringify_keys
       kind = input['kind'].to_s
       raise RuleError, '请选择作品、经验、画风或图型' unless KINDS.include?(kind)
+      raise RuleError, '经验由版主从论坛原帖收录，请先到论坛发帖' if kind == 'experience'
       data = content_data(kind, input['content'])
       cover = safe_image(input['cover_url'])
       raise RuleError, '作品需要一张真实成图' if kind == 'work' && cover.blank?
@@ -105,6 +106,7 @@ module Handraw
 
     def self.update!(entry, user, values)
       raise Discourse::InvalidAccess unless user.id == entry.user_id
+      raise RuleError, '请直接编辑论坛原帖，经验收录由版主管理' if entry.forum_curated?
       raise RuleError, '旧测试内容请按新格式重新发布' unless entry.market?
       input = hash(values).stringify_keys
       entry.with_lock do

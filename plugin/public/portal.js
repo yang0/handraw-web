@@ -235,6 +235,15 @@
   }
 
   function card(entry) {
+    const entryLink = entry.forum_curated
+      ? { href: entry.topic_url }
+      : {
+          href: `/studio?entry=${entry.id}`,
+          onclick: (event) => {
+            event.preventDefault();
+            openEntry(entry.id);
+          },
+        };
     const saveButton = el(
       "button",
       {
@@ -256,11 +265,7 @@
           "a",
           {
             class: "hw-work__visual",
-            href: `/studio?entry=${entry.id}`,
-            onclick: (event) => {
-              event.preventDefault();
-              openEntry(entry.id);
-            },
+            ...entryLink,
           },
           el("img", {
             class: "hw-work__image",
@@ -280,23 +285,9 @@
         { class: "hw-work__kind" },
         `${labels[entry.kind] || "资料"}${entry.source_label ? " / " + entry.source_label : ""}${entry.verified ? " / 已验证" : ""}${entry.paid ? ` / ${entry.price} 积分` : ""}`,
       ),
-      el(
-        "h3",
-        {},
-        el(
-          "a",
-          {
-            href: `/studio?entry=${entry.id}`,
-            onclick: (event) => {
-              event.preventDefault();
-              openEntry(entry.id);
-            },
-          },
-          entry.title,
-        ),
-      ),
+      el("h3", {}, el("a", entryLink, entry.title)),
     );
-    if (!entry.cover_url)
+    if (!entry.cover_url || entry.forum_curated)
       node.append(el("p", { class: "hw-work__abstract" }, entry.summary));
     node.append(
       el(
@@ -964,7 +955,14 @@
     if (state.view === "explore") return discover.explore();
     if (state.view === "create") return discover.create();
     if (state.view === "learn") return discover.learn();
-    $("#heading-actions").append(button("分享创作 ↗", share, true));
+    const experienceView =
+      state.view === "experience" ||
+      (state.view === "community" && params.get("kind") === "experience");
+    $("#heading-actions").append(
+      experienceView
+        ? el("a", { href: "/latest", class: "hw-text-link" }, "到论坛交流 →")
+        : button("分享创作 ↗", share, true),
+    );
     if (state.view === "mine") return showMine();
     if (state.view === "wallet") return showWallet();
     if (state.view === "review") return showReview();

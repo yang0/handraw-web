@@ -194,17 +194,19 @@ RSpec.describe Handraw::PortalController do
   describe '#create' do
     it 'accepts a simple submission without asking the author to choose a board or license' do
       sign_in(reviewer)
-      post '/studio/api/entries.json', params: { entry: { kind: 'experience', title: '一个清楚的创作经验标题',
-                                                         summary: '先选择目标，再记录步骤，最后贴上结果，帮助其他创作者复用方法。', content: { body: '先选择目标，再记录步骤，最后贴上结果，帮助其他创作者复用方法。' } } }
+      post '/studio/api/entries.json', params: { entry: { kind: 'work', title: '一个清楚的创作作品标题',
+                                                         cover_url: 'https://img.handraw-style.com/images/individual/FA/FA-001.webp',
+                                                         summary: '先选择目标，再记录步骤，最后贴上结果，帮助其他创作者复用方法。', content: { prompt: '先选择目标，再记录步骤，最后贴上结果，帮助其他创作者复用方法。' } } }
       expect(response.status).to eq(201)
       expect(Handraw::Entry.find_by!(public_id: response.parsed_body.fetch('id')).license).to include('联系原作者')
     end
 
     it 'publishes a public contribution with its discussion and rejects duplicate content' do
       sign_in(reviewer)
-      payload = { kind: 'experience', title: '水彩风格的三步创作过程',
+      payload = { kind: 'work', title: '水彩风格的三步创作过程',
+                  cover_url: 'https://img.handraw-style.com/images/individual/FA/FA-001.webp',
                   summary: '先明确使用场景，再选择视觉语言，最后用不同主题验证复用效果。',
-                  license: '允许学习参考，转载请联系原作者。', category_id: topic.category_id, content: { body: '先明确使用场景，再选择视觉语言，最后用不同主题验证复用效果。' } }
+                  license: '允许学习参考，转载请联系原作者。', category_id: topic.category_id, content: { prompt: '先明确使用场景，再选择视觉语言，最后用不同主题验证复用效果。' } }
       post '/studio/api/entries.json', params: { entry: payload }
       expect(response.status).to eq(201)
       created = Handraw::Entry.find_by!(public_id: response.parsed_body.fetch('id'))

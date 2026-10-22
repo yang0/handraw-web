@@ -20,7 +20,21 @@ RSpec.describe 'Handraw content market' do
                 cover_url: 'https://img.handraw-style.com/images/individual/FA/FA-001.webp',
                 price: 10, paid_opt_in: true,
                 content: { prompt: secret, body: secret, definition_zh: secret, parameters: { model: 'test' } } }.merge(extra)
-    Handraw::Publishing.create!(author, payload, Guardian.new(author))
+    return Handraw::Publishing.create!(author, payload, Guardian.new(author)) unless kind == 'experience'
+
+    # Historical paid experiences remain readable and refundable; new submissions cannot create them.
+    topic = Fabricate(:topic, user: author, title: payload[:title])
+    Fabricate(:post, topic: topic, user: author, post_number: 1, raw: payload[:summary])
+    record = Handraw::Entry.new(user: author, topic: topic, public_id: SecureRandom.uuid, kind: kind,
+                               title: payload[:title], summary: payload[:summary], cover_url: payload[:cover_url],
+                               license: '允许学习参考，转载请联系原作者。', content_digest: SecureRandom.hex(32),
+                               metadata: { 'content_market' => true })
+    Handraw::Publishing.price!(record, payload.stringify_keys, initial: true)
+    record.save!
+    data = Handraw::Publishing.content_data(kind, payload[:content])
+    record.create_content!(data: data)
+    Handraw::Publishing.claim_images!(record, data)
+    record
   end
 
   def grant(user = buyer, amount = 100)

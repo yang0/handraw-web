@@ -35,6 +35,7 @@
   const heading = el("h2", { id: "handraw-forum-dialog-title" });
   const body = el("div", { "data-handraw-id": "modal-body" });
   const notice = el("p", { role: "status", "aria-live": "polite" });
+  const pageNotice = el("p", { class: "hw-forum-notice", role: "status" });
   const dialog = el(
     "dialog",
     {
@@ -55,10 +56,11 @@
     notice,
     body,
   );
-  shell.append(dialog);
+  shell.append(pageNotice, dialog);
   document.body.append(shell);
   const tell = (message) => {
     notice.textContent = message;
+    if (!dialog.open) pageNotice.textContent = message;
   };
   const modal = (title, ...children) => {
     heading.textContent = title;
@@ -135,77 +137,103 @@
       ),
   });
   let topicChecked = "",
+    checkedPost,
     timer;
   async function enhance() {
     if (!state.boot) return;
-    const header = document.querySelector('[data-surface="forum"]');
-    if (
-      state.boot.participant &&
-      header &&
-      !header.querySelector(".hw-write-experience")
-    ) {
-      const write = button("写经验", () => market.share("experience"), true);
-      write.classList.add("hw-write-experience");
-      header.append(write);
-    }
-    const toolbar = document.querySelector(".d-editor-button-bar");
-    if (
-      state.boot.participant &&
-      toolbar &&
-      !toolbar.querySelector(".hw-compose-experience")
-    ) {
-      const write = button("分享经验", () => market.share("experience"), true);
-      write.classList.add("hw-compose-experience");
-      toolbar.append(write);
-    }
     const match = location.pathname.match(/^\/t\/(?:[^/]+\/)?(\d+)/);
     if (!match) {
       topicChecked = "";
       return;
     }
     const firstPost = document.querySelector("#post_1 .cooked");
-    if (!firstPost || topicChecked === match[1]) return;
+    if (!firstPost || (topicChecked === match[1] && checkedPost === firstPost))
+      return;
     topicChecked = match[1];
+    checkedPost = firstPost;
     try {
       const result = await api(`/topics/${match[1]}/experience`);
       if (!firstPost.isConnected) return;
-      if (result.entry) {
+      const entry = result.entry;
+      const username = document
+        .querySelector("#post_1 .username")
+        ?.textContent.trim();
+      const own =
+        username === state.boot.user?.username ||
+        entry?.author.id === state.boot.user?.id;
+      const refresh = async () => {
+        firstPost.querySelector(".hw-forum-experience-link")?.remove();
+        topicChecked = "";
+        await enhance();
+      };
+      if (entry?.forum_curated) {
+        const controls = el(
+          "div",
+          { class: "hw-forum-experience-link" },
+          el("p", {}, "已收录为社区经验 · 内容以本帖为准"),
+        );
+        if (state.boot.participant && !own)
+          controls.append(
+            button(
+              "这篇经验有帮助",
+              async (node) => {
+                await api(`/entries/${entry.id}/events`, {
+                  method: "POST",
+                  body: JSON.stringify({ kind: "detail" }),
+                });
+                await api(`/entries/${entry.id}/events`, {
+                  method: "POST",
+                  body: JSON.stringify({ kind: "useful" }),
+                });
+                node.textContent = "已记录帮助反馈 ✓";
+              },
+              true,
+            ),
+          );
+        if (state.boot.reviewer && !own)
+          controls.append(
+            button(
+              "取消经验收录",
+              async () => {
+                await api(`/topics/${match[1]}/experience`, {
+                  method: "DELETE",
+                });
+                await refresh();
+                tell("已取消经验收录，原帖保留。");
+              },
+              true,
+            ),
+          );
+        firstPost.append(controls);
+      } else if (entry) {
         firstPost.append(
           el(
             "div",
             { class: "hw-forum-experience-link" },
             button(
-              result.entry.paid
-                ? `完整经验 · ${result.entry.price} 积分${result.entry.unlocked ? " · 已解锁" : ""}`
+              entry.paid
+                ? `完整经验 · ${entry.price} 积分${entry.unlocked ? " · 已解锁" : ""}`
                 : "阅读完整经验",
-              () => market.openEntry(result.entry.id),
+              () => market.openEntry(entry.id),
             ),
           ),
         );
-      } else if (state.boot.participant) {
-        const username = document
-          .querySelector("#post_1 .username")
-          ?.textContent.trim();
-        if (username === state.boot.user?.username)
-          firstPost.append(
-            el(
-              "div",
-              { class: "hw-forum-experience-link" },
-              button(
-                "收录为经验／添加进阶内容",
-                () =>
-                  market.share("experience", {
-                    topic_id: Number(match[1]),
-                    title:
-                      document
-                        .querySelector("#topic-title h1")
-                        ?.textContent.trim() || "我的创作经验分享",
-                    summary: "来自论坛的经验分享，阅读原帖或查看完整方法。",
-                  }),
-                true,
-              ),
+      } else if (state.boot.reviewer && !own) {
+        firstPost.append(
+          el(
+            "div",
+            { class: "hw-forum-experience-link" },
+            button(
+              "收录为社区经验",
+              async () => {
+                await api(`/topics/${match[1]}/experience`, { method: "POST" });
+                await refresh();
+                tell("已收录，社区经验列表会链接到这篇原帖。");
+              },
+              true,
             ),
-          );
+          ),
+        );
       }
     } catch (_) {
       topicChecked = "";

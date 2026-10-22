@@ -43,6 +43,10 @@ module Handraw
       %w[style layout].include?(kind)
     end
 
+    def forum_curated?
+      kind == 'experience' && !market? && (metadata['forum_curated'] == true || metadata['imported_from_forum'] == true)
+    end
+
     def tradable?
       status == 'published' && (market? ? content.present? && (!resource? || !paid_opt_in || download_approved) : bundled? && download_approved)
     end
@@ -75,6 +79,7 @@ module Handraw
         price: paid_opt_in && (market? || download_approved) ? price : 0,
         pricing_mode: pricing_mode,
         market: market?,
+        forum_curated: forum_curated?,
         tradable: tradable?,
         review_pending: market? && resource? && paid_opt_in && !download_approved,
         content_available: market? && content.present?,
@@ -93,7 +98,7 @@ module Handraw
         examples: Array(metadata['examples']),
         collection_count: collections.count,
         created_at: created_at,
-        source_label: metadata['imported_from_forum'] ? '来自论坛' : nil
+        source_label: forum_curated? ? '论坛经验' : metadata['imported_from_forum'] ? '来自论坛' : nil
       }
     end
 

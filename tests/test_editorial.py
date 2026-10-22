@@ -26,7 +26,8 @@ class EditorialContentTests(unittest.TestCase):
                     self.assertEqual(resources[template[field]]['kind'], field)
         self.assertGreaterEqual(len(editorial['featured']), 8)
         self.assertGreaterEqual(len(editorial['guides']), 5)
-        self.assertTrue(all(len(guide['steps']) >= 3 for guide in editorial['guides']))
+        self.assertEqual(len({guide['topic_id'] for guide in editorial['guides']}), len(editorial['guides']))
+        self.assertTrue(all(guide['topic_id'] > 0 and guide['summary'] and 'steps' not in guide for guide in editorial['guides']))
 
     def test_legacy_style_numbers_resolve_without_collisions(self):
         catalog = json.loads((ROOT / 'plugin/content/catalog.json').read_text(encoding='utf-8'))

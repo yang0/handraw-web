@@ -183,6 +183,21 @@
 .hw-forum-dialog::backdrop {
   background: rgb(36 30 21 / 45%);
 }
+.hw-forum-notice:empty {
+  display: none;
+}
+.hw-forum-notice {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  max-width: min(420px, 90vw);
+  z-index: 1100;
+  padding: 12px 16px;
+  background: #fffdf9;
+  color: #302a24;
+  border: 1px solid #d9d3c8;
+  border-radius: 4px;
+}
 .hw-forum-dialog-heading {
   display: flex;
   justify-content: space-between;

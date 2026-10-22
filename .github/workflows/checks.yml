@@ -22,6 +22,7 @@ jobs:
       - run: node --check plugin/public/market.js && node --check plugin/public/forum-experience.js
       - run: node tests/test_share_preview.cjs
       - run: node tests/test_masonry_flow.cjs
+      - run: node tests/test_forum_navigation.cjs
       - run: node --check plugin/public/image-loader.js && node tests/test_image_loader.cjs
       - run: bash -n ops/server-deploy.sh ops/preview-server.sh ops/setup-preview.sh ops/test-server.sh
       - name: Check tracked files

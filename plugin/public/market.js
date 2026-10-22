@@ -219,11 +219,15 @@ window.HandrawMarket = ({
         el(
           "div",
           { class: "hw-share-choices" },
-          ...Object.entries(names).map(([value, title]) =>
-            button(`分享${title}`, () => share(value), true),
-          ),
+          ...Object.entries(names)
+            .filter(([value]) => value !== "experience")
+            .map(([value, title]) =>
+              button(`分享${title}`, () => share(value), true),
+            ),
         ),
       );
+    if (kind === "experience")
+      return tell("经验由版主从论坛原帖收录，请先到论坛分享。");
     if (!login()) return;
     if (!state.boot.participant) return tell("请完成账号验证后再发布。");
     const editing = !!initial.id;
@@ -607,6 +611,10 @@ window.HandrawMarket = ({
   }
   async function openEntry(id) {
     const entry = await api(`/entries/${id}`);
+    if (entry.forum_curated) {
+      location.href = entry.topic_url;
+      return;
+    }
     if (state.boot.user && state.boot.user.id !== entry.author.id)
       api(`/entries/${id}/events`, {
         method: "POST",
@@ -774,7 +782,11 @@ window.HandrawMarket = ({
           "这份内容来自原有公开分享，可前往原帖阅读。",
         ),
       );
-    if (state.boot.user?.id === entry.author.id && entry.market)
+    if (
+      state.boot.user?.id === entry.author.id &&
+      entry.market &&
+      entry.kind !== "experience"
+    )
       actions.append(
         button("编辑内容与价格", () => share(entry.kind, entry), true),
       );

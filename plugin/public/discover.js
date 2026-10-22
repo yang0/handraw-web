@@ -133,25 +133,10 @@ window.HandrawDiscover = ({
     return market.assetDetail(item.ref || `official:${item.id}`);
   }
 
-  function guide(item) {
-    modal(
-      item.title,
-      el("p", { class: "hw-help" }, `官方指南 · 约 ${item.minutes} 分钟`),
-      ...item.steps.map(([title, body], index) =>
-        el(
-          "section",
-          { class: "hw-guide-step" },
-          el("h3", {}, `${index + 1}. ${title}`),
-          el("p", {}, body),
-        ),
-      ),
-      link("去创作台试试 →", "create", {}, "hw-button"),
-    );
-  }
   function guideCard(item, index) {
     return el(
-      "button",
-      { class: "hw-guide-link", type: "button", onclick: () => guide(item) },
+      "a",
+      { class: "hw-guide-link", href: item.url || `/t/${item.topic_id}` },
       el(
         "span",
         { class: "hw-guide-link__number" },
@@ -352,7 +337,7 @@ window.HandrawDiscover = ({
       el(
         "p",
         { class: "hw-page-intro" },
-        "先完成一次小创作，再慢慢熟悉其他功能。",
+        "整理自社区的使用教程与创作方法。点击标题，直接阅读论坛原帖。",
       ),
       el(
         "div",
@@ -377,10 +362,6 @@ window.HandrawDiscover = ({
         link("到社区提问 →", "community"),
       ),
     );
-    const selected = editorial().guides.find(
-      (item) => item.id === new URLSearchParams(location.search).get("id"),
-    );
-    if (selected) guide(selected);
   }
 
   function ensureEngine() {

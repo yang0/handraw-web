@@ -20,6 +20,8 @@ Handraw::Engine.routes.draw do
   get '/api/generations/:id/content', to: 'portal#generation_content'
   get '/api/feed', to: 'portal#feed'
   get '/api/topics/:topic_id/experience', to: 'portal#topic_experience'
+  post '/api/topics/:topic_id/experience', to: 'portal#curate_experience'
+  delete '/api/topics/:topic_id/experience', to: 'portal#uncurate_experience'
   post '/api/impressions', to: 'portal#impressions'
   get '/api/creators/:username', to: 'portal#creator'
   get '/api/library', to: 'portal#library'

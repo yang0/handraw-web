@@ -22,6 +22,8 @@ require_relative 'lib/handraw/navigation'
 require_relative 'lib/handraw/image_service'
 require_relative 'lib/handraw/catalog'
 require_relative 'lib/handraw/publishing'
+require_relative 'lib/handraw/forum_curation'
+require_relative 'lib/handraw/editorial'
 require_relative 'lib/handraw/creation'
 require_relative 'lib/handraw/private_media'
 

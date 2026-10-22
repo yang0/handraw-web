@@ -10,7 +10,7 @@ module Handraw
     before_action :ensure_logged_in, except: %i[index asset boot feed show creator assets asset_show asset_content related content private_image topic_experience]
     before_action :ensure_participant, only: %i[create update upload_bundle private_image_upload]
     before_action :ensure_verified, only: %i[welcome unlock generation_create generation_retry resolve_creation]
-    before_action :ensure_reviewer, only: %i[review_queue review refund freeze_wallet review_download]
+    before_action :ensure_reviewer, only: %i[review_queue review refund freeze_wallet review_download curate_experience uncurate_experience]
 
     rescue_from Handraw::RuleError do |error|
       render json: { errors: [error.message] }, status: :unprocessable_entity
@@ -72,7 +72,7 @@ module Handraw
           price_days: SiteSetting.handraw_price_window_days
         },
         categories: Category.secured(guardian).where(read_restricted: false).order(:position).pluck(:id, :name),
-        editorial: JSON.parse(File.read(Handraw::Engine.root.join('content', 'editorial.json'))),
+        editorial: Editorial.payload,
         generation: { enabled: ImageService.enabled?, available: ImageService.enabled? && Access.verified?(current_user),
                       daily_limit: SiteSetting.handraw_generation_daily_limit },
         fixed_price_max: SiteSetting.handraw_fixed_price_max,
@@ -154,8 +154,21 @@ module Handraw
     end
 
     def topic_experience
+      topic = Topic.find(params[:topic_id])
+      guardian.ensure_can_see!(topic)
       record = Entry.visible.find_by(topic_id: params[:topic_id], kind: 'experience')
       render json: { entry: record&.public_payload(current_user) }
+    end
+
+    def curate_experience
+      RateLimiter.new(current_user, 'handraw-curate-experience', 30, 1.minute).performed!
+      record = ForumCuration.mark!(Topic.find(params[:topic_id]), current_user, guardian, assets: params[:assets])
+      render json: { entry: record.public_payload(current_user) }
+    end
+
+    def uncurate_experience
+      ForumCuration.unmark!(Topic.find(params[:topic_id]), current_user, guardian)
+      head :no_content
     end
 
     def asset_content
