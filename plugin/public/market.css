@@ -1,3 +1,61 @@
+.hw-masonry {
+  columns: 4;
+  column-gap: 22px;
+}
+.hw-masonry > .hw-library-card {
+  break-inside: avoid;
+  margin-bottom: 32px;
+}
+.hw-masonry--measured {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 8px;
+  grid-auto-flow: dense;
+  align-items: start;
+  gap: 0 22px;
+}
+.hw-masonry--measured > .hw-library-card {
+  margin-bottom: 0;
+}
+.hw-masonry .hw-library-card__image {
+  aspect-ratio: auto;
+}
+.hw-masonry .hw-library-card__image img {
+  height: auto;
+  object-fit: contain;
+}
+.hw-masonry .hw-library-card__image:hover img {
+  transform: none;
+}
+.hw-masonry > .hw-empty {
+  grid-column: 1 / -1;
+  grid-row: span 20;
+}
+@media (max-width: 1100px) {
+  .hw-masonry {
+    columns: 3;
+  }
+  .hw-masonry--measured {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .hw-masonry {
+    columns: 2;
+  }
+  .hw-masonry--measured {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .hw-masonry {
+    columns: 1;
+  }
+  .hw-masonry--measured {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .hw-market-form {
   display: grid;
   gap: 18px;
@@ -91,12 +149,12 @@
 .hw-related-works img {
   width: 100%;
   max-height: 230px;
-  object-fit: cover;
+  object-fit: contain;
 }
 .hw-library-image {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 .hw-picker-image {
   width: 100%;

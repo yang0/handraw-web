@@ -15,6 +15,7 @@ window.HandrawMarket = ({
 }) => {
   const $ = select || ((query) => document.querySelector(query));
   let disposeSharePreview = () => {};
+  let disposeExplore = () => {};
   window.addEventListener("pagehide", (event) => {
     if (!event.persisted) disposeSharePreview();
   });
@@ -982,13 +983,18 @@ window.HandrawMarket = ({
     return node;
   }
   async function explore() {
+    disposeExplore();
     const params = new URLSearchParams(location.search);
     let kind = params.get("type") === "layout" ? "layout" : "style";
     let source = params.get("source") || "",
       count = 12,
       page = 1,
       query = params.get("q") || "",
-      assets = [];
+      assets = [],
+      remoteMore = false,
+      busy = false,
+      request = 0,
+      timer;
     const tabs = el("div", {
       class: "hw-resource-tabs",
       "aria-label": "探索类型",
@@ -1011,25 +1017,87 @@ window.HandrawMarket = ({
     );
     sourceInput.value = source;
     const status = el("p", { class: "hw-help", "aria-live": "polite" });
-    const grid = el("div", { class: "hw-editorial-grid" });
-    const more = button(
-      "继续看 12 个 ↓",
-      async () => {
-        count += 12;
-        if (source === "community") {
-          page += 1;
-          assets.push(
-            ...(
-              await api(
-                `/assets?kind=${kind}&source=community&page=${page}&q=${encodeURIComponent(query)}`,
-              )
-            ).assets,
+    const grid = el("div", {
+      class: `hw-masonry${typeof ResizeObserver === "undefined" ? "" : " hw-masonry--measured"}`,
+      "aria-label": "画风与图型",
+    });
+    // Cards keep their intrinsic image heights; row spans fill the gaps between them.
+    const resize =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver((entries) => {
+            for (const { target } of entries) {
+              const span = Math.ceil(
+                (target.getBoundingClientRect().height + 32) / 8,
+              );
+              target.style.gridRowEnd = `span ${Math.max(1, span)}`;
+            }
+          });
+    function appendCards(items) {
+      for (const item of items) {
+        const node = assetCard(item);
+        grid.append(node);
+        resize?.observe(node);
+      }
+    }
+    const observer =
+      typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver(
+            (entries) => {
+              if (!grid.isConnected) return observer.disconnect();
+              if (entries.some((entry) => entry.isIntersecting))
+                next().catch(() => {});
+            },
+            { rootMargin: "200px 0px" },
           );
+    disposeExplore = () => {
+      request++;
+      clearTimeout(timer);
+      observer?.disconnect();
+      resize?.disconnect();
+    };
+    const more = button("继续看 12 个 ↓", () => next(), true);
+    function updateStatus() {
+      status.textContent = `${names[kind]} · 已显示 ${Math.min(count, assets.length)} 份 · 官方免费，社区按作者发布方式解锁`;
+      more.hidden = assets.length <= count && !remoteMore;
+      more.disabled = busy;
+      more.textContent = busy ? "正在加载…" : "继续看 12 个 ↓";
+    }
+    async function next() {
+      if (busy || more.hidden || !grid.isConnected) return;
+      const current = request;
+      const before = Math.min(count, assets.length);
+      busy = true;
+      updateStatus();
+      try {
+        if (assets.length < count + 12 && remoteMore) {
+          const result = await api(
+            `/assets?kind=${kind}&source=community&page=${page + 1}&q=${encodeURIComponent(query)}`,
+          );
+          if (current !== request) return;
+          page++;
+          const known = new Set(assets.map(assetRef));
+          const fresh = result.assets.filter(
+            (item) => !known.has(assetRef(item)),
+          );
+          remoteMore =
+            page < 50 && result.assets.length === 20 && fresh.length > 0;
+          assets.push(...fresh);
         }
-        draw();
-      },
-      true,
-    );
+        count += 12;
+        appendCards(assets.slice(before, count));
+      } catch (error) {
+        // Pause automatic retries on failure; the button remains an explicit retry.
+        observer?.unobserve(more);
+        tell(error.message);
+      } finally {
+        if (current === request) {
+          busy = false;
+          updateStatus();
+        }
+      }
+    }
     function draw() {
       tabs.replaceChildren(
         ...["style", "layout"].map((value) =>
@@ -1048,23 +1116,39 @@ window.HandrawMarket = ({
           ),
         ),
       );
-      grid.replaceChildren(...assets.slice(0, count).map(assetCard));
+      resize?.disconnect();
+      grid.replaceChildren();
+      appendCards(assets.slice(0, count));
       if (!assets.length)
         grid.append(el("p", { class: "hw-empty" }, "还没有找到对应资产。"));
-      status.textContent = `${names[kind]} · 已显示 ${Math.min(count, assets.length)} 份 · 官方免费，社区按作者发布方式解锁`;
-      more.hidden = source !== "community" && assets.length <= count;
+      updateStatus();
     }
     async function load() {
+      const current = ++request;
+      observer?.unobserve(more);
+      busy = true;
+      updateStatus();
       page = 1;
       count = 12;
-      assets = (
-        await api(
+      try {
+        const result = await api(
           `/assets?kind=${kind}&source=${source}&q=${encodeURIComponent(query)}`,
-        )
-      ).assets;
-      draw();
+        );
+        if (current !== request) return;
+        assets = result.assets;
+        remoteMore =
+          source !== "official" &&
+          assets.filter((item) => item.source === "community").length === 20;
+        busy = false;
+        draw();
+        if (!more.hidden) observer?.observe(more);
+      } finally {
+        if (current === request) {
+          busy = false;
+          updateStatus();
+        }
+      }
     }
-    let timer;
     queryInput.addEventListener("input", () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
@@ -1102,6 +1186,7 @@ window.HandrawMarket = ({
     assetPicker,
     explore,
     assetCard,
+    stopExplore: () => disposeExplore(),
     upload,
     relations,
   };

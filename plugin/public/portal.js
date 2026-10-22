@@ -898,6 +898,7 @@
   });
 
   async function render() {
+    market.stopExplore();
     activeRequest += 1;
     const params = new URLSearchParams(location.search);
     const requested = params.get("view") || "home";

@@ -230,7 +230,7 @@ button:disabled {
   display: block;
   width: 100%;
   aspect-ratio: 4/3;
-  object-fit: cover;
+  object-fit: contain;
   background: var(--soft);
   border: 0;
   transition:
@@ -243,7 +243,7 @@ button:disabled {
   cursor: pointer;
 }
 .hw-work__visual:hover .hw-work__image {
-  transform: scale(1.025);
+  transform: none;
   filter: contrast(1.03);
 }
 .hw-work__badge {
@@ -870,7 +870,7 @@ button:disabled {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   transition: opacity 0.4s;
 }
 .hw-hero-art img:not([data-hw-loaded]) {
@@ -957,11 +957,11 @@ button:disabled {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   transition: transform 0.3s ease;
 }
 .hw-library-card__image:hover img {
-  transform: scale(1.025);
+  transform: none;
 }
 .hw-library-card__label {
   font-size: 11px;
@@ -1012,11 +1012,11 @@ button:disabled {
 .hw-template__visual img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   transition: transform 0.3s;
 }
 .hw-template__visual:hover img {
-  transform: scale(1.025);
+  transform: none;
 }
 .hw-template h3 {
   font: 400 24px/1.4 var(--serif);
