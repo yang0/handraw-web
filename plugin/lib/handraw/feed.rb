@@ -3,7 +3,7 @@
 module Handraw
   module Feed
     def self.call(kind: nil, page: 1, search: nil, sort: nil)
-      scope = Entry.visible.includes(:user, :content, :asset_links)
+      scope = Entry.visible.for_listing.includes(:user, :content, :asset_links)
       scope = scope.where(kind: kind) if Entry::KINDS.include?(kind)
       scope = scope.where(kind: %w[style layout package]) if kind == 'resource'
       if search.present?

@@ -14,6 +14,10 @@ window.HandrawMarket = ({
   observeImpression = () => {},
 }) => {
   const $ = select || ((query) => document.querySelector(query));
+  let disposeSharePreview = () => {};
+  window.addEventListener("pagehide", (event) => {
+    if (!event.persisted) disposeSharePreview();
+  });
   const names = {
     work: "作品",
     experience: "经验",
@@ -225,6 +229,7 @@ window.HandrawMarket = ({
     let protectedData = initial.content || {};
     if (editing && !initial.content)
       protectedData = (await api(`/entries/${initial.id}/content`)).content;
+    disposeSharePreview();
     const form = el("form", { class: "hw-share-form hw-market-form" });
     const title = field(
       `${names[kind]}标题`,
@@ -257,9 +262,49 @@ window.HandrawMarket = ({
           "原帖已公开部分保持公开；收费部分请填写新增、尚未公开的方法与内容。",
         ),
       );
-    if (initial.image) cover.append(el("small", {}, "已附上刚生成的图片。"));
-    else if (initial.cover_url)
-      cover.append(image(initial.cover_url, initial.title, "hw-form-preview"));
+    const coverInput = cover.querySelector("input");
+    const coverPreview = el("div", { class: "hw-form-preview-area" });
+    const coverStatus = el("small", { role: "status" });
+    const dialog = $("#modal");
+    let previewUrl;
+    const releasePreview = () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    };
+    const onClose = () => {
+      if (!dialog.open) disposeSharePreview();
+    };
+    disposeSharePreview = () => {
+      releasePreview();
+      dialog.removeEventListener("close", onClose);
+    };
+    dialog.addEventListener("close", onClose);
+    const showCover = () => {
+      releasePreview();
+      const file = coverInput.files[0] || initial.image;
+      coverPreview.replaceChildren();
+      if (file) {
+        previewUrl = URL.createObjectURL(file);
+        // Local files do not need the network image queue.
+        const preview = document.createElement("img");
+        preview.className = "hw-form-preview";
+        preview.alt = "投稿图片预览";
+        preview.src = previewUrl;
+        coverPreview.append(preview);
+        coverStatus.textContent = coverInput.files[0]
+          ? `已选择：${file.name}`
+          : "已附上生成图片，可直接发布，也可选择其他图片替换。";
+      } else if (initial.cover_url) {
+        coverPreview.append(
+          image(initial.cover_url, "投稿图片预览", "hw-form-preview"),
+        );
+        coverStatus.textContent = "当前图片已保留，可选择其他图片替换。";
+      } else coverStatus.textContent = "";
+      coverPreview.hidden = !file && !initial.cover_url;
+    };
+    coverInput.addEventListener("change", showCover);
+    cover.append(coverPreview, coverStatus);
+    showCover();
     const contentKey = {
       work: "prompt",
       experience: "body",
@@ -620,10 +665,14 @@ window.HandrawMarket = ({
           image.removeAttribute("src");
           image.removeAttribute("srcset");
           image.loading = "lazy";
-          if (source && window.HandrawImages) window.HandrawImages.set(image, source);
+          if (source && window.HandrawImages)
+            window.HandrawImages.set(image, source);
           else if (source) image.src = source;
         }
-        for (const source of template.content.querySelectorAll("source[srcset]")) source.removeAttribute("srcset");
+        for (const source of template.content.querySelectorAll(
+          "source[srcset]",
+        ))
+          source.removeAttribute("srcset");
         article.append(template.content);
         protectedBody.append(article);
       } else
@@ -843,7 +892,11 @@ window.HandrawMarket = ({
       "div",
       {},
       image(asset.image, asset.name),
-      el("p", { class: "hw-help" }, `官方${names[kind]} · ${asset.id} · v${asset.version} · ${asset.author.name} · 免费`),
+      el(
+        "p",
+        { class: "hw-help" },
+        `官方${names[kind]} · ${asset.id} · v${asset.version} · ${asset.author.name} · 免费`,
+      ),
       el("p", {}, asset.description),
       el(
         "div",

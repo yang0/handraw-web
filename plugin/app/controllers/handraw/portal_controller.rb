@@ -175,7 +175,7 @@ module Handraw
     def related
       asset = Catalog.find(params[:ref])
       ids = AssetLink.where(asset_ref: Catalog.ref(asset)).select(:entry_id)
-      records = Entry.visible.where(id: ids).includes(:user).order(featured: :desc, created_at: :desc).limit(40)
+      records = Entry.visible.for_listing.where(id: ids).includes(:user).order(featured: :desc, created_at: :desc).limit(40)
       render json: { works: records.where(kind: 'work').map { |e| e.public_payload(current_user) },
                      experiences: records.where(kind: 'experience').map { |e| e.public_payload(current_user) } }
     end
@@ -258,7 +258,7 @@ module Handraw
 
     def feed
       entries = Feed.call(kind: params[:kind], page: params[:page], search: params[:q], sort: params[:sort])
-      topics = TopicQuery.new(current_user, per_page: 6).list_latest.topics
+      topics = params[:kind] == 'work' ? [] : TopicQuery.new(current_user, per_page: 6).list_latest.topics
       render json: {
         entries: entries.map { |entry| entry.public_payload(current_user) },
         discussions: topics.map do |topic|
@@ -269,7 +269,7 @@ module Handraw
 
     def creator
       user = User.find_by!(username_lower: params[:username].to_s.downcase)
-      scope = Entry.visible.where(user_id: user.id)
+      scope = Entry.visible.for_listing.where(user_id: user.id)
       entries = scope.includes(:user).order(created_at: :desc).limit(100)
       render json: {
         author: { username: user.username, name: user.name, profile_url: "/u/#{user.username}" },
@@ -307,10 +307,10 @@ module Handraw
       unlocked_ids = Unlock.active.where(user_id: current_user.id).pluck(:entry_id)
       ids = (collected_ids + unlocked_ids).uniq
       render json: {
-        owned: Entry.where(user_id: current_user.id).includes(:user).order(created_at: :desc).limit(200)
+        owned: Entry.for_listing.where(user_id: current_user.id).includes(:user).order(created_at: :desc).limit(200)
                     .map { |record| record.public_payload(current_user).merge(status: record.status,
                       content_url: record.market? ? "/studio/api/entries/#{record.public_id}/content" : nil) },
-        collected: Entry.visible.where(id: ids).includes(:user).order(created_at: :desc).limit(500)
+        collected: Entry.visible.for_listing.where(id: ids).includes(:user).order(created_at: :desc).limit(500)
                         .map do |record|
           record.public_payload(current_user).merge(
             sha256: record.bundle_sha256,

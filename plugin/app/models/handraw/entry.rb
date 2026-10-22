@@ -25,6 +25,12 @@ module Handraw
                              .where(categories: { read_restricted: false })
     }
 
+    scope :image_works, lambda {
+      where(kind: 'work').where("NULLIF(BTRIM(handraw_entries.cover_url), '') IS NOT NULL")
+                         .where("handraw_entries.metadata ->> 'imported_from_forum' IS DISTINCT FROM 'true'")
+    }
+    scope :for_listing, -> { where.not(kind: 'work').or(image_works) }
+
     def bundled?
       bundle_key.present? && bundle_sha256.present?
     end

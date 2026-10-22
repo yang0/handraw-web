@@ -78,6 +78,15 @@ RSpec.describe 'Handraw content market' do
     expect(record.collections.count).to eq(0)
   end
 
+  it 'keeps the work feed image-only without a forum discussion strip' do
+    record = publish
+    get '/studio/api/feed.json', params: { kind: 'work', sort: 'latest' }
+    expect(response.status).to eq(200)
+    expect(response.parsed_body['entries'].map { |row| row['id'] }).to include(record.public_id)
+    expect(response.parsed_body['entries']).to all(include('kind' => 'work', 'cover_url' => record.cover_url))
+    expect(response.parsed_body['discussions']).to eq([])
+  end
+
   it 'keeps paid experience bodies out of post revisions and search results' do
     record = publish('experience')
     expect(record.topic.first_post.raw).not_to include(secret)

@@ -924,11 +924,9 @@
     $("#hero").hidden = !isHome;
     $("#home-sections").hidden = !isHome;
     $(".hw-workspace").hidden = isHome;
-    $("#discussions-section").hidden = ![
-      "community",
-      "works",
-      "experience",
-    ].includes(state.view);
+    $("#discussions-section").hidden =
+      state.view !== "experience" &&
+      !(state.view === "community" && params.get("kind") === "experience");
     $("#section-title").textContent = titles[state.view] || titles.home;
     $("#section-label").textContent = [
       "community",
