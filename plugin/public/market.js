@@ -612,7 +612,19 @@ window.HandrawMarket = ({
       );
       if (data.body_html) {
         const article = el("article", { class: "hw-experience-body cooked" });
-        article.innerHTML = data.body_html;
+        // Parse inertly so protected images cannot start a burst before entering the queue.
+        const template = document.createElement("template");
+        template.innerHTML = data.body_html;
+        for (const image of template.content.querySelectorAll("img")) {
+          const source = image.getAttribute("src");
+          image.removeAttribute("src");
+          image.removeAttribute("srcset");
+          image.loading = "lazy";
+          if (source && window.HandrawImages) window.HandrawImages.set(image, source);
+          else if (source) image.src = source;
+        }
+        for (const source of template.content.querySelectorAll("source[srcset]")) source.removeAttribute("srcset");
+        article.append(template.content);
         protectedBody.append(article);
       } else
         protectedBody.append(
