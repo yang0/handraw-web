@@ -240,8 +240,14 @@ module Handraw
       image = PrivateImage.find_by!(public_id: params[:image_id])
       allowed = image.user_id == current_user&.id
       if image.entry && !allowed
-        Entry.visible.find(image.entry_id)
-        allowed = image.entry.content_readable?(current_user)
+        if Access.reviewer?(current_user)
+          Audit.create!(user_id: current_user.id, entry_id: image.entry_id,
+                        action: 'inspect_private_image', reason: '审核已投稿的受保护正文配图')
+          allowed = true
+        else
+          Entry.visible.find(image.entry_id)
+          allowed = image.entry.content_readable?(current_user)
+        end
       end
       raise Discourse::InvalidAccess unless allowed
       response.headers['Cache-Control'] = 'private, no-store'

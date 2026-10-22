@@ -831,7 +831,7 @@ window.HandrawMarket = ({
       "div",
       {},
       image(asset.image, asset.name),
-      el("p", { class: "hw-help" }, `官方${names[kind]} · ${asset.id} · 免费`),
+      el("p", { class: "hw-help" }, `官方${names[kind]} · ${asset.id} · v${asset.version} · ${asset.author.name} · 免费`),
       el("p", {}, asset.description),
       el(
         "div",

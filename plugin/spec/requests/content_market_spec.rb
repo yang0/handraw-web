@@ -194,6 +194,10 @@ RSpec.describe 'Handraw content market' do
       expect(image.reload.entry_id).to eq(record.id)
       get url
       expect(response.status).to eq(403)
+      sign_in(reviewer)
+      get url
+      expect(response.status).to eq(200)
+      expect(Handraw::Audit.where(user_id: reviewer.id, entry_id: record.id, action: 'inspect_private_image').count).to eq(1)
       sign_in(buyer)
       get url
       expect(response.status).to eq(403)
