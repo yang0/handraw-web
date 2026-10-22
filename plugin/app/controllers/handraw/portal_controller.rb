@@ -184,6 +184,7 @@ module Handraw
       raise Discourse::InvalidAccess unless Access.verified?(current_user)
       asset = Catalog.find(params[:ref])
       if asset.is_a?(Entry)
+        raise RuleError, '自己的资源已在我的创作中' if asset.user_id == current_user.id
         Collection.create_or_find_by!(entry_id: asset.id, user_id: current_user.id)
       else
         AssetCollection.create_or_find_by!(user_id: current_user.id, asset_ref: Catalog.ref(asset))

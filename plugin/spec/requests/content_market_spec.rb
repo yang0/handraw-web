@@ -70,6 +70,14 @@ RSpec.describe 'Handraw content market' do
     expect(record.unlocks.count).to eq(1)
   end
 
+  it 'rejects self-collection through the unified asset endpoint' do
+    record = publish('style', paid_opt_in: false)
+    sign_in(author)
+    post "/studio/api/assets/community%3A#{record.public_id}/collection.json"
+    expect(response.status).to eq(422)
+    expect(record.collections.count).to eq(0)
+  end
+
   it 'keeps paid experience bodies out of post revisions and search results' do
     record = publish('experience')
     expect(record.topic.first_post.raw).not_to include(secret)
