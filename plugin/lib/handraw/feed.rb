@@ -3,7 +3,7 @@
 module Handraw
   module Feed
     def self.call(kind: nil, page: 1, search: nil, sort: nil)
-      scope = Entry.visible.includes(:user)
+      scope = Entry.visible.includes(:user, :content, :asset_links)
       scope = scope.where(kind: kind) if Entry::KINDS.include?(kind)
       scope = scope.where(kind: %w[style layout package]) if kind == 'resource'
       if search.present?
@@ -34,7 +34,9 @@ module Handraw
         visitors = counts.fetch([entry.id, 'detail'], 0)
         useful = counts.fetch([entry.id, 'useful'], 0)
         votes = useful + counts.fetch([entry.id, 'not_useful'], 0)
-        ((saved + 1.0) / ([visitors, saved].max + 10) + (useful + 2.0) / (votes + 4)) / 2
+        save_rate = (saved + 1.0) / ([visitors, saved].max + 10)
+        useful_rate = (useful + 2.0) / (votes + 4)
+        entry.kind == 'work' ? save_rate * 0.7 + useful_rate * 0.3 : save_rate * 0.3 + useful_rate * 0.7
       }
       exploring = candidates.select(&exploration).sort_by(&:created_at).uniq(&:user_id)
       quality = candidates.reject(&exploration).sort_by { |entry| -score.call(entry) }

@@ -16,6 +16,7 @@ RSpec.describe Handraw::PortalController do
   end
 
   before do
+    [author, buyer, reviewer].each { |user| user.activate unless user.email_confirmed? }
     SiteSetting.handraw_enabled = true
     SiteSetting.handraw_public_submissions = true
   end
@@ -52,7 +53,7 @@ RSpec.describe Handraw::PortalController do
       Handraw::ImageService.stubs(:enabled?).returns(true)
       Handraw::ImageService.stubs(:request).returns('status' => 'queued')
       post '/studio/api/generations.json', params: {
-        client_id: SecureRandom.uuid, prompt: '一只在窗边晒太阳的小猫', title: '窗边小猫', ratio: '1:1'
+        client_id: SecureRandom.uuid, creation: { theme: '一只在窗边晒太阳的小猫', style: 'FA-001', ratio: '1:1' }
       }
       expect(response.status).to eq(200)
       id = response.parsed_body['id']
@@ -65,8 +66,9 @@ RSpec.describe Handraw::PortalController do
       expect(response.status).to eq(404)
     end
 
-    it 'does not grant generation rights to a signed-in account outside the pilot' do
+    it 'does not grant generation rights to an unverified account' do
       SiteSetting.handraw_public_submissions = false
+      buyer.update!(silenced_till: 1.day.from_now)
       sign_in(buyer)
       Handraw::ImageService.expects(:submit).never
       post '/studio/api/generations.json', params: { client_id: SecureRandom.uuid, prompt: '一只猫咪', ratio: '1:1' }
@@ -193,7 +195,7 @@ RSpec.describe Handraw::PortalController do
     it 'accepts a simple submission without asking the author to choose a board or license' do
       sign_in(reviewer)
       post '/studio/api/entries.json', params: { entry: { kind: 'experience', title: '一个清楚的创作经验标题',
-                                                         summary: '先选择目标，再记录步骤，最后贴上结果，帮助其他创作者复用方法。' } }
+                                                         summary: '先选择目标，再记录步骤，最后贴上结果，帮助其他创作者复用方法。', content: { body: '先选择目标，再记录步骤，最后贴上结果，帮助其他创作者复用方法。' } } }
       expect(response.status).to eq(201)
       expect(Handraw::Entry.find_by!(public_id: response.parsed_body.fetch('id')).license).to include('联系原作者')
     end
@@ -202,7 +204,7 @@ RSpec.describe Handraw::PortalController do
       sign_in(reviewer)
       payload = { kind: 'experience', title: '水彩风格的三步创作过程',
                   summary: '先明确使用场景，再选择视觉语言，最后用不同主题验证复用效果。',
-                  license: '允许学习参考，转载请联系原作者。', category_id: topic.category_id }
+                  license: '允许学习参考，转载请联系原作者。', category_id: topic.category_id, content: { body: '先明确使用场景，再选择视觉语言，最后用不同主题验证复用效果。' } }
       post '/studio/api/entries.json', params: { entry: payload }
       expect(response.status).to eq(201)
       created = Handraw::Entry.find_by!(public_id: response.parsed_body.fetch('id'))

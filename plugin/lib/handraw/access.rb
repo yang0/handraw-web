@@ -6,7 +6,7 @@ module Handraw
 
   module Access
     def self.verified?(user)
-      user && user.active && !user.staged && !user.suspended? && !user.silenced?
+      user && user.active && user.email_confirmed? && !user.staged && !user.suspended? && !user.silenced?
     end
 
     def self.qualified?(user)

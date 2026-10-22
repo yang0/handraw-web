@@ -12,7 +12,7 @@ def build(plugin: Path, target: Path, static_root: Path):
     gallery = target / 'gallery'
     assets.mkdir(parents=True, exist_ok=True)
     gallery.mkdir(parents=True, exist_ok=True)
-    for name in ('portal.js', 'portal.css', 'navigation.css', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css'):
+    for name in ('portal.js', 'market.js', 'forum-experience.js', 'market.css', 'portal.css', 'navigation.css', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css'):
         shutil.copyfile(plugin / 'public' / name, assets / name)
     shutil.copyfile(plugin / 'content/catalog.json', assets / 'catalog.json')
     revision = (plugin / 'REVISION').read_text().strip()

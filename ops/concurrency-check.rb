@@ -1,12 +1,14 @@
 # frozen_string_literal: true
 
 raise "Must use isolated test database" unless ActiveRecord::Base.connection.current_database == "handraw_web_test"
+SiteSetting.disable_emails = 'yes'
 SiteSetting.handraw_enabled = true
 SiteSetting.handraw_public_submissions = true
 RateLimiter.disable
 suffix = SecureRandom.hex(4)
 author = User.create!(username: "hwa_#{suffix}", email: "hwa_#{suffix}@example.test", password: SecureRandom.base64(32), active: true)
 buyer = User.create!(username: "hwb_#{suffix}", email: "hwb_#{suffix}@example.test", password: SecureRandom.base64(32), active: true)
+[author, buyer].each { |user| user.activate unless user.email_confirmed? }
 category = Category.create!(name: "Concurrency #{suffix}", user: author, color: "0088CC", text_color: "FFFFFF")
 resources = 3.times.map do |number|
   topic = Topic.create!(user: author, title: "Parallel resource #{suffix} #{number}", category: category)
@@ -77,7 +79,7 @@ raise 'Generation retry consumed two submissions' unless errors.empty? && Handra
 first = results.pop
 raise 'Generation retry changed the upstream task key' unless results.pop['id'] == first['id']
 raise 'Generation retry duplicated the upstream task' unless [upstream_ids.pop, upstream_ids.pop].uniq == [first['id']]
-Handraw::ImageService.update(buyer, first['id'], 'status' => 'error')
+Handraw::ImageService.update(buyer, first['id'], 'status' => 'success', 'data' => [{ 'url' => 'https://chatgpt2api.handraw-style.com/images/test.png' }])
 errors, results = parallel_generations(buyer.id, [SecureRandom.uuid, SecureRandom.uuid])
 raise 'Concurrent generation exceeded the daily allowance' unless errors.size == 1 && results.size == 1 && Handraw::ImageService.store(buyer)['submitted'] == 2
 puts JSON.generate(concurrent_retry: 'passed', concurrent_overspend: 'passed', generation_retry: 'passed', generation_quota: 'passed', final_balance: 0)

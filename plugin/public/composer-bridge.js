@@ -29,6 +29,21 @@ window.addEventListener("message", (event) => {
   )
     setMode(data.mode);
   selectedStyle = STYLES_DATA.find((item) => item.id === data.style) || null;
+  isFusionActive = data.fusion === true;
+  checkboxFusion.checked = isFusionActive;
+  selectedCharStyle = isFusionActive
+    ? STYLES_DATA.find((item) => item.id === data.character_style) || null
+    : null;
+  selectedSceneStyle = isFusionActive
+    ? STYLES_DATA.find((item) => item.id === data.scene_style) || null
+    : null;
+  if (
+    isFusionActive &&
+    (!selectedCharStyle ||
+      !selectedSceneStyle ||
+      selectedCharStyle.id === selectedSceneStyle.id)
+  )
+    return;
   selectedLayout = LAYOUTS_DATA.find((item) => item.id === data.layout) || null;
   selectedColor = COLORS_DATA.find((item) => item.id === data.color) || null;
   inputTheme.value = data.theme;

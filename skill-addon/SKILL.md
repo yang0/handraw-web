@@ -22,6 +22,7 @@ python scripts/personal_library.py fork <资源ID> --name "我的改编"
 python scripts/personal_library.py export <自己创建的资源ID> --output path/to/resource.zip
 ```
 
+- 网站新画风／图型以鉴权 JSON 定义同步，校验后直接进入个人库，不要求用户下载或上传 ZIP。原 ZIP 导入／导出命令仅兼容已有离线文件。
 - 未给出同步资源 ID 时，仅列清单，不自动批量下载。只同步已解锁项目；未解锁项显示状态，不自动扣分。
 - 复用现有 `~/.handraw-style/community_auth.json` 与 Cookie 文件。不要读取或打印凭据；需要绑定时使用已有 `community-share` 登录流程。
 - 同步网络失败不影响本地已导入资源。只按来源 ID 更新同一个收藏，名称相同不覆盖其他资源。

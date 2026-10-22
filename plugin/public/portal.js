@@ -69,7 +69,8 @@
 
   async function api(path, options = {}) {
     const read = !options.method || options.method === "GET";
-    if (read && getCache.get(path)?.expires > Date.now())
+    const sensitive = /\/content(?:\?|$)|^\/generations|\/review/.test(path);
+    if (read && !sensitive && getCache.get(path)?.expires > Date.now())
       return getCache.get(path).value;
     if (read && pendingGets.has(path)) return pendingGets.get(path);
     const request = async (retried = false) => {
@@ -110,7 +111,7 @@
               ? "请登录获准参与的账号后再操作"
               : "操作未完成，请稍后重试"),
         );
-      if (read)
+      if (read && !sensitive)
         getCache.set(path, { value: result, expires: Date.now() + 15000 });
       return result;
     };
@@ -190,204 +191,8 @@
     );
   }
 
-  async function share(kind = null, initial = null) {
-    if (!kind || typeof kind !== "string") {
-      return modal(
-        "你想分享什么？",
-        el("p", { class: "hw-help" }, "作品、制作方法，或你整理的画风与图型。"),
-        el(
-          "div",
-          { class: "hw-share-choices" },
-          ...[
-            ["work", "晒作品", "上传一张图，说说你画了什么。"],
-            ["experience", "写经验", "教程、创作过程、踩过的坑，都可以写。"],
-            [
-              "style",
-              "分享画风或图型",
-              "分享你用过的提示词、画风描述或排版方法。",
-            ],
-          ].map(
-            ([value, title, description]) =>
-              button("", () => share(value), true).appendChild(
-                el(
-                  "span",
-                  {},
-                  el("strong", {}, title),
-                  el("small", {}, description),
-                ),
-              ).parentElement,
-          ),
-        ),
-      );
-    }
-    if (state.boot.user && !state.boot.participant)
-      return modal(
-        "创作者试运行",
-        el(
-          "p",
-          {},
-          "目前由试运行创作者发布。你可以先收藏喜欢的内容，或到论坛交流。",
-        ),
-        el("a", { href: "/latest", class: "hw-text-link" }, "前往论坛"),
-      );
-    const resource = ["style", "layout"].includes(kind);
-    const titleLabel =
-      kind === "work"
-        ? "作品标题"
-        : kind === "experience"
-          ? "经验标题"
-          : "给画风／图型起个名字";
-    const bodyLabel =
-      kind === "work"
-        ? "创作说明（选填）"
-        : kind === "experience"
-          ? "写下你的方法"
-          : "画风描述／提示词／布局要点";
-    const titleField = field("title", titleLabel);
-    titleField.querySelector("input").placeholder =
-      kind === "work"
-        ? "例如：用水彩画了一间街角咖啡馆"
-        : kind === "experience"
-          ? "例如：我是怎样让 AI 画出的文字更清楚的"
-          : "例如：温暖的纸感水彩";
-    const bodyField = field("summary", bodyLabel, "textarea", kind !== "work");
-    bodyField.querySelector("textarea").placeholder =
-      kind === "work"
-        ? "用了什么画风？有什么想说的？"
-        : kind === "experience"
-          ? "想做什么 → 怎么做的 → 最后效果如何。写清一个小经验就很好。"
-          : "粘贴你用过的提示词，或描述色彩、笔触和排版。附一张实际效果图更容易理解。";
-    const form = el("form", { class: "hw-share-form" });
-    if (!state.boot.user)
-      form.append(
-        el(
-          "p",
-          { class: "hw-help" },
-          "登录后即可发布。先看看适合分享哪些内容。",
-        ),
-      );
-    const fields = el("fieldset", { disabled: !state.boot.user });
-    if (resource)
-      fields.append(
-        selectField("kind", "分享类型", [
-          ["style", "画风"],
-          ["layout", "图型／排版"],
-        ]),
-      );
-    fields.append(titleField);
-    const imageField = field(
-      "image",
-      kind === "work" ? "上传作品图片" : "配一张效果图（选填）",
-      "file",
-      kind === "work",
-    );
-    imageField.querySelector("input").accept =
-      "image/png,image/jpeg,image/webp";
-    if (kind === "work") fields.append(imageField, bodyField);
-    else fields.append(bodyField, imageField);
-    if (initial && kind === "work") {
-      titleField.querySelector("input").value = String(
-        initial.title || "",
-      ).slice(0, 120);
-      bodyField.querySelector("textarea").value = String(initial.summary || "");
-      if (initial.image instanceof File) {
-        const files = new DataTransfer();
-        files.items.add(initial.image);
-        imageField.querySelector("input").files = files.files;
-        imageField.append(
-          el(
-            "p",
-            { class: "hw-help" },
-            "已附上刚刚生成的图片；发布前请确认标题与使用说明。",
-          ),
-        );
-      }
-    }
-    if (resource) {
-      const advanced = el(
-        "details",
-        { class: "hw-advanced" },
-        el("summary", {}, "补充使用说明（选填）"),
-        field("license", "允许怎样使用这份分享？", "textarea", false),
-      );
-      fields.append(advanced);
-    }
-    fields.append(
-      el(
-        "label",
-        { class: "hw-check" },
-        el("input", { name: "rights", type: "checkbox", required: true }),
-        "我有权分享以上内容。使用范围以作者说明为准。",
-      ),
-    );
-    form.append(fields, el("p", { class: "hw-form-error", role: "alert" }));
-    const submit = el(
-      "button",
-      { class: "hw-button", type: "submit" },
-      state.boot.user ? "发布分享" : "登录后发布",
-    );
-    form.append(submit);
-    form.elements.title.minLength = 5;
-    if (kind !== "work") form.elements.summary.minLength = 10;
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      if (!needUser()) return;
-      await action(submit, async () => {
-        const data = new FormData(form);
-        let cover = "";
-        const image = data.get("image");
-        if (image?.size) {
-          const imageForm = new FormData();
-          imageForm.append("type", "composer");
-          imageForm.append("synchronous", "true");
-          imageForm.append("file", image);
-          const response = await fetch("/uploads.json", {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-              "X-CSRF-Token": await getCsrf(),
-              "X-Requested-With": "XMLHttpRequest",
-            },
-            body: imageForm,
-          });
-          const upload = await response.json();
-          if (!response.ok || !upload.url)
-            throw new Error(
-              upload.errors?.join("；") || "图片上传失败，请稍后再试",
-            );
-          cover = upload.url.startsWith("//")
-            ? `https:${upload.url}`
-            : upload.url;
-        }
-        const entry = await api("/entries", {
-          method: "POST",
-          body: JSON.stringify({
-            entry: {
-              kind: resource ? data.get("kind") : kind,
-              title: data.get("title"),
-              summary:
-                String(data.get("summary") || "").trim() ||
-                "作者分享的创作作品，欢迎在原帖交流制作方法。",
-              cover_url: cover,
-              license: data.get("license") || undefined,
-              paid_opt_in: false,
-            },
-          }),
-        });
-        $("#modal").close();
-        navigate("mine");
-        tell("分享已发布。");
-      });
-    });
-    modal(
-      kind === "work"
-        ? "晒作品"
-        : kind === "experience"
-          ? "写经验"
-          : "分享画风或图型",
-      form,
-      button("重新选择分享类型", () => share(), true),
-    );
+  async function share(kind = null, initial = {}) {
+    return market.share(typeof kind === "string" ? kind : null, initial || {});
   }
 
   async function save(entry, node) {
@@ -405,133 +210,7 @@
 
   async function openEntry(id) {
     try {
-      const entry = await api(`/entries/${id}`);
-      if (state.boot.user && state.boot.user.id !== entry.author.id)
-        api(`/entries/${id}/events`, {
-          method: "POST",
-          body: JSON.stringify({ kind: "detail" }),
-        }).catch(() => {});
-      const body = [];
-      if (entry.cover_url)
-        body.push(
-          el("img", {
-            class: "hw-detail-image",
-            src: entry.cover_url,
-            alt: entry.title,
-          }),
-        );
-      body.push(
-        el(
-          "p",
-          { class: "hw-help" },
-          `${labels[entry.kind] || "资料"}${entry.source_label ? " · " + entry.source_label : ""} · ${entry.author.name || entry.author.username} · v${entry.version}${entry.featured ? " · 编辑精选" : ""}`,
-        ),
-      );
-      body.push(el("p", { class: "hw-detail-text" }, entry.summary));
-      const actions = el("div", { class: "hw-actions" });
-      actions.append(
-        button(
-          entry.collected ? "已收藏 ♥" : "收藏 ♡",
-          (node) => save(entry, node),
-          true,
-        ),
-      );
-      if (["style", "layout"].includes(entry.kind))
-        actions.append(
-          button("复制描述与提示词", async () => {
-            await navigator.clipboard.writeText(entry.summary);
-            tell("已复制，可以带入创作台使用。");
-          }),
-        );
-      // Keep access to previously published attachments; new shares use text and images.
-      if (entry.bundle_available) {
-        if (entry.unlocked)
-          actions.append(
-            el(
-              "a",
-              {
-                class: "hw-button",
-                href: `/studio/api/entries/${id}/download`,
-              },
-              "获取已有附件 ↓",
-            ),
-          );
-        else
-          actions.append(
-            button(
-              entry.price ? `${entry.price} 积分解锁` : "免费获取",
-              async () => {
-                if (!needUser()) return;
-                if (
-                  !confirm(
-                    entry.price
-                      ? `确认使用 ${entry.price} 积分解锁？作者获得 ${state.boot.rules.author_percent}%，同一资源后续下载与更新免费。`
-                      : "确认免费获取并添加到已解锁资源？",
-                  )
-                )
-                  return;
-                await api(`/entries/${id}/unlock`, {
-                  method: "POST",
-                  body: JSON.stringify({
-                    price: entry.price,
-                    price_revision: entry.price_revision,
-                  }),
-                });
-                await refreshAccount();
-                await openEntry(id);
-              },
-            ),
-          );
-      }
-      actions.append(
-        el(
-          "a",
-          { class: "hw-text-link", href: entry.topic_url },
-          entry.source_label ? "阅读原帖与讨论 →" : "讨论与补充 →",
-        ),
-      );
-      body.push(actions);
-      if (entry.paid)
-        body.push(
-          el(
-            "p",
-            { class: "hw-help" },
-            `${entry.price_reason}。一次解锁后，重复下载与更新不再扣分。`,
-          ),
-        );
-      if (state.boot.user && state.boot.user.id !== entry.author.id) {
-        body.push(
-          el(
-            "div",
-            { class: "hw-actions" },
-            button(
-              "使用后觉得有用",
-              async () => {
-                await api(`/entries/${id}/events`, {
-                  method: "POST",
-                  body: JSON.stringify({ kind: "useful" }),
-                });
-                tell("使用反馈已记录，谢谢分享真实体验。");
-              },
-              true,
-            ),
-            button(
-              "使用后不太有用",
-              async () => {
-                await api(`/entries/${id}/events`, {
-                  method: "POST",
-                  body: JSON.stringify({ kind: "not_useful" }),
-                });
-                tell("反馈已记录。");
-              },
-              true,
-            ),
-            button("报告问题", () => report(entry), true),
-          ),
-        );
-      }
-      body.push(el("p", { class: "hw-license" }, `授权说明：${entry.license}`));
-      modal(entry.title, ...body);
+      await market.openEntry(id);
     } catch (error) {
       tell(error.message);
     }
@@ -880,8 +559,30 @@
         ? data.collected
         : state.mine === "owned"
           ? data.owned
-          : data.owned.filter((item) => item.kind === state.mine);
+          : [
+              ...new Map(
+                [...data.owned, ...data.collected]
+                  .filter((item) => item.kind === state.mine)
+                  .map((item) => [item.id, item]),
+              ).values(),
+            ];
     renderEntries(items);
+    if (
+      ["collected", "style", "layout"].includes(state.mine) &&
+      data.official?.length
+    )
+      $("#content").append(
+        el("h3", {}, "收藏的官方画风与图型"),
+        el(
+          "div",
+          { class: "hw-library-grid" },
+          ...data.official
+            .filter(
+              (item) => state.mine === "collected" || item.kind === state.mine,
+            )
+            .map(market.assetCard),
+        ),
+      );
     if (state.mine === "collected")
       $("#content").prepend(
         el(
@@ -1039,7 +740,7 @@
           el(
             "p",
             { class: "hw-help" },
-            `${labels[entry.kind]} / ${entry.status} / ${entry.featured ? "已精选" : "待精选"} / ${entry.has_bundle ? "有历史附件" : "无历史附件"} / ${entry.paid_opt_in ? "申请积分下载" : "免费分享"}`,
+            `${labels[entry.kind]} / ${entry.status} / ${entry.featured ? "已精选" : "待精选"} / ${entry.market ? "完整内容已保护" : "原有公开内容"} / ${entry.paid_opt_in ? "申请积分交易" : "免费分享"}`,
           ),
           el("p", {}, entry.summary),
           el(
@@ -1052,16 +753,35 @@
               },
               true,
             ),
-            entry.has_bundle
-              ? el(
-                  "a",
-                  {
-                    class: "hw-button hw-button--quiet",
-                    href: `/studio/api/entries/${entry.id}/review-download`,
+            entry.market
+              ? button(
+                  "检查完整定义与示例",
+                  async () => {
+                    const result = await api(
+                      `/entries/${entry.id}/review-download`,
+                    );
+                    modal(
+                      "审核内容",
+                      el("p", {}, entry.title),
+                      el(
+                        "pre",
+                        { class: "hw-prompt-text" },
+                        JSON.stringify(result.content, null, 2),
+                      ),
+                    );
                   },
-                  "查看历史附件",
+                  true,
                 )
-              : null,
+              : entry.has_bundle
+                ? el(
+                    "a",
+                    {
+                      class: "hw-button hw-button--quiet",
+                      href: `/studio/api/entries/${entry.id}/review-download`,
+                    },
+                    "查看历史附件",
+                  )
+                : null,
             button(
               entry.featured ? "取消精选" : "设为精选",
               () =>
@@ -1069,7 +789,7 @@
               true,
             ),
             button(
-              "验证并开放下载",
+              "验证复用并开放交易",
               () => reviewAction(entry, "approve_download"),
               true,
             ),
@@ -1152,6 +872,17 @@
     );
   }
 
+  const market = window.HandrawMarket({
+    state,
+    el,
+    button,
+    modal,
+    tell,
+    api,
+    navigate,
+    card,
+    refreshAccount,
+  });
   const discover = window.HandrawDiscover({
     state,
     el,
@@ -1162,6 +893,7 @@
     share,
     navigate,
     card,
+    market,
   });
 
   async function render() {
@@ -1242,7 +974,9 @@
           ? "work"
           : state.view === "experience"
             ? "experience"
-            : ["experience", "resource"].includes(params.get("kind"))
+            : ["experience", "style", "layout", "resource"].includes(
+                  params.get("kind"),
+                )
               ? params.get("kind")
               : "work";
       $("#toolbar").append(
@@ -1250,7 +984,8 @@
           [
             ["work", "作品广场"],
             ["experience", "经验分享"],
-            ["resource", "画风与图型"],
+            ["style", "画风"],
+            ["layout", "图型"],
           ],
           state.kind,
           (value) => navigate("community", { kind: value }),
@@ -1290,10 +1025,29 @@
       const data = await api(`/creators/${encodeURIComponent(creator)}`);
       $("#section-title").textContent =
         `${data.author.name || data.author.username} 的创作`;
+      const stats = el("div", { class: "hw-contribution-records" });
+      for (const [kind, label] of Object.entries(labels)) {
+        const row = data.contributions?.[kind];
+        if (row)
+          stats.append(
+            el(
+              "p",
+              {},
+              `${label}：${row.published} 份 · ${row.featured} 次精选 · ${row.useful_users} 位用户认可${row.verified ? ` · ${row.verified} 份复用验证` : ""}${row.reuse_users ? ` · ${row.reuse_users} 位实际复用` : ""}${row.honor ? ` · ${row.honor}` : ""}`,
+            ),
+          );
+      }
+      $("#toolbar").append(stats);
       renderEntries(data.entries);
       return;
     }
     await loadFeed();
+    const shareKind = params.get("share");
+    if (["work", "experience", "style", "layout"].includes(shareKind))
+      await share(
+        shareKind,
+        params.get("topic_id") ? { topic_id: params.get("topic_id") } : {},
+      );
     const id = new URLSearchParams(location.search).get("entry");
     if (id) await openEntry(id);
   }

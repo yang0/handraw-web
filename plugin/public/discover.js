@@ -10,6 +10,7 @@ window.HandrawDiscover = ({
   share,
   navigate,
   card,
+  market,
 }) => {
   const $ = (query) => document.querySelector(query);
   const editorial = () => state.boot.editorial;
@@ -36,6 +37,9 @@ window.HandrawDiscover = ({
     color: "",
     ratio: "1:1",
     mood: "",
+    fusion: false,
+    character_style: "",
+    scene_style: "",
   };
   try {
     const saved = JSON.parse(
@@ -125,56 +129,10 @@ window.HandrawDiscover = ({
       link(`使用此${kinds[item.kind]} ↗`, "create", { [item.kind]: item.id }),
     );
   }
-  function detail(item) {
-    modal(
-      `${item.id} · ${item.title || item.name}`,
-      el(
-        "div",
-        { class: "hw-resource-detail" },
-        el("img", {
-          class: "hw-detail-image",
-          src: item.image,
-          alt: item.name,
-        }),
-        el(
-          "div",
-          {},
-          el(
-            "p",
-            { class: "hw-eyebrow" },
-            `官方${kinds[item.kind]} / ${item.id}`,
-          ),
-          el("h3", {}, item.name),
-          el("p", {}, item.description),
-          el(
-            "p",
-            { class: "hw-help" },
-            "示例来自官方图库，用于了解视觉方向。实际效果会随主题、模型和比例变化。",
-          ),
-          el(
-            "div",
-            { class: "hw-actions" },
-            link(
-              `使用此${kinds[item.kind]} ↗`,
-              "create",
-              { [item.kind]: item.id },
-              "hw-button",
-            ),
-            button(
-              "复制描述",
-              async () => {
-                await navigator.clipboard.writeText(
-                  item.definition || item.description,
-                );
-                tell("已复制描述。");
-              },
-              true,
-            ),
-          ),
-        ),
-      ),
-    );
+  async function detail(item) {
+    return market.assetDetail(item.ref || `official:${item.id}`);
   }
+
   function guide(item) {
     modal(
       item.title,
@@ -236,6 +194,26 @@ window.HandrawDiscover = ({
           "div",
           { class: "hw-editorial-grid" },
           data.featured.map((item) => resourceCard(item)),
+        ),
+      ),
+      el(
+        "section",
+        { class: "hw-home-section" },
+        heading(
+          "LAYOUTS / 给内容一个结构",
+          "让内容找到合适的图型",
+          link("探索全部图型 →", "explore", { type: "layout" }),
+        ),
+        el(
+          "div",
+          { class: "hw-template-grid" },
+          ...(data.featured_layouts || []).map((item) =>
+            market.assetCard({
+              ...item,
+              source: "official",
+              ref: `official:${item.id}`,
+            }),
+          ),
         ),
       ),
       el(
@@ -367,116 +345,7 @@ window.HandrawDiscover = ({
     }
   }
   async function explore() {
-    const data = await catalog();
-    if (!["explore", "resources"].includes(state.view)) return;
-    const params = new URLSearchParams(location.search);
-    let kind = ["style", "layout", "color"].includes(params.get("kind"))
-      ? params.get("kind")
-      : "style";
-    let query = (params.get("q") || "").slice(0, 100);
-    let count = 12;
-    const tabs = el("div", {
-      class: "hw-resource-tabs",
-      role: "group",
-      "aria-label": "图库类型",
-    });
-    const search = el("input", {
-      type: "search",
-      class: "hw-library-search",
-      placeholder: "搜索名称、编号或关键词，如水彩、FA-001",
-      "aria-label": "搜索官方图库",
-      maxlength: 100,
-    });
-    search.value = query;
-    const status = el("p", { class: "hw-help", "aria-live": "polite" });
-    const grid = el("div", { class: "hw-editorial-grid" });
-    const more = button(
-      "继续看 12 个 ↓",
-      () => {
-        count += 12;
-        draw();
-      },
-      true,
-    );
-    const typeButtons = Object.entries(kinds).map(([id, title]) =>
-      button(
-        `${title} ${data.counts[id]}`,
-        () => {
-          kind = id;
-          count = 12;
-          draw();
-        },
-        true,
-      ),
-    );
-    tabs.append(...typeButtons);
-    function draw() {
-      typeButtons.forEach((node, i) =>
-        node.setAttribute(
-          "aria-pressed",
-          String(Object.keys(kinds)[i] === kind),
-        ),
-      );
-      const q = query.trim().toLowerCase().replace(/^#/, "");
-      const legacyQuery = kind === "style" && /^\d{1,3}$/.test(q);
-      const items = data.resources.filter(
-        (item) =>
-          item.kind === kind &&
-          (!q ||
-            (legacyQuery
-              ? item.legacy && Number(q) === Number(item.legacy)
-              : `${item.id} ${item.name} ${item.description} ${item.group}`
-                  .toLowerCase()
-                  .includes(q))),
-      );
-      if (!q && kind === "style") {
-        const order = new Map(
-          editorial().featured.map((item, index) => [item.id, index]),
-        );
-        items.sort(
-          (a, b) => (order.get(a.id) ?? 9999) - (order.get(b.id) ?? 9999),
-        );
-      }
-      status.textContent = `${items.length} 个${kinds[kind]} · 已显示 ${Math.min(count, items.length)} 个`;
-      grid.replaceChildren(
-        ...items.slice(0, count).map((item) => resourceCard(item)),
-      );
-      if (!items.length)
-        grid.append(
-          el("p", { class: "hw-empty" }, "没有找到对应资源，试试其他关键词。"),
-        );
-      more.hidden = items.length <= count;
-    }
-    search.addEventListener("input", () => {
-      query = search.value;
-      count = 12;
-      draw();
-    });
-    $("#content").replaceChildren(
-      el(
-        "p",
-        { class: "hw-page-intro" },
-        "不必先懂风格术语。先看效果，喜欢就带进创作。",
-      ),
-      tabs,
-      search,
-      status,
-      grid,
-      more,
-      el(
-        "p",
-        { class: "hw-help hw-library-source" },
-        "官方图库 · 编号与 Skill 保持一致。图片按需分批加载。",
-      ),
-    );
-    $("#content").append(
-      link("看看社区分享的画风与图型 →", "community", { kind: "resource" }),
-    );
-    draw();
-    const selected = data.resources.find(
-      (item) => item.id === params.get("id"),
-    );
-    if (selected) detail(selected);
+    return market.explore();
   }
   function learn() {
     $("#content").replaceChildren(
@@ -553,7 +422,40 @@ window.HandrawDiscover = ({
       callback(event.data.command);
     }
   });
-  async function compose() {
+  async function compose(full = false) {
+    if (
+      draft.fusion &&
+      (!draft.character_style ||
+        !draft.scene_style ||
+        draft.character_style === draft.scene_style)
+    )
+      throw new Error("融合模式请选择两个不同画风。");
+    if (
+      [
+        draft.style,
+        draft.character_style,
+        draft.scene_style,
+        draft.layout,
+      ].some((ref) => ref?.startsWith("community:"))
+    ) {
+      if (full)
+        return (
+          await api("/creation/resolve", {
+            method: "POST",
+            body: JSON.stringify({ creation: creationInput() }),
+          })
+        ).prompt;
+      return [
+        draft.fusion ? "【风格融合设计】" : modes[draft.mode],
+        draft.fusion
+          ? `角色风格：${draft.character_style}，场景风格：${draft.scene_style}`
+          : `画风：${draft.style}`,
+        draft.layout ? `图型：${draft.layout}` : "",
+        `主题：${draft.theme}`,
+      ]
+        .filter(Boolean)
+        .join("，");
+    }
     await ensureEngine();
     const id = ++requestNumber;
     return new Promise((resolve, reject) => {
@@ -571,6 +473,22 @@ window.HandrawDiscover = ({
       );
     });
   }
+  function creationInput() {
+    const value = {
+      mode: draft.mode,
+      theme: draft.theme,
+      ratio: draft.ratio,
+      mood: draft.mood,
+      layout: draft.layout,
+      color: draft.color,
+      fusion: draft.fusion,
+    };
+    if (draft.fusion) {
+      value.character_style = draft.character_style;
+      value.scene_style = draft.scene_style;
+    } else value.style = draft.style;
+    return value;
+  }
   async function create() {
     const data = await catalog();
     if (state.view !== "create") return;
@@ -579,14 +497,24 @@ window.HandrawDiscover = ({
       (item) => item.id === params.get("template"),
     );
     const incoming = template || Object.fromEntries(params);
-    for (const key of ["style", "layout", "color"])
+    for (const key of [
+      "style",
+      "character_style",
+      "scene_style",
+      "layout",
+      "color",
+    ])
       if (
         incoming[key] &&
-        data.resources.some(
-          (item) => item.kind === key && item.id === incoming[key],
-        )
+        (data.resources.some((item) => item.id === incoming[key]) ||
+          incoming[key].startsWith("community:"))
       )
         draft[key] = incoming[key];
+    if (incoming.fusion !== undefined)
+      draft.fusion =
+        incoming.fusion === true ||
+        incoming.fusion === "true" ||
+        incoming.fusion === "1";
     if (Object.hasOwn(modes, incoming.mode)) draft.mode = incoming.mode;
     if (["1:1", "3:4", "4:3", "16:9", "9:16"].includes(incoming.ratio))
       draft.ratio = incoming.ratio;
@@ -628,7 +556,10 @@ window.HandrawDiscover = ({
             status.textContent = "指令已更新。";
           }
         } catch (error) {
-          if (output.isConnected) status.textContent = error.message;
+          if (output.isConnected) {
+            output.value = "";
+            status.textContent = error.message;
+          }
         }
       }, 400);
     };
@@ -638,23 +569,37 @@ window.HandrawDiscover = ({
     });
     const choices = el("div", { class: "hw-create-choices" });
     function drawChoices() {
+      const slots = draft.fusion
+        ? [
+            ["character_style", "角色画风", "style"],
+            ["scene_style", "场景画风", "style"],
+            ["layout", "图型", "layout"],
+            ["color", "配色", "color"],
+          ]
+        : [
+            ["style", "画风", "style"],
+            ["layout", "图型", "layout"],
+            ["color", "配色", "color"],
+          ];
       choices.replaceChildren(
-        ...Object.entries(kinds).map(([kind, title]) => {
-          const item = data.resources.find(
-            (item) => item.id === draft[kind] && item.kind === kind,
+        ...slots.map(([slot, title, kind]) => {
+          const selected = data.resources.find(
+            (item) => item.id === draft[slot],
           );
-          return el(
+          const ref = draft[slot];
+          const node = el(
             "button",
             {
               type: "button",
               class: "hw-create-choice",
-              onclick: () => choose(kind),
+              onclick: () =>
+                chooseSlot(slot, kind).catch((error) => tell(error.message)),
             },
             el("span", { class: "hw-help" }, title),
-            item
+            selected
               ? el("img", {
-                  src: item.image,
-                  alt: item.name,
+                  src: selected.image,
+                  alt: selected.name,
                   width: 80,
                   height: 70,
                 })
@@ -663,10 +608,58 @@ window.HandrawDiscover = ({
                   { class: "hw-choice-empty", "aria-hidden": "true" },
                   "+",
                 ),
-            el("strong", {}, item ? `${item.id} · ${item.name}` : "不指定"),
+            el(
+              "strong",
+              {},
+              selected ? selected.name : ref ? "已选社区资产" : "不指定",
+            ),
             el("small", {}, "点击选择 ↗"),
           );
+          if (!selected && ref?.startsWith("community:"))
+            api(`/assets/${encodeURIComponent(ref)}`)
+              .then((item) => {
+                if (node.isConnected) {
+                  data.resources.push({ ...item, id: ref });
+                  drawChoices();
+                }
+              })
+              .catch((error) => tell(error.message));
+          return node;
         }),
+      );
+    }
+    async function chooseSlot(slot, kind) {
+      if (kind === "color") return choose(kind);
+      await market.assetPicker(
+        kind,
+        (item) => {
+          const ref = item.source === "official" ? item.id : item.ref;
+          const other =
+            slot === "character_style"
+              ? draft.scene_style
+              : slot === "scene_style"
+                ? draft.character_style
+                : null;
+          if (other === ref) return tell("角色画风与场景画风必须不同。");
+          draft[slot] = ref;
+          if (!data.resources.some((entry) => entry.id === ref))
+            data.resources.push({ ...item, id: ref });
+          drawChoices();
+          refresh();
+        },
+        true,
+      );
+      $("#modal-body").prepend(
+        button(
+          "清除这个选择",
+          () => {
+            draft[slot] = "";
+            $("#modal").close();
+            drawChoices();
+            refresh();
+          },
+          true,
+        ),
       );
     }
     function choose(kind) {
@@ -765,6 +758,7 @@ window.HandrawDiscover = ({
     ratio.value = draft.ratio;
     ratio.addEventListener("change", () => {
       draft.ratio = ratio.value;
+      draft.ratioTouched = true;
       refresh();
     });
     const mood = el("input", {
@@ -777,6 +771,27 @@ window.HandrawDiscover = ({
     mood.value = draft.mood;
     mood.addEventListener("input", () => {
       draft.mood = mood.value;
+      refresh();
+    });
+    const fusionToggle = el("input", {
+      type: "checkbox",
+      id: "create-fusion",
+      "aria-label": "风格融合",
+    });
+    fusionToggle.checked = draft.fusion;
+    fusionToggle.addEventListener("change", () => {
+      draft.fusion = fusionToggle.checked;
+      if (draft.fusion && !draft.character_style)
+        draft.character_style = draft.style;
+      if (draft.fusion && !draft.ratioTouched && draft.ratio === "1:1") {
+        draft.ratio = "3:4";
+        ratio.value = draft.ratio;
+      }
+      if (draft.fusion && !draft.mood) {
+        draft.mood = "治愈";
+        mood.value = draft.mood;
+      }
+      drawChoices();
       refresh();
     });
     const workspace = el(
@@ -806,6 +821,12 @@ window.HandrawDiscover = ({
           ),
         ),
         el("h3", {}, "03 / 选一个视觉方向"),
+        el(
+          "label",
+          { class: "hw-check" },
+          fusionToggle,
+          "风格融合 · 角色画风 × 场景画风",
+        ),
         choices,
         el(
           "details",
@@ -829,7 +850,7 @@ window.HandrawDiscover = ({
           "复制创作指令",
           async (node) => {
             if (!draft.theme.trim()) throw new Error("先写下你想画什么。");
-            const text = await compose();
+            const text = await compose(true);
             output.value = text;
             await navigator.clipboard.writeText(text);
             node.textContent = "已复制 ✓";
@@ -844,7 +865,14 @@ window.HandrawDiscover = ({
               mode: draft.mode,
               ratio: draft.ratio,
             });
-            for (const kind of ["style", "layout", "color"])
+            if (draft.fusion) params.set("fusion", "1");
+            for (const kind of [
+              "style",
+              "character_style",
+              "scene_style",
+              "layout",
+              "color",
+            ])
               if (draft[kind]) params.set(kind, draft[kind]);
             await navigator.clipboard.writeText(
               `${location.origin}/studio?${params}`,
@@ -898,37 +926,15 @@ window.HandrawDiscover = ({
         }
         if (draft.theme.trim().length < 5)
           throw new Error("用至少五个字描述你想画什么。");
-        const selected = ["style", "layout", "color"]
-          .map((kind) =>
-            catalogData.resources.find(
-              (item) => item.kind === kind && item.id === draft[kind],
-            ),
-          )
-          .filter(Boolean);
-        const prompt = [
-          "请直接生成一张符合以下要求的图片。不要把说明、资源编号或参数标签画进画面。",
-          `画面内容：${draft.theme.trim()}`,
-          `创作类型：${modes[draft.mode]}。目标画幅比例：${draft.ratio}。${draft.mood ? `画面情绪：${draft.mood}` : ""}`,
-          ...selected.map(
-            (item) =>
-              `${kinds[item.kind]}视觉定义（${item.id}）：${item.definition || item.description}`,
-          ),
-          draft.mode === "pure" || draft.mode === "photo"
-            ? "除非画面内容明确要求，不要额外添加文字。"
-            : "如果画面内容包含标题或文案，请保持文字准确、清晰可读。",
-        ]
-          .join("\n\n")
-          .slice(0, 16000);
-        const fingerprint = JSON.stringify([prompt, draft.ratio]);
+        const creation = creationInput();
+        const fingerprint = JSON.stringify(creation);
         if (generationClient?.fingerprint !== fingerprint)
           generationClient = { fingerprint, id: crypto.randomUUID() };
         await api("/generations", {
           method: "POST",
           body: JSON.stringify({
             client_id: generationClient.id,
-            prompt,
-            title: draft.theme.trim(),
-            ratio: draft.ratio,
+            creation,
           }),
         });
         await refresh(true);
@@ -944,10 +950,10 @@ window.HandrawDiscover = ({
         !capability.enabled
           ? "在线生图正在准备。当前可使用上方的创作指令。"
           : !state.boot.user
-            ? "登录后查看试运行资格。生成结果由你决定是否分享。"
+            ? "验证账号后每天可生成五张。生成结果由你决定是否分享。"
             : !capability.available
-              ? "目前向试运行创作者开放，其他账号可先使用创作指令。"
-              : `试运行：每天最多提交 ${capability.daily_limit} 次，同时生成一张。生成结果不会自动公开。`,
+              ? "请先验证账号，或解除账号限制后再使用。"
+              : `每天最多成功生成 ${capability.daily_limit} 张，同时一张；明确失败会归还次数。生成结果不会自动公开。`,
       ),
     );
     if (!state.boot.user) return;
@@ -979,7 +985,7 @@ window.HandrawDiscover = ({
           el(
             "p",
             { class: "hw-help" },
-            `今日还可提交 ${data.remaining} 次 · 最近的创作`,
+            `今日还可生成 ${data.remaining} 张 · 最近的创作`,
           ),
           ...data.tasks.slice(0, 5).map((task) => {
             const row = el(
@@ -1044,7 +1050,13 @@ window.HandrawDiscover = ({
                       const image = new File([blob], `handraw-${task.id}.png`, {
                         type: blob.type,
                       });
+                      const detail = await api(
+                        `/generations/${task.id}/content`,
+                      );
                       share("work", {
+                        prompt: detail.prompt,
+                        parameters: detail.creation?.parameters || {},
+                        assets: detail.creation?.assets || [],
                         title: task.title,
                         image,
                         summary: "在手绘风创作台完成的作品。",

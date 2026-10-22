@@ -164,6 +164,28 @@ class Library:
                            resource["license"], {"parent_id": resource["id"], "source": resource.get("origin"),
                                                  "redistribution_requires_original_license": True})
 
+    def import_definition(self, resource: dict, expected_sha256: str, source_id: str,
+                          source_url: str | None = None, author: dict | None = None) -> dict:
+        self.validate_resource(resource)
+        if resource['kind'] not in {'style', 'layout'} or not source_id or len(source_id) > 200:
+            raise ValueError('只能将画风或图型导入个人库')
+        canonical = json.dumps(resource, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        digest = hashlib.sha256(canonical).hexdigest()
+        if digest != expected_sha256:
+            raise ValueError('定义校验失败，未导入个人库')
+        local_id = 'community:' + hashlib.sha256(source_id.encode()).hexdigest()[:24]
+        data = self.index()
+        existing = next((row for row in data['resources'] if row['id'] == local_id), None)
+        if existing and existing.get('sha256') == digest:
+            return existing
+        item = {key: value for key, value in resource.items() if key not in {'id', 'section', 'path', 'origin'}}
+        item.update(id=local_id, section='collected', sha256=digest,
+                    origin={'id': source_id, 'url': source_url, 'author': author or resource.get('author')},
+                    updated_at=datetime.now(timezone.utc).isoformat())
+        data['resources'] = [row for row in data['resources'] if row['id'] != local_id] + [item]
+        self.write(data)
+        return item
+
     def export(self, resource_id: str, output: Path | str) -> dict:
         resource = self.get(resource_id)
         if resource["section"] != "owned":
@@ -213,9 +235,15 @@ class Client:
 
     def sync(self, library: Library, resource_id: str | None = None) -> list[dict] | dict:
         data = json.loads(self.fetch("/studio/api/library"))
+        resources = [item for item in data['collected'] + data.get('owned', []) + data.get('official', []) if item['kind'] in {'style', 'layout'}]
         if not resource_id:
-            return [{key: item.get(key) for key in ("id", "title", "kind", "version", "collected", "unlocked")} for item in data["collected"]]
-        resource = next((item for item in data["collected"] if item["id"] == resource_id), None)
+            return [{key: item.get(key) for key in ("id", "ref", "title", "name", "kind", "version", "collected", "unlocked")} for item in resources]
+        resource = next((item for item in resources if item['id'] == resource_id or item.get('ref') == resource_id), None)
+        if resource and resource.get('unlocked') and (resource.get('content_url') or resource.get('source') == 'official'):
+            url = resource.get('content_url') or '/studio/api/assets/' + urllib.parse.quote(resource['ref'], safe='') + '/content'
+            result = json.loads(self.fetch(url))
+            return library.import_definition(result['resource'], result['sha256'], resource_id,
+                                             BASE_URL + '/studio?view=explore&asset=' + urllib.parse.quote(resource.get('ref', resource_id)), resource.get('author'))
         if not resource or not resource.get("unlocked") or not resource.get("download_url"):
             raise ValueError("资源尚未解锁或不可下载；同步不会自动扣分")
         payload = self.fetch(resource["download_url"])

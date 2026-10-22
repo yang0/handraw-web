@@ -27,6 +27,8 @@ RSpec.describe Handraw::Economy do
       fresh.save!
       expect(fresh.price).to eq(15)
       user = Fabricate(:user, active: true, created_at: 14.days.ago)
+      user.activate
+      fresh.unlocks.create!(user: user, author_id: author.id, amount: 10, author_amount: 8, settle_at: 7.days.from_now)
       fresh.events.create!(user: user, kind: 'not_useful', qualified: true, day: Date.current)
       described_class.reprice!(fresh)
       expect(fresh.reload.price).to eq(12)
@@ -40,9 +42,21 @@ RSpec.describe Handraw::Economy do
       expect(resource.reload.price).to eq(15)
     end
 
+    it 'excludes restricted purchasers from dynamic-price feedback samples' do
+      SiteSetting.handraw_price_min_ratings = 1
+      user = Fabricate(:user, active: true, created_at: 14.days.ago, silenced_till: 1.day.from_now)
+      user.activate
+      resource.unlocks.create!(user: user, author_id: author.id, amount: 10, author_amount: 8, settle_at: 7.days.from_now)
+      resource.events.create!(user: user, kind: 'not_useful', qualified: true, day: Date.current)
+      described_class.reprice!(resource)
+      expect(resource.reload.price).to eq(10)
+    end
+
     it 'lowers the price for enough poor usage feedback and stops at the lower bound' do
       5.times do
         user = Fabricate(:user, active: true, created_at: 14.days.ago)
+        user.activate
+        resource.unlocks.create!(user: user, author_id: author.id, amount: 10, author_amount: 8, settle_at: 7.days.from_now)
         resource.events.create!(user: user, kind: 'not_useful', qualified: true, day: Date.current)
       end
       described_class.reprice!(resource)

@@ -16,4 +16,6 @@ if first_activation
   SiteSetting.handraw_public_submissions = false
 end
 SiteSetting.handraw_enabled = true
-puts "Portal enabled. Public discovery; publishing remains controlled by existing pilot settings."
+SiteSetting.handraw_public_submissions = true
+SiteSetting.handraw_generation_daily_limit = 5
+puts "Portal enabled. Verified accounts may publish and trade; paid templates require independent review. Generation limit: five per day."

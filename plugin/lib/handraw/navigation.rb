@@ -13,7 +13,7 @@ module Handraw
       page
     end
 
-    def self.stylesheet
+    def self.stylesheet(nonce: nil)
       revision_path = Handraw::Engine.root.join("REVISION")
       revision =
         revision_path.file? ? File.read(revision_path).strip : "development"
@@ -25,7 +25,9 @@ module Handraw
             "https://static.handraw-style.com/handraw-web/releases/#{revision}/assets/navigation.css"
           end
         )
-      "<link rel=\"stylesheet\" href=\"#{url}\">"
+      base = url.delete_suffix('navigation.css')
+      "<link rel=\"stylesheet\" href=\"#{url}\"><link rel=\"stylesheet\" href=\"#{base}market.css\">" +
+        %w[image-loader.js market.js forum-experience.js].map { |name| "<script nonce=\"#{nonce}\" src=\"#{base}#{name}\" defer></script>" }.join
     end
   end
 end

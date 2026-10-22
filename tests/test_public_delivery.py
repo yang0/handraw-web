@@ -20,7 +20,7 @@ class PublicDeliveryTests(unittest.TestCase):
             plugin = root / 'plugin'
             (plugin / 'public').mkdir(parents=True)
             (plugin / 'REVISION').write_text('a' * 40)
-            for name in ('portal.js', 'portal.css', 'navigation.css', 'navigation.html', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css'):
+            for name in ('portal.js', 'market.js', 'forum-experience.js', 'market.css', 'portal.css', 'navigation.css', 'navigation.html', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css'):
                 (plugin / 'public' / name).write_text((ROOT / 'plugin/public' / name).read_text(encoding='utf-8'), encoding='utf-8')
             (plugin / 'content').mkdir()
             (plugin / 'content/catalog.json').write_text((ROOT / 'plugin/content/catalog.json').read_text(encoding='utf-8'), encoding='utf-8')

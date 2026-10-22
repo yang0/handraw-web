@@ -18,7 +18,7 @@ module Handraw
             author_id,
             author_amount,
             key: "sale:#{id}",
-            reason: '资源下载收益',
+            reason: '内容解锁收益',
             entry_id: entry_id
           )
         end
@@ -45,6 +45,7 @@ module Handraw
           )
         end
         update!(refunded_at: Time.current, held: true)
+        Event.where(entry_id: entry_id, user_id: user_id, kind: %w[useful not_useful]).update_all(qualified: false)
         Audit.create!(user_id: reviewer.id, entry_id: entry_id, action: 'refund', reason: reason,
                       details: { unlock_id: id })
       end

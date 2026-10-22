@@ -14,6 +14,18 @@ SPEC.loader.exec_module(module)
 
 
 class LibraryTests(unittest.TestCase):
+    def test_structured_import_checks_integrity_and_stays_available_offline(self):
+        resource = {"id": "community:demo", "kind": "style", "name": "纸感水彩", "version": "1.0.0", "prompt_zh": "纸感与水彩。", "prompt_en": "Paper and watercolor.", "license": "允许用于个人创作。"}
+        digest = hashlib.sha256(json.dumps(resource, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+        with self.assertRaisesRegex(ValueError, '校验'):
+            self.library.import_definition(resource, '0' * 64, 'demo')
+        first = self.library.import_definition(resource, digest, 'demo')
+        second = self.library.import_definition(resource, digest, 'demo')
+        self.assertEqual(first['id'], second['id'])
+        reopened = module.Library(self.library.root)
+        self.assertEqual(reopened.get(first['id'])['prompt_zh'], '纸感与水彩。')
+        self.assertEqual(len(reopened.index()['resources']), 1)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

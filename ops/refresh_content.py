@@ -13,7 +13,8 @@ legacy = dict(re.findall(r'data-number="([A-Z]+-\d+)"[^>]*data-legacy="(\d+)"', 
 resources = []
 for item in styles:
     number = item['number']
-    resources.append({'id': number, 'legacy': legacy.get(number, ''), 'kind': 'style', 'name': item['generation_name'], 'group': item['group'], 'description': item['traits'], 'image': f'https://img.handraw-style.com/images/individual/{number.split("-")[0]}/{number}.webp'})
+    definition = f"#{number} {item['generation_name']}。参考作者/风格名称：{item.get('reference', item.get('ref', ''))}。核心风格特征：{item['traits']}。"
+    resources.append({'id': number, 'legacy': legacy.get(number, ''), 'kind': 'style', 'name': item['generation_name'], 'group': item['group'], 'description': item['traits'], 'definition': definition, 'image': f'https://img.handraw-style.com/images/individual/{number.split("-")[0]}/{number}.webp'})
 for item in layouts:
     prompt = references / item['prompt_file']
     resources.append({'id': item['id'], 'kind': 'layout', 'name': item['name'], 'group': item['category'], 'description': '、'.join(item.get('keywords', [])), 'definition': prompt.read_text(encoding='utf-8') if prompt.exists() else '', 'image': item['image'].replace('../../../images/', 'https://img.handraw-style.com/images/')})
@@ -26,6 +27,8 @@ for item in editorial['featured']:
     if item['id'] not in index:
         raise SystemExit(f'Featured resource is missing: {item["id"]}; no content was written.')
 for item in editorial['featured']:
+    item.update(index[item['id']])
+for item in editorial.get('featured_layouts', []):
     item.update(index[item['id']])
 counts = {'style': len(styles), 'layout': len(layouts), 'color': len(colors)}
 editorial['counts'] = counts

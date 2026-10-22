@@ -40,7 +40,7 @@ RSpec.describe Handraw::ImageService do
     described_class.stubs(:request).returns('status' => 'running')
     first = submit
     expect { submit }.to raise_error(Handraw::RuleError, /正在生成/)
-    described_class.update(author, first['id'], 'status' => 'error')
+    described_class.update(author, first['id'], 'status' => 'success', 'data' => [{ 'url' => 'https://chatgpt2api.handraw-style.com/images/test.png' }])
     SiteSetting.handraw_generation_daily_limit = 1
     expect { submit }.to raise_error(Handraw::RuleError, /今天/)
     expect(described_class.store(author)['submitted']).to eq(1)
@@ -73,5 +73,38 @@ RSpec.describe Handraw::ImageService do
     expect(first['status']).to eq('queued')
     expect(first['message']).to include('暂时无法确认')
     expect(described_class.store(author)['submitted']).to eq(1)
+  end
+end
+
+RSpec.describe 'Handraw generation quota release' do
+  it 'counts five successful images, releases failures, and does not refund an earlier day into today' do
+    user = Fabricate(:user)
+    Handraw::ImageService.stubs(:enabled?).returns(true)
+    Handraw::ImageService.stubs(:request).returns('status' => 'running')
+    Handraw::ImageService.stubs(:quota_day).returns('2026-10-21')
+    SiteSetting.handraw_generation_daily_limit = 5
+    5.times do
+      task = Handraw::ImageService.submit(user, client_id: SecureRandom.uuid, prompt: '一只窗台上晒太阳的小猫', title: '小猫', ratio: '1:1')
+      Handraw::ImageService.update(user, task['id'], 'status' => 'success', 'data' => [{ 'url' => 'https://chatgpt2api.handraw-style.com/images/test.png' }])
+    end
+    expect { Handraw::ImageService.submit(user, client_id: SecureRandom.uuid, prompt: '一只窗台上晒太阳的小猫', title: '小猫', ratio: '1:1') }.to raise_error(Handraw::RuleError, /今天/)
+    Handraw::ImageService.stubs(:quota_day).returns('2026-10-22')
+    task = Handraw::ImageService.submit(user, client_id: SecureRandom.uuid, prompt: '一只窗台上晒太阳的小猫', title: '小猫', ratio: '1:1')
+    expect(Handraw::ImageService.store(user)['submitted']).to eq(1)
+    Handraw::ImageService.stubs(:quota_day).returns('2026-10-23')
+    Handraw::ImageService.update(user, task['id'], 'status' => 'error')
+    expect(Handraw::ImageService.list(user)[:remaining]).to eq(5)
+  end
+
+  it 'returns a failed reservation only once and uses the Beijing submission day' do
+    user = Fabricate(:user)
+    Handraw::ImageService.stubs(:enabled?).returns(true)
+    Handraw::ImageService.stubs(:request).returns('status' => 'running')
+    SiteSetting.handraw_generation_daily_limit = 5
+    task = Handraw::ImageService.submit(user, client_id: SecureRandom.uuid, prompt: '一只窗台上晒太阳的小猫', title: '小猫', ratio: '1:1')
+    expect(Handraw::ImageService.store(user)['tasks'].first['quota_day']).to eq(Time.current.in_time_zone('Asia/Shanghai').to_date.iso8601)
+    2.times { Handraw::ImageService.update(user, task['id'], 'status' => 'error') }
+    expect(Handraw::ImageService.store(user)['submitted']).to eq(0)
+    expect(Handraw::ImageService.list(user)[:remaining]).to eq(5)
   end
 end

@@ -3,19 +3,19 @@
 module Handraw
   module Economy
     def self.welcome!(user, accepted)
-      raise RuleError, '请验证账号并确认完成新人任务' unless Access.participant?(user) && accepted
+      raise RuleError, '请验证账号并确认完成新人任务' unless Access.verified?(user) && accepted
 
       Wallet.change!(user.id, SiteSetting.handraw_welcome_credits, key: 'welcome', reason: '完成新人任务')
     end
 
     def self.unlock!(entry, user, expected_price, expected_revision)
-      raise RuleError, '请先登录获准参与的账号' unless Access.participant?(user)
+      raise RuleError, '请先登录已验证账号' unless Access.verified?(user)
 
       entry.with_lock do
         existing = entry.unlocks.find_by(user_id: user.id)
         raise RuleError, '此资源已退款，请先联系版主处理' if existing&.refunded_at
         return existing if existing
-        raise RuleError, '资源暂未开放下载' unless entry.status == 'published' && entry.download_approved && entry.bundled?
+        raise RuleError, '内容暂未开放解锁' unless entry.tradable?
 
         amount = entry.paid_opt_in ? entry.price : 0
         raise RuleError, '价格已变化，请刷新后重新确认' if amount != expected_price || entry.price_revision != expected_revision
@@ -33,10 +33,11 @@ module Handraw
     end
 
     def self.contribution!(entry)
-      return if entry.metadata['imported_from_forum']
+      return if entry.metadata['imported_from_forum'] && !entry.market?
 
       entry.with_lock do
         users = entry.qualified_events.where(kind: 'useful').distinct.pluck(:user_id)
+        users &= entry.unlocks.active.pluck(:user_id) if entry.paid_opt_in
         return if users.size < SiteSetting.handraw_contribution_confirmations
 
         wallet = Wallet.for_user(entry.user_id)
@@ -64,15 +65,18 @@ module Handraw
 
     def self.reprice!(entry, now = Time.current)
       entry.with_lock do
-        return unless entry.paid_opt_in && entry.download_approved && entry.status == 'published'
+        return unless entry.resource? && entry.paid_opt_in && entry.download_approved && entry.status == 'published'
         period = SiteSetting.handraw_price_window_days.days
         return if (entry.last_priced_at || entry.created_at) > now - period
 
         window = (now - period)..now
         sales = entry.unlocks.where(created_at: window)
-        valid_sales = sales.active.joins(:user).where(users: { active: true, staged: false })
-                           .where('users.created_at <= ?', now - SiteSetting.handraw_qualified_account_days.days)
+        eligible_users = entry.unlocks.active.includes(:user).filter_map do |sale|
+          sale.user_id if Access.qualified?(sale.user)
+        end
+        valid_sales = sales.active.where(user_id: eligible_users)
         ratings = entry.qualified_events.where(kind: %w[useful not_useful], created_at: window)
+        ratings = ratings.where(user_id: eligible_users)
         votes = ratings.distinct.count(:user_id)
         useful = ratings.where(kind: 'useful').distinct.count(:user_id)
         visitors = entry.qualified_events.where(kind: 'detail', created_at: window).distinct.count(:user_id)
@@ -87,7 +91,7 @@ module Handraw
           reason = '有效访问未转化或使用反馈较弱，下调一档'
         elsif valid_sales.count >= SiteSetting.handraw_price_min_unlocks && votes >= SiteSetting.handraw_price_min_ratings &&
               useful.to_f * 100 / votes >= SiteSetting.handraw_price_raise_useful_percent &&
-              complaints.to_f * 100 / [sales.count, 1].max <= SiteSetting.handraw_price_max_complaint_percent
+              complaints.to_f * 100 / [valid_sales.count, 1].max <= SiteSetting.handraw_price_max_complaint_percent
           entry.price = (old + SiteSetting.handraw_price_step).clamp(lower, upper)
           reason = '有效获取与使用反馈达到标准，上调一档'
         end

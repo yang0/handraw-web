@@ -7,8 +7,9 @@ module Handraw
     # This allowlisted action serves public static JavaScript to same-origin script tags.
     skip_after_action :verify_same_origin_request, only: :asset
     before_action :require_enabled
-    before_action :ensure_logged_in, except: %i[index asset boot feed show creator]
-    before_action :ensure_participant, only: %i[create upload_bundle welcome unlock generation_create generation_retry]
+    before_action :ensure_logged_in, except: %i[index asset boot feed show creator assets asset_show asset_content related content private_image topic_experience]
+    before_action :ensure_participant, only: %i[create update upload_bundle private_image_upload]
+    before_action :ensure_verified, only: %i[welcome unlock generation_create generation_retry resolve_creation]
     before_action :ensure_reviewer, only: %i[review_queue review refund freeze_wallet review_download]
 
     rescue_from Handraw::RuleError do |error|
@@ -17,6 +18,9 @@ module Handraw
 
     rescue_from ActiveRecord::RecordInvalid do |error|
       render json: { errors: error.record.errors.full_messages }, status: :unprocessable_entity
+    end
+    rescue_from ActiveRecord::RecordNotSaved do |error|
+      render json: { errors: [error.message] }, status: :unprocessable_entity
     end
 
     def index
@@ -33,6 +37,7 @@ module Handraw
       page = page.sub('<script src="/studio/assets/portal.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/portal.js\"")
       page = page.sub('<script src="/studio/assets/image-loader.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/image-loader.js\"")
       page = page.sub('<script src="/studio/assets/discover.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/discover.js\"")
+      page = page.sub('<script src="/studio/assets/market.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/market.js\"")
       if release_version.match?(/\A[0-9a-f]{40}\z/)
         page = page.gsub('/studio/assets/', "https://static.handraw-style.com/handraw-web/releases/#{release_version}/assets/")
       end
@@ -41,7 +46,7 @@ module Handraw
 
     def asset
       name = params[:name]
-      raise Discourse::NotFound if %w[portal.js portal.css navigation.css image-loader.js discover.js composer-bridge.js composer.html catalog.json].exclude?(name)
+      raise Discourse::NotFound if %w[portal.js market.js forum-experience.js portal.css market.css navigation.css image-loader.js discover.js composer-bridge.js composer.html catalog.json].exclude?(name)
 
       path = Handraw::Engine.root.join(name == 'catalog.json' ? 'content' : 'public', name)
       send_file path, disposition: 'inline',
@@ -68,16 +73,21 @@ module Handraw
         },
         categories: Category.secured(guardian).where(read_restricted: false).order(:position).pluck(:id, :name),
         editorial: JSON.parse(File.read(Handraw::Engine.root.join('content', 'editorial.json'))),
-        generation: { enabled: ImageService.enabled?, available: ImageService.enabled? && Access.participant?(current_user),
+        generation: { enabled: ImageService.enabled?, available: ImageService.enabled? && Access.verified?(current_user),
                       daily_limit: SiteSetting.handraw_generation_daily_limit },
+        fixed_price_max: SiteSetting.handraw_fixed_price_max,
+        min_title_length: [5, SiteSetting.min_topic_title_length].max,
         release: release_version
       }
     end
 
     def generation_create
       RateLimiter.new(current_user, 'handraw-generation-submit', 10, 1.minute).performed!
-      render json: ImageService.submit(current_user, client_id: params[:client_id], prompt: params[:prompt],
-                                                    title: params[:title], ratio: params[:ratio])
+      resolved = Creation.resolve(current_user, params.require(:creation))
+      task = ImageService.submit(current_user, client_id: params[:client_id], prompt: resolved[:prompt],
+                                              title: resolved[:title], ratio: resolved[:ratio],
+                                              creation: resolved.except(:prompt))
+      render json: task
     end
 
     def generation_index
@@ -97,6 +107,148 @@ module Handraw
       send_data bytes, type: media_type, disposition: 'inline'
     end
 
+    def generation_content
+      task = ImageService.store(current_user)['tasks'].find { |item| item['id'] == params[:id] }
+      raise Discourse::NotFound unless task
+      response.headers['Cache-Control'] = 'private, no-store'
+      render json: { prompt: task['prompt'], creation: task['creation'] }
+    end
+
+    def resolve_creation
+      response.headers['Cache-Control'] = 'private, no-store'
+      render json: Creation.resolve(current_user, params.require(:creation))
+    end
+
+    def assets
+      kind = params[:kind].to_s.presence || 'style'
+      raise RuleError, '请选择画风或图型' unless %w[style layout].include?(kind)
+      source = params[:source].to_s
+      items = source == 'community' ? [] : Catalog.official.select { |item| item['kind'] == kind }.map { |item| Catalog.payload(item, current_user) }
+      unless source == 'official'
+        community = Feed.call(kind: kind, page: params[:page], sort: params[:sort], search: params[:q]).map { |item| Catalog.payload(item, current_user) }
+        if source == 'community'
+          items = community
+        else
+          # Give community assets a place near the beginning, without displacing the official library.
+          items = items.each_slice(3).flat_map { |group| group + (community.empty? ? [] : [community.shift]) } + community
+        end
+      end
+      if params[:q].present?
+        q = params[:q].to_s.downcase.delete_prefix('#').first(100)
+        items = items.select do |item|
+          if kind == 'style' && q.match?(/\A\d{1,3}\z/) && item['source'] == 'official'
+            item['legacy'].present? && item['legacy'].to_i == q.to_i
+          else
+            [item[:title], item[:summary], item['name'], item['id'], item['legacy'], item['description']].join(' ').downcase.include?(q)
+          end
+        end
+      end
+      render json: { assets: items }
+    end
+
+    def asset_show
+      asset = Catalog.find(params[:ref])
+      payload = Catalog.payload(asset, current_user)
+      payload['collected'] = current_user && AssetCollection.exists?(user_id: current_user.id, asset_ref: Catalog.ref(asset)) if asset.is_a?(Hash)
+      render json: payload
+    end
+
+    def topic_experience
+      record = Entry.visible.find_by(topic_id: params[:topic_id], kind: 'experience')
+      render json: { entry: record&.public_payload(current_user) }
+    end
+
+    def asset_content
+      asset = Catalog.find(params[:ref])
+      response.headers['Cache-Control'] = 'private, no-store'
+      if asset.is_a?(Entry)
+        params[:id] = asset.public_id
+        return content
+      end
+      resource = { id: Catalog.ref(asset), kind: asset['kind'], name: asset['name'],
+                   prompt_zh: Catalog.definition(asset, current_user), prompt_en: Catalog.definition(asset, current_user),
+                   license: '沿用官方 Skill 的使用说明', version: '1.0.0', author: { name: '手绘风官方' },
+                   source: "/studio?view=explore&asset=#{Catalog.ref(asset)}" }
+      render json: { resource: resource, sha256: Digest::SHA256.hexdigest(JSON.generate(resource)) }
+    end
+
+    def related
+      asset = Catalog.find(params[:ref])
+      ids = AssetLink.where(asset_ref: Catalog.ref(asset)).select(:entry_id)
+      records = Entry.visible.where(id: ids).includes(:user).order(featured: :desc, created_at: :desc).limit(40)
+      render json: { works: records.where(kind: 'work').map { |e| e.public_payload(current_user) },
+                     experiences: records.where(kind: 'experience').map { |e| e.public_payload(current_user) } }
+    end
+
+    def asset_collect
+      raise Discourse::InvalidAccess unless Access.verified?(current_user)
+      asset = Catalog.find(params[:ref])
+      if asset.is_a?(Entry)
+        Collection.create_or_find_by!(entry_id: asset.id, user_id: current_user.id)
+      else
+        AssetCollection.create_or_find_by!(user_id: current_user.id, asset_ref: Catalog.ref(asset))
+      end
+      render json: { collected: true }
+    end
+
+    def asset_uncollect
+      asset = Catalog.find(params[:ref])
+      if asset.is_a?(Entry)
+        Collection.where(user_id: current_user.id, entry_id: asset.id).destroy_all
+      else
+        AssetCollection.where(user_id: current_user.id, asset_ref: Catalog.ref(asset)).destroy_all
+      end
+      head :no_content
+    end
+
+    def content
+      record = entry
+      raise Discourse::InvalidAccess unless record.content_readable?(current_user)
+      response.headers['Cache-Control'] = 'private, no-store'
+      response.headers['Vary'] = 'Cookie'
+      data = record.content.data.deep_dup
+      if Access.verified?(current_user) && record.user_id != current_user.id
+        Event.create_or_find_by!(entry_id: record.id, user_id: current_user.id, kind: 'access', day: Date.current) do |event|
+          event.qualified = Access.qualified?(current_user)
+        end
+      end
+      data['body_html'] = PrettyText.cook(data['body']) if data['body'].present?
+      payload = { id: record.public_id, kind: record.kind, version: record.version, content: data }
+      if record.resource?
+        resource = { id: "community:#{record.public_id}", kind: record.kind, name: record.title,
+                     prompt_zh: data['definition_zh'], prompt_en: data['definition_en'].presence || data['definition_zh'],
+                     license: record.license, version: record.version, author: record.public_payload[:author],
+                     source: "/studio?entry=#{record.public_id}" }
+        payload[:resource] = resource
+        payload[:sha256] = Digest::SHA256.hexdigest(JSON.generate(resource))
+      end
+      render json: payload
+    end
+
+    def update
+      record = Publishing.update!(entry, current_user, params.require(:entry))
+      render json: record.public_payload(current_user)
+    end
+
+    def private_image_upload
+      RateLimiter.new(current_user, 'handraw-private-image-upload', 30, 1.day).performed!
+      image = PrivateMedia.save!(current_user, params.require(:file))
+      render json: { url: "/studio/api/private-images/#{image.public_id}" }, status: :created
+    end
+
+    def private_image
+      image = PrivateImage.find_by!(public_id: params[:image_id])
+      allowed = image.user_id == current_user&.id
+      if image.entry && !allowed
+        Entry.visible.find(image.entry_id)
+        allowed = image.entry.content_readable?(current_user)
+      end
+      raise Discourse::InvalidAccess unless allowed
+      response.headers['Cache-Control'] = 'private, no-store'
+      response.headers['X-Content-Type-Options'] = 'nosniff'
+      send_file PrivateMedia.path(image), type: image.media_type, disposition: 'inline'
+    end
+
     def feed
       entries = Feed.call(kind: params[:kind], page: params[:page], search: params[:q], sort: params[:sort])
       topics = TopicQuery.new(current_user, per_page: 6).list_latest.topics
@@ -110,11 +262,22 @@ module Handraw
 
     def creator
       user = User.find_by!(username_lower: params[:username].to_s.downcase)
-      entries = Entry.visible.where(user_id: user.id).includes(:user).order(created_at: :desc).limit(100)
+      scope = Entry.visible.where(user_id: user.id)
+      entries = scope.includes(:user).order(created_at: :desc).limit(100)
       render json: {
         author: { username: user.username, name: user.name, profile_url: "/u/#{user.username}" },
         featured_count: entries.count(&:featured),
         verified_count: entries.count(&:verified),
+        contributions: %w[work style layout experience].to_h do |kind|
+          group = scope.where(kind: kind)
+          useful = Event.where(entry_id: group.select(:id), kind: 'useful', qualified: true).distinct.count(:user_id)
+          reused = Event.where(entry_id: group.select(:id), kind: 'reuse', qualified: true).distinct.count(:user_id)
+          featured = group.where(featured: true).count
+          verified = group.where(verified: true).count
+          honor = { 'work' => '精选创作者', 'style' => '画风贡献者', 'layout' => '图型贡献者', 'experience' => '经验分享者' }[kind]
+          earned = featured.positive? || (%w[style layout].include?(kind) && verified.positive?) || (kind == 'experience' && useful >= 3)
+          [kind, { published: group.count, featured: featured, verified: verified, useful_users: useful, reuse_users: reused, honor: earned ? honor : nil }]
+        end,
         entries: entries.map { |entry| entry.public_payload(current_user) }
       }
     end
@@ -125,41 +288,11 @@ module Handraw
 
     def create
       RateLimiter.new(current_user, 'handraw-post', 10, 1.day).performed!
-      data = params.require(:entry).permit(:kind, :title, :summary, :cover_url, :license, :category_id, :paid_opt_in)
-      category_name = { 'work' => '实战作品与爆款', 'experience' => '创作交流' }.fetch(data[:kind], '手绘skill')
-      category_id = data[:category_id].presence || Category.find_by(name: category_name)&.id || SiteSetting.uncategorized_category_id
-      category = Category.find(category_id)
-      raise Discourse::InvalidAccess if category.read_restricted || !guardian.can_create_topic_on_category?(category)
-
-      cover = safe_cover(data[:cover_url])
-      digest = Digest::SHA256.hexdigest([data[:kind], data[:summary].to_s.strip, cover].join("\n"))
-      raise RuleError, '相同内容已发布，请更新原投稿' if Entry.exists?(content_digest: digest)
-
-      record = nil
-      Entry.transaction do
-        record = Entry.new(
-          user_id: current_user.id,
-          public_id: SecureRandom.uuid,
-          kind: data[:kind],
-          title: data[:title],
-          summary: data[:summary],
-          cover_url: cover,
-          license: data[:license].presence || '供学习欣赏，其他用途及转载请先联系原作者。',
-          paid_opt_in: !!ActiveModel::Type::Boolean.new.cast(data[:paid_opt_in]),
-          content_digest: digest
-        )
-        # Validate before creating the discussion so malformed drafts have no external effects.
-        record.valid?
-        errors = record.errors.reject { |error| error.attribute == :topic }
-        raise RuleError, errors.map(&:full_message).join('，') if errors.any?
-
-        post = PostCreator.create!(current_user, title: record.title,
-                                                 raw: [cover.present? ? "![作品](#{cover})" : nil, record.summary,
-                                                       "授权说明：#{record.license}"].compact.join("\n\n"), category: category.id)
-        record.topic = post.topic
-        record.save!
+      if params.dig(:entry, :content).present?
+        record = Publishing.create!(current_user, params.require(:entry), guardian)
+        return render json: record.public_payload(current_user), status: :created
       end
-      render json: record.public_payload(current_user), status: :created
+      raise RuleError, '请使用新版投稿表单，填写完整内容'
     end
 
     def library
@@ -168,13 +301,19 @@ module Handraw
       ids = (collected_ids + unlocked_ids).uniq
       render json: {
         owned: Entry.where(user_id: current_user.id).includes(:user).order(created_at: :desc).limit(200)
-                    .map { |record| record.public_payload(current_user).merge(status: record.status) },
+                    .map { |record| record.public_payload(current_user).merge(status: record.status,
+                      content_url: record.market? ? "/studio/api/entries/#{record.public_id}/content" : nil) },
         collected: Entry.visible.where(id: ids).includes(:user).order(created_at: :desc).limit(500)
                         .map do |record|
           record.public_payload(current_user).merge(
             sha256: record.bundle_sha256,
-            download_url: record.accessible_to?(current_user) ? "/studio/api/entries/#{record.public_id}/download" : nil
+            download_url: record.market? ? nil : record.accessible_to?(current_user) ? "/studio/api/entries/#{record.public_id}/download" : nil,
+            content_url: record.market? && record.content_readable?(current_user) ? "/studio/api/entries/#{record.public_id}/content" : nil
           )
+        end,
+        official: AssetCollection.where(user_id: current_user.id).filter_map do |collection|
+          asset = Catalog.find(collection.asset_ref) rescue nil
+          Catalog.payload(asset, current_user).merge('collected' => true) if asset
         end
       }
     end
@@ -203,8 +342,9 @@ module Handraw
 
       if %w[useful not_useful].include?(kind)
         raise RuleError, '请先查看内容再评价' unless entry.events.exists?(user_id: current_user.id, kind: 'detail')
-        if %w[style layout package].include?(entry.kind) && !entry.accessible_to?(current_user)
-          raise RuleError, '请获取并使用资源后再评价'
+        raise RuleError, '请先阅读或使用完整内容再评价' if entry.market? && !entry.events.exists?(user_id: current_user.id, kind: 'access')
+        if entry.paid_opt_in && !entry.accessible_to?(current_user)
+          raise RuleError, '请解锁并使用内容后再评价'
         end
 
         entry.with_lock do
@@ -323,19 +463,21 @@ module Handraw
         when 'unfeature'
           record.featured = false
         when 'verify', 'approve_download'
-          raise RuleError, '请先上传资源包' unless record.bundled?
-
-          BundleStore.path(record)
-          if %w[style layout].include?(record.kind)
+          raise RuleError, '仅画风和图型需要复用审核' unless record.resource?
+          if record.market?
+            raise RuleError, '请先补全可复用定义' unless record.content.present?
             examples = record.metadata['examples']
-            raise RuleError, '需要三个不同主题的复用示例' unless examples.is_a?(Array) && examples.size >= 3
+            minimum = record.kind == 'style' ? 3 : 2
+            valid = Array(examples).select { |sample| sample.is_a?(Hash) && sample['theme'].present? && sample['image'].present? }
+            raise RuleError, "需要 #{minimum} 个不同主题及图片的复用示例" unless valid.map { |s| s['theme'].strip }.uniq.size >= minimum && valid.map { |s| s['image'] }.uniq.size >= minimum
+          else
+            raise RuleError, '请先补全画风或图型定义' unless record.bundled?
+            BundleStore.path(record)
           end
           record.verified = true
           record.download_approved = true
-          record.featured = true
           reusable_free = !record.paid_opt_in && %w[style layout].include?(record.kind)
-          award = reusable_free ? SiteSetting.handraw_verified_resource_credits : SiteSetting.handraw_featured_credits
-          Economy.editorial_award!(record, award)
+          Economy.editorial_award!(record, SiteSetting.handraw_verified_resource_credits) if reusable_free
         when 'pause', 'hide'
           record.status = action == 'hide' ? 'hidden' : 'paused'
           record.download_approved = false
@@ -359,6 +501,12 @@ module Handraw
     def review_download
       record = Entry.find_by!(public_id: params[:id])
       raise RuleError, '不能审核自己的投稿' if record.user_id == current_user.id
+
+      if record.market?
+        Audit.create!(user_id: current_user.id, entry_id: record.id, action: 'inspect_content', reason: '检查定义、示例与授权')
+        response.headers['Cache-Control'] = 'private, no-store'
+        return render json: { content: record.content&.data, entry: record.public_payload(current_user) }
+      end
 
       Audit.create!(user_id: current_user.id, entry_id: record.id, action: 'inspect_bundle', reason: '下载资源包进行复用与授权审核')
       response.headers['Cache-Control'] = 'private, no-store'
@@ -420,6 +568,10 @@ module Handraw
 
     def ensure_participant
       raise Discourse::InvalidAccess unless Access.participant?(current_user)
+    end
+
+    def ensure_verified
+      raise Discourse::InvalidAccess unless Access.verified?(current_user)
     end
 
     def ensure_reviewer
