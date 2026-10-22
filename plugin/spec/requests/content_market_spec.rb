@@ -28,6 +28,8 @@ RSpec.describe 'Handraw content market' do
   end
 
   it 'allows forum experience scripts through the native Discourse nonce policy' do
+    # Avatar rendering is unrelated to this HTML/CSP check and requires an external ImageMagick binary.
+    LetterAvatar.stubs(:version).returns('nonce-test')
     sign_in(buyer)
     get '/latest', headers: { 'HTTP_USER_AGENT' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'Accept' => 'text/html' }
     expect(response.status).to eq(200)

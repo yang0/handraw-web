@@ -11,6 +11,7 @@ window.HandrawMarket = ({
   card,
   select,
   refreshAccount = async () => {},
+  observeImpression = () => {},
 }) => {
   const $ = select || ((query) => document.querySelector(query));
   const names = {
@@ -867,9 +868,12 @@ window.HandrawMarket = ({
   }
   function assetCard(item) {
     const ref = assetRef(item);
-    return el(
+    const node = el(
       "article",
-      { class: "hw-library-card" },
+      {
+        class: "hw-library-card",
+        "data-entry-id": item.source === "community" ? item.id : null,
+      },
       el(
         "button",
         {
@@ -900,7 +904,7 @@ window.HandrawMarket = ({
       ),
       el(
         "p",
-        { class: "hw-library-card__description" },
+        { class: "hw-library-card__caption" },
         item.description || item.summary,
       ),
       item.review_pending
@@ -909,6 +913,8 @@ window.HandrawMarket = ({
             [item.kind]: item.source === "official" ? item.id : ref,
           }),
     );
+    if (item.source === "community") observeImpression(node);
+    return node;
   }
   async function explore() {
     const params = new URLSearchParams(location.search);
@@ -919,7 +925,7 @@ window.HandrawMarket = ({
       query = params.get("q") || "",
       assets = [];
     const tabs = el("div", {
-      class: "hw-library-tabs",
+      class: "hw-resource-tabs",
       "aria-label": "探索类型",
     });
     const queryInput = el("input", {
@@ -940,7 +946,7 @@ window.HandrawMarket = ({
     );
     sourceInput.value = source;
     const status = el("p", { class: "hw-help", "aria-live": "polite" });
-    const grid = el("div", { class: "hw-library-grid" });
+    const grid = el("div", { class: "hw-editorial-grid" });
     const more = button(
       "继续看 12 个 ↓",
       async () => {

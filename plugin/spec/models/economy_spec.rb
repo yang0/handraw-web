@@ -52,6 +52,21 @@ RSpec.describe Handraw::Economy do
       expect(resource.reload.price).to eq(10)
     end
 
+    it 'raises prices only with enough valid unlocks and useful feedback' do
+      10.times do |index|
+        user = Fabricate(:user, active: true, created_at: 14.days.ago)
+        user.activate
+        resource.unlocks.create!(user: user, author_id: author.id, amount: 10, author_amount: 8, settle_at: 7.days.from_now)
+        resource.events.create!(user: user, kind: 'useful', qualified: true, day: Date.current) if index < 5
+      end
+      described_class.reprice!(resource)
+      expect(resource.reload.price).to eq(15)
+      resource.update!(last_priced_at: 8.days.ago)
+      Handraw::Report.create!(entry: resource, user: resource.unlocks.first.user, status: 'confirmed', reason: '经版主确认的内容问题')
+      described_class.reprice!(resource)
+      expect(resource.reload.price).to eq(15)
+    end
+
     it 'lowers the price for enough poor usage feedback and stops at the lower bound' do
       5.times do
         user = Fabricate(:user, active: true, created_at: 14.days.ago)

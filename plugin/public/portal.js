@@ -575,7 +575,7 @@
         el("h3", {}, "收藏的官方画风与图型"),
         el(
           "div",
-          { class: "hw-library-grid" },
+          { class: "hw-editorial-grid" },
           ...data.official
             .filter(
               (item) => state.mine === "collected" || item.kind === state.mine,
@@ -882,6 +882,7 @@
     navigate,
     card,
     refreshAccount,
+    observeImpression: (node) => impressionObserver?.observe(node),
   });
   const discover = window.HandrawDiscover({
     state,
