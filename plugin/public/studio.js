@@ -2,24 +2,39 @@
 
 // A bounded page is appended only when the dialog viewport approaches its end.
 window.HandrawStudioPager = ({ root, sentinel, load, hasMore, onError }) => {
-  let loading = false, stopped = false, failed = false;
+  let loading = false,
+    stopped = false,
+    failed = false;
   const nearby = () => {
     if (!sentinel.isConnected || !root.open) return false;
-    const edge = root.getBoundingClientRect(), point = sentinel.getBoundingClientRect();
-    return point.top <= Math.min(edge.bottom, window.innerHeight) + 240 && point.bottom >= edge.top;
+    const edge = root.getBoundingClientRect(),
+      point = sentinel.getBoundingClientRect();
+    return (
+      point.top <= Math.min(edge.bottom, window.innerHeight) + 240 &&
+      point.bottom >= edge.top
+    );
   };
   async function check() {
     if (stopped || loading || failed || !hasMore() || !nearby()) return;
     loading = true;
-    try { await load(); }
-    catch (error) { failed = true; onError(error); }
-    finally {
+    try {
+      await load();
+    } catch (error) {
+      failed = true;
+      onError(error);
+    } finally {
       loading = false;
       if (!stopped && !failed) requestAnimationFrame(check);
     }
   }
-  const revisit = () => { failed = false; check(); };
-  const observer = new IntersectionObserver(check, { root, rootMargin: "240px 0px" });
+  const revisit = () => {
+    failed = false;
+    check();
+  };
+  const observer = new IntersectionObserver(check, {
+    root,
+    rootMargin: "240px 0px",
+  });
   observer.observe(sentinel);
   root.addEventListener("scroll", revisit, { passive: true });
   window.addEventListener("resize", revisit, { passive: true });
@@ -32,6 +47,20 @@ window.HandrawStudioPager = ({ root, sentinel, load, hasMore, onError }) => {
       window.removeEventListener("resize", revisit);
     },
   };
+};
+
+window.HandrawStudioDraft = {
+  restore(saved) {
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+    // Restoring text/options must not silently choose a style on a new visit.
+    return {
+      ...saved,
+      style: "",
+      character_style: "",
+      scene_style: "",
+      fusion: false,
+    };
+  },
 };
 
 window.HandrawStudio = ({
@@ -261,25 +290,67 @@ window.HandrawStudio = ({
       class: "hw-library-search",
       placeholder: "名称、编号或关键词",
     });
-    const sourceSelect = el(
-      "select",
-      { "aria-label": "资源来源" },
-      ...["official", "community", "mine"].map((v, i) =>
-        el("option", { value: v }, ["官方", "社区", "我的创作"][i]),
-      ),
+    function choices(label, items, current, onChange) {
+      const group = el("div", {
+        class: "hw-studio-filters",
+        role: "group",
+        "aria-label": label,
+      });
+      for (const [value, title] of items) {
+        const chip = button(
+          title,
+          () => {
+            for (const node of group.children)
+              node.setAttribute("aria-pressed", String(node === chip));
+            onChange(value);
+          },
+          true,
+        );
+        chip.setAttribute("aria-pressed", String(value === current));
+        group.append(chip);
+      }
+      return group;
+    }
+    const categories = choices(
+      "资源分类",
+      [
+        ["", "全部分类"],
+        ...Array.from(
+          new Set(resources.filter((r) => r.kind === kind).map((r) => r.group)),
+        )
+          .filter(Boolean)
+          .map((g) => [g, g.split(" / ")[0]]),
+      ],
+      category,
+      (value) => {
+        category = value;
+        limit = 12;
+        draw();
+      },
     );
-    const categories = el(
-      "select",
-      { "aria-label": "资源分类" },
-      el("option", { value: "" }, "全部分类"),
-      ...Array.from(
-        new Set(resources.filter((r) => r.kind === kind).map((r) => r.group)),
-      ).map((g) => el("option", { value: g }, g)),
+    const sources = choices(
+      "资源来源",
+      [
+        ["official", "官方"],
+        ["community", "社区"],
+        ["mine", "我的创作"],
+      ],
+      source,
+      (value) => {
+        source = value;
+        clearTimeout(searchTimer);
+        categories.hidden = source !== "official";
+        load().catch((e) => (status.textContent = e.message));
+      },
     );
-    const sentinel = el("div", { class: "hw-studio-sentinel", "aria-hidden": "true" });
-    const filtered = () => values.filter(
+    const sentinel = el("div", {
+      class: "hw-studio-sentinel",
+      "aria-hidden": "true",
+    });
+    const filtered = () =>
+      values.filter(
         (v) =>
-          (!category || v.group === category) &&
+          (source !== "official" || !category || v.group === category) &&
           `${v.id} ${v.name} ${v.description || v.summary || ""}`
             .toLowerCase()
             .includes(query),
@@ -294,7 +365,9 @@ window.HandrawStudio = ({
         if (token !== requestVersion || !sentinel.isConnected) return;
         page++;
         const seen = new Set(values.map((item) => item.id));
-        values.push(...result.assets.map(normalize).filter((item) => !seen.has(item.id)));
+        values.push(
+          ...result.assets.map(normalize).filter((item) => !seen.has(item.id)),
+        );
         hasMore = result.assets.length === 20;
       }
       if (token !== requestVersion) return;
@@ -304,47 +377,61 @@ window.HandrawStudio = ({
     function draw() {
       const visible = filtered();
       const nodes = visible.slice(0, limit).map((item) => {
-          const usable = item.source !== "community" || item.unlocked;
-          let card = cards.get(item.id);
-          const caption = `${multi && chosen.has(item.id) ? "✓ " : ""}${item.name}${usable ? "" : ` · ${item.price}积分，先解锁`}`;
-          if (card) {
-            card.label.textContent = caption;
-            card.choose.setAttribute("aria-pressed", String(chosen.has(item.id)));
-            return card.node;
-          }
-          const label = el("strong", {}, caption);
-          const choose = button(
-            "",
-            () => {
-              if (multi) {
-                chosen.has(item.id)
-                  ? chosen.delete(item.id)
-                  : chosen.set(item.id, item);
-                draw();
-              } else {
-                onSelect(item);
-                close();
-              }
-            },
-            true,
-          );
-          choose.append(label);
-          if (multi) choose.setAttribute("aria-pressed", String(chosen.has(item.id)));
-          choose.disabled = !usable;
-          if (item.image)
-            choose.prepend(el("img", { src: item.image, alt: item.name }));
-          const node = el(
-            "div",
-            {},
-            choose,
-            !usable
-              ? button("查看与解锁", () => { stopPicker(); market.assetDetail(item.id); }, true)
-              : null,
-          );
-          cards.set(item.id, { node, choose, label });
-          return node;
-        });
-      if (Array.from(grid.children).every((node, index) => nodes[index] === node))
+        const usable = item.source !== "community" || item.unlocked;
+        let card = cards.get(item.id);
+        const caption = `${multi && chosen.has(item.id) ? "✓ " : ""}${item.name}${usable ? "" : ` · ${item.price}积分，先解锁`}`;
+        if (card) {
+          card.label.textContent = caption;
+          if (multi)
+            card.choose.setAttribute(
+              "aria-pressed",
+              String(chosen.has(item.id)),
+            );
+          return card.node;
+        }
+        const label = el("strong", {}, caption);
+        const choose = button(
+          "",
+          () => {
+            if (multi) {
+              chosen.has(item.id)
+                ? chosen.delete(item.id)
+                : chosen.set(item.id, item);
+              draw();
+            } else {
+              onSelect(item);
+              close();
+            }
+          },
+          true,
+        );
+        choose.append(label);
+        if (multi)
+          choose.setAttribute("aria-pressed", String(chosen.has(item.id)));
+        choose.disabled = !usable;
+        if (item.image)
+          choose.prepend(el("img", { src: item.image, alt: item.name }));
+        const node = el(
+          "div",
+          {},
+          choose,
+          !usable
+            ? button(
+                "查看与解锁",
+                () => {
+                  stopPicker();
+                  market.assetDetail(item.id);
+                },
+                true,
+              )
+            : null,
+        );
+        cards.set(item.id, { node, choose, label });
+        return node;
+      });
+      if (
+        Array.from(grid.children).every((node, index) => nodes[index] === node)
+      )
         grid.append(...nodes.slice(grid.children.length));
       else grid.replaceChildren(...nodes);
       sentinel.hidden = visible.length <= limit && !hasMore;
@@ -371,7 +458,9 @@ window.HandrawStudio = ({
           .filter((r) => r.kind === kind)
           .map((r) => normalize({ ...r, source: "community", unlocked: true }));
       } else {
-        const result = await api(`/assets?kind=${kind}&source=community&q=${encodeURIComponent(query)}`);
+        const result = await api(
+          `/assets?kind=${kind}&source=community&q=${encodeURIComponent(query)}`,
+        );
         if (token !== requestVersion || !sentinel.isConnected) return;
         resultValues = result.assets.map(normalize);
         hasMore = result.assets.length === 20;
@@ -392,26 +481,17 @@ window.HandrawStudio = ({
         hasMore = false;
         grid.replaceChildren();
         status.textContent = "正在搜索…";
-        searchTimer = setTimeout(() => load().catch((e) => (status.textContent = e.message)), 300);
-      }
-      else draw();
-    });
-    categories.addEventListener("change", () => {
-      category = categories.value;
-      limit = 12;
-      draw();
-    });
-    sourceSelect.addEventListener("change", () => {
-      source = sourceSelect.value;
-      clearTimeout(searchTimer);
-      categories.hidden = source !== "official";
-      category = "";
-      load().catch((e) => (status.textContent = e.message));
+        searchTimer = setTimeout(
+          () => load().catch((e) => (status.textContent = e.message)),
+          300,
+        );
+      } else draw();
     });
     modal(
       `选择${{ style: "画风", layout: "图型", color: "配色" }[kind]}`,
       search,
-      el("div", { class: "hw-actions" }, sourceSelect, categories),
+      sources,
+      categories,
       status,
       button(
         "不指定",
@@ -432,9 +512,14 @@ window.HandrawStudio = ({
         : null,
     );
     const dialog = $("#modal");
-    pager = window.HandrawStudioPager({ root: dialog, sentinel, load: next,
+    pager = window.HandrawStudioPager({
+      root: dialog,
+      sentinel,
+      load: next,
       hasMore: () => filtered().length > limit || hasMore,
-      onError: (error) => { status.textContent = `${error.message}，滚动后重试`; },
+      onError: (error) => {
+        status.textContent = `${error.message}，滚动后重试`;
+      },
     });
     stopPicker = () => {
       clearTimeout(searchTimer);
@@ -461,7 +546,7 @@ window.HandrawStudio = ({
         const saved = JSON.parse(
           sessionStorage.getItem("handraw-create-draft") || "null",
         );
-        if (saved) Object.assign(draft, saved);
+        Object.assign(draft, window.HandrawStudioDraft.restore(saved));
       } catch (_) {}
       draft.loaded = true;
     }
@@ -508,7 +593,8 @@ window.HandrawStudio = ({
       try {
         if (f.size > 100000) throw Error("请使用十万字节以内的文本文件");
         const text = await f.text();
-        if (text.length > 20000) throw Error("文章超过两万字，请选取需要配图的段落后导入");
+        if (text.length > 20000)
+          throw Error("文章超过两万字，请选取需要配图的段落后导入");
         theme.value = text;
         change("theme", theme.value);
       } catch (error) {
@@ -1307,9 +1393,9 @@ window.HandrawStudio = ({
                         summary: "在手绘风创作台完成的作品。",
                         prompt: detail.prompt,
                         parameters: Object.fromEntries(
-                          Object.entries(detail.creation?.parameters || {}).filter(
-                            ([key]) => key !== "references",
-                          ),
+                          Object.entries(
+                            detail.creation?.parameters || {},
+                          ).filter(([key]) => key !== "references"),
                         ),
                         assets: detail.creation?.assets || [],
                         image: new File([blob], `handraw-${task.id}.png`, {

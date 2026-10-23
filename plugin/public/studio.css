@@ -183,6 +183,26 @@
 .hw-studio-sentinel {
   min-height: 2px;
 }
+.hw-studio-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+.hw-studio-filters[hidden] {
+  display: none;
+}
+.hw-studio-filters .hw-button {
+  padding: 7px 11px;
+  font-size: 13px;
+  white-space: normal;
+  text-align: left;
+}
+.hw-studio-filters [aria-pressed="true"] {
+  color: var(--paper);
+  background: var(--ink);
+  border-color: var(--ink);
+}
 .hw-studio-picker > div > button:first-child {
   display: flex;
   flex-direction: column;

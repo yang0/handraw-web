@@ -18,6 +18,16 @@ vm.runInNewContext(fs.readFileSync("plugin/public/studio.js", "utf8"), {
     disconnect() { disconnected = true; }
   },
 });
+const oldDraft = { style: "FA-001", character_style: "FA-002", scene_style: "FA-003", fusion: true, theme: "保留用户主题", tones: ["T-01"], layout: "SC-001" };
+const restored = window.HandrawStudioDraft.restore(oldDraft);
+for (const key of ["style", "character_style", "scene_style"])
+  assert.equal(restored[key], "", "old drafts cannot preselect a style on entry");
+assert.equal(restored.fusion, false);
+assert.equal(restored.theme, oldDraft.theme);
+assert.equal(restored.layout, oldDraft.layout);
+assert.equal(restored.tones, oldDraft.tones);
+assert.equal(oldDraft.style, "FA-001", "restoring does not mutate the saved object");
+assert.equal(Object.keys(window.HandrawStudioDraft.restore(null)).length, 0);
 let top = 1300, more = true, calls = 0, finish, fail = false;
 const root = {
   open: true,
