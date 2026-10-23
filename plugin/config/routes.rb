@@ -2,7 +2,7 @@
 
 Handraw::Engine.routes.draw do
   root to: 'portal#index'
-  get '/assets/:name', to: 'portal#asset', constraints: { name: /(?:(?:portal|market|forum-experience|image-loader|discover|composer-bridge)\.js|(?:portal|market|navigation)\.css|catalog\.json|composer\.html)/ }
+  get '/assets/:name', to: 'portal#asset', constraints: { name: /(?:(?:portal|market|forum-experience|image-loader|discover|composer-bridge|composer-core|studio)\.js|(?:portal|market|navigation|studio)\.css|(?:catalog|studio-options)\.json|composer\.html)/ }
   get '/api/boot', to: 'portal#boot'
   get '/api/assets', to: 'portal#assets'
   get '/api/assets/:ref', to: 'portal#asset_show'
@@ -16,6 +16,7 @@ Handraw::Engine.routes.draw do
   get '/api/generations', to: 'portal#generation_index'
   post '/api/generations', to: 'portal#generation_create'
   post '/api/generations/:id/retry', to: 'portal#generation_retry'
+  post '/api/generation-batches/:batch_id/cancel', to: 'portal#generation_cancel'
   get '/api/generations/:id/image', to: 'portal#generation_image'
   get '/api/generations/:id/content', to: 'portal#generation_content'
   get '/api/feed', to: 'portal#feed'

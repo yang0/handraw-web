@@ -195,7 +195,7 @@ RSpec.describe 'Handraw content market' do
     post '/studio/api/generations.json', params: { client_id: SecureRandom.uuid, creation: { theme: '窗台上的一只小猫', style: 'FA-001', ratio: '1:1' } }
     expect(response.status).to eq(200)
     task = Handraw::ImageService.store(buyer)['tasks'].first
-    expect(task['prompt']).to include(Handraw::Catalog.find('FA-001')['definition'])
+    expect(task['prompt']).to include(Handraw::Creation.options.fetch('styles').fetch('FA-001').fetch('definition'))
     expect(response.body).not_to include('核心风格特征')
   end
 

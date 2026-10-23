@@ -12,9 +12,10 @@ def build(plugin: Path, target: Path, static_root: Path):
     gallery = target / 'gallery'
     assets.mkdir(parents=True, exist_ok=True)
     gallery.mkdir(parents=True, exist_ok=True)
-    for name in ('portal.js', 'market.js', 'forum-experience.js', 'market.css', 'portal.css', 'navigation.css', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css'):
+    for name in ('portal.js', 'market.js', 'forum-experience.js', 'market.css', 'portal.css', 'navigation.css', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css', 'studio.js', 'studio.css', 'composer-core.js'):
         shutil.copyfile(plugin / 'public' / name, assets / name)
     shutil.copyfile(plugin / 'content/catalog.json', assets / 'catalog.json')
+    shutil.copyfile(plugin / 'content/studio-options.json', assets / 'studio-options.json')
     revision = (plugin / 'REVISION').read_text().strip()
     navigation = (plugin / 'public/navigation.html').read_text(encoding='utf-8')
     navigation = navigation.replace('data-surface="portal"', 'data-surface="gallery"')

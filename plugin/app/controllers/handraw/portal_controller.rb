@@ -7,9 +7,9 @@ module Handraw
     # This allowlisted action serves public static JavaScript to same-origin script tags.
     skip_after_action :verify_same_origin_request, only: :asset
     before_action :require_enabled
-    before_action :ensure_logged_in, except: %i[index asset boot feed show creator assets asset_show asset_content related content private_image topic_experience]
-    before_action :ensure_participant, only: %i[create update upload_bundle private_image_upload]
-    before_action :ensure_verified, only: %i[welcome unlock generation_create generation_retry resolve_creation]
+    before_action :ensure_logged_in, except: %i[index asset boot feed show creator assets asset_show asset_content related content private_image topic_experience resolve_creation]
+    before_action :ensure_participant, only: %i[create update upload_bundle]
+    before_action :ensure_verified, only: %i[welcome unlock generation_create generation_retry generation_cancel private_image_upload]
     before_action :ensure_reviewer, only: %i[review_queue review refund freeze_wallet review_download curate_experience uncurate_experience]
 
     rescue_from Handraw::RuleError do |error|
@@ -38,6 +38,9 @@ module Handraw
       page = page.sub('<script src="/studio/assets/image-loader.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/image-loader.js\"")
       page = page.sub('<script src="/studio/assets/discover.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/discover.js\"")
       page = page.sub('<script src="/studio/assets/market.js"', "<script nonce=\"#{nonce}\" src=\"/studio/assets/market.js\"")
+      %w[studio.js composer-core.js].each do |name|
+        page = page.sub("<script src=\"/studio/assets/#{name}\"", "<script nonce=\"#{nonce}\" src=\"/studio/assets/#{name}\"")
+      end
       if release_version.match?(/\A[0-9a-f]{40}\z/)
         page = page.gsub('/studio/assets/', "https://static.handraw-style.com/handraw-web/releases/#{release_version}/assets/")
       end
@@ -46,9 +49,9 @@ module Handraw
 
     def asset
       name = params[:name]
-      raise Discourse::NotFound if %w[portal.js market.js forum-experience.js portal.css market.css navigation.css image-loader.js discover.js composer-bridge.js composer.html catalog.json].exclude?(name)
+      raise Discourse::NotFound if %w[portal.js market.js forum-experience.js portal.css market.css navigation.css image-loader.js discover.js composer-bridge.js composer-core.js studio.js studio.css studio-options.json composer.html catalog.json].exclude?(name)
 
-      path = Handraw::Engine.root.join(name == 'catalog.json' ? 'content' : 'public', name)
+      path = Handraw::Engine.root.join(%w[catalog.json studio-options.json].include?(name) ? 'content' : 'public', name)
       send_file path, disposition: 'inline',
                                                            type: name.end_with?('.json') ? 'application/json' : name.end_with?('.js') ? 'text/javascript' : name.end_with?('.html') ? 'text/html' : 'text/css'
     end
@@ -83,11 +86,9 @@ module Handraw
 
     def generation_create
       RateLimiter.new(current_user, 'handraw-generation-submit', 10, 1.minute).performed!
-      resolved = Creation.resolve(current_user, params.require(:creation))
-      task = ImageService.submit(current_user, client_id: params[:client_id], prompt: resolved[:prompt],
-                                              title: resolved[:title], ratio: resolved[:ratio],
-                                              creation: resolved.except(:prompt))
-      render json: task
+      plans = Creation.plans(current_user, params.require(:creation))
+      tasks = ImageService.submit_batch(current_user, client_id: params[:client_id], plans: plans)
+      render json: tasks.first.merge(tasks: tasks)
     end
 
     def generation_index
@@ -99,6 +100,11 @@ module Handraw
     def generation_retry
       RateLimiter.new(current_user, 'handraw-generation-confirm', 5, 1.minute).performed!
       render json: ImageService.dispatch(current_user, params[:id])
+    end
+
+    def generation_cancel
+      ImageService.cancel_waiting(current_user, params[:batch_id].to_s)
+      head :no_content
     end
 
     def generation_image
@@ -116,7 +122,8 @@ module Handraw
 
     def resolve_creation
       response.headers['Cache-Control'] = 'private, no-store'
-      render json: Creation.resolve(current_user, params.require(:creation))
+      plans = Creation.plans(current_user, params.require(:creation))
+      render json: plans.first.merge(plans: plans)
     end
 
     def assets

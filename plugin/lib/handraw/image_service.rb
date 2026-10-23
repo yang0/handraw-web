@@ -2,13 +2,25 @@
 
 require 'net/http'
 require 'uri'
+require 'base64'
 
 module Handraw
   module ImageService
     NAMESPACE = 'handraw-generations'
-    ACTIVE = %w[queued running].freeze
+    ACTIVE = %w[queued running waiting].freeze
     RATIOS = { '1:1' => '1024x1024', '3:4' => '1152x1536', '4:3' => '1536x1152',
                '9:16' => '864x1536', '16:9' => '1536x864' }.freeze
+
+    def self.size_for(ratio)
+      return 'auto' if ratio.blank?
+      return RATIOS[ratio] if RATIOS.key?(ratio)
+      raise RuleError, '比例请填写正数，例如 5:2、2.35:1' unless ratio.to_s.match?(/\A\d+(?:\.\d+)?:\d+(?:\.\d+)?\z/)
+      width, height = ratio.split(':').map(&:to_f)
+      value = width / height
+      raise RuleError, '在线比例需在 1:4 至 4:1 之间' unless width.positive? && height.positive? && value.finite? && value.between?(0.25, 4)
+      w, h = value >= 1 ? [1536, 1536 / value] : [1536 * value, 1536]
+      "#{(w / 16).round * 16}x#{(h / 16).round * 16}"
+    end
 
     def self.config
       return {} unless Rails.env.production? || ENV.key?('HANDRAW_IMAGE_CONFIG')
@@ -68,7 +80,7 @@ module Handraw
     end
 
     def self.public_task(task)
-      task.slice('id', 'client_id', 'title', 'status', 'created_at', 'message', 'creation').merge(
+      task.slice('id', 'client_id', 'title', 'status', 'created_at', 'message', 'creation', 'batch_id', 'batch_position', 'batch_total').merge(
         'images' => Array(task['urls']).each_index.map { |index| "/studio/api/generations/#{task['id']}/image?index=#{index}" }
       )
     end
@@ -77,10 +89,10 @@ module Handraw
       raise RuleError, '在线生图暂未开放' unless enabled?
       raise RuleError, '请先填写画面主题' unless prompt.to_s.length.between?(5, 120_000)
       raise RuleError, '请求标识无效' unless client_id.to_s.match?(/\A[0-9a-f-]{36}\z/)
-      raise RuleError, '画幅比例无效' unless RATIOS.key?(ratio)
+      size_for(ratio)
 
       task = nil
-      digest = Digest::SHA256.hexdigest([prompt, ratio].join("\n"))
+      digest = Digest::SHA256.hexdigest([prompt, ratio, creation&.dig(:references), creation&.dig(:parameters, 'quality')].to_json)
       user.with_lock do
         data = store(user)
         task = data['tasks'].find { |item| item['client_id'] == client_id }
@@ -106,15 +118,72 @@ module Handraw
       dispatch(user, task['id'])
     end
 
+    def self.submit_batch(user, client_id:, plans:)
+      raise RuleError, '在线生图暂未开放' unless enabled?
+      raise RuleError, '请求标识无效' unless client_id.to_s.match?(/\A[0-9a-f-]{36}\z/)
+      raise RuleError, '每批最多五张' unless plans.size.between?(1, 5)
+      return [submit(user, client_id: client_id, prompt: plans[0][:prompt], title: plans[0][:title], ratio: plans[0][:ratio], creation: plans[0].except(:prompt))] if plans.size == 1
+      digest = Digest::SHA256.hexdigest(plans.to_json)
+      tasks = nil
+      user.with_lock do
+        data = store(user)
+        tasks = data['tasks'].select { |t| t['batch_id'] == client_id || t['client_id'] == client_id }
+        if tasks.any?
+          raise RuleError, '同一批次不能用于不同创作' unless tasks.size == plans.size && tasks.all? { |t| t['batch_digest'] == digest }
+        else
+          if data['date'] != quota_day
+            data['date'], data['submitted'] = quota_day, 0
+          end
+          raise RuleError, '今日剩余次数不足，请减少批量数量' if data['submitted'] + plans.size > SiteSetting.handraw_generation_daily_limit
+          raise RuleError, '请先等待当前任务完成' if data['tasks'].any? { |t| ACTIVE.include?(t['status']) }
+          tasks = plans.each_with_index.map do |plan, i|
+            { 'id'=>SecureRandom.uuid, 'client_id'=> i.zero? ? client_id : "#{client_id}-#{i}", 'batch_id'=>client_id,
+              'batch_position'=>i+1, 'batch_total'=>plans.size, 'batch_digest'=>digest, 'title'=>plan[:title],
+              'prompt'=>plan[:prompt], 'ratio'=>plan[:ratio], 'creation'=>plan.except(:prompt), 'status'=>i.zero? ? 'queued' : 'waiting',
+              'created_at'=>Time.now.utc.iso8601, 'urls'=>[], 'quota_day'=>quota_day, 'quota_reserved'=>true }
+          end
+          data['tasks'] = tasks + data['tasks'].first(20 - tasks.size)
+          data['submitted'] += tasks.size
+          save(user, data)
+        end
+      end
+      dispatch(user, tasks.first['id'])
+      store(user)['tasks'].select { |t| t['batch_id'] == client_id }.map { |t| public_task(t) }
+    end
+
+    def self.cancel_waiting(user, batch_id)
+      user.with_lock do
+        data = store(user)
+        data['tasks'].select { |t| t['batch_id'] == batch_id && t['status'] == 'waiting' }.each do |task|
+          task['status'], task['message'] = 'error', '已取消尚未提交的任务。'
+          data['submitted'] = [data['submitted'] - 1, 0].max if task['quota_reserved'] && task['quota_day'] == data['date']
+          task['quota_reserved'] = false
+        end
+        save(user, data)
+      end
+    end
+
     def self.dispatch(user, id)
       task = store(user)['tasks'].find { |item| item['id'] == id }
       raise Discourse::NotFound unless task
       return public_task(task) unless task['status'] == 'queued'
 
-      result = request('/api/image-tasks/generations', payload: {
-                         client_task_id: task['id'], prompt: task['prompt'], model: 'gpt-image-2',
-                         size: RATIOS.fetch(task['ratio']), quality: 'auto'
-                       })
+      images = Array(task.dig('creation', 'references')).map do |ref|
+        if ref['source'] == 'private'
+          image = PrivateImage.find_by!(public_id: ref['id'], user_id: user.id)
+          bytes, media_type = File.binread(PrivateMedia.path(image)), image.media_type
+        else
+          root = Pathname.new('/home/yang0/projectHome/handraw-static').realpath
+          path = root.join(ref.fetch('path')).realpath
+          raise RuleError, '参考图路径无效' unless path.to_s.start_with?("#{root}/images/")
+          bytes, media_type = File.binread(path), 'image/webp'
+        end
+        raise RuleError, '参考图过大' if bytes.bytesize > 10.megabytes
+        { b64_json: Base64.strict_encode64(bytes), mime_type: media_type }
+      end
+      payload = { client_task_id: task['id'], prompt: task['prompt'], model: 'gpt-image-2', size: size_for(task['ratio']), quality: task.dig('creation', 'parameters', 'quality') || 'auto' }
+      payload[:images] = images if images.any?
+      result = request(images.any? ? '/api/image-tasks/edits' : '/api/image-tasks/generations', payload: payload)
       update(user, id, result)
     rescue RuleError => error
       user.with_lock do
@@ -169,10 +238,25 @@ module Handraw
 
     def self.list(user, refresh: false)
       data = store(user)
-      pending = data['tasks'].select { |task| ACTIVE.include?(task['status']) }
+      pending = data['tasks'].select { |task| %w[queued running].include?(task['status']) }
       if refresh && pending.any?
         result = request("/api/image-tasks?ids=#{pending.map { |task| task['id'] }.join(',')}")
         Array(result['items']).each { |item| update(user, item['id'], item) if pending.any? { |task| task['id'] == item['id'] } }
+        data = store(user)
+      end
+      promote = nil
+      if refresh
+        user.with_lock do
+          data = store(user)
+          unless data['tasks'].any? { |task| %w[queued running].include?(task['status']) }
+            promote = data['tasks'].find { |task| task['status'] == 'waiting' }
+            if promote
+              promote['status'] = 'queued'
+              save(user, data)
+            end
+          end
+        end
+        dispatch(user, promote['id']) if promote
         data = store(user)
       end
       used = data['date'] == quota_day ? data['submitted'] : 0
