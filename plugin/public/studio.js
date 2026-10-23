@@ -530,7 +530,7 @@ window.HandrawStudio = ({
     dialog.addEventListener("close", stopPicker, { once: true });
     await load();
   }
-  async function create() {
+  async function create({ entry = true } = {}) {
     stop();
     if (!resources) {
       const [data, settings] = await Promise.all([
@@ -541,6 +541,7 @@ window.HandrawStudio = ({
       options = settings;
     }
     draft = { ...defaults(), ...(draft || {}) };
+    if (entry) Object.assign(draft, window.HandrawStudioDraft.restore(draft));
     if (!draft.loaded) {
       try {
         const saved = JSON.parse(
@@ -551,7 +552,7 @@ window.HandrawStudio = ({
       draft.loaded = true;
     }
     const params = new URLSearchParams(location.search);
-    if (appliedQuery !== location.search) {
+    if (entry || appliedQuery !== location.search) {
       appliedQuery = location.search;
       for (const key of [
         "style",
@@ -1048,7 +1049,7 @@ window.HandrawStudio = ({
             () => {
               draft = defaults();
               save();
-              create();
+              create({ entry: false });
             },
             true,
           ),
@@ -1418,7 +1419,7 @@ window.HandrawStudio = ({
                     { theme: task.creation?.parameters?.theme || task.title },
                   );
                   save();
-                  create();
+                  create({ entry: false });
                 },
                 true,
               ),
