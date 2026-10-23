@@ -1,5 +1,39 @@
 "use strict";
 
+// A bounded page is appended only when the dialog viewport approaches its end.
+window.HandrawStudioPager = ({ root, sentinel, load, hasMore, onError }) => {
+  let loading = false, stopped = false, failed = false;
+  const nearby = () => {
+    if (!sentinel.isConnected || !root.open) return false;
+    const edge = root.getBoundingClientRect(), point = sentinel.getBoundingClientRect();
+    return point.top <= Math.min(edge.bottom, window.innerHeight) + 240 && point.bottom >= edge.top;
+  };
+  async function check() {
+    if (stopped || loading || failed || !hasMore() || !nearby()) return;
+    loading = true;
+    try { await load(); }
+    catch (error) { failed = true; onError(error); }
+    finally {
+      loading = false;
+      if (!stopped && !failed) requestAnimationFrame(check);
+    }
+  }
+  const revisit = () => { failed = false; check(); };
+  const observer = new IntersectionObserver(check, { root, rootMargin: "240px 0px" });
+  observer.observe(sentinel);
+  root.addEventListener("scroll", revisit, { passive: true });
+  window.addEventListener("resize", revisit, { passive: true });
+  return {
+    check: revisit,
+    stop() {
+      stopped = true;
+      observer.disconnect();
+      root.removeEventListener("scroll", revisit);
+      window.removeEventListener("resize", revisit);
+    },
+  };
+};
+
 window.HandrawStudio = ({
   state,
   el,
@@ -32,11 +66,12 @@ window.HandrawStudio = ({
     language = "zh",
     outputKind = "prompt";
   const historyRows = new Map();
+  let stopPicker = () => {};
   let appliedQuery;
   const defaults = () => ({
     mode: "pure",
     theme: "",
-    style: "FA-001",
+    style: "",
     layout: "",
     color: "",
     ratio: "3:4",
@@ -79,6 +114,7 @@ window.HandrawStudio = ({
     image: item.image || item.cover_url,
   });
   function stop() {
+    stopPicker();
     clearTimeout(timer);
     clearTimeout(pollTimer);
     version++;
@@ -203,13 +239,17 @@ window.HandrawStudio = ({
     }, 450);
   }
   async function picker(kind, onSelect, selected = [], multi = false) {
+    stopPicker();
     let source = "official",
       category = "",
       query = "",
       page = 1,
       limit = 12,
       values = [],
-      hasMore = false;
+      hasMore = false,
+      requestVersion = 0;
+    const cards = new Map();
+    let pager, searchTimer;
     const chosen = new Map(
       selected.filter(Boolean).map((id) => [id, find(id) || { id, name: id }]),
     );
@@ -236,35 +276,45 @@ window.HandrawStudio = ({
         new Set(resources.filter((r) => r.kind === kind).map((r) => r.group)),
       ).map((g) => el("option", { value: g }, g)),
     );
-    const more = button(
-      "继续加载 ↓",
-      async () => {
-        limit += 12;
-        if (source === "community" && hasMore && values.length < limit) {
-          page++;
-          const result = await api(
-            `/assets?kind=${kind}&source=community&page=${page}`,
-          );
-          values.push(...result.assets.map(normalize));
-          hasMore = result.assets.length === 20;
-        }
-        draw();
-      },
-      true,
-    );
-    function draw() {
-      const filtered = values.filter(
+    const sentinel = el("div", { class: "hw-studio-sentinel", "aria-hidden": "true" });
+    const filtered = () => values.filter(
         (v) =>
           (!category || v.group === category) &&
           `${v.id} ${v.name} ${v.description || v.summary || ""}`
             .toLowerCase()
             .includes(query),
       );
-      grid.replaceChildren(
-        ...filtered.slice(0, limit).map((item) => {
+    async function next() {
+      const token = requestVersion;
+      const nextLimit = limit + 12;
+      if (source === "community" && hasMore && filtered().length < nextLimit) {
+        const result = await api(
+          `/assets?kind=${kind}&source=community&page=${page + 1}&q=${encodeURIComponent(query)}`,
+        );
+        if (token !== requestVersion || !sentinel.isConnected) return;
+        page++;
+        const seen = new Set(values.map((item) => item.id));
+        values.push(...result.assets.map(normalize).filter((item) => !seen.has(item.id)));
+        hasMore = result.assets.length === 20;
+      }
+      if (token !== requestVersion) return;
+      limit = nextLimit;
+      draw();
+    }
+    function draw() {
+      const visible = filtered();
+      const nodes = visible.slice(0, limit).map((item) => {
           const usable = item.source !== "community" || item.unlocked;
+          let card = cards.get(item.id);
+          const caption = `${multi && chosen.has(item.id) ? "✓ " : ""}${item.name}${usable ? "" : ` · ${item.price}积分，先解锁`}`;
+          if (card) {
+            card.label.textContent = caption;
+            card.choose.setAttribute("aria-pressed", String(chosen.has(item.id)));
+            return card.node;
+          }
+          const label = el("strong", {}, caption);
           const choose = button(
-            `${multi && chosen.has(item.id) ? "✓ " : ""}${item.name}${usable ? "" : ` · ${item.price}积分，先解锁`}`,
+            "",
             () => {
               if (multi) {
                 chosen.has(item.id)
@@ -278,40 +328,56 @@ window.HandrawStudio = ({
             },
             true,
           );
+          choose.append(label);
+          if (multi) choose.setAttribute("aria-pressed", String(chosen.has(item.id)));
           choose.disabled = !usable;
           if (item.image)
             choose.prepend(el("img", { src: item.image, alt: item.name }));
-          return el(
+          const node = el(
             "div",
             {},
             choose,
             !usable
-              ? button("查看与解锁", () => market.assetDetail(item.id), true)
+              ? button("查看与解锁", () => { stopPicker(); market.assetDetail(item.id); }, true)
               : null,
           );
-        }),
-      );
-      more.hidden = filtered.length <= limit && !hasMore;
+          cards.set(item.id, { node, choose, label });
+          return node;
+        });
+      if (Array.from(grid.children).every((node, index) => nodes[index] === node))
+        grid.append(...nodes.slice(grid.children.length));
+      else grid.replaceChildren(...nodes);
+      sentinel.hidden = visible.length <= limit && !hasMore;
       status.textContent = multi
         ? `已选择 ${chosen.size} 项`
-        : `找到 ${filtered.length} 项`;
+        : `找到 ${visible.length} 项`;
+      pager?.check();
     }
     async function load() {
+      const token = ++requestVersion;
+      const currentSource = source;
       page = 1;
       limit = 12;
       hasMore = false;
-      if (source === "official")
-        values = resources.filter((r) => r.kind === kind);
-      else if (source === "mine") {
+      values = [];
+      grid.replaceChildren();
+      cards.clear();
+      let resultValues;
+      if (currentSource === "official")
+        resultValues = resources.filter((r) => r.kind === kind);
+      else if (currentSource === "mine") {
         if (!state.boot.user) throw Error("请先登录查看个人创作");
-        values = (await api("/library")).owned
+        resultValues = (await api("/library")).owned
           .filter((r) => r.kind === kind)
           .map((r) => normalize({ ...r, source: "community", unlocked: true }));
       } else {
-        const result = await api(`/assets?kind=${kind}&source=community`);
-        values = result.assets.map(normalize);
+        const result = await api(`/assets?kind=${kind}&source=community&q=${encodeURIComponent(query)}`);
+        if (token !== requestVersion || !sentinel.isConnected) return;
+        resultValues = result.assets.map(normalize);
         hasMore = result.assets.length === 20;
       }
+      if (token !== requestVersion || !sentinel.isConnected) return;
+      values = resultValues;
       if (kind === "style" && source === "official")
         values = [{ id: "realistic", name: "写实", kind: "style" }, ...values];
       draw();
@@ -319,14 +385,25 @@ window.HandrawStudio = ({
     search.addEventListener("input", () => {
       query = search.value.trim().toLowerCase();
       limit = 12;
-      draw();
+      clearTimeout(searchTimer);
+      requestVersion++;
+      if (source === "community") {
+        values = [];
+        hasMore = false;
+        grid.replaceChildren();
+        status.textContent = "正在搜索…";
+        searchTimer = setTimeout(() => load().catch((e) => (status.textContent = e.message)), 300);
+      }
+      else draw();
     });
     categories.addEventListener("change", () => {
       category = categories.value;
+      limit = 12;
       draw();
     });
     sourceSelect.addEventListener("change", () => {
       source = sourceSelect.value;
+      clearTimeout(searchTimer);
       categories.hidden = source !== "official";
       category = "";
       load().catch((e) => (status.textContent = e.message));
@@ -345,7 +422,7 @@ window.HandrawStudio = ({
         true,
       ),
       grid,
-      more,
+      sentinel,
       multi
         ? button("确认选择", () => {
             if (chosen.size > 5) throw Error("最多选择五个图型");
@@ -354,6 +431,18 @@ window.HandrawStudio = ({
           })
         : null,
     );
+    const dialog = $("#modal");
+    pager = window.HandrawStudioPager({ root: dialog, sentinel, load: next,
+      hasMore: () => filtered().length > limit || hasMore,
+      onError: (error) => { status.textContent = `${error.message}，滚动后重试`; },
+    });
+    stopPicker = () => {
+      clearTimeout(searchTimer);
+      requestVersion++;
+      pager.stop();
+      dialog.removeEventListener("close", stopPicker);
+    };
+    dialog.addEventListener("close", stopPicker, { once: true });
     await load();
   }
   async function create() {

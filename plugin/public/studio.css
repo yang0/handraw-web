@@ -180,6 +180,9 @@
   width: 100%;
   height: 150px;
 }
+.hw-studio-sentinel {
+  min-height: 2px;
+}
 .hw-studio-picker > div > button:first-child {
   display: flex;
   flex-direction: column;

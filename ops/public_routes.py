@@ -1,5 +1,6 @@
 """Prepare scoped Nginx routes; never send gallery misses to the forum rate limiter."""
 import argparse
+import re
 from pathlib import Path
 
 
@@ -24,7 +25,7 @@ def gallery_entry(text):
 def configure(text, surface):
     marker = '# handraw-public-routes-v2'
     if marker in text:
-        return gallery_entry(text)
+        return image_cache(gallery_entry(text)) if surface == 'static' else gallery_entry(text)
     if text.count('    location / {') != 1:
         raise ValueError('Expected one existing catch-all location')
     if surface == 'main':
@@ -55,7 +56,8 @@ def configure(text, surface):
     location ^~ /images/ {
         alias /home/yang0/projectHome/handraw-static/images/;
         add_header Access-Control-Allow-Origin "*" always;
-        expires 1d;
+        expires 1y;
+        add_header Cache-Control "public, immutable" always;
         try_files $uri =404;
     }
     location ^~ /data/ {
@@ -66,6 +68,19 @@ def configure(text, surface):
     }
 '''
     return gallery_entry(text.replace('    location / {', routes + '\n    location / {', 1))
+
+
+def image_cache(text):
+    """Upgrade only the managed public image location, preserving other routes."""
+    def replace(match):
+        block = re.sub(r'expires\s+[^;]+;', 'expires 1y;', match.group(0))
+        if 'add_header Cache-Control' not in block:
+            block = block.replace('expires 1y;', 'expires 1y;\n        add_header Cache-Control "public, immutable" always;')
+        return block
+    updated, count = re.subn(r'    location \^~ /images/ \{[^}]+\}', replace, text)
+    if count != 1:
+        raise ValueError('Expected one managed public image route')
+    return updated
 
 
 if __name__ == '__main__':

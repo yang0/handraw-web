@@ -23,7 +23,7 @@ jobs:
       - run: node tests/test_share_preview.cjs
       - run: node tests/test_masonry_flow.cjs
       - run: node tests/test_forum_navigation.cjs
-      - run: node --check plugin/public/studio.js && node tests/test_studio_command.cjs
+      - run: node --check plugin/public/studio.js && node tests/test_studio_command.cjs && node tests/test_studio_pager.cjs
       - run: node --check plugin/public/image-loader.js && node tests/test_image_loader.cjs
       - run: bash -n ops/server-deploy.sh ops/preview-server.sh ops/setup-preview.sh ops/test-server.sh
       - name: Check tracked files
