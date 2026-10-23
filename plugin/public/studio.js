@@ -542,15 +542,15 @@ window.HandrawStudio = ({
     }
     draft = { ...defaults(), ...(draft || {}) };
     if (entry) Object.assign(draft, window.HandrawStudioDraft.restore(draft));
-    if (!draft.loaded) {
+    if (!draft.loaded && entry) {
       try {
         const saved = JSON.parse(
           sessionStorage.getItem("handraw-create-draft") || "null",
         );
         Object.assign(draft, window.HandrawStudioDraft.restore(saved));
       } catch (_) {}
-      draft.loaded = true;
     }
+    draft.loaded = true;
     const params = new URLSearchParams(location.search);
     if (entry || appliedQuery !== location.search) {
       appliedQuery = location.search;
