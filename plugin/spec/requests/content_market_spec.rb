@@ -84,6 +84,49 @@ RSpec.describe 'Handraw content market' do
     expect(record.unlocks.count).to eq(1)
   end
 
+  it 'publishes and updates a work whose title already exists in the forum' do
+    SiteSetting.duplicate_topic_titles = 'disallowed'
+    SiteSetting.min_topic_title_length = 5
+    SiteSetting.title_min_entropy = 0
+    title = '我宣布：今天不做大人'
+    original = Fabricate(:topic, user: author, title: title)
+    Fabricate(:post, topic: original, user: author, post_number: 1, raw: '原有论坛帖子内容保持完整，不由作品投稿覆盖。')
+    sign_in(author)
+    links = [{ ref: 'official:FA-013', role: 'style' }]
+    post '/studio/api/entries.json', params: { entry: {
+      kind: 'work', title: title, price: 0,
+      summary: '作品广场保存原始标题，内部预览话题不应阻止分享。',
+      cover_url: 'https://img.handraw-style.com/images/individual/FA/FA-013.webp',
+      content: { prompt: '我要做一张适合发小红书的图片。你帮我设计下。' }, assets: links
+    } }
+    expect(response.status).to eq(201), response.body
+    record = Handraw::Entry.find_by!(public_id: response.parsed_body['id'])
+    expect(record.title).to eq(title)
+    expect(record.topic.title).to include(record.public_id.first(8))
+    expect(record.topic_id).not_to eq(original.id)
+    expect(record.asset_links.pluck(:asset_ref)).to eq(['official:FA-013'])
+    expect(original.reload.title).to eq(title)
+    patch "/studio/api/entries/#{record.public_id}.json", params: { entry: { title: title } }
+    expect(response.status).to eq(200), response.body
+    expect(record.reload.title).to eq(title)
+    get '/studio/api/feed.json', params: { kind: 'work', sort: 'latest' }
+    expect(response.parsed_body['entries'].map { |row| row['id'] }).to include(record.public_id)
+  end
+
+  it 'allows distinct works to share a title without exceeding the preview title limit' do
+    SiteSetting.max_topic_title_length = 80
+    SiteSetting.duplicate_topic_titles = 'disallowed'
+    first = publish('work', title: '同名的两幅作品保存各自完整内容', price: 0)
+    second = publish('work', title: first.title, price: 0,
+                     content: { prompt: '第二幅作品使用另一份提示词，创作内容不同。' })
+    expect(first.title).to eq(second.title)
+    expect(first.topic.title).not_to eq(second.topic.title)
+    long_work = publish('work', title: '长标题的作品保持原始名称' * 10, price: 0,
+                        content: { prompt: '长标题作品的完整提示词，检查内部话题的标题长度。' })
+    expect(long_work.title.length).to be > 80
+    expect(long_work.topic.title.length).to be <= 80
+  end
+
   it 'rejects self-collection through the unified asset endpoint' do
     record = publish('style', paid_opt_in: false)
     sign_in(author)

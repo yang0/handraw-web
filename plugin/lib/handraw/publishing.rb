@@ -62,6 +62,14 @@ module Handraw
       raise RuleError, '价格格式无效'
     end
 
+    def self.preview_topic_title(entry)
+      return entry.title unless entry.kind == 'work'
+
+      # A work title is independent of the forum's duplicate-title restriction.
+      key = entry.public_id.delete('-').scan(/.{1,8}/).join(' ')
+      "作品预览 #{key}".first(SiteSetting.max_topic_title_length)
+    end
+
     def self.create!(user, values, guardian)
       input = hash(values).stringify_keys
       kind = input['kind'].to_s
@@ -93,7 +101,7 @@ module Handraw
           entry.topic = source_topic
           entry.metadata['existing_public_post'] = true
         else
-          post = PostCreator.create!(user, title: entry.title, raw: raw, category: category.id)
+          post = PostCreator.create!(user, title: preview_topic_title(entry), raw: raw, category: category.id)
           entry.topic = post.topic
         end
         entry.save!
@@ -127,7 +135,7 @@ module Handraw
         unless entry.metadata['existing_public_post']
           post = entry.topic.posts.find_by!(post_number: 1)
           raw = [entry.summary, "[查看完整内容与图片](/studio?entry=#{entry.public_id})"].join("\n\n")
-          PostRevisor.new(post).revise!(user, raw: raw, title: entry.title)
+          PostRevisor.new(post).revise!(user, raw: raw, title: preview_topic_title(entry))
         end
       end
       entry.reload
