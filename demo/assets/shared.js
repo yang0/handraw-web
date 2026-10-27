@@ -514,7 +514,8 @@
         description: (ov && ov.description) || r.description,
         definition: (ov && ov.definition) || r.definition,
         featured: Boolean(ov && ov.featured),
-        isNewRelease: Boolean(ov && ov.isNewRelease)
+        isNewRelease: ov && ov.isNewRelease !== undefined ? Boolean(ov.isNewRelease) : Boolean(r.isNewRelease),
+        publishedAtMs: Number((ov && ov.publishedAtMs) || r.publishedAtMs || 0)
       });
     }
 
@@ -1274,10 +1275,14 @@
     if (!item) return false;
     const raw = item.publishedAtMs ?? item.published_at_ms ?? item.createdAtMs ?? item.created_at_ms;
     const timestamp = Number(raw);
-    if (!Number.isFinite(timestamp) || timestamp <= 0) return false;
-    const now = Number(nowMs);
-    if (!Number.isFinite(now) || now < timestamp) return false;
-    return now - timestamp <= 72 * 60 * 60 * 1000;
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+      const now = Number(nowMs);
+      if (!Number.isFinite(now) || now < timestamp) return false;
+      return now - timestamp <= 72 * 60 * 60 * 1000;
+    }
+    // Payloads without an absolute timestamp (legacy fixtures) fall back to the
+    // server-computed window flag so the badge and the block never disagree.
+    return item.isNewRelease === true || item.is_new_release === true;
   }
 
   const RANK_PERIODS = [
@@ -1309,8 +1314,14 @@
 
   function getRecencyMinutes(item) {
     if (!item) return 999999;
+    const pubMs = Number(item.publishedAtMs ?? item.published_at_ms ?? 0);
+    if (Number.isFinite(pubMs) && pubMs > 0) {
+      // Prefer the absolute timestamp so a stale text label can never outrank
+      // genuinely recent items inside the new-release block.
+      return Math.max(0, Math.round((Date.now() - pubMs) / 60000));
+    }
     const t = String(item.createdAt || "").trim();
-    if (!t) return item.isNewRelease ? 180 : 999999;
+    if (!t) return 999999;
     if (t.includes("刚刚")) return 0;
     const mm = t.match(/(\d+)\s*分钟前/);
     if (mm) return Number(mm[1]);
@@ -1324,7 +1335,7 @@
     if (wm) return Number(wm[1]) * 10080;
     const mo = t.match(/(\d+)\s*个月前/);
     if (mo) return Number(mo[1]) * 43200;
-    return item.isNewRelease ? 240 : 999999;
+    return 999999;
   }
 
   function isWithinRankPeriod(item, period = "all") {

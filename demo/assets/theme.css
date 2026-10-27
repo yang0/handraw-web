@@ -1156,6 +1156,37 @@ button {
   }
 }
 
+/* On phones the demo-only role switcher would consume the whole first screen,
+   so collapse it to a single scrollable row that keeps every action reachable. */
+@media (max-width: 720px) {
+  .demo-sandbox-bar {
+    padding: 4px 12px;
+    gap: 6px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .demo-sandbox-bar > div:first-child {
+    display: none;
+  }
+  .demo-switcher-group {
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .demo-switcher-group::-webkit-scrollbar {
+    display: none;
+  }
+  .demo-switcher-group > * {
+    flex: 0 0 auto;
+  }
+  .demo-switcher-group > span {
+    display: none;
+  }
+}
+
 .studio-slot {
   border: 1.5px dashed var(--line-strong);
   border-radius: 12px;
