@@ -1,0 +1,102 @@
+# Handraw Web 2.0 — 4-Subdomain Production Reverse Proxy Template
+#
+# Subdomains routed to unified Handraw Web 2.0 application ports:
+#   1. handraw-style.com         -> 127.0.0.1:3080 (Main Portal: Styles / Layouts / Works / Rankings / Wallet)
+#   2. studio.handraw-style.com  -> 127.0.0.1:3081 (Infinite Canvas Studio)
+#   3. forum.handraw-style.com   -> 127.0.0.1:3082 (Visual Creator Forum & Bounty Board)
+#   4. admin.handraw-style.com   -> 127.0.0.1:3083 (Admin Management Console — RBAC + IP allowlist recommended)
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# Shared proxy parameters (inline example)
+# Note: backend/server.py automatically sets Secure + Domain=.handraw-style.com on session cookies
+# when Host ends with handraw-style.com and X-Forwarded-Proto is https.
+
+server {
+    listen 443 ssl http2;
+    server_name handraw-style.com www.handraw-style.com;
+
+    ssl_certificate     /etc/letsencrypt/live/handraw-style.com/fullchain.cer;
+    ssl_certificate_key /etc/letsencrypt/live/handraw-style.com/privkey.cer;
+    client_max_body_size 20m;
+
+    location ~* ^/(images|uploads|generated)/ {
+        proxy_pass http://127.0.0.1:3080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800";
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name studio.handraw-style.com;
+
+    ssl_certificate     /etc/letsencrypt/live/handraw-style.com/fullchain.cer;
+    ssl_certificate_key /etc/letsencrypt/live/handraw-style.com/privkey.cer;
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3081;
+        proxy_http_version 1.1;
+        proxy_read_timeout 120s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name forum.handraw-style.com;
+
+    ssl_certificate     /etc/letsencrypt/live/handraw-style.com/fullchain.cer;
+    ssl_certificate_key /etc/letsencrypt/live/handraw-style.com/privkey.cer;
+    client_max_body_size 20m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3082;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name admin.handraw-style.com;
+
+    ssl_certificate     /etc/letsencrypt/live/handraw-style.com/fullchain.cer;
+    ssl_certificate_key /etc/letsencrypt/live/handraw-style.com/privkey.cer;
+    client_max_body_size 20m;
+
+    # Optional IP allowlist in addition to RBAC session enforcement:
+    # allow 203.0.113.0/24;
+    # deny all;
+
+    location / {
+        proxy_pass http://127.0.0.1:3083;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

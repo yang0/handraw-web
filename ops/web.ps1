@@ -1,7 +1,9 @@
 param(
-    [Parameter(Position=0)][ValidateSet('update','status','deploy','rollback','preview','test')][string]$Action='status',
+    [Parameter(Position=0)][ValidateSet('update','status','deploy','rollback','preview','test','dev','local')][string]$Action='status',
     [string]$Commit,
-    [string]$Server='tencent-vm'
+    [string]$Server='tencent-vm',
+    [int]$Port=3000,
+    [string]$DiscourseUrl='https://handraw-style.com'
 )
 $ErrorActionPreference='Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
@@ -35,6 +37,9 @@ if ($Action -eq 'update') {
 } elseif ($Action -eq 'preview') {
     Write-Host 'Preview tunnel: http://localhost:3010/studio (Ctrl+C closes only the tunnel)'
     Invoke-Checked ssh @('-N','-L','3010:127.0.0.1:3010',$Server)
+} elseif ($Action -in @('dev','local')) {
+    Write-Host "Starting local zero-ops development server on port $Port (Discourse: $DiscourseUrl)..."
+    Invoke-Checked python @('ops/dev_server.py','--port',"$Port",'--discourse',"$DiscourseUrl")
 } else {
     Invoke-Checked python @('-m','unittest','discover','-s','tests','-v')
     Invoke-Checked node @('--check','plugin/public/portal.js')

@@ -21,3 +21,7 @@ image-service.json
 *.zip
 *.tar.gz
 /.coverage
+ops/dev_data.json
+*.db
+*.db-wal
+*.db-shm

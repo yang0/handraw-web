@@ -1,0 +1,3249 @@
+"""Core domain services for Handraw Web 2.0 (Auth, Boot, Economy, Catalog, Works, Forum, Studio, Skill-Addon)."""
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import json
+import re
+import sqlite3
+import time
+import uuid
+from datetime import datetime
+from typing import Any
+
+from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
+from .db import Database, local_today_str, utc_now_iso
+from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
+from .security import (
+    generate_api_key,
+    generate_session_token,
+    hash_password,
+    parse_cookie_header,
+    verify_password,
+)
+
+
+class ServiceError(Exception):
+    def __init__(self, message: str, status: int = 400, code: str = "bad_request") -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+        self.code = code
+
+
+CREATOR_HONOR_TIERS = [
+    {"tier": 4, "minCount": 6, "key": "hall", "badge": "👑 殿堂共创官", "shortBadge": "👑 殿堂", "boost": 1.45, "boostText": "1.45× 优先曝光", "sealClass": "honor-hall"},
+    {"tier": 3, "minCount": 3, "key": "gold", "badge": "🏅 金牌主理人", "shortBadge": "🏅 金牌", "boost": 1.25, "boostText": "1.25× 曝光加权", "sealClass": "honor-gold"},
+    {"tier": 2, "minCount": 2, "key": "pioneer", "badge": "🌟 先锋开荒者", "shortBadge": "🌟 先锋", "boost": 1.12, "boostText": "1.12× 曝光加权", "sealClass": "honor-pioneer"},
+    {"tier": 1, "minCount": 1, "key": "rookie", "badge": "🌱 新锐创作者", "shortBadge": "🌱 新锐", "boost": 1.08, "boostText": "新秀首曝扶持", "sealClass": "honor-rookie"},
+    {"tier": 0, "minCount": 0, "key": "member", "badge": "✨ 灵感探索者", "shortBadge": "探索者", "boost": 1.0, "boostText": "首发即享必曝", "sealClass": "honor-member"},
+]
+
+FORUM_BOARDS: list[dict[str, str]] = [
+    {"key": "all", "label": "📋 全区总版主", "shortLabel": "全区总版", "desc": "跨全论坛所有板块享有置顶、加精、移版与违规治理权限"},
+    {"key": "tuning", "label": "🎯 作品求调优 / 悬赏", "shortLabel": "调优悬赏版", "desc": "负责实测翻车诊断、提示词调优与求改悬赏帖秩序"},
+    {"key": "experience", "label": "📘 实战经验与变现", "shortLabel": "实战变现版", "desc": "负责商单交付 SOP、小红书/公众号起号复盘与精选加精"},
+    {"key": "assets", "label": "🎨 画风与图型专区", "shortLabel": "画风图型版", "desc": "负责 370+ 画风与 170+ 图型参数研讨、新风格共创交流"},
+    {"key": "tools", "label": "🛠️ 工具流与问答", "shortLabel": "工具问答版", "desc": "负责无限画布工作流、Skill 插件排障与日常创作问答"},
+]
+FORUM_BOARD_LABELS: dict[str, str] = {b["key"]: b["label"] for b in FORUM_BOARDS}
+FORUM_BOARD_SHORT_LABELS: dict[str, str] = {b["key"]: b["shortLabel"] for b in FORUM_BOARDS}
+
+
+def _seed_filter(column: str, kind: str) -> tuple[str, tuple[str, ...]]:
+    """Build a parameterized exclusion for known demo IDs in normal mode."""
+    if is_demo_mode():
+        return "1 = 1", ()
+    ids = sorted(seed_ids(kind))
+    if not ids:
+        return "1 = 1", ()
+    placeholders = ", ".join("?" for _ in ids)
+    return f"{column} NOT IN ({placeholders})", tuple(ids)
+
+
+def _default_asset_social_baseline(code: str) -> tuple[int, int]:
+    """Return synthetic social baselines only for an explicitly demo boot."""
+    if not is_demo_mode():
+        return (0, 0)
+    up = (code or "").strip().upper()
+    h = sum((i + 1) * ord(ch) for i, ch in enumerate(up))
+    return (12 + (h % 29), 7 + ((h * 3) % 21))
+
+
+def _infer_asset_kind(code: str, fallback: str = "style") -> str:
+    up = (code or "").strip().upper()
+    if re.match(r"^(SC|IG|SB|IP|EC|LX|USR-L)", up):
+        return "layout"
+    if re.match(r"^(F[A-Z]|S-|USR-S)", up):
+        return "style"
+    return "layout" if fallback == "layout" else "style"
+
+
+def compute_honor_tier(total_published: int, honor_override: int | None = None) -> dict[str, Any]:
+    if honor_override is not None:
+        for t in CREATOR_HONOR_TIERS:
+            if t["tier"] == int(honor_override):
+                return t
+    cnt = max(0, int(total_published))
+    for t in CREATOR_HONOR_TIERS:
+        if cnt >= int(t["minCount"]):
+            return t
+    return CREATOR_HONOR_TIERS[-1]
+
+
+def format_short_time(iso_or_label: str) -> str:
+    if not iso_or_label:
+        return "刚刚"
+    if "T" not in iso_or_label:
+        return iso_or_label
+    try:
+        dt = datetime.fromisoformat(iso_or_label.replace("Z", "+00:00")).astimezone()
+        today = datetime.now().astimezone().date()
+        if dt.date() == today:
+            return f"今天 {dt.strftime('%H:%M')}"
+        return dt.strftime("%m-%d %H:%M")
+    except Exception:
+        return iso_or_label
+
+
+def format_relative_cn(published_at_ms: int, fallback: str = "刚刚") -> str:
+    if not published_at_ms:
+        return fallback or "刚刚"
+    diff_sec = max(0, int(time.time() - published_at_ms / 1000.0))
+    if diff_sec < 90:
+        return "刚刚"
+    if diff_sec < 3600:
+        return f"{max(1, diff_sec // 60)} 分钟前"
+    if diff_sec < 86400:
+        return f"{max(1, diff_sec // 3600)} 小时前"
+    return f"{max(1, diff_sec // 86400)} 天前"
+
+
+NEW_RELEASE_WINDOW_MS = 72 * 60 * 60 * 1000
+
+
+def is_new_release_active(published_at_ms: int | None, now_ms: int | None = None) -> bool:
+    """Use publication time as the single source of truth for the 72h badge."""
+    try:
+        published = int(published_at_ms or 0)
+    except (TypeError, ValueError):
+        return False
+    if published <= 0:
+        return False
+    current = int(now_ms if now_ms is not None else time.time() * 1000)
+    age = current - published
+    return 0 <= age < NEW_RELEASE_WINDOW_MS
+
+
+def get_site_settings(conn: sqlite3.Connection) -> dict[str, Any]:
+    out = json.loads(json.dumps(DEFAULT_SITE_SETTINGS))
+    rows = conn.execute("SELECT key, value_json FROM site_settings").fetchall()
+    for r in rows:
+        try:
+            parsed = json.loads(r["value_json"])
+            if isinstance(parsed, dict) and isinstance(out.get(r["key"]), dict):
+                out[r["key"]].update(parsed)
+            else:
+                out[r["key"]] = parsed
+        except Exception:
+            pass
+    return out
+
+
+def record_audit_log(
+    tx: sqlite3.Connection,
+    actor: dict[str, Any] | None,
+    action: str,
+    target_type: str,
+    target_id: str,
+    reason: str = "",
+    details: dict[str, Any] | None = None,
+) -> None:
+    tx.execute(
+        """
+        INSERT INTO audit_logs (actor_id, actor_username, actor_role, action, target_type, target_id, reason, details_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            actor["id"] if actor else None,
+            actor["username"] if actor else "system",
+            actor["role"] if actor else "system",
+            action,
+            target_type,
+            str(target_id),
+            reason or "",
+            json.dumps(details or {}, ensure_ascii=False),
+            utc_now_iso(),
+        ),
+    )
+
+
+def apply_wallet_delta(
+    tx: sqlite3.Connection,
+    user_id: int,
+    delta: int,
+    kind: str,
+    reason: str,
+    event_key: str | None = None,
+    ref_type: str = "",
+    ref_id: str = "",
+    actor_id: int | None = None,
+    allow_negative: bool = False,
+) -> tuple[int, bool]:
+    """Atomically apply credit delta and write append-only ledger. Returns (new_balance, applied)."""
+    now = utc_now_iso()
+    w = tx.execute("SELECT balance, locked FROM wallets WHERE user_id = ?", (user_id,)).fetchone()
+    if not w:
+        tx.execute(
+            "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
+            (user_id, now),
+        )
+        cur_balance = 0
+        locked = 0
+    else:
+        cur_balance = int(w["balance"])
+        locked = int(w["locked"])
+
+    if locked and delta < 0 and not allow_negative:
+        raise ServiceError("积分钱包当前处于风控锁定状态，请联系管理员", status=403, code="wallet_locked")
+
+    if event_key:
+        dup = tx.execute("SELECT id FROM ledgers WHERE user_id = ? AND event_key = ?", (user_id, event_key)).fetchone()
+        if dup:
+            return cur_balance, False
+
+    new_balance = cur_balance + int(delta)
+    if new_balance < 0 and not allow_negative:
+        raise ServiceError(f"积分不足（需 {abs(delta)} 积分，当前可用 {cur_balance} 积分）", status=400, code="insufficient_credits")
+
+    tx.execute("UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?", (new_balance, now, user_id))
+    tx.execute(
+        """
+        INSERT INTO ledgers (user_id, delta, balance_after, kind, event_key, reason, ref_type, ref_id, actor_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, int(delta), new_balance, kind, event_key, reason, ref_type, str(ref_id), actor_id, now),
+    )
+    return new_balance, True
+
+
+def get_wallet_quota_state(conn: sqlite3.Connection, user_id: int, settings: dict[str, Any]) -> dict[str, Any]:
+    today = local_today_str()
+    econ = settings.get("economy", {})
+    max_q = max(0, int(econ.get("daily_free_quota", 3)))
+    w = conn.execute("SELECT * FROM wallets WHERE user_id = ?", (user_id,)).fetchone()
+    if not w:
+        return {"balance": 0, "freeQuotaMax": max_q, "freeQuotaRemaining": max_q, "dailyCheckedIn": False, "locked": False}
+    used = int(w["free_quota_used"]) if w["free_quota_date"] == today else 0
+    checked_in = bool(w["checkin_date"] == today)
+    return {
+        "balance": int(w["balance"]),
+        "freeQuotaMax": max_q,
+        "freeQuotaRemaining": max(0, max_q - used),
+        "dailyCheckedIn": checked_in,
+        "locked": bool(w["locked"]),
+    }
+
+
+def _count_user_published_items(conn: sqlite3.Connection, username: str) -> int:
+    work_filter, work_ids = _seed_filter("id", "works")
+    asset_filter, asset_ids = _seed_filter("code", "assets")
+    w_cnt = int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM works WHERE author_username = ? AND status = 'published' AND {work_filter}",
+            (username, *work_ids),
+        ).fetchone()[0]
+    )
+    a_cnt = int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM catalog_assets WHERE author_username = ? AND source_type = 'community' AND status = 'published' AND {asset_filter}",
+            (username, *asset_ids),
+        ).fetchone()[0]
+    )
+    return w_cnt + a_cnt
+
+
+# ======================== AUTHENTICATION & SESSIONS ========================
+
+def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any] | None:
+    conn = db.get_conn()
+    now_ts = int(time.time())
+
+    # 1. Bearer token or X-Handraw-Token
+    token = ""
+    auth_hdr = headers.get("Authorization") or headers.get("authorization") or ""
+    if auth_hdr.lower().startswith("bearer "):
+        token = auth_hdr[7:].strip()
+    if not token:
+        token = (headers.get("X-Handraw-Token") or headers.get("x-handraw-token") or "").strip()
+
+    # 2. Skill-Addon API Key headers (Api-Key / User-Api-Key)
+    api_key = (
+        headers.get("Api-Key")
+        or headers.get("api-key")
+        or headers.get("User-Api-Key")
+        or headers.get("user-api-key")
+        or ""
+    ).strip()
+    if api_key or token.startswith("hwk_"):
+        key_val = api_key or token
+        u = conn.execute("SELECT * FROM users WHERE api_key = ?", (key_val,)).fetchone()
+        if u and u["status"] == "active":
+            return dict(u)
+        return None
+
+    # 3. Session Cookie
+    if not token:
+        cookies = parse_cookie_header(headers.get("Cookie") or headers.get("cookie"))
+        token = (cookies.get(SESSION_COOKIE_NAME) or "").strip()
+
+    if not token:
+        return None
+
+    row = conn.execute(
+        """
+        SELECT u.*
+        FROM sessions s
+        JOIN users u ON u.id = s.user_id
+        WHERE s.token = ? AND s.expires_at > ?
+        """,
+        (token, now_ts),
+    ).fetchone()
+    if not row or row["status"] != "active":
+        return None
+    result = dict(row)
+    result["_session_token"] = token
+    return result
+
+
+def create_session_for_user(tx: sqlite3.Connection, user_id: int, user_agent: str = "", ip_addr: str = "") -> str:
+    token = generate_session_token()
+    now_iso = utc_now_iso()
+    exp = int(time.time()) + SESSION_TTL_SECONDS
+    tx.execute(
+        "INSERT INTO sessions (token, user_id, user_agent, ip_addr, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (token, user_id, (user_agent or "")[:200], (ip_addr or "")[:64], exp, now_iso),
+    )
+    tx.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (now_iso, user_id))
+    return token
+
+
+def register_user(
+    db: Database,
+    username: str,
+    password: str,
+    email: str = "",
+    display_name: str = "",
+    invite_code: str = "",
+    user_agent: str = "",
+    ip_addr: str = "",
+) -> tuple[dict[str, Any], str]:
+    uname = re.sub(r"[^a-zA-Z0-9_\-]", "", (username or "").strip())
+    if len(uname) < 2 or len(uname) > 32:
+        raise ServiceError("用户名需为 2~32 位字母、数字、下划线或连字符")
+    if len(password or "") < 6:
+        raise ServiceError("登录密码长度至少 6 位")
+
+    clean_email = (email or f"{uname}@handraw-style.com").strip().lower()
+    dname = (display_name or uname).strip()[:40]
+    ref_code = (invite_code or "").strip()
+    now_iso = utc_now_iso()
+
+    with db.transaction() as tx:
+        exists = tx.execute(
+            "SELECT id FROM users WHERE username = ? OR (email != '' AND email = ?)",
+            (uname, clean_email),
+        ).fetchone()
+        if exists:
+            raise ServiceError("该用户名或邮箱已被注册，请直接登录或更换用户名")
+
+        settings = get_site_settings(tx)
+        econ = settings.get("economy", {})
+        welcome = int(econ.get("welcome_credits", 20))
+        inviter_bonus = int(econ.get("invite_inviter_credits", 15))
+        invitee_bonus = int(econ.get("invite_invitee_credits", 10))
+
+        inviter_row = None
+        if ref_code:
+            inviter_row = tx.execute(
+                "SELECT id, username, display_name FROM users WHERE invite_code = ? AND status = 'active'",
+                (ref_code,),
+            ).fetchone()
+
+        pw_hash = hash_password(password)
+        api_key = generate_api_key()
+        cur = tx.execute(
+            """
+            INSERT INTO users (
+                username, display_name, email, password_hash, password_algo,
+                role, status, bio, invite_code, invited_by, api_key, created_at, last_login_at
+            ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', 'user', 'active', 'Handraw 新锐社区创作者', ?, ?, ?, ?, ?)
+            """,
+            (uname, dname, clean_email, pw_hash, uname, inviter_row["username"] if inviter_row else "", api_key, now_iso, now_iso),
+        )
+        uid = int(cur.lastrowid)
+        tx.execute(
+            "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
+            (uid, now_iso),
+        )
+        if welcome > 0:
+            apply_wallet_delta(tx, uid, welcome, "welcome", "新用户注册欢迎礼（可解锁配方或云端生图）", event_key=f"welcome_{uid}")
+
+        if inviter_row and inviter_row["id"] != uid:
+            if invitee_bonus > 0:
+                apply_wallet_delta(
+                    tx,
+                    uid,
+                    invitee_bonus,
+                    "invite_invitee",
+                    f"受好友 @{inviter_row['display_name']} 邀请注册加赠礼",
+                    event_key=f"invitee_{uid}",
+                )
+            if inviter_bonus > 0:
+                apply_wallet_delta(
+                    tx,
+                    int(inviter_row["id"]),
+                    inviter_bonus,
+                    "invite_inviter",
+                    f"成功邀请新创作者 @{dname} 注册奖励",
+                    event_key=f"inviter_{inviter_row['id']}_{uid}",
+                    ref_type="user",
+                    ref_id=str(uid),
+                )
+
+        token = create_session_for_user(tx, uid, user_agent=user_agent, ip_addr=ip_addr)
+        user_row = dict(tx.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone())
+    return user_row, token
+
+
+def login_user(
+    db: Database,
+    identifier: str,
+    password: str,
+    user_agent: str = "",
+    ip_addr: str = "",
+) -> tuple[dict[str, Any], str]:
+    ident = (identifier or "").strip()
+    if not ident or not password:
+        raise ServiceError("请输入用户名/邮箱与密码")
+
+    with db.transaction() as tx:
+        row = tx.execute(
+            "SELECT * FROM users WHERE username = ? OR email = ?",
+            (ident, ident.lower()),
+        ).fetchone()
+        if not row:
+            raise ServiceError("账号不存在或密码不正确", status=401, code="invalid_credentials")
+        if row["status"] != "active":
+            raise ServiceError("该账号已被冻结，如有疑问请联系社区管理员", status=403, code="account_frozen")
+        if (
+            not is_demo_mode()
+            and password == DEMO_DEFAULT_PASSWORD
+            and is_seed_username(row["username"])
+            and not row["discourse_user_id"]
+        ):
+            raise ServiceError("演示账号默认凭据已停用，请先完成真实账号接管", status=401, code="seed_credentials_disabled")
+
+        ok = verify_password(
+            password,
+            row["password_hash"],
+            password_algo=row["password_algo"],
+            discourse_salt=row["discourse_salt"],
+        )
+        if not ok:
+            raise ServiceError("账号不存在或密码不正确", status=401, code="invalid_credentials")
+
+        # Transparent upgrade from imported Discourse hash to native PBKDF2-SHA256
+        if row["password_algo"] != "pbkdf2_sha256":
+            tx.execute(
+                "UPDATE users SET password_hash = ?, password_algo = 'pbkdf2_sha256', discourse_salt = '' WHERE id = ?",
+                (hash_password(password), int(row["id"])),
+            )
+
+        token = create_session_for_user(tx, int(row["id"]), user_agent=user_agent, ip_addr=ip_addr)
+        user_row = dict(tx.execute("SELECT * FROM users WHERE id = ?", (int(row["id"]),)).fetchone())
+    return user_row, token
+
+
+def logout_session(db: Database, token: str) -> None:
+    if not token:
+        return
+    with db.transaction() as tx:
+        tx.execute("DELETE FROM sessions WHERE token = ?", (token,))
+
+
+def sandbox_switch_account(db: Database, target_username: str, user_agent: str = "", ip_addr: str = "") -> tuple[dict[str, Any] | None, str]:
+    """Local dev/testing quick account switcher (yang0 / ops_lin / reviewer_su / su_editorial / guest)."""
+    if not target_username or target_username == "guest":
+        return None, ""
+    with db.transaction() as tx:
+        row = tx.execute("SELECT * FROM users WHERE username = ?", (target_username,)).fetchone()
+        if not row:
+            raise ServiceError(f"未找到测试账号：{target_username}", status=404)
+        if row["status"] != "active":
+            raise ServiceError(f"账号 {target_username} 当前已被冻结", status=403)
+        token = create_session_for_user(tx, int(row["id"]), user_agent=user_agent, ip_addr=ip_addr)
+        return dict(row), token
+
+
+def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    """Self-service personal account profile & password management for logged-in users."""
+    uid = int(user["id"])
+    with db.transaction() as tx:
+        row = tx.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+        if not row:
+            raise ServiceError("账号不存在", status=404)
+
+        dname = str(body.get("displayName") if body.get("displayName") is not None else row["display_name"]).strip()[:40]
+        if not dname:
+            raise ServiceError("显示昵称不能为空")
+        email = str(body.get("email") if body.get("email") is not None else (row["email"] or "")).strip().lower()[:120]
+        bio = str(body.get("bio") if body.get("bio") is not None else (row["bio"] or "")).strip()[:300]
+
+        if email and email != (row["email"] or "").lower():
+            dup = tx.execute("SELECT id FROM users WHERE LOWER(email) = ? AND id != ?", (email, uid)).fetchone()
+            if dup:
+                raise ServiceError("该邮箱已被其他账号绑定")
+
+        pw_hash = row["password_hash"]
+        pw_algo = row["password_algo"]
+        disc_salt = row["discourse_salt"]
+        new_pw = str(body.get("newPassword") or "")
+        if new_pw:
+            if len(new_pw) < 6:
+                raise ServiceError("新登录密码长度至少 6 位")
+            cur_pw = str(body.get("currentPassword") or "")
+            if not verify_password(cur_pw, row["password_hash"], password_algo=row["password_algo"], discourse_salt=row["discourse_salt"]):
+                raise ServiceError("当前旧密码验证不正确", status=403)
+            pw_hash = hash_password(new_pw)
+            pw_algo = "pbkdf2_sha256"
+            disc_salt = ""
+
+        api_key = generate_api_key() if body.get("regenerateApiKey") else row["api_key"]
+        tx.execute(
+            """
+            UPDATE users SET display_name = ?, email = ?, bio = ?, password_hash = ?, password_algo = ?, discourse_salt = ?, api_key = ?
+            WHERE id = ?
+            """,
+            (dname, email, bio, pw_hash, pw_algo, disc_salt, api_key, uid),
+        )
+        # Keep denormalized author_name fresh on user's works/topics/assets
+        if dname != row["display_name"]:
+            tx.execute("UPDATE works SET author_name = ? WHERE author_username = ?", (dname, row["username"]))
+            tx.execute("UPDATE forum_topics SET author_name = ? WHERE author_username = ?", (dname, row["username"]))
+            tx.execute("UPDATE catalog_assets SET author_name = ? WHERE author_username = ? AND source_type = 'community'", (dname, row["username"]))
+
+        updated = dict(tx.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone())
+    return {"ok": True, "boot": build_boot_payload(db, updated)}
+
+
+# ======================== BOOT PAYLOAD & STRICT SERVER GATES ========================
+
+def _serialize_catalog_asset(row: sqlite3.Row, unlocked_set: set[str], current_user: dict[str, Any] | None) -> dict[str, Any]:
+    code = row["code"]
+    source_type = row["source_type"]
+    cost = int(row["unlock_cost"] or 0)
+    is_staff = bool(current_user and current_user.get("role") in ("admin", "operator", "reviewer"))
+    is_author = bool(current_user and current_user.get("username") == row["author_username"])
+    is_unlocked = cost <= 0 or (code in unlocked_set) or is_author or is_staff
+
+    # NEVER leak secret_blackbox_prompt to frontend!
+    if source_type == "exclusive":
+        public_def = row["definition"] or f"[CLOUD_BLACKBOX::{code}] 仅限在线创作工坊云端生图自动注入底层视觉参数。"
+    elif not is_unlocked:
+        public_def = f"[LOCKED_ASSET::{code}] 付费共创资产（需 {cost} 积分解锁后查看完整定义词与创作台挂载权限）"
+    else:
+        public_def = row["definition"] or row["description"] or ""
+
+    try:
+        stamps = json.loads(row["stamp_counts_json"] or "{}")
+    except Exception:
+        stamps = {}
+
+    return {
+        "id": code,
+        "kind": row["kind"],
+        "sourceType": source_type,
+        "tier": row["tier"],
+        "unlockCost": cost,
+        "author": row["author_username"],
+        "authorName": row["author_name"] or row["author_username"],
+        "createdAt": row["created_label"] or format_relative_cn(int(row["published_at_ms"])),
+        "isNewRelease": is_new_release_active(row["published_at_ms"]),
+        "featured": bool(row["featured"]),
+        "publishedAtMs": int(row["published_at_ms"]),
+        "cheers": int(row["cheers"]),
+        "tips": int(row["tips"]),
+        "stampCounts": stamps,
+        "name": row["name"],
+        "group": row["group_name"],
+        "description": row["description"],
+        "definition": public_def,
+        "image": row["image_url"],
+    }
+
+
+def _serialize_work(
+    row: sqlite3.Row,
+    comments_by_work: dict[str, list[dict[str, Any]]],
+    unlocked_set: set[str],
+    current_user: dict[str, Any] | None,
+) -> dict[str, Any]:
+    wid = row["id"]
+    price = int(row["price"] or 0)
+    is_staff = bool(current_user and current_user.get("role") in ("admin", "operator", "reviewer"))
+    is_author = bool(current_user and current_user.get("username") == row["author_username"])
+    is_unlocked = price <= 0 or (wid in unlocked_set) or is_author or is_staff
+
+    full_prompt = row["prompt"] or ""
+    if is_unlocked:
+        safe_prompt = full_prompt
+    else:
+        safe_prompt = full_prompt[:34] + "……（解锁后查看完整生图提示词与避坑参数）"
+
+    try:
+        stamps = json.loads(row["stamp_counts_json"] or "{}")
+    except Exception:
+        stamps = {}
+
+    return {
+        "id": wid,
+        "title": row["title"],
+        "author": row["author_username"],
+        "authorName": row["author_name"],
+        "createdAt": row["created_label"] or format_relative_cn(int(row["published_at_ms"])),
+        "isNewRelease": is_new_release_active(row["published_at_ms"]),
+        "featured": bool(row["featured"]),
+        "publishedAtMs": int(row["published_at_ms"]),
+        "cheers": int(row["cheers"]),
+        "images": json.loads(row["images_json"] or "[]"),
+        "styles": json.loads(row["styles_json"] or "[]"),
+        "layout": row["layout_code"] or None,
+        "sc021Type": row["sc021_type"] or "",
+        "color": row["color_code"] or "C-15",
+        "tone": row["tone_code"] or "T-01",
+        "ratio": row["ratio"] or "3:4",
+        "mode": row["mode"] or "graphic-text",
+        "shootType": row["shoot_type"] or "",
+        "mood": row["mood"] or "治愈",
+        "price": price,
+        "likes": int(row["likes"]),
+        "favorites": int(row["favorites"]),
+        "forks": int(row["forks"]),
+        "tips": int(row["tips"]),
+        "views": int(row["views"]),
+        "stampCounts": stamps,
+        "prompt": safe_prompt,
+        "promptMasked": not is_unlocked,
+        "notes": row["notes"] or "",
+        "comments": comments_by_work.get(wid, []),
+    }
+
+
+def _serialize_topic(
+    row: sqlite3.Row,
+    replies_by_topic: dict[str, list[dict[str, Any]]],
+    unlocked_set: set[str],
+    current_user: dict[str, Any] | None,
+) -> dict[str, Any]:
+    tid = row["id"]
+    price = int(row["price"] or 0)
+    is_staff = bool(current_user and current_user.get("role") in ("admin", "operator", "reviewer"))
+    is_author = bool(current_user and current_user.get("username") == row["author_username"])
+    is_unlocked = price <= 0 or (tid in unlocked_set) or is_author or is_staff
+
+    recipe = None
+    if row["recipe_json"]:
+        try:
+            recipe = json.loads(row["recipe_json"])
+        except Exception:
+            recipe = None
+
+    shared_card = None
+    if isinstance(recipe, dict) and "sharedCard" in recipe:
+        shared_card = recipe["sharedCard"]
+
+    return {
+        "id": tid,
+        "category": row["category"],
+        "categoryLabel": row["category_label"],
+        "pinned": bool(row["pinned"]),
+        "featured": bool(row["featured"]),
+        "title": row["title"],
+        "author": row["author_username"],
+        "authorName": row["author_name"],
+        "createdAt": row["created_label"] or format_relative_cn(int(row["published_at_ms"])),
+        "publishedAtMs": int(row["published_at_ms"]),
+        "views": int(row["views"]),
+        "likes": int(row["likes"]),
+        "favorites": int(row["favorites"]),
+        "price": price,
+        "bounty": int(row["bounty"]),
+        "bountyStatus": row["bounty_status"],
+        "solved": bool(row["solved"]),
+        "acceptedReplyId": row["accepted_reply_id"] or "",
+        "images": json.loads(row["images_json"] or "[]"),
+        "styles": json.loads(row["styles_json"] or "[]"),
+        "layout": row["layout_code"] or None,
+        "workId": row["work_id"] or None,
+        "sharedCard": shared_card,
+        "recipe": recipe,
+        "summary": row["summary"],
+        "lockedBody": (row["locked_body"] or "") if is_unlocked else "",
+        "replies": replies_by_topic.get(tid, []),
+    }
+
+
+def compute_public_asset_counts_and_creators(conn: sqlite3.Connection) -> tuple[dict[str, int], int, int, list[dict[str, Any]]]:
+    """Compute exact counts per style/layout and creator honor summaries WITHOUT exposing any work images or prompts."""
+    asset_counts: dict[str, int] = {}
+    creator_stats: dict[str, dict[str, Any]] = {}
+
+    users_map = {
+        r["username"]: {"display_name": r["display_name"], "honor_override": r["honor_override"]}
+        for r in conn.execute("SELECT username, display_name, honor_override FROM users WHERE status = 'active'").fetchall()
+    }
+
+    def ensure_rec(uname: str, aname: str) -> dict[str, Any]:
+        rec = creator_stats.get(uname)
+        if not rec:
+            uinfo = users_map.get(uname, {})
+            clean_name = uinfo.get("display_name") or aname or uname
+            rec = {
+                "username": uname,
+                "authorName": clean_name,
+                "stylesCount": 0,
+                "layoutsCount": 0,
+                "worksCount": 0,
+                "topicsCount": 0,
+                "totalCheers": 0,
+                "totalFavorites": 0,
+                "totalForks": 0,
+                "hasFresh": False,
+                "honorOverride": uinfo.get("honor_override"),
+            }
+            creator_stats[uname] = rec
+        return rec
+
+    asset_filter, asset_ids = _seed_filter("code", "assets")
+    work_filter, work_ids = _seed_filter("id", "works")
+    topic_filter, topic_ids = _seed_filter("id", "topics")
+    for r in conn.execute(
+        f"SELECT * FROM catalog_assets WHERE status = 'published' AND source_type = 'community' AND {asset_filter}",
+        asset_ids,
+    ).fetchall():
+        rec = ensure_rec(r["author_username"], r["author_name"])
+        if r["kind"] == "layout":
+            rec["layoutsCount"] += 1
+        else:
+            rec["stylesCount"] += 1
+        rec["totalCheers"] += int(r["cheers"] or 16)
+        if is_new_release_active(r["published_at_ms"]):
+            rec["hasFresh"] = True
+
+    work_rows = conn.execute(
+        f"SELECT author_username, author_name, styles_json, layout_code, cheers, likes, favorites, forks, is_new_release, published_at_ms FROM works WHERE status = 'published' AND {work_filter}",
+        work_ids,
+    ).fetchall()
+    total_works = len(work_rows)
+    total_cheers = 0
+
+    for w in work_rows:
+        styles = json.loads(w["styles_json"] or "[]")
+        for sid in styles:
+            if sid:
+                asset_counts[sid] = asset_counts.get(sid, 0) + 1
+        lcode = (w["layout_code"] or "").strip()
+        if lcode:
+            asset_counts[lcode] = asset_counts.get(lcode, 0) + 1
+
+        ch = int(w["cheers"] or 0)
+        total_cheers += ch
+        rec = ensure_rec(w["author_username"], w["author_name"])
+        rec["worksCount"] += 1
+        rec["totalCheers"] += ch + round(int(w["likes"] or 0) * 0.35)
+        rec["totalFavorites"] += int(w["favorites"] or 0)
+        rec["totalForks"] += int(w["forks"] or 0)
+        if is_new_release_active(w["published_at_ms"]):
+            rec["hasFresh"] = True
+
+    for tp in conn.execute(
+        f"SELECT author_username, author_name FROM forum_topics WHERE status = 'published' AND {topic_filter}",
+        topic_ids,
+    ).fetchall():
+        rec = ensure_rec(tp["author_username"], tp["author_name"])
+        rec["topicsCount"] += 1
+
+    return asset_counts, total_works, total_cheers, list(creator_stats.values())
+
+
+def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dict[str, Any]:
+    conn = db.get_conn()
+    settings = get_site_settings(conn)
+    asset_counts, total_works_count, total_cheers_count, public_creators = compute_public_asset_counts_and_creators(conn)
+
+    unlocked_set: set[str] = set()
+    collections: dict[str, list[str]] = {"styles": [], "layouts": [], "works": [], "topics": []}
+    cheered_ids: list[str] = []
+    liked_ids: list[str] = []
+    ledger_list: list[dict[str, Any]] = []
+    wallet_info = {
+        "balance": 0,
+        "freeQuotaMax": int(settings.get("economy", {}).get("daily_free_quota", 3)),
+        "freeQuotaRemaining": 0,
+        "dailyCheckedIn": False,
+        "locked": False,
+    }
+
+    if current_user:
+        uid = int(current_user["id"])
+        wallet_info = get_wallet_quota_state(conn, uid, settings)
+
+        collection_filter, collection_ids = _seed_filter("target_id", "assets")
+        collection_work_filter, collection_work_ids = _seed_filter("target_id", "works")
+        collection_topic_filter, collection_topic_ids = _seed_filter("target_id", "topics")
+
+        for r in conn.execute(
+            f"SELECT bucket, target_id FROM collections WHERE user_id = ? AND ((bucket IN ('styles', 'layouts') AND {collection_filter}) OR (bucket = 'works' AND {collection_work_filter}) OR (bucket = 'topics' AND {collection_topic_filter})) ORDER BY rowid DESC",
+            (uid, *collection_ids, *collection_work_ids, *collection_topic_ids),
+        ).fetchall():
+            b = r["bucket"]
+            if b in collections:
+                collections[b].append(r["target_id"])
+
+        unlock_filter, unlock_ids = _seed_filter("target_id", "works")
+        asset_unlock_filter, asset_unlock_ids = _seed_filter("target_id", "assets")
+        for r in conn.execute(
+            f"SELECT target_id FROM unlocks WHERE user_id = ? AND status = 'settled' AND ((target_type = 'work' AND {unlock_filter}) OR (target_type = 'asset' AND {asset_unlock_filter}) OR target_type NOT IN ('work', 'asset'))",
+            (uid, *unlock_ids, *asset_unlock_ids),
+        ).fetchall():
+            unlocked_set.add(r["target_id"])
+
+        # Own works, topics, and community assets are always unlocked for the author
+        uname = current_user["username"]
+        own_work_filter, own_work_ids = _seed_filter("id", "works")
+        own_topic_filter, own_topic_ids = _seed_filter("id", "topics")
+        own_asset_filter, own_asset_ids = _seed_filter("code", "assets")
+        for r in conn.execute(
+            f"SELECT id FROM works WHERE author_username = ? AND {own_work_filter}",
+            (uname, *own_work_ids),
+        ).fetchall():
+            unlocked_set.add(r["id"])
+        for r in conn.execute(
+            f"SELECT id FROM forum_topics WHERE author_username = ? AND {own_topic_filter}",
+            (uname, *own_topic_ids),
+        ).fetchall():
+            unlocked_set.add(r["id"])
+        for r in conn.execute(
+            f"SELECT code FROM catalog_assets WHERE author_username = ? AND {own_asset_filter}",
+            (uname, *own_asset_ids),
+        ).fetchall():
+            unlocked_set.add(r["code"])
+
+        interaction_asset_filter, interaction_asset_ids = _seed_filter("target_id", "assets")
+        interaction_work_filter, interaction_work_ids = _seed_filter("target_id", "works")
+        interaction_topic_filter, interaction_topic_ids = _seed_filter("target_id", "topics")
+        for r in conn.execute(
+            f"SELECT target_type, target_id, stamp_label FROM interactions WHERE user_id = ? AND ((target_type IN ('like_style', 'like_layout') AND {interaction_asset_filter}) OR (target_type IN ('like_work', 'like_topic') AND ({interaction_work_filter} OR {interaction_topic_filter})) OR target_type NOT IN ('like_style', 'like_layout', 'like_work', 'like_topic'))",
+            (uid, *interaction_asset_ids, *interaction_work_ids, *interaction_topic_ids),
+        ).fetchall():
+            ttype = str(r["target_type"] or "")
+            if ttype.startswith("like_"):
+                liked_ids.append(f"{ttype[5:]}:{r['target_id']}")
+            else:
+                key = f"{r['target_id']}::{r['stamp_label']}" if r["stamp_label"] else r["target_id"]
+                cheered_ids.append(key)
+
+        ledger_filter, ledger_ids = _seed_filter("event_key", "ledger_events")
+        for r in conn.execute(
+            f"SELECT id, delta, reason, created_at FROM ledgers WHERE user_id = ? AND {ledger_filter} ORDER BY id DESC LIMIT 60",
+            (uid, *ledger_ids),
+        ).fetchall():
+            ledger_list.append(
+                {
+                    "id": f"led_{r['id']}",
+                    "time": format_short_time(r["created_at"]),
+                    "reason": r["reason"],
+                    "delta": int(r["delta"]),
+                }
+            )
+
+    # Catalog overlays (exclusive + community + official overrides)
+    catalog_filter, catalog_ids = _seed_filter("code", "assets")
+    cat_rows = conn.execute(
+        f"SELECT * FROM catalog_assets WHERE status = 'published' AND {catalog_filter} ORDER BY published_at_ms DESC",
+        catalog_ids,
+    ).fetchall()
+    exclusive_resources = []
+    community_resources = []
+    official_overrides = []
+    for r in cat_rows:
+        ser = _serialize_catalog_asset(r, unlocked_set, current_user)
+        if r["source_type"] == "exclusive":
+            exclusive_resources.append(ser)
+        elif r["source_type"] == "community":
+            community_resources.append(ser)
+        else:
+            official_overrides.append(ser)
+
+    # Forum topics & replies (publicly visible, paid lockedBody masked unless unlocked!)
+    replies_by_topic: dict[str, list[dict[str, Any]]] = {}
+    reply_filter, reply_ids = _seed_filter("id", "forum_replies")
+    reply_topic_filter, reply_topic_ids = _seed_filter("topic_id", "topics")
+    for rp in conn.execute(
+        f"SELECT * FROM forum_replies WHERE status = 'published' AND {reply_filter} AND {reply_topic_filter} ORDER BY rowid ASC",
+        (*reply_ids, *reply_topic_ids),
+    ).fetchall():
+        replies_by_topic.setdefault(rp["topic_id"], []).append(
+            {
+                "id": rp["id"],
+                "user": rp["author_username"],
+                "name": rp["author_name"],
+                "time": rp["time_label"] or format_short_time(rp["created_at"]),
+                "text": rp["text"],
+                "mountedStyle": rp["mounted_style"] or "",
+                "mountedLayout": rp["mounted_layout"] or "",
+                "likes": int(rp["likes"]),
+                "accepted": bool(rp["accepted"]),
+            }
+        )
+
+    topic_filter, topic_ids = _seed_filter("id", "topics")
+    topic_rows = conn.execute(
+        f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} ORDER BY pinned DESC, published_at_ms DESC",
+        topic_ids,
+    ).fetchall()
+    topics_out = [_serialize_topic(r, replies_by_topic, unlocked_set, current_user) for r in topic_rows]
+
+    # PUBLIC SEO-FRIENDLY WORKS SQUARE:
+    # Published works are visible to both anonymous visitors & crawlers; paid prompts (price > 0) remain masked unless unlocked.
+    comments_by_work: dict[str, list[dict[str, Any]]] = {}
+    comment_filter, comment_ids = _seed_filter("id", "work_comments")
+    comment_work_filter, comment_work_ids = _seed_filter("work_id", "works")
+    for cm in conn.execute(
+        f"SELECT * FROM work_comments WHERE status = 'published' AND {comment_filter} AND {comment_work_filter} ORDER BY rowid ASC",
+        (*comment_ids, *comment_work_ids),
+    ).fetchall():
+        comments_by_work.setdefault(cm["work_id"], []).append(
+            {
+                "id": cm["id"],
+                "user": cm["author_username"],
+                "name": cm["author_name"],
+                "text": cm["text"],
+                "time": cm["time_label"] or format_short_time(cm["created_at"]),
+            }
+        )
+    work_filter, work_ids = _seed_filter("id", "works")
+    work_rows = conn.execute(
+        f"SELECT * FROM works WHERE status = 'published' AND {work_filter} ORDER BY featured DESC, published_at_ms DESC",
+        work_ids,
+    ).fetchall()
+    works_out: list[dict[str, Any]] = [_serialize_work(w, comments_by_work, unlocked_set, current_user) for w in work_rows]
+
+    # Active Official Studio Presets
+    preset_rows = conn.execute(
+        "SELECT id, title, blueprint, scenario_badge, scenario_desc, sort_order FROM studio_workflows WHERE is_official_preset = 1 AND enabled = 1 ORDER BY sort_order ASC"
+    ).fetchall()
+    official_presets = [dict(r) for r in preset_rows]
+
+    # Asset Comments, Seeded Baselines & Live Likes/Favorites for ALL Styles & Layouts
+    asset_comments: dict[str, list[dict[str, Any]]] = {}
+    asset_comment_filter, asset_comment_ids = _seed_filter("id", "asset_comments")
+    asset_comment_asset_filter, asset_comment_asset_ids = _seed_filter("asset_code", "assets")
+    for ac in conn.execute(
+        f"SELECT * FROM asset_comments WHERE status = 'published' AND {asset_comment_filter} AND {asset_comment_asset_filter} ORDER BY rowid ASC",
+        (*asset_comment_ids, *asset_comment_asset_ids),
+    ).fetchall():
+        asset_comments.setdefault(ac["asset_code"], []).append(
+            {
+                "id": ac["id"],
+                "user": ac["author_username"],
+                "name": ac["author_name"],
+                "text": ac["text"],
+                "time": ac["time_label"] or format_short_time(ac["created_at"]),
+            }
+        )
+
+    asset_seed_filter, asset_seed_ids = _seed_filter("asset_code", "assets")
+    asset_seed_metrics = {
+        r["asset_code"]: {"likes": int(r["base_likes"]), "favorites": int(r["base_favorites"])}
+        for r in conn.execute(
+            f"SELECT asset_code, base_likes, base_favorites FROM asset_social_seeds WHERE {asset_seed_filter}",
+            asset_seed_ids,
+        ).fetchall()
+    }
+    live_asset_filter, live_asset_ids = _seed_filter("target_id", "assets")
+    asset_live_likes = {
+        r["target_id"]: int(r["cnt"])
+        for r in conn.execute(
+            f"SELECT target_id, COUNT(*) AS cnt FROM interactions WHERE target_type IN ('like_style', 'like_layout') AND {live_asset_filter} GROUP BY target_id",
+            live_asset_ids,
+        ).fetchall()
+    }
+    asset_live_favorites = {
+        r["target_id"]: int(r["cnt"])
+        for r in conn.execute(
+            f"SELECT target_id, COUNT(*) AS cnt FROM collections WHERE bucket IN ('styles', 'layouts') AND {live_asset_filter} GROUP BY target_id",
+            live_asset_ids,
+        ).fetchall()
+    }
+
+    # Active Forum Board Moderators (publicly displayed on boards & author badges)
+    if is_demo_mode():
+        moderator_seed_clause, moderator_seed_params = "1 = 1", ()
+    else:
+        seed_user_names = sorted(item.lower() for item in seed_ids("users"))
+        moderator_seed_clause = f"LOWER(fm.username) NOT IN ({', '.join('?' for _ in seed_user_names)})"
+        moderator_seed_params = tuple(seed_user_names)
+    mod_rows = conn.execute(
+        f"""
+        SELECT fm.id, fm.user_id, fm.username, fm.category, fm.title, fm.note, fm.created_at,
+               u.display_name, u.role
+        FROM forum_moderators fm
+        JOIN users u ON u.id = fm.user_id
+        WHERE u.status = 'active' AND {moderator_seed_clause}
+        ORDER BY CASE fm.category WHEN 'all' THEN 0 ELSE 1 END, fm.id ASC
+        """,
+        moderator_seed_params,
+    ).fetchall()
+    forum_moderators = [
+        {
+            "id": int(r["id"]),
+            "userId": int(r["user_id"]),
+            "username": r["username"],
+            "displayName": r["display_name"],
+            "userRole": r["role"],
+            "category": r["category"],
+            "categoryLabel": FORUM_BOARD_LABELS.get(r["category"], r["category"]),
+            "shortBoardLabel": FORUM_BOARD_SHORT_LABELS.get(r["category"], r["category"]),
+            "title": r["title"] or "版主",
+            "note": r["note"] or "",
+        }
+        for r in mod_rows
+    ]
+
+    user_payload: dict[str, Any] = {
+        "loggedIn": False,
+        "username": "guest",
+        "name": "未登录访客",
+        "displayName": "未登录访客",
+        "role": "guest",
+        "managementRole": "none",
+        "canAccessAdmin": False,
+        "level": "访客",
+        "inviteCode": "handraw",
+        "moderatedBoards": [],
+        "openReportsCount": 0,
+        "managementCapabilities": {},
+    }
+    if current_user:
+        pub_cnt = _count_user_published_items(conn, current_user["username"])
+        honor = compute_honor_tier(pub_cnt, current_user.get("honor_override"))
+        my_mod_boards = [m["category"] for m in forum_moderators if m["username"].lower() == current_user["username"].lower()]
+        raw_u_role = str(current_user.get("role") or "user")
+        u_role = "operator" if raw_u_role == "reviewer" else raw_u_role
+        if u_role in ("admin", "operator"):
+            mgmt_role = u_role
+        elif my_mod_boards:
+            mgmt_role = "moderator"
+        else:
+            mgmt_role = "none"
+
+        report_filter, report_ids = _seed_filter("target_id", "reports")
+        if mgmt_role in ("admin", "operator"):
+            open_reports_count = int(
+                conn.execute(f"SELECT COUNT(*) FROM reports WHERE status = 'open' AND {report_filter}", report_ids).fetchone()[0]
+            )
+        elif mgmt_role == "moderator":
+            if "all" in my_mod_boards:
+                open_reports_count = int(
+                    conn.execute(
+                        f"SELECT COUNT(*) FROM reports WHERE status = 'open' AND target_type IN ('topic', 'reply') AND {report_filter}",
+                        report_ids,
+                    ).fetchone()[0]
+                )
+            else:
+                ph = ",".join("?" for _ in my_mod_boards)
+                open_reports_count = int(conn.execute(
+                    f"SELECT COUNT(*) FROM reports WHERE status = 'open' AND target_type IN ('topic', 'reply') AND ("
+                    f"  ((target_type = 'topic' AND target_id IN (SELECT id FROM forum_topics WHERE category IN ({ph}))) "
+                    f"  OR (target_type = 'reply' AND target_id IN (SELECT fr.id FROM forum_replies fr JOIN forum_topics ft ON ft.id = fr.topic_id WHERE ft.category IN ({ph}))))"
+                    f" AND {report_filter}"
+                    f")",
+                    (*my_mod_boards, *my_mod_boards, *report_ids),
+                ).fetchone()[0])
+        else:
+            open_reports_count = 0
+
+        user_payload = {
+            "loggedIn": True,
+            "id": int(current_user["id"]),
+            "username": current_user["username"],
+            "name": current_user["display_name"],
+            "displayName": current_user["display_name"],
+            "avatarUrl": "/assets/user-avatar.webp",
+            "email": current_user.get("email") or "",
+            "bio": current_user.get("bio") or "",
+            "role": u_role,
+            "managementRole": mgmt_role,
+            "canAccessAdmin": mgmt_role != "none",
+            "level": honor["badge"],
+            "inviteCode": current_user["invite_code"],
+            "honorOverride": current_user.get("honor_override"),
+            "moderatedBoards": my_mod_boards,
+            "openReportsCount": open_reports_count,
+            "managementCapabilities": {
+                "canModerateContent": mgmt_role in ("admin", "operator"),
+                "canModerateForum": mgmt_role in ("admin", "operator", "moderator"),
+                "canDeleteGlobalContent": mgmt_role in ("admin", "operator"),
+                "canFreezeUser": mgmt_role in ("admin", "operator"),
+                "canManageRedeemCodes": mgmt_role in ("admin", "operator"),
+                "canEditAnnouncement": mgmt_role in ("admin", "operator"),
+                "canAdministerUsers": mgmt_role == "admin",
+                "canViewBlackbox": mgmt_role == "admin",
+                "canAdjustCredits": mgmt_role == "admin",
+            },
+            "apiKey": current_user.get("api_key") or "",
+            "apiKeyMasked": (current_user["api_key"][:8] + "…" + current_user["api_key"][-4:]) if current_user.get("api_key") else "",
+        }
+
+    return {
+        "version": 4,
+        "serverBacked": True,
+        "demoMode": is_demo_mode(),
+        "loggedIn": bool(current_user),
+        "user": user_payload,
+        "credits": wallet_info["balance"],
+        "freeQuotaRemaining": wallet_info["freeQuotaRemaining"],
+        "freeQuotaMax": wallet_info["freeQuotaMax"],
+        "dailyCheckedIn": wallet_info["dailyCheckedIn"],
+        "collections": collections,
+        "unlockedIds": sorted(unlocked_set),
+        "cheeredIds": cheered_ids,
+        "likedIds": liked_ids,
+        "works": works_out,
+        "totalWorksCount": total_works_count,
+        "totalCheersCount": total_cheers_count,
+        "publicCreators": public_creators,
+        "topics": topics_out,
+        "forumBoards": FORUM_BOARDS,
+        "forumModerators": forum_moderators,
+        "exclusiveResources": exclusive_resources,
+        "communityResources": community_resources,
+        "officialOverrides": official_overrides,
+        "officialPresets": official_presets,
+        "assetCounts": asset_counts,
+        "assetComments": asset_comments,
+        "assetSeedMetrics": asset_seed_metrics,
+        "assetLiveLikes": asset_live_likes,
+        "assetLiveFavorites": asset_live_favorites,
+        "ledger": ledger_list,
+        "siteSettings": {
+            "announcement": settings.get("announcement", {}),
+            "economy": settings.get("economy", {}),
+        },
+    }
+
+
+# ======================== USER INTERACTIONS & ATOMIC ECONOMY ========================
+
+def perform_daily_checkin(db: Database, user: dict[str, Any]) -> dict[str, Any]:
+    uid = int(user["id"])
+    today = local_today_str()
+    now = utc_now_iso()
+    with db.transaction() as tx:
+        settings = get_site_settings(tx)
+        bonus = int(settings.get("economy", {}).get("daily_checkin_credits", 5))
+        w = tx.execute("SELECT checkin_date FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        if w and w["checkin_date"] == today:
+            raise ServiceError("今日已完成打卡签到，明天再来吧！")
+        tx.execute(
+            "UPDATE wallets SET checkin_date = ?, free_quota_date = ?, free_quota_used = 0, updated_at = ? WHERE user_id = ?",
+            (today, today, now, uid),
+        )
+        new_bal, _ = apply_wallet_delta(
+            tx, uid, bonus, "checkin", f"每日社区创作打卡奖励 ({today})", event_key=f"checkin_{uid}_{today}"
+        )
+        q_state = get_wallet_quota_state(tx, uid, settings)
+    return {"ok": True, "bonus": bonus, "credits": new_bal, **q_state}
+
+
+def redeem_code_for_user(db: Database, user: dict[str, Any], raw_code: str) -> dict[str, Any]:
+    code = (raw_code or "").strip().upper()
+    if not code:
+        raise ServiceError("请输入积分兑换码")
+    uid = int(user["id"])
+    today = local_today_str()
+    now = utc_now_iso()
+
+    with db.transaction() as tx:
+        rc = tx.execute("SELECT * FROM redeem_codes WHERE code = ?", (code,)).fetchone()
+        if not rc or not int(rc["active"]):
+            raise ServiceError("兑换码无效或已停用")
+        if rc["expires_at"] and rc["expires_at"] < today:
+            raise ServiceError("该兑换码已过期")
+        if int(rc["used_count"]) >= int(rc["max_uses"]):
+            raise ServiceError("该兑换码已被领完")
+        used = tx.execute("SELECT 1 FROM redeem_code_uses WHERE code = ? AND user_id = ?", (code, uid)).fetchone()
+        if used:
+            raise ServiceError("你已经兑换过该礼券码啦")
+
+        credits = int(rc["credits"])
+        tx.execute("UPDATE redeem_codes SET used_count = used_count + 1 WHERE code = ?", (code,))
+        tx.execute("INSERT INTO redeem_code_uses (code, user_id, used_at) VALUES (?, ?, ?)", (code, uid, now))
+        new_bal, _ = apply_wallet_delta(
+            tx,
+            uid,
+            credits,
+            "redeem_code",
+            f"兑换积分礼券码 {code}" + (f"（{rc['note']}）" if rc["note"] else ""),
+            event_key=f"redeem_{uid}_{code}",
+            ref_type="redeem_code",
+            ref_id=code,
+        )
+    return {"ok": True, "code": code, "added": credits, "credits": new_bal}
+
+
+def topup_credits_for_user(db: Database, user: dict[str, Any], amount: int) -> dict[str, Any]:
+    amt = int(amount or 0)
+    if amt not in (50, 100, 200, 500):
+        raise ServiceError("无效的充值档位")
+    uid = int(user["id"])
+    with db.transaction() as tx:
+        new_bal, _ = apply_wallet_delta(
+            tx,
+            uid,
+            amt,
+            "recharge",
+            f"在线充值积分加油包 (+{amt} 积分)",
+        )
+    return {"ok": True, "added": amt, "credits": new_bal}
+
+
+def toggle_user_collection(db: Database, user: dict[str, Any], bucket: str, target_id: str, title_label: str = "") -> dict[str, Any]:
+    if bucket not in ("styles", "layouts", "works", "topics"):
+        raise ServiceError("收藏夹分类无效")
+    tid = (target_id or "").strip()
+    if not tid:
+        raise ServiceError("缺少收藏目标 ID")
+    uid = int(user["id"])
+    now = utc_now_iso()
+
+    with db.transaction() as tx:
+        existing = tx.execute(
+            "SELECT 1 FROM collections WHERE user_id = ? AND bucket = ? AND target_id = ?",
+            (uid, bucket, tid),
+        ).fetchone()
+        rewarded = 0
+        if existing:
+            tx.execute("DELETE FROM collections WHERE user_id = ? AND bucket = ? AND target_id = ?", (uid, bucket, tid))
+            collected = False
+            if bucket == "works":
+                tx.execute("UPDATE works SET favorites = MAX(0, favorites - 1) WHERE id = ?", (tid,))
+            elif bucket == "topics":
+                tx.execute("UPDATE forum_topics SET favorites = MAX(0, favorites - 1) WHERE id = ?", (tid,))
+        else:
+            tx.execute(
+                "INSERT INTO collections (user_id, bucket, target_id, created_at) VALUES (?, ?, ?, ?)",
+                (uid, bucket, tid, now),
+            )
+            collected = True
+            if bucket == "works":
+                tx.execute("UPDATE works SET favorites = favorites + 1 WHERE id = ?", (tid,))
+            elif bucket == "topics":
+                tx.execute("UPDATE forum_topics SET favorites = favorites + 1 WHERE id = ?", (tid,))
+
+            u_row = tx.execute("SELECT first_collect_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
+            if u_row and not int(u_row["first_collect_rewarded"]):
+                settings = get_site_settings(tx)
+                bonus = int(settings.get("economy", {}).get("first_collect_credits", 2))
+                tx.execute("UPDATE users SET first_collect_rewarded = 1 WHERE id = ?", (uid,))
+                if bonus > 0:
+                    apply_wallet_delta(
+                        tx,
+                        uid,
+                        bonus,
+                        "first_collect",
+                        f"首次使用云端收藏夹激励（{title_label or tid}）",
+                        event_key=f"first_collect_{uid}",
+                    )
+                    rewarded = bonus
+
+        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
+    return {"ok": True, "collected": collected, "rewarded": rewarded, "credits": bal}
+
+
+def toggle_user_like(db: Database, user: dict[str, Any], target_type: str, target_id: str) -> dict[str, Any]:
+    """Toggle 👍 Like on any Style, Layout, Work, or Forum Topic."""
+    raw_type = (target_type or "").strip().lower()
+    tid = (target_id or "").strip()
+    if not tid:
+        raise ServiceError("缺少点赞目标 ID")
+
+    if raw_type in ("style", "layout", "asset"):
+        tid = tid.upper().lstrip("#")
+        norm_type = _infer_asset_kind(tid, fallback=("layout" if raw_type == "layout" else "style"))
+    elif raw_type in ("work", "topic"):
+        norm_type = raw_type
+    else:
+        raise ServiceError("不支持的点赞目标类型")
+
+    uid = int(user["id"])
+    now = utc_now_iso()
+    itype = f"like_{norm_type}"
+
+    with db.transaction() as tx:
+        if norm_type == "work":
+            w_row = tx.execute("SELECT id, title, author_name, likes FROM works WHERE id = ?", (tid,)).fetchone()
+            if not w_row:
+                raise ServiceError("作品不存在", status=404)
+            title_lbl = w_row["title"]
+        elif norm_type == "topic":
+            t_row = tx.execute("SELECT id, title, author_name, likes FROM forum_topics WHERE id = ?", (tid,)).fetchone()
+            if not t_row:
+                raise ServiceError("帖子不存在", status=404)
+            title_lbl = t_row["title"]
+        else:
+            title_lbl = tid
+
+        existing = tx.execute(
+            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ''",
+            (uid, itype, tid),
+        ).fetchone()
+
+        rewarded = 0
+        if existing:
+            tx.execute(
+                "DELETE FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ''",
+                (uid, itype, tid),
+            )
+            liked = False
+            if norm_type == "work":
+                tx.execute("UPDATE works SET likes = MAX(0, likes - 1) WHERE id = ?", (tid,))
+            elif norm_type == "topic":
+                tx.execute("UPDATE forum_topics SET likes = MAX(0, likes - 1) WHERE id = ?", (tid,))
+        else:
+            tx.execute(
+                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
+                (uid, itype, tid, now),
+            )
+            liked = True
+            if norm_type == "work":
+                tx.execute("UPDATE works SET likes = likes + 1 WHERE id = ?", (tid,))
+            elif norm_type == "topic":
+                tx.execute("UPDATE forum_topics SET likes = likes + 1 WHERE id = ?", (tid,))
+
+            u_row = tx.execute("SELECT first_cheer_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
+            if u_row and not int(u_row["first_cheer_rewarded"]):
+                settings = get_site_settings(tx)
+                bonus = int(settings.get("economy", {}).get("first_cheer_credits", 2))
+                tx.execute("UPDATE users SET first_cheer_rewarded = 1 WHERE id = ?", (uid,))
+                if bonus > 0:
+                    apply_wallet_delta(
+                        tx,
+                        uid,
+                        bonus,
+                        "first_cheer",
+                        f"友善社区互动：首次点赞《{title_lbl[:20]}》",
+                        event_key=f"first_cheer_{uid}",
+                    )
+                    rewarded = bonus
+
+        if norm_type == "work":
+            new_likes = int(tx.execute("SELECT likes FROM works WHERE id = ?", (tid,)).fetchone()["likes"])
+        elif norm_type == "topic":
+            new_likes = int(tx.execute("SELECT likes FROM forum_topics WHERE id = ?", (tid,)).fetchone()["likes"])
+        else:
+            seed_row = tx.execute("SELECT base_likes FROM asset_social_seeds WHERE asset_code = ?", (tid,)).fetchone()
+            base_likes = int(seed_row["base_likes"]) if seed_row else _default_asset_social_baseline(tid)[0]
+            live_cnt = int(
+                tx.execute(
+                    "SELECT COUNT(*) FROM interactions WHERE target_type IN ('like_style', 'like_layout') AND target_id = ?",
+                    (tid,),
+                ).fetchone()[0]
+            )
+            new_likes = base_likes + live_cnt
+
+        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
+
+    return {
+        "ok": True,
+        "targetType": norm_type,
+        "targetId": tid,
+        "liked": liked,
+        "likes": new_likes,
+        "rewarded": rewarded,
+        "credits": bal,
+    }
+
+
+def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, target_id: str, stamp_label: str = "") -> dict[str, Any]:
+    if target_type not in ("work", "asset"):
+        raise ServiceError("不支持的鼓励对象类型")
+    tid = (target_id or "").strip()
+    stamp = (stamp_label or "").strip()[:20]
+    uid = int(user["id"])
+    now = utc_now_iso()
+
+    with db.transaction() as tx:
+        if target_type == "work":
+            target = tx.execute("SELECT id, title, author_name, cheers, stamp_counts_json FROM works WHERE id = ?", (tid,)).fetchone()
+        else:
+            target = tx.execute("SELECT code AS id, name AS title, author_name, cheers, stamp_counts_json FROM catalog_assets WHERE code = ?", (tid,)).fetchone()
+
+        if not target:
+            raise ServiceError("未找到目标内容", status=404)
+
+        existing = tx.execute(
+            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ?",
+            (uid, target_type, tid, stamp),
+        ).fetchone()
+
+        rewarded = 0
+        if existing and not stamp:
+            tx.execute(
+                "DELETE FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ''",
+                (uid, target_type, tid),
+            )
+            new_cheers = max(0, int(target["cheers"]) - 1)
+            if target_type == "work":
+                tx.execute("UPDATE works SET cheers = ? WHERE id = ?", (new_cheers, tid))
+            else:
+                tx.execute("UPDATE catalog_assets SET cheers = ? WHERE code = ?", (new_cheers, tid))
+            cheered = False
+        elif existing and stamp:
+            cheered = True
+            new_cheers = int(target["cheers"])
+        else:
+            tx.execute(
+                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, ?, ?)",
+                (uid, target_type, tid, stamp, now),
+            )
+            tx.execute(
+                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
+                (uid, target_type, tid, now),
+            )
+            new_cheers = int(target["cheers"]) + 1
+            stamps_dict = json.loads(target["stamp_counts_json"] or "{}")
+            if stamp:
+                base_map = {"惊艳神图": 6, "配方超稳": 8, "构图绝妙": 4, "超实用配方": 5, "审美在线": 4}
+                prev = int(stamps_dict.get(stamp, base_map.get(stamp, 3)))
+                stamps_dict[stamp] = prev + 1
+            if target_type == "work":
+                tx.execute(
+                    "UPDATE works SET cheers = ?, likes = likes + 1, stamp_counts_json = ? WHERE id = ?",
+                    (new_cheers, json.dumps(stamps_dict, ensure_ascii=False), tid),
+                )
+            else:
+                tx.execute(
+                    "UPDATE catalog_assets SET cheers = ?, stamp_counts_json = ? WHERE code = ?",
+                    (new_cheers, json.dumps(stamps_dict, ensure_ascii=False), tid),
+                )
+            cheered = True
+
+            u_row = tx.execute("SELECT first_cheer_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
+            if u_row and not int(u_row["first_cheer_rewarded"]):
+                settings = get_site_settings(tx)
+                bonus = int(settings.get("economy", {}).get("first_cheer_credits", 2))
+                tx.execute("UPDATE users SET first_cheer_rewarded = 1 WHERE id = ?", (uid,))
+                if bonus > 0:
+                    apply_wallet_delta(
+                        tx,
+                        uid,
+                        bonus,
+                        "first_cheer",
+                        f"友善社区互动：首次送上鼓励支持 @{target['author_name']}",
+                        event_key=f"first_cheer_{uid}",
+                    )
+                    rewarded = bonus
+
+        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
+    return {"ok": True, "cheered": cheered, "cheers": new_cheers, "rewarded": rewarded, "credits": bal}
+
+
+def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, target_id: str, amount: int = 2) -> dict[str, Any]:
+    amt = max(1, min(50, int(amount or 2)))
+    uid = int(user["id"])
+    now = utc_now_iso()
+
+    with db.transaction() as tx:
+        if target_type == "work":
+            target = tx.execute("SELECT id, title, author_username, author_name FROM works WHERE id = ?", (target_id,)).fetchone()
+        elif target_type == "asset":
+            target = tx.execute("SELECT code AS id, name AS title, author_username, author_name FROM catalog_assets WHERE code = ?", (target_id,)).fetchone()
+        else:
+            raise ServiceError("不支持的赞赏类型")
+
+        if not target:
+            raise ServiceError("目标不存在", status=404)
+        if target["author_username"] == user["username"]:
+            raise ServiceError("不能给自己赞赏积分哦")
+
+        new_bal, _ = apply_wallet_delta(
+            tx,
+            uid,
+            -amt,
+            "tip_out",
+            f"🎁 赞赏鼓励 @{target['author_name']} 的《{target['title']}》（100% 直达作者）",
+            ref_type=target_type,
+            ref_id=target_id,
+        )
+
+        author_row = tx.execute("SELECT id FROM users WHERE username = ?", (target["author_username"],)).fetchone()
+        if author_row:
+            apply_wallet_delta(
+                tx,
+                int(author_row["id"]),
+                amt,
+                "tip_in",
+                f"🎁 收到 @{user['display_name']} 对《{target['title']}》的赞赏鼓励",
+                ref_type=target_type,
+                ref_id=target_id,
+            )
+
+        if target_type == "work":
+            tx.execute("UPDATE works SET cheers = cheers + 3, tips = tips + ? WHERE id = ?", (amt, target_id))
+        else:
+            tx.execute("UPDATE catalog_assets SET cheers = cheers + 3, tips = tips + ? WHERE code = ?", (amt, target_id))
+
+        tx.execute(
+            "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
+            (uid, target_type, target_id, now),
+        )
+    return {"ok": True, "credits": new_bal, "amount": amt}
+
+
+def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, target_id: str) -> dict[str, Any]:
+    tid = (target_id or "").strip()
+    uid = int(user["id"])
+    now = utc_now_iso()
+
+    with db.transaction() as tx:
+        settings = get_site_settings(tx)
+        share_ratio = float(settings.get("economy", {}).get("author_share_ratio", 0.80))
+
+        # Auto-detect target_type if generic
+        resolved_type = target_type
+        cost = 0
+        title = tid
+        author_uname = ""
+        author_name = ""
+        unlocked_content = ""
+
+        w_row = tx.execute("SELECT * FROM works WHERE id = ?", (tid,)).fetchone()
+        t_row = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (tid,)).fetchone() if not w_row else None
+        a_row = tx.execute("SELECT * FROM catalog_assets WHERE code = ?", (tid.upper(),)).fetchone() if not (w_row or t_row) else None
+
+        if w_row:
+            resolved_type = "work"
+            cost = int(w_row["price"] or 0)
+            title = w_row["title"]
+            author_uname = w_row["author_username"]
+            author_name = w_row["author_name"]
+            unlocked_content = w_row["prompt"]
+        elif t_row:
+            resolved_type = "topic"
+            cost = int(t_row["price"] or 0)
+            title = t_row["title"]
+            author_uname = t_row["author_username"]
+            author_name = t_row["author_name"]
+            unlocked_content = t_row["locked_body"]
+        elif a_row:
+            resolved_type = "asset"
+            tid = a_row["code"]
+            cost = int(a_row["unlock_cost"] or 0)
+            title = f"{a_row['code']} {a_row['name']}"
+            author_uname = a_row["author_username"] if a_row["source_type"] == "community" else ""
+            author_name = a_row["author_name"] if a_row["source_type"] == "community" else ""
+            unlocked_content = a_row["definition"] if a_row["source_type"] != "exclusive" else ""
+        else:
+            raise ServiceError("未找到待解锁内容", status=404)
+
+        existing = tx.execute(
+            "SELECT status FROM unlocks WHERE user_id = ? AND target_type = ? AND target_id = ?",
+            (uid, resolved_type, tid),
+        ).fetchone()
+        if existing and existing["status"] == "settled":
+            bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
+            return {"ok": True, "alreadyUnlocked": True, "credits": bal, "unlockedContent": unlocked_content, "targetType": resolved_type, "targetId": tid}
+
+        if cost <= 0 or author_uname == user["username"]:
+            bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
+            return {"ok": True, "alreadyUnlocked": True, "credits": bal, "unlockedContent": unlocked_content, "targetType": resolved_type, "targetId": tid}
+
+        author_share = max(1, round(cost * share_ratio)) if author_uname else 0
+        new_bal, _ = apply_wallet_delta(
+            tx,
+            uid,
+            -cost,
+            "unlock_spend",
+            f"解锁{f' @{author_name} 的' if author_name else ''}「{title}」" + ("（80% 积分实时分账原作者）" if author_uname else ""),
+            event_key=f"unlock_{uid}_{resolved_type}_{tid}",
+            ref_type=resolved_type,
+            ref_id=tid,
+        )
+
+        if author_uname and author_share > 0:
+            arow = tx.execute("SELECT id FROM users WHERE username = ?", (author_uname,)).fetchone()
+            if arow and int(arow["id"]) != uid:
+                apply_wallet_delta(
+                    tx,
+                    int(arow["id"]),
+                    author_share,
+                    "unlock_royalty",
+                    f"作品/资产「{title}」被 @{user['display_name']} 解锁分成 (80%)",
+                    event_key=f"royalty_{arow['id']}_{uid}_{resolved_type}_{tid}",
+                    ref_type=resolved_type,
+                    ref_id=tid,
+                )
+
+        if existing:
+            tx.execute(
+                "UPDATE unlocks SET status = 'settled', cost = ?, author_share = ?, refund_reason = '', refunded_at = NULL WHERE user_id = ? AND target_type = ? AND target_id = ?",
+                (cost, author_share, uid, resolved_type, tid),
+            )
+        else:
+            tx.execute(
+                """
+                INSERT INTO unlocks (user_id, author_username, target_type, target_id, cost, author_share, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'settled', ?)
+                """,
+                (uid, author_uname, resolved_type, tid, cost, author_share, now),
+            )
+
+    return {
+        "ok": True,
+        "credits": new_bal,
+        "cost": cost,
+        "targetType": resolved_type,
+        "targetId": tid,
+        "unlockedContent": unlocked_content,
+    }
+
+
+# ======================== PUBLISHING: WORKS, ASSETS, FORUM & BOUNTIES ========================
+
+def publish_user_work(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    title = str(body.get("title") or "社区实测新作品").strip()[:120]
+    prompt = str(body.get("prompt") or "手绘插画创作，干净留白纸本肌理。").strip()[:6000]
+    images = [str(u) for u in (body.get("images") or []) if str(u).strip()][:9]
+    if not images:
+        images = ["/images/poster-demo-autumn-equinox.webp"]
+
+    styles = [str(s).strip().upper().lstrip("#") for s in (body.get("styles") or []) if str(s).strip()][:3]
+    layout_code = str(body.get("layout") or "").strip().upper().lstrip("#")
+    price = max(0, min(100, int(body.get("price") or 0)))
+    uid = int(user["id"])
+    uname = user["username"]
+    now_iso = utc_now_iso()
+    now_ms = int(time.time() * 1000)
+    wid = f"work_{now_ms}_{uuid.uuid4().hex[:4]}"
+
+    with db.transaction() as tx:
+        settings = get_site_settings(tx)
+        econ = settings.get("economy", {})
+        mod = settings.get("moderation", {})
+        base_reward = int(econ.get("work_publish_credits", 5))
+        pioneer_bonus = int(econ.get("pioneer_bonus_credits", 10))
+        pioneer_threshold = int(econ.get("pioneer_work_threshold", 3))
+        honor_bonus = int(econ.get("honor_upgrade_credits", 10))
+        default_status = str(mod.get("work_default_status") or "published")
+
+        asset_counts, _, _, _ = compute_public_asset_counts_and_creators(tx)
+        is_pioneer = False
+        for sid in styles:
+            if asset_counts.get(sid, 0) < pioneer_threshold:
+                is_pioneer = True
+        if layout_code and asset_counts.get(layout_code, 0) < pioneer_threshold:
+            is_pioneer = True
+
+        before_cnt = _count_user_published_items(tx, uname)
+        before_honor = compute_honor_tier(before_cnt, user.get("honor_override"))
+
+        tx.execute(
+            """
+            INSERT INTO works (
+                id, author_username, author_name, title, images_json, styles_json,
+                layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, notes,
+                status, featured, is_new_release, pioneer_rewarded, cheers, likes, favorites, forks,
+                published_at_ms, created_label, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, 1, 1, 1, 0, ?, '刚刚', ?, ?)
+            """,
+            (
+                wid,
+                uname,
+                user["display_name"],
+                title,
+                json.dumps(images, ensure_ascii=False),
+                json.dumps(styles, ensure_ascii=False),
+                layout_code,
+                str(body.get("color") or "C-15"),
+                str(body.get("tone") or "T-01"),
+                str(body.get("ratio") or "3:4"),
+                str(body.get("mode") or "graphic-text"),
+                str(body.get("mood") or "治愈"),
+                price,
+                prompt,
+                str(body.get("notes") or ""),
+                default_status,
+                1 if is_pioneer else 0,
+                now_ms,
+                now_iso,
+                now_iso,
+            ),
+        )
+
+        reward = base_reward + (pioneer_bonus if is_pioneer else 0)
+        new_bal, _ = apply_wallet_delta(
+            tx,
+            uid,
+            reward,
+            "publish_work",
+            f"发布作品《{title}》（含荒地开垦首晒奖 +{pioneer_bonus}）" if is_pioneer else f"发布实测作品《{title}》",
+            event_key=f"pub_work_{wid}",
+            ref_type="work",
+            ref_id=wid,
+        )
+
+        after_cnt = _count_user_published_items(tx, uname)
+        after_honor = compute_honor_tier(after_cnt, user.get("honor_override"))
+        upgraded_badge = ""
+        if int(after_honor["tier"]) > int(before_honor["tier"]) and honor_bonus > 0:
+            new_bal, _ = apply_wallet_delta(
+                tx,
+                uid,
+                honor_bonus,
+                "honor_upgrade",
+                f"🏆 创作者荣誉晋升至「{after_honor['badge']}」礼金",
+                event_key=f"honor_up_{uid}_{after_honor['tier']}",
+            )
+            upgraded_badge = after_honor["badge"]
+
+    return {
+        "ok": True,
+        "workId": wid,
+        "reward": reward,
+        "pioneer": is_pioneer,
+        "upgradedBadge": upgraded_badge,
+        "credits": new_bal,
+    }
+
+
+def add_comment_to_work(db: Database, user: dict[str, Any], work_id: str, text: str) -> dict[str, Any]:
+    clean = (text or "").strip()[:800]
+    if not clean:
+        raise ServiceError("请输入评论内容")
+    now_iso = utc_now_iso()
+    cid = f"wc_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
+    with db.transaction() as tx:
+        w = tx.execute("SELECT id FROM works WHERE id = ? AND status = 'published'", (work_id,)).fetchone()
+        if not w:
+            raise ServiceError("作品不存在", status=404)
+        tx.execute(
+            "INSERT INTO work_comments (id, work_id, author_username, author_name, text, status, time_label, created_at) VALUES (?, ?, ?, ?, ?, 'published', '刚刚', ?)",
+            (cid, work_id, user["username"], user["display_name"], clean, now_iso),
+        )
+    return {
+        "ok": True,
+        "comment": {
+            "id": cid,
+            "user": user["username"],
+            "name": user["display_name"],
+            "text": clean,
+            "time": "刚刚",
+        },
+    }
+
+
+def add_comment_to_asset(
+    db: Database,
+    user: dict[str, Any],
+    asset_code: str,
+    text: str,
+    asset_kind: str = "",
+) -> dict[str, Any]:
+    code = (asset_code or "").strip().upper().lstrip("#")
+    if not code or len(code) > 40:
+        raise ServiceError("无效的画风或图型编号")
+    clean = (text or "").strip()[:800]
+    if not clean:
+        raise ServiceError("请输入评论内容")
+    kind = _infer_asset_kind(code, asset_kind)
+    now_iso = utc_now_iso()
+    cid = f"ac_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
+    with db.transaction() as tx:
+        tx.execute(
+            """
+            INSERT INTO asset_comments (
+                id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'published', '刚刚', ?)
+            """,
+            (cid, code, kind, user["username"], user["display_name"], clean, now_iso),
+        )
+    return {
+        "ok": True,
+        "assetCode": code,
+        "assetKind": kind,
+        "comment": {
+            "id": cid,
+            "user": user["username"],
+            "name": user["display_name"],
+            "text": clean,
+            "time": "刚刚",
+        },
+    }
+
+
+def publish_user_community_asset(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    kind = "layout" if body.get("kind") == "layout" else "style"
+    name = str(body.get("name") or ("新社区共创画风" if kind == "style" else "新社区共创图型")).strip()[:80]
+    desc = str(body.get("description") or "社区主理人提炼的高稳定性视觉配方。").strip()[:300]
+    definition = str(body.get("definition") or f"{name} 核心风格与构图约束。").strip()[:4000]
+    cost = max(0, min(50, int(body.get("unlockCost") or 0)))
+    group_name = "USR 社区共创画风 / Community" if kind == "style" else str(body.get("group") or "social-card")
+    image_url = str(
+        body.get("image")
+        or ("/images/individual/FB/FB-001.webp" if kind == "style" else "/images/layouts/social-cards/SC-020.webp")
+    )
+
+    uid = int(user["id"])
+    uname = user["username"]
+    now_iso = utc_now_iso()
+    now_ms = int(time.time() * 1000)
+    prefix = "USR-S" if kind == "style" else "USR-L"
+
+    with db.transaction() as tx:
+        rows = tx.execute("SELECT code FROM catalog_assets WHERE code LIKE ?", (f"{prefix}%",)).fetchall()
+        max_num = 0
+        for r in rows:
+            m = re.search(r"(\d+)$", r["code"])
+            if m:
+                max_num = max(max_num, int(m.group(1)))
+        code = f"{prefix}{max_num + 1:02d}"
+
+        settings = get_site_settings(tx)
+        econ = settings.get("economy", {})
+        mod = settings.get("moderation", {})
+        reward = int(econ.get("asset_publish_credits", 15))
+        honor_bonus = int(econ.get("honor_upgrade_credits", 10))
+        default_status = str(mod.get("community_asset_default_status") or "published")
+
+        before_cnt = _count_user_published_items(tx, uname)
+        before_honor = compute_honor_tier(before_cnt, user.get("honor_override"))
+
+        tx.execute(
+            """
+            INSERT INTO catalog_assets (
+                code, kind, source_type, author_username, author_name, name, group_name,
+                tier, unlock_cost, image_url, description, definition, prompt_en,
+                secret_blackbox_prompt, status, featured, is_new_release, cheers,
+                published_at_ms, created_label, created_at, updated_at
+            ) VALUES (?, ?, 'community', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, 0, 1, 1, ?, '刚刚', ?, ?)
+            """,
+            (
+                code,
+                kind,
+                uname,
+                user["display_name"],
+                name,
+                group_name,
+                "pro_credit" if cost > 0 else "free",
+                cost,
+                image_url,
+                desc,
+                definition,
+                f"Community {kind}: {name}",
+                default_status,
+                now_ms,
+                now_iso,
+                now_iso,
+            ),
+        )
+
+        new_bal, _ = apply_wallet_delta(
+            tx,
+            uid,
+            reward,
+            "publish_asset",
+            f"贡献社区{'画风' if kind == 'style' else '图型'} {code}《{name}》",
+            event_key=f"pub_asset_{code}",
+            ref_type="asset",
+            ref_id=code,
+        )
+
+        after_cnt = _count_user_published_items(tx, uname)
+        after_honor = compute_honor_tier(after_cnt, user.get("honor_override"))
+        upgraded_badge = ""
+        if int(after_honor["tier"]) > int(before_honor["tier"]) and honor_bonus > 0:
+            new_bal, _ = apply_wallet_delta(
+                tx,
+                uid,
+                honor_bonus,
+                "honor_upgrade",
+                f"🏆 创作者荣誉晋升至「{after_honor['badge']}」礼金",
+                event_key=f"honor_up_{uid}_{after_honor['tier']}",
+            )
+            upgraded_badge = after_honor["badge"]
+
+    return {"ok": True, "code": code, "reward": reward, "upgradedBadge": upgraded_badge, "credits": new_bal}
+
+
+def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    cat = str(body.get("category") or "experience")
+    cat_map = {
+        "tuning": "🎯 作品求调优 / 悬赏",
+        "experience": "📘 实战经验与变现",
+        "assets": "🎨 画风与图型专区",
+        "tools": "🛠️ 工具流与问答",
+    }
+    if cat not in cat_map:
+        cat = "experience"
+
+    title = str(body.get("title") or "最新创作调参交流帖").strip()[:140]
+    raw_body = str(body.get("body") or body.get("summary") or "附上我的实战配置与思考，欢迎交流！").strip()[:60000]
+    price = max(0, min(100, int(body.get("price") or 0)))
+    bounty = max(0, min(200, int(body.get("bounty") or 0)))
+    shared_card = body.get("sharedCard")
+    styles = [str(s).strip().upper().lstrip("#") for s in (body.get("styles") or []) if str(s).strip()][:3]
+    layout_code = str(body.get("layout") or "").strip().upper().lstrip("#")
+    work_id = str(body.get("workId") or "").strip()[:64]
+
+    if isinstance(shared_card, dict):
+        card_kind = str(shared_card.get("kind") or "")
+        card_id = str(shared_card.get("id") or "").strip()
+        if card_kind == "work" and card_id and not work_id:
+            work_id = card_id[:64]
+        elif card_kind == "style" and card_id and not styles:
+            styles = [card_id.upper().lstrip("#")]
+        elif card_kind == "layout" and card_id and not layout_code:
+            layout_code = card_id.upper().lstrip("#")
+
+    images = body.get("images") or []
+    recipe = body.get("recipe")
+    if isinstance(shared_card, dict):
+        if not recipe or not isinstance(recipe, dict):
+            recipe = {"sharedCard": shared_card}
+        else:
+            recipe["sharedCard"] = shared_card
+
+    uid = int(user["id"])
+    now_iso = utc_now_iso()
+    now_ms = int(time.time() * 1000)
+    tid = f"topic_{now_ms}_{uuid.uuid4().hex[:4]}"
+
+    incoming_summary = str(body.get("summary") or "").strip()
+    if incoming_summary:
+        summary = incoming_summary[:60000]
+    elif price > 0 and len(raw_body) > 60:
+        clean_text = re.sub(r"<[^>]+>", " ", raw_body).strip()
+        summary = (clean_text[:120] if len(clean_text) > 120 else clean_text) + "……（以下为核心实战干货，需付费解锁查看）"
+    else:
+        summary = raw_body
+    locked_body = (str(body.get("lockedBody") or raw_body)).strip()[:60000] if price > 0 else ""
+
+    with db.transaction() as tx:
+        settings = get_site_settings(tx)
+        topic_reward = int(settings.get("economy", {}).get("topic_publish_credits", 5))
+
+        if bounty > 0:
+            new_bal, _ = apply_wallet_delta(
+                tx,
+                uid,
+                -bounty,
+                "bounty_escrow",
+                f"发布求调优悬赏帖《{title[:22]}》托管赏金",
+                event_key=f"bounty_escrow_{tid}",
+                ref_type="topic",
+                ref_id=tid,
+            )
+            bounty_status = "open"
+        else:
+            bounty_status = "none"
+            new_bal, _ = apply_wallet_delta(
+                tx,
+                uid,
+                topic_reward,
+                "publish_topic",
+                f"发布社区交流帖《{title[:22]}》激励",
+                event_key=f"pub_topic_{tid}",
+                ref_type="topic",
+                ref_id=tid,
+            )
+
+        if not work_id:
+            work_id = str(body.get("workId") or "").strip()[:64]
+        tx.execute(
+            """
+            INSERT INTO forum_topics (
+                id, category, category_label, pinned, featured, title, author_username, author_name,
+                views, likes, favorites, price, bounty, bounty_status, solved, accepted_reply_id,
+                images_json, styles_json, layout_code, work_id, recipe_json, summary, locked_body,
+                status, published_at_ms, created_label, created_at, updated_at
+            ) VALUES (?, ?, ?, 0, 0, ?, ?, ?, 1, 1, 0, ?, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, 'published', ?, '刚刚', ?, ?)
+            """,
+            (
+                tid,
+                cat,
+                cat_map[cat],
+                title,
+                user["username"],
+                user["display_name"],
+                price,
+                bounty,
+                bounty_status,
+                json.dumps(images[:9], ensure_ascii=False),
+                json.dumps(styles, ensure_ascii=False),
+                layout_code,
+                work_id,
+                json.dumps(recipe, ensure_ascii=False) if recipe else "",
+                summary,
+                locked_body,
+                now_ms,
+                now_iso,
+                now_iso,
+            ),
+        )
+
+    return {"ok": True, "topicId": tid, "topic": {"id": tid}, "credits": new_bal, "bounty": bounty}
+
+
+def publish_forum_reply_post(
+    db: Database,
+    user: dict[str, Any],
+    topic_id: str,
+    text: str,
+    mounted_style: str = "",
+    mounted_layout: str = "",
+) -> dict[str, Any]:
+    clean = (text or "").strip()[:3000]
+    if not clean:
+        raise ServiceError("请输入回复内容")
+    uid = int(user["id"])
+    today = local_today_str()
+    now_iso = utc_now_iso()
+    rid = f"rep_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
+
+    with db.transaction() as tx:
+        tp = tx.execute("SELECT id, title FROM forum_topics WHERE id = ? AND status = 'published'", (topic_id,)).fetchone()
+        if not tp:
+            raise ServiceError("帖子不存在或已下架", status=404)
+
+        settings = get_site_settings(tx)
+        econ = settings.get("economy", {})
+        reply_reward = int(econ.get("reply_publish_credits", 2))
+        daily_cap = int(econ.get("reply_daily_cap", 5))
+
+        tx.execute(
+            """
+            INSERT INTO forum_replies (
+                id, topic_id, author_username, author_name, text, mounted_style, mounted_layout,
+                likes, accepted, status, time_label, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 'published', '刚刚', ?)
+            """,
+            (
+                rid,
+                topic_id,
+                user["username"],
+                user["display_name"],
+                clean,
+                (mounted_style or "").strip().upper().lstrip("#"),
+                (mounted_layout or "").strip().upper().lstrip("#"),
+                now_iso,
+            ),
+        )
+
+        today_rewarded_cnt = int(
+            tx.execute(
+                "SELECT COUNT(*) FROM ledgers WHERE user_id = ? AND kind = 'publish_reply' AND created_at LIKE ?",
+                (uid, f"{today}%"),
+            ).fetchone()[0]
+        )
+        rewarded = 0
+        if reply_reward > 0 and today_rewarded_cnt < daily_cap:
+            new_bal, _ = apply_wallet_delta(
+                tx,
+                uid,
+                reply_reward,
+                "publish_reply",
+                f"参与帖子《{tp['title'][:18]}…》深度回复激励",
+                event_key=f"pub_reply_{rid}",
+                ref_type="reply",
+                ref_id=rid,
+            )
+            rewarded = reply_reward
+        else:
+            new_bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
+
+    return {"ok": True, "replyId": rid, "rewarded": rewarded, "credits": new_bal}
+
+
+def accept_forum_bounty_reply(db: Database, user: dict[str, Any], topic_id: str, reply_id: str) -> dict[str, Any]:
+    now_iso = utc_now_iso()
+    with db.transaction() as tx:
+        tp = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (topic_id,)).fetchone()
+        if not tp:
+            raise ServiceError("帖子不存在", status=404)
+        is_staff = user.get("role") in ("admin", "reviewer")
+        if tp["author_username"] != user["username"] and not is_staff:
+            raise ServiceError("仅发帖楼主或管理员可采纳悬赏答案", status=403)
+        if int(tp["bounty"] or 0) <= 0 or tp["bounty_status"] != "open" or int(tp["solved"]):
+            raise ServiceError("该悬赏已结算或未开启悬赏")
+
+        rp = tx.execute("SELECT * FROM forum_replies WHERE id = ? AND topic_id = ?", (reply_id, topic_id)).fetchone()
+        if not rp:
+            raise ServiceError("未找到对应回复", status=404)
+        if rp["author_username"] == tp["author_username"] and not is_staff:
+            raise ServiceError("楼主不能采纳自己的回复领赏哦")
+
+        bounty = int(tp["bounty"])
+        tx.execute(
+            "UPDATE forum_topics SET solved = 1, bounty_status = 'settled', accepted_reply_id = ?, updated_at = ? WHERE id = ?",
+            (reply_id, now_iso, topic_id),
+        )
+        tx.execute("UPDATE forum_replies SET accepted = 1 WHERE id = ?", (reply_id,))
+
+        winner = tx.execute("SELECT id FROM users WHERE username = ?", (rp["author_username"],)).fetchone()
+        if winner:
+            apply_wallet_delta(
+                tx,
+                int(winner["id"]),
+                bounty,
+                "bounty_win",
+                f"🏆 调优方案被采纳！获得《{tp['title'][:16]}…》悬赏金",
+                event_key=f"bounty_win_{topic_id}",
+                ref_type="topic",
+                ref_id=topic_id,
+            )
+
+        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (int(user["id"]),)).fetchone()["balance"])
+    return {"ok": True, "bounty": bounty, "winnerName": rp["author_name"], "credits": bal}
+
+
+def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
+    """Board-scoped moderation & front-stage deletion endpoint for Authors, Forum Moderators, Operators, and Super Admins."""
+    if not user or user.get("status") != "active":
+        raise ServiceError("请先登录账号", status=401, code="login_required")
+
+    topic_id = str(body.get("topicId") or "").strip()
+    action = str(body.get("action") or body.get("op") or "").strip().lower()
+    reason = str(body.get("reason") or "").strip()[:200]
+    if not topic_id or not action:
+        raise ServiceError("缺少帖子 ID 或操作动作")
+
+    uid = int(user["id"])
+    u_role = str(user.get("role") or "user")
+    norm_role = "operator" if u_role == "reviewer" else u_role
+    is_admin = norm_role == "admin"
+    is_staff = norm_role in ("admin", "operator")
+    now_iso = utc_now_iso()
+
+    with db.transaction() as tx:
+        tp = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (topic_id,)).fetchone()
+        if not tp:
+            raise ServiceError("目标帖子不存在", status=404)
+
+        board_key = str(tp["category"] or "experience")
+        mod_row = tx.execute(
+            "SELECT * FROM forum_moderators WHERE user_id = ? AND category IN ('all', ?) ORDER BY CASE category WHEN 'all' THEN 0 ELSE 1 END LIMIT 1",
+            (uid, board_key),
+        ).fetchone()
+
+        is_topic_author = (user["username"].lower() == str(tp["author_username"] or "").lower())
+        reply_id = str(body.get("replyId") or "").strip()
+        rp = None
+        is_reply_author = False
+        if reply_id:
+            rp = tx.execute("SELECT * FROM forum_replies WHERE id = ? AND topic_id = ?", (reply_id, topic_id)).fetchone()
+            if rp:
+                is_reply_author = (user["username"].lower() == str(rp["author_username"] or "").lower())
+
+        is_authorized = False
+        if action in ("delete", "delete_topic"):
+            is_authorized = is_topic_author or is_staff or bool(mod_row)
+        elif action in ("delete_reply",):
+            is_authorized = is_reply_author or is_staff or bool(mod_row)
+        else:
+            is_authorized = is_staff or bool(mod_row)
+
+        if not is_authorized:
+            board_lbl = FORUM_BOARD_LABELS.get(board_key, board_key)
+            raise ServiceError(f"权限不足：你不是「{board_lbl}」板块版主或作者本人，无法执行该操作", status=403, code="not_authorized")
+
+        # Anti-self-review for operators on pin/feature
+        if action in ("pin", "feature") and not is_admin and is_topic_author:
+            raise ServiceError("风控限制：运营审查员禁止自审自荐本人发布的内容（如加精、置顶）", status=403, code="self_review_forbidden")
+
+        actor_for_audit = user if is_staff else (dict(user, role=f"moderator:{mod_row['category']}") if mod_row else user)
+
+        if action == "pin":
+            tx.execute("UPDATE forum_topics SET pinned = 1, updated_at = ? WHERE id = ?", (now_iso, topic_id))
+        elif action == "unpin":
+            tx.execute("UPDATE forum_topics SET pinned = 0, updated_at = ? WHERE id = ?", (now_iso, topic_id))
+        elif action == "feature":
+            tx.execute("UPDATE forum_topics SET featured = 1, updated_at = ? WHERE id = ?", (now_iso, topic_id))
+        elif action == "unfeature":
+            tx.execute("UPDATE forum_topics SET featured = 0, updated_at = ? WHERE id = ?", (now_iso, topic_id))
+        elif action == "move":
+            target_cat = str(body.get("targetCategory") or "").strip()
+            valid_cats = {
+                "tuning": "🎯 作品求调优 / 悬赏",
+                "experience": "📘 实战经验与变现",
+                "assets": "🎨 画风与图型专区",
+                "tools": "🛠️ 工具流与问答",
+            }
+            if target_cat not in valid_cats:
+                raise ServiceError("目标板块无效")
+            tx.execute(
+                "UPDATE forum_topics SET category = ?, category_label = ?, updated_at = ? WHERE id = ?",
+                (target_cat, valid_cats[target_cat], now_iso, topic_id),
+            )
+        elif action == "hide":
+            author_u = tx.execute("SELECT role FROM users WHERE username = ?", (tp["author_username"],)).fetchone()
+            if not is_admin and author_u and author_u["role"] == "admin":
+                raise ServiceError("无权隐藏超级管理员发布的公告或帖子", status=403)
+            tx.execute("UPDATE forum_topics SET status = 'hidden', updated_at = ? WHERE id = ?", (now_iso, topic_id))
+        elif action == "publish":
+            tx.execute("UPDATE forum_topics SET status = 'published', updated_at = ? WHERE id = ?", (now_iso, topic_id))
+        elif action in ("delete", "delete_topic"):
+            if not is_admin and not is_topic_author:
+                author_u = tx.execute("SELECT role FROM users WHERE username = ?", (tp["author_username"],)).fetchone()
+                if author_u and author_u["role"] == "admin":
+                    raise ServiceError("无权删除超级管理员发布的帖子", status=403)
+            tx.execute("DELETE FROM forum_replies WHERE topic_id = ?", (topic_id,))
+            tx.execute("DELETE FROM collections WHERE bucket = 'topics' AND target_id = ?", (topic_id,))
+            tx.execute("DELETE FROM forum_topics WHERE id = ?", (topic_id,))
+        elif action == "hide_reply":
+            if not rp:
+                raise ServiceError("未找到目标回复", status=404)
+            rp_author_u = tx.execute("SELECT role FROM users WHERE username = ?", (rp["author_username"],)).fetchone()
+            if not is_admin and rp_author_u and rp_author_u["role"] == "admin":
+                raise ServiceError("无权隐藏超级管理员的回复", status=403)
+            tx.execute("UPDATE forum_replies SET status = 'hidden' WHERE id = ? AND topic_id = ?", (reply_id, topic_id))
+        elif action == "publish_reply":
+            if not rp:
+                raise ServiceError("未找到目标回复", status=404)
+            tx.execute("UPDATE forum_replies SET status = 'published' WHERE id = ? AND topic_id = ?", (reply_id, topic_id))
+        elif action == "delete_reply":
+            if not rp:
+                raise ServiceError("未找到目标回复", status=404)
+            if not is_admin and not is_reply_author:
+                rp_author_u = tx.execute("SELECT role FROM users WHERE username = ?", (rp["author_username"],)).fetchone()
+                if rp_author_u and rp_author_u["role"] == "admin":
+                    raise ServiceError("无权删除超级管理员的回复", status=403)
+            tx.execute("DELETE FROM forum_replies WHERE id = ? AND topic_id = ?", (reply_id, topic_id))
+            tx.execute("UPDATE forum_topics SET accepted_reply_id = NULL, solved = 0 WHERE id = ? AND accepted_reply_id = ?", (topic_id, reply_id))
+        else:
+            raise ServiceError(f"不支持的帖子操作：{action}")
+
+        record_audit_log(
+            tx,
+            actor_for_audit,
+            f"forum.mod.{action}",
+            "topic",
+            topic_id,
+            reason or f"论坛治理操作：{action}",
+            {
+                "board": board_key,
+                "title": tp["title"],
+                "targetCategory": body.get("targetCategory"),
+                "replyId": reply_id,
+            },
+        )
+    return {"ok": True, "topicId": topic_id, "action": action}
+
+
+def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    target_type = str(body.get("targetType") or "work")
+    if target_type not in ("work", "topic", "asset", "reply", "comment"):
+        raise ServiceError("不支持的举报目标类型")
+    target_id = str(body.get("targetId") or "").strip()
+    reason = str(body.get("reason") or "内容疑似违规或标注不实").strip()[:120]
+    detail = str(body.get("detail") or "").strip()[:600]
+    if not target_id:
+        raise ServiceError("缺少举报对象 ID")
+
+    now_iso = utc_now_iso()
+    uid = int(user["id"])
+
+    with db.transaction() as tx:
+        settings = get_site_settings(tx)
+        threshold = max(1, int(settings.get("moderation", {}).get("auto_pause_report_threshold", 3)))
+
+        target_title = target_id
+        if target_type == "work":
+            r = tx.execute("SELECT title FROM works WHERE id = ?", (target_id,)).fetchone()
+            if r:
+                target_title = r["title"]
+        elif target_type == "topic":
+            r = tx.execute("SELECT title FROM forum_topics WHERE id = ?", (target_id,)).fetchone()
+            if r:
+                target_title = r["title"]
+        elif target_type == "asset":
+            r = tx.execute("SELECT name FROM catalog_assets WHERE code = ?", (target_id,)).fetchone()
+            if r:
+                target_title = f"{target_id} {r['name']}"
+
+        tx.execute(
+            """
+            INSERT INTO reports (reporter_id, reporter_username, target_type, target_id, target_title, reason, detail, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+            """,
+            (uid, user["username"], target_type, target_id, target_title, reason, detail, now_iso),
+        )
+
+        open_cnt = int(
+            tx.execute(
+                "SELECT COUNT(*) FROM reports WHERE target_type = ? AND target_id = ? AND status = 'open'",
+                (target_type, target_id),
+            ).fetchone()[0]
+        )
+        auto_paused = False
+        if open_cnt >= threshold:
+            if target_type == "work":
+                tx.execute("UPDATE works SET status = 'paused', updated_at = ? WHERE id = ? AND status = 'published'", (now_iso, target_id))
+            elif target_type == "topic":
+                tx.execute("UPDATE forum_topics SET status = 'paused', updated_at = ? WHERE id = ? AND status = 'published'", (now_iso, target_id))
+            elif target_type == "asset":
+                tx.execute("UPDATE catalog_assets SET status = 'paused', updated_at = ? WHERE code = ? AND status = 'published'", (now_iso, target_id))
+            auto_paused = True
+            record_audit_log(
+                tx,
+                None,
+                "moderation.auto_pause",
+                target_type,
+                target_id,
+                f"累计待处理举报达 {open_cnt} 次，触发自动保护性暂停展示",
+                {"openReports": open_cnt, "threshold": threshold},
+            )
+
+    return {"ok": True, "openReports": open_cnt, "autoPaused": auto_paused}
+
+
+# ======================== STUDIO CLOUD PERSISTENCE & QUOTA/BLACKBOX ENGINE ========================
+
+def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
+    conn = db.get_conn()
+    presets = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT id, title, blueprint, scenario_badge, scenario_desc, sort_order FROM studio_workflows WHERE is_official_preset = 1 AND enabled = 1 ORDER BY sort_order ASC"
+        ).fetchall()
+    ]
+    if not user:
+        return {"loggedIn": False, "workflows": [], "articles": [], "history": [], "pendingTasks": [], "uploads": [], "officialPresets": presets}
+
+    uid = int(user["id"])
+    wfs = []
+    for r in conn.execute(
+        "SELECT * FROM studio_workflows WHERE user_id = ? AND is_official_preset = 0 ORDER BY updated_at_ms DESC",
+        (uid,),
+    ).fetchall():
+        try:
+            g = json.loads(r["graph_json"])
+        except Exception:
+            g = None
+        wfs.append(
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "blueprint": r["blueprint"],
+                "updatedAtMs": int(r["updated_at_ms"]),
+                "graph": g,
+            }
+        )
+
+    arts = []
+    for r in conn.execute("SELECT * FROM studio_articles WHERE user_id = ? ORDER BY updated_at_ms DESC", (uid,)).fetchall():
+        arts.append(
+            {
+                "id": r["id"],
+                "articleTitle": r["article_title"],
+                "markdown": r["markdown"],
+                "cards": json.loads(r["cards_json"] or "[]"),
+                "style1": r["style1"],
+                "layout": r["layout_code"],
+                "status": r["status"],
+                "runCount": int(r["run_count"]),
+                "createdAtMs": int(r["created_at_ms"]),
+                "updatedAtMs": int(r["updated_at_ms"]),
+            }
+        )
+
+    hist = []
+    pending_tasks = []
+    history_filter, history_ids = _seed_filter("id", "generations")
+    for r in conn.execute(
+        f"SELECT * FROM studio_generations WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT 40",
+        (uid, *history_ids),
+    ).fetchall():
+        items = json.loads(r["items_json"] or "[]")
+        if items and isinstance(items[0], str):
+            items = [{"id": f"{r['id']}_0", "title": r["tab_title"] or "生成图", "imageUrl": u, "prompt": r["prompt"]} for u in items]
+        hist.append(
+            {
+                "id": r["id"],
+                "createdAt": format_short_time(r["created_at"]),
+                "tabTitle": r["tab_title"],
+                "mode": r["mode"],
+                "modeLabel": r["mode_label"],
+                "kind": r["kind"],
+                "recipeSummary": r["recipe_summary"],
+                "prompt": r["prompt"],
+                "markdown": r["markdown"],
+                "items": items,
+                "status": r["status"],
+                "engine": r["engine"],
+                "taskId": r["task_id"] or "",
+                "requestId": r["request_id"] or "",
+                "error": r["error_msg"] or "",
+            }
+        )
+        if r["status"] in ("queued", "running"):
+            pending_tasks.append(
+                {
+                    "genId": r["id"],
+                    "requestId": r["request_id"] or "",
+                    "clientRequestId": r["request_id"] or "",
+                    "taskId": r["task_id"] or "",
+                    "status": r["status"],
+                    "createdAt": r["created_at"],
+                    "mode": r["mode"],
+                    "kind": r["kind"],
+                    "prompt": r["prompt"],
+                    "reservationDate": r["reservation_date"] or "",
+                }
+            )
+
+    uploads = [
+        {
+            "id": r["id"],
+            "cat": r["cat"],
+            "name_zh": r["name_zh"],
+            "desc_zh": r["desc_zh"],
+            "image": r["image_url"],
+            "custom": True,
+        }
+        for r in conn.execute("SELECT * FROM user_uploads WHERE user_id = ? ORDER BY created_at DESC", (uid,)).fetchall()
+    ]
+
+    return {
+        "loggedIn": True,
+        "workflows": wfs,
+        "articles": arts,
+        "history": hist,
+        "pendingTasks": pending_tasks,
+        "uploads": uploads,
+        "officialPresets": presets,
+    }
+
+
+def save_user_studio_workflow(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    uid = int(user["id"])
+    wf_id = str(body.get("id") or f"wf_{int(time.time() * 1000)}")
+    title = str(body.get("title") or "未命名工作流").strip()[:100]
+    blueprint = str(body.get("blueprint") or "single")
+    graph_json = json.dumps(body.get("graph") or {}, ensure_ascii=False)
+    now_ms = int(body.get("updatedAtMs") or time.time() * 1000)
+    now_iso = utc_now_iso()
+
+    with db.transaction() as tx:
+        tx.execute(
+            """
+            INSERT INTO studio_workflows (id, user_id, title, blueprint, scenario_badge, scenario_desc, graph_json, is_official_preset, enabled, sort_order, updated_at_ms, created_at)
+            VALUES (?, ?, ?, ?, '', '', ?, 0, 1, 0, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                blueprint = excluded.blueprint,
+                graph_json = excluded.graph_json,
+                updated_at_ms = excluded.updated_at_ms
+            WHERE studio_workflows.user_id = excluded.user_id
+            """,
+            (wf_id, uid, title, blueprint, graph_json, now_ms, now_iso),
+        )
+    return {"ok": True, "id": wf_id}
+
+
+def delete_user_studio_workflow(db: Database, user: dict[str, Any], wf_id: str) -> dict[str, Any]:
+    uid = int(user["id"])
+    with db.transaction() as tx:
+        tx.execute("DELETE FROM studio_workflows WHERE id = ? AND user_id = ? AND is_official_preset = 0", (wf_id, uid))
+    return {"ok": True}
+
+
+def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list[dict[str, Any]]) -> dict[str, Any]:
+    uid = int(user["id"])
+    now_ms = int(time.time() * 1000)
+    with db.transaction() as tx:
+        for art in (articles or [])[:50]:
+            if not isinstance(art, dict) or not art.get("id"):
+                continue
+            aid = str(art["id"])
+            # Skip static read-only seed articles unless modified
+            tx.execute(
+                """
+                INSERT INTO studio_articles (id, user_id, article_title, markdown, cards_json, style1, layout_code, status, run_count, created_at_ms, updated_at_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    article_title = excluded.article_title,
+                    markdown = excluded.markdown,
+                    cards_json = excluded.cards_json,
+                    style1 = excluded.style1,
+                    layout_code = excluded.layout_code,
+                    status = excluded.status,
+                    run_count = excluded.run_count,
+                    updated_at_ms = excluded.updated_at_ms
+                WHERE studio_articles.user_id = excluded.user_id
+                """,
+                (
+                    aid,
+                    uid,
+                    str(art.get("articleTitle") or "未命名文章")[:140],
+                    str(art.get("markdown") or ""),
+                    json.dumps(art.get("cards") or [], ensure_ascii=False),
+                    str(art.get("style1") or ""),
+                    str(art.get("layout") or ""),
+                    str(art.get("status") or "ready"),
+                    int(art.get("runCount") or 0),
+                    int(art.get("createdAtMs") or now_ms),
+                    int(art.get("updatedAtMs") or now_ms),
+                ),
+            )
+    return {"ok": True}
+
+
+def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    uid = int(user["id"])
+    hid = str(entry.get("id") or f"hist_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}").strip()[:160]
+    if not hid:
+        raise ServiceError("历史记录编号不能为空", status=400, code="history_id_required")
+    now_iso = utc_now_iso()
+    with db.transaction() as tx:
+        existing = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (hid,)).fetchone()
+        if existing and int(existing["user_id"] or 0) != uid:
+            raise ServiceError("该历史记录编号属于其他账号，不能覆盖", status=409, code="history_conflict")
+
+        values = (
+            str(entry.get("tabTitle") or ""),
+            str(entry.get("mode") or ""),
+            str(entry.get("modeLabel") or ""),
+            str(entry.get("kind") or "single"),
+            str(entry.get("recipeSummary") or ""),
+            str(entry.get("prompt") or ""),
+            str(entry.get("markdown") or ""),
+            json.dumps(entry.get("items") or [], ensure_ascii=False),
+        )
+        if existing:
+            # A browser save may use the same id as a real cloud generation.
+            # Only update user-editable presentation fields; never replace
+            # ownership, engine, cost, task, status, or accounting columns.
+            tx.execute(
+                """
+                UPDATE studio_generations
+                SET tab_title = ?, mode = ?, mode_label = ?, kind = ?, recipe_summary = ?,
+                    prompt = ?, markdown = ?, items_json = ?, deleted_at = ''
+                WHERE id = ? AND user_id = ?
+                """,
+                (*values, hid, uid),
+            )
+        else:
+            tx.execute(
+                """
+                INSERT INTO studio_generations (
+                    id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
+                    prompt, markdown, items_json, engine, cost_type, credits_spent, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?)
+                """,
+                (hid, uid, user["username"], *values, now_iso),
+            )
+    return {"ok": True, "id": hid}
+
+
+def delete_user_studio_history(db: Database, user: dict[str, Any], history_id: str) -> dict[str, Any]:
+    """Hide one cloud history row owned by the current user.
+
+    This is a soft delete so a generation's task, quota reservation, and
+    accounting trail cannot be erased by a history UI action.
+    """
+    uid = int(user["id"])
+    hid = str(history_id or "").strip()
+    if not hid:
+        raise ServiceError("历史记录编号不能为空", status=400, code="history_id_required")
+    with db.transaction() as tx:
+        row = tx.execute("SELECT user_id, status, deleted_at FROM studio_generations WHERE id = ?", (hid,)).fetchone()
+        if not row:
+            return {"ok": True, "id": hid, "deleted": False}
+        if int(row["user_id"] or 0) != uid:
+            raise ServiceError("无权删除其他账号的历史记录", status=403, code="history_forbidden")
+        if row["status"] in ("queued", "running"):
+            raise ServiceError("生成任务仍在进行中，完成或失败后才能删除历史", status=409, code="history_active")
+        if row["deleted_at"]:
+            return {"ok": True, "id": hid, "deleted": False}
+        tx.execute("UPDATE studio_generations SET deleted_at = ? WHERE id = ? AND user_id = ?", (utc_now_iso(), hid, uid))
+    return {"ok": True, "id": hid, "deleted": True}
+
+
+def delete_all_user_studio_history(db: Database, user: dict[str, Any]) -> dict[str, Any]:
+    """Soft-delete all completed/refunded history rows owned by the user.
+
+    In-flight rows stay visible so task recovery and accounting can finish;
+    callers must use this explicit function rather than treating an empty id as
+    a wildcard in ``delete_user_studio_history``.
+    """
+    uid = int(user["id"])
+    now_iso = utc_now_iso()
+    with db.transaction() as tx:
+        cur = tx.execute(
+            """
+            UPDATE studio_generations
+            SET deleted_at = ?
+            WHERE user_id = ? AND COALESCE(deleted_at, '') = ''
+              AND status NOT IN ('queued', 'running')
+            """,
+            (now_iso, uid),
+        )
+        deleted = int(cur.rowcount or 0)
+    return {"ok": True, "deleted": deleted}
+
+
+def get_user_studio_task(
+    db: Database,
+    user: dict[str, Any] | None,
+    task_id: str = "",
+    request_id: str = "",
+) -> dict[str, Any] | None:
+    """Resolve a task only inside the authenticated user's generation rows."""
+    if not user:
+        raise ServiceError("查询生图任务请先登录账号", status=401, code="login_required")
+    uid = int(user["id"])
+    tid = str(task_id or "").strip()
+    rid = str(request_id or "").strip()
+    if not tid and not rid:
+        raise ServiceError("缺少任务编号或 requestId", status=400, code="task_id_required")
+    conn = db.get_conn()
+    if tid:
+        row = conn.execute(
+            "SELECT * FROM studio_generations WHERE user_id = ? AND task_id = ? ORDER BY created_at DESC LIMIT 1",
+            (uid, tid),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM studio_generations WHERE user_id = ? AND request_id = ? ORDER BY created_at DESC LIMIT 1",
+            (uid, rid),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        items = json.loads(row["items_json"] or "[]")
+    except Exception:
+        items = []
+    return {
+        "genId": row["id"],
+        "requestId": row["request_id"] or "",
+        "clientRequestId": row["request_id"] or "",
+        "taskId": row["task_id"] or "",
+        "status": row["status"],
+        "images": items if isinstance(items, list) else [],
+        "error": row["error_msg"] or "",
+        "reservationDate": row["reservation_date"] or "",
+    }
+
+
+def claim_cloud_generation_submission(db: Database, user: dict[str, Any] | None, gen_id: str) -> dict[str, Any]:
+    """Atomically claim the gateway-submit edge of a reserved generation.
+
+    The HTTP layer can call this after ``prepare_cloud_generation``. Exactly
+    one retry may move a reservation from ``running`` to ``queued``; later
+    retries receive ``claimed=False`` and must wait for the existing task.
+    """
+    if not user:
+        raise ServiceError("提交生图任务请先登录账号", status=401, code="login_required")
+    uid = int(user["id"])
+    gid = str(gen_id or "").strip()
+    if not gid:
+        raise ServiceError("缺少生成记录编号", status=400, code="generation_id_required")
+    with db.transaction() as tx:
+        row = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gid,)).fetchone()
+        if not row:
+            raise ServiceError("生成记录不存在", status=404, code="generation_not_found")
+        if int(row["user_id"] or 0) != uid:
+            raise ServiceError("无权提交其他账号的生图任务", status=403, code="generation_forbidden")
+        cur = tx.execute(
+            "UPDATE studio_generations SET status = 'queued' WHERE id = ? AND user_id = ? AND status = 'running' AND COALESCE(task_id, '') = ''",
+            (gid, uid),
+        )
+        current = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gid,)).fetchone()
+    return {
+        "claimed": bool(cur.rowcount),
+        "genId": gid,
+        "status": current["status"] if current else row["status"],
+        "taskId": current["task_id"] if current else row["task_id"],
+        "requestId": current["request_id"] if current else row["request_id"],
+    }
+
+
+def _cloud_generation_result(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    settings: dict[str, Any],
+    *,
+    idempotent: bool = False,
+) -> dict[str, Any]:
+    """Return the stable public shape used by first submit and retry paths."""
+    uid = int(row["user_id"])
+    today = local_today_str()
+    wallet = conn.execute("SELECT * FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+    max_free = max(0, int(settings.get("economy", {}).get("daily_free_quota", 3)))
+    used = int(wallet["free_quota_used"]) if (wallet and wallet["free_quota_date"] == today) else 0
+    return {
+        "genId": row["id"],
+        "requestId": row["request_id"] or "",
+        "clientRequestId": row["request_id"] or "",
+        "idempotent": bool(idempotent),
+        "status": row["status"],
+        "taskId": row["task_id"] or "",
+        "finalPrompt": row["prompt"] or "",
+        "costType": row["cost_type"],
+        "creditsSpent": int(row["credits_spent"] or 0),
+        "credits": int(wallet["balance"]) if wallet else 0,
+        "freeQuotaRemaining": max(0, max_free - used),
+        "reservationDate": row["reservation_date"] or "",
+        "model": str(settings.get("gateway", {}).get("model", "gpt-image-2")),
+    }
+
+
+def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
+    """Reserve one generation atomically and inject DB blackbox prompts.
+
+    ``requestId``/``clientRequestId`` is scoped to the authenticated user. A
+    retry returns the original reservation rather than charging a second time;
+    callers should inspect ``idempotent`` and ``status`` before submitting to a
+    gateway again. At most ``gateway.max_inflight_per_user`` queued/running
+    rows may exist for one user (default 1).
+    """
+    if not user:
+        raise ServiceError("调用云端真实大模型生图请先登录账号", status=401, code="login_required")
+
+    uid = int(user["id"])
+    uname = user["username"]
+    is_staff = user.get("role") in ("admin", "reviewer")
+    raw_prompt = str(body.get("prompt") or "").strip()
+    style1 = str(body.get("style1") or "").strip().upper()
+    style2 = str(body.get("style2") or "").strip().upper()
+    layout = str(body.get("layout") or "").strip().upper()
+    request_id = str(body.get("requestId") or body.get("clientRequestId") or "").strip()
+    if len(request_id) > 128:
+        raise ServiceError("requestId 过长", status=400, code="invalid_request_id")
+    today = local_today_str()
+    now_iso = utc_now_iso()
+    gen_id = f"gen_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+
+    with db.transaction() as tx:
+        settings = get_site_settings(tx)
+        econ = settings.get("economy", {})
+        gateway = settings.get("gateway", {})
+        max_free = max(0, int(econ.get("daily_free_quota", 3)))
+        per_img_cost = max(0, int(econ.get("studio_credit_per_image", 2)))
+
+        # Idempotency is checked before permissions/charging. Once a request
+        # has been accepted, a retry must replay its reservation even if the
+        # browser has since changed its selected paid asset.
+        if request_id:
+            existing = tx.execute(
+                "SELECT * FROM studio_generations WHERE user_id = ? AND request_id = ? ORDER BY created_at DESC LIMIT 1",
+                (uid, request_id),
+            ).fetchone()
+            if existing:
+                return _cloud_generation_result(tx, existing, settings, idempotent=True)
+
+        max_inflight = max(0, int(gateway.get("max_inflight_per_user", 1)))
+        if max_inflight:
+            active = tx.execute(
+                """
+                SELECT COUNT(*) AS cnt FROM studio_generations
+                WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND status IN ('queued', 'running')
+                """,
+                (uid,),
+            ).fetchone()
+            if active and int(active["cnt"]) >= max_inflight:
+                raise ServiceError("已有生图任务正在进行，请等待完成后再提交", status=429, code="generation_in_progress")
+
+        # 1. Verify unlock status and fetch DB blackbox secrets.
+        injected_notes: list[str] = []
+        for code in (style1, style2, layout):
+            if not code:
+                continue
+            arow = tx.execute("SELECT * FROM catalog_assets WHERE code = ? AND status = 'published'", (code,)).fetchone()
+            if not arow:
+                continue
+            cost = int(arow["unlock_cost"] or 0)
+            if cost > 0 and arow["author_username"] != uname and not is_staff:
+                ul = tx.execute(
+                    "SELECT 1 FROM unlocks WHERE user_id = ? AND target_type = 'asset' AND target_id = ? AND status = 'settled'",
+                    (uid, code),
+                ).fetchone()
+                if not ul:
+                    raise ServiceError(f"尚未解锁付费编号 {code}《{arow['name']}》，请先解锁后再调用", status=403, code="asset_locked")
+            secret = (arow["secret_blackbox_prompt"] or "").strip()
+            if secret:
+                injected_notes.append(f"【云端黑盒注入 {code}】：{secret}")
+
+        # 2. Enforce daily free quota -> automatic credit fallback.
+        w = tx.execute("SELECT * FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        used = int(w["free_quota_used"]) if (w and w["free_quota_date"] == today) else 0
+        if used < max_free:
+            tx.execute(
+                "UPDATE wallets SET free_quota_date = ?, free_quota_used = ?, updated_at = ? WHERE user_id = ?",
+                (today, used + 1, now_iso, uid),
+            )
+            cost_type = "free_quota"
+            credits_spent = 0
+            cur_balance = int(w["balance"]) if w else 0
+            free_remaining = max(0, max_free - (used + 1))
+        else:
+            cost_type = "credits"
+            credits_spent = per_img_cost
+            cur_balance, _ = apply_wallet_delta(
+                tx,
+                uid,
+                -per_img_cost,
+                "studio_gen",
+                f"在线创作台云端直出生图消耗 ({style1 or layout or '自由创作'})",
+                event_key=f"gen_spend_{gen_id}",
+                ref_type="generation",
+                ref_id=gen_id,
+            )
+            free_remaining = 0
+
+        cleaned = raw_prompt
+        if injected_notes:
+            cleaned += "\n\n" + "\n".join(injected_notes)
+        final_prompt = f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
+
+        tx.execute(
+            """
+            INSERT INTO studio_generations (
+                id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
+                prompt, markdown, items_json, engine, cost_type, credits_spent, task_id,
+                status, error_msg, request_id, reservation_date, created_at
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?)
+            """,
+            (
+                gen_id,
+                uid,
+                uname,
+                str(body.get("ratio") or "3:4"),
+                f"{style1} {style2} {layout}".strip(),
+                final_prompt[:4000],
+                cost_type,
+                credits_spent,
+                request_id,
+                today,
+                now_iso,
+            ),
+        )
+        if cost_type == "free_quota":
+            tx.execute(
+                """
+                INSERT INTO studio_quota_reservations
+                    (generation_id, user_id, reservation_date, units, status, created_at)
+                VALUES (?, ?, ?, 1, 'reserved', ?)
+                """,
+                (gen_id, uid, today, now_iso),
+            )
+        inserted = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
+
+    # Keep the historical response keys while making request/retry state
+    # explicit for the server and the canvas recovery client.
+    result = _cloud_generation_result(db.get_conn(), inserted, settings)
+    result.update({"credits": cur_balance, "freeQuotaRemaining": free_remaining})
+    return result
+
+
+def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) -> None:
+    now_iso = utc_now_iso()
+    today = local_today_str()
+    with db.transaction() as tx:
+        row = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
+        if not row or row["status"] in ("refunded", "success"):
+            return
+        uid = int(row["user_id"])
+        tx.execute(
+            "UPDATE studio_generations SET status = 'refunded', error_msg = ? WHERE id = ?",
+            ((error_msg or "")[:300], gen_id),
+        )
+        if row["cost_type"] == "free_quota":
+            reservation = tx.execute(
+                "SELECT reservation_date, units, status FROM studio_quota_reservations WHERE generation_id = ?",
+                (gen_id,),
+            ).fetchone()
+            reservation_date = str(
+                (reservation["reservation_date"] if reservation else None)
+                or row["reservation_date"]
+                or str(row["created_at"] or "")[:10]
+                or today
+            )
+            units = max(1, int(reservation["units"] if reservation else 1))
+            if reservation and reservation["status"] == "reserved":
+                tx.execute(
+                    "UPDATE studio_quota_reservations SET status = 'released', released_at = ? WHERE generation_id = ? AND status = 'reserved'",
+                    (now_iso, gen_id),
+                )
+            # Only decrement the wallet counter when it is still the same
+            # business day. Across midnight, the old reservation is already
+            # outside today's counter and must not reduce the new day's quota.
+            if reservation_date == today:
+                tx.execute(
+                    "UPDATE wallets SET free_quota_used = MAX(0, free_quota_used - ?), updated_at = ? WHERE user_id = ? AND free_quota_date = ?",
+                    (units, now_iso, uid, reservation_date),
+                )
+        elif int(row["credits_spent"] or 0) > 0:
+            apply_wallet_delta(
+                tx,
+                uid,
+                int(row["credits_spent"]),
+                "studio_refund",
+                f"云端生图异常自动退还积分 ({gen_id})",
+                event_key=f"gen_refund_{gen_id}",
+                ref_type="generation",
+                ref_id=gen_id,
+            )
+
+
+def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_urls: list[str] | None = None) -> None:
+    with db.transaction() as tx:
+        generation = tx.execute("SELECT user_id FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
+        if image_urls is not None:
+            tx.execute(
+                "UPDATE studio_generations SET status = 'success', task_id = ?, items_json = ? WHERE id = ? AND status NOT IN ('refunded', 'success')",
+                (task_id, json.dumps(image_urls, ensure_ascii=False), gen_id),
+            )
+            tx.execute(
+                "UPDATE studio_quota_reservations SET status = 'consumed' WHERE generation_id = ? AND status = 'reserved'",
+                (gen_id,),
+            )
+            if generation and generation["user_id"] is not None:
+                for idx, media_url in enumerate(image_urls or []):
+                    safe_url = str(media_url or "").strip()
+                    if not safe_url:
+                        continue
+                    tx.execute(
+                        """
+                        INSERT OR IGNORE INTO studio_generation_media
+                            (id, generation_id, user_id, media_url, media_kind, storage_path, visibility, created_at)
+                        VALUES (?, ?, ?, ?, 'generated', ?, 'private', ?)
+                        """,
+                        (
+                            f"gm_{gen_id}_{idx}",
+                            gen_id,
+                            int(generation["user_id"]),
+                            safe_url,
+                            safe_url.removeprefix("/generated/").split("?", 1)[0],
+                            utc_now_iso(),
+                        ),
+                    )
+        else:
+            tx.execute("UPDATE studio_generations SET task_id = ? WHERE id = ? AND status NOT IN ('refunded', 'success')", (task_id, gen_id))
+
+
+def grant_studio_media_public(
+    db: Database,
+    user: dict[str, Any],
+    media_url: str,
+    target_type: str,
+    target_id: str,
+    generation_id: str | None = None,
+) -> dict[str, Any]:
+    """Grant one owned private media URL to one published content target.
+
+    Publication code should call this only after validating the target's
+    ownership/status. The grant is explicit and revocable; it is never inferred
+    from a URL merely appearing in a draft.
+    """
+    uid = int(user["id"])
+    url = str(media_url or "").strip().split("?", 1)[0]
+    ttype = str(target_type or "").strip()
+    tid = str(target_id or "").strip()
+    if not url or not ttype or not tid:
+        raise ServiceError("媒体授权参数不完整", status=400, code="media_grant_invalid")
+
+    with db.transaction() as tx:
+        media = tx.execute(
+            "SELECT user_id, generation_id FROM studio_generation_media WHERE media_url = ? ORDER BY created_at DESC LIMIT 1",
+            (url,),
+        ).fetchone()
+        owner_id = int(media["user_id"]) if media else None
+        resolved_generation_id = generation_id or (media["generation_id"] if media else None)
+        if owner_id is None and url.startswith("/uploads/"):
+            upload = tx.execute(
+                "SELECT user_id FROM user_uploads WHERE image_url = ? OR file_path = ? LIMIT 1",
+                (url, url),
+            ).fetchone()
+            owner_id = int(upload["user_id"]) if upload else None
+        if owner_id is None and resolved_generation_id:
+            generation = tx.execute("SELECT user_id FROM studio_generations WHERE id = ?", (resolved_generation_id,)).fetchone()
+            owner_id = int(generation["user_id"]) if generation and generation["user_id"] is not None else None
+        if owner_id is None:
+            raise ServiceError("找不到该私有媒体或其所有者", status=404, code="media_not_found")
+        if owner_id != uid and user.get("role") not in ("admin", "operator", "reviewer"):
+            raise ServiceError("无权公开其他账号的私有媒体", status=403, code="media_forbidden")
+
+        grant_id = f"grant_{uuid.uuid4().hex}"
+        now_iso = utc_now_iso()
+        tx.execute(
+            """
+            INSERT INTO media_public_grants
+                (id, media_url, owner_user_id, generation_id, target_type, target_id, granted_by_user_id, granted_at, revoked_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(media_url, target_type, target_id) DO UPDATE SET
+                owner_user_id = excluded.owner_user_id,
+                generation_id = excluded.generation_id,
+                granted_by_user_id = excluded.granted_by_user_id,
+                granted_at = excluded.granted_at,
+                revoked_at = NULL
+            """,
+            (grant_id, url, owner_id, resolved_generation_id, ttype, tid, uid, now_iso),
+        )
+    return {"ok": True, "mediaUrl": url, "targetType": ttype, "targetId": tid, "generationId": resolved_generation_id}
+
+
+# ======================== SKILL-ADDON COMPATIBILITY (/studio/api/library) ========================
+
+def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str, Any]:
+    conn = db.get_conn()
+    uid = int(user["id"])
+    uname = user["username"]
+
+    fav_codes = {
+        r["target_id"]
+        for r in conn.execute("SELECT target_id FROM collections WHERE user_id = ? AND bucket IN ('styles', 'layouts')", (uid,)).fetchall()
+    }
+    unlocked_codes = {
+        r["target_id"]
+        for r in conn.execute("SELECT target_id FROM unlocks WHERE user_id = ? AND target_type = 'asset' AND status = 'settled'", (uid,)).fetchall()
+    }
+
+    collected = []
+    owned = []
+    library_asset_filter, library_asset_ids = _seed_filter("code", "assets")
+    for r in conn.execute(
+        f"SELECT * FROM catalog_assets WHERE status = 'published' AND {library_asset_filter}",
+        library_asset_ids,
+    ).fetchall():
+        code = r["code"]
+        if r["source_type"] == "exclusive":
+            # Online-exclusive blackbox styles cannot be exported offline to local skill library
+            continue
+        is_mine = r["author_username"] == uname
+        is_fav = code in fav_codes
+        if not (is_mine or is_fav):
+            continue
+        is_unlocked = int(r["unlock_cost"] or 0) <= 0 or is_mine or (code in unlocked_codes)
+        entry = {
+            "id": f"asset:{code}",
+            "ref": code,
+            "title": r["name"],
+            "name": r["name"],
+            "kind": r["kind"],
+            "version": "1.0.0",
+            "collected": is_fav,
+            "unlocked": is_unlocked,
+            "source": "community",
+            "author": {"username": r["author_username"], "name": r["author_name"]},
+            "content_url": f"/studio/api/assets/{code}/content" if is_unlocked else None,
+        }
+        if is_mine:
+            owned.append(entry)
+        else:
+            collected.append(entry)
+
+    # Also expose favorited official catalog items
+    official = []
+    cat_file = CONTENT_DIR / "catalog.json"
+    if cat_file.is_file():
+        cat_data = json.loads(cat_file.read_text(encoding="utf-8"))
+        for item in cat_data.get("resources", []):
+            code = item.get("id")
+            if code in fav_codes and item.get("kind") in ("style", "layout"):
+                official.append(
+                    {
+                        "id": f"official:{code}",
+                        "ref": code,
+                        "title": item.get("name") or code,
+                        "name": item.get("name") or code,
+                        "kind": item.get("kind"),
+                        "version": "1.0.0",
+                        "collected": True,
+                        "unlocked": True,
+                        "source": "official",
+                        "content_url": f"/studio/api/assets/{code}/content",
+                    }
+                )
+
+    return {"collected": collected, "owned": owned, "official": official}
+
+
+def build_skill_asset_content(db: Database, user: dict[str, Any], code: str) -> dict[str, Any]:
+    clean_code = (code or "").strip().upper()
+    if not is_demo_mode() and clean_code in seed_ids("assets"):
+        raise ServiceError(f"未找到资源编号：{clean_code}", status=404, code="seed_content_hidden")
+    conn = db.get_conn()
+    uid = int(user["id"])
+
+    row = conn.execute("SELECT * FROM catalog_assets WHERE code = ? AND status = 'published'", (clean_code,)).fetchone()
+    if row:
+        if row["source_type"] == "exclusive":
+            raise ServiceError("官网在线独占黑盒资产仅支持云端调用，不支持导出明文定义", status=403)
+        cost = int(row["unlock_cost"] or 0)
+        if cost > 0 and row["author_username"] != user["username"] and user.get("role") not in ("admin", "reviewer"):
+            ul = conn.execute(
+                "SELECT 1 FROM unlocks WHERE user_id = ? AND target_type = 'asset' AND target_id = ? AND status = 'settled'",
+                (uid, clean_code),
+            ).fetchone()
+            if not ul:
+                raise ServiceError("该共创资产尚未解锁", status=403)
+        resource = {
+            "kind": row["kind"],
+            "name": f"{clean_code} {row['name']}",
+            "prompt_zh": row["definition"] or row["description"],
+            "prompt_en": row["prompt_en"] or f"Handraw {row['kind']} {clean_code}: {row['name']}",
+            "license": "Handraw Community Co-Creation License 1.0",
+            "version": "1.0.0",
+            "author": {"username": row["author_username"], "name": row["author_name"]},
+        }
+    else:
+        cat_file = CONTENT_DIR / "catalog.json"
+        found = None
+        if cat_file.is_file():
+            for it in json.loads(cat_file.read_text(encoding="utf-8")).get("resources", []):
+                if str(it.get("id")).upper() == clean_code and it.get("kind") in ("style", "layout"):
+                    found = it
+                    break
+        if not found:
+            raise ServiceError(f"未找到资源编号：{clean_code}", status=404)
+        resource = {
+            "kind": found["kind"],
+            "name": f"{clean_code} {found.get('name', clean_code)}",
+            "prompt_zh": found.get("definition") or found.get("description") or clean_code,
+            "prompt_en": f"Handraw official {found['kind']} {clean_code}: {found.get('name', clean_code)}",
+            "license": "Handraw Official Reference License 1.0",
+            "version": "1.0.0",
+        }
+
+    canonical = json.dumps(resource, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(canonical).hexdigest()
+    return {"resource": resource, "sha256": digest}
+
+
+# ======================== DISCOURSE USER MIGRATION IMPORTER ========================
+
+def import_discourse_users_batch(
+    db: Database,
+    actor: dict[str, Any] | None,
+    raw_payload: str | list[dict[str, Any]],
+    migration_credits: int | None = None,
+) -> dict[str, Any]:
+    """Import Discourse users from JSON list or CSV text additively (idempotent on username/email)."""
+    records: list[dict[str, Any]] = []
+    if isinstance(raw_payload, list):
+        records = [r for r in raw_payload if isinstance(r, dict)]
+    elif isinstance(raw_payload, str):
+        stripped = raw_payload.strip()
+        if not stripped:
+            raise ServiceError("导入内容不能为空")
+        if stripped.startswith("[") or stripped.startswith("{"):
+            parsed = json.loads(stripped)
+            records = parsed.get("users", []) if isinstance(parsed, dict) else parsed
+        else:
+            reader = csv.DictReader(io.StringIO(stripped))
+            records = [dict(row) for row in reader]
+
+    if not records:
+        raise ServiceError("未解析到有效的 Discourse 用户记录")
+
+    now_iso = utc_now_iso()
+    imported = 0
+    skipped = 0
+    imported_usernames: list[str] = []
+
+    with db.transaction() as tx:
+        settings = get_site_settings(tx)
+        bonus = (
+            int(migration_credits)
+            if migration_credits is not None
+            else int(settings.get("economy", {}).get("discourse_migration_credits", 50))
+        )
+
+        for rec in records:
+            uname = re.sub(r"[^a-zA-Z0-9_\-]", "", str(rec.get("username") or "").strip())
+            if not uname or uname.lower() in ("system", "discobot"):
+                skipped += 1
+                continue
+            email = str(rec.get("email") or f"{uname}@handraw-style.com").strip().lower()
+            exists = tx.execute(
+                "SELECT id FROM users WHERE username = ? OR email = ?",
+                (uname, email),
+            ).fetchone()
+            if exists:
+                skipped += 1
+                continue
+
+            dname = str(rec.get("name") or rec.get("display_name") or uname).strip()[:40]
+            is_admin = str(rec.get("admin") or "").lower() in ("true", "1", "t", "yes")
+            is_mod = str(rec.get("moderator") or "").lower() in ("true", "1", "t", "yes")
+            role = "admin" if is_admin else ("reviewer" if is_mod else "user")
+
+            disc_hash = str(rec.get("password_hash") or "").strip()
+            disc_salt = str(rec.get("salt") or "").strip()
+            plain_pw = str(rec.get("password") or "").strip()
+
+            if disc_hash and disc_salt and len(disc_hash) == 64:
+                pw_hash = disc_hash.lower()
+                pw_algo = "discourse_pbkdf2"
+            else:
+                pw_hash = hash_password(plain_pw or "handraw123")
+                pw_algo = "pbkdf2_sha256"
+                disc_salt = ""
+
+            disc_id = int(rec["id"]) if str(rec.get("id") or "").isdigit() else None
+            created_at = str(rec.get("created_at") or now_iso)
+            api_key = generate_api_key()
+
+            cur = tx.execute(
+                """
+                INSERT INTO users (
+                    username, display_name, email, password_hash, password_algo,
+                    discourse_salt, discourse_user_id, role, status, bio,
+                    invite_code, api_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', '原 Discourse 社区老用户迁移账号', ?, ?, ?)
+                """,
+                (uname, dname, email, pw_hash, pw_algo, disc_salt, disc_id, role, uname, api_key, created_at),
+            )
+            uid = int(cur.lastrowid)
+            tx.execute(
+                "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
+                (uid, now_iso),
+            )
+            if bonus > 0:
+                apply_wallet_delta(
+                    tx,
+                    uid,
+                    bonus,
+                    "discourse_migration",
+                    "原 Discourse 社区老用户无缝迁移激活礼包",
+                    event_key=f"disc_mig_{uid}",
+                )
+            imported += 1
+            imported_usernames.append(uname)
+
+        record_audit_log(
+            tx,
+            actor,
+            "users.import_discourse",
+            "users",
+            f"batch:{imported}",
+            f"导入原 Discourse 注册用户 {imported} 人（跳过已存在 {skipped} 人），每人发放迁移礼金 +{bonus}✦",
+            {"imported": imported, "skipped": skipped, "sample": imported_usernames[:10]},
+        )
+
+    return {"ok": True, "imported": imported, "skipped": skipped, "bonusPerUser": bonus, "usernames": imported_usernames}

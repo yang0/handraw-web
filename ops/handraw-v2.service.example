@@ -1,0 +1,37 @@
+[Unit]
+Description=Handraw Web 2.0 local-loopback application
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=handraw
+Group=handraw
+WorkingDirectory=/srv/handraw-web
+
+# Use the pinned virtual environment; do not rely on the system Python.
+Environment="PATH=/srv/handraw-web/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+EnvironmentFile=-/etc/handraw/handraw-v2.env
+Environment=HANDRAW_HOST=127.0.0.1
+Environment=HANDRAW_PORT=3080
+Environment=HANDRAW_DEMO_MODE=0
+Environment=HANDRAW_PRIVATE_STORAGE=/var/lib/handraw/private
+Environment=HANDRAW_DB_PATH=/var/lib/handraw/private/handraw_v2.db
+Environment=HANDRAW_UPLOADS_DIR=/var/lib/handraw/private/uploads
+Environment=HANDRAW_GENERATED_DIR=/var/lib/handraw/private/generated
+Environment=HANDRAW_IMAGE_CONFIG=/etc/handraw/image-service.json
+
+ExecStart=/srv/handraw-web/.venv/bin/python -m backend.server --host 127.0.0.1 --port 3080 --db /var/lib/handraw/private/handraw_v2.db
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+
+# The reverse proxy owns the public socket; this process remains loopback-only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/handraw/private
+
+[Install]
+WantedBy=multi-user.target
