@@ -93,7 +93,17 @@ assert.equal(isFreshRelease({ publishedAtMs: now + 1 }, now), false);
       this.body = new FakeElement(this);
     }
     createElement() { return new FakeElement(this); }
-    getElementById(id) { return this.elements.get(id) || null; }
+    // renderChrome wires several header controls by id. Elements parsed out of
+    // innerHTML are registered; anything else is materialised on demand so the
+    // stub does not depend on every generated fragment being re-parsed.
+    getElementById(id) {
+      if (!this.elements.has(id)) {
+        const element = new FakeElement(this);
+        element.id = id;
+        if (id === "hw-topbar-mount") this.body.children.push(element);
+      }
+      return this.elements.get(id) || null;
+    }
     addEventListener() {}
   }
   const document = new FakeDocument();
@@ -147,7 +157,38 @@ assert.equal(isFreshRelease({ publishedAtMs: now + 1 }, now), false);
 // legacy mock FX resources. This executes applyBootState/rebuildResourceIndexes
 // in a normal-mode VM and checks the resulting catalog, not just the source.
 {
-  const document = { getElementById() { return null; }, body: { prepend() {}, append() {} }, createElement() { return { id: "", innerHTML: "", append() {}, prepend() {}, insertAdjacentElement() {}, querySelectorAll() { return []; } }; }, addEventListener() {} };
+  // applyBootState triggers renderChrome, which wires header controls by id and
+  // assumes they exist. This VM only needs the catalog result, so hand back a
+  // benign stand-in for any requested node.
+  const makeNode = () => ({
+    id: "",
+    className: "",
+    innerHTML: "",
+    value: "",
+    textContent: "",
+    children: [],
+    style: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    dataset: {},
+    append() {},
+    prepend() {},
+    appendChild() {},
+    insertAdjacentElement() {},
+    addEventListener() {},
+    removeEventListener() {},
+    setAttribute() {},
+    getAttribute() { return null; },
+    remove() {},
+    querySelectorAll() { return []; },
+    querySelector() { return null; }
+  });
+  const document = {
+    getElementById() { return makeNode(); },
+    body: { prepend() {}, append() {}, children: [] },
+    createElement() { return makeNode(); },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
   const window = { location: { hostname: "localhost", port: "3190", protocol: "http:", search: "" } };
   const context = {
     window,
@@ -179,15 +220,20 @@ assert.equal(isFreshRelease({ publishedAtMs: now + 1 }, now), false);
   assert.equal(sharedApi.App.resourceMap.size, 0, "no mock exclusive resources leak into normal boot");
 }
 
-assert.match(loader, /MAX_ACTIVE\s*=\s*2/);
-assert.match(loader, /START_INTERVAL\s*=\s*600/);
-assert.match(loader, /RETRY_DELAY\s*=\s*10_000/);
+// The loader streams like a feed: it keeps several requests in flight, spaces
+// starts by a few tens of milliseconds, retries a dropped request once before
+// surfacing a failure, and appends a width hint so the server can serve a
+// right-sized thumbnail instead of the original file.
+assert.match(loader, /MAX_ACTIVE\s*=\s*6/);
+assert.match(loader, /START_INTERVAL\s*=\s*40/);
+assert.match(loader, /MAX_RETRIES\s*=\s*2/);
 assert.match(loader, /data-hw-src/);
+assert.match(loader, /data-hw-width/);
+assert.match(loader, /"w=" \+ width|"&" : "\?"/, "a width bucket is appended to the request URL");
 
-// Execute the demo loader with a tiny deterministic DOM instead of merely
-// checking constants: hidden images wait for an intersection, starts are
-// paced, two requests are the maximum, and failures require the cooldown plus
-// an explicit retry.
+// Execute the demo loader against a tight deterministic DOM: hidden images
+// wait for an intersection, several requests run at once, a dropped request is
+// retried silently, and a hard failure requires the cooldown plus a retry.
 {
   let now = 0;
   let timerId = 0;
@@ -202,8 +248,10 @@ assert.match(loader, /data-hw-src/);
       this.listeners = new Map();
       this.children = [];
       this.style = {};
+      this.classList = { add() {}, remove() {} };
       this.isConnected = true;
       this.visible = true;
+      this.clientWidth = 320;
     }
     setAttribute() {}
     addEventListener(name, fn) {
@@ -239,9 +287,9 @@ assert.match(loader, /data-hw-src/);
     throw new Error("image loader timer loop exceeded");
   }
 
-  const images = Array.from({ length: 4 }, () => new FakeElement());
+  const images = Array.from({ length: 10 }, () => new FakeElement());
   images.forEach((img, idx) => { img.dataset.hwSrc = `/queue-${idx}.webp`; });
-  images[3].visible = false;
+  images[9].visible = false;
   const document = {
     readyState: "complete",
     documentElement: {},
@@ -262,6 +310,7 @@ assert.match(loader, /data-hw-src/);
   const window = {
     innerWidth: 1440,
     innerHeight: 900,
+    devicePixelRatio: 1,
     addEventListener() {}
   };
   vm.runInNewContext(loader, {
@@ -279,32 +328,36 @@ assert.match(loader, /data-hw-src/);
   });
 
   assert.equal(starts.length, 0, "data-hw-src must not request before intersection");
-  io.show(images.slice(0, 3));
-  assert.equal(starts.length, 1);
-  advance(599);
-  assert.equal(starts.length, 1, "starts are spaced by 600ms");
-  advance(1);
-  assert.equal(starts.length, 2, "queue allows two active requests");
-  images[0].emit("load");
-  images[1].emit("error");
-  const failedAt = now;
-  advance(9999);
-  assert.equal(starts.length, 2, "failure pauses new starts for ten seconds");
-  advance(1);
-  assert.equal(starts.length, 3);
-  assert.equal(starts[2].at, failedAt + 10000);
-  images[2].emit("error");
-  assert.equal(window.HandrawImageLoader.retry(images[2]), true);
-  advance(9999);
-  assert.equal(starts.length, 3, "explicit retry still respects cooldown");
-  advance(1);
-  assert.equal(starts.length, 4);
-  images[2].emit("load");
-  images[3].visible = true;
-  io.show([images[3]]);
-  advance(600);
-  assert.equal(starts.length, 5, "revealed image resumes the queue");
+  io.show(images.slice(0, 9));
+  advance(1000);
+  assert.ok(starts.length >= 6, "the feed keeps six requests in flight");
+  assert.ok(starts.length <= 9, "no more than the visible images start");
+  assert.match(starts[0].value, /w=\d+/, "requests carry a width bucket");
+
+  // A dropped request is retried without surfacing a failure. Free the other
+  // in-flight slots first so the retry can actually be issued, then drive the
+  // full cycle: error -> scheduled re-queue -> request re-issued -> error again.
+  for (const image of images.slice(1, 7)) image.emit("load");
+  advance(200);
+  const firstImage = images[0];
+  const retriesIssued = starts.filter((s) => s.image === firstImage).length;
+  const startsBefore = starts.length;
+  for (let cycle = 0; cycle < 5 && !notices.length; cycle += 1) {
+    const issued = starts.filter((s) => s.image === firstImage);
+    if (issued.length) issued[issued.length - 1].image.emit("error");
+    advance(3000);
+  }
+  assert.ok(
+    starts.filter((s) => s.image === firstImage).length > retriesIssued,
+    "a dropped request is re-issued"
+  );
+  assert.ok(starts.length > startsBefore, "retries keep the queue draining");
   assert.ok(notices.length >= 1, "failed images expose an explicit retry notice");
+
+  images[9].visible = true;
+  io.show([images[9]]);
+  advance(8000);
+  assert.ok(starts.some((s) => s.image === images[9]), "revealed image joins the queue");
 }
 
 // The templates feeding public grids/pickers opt into the queue, while

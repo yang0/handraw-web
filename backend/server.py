@@ -74,6 +74,7 @@ from .config import (
     get_db_path,
     get_generated_dir,
     get_image_config_path,
+    get_storage_root,
     get_uploads_dir,
 )
 from .db import Database, utc_now_iso
@@ -466,6 +467,90 @@ def _path_is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+# ======================== RESPONSIVE IMAGE THUMBNAILS ========================
+# Gallery pages request many images at once.  Serving the full-size original
+# for every card wastes bandwidth on files that are displayed at a few hundred
+# pixels, so each distinct width is rendered once into a private cache and
+# reused.  Anything we cannot decode is served as the original bytes.
+
+THUMB_WIDTHS = (320, 480, 640, 960, 1280)
+_THUMB_LOCK = threading.Lock()
+
+
+def get_thumb_cache_dir() -> Path:
+    explicit = os.environ.get("HANDRAW_THUMB_CACHE_DIR")
+    if explicit:
+        return Path(explicit).resolve()
+    return get_storage_root() / "thumbs"
+
+
+def normalize_thumb_width(raw: Any) -> int:
+    """Snap a requested width up to the nearest supported bucket (0 = original)."""
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0
+    if value <= 0:
+        return 0
+    for width in THUMB_WIDTHS:
+        if value <= width:
+            return width
+    return THUMB_WIDTHS[-1]
+
+
+def build_thumbnail(source: Path, width: int) -> bytes | None:
+    """Return WebP bytes at ``width``, or None when the source cannot be decoded."""
+    try:
+        from PIL import Image  # imported lazily: only needed when a thumb is requested
+    except Exception:
+        return None
+    try:
+        with Image.open(source) as image:
+            image.load()
+            if image.width <= width:
+                return None
+            height = max(1, round(image.height * (width / image.width)))
+            resized = image.resize((width, height), Image.LANCZOS)
+            if resized.mode not in ("RGB", "RGBA"):
+                resized = resized.convert("RGBA" if "A" in resized.getbands() else "RGB")
+            buffer = io.BytesIO()
+            resized.save(buffer, format="WEBP", quality=82, method=4)
+            return buffer.getvalue()
+    except Exception:
+        return None
+
+
+def read_with_thumbnail(source: Path, width: int) -> tuple[bytes, str, bool]:
+    """Return (payload, content_type, is_thumbnail) for one media file."""
+    original_type = mimetypes.guess_type(str(source))[0] or "application/octet-stream"
+    if width <= 0:
+        return source.read_bytes(), original_type, False
+    try:
+        stat = source.stat()
+    except OSError:
+        return b"", original_type, False
+    key = f"{abs(hash(str(source))):x}_{stat.st_mtime_ns}_{stat.st_size}_{width}.webp"
+    cache_dir = get_thumb_cache_dir()
+    cached = cache_dir / key
+    if cached.is_file():
+        try:
+            return cached.read_bytes(), "image/webp", True
+        except OSError:
+            pass
+    payload = build_thumbnail(source, width)
+    if payload is None:
+        return source.read_bytes(), original_type, False
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with _THUMB_LOCK:
+            temp = cached.with_suffix(".tmp")
+            temp.write_bytes(payload)
+            temp.replace(cached)
+    except OSError:
+        pass
+    return payload, "image/webp", True
 
 
 def _iter_media_values(value: Any):
@@ -1777,7 +1862,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                             if not allowed:
                                 self.send_error(404, "Media not found")
                                 return
-                        self._send_bytes(target.read_bytes(), ctype, cache=cache_policy)
+                        payload, ctype, resized = read_with_thumbnail(target, normalize_thumb_width(q1("w")))
+                        if resized:
+                            # A transcoded variant is addressable by its own URL,
+                            # so it can be cached by any shared layer.
+                            cache_policy = "public, max-age=604800" if prefix == "/images/" else "private, max-age=86400"
+                        self._send_bytes(payload, ctype, cache=cache_policy)
                         return
                 self.send_error(404, "Media not found")
                 return

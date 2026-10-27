@@ -747,6 +747,50 @@ button {
   transition: transform 0.28s ease;
 }
 
+/* Image streaming states.
+ *
+ * Cards must never flash an empty box or a browser broken-image glyph while a
+ * request is in flight. A reserved box plus a soft shimmer holds the layout,
+ * and a failed request keeps the placeholder instead of an alt-text icon.
+ */
+img[data-hw-src] {
+  background-color: var(--paper-inset);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  color: transparent;
+  overflow: hidden;
+}
+
+img[data-hw-src].hw-img-loading {
+  background-image: linear-gradient(100deg, #f0eae1 30%, #f8f3ea 50%, #f0eae1 70%);
+  background-size: 200% 100%;
+  animation: hw-image-shimmer 1.4s ease-in-out infinite;
+}
+
+img[data-hw-src].hw-img-ready {
+  background-image: none;
+  animation: none;
+}
+
+img[data-hw-src].hw-img-failed {
+  background-image: none;
+  background-color: #f2ece3;
+  animation: none;
+}
+
+@keyframes hw-image-shimmer {
+  from { background-position: 140% 0; }
+  to { background-position: -40% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  img[data-hw-src].hw-img-loading {
+    animation: none;
+    background-image: none;
+  }
+}
+
 .hw-card:hover .hw-card-media img {
   transform: scale(1.025);
 }
