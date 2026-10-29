@@ -9,7 +9,14 @@ from backend import server
 from backend.services import build_boot_payload
 from ops import seed_starter_library
 
+# The style art is a deployment asset (gitignored, ~47 MB) copied from the
+# handraw-style package, so a clean checkout has none.  The seed tests only make
+# sense where those images are present.
+_STYLE_ART = Path(__file__).resolve().parent.parent / "images" / "individual"
+_HAS_ART = _STYLE_ART.is_dir() and any(_STYLE_ART.rglob("*.webp"))
 
+
+@unittest.skipUnless(_HAS_ART, "style art not installed in this checkout")
 class StarterLibraryTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
