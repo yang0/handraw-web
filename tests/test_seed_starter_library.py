@@ -1,0 +1,63 @@
+"""Starter library seed: real works, real style images, honest counters."""
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from backend import server
+from backend.services import build_boot_payload
+from ops import seed_starter_library
+
+
+class StarterLibraryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.db = server.init_database(Path(self.temp.name) / "starter.db")
+
+    def tearDown(self):
+        self.db.get_conn().close()
+        self.db.close()
+        self.temp.cleanup()
+
+    def test_plan_uses_only_shipped_images_and_known_resources(self):
+        plan = seed_starter_library.build_plan(self.db)
+        self.assertGreater(len(plan["works"]), 0)
+        for work in plan["works"]:
+            image = work["images"][0]
+            self.assertTrue(image.startswith("/images/"), image)
+            self.assertEqual(plan["skipped"], [], "every starter work must resolve")
+
+    def test_apply_creates_published_works_with_zero_counters(self):
+        plan = seed_starter_library.build_plan(self.db)
+        result = seed_starter_library.apply_plan(self.db, plan)
+        self.assertEqual(result["works"], len(plan["works"]))
+
+        boot = build_boot_payload(self.db, None)
+        self.assertEqual(len(boot["works"]), len(plan["works"]))
+
+        for work in boot["works"]:
+            self.assertEqual(work["likes"], 0, "a seeded work must not start with fake likes")
+            self.assertEqual(work["favorites"], 0)
+            self.assertEqual(work["cheers"], 0)
+            self.assertEqual(work["forks"], 0)
+            self.assertTrue(work["styles"], "each starter work references a real style")
+            self.assertIn("/images/", work["images"][0])
+
+        showcase = [t for t in boot["topics"] if t.get("category") == "showcase"]
+        self.assertEqual(len(showcase), len(plan["works"]), "every work topic lands in 晒作品")
+        for topic in showcase:
+            self.assertTrue(topic.get("workId"), "a work topic must expose its work id")
+
+    def test_seeding_twice_does_not_duplicate(self):
+        plan = seed_starter_library.build_plan(self.db)
+        seed_starter_library.apply_plan(self.db, plan)
+        # A second run reuses existing accounts and the same requestIds.
+        result = seed_starter_library.apply_plan(self.db, plan)
+        self.assertEqual(result["users"], 0, "accounts are not recreated")
+        count = int(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0])
+        self.assertEqual(count, len(plan["works"]), "idempotent seeding must not duplicate works")
+
+
+if __name__ == "__main__":
+    unittest.main()

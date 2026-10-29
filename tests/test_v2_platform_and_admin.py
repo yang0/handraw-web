@@ -116,6 +116,37 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
             self.assertEqual(code, 200, f"Login failed for {username}: {res}")
         return c
 
+    def collect(self, result):
+        """Drive the result to its public state.
+
+        Works publish immediately (D-02), so there is nothing to drain: assert
+        the row exists and that it did not enter the review queue.  Styles and
+        layouts keep the two-vote gate, so they are still reviewed here.
+        """
+        from backend import curation as C
+        from backend.services import register_user
+        reviewers=[]
+        for name in ('qa_collect_a','qa_collect_b'):
+            row=self.db.get_conn().execute('SELECT * FROM users WHERE username=?',(name,)).fetchone()
+            reviewers.append(dict(row) if row else register_user(self.db,name,'qa-password')[0])
+        admin=dict(self.db.get_conn().execute("SELECT * FROM users WHERE username='yang0'").fetchone())
+        C.grant_access(self.db,admin,{'usernames':[r['username'] for r in reviewers],'kinds':['work','style','layout'],'action':'grant','reason':'isolated fixtures'})
+
+        if result.get('status')=='published':
+            self.assertIsNone(C.review_queue(self.db,reviewers[0])['assignment'],
+                              "a published work must not re-enter the review queue")
+            row=self.db.get_conn().execute('SELECT * FROM works WHERE id=?',(result['workId'],)).fetchone()
+            self.assertIsNotNone(row, "work row must exist immediately after publishing")
+            return result
+
+        published=None
+        for reviewer in reviewers:
+            task=C.review_queue(self.db,reviewer)['assignment']
+            self.assertEqual(task['topicId'],result['topicId'])
+            vote=C.vote(self.db,reviewer,{'assignmentId':task['assignmentId'],'decision':'approve'})
+            published=vote.get('published') or published
+        return published
+
     def test_01_public_works_seo_and_blackbox_protection(self) -> None:
         guest = self.client()
         code, boot = guest.request("GET", "/api/boot")
@@ -288,11 +319,12 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 "title": "付费精调配方测试图",
                 "images": ["/images/poster-demo-autumn-equinox.webp"],
                 "styles": ["FA-001"],
-                "layout": "LA-001",
+                "layout": "SC-001",
                 "price": 10,
                 "prompt": "机密高阶手绘提示词内容_888",
             },
         )
+        self.collect(pub_w)
         paid_wid = pub_w["workId"]
         _, yang_before_sale = admin.request("GET", "/api/boot")
         _, su_before_buy = su.request("GET", "/api/boot")
@@ -333,15 +365,23 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
             {
                 "title": "荒地开垦首晒测试",
                 "images": ["/images/individual/FA/FA-013.webp"],
-                "styles": ["FZ-999"],
-                "layout": "LA-001",
+                "styles": ["FA-013"],
+                "layout": "SC-001",
                 "prompt": "荒地首晒提示词",
             },
         )
         self.assertEqual(code_w, 200, res_w)
-        self.assertTrue(res_w["pioneer"])
-        # 1st share crosses member -> rookie (+10 honor upgrade) + 5 base + 10 pioneer = +25
-        self.assertEqual(res_w["credits"], c0 + 5 + 10 + 10)
+        # D-02: the work is live immediately and its reward lands right away.
+        self.assertEqual(res_w['status'],'published')
+        # Exact amounts, not "whatever the server reported".  FA-013 is an
+        # unclaimed style, so this first share earns base +5 + pioneer +10, and
+        # crossing the share threshold also triggers the +10 honour upgrade.
+        self.assertEqual(res_w['reward'], 15, res_w)
+        c_after_work = c0 + 5 + 10 + 10
+        _,published_boot=fresh.request('GET','/api/boot')
+        self.assertEqual(published_boot['credits'], c_after_work, "base + pioneer + honour upgrade must all apply")
+        self.assertTrue(any(w['id']==res_w['workId'] for w in published_boot['works']))
+        after_work=published_boot['credits']
 
         # Publish community style -> crosses total shares 1 -> 2 (rookie -> pioneer), earning +15 base + +10 honor upgrade!
         code_a, res_a = fresh.request(
@@ -357,8 +397,10 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
             },
         )
         self.assertEqual(code_a, 200, res_a)
-        self.assertTrue(len(res_a["upgradedBadge"]) > 0)
-        self.assertEqual(res_a["credits"], c0 + 25 + 15 + 10)
+        self.assertEqual(res_a['status'],'pending')
+        collected_asset=self.collect(res_a)
+        self.assertTrue(collected_asset['upgradedBadge'])
+        self.assertEqual(collected_asset['credits'],after_work+15+10)
 
     def test_06_forum_bounty_escrow_accept_and_admin_arbitration(self) -> None:
         su = self.client("su_editorial")
@@ -470,6 +512,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 "prompt": "审核员作品提示词",
             },
         )
+        self.collect(own_pub)
         own_wid = own_pub["workId"]
         code_self, err_self = reviewer.request(
             "POST",
@@ -815,6 +858,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
             },
         )
         self.assertEqual(c_pw, 200)
+        self.collect(pw_res)
         norm_wid = pw_res["workId"]
 
         # Board moderator (not author, not operator) tries to delete it -> 403
