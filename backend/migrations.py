@@ -520,7 +520,13 @@ except ImportError:  # pragma: no cover - compatibility for staged rollouts
 
 MIGRATIONS.extend(FEATURE_MIGRATIONS)
 
-from .curation_schema import CURATION_MIGRATIONS
+# Community curation schema.  Optional so a checkout that does not include the
+# curation module can still boot and migrate; the module ships with the feature.
+try:
+    from .curation_schema import CURATION_MIGRATIONS
+except ImportError:  # pragma: no cover - compatibility for partial checkouts
+    CURATION_MIGRATIONS: list[tuple[int, str, str]] = []
+
 MIGRATIONS.extend(CURATION_MIGRATIONS)
 
 # Work identity / social counters / forks (migration block 040+).

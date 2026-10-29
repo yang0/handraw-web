@@ -1622,13 +1622,19 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             vals = qs.get(key)
             return vals[0].strip() if vals and vals[0] else default
 
-        # Optional feature module is loaded lazily so the security boundary is
-        # available even while its additive schema/routes are being deployed.
-        from .curation_routes import handle_get as curation_get
-        from .forum_resource_routes import handle_get as resource_get
-        if resource_get(self, req_path, qs):
+        # Optional feature modules load lazily and degrade to "no route" when a
+        # partial checkout omits them, so the rest of the server still boots.
+        try:
+            from .curation_routes import handle_get as curation_get
+        except ImportError:  # pragma: no cover - partial checkout
+            curation_get = None
+        try:
+            from .forum_resource_routes import handle_get as resource_get
+        except ImportError:  # pragma: no cover - partial checkout
+            resource_get = None
+        if resource_get and resource_get(self, req_path, qs):
             return
-        if curation_get(self, req_path, qs):
+        if curation_get and curation_get(self, req_path, qs):
             return
         if self._feature_get(req_path, qs):
             return
@@ -2066,11 +2072,17 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             edit_user = self._current_user(required=True)
             body = validate_publish_media(self.db, edit_user, sanitize_submission_body(body))  # type: ignore[arg-type]
 
-        from .curation_routes import handle_post as curation_post
-        from .forum_resource_routes import handle_post as resource_post
-        if resource_post(self, req_path, body):
+        try:
+            from .curation_routes import handle_post as curation_post
+        except ImportError:  # pragma: no cover - partial checkout
+            curation_post = None
+        try:
+            from .forum_resource_routes import handle_post as resource_post
+        except ImportError:  # pragma: no cover - partial checkout
+            resource_post = None
+        if resource_post and resource_post(self, req_path, body):
             return
-        if curation_post(self, req_path, body):
+        if curation_post and curation_post(self, req_path, body):
             return
         if self._feature_post(req_path, body):
             return
