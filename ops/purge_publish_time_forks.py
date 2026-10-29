@@ -23,11 +23,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def plan(conn: sqlite3.Connection) -> list[dict]:
-    """Rows that cannot be backed by a real generation.
+    """Rows that cannot be backed by a genuine generation by the same user.
 
-    A legitimate fork points at the generation that produced it.  Rows are
-    suspicious when they have no generation at all, or when the named generation
-    does not exist / did not succeed.
+    A legitimate fork points at a generation that (a) exists, (b) succeeded,
+    (c) was not a sample, (d) belongs to the same user who claims the fork, and
+    (e) was itself generated with this work as ``fork_work_id``.  Anything
+    failing one of those checks is either publish-path debris or a borrowed
+    generation id.
     """
     rows = conn.execute(
         """
@@ -39,10 +41,27 @@ def plan(conn: sqlite3.Connection) -> list[dict]:
                   WHERE g.id = f.first_generation_id
                     AND g.status = 'success'
                     AND COALESCE(g.engine, '') <> 'sample'
+                    AND g.user_id = f.user_id
+                    AND COALESCE(g.fork_work_id, '') = f.work_id
                )
         """
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def backup(conn: sqlite3.Connection, db_path: Path) -> Path:
+    """Copy the database through SQLite's backup API.
+
+    A filesystem copy can miss data still sitting in the WAL (and can capture a
+    half-written page), which is how an "empty 4 KB backup" happens.
+    """
+    target = db_path.with_name(db_path.name + f".bak-forks-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    dest = sqlite3.connect(str(target))
+    try:
+        conn.backup(dest)
+    finally:
+        dest.close()
+    return target
 
 
 def apply(conn: sqlite3.Connection, todo: list[dict]) -> int:
@@ -76,18 +95,26 @@ def main(argv: list[str] | None = None) -> int:
     conn.row_factory = sqlite3.Row
     try:
         todo = plan(conn)
-        print(f"待清理的可疑复刻记录：{len(todo)} 条（无生成来源）")
+        print(f"待清理的可疑复刻记录：{len(todo)} 条（无有效生成来源）")
         for row in todo[:10]:
-            print(f"  {row['work_id']} <- user {row['user_id']}")
+            print(f"  {row['work_id']} <- user {row['user_id']}  gen={row['first_generation_id'] or '(none)'}")
         if not args.apply:
             print("干跑完成，未写入。加 --apply 执行。")
             return 0
         if not todo:
             print("无需清理。")
             return 0
-        backup = db_path.with_name(db_path.name + f".bak-forks-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
-        shutil.copy2(db_path, backup)
-        print(f"已备份：{backup}")
+        backup_path = backup(conn, db_path)
+        print(f"已备份：{backup_path}")
+        # Verify the backup actually contains data before mutating the original.
+        check = sqlite3.connect(str(backup_path))
+        try:
+            copied = int(check.execute("SELECT COUNT(*) FROM works").fetchone()[0])
+        finally:
+            check.close()
+        if copied < 1:
+            print("备份为空，已中止（数据库可能有未落盘的 WAL 数据）。", file=sys.stderr)
+            return 3
         removed = apply(conn, todo)
         print(f"已删除 {removed} 条，并按事实表重算了 works.forks。")
         return 0
