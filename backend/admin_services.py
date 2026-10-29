@@ -798,6 +798,11 @@ def admin_moderate_work(
         if not w:
             raise ServiceError(f"作品不存在：{wid}", status=404)
 
+        curated=tx.execute("SELECT id FROM curation_submissions WHERE kind='work' AND target_id=?",(wid,)).fetchone()
+        if curated and act=='edit':
+            raise ServiceError('收录作品请由作者编辑重提',status=409)
+        if curated and act in ('publish','feature','boost_new') and not tx.execute("SELECT 1 FROM curation_events WHERE submission_id=? AND event_type='publish'",(curated['id'],)).fetchone():
+            raise ServiceError('作品尚未通过收录审核',status=409)
         is_author = (user.get("username") == w["author_username"])
         if is_author:
             if act not in ("delete", "edit"):
@@ -818,11 +823,17 @@ def admin_moderate_work(
                 raise ServiceError("运营审查员无权删除超级管理员发布的作品", status=403)
 
         if act == "publish":
-            tx.execute("UPDATE works SET status = 'published', updated_at = ? WHERE id = ?", (now_iso, wid))
+            from .services import set_work_visibility
+
+            set_work_visibility(tx, wid, "published", now_iso)
         elif act == "pause":
-            tx.execute("UPDATE works SET status = 'paused', updated_at = ? WHERE id = ?", (now_iso, wid))
+            from .services import set_work_visibility
+
+            set_work_visibility(tx, wid, "paused", now_iso)
         elif act == "hide":
-            tx.execute("UPDATE works SET status = 'hidden', updated_at = ? WHERE id = ?", (now_iso, wid))
+            from .services import set_work_visibility
+
+            set_work_visibility(tx, wid, "hidden", now_iso)
         elif act == "feature":
             tx.execute("UPDATE works SET featured = 1, status = 'published', updated_at = ? WHERE id = ?", (now_iso, wid))
         elif act == "unfeature":
@@ -834,7 +845,10 @@ def admin_moderate_work(
             )
         elif act == "edit":
             title = str(payload.get("title") if payload.get("title") is not None else w["title"]).strip()
-            price = max(0, min(200, int(payload.get("price") if payload.get("price") is not None else w["price"])))
+            try:
+                price = max(0, min(200, int(payload.get("price") if payload.get("price") is not None else w["price"])))
+            except (TypeError, ValueError, OverflowError):
+                raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
             raw_styles = payload.get("styles")
             if isinstance(raw_styles, str):
                 styles = [s.strip().upper() for s in re.split(r"[,，\s]+", raw_styles) if s.strip()]
@@ -844,7 +858,9 @@ def admin_moderate_work(
                 styles = json.loads(w["styles_json"] or "[]")
             layout = str(payload.get("layout") if payload.get("layout") is not None else w["layout_code"]).strip().upper()
             mood = str(payload.get("mood") if payload.get("mood") is not None else w["mood"]).strip()
-            prompt = str(payload.get("prompt") if payload.get("prompt") is not None else w["prompt"]).strip()
+            # Keep the stored prompt byte-for-byte unless the admin actually
+            # rewrote it: stripping would silently change the author's text.
+            prompt = str(payload.get("prompt") if payload.get("prompt") is not None else w["prompt"])
             notes = str(payload.get("notes") if payload.get("notes") is not None else w["notes"]).strip()
             tx.execute(
                 """
@@ -856,9 +872,35 @@ def admin_moderate_work(
         elif act == "delete":
             tx.execute("DELETE FROM work_comments WHERE work_id = ?", (wid,))
             tx.execute("DELETE FROM collections WHERE bucket = 'works' AND target_id = ?", (wid,))
+            # The thread must go dark with the work: hiding it before dropping the
+            # mapping, otherwise the topic stays published and anonymous readers
+            # keep seeing a deleted work's discussion.
+            mapped = tx.execute(
+                "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
+                (wid,),
+            ).fetchone()
+            if mapped:
+                tx.execute(
+                    "UPDATE forum_topics SET status = 'hidden', updated_at = ? WHERE id = ?",
+                    (now_iso, str(mapped["topic_id"])),
+                )
+            tx.execute("DELETE FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?", (wid,))
             tx.execute("DELETE FROM works WHERE id = ?", (wid,))
         else:
             raise ServiceError(f"不支持的作品审核动作：{act}")
+
+        # ``set_work_visibility`` already syncs the topic for publish/pause/hide.
+        # Featuring also republishes, so its topic needs the same treatment.
+        if act == "feature":
+            mapped = tx.execute(
+                "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
+                (wid,),
+            ).fetchone()
+            if mapped:
+                tx.execute(
+                    "UPDATE forum_topics SET status = 'published', updated_at = ? WHERE id = ?",
+                    (now_iso, str(mapped["topic_id"])),
+                )
 
         record_audit_log(
             tx,
@@ -1138,6 +1180,11 @@ def admin_upsert_catalog_asset(
         settings = get_site_settings(tx)
         _admin_reject_seed_value(code, "assets", "资产")
         existing = tx.execute("SELECT * FROM catalog_assets WHERE code = ?", (code,)).fetchone() if code else None
+        if source_type == 'community' and not existing:
+            raise ServiceError('新增共创资源请通过论坛分享投稿并申请收录',status=409)
+        if code and tx.execute('SELECT 1 FROM curation_submissions WHERE target_id=? AND kind=?',(code,kind)).fetchone():
+            raise ServiceError('共创投稿的定义请由作者编辑重提；申诉请进入收录管理',status=409)
+
 
         if existing:
             if existing["source_type"] in ("exclusive", "official_override") and actor.get("role") != "admin":
@@ -1499,7 +1546,10 @@ def admin_moderate_topic(
             cat = str(payload.get("category") or t["category"]).strip()
             cat_label = FORUM_CATEGORY_LABELS.get(cat, t["category_label"])
             title = str(payload.get("title") if payload.get("title") is not None else t["title"]).strip()
-            price = max(0, min(200, int(payload.get("price") if payload.get("price") is not None else t["price"])))
+            try:
+                price = max(0, min(200, int(payload.get("price") if payload.get("price") is not None else t["price"])))
+            except (TypeError, ValueError, OverflowError):
+                raise ServiceError("帖子定价必须是整数", status=400, code="invalid_price")
             summary = str(payload.get("summary") if payload.get("summary") is not None else t["summary"]).strip()
             locked_body = str(payload.get("lockedBody") if payload.get("lockedBody") is not None else t["locked_body"]).strip()
             tx.execute(
@@ -1718,6 +1768,15 @@ def admin_revoke_forum_moderator(
     return {"ok": True, "username": row["username"], "category": row["category"]}
 
 
+def _has_other_open_reports(tx, target_type: str, target_id: str, report_id) -> bool:
+    """True when other reports on this target are still open."""
+    row = tx.execute(
+        "SELECT COUNT(*) FROM reports WHERE target_type = ? AND target_id = ? AND status = 'open' AND id <> ?",
+        (target_type, target_id, report_id),
+    ).fetchone()
+    return bool(row and int(row[0]) > 0)
+
+
 def admin_list_reports(db: Database, user: dict[str, Any] | None, status: str = "") -> dict[str, Any]:
     require_staff(user, allow_reviewer=True)
     conn = db.get_conn()
@@ -1822,25 +1881,33 @@ def admin_resolve_report(
 
         ttype = rep["target_type"]
         tid = rep["target_id"]
-        if auto_action:
-            if res == "confirmed":
-                if ttype == "work":
-                    tx.execute("UPDATE works SET status = 'hidden', updated_at = ? WHERE id = ?", (now_iso, tid))
-                elif ttype == "topic":
-                    tx.execute("UPDATE forum_topics SET status = 'hidden', updated_at = ? WHERE id = ?", (now_iso, tid))
-                elif ttype == "asset":
-                    tx.execute("UPDATE catalog_assets SET status = 'hidden', updated_at = ? WHERE code = ?", (now_iso, tid))
-                elif ttype == "comment":
-                    tx.execute("UPDATE work_comments SET status = 'hidden' WHERE id = ?", (tid,))
-                elif ttype == "reply":
-                    tx.execute("UPDATE forum_replies SET status = 'hidden' WHERE id = ?", (tid,))
-            elif res == "dismissed":
-                if ttype == "work":
-                    tx.execute("UPDATE works SET status = 'published', updated_at = ? WHERE id = ? AND status = 'paused'", (now_iso, tid))
-                elif ttype == "topic":
-                    tx.execute("UPDATE forum_topics SET status = 'published', updated_at = ? WHERE id = ? AND status = 'paused'", (now_iso, tid))
-                elif ttype == "asset":
-                    tx.execute("UPDATE catalog_assets SET status = 'published', updated_at = ? WHERE code = ? AND status = 'paused'", (now_iso, tid))
+        # ``auto_action`` only decides whether the *hide* half runs.  Restoring
+        # must not depend on it: when abuse handling paused the target earlier,
+        # dismissing the report has to undo that regardless of this flag.
+        if auto_action and res == "confirmed":
+            if ttype == "work":
+                from .services import set_work_visibility
+
+                set_work_visibility(tx, str(tid), "hidden", now_iso)
+            elif ttype == "topic":
+                tx.execute("UPDATE forum_topics SET status = 'hidden', updated_at = ? WHERE id = ?", (now_iso, tid))
+            elif ttype == "asset":
+                tx.execute("UPDATE catalog_assets SET status = 'hidden', updated_at = ? WHERE code = ?", (now_iso, tid))
+            elif ttype == "comment":
+                tx.execute("UPDATE work_comments SET status = 'hidden' WHERE id = ?", (tid,))
+            elif ttype == "reply":
+                tx.execute("UPDATE forum_replies SET status = 'hidden' WHERE id = ?", (tid,))
+        elif res == "dismissed" and not _has_other_open_reports(tx, ttype, str(tid), report_id):
+            # Only the last dismissed report restores the target, and only if it
+            # was auto-paused — a work an admin hid stays hidden.
+            if ttype == "work":
+                from .services import set_work_visibility
+
+                set_work_visibility(tx, str(tid), "published", now_iso, allow_from=("paused",))
+            elif ttype == "topic":
+                tx.execute("UPDATE forum_topics SET status = 'published', updated_at = ? WHERE id = ? AND status = 'paused'", (now_iso, tid))
+            elif ttype == "asset":
+                tx.execute("UPDATE catalog_assets SET status = 'published', updated_at = ? WHERE code = ? AND status = 'paused'", (now_iso, tid))
 
         record_audit_log(
             tx,

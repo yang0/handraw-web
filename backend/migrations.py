@@ -519,3 +519,14 @@ except ImportError:  # pragma: no cover - compatibility for staged rollouts
     FEATURE_MIGRATIONS = []
 
 MIGRATIONS.extend(FEATURE_MIGRATIONS)
+
+from .curation_schema import CURATION_MIGRATIONS
+MIGRATIONS.extend(CURATION_MIGRATIONS)
+
+# Work identity / social counters / forks (migration block 040+).
+try:
+    from .work_schema import WORK_MIGRATIONS
+except ImportError:  # pragma: no cover - compatibility for staged rollouts
+    WORK_MIGRATIONS = []
+
+MIGRATIONS.extend(WORK_MIGRATIONS)

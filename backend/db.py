@@ -1,6 +1,7 @@
 """Thread-safe SQLite WAL database manager with additive migrations and ACID transactions."""
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -15,6 +16,9 @@ from .migrations import MIGRATIONS
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_MIGRATION_NAME_RE = re.compile(r"^[0-9]{3}_[a-z0-9_]+$")
 
 
 def local_today_str() -> str:
@@ -113,11 +117,32 @@ class Database:
             for version, name, ddl in MIGRATIONS:
                 if version in existing:
                     continue
-                conn.executescript(ddl)
-                conn.execute(
-                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-                    (version, name, now),
+                if not isinstance(version, int) or not _MIGRATION_NAME_RE.fullmatch(name):
+                    raise RuntimeError(f"invalid migration id: {version!r} {name!r}")
+                # DDL and its bookkeeping must commit together.  ``executescript``
+                # implicitly commits first, so a failure halfway through used to
+                # leave an un-recorded partial migration behind -- and SQLite's
+                # ``ALTER TABLE ADD COLUMN`` has no ``IF NOT EXISTS``, so the
+                # re-run then failed permanently with "duplicate column name".
+                script = (
+                    "BEGIN IMMEDIATE;\n"
+                    + ddl
+                    + "\n;\n"
+                    + "INSERT INTO schema_migrations (version, name, applied_at) VALUES ("
+                    + str(version)
+                    + ", '"
+                    + name
+                    + "', '"
+                    + now
+                    + "');\n"
+                    + "COMMIT;"
                 )
+                try:
+                    conn.executescript(script)
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK;")
+                    raise
                 applied_names.append(name)
         return applied_names
 

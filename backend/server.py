@@ -22,6 +22,9 @@ import uuid
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import logging
+
+logger = logging.getLogger("backend.server")
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -672,7 +675,9 @@ def validate_publish_media(db: Database, user: dict[str, Any] | None, body: dict
                 if not safe:
                     continue
                 if safe.startswith(("/uploads/", "/generated/")) and _media_owner(db, safe) != uid:
-                    continue
+                    # Never drop silently: the caller would believe an image was
+                    # published when it was not (the Skill contract forbids this).
+                    raise ServiceError("不能使用他人的图片作为作品配图", status=403, code="foreign_media")
                 clean.append(safe)
             elif isinstance(item, dict):
                 raw_url = str(item.get("url") or item.get("src") or item.get("image") or "").strip()
@@ -681,8 +686,10 @@ def validate_publish_media(db: Database, user: dict[str, Any] | None, body: dict
                     saved = save_data_url_upload(db, user, raw_url, name_zh=tag or f"帖内配图-{idx + 1}")
                     raw_url = saved["url"]
                 safe = sanitize_media_url(raw_url)
-                if not safe or (safe.startswith(("/uploads/", "/generated/")) and _media_owner(db, safe) != uid):
+                if not safe:
                     continue
+                if safe.startswith(("/uploads/", "/generated/")) and _media_owner(db, safe) != uid:
+                    raise ServiceError("不能使用他人的图片作为作品配图", status=403, code="foreign_media")
                 clean.append({"url": safe, "tag": tag or f"配图 P{idx + 1}"})
         out["images"] = clean
     return out
@@ -694,6 +701,94 @@ def _persist_inline_images_in_body(db: Database, user: dict[str, Any] | None, bo
     if user:
         return validate_publish_media(db, user, out)
     return out
+
+
+def _entry_to_work_body(entry: dict[str, Any]) -> dict[str, Any]:
+    """Translate a Skill work payload into the work publish body.
+
+    Accepts the shape ``community_share.work_payload`` actually produces::
+
+        {"kind": "work", "title": ..., "cover_url": ...,
+         "content": {"prompt": ..., "parameters": {"style_ids": [...], "layout_ids": [...]},
+                     "examples": [{"theme": ..., "image": ...}]},
+         "assets": [{"ref": "official:FA-013", "role": "style"}, ...]}
+
+    Flat fields (``prompt``, ``styleIds``, ``layoutId``) are also accepted so a
+    direct ``/api/works`` call works without an adapter.
+    """
+    def _codes(value: Any) -> list[str]:
+        items = value if isinstance(value, list) else [value]
+        return [str(v).strip() for v in items if v is not None and str(v).strip()]
+
+    content = entry.get("content") if isinstance(entry.get("content"), dict) else {}
+    params = content.get("parameters") if isinstance(content.get("parameters"), dict) else {}
+
+    # Images: cover first, then examples; fall back to flat image lists.
+    image_urls: list[str] = []
+    cover = entry.get("cover_url") or entry.get("image") or ""
+    if cover:
+        image_urls.append(str(cover))
+    for example in content.get("examples") or []:
+        if isinstance(example, dict):
+            url = example.get("image") or example.get("url") or ""
+            if url:
+                image_urls.append(str(url))
+        elif isinstance(example, str):
+            image_urls.append(example)
+    for item in entry.get("images") or entry.get("uploads") or []:
+        if isinstance(item, str):
+            image_urls.append(item)
+        elif isinstance(item, dict):
+            url = item.get("url") or item.get("short_url") or ""
+            if url:
+                image_urls.append(str(url))
+    deduped: list[str] = []
+    for url in image_urls:
+        if url and url not in deduped:
+            deduped.append(url)
+
+    # A caller sending more than nine images is rejected even when they collapse
+    # to fewer unique URLs, so the "split the share" instruction still surfaces.
+    if len(image_urls) > 9:
+        raise ServiceError("一次最多 9 张图片，请分批发布", status=400, code="too_many_images")
+
+    # Assets carry "official:<CODE>" refs; split them by role.
+    styles = _codes(entry.get("styleIds") or entry.get("styles") or [])
+    layouts = _codes(entry.get("layoutId") or entry.get("layout") or [])
+    if not styles and not layouts:
+        styles = _codes(params.get("style_ids") or [])
+        layouts = _codes(params.get("layout_ids") or [])
+    for asset in entry.get("assets") or []:
+        if not isinstance(asset, dict):
+            continue
+        ref = str(asset.get("ref") or "").strip()
+        code = ref.split(":", 1)[1] if ref.startswith("official:") else ref
+        if not code:
+            continue
+        role = str(asset.get("role") or "style")
+        if role == "layout" and code not in layouts:
+            layouts.append(code)
+        elif role == "style" and code not in styles:
+            styles.append(code)
+
+    # Stored verbatim: the Skill preserves the user's original request byte for
+    # byte, and trimming would silently change what they said.
+    prompt = str(content.get("prompt") or entry.get("prompt") or "")
+
+    return {
+        "title": str(entry.get("title") or "").strip(),
+        "prompt": prompt,
+        "notes": str(entry.get("originalRequest") or entry.get("notes") or entry.get("summary") or "").strip(),
+        "images": deduped,
+        "styles": styles,
+        "layout": layouts[0] if layouts else "",
+        "ratio": str(entry.get("ratio") or "3:4"),
+        "requestId": str(entry.get("requestId") or entry.get("clientRequestId") or "").strip(),
+        # ``forkOf`` is accepted for lineage only; it never increments a counter
+        # (forks are counted when a real generation succeeds).
+        "forkOf": str(entry.get("forkOf") or "").strip(),
+        "origin": "skill",
+    }
 
 
 def load_localized_json(filename: str) -> bytes:
@@ -1151,7 +1246,7 @@ def build_sitemap_xml(db: Database, origin: str) -> bytes:
 def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[str, list[str]]) -> bytes:
     base = origin.rstrip("/")
     conn = db.get_conn()
-    view = (qs.get("view", ["styles"])[0] or "styles").strip()
+    view = (qs.get("view", ["discover"])[0] or "discover").strip()
     work_id = (qs.get("work", [""])[0] or (qs.get("id", [""])[0] if view == "work" else "")).strip()
     asset_code = (qs.get("asset", [""])[0] or (qs.get("id", [""])[0] if view == "asset" else "")).strip().upper()
     profile_user = (qs.get("user", [""])[0] or "").strip()
@@ -1183,7 +1278,9 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         styles_list = json.loads(target_work["styles_json"] or "[]")
         recipe_tags = " / ".join([*styles_list, *([target_work["layout_code"]] if target_work["layout_code"] else [])])
         snippet_src = target_work["notes"] or (
-            target_work["prompt"][:80] if int(target_work["price"] or 0) <= 0 else target_work["prompt"][:34]
+            # Paid recipes must not appear in server-rendered HTML: crawlers and
+            # anonymous visitors would read them without unlocking.
+            target_work["prompt"][:80] if int(target_work["price"] or 0) <= 0 else ""
         )
         page_title = f"{target_work['title']} (@{target_work['author_name']}) 作品详情与评论 — Handraw 实测作品广场"
         meta_desc = f"由 @{target_work['author_name']} 分享的手绘实测作品《{target_work['title']}》" + (
@@ -1218,7 +1315,10 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
             "mainEntity": {"@type": "Person", "name": disp_name, "identifier": profile_user},
         }
     else:
-        if view == "works":
+        if view == "discover":
+            page_title = "AI 视觉创作与实测分享 — 手绘风创作社区"
+            meta_desc = "看看大家做出了什么，也把你的做法留下来。浏览画风、图型和公开作品，找到适合这次创作的方法。"
+        elif view == "works":
             page_title = f"实测作品广场（{total_works} 件手绘生图作品与提示词配方）— Handraw 手绘风社区"
             meta_desc = f"匿名免登录公开浏览 {total_works} 件社区创作者真实手绘生图作品、画风图型搭配方案与实测提示词，支持一键带入无限画布复刻。"
         elif view == "layouts":
@@ -1278,7 +1378,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         img0 = imgs[0] if imgs else "/images/poster-demo-autumn-equinox.webp"
         styles = json.loads(w["styles_json"] or "[]")
         tags = " · ".join([*styles, *([w["layout_code"]] if w["layout_code"] else [])]) or "自由手绘创作"
-        summary_txt = w["notes"] or (w["prompt"][:80] if int(w["price"] or 0) <= 0 else w["prompt"][:34] + "…")
+        summary_txt = w["notes"] or (w["prompt"][:80] if int(w["price"] or 0) <= 0 else "")
         w_href = f"/?view=work&id={urllib.parse.quote(w['id'])}"
         ssr_cards.append(
             f'<article class="hw-seo-work-item">'
@@ -1296,6 +1396,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         f"<h1>{html.escape(page_title)}</h1>"
         f"<p>{html.escape(meta_desc)}</p>"
         '<nav aria-label="站点公开频道">'
+        '<a href="/?view=discover">发现作品与做法</a> · '
         '<a href="/?view=styles">手绘画风库</a> · '
         '<a href="/?view=layouts">结构化图型库</a> · '
         '<a href="/?view=works">实测作品广场</a> · '
@@ -1523,6 +1624,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         # Optional feature module is loaded lazily so the security boundary is
         # available even while its additive schema/routes are being deployed.
+        from .curation_routes import handle_get as curation_get
+        from .forum_resource_routes import handle_get as resource_get
+        if resource_get(self, req_path, qs):
+            return
+        if curation_get(self, req_path, qs):
+            return
         if self._feature_get(req_path, qs):
             return
 
@@ -1872,7 +1979,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "Media not found")
                 return
 
-        # HTML Entrypoint & Static Assets Routing across 4 Channels
+        # One listener serves all frontends. Production chooses by Host; local
+        # development also has explicit paths on the same origin.
         is_studio_channel = host.startswith("studio.") or srv_role == "studio"
         is_forum_channel = host.startswith("forum.") or host.startswith("bbs.") or srv_role == "forum"
 
@@ -1887,6 +1995,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 file_path = DEMO_DIR / "index.html"
         elif req_path in ("/admin", "/admin/"):
             file_path = DEMO_DIR / "admin.html"
+        elif req_path in ("/studio", "/studio/"):
+            file_path = DEMO_DIR / "studio.html"
+        elif req_path in ("/forum", "/forum/"):
+            file_path = DEMO_DIR / "forum.html"
         else:
             clean_rel = req_path.lstrip("/")
             file_path = (DEMO_DIR / clean_rel).resolve()
@@ -1954,6 +2066,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             edit_user = self._current_user(required=True)
             body = validate_publish_media(self.db, edit_user, sanitize_submission_body(body))  # type: ignore[arg-type]
 
+        from .curation_routes import handle_post as curation_post
+        from .forum_resource_routes import handle_post as resource_post
+        if resource_post(self, req_path, body):
+            return
+        if curation_post(self, req_path, body):
+            return
         if self._feature_post(req_path, body):
             return
 
@@ -2135,8 +2253,34 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             user = self._current_user(required=True)
             clean_body = _persist_inline_images_in_body(self.db, user, body)
             result = publish_user_work(self.db, user, clean_body)  # type: ignore[arg-type]
-            _grant_published_media(self.db, user, clean_body, target_type="work", target_id=str(result.get("workId") or ""))
+            _grant_published_media(self.db, user, clean_body, target_type="topic", target_id=str(result.get("topicId") or ""))
             self._send_json(result)
+            return
+
+        # Skill share contract.  ``community-share`` posts ``{"entry": {...}}``
+        # and expects ``{"id", "kind": "work"}`` back so it can mint a durable
+        # receipt.  This is the entry point the Skill targets; the shape is
+        # translated here rather than making every Skill client speak the
+        # browser payload.
+        if req_path == "/api/entries":
+            user = self._current_user(required=True)
+            entry = body.get("entry") if isinstance(body, dict) else None
+            if not isinstance(entry, dict):
+                self._send_json({"ok": False, "error": "缺少 entry 对象", "code": "entry_required"}, status=400)
+                return
+            clean_body = _persist_inline_images_in_body(self.db, user, _entry_to_work_body(entry))
+            result = publish_user_work(self.db, user, clean_body)  # type: ignore[arg-type]
+            _grant_published_media(self.db, user, clean_body, target_type="topic", target_id=str(result.get("topicId") or ""))
+            self._send_json(
+                {
+                    "ok": True,
+                    "id": result.get("workId"),
+                    "kind": "work",
+                    "topicId": result.get("topicId"),
+                    "url": result.get("url"),
+                    "status": result.get("status"),
+                }
+            )
             return
 
         m_work_comment = re.match(r"^/api/works/([^/]+)/comments$", req_path)
@@ -2163,7 +2307,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             user = self._current_user(required=True)
             clean_body = _persist_inline_images_in_body(self.db, user, body)
             result = publish_user_community_asset(self.db, user, clean_body)  # type: ignore[arg-type]
-            _grant_published_media(self.db, user, clean_body, target_type="asset", target_id=str(result.get("code") or ""))
+            _grant_published_media(self.db, user, clean_body, target_type="topic", target_id=str(result.get("topicId") or ""))
             self._send_json(result)
             return
 
@@ -2216,6 +2360,31 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             user = self._current_user(required=True)
             articles = body.get("articles") if isinstance(body.get("articles"), list) else (body.get("_list") or [])
             self._send_json(sync_user_studio_articles(self.db, user, articles))  # type: ignore[arg-type]
+            return
+
+        if req_path == "/api/studio/parse-article":
+            import base64
+            from backend.document_parser import parse_article_file
+
+            file_name = str(body.get("fileName") or body.get("name") or "")
+            file_data = body.get("fileData") or body.get("data") or body.get("dataUrl") or ""
+            raw_text = str(body.get("text") or "")
+
+            if file_data and isinstance(file_data, str):
+                if "," in file_data:
+                    file_data = file_data.split(",", 1)[1]
+                try:
+                    file_bytes = base64.b64decode(file_data)
+                except Exception as exc:
+                    raise ServiceError(f"文件数据 Base64 解码失败：{exc}", status=400) from exc
+            elif raw_text:
+                file_bytes = raw_text.encode("utf-8")
+            else:
+                raise ServiceError("未提供有效的文件数据或文本正文", status=400)
+
+            logger.info("POST /api/studio/parse-article: filename=%s, bytes=%d", file_name, len(file_bytes))
+            parsed_res = parse_article_file(file_bytes, file_name)
+            self._send_json({"ok": True, **parsed_res})
             return
 
         if req_path == "/api/studio/history":
@@ -2577,8 +2746,8 @@ def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
-    parser = argparse.ArgumentParser(description="Handraw Web 2.0 Full-Stack Multi-Channel Server")
-    parser.add_argument("--port", type=int, default=3080, help="Base port (3080=main, +1=studio, +2=forum, +3=admin)")
+    parser = argparse.ArgumentParser(description="Handraw Web single-backend server")
+    parser.add_argument("--port", type=int, default=3080, help="Single HTTP port for all frontends (default: 3080)")
     parser.add_argument("--host", type=str, default="", help="Bind host; wildcard requires HANDRAW_ALLOW_PUBLIC_BIND=1")
     parser.add_argument("--db", type=str, default="", help="Optional custom SQLite DB path")
     parser.add_argument("--reset-db", action="store_true", help="Reset seed data on startup")
@@ -2591,33 +2760,26 @@ def main(argv: list[str] | None = None) -> None:
 
     db = init_database(args.db or get_db_path(), force_reset=args.reset_db)
 
-    p_main = args.port
-    p_studio = args.port + 1
-    p_forum = args.port + 2
-    p_admin = args.port + 3
-
     requested_host = args.host or None
-    srv_main = create_channel_server(p_main, "main", db, host=requested_host, demo_mode=args.demo_mode or None)
-    srv_studio = create_channel_server(p_studio, "studio", db, host=requested_host, demo_mode=args.demo_mode or None)
-    srv_forum = create_channel_server(p_forum, "forum", db, host=requested_host, demo_mode=args.demo_mode or None)
-    srv_admin = create_channel_server(p_admin, "admin", db, host=requested_host, demo_mode=args.demo_mode or None)
+    server = create_channel_server(args.port, "main", db, host=requested_host, demo_mode=args.demo_mode or None)
     reconciler = GenerationReconciler(db).start()
 
-    threading.Thread(target=srv_studio.serve_forever, daemon=True).start()
-    threading.Thread(target=srv_forum.serve_forever, daemon=True).start()
-    threading.Thread(target=srv_admin.serve_forever, daemon=True).start()
-
-    print("Handraw Web 2.0 Full-Stack Platform Server running (SQLite WAL + safe bind):")
-    print(f"  [bind] {getattr(srv_main, 'bind_host', '127.0.0.1')}")
-    print(f"  [1. 主站 handraw-style.com]         http://localhost:{p_main}")
-    print(f"  [2. 创作台 studio.handraw-style.com] http://localhost:{p_studio}")
-    print(f"  [3. 论坛 forum.handraw-style.com]    http://localhost:{p_forum}")
-    print(f"  [4. 后台 admin.handraw-style.com]    http://localhost:{p_admin}")
+    print("Handraw Web single backend running (SQLite WAL + safe bind):")
+    print(f"  [bind] {getattr(server, 'bind_host', '127.0.0.1')}")
+    print(f"  [首页]   http://localhost:{args.port}/")
+    print(f"  [创作台] http://localhost:{args.port}/studio/")
+    print(f"  [社区]   http://localhost:{args.port}/forum/")
+    print(f"  [后台]   http://localhost:{args.port}/admin/")
+    print("  [部署] 按 Host 分发前端，所有二级域名共用本端口")
     print(f"  [DB] {db.db_path}")
     try:
-        srv_main.serve_forever()
+        server.serve_forever()
     except KeyboardInterrupt:
+        pass
+    finally:
         reconciler.stop()
+        server.server_close()
+        db.close()
 
 
 if __name__ == "__main__":

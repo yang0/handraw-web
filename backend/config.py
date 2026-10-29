@@ -53,3 +53,23 @@ def get_generated_dir() -> Path:
 
 def get_image_config_path() -> Path:
     return Path(os.environ.get("HANDRAW_IMAGE_CONFIG", str(WEB_ROOT / "image-service.json")))
+
+
+def get_ai_config_path() -> Path:
+    return Path(os.environ.get("HANDRAW_AI_CONFIG", str(WEB_ROOT / "ai-service.json")))
+
+
+def load_ai_config() -> dict:
+    import json
+    p = get_ai_config_path()
+    if p.is_file():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "url": os.environ.get("HANDRAW_AI_URL", "http://127.0.0.1:3065/v1"),
+        "key": os.environ.get("HANDRAW_AI_KEY", ""),
+        "model": os.environ.get("HANDRAW_AI_MODEL", "deepseek-v4.1-flash"),
+    }
+
