@@ -1534,9 +1534,30 @@ def admin_moderate_topic(
         elif act == "unfeature":
             tx.execute("UPDATE forum_topics SET featured = 0, updated_at = ? WHERE id = ?", (now_iso, tid))
         elif act == "publish":
-            tx.execute("UPDATE forum_topics SET status = 'published', updated_at = ? WHERE id = ?", (now_iso, tid))
+            # A work's thread may not be republished while the work itself is
+            # moderated; otherwise a board moderator can re-expose content an
+            # admin hid, one half at a time.
+            mapped_work = tx.execute(
+                "SELECT target_id FROM curation_resource_topics WHERE kind = 'work' AND topic_id = ?",
+                (tid,),
+            ).fetchone()
+            if mapped_work:
+                work_status = tx.execute(
+                    "SELECT status FROM works WHERE id = ?", (str(mapped_work["target_id"]),)
+                ).fetchone()
+                if work_status and str(work_status["status"]) != "published":
+                    raise ServiceError(
+                        "该主帖关联的作品当前不可见，请先恢复作品", status=409, code="work_not_published"
+                    )
+            tx.execute(
+                "UPDATE forum_topics SET status = 'published', status_source = '', status_reason = '', updated_at = ? WHERE id = ?",
+                (now_iso, tid),
+            )
         elif act == "hide":
-            tx.execute("UPDATE forum_topics SET status = 'hidden', updated_at = ? WHERE id = ?", (now_iso, tid))
+            tx.execute(
+                "UPDATE forum_topics SET status = 'hidden', status_source = 'moderator', updated_at = ? WHERE id = ?",
+                (now_iso, tid),
+            )
         elif act == "edit":
             cat = str(payload.get("category") or t["category"]).strip()
             cat_label = FORUM_CATEGORY_LABELS.get(cat, t["category_label"])
@@ -1883,15 +1904,16 @@ def admin_resolve_report(
             if ttype == "work":
                 from .services import set_work_visibility
 
-                # Attribute the hide to the report flow, so a later dismissal
-                # knows it may undo it — but only if nothing else intervened.
+                # Confirming a report is a human verdict, not an automatic
+                # action: it must be recorded as 'moderator' so a later
+                # dismissal cannot republish content a decision already hid.
                 set_work_visibility(
                     tx, str(tid), "hidden", now_iso,
-                    source="report", reason=f"举报成立（#{report_id}）",
+                    source="moderator", reason=f"举报成立（#{report_id}）",
                     allow_sources=("", "report"),
                 )
             elif ttype == "topic":
-                tx.execute("UPDATE forum_topics SET status = 'hidden', status_source = 'report', updated_at = ? WHERE id = ?", (now_iso, tid))
+                tx.execute("UPDATE forum_topics SET status = 'hidden', status_source = 'moderator', updated_at = ? WHERE id = ?", (now_iso, tid))
             elif ttype == "asset":
                 tx.execute("UPDATE catalog_assets SET status = 'hidden', updated_at = ? WHERE code = ?", (now_iso, tid))
             elif ttype == "comment":
@@ -1906,8 +1928,11 @@ def admin_resolve_report(
             if ttype == "work":
                 from .services import set_work_visibility
 
+                # source='report' keeps this in the report flow, so a thread a
+                # moderator hid is not republished along with the work.
                 set_work_visibility(
                     tx, str(tid), "published", now_iso,
+                    source="report", reason=f"举报驳回（#{report_id}）",
                     allow_from=("paused", "hidden"), allow_sources=("report",),
                 )
             elif ttype == "topic":

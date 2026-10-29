@@ -10,6 +10,19 @@
   const S = window.HANDRAW_SHARED;
   const { App, esc, toast, channelUrl } = S;
 
+  // Resource pages, curation panel and work-post rendering live in optional
+  // modules.  They are loaded on the full site but may be absent in a partial
+  // build, so every call site degrades to a plain-thread fallback instead of
+  // throwing — a hard reference here broke every topic page.
+  function optionalModule(name) {
+    const mod = window[name];
+    return mod && typeof mod === "object" ? mod : null;
+  }
+  function hasModule(name, method) {
+    const mod = optionalModule(name);
+    return !!(mod && typeof mod[method] === "function");
+  }
+
   const BOARD_DEFS = [
     { key: "tuning", label: "🎯 作品求改进 / 悬赏", short: "求调优" },
     { key: "experience", label: "📘 创作经验", short: "创作经验" },
@@ -1528,8 +1541,11 @@
       const params = new URLSearchParams({view:"resource",kind,id});
       history.replaceState({}, "", channelUrl("forum", Object.fromEntries(params)));
       FUI.view = "resource";
-      window.HandrawResourcePages.render(root, params);
-      return;
+      if (hasModule("HandrawResourcePages", "render")) {
+        window.HandrawResourcePages.render(root, params);
+        return;
+      }
+      // Fall back to the plain thread when the resource page module is absent.
     }
     const prevTopic = curIdx > 0 ? allTopics[curIdx - 1] : null;
     const nextTopic = curIdx >= 0 && curIdx < allTopics.length - 1 ? allTopics[curIdx + 1] : null;
@@ -1567,7 +1583,9 @@
       `
       : "";
 
-    const workPost = window.HandrawForumWork.fromTopic(topic, App.state.works || [], App.resourceMap, unlocked || S.isStaff?.());
+    const workPost = hasModule("HandrawForumWork", "fromTopic")
+      ? window.HandrawForumWork.fromTopic(topic, App.state.works || [], App.resourceMap, unlocked || S.isStaff?.())
+      : null;
     const cardsToRender = [];
     if (topic.sharedCard && topic.sharedCard.title) {
       cardsToRender.push(topic.sharedCard);
@@ -1676,7 +1694,7 @@
               </div>
 
               <h1 class="hw-detail-title">${esc(topic.title)}</h1>
-              ${window.HandrawCuration.topicPanelHtml(topic)}
+              ${hasModule("HandrawCuration", "topicPanelHtml") ? window.HandrawCuration.topicPanelHtml(topic) : ""}
 
               <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--line-soft);">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--ink-muted);">
@@ -1711,7 +1729,7 @@
 
               <!-- Cohesive Editorial Article Narrative & In-Flow Media/Cards -->
               <div class="forum-article-body" id="topic-article-body">
-                ${workPost ? window.HandrawForumWork.render(workPost) : renderEditorialArticleHtml(topic, cardsToRender, unlocked)}
+                ${workPost && hasModule("HandrawForumWork", "render") ? window.HandrawForumWork.render(workPost) : renderEditorialArticleHtml(topic, cardsToRender, unlocked)}
               </div>
 
               ${paidSectionHtml}
@@ -1894,7 +1912,9 @@
       </div>
     `;
 
-    window.HandrawCuration.bindTopicPanel(root,topic);
+    if (hasModule("HandrawCuration", "bindTopicPanel")) {
+      window.HandrawCuration.bindTopicPanel(root,topic);
+    }
     if (!topic.author && topic.resourceDiscussion) {
       const authorCard=root.querySelector('aside .forum-side-card');
       if (authorCard) authorCard.remove();
@@ -1939,7 +1959,7 @@
       };
     });
 
-    if (workPost) window.HandrawForumWork.bind(root,workPost);
+    if (workPost && hasModule("HandrawForumWork", "bind")) window.HandrawForumWork.bind(root,workPost);
 
     root.querySelector("#topic-page-like").onclick = () => {
       S.toggleLike("topic", topic.id, topic.title);
@@ -2379,15 +2399,22 @@
     if (!root || !App.state) return;
 
     if (["resource", "related"].includes(FUI.view)) {
-      window.HandrawResourcePages.render(root,new URLSearchParams(location.search));
-      return;
+      if (hasModule("HandrawResourcePages", "render")) {
+        window.HandrawResourcePages.render(root,new URLSearchParams(location.search));
+        return;
+      }
+      // No resource-page module: fall through to the plain stream.
+      FUI.view = "list";
     }
-    window.HandrawResourcePages?.cancel();
+    if (hasModule("HandrawResourcePages", "cancel")) window.HandrawResourcePages.cancel();
     root.classList.remove('hrp');
     if (FUI.view === "curation") {
-      document.title="共创收录 — Handraw";
-      window.HandrawCuration.render(root,new URLSearchParams(location.search).get("tab") || "share");
-      return;
+      if (hasModule("HandrawCuration", "render")) {
+        document.title="共创收录 — Handraw";
+        window.HandrawCuration.render(root,new URLSearchParams(location.search).get("tab") || "share");
+        return;
+      }
+      FUI.view = "list";
     }
     if (FUI.view === "compose") {
       renderComposePage(root);

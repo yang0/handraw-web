@@ -1378,9 +1378,19 @@ def set_work_visibility(
         (work_id,),
     ).fetchone()
     if mapped:
+        topic_id = str(mapped["topic_id"])
+        # A human decision on the thread outranks the report flow in both
+        # directions: reports must neither resurrect a moderator-hidden thread
+        # nor downgrade a moderator-hidden thread into a temporary pause.
+        topic_row = tx.execute(
+            "SELECT status, status_source FROM forum_topics WHERE id = ?", (topic_id,)
+        ).fetchone()
+        topic_source = str(topic_row["status_source"] or "") if topic_row else ""
+        if topic_source == "moderator" and source != "moderator":
+            return True
         tx.execute(
             "UPDATE forum_topics SET status = ?, status_source = ?, status_reason = ?, updated_at = ? WHERE id = ?",
-            (status, "" if publishing else source, "" if publishing else reason, now_iso, str(mapped["topic_id"])),
+            (status, "" if publishing else source, "" if publishing else reason, now_iso, topic_id),
         )
     return True
 
