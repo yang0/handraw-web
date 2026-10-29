@@ -17,6 +17,7 @@ node_modules/
 community_auth.json
 credentials.json
 image-service.json
+ai-service.json
 *.log
 *.zip
 *.tar.gz
@@ -25,3 +26,10 @@ ops/dev_data.json
 *.db
 *.db-wal
 *.db-shm
+
+# Style/layout reference art copied from the handraw-style package
+# (E:\handraw-style\images).  It is product content, but 47 MB of binaries
+# does not belong in this repository: deploy it from the package instead.
+/images/
+# Never commit generated credentials from ops/seed_starter_library.py.
+starter_credentials.json
