@@ -108,19 +108,20 @@
   function channelHref(channel, extraQuery) {
     const proto = window.location.protocol;
     const host = window.location.hostname;
-    const portNum = parseInt(window.location.port || "80", 10);
+    const portPart = window.location.port ? `:${window.location.port}` : "";
     const suffix = extraQuery ? (extraQuery.startsWith("?") ? extraQuery : `?${extraQuery}`) : "";
     if (host.endsWith("handraw-style.com")) {
-      if (channel === "studio") return `${proto}//studio.handraw-style.com/${suffix}`;
-      if (channel === "forum") return `${proto}//forum.handraw-style.com/${suffix}`;
-      if (channel === "admin") return `${proto}//admin.handraw-style.com/${suffix}`;
-      return `${proto}//handraw-style.com/${suffix}`;
+      if (channel === "studio") return `${proto}//studio.handraw-style.com${portPart}/${suffix}`;
+      if (channel === "forum") return `${proto}//forum.handraw-style.com${portPart}/${suffix}`;
+      if (channel === "admin") return `${proto}//admin.handraw-style.com${portPart}/${suffix}`;
+      return `${proto}//handraw-style.com${portPart}/${suffix}`;
     }
-    const mainP = portNum >= 1024 ? (portNum % 10 <= 3 ? portNum - (portNum % 10) : 3080) : 3080;
-    if (channel === "studio") return `${proto}//${host}:${mainP + 1}/${suffix}`;
-    if (channel === "forum") return `${proto}//${host}:${mainP + 2}/${suffix}`;
-    if (channel === "admin") return `${proto}//${host}:${mainP + 3}/${suffix}`;
-    return `${proto}//${host}:${mainP}/${suffix}`;
+    if (host.endsWith(".localhost")) {
+      const prefix = ["studio", "forum", "admin"].includes(channel) ? `${channel}.` : "";
+      return `${proto}//${prefix}localhost${portPart}/${suffix}`;
+    }
+    const paths = { main: "/", studio: "/studio/", forum: "/forum/", admin: "/admin/" };
+    return `${paths[channel] || "/"}${suffix}`;
   }
 
   function toast(msg, isError) {
@@ -541,7 +542,7 @@
                   <td><span class="adm-badge neutral">${esc(t.categoryLabel)}</span></td>
                   <td>${esc(t.authorName)}<div style="font-size:11.5px;color:var(--adm-ink-muted);">@${esc(t.authorUsername)}</div></td>
                   <td>
-                    <div style="font-size:12px;">👁 ${t.views} · 👍 ${t.likes} · 💬 ${t.repliesCount}</div>
+                    <div style="font-size:12px;">👍 ${t.likes} · 💬 ${t.repliesCount}</div>
                     ${t.bounty > 0 ? `<div style="font-size:11.5px;color:var(--adm-vermilion);">🎯 ${t.bounty}✦ (${esc(t.bountyStatus)})</div>` : ""}
                   </td>
                   <td><span class="adm-badge ${esc(t.status)}">${esc(t.status)}</span></td>
@@ -1644,6 +1645,7 @@
           <div class="admin-sidebar-footer">
             <div style="font-size:11.5px;color:var(--adm-ink-muted);padding:0 4px;">跨频道直达：</div>
             <div class="admin-channel-links">
+              ${effRole() === "admin" ? `<a class="admin-channel-link" href="${esc(channelHref("forum"))}?view=curation&tab=admin">社群审核资格</a>` : ""}
               <a class="admin-channel-link" href="${esc(channelHref("main"))}">🎨 主站</a>
               <a class="admin-channel-link" href="${esc(channelHref("studio"))}">✨ 创作台</a>
               <a class="admin-channel-link" href="${esc(channelHref("forum"))}">💬 论坛</a>

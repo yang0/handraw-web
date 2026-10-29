@@ -14,16 +14,18 @@
     density: "standard", // 'compact' | 'standard' | 'large'
     pageSize: 60,
     shownCount: 60,
-    spotlightCollapsed: window.matchMedia("(max-width: 700px)").matches,
-    workSort: "recommended", // 'recommended' | 'newest' | 'cheers' | 'favorites' | 'paid'
-    workAssoc: "all", // 'all' | 'both' | 'style_only' | 'layout_only' | 'freeform'
+    spotlightCollapsed: true,
+    workSort: "newest", // newest | favorites | cheers
+    workFormat: "all", // all | single | multi
+    workAccess: "all", // all | free | paid
+    workShownCount: 24,
     workFilterAsset: "",
     workFilterAuthor: "",
     workQuery: "",
-    worksSpotlightCollapsed: window.matchMedia("(max-width: 700px)").matches,
+    worksSpotlightCollapsed: true,
     rankTab: "creators", // 'creators' | 'works' | 'assets'
     rankPeriod: "week", // 'week' | 'month' | 'all' — default 'week' so fresh active faces shine first!
-    lastPrimaryView: "styles", // parent channel to return to from secondary/detail pages
+    lastPrimaryView: "discover", // parent channel to return to from secondary/detail pages
     creatorRankMode: "prolific", // 'prolific' | 'cheers' | 'rising'
     workRankMode: "composite", // 'composite' | 'cheers' | 'rising' | 'forks'
     favTab: "styles", // 'styles' | 'layouts' | 'works' | 'topics'
@@ -160,10 +162,10 @@
       return {};
     }
 
-    if (["styles", "layouts", "works", "rankings", "collections", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic"].includes(view)) {
+    if (["discover", "styles", "layouts", "works", "rankings", "collections", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic"].includes(view)) {
       App.view = view;
     } else {
-      App.view = "styles";
+      App.view = !view && p.get("q") ? "styles" : "discover";
     }
 
     if (p.get("filterAsset")) {
@@ -173,6 +175,15 @@
     if (p.get("author")) {
       UI.workFilterAuthor = p.get("author");
       App.view = "works";
+    }
+    if (App.view === "works") {
+      UI.workFormat = ["single","multi"].includes(p.get("format")) ? p.get("format") : "all";
+      UI.workAccess = ["free","paid"].includes(p.get("access")) ? p.get("access") : "all";
+      UI.workSort = ["favorites","cheers"].includes(p.get("sort")) ? p.get("sort") : "newest";
+      UI.workQuery = p.get("q") || "";
+      UI.workFilterAsset = (p.get("filterAsset") || "").toUpperCase();
+      UI.workFilterAuthor = p.get("author") || "";
+      UI.workShownCount = 24;
     }
     if (["styles", "layouts", "works"].includes(App.view)) {
       UI.lastPrimaryView = App.view;
@@ -187,9 +198,10 @@
     }
     const wc = (App.state && App.state.works && App.state.works.length) || 0;
     const titles = {
+      discover: "AI 视觉创作与实测分享 — 手绘风创作社区",
       styles: `${App.styles?.length || 0} 款画风视觉库 — 手绘风创作社区`,
       layouts: `${App.layouts?.length || 0} 款图型与版式库 — 手绘风创作社区`,
-      works: `实测作品广场（${wc} 件手绘生图作品与提示词配方）— 手绘风创作社区`,
+      works: `作品与做法（${wc} 件社区作品）— 手绘风创作社区`,
       rankings: "创作者荣誉榜单与作品风云榜 — 手绘风创作社区",
       collections: "我的四合一云端收藏夹 — 手绘风创作社区",
       wallet: "统一积分钱包与创作密钥中心 — 手绘风创作社区",
@@ -223,6 +235,10 @@
     if (App.view === "works") {
       if (UI.workFilterAsset) p.set("filterAsset", UI.workFilterAsset);
       if (UI.workFilterAuthor) p.set("author", UI.workFilterAuthor);
+      if (UI.workFormat !== "all") p.set("format", UI.workFormat);
+      if (UI.workAccess !== "all") p.set("access", UI.workAccess);
+      if (UI.workSort !== "newest") p.set("sort", UI.workSort);
+      if (UI.workQuery.trim()) p.set("q", UI.workQuery.trim());
     } else if (App.view === "rankings") {
       if (UI.rankTab) p.set("rtab", UI.rankTab);
       if (UI.rankPeriod) p.set("period", UI.rankPeriod);
@@ -263,10 +279,14 @@
       UI.lastPrimaryView = nextView;
     }
     const viewChanged = App.view !== nextView;
+    if (viewChanged && ["styles","layouts"].includes(nextView)) UI.assetQuery = "";
     App.view = nextView;
     UI.shownCount = UI.pageSize;
     if (extra.filterAsset !== undefined) UI.workFilterAsset = extra.filterAsset;
     if (extra.filterAuthor !== undefined) UI.workFilterAuthor = extra.filterAuthor;
+    if (nextView === "works" && (extra.filterAsset !== undefined || extra.filterAuthor !== undefined)) {
+      UI.workFormat="all"; UI.workAccess="all"; UI.workQuery=""; UI.workShownCount=24;
+    }
     if (extra.rankTab !== undefined) UI.rankTab = extra.rankTab;
     if (extra.rankPeriod !== undefined) UI.rankPeriod = extra.rankPeriod;
     if (extra.shareItem !== undefined) UI.walletShareItem = extra.shareItem;
@@ -276,56 +296,11 @@
   }
 
   function openAssetPage(assetId, subTab = "") {
-    S.closeModal();
-    const code = String(assetId || "").trim().toUpperCase().replace(/^#/, "");
-    const item = App.resourceMap.get(code);
-    if (!item) {
-      toast(`未找到资产编号：${code}`);
-      return;
-    }
-    if (["styles", "layouts", "works"].includes(App.view)) {
-      UI.lastPrimaryView = App.view;
-    } else if (App.view !== "asset") {
-      UI.lastPrimaryView = item.kind === "layout" ? "layouts" : "styles";
-    }
-    const isEntering = App.view !== "asset" || UI.activeAssetId !== code;
-    App.view = "asset";
-    UI.activeAssetId = code;
-    if (subTab === "topics" || subTab === "works") {
-      UI.assetSubTab = subTab;
-    } else if (isEntering) {
-      UI.assetSubTab = "works";
-    }
-    UI.assetFocusComments = subTab === "comments";
-    if (subTab === "report") UI.assetInlineDrawer = "report";
-    else if (isEntering) UI.assetInlineDrawer = "";
-
-    syncUrl(isEntering);
-    S.saveState();
-    if (isEntering && subTab !== "comments") {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
+    S.goToAssetPage(assetId, subTab);
   }
 
   function openWorkPage(workId, imgIndex = 0, focusComment = false) {
-    S.closeModal();
-    const work = (App.state.works || []).find((w) => w.id === workId);
-    if (!work) return;
-    if (["styles", "layouts", "works"].includes(App.view)) {
-      UI.lastPrimaryView = App.view;
-    }
-    const isEntering = App.view !== "work" || UI.activeWorkId !== work.id;
-    App.view = "work";
-    UI.activeWorkId = work.id;
-    UI.activeWorkImgIdx = Number(imgIndex) || 0;
-    UI.workFocusComment = Boolean(focusComment);
-    if (isEntering) UI.workInlineDrawer = "";
-
-    syncUrl(isEntering);
-    S.saveState();
-    if (isEntering && !focusComment) {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
+    S.goToWorkPage(workId, focusComment);
   }
 
   function openProfilePage(username, ptab = "works") {
@@ -394,72 +369,9 @@
   }
 
   function renderMyHonorStatusCard(actionButtonsHtml) {
-    if (!App.state.loggedIn) {
-      return `
-        <div class="hw-my-honor-card">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-            <span style="font-size:12.5px;font-weight:850;color:var(--gold);">🏆 社区创作者荣誉与曝光激励计划</span>
-            <div style="display:flex;align-items:center;gap:5px;">
-              <span class="hw-boost-pill">最高 1.45× 曝光加权</span>
-              ${
-                App.view !== "rankings"
-                  ? `<button type="button" class="hw-pill" style="padding:2px 8px;font-size:11px;" data-jump-rankings="creators">查看榜单 ↗</button>`
-                  : ""
-              }
-            </div>
-          </div>
-          <div style="font-size:12.5px;color:var(--ink-body);line-height:1.5;">
-            新发布的画风、图型与作品直通 <strong>72h 首发曝光席</strong>；累计多发解锁四阶荣誉勋章与专属联展位！
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px;">
-            ${actionButtonsHtml}
-          </div>
-        </div>
-      `;
-    }
-
-    const me = S.getCreatorProfile(App.state.user.username);
-    const h = me.honor;
-    const activePeriodMeta = getPeriodMeta(UI.rankPeriod);
-    const periodRanked = S.getTopCreators(100, "prolific", UI.rankPeriod);
-    const myRankIdx = periodRanked.findIndex((c) => c.username === me.username);
-    const rankLabel =
-      myRankIdx >= 0
-        ? `${activePeriodMeta.label.replace(/^[^\s]+\s*/, "")} #${myRankIdx + 1}`
-        : `${activePeriodMeta.label.replace(/^[^\s]+\s*/, "")}待上榜`;
-
-    let progressPct = 100;
-    let progressHint = "🎉 已登顶社区最高殿堂荣誉！常驻全站联展与 1.45× 曝光加权";
-    if (h.nextAt) {
-      const prevMin = h.minCount || 0;
-      const span = Math.max(1, h.nextAt - prevMin);
-      progressPct = Math.min(95, Math.max(18, Math.round(((me.totalPublished - prevMin) / span) * 100)));
-      const diff = Math.max(1, h.nextAt - me.totalPublished);
-      progressHint = `已分享 ${me.totalPublished} 项 · 再发 ${diff} 项晋升「${h.nextTitle}」并赢 +10✦ 荣誉礼金`;
-    }
-
     return `
-      <div class="hw-my-honor-card">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="hw-author-chip" data-open-creator="${esc(me.username)}" title="点击查看我的创作者荣誉名片">
-            <span class="hw-creator-avatar-sm ${esc(h.sealClass)}">${esc(me.avatarChar)}</span>
-            <strong style="font-size:13px;color:var(--ink-strong);">${esc(me.authorName)}</strong>
-            <span class="hw-honor-badge ${esc(h.sealClass)}">${esc(h.badge)}</span>
-          </button>
-          <div style="display:flex;align-items:center;gap:5px;">
-            <span class="hw-boost-pill">🔥 ${esc(h.boostText)}</span>
-            <button type="button" class="hw-pill" style="padding:2px 8px;font-size:11px;" data-jump-rankings="creators">${esc(rankLabel)} ↗</button>
-          </div>
-        </div>
-        <div class="hw-honor-progress-track">
-          <div class="hw-honor-progress-fill" style="width:${progressPct}%;"></div>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:11.8px;color:var(--ink-muted);">${esc(progressHint)}</span>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px;">
-          ${actionButtonsHtml}
-        </div>
+      <div class="hw-product-actions">
+        ${actionButtonsHtml}
       </div>
     `;
   }
@@ -469,12 +381,23 @@
     const root = document.getElementById("main-app-root");
     if (!root || !App.state) return;
 
+    // Product-browse layout class only applies to styles/layouts/works.
+    const isBrowse = ["styles", "layouts", "works"].includes(App.view);
+    root.classList.toggle("hw-product-browse", isBrowse);
+
     if (window.HandrawAccountTools?.views.has(App.view)) {
       window.HandrawAccountTools.render(root, App.view);
       return;
     }
 
-    if (App.view === "styles") renderAssetCatalog(root, "style");
+    if (App.view === "discover") {
+      if (window.HandrawDiscovery?.render) {
+        window.HandrawDiscovery.render(root);
+      } else {
+        root.innerHTML = `<div style="padding:48px 0;text-align:center;color:var(--ink-muted);">发现页正在加载…</div>`;
+      }
+    }
+    else if (App.view === "styles") renderAssetCatalog(root, "style");
     else if (App.view === "layouts") renderAssetCatalog(root, "layout");
     else if (App.view === "works") renderWorksSquare(root);
     else if (App.view === "rankings") renderRankingsHall(root);
@@ -507,27 +430,28 @@
         }
       }
       if (q) {
-        const hay = `${item.id} ${item.legacy || ""} ${item.name} ${item.description || ""} ${item.group || ""} ${item.authorName || ""}`.toLowerCase();
+        const hay = S.resourceSearchText(item);
         if (!hay.includes(q)) return false;
       }
       return true;
     });
   }
 
-  function getAssetExposureScore(item, statsMap) {
-    const wCount = S.getAssetWorkCount(item.id);
-    const freshBonus = S.isFreshRelease(item) ? 160 : 0;
-    const commBonus = item.sourceType === "community" ? 42 : item.sourceType === "exclusive" ? 55 : 0;
-    const prof = item.author && statsMap ? statsMap.get(item.author) : null;
-    const honorBoost = prof ? prof.honor.boost : 1.0;
-    const cheers = Number(item.cheers || 0);
-    return Math.round((wCount * 36 + cheers * 1.1 + commBonus) * honorBoost + freshBonus);
-  }
+  // Removed ``getAssetExposureScore``: it blended freshness, source type and an
+  // honour multiplier into catalogue ordering.  Styles and layouts now rank by
+  // the single rule in ``S.popularScore`` (published works referencing them).
 
   function renderAssetCatalog(root, kind) {
     const isStyle = kind === "style";
-    const activeGroup = isStyle ? UI.styleGroup : UI.layoutGroup;
-    const groups = isStyle ? S.STYLE_GROUPS : S.LAYOUT_GROUPS;
+    let activeGroup = isStyle ? UI.styleGroup : UI.layoutGroup;
+    const groups = (isStyle ? S.STYLE_GROUPS : S.LAYOUT_GROUPS)
+      .map(g => ({ ...g, count: filterAssets(kind, g.key).length }))
+      .filter(g => g.count > 0);
+    if (!groups.some(g => g.key === activeGroup)) {
+      activeGroup = "ALL";
+      if (isStyle) UI.styleGroup = activeGroup;
+      else UI.layoutGroup = activeGroup;
+    }
     const allItems = isStyle ? App.styles : App.layouts;
     const statsMap = S.getCreatorStatsMap();
 
@@ -546,9 +470,11 @@
     const filtered = filterAssets(kind, activeGroup);
 
     filtered.sort((a, b) => {
-      if (UI.assetSort === "recommended") {
-        const sb = getAssetExposureScore(b, statsMap);
-        const sa = getAssetExposureScore(a, statsMap);
+      if (UI.assetSort === "recommended" || UI.assetSort === "hot") {
+        // "recommended" and "hot" merged into the single popularity rule:
+        // how many published works reference this style or layout.
+        const sb = S.popularScore("style", { ...b, usageCount: S.getAssetWorkCount(b.id) });
+        const sa = S.popularScore("style", { ...a, usageCount: S.getAssetWorkCount(a.id) });
         if (sb !== sa) return sb - sa;
       } else if (UI.assetSort === "newest") {
         const af = S.isFreshRelease(a) ? 1 : 0;
@@ -563,10 +489,6 @@
         const ea = a.sourceType === "exclusive" ? 1 : 0;
         const eb = b.sourceType === "exclusive" ? 1 : 0;
         if (eb !== ea) return eb - ea;
-      } else if (UI.assetSort === "hot") {
-        const cwA = S.getAssetWorkCount(a.id);
-        const cwB = S.getAssetWorkCount(b.id);
-        if (cwB !== cwA) return cwB - cwA;
       }
       return a.id.localeCompare(b.id, "en");
     });
@@ -576,27 +498,9 @@
     const favBucket = isStyle ? "styles" : "layouts";
     const showCommunityStage = !UI.assetQuery.trim() && !UI.spotlightCollapsed;
 
-    const heroActionsHtml = `
-      <button type="button" class="btn btn-primary btn-sm" id="hero-btn-contribute">＋ 发布新${isStyle ? "画风" : "图型"} (+10✦)</button>
-      <a class="btn btn-sm" href="${esc(channelUrl("studio"))}">✨ 在线创作工坊 ↗</a>
-    `;
-
     root.innerHTML = `
-      <section class="hw-editorial-strip hw-reveal-section">
-        <div style="max-width:680px;flex:1 1 380px;">
-          <p class="hw-editorial-eyebrow">${isStyle ? "画风视觉目录与共创中枢" : "图型版式目录与共创中枢"}</p>
-          <h1 class="hw-editorial-title">
-            ${
-              isStyle
-                ? "选择适合这次创作的画风"
-                : "从清晰的图型开始排版"
-            }
-          </h1>
-          <p class="hw-editorial-sub">
-            已收录 <strong>${allItems.length}</strong> 款${isStyle ? "画风" : "图型"}（含 <strong>${commItems.length}</strong> 款创作者共创 · <strong>${allItems.filter((i) => S.getAssetWorkCount(i.id) > 0).length}</strong> 款已有社区实测作品）。新贡献资产自动登顶<strong>「72h 首发曝光席」</strong>，高产创作者享全站优先推荐加权！
-          </p>
-        </div>
-        ${renderMyHonorStatusCard(heroActionsHtml)}
+      <section class="hw-catalog-actions" aria-label="${isStyle ? "画风" : "图型"}频道">
+        <button type="button" class="btn btn-primary btn-sm" id="hero-btn-contribute">＋ 发布新${isStyle ? "画风" : "图型"}</button>
       </section>
 
       ${
@@ -605,7 +509,7 @@
           : UI.spotlightCollapsed
           ? `
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;background:var(--paper-card);border:1px solid var(--line-soft);border-radius:10px;padding:8px 14px;margin-bottom:14px;font-size:12.5px;">
-              <span>🌱 已折叠「新发${isStyle ? "画风" : "图型"}首发曝光席」与「共创主理人荣誉榜 前五名」</span>
+              <span>新资源与贡献者</span>
               <div style="display:flex;gap:6px;">
                 <button type="button" class="btn btn-sm btn-gold" data-jump-rankings="creators">完整榜单 ↗</button>
                 <button type="button" class="btn btn-sm" id="btn-toggle-spotlight">展开曝光席与荣誉榜 ▾</button>
@@ -624,7 +528,6 @@
                     </div>
                     <div class="hw-panel-sub">最新由社区创作者提炼贡献的${isStyle ? "画风" : "图型"}，享有置顶曝光席位，快给作者点个鼓励吧！</div>
                   </div>
-                  <button type="button" class="btn btn-sm" id="spot-btn-contribute">＋ 我也要发新${isStyle ? "画风" : "图型"}</button>
                 </div>
 
                 <div class="hw-new-release-grid">
@@ -651,7 +554,7 @@
                                 <span class="hw-honor-badge ${esc(h.sealClass)}" style="padding:1px 5px;font-size:10px;">${esc(h.shortBadge)}</span>
                               </button>
                               <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-asset="${esc(item.id)}" title="为新发布的共创资产送上鼓励">
-                                👏 ${item.cheers || 16}
+                                👏 ${item.cheers ?? 0}
                               </button>
                             </div>
                           </div>
@@ -722,7 +625,7 @@
         <div class="hw-pills-row" id="catalog-group-pills">
           ${groups
             .map((g) => {
-              const cnt = filterAssets(kind, g.key).length;
+              const cnt = g.count;
               return `
                 <button type="button" class="hw-pill ${activeGroup === g.key ? "is-active" : ""}" data-group="${esc(g.key)}">
                   ${esc(g.label)} <span class="hw-pill-count">${cnt}</span>
@@ -736,9 +639,8 @@
           <div class="hw-controls-left">
             <input type="search" class="hw-input" id="catalog-search" style="width:248px;" value="${esc(UI.assetQuery)}" placeholder="过滤编号（如 ${isStyle ? "FA-001 / USR-S05 / FX-001" : "SC-021 / USR-L04 / LX-001"}）或作者…" />
             <select class="hw-select" id="catalog-sort">
-              <option value="recommended" ${UI.assetSort === "recommended" ? "selected" : ""}>⚡ 综合推荐（新发扶持 + 高产加权）</option>
+              <option value="recommended" ${UI.assetSort === "recommended" ? "selected" : ""}>🔥 热门（被实测作品采用最多）</option>
               <option value="newest" ${UI.assetSort === "newest" ? "selected" : ""}>🌱 最新入库优先</option>
-              <option value="hot" ${UI.assetSort === "hot" ? "selected" : ""}>🔥 实测作品最多</option>
               <option value="exclusive" ${UI.assetSort === "exclusive" ? "selected" : ""}>🔒 官网在线独占置顶</option>
               <option value="code" ${UI.assetSort === "code" ? "selected" : ""}>🔢 按编号字母顺序</option>
             </select>
@@ -746,7 +648,6 @@
           </div>
 
           <div class="hw-controls-right">
-            <button type="button" class="btn btn-primary btn-sm" id="catalog-btn-publish-asset">＋ 发布新${isStyle ? "画风" : "图型"}</button>
             <span style="font-size:12px;color:var(--ink-muted);margin-left:6px;">浏览密度：</span>
             <div class="hw-segmented" id="catalog-density">
               <button type="button" class="hw-seg-btn ${UI.density === "compact" ? "is-active" : ""}" data-density="compact">紧凑 8列</button>
@@ -792,7 +693,7 @@
                     <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:10px;padding:1px 5px;">${esc(prof.honor.shortBadge)}</span>
                   </button>
                   <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-asset="${esc(item.id)}" title="为贡献者送上鼓励">
-                    👏 ${item.cheers || 16}
+                    👏 ${item.cheers ?? 0}
                   </button>
                 </div>
               `
@@ -861,11 +762,11 @@
       }
     `;
 
-    root.querySelector("#hero-btn-contribute").onclick = () => S.goToForumCompose({ category: "assets" });
+    root.querySelector("#hero-btn-contribute").onclick = () => S.goToCurationShare({ kind: UI.view === "layouts" ? "layout" : "style" });
     const catPubBtn = root.querySelector("#catalog-btn-publish-asset");
-    if (catPubBtn) catPubBtn.onclick = () => S.goToForumCompose({ category: "assets" });
+    if (catPubBtn) catPubBtn.onclick = () => S.goToCurationShare({ kind: UI.view === "layouts" ? "layout" : "style" });
     const spotContrib = root.querySelector("#spot-btn-contribute");
-    if (spotContrib) spotContrib.onclick = () => S.goToForumCompose({ category: "assets" });
+    if (spotContrib) spotContrib.onclick = () => S.goToCurationShare({ kind: UI.view === "layouts" ? "layout" : "style" });
 
     const toggleSpotBtn = root.querySelector("#btn-toggle-spotlight");
     if (toggleSpotBtn) {
@@ -976,1121 +877,220 @@
   }
 
   function renderAssetDetailPage(root) {
-    const item = App.resourceMap.get(UI.activeAssetId);
-    if (!item) {
-      root.innerHTML = `
-        <div class="hw-locked-gate-box" style="padding:48px 24px;">
-          <div style="font-size:32px;margin-bottom:8px;">🔎</div>
-          <h2>未找到对应的画风或图型编号：${esc(UI.activeAssetId || "未知")}</h2>
-          <p style="color:var(--ink-muted);margin-bottom:18px;">该编号可能尚未入库或已被归档，请返回目录浏览全部视觉资产。</p>
-          <button type="button" class="btn btn-primary" id="asset-missing-back-btn">← 返回画风库</button>
-        </div>
-      `;
-      root.querySelector("#asset-missing-back-btn").onclick = () => switchView("styles");
-      return;
-    }
-
-    const isStyle = item.kind === "style";
-    const parentCatalogView = isStyle ? "styles" : "layouts";
-    const parentCatalogLabel = isStyle ? "🎨 画风库" : "📐 图型库";
-    const pool = isStyle ? App.styles : App.layouts;
-    const curIdx = pool.findIndex((x) => x.id === item.id);
-    const prevAsset = curIdx > 0 ? pool[curIdx - 1] : null;
-    const nextAsset = curIdx >= 0 && curIdx < pool.length - 1 ? pool[curIdx + 1] : null;
-
-    const favBucket = isStyle ? "styles" : "layouts";
-    const liked = S.isLiked(item.kind, item.id);
-    const likeCnt = S.getLikeCount(item.kind, item);
-    const collected = S.isCollected(favBucket, item.id);
-    const favCnt = S.getFavoriteCount(item.kind, item);
-    const assetComments = S.getAssetComments(item.id);
-    const unlocked = S.isUnlocked(item.id, item);
-    const relatedWorks = S.getAssetWorks(item.id);
-    const relatedTopics = S.getAssetTopics(item.id);
-    const contributorProf = item.author ? S.getCreatorProfile(item.author) : null;
-    const cheered = S.isCheered(item.id);
-    const effectiveSubTab = UI.assetSubTab === "topics" ? "topics" : "works";
-    const totalAssetWorks = S.getAssetWorkCount(item.id);
-
-    const contributorEncourageHtml = contributorProf
-      ? `
-        <div class="hw-stamp-bar">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-            <button type="button" class="hw-author-chip" id="asset-page-open-contributor">
-              <span class="hw-creator-avatar-sm ${esc(contributorProf.honor.sealClass)}">${esc(contributorProf.avatarChar)}</span>
-              <strong>@${esc(contributorProf.authorName)}</strong>
-              <span class="hw-honor-badge ${esc(contributorProf.honor.sealClass)}">${esc(contributorProf.honor.badge)}</span>
-              <span class="hw-boost-pill">${esc(contributorProf.honor.boostText)}</span>
-            </button>
-            <button type="button" class="btn btn-sm" id="asset-page-visit-profile-btn">🏠 访问贡献者个人主页 (${contributorProf.totalPublished}作) ↗</button>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-            <button type="button" class="hw-stamp-btn ${cheered ? "is-active" : ""}" id="drawer-btn-cheer-asset">
-              👏 感谢贡献 (${item.cheers || 16})
-            </button>
-            <button type="button" class="hw-stamp-btn ${S.isCheered(item.id, "超实用配方") ? "is-active" : ""}" data-asset-stamp="超实用配方">🎯 超实用配方 (${S.getStampCount(item, "超实用配方")})</button>
-            <button type="button" class="hw-stamp-btn ${S.isCheered(item.id, "审美在线") ? "is-active" : ""}" data-asset-stamp="审美在线">✨ 审美在线 (${S.getStampCount(item, "审美在线")})</button>
-            <button type="button" class="btn btn-sm btn-gold" id="drawer-btn-tip-asset" style="margin-left:auto;">🎁 赞赏 +2✦ 鼓励作者</button>
-          </div>
-        </div>
-      `
-      : `
-        <div class="hw-stamp-bar">
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-            <span style="font-size:12px;font-weight:800;color:var(--ink-muted);margin-right:4px;">官方标准编号 · 质量印章：</span>
-            <button type="button" class="hw-stamp-btn ${cheered ? "is-active" : ""}" id="drawer-btn-cheer-asset">
-              👏 好用推荐 (${item.cheers || 16})
-            </button>
-            <button type="button" class="hw-stamp-btn ${S.isCheered(item.id, "超实用配方") ? "is-active" : ""}" data-asset-stamp="超实用配方">🎯 超实用配方 (${S.getStampCount(item, "超实用配方")})</button>
-            <button type="button" class="hw-stamp-btn ${S.isCheered(item.id, "审美在线") ? "is-active" : ""}" data-asset-stamp="审美在线">✨ 审美在线 (${S.getStampCount(item, "审美在线")})</button>
-          </div>
-        </div>
-      `;
-
-    let defSectionHtml = "";
-    if (item.sourceType === "exclusive") {
-      if (item.tier === "pro_credit" && !unlocked) {
-        defSectionHtml = `
-          <div style="background:var(--gold-wash);border:1px solid var(--gold-border);border-radius:12px;padding:14px 16px;">
-            <div style="font-weight:800;color:var(--gold);margin-bottom:6px;">💎 Pro 官网在线独占${isStyle ? "画风" : "图型"}（底层参数黑盒保护）</div>
-            <p style="margin:0 0 12px;font-size:13.2px;color:var(--ink-body);">解锁后永久获得在线创作工坊调用权限，云端生图自动注入全套高阶笔触/排版控制，不对外导出明文提示词。</p>
-            <button type="button" class="btn btn-primary btn-sm" id="drawer-btn-unlock-exclusive">
-              🔓 使用 ${item.unlockCost} 积分永久解锁在线使用权
-            </button>
-          </div>
-        `;
-      } else {
-        defSectionHtml = `
-          <div style="background:var(--paper-inset);border:1px solid var(--line-strong);border-radius:12px;padding:14px 16px;font-size:13.2px;">
-            <strong>🔒 官网在线独占黑盒保护</strong>：${
-              App.state.loggedIn
-                ? `<span style="color:var(--jade);font-weight:700;">✅ 你的账号已解锁在线使用权！</span>点击上方「去在线创作台使用」即可在云端生图时自动挂载底层特征词。`
-                : `登录账号即可在在线创作工坊免费调用该独占${isStyle ? "画风" : "图型"}！`
-            }
-          </div>
-        `;
-      }
-    } else if (item.unlockCost > 0 && !unlocked) {
-      defSectionHtml = `
-        <div style="background:var(--vermilion-wash);border:1px solid var(--vermilion-border);border-radius:12px;padding:14px 16px;">
-          <div style="font-weight:800;color:var(--vermilion);margin-bottom:6px;">✨ 社区共创付费${isStyle ? "画风" : "图型"}（${item.unlockCost} 积分，80% 归原作者）</div>
-          <button type="button" class="btn btn-primary btn-sm" id="drawer-btn-unlock-comm">
-            🔓 花费 ${item.unlockCost} 积分解锁定义词与在线调用
-          </button>
-        </div>
-      `;
-    } else {
-      defSectionHtml = `
-        <div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <span style="font-size:12.8px;font-weight:800;color:var(--ink-muted);">📜 标准定义与视觉特征描述</span>
-            <button type="button" class="btn btn-sm" id="drawer-btn-copy-def">📋 复制定义词</button>
-          </div>
-          <div class="hw-prompt-box">${esc(item.definition || item.description)}</div>
-        </div>
-      `;
-    }
-
-    const inlineDrawerHtml =
-      UI.assetInlineDrawer === "share"
-        ? S.renderInlineSharePanelHtml(item.kind, item)
-        : UI.assetInlineDrawer === "report"
-        ? S.renderInlineReportPanelHtml("asset", item.id, `${item.id} ${item.name}`)
-        : "";
-
-    let subContentHtml = "";
-    if (effectiveSubTab === "works") {
-      if (relatedWorks.length === 0) {
-        subContentHtml = `
-          <div class="hw-locked-gate-box" style="border-color:var(--gold-border);background:var(--gold-wash);">
-            <div style="font-size:26px;margin-bottom:6px;">🌟</div>
-            <h3 style="margin:0 0 6px;font-size:16px;color:var(--gold);">当前暂无挂载此编号的实测成片</h3>
-            <p style="margin:0 0 14px;font-size:13px;color:var(--ink-body);">
-              前往社区论坛独立发帖页附加多图实测成片与调参心得，立得 <strong>+5✦ 积分</strong>！
-            </p>
-            <button type="button" class="btn btn-primary" id="drawer-btn-pioneer-share">
-              ✏️ 去论坛独立页发同款图文帖 (+5✦) ↗
-            </button>
-          </div>
-        `;
-      } else {
-        subContentHtml = `
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px;">
-            ${relatedWorks
-              .map(
-                (w) => `
-                  <article class="hw-card" style="margin:0;cursor:pointer;" data-drawer-open-work="${esc(w.id)}">
-                    <div class="hw-card-media">
-                      ${S.isFreshRelease(w) ? `<span class="hw-card-badge-tl badge-new-release">🆕 新发</span>` : w.price > 0 && !S.isUnlocked(w.id, w) ? `<span class="hw-card-badge-tl badge-paid">💎 ${w.price}积分</span>` : ""}
-                      <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" style="height:165px;object-fit:cover;" />
-                    </div>
-                    <div style="padding:10px 12px;">
-                      <div style="font-size:13.5px;font-weight:750;line-height:1.38;margin-bottom:5px;">${esc(w.title)}</div>
-                      <div style="font-size:12px;color:var(--ink-muted);">@${esc(w.authorName)} · 👍 ${S.getLikeCount("work", w)} · ♥ ${S.getFavoriteCount("work", w)} · 💬 ${(w.comments || []).length}</div>
-                    </div>
-                  </article>
-                `
-              )
-              .join("")}
-          </div>
-        `;
-      }
-    } else {
-      subContentHtml =
-        relatedTopics.length === 0
-          ? `<div style="padding:28px;text-align:center;color:var(--ink-muted);background:var(--paper-bg);border-radius:12px;">暂无关联论坛帖，去论坛独立发帖页分享你的使用心得立得 +5 积分！</div>`
-          : `<div style="display:grid;gap:10px;">
-              ${relatedTopics
-                .map(
-                  (t) => `
-                    <a class="smart-embed-card" href="${esc(channelUrl("forum", { view: "topic", id: t.id }))}" style="justify-content:space-between;text-decoration:none;">
-                      <div>
-                        <div style="font-size:11.8px;color:var(--vermilion);font-weight:800;">${esc(t.categoryLabel)} ${t.price > 0 ? `· 💎 ${t.price}积分解锁干货` : ""} ${t.bounty > 0 ? `· 💰 悬赏 ${t.bounty}积分` : ""}</div>
-                        <div style="font-weight:800;font-size:14.5px;margin:3px 0;color:var(--ink-strong);">${esc(t.title)}</div>
-                        <div style="font-size:12px;color:var(--ink-muted);">@${esc(t.authorName)} · 💬 ${(t.replies || []).length} 条回复 · 👁️ ${t.views || 0}</div>
-                      </div>
-                      <span class="btn btn-sm">阅读帖子详情 ↗</span>
-                    </a>
-                  `
-                )
-                .join("")}
-            </div>`;
-    }
-
-    root.innerHTML = `
-      <div class="hw-detail-page" id="standalone-asset-detail-page">
-        <nav class="hw-subpage-bar" aria-label="详情页返回与翻页导航">
-          <div class="hw-subpage-crumbs">
-            <button type="button" class="btn btn-sm" id="asset-btn-back">← 返回${esc(isStyle ? "画风库" : "图型库")}</button>
-            <span>/</span>
-            <button type="button" class="hw-pill" style="padding:2px 10px;font-size:12px;" id="asset-crumb-catalog">${esc(parentCatalogLabel)}</button>
-            <span>/</span>
-            <strong>#${esc(item.id)} ${esc(item.name)}</strong>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            ${
-              prevAsset
-                ? `<button type="button" class="btn btn-sm" data-nav-asset="${esc(prevAsset.id)}">◀ 上一款 (${esc(prevAsset.id)})</button>`
-                : ""
-            }
-            ${
-              nextAsset
-                ? `<button type="button" class="btn btn-sm" data-nav-asset="${esc(nextAsset.id)}">下一款 (${esc(nextAsset.id)}) ▶</button>`
-                : ""
-            }
-          </div>
-        </nav>
-
-        <section class="hw-detail-grid">
-          <div class="hw-detail-stage-wrap">
-            <div class="hw-detail-stage">
-              <img class="main-stage-img" src="${esc(item.image)}" alt="${esc(item.name)}" />
-              <div style="color:#d8cfc3;font-size:12.5px;">
-                标准视觉样张 · 编号 <strong>${esc(item.id)}</strong> ${item.legacy ? `(兼容旧版 #${esc(item.legacy)})` : ""} · 累计驱动 <strong>${totalAssetWorks}</strong> 件实测作品
-              </div>
-            </div>
-            ${contributorEncourageHtml}
-          </div>
-
-          <div class="hw-detail-meta-card">
-            ${
-              S.isAdmin && S.isAdmin()
-                ? `
-                  <div id="asset-admin-drawer" style="background:rgba(180,40,20,0.06);border:1px solid rgba(180,40,20,0.25);border-radius:10px;padding:9px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <div style="font-size:12.5px;color:var(--vermilion);font-weight:750;">
-                      👑 <strong>超管黑盒与资产管理</strong>：${esc(item.tier || "标准")} · ${item.sourceType === "exclusive" ? "🔒 云端独占" : "🌐 开放"}
-                    </div>
-                    <div style="display:flex;gap:6px;align-items:center;">
-                      <button type="button" class="btn btn-sm btn-gold" id="asset-admin-edit-btn">✏️ 编辑资产与黑盒参数</button>
-                      ${item.sourceType === "community" ? `<button type="button" class="btn btn-sm" id="asset-admin-toggle-status-btn" style="color:var(--vermilion);">${item.status === "paused" ? "▶️ 恢复资产" : "⏸️ 下架审查"}</button>` : ""}
-                    </div>
-                  </div>
-                `
-                : S.canManageGlobal && S.canManageGlobal() && item.sourceType === "community"
-                ? `
-                  <div id="asset-operator-drawer" style="background:rgba(31,95,139,0.08);border:1px solid rgba(31,95,139,0.25);border-radius:10px;padding:9px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <div style="font-size:12.5px;color:#1f5f8b;font-weight:750;">
-                      🧭 <strong>运营审查</strong>：社区共创资产治理 (${item.status === "paused" ? "已下架" : "已上架"})
-                    </div>
-                    <button type="button" class="btn btn-sm" id="asset-admin-toggle-status-btn" style="color:var(--vermilion);">${item.status === "paused" ? "▶️ 恢复上架" : "⏸️ 下架审查"}</button>
-                  </div>
-                `
-                : ""
-            }
-            <div>
-              <p class="hw-editorial-eyebrow" style="margin-bottom:6px;">
-                ${isStyle ? "画风标本与实测配方详情" : "图型标本与版式结构详情"}
-              </p>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-                <span class="hw-recipe-pill ${!isStyle ? "is-layout" : ""}" style="font-size:12.5px;padding:3px 9px;">#${esc(item.id)}</span>
-                <span class="hw-card-group-tag" style="font-size:12px;padding:2px 8px;">${esc(item.group)}</span>
-                ${S.isFreshRelease(item) ? `<span class="hw-honor-badge honor-pioneer">🌱 72h 新发曝光扶持中</span>` : ""}
-                ${item.sourceType === "community" ? `<span class="hw-honor-badge honor-gold">✨ 社区共创资产</span>` : ""}
-              </div>
-              <h1 class="hw-detail-title">${esc(item.id)} · ${esc(item.name)}</h1>
-              <p style="margin:10px 0 0;font-size:14.5px;color:var(--ink-body);line-height:1.68;">${esc(item.description || "")}</p>
-            </div>
-
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-top:4px;">
-              <a class="btn btn-primary" href="${esc(channelUrl("studio", isStyle ? { style: item.id } : { layout: item.id }))}">
-                ✨ 用此${isStyle ? "画风" : "图型"}去无限画布创作 ↗
-              </a>
-              <button type="button" class="btn ${liked ? "btn-primary" : ""}" id="drawer-btn-like">
-                👍 ${liked ? "已赞" : "点赞"} (${likeCnt})
-              </button>
-              <button type="button" class="btn ${collected ? "btn-primary" : ""}" id="drawer-btn-collect">
-                ${collected ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
-              </button>
-              <button type="button" class="btn" id="drawer-btn-forum-compose">
-                📑 作为卡片分享到论坛 ↗
-              </button>
-              <button type="button" class="btn btn-gold" id="drawer-btn-share">
-                📤 分享赚积分
-              </button>
-              <button type="button" class="btn btn-sm" id="drawer-btn-report-asset" title="举报违规或标注不实资产">
-                🚩 举报
-              </button>
-            </div>
-
-            ${inlineDrawerHtml}
-
-            ${defSectionHtml}
-          </div>
-        </section>
-
-        <!-- FULL-WIDTH STANDALONE COMMENTS SECTION -->
-        <section class="hw-detail-section-card" id="asset-comments-box">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-            <div>
-              <h2 style="margin:0;font-size:19px;font-family:var(--font-serif);">
-                💬 ${isStyle ? "画风" : "图型"}实测评论与避坑心得 (${assetComments.length})
-              </h2>
-              <div style="font-size:12.5px;color:var(--ink-muted);margin-top:3px;">
-                交流 <code>#${esc(item.id)}</code> 的笔触表现、适用主题、文字留白控制与混搭建议
-              </div>
-            </div>
-          </div>
-
-          <div class="hw-comments-composer">
-            <textarea class="hw-textarea" rows="3" id="asset-comment-input" placeholder="写下你对 #${esc(item.id)} ${esc(item.name)} 的实测出图评价、提示词调参心得或搭配建议…"></textarea>
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-              <span style="font-size:12px;color:var(--ink-muted);">友善真实的实测反馈将帮助更多创作者少走弯路</span>
-              <button type="button" class="btn btn-primary" id="asset-comment-send">💬 发表评论</button>
-            </div>
-          </div>
-
-          <div class="hw-comments-list">
-            ${
-              assetComments.length === 0
-                ? `<div style="padding:28px;text-align:center;font-size:13.5px;color:var(--ink-muted);background:var(--paper-bg);border-radius:12px;">暂无评论，来写下第一条关于 <code>#${esc(item.id)}</code> 的出图质感评价或配比心得吧～</div>`
-                : assetComments
-                    .map((c, idx) => {
-                      const cUser = c.user || c.username || "";
-                      const cProf = cUser ? S.getCreatorProfile(cUser) : null;
-                      const avatarChar = cProf ? cProf.avatarChar : String(c.name || "绘").charAt(0).toUpperCase();
-                      return `
-                        <div class="hw-comment-item">
-                          <span class="hw-creator-avatar-md ${esc(cProf ? cProf.honor.sealClass : "")}" style="${cUser ? "cursor:pointer;" : ""}" ${cUser ? `data-open-creator="${esc(cUser)}"` : ""}>${esc(avatarChar)}</span>
-                          <div style="flex:1;min-width:0;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-                              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                                <strong style="font-size:13.5px;${cUser ? "cursor:pointer;" : ""}" ${cUser ? `data-open-creator="${esc(cUser)}"` : ""}>@${esc(c.name)}</strong>
-                                ${cProf ? `<span class="hw-honor-badge ${esc(cProf.honor.sealClass)}" style="font-size:10px;padding:0 5px;">${esc(cProf.honor.shortBadge)}</span>` : ""}
-                                <span style="color:var(--ink-faint);font-size:11.8px;">${esc(c.time)}</span>
-                              </div>
-                              <div style="display:flex;gap:6px;align-items:center;">
-                                ${S.isStaff && S.isStaff() ? `<button type="button" class="btn btn-sm" data-hide-asset-comment="${esc(c.id || idx)}" style="font-size:11px;padding:1px 6px;color:var(--ink-muted);">🙈 隐藏</button>` : ""}
-                                ${(S.canDeleteComment ? S.canDeleteComment(c) : (App.state.loggedIn && (cUser === App.state.user.username || (S.isStaff && S.isStaff())))) ? `<button type="button" class="btn btn-sm" data-del-asset-comment="${esc(c.id || idx)}" style="font-size:11px;padding:1px 6px;color:var(--vermilion);">🗑️ 删除</button>` : ""}
-                                <span class="hw-comment-floor">#${idx + 1}楼</span>
-                              </div>
-                            </div>
-                            <div style="font-size:14px;color:var(--ink-body);line-height:1.62;">${esc(c.text)}</div>
-                          </div>
-                        </div>
-                      `;
-                    })
-                    .join("")
-            }
-          </div>
-        </section>
-
-        <!-- FULL-WIDTH RELATED COMMUNITY WORKS & FORUM TOPICS -->
-        <section class="hw-detail-section-card">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
-            <div class="hw-segmented">
-              <button type="button" class="hw-seg-btn ${effectiveSubTab === "works" ? "is-active" : ""}" id="drawer-tab-works">
-                🖼️ 社区同款实测作品 (${totalAssetWorks})
-              </button>
-              <button type="button" class="hw-seg-btn ${effectiveSubTab === "topics" ? "is-active" : ""}" id="drawer-tab-topics">
-                📋 关联论坛讨论帖 (${relatedTopics.length})
-              </button>
-            </div>
-            <button type="button" class="btn btn-sm btn-primary" id="drawer-btn-add-work">
-              📑 作为卡片分享到论坛交流 (+5✦) ↗
-            </button>
-          </div>
-          ${subContentHtml}
-        </section>
-      </div>
-    `;
-
-    root.querySelector("#asset-btn-back").onclick = () => navigateBack(parentCatalogView);
-    root.querySelector("#asset-crumb-catalog").onclick = () => switchView(parentCatalogView);
-    root.querySelectorAll("[data-nav-asset]").forEach((btn) => {
-      btn.onclick = () => openAssetPage(btn.getAttribute("data-nav-asset"));
-    });
-
-    const openContrib = root.querySelector("#asset-page-open-contributor");
-    if (openContrib && contributorProf) {
-      openContrib.onclick = () => openProfilePage(contributorProf.username, "works");
-    }
-    const visitContribBtn = root.querySelector("#asset-page-visit-profile-btn");
-    if (visitContribBtn && contributorProf) {
-      visitContribBtn.onclick = () => openProfilePage(contributorProf.username, "works");
-    }
-
-    root.querySelectorAll("[data-open-creator]").forEach((el) => {
-      el.onclick = (e) => {
-        e.stopPropagation();
-        openProfilePage(el.getAttribute("data-open-creator"), "works");
-      };
-    });
-
-    const cheerAssetBtn = root.querySelector("#drawer-btn-cheer-asset");
-    if (cheerAssetBtn) {
-      cheerAssetBtn.onclick = () => S.toggleCheerItem("asset", item.id);
-    }
-    root.querySelectorAll("[data-asset-stamp]").forEach((sb) => {
-      sb.onclick = () => S.toggleCheerItem("asset", item.id, sb.getAttribute("data-asset-stamp"));
-    });
-    const tipAssetBtn = root.querySelector("#drawer-btn-tip-asset");
-    if (tipAssetBtn) {
-      tipAssetBtn.onclick = () => S.sendEncourageTip("asset", item.id, 2);
-    }
-
-    root.querySelector("#drawer-btn-like").onclick = () => {
-      S.toggleLike(item.kind, item.id, `${item.id} ${item.name}`);
-    };
-    root.querySelector("#drawer-btn-collect").onclick = () => {
-      S.toggleCollect(favBucket, item.id, `${item.id} ${item.name}`);
-    };
-    root.querySelector("#drawer-btn-forum-compose").onclick = () =>
-      S.goToForumCompose({
-        category: "assets",
-        style1: isStyle ? item.id : "",
-        layout: !isStyle ? item.id : "",
-        topicTitle: `围绕${isStyle ? "画风" : "图型"}《${item.name}》的创作实测分享`,
-        sharedCard: {
-          kind: isStyle ? "style" : "layout",
-          id: item.id,
-          title: item.name,
-          image: item.image,
-          authorName: item.authorName || "Handraw 官方",
-          desc: item.description || ""
-        }
-      });
-
-    root.querySelector("#drawer-btn-share").onclick = () => {
-      UI.assetInlineDrawer = UI.assetInlineDrawer === "share" ? "" : "share";
-      renderMain();
-    };
-    root.querySelector("#drawer-btn-report-asset").onclick = () => {
-      if (!App.state.loggedIn) {
-        openAuthPage("登录后即可参与社区内容自治举报反馈", () => {
-          UI.assetInlineDrawer = "report";
-          renderMain();
-        });
-        return;
-      }
-      UI.assetInlineDrawer = UI.assetInlineDrawer === "report" ? "" : "report";
-      renderMain();
-    };
-
-    if (UI.assetInlineDrawer === "share") {
-      S.bindInlineSharePanel(root, item.kind, item, () => {
-        UI.assetInlineDrawer = "";
-        renderMain();
-      });
-    } else if (UI.assetInlineDrawer === "report") {
-      S.bindInlineReportPanel(root, "asset", item.id, () => {
-        UI.assetInlineDrawer = "";
-        renderMain();
-      });
-    }
-
-    const cmtInput = root.querySelector("#asset-comment-input");
-    const cmtSend = root.querySelector("#asset-comment-send");
-    if (UI.assetFocusComments && cmtInput) {
-      UI.assetFocusComments = false;
-      setTimeout(() => {
-        const box = document.getElementById("asset-comments-box");
-        if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
-        cmtInput.focus();
-      }, 40);
-    }
-    if (cmtSend) {
-      cmtSend.onclick = async () => {
-        const val = cmtInput.value.trim();
-        if (!val) {
-          toast("请输入评论内容");
-          return;
-        }
-        try {
-          const created = await S.submitAssetComment(item.id, item.kind, val);
-          if (created) renderMain();
-        } catch (err) {
-          toast(`评论失败：${err.message}`);
-        }
-      };
-    }
-
-    const copyDef = root.querySelector("#drawer-btn-copy-def");
-    if (copyDef) {
-      copyDef.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(item.definition || item.description || "");
-        } catch (_) {}
-        toast(`📋 已复制 ${item.id} 定义词`);
-      };
-    }
-
-    const unlockExcl = root.querySelector("#drawer-btn-unlock-exclusive");
-    if (unlockExcl) {
-      unlockExcl.onclick = () => {
-        if (S.unlockWithCredits(item.id, item.unlockCost, `${item.id} ${item.name}`, "", () => renderMain())) {
-          renderMain();
-        }
-      };
-    }
-
-    const unlockComm = root.querySelector("#drawer-btn-unlock-comm");
-    if (unlockComm) {
-      unlockComm.onclick = () => {
-        if (S.unlockWithCredits(item.id, item.unlockCost, `${item.id} ${item.name}`, item.authorName, () => renderMain())) {
-          renderMain();
-        }
-      };
-    }
-
-    root.querySelector("#drawer-tab-works").onclick = () => {
-      UI.assetSubTab = "works";
-      syncUrl(false);
-      renderMain();
-    };
-    root.querySelector("#drawer-tab-topics").onclick = () => {
-      UI.assetSubTab = "topics";
-      syncUrl(false);
-      renderMain();
-    };
-
-    const pioneerBtn = root.querySelector("#drawer-btn-pioneer-share");
-    if (pioneerBtn) {
-      pioneerBtn.onclick = () =>
-        S.goToForumCompose({
-          category: "assets",
-          style1: isStyle ? item.id : "",
-          layout: !isStyle ? item.id : "",
-          topicTitle: `首晒《${item.name}》实测图文与配方心得`,
-          sharedCard: {
-            kind: isStyle ? "style" : "layout",
-            id: item.id,
-            title: item.name,
-            image: item.image,
-            authorName: item.authorName || "Handraw 官方",
-            desc: item.description || ""
-          }
-        });
-    }
-
-    const addWorkBtn = root.querySelector("#drawer-btn-add-work");
-    if (addWorkBtn) {
-      addWorkBtn.onclick = () =>
-        S.goToForumCompose({
-          category: "assets",
-          style1: isStyle ? item.id : "",
-          layout: !isStyle ? item.id : "",
-          topicTitle: `围绕《${item.name}》实测成片对比分享`,
-          sharedCard: {
-            kind: isStyle ? "style" : "layout",
-            id: item.id,
-            title: item.name,
-            image: item.image,
-            authorName: item.authorName || "Handraw 官方",
-            desc: item.description || ""
-          }
-        });
-    }
-
-    root.querySelectorAll("[data-drawer-open-work]").forEach((card) => {
-      card.onclick = () => openWorkPage(card.getAttribute("data-drawer-open-work"));
-    });
-
-    // Asset In-Place Admin & Operator Handlers
-    const assetAdminEditBtn = root.querySelector("#asset-admin-edit-btn");
-    if (assetAdminEditBtn) {
-      assetAdminEditBtn.onclick = () => openFrontAssetEditModal(item.id);
-    }
-    const assetToggleBtn = root.querySelector("#asset-admin-toggle-status-btn");
-    if (assetToggleBtn) {
-      assetToggleBtn.onclick = async () => {
-        const nextStatus = item.status === "paused" ? "active" : "paused";
-        if (!confirm(`确定要将资产 #${item.id} 状态修改为 [${nextStatus}] 吗？`)) return;
-        try {
-          if (App.state.serverBacked) {
-            await S.apiJson(`/api/admin/assets/${encodeURIComponent(item.id)}`, {
-              method: "PATCH",
-              body: { status: nextStatus }
-            });
-          }
-          item.status = nextStatus;
-          toast(`✅ 资产状态已修改为 ${nextStatus}！`);
-          await S.refreshFromServer();
-          renderMain();
-        } catch (err) {
-          toast(`操作失败：${err.message}`);
-        }
-      };
-    }
-
-    // Asset comments delete & hide
-    root.querySelectorAll("[data-del-asset-comment]").forEach((btn) => {
-      btn.onclick = async () => {
-        const cid = btn.getAttribute("data-del-asset-comment");
-        if (!confirm("确定要删除此条资产评论吗？")) return;
-        try {
-          if (App.state.serverBacked) {
-            await S.apiJson(`/api/comments/moderate`, {
-              method: "POST",
-              body: { commentType: "asset_comment", id: cid, assetCode: item.id, action: "delete" }
-            });
-          }
-          toast("🗑️ 资产评论已删除！");
-          await S.refreshFromServer();
-          renderMain();
-        } catch (err) {
-          toast(`删除评论失败：${err.message}`);
-        }
-      };
-    });
-    root.querySelectorAll("[data-hide-asset-comment]").forEach((btn) => {
-      btn.onclick = async () => {
-        const cid = btn.getAttribute("data-hide-asset-comment");
-        try {
-          if (App.state.serverBacked) {
-            await S.apiJson(`/api/comments/moderate`, {
-              method: "POST",
-              body: { commentType: "asset_comment", id: cid, assetCode: item.id, action: "hide" }
-            });
-          }
-          toast("🙈 资产评论已隐藏！");
-          await S.refreshFromServer();
-          renderMain();
-        } catch (err) {
-          toast(`操作失败：${err.message}`);
-        }
-      };
-    });
+    location.replace(channelUrl("main", {view:"asset",id:UI.activeAssetId,tab:UI.assetFocusComments ? "comments" : UI.assetSubTab === "topics" ? "topics" : ""}));
   }
 
-  /* ======================== 2. WORKS SQUARE (PUBLIC SEO + HONOR SPOTLIGHT + NEW EXPOSURE + LEADERBOARD) ======================== */
   function renderWorksSquare(root) {
+    const B = window.HandrawWorksBrowser;
     const allWorks = App.state.works || [];
-    const statsMap = S.getCreatorStatsMap();
-    const pMeta = getPeriodMeta(UI.rankPeriod);
-    const topCreators = S.getTopCreators(3, "prolific", UI.rankPeriod);
-    const totalCheersAll = allWorks.reduce((sum, w) => sum + Number(w.cheers || 0), 0);
+    const counts = B.countFormats(allWorks);
+    const filters = {
+      format: UI.workFormat || "all",
+      access: UI.workAccess || "all",
+      query: UI.workQuery || "",
+      asset: UI.workFilterAsset || "",
+      author: UI.workFilterAuthor || "",
+      sort: UI.workSort === "newest" || UI.workSort === "favorites" || UI.workSort === "cheers"
+        ? UI.workSort : "newest"
+    };
+    if (!counts[filters.format]) filters.format = UI.workFormat = "all";
+    const filtered = B.select(allWorks, filters, App.resourceMap, S);
+    const shownCount = Math.max(24, Number(UI.workShownCount) || 24);
+    const visible = filtered.slice(0, shownCount);
+    const hasFilters = Boolean(
+      filters.format !== "all" || filters.access !== "all" ||
+      String(filters.query).trim() || filters.asset || filters.author
+    );
+    const selectedAsset = filters.asset && App.resourceMap ? App.resourceMap.get(filters.asset) : null;
+    const author = filters.author ? S.getCreatorProfile(filters.author) : null;
+    const assetImage = selectedAsset && (selectedAsset.thumbUrl || selectedAsset.image || selectedAsset.cover || "");
 
-    const freshWorks = S.getRankedWorks(4, "rising", "week");
-    const topRankedWorks = S.getRankedWorks(5, "composite", UI.rankPeriod);
+    const formatButton = (key, label, count) => key === "all" || count > 0
+      ? `<button type="button" class="hw-wb-tab ${filters.format === key ? "is-active" : ""}" data-wb-format="${esc(key)}" aria-pressed="${filters.format === key}">${esc(label)} <span class="hw-wb-tab-count">${count}</span></button>`
+      : "";
 
-    const q = UI.workQuery.trim().toLowerCase();
-    const filtered = allWorks.filter((w) => {
-      const hasS = w.styles && w.styles.length > 0;
-      const hasL = Boolean(w.layout);
-      if (UI.workAssoc === "both" && !(hasS && hasL)) return false;
-      if (UI.workAssoc === "style_only" && !(hasS && !hasL)) return false;
-      if (UI.workAssoc === "layout_only" && !(!hasS && hasL)) return false;
-      if (UI.workAssoc === "freeform" && (hasS || hasL)) return false;
-      if (UI.workFilterAsset) {
-        const hit = (w.styles || []).includes(UI.workFilterAsset) || w.layout === UI.workFilterAsset;
-        if (!hit) return false;
-      }
-      if (UI.workFilterAuthor && w.author !== UI.workFilterAuthor) return false;
-      if (UI.workSort === "paid" && !(w.price > 0)) return false;
-      if (q) {
-        const hay = `${w.title} ${w.prompt} ${(w.styles || []).join(" ")} ${w.layout || ""} ${w.authorName}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
+    const cards = visible.map((w) => {
+      const images = B.imagesFor(w);
+      const id = String(w.id);
+      const href = channelUrl("main", { view: "work", id });
+      const collected = S.isCollected("works", id);
+      const favCnt = S.getFavoriteCount("work", w);
+      const cmtCnt = (w.comments || []).length;
+      const unlocked = S.isUnlocked(id, w);
+      const priced = (Number(w.price) || 0) > 0;
+      const canModerate = Boolean(S.canModerateWork && S.canModerateWork(w));
+      const canDelete = Boolean(
+        (S.canDeleteWork && S.canDeleteWork(w)) ||
+        (App.state.loggedIn && App.state.user && w.author === App.state.user.username)
+      );
+      return `
+        <article class="hw-wb-card" data-wb-work="${esc(id)}">
+          <a class="hw-wb-media" href="${esc(href)}" data-wb-open="${esc(id)}" aria-label="打开作品：${esc(w.title || "未命名作品")}">
+            <img data-hw-src="${esc(images[0])}" alt="${esc(w.title || "作品图片")}" loading="lazy" />
+            ${images.length > 1 ? `<span class="hw-wb-media-count">${images.length} 张</span>` : ""}
+            ${priced ? `<span class="hw-wb-price">${unlocked ? "已解锁做法" : `${Number(w.price)} 积分做法`}</span>` : ""}
+          </a>
+          <div class="hw-wb-body">
+            <h3 class="hw-wb-title"><a href="${esc(href)}" data-wb-open="${esc(id)}">${esc(w.title || "未命名作品")}</a></h3>
+            <div class="hw-wb-meta">
+              <button type="button" class="hw-wb-author" data-wb-author="${esc(w.author || "")}">${esc(w.authorName || w.author || "社区作者")}</button>
+            </div>
+            <div class="hw-wb-actions">
+              <button type="button" class="hw-wb-action ${collected ? "is-active" : ""}" data-wb-fav="${esc(id)}" aria-label="${collected ? "取消收藏" : "收藏"} ${favCnt}" aria-pressed="${collected}">${collected ? "♥" : "♡"} ${favCnt}</button>
+              <button type="button" class="hw-wb-action" data-wb-comment="${esc(id)}" aria-label="评论 ${cmtCnt}">💬 ${cmtCnt}</button>
+              ${canModerate ? `<button type="button" class="hw-wb-action" data-wb-mod="${w.featured ? "unfeature" : "feature"}" data-wb-id="${esc(id)}">${w.featured ? "取消精选" : "精选"}</button>` : ""}
+              ${canDelete ? `<button type="button" class="hw-wb-action is-danger" data-wb-mod="delete" data-wb-id="${esc(id)}">删除</button>` : ""}
+            </div>
+          </div>
+        </article>`;
+    }).join("");
 
-    filtered.sort((a, b) => {
-      if (UI.workSort === "newest") {
-        return S.compareByRecency(a, b);
-      }
-      if (UI.workSort === "cheers") return (b.cheers || 0) - (a.cheers || 0);
-      if (UI.workSort === "favorites") return (b.favorites || 0) - (a.favorites || 0);
-      return S.getWorkCompositeScore(b, statsMap) - S.getWorkCompositeScore(a, statsMap);
-    });
-
-    const hasActiveFilter = Boolean(q || UI.workFilterAsset || UI.workFilterAuthor);
-    const activeAuthorProf = UI.workFilterAuthor ? S.getCreatorProfile(UI.workFilterAuthor) : null;
-
-    const heroActionsHtml = `
-      <button type="button" class="btn btn-primary btn-sm" id="works-btn-publish">＋ 晒我的作品（入驻新发曝光席 +5~15✦）</button>
-      <button type="button" class="btn btn-gold btn-sm" data-jump-rankings="works">🏆 冲击作品风云榜 ↗</button>
-    `;
+    const emptyHtml = !counts.all
+      ? `<div class="hw-wb-empty"><h2>还没有已收录作品</h2><p>分享的作品通过收录后，会展示在这里。</p><a class="btn btn-sm" href="${esc(channelUrl("forum"))}">先逛逛社区 →</a></div>`
+      : `<div class="hw-wb-empty"><p>没有符合当前条件的作品。</p><button type="button" class="btn btn-sm" id="hw-wb-reset-empty">重置筛选</button></div>`;
 
     root.innerHTML = `
-      <section class="hw-editorial-strip hw-reveal-section">
-        <div style="max-width:680px;flex:1 1 380px;">
-          <p class="hw-editorial-eyebrow">社区实测作品与创作者联展</p>
-          <h1 class="hw-editorial-title">每一份实测分享都值得被看见、被鼓励、被授予荣光</h1>
-          <p class="hw-editorial-sub">
-            全站累计沉淀 <strong>${allWorks.length}</strong> 件可复刻作品 · 共送出 <strong style="color:var(--vermilion);">👏 ${totalCheersAll}</strong> 次鼓励支持。新发作品保底登台破冰，高产主理人享专属三图联展与最高 <strong>1.45× 瀑布流优先曝光</strong>！
-          </p>
-        </div>
-        ${renderMyHonorStatusCard(heroActionsHtml)}
-      </section>
-
-      ${
-        hasActiveFilter
-          ? ""
-          : UI.worksSpotlightCollapsed
-          ? `
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;background:var(--paper-card);border:1px solid var(--line-soft);border-radius:10px;padding:8px 14px;margin-bottom:14px;font-size:12.5px;">
-              <span>👑 已折叠「活跃主理人联展」「作品风云榜 前五名」与「新发破冰曝光席」</span>
-              <div style="display:flex;gap:6px;">
-                <button type="button" class="btn btn-sm btn-primary" data-jump-rankings="works">完整榜单 ↗</button>
-                <button type="button" class="btn btn-sm" id="btn-toggle-works-spotlight">展开联展与排行榜 ▾</button>
-              </div>
-            </div>
-          `
-          : `
-            <!-- Row 1: Prolific Creator Gallery Spotlight + Live Top-5 Works Leaderboard -->
-            <section class="hw-community-stage hw-reveal-section">
-              <div class="hw-spotlight-panel is-warm-gold">
-                <div class="hw-panel-head">
-                  <div>
-                    <div class="hw-panel-title-wrap">
-                      <h2 class="hw-panel-title">👑 活跃主理人 · 专属联展席</h2>
-                      ${renderPeriodSwitchHtml(true)}
-                    </div>
-                    <div class="hw-panel-sub">${
-                      UI.rankPeriod === "all"
-                        ? "历史累计高产创作者联展，享最高 1.45× 推荐加权"
-                        : `${esc(pMeta.shortPrefix)}新发与互动活跃榜（新人新作优先登台，告别熟面孔霸榜）`
-                    }</div>
-                  </div>
-                  <button type="button" class="btn btn-sm btn-gold" data-jump-rankings="creators">创作者榜单 ↗</button>
-                </div>
-
-                <div class="hw-prolific-grid">
-                  ${topCreators
-                    .map((c, idx) => {
-                      const pubVal = UI.rankPeriod === "all" ? c.totalPublished : c.periodPublished;
-                      const cheerVal = UI.rankPeriod === "all" ? c.totalCheers : c.periodCheers;
-                      const thumbPool =
-                        UI.rankPeriod !== "all" && c.periodWorks && c.periodWorks.length ? c.periodWorks : c.works;
-                      return `
-                        <article class="hw-prolific-card">
-                          <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
-                            <span class="hw-honor-badge ${esc(c.honor.sealClass)}">${idx === 0 ? "🥇 " : idx === 1 ? "🥈 " : "🥉 "}${esc(c.honor.badge)}</span>
-                            <span class="hw-boost-pill">${esc(c.honor.boostText)}</span>
-                          </div>
-                          <div style="display:flex;align-items:center;gap:9px;cursor:pointer;" data-open-creator="${esc(c.username)}">
-                            <span class="hw-creator-avatar-md ${esc(c.honor.sealClass)}">${esc(c.avatarChar)}</span>
-                            <div style="min-width:0;flex:1;">
-                              <div style="font-weight:850;font-size:13.8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.authorName)}</div>
-                              <div style="font-size:11.3px;color:var(--ink-muted);">${esc(pMeta.shortPrefix)} <strong>${pubVal}</strong> 篇 · 获 <strong>${cheerVal}</strong> 👏</div>
-                            </div>
-                          </div>
-                          <div class="hw-prolific-thumbs">
-                            ${thumbPool
-                              .slice(0, 3)
-                              .map(
-                                (pw) =>
-                                  `<img data-hw-src="${esc(pw.images[0])}" alt="${esc(pw.title)}" title="${esc(pw.title)}" data-open-work="${esc(pw.id)}" loading="lazy" />`
-                              )
-                              .join("")}
-                          </div>
-                          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:auto;">
-                            <button type="button" class="btn btn-sm" style="padding:2px 8px;font-size:11.5px;" data-open-creator="${esc(c.username)}">荣誉主页</button>
-                            <button type="button" class="btn btn-sm btn-primary" style="padding:2px 8px;font-size:11.5px;" data-filter-author="${esc(c.username)}">看全部作品 (${c.works.length})</button>
-                          </div>
-                        </article>
-                      `;
-                    })
-                    .join("")}
-                </div>
-              </div>
-
-              <!-- Right: Live Top 5 Works Leaderboard -->
-              <div class="hw-spotlight-panel">
-                <div class="hw-panel-head">
-                  <div>
-                    <div class="hw-panel-title-wrap">
-                      <h2 class="hw-panel-title">🔥 作品风云榜 前五名</h2>
-                      ${renderPeriodSwitchHtml(true)}
-                    </div>
-                    <div class="hw-panel-sub">${
-                      UI.rankPeriod === "all"
-                        ? "历史经典作品综合热度排行"
-                        : `${esc(pMeta.shortPrefix)}新发布高人气作品实时排定`
-                    }</div>
-                  </div>
-                  <div style="display:flex;gap:6px;">
-                    <button type="button" class="btn btn-sm btn-primary" data-jump-rankings="works">完整榜单 ↗</button>
-                    <button type="button" class="btn btn-sm" id="btn-toggle-works-spotlight" title="收起展台">收起</button>
-                  </div>
-                </div>
-
-                <div class="hw-mini-rank-list">
-                  ${topRankedWorks
-                    .map((w, idx) => {
-                      const rankCls = idx < 3 ? `rank-${idx + 1}` : "";
-                      const prof = statsMap.get(w.author) || S.getCreatorProfile(w.author);
-                      const cheered = S.isCheered(w.id);
-                      return `
-                        <div class="hw-mini-rank-row" data-open-work="${esc(w.id)}">
-                          <span class="hw-rank-num ${rankCls}">${String(idx + 1).padStart(2, "0")}</span>
-                          <img data-hw-src="${esc(w.images[0])}" alt="" style="width:42px;height:42px;border-radius:7px;object-fit:cover;flex-shrink:0;border:1px solid var(--line-soft);" />
-                          <div style="min-width:0;flex:1;">
-                            <div style="font-size:12.6px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(w.title)}</div>
-                            <div style="font-size:11.2px;color:var(--ink-muted);display:flex;align-items:center;gap:5px;margin-top:2px;">
-                              <span>@${esc(w.authorName)}</span>
-                              <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:9.8px;padding:0 5px;">${esc(prof.honor.shortBadge)}</span>
-                            </div>
-                          </div>
-                          <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-work="${esc(w.id)}" title="点鼓励助作品冲榜">
-                            👏 ${w.cheers || 12}
-                          </button>
-                        </div>
-                      `;
-                    })
-                    .join("")}
-                </div>
-              </div>
-            </section>
-
-            <!-- Row 2: Newly Published Works Exposure & First-Cheer Stage -->
-            <section class="hw-spotlight-panel is-fresh-jade hw-reveal-section" style="margin-bottom:18px;">
-              <div class="hw-panel-head">
-                <div>
-                  <div class="hw-panel-title-wrap">
-                    <h2 class="hw-panel-title">🌱 新发作品 · 破冰曝光与鼓励席</h2>
-                    <span class="hw-honor-badge honor-pioneer">新发必有曝光 · 给新人与新作送上掌声</span>
-                  </div>
-                  <div class="hw-panel-sub">最新发布的社区作品优先在此轮展，你的每一次「👏 鼓励」都会直接帮新作获得更高推荐权重！</div>
-                </div>
-                <button type="button" class="btn btn-sm" id="fresh-stage-btn-share">＋ 发布作品抢占首排</button>
-              </div>
-
-              <div class="hw-new-works-grid">
-                ${freshWorks
-                  .map((w) => {
-                    const prof = statsMap.get(w.author) || S.getCreatorProfile(w.author);
-                    const cheered = S.isCheered(w.id);
-                    return `
-                      <article class="hw-new-card" data-fresh-work="${esc(w.id)}">
-                        <div class="hw-new-card-media" data-open-work="${esc(w.id)}">
-                          <span class="hw-card-badge-tl badge-new-release">🆕 ${esc(w.createdAt || "刚刚新发")}</span>
-                          <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" loading="lazy" />
-                        </div>
-                        <div class="hw-new-card-body">
-                          <h3 class="hw-card-title" style="font-size:13.3px;" data-open-work="${esc(w.id)}">${esc(w.title)}</h3>
-                          <div style="font-size:11.4px;color:var(--ink-muted);display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;">
-                            ${esc(w.notes || w.prompt)}
-                          </div>
-                          <div style="margin-top:auto;padding-top:7px;border-top:1px dashed var(--line-soft);display:flex;align-items:center;justify-content:space-between;gap:6px;">
-                            <button type="button" class="hw-author-chip" data-open-creator="${esc(prof.username)}">
-                              <span class="hw-creator-avatar-sm ${esc(prof.honor.sealClass)}">${esc(prof.avatarChar)}</span>
-                              <span style="max-width:74px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(w.authorName)}</span>
-                              <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:10px;padding:1px 5px;">${esc(prof.honor.shortBadge)}</span>
-                            </button>
-                            <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-work="${esc(w.id)}">
-                              👏 鼓励 ${w.cheers || 1}
-                            </button>
-                          </div>
-                        </div>
-                      </article>
-                    `;
-                  })
-                  .join("")}
-              </div>
-            </section>
-          `
-      }
-
-      <div class="hw-filter-bar">
-        <div class="hw-pills-row">
-          <button type="button" class="hw-pill ${UI.workAssoc === "all" ? "is-active" : ""}" data-wassoc="all">全部关联类型 (${allWorks.length})</button>
-          <button type="button" class="hw-pill ${UI.workAssoc === "both" ? "is-active" : ""}" data-wassoc="both">🎨+📐 画风+图型齐全</button>
-          <button type="button" class="hw-pill ${UI.workAssoc === "style_only" ? "is-active" : ""}" data-wassoc="style_only">🎨 仅指定画风</button>
-          <button type="button" class="hw-pill ${UI.workAssoc === "layout_only" ? "is-active" : ""}" data-wassoc="layout_only">📐 仅指定图型</button>
-          <button type="button" class="hw-pill ${UI.workAssoc === "freeform" ? "is-active" : ""}" data-wassoc="freeform">🌿 自由创作 (无编号)</button>
-          ${
-            UI.workFilterAsset
-              ? `<button type="button" class="hw-pill is-active" id="clear-work-asset-filter">正在筛选资产：${esc(UI.workFilterAsset)} ×</button>`
-              : ""
-          }
-          ${
-            activeAuthorProf
-              ? `<button type="button" class="hw-pill is-active" id="clear-work-author-filter">${esc(activeAuthorProf.honor.shortBadge)} 正在看 @${esc(activeAuthorProf.authorName)} 的全部作品 ×</button>`
-              : ""
-          }
-        </div>
-
-        <div class="hw-controls-row">
-          <div class="hw-controls-left">
-            <div class="hw-segmented">
-              <button type="button" class="hw-seg-btn ${UI.workSort === "recommended" ? "is-active" : ""}" data-wsort="recommended">⚡ 综合曝光 (新发+高产加权)</button>
-              <button type="button" class="hw-seg-btn ${UI.workSort === "newest" ? "is-active" : ""}" data-wsort="newest">🌱 最新发布</button>
-              <button type="button" class="hw-seg-btn ${UI.workSort === "cheers" ? "is-active" : ""}" data-wsort="cheers">👏 最多鼓励</button>
-              <button type="button" class="hw-seg-btn ${UI.workSort === "favorites" ? "is-active" : ""}" data-wsort="favorites">♥ 最多收藏</button>
-              <button type="button" class="hw-seg-btn ${UI.workSort === "paid" ? "is-active" : ""}" data-wsort="paid">💎 付费精品配方</button>
-            </div>
-            <input type="search" class="hw-input" id="works-search-input" value="${esc(UI.workQuery)}" placeholder="搜作品标题 / 提示词 / 创作者…" />
+      <section class="hw-works-browser">
+        <header class="hw-wb-head">
+          <div>
+            <h1 class="hw-wb-title-head">作品与做法</h1>
+            <p class="hw-wb-sub">浏览社区已收录作品，按画风、图型或关键词查找。</p>
           </div>
-          <div class="hw-controls-right" style="margin-left:auto;display:flex;align-items:center;gap:10px;">
-            <button type="button" class="btn btn-primary btn-sm" id="works-btn-square-publish">＋ 晒出实测作品</button>
-            <span style="font-size:12.5px;color:var(--ink-muted);">共 <strong>${filtered.length}</strong> 件作品</span>
+          <div class="hw-wb-head-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="hw-wb-share">分享作品</button>
+            <a class="hw-wb-rank-link" href="${esc(channelUrl("main",{view:"rankings",rtab:"works"}))}" id="hw-wb-rank">作品榜单 ↗</a>
           </div>
+        </header>
+
+        <div class="hw-wb-tabs" role="group" aria-label="作品类型">
+          ${formatButton("all", "全部作品", counts.all)}
+          ${formatButton("single", "单图作品", counts.single)}
+          ${formatButton("multi", "多图作品", counts.multi)}
         </div>
-      </div>
 
-      ${S.renderMasonry(
-        filtered.map((w) => {
-          const liked = S.isLiked("work", w.id);
-          const likeCnt = S.getLikeCount("work", w);
-          const collected = S.isCollected("works", w.id);
-          const favCnt = S.getFavoriteCount("works", w);
-          const cmtCnt = (w.comments || []).length;
-          const unlocked = S.isUnlocked(w.id, w);
-          const cheered = S.isCheered(w.id);
-          const isFresh = S.isFreshRelease(w);
-          const prof = statsMap.get(w.author) || S.getCreatorProfile(w.author);
-          const hasS = w.styles && w.styles.length > 0;
-          const hasL = Boolean(w.layout);
+        <div class="hw-wb-toolbar"><div class="hw-wb-filters">
+          <label class="hw-wb-search-wrap">
+            <span class="hw-wb-sr">搜索作品</span>
+            <input type="search" id="hw-wb-search" class="hw-wb-search" value="${esc(filters.query)}" placeholder="搜索标题 / 作者 / 编号 / 资源名称" autocomplete="off" />
+          </label>
+          <button type="button" class="hw-wb-chip" data-wb-picker="style">选择画风</button>
+          <button type="button" class="hw-wb-chip" data-wb-picker="layout">选择图型</button>
+        </div>
+        <div class="hw-wb-options">
+          <label>做法<select id="hw-wb-access"><option value="all" ${filters.access === "all" ? "selected" : ""}>全部做法</option><option value="free" ${filters.access === "free" ? "selected" : ""}>免费做法</option><option value="paid" ${filters.access === "paid" ? "selected" : ""}>积分解锁</option></select></label>
+          <label>排序<select id="hw-wb-sort"><option value="newest" ${filters.sort === "newest" ? "selected" : ""}>最新发布</option><option value="favorites" ${filters.sort === "favorites" ? "selected" : ""}>最多收藏</option><option value="cheers" ${filters.sort === "cheers" ? "selected" : ""}>最多鼓励</option></select></label>
+          ${hasFilters ? `<button type="button" class="hw-wb-reset" id="hw-wb-reset">清除筛选</button>` : ""}
+        </div></div>
+        <div class="hw-wb-selected" ${!filters.asset && !filters.author ? "hidden" : ""}>
+          ${filters.asset ? `<button type="button" class="hw-wb-chip is-active" id="hw-wb-clear-asset" aria-label="清除资源筛选">${assetImage ? `<img data-hw-src="${esc(assetImage)}" alt="${esc(selectedAsset?.name || filters.asset)}" />` : ""}<span>${esc(selectedAsset?.name || "资源")} · ${esc(filters.asset)}</span><span aria-hidden="true">×</span></button>` : ""}
+          ${filters.author ? `<button type="button" class="hw-wb-chip is-active" id="hw-wb-author" aria-label="清除作者筛选">作者：${esc(author?.authorName || filters.author)} <span aria-hidden="true">×</span></button>` : ""}
+        </div>
 
-          let pillsHtml = "";
-          if (hasS || hasL) {
-            pillsHtml =
-              (w.styles || [])
-                .map((sid) => `<span class="hw-recipe-pill" data-pill-asset="${esc(sid)}">#${esc(sid)}</span>`)
-                .join("") +
-              (w.layout ? `<span class="hw-recipe-pill is-layout" data-pill-asset="${esc(w.layout)}">📐 ${esc(w.layout)}</span>` : "");
-          } else {
-            pillsHtml = `<span class="hw-recipe-pill" style="background:var(--jade-wash);border-color:#bce3cb;color:var(--jade);">🌿 自由创作</span>`;
-          }
+        <div class="hw-wb-count" aria-live="polite">共 ${filtered.length} 件</div>
+        ${visible.length ? `<div class="hw-wb-grid">${cards}</div>` : emptyHtml}
+        ${visible.length < filtered.length ? `<div class="hw-wb-more"><button type="button" class="btn btn-sm" id="hw-wb-more">加载更多</button></div>` : ""}
+      </section>`;
 
-          let tlBadge = "";
-          if (w.price > 0) {
-            tlBadge = `<span class="hw-card-badge-tl badge-paid">${unlocked ? "💎 已解锁配方" : `💎 ${w.price} 积分配方`}</span>`;
-          } else if (isFresh) {
-            tlBadge = `<span class="hw-card-badge-tl badge-new-release">🆕 新发曝光 · ${esc(w.createdAt || "新作品")}</span>`;
-          } else if (prof.honor.tier >= 4) {
-            tlBadge = `<span class="hw-card-badge-tl badge-honor-hall">👑 殿堂主理人精选</span>`;
-          }
-
-          return `
-            <article class="hw-card ${isFresh ? "is-fresh-highlight" : prof.honor.tier >= 4 ? "is-hall-highlight" : ""}" data-work-card="${esc(w.id)}">
-              <div class="hw-card-media" data-open-work="${esc(w.id)}">
-                ${tlBadge}
-                <button type="button" class="hw-card-fav-btn ${collected ? "is-collected" : ""}" data-fav-work="${esc(w.id)}" title="收藏作品">
-                  ${collected ? "♥" : "♡"}
-                </button>
-                <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" loading="lazy" />
-                ${w.images.length > 1 ? `<span class="hw-card-workcount">1/${w.images.length} 多图</span>` : ""}
-              </div>
-              <div class="hw-card-body">
-                <h3 class="hw-card-title" data-open-work="${esc(w.id)}">${esc(w.title)}</h3>
-                <div class="hw-recipe-pills">${pillsHtml}</div>
-                <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:6px;">
-                  <button type="button" class="hw-author-chip" data-open-creator="${esc(prof.username)}">
-                    <span class="hw-creator-avatar-sm ${esc(prof.honor.sealClass)}">${esc(prof.avatarChar)}</span>
-                    <span style="max-width:86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(w.authorName)}</span>
-                    <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:10px;padding:1px 5px;">${esc(prof.honor.shortBadge)}</span>
-                  </button>
-                  <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" style="padding:2px 6px;font-size:11px;" data-cheer-work="${esc(w.id)}" title="为作者作品送上鼓励">
-                    👏 ${w.cheers || 12}
-                  </button>
-                </div>
-                <div class="hw-card-footer" style="gap:5px;flex-wrap:wrap;">
-                  <button type="button" class="btn btn-sm ${liked ? "btn-primary" : ""}" style="padding:2px 7px;font-size:11px;" data-like-work="${esc(w.id)}" title="点赞作品">
-                    👍 ${likeCnt}
-                  </button>
-                  <button type="button" class="btn btn-sm ${collected ? "btn-primary" : ""}" style="padding:2px 7px;font-size:11px;" data-fav-work="${esc(w.id)}" title="收藏作品">
-                    ${collected ? "♥" : "♡"} ${favCnt}
-                  </button>
-                  <button type="button" class="btn btn-sm" style="padding:2px 7px;font-size:11px;" data-comment-work="${esc(w.id)}" title="评论作品">
-                    💬 ${cmtCnt}
-                  </button>
-                  <span style="font-size:11px;color:var(--ink-muted);">⚡ ${w.forks || 0}</span>
-                  ${
-                    (S.canModerateWork ? S.canModerateWork(w) : false)
-                      ? `
-                        <span style="display:inline-flex;gap:3px;align-items:center;margin-left:auto;">
-                          <button type="button" class="btn btn-sm" style="padding:1px 5px;font-size:10.5px;" data-work-mod-op="${w.featured ? "unfeature" : "feature"}" data-work-id="${esc(w.id)}">${w.featured ? "取消精选" : "🌟 精选"}</button>
-                          <button type="button" class="btn btn-sm" style="padding:1px 5px;font-size:10.5px;color:var(--vermilion);font-weight:750;" data-work-mod-op="delete" data-work-id="${esc(w.id)}">🗑️ 删</button>
-                        </span>
-                      `
-                      : (S.canDeleteWork ? S.canDeleteWork(w) : (App.state.loggedIn && App.state.user && w.author === App.state.user.username))
-                      ? `
-                        <button type="button" class="btn btn-sm" style="padding:1px 5px;font-size:10.5px;color:var(--vermilion);margin-left:auto;" data-work-mod-op="delete" data-work-id="${esc(w.id)}">🗑️ 删除</button>
-                      `
-                      : ""
-                  }
-                </div>
-              </div>
-            </article>
-          `;
-        }),
-        "standard"
-      )}
-    `;
-
-    root.querySelector("#works-btn-publish").onclick = () => S.goToForumCompose({ category: "tuning" });
-    const sqPub = root.querySelector("#works-btn-square-publish");
-    if (sqPub) sqPub.onclick = () => S.goToForumCompose({ category: "tuning" });
-    const freshShareBtn = root.querySelector("#fresh-stage-btn-share");
-    if (freshShareBtn) freshShareBtn.onclick = () => S.goToForumCompose({ category: "tuning" });
-
-    const toggleWorksSpot = root.querySelector("#btn-toggle-works-spotlight");
-    if (toggleWorksSpot) {
-      toggleWorksSpot.onclick = () => {
-        UI.worksSpotlightCollapsed = !UI.worksSpotlightCollapsed;
-        renderMain();
-      };
-    }
-    bindPeriodSwitch(root);
-
-    root.querySelectorAll("[data-jump-rankings]").forEach((btn) => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        switchView("rankings", { rankTab: btn.getAttribute("data-jump-rankings") || "works" });
-      };
+    const rerender = () => { if (typeof syncUrl === "function") syncUrl(); renderMain(); };
+    const change = (fn) => { fn(); UI.workShownCount = 24; rerender(); };
+    const clearFilters = () => change(() => {
+      UI.workQuery = ""; UI.workFormat = "all"; UI.workAccess = "all";
+      UI.workFilterAsset = ""; UI.workFilterAuthor = "";
     });
+    const share = () => S.goToCurationShare({ kind: "work" });
 
-    root.querySelectorAll("[data-open-creator]").forEach((el) => {
-      el.onclick = (e) => {
-        e.stopPropagation();
-        openCreatorCard(el.getAttribute("data-open-creator"));
-      };
+    const q = root.querySelector("#hw-wb-share");
+    if (q) q.onclick = share;
+    const rank = root.querySelector("#hw-wb-rank");
+    if (rank) rank.onclick = (e) => { e.preventDefault(); switchView("rankings", { rankTab: "works" }); };
+
+    root.querySelectorAll("[data-wb-format]").forEach((el) => {
+      el.onclick = () => change(() => { UI.workFormat = el.getAttribute("data-wb-format"); });
     });
+    root.querySelector("#hw-wb-access").onchange = e => change(() => { UI.workAccess=e.target.value; });
+    root.querySelector("#hw-wb-sort").onchange = e => change(() => { UI.workSort=e.target.value; });
+    root.querySelectorAll("#hw-wb-reset, #hw-wb-reset-empty").forEach((el) => { el.onclick = clearFilters; });
 
-    root.querySelectorAll("[data-filter-author]").forEach((btn) => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        UI.workFilterAuthor = btn.getAttribute("data-filter-author");
-        syncUrl();
-        renderMain();
-      };
+    root.querySelectorAll("[data-wb-picker]").forEach(btn => {
+      btn.onclick = () => S.openAssetPickerModal({ kind:btn.getAttribute("data-wb-picker"), currentId:UI.workFilterAsset,onSelect(value) {
+        if (App.view !== "works") return;
+        const code = value && typeof value === "object" ? (value.code || value.id || "") : (value || "");
+        change(() => { UI.workFilterAsset=String(code); });
+      }});
     });
-
-    root.querySelectorAll("[data-cheer-work]").forEach((btn) => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        S.toggleCheerItem("work", btn.getAttribute("data-cheer-work"));
-      };
-    });
-
-    root.querySelectorAll("[data-wassoc]").forEach((b) => {
-      b.onclick = () => {
-        UI.workAssoc = b.getAttribute("data-wassoc");
-        renderMain();
-      };
-    });
-    root.querySelectorAll("[data-wsort]").forEach((b) => {
-      b.onclick = () => {
-        UI.workSort = b.getAttribute("data-wsort");
-        renderMain();
-      };
-    });
-
-    const clearChip = root.querySelector("#clear-work-asset-filter");
-    if (clearChip) {
-      clearChip.onclick = () => {
-        UI.workFilterAsset = "";
-        syncUrl();
-        renderMain();
-      };
-    }
-    const clearAuthorChip = root.querySelector("#clear-work-author-filter");
-    if (clearAuthorChip) {
-      clearAuthorChip.onclick = () => {
-        UI.workFilterAuthor = "";
-        syncUrl();
-        renderMain();
-      };
-    }
-
-    const wSearch = root.querySelector("#works-search-input");
-    wSearch.oninput = (e) => {
-      UI.workQuery = e.target.value;
-      renderMain();
-      const next = document.getElementById("works-search-input");
-      if (next) {
-        next.focus();
-        next.setSelectionRange(next.value.length, next.value.length);
-      }
+    const clearAsset = root.querySelector("#hw-wb-clear-asset");
+    if (clearAsset) clearAsset.onclick = () => change(() => { UI.workFilterAsset=""; });
+    const authorBtn = root.querySelector("#hw-wb-author");
+    if (authorBtn) authorBtn.onclick = (e) => {
+      change(() => { UI.workFilterAuthor = ""; });
     };
-    root.querySelectorAll("[data-like-work]").forEach((b) => {
-      b.onclick = (e) => {
-        e.stopPropagation();
-        const wid = b.getAttribute("data-like-work");
-        const w = allWorks.find((x) => x.id === wid);
-        if (w) S.toggleLike("work", wid, w.title);
+
+    const search = root.querySelector("#hw-wb-search");
+    if (search) {
+      let timer = null;
+      let composing = false;
+      const queueSearch = () => {
+        UI.workQuery = search.value;
+        clearTimeout(timer);
+        if (composing) return;
+        timer = setTimeout(() => {
+          if (App.view !== "works" || !search.isConnected) return;
+          const start=search.selectionStart,end=search.selectionEnd;
+          UI.workShownCount = 24;
+          syncUrl();
+          renderMain();
+          const next = document.getElementById("hw-wb-search");
+          if (next) { next.focus(); if(start!==null && end!==null) next.setSelectionRange(start,end); }
+        }, 180);
+      };
+      search.addEventListener("compositionstart", () => { composing = true; clearTimeout(timer); });
+      search.addEventListener("compositionend", () => { composing = false; queueSearch(); });
+      search.oninput = queueSearch;
+    }
+
+    root.querySelectorAll("[data-wb-open]").forEach((a) => {
+      a.addEventListener("click", (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        openWorkLightbox(a.getAttribute("data-wb-open"), 0, false);
+      });
+    });
+    root.querySelectorAll("[data-wb-comment]").forEach(button => {
+      button.onclick = () => openWorkLightbox(button.getAttribute("data-wb-comment"),0,true);
+    });
+    root.querySelectorAll("[data-wb-author]").forEach(button => {
+      button.onclick = () => S.goToCreatorProfile(button.getAttribute("data-wb-author"));
+    });
+    root.querySelectorAll("[data-wb-fav]").forEach((b) => {
+      b.onclick = () => {
+        const w = allWorks.find((x) => String(x.id) === b.getAttribute("data-wb-fav"));
+        if (w) S.toggleCollect("works", w.id, w.title);
       };
     });
-    root.querySelectorAll("[data-fav-work]").forEach((b) => {
-      b.onclick = (e) => {
-        e.stopPropagation();
-        const wid = b.getAttribute("data-fav-work");
-        const w = allWorks.find((x) => x.id === wid);
-        if (w) S.toggleCollect("works", wid, w.title);
-      };
-    });
-    root.querySelectorAll("[data-comment-work]").forEach((b) => {
-      b.onclick = (e) => {
-        e.stopPropagation();
-        openWorkLightbox(b.getAttribute("data-comment-work"), 0, true);
-      };
-    });
-    root.querySelectorAll("[data-pill-asset]").forEach((el) => {
-      el.onclick = (e) => {
-        e.stopPropagation();
-        openAssetDrawer(el.getAttribute("data-pill-asset"));
-      };
-    });
-    root.querySelectorAll("[data-open-work]").forEach((el) => {
-      el.onclick = (e) => {
-        e.stopPropagation();
-        openWorkLightbox(el.getAttribute("data-open-work"));
-      };
-    });
-    root.querySelectorAll("[data-work-mod-op]").forEach((btn) => {
-      btn.onclick = async (e) => {
-        e.stopPropagation();
-        const wid = btn.getAttribute("data-work-id");
-        const action = btn.getAttribute("data-work-mod-op");
-        if (action === "delete") {
-          if (!confirm("确定要删除这件作品吗？此操作不可撤销。")) return;
-        }
+    root.querySelectorAll("[data-wb-mod]").forEach((b) => {
+      b.onclick = async () => {
+        const action = b.getAttribute("data-wb-mod");
+        if (action === "delete" && !confirm("确定删除这件作品？此操作不可撤销。")) return;
+        b.disabled = true;
         try {
-          const res = await S.apiJson(`/api/works/${wid}/moderate`, {
-            method: "POST",
-            body: { action }
-          });
+          const res = await S.apiJson(`/api/works/${encodeURIComponent(b.getAttribute("data-wb-id"))}/moderate`, { method: "POST", body: { action } });
           if (!res.ok) throw new Error(res.error || "操作失败");
           await S.refreshFromServer();
-          S.toast(action === "delete" ? "作品已成功删除" : "作品状态已更新！", "success");
+          toast(action === "delete" ? "作品已删除" : "作品状态已更新");
           renderMain();
-        } catch (err) {
-          S.toast("操作失败：" + (err.message || err), "error");
-        }
+        } catch (err) { toast("操作失败：" + (err.message || err)); }
+        finally { if (b.isConnected) b.disabled=false; }
       };
     });
+
+    const more = root.querySelector("#hw-wb-more");
+    if (more) more.onclick = () => {
+      const nextId=filtered[shownCount]?.id;
+      UI.workShownCount=shownCount+24;
+      renderMain();
+      const nextCard=Array.from(root.querySelectorAll("[data-wb-work]")).find(el=>el.getAttribute("data-wb-work")===nextId);
+      nextCard?.querySelector("a")?.focus({preventScroll:true});
+    };
   }
 
   /* ======================== 2.5 STANDALONE HONOR & POPULARITY RANKINGS HALL (?view=rankings) ======================== */
@@ -2263,7 +1263,7 @@
                       <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:10px;padding:1px 5px;">${esc(prof.honor.shortBadge)}</span>
                     </button>
                     <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-work="${esc(w.id)}">
-                      👏 鼓励 ${w.cheers || 12}
+                      👏 鼓励 ${w.cheers ?? 0}
                     </button>
                   </div>
                 </article>
@@ -2299,7 +1299,7 @@
                   </div>
                   <div style="display:flex;align-items:center;gap:10px;">
                     <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-work="${esc(w.id)}">
-                      👏 鼓励冲榜 (${w.cheers || 12})
+                      👏 鼓励冲榜 (${w.cheers ?? 0})
                     </button>
                     <button type="button" class="btn btn-sm" data-rank-open-work="${esc(w.id)}">看配方</button>
                   </div>
@@ -2352,7 +1352,7 @@
                   <div style="display:flex;align-items:center;gap:8px;">
                     ${
                       a.sourceType === "community"
-                        ? `<button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-asset="${esc(a.id)}">👏 鼓励 ${a.cheers || 16}</button>`
+                        ? `<button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-asset="${esc(a.id)}">👏 鼓励 ${a.cheers ?? 0}</button>`
                         : ""
                     }
                     <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", a.kind === "style" ? { style: a.id } : { layout: a.id }))}">去创作 ↗</a>
@@ -2493,618 +1493,9 @@
   }
 
   function renderWorkDetailPage(root) {
-    const allWorks = App.state.works || [];
-    const curIdx = allWorks.findIndex((w) => w.id === UI.activeWorkId);
-    const work = curIdx >= 0 ? allWorks[curIdx] : null;
-
-    if (!work) {
-      root.innerHTML = `
-        <div class="hw-detail-page" id="standalone-work-detail-page">
-          <div class="hw-subpage-bar">
-            <button type="button" class="btn btn-sm" id="work-missing-back">← 返回实测作品广场</button>
-          </div>
-          <div class="hw-detail-section-card" style="text-align:center;padding:48px 24px;">
-            <h2 style="margin:0 0 8px;">未找到对应的作品详情</h2>
-            <p style="color:var(--ink-muted);margin:0 0 18px;">该作品可能尚未公开展示或链接参数有误。</p>
-            <button type="button" class="btn btn-primary" id="work-missing-go-works">浏览全部实测作品</button>
-          </div>
-        </div>
-      `;
-      root.querySelector("#work-missing-back").onclick = () => navigateBack("works");
-      root.querySelector("#work-missing-go-works").onclick = () => switchView("works");
-      return;
-    }
-
-    const prevWork = curIdx > 0 ? allWorks[curIdx - 1] : null;
-    const nextWork = curIdx >= 0 && curIdx < allWorks.length - 1 ? allWorks[curIdx + 1] : null;
-    const imgIndex = Math.max(0, Math.min((work.images || []).length - 1, Number(UI.activeWorkImgIdx) || 0));
-
-    const liked = S.isLiked("work", work.id);
-    const likeCnt = S.getLikeCount("work", work);
-    const collected = S.isCollected("works", work.id);
-    const favCnt = S.getFavoriteCount("works", work);
-    const unlocked = S.isUnlocked(work.id, work);
-    const cheered = S.isCheered(work.id);
-    const authorProf = S.getCreatorProfile(work.author);
-    const hasS = work.styles && work.styles.length > 0;
-    const hasL = Boolean(work.layout);
-    const comments = work.comments || [];
-    const canDelWork = S.canDeleteWork ? S.canDeleteWork(work) : (App.state.loggedIn && App.state.user && work.author === App.state.user.username);
-    const canModWork = S.canModerateWork ? S.canModerateWork(work) : false;
-    const isWorkAuthor = Boolean(App.state.loggedIn && App.state.user && work.author === App.state.user.username);
-
-    const backLabel =
-      UI.lastPrimaryView === "styles"
-        ? "画风视觉库"
-        : UI.lastPrimaryView === "layouts"
-        ? "图型结构库"
-        : "实测作品广场";
-
-    const mountedAssetsHtml =
-      hasS || hasL
-        ? `
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            ${(work.styles || [])
-              .map((sid) => {
-                const st = App.resourceMap.get(sid);
-                return `<button type="button" class="hw-recipe-pill" data-lb-asset="${esc(sid)}">🎨 #${esc(sid)} ${esc(st ? st.name : "")}</button>`;
-              })
-              .join("")}
-            ${
-              work.layout
-                ? (() => {
-                    const ly = App.resourceMap.get(work.layout);
-                    return `<button type="button" class="hw-recipe-pill is-layout" data-lb-asset="${esc(work.layout)}">📐 ${esc(work.layout)} ${esc(ly ? ly.name : "")}</button>`;
-                  })()
-                : ""
-            }
-          </div>
-        `
-        : `<div style="font-size:12.5px;color:var(--jade);font-weight:700;">🌿 自由创作作品（未绑定特定画风或图型编号，直接以纯提示词驱动）</div>`;
-
-    const promptHtml = unlocked
-      ? `
-        <div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;flex-wrap:wrap;">
-            <span style="font-size:12.5px;font-weight:750;color:var(--ink-muted);">📜 完整生图提示词配方（支持复制或一键带入创作台）</span>
-            <button type="button" class="btn btn-sm" id="lb-btn-copy-prompt">📋 复制完整提示词</button>
-          </div>
-          <div class="hw-prompt-box">${esc(work.prompt)}</div>
-        </div>
-      `
-      : `
-        <div style="background:var(--vermilion-wash);border:1.5px dashed var(--vermilion-border);border-radius:10px;padding:16px;text-align:center;">
-          <div style="font-weight:800;color:var(--vermilion);margin-bottom:6px;">💎 创作者精品配方（需 ${work.price} 积分解锁）</div>
-          <p style="margin:0 0 12px;font-size:12.8px;color:var(--ink-body);">
-            预览摘要：${esc((work.prompt || "").slice(0, 42))}……（含完整微排版约束与避坑参数，80% 积分直达作者 @${esc(work.authorName)}）
-          </p>
-          <button type="button" class="btn btn-primary" id="lb-btn-unlock-work">
-            🔓 花费 ${work.price} 积分解锁完整提示词与一键同款
-          </button>
-        </div>
-      `;
-
-    const inlineDrawerHtml =
-      UI.workInlineDrawer === "share"
-        ? S.renderInlineSharePanelHtml("work", work)
-        : UI.workInlineDrawer === "report"
-        ? S.renderInlineReportPanelHtml("work", work.id, work.title)
-        : "";
-
-    const relatedWorks = allWorks
-      .filter((rw) => {
-        if (rw.id === work.id) return false;
-        if (work.layout && rw.layout === work.layout) return true;
-        if (hasS && (rw.styles || []).some((s) => work.styles.includes(s))) return true;
-        return rw.author === work.author;
-      })
-      .slice(0, 5);
-    const fallbackRelated =
-      relatedWorks.length >= 3
-        ? relatedWorks
-        : [
-            ...relatedWorks,
-            ...allWorks.filter((rw) => rw.id !== work.id && !relatedWorks.some((x) => x.id === rw.id))
-          ].slice(0, 5);
-
-    root.innerHTML = `
-      <div class="hw-detail-page" id="standalone-work-detail-page">
-        <div class="hw-subpage-bar">
-          <div class="hw-subpage-crumbs">
-            <button type="button" class="btn btn-sm" id="work-page-back-btn">← 返回${esc(backLabel)}</button>
-            <span>/</span>
-            <button type="button" class="hw-pill" id="work-crumb-works" style="padding:2px 9px;font-size:11.8px;">🖼️ 实测作品广场</button>
-            <span>/</span>
-            <strong>${esc(work.title)}</strong>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button type="button" class="btn btn-sm" id="work-page-prev" ${prevWork ? "" : "disabled"} title="${esc(prevWork ? prevWork.title : "已是第一件")}">◀ 上一件</button>
-            <button type="button" class="btn btn-sm" id="work-page-next" ${nextWork ? "" : "disabled"} title="${esc(nextWork ? nextWork.title : "已是最后一件")}">下一件 ▶</button>
-          </div>
-        </div>
-
-        <div class="hw-detail-grid">
-          <div class="hw-detail-stage-wrap">
-            <div class="hw-detail-stage">
-              <img class="main-stage-img" src="${esc(work.images[imgIndex] || work.images[0])}" alt="${esc(work.title)}" />
-              ${
-                work.images.length > 1
-                  ? `<div class="hw-thumb-strip">
-                      ${work.images
-                        .map(
-                          (u, idx) =>
-                            `<img data-hw-src="${esc(u)}" class="${idx === imgIndex ? "is-active" : ""}" data-lb-thumb="${idx}" alt="P${idx + 1}" />`
-                        )
-                        .join("")}
-                    </div>`
-                  : ""
-              }
-            </div>
-
-            <!-- Warm Encouragement Stamp Bar -->
-            <div class="hw-stamp-bar">
-              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                <button type="button" class="hw-stamp-btn ${cheered ? "is-active" : ""}" id="lb-btn-cheer-main">
-                  👏 鼓励支持 (${work.cheers || 12})
-                </button>
-                <button type="button" class="hw-stamp-btn ${S.isCheered(work.id, "惊艳神图") ? "is-active" : ""}" data-lb-stamp="惊艳神图">🔥 惊艳神图 (${S.getStampCount(work, "惊艳神图")})</button>
-                <button type="button" class="hw-stamp-btn ${S.isCheered(work.id, "配方超稳") ? "is-active" : ""}" data-lb-stamp="配方超稳">🎯 配方超稳 (${S.getStampCount(work, "配方超稳")})</button>
-                <button type="button" class="hw-stamp-btn ${S.isCheered(work.id, "构图绝妙") ? "is-active" : ""}" data-lb-stamp="构图绝妙">💡 构图绝妙 (${S.getStampCount(work, "构图绝妙")})</button>
-                <button type="button" class="btn btn-sm btn-gold" id="lb-btn-tip-author" style="margin-left:auto;">
-                  🎁 赞赏 +2✦ 鼓励作者
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="hw-detail-meta-card">
-            ${
-              canModWork
-                ? `
-                  <div id="work-mod-toolbar" style="background:rgba(31,95,139,0.08);border:1px solid rgba(31,95,139,0.28);border-radius:12px;padding:10px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span style="font-size:12.8px;font-weight:850;color:#1f5f8b;">🛡️ 前台运审管理工具条</span>
-                    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                      <button type="button" class="btn btn-sm" data-work-mod-op="${work.featured ? "unfeature" : "feature"}">${work.featured ? "取消精选" : "🌟 设为精选"}</button>
-                      <button type="button" class="btn btn-sm" data-work-mod-op="boost_new">🚀 72h 首发提权</button>
-                      <button type="button" class="btn btn-sm" data-work-mod-op="${work.status === "paused" ? "publish" : "pause"}">${work.status === "paused" ? "▶️ 恢复上架" : "⏸️ 暂存下架"}</button>
-                      <button type="button" class="btn btn-sm" data-work-mod-op="hide">🙈 违规隐藏</button>
-                      <button type="button" class="btn btn-sm" id="work-mod-edit-btn">✏️ 编辑作品</button>
-                      <button type="button" class="btn btn-sm" data-work-mod-op="delete" style="color:var(--vermilion);font-weight:750;">🗑️ 删除作品</button>
-                    </div>
-                  </div>
-                `
-                : ""
-            }
-            <div>
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-                <span class="hw-card-code">🖼️ 社区实测生图配方</span>
-                <span style="font-size:12px;color:var(--ink-muted);">${esc(work.createdAt)} · 画幅 ${esc(work.ratio || "3:4")}</span>
-              </div>
-              <h1 class="hw-detail-title">${esc(work.title)}</h1>
-            </div>
-
-            <!-- Creator Honor Card (links to standalone Personal Homepage) -->
-            <div style="background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:12px;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-              <button type="button" class="hw-author-chip" id="lb-open-author">
-                <span class="hw-creator-avatar-sm ${esc(authorProf.honor.sealClass)}">${esc(authorProf.avatarChar)}</span>
-                <strong style="font-size:13.8px;color:var(--ink-strong);">@${esc(work.authorName)}</strong>
-                <span class="hw-honor-badge ${esc(authorProf.honor.sealClass)}">${esc(authorProf.honor.badge)}</span>
-                <span class="hw-boost-pill">${esc(authorProf.honor.boostText)}</span>
-              </button>
-              <button type="button" class="btn btn-sm" id="lb-visit-profile-btn">🏠 访问个人主页 (${authorProf.totalPublished}) ↗</button>
-            </div>
-
-            <div>
-              <div style="font-size:12px;font-weight:750;color:var(--ink-muted);margin-bottom:6px;">挂载的画风与图型资产（点击进入对应独立详情评论页）：</div>
-              ${mountedAssetsHtml}
-            </div>
-
-            ${work.notes ? `<div style="background:var(--paper-inset);padding:11px 13px;border-radius:9px;font-size:13.2px;color:var(--ink-body);line-height:1.6;">💡 <strong>作者实测笔记：</strong>${esc(work.notes)}</div>` : ""}
-
-            ${promptHtml}
-
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-top:4px;border-top:1px solid var(--line-soft);">
-              ${
-                unlocked
-                  ? `<a class="btn btn-primary" href="${esc(channelUrl("studio", { fork: work.id }))}">⚡ 一键带入无限画布复刻 (${work.forks || 0}) ↗</a>`
-                  : ""
-              }
-              <button type="button" class="btn ${liked ? "btn-primary" : ""}" id="lb-btn-like">
-                👍 ${liked ? "已赞" : "点赞"} (${likeCnt})
-              </button>
-              <button type="button" class="btn ${collected ? "btn-primary" : ""}" id="lb-btn-collect">
-                ${collected ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
-              </button>
-              <button type="button" class="btn" id="lb-btn-scroll-comments">
-                💬 评论交流 (${comments.length})
-              </button>
-              <button type="button" class="btn" id="lb-btn-forum-post">
-                📑 作为卡片分享到论坛 ↗
-              </button>
-              <button type="button" class="btn btn-gold ${UI.workInlineDrawer === "share" ? "btn-primary" : ""}" id="lb-btn-share">
-                📤 分享赚积分
-              </button>
-              <button type="button" class="btn btn-sm ${UI.workInlineDrawer === "report" ? "btn-primary" : ""}" id="lb-btn-report" title="举报内容不实或违规">
-                🚩 举报
-              </button>
-              ${isWorkAuthor && !canModWork ? `<button type="button" class="btn btn-sm" id="work-page-author-delete" style="color:var(--vermilion);" title="删除我的这件作品">🗑️ 删除我的作品</button>` : ""}
-            </div>
-
-            ${inlineDrawerHtml}
-          </div>
-        </div>
-
-        <!-- Full-Width Dedicated Work Comments & Replication Feedback Section -->
-        <section class="hw-detail-section-card" id="work-comments-section">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-            <div>
-              <h2 style="margin:0;font-size:18px;font-family:var(--font-serif);">💬 作品评论与复刻交流区 (${comments.length})</h2>
-              <div style="font-size:12.4px;color:var(--ink-muted);margin-top:3px;">交流复刻提示词参数、字号密度或构图微调技巧，点击评论者昵称可直达其独立个人主页。</div>
-            </div>
-            <span class="hw-boost-pill">友善评论与鼓励计入创作者荣誉加权</span>
-          </div>
-
-          <div class="hw-comments-composer">
-            <textarea class="hw-textarea" rows="2" id="lb-comment-input" placeholder="写下你对《${esc(work.title)}》的赏析、参数提问或复刻反馈（Ctrl + Enter 快捷发送）…" style="flex:1;"></textarea>
-            <button type="button" class="btn btn-primary" id="lb-comment-send" style="align-self:flex-end;">💬 发表评论</button>
-          </div>
-
-          <div class="hw-comments-list" style="margin-top:14px;">
-            ${
-              comments.length === 0
-                ? `<div style="padding:26px;text-align:center;color:var(--ink-muted);background:var(--paper-bg);border-radius:10px;">沙发虚位以待～写一句鼓励或复刻心得，让创作者更有动力吧！</div>`
-                : comments
-                    .map(
-                      (c, idx) => `
-                        <div class="hw-comment-item">
-                          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;">
-                            <div style="display:flex;align-items:center;gap:8px;">
-                              <button type="button" class="hw-author-chip" data-comment-user="${esc(c.user || c.name || "yang0")}" style="padding:2px 8px;">
-                                <strong style="font-size:13px;color:var(--ink-strong);">@${esc(c.name || c.user || "画友")}</strong>
-                              </button>
-                              <span style="color:var(--ink-faint);font-size:11.8px;">${esc(c.time || "刚刚")}</span>
-                            </div>
-                            <div style="display:flex;gap:6px;align-items:center;">
-                              ${canModWork ? `<button type="button" class="btn btn-sm" data-hide-work-comment="${esc(c.id || idx)}" style="font-size:11px;padding:1px 6px;color:var(--ink-muted);">🙈 隐藏</button>` : ""}
-                              ${(S.canDeleteComment ? S.canDeleteComment(c) : (App.state.loggedIn && (c.user === App.state.user.username || canModWork))) ? `<button type="button" class="btn btn-sm" data-del-work-comment="${esc(c.id || idx)}" style="font-size:11px;padding:1px 6px;color:var(--vermilion);">🗑️ 删除</button>` : ""}
-                              <span class="hw-comment-floor">#${idx + 1}楼</span>
-                            </div>
-                          </div>
-                          <div style="font-size:13.8px;color:var(--ink-body);line-height:1.65;white-space:pre-wrap;">${esc(c.text)}</div>
-                        </div>
-                      `
-                    )
-                    .join("")
-            }
-          </div>
-        </section>
-
-        ${
-          fallbackRelated.length
-            ? `
-              <section class="hw-detail-section-card">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-                  <h2 style="margin:0;font-size:17.5px;font-family:var(--font-serif);">✨ 相关同款与推荐实测作品</h2>
-                  <button type="button" class="btn btn-sm" id="work-more-square-btn">去作品广场探索更多 →</button>
-                </div>
-                ${S.renderMasonry(
-                  fallbackRelated.map(
-                    (rw) => `
-                      <article class="hw-card" data-rel-work="${esc(rw.id)}" style="cursor:pointer;">
-                        <div class="hw-card-media">
-                          <img data-hw-src="${esc(rw.images[0])}" alt="${esc(rw.title)}" loading="lazy" />
-                        </div>
-                        <div class="hw-card-body">
-                          <h3 class="hw-card-title">${esc(rw.title)}</h3>
-                          <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;">
-                            <span>@${esc(rw.authorName)}</span>
-                            <span>👏 ${rw.cheers || 12} · 💬 ${(rw.comments || []).length}</span>
-                          </div>
-                        </div>
-                      </article>
-                    `
-                  ),
-                  "standard"
-                )}
-              </section>
-            `
-            : ""
-        }
-      </div>
-    `;
-
-    root.querySelector("#work-page-back-btn").onclick = () => navigateBack(UI.lastPrimaryView || "works");
-    root.querySelector("#work-crumb-works").onclick = () => switchView("works");
-    if (prevWork) {
-      root.querySelector("#work-page-prev").onclick = () => openWorkPage(prevWork.id, 0, false);
-    }
-    if (nextWork) {
-      root.querySelector("#work-page-next").onclick = () => openWorkPage(nextWork.id, 0, false);
-    }
-
-    root.querySelector("#lb-open-author").onclick = () => openProfilePage(authorProf.username, "works");
-    root.querySelector("#lb-visit-profile-btn").onclick = () => openProfilePage(authorProf.username, "works");
-
-    root.querySelector("#lb-btn-cheer-main").onclick = () => {
-      S.toggleCheerItem("work", work.id);
-    };
-    root.querySelectorAll("[data-lb-stamp]").forEach((sb) => {
-      sb.onclick = () => {
-        S.toggleCheerItem("work", work.id, sb.getAttribute("data-lb-stamp"));
-      };
-    });
-    root.querySelector("#lb-btn-tip-author").onclick = () => {
-      S.sendEncourageTip("work", work.id, 2);
-    };
-
-    root.querySelectorAll("[data-lb-thumb]").forEach((t) => {
-      t.onclick = () => {
-        UI.activeWorkImgIdx = Number(t.getAttribute("data-lb-thumb")) || 0;
-        renderMain();
-      };
-    });
-    root.querySelectorAll("[data-lb-asset]").forEach((b) => {
-      b.onclick = () => openAssetPage(b.getAttribute("data-lb-asset"));
-    });
-
-    const copyBtn = root.querySelector("#lb-btn-copy-prompt");
-    if (copyBtn) {
-      copyBtn.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(work.prompt);
-        } catch (_) {}
-        toast("📋 完整生图提示词已复制！");
-      };
-    }
-
-    const unlockBtn = root.querySelector("#lb-btn-unlock-work");
-    if (unlockBtn) {
-      unlockBtn.onclick = () => {
-        S.unlockWithCredits(work.id, work.price, work.title, work.authorName, () => renderMain());
-      };
-    }
-
-    root.querySelector("#lb-btn-like").onclick = () => {
-      S.toggleLike("work", work.id, work.title);
-    };
-    root.querySelector("#lb-btn-collect").onclick = () => {
-      S.toggleCollect("works", work.id, work.title);
-    };
-    root.querySelector("#lb-btn-scroll-comments").onclick = () => {
-      const sec = root.querySelector("#work-comments-section");
-      if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" });
-      const inp = root.querySelector("#lb-comment-input");
-      if (inp) setTimeout(() => inp.focus(), 180);
-    };
-    root.querySelector("#lb-btn-forum-post").onclick = () =>
-      S.goToForumCompose({
-        category: "tuning",
-        topicTitle: `围绕作品《${work.title}》的复刻与调优讨论`,
-        images: work.images || [],
-        sharedCard: {
-          kind: "work",
-          id: work.id,
-          title: work.title,
-          image: (work.images && work.images[0]) || "",
-          authorName: work.authorName || work.author || "",
-          desc: work.notes || work.prompt || ""
-        }
-      });
-
-    root.querySelector("#lb-btn-share").onclick = () => {
-      UI.workInlineDrawer = UI.workInlineDrawer === "share" ? "" : "share";
-      renderMain();
-    };
-    root.querySelector("#lb-btn-report").onclick = () => {
-      if (!App.state.loggedIn) {
-        openAuthPage("登录后即可参与社区内容自治举报反馈", () => {
-          UI.workInlineDrawer = "report";
-        });
-        return;
-      }
-      UI.workInlineDrawer = UI.workInlineDrawer === "report" ? "" : "report";
-      renderMain();
-    };
-
-    if (UI.workInlineDrawer === "share") {
-      S.bindInlineSharePanel(root, "work", work, () => {
-        UI.workInlineDrawer = "";
-        renderMain();
-      });
-    } else if (UI.workInlineDrawer === "report") {
-      S.bindInlineReportPanel(root, "work", work.id, () => {
-        UI.workInlineDrawer = "";
-        renderMain();
-      });
-    }
-
-    root.querySelectorAll("[data-comment-user]").forEach((btn) => {
-      btn.onclick = () => {
-        const u = btn.getAttribute("data-comment-user");
-        if (u) openProfilePage(u, "works");
-      };
-    });
-
-    root.querySelectorAll("[data-rel-work]").forEach((card) => {
-      card.onclick = () => openWorkPage(card.getAttribute("data-rel-work"), 0, false);
-    });
-    const moreBtn = root.querySelector("#work-more-square-btn");
-    if (moreBtn) moreBtn.onclick = () => switchView("works");
-
-    const lbInp = root.querySelector("#lb-comment-input");
-    if (UI.workFocusComment && lbInp) {
-      UI.workFocusComment = false;
-      setTimeout(() => {
-        const sec = root.querySelector("#work-comments-section");
-        if (sec) sec.scrollIntoView({ behavior: "smooth", block: "center" });
-        lbInp.focus();
-      }, 60);
-    }
-
-    const submitWorkComment = async () => {
-      if (!App.state.loggedIn) {
-        openAuthPage("登录后即可发表作品交流与鼓励留言！", () => openWorkPage(work.id, imgIndex, true));
-        return;
-      }
-      const txt = lbInp.value.trim();
-      if (!txt) {
-        toast("请输入评论内容");
-        return;
-      }
-      if (App.state.serverBacked) {
-        try {
-          const res = await S.apiJson(`/api/works/${encodeURIComponent(work.id)}/comments`, {
-            method: "POST",
-            body: { text: txt }
-          });
-          work.comments = work.comments || [];
-          if (res.comment) work.comments.push(res.comment);
-          toast("💬 作品评论已发布！");
-          await S.refreshFromServer();
-        } catch (err) {
-          toast(`评论失败：${err.message}`);
-        }
-        return;
-      }
-      work.comments = work.comments || [];
-      work.comments.push({
-        id: "c_" + Date.now(),
-        user: App.state.user.username,
-        name: App.state.user.name,
-        text: txt,
-        time: "刚刚"
-      });
-      S.saveState();
-      toast("💬 作品评论已发布！");
-    };
-
-    root.querySelector("#lb-comment-send").onclick = submitWorkComment;
-    if (lbInp) {
-      lbInp.addEventListener("keydown", (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-          e.preventDefault();
-          submitWorkComment();
-        }
-      });
-    }
-
-    // Wire Front-Stage Work Moderation Toolbar
-    root.querySelectorAll("#work-mod-toolbar [data-work-mod-op]").forEach((btn) => {
-      btn.onclick = async () => {
-        const op = btn.getAttribute("data-work-mod-op");
-        if (!op) return;
-        if (op === "delete") {
-          if (!confirm(`确定要彻底删除作品《${work.title}》吗？此操作不可逆。`)) return;
-        }
-        try {
-          if (App.state.serverBacked) {
-            await S.apiJson(`/api/works/${encodeURIComponent(work.id)}/moderate`, {
-              method: "POST",
-              body: { action: op }
-            });
-          }
-          if (op === "delete") {
-            toast(`🗑️ 作品《${work.title}》已成功删除`);
-            await S.refreshFromServer();
-            switchView("works");
-          } else {
-            toast(`✅ 作品管理操作 [${op}] 已执行！`);
-            await S.refreshFromServer();
-            renderMain();
-          }
-        } catch (err) {
-          toast(`操作失败：${err.message}`);
-        }
-      };
-    });
-
-    // Wire Work Author Delete Button
-    const authorDelBtn = root.querySelector("#work-page-author-delete");
-    if (authorDelBtn) {
-      authorDelBtn.onclick = async () => {
-        if (!confirm(`确定要删除您的作品《${work.title}》吗？删除后不可恢复。`)) return;
-        try {
-          if (App.state.serverBacked) {
-            await S.apiJson(`/api/works/${encodeURIComponent(work.id)}/delete`, {
-              method: "POST",
-              body: {}
-            });
-          }
-          toast("🗑️ 您的作品已成功删除！");
-          await S.refreshFromServer();
-          switchView("works");
-        } catch (err) {
-          toast(`删除作品失败：${err.message}`);
-        }
-      };
-    }
-
-    // Wire Work Edit Button
-    const editModBtn = root.querySelector("#work-mod-edit-btn");
-    if (editModBtn) {
-      editModBtn.onclick = async () => {
-        const nextTitle = prompt("修改作品标题：", work.title);
-        if (nextTitle === null) return;
-        const newTitle = nextTitle.trim() || work.title;
-        const nextPriceStr = prompt("修改提示词查看积分（0 表示公开免费）：", String(work.price || 0));
-        const newPrice = nextPriceStr !== null ? Math.max(0, parseInt(nextPriceStr, 10) || 0) : work.price;
-        try {
-          if (App.state.serverBacked) {
-            await S.apiJson(`/api/works/${encodeURIComponent(work.id)}/moderate`, {
-              method: "POST",
-              body: { action: "edit", title: newTitle, price: newPrice }
-            });
-          }
-          toast("✅ 作品信息已更新！");
-          await S.refreshFromServer();
-          renderMain();
-        } catch (err) {
-          toast(`更新失败：${err.message}`);
-        }
-      };
-    }
-
-    // Wire Work Comments Moderate (Delete / Hide)
-    root.querySelectorAll("[data-del-work-comment]").forEach((btn) => {
-      btn.onclick = async () => {
-        const cid = btn.getAttribute("data-del-work-comment");
-        if (!confirm("确定要删除此条作品评论吗？")) return;
-        try {
-          if (App.state.serverBacked) {
-            await S.apiJson(`/api/comments/moderate`, {
-              method: "POST",
-              body: { commentType: "work_comment", id: cid, workId: work.id, action: "delete" }
-            });
-          }
-          toast("🗑️ 评论已删除！");
-          await S.refreshFromServer();
-          renderMain();
-        } catch (err) {
-          toast(`删除评论失败：${err.message}`);
-        }
-      };
-    });
-    root.querySelectorAll("[data-hide-work-comment]").forEach((btn) => {
-      btn.onclick = async () => {
-        const cid = btn.getAttribute("data-hide-work-comment");
-        try {
-          if (App.state.serverBacked) {
-            await S.apiJson(`/api/comments/moderate`, {
-              method: "POST",
-              body: { commentType: "work_comment", id: cid, workId: work.id, action: "hide" }
-            });
-          }
-          toast("🙈 评论已隐藏！");
-          await S.refreshFromServer();
-          renderMain();
-        } catch (err) {
-          toast(`操作失败：${err.message}`);
-        }
-      };
-    });
+    location.replace(channelUrl("main", {view:"work",id:UI.activeWorkId,...(UI.workFocusComment ? {focus:"comment"} : {})}));
   }
 
-  /* ======================== STANDALONE CREATOR PERSONAL HOMEPAGE & ACCOUNT CENTER (?view=profile) ======================== */
   function renderCreatorProfilePage(root) {
     const fallbackUser = App.state.loggedIn && App.state.user ? App.state.user.username : "";
     const targetUser = (UI.profileUser || fallbackUser || "").trim();
@@ -3151,7 +1542,7 @@
                     <h3 class="hw-card-title">${esc(w.title)}</h3>
                     <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;align-items:center;">
                       <span>${esc(w.createdAt || "近期")}</span>
-                      <span>👏 ${w.cheers || 12} · 💬 ${(w.comments || []).length}</span>
+                      <span>👏 ${w.cheers ?? 0} · 💬 ${(w.comments || []).length}</span>
                     </div>
                   </div>
                 </article>
@@ -3876,7 +2267,7 @@
       UI.walletShareItem = { itemType: "style", item: App.resourceMap.get("FX-001") || App.styles[0] };
       renderMain();
     };
-    root.querySelector("#wallet-btn-contrib").onclick = () => S.goToForumCompose({ category: "assets" });
+    root.querySelector("#wallet-btn-contrib").onclick = () => S.goToCurationShare({ kind: UI.view === "layouts" ? "layout" : "style" });
   }
 
   /* ======================== FRONT-STAGE MANAGEMENT: MODALS & HUB ======================== */

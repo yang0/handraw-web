@@ -343,9 +343,9 @@
     { key: "FC", label: "FC 现代几何" },
     { key: "FD", label: "FD 日系插画" },
     { key: "FE", label: "FE 概念厚涂" },
-    { key: "FF", label: "FF 潮玩3D手作" },
+    { key: "FF", label: "FF 潮玩立体手作" },
     { key: "FG", label: "FG 动漫分镜" },
-    { key: "FH", label: "FH 独立Zine媒介" },
+    { key: "FH", label: "FH 独立印刷媒介" },
     { key: "FI", label: "FI 大师摄影电影" }
   ];
 
@@ -413,8 +413,17 @@
   }
 
   function channelUrl(targetChannel, paramsObj) {
+    // All public resource links have one canonical forum destination.
+    if (targetChannel === "main" && ["asset", "work"].includes(paramsObj?.view)) {
+      const { view, id, tab, focus, panel } = paramsObj;
+      const item = App.resourceMap?.get(String(id || "").toUpperCase());
+      targetChannel = "forum";
+      paramsObj = { view: tab === "topics" ? "related" : "resource", kind: view === "work" ? "work" : item?.kind || "asset", id };
+      if (tab === "topics") paramsObj.tab = "topics";
+      if (focus || tab === "comments") paramsObj.focus = "comment";
+      if (panel === 'report' || tab === 'report') paramsObj.panel='report';
+    }
     const host = window.location.hostname.toLowerCase();
-    const curPort = Number(window.location.port || 80);
     const proto = window.location.protocol;
     const qs = paramsObj ? new URLSearchParams(paramsObj).toString() : "";
     const suffix = qs ? `?${qs}` : "";
@@ -436,19 +445,8 @@
       return `${proto}//localhost${portPart}/${suffix}`;
     }
 
-    // 4 Independent Origins via dedicated ports (+0 Main / +1 Studio / +2 Forum / +3 Admin) — 100% Clash/Proxy safe!
-    if (curPort >= 1024) {
-      const chOffsetMap = { main: 0, studio: 1, forum: 2, admin: 3 };
-      const curOffset = chOffsetMap[App.channel] != null ? chOffsetMap[App.channel] : (curPort % 10 <= 3 ? curPort % 10 : 0);
-      const basePort = curPort - curOffset;
-      const targetOffset = chOffsetMap[targetChannel] != null ? chOffsetMap[targetChannel] : 0;
-      return `${proto}//${host}:${basePort + targetOffset}/${suffix}`;
-    }
-
-    if (targetChannel === "studio") return `/studio.html${suffix}`;
-    if (targetChannel === "forum") return `/forum.html${suffix}`;
-    if (targetChannel === "admin") return `/admin.html${suffix}`;
-    return `/index.html${suffix}`;
+    const paths = { main: "/", studio: "/studio/", forum: "/forum/", admin: "/admin/" };
+    return `${paths[targetChannel] || "/"}${suffix}`;
   }
 
   async function apiJson(url, opts = {}) {
@@ -479,6 +477,45 @@
       }
     }
     return counts;
+  }
+
+  function resourceLabel(item) {
+    if (!item) return "";
+    const chinese = /[\u3400-\u9fff]/;
+    const named = [item.nameZh, item.name_zh, item.name].find(x => chinese.test(String(x || "")));
+    if (named) return String(named);
+    const phrase = String(item.description || "").replace(/2D/g, "二维").replace(/3D/g, "立体")
+      .split(/[，。；、\n]/).find(x => chinese.test(x) && !/^\s*(参考|灵感来源|作者)/.test(x));
+    const label = phrase && phrase.match(/[\u3400-\u9fff][\u3400-\u9fff\d\s（）「」“”·-]*/);
+    return label ? label[0].trim().slice(0, 24) : item.group
+      ? resourceGroupLabel(item.group, item.kind).replace(/^[A-Z]{2}\s*/, "")
+      : item.kind === "layout" ? "图型参考" : "画风参考";
+  }
+
+  function resourceSearchText(item) {
+    return `${item.id} ${item.legacy || ""} ${item.name || ""} ${item.nameZh || item.name_zh || ""} ${item.originalName || ""} ${item.description || item.desc_zh || ""} ${item.group || ""} ${item.authorName || ""}`.toLowerCase();
+  }
+
+  function resourceMatchesGroup(item, key) {
+    if (key === "ALL") return true;
+    if (key === "FAV") return isCollected(item.kind === "layout" ? "layouts" : "styles", item.id);
+    if (key === "NEW_RELEASE") return isFreshRelease(item);
+    if (key === "EXCLUSIVE") return item.sourceType === "exclusive";
+    if (key === "COMMUNITY") return item.sourceType === "community";
+    if (key === "HAS_WORKS") return getAssetWorkCount(item.id) > 0;
+    return item.group === key || (item.kind === "style" && item.id.startsWith(key + "-"));
+  }
+
+  function resourceGroupLabel(key, kind) {
+    const groups = kind === "layout" ? LAYOUT_GROUPS : STYLE_GROUPS;
+    const found = groups.find(g => g.key === key || (kind === "style" && key.startsWith(g.key + " ")));
+    const plain = String(key).split("/")[0].trim();
+    return found ? found.label : /[\u3400-\u9fff]/.test(plain) ? plain : kind === "layout" ? "其他图型" : "其他画风";
+  }
+
+  function visibleResourceGroups(list, groups, query = "") {
+    const matched = list.filter(item => resourceSearchText(item).includes(query.trim().toLowerCase()));
+    return groups.map(g => ({ ...g, count: matched.filter(item => resourceMatchesGroup(item, g.key)).length })).filter(g => g.count > 0);
   }
 
   function rebuildResourceIndexes() {
@@ -527,10 +564,14 @@
 
     for (const item of all) {
       if (!item || !item.id || App.resourceMap.has(item.id)) continue;
-      App.resourceMap.set(item.id, item);
-      if (item.kind === "style") App.styles.push(item);
-      else if (item.kind === "layout") App.layouts.push(item);
-      else if (item.kind === "color") App.colors.push(item);
+      // Local display aliases leave the source catalog and generation definition intact.
+      const shown = ["style", "layout"].includes(item.kind)
+        ? { ...item, originalName: item.originalName || item.name, name: resourceLabel(item) }
+        : item;
+      App.resourceMap.set(shown.id, shown);
+      if (shown.kind === "style") App.styles.push(shown);
+      else if (shown.kind === "layout") App.layouts.push(shown);
+      else if (shown.kind === "color") App.colors.push(shown);
     }
   }
 
@@ -1169,7 +1210,7 @@
 
   function getAssetTopics(assetId) {
     return ((App.state && App.state.topics) || []).filter(
-      (t) => (t.styles && t.styles.includes(assetId)) || t.layout === assetId
+      (t) => (t.styles && t.styles.includes(assetId)) || t.layout === assetId || (t.submissions || []).some(s => s.targetId === assetId) || t.resourceDiscussion?.targetId === assetId
     );
   }
 
@@ -1418,7 +1459,7 @@
       if (!rec) continue;
       if (res.kind === "layout") rec.layouts.push(res);
       else rec.styles.push(res);
-      rec.totalCheers += Number(res.cheers || 16);
+      rec.totalCheers += Number(res.cheers ?? 0);
     }
 
     for (const w of s.works || []) {
@@ -1508,7 +1549,7 @@
       let pFavs = 0;
       let pForks = 0;
       for (const a of [...pStyles, ...pLayouts]) {
-        pCheers += Number(a.cheers || 16);
+        pCheers += Number(a.cheers ?? 0);
       }
       for (const w of pWorks) {
         pCheers += Number(w.cheers || 0) + Math.round(Number(w.likes || 0) * 0.35);
@@ -1557,25 +1598,32 @@
     return list.slice(0, limit);
   }
 
+  // Single popularity formula per object type, mirroring backend/ranking.py.
+  // Weights encode effort: a fork is real reuse, favouriting means planning to
+  // reuse, likes and cheers are light acknowledgement.  Honour boosts and
+  // freshness bonuses are gone so ranking reflects only real interaction.
+  function popularScore(kind, item) {
+    if (!item) return 0;
+    if (kind === "work") {
+      return (
+        Number(item.likes || 0) +
+        Number(item.cheers || 0) +
+        2 * Number(item.favorites || 0) +
+        3 * Number(item.forks || 0)
+      );
+    }
+    if (kind === "topic") {
+      const replies = Array.isArray(item.replies)
+        ? item.replies.length
+        : Number(item.replyCount || 0);
+      return replies + Number(item.likes || 0) + 2 * Number(item.favorites || 0);
+    }
+    // styles and layouts: how many published works reference them
+    return Number(item.usageCount || 0);
+  }
+
   function getWorkCompositeScore(work, statsMap, period = "feed") {
-    if (!work) return 0;
-    const isWindowed = period === "week" || period === "month";
-    const prof = !isWindowed && statsMap ? statsMap.get(work.author) : null;
-    const honorBoost = isWindowed ? 1.0 : prof ? prof.honor.boost : 1.0;
-    const freshBonus =
-      isFreshRelease(work)
-        ? period === "week"
-          ? 85
-          : period === "feed"
-          ? 130
-          : 0
-        : 0;
-    const rawHeat =
-      Number(work.cheers || 0) * 2.2 +
-      Number(work.favorites || 0) * 1.15 +
-      Number(work.forks || 0) * 1.8 +
-      Number(work.likes || 0) * 0.6;
-    return Math.round(rawHeat * honorBoost + freshBonus);
+    return popularScore("work", work);
   }
 
   function getRankedWorks(limit = 15, mode = "composite", period = "all") {
@@ -1584,24 +1632,18 @@
     let works = normPeriod === "all" ? allWorks : allWorks.filter((w) => isWithinRankPeriod(w, normPeriod));
     if (!works.length) works = allWorks;
 
-    const statsMap = getCreatorStatsMap();
     if (mode === "rising") {
       const freshList = works.filter(isFreshRelease);
       const target = freshList.length ? freshList : works;
       target.sort(compareByRecency);
       return target.slice(0, limit);
     }
-    if (mode === "cheers") {
-      works.sort((a, b) => (b.cheers || 0) - (a.cheers || 0) || (b.likes || 0) - (a.likes || 0));
-      return works.slice(0, limit);
-    }
     if (mode === "forks") {
       works.sort((a, b) => (b.forks || 0) - (a.forks || 0) || (b.favorites || 0) - (a.favorites || 0));
       return works.slice(0, limit);
     }
-    works.sort(
-      (a, b) => getWorkCompositeScore(b, statsMap, normPeriod) - getWorkCompositeScore(a, statsMap, normPeriod)
-    );
+    // "composite", legacy "cheers" and "popular" all resolve to the one formula.
+    works.sort((a, b) => popularScore("work", b) - popularScore("work", a));
     return works.slice(0, limit);
   }
 
@@ -1667,9 +1709,10 @@
   function getStampCount(item, stampLabel) {
     if (!item || !stampLabel) return 0;
     if (item.stampCounts && item.stampCounts[stampLabel] !== undefined) {
-      return Number(item.stampCounts[stampLabel]);
+      const count = Number(item.stampCounts[stampLabel]);
+      return Number.isFinite(count) ? Math.max(0, count) : 0;
     }
-    return DEFAULT_STAMP_BASES[stampLabel] || 3;
+    return 0;
   }
 
   function isCheered(id, stampLabel = "") {
@@ -1862,28 +1905,14 @@
 
   function goToAssetPage(assetId, subTab = "") {
     closeModal();
-    const code = String(assetId || "").trim().toUpperCase().replace(/^#/, "");
-    if (!code) return;
-    if (App.channel === "main" && typeof window.HANDRAW_MAIN_OPEN_ASSET === "function") {
-      window.HANDRAW_MAIN_OPEN_ASSET(code, subTab);
-      return;
-    }
-    const params = { view: "asset", id: code };
-    if (subTab) params.tab = subTab;
-    window.location.href = channelUrl("main", params);
+    const id = String(assetId || "").trim().toUpperCase().replace(/^#/, "");
+    if (id) window.location.href = channelUrl("main", {view:"asset", id, tab:subTab});
   }
 
   function goToWorkPage(workId, focusComment = false) {
     closeModal();
-    const wid = String(workId || "").trim();
-    if (!wid) return;
-    if (App.channel === "main" && typeof window.HANDRAW_MAIN_OPEN_WORK === "function") {
-      window.HANDRAW_MAIN_OPEN_WORK(wid, 0, Boolean(focusComment));
-      return;
-    }
-    const params = { view: "work", id: wid };
-    if (focusComment) params.focus = "comment";
-    window.location.href = channelUrl("main", params);
+    const id = String(workId || "").trim();
+    if (id) window.location.href = channelUrl("main", {view:"work", id, ...(focusComment ? {focus:"comment"} : {})});
   }
 
   function goToTopicPage(topicId) {
@@ -2015,6 +2044,8 @@
         : { label: "🏛️ 版主后台", sub: "板块版务" };
 
     sandbox.innerHTML = showDemoControls ? `
+      <details class="hw-product-demo-tools">
+        <summary>演示环境 · 展开测试工具</summary>
       <div class="demo-sandbox-bar">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="demo-domain-pill">
@@ -2054,6 +2085,7 @@
           </button>
         </div>
       </div>
+      </details>
     ` : "";
 
     if (showDemoControls) {
@@ -2087,26 +2119,22 @@
 
     topbar.innerHTML = `
       <div class="hw-topbar-inner">
-        <a class="hw-brand" href="${esc(channelUrl("main", { view: "styles" }))}" id="nav-brand-link">
+        <a class="hw-brand" href="${esc(channelUrl("main", { view: "discover" }))}" id="nav-brand-link">
           <span class="hw-brand-seal">绘</span>
           <span class="hw-brand-title">手绘风创作社区</span>
         </a>
 
         <nav class="hw-nav-links" aria-label="主频道导航">
-          <a class="hw-nav-item ${activeView === "styles" ? "is-active" : ""}" href="${esc(channelUrl("main", { view: "styles" }))}" data-main-view="styles">
-            🎨 画风库 <span class="hw-nav-subtag">${App.styles.length}</span>
+          <a class="hw-nav-item ${["discover", "works", "work"].includes(activeView) ? "is-active" : ""}" href="${esc(channelUrl("main", { view: "discover" }))}" data-main-view="discover">
+            发现
           </a>
-          <a class="hw-nav-item ${activeView === "layouts" ? "is-active" : ""}" href="${esc(channelUrl("main", { view: "layouts" }))}" data-main-view="layouts">
-            📐 图型库 <span class="hw-nav-subtag">${App.layouts.length}</span>
-          </a>
-          <a class="hw-nav-item ${activeView === "works" ? "is-active" : ""}" href="${esc(channelUrl("main", { view: "works" }))}" data-main-view="works">
-            🖼️ 作品广场 <span class="hw-nav-subtag">${worksNavCount}</span>
-          </a>
-          <a class="hw-nav-item ${App.channel === "studio" ? "is-active" : ""}" href="${esc(channelUrl("studio"))}">
-            ✨ 无限画布创作
+          <a class="hw-nav-item ${activeView === "styles" ? "is-active" : ""}" href="${esc(channelUrl("main", { view: "styles" }))}" data-main-view="styles">画风</a>
+          <a class="hw-nav-item ${activeView === "layouts" ? "is-active" : ""}" href="${esc(channelUrl("main", { view: "layouts" }))}" data-main-view="layouts">图型</a>
+          <a class="hw-nav-item ${App.channel === "studio" ? "is-active" : ""}" href="${esc(channelUrl("studio", { entry: "quick" }))}">
+            创作台
           </a>
           <a class="hw-nav-item ${App.channel === "forum" ? "is-active" : ""}" href="${esc(channelUrl("forum"))}">
-            💬 社区论坛
+            社区
           </a>
         </nav>
 
@@ -2263,7 +2291,7 @@
       if (brand && window.HANDRAW_MAIN_SWITCH_VIEW) {
         brand.addEventListener("click", (e) => {
           e.preventDefault();
-          window.HANDRAW_MAIN_SWITCH_VIEW("styles");
+          window.HANDRAW_MAIN_SWITCH_VIEW("discover");
         });
       }
     }
@@ -2786,7 +2814,7 @@
       return;
     }
     if (targetType === "asset") goToAssetPage(targetId, "report");
-    else if (targetType === "work") goToWorkPage(targetId, false);
+    else if (targetType === "work") window.location.href=channelUrl('main',{view:'work',id:targetId,panel:'report'});
     else if (targetType === "topic") goToTopicPage(targetId);
   }
 
@@ -2827,10 +2855,12 @@
         const searchEl = root.querySelector("#picker-search-input");
 
         function renderPills() {
-          pillsEl.innerHTML = groups
+          const visible = visibleResourceGroups(list, groups, query);
+          if (!visible.some(g => g.key === activeGroup)) activeGroup = "ALL";
+          pillsEl.innerHTML = visible
             .map(
               (g) =>
-                `<button type="button" class="hw-pill ${activeGroup === g.key ? "is-active" : ""}" data-g="${esc(g.key)}">${esc(g.label)}</button>`
+                `<button type="button" class="hw-pill ${activeGroup === g.key ? "is-active" : ""}" data-g="${esc(g.key)}">${esc(g.label)} <span class="hw-pill-count">${g.count}</span></button>`
             )
             .join("");
           pillsEl.querySelectorAll("[data-g]").forEach((b) => {
@@ -2843,33 +2873,9 @@
         }
 
         function renderGrid() {
-          const favBucket = isStyle ? "styles" : "layouts";
           const q = query.trim().toLowerCase();
           const filtered = list.filter((item) => {
-            if (activeGroup === "FAV" && !isCollected(favBucket, item.id)) return false;
-            if (activeGroup === "NEW_RELEASE" && !isFreshRelease(item)) return false;
-            if (activeGroup === "EXCLUSIVE" && item.sourceType !== "exclusive") return false;
-            if (activeGroup === "COMMUNITY" && item.sourceType !== "community") return false;
-            if (activeGroup === "HAS_WORKS" && getAssetWorkCount(item.id) === 0) return false;
-            if (
-              activeGroup !== "ALL" &&
-              activeGroup !== "FAV" &&
-              activeGroup !== "NEW_RELEASE" &&
-              activeGroup !== "EXCLUSIVE" &&
-              activeGroup !== "COMMUNITY" &&
-              activeGroup !== "HAS_WORKS"
-            ) {
-              if (isStyle) {
-                if (!item.id.startsWith(activeGroup + "-")) return false;
-              } else if (isLayout) {
-                if (item.group !== activeGroup) return false;
-              }
-            }
-            if (q) {
-              const hay = `${item.id} ${item.legacy || ""} ${item.name} ${item.description || ""} ${item.group || ""}`.toLowerCase();
-              if (!hay.includes(q)) return false;
-            }
-            return true;
+            return resourceMatchesGroup(item, activeGroup) && resourceSearchText(item).includes(q);
           });
 
           const shown = filtered.slice(0, 96);
@@ -2917,6 +2923,7 @@
 
         searchEl.oninput = () => {
           query = searchEl.value;
+          renderPills();
           renderGrid();
         };
 
@@ -2959,9 +2966,9 @@
           const q = query.trim().toLowerCase();
           let items = [];
           if (currentKind === "style") {
-            items = (App.styles || []).filter((s) => !q || `${s.name} ${s.description || ""} ${s.group || ""}`.toLowerCase().includes(q));
+            items = (App.styles || []).filter((s) => !q || resourceSearchText(s).includes(q));
           } else if (currentKind === "layout") {
-            items = (App.layouts || []).filter((l) => !q || `${l.name} ${l.description || ""} ${l.group || ""}`.toLowerCase().includes(q));
+            items = (App.layouts || []).filter((l) => !q || resourceSearchText(l).includes(q));
           } else {
             items = (App.state.works || []).filter((w) => !q || `${w.title} ${w.authorName || ""} ${w.notes || ""}`.toLowerCase().includes(q));
           }
@@ -3191,9 +3198,25 @@
     window.location.href = channelUrl("forum", params);
   }
 
+  async function goToCurationShare(prefill = {}) {
+    if (!App.state?.loggedIn) {
+      openLoginModal("登录后分享投稿", () => goToCurationShare(prefill));
+      return;
+    }
+    const user = App.state.user.username;
+    const kind = ["style", "layout", "work"].includes(prefill.kind) ? prefill.kind : "work";
+    try {
+      const payload = Object.assign({}, prefill, {kind, styles: prefill.styles || (prefill.style1 ? [prefill.style1] : [])});
+      const saved = await apiJson("/api/curation/drafts", {method:"POST", body:{payload}});
+      if (App.state.user.username !== user) return;
+      window.location.href = channelUrl("forum", {view:"curation", tab:"share",kind,draft:saved.id});
+    } catch (err) { toast(`打开投稿失败：${err.message}`); }
+  }
+
   function openQuickPublishModal(_initialTab = "topic", prefill = {}) {
     // Posting is strictly limited to Forum Posts on a dedicated standalone page (never a popup modal)
-    goToForumCompose(prefill || {});
+    if (["style","layout","work"].includes(_initialTab)) goToCurationShare(Object.assign({},prefill,{kind:_initialTab}));
+    else goToForumCompose(prefill || {});
   }
 
   function renderAccountSettingsFormHtml() {
@@ -3684,6 +3707,11 @@
     CREATOR_HONOR_TIERS,
     RANK_PERIODS,
     esc,
+    resourceLabel,
+    resourceSearchText,
+    resourceMatchesGroup,
+    resourceGroupLabel,
+    visibleResourceGroups,
     toast,
     apiJson,
     channelUrl,
@@ -3722,6 +3750,7 @@
     getCreatorStatsMap,
     getCreatorProfile,
     getTopCreators,
+    popularScore,
     getWorkCompositeScore,
     getRankedWorks,
     getRankedAssets,
@@ -3751,6 +3780,7 @@
     openAssetPickerModal,
     openSharedCardPickerModal,
     goToForumCompose,
+    goToCurationShare,
     openQuickPublishModal,
     openAccountSettingsModal,
     openFrontAnnouncementEditorModal,

@@ -11,8 +11,8 @@
   const { App, esc, toast, channelUrl } = S;
 
   const BOARD_DEFS = [
-    { key: "tuning", label: "🎯 作品求调优 / 悬赏", short: "求调优" },
-    { key: "experience", label: "📘 实战经验与变现", short: "实战变现" },
+    { key: "tuning", label: "🎯 作品求改进 / 悬赏", short: "求调优" },
+    { key: "experience", label: "📘 创作经验", short: "创作经验" },
     { key: "assets", label: "🎨 画风与图型专区", short: "画风图型" },
     { key: "tools", label: "🛠️ 工具流与问答", short: "工具问答" }
   ];
@@ -194,6 +194,9 @@
       FUI.format = p.get("format");
     }
 
+    if (["resource", "related"].includes(view)) { FUI.view=view; return; }
+    if (view === "curation") { FUI.view="curation"; return; }
+
     if (view === "topic" || legacyTopic) {
       const tid = (p.get("id") || legacyTopic || "").trim();
       if (tid) {
@@ -315,6 +318,7 @@
   }
 
   function syncForumUrl(pushHistory = false) {
+    if (["curation", "resource", "related"].includes(FUI.view)) return;
     const u = new URL(window.location.href);
     u.search = "";
     if (FUI.view === "topic" && FUI.activeTopicId) {
@@ -360,10 +364,8 @@
     if (!tid) return;
     const isEntering = FUI.view !== "topic" || FUI.activeTopicId !== tid;
     const topic = (App.state?.topics || []).find((t) => t.id === tid);
-    if (topic && !FUI.topicCountedViews.has(tid)) {
-      FUI.topicCountedViews.add(tid);
-      topic.views = (topic.views || 0) + 1;
-    }
+    // View counts are frozen by design (see backend/ranking.py): they have no
+    // trusted write path and a client-side increment would be a fake number.
     FUI.view = "topic";
     FUI.activeTopicId = tid;
     FUI.activeTopicImgIdx = Number(activeImgIdx) || 0;
@@ -719,8 +721,8 @@
               <input class="hw-input" id="fmod-username" placeholder="输入用户名 (如 su_editorial)" />
               <select class="hw-select" id="fmod-category">
                 <option value="assets" ${defaultBoard === "assets" ? "selected" : ""}>🎨 画风与图型专区</option>
-                <option value="tuning" ${defaultBoard === "tuning" ? "selected" : ""}>🎯 作品求调优 / 悬赏</option>
-                <option value="experience" ${defaultBoard === "experience" ? "selected" : ""}>📘 实战经验与变现</option>
+                <option value="tuning" ${defaultBoard === "tuning" ? "selected" : ""}>🎯 作品求改进 / 悬赏</option>
+                <option value="experience" ${defaultBoard === "experience" ? "selected" : ""}>📘 创作经验</option>
                 <option value="tools" ${defaultBoard === "tools" ? "selected" : ""}>🛠️ 工具流与问答</option>
                 <option value="all" ${defaultBoard === "all" ? "selected" : ""}>🏛️ 全区总版主 (全部板块)</option>
               </select>
@@ -769,6 +771,7 @@
 
     root.querySelector("#fmod-back-btn").onclick = () => openForumList(true);
     root.querySelectorAll("[data-open-creator]").forEach((btn) => {
+      if (!btn.getAttribute("data-open-creator")) { btn.outerHTML='<span class="curation-muted">资源讨论</span>'; return; }
       btn.onclick = () => S.goToCreatorProfile(btn.getAttribute("data-open-creator"));
     });
 
@@ -1507,9 +1510,27 @@
       `;
       root.querySelector("#topic-missing-back").onclick = () => openForumList(true);
       root.querySelector("#topic-missing-list").onclick = () => openForumList(true);
+      // A zero-comment official topic stays out of boot/feed; preserve its old URL.
+      const missingId = FUI.activeTopicId;
+      S.apiJson('/api/forum/resource-topics/' + encodeURIComponent(missingId)).then(resource => {
+        if (FUI.view !== 'topic' || FUI.activeTopicId !== missingId || !resource.id) return;
+        location.replace(channelUrl('forum',{view:'resource',kind:resource.kind,id:resource.id}));
+      }).catch(() => {});
       return;
     }
 
+    const submission = topic.submissions?.[0];
+    const attached = topic.resourceDiscussion;
+    // Only authoritative submission/mapping metadata identifies a resource post.
+    if (submission || attached) {
+      const kind = submission?.kind || attached.kind;
+      const id = submission?.targetId || attached.targetId;
+      const params = new URLSearchParams({view:"resource",kind,id});
+      history.replaceState({}, "", channelUrl("forum", Object.fromEntries(params)));
+      FUI.view = "resource";
+      window.HandrawResourcePages.render(root, params);
+      return;
+    }
     const prevTopic = curIdx > 0 ? allTopics[curIdx - 1] : null;
     const nextTopic = curIdx >= 0 && curIdx < allTopics.length - 1 ? allTopics[curIdx + 1] : null;
     const unlocked = S.isUnlocked(topic.id, topic);
@@ -1520,7 +1541,7 @@
     const imgs = normalizeTopicImages(topic);
     const activeImgIdx = Math.max(0, Math.min(imgs.length - 1, Number(FUI.activeTopicImgIdx) || 0));
     const canModerateThisBoard = S.canModerateForumBoard ? S.canModerateForumBoard(topic.category) : false;
-    const authorProf = S.getCreatorProfile(topic.author);
+    const authorProf = S.getCreatorProfile(topic.author) || {honor:{sealClass:""},avatarChar:"绘",authorName:"资源讨论",totalPublished:0,totalCheers:0,topics:[]};
     const boardMods = S.getBoardModerators ? S.getBoardModerators(topic.category) : [];
     const replies = topic.replies || [];
 
@@ -1546,6 +1567,7 @@
       `
       : "";
 
+    const workPost = window.HandrawForumWork.fromTopic(topic, App.state.works || [], App.resourceMap, unlocked || S.isStaff?.());
     const cardsToRender = [];
     if (topic.sharedCard && topic.sharedCard.title) {
       cardsToRender.push(topic.sharedCard);
@@ -1642,8 +1664,8 @@
                 ${topic.featured ? `<span style="background:var(--gold);color:#fff;font-size:11.5px;font-weight:800;padding:2px 8px;border-radius:5px;">🌟 精华</span>` : ""}
                 <span style="font-size:12.5px;font-weight:800;color:var(--vermilion);">${esc(topic.categoryLabel)}</span>
                 ${
-                  imgs.length > 0
-                    ? `<span class="forum-format-badge is-visual">🖼️ ${imgs.length} 图实测帖</span>`
+                  workPost ? `<span class="forum-format-badge is-visual">作品分享</span>` : imgs.length > 0
+                    ? `<span class="forum-format-badge is-visual">🖼️ ${imgs.length} 图分享帖</span>`
                     : `<span class="forum-format-badge">📝 纯文讨论帖</span>`
                 }
                 ${
@@ -1654,6 +1676,7 @@
               </div>
 
               <h1 class="hw-detail-title">${esc(topic.title)}</h1>
+              ${window.HandrawCuration.topicPanelHtml(topic)}
 
               <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--line-soft);">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--ink-muted);">
@@ -1663,7 +1686,6 @@
                   </button>
                   ${renderModBadgeHtml(topic.author, topic.category)}
                   <span>· 发布于 ${esc(topic.createdAt)}</span>
-                  <span>· 👁️ ${topic.views || 1} 阅读</span>
                 </div>
 
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -1679,7 +1701,7 @@
                   <button type="button" class="btn btn-sm" id="topic-page-quote-reply" title="引用主帖正文进行回复">
                     ❝ 引用回复
                   </button>
-                  <button type="button" class="btn btn-sm btn-gold ${FUI.topicInlineDrawer === "share" ? "btn-primary" : ""}" id="topic-page-share">📤 分享赚积分</button>
+                  <button type="button" class="btn btn-sm btn-gold ${FUI.topicInlineDrawer === "share" ? "btn-primary" : ""}" id="topic-page-share">📤 分享帖子链接</button>
                   <button type="button" class="btn btn-sm ${FUI.topicInlineDrawer === "report" ? "btn-primary" : ""}" id="topic-page-report" title="举报违规或虚假内容">🚩 举报</button>
                   ${isTopicAuthor && !canModerateThisBoard ? `<button type="button" class="btn btn-sm" id="topic-page-author-delete" style="color:var(--vermilion);" title="删除我发布的这篇帖子">🗑️ 删除帖子</button>` : ""}
                 </div>
@@ -1689,33 +1711,15 @@
 
               <!-- Cohesive Editorial Article Narrative & In-Flow Media/Cards -->
               <div class="forum-article-body" id="topic-article-body">
-                ${renderEditorialArticleHtml(topic, cardsToRender, unlocked)}
+                ${workPost ? window.HandrawForumWork.render(workPost) : renderEditorialArticleHtml(topic, cardsToRender, unlocked)}
               </div>
 
               ${paidSectionHtml}
 
-              ${
-                topic.recipe
-                  ? `
-                    <div style="background:var(--vermilion-wash);border:1px solid var(--vermilion-border);border-radius:12px;padding:13px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0;">
-                      <div>
-                        <div style="font-size:12px;font-weight:800;color:var(--vermilion);">⚡ 随帖挂载无限画布参数快照</div>
-                        <div style="font-size:13.2px;font-weight:700;">
-                          模式：${esc(topic.recipe.mode)} · 画风：${esc(topic.recipe.style1 || "无")} · 图型：${esc(topic.recipe.layout || "无")} · 比例：${esc(topic.recipe.ratio)}
-                        </div>
-                      </div>
-                      <a class="btn btn-primary btn-sm" href="${esc(channelUrl("studio", { forkTopic: topic.id }))}">
-                        ⚡ 一键带入无限画布复刻 ↗
-                      </a>
-                    </div>
-                  `
-                  : ""
-              }
-
               <!-- Article Bottom Actions Bar -->
               <div class="forum-article-actions" style="margin-top:20px;padding-top:14px;border-top:1px solid var(--line-soft);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
                 <div style="font-size:12.5px;color:var(--ink-muted);">
-                  ✨ 欢迎发表调优反馈或互动交流，有效回帖立得 <strong>+2✦</strong> 积分
+                  欢迎带上具体问题、参考或调整过程一起交流。
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                   <button type="button" class="btn btn-sm" id="topic-page-bottom-reply">
@@ -1733,7 +1737,7 @@
               <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
                 <div>
                   <h2 style="margin:0;font-size:18.5px;font-family:var(--font-serif);">💬 全部社区交流与调优楼层 (${replies.length})</h2>
-                  <div style="font-size:12.4px;color:var(--ink-muted);margin-top:3px;">参与回帖立得 +2✦ 互助积分；可随楼层附带推荐的 #画风 或 #图型 编号直通创作台。</div>
+                  <div style="font-size:12.4px;color:var(--ink-muted);margin-top:3px;">可以附上推荐的 #画风 或 #图型 编号，方便继续尝试。</div>
                 </div>
                 ${
                   topic.bounty > 0 && !topic.solved
@@ -1745,7 +1749,7 @@
               <div style="display:grid;gap:12px;margin-bottom:18px;">
                 ${
                   replies.length === 0
-                    ? `<div style="padding:28px;text-align:center;color:var(--ink-muted);background:var(--paper-bg);border-radius:10px;">暂无楼层回复，抢下 1楼 沙发立得 +2✦ 互助积分！</div>`
+                    ? `<div style="padding:28px;text-align:center;color:var(--ink-muted);background:var(--paper-bg);border-radius:10px;">还没有回复，欢迎分享你的想法。</div>`
                     : replies
                         .map((r, idx) => {
                           const canAccept =
@@ -1814,9 +1818,9 @@
               <!-- Bottom Reply Composer -->
               <div style="background:var(--paper-bg);border:1px solid var(--line-strong);border-radius:12px;padding:14px 16px;">
                 <div style="font-size:13px;font-weight:800;margin-bottom:8px;">✍️ 发表跟帖回复 / 交流讨论</div>
-                <textarea class="hw-textarea" rows="3" id="topic-reply-input" placeholder="写下你的调优建议、避坑经验或交流反馈（回帖立得 +2✦ 互助积分，支持 Ctrl + Enter 快捷发送）…"></textarea>
+                <textarea class="hw-textarea" rows="3" id="topic-reply-input" placeholder="写下建议、经验或问题，支持 Ctrl + Enter 发送…"></textarea>
                 <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
-                  <button type="button" class="btn btn-primary" id="topic-reply-submit">💬 发布楼层回复 (+2✦)</button>
+                  <button type="button" class="btn btn-primary" id="topic-reply-submit">💬 发布回复</button>
                 </div>
               </div>
             </section>
@@ -1825,15 +1829,11 @@
           <!-- RIGHT AUTHOR & BOARD SIDEBAR -->
           <aside style="display:flex;flex-direction:column;gap:14px;">
             <div class="forum-side-card" style="display:grid;gap:12px;">
-              <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);letter-spacing:0.04em;">楼主创作者名片 · 个人荣誉档案</div>
+              <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);letter-spacing:0.04em;">作者</div>
               <div style="display:flex;gap:12px;align-items:center;">
                 <div class="hw-creator-avatar-sm ${esc(authorProf.honor.sealClass)}" style="width:46px;height:46px;font-size:18px;">${esc(authorProf.avatarChar)}</div>
                 <div style="min-width:0;">
                   <div style="font-weight:850;font-size:15px;color:var(--ink-strong);">@${esc(authorProf.authorName)}</div>
-                  <div style="margin-top:3px;display:flex;gap:5px;flex-wrap:wrap;">
-                    <span class="hw-honor-badge ${esc(authorProf.honor.sealClass)}">${esc(authorProf.honor.badge)}</span>
-                    <span class="hw-boost-pill">${esc(authorProf.honor.boostText)}</span>
-                  </div>
                 </div>
               </div>
               <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;background:var(--paper-bg);padding:8px;border-radius:9px;font-size:12px;">
@@ -1894,6 +1894,11 @@
       </div>
     `;
 
+    window.HandrawCuration.bindTopicPanel(root,topic);
+    if (!topic.author && topic.resourceDiscussion) {
+      const authorCard=root.querySelector('aside .forum-side-card');
+      if (authorCard) authorCard.remove();
+    }
     root.querySelector("#topic-back-list-btn").onclick = () => openForumList(true);
     root.querySelector("#topic-crumb-board").onclick = () => {
       FUI.category = topic.category || "all";
@@ -1909,6 +1914,7 @@
       openComposeView({ category: topic.category || "experience" }, true);
 
     root.querySelectorAll("[data-open-creator]").forEach((btn) => {
+      if (!btn.getAttribute("data-open-creator")) { btn.outerHTML='<span class="curation-muted">资源讨论</span>'; return; }
       btn.onclick = () => S.goToCreatorProfile(btn.getAttribute("data-open-creator"));
     });
     root.querySelectorAll("[data-switch-topic]").forEach((btn) => {
@@ -1932,6 +1938,8 @@
         openImageLightboxModal(imgEl.src);
       };
     });
+
+    if (workPost) window.HandrawForumWork.bind(root,workPost);
 
     root.querySelector("#topic-page-like").onclick = () => {
       S.toggleLike("topic", topic.id, topic.title);
@@ -2232,7 +2240,7 @@
           <span style="font-size:12px;font-weight:800;color:var(--vermilion);">${esc(t.categoryLabel)}</span>
           ${
             imgCount > 0
-              ? `<span class="forum-format-badge is-visual">🖼️ ${imgCount > 1 ? `${imgCount} 图实测` : "图文实测"}</span>`
+              ? `<span class="forum-format-badge is-visual">🖼️ ${imgCount > 1 ? `${imgCount} 图分享` : "图文分享"}</span>`
               : `<span class="forum-format-badge">📝 纯文讨论</span>`
           }
           ${
@@ -2345,7 +2353,6 @@
               ${collected ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
             </button>
             <span>💬 ${(t.replies || []).length} 回复</span>
-            <span>👁️ ${t.views || 0}</span>
             ${
               canMod
                 ? `
@@ -2371,6 +2378,17 @@
     const root = document.getElementById("forum-app-root");
     if (!root || !App.state) return;
 
+    if (["resource", "related"].includes(FUI.view)) {
+      window.HandrawResourcePages.render(root,new URLSearchParams(location.search));
+      return;
+    }
+    window.HandrawResourcePages?.cancel();
+    root.classList.remove('hrp');
+    if (FUI.view === "curation") {
+      document.title="共创收录 — Handraw";
+      window.HandrawCuration.render(root,new URLSearchParams(location.search).get("tab") || "share");
+      return;
+    }
     if (FUI.view === "compose") {
       renderComposePage(root);
       return;
@@ -2427,8 +2445,9 @@
 
     filtered.sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      if (FUI.sort === "newest") return 0;
-      return (b.likes || 0) + (b.views || 0) / 10 - ((a.likes || 0) + (a.views || 0) / 10);
+      if (FUI.sort === "newest") return (b.activityAtMs || b.publishedAtMs || 0) - (a.activityAtMs || a.publishedAtMs || 0);
+      // "hot" uses the shared topic formula: replies + likes + 2*favourites.
+      return S.popularScore("topic", b) - S.popularScore("topic", a);
     });
 
     const hotAssetIds = ["FA-001", "FX-001", "SC-021", "FC-029", "IG-001", "LX-001"];
@@ -2436,13 +2455,16 @@
     root.innerHTML = `
       <section class="hw-editorial-strip">
         <div>
-          <p class="hw-editorial-eyebrow">以图为先的创作者社区 · 独立发帖页 + 独立详情楼层页 + 板块版主自治</p>
-          <h1 class="hw-editorial-title">围绕视觉创作而生的社区：图文实测与纯文讨论自然共生</h1>
-          <p class="hw-editorial-sub">发帖、帖子详情与楼层回复全部采用<strong>独立专属页面</strong>（支持浏览器前进后退与独立链接分享）；各板块配备<strong>专属版主团队</strong>保障高质量交流。</p>
+          <p class="hw-editorial-eyebrow">以图为先的创作者社区 · 晒图交流与灵感互助</p>
+          <h1 class="hw-editorial-title">晒作品、聊配方、求改图建议</h1>
+          <p class="hw-editorial-sub">在这里晒图交流作品，分享可复用的<strong>画风、图型与提示词</strong>；遇到问题也可以<strong>发帖求助</strong>，和大家一起探讨。</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-primary" id="forum-btn-new-visual">🖼️ 去独立页发图文帖 (+5✦)</button>
-          <button type="button" class="btn" id="forum-btn-new-text">📝 发纯文讨论帖 (+5✦)</button>
+          <button type="button" class="btn btn-primary" id="forum-btn-new-visual">分享投稿</button>
+          <a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"mine"}))}">我的投稿</a>
+          <a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"review"}))}">参与审核</a>
+          ${isSuperAdmin ? `<a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"admin"}))}">审核资格管理</a>` : ""}
+          <button type="button" class="btn" id="forum-btn-new-text">📝 发纯文讨论帖</button>
         </div>
       </section>
 
@@ -2546,17 +2568,17 @@
         <!-- RIGHT SIDEBAR -->
         <aside class="forum-aside-right" style="display:flex;flex-direction:column;gap:14px;">
           <div class="forum-side-card" style="background:linear-gradient(160deg,#fffdf9 0%,#f7efe2 100%);">
-            <div style="font-size:12px;font-weight:800;color:var(--vermilion);margin-bottom:6px;">✨ 独立页面架构与版主治理规范</div>
-            <div style="font-weight:800;font-size:14.5px;margin-bottom:6px;">全链路独立页面 · 图文自由附加</div>
+            <div style="font-size:12px;font-weight:800;color:var(--vermilion);margin-bottom:6px;">交流与求助</div>
+            <div style="font-weight:800;font-size:14.5px;margin-bottom:6px;">把做法说清楚，让交流更有用</div>
             <p style="margin:0;font-size:12.5px;color:var(--ink-body);line-height:1.58;">
-              • <strong>独立发帖与详情页</strong>：发帖、看帖与楼层评论均为独立页面，彻底告别拥挤弹窗<br/>
-              • <strong>板块专属版主</strong>：各板块版主负责本版加精、置顶、分类调整与友善交流守护<br/>
-              • <strong>个人主页直连</strong>：点击任意作者或回复者昵称直达独立创作者个人主页
+              • <strong>分享作品</strong>：附上主题、使用的画风或图型。<br/>
+              • <strong>交流做法</strong>：说明提示词、参考与调整过程。<br/>
+              • <strong>遇到问题</strong>：贴出结果和预期，方便大家帮忙。
             </p>
           </div>
 
           <div class="forum-side-card">
-            <div style="font-weight:800;font-size:13.8px;margin-bottom:10px;">🔥 论坛高频讨论资产榜</div>
+            <div style="font-weight:800;font-size:13.8px;margin-bottom:10px;">画风与图型入口</div>
             <div style="display:grid;gap:8px;">
               ${["FA-001", "SC-021", "FX-001", "IG-001"]
                 .map((id) => {
@@ -2581,14 +2603,7 @@
       </div>
     `;
 
-    root.querySelector("#forum-btn-new-visual").onclick = () =>
-      openComposeView({
-        category: FUI.category !== "all" ? FUI.category : "assets",
-        images: [
-          { url: "/images/poster-demo-autumn-equinox.webp", tag: "实测成片 P1" },
-          { url: "/images/graphic-text-mode-demo.webp", tag: "对比版式 P2" }
-        ]
-      });
+    root.querySelector("#forum-btn-new-visual").onclick = () => S.goToCurationShare({kind:"work"});
 
     root.querySelector("#forum-btn-new-text").onclick = () =>
       openComposeView({
@@ -2715,6 +2730,11 @@
     });
   }
 
+  window.addEventListener('popstate', () => {
+    FUI.view = 'list';
+    parseInitialForumUrl();
+    renderForum();
+  });
   parseInitialForumUrl();
   S.initApp("forum", () => { restoreComposeDraft(); renderForum(); }).then(() => {
     restoreComposeDraft();
