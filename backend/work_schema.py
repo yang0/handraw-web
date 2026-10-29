@@ -70,6 +70,154 @@ CREATE TABLE IF NOT EXISTS curation_resource_topics (
 CREATE INDEX IF NOT EXISTS idx_curation_map_topic ON curation_resource_topics(topic_id);
 """
 
+# The publish path, review queue and appeal flow all live in ``curation.py``,
+# which ships with this change, so their tables must be created here too.  The
+# curation module keeps its own copy of this DDL; both use IF NOT EXISTS, so
+# whichever migrates first wins and the other is a no-op.
+CURATION_TABLES_SQL = """
+-- Curated community submissions (one forum topic may host many items).
+CREATE TABLE IF NOT EXISTS curation_submissions (
+    id TEXT PRIMARY KEY,
+    topic_id TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
+    owner_user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    current_revision INTEGER NOT NULL DEFAULT 1,
+    request_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(kind, target_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_curation_sub_owner ON curation_submissions(owner_username, created_at);
+CREATE INDEX IF NOT EXISTS idx_curation_sub_status ON curation_submissions(status);
+CREATE INDEX IF NOT EXISTS idx_curation_sub_topic ON curation_submissions(topic_id);
+
+-- Immutable payload snapshots per revision.
+CREATE TABLE IF NOT EXISTS curation_versions (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(submission_id, revision),
+    FOREIGN KEY (submission_id) REFERENCES curation_submissions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_curation_ver_sub ON curation_versions(submission_id, revision DESC);
+
+-- Reviewer assignments (max 2 distinct per version, third on divergence).
+CREATE TABLE IF NOT EXISTS curation_assignments (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    reviewer_username TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    UNIQUE(submission_id, revision, reviewer_username),
+    FOREIGN KEY (submission_id) REFERENCES curation_submissions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_curation_asg_sub ON curation_assignments(submission_id, revision, status);
+
+-- Votes are immutable; a reviewer votes once per assignment.
+CREATE TABLE IF NOT EXISTS curation_votes (
+    id TEXT PRIMARY KEY,
+    assignment_id TEXT NOT NULL,
+    submission_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    reviewer_username TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(assignment_id),
+    FOREIGN KEY (assignment_id) REFERENCES curation_assignments(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_curation_vote_sub ON curation_votes(submission_id, revision);
+
+-- Per-kind review access granted to ordinary members.
+CREATE TABLE IF NOT EXISTS curation_review_access (
+    username TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    paused INTEGER NOT NULL DEFAULT 0,
+    manual_granted INTEGER NOT NULL DEFAULT 0,
+    granted_by TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (username, kind)
+);
+
+-- Author appeals, admin audit records.
+CREATE TABLE IF NOT EXISTS curation_appeals (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL,
+    author_username TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (submission_id) REFERENCES curation_submissions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_curation_appeal_sub ON curation_appeals(submission_id, status);
+
+CREATE TABLE IF NOT EXISTS curation_admin_actions (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL,
+    admin_username TEXT NOT NULL,
+    action TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_curation_admin_sub ON curation_admin_actions(submission_id, created_at);
+
+-- Idempotent client request keys (defensive; also mirrored on submissions).
+CREATE TABLE IF NOT EXISTS curation_requests (
+    id TEXT PRIMARY KEY,
+    owner_username TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    submission_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(owner_username, request_id)
+);
+
+-- Target/topic mapping shared with the official-comment module.
+CREATE TABLE IF NOT EXISTS curation_resource_topics (
+    kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'submission',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (kind, target_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_curation_map_topic ON curation_resource_topics(topic_id);
+
+CREATE TABLE IF NOT EXISTS curation_drafts (
+    id TEXT PRIMARY KEY,
+    owner_user_id INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    expires_at REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+-- Audit/event log for curation actions.
+CREATE TABLE IF NOT EXISTS curation_events (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL DEFAULT '',
+    actor_username TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_curation_events_sub ON curation_events(submission_id, created_at);
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -77,4 +225,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (43, "043_reply_legacy_source", REPLY_LEGACY_SOURCE_SQL),
     (44, "044_work_popular_index", WORK_POPULAR_INDEX_SQL),
     (45, "045_resource_topic_map", RESOURCE_TOPIC_MAP_SQL),
+    (46, "046_curation_tables", CURATION_TABLES_SQL),
 ]
