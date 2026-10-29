@@ -78,12 +78,14 @@ class GovernanceRegressionTests(_Base):
         admin_resolve_report(self.db, self.admin, report["id"], "dismissed", auto_action=False)
         self.assertEqual(self._statuses(), ("hidden", "hidden"), "a dismissed report must not republish")
 
-    def test_rejection_restores_an_auto_paused_work(self):
-        # An auto-paused work (not hidden by an admin) returns when reports are
-        # dismissed: the guard only blocks downgrading a *hidden* work.
+    def test_rejection_restores_a_report_paused_work(self):
+        # A pause caused by the report flow is undone when the reports are
+        # dismissed.  The pause must carry source='report' for that to happen.
         with self.db.transaction() as tx:
-            set_work_visibility(tx, self.work["workId"], "paused", "2026-01-01T00:00:00Z",
-                                allow_from=("published",))
+            set_work_visibility(
+                tx, self.work["workId"], "paused", "2026-01-01T00:00:00Z",
+                source="report", reason="举报达到阈值", allow_from=("published",),
+            )
         self.assertEqual(self._statuses(), ("paused", "paused"))
         submit_abuse_report(
             self.db, self.author, {"targetType": "work", "targetId": self.work["workId"], "reason": "垃圾内容"}
@@ -94,6 +96,26 @@ class GovernanceRegressionTests(_Base):
         ).fetchone()
         admin_resolve_report(self.db, self.admin, report["id"], "dismissed", auto_action=False)
         self.assertEqual(self._statuses(), ("published", "published"))
+
+    def test_rejection_does_not_restore_a_moderator_paused_work(self):
+        # A human pause outranks the report flow: dismissing reports must leave
+        # the moderator's decision intact.
+        with self.db.transaction() as tx:
+            set_work_visibility(
+                tx, self.work["workId"], "paused", "2026-01-01T00:00:00Z",
+                source="moderator", reason="管理员暂停", allow_from=("published",),
+            )
+        submit_abuse_report(
+            self.db, self.author, {"targetType": "work", "targetId": self.work["workId"], "reason": "垃圾内容"}
+        )
+        report = self.db.get_conn().execute(
+            "SELECT id FROM reports WHERE target_type = 'work' AND target_id = ? AND status = 'open' LIMIT 1",
+            (self.work["workId"],),
+        ).fetchone()
+        admin_resolve_report(self.db, self.admin, report["id"], "dismissed", auto_action=False)
+        self.assertEqual(
+            self._statuses(), ("paused", "paused"), "a dismissed report must not undo a moderator pause"
+        )
 
 
 class DeleteSyncTests(_Base):

@@ -218,6 +218,30 @@ CREATE TABLE IF NOT EXISTS curation_events (
 CREATE INDEX IF NOT EXISTS idx_curation_events_sub ON curation_events(submission_id, created_at);
 """
 
+# Who moved the work out of public view, and why.  A bare ``status`` column
+# cannot distinguish "an admin deliberately hid this" from "automation paused it
+# because of reports", so a later report dismissal happily republished moderated
+# content.  ``status_source`` records the cause:
+#   ''          never moderated
+#   'report'    paused automatically by the abuse-report threshold
+#   'moderator' hidden/paused by a human (admin, operator or board moderator)
+STATUS_SOURCE_SQL = """
+ALTER TABLE works ADD COLUMN status_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE works ADD COLUMN status_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE forum_topics ADD COLUMN status_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE forum_topics ADD COLUMN status_reason TEXT NOT NULL DEFAULT '';
+"""
+
+# The fork weight changed from 3 to 1 (see ranking.py), so the expression index
+# must match the new ORDER BY text.  SQLite has no "replace index", so this uses
+# a differently named index and then drops the superseded one.  Dropping an
+# index is safe: it rebuilds automatically if code rolls back and asks for it.
+POPULAR_INDEX_V2_SQL = """
+CREATE INDEX IF NOT EXISTS idx_works_popular_v2
+    ON works(status, (likes + cheers + 2 * favorites + forks) DESC, published_at_ms DESC);
+DROP INDEX IF EXISTS idx_works_popular;
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -226,4 +250,6 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (44, "044_work_popular_index", WORK_POPULAR_INDEX_SQL),
     (45, "045_resource_topic_map", RESOURCE_TOPIC_MAP_SQL),
     (46, "046_curation_tables", CURATION_TABLES_SQL),
+    (47, "047_status_source", STATUS_SOURCE_SQL),
+    (48, "048_popular_index_v2", POPULAR_INDEX_V2_SQL),
 ]

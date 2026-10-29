@@ -1584,6 +1584,39 @@ def count_fork_if_new(tx, parent_work_id: str, uid: int, generation_id: str, now
         return int(
             tx.execute("SELECT forks FROM works WHERE id = ?", (parent_work_id,)).fetchone()["forks"]
         )
+
+    # Two anti-farming gates.  A fork is meant to represent reuse by someone with
+    # a real presence; brand-new throwaway accounts spending free quota are not
+    # that.  Neither gate is a security boundary — they only keep the ranking
+    # signal honest, and both are cheap enough to run on the completion path.
+    # 1) The forker must already have published at least one work of their own.
+    published_by_forker = int(
+        tx.execute(
+            "SELECT COUNT(*) FROM works WHERE author_username = (SELECT username FROM users WHERE id = ?) "
+            "AND status = 'published'",
+            (int(uid),),
+        ).fetchone()[0]
+    )
+    if published_by_forker < 1:
+        return int(
+            tx.execute("SELECT forks FROM works WHERE id = ?", (parent_work_id,)).fetchone()["forks"]
+        )
+
+    # 2) At most a handful of new forks may be booked against one work per day,
+    #    so a batch of accounts cannot spike the counter in one run.
+    today_prefix = str(now_iso)[:10]
+    forks_today = int(
+        tx.execute(
+            "SELECT COUNT(*) FROM work_forks WHERE work_id = ? AND created_at LIKE ?",
+            (parent_work_id, today_prefix + "%"),
+        ).fetchone()[0]
+    )
+    daily_cap = 8
+    if forks_today >= daily_cap:
+        return int(
+            tx.execute("SELECT forks FROM works WHERE id = ?", (parent_work_id,)).fetchone()["forks"]
+        )
+
     tx.execute(
         "INSERT INTO work_forks (work_id, user_id, first_generation_id, created_at) VALUES (?, ?, ?, ?)",
         (parent_work_id, int(uid), str(generation_id or ""), now_iso),

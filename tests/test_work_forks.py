@@ -68,6 +68,9 @@ class ForkLineageTests(unittest.TestCase):
 
     def test_successful_generation_counts_the_fork_once(self):
         parent = self._publish(self.a, "被复刻的原作")
+        # Anti-farming gate: a forker needs at least one published work of their
+        # own, so give B one before the generation.
+        self._publish(self.b, "复刻者自己的作品")
         prepared = prepare_cloud_generation(
             self.db,
             self.b,
@@ -82,6 +85,16 @@ class ForkLineageTests(unittest.TestCase):
         # A second completion of the same generation must not double-count.
         complete_cloud_generation(self.db, gen_id, "task-1", ["/generated/fork-1.webp"])
         self.assertEqual(self._forks(parent["workId"]), 1)
+
+    def test_brand_new_account_generation_does_not_book_a_fork(self):
+        parent = self._publish(self.a, "被新手复刻")
+        prepared = prepare_cloud_generation(
+            self.db,
+            self.b,
+            {"prompt": "我是新号", "forkOf": parent["workId"], "requestId": "gen-newbie"},
+        )
+        complete_cloud_generation(self.db, prepared["genId"], "task-n", ["/generated/n.webp"])
+        self.assertEqual(self._forks(parent["workId"]), 0, "an account with no works of its own is not reuse")
 
     def test_author_generating_from_own_work_does_not_count(self):
         parent = self._publish(self.a, "自己的作品")
@@ -106,6 +119,8 @@ class ForkLineageTests(unittest.TestCase):
     def test_counter_matches_fact_table(self):
         parent = self._publish(self.a, "计数一致")
         for index, user in enumerate((self.b, self.c), 1):
+            # Each forker needs a published work of their own (anti-farming gate).
+            self._publish(user, f"复刻者作品{index}")
             prepared = prepare_cloud_generation(
                 self.db,
                 user,

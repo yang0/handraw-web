@@ -29,8 +29,9 @@ def _row(**kw):
 class RankingFormulaTests(unittest.TestCase):
     def test_work_formula_weights(self):
         row = _row(likes=1, cheers=2, favorites=3, forks=4)
-        # 1 + 2 + 2*3 + 3*4 = 21
-        self.assertEqual(work_popular_score(row), 21)
+        # 1 + 2 + 2*3 + 1*4 = 13.  Forks weigh 1, not 3: the counter is farmable
+        # through free generation quota.
+        self.assertEqual(work_popular_score(row), 13)
 
     def test_work_formula_handles_missing_and_none(self):
         self.assertEqual(work_popular_score(_row()), 0)

@@ -69,13 +69,16 @@ class PopularIndexTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_expression_index_exists(self):
+        # Migration 048 rebuilt the index for the fork-weight change, so the
+        # live name is v2; the old one is dropped.
         names = [
             row[0]
             for row in self.db.get_conn().execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_works_popular'"
+                "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_works_popular%'"
             )
         ]
-        self.assertTrue(names, "the popularity expression index must exist")
+        self.assertIn("idx_works_popular_v2", names, "the popularity expression index must exist")
+        self.assertNotIn("idx_works_popular", names, "the superseded index must be gone")
 
     def test_query_planner_uses_the_index(self):
         # The ORDER BY must match the index expression textually for SQLite to

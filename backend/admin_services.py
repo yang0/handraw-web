@@ -829,18 +829,26 @@ def admin_moderate_work(
         elif act == "pause":
             from .services import set_work_visibility
 
-            set_work_visibility(tx, wid, "paused", now_iso)
+            set_work_visibility(tx, wid, "paused", now_iso, source="moderator", reason=reason or "管理员暂停")
         elif act == "hide":
             from .services import set_work_visibility
 
-            set_work_visibility(tx, wid, "hidden", now_iso)
+            set_work_visibility(tx, wid, "hidden", now_iso, source="moderator", reason=reason or "管理员隐藏")
         elif act == "feature":
-            tx.execute("UPDATE works SET featured = 1, status = 'published', updated_at = ? WHERE id = ?", (now_iso, wid))
+            # Featuring is a promotion flag, not a visibility decision.  It used
+            # to also set status='published', which let an operator un-hide a
+            # moderated work just by adding a badge.
+            if str(w["status"] or "") != "published":
+                raise ServiceError("只能给已公开的作品加精", status=409, code="feature_requires_published")
+            tx.execute("UPDATE works SET featured = 1, updated_at = ? WHERE id = ?", (now_iso, wid))
         elif act == "unfeature":
             tx.execute("UPDATE works SET featured = 0, updated_at = ? WHERE id = ?", (now_iso, wid))
         elif act == "boost_new":
+            # Same rule: bumping "new release" must not republish hidden content.
+            if str(w["status"] or "") != "published":
+                raise ServiceError("只能推广已公开的作品", status=409, code="boost_requires_published")
             tx.execute(
-                "UPDATE works SET is_new_release = 1, published_at_ms = ?, status = 'published', updated_at = ? WHERE id = ?",
+                "UPDATE works SET is_new_release = 1, published_at_ms = ?, updated_at = ? WHERE id = ?",
                 (now_ms, now_iso, wid),
             )
         elif act == "edit":
@@ -888,19 +896,6 @@ def admin_moderate_work(
             tx.execute("DELETE FROM works WHERE id = ?", (wid,))
         else:
             raise ServiceError(f"不支持的作品审核动作：{act}")
-
-        # ``set_work_visibility`` already syncs the topic for publish/pause/hide.
-        # Featuring also republishes, so its topic needs the same treatment.
-        if act == "feature":
-            mapped = tx.execute(
-                "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
-                (wid,),
-            ).fetchone()
-            if mapped:
-                tx.execute(
-                    "UPDATE forum_topics SET status = 'published', updated_at = ? WHERE id = ?",
-                    (now_iso, str(mapped["topic_id"])),
-                )
 
         record_audit_log(
             tx,
@@ -1888,9 +1883,15 @@ def admin_resolve_report(
             if ttype == "work":
                 from .services import set_work_visibility
 
-                set_work_visibility(tx, str(tid), "hidden", now_iso)
+                # Attribute the hide to the report flow, so a later dismissal
+                # knows it may undo it — but only if nothing else intervened.
+                set_work_visibility(
+                    tx, str(tid), "hidden", now_iso,
+                    source="report", reason=f"举报成立（#{report_id}）",
+                    allow_sources=("", "report"),
+                )
             elif ttype == "topic":
-                tx.execute("UPDATE forum_topics SET status = 'hidden', updated_at = ? WHERE id = ?", (now_iso, tid))
+                tx.execute("UPDATE forum_topics SET status = 'hidden', status_source = 'report', updated_at = ? WHERE id = ?", (now_iso, tid))
             elif ttype == "asset":
                 tx.execute("UPDATE catalog_assets SET status = 'hidden', updated_at = ? WHERE code = ?", (now_iso, tid))
             elif ttype == "comment":
@@ -1898,14 +1899,23 @@ def admin_resolve_report(
             elif ttype == "reply":
                 tx.execute("UPDATE forum_replies SET status = 'hidden' WHERE id = ?", (tid,))
         elif res == "dismissed" and not _has_other_open_reports(tx, ttype, str(tid), report_id):
-            # Only the last dismissed report restores the target, and only if it
-            # was auto-paused — a work an admin hid stays hidden.
+            # A dismissal only undoes what the report flow itself did.  It must
+            # never publish a work an admin hid or paused: the status_source
+            # check rejects those, which is why a bare status column was not
+            # enough to get this right.
             if ttype == "work":
                 from .services import set_work_visibility
 
-                set_work_visibility(tx, str(tid), "published", now_iso, allow_from=("paused",))
+                set_work_visibility(
+                    tx, str(tid), "published", now_iso,
+                    allow_from=("paused", "hidden"), allow_sources=("report",),
+                )
             elif ttype == "topic":
-                tx.execute("UPDATE forum_topics SET status = 'published', updated_at = ? WHERE id = ? AND status = 'paused'", (now_iso, tid))
+                tx.execute(
+                    "UPDATE forum_topics SET status = 'published', status_source = '', updated_at = ? "
+                    "WHERE id = ? AND status IN ('paused', 'hidden') AND status_source = 'report'",
+                    (now_iso, tid),
+                )
             elif ttype == "asset":
                 tx.execute("UPDATE catalog_assets SET status = 'published', updated_at = ? WHERE code = ? AND status = 'paused'", (now_iso, tid))
 

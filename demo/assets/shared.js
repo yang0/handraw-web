@@ -1605,11 +1605,13 @@
   function popularScore(kind, item) {
     if (!item) return 0;
     if (kind === "work") {
+      // Mirrors backend/ranking.py: forks weigh 1, not 3, because the counter
+      // can be moved by spending free generation quota.
       return (
         Number(item.likes || 0) +
         Number(item.cheers || 0) +
         2 * Number(item.favorites || 0) +
-        3 * Number(item.forks || 0)
+        Number(item.forks || 0)
       );
     }
     if (kind === "topic") {

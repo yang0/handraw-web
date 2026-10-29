@@ -1341,31 +1341,46 @@ def set_work_visibility(
     status: str,
     now_iso: str,
     *,
+    source: str = "moderator",
+    reason: str = "",
     allow_from: tuple[str, ...] | None = None,
+    allow_sources: tuple[str, ...] | None = None,
 ) -> bool:
     """Change a work's status and keep its discussion topic in step.
 
     Every path that hides, pauses or restores a work must go through here.
 
-    ``allow_from`` is the guard against automation resurrecting moderated
-    content: report-driven pauses pass ``('published',)`` so a work an admin
-    already hid cannot come back to life just because enough reports were filed
-    and later rejected.  Returns True when a row was actually changed.
+    ``source`` records who caused the change: ``'report'`` for the abuse-report
+    threshold, ``'moderator'`` for a human decision.  Restoring passes
+    ``allow_sources=('report',)`` so a dismissed report only undoes an automatic
+    pause — never an admin's hide, and never a human pause.
+
+    ``allow_from`` guards the previous status in the same way.  Returns True when
+    a row was actually changed.
     """
-    current = tx.execute("SELECT status FROM works WHERE id = ?", (work_id,)).fetchone()
+    current = tx.execute(
+        "SELECT status, status_source FROM works WHERE id = ?", (work_id,)
+    ).fetchone()
     if not current:
         return False
     if allow_from is not None and str(current["status"]) not in allow_from:
         return False
-    tx.execute("UPDATE works SET status = ?, updated_at = ? WHERE id = ?", (status, now_iso, work_id))
+    if allow_sources is not None and str(current["status_source"] or "") not in allow_sources:
+        return False
+
+    publishing = status == "published"
+    tx.execute(
+        "UPDATE works SET status = ?, status_source = ?, status_reason = ?, updated_at = ? WHERE id = ?",
+        (status, "" if publishing else source, "" if publishing else reason, now_iso, work_id),
+    )
     mapped = tx.execute(
         "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
         (work_id,),
     ).fetchone()
     if mapped:
         tx.execute(
-            "UPDATE forum_topics SET status = ?, updated_at = ? WHERE id = ?",
-            (status, now_iso, str(mapped["topic_id"])),
+            "UPDATE forum_topics SET status = ?, status_source = ?, status_reason = ?, updated_at = ? WHERE id = ?",
+            (status, "" if publishing else source, "" if publishing else reason, now_iso, str(mapped["topic_id"])),
         )
     return True
 
@@ -2195,7 +2210,9 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
                 # not be downgraded to "paused", because a later rejection would
                 # then republish it.
                 auto_paused = set_work_visibility(
-                    tx, target_id, "paused", now_iso, allow_from=("published",)
+                    tx, target_id, "paused", now_iso,
+                    source="report", reason=f"举报达到阈值（{open_cnt} 条）",
+                    allow_from=("published",), allow_sources=("",),
                 )
             elif target_type == "topic":
                 tx.execute("UPDATE forum_topics SET status = 'paused', updated_at = ? WHERE id = ? AND status = 'published'", (now_iso, target_id))
