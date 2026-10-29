@@ -31,5 +31,7 @@ ops/dev_data.json
 # (E:\handraw-style\images).  It is product content, but 47 MB of binaries
 # does not belong in this repository: deploy it from the package instead.
 /images/
-# Never commit generated credentials from ops/seed_starter_library.py.
+# Never commit generated credentials from ops/seed_starter_library.py or
+# ops/rotate_starter_credentials.py (the latter suffixes the database name).
 starter_credentials.json
+starter_credentials.*.json

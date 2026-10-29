@@ -2225,8 +2225,14 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
                     allow_from=("published",), allow_sources=("",),
                 )
             elif target_type == "topic":
-                tx.execute("UPDATE forum_topics SET status = 'paused', updated_at = ? WHERE id = ? AND status = 'published'", (now_iso, target_id))
-                auto_paused = True
+                # Record the cause, otherwise a dismissal cannot tell this apart
+                # from a moderator pause and the thread never comes back.
+                cursor = tx.execute(
+                    "UPDATE forum_topics SET status = 'paused', status_source = 'report', "
+                    "status_reason = ?, updated_at = ? WHERE id = ? AND status = 'published'",
+                    (f"举报达到阈值（{open_cnt} 条）", now_iso, target_id),
+                )
+                auto_paused = cursor.rowcount > 0
             elif target_type == "asset":
                 tx.execute("UPDATE catalog_assets SET status = 'paused', updated_at = ? WHERE code = ? AND status = 'published'", (now_iso, target_id))
                 auto_paused = True

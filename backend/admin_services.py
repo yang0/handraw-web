@@ -1884,6 +1884,15 @@ def admin_resolve_report(
         if target_author:
             _assert_not_self_review(actor, target_author, settings)
 
+        # Resolving one report also closes its siblings on the same target, so
+        # capture the count *before* that sweep: the restoration decision below
+        # needs to know whether other people's reports were still pending.
+        sibling_open_before = int(
+            tx.execute(
+                "SELECT COUNT(*) FROM reports WHERE target_type = ? AND target_id = ? AND status = 'open' AND id <> ?",
+                (rep["target_type"], rep["target_id"], int(report_id)),
+            ).fetchone()[0]
+        )
         tx.execute(
             "UPDATE reports SET status = ?, resolved_by = ?, resolution_note = ?, resolved_at = ? WHERE id = ?",
             (res, actor["username"], (note or "").strip(), now_iso, int(report_id)),
@@ -1920,11 +1929,11 @@ def admin_resolve_report(
                 tx.execute("UPDATE work_comments SET status = 'hidden' WHERE id = ?", (tid,))
             elif ttype == "reply":
                 tx.execute("UPDATE forum_replies SET status = 'hidden' WHERE id = ?", (tid,))
-        elif res == "dismissed" and not _has_other_open_reports(tx, ttype, str(tid), report_id):
-            # A dismissal only undoes what the report flow itself did.  It must
-            # never publish a work an admin hid or paused: the status_source
-            # check rejects those, which is why a bare status column was not
-            # enough to get this right.
+        elif res == "dismissed":
+            # The sibling sweep above closed every open report on this target,
+            # so a dismissal always settles it.  A dismissal only undoes what
+            # the report flow itself did: it must never publish a work an admin
+            # hid or paused (status_source enforces that).
             if ttype == "work":
                 from .services import set_work_visibility
 

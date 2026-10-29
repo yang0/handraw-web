@@ -1990,6 +1990,14 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         is_studio_channel = host.startswith("studio.") or srv_role == "studio"
         is_forum_channel = host.startswith("forum.") or host.startswith("bbs.") or srv_role == "forum"
 
+        # An unmatched API path must not fall through to the SPA shell: a client
+        # would receive 200 + index.html and treat a missing endpoint as success.
+        if req_path.startswith("/api/"):
+            self._send_json(
+                {"ok": False, "error": "接口不存在", "code": "not_found"}, status=404
+            )
+            return
+
         if req_path in ("/", ""):
             if is_admin_channel:
                 file_path = DEMO_DIR / "admin.html"

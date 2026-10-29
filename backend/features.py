@@ -158,14 +158,25 @@ def _owned_content(db: Any, user: dict, kind: str, item_id: str) -> dict:
 
 def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict) -> dict:
     row = _owned_content(db,user,kind,item_id)
+    if kind == 'works':
+        sub=db.get_conn().execute("SELECT id,current_revision FROM curation_submissions WHERE kind='work' AND target_id=?",(item_id,)).fetchone()
+        if sub:
+            from .curation import revise, _current_payload
+            payload=_current_payload(db.get_conn(),sub['id'],sub['current_revision'])
+            for key in ('title','prompt','notes'):
+                if key in body:
+                    payload[key]=body[key]
+            return revise(db,user,sub['id'],{'payload':payload})
     title = str(body.get("title",row["title"])).strip()
     if not 4 <= len(title) <= 140:
         raise ServiceError("标题需为 4～140 个字")
     now = utc_now_iso()
     with db.transaction() as tx:
         if kind == "works":
-            prompt = str(body.get("prompt",row["prompt"])).strip()
-            if not prompt or len(prompt) > 20000:
+            # Stored verbatim: the Skill promises the author's text survives a
+            # round trip, so editing must not trim it.
+            prompt = str(body.get("prompt",row["prompt"]))
+            if not prompt.strip() or len(prompt) > 20000:
                 raise ServiceError("请填写有效的实际提示词（最多 20000 字）")
             notes = str(body.get("notes",row["notes"]))[:20000]
             tx.execute("UPDATE works SET title=?,prompt=?,notes=?,updated_at=? WHERE id=? AND author_username=?", (title,prompt,notes,now,item_id,user["username"]))
