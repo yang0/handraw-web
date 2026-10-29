@@ -1,0 +1,239 @@
+/* forum-work-post.css — .fwp 作用域内的作品帖展示样式 */
+.fwp {
+  --fwp-paper: #faf6ee;
+  --fwp-inset: #f3ede1;
+  --fwp-ink: #2b2620;
+  --fwp-muted: #8a7f70;
+  --fwp-border: #e3d9c6;
+  --fwp-vermilion: #b5452f;
+  margin: 20px 0;
+  color: var(--fwp-ink);
+  font-family: inherit;
+}
+
+.fwp-title {
+  margin: 0 0 14px;
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.fwp-gallery {
+  margin: 0 0 16px;
+}
+
+.fwp-gallery-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--fwp-inset);
+  border: 1px solid var(--fwp-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.fwp-main {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  max-height: 640px;
+}
+
+.fwp-thumbs {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.fwp-thumb {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background: var(--fwp-inset);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.fwp-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fwp-thumb.is-active,
+.fwp-thumb:hover {
+  border-color: var(--fwp-vermilion);
+}
+
+.fwp-prompt {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  background: var(--fwp-inset);
+  border: 1px solid var(--fwp-border);
+  border-radius: 6px;
+}
+
+.fwp-prompt-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.fwp-prompt-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  flex: 1 1 auto;
+}
+
+.fwp-copy,
+.fwp-fork {
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--fwp-vermilion);
+  background: transparent;
+  color: var(--fwp-vermilion);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fwp-fork {
+  background: var(--fwp-vermilion);
+  color: #fff;
+}
+
+.fwp-copy:hover,
+.fwp-fork:hover {
+  opacity: 0.85;
+}
+
+.fwp-fork.is-disabled,
+.fwp-fork:disabled {
+  border-color: var(--fwp-border);
+  background: transparent;
+  color: var(--fwp-muted);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.fwp-prompt-text {
+  margin: 0;
+  max-height: 340px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--fwp-ink);
+}
+
+.fwp-locked,
+.fwp-missing {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--fwp-muted);
+}
+
+.fwp-notes {
+  margin: 0 0 16px;
+}
+
+.fwp-notes-title,
+.fwp-assets-title {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--fwp-muted);
+}
+
+.fwp-notes-body {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--fwp-ink);
+}
+
+.fwp-assets {
+  margin: 0 0 8px;
+}
+
+.fwp-asset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fwp-asset {
+  display: grid;
+  grid-template-columns: 64px minmax(0,1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--fwp-border);
+  border-radius: 4px;
+  background: var(--fwp-paper);
+  font-size: 0.82rem;
+  color: var(--fwp-ink);
+  text-decoration: none;
+  width: min(100%,300px);
+}
+.fwp-asset img { width:64px;height:64px;object-fit:contain;grid-row:1 / span 3; }
+.fwp-asset-kind,.fwp-asset-name,.fwp-asset-id { grid-column:2;min-width:0;overflow-wrap:anywhere; }
+.fwp-asset:not(:has(img)) { grid-template-columns:1fr; }
+.fwp-asset:not(:has(img)) > span { grid-column:1; }
+.hrp-work-thread { max-width:1040px;margin:0 auto 24px; }
+.hrp-work-heading { display:flex;gap:14px;align-items:center;color:var(--ink-muted);font-size:13px; }
+.hrp-work-thread .hw-detail-title { margin:0; }
+.hrp-work-thread .fwp { margin:0; }
+
+
+.fwp-asset:hover {
+  border-color: var(--fwp-vermilion);
+}
+
+.fwp-asset-kind {
+  font-size: 0.72rem;
+  color: var(--fwp-muted);
+}
+
+.fwp-asset-name {
+  font-weight: 500;
+}
+
+.fwp-asset-id {
+  font-size: 0.72rem;
+  color: var(--fwp-muted);
+  font-family: ui-monospace, monospace;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fwp-thumb,
+  .fwp-copy,
+  .fwp-fork,
+  .fwp-asset {
+    transition: none !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .fwp-prompt-head {
+    flex-wrap: wrap;
+  }
+  .fwp-prompt-title {
+    flex-basis: 100%;
+  }
+}
