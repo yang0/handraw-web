@@ -54,10 +54,27 @@ CREATE INDEX IF NOT EXISTS idx_works_popular
     ON works(status, (likes + cheers + 2 * favorites + 3 * forks) DESC, published_at_ms DESC);
 """
 
+# The work publish path maps a work to its discussion topic through this table.
+# It originally shipped with the curation module, but the publish path depends
+# on it, so it must exist wherever this backend runs. ``IF NOT EXISTS`` keeps it
+# safe when the curation module also creates it.
+RESOURCE_TOPIC_MAP_SQL = """
+CREATE TABLE IF NOT EXISTS curation_resource_topics (
+    kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'submission',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (kind, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_curation_map_topic ON curation_resource_topics(topic_id);
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
     (42, "042_work_forks", WORK_FORKS_SQL),
     (43, "043_reply_legacy_source", REPLY_LEGACY_SOURCE_SQL),
     (44, "044_work_popular_index", WORK_POPULAR_INDEX_SQL),
+    (45, "045_resource_topic_map", RESOURCE_TOPIC_MAP_SQL),
 ]
