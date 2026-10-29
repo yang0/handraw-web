@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -50,10 +51,14 @@ class PaidPromptNeverServedTests(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join(5)
-        cls.db.close_thread_conn()
-        cls.db.get_conn().close()
         cls.db.close()
-        cls.temp.cleanup()
+        # Windows may still hold the file briefly while the thread winds down.
+        for _ in range(20):
+            try:
+                cls.temp.cleanup()
+                break
+            except PermissionError:
+                time.sleep(0.1)
 
     def _fetch(self, path):
         request = urllib.request.Request(self.base + path, headers={"Origin": "http://trusted.test"})
