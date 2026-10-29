@@ -16,9 +16,16 @@ import sqlite3
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from backend.cold_start_content import PACK_ID, USERS
 from backend.db import Database
 from backend.security import hash_password
+
+# The cold-start content pack ships separately; importing this script must not
+# fail on a checkout that does not include it.
+try:
+    from backend.cold_start_content import PACK_ID, USERS
+except ImportError:  # pragma: no cover - content pack not installed
+    PACK_ID = ""
+    USERS: list = []
 
 LABELS = {'tuning': '作品求改进', 'experience': '创作经验', 'assets': '画风与图型', 'tools': '工具与问答'}
 
