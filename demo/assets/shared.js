@@ -2631,7 +2631,6 @@
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button type="button" class="btn btn-sm btn-primary" data-btn-share-card-forum="1">📑 作为卡片分享到论坛 ↗</button>
               <button type="button" class="btn btn-sm" data-btn-copy-share="1">📋 复制分享口令</button>
-              <button type="button" class="btn btn-sm btn-gold" data-btn-sim-invite="1">🧪 模拟好友注册 (+15✦)</button>
             </div>
           </div>
         </div>
@@ -2705,38 +2704,9 @@
       };
     }
 
-    const simBtn = panel.querySelector("[data-btn-sim-invite]");
-    if (simBtn) {
-      simBtn.onclick = async () => {
-        if (!App.state.loggedIn) {
-          openLoginModal("登录后即可生成你的专属邀请码并领取拉新奖励！");
-          return;
-        }
-        if (App.state.serverBacked) {
-          try {
-            const randSuffix = Math.random().toString(36).slice(2, 7);
-            await apiJson("/api/auth/register", {
-              method: "POST",
-              body: {
-                username: `friend_${randSuffix}`,
-                displayName: `受邀画友_${randSuffix.toUpperCase()}`,
-                password: "handraw123",
-                inviteCode: invCode,
-                noSession: true
-              }
-            });
-            await refreshFromServer();
-            toast("🎉 裂变追踪入库生效！1 位新画友通过你的邀请码注册，你获得 +15✦，好友获 +30✦！");
-          } catch (err) {
-            toast(`模拟拉新失败：${err.message}`);
-          }
-          return;
-        }
-        addLedger(`通过分享「${title}」成功邀请新用户注册`, +15);
-        saveState();
-        toast("🎉 裂变追踪生效！1 位好友通过你的分享链接注册，你获得 +15 积分！");
-      };
-    }
+    // The "simulate a friend signing up" button was removed: it called the real
+    // registration endpoint with a fixed password and credited the inviter, so
+    // any signed-in user could mint accounts and points indefinitely.
   }
 
   function openSharePosterModal(itemType, item) {

@@ -1444,11 +1444,16 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if not allowed:
             raise ServiceError("写请求来源未通过校验", status=403, code=f"csrf_{reason}")
 
-    def _enforce_auth_rate_limit(self, scope: str, subject: str) -> None:
+    def _enforce_auth_rate_limit(self, scope: str, subject: str, *, per_ip_only: bool = False) -> None:
         if self._demo_enabled():
             return
         ip_addr = self.client_address[0] if self.client_address else "unknown"
-        key = f"{ip_addr}|{(subject or '').strip().lower()[:120]}"
+        if per_ip_only:
+            # The caller controls the other half of the key, so it must not be
+            # part of it.
+            key = ip_addr
+        else:
+            key = f"{ip_addr}|{(subject or '').strip().lower()[:120]}"
         if not check_auth_rate_limit(scope, key):
             raise ServiceError("请求过于频繁，请稍后再试", status=429, code="rate_limited")
 
@@ -2099,7 +2104,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         # Auth & Session Endpoints
         if req_path == "/api/auth/register":
-            self._enforce_auth_rate_limit("register", str(body.get("username") or body.get("email") or ""))
+            # Registration is limited per IP only.  Keying by IP+username let a
+            # caller pick a fresh username each time and bypass the limit, which
+            # made invite farming unlimited.
+            self._enforce_auth_rate_limit("register", "", per_ip_only=True)
             user_row, token = register_user(
                 self.db,
                 username=str(body.get("username") or ""),
