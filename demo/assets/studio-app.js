@@ -2455,8 +2455,12 @@
         const targetAid = aidParam || CS.activeArticleId;
         const targetArt = targetAid ? (CS.myArticles || []).find((a) => a.id === targetAid) : null;
 
-        // All legacy subviews (detail/preview/portal/editor/undefined) normalize to the unified editor.
-        if (targetArt) {
+        // The editor and the reader preview are separate pages now: the editor
+        // keeps the writing column at full width, and 预览 opens ?subview=preview,
+        // which can jump back with ?subview=editor.
+        if (subviewParam === "preview") {
+          renderArticlePreviewPage(targetArt ? targetArt.id : CS.activeArticleId || null);
+        } else if (targetArt) {
           openUnifiedArticleEditor(targetArt.id, { renderNow: false });
         } else if (aidParam) {
           openUnifiedArticleEditor(null, { createNew: true, renderNow: false });
@@ -11586,6 +11590,88 @@
     return `<div class="ic-notion-gap" data-gap-idx="${idx}"><button type="button" class="ic-notion-insert-btn" data-plan-insert-at="${idx}">＋ 在${esc(label)}添加配图</button></div>`;
   }
 
+  // Reader preview as its own page.  The editor keeps the full width for writing
+  // and 预览 opens ?subview=preview; 返回编辑 goes back with ?subview=editor.
+  function renderArticlePreviewPage(articleId, draftOverride) {
+    flushUnifiedArticleEditor();
+    // Prefer the in-memory draft: right after saving a whole-page rerender the
+    // cloud sync has not reached CS.myArticles yet, and looking only there
+    // rendered the writer again instead of the preview.
+    const candidates = [draftOverride, CS.activeArticleDraft, ...(CS.myArticles || [])].filter(Boolean);
+    const art =
+      candidates.find((a) => a && a.id === articleId) ||
+      candidates.find((a) => a && (a.markdown || "").trim()) ||
+      null;
+    if (!art) {
+      console.warn("[preview] no draft to preview:", articleId,
+                   "known:", (CS.myArticles || []).map((a) => a.id).slice(0, 5));
+      renderArticleEditorPage(CS.myArticles || []);
+      return;
+    }
+    CS.stageView = "preview";
+    CS.activeArticleId = art.id;
+    const styleObj = Catalog.resourceMap?.get(art.styleId) || {
+      id: art.styleId || "FA-001",
+      name: "手绘钢笔淡彩",
+      image: "/images/individual/FA/FA-001.webp",
+    };
+    const cards = resolveArticleTarget(art.id)?.planNode?.data?.cards || [];
+
+    DOM.previewStage.innerHTML = `
+      <div class="ic-wechat-editor-root ic-article-preview-root">
+        <header class="ic-wechat-topbar">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button type="button" class="btn btn-sm" id="preview-btn-back-editor" style="font-weight:750;padding:3px 10px;">← 返回编辑</button>
+            <span style="font-size:13px;font-weight:850;color:var(--ic-ink);display:flex;align-items:center;gap:5px;">
+              👁 <span>预览</span>
+            </span>
+            <span style="font-size:11px;color:var(--ic-muted);background:var(--ic-surface,#f0f2f5);padding:2px 7px;border-radius:4px;">微信公众号排版</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button type="button" class="btn btn-sm" id="preview-btn-list">← 文章列表</button>
+          </div>
+        </header>
+
+        <div class="ic-wechat-body">
+          <div class="ic-wechat-scroll-area" style="align-items:center;">
+            <div class="ic-article-preview-sheet">
+              ${renderWeChatArticlePreviewHtml(art, styleObj, false)}
+            </div>
+          </div>
+        </div>
+
+        <footer class="ic-wechat-bottombar">
+          <span class="ic-article-preview-meta">${art.markdown ? (art.markdown.replace(/[#*\s]/g, "").length) : 0} 字 · 配图 ${cards.filter((c) => c.imageUrl).length}/${cards.length} 张</span>
+          <div style="flex:1 1 auto;"></div>
+          <button type="button" class="btn btn-sm" id="preview-btn-back-editor-2">← 返回编辑</button>
+        </footer>
+      </div>
+    `;
+
+    const back = () => {
+      // Keep the draft in memory so the writer returns to the same text, and
+      // carry the id in the URL so a reload lands on the same article.
+      CS.articleEditorDraft = art;
+      CS.activeArticleId = art.id;
+      const url = new URL(location.href);
+      url.searchParams.set("entry", "article");
+      url.searchParams.set("subview", "editor");
+      url.searchParams.set("articleId", art.id);
+      history.pushState({}, "", url.toString());
+      openUnifiedArticleEditor(art.id);
+    };
+    DOM.previewStage.querySelector("#preview-btn-back-editor")?.addEventListener("click", back);
+    DOM.previewStage.querySelector("#preview-btn-back-editor-2")?.addEventListener("click", back);
+    DOM.previewStage.querySelector("#preview-btn-list")?.addEventListener("click", () => {
+      const url = new URL(location.href);
+      url.searchParams.set("entry", "article");
+      url.searchParams.delete("subview");
+      url.searchParams.delete("articleId");
+      history.pushState({}, "", url.toString());
+      renderArticleDirectoryPage(CS.myArticles || []);
+    });
+  }
+
   function renderArticleEditorPage(sortedArticles) {
     const draft = CS.articleEditorDraft || {
       title: "",
@@ -11662,10 +11748,10 @@
             }
           </div>
 
-          <!-- Top-right: Edit/Preview toggle tabs & Document Upload -->
+          <!-- Top-right: reader preview (its own page) & Document Upload -->
           <div style="display:flex;align-items:center;gap:10px;">
-            <button type="button" class="btn btn-sm" id="editor-btn-toggle-preview" style="padding:3px 12px;font-size:12px;font-weight:800;" aria-expanded="${previewOpen ? "true" : "false"}">
-              ${previewOpen ? "收起预览" : "排版预览"}
+            <button type="button" class="btn btn-sm" id="editor-btn-toggle-preview" style="padding:3px 12px;font-size:12px;font-weight:800;" title="打开独立预览页">
+              👁 预览
             </button>
 
             <label class="btn btn-sm" style="cursor:pointer;padding:3px 10px;font-size:12px;font-weight:750;" title="上传文档重新由 AI 解析覆盖当前正文">
@@ -11724,9 +11810,8 @@
             }
           </div>
 
-          <aside id="editor-inline-preview" ${previewOpen ? "" : "hidden"}>
-            <div id="editor-inline-preview-content">${renderWeChatArticlePreviewHtml(draft, styleObj, false)}</div>
-          </aside>
+          <!-- The reader preview lives on its own page (?subview=preview); the
+               writing column keeps the whole width here. -->
         </div>
 
         <!-- 3. FIXED BOTTOM BAR (底部固定状态与主操作栏) -->
@@ -11794,10 +11879,9 @@
     if (planSheet && target?.planNode) bindNotionPlanSheetInteractions(target.planNode);
 
     const updateInlineArticlePreview = () => {
-      const contentEl = DOM.previewStage.querySelector("#editor-inline-preview-content");
-      if (!contentEl) return;
-      const styleRes = Catalog.resourceMap?.get(draft.styleId) || styleObj;
-      contentEl.innerHTML = renderWeChatArticlePreviewHtml(draft, styleRes, false);
+      // Kept as a no-op hook: several call sites refresh "the preview" after an
+      // edit, but the reader preview is now a separate page, so there is nothing
+      // to repaint in place.
     };
 
     const backBtn = DOM.previewStage.querySelector("#editor-btn-back");
@@ -11818,7 +11902,6 @@
     const replaceInp = DOM.previewStage.querySelector("#editor-file-replace-inp");
     const planBtn = DOM.previewStage.querySelector("#editor-btn-plan");
     const togglePreviewBtn = DOM.previewStage.querySelector("#editor-btn-toggle-preview");
-    const inlinePreviewPane = DOM.previewStage.querySelector("#editor-inline-preview");
     const batchBtn = DOM.previewStage.querySelector("#editor-btn-batch");
     const exportBtn = DOM.previewStage.querySelector("#editor-btn-export");
     const publishBtn = DOM.previewStage.querySelector("#editor-btn-publish");
@@ -11917,15 +12000,17 @@
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
 
-    // Inline preview pane toggle
+    // 预览 opens the reader preview page; 返回编辑 there brings the writer back.
     if (togglePreviewBtn) {
       togglePreviewBtn.onclick = () => {
-        const nextOpen = !(CS.articlePreviewOpen !== false);
-        CS.articlePreviewOpen = nextOpen;
-        if (inlinePreviewPane) inlinePreviewPane.hidden = !nextOpen;
-        togglePreviewBtn.setAttribute("aria-expanded", nextOpen ? "true" : "false");
-        togglePreviewBtn.textContent = nextOpen ? "收起预览" : "排版预览";
-        if (nextOpen) updateInlineArticlePreview();
+        collectDraftFromInputs(draft);
+        syncArticleEditorDraftToHistory(draft, { bumpTime: false });
+        const url = new URL(location.href);
+        url.searchParams.set("entry", "article");
+        url.searchParams.set("subview", "preview");
+        url.searchParams.set("articleId", draft.id);
+        history.pushState({}, "", url.toString());
+        renderArticlePreviewPage(draft.id, draft);
       };
     }
 
