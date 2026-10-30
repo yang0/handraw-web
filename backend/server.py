@@ -1444,10 +1444,35 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if not allowed:
             raise ServiceError("写请求来源未通过校验", status=403, code=f"csrf_{reason}")
 
+    def _client_ip(self) -> str:
+        """The address a rate limit should key on.
+
+        Behind the project's nginx deployment every request arrives from
+        127.0.0.1, so keying on the socket address would put *all* visitors in
+        one bucket — one person registering a few times would lock everyone out.
+        The forwarded header is therefore honoured, but only when the connection
+        itself comes from the local reverse proxy; a direct client cannot spoof
+        its way into a fresh bucket.
+        """
+        peer = self.client_address[0] if self.client_address else "unknown"
+        if peer not in ("127.0.0.1", "::1", "localhost"):
+            return peer
+        forwarded = (self.headers.get("X-Real-IP") or "").strip()
+        if forwarded:
+            return forwarded
+        chain = (self.headers.get("X-Forwarded-For") or "").strip()
+        if chain:
+            # The left-most entry is the original client as recorded by the
+            # outermost trusted proxy.
+            first = chain.split(",")[0].strip()
+            if first:
+                return first
+        return peer
+
     def _enforce_auth_rate_limit(self, scope: str, subject: str, *, per_ip_only: bool = False) -> None:
         if self._demo_enabled():
             return
-        ip_addr = self.client_address[0] if self.client_address else "unknown"
+        ip_addr = self._client_ip()
         if per_ip_only:
             # The caller controls the other half of the key, so it must not be
             # part of it.
