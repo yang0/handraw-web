@@ -1538,30 +1538,15 @@ def admin_moderate_topic(
         elif act == "unfeature":
             tx.execute("UPDATE forum_topics SET featured = 0, updated_at = ? WHERE id = ?", (now_iso, tid))
         elif act == "publish":
-            # A work's thread may not be republished while the work itself is
-            # moderated; otherwise a board moderator can re-expose content an
-            # admin hid, one half at a time.
-            mapped_work = tx.execute(
-                "SELECT target_id FROM curation_resource_topics WHERE kind = 'work' AND topic_id = ?",
-                (tid,),
-            ).fetchone()
-            if mapped_work:
-                work_status = tx.execute(
-                    "SELECT status FROM works WHERE id = ?", (str(mapped_work["target_id"]),)
-                ).fetchone()
-                # Deleted counts as unavailable, not as "no constraint".
-                if work_status is None or str(work_status["status"]) != "published":
-                    raise ServiceError(
-                        "该主帖关联的作品当前不可见，请先恢复作品", status=409, code="work_not_published"
-                    )
-            tx.execute(
-                "UPDATE forum_topics SET status = 'published', status_source = '', status_reason = '', updated_at = ? WHERE id = ?",
-                (now_iso, tid),
-            )
+            from .services import set_topic_visibility
+
+            set_topic_visibility(tx, str(tid), "published", now_iso, source="moderator")
         elif act == "hide":
-            tx.execute(
-                "UPDATE forum_topics SET status = 'hidden', status_source = 'moderator', updated_at = ? WHERE id = ?",
-                (now_iso, tid),
+            from .services import set_topic_visibility
+
+            set_topic_visibility(
+                tx, str(tid), "hidden", now_iso,
+                source="moderator", reason=reason or "管理员隐藏",
             )
         elif act == "edit":
             cat = str(payload.get("category") or t["category"]).strip()

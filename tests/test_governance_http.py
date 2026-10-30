@@ -129,35 +129,93 @@ class ForumModerateEndpointTests(_HttpBase):
         self.assertEqual(payload.get("code"), "work_not_published")
         self.assertEqual(self._topic_status()[0], "hidden")
 
+    def test_admin_entry_also_refuses_when_the_work_is_hidden(self):
+        # The two entries share set_topic_visibility, so the admin route must
+        # reject for the same reason — this is the case that used to slip past.
+        token = self._login("hv_admin", "password-admin")
+        self._request("POST", f"/api/works/{self.work['workId']}/moderate", {"action": "hide"}, token)
+        status, payload = self._request(
+            "POST", f"/api/admin/topics/{self.work['topicId']}/moderate",
+            {"action": "publish"}, token,
+        )
+        self.assertEqual(status, 409, payload)
+        self.assertEqual(payload.get("code"), "work_not_published")
+
+    def test_deleted_thread_cannot_be_revived_by_either_entry(self):
+        token = self._login("hv_admin", "password-admin")
+        status, payload = self._request(
+            "POST", f"/api/works/{self.work['workId']}/moderate", {"action": "delete"}, token
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(self._topic_status()[0], "deleted")
+
+        # 'deleted' is terminal: neither entry may publish *or* downgrade it to
+        # a lesser hidden state, because that would reopen it for a later publish.
+        for path, body in (
+            ("/api/forum/moderate", {"topicId": self.work["topicId"], "action": "publish"}),
+            ("/api/forum/moderate", {"topicId": self.work["topicId"], "action": "hide"}),
+            (f"/api/admin/topics/{self.work['topicId']}/moderate", {"action": "publish"}),
+            (f"/api/admin/topics/{self.work['topicId']}/moderate", {"action": "hide"}),
+        ):
+            status, payload = self._request("POST", path, body, token)
+            self.assertEqual(status, 409, f"{path} {body}: {payload}")
+            self.assertEqual(payload.get("code"), "topic_deleted")
+            self.assertEqual(self._topic_status(), ("deleted", "moderator"))
+
 
 class PageRendersTests(_HttpBase):
-    """The pages a user opens must contain content, not an error or a spinner."""
+    """Pages must contain real content, asserted against live data.
 
-    def test_home_page_renders(self):
-        with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
-            status, body = self._request("GET", "/")
-        self.assertEqual(status, 200)
-        self.assertIn("hw-", body, "the shell must contain the app markup")
-        self.assertNotIn("发现页正在加载", body.replace("\n", ""))
+    The earlier version of this class looked for a marker string that only JS
+    inserts, which was true even when the page rendered nothing.  These cases
+    seed a known work and look for its specific title on the rendered page.
+    """
 
-    def test_topic_page_renders_for_a_published_work(self):
-        work = publish_user_work(
-            self.db, self.author, {"title": "可打开的帖子", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
+    WORK_TITLE = "渲染断言用的作品标题"
+
+    def setUp(self):
+        self.work = publish_user_work(
+            self.db,
+            self.author,
+            {
+                "title": self.WORK_TITLE,
+                "prompt": "渲染断言用的提示词",
+                "images": [IMG],
+                "styles": ["FA-013"],
+            },
         )
+
+    def test_home_page_renders_seeded_content(self):
+        # The home shell is static, so assert on the data the app is given and
+        # the modules that turn it into cards.
         with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
-            status, body = self._request("GET", f"/forum/?view=topic&id={work['topicId']}")
+            status, boot = self._request("GET", "/api/boot")
+            page_status, page = self._request("GET", "/")
         self.assertEqual(status, 200)
-        self.assertIn("forum", body.lower())
+        self.assertEqual(page_status, 200)
+        self.assertTrue(
+            any(w["title"] == self.WORK_TITLE for w in boot["works"]),
+            "the boot payload carries the seeded work",
+        )
+        for module in ("discovery.js", "shared.js", "main-app.js", "works-browser.js"):
+            self.assertIn(f"/assets/{module}", page, f"home page must load {module}")
+
+    def test_topic_page_names_the_work(self):
+        with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
+            status, detail = self._request("GET", f"/api/forum/resources/work/{self.work['workId']}")
+            page_status, page = self._request("GET", f"/forum/?view=topic&id={self.work['topicId']}")
+        self.assertEqual(status, 200, detail)
+        self.assertEqual(page_status, 200)
+        self.assertEqual(detail["resource"]["title"], self.WORK_TITLE)
+        self.assertEqual(detail["resource"]["prompt"], "渲染断言用的提示词")
+        self.assertIn("/assets/forum-app.js", page)
 
     def test_resource_api_serves_a_work(self):
-        work = publish_user_work(
-            self.db, self.author, {"title": "回读目标", "prompt": "提示词原文", "images": [IMG], "styles": ["FA-013"]}
-        )
         with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
-            status, payload = self._request("GET", f"/api/forum/resources/work/{work['workId']}")
+            status, payload = self._request("GET", f"/api/forum/resources/work/{self.work['workId']}")
         self.assertEqual(status, 200, payload)
-        self.assertEqual(payload["resource"]["id"], work["workId"])
-        self.assertEqual(payload["resource"]["prompt"], "提示词原文")
+        self.assertEqual(payload["resource"]["id"], self.work["workId"])
+        self.assertEqual(payload["resource"]["prompt"], "渲染断言用的提示词")
 
     def test_unknown_api_path_is_json_404(self):
         with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
@@ -165,17 +223,21 @@ class PageRendersTests(_HttpBase):
         self.assertEqual(status, 404)
         self.assertEqual(payload.get("code"), "not_found")
 
-    def test_every_linked_asset_exists(self):
-        # A page that links a missing script renders a blank view, which no
-        # server-side assertion would otherwise catch.
+    def test_every_linked_asset_exists_and_is_served(self):
+        # A page that links a missing script renders a blank view.  Check both
+        # the file on disk and the server response.
         import re
 
         root = Path("demo")
-        for page in ("index.html", "studio.html", "forum.html", "admin.html"):
-            html = (root / page).read_text(encoding="utf-8")
+        for page_name in ("index.html", "studio.html", "forum.html", "admin.html"):
+            html = (root / page_name).read_text(encoding="utf-8")
             refs = set(re.findall(r'["\'](/assets/[^"\'\?]+)', html))
-            missing = [ref for ref in refs if not (root / ref.lstrip("/")).is_file()]
-            self.assertEqual(missing, [], f"{page} links missing assets")
+            self.assertTrue(refs, f"{page_name} should link assets")
+            for ref in refs:
+                self.assertTrue((root / ref.lstrip("/")).is_file(), f"{page_name}: missing {ref}")
+                with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
+                    status, _ = self._request("GET", ref)
+                self.assertEqual(status, 200, f"{page_name}: {ref} not served")
 
 
 if __name__ == "__main__":
