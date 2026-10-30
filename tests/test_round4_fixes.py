@@ -119,15 +119,26 @@ class GovernanceRegressionTests(_Base):
 
 
 class DeleteSyncTests(_Base):
-    def test_deleting_a_work_hides_its_thread(self):
+    def test_deleting_a_work_marks_its_thread_deleted(self):
         admin_moderate_work(self.db, self.admin, self.work["workId"], "delete")
         work, topic = self._statuses()
         self.assertIsNone(work)
-        self.assertEqual(topic, "hidden", "a deleted work must not leave a readable thread")
+        self.assertEqual(topic, "deleted", "a deleted work must not leave a readable thread")
         mapping = self.db.get_conn().execute(
             "SELECT COUNT(*) FROM curation_resource_topics WHERE target_id = ?", (self.work["workId"],)
         ).fetchone()[0]
         self.assertEqual(mapping, 0)
+
+    def test_deleted_thread_cannot_be_republished(self):
+        from backend.services import ServiceError, forum_moderator_action
+
+        admin_moderate_work(self.db, self.admin, self.work["workId"], "delete")
+        for act in ("publish",):
+            with self.assertRaises(ServiceError) as ctx:
+                forum_moderator_action(
+                    self.db, self.admin, {"topicId": self.work["topicId"], "action": act}
+                )
+            self.assertEqual(ctx.exception.code, "topic_deleted")
 
 
 class ForkTargetValidationTests(_Base):

@@ -2113,9 +2113,42 @@ def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict
             author_u = tx.execute("SELECT role FROM users WHERE username = ?", (tp["author_username"],)).fetchone()
             if not is_admin and author_u and author_u["role"] == "admin":
                 raise ServiceError("无权隐藏超级管理员发布的公告或帖子", status=403)
-            tx.execute("UPDATE forum_topics SET status = 'hidden', updated_at = ? WHERE id = ?", (now_iso, topic_id))
+            # A moderator hiding the thread is a human decision and must say so;
+            # otherwise the report flow would later "restore" it.
+            tx.execute(
+                "UPDATE forum_topics SET status = 'hidden', status_source = 'moderator', "
+                "status_reason = ?, updated_at = ? WHERE id = ?",
+                (str(body.get("reason") or "")[:200] or "版主隐藏", now_iso, topic_id),
+            )
         elif action == "publish":
-            tx.execute("UPDATE forum_topics SET status = 'published', updated_at = ? WHERE id = ?", (now_iso, topic_id))
+            # A thread whose subject was deleted stays deleted; it is not an
+            # ordinary post that a moderator can revive.
+            current_topic = tx.execute(
+                "SELECT status FROM forum_topics WHERE id = ?", (topic_id,)
+            ).fetchone()
+            if current_topic and str(current_topic["status"]) == "deleted":
+                raise ServiceError("该帖子已随作品删除，不能恢复", status=409, code="topic_deleted")
+            # Same guard as the admin entry: a thread whose work is moderated may
+            # not be brought back one half at a time.
+            mapped_work = tx.execute(
+                "SELECT target_id FROM curation_resource_topics WHERE kind = 'work' AND topic_id = ?",
+                (topic_id,),
+            ).fetchone()
+            if mapped_work:
+                work_row = tx.execute(
+                    "SELECT status FROM works WHERE id = ?", (str(mapped_work["target_id"]),)
+                ).fetchone()
+                # A missing work (deleted) is as blocking as a hidden one: the
+                # thread must not survive its subject.
+                if work_row is None or str(work_row["status"]) not in ("published",):
+                    raise ServiceError(
+                        "该主帖关联的作品当前不可见，请先恢复作品", status=409, code="work_not_published"
+                    )
+            tx.execute(
+                "UPDATE forum_topics SET status = 'published', status_source = '', status_reason = '', "
+                "updated_at = ? WHERE id = ?",
+                (now_iso, topic_id),
+            )
         elif action in ("delete", "delete_topic"):
             if not is_admin and not is_topic_author:
                 author_u = tx.execute("SELECT role FROM users WHERE username = ?", (tp["author_username"],)).fetchone()

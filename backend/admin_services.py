@@ -888,8 +888,12 @@ def admin_moderate_work(
                 (wid,),
             ).fetchone()
             if mapped:
+                # Mark the thread deleted, not merely hidden: once the mapping is
+                # gone nothing else can tell it apart from an ordinary post, so
+                # the state itself must carry the fact that its work is gone.
                 tx.execute(
-                    "UPDATE forum_topics SET status = 'hidden', updated_at = ? WHERE id = ?",
+                    "UPDATE forum_topics SET status = 'deleted', status_source = 'moderator', "
+                    "status_reason = '作品已删除', updated_at = ? WHERE id = ?",
                     (now_iso, str(mapped["topic_id"])),
                 )
             tx.execute("DELETE FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?", (wid,))
@@ -1545,7 +1549,8 @@ def admin_moderate_topic(
                 work_status = tx.execute(
                     "SELECT status FROM works WHERE id = ?", (str(mapped_work["target_id"]),)
                 ).fetchone()
-                if work_status and str(work_status["status"]) != "published":
+                # Deleted counts as unavailable, not as "no constraint".
+                if work_status is None or str(work_status["status"]) != "published":
                     raise ServiceError(
                         "该主帖关联的作品当前不可见，请先恢复作品", status=409, code="work_not_published"
                     )
