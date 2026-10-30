@@ -1,0 +1,82 @@
+/* Compact creation: image choices, theme, settings, cost, action. */
+.ic-quick-stage { position:relative;width:100%;height:100%;min-height:0;overflow:auto;background:var(--paper-bg);padding:18px clamp(14px,4vw,48px) 36px; }
+.ic-stage-wrap:has(.ic-quick-stage[style*="block"]) .ic-canvas-stage { display:none; }
+.ic-quick-stage > .qc-head,.ic-quick-stage > .qc-wrap,.ic-quick-stage > .qc-results { width:min(100%,880px);margin-left:auto;margin-right:auto; }
+.qc-head { display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px; }
+.qc-head h1 { margin:0;font:700 24px/1.3 var(--font-serif); }
+.qc-lede { margin:3px 0 0;font-size:12px;color:var(--ink-muted); }
+.qc-head-actions { display:flex;gap:6px;flex-shrink:0; }
+.qc-head-actions .qc-picker { min-height:36px;padding:6px 10px;font-size:12px; }
+.qc-wrap { padding:0;color:var(--ink-body); }
+.qc-form fieldset { display:grid;gap:8px;min-width:0;border:0;padding:0;margin:0; }
+.qc-picker { font:inherit;text-align:left;cursor:pointer;border-radius:6px;border:1px solid var(--line-strong);background:var(--paper-card);color:inherit;min-height:44px;padding:8px 12px; }
+.qc-picker:hover { border-color:var(--vermilion); }
+.qc-pickers { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:4px; }
+.qc-resource-picker { display:flex;align-items:center;gap:10px;min-width:0;padding:8px; }
+.qc-resource-picker img,.qc-picker-empty { display:block;flex:0 0 72px;width:72px;height:72px;border-radius:4px;object-fit:contain;background:var(--paper-inset); }
+.qc-picker-empty { display:grid;place-items:center;font-size:22px;font-weight:400;color:var(--ink-muted); }
+.qc-picker-copy { display:grid;gap:4px;min-width:0; }
+.qc-picker-copy strong { font-size:13px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.qc-picker-kind,.qc-picker-hint { font-size:11px;line-height:1.3;color:var(--ink-muted); }
+.qc-picker-kind { color:var(--vermilion); }
+.qc-form label { font-size:12px;font-weight:600; }
+.qc-form input,.qc-form select,.qc-form textarea { box-sizing:border-box;width:100%;min-width:0;min-height:40px;padding:8px 10px;font:inherit;font-size:13px;color:inherit;background:var(--paper-card);border:1px solid var(--line-strong);border-radius:6px; }
+.qc-form textarea { height:76px;min-height:76px;resize:vertical; }
+.qc-settings { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:2px; }
+.qc-settings label { display:grid;gap:5px;min-width:0; }
+.qc-estimate { margin:12px 0 0;font-size:12px;line-height:1.6;color:var(--ink-muted); }
+.qc-estimate-note { display:block; }
+.qc-status { margin-top:5px;color:var(--ink-muted);font-size:12px;line-height:1.5; }
+.qc-run-row { display:flex;gap:10px;margin-top:10px; }
+.qc-run { font:inherit;font-size:13px;font-weight:600;min-height:44px;padding:8px 24px;border:1px solid var(--vermilion);border-radius:6px;background:var(--vermilion);color:white;cursor:pointer; }
+.qc-run:disabled { opacity:.65;cursor:progress; }
+.qc-picker:focus-visible,.qc-run:focus-visible,.qc-form input:focus-visible,.qc-form select:focus-visible,.qc-form textarea:focus-visible { outline:2px solid var(--vermilion);outline-offset:2px; }
+.qc-inline { display:flex;gap:8px;flex-wrap:wrap; }
+.qc-results { margin-top:22px; }
+.qc-results h2 { margin:0;font:700 18px var(--font-serif); }
+.qc-results > .qc-estimate { margin-top:5px; }
+.qc-results-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:12px; }
+.qc-result { margin:0;overflow:hidden;border:1px solid var(--line-soft);border-radius:6px;background:var(--paper-card); }
+.qc-result img { display:block;width:100%;height:auto;object-fit:contain; }
+.qc-result figcaption { display:flex;flex-wrap:wrap;gap:6px;padding:8px; }
+.qc-result-title { width:100%;font-size:12px; }
+.qc-result .qc-picker { font-size:12px;min-height:36px;padding:5px 8px; }
+.qc-empty { color:var(--ink-muted);font-size:12px;line-height:1.6;margin-top:8px; }
+.qc-entry-bar { display:flex;align-items:center;gap:14px;padding:8px 18px;background:var(--paper-card);border-bottom:1px solid var(--line-soft);font-size:12px;color:var(--ink-muted);flex-shrink:0; }
+.qc-mode-switch { display:flex;align-items:center;gap:8px;flex-shrink:0; }
+.qc-mode-switch .btn { min-height:40px;padding:6px 14px; }
+.qc-mode-history { margin-left:auto;flex-shrink:0;min-height:40px;padding:6px 14px;white-space:nowrap; }
+.qc-advanced-cost { font-size:12px;line-height:1.6;color:var(--ink-body);padding:8px 0;margin:0; }
+.hw-product-demo-tools > summary { font-size:11px;padding:5px 24px;color:var(--ink-muted);background:var(--paper-inset); }
+@media(max-width:720px) {
+ .ic-quick-stage { padding:14px 14px 28px; }
+ .qc-head { flex-wrap:wrap;gap:8px; }
+ .qc-head h1 { font-size:22px; }
+ .qc-pickers { gap:8px; }
+ .qc-resource-picker { flex-direction:column;align-items:stretch;gap:6px; }
+ .qc-resource-picker img,.qc-picker-empty { width:100%;height:72px;flex-basis:auto; }
+ .qc-picker-copy { gap:3px; }
+ .qc-picker-copy strong { font-size:12px; }
+ .qc-picker-hint { display:none; }
+ .qc-settings { gap:8px; }
+ .qc-settings input,.qc-settings select { min-height:44px;padding:7px 8px; }
+ .qc-run { width:100%; }
+ .qc-results-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:10px; }
+ .qc-entry-bar span { display:none; }
+ .qc-mode-switch .btn { min-height:44px; }
+ .qc-mode-history { min-height:44px; }
+}
+@media(max-width:390px) {
+ .qc-entry-bar { flex-wrap:wrap;gap:6px;padding:6px 10px; }
+ .qc-mode-switch { flex-wrap:wrap;gap:6px; }
+ .qc-mode-switch .btn { padding:6px 9px;min-height:44px;font-size:12px; }
+ .qc-mode-history { margin-left:auto;padding:6px 10px;min-height:44px;font-size:12px; }
+}
+@media(max-width:320px) {
+ .qc-entry-bar { padding:6px 8px;gap:4px; }
+ .qc-mode-switch { gap:4px; }
+ .qc-mode-switch .btn { padding:6px 7px;font-size:11px;min-height:44px; }
+ .qc-mode-history { padding:6px 8px;font-size:11px;min-height:44px; }
+}
+@media(max-width:480px) { .qc-results-grid { grid-template-columns:1fr; } }
+@media(prefers-reduced-motion:reduce) { .qc-picker,.qc-run { transition:none; } }
