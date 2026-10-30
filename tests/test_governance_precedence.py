@@ -259,6 +259,18 @@ class PrecedenceTests(unittest.TestCase):
         self._resolve_first("work", self.wid, "dismissed")
         self.assertEqual(self._state(), ("published", "published"))
 
+    def test_work_changes_do_not_lift_a_thread_report_hold(self):
+        # The thread is paused by its own open reports.  Hiding and
+        # republishing the work must not publish it: only its own dismissal
+        # (or confirmation) ends that hold.
+        self._report_by_all("topic", self.tid)
+        self.assertEqual(self._state(), ("published", "paused"))
+        self._work("pc_admin", "hide")
+        self._work("pc_admin", "publish")
+        self.assertEqual(self._state(), ("published", "paused"))
+        self.assertEqual(self._topic_source(), "report")
+        self.assertFalse(self._thread_public())
+
     def test_dismissing_a_thread_report_restores_a_thread_paused_only_by_reports(self):
         # N5 / MU5: a pure report pause is lifted, and the provenance cleared.
         self._report_by_all("topic", self.tid)
