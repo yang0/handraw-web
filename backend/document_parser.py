@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict
 
+from backend import ai_client
 from backend.config import load_ai_config
 
 logger = logging.getLogger(__name__)
@@ -244,18 +245,6 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
     if truncated:
         clean_raw = clean_raw[:max_input_chars] + "\n\n[正文文本过长，已截断]"
 
-    cfg = load_ai_config()
-    ai_url = (cfg.get("url") or "http://127.0.0.1:3065/v1").rstrip("/") + "/chat/completions"
-    # Never fall back to a literal key: it would end up in the repository.  When
-    # no key is configured the heuristic parser below handles the file.
-    ai_key = cfg.get("key") or ""
-    if not ai_key:
-        logger.info("No AI key configured; using heuristic parsing for '%s'", filename)
-        return fallback_parse_article(clean_raw, filename, fallback_reason="no_key", truncated=truncated)
-    ai_model = cfg.get("model") or "deepseek-v4.1-flash"
-
-    logger.info("Calling local AI service at %s (model: %s) for file '%s'...", ai_url, ai_model, filename)
-
     doc_hint = f"（文件名：{filename}）" if filename else ""
     user_instruction = (
         "你是一个专业的出版级长文排版与章节结构拆分助手。请从给定的文档中提取文章最准确精炼的主标题（title），"
@@ -278,57 +267,52 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
         },
     ]
 
-    payload = {
-        "model": ai_model,
-        "messages": messages,
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-    }
-
-    req = urllib.request.Request(
-        ai_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {ai_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "Handraw-Studio-Parser/1.0",
-        },
+    content, meta = ai_client.chat(
+        messages,
+        temperature=0.1,
+        timeout=35,
+        json_mode=True,
     )
 
+    if not meta.get("ok"):
+        reason = meta.get("reason")
+        if reason == "no_key":
+            logger.info("No AI key configured; using heuristic parsing for '%s'", filename)
+            return fallback_parse_article(clean_raw, filename, fallback_reason="no_key", truncated=truncated)
+        logger.warning("AI parse failed (%s); falling back to heuristic parsing", reason)
+        return fallback_parse_article(clean_raw, filename, fallback_reason="timeout_or_error", truncated=truncated)
+
     try:
-        with urllib.request.urlopen(req, timeout=35) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"]
-            content_clean = content.strip()
-            if content_clean.startswith("```"):
-                content_clean = re.sub(r"^```(?:json)?\s*", "", content_clean)
-                content_clean = re.sub(r"\s*```$", "", content_clean)
+        content_clean = content.strip()
+        if content_clean.startswith("```"):
+            content_clean = re.sub(r"^```(?:json)?\s*", "", content_clean)
+            content_clean = re.sub(r"\s*```$", "", content_clean)
 
-            json_match = re.search(r"\{[\s\S]*\}", content_clean)
-            if json_match:
-                content_clean = json_match.group(0)
+        json_match = re.search(r"\{[\s\S]*\}", content_clean)
+        if json_match:
+            content_clean = json_match.group(0)
 
-            try:
-                parsed = json.loads(content_clean)
-            except Exception:
-                logger.warning("AI parse returned non-JSON content; falling back to heuristic parsing")
-                return fallback_parse_article(clean_raw, filename, fallback_reason="invalid_json", truncated=truncated)
+        try:
+            parsed = json.loads(content_clean)
+        except Exception:
+            logger.warning("AI parse returned non-JSON content; falling back to heuristic parsing")
+            return fallback_parse_article(clean_raw, filename, fallback_reason="invalid_json", truncated=truncated)
 
-            if isinstance(parsed, dict):
-                title = str(parsed.get("title") or "").strip()
-                markdown = str(parsed.get("markdown") or "").strip()
-                if title and markdown:
-                    logger.info("AI parsing succeeded! Extracted title: '%s', Markdown length: %d", title, len(markdown))
-                    res = {"title": title, "markdown": markdown, "aiUsed": True, "fallbackReason": ""}
-                    if truncated:
-                        res["truncated"] = True
-                    return res
-                else:
-                    return fallback_parse_article(clean_raw, filename, fallback_reason="empty", truncated=truncated)
+        if isinstance(parsed, dict):
+            title = str(parsed.get("title") or "").strip()
+            markdown = str(parsed.get("markdown") or "").strip()
+            if title and markdown:
+                logger.info("AI parsing succeeded! Extracted title: '%s', Markdown length: %d", title, len(markdown))
+                res = {"title": title, "markdown": markdown, "aiUsed": True, "fallbackReason": ""}
+                if truncated:
+                    res["truncated"] = True
+                return res
             else:
-                return fallback_parse_article(clean_raw, filename, fallback_reason="invalid_json", truncated=truncated)
+                return fallback_parse_article(clean_raw, filename, fallback_reason="empty", truncated=truncated)
+        else:
+            return fallback_parse_article(clean_raw, filename, fallback_reason="invalid_json", truncated=truncated)
     except Exception as e:
-        logger.warning("AI parse failed (%s); falling back to heuristic parsing", e)
+        logger.warning("AI parse processing failed (%s); falling back to heuristic parsing", e)
         return fallback_parse_article(clean_raw, filename, fallback_reason="timeout_or_error", truncated=truncated)
 
 

@@ -18,6 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from . import ai_client
 from .config import load_ai_config
 from .skill_paths import SKILL_DIR, reference_file
 
@@ -132,33 +133,20 @@ def build_facts(style_code: str, layout_code: str = "", colour: str = "", theme:
 
 
 def _call_model(system: str, user: str, *, timeout: int = 120) -> str:
-    cfg = load_ai_config()
-    base = str(cfg.get("url") or "").rstrip("/")
-    key = str(cfg.get("key") or "")
-    model = str(cfg.get("model") or "")
-    if not base or not key:
-        return ""
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "max_tokens": 1200,
-        "temperature": 0.4,
-    }
-    request = urllib.request.Request(
-        base + "/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-        method="POST",
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    content, meta = ai_client.chat(
+        messages,
+        temperature=0.4,
+        max_tokens=1200,
+        timeout=timeout,
+        json_mode=False,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        return str(data["choices"][0]["message"]["content"]).strip()
-    except Exception:
-        return ""
+    if meta.get("ok"):
+        return content.strip()
+    return ""
 
 
 _SYSTEM = (
