@@ -1461,7 +1461,11 @@
     const role = slotInfo.role === "cover" ? "cover" : "inline";
     const ratio = slotInfo.ratio || (role === "cover" ? "2.35:1" : "4:3");
     const subjectLine = String(slotInfo.subject || "").trim() || "温暖手绘编辑风叙事插画";
-    const extraNote = rec && rec.attachedFileContent && rec.userNoteText ? rec.userNoteText : "";
+    // Only a short steer belongs in a per-card prompt.  userNoteText is the
+    // whole user input for the run, and appending all of it to every card made
+    // each image prompt repeat the entire article.
+    const extraNoteRaw = rec && rec.userNoteText ? String(rec.userNoteText).trim() : "";
+    const extraNote = extraNoteRaw.length > 160 ? extraNoteRaw.slice(0, 160) + "…" : extraNoteRaw;
 
     const lines = [];
     if (role === "cover") {

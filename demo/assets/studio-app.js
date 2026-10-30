@@ -754,18 +754,23 @@
 
   function persistOpenTabs() {
     syncCurrentTabSnapshot();
-    const slimTabs = CS.tabs.map((t) => ({
-      id: t.id,
-      title: t.title,
-      blueprint: t.blueprint,
-      dirty: Boolean(t.dirty),
-      savedId: t.savedId || null,
-      vx: t.vx,
-      vy: t.vy,
-      vk: t.vk,
-      graph: t.graph,
-      quickStart: t.quickStart === true
-    }));
+    // The article workspace tab is created on demand to back the article editor;
+    // it is not a preset the user picked, so persisting it made 📝 文章配图
+    // reappear in the canvas tab strip after any visit to 文章模式.
+    const slimTabs = CS.tabs
+      .filter((t) => t.blueprint !== "article")
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        blueprint: t.blueprint,
+        dirty: Boolean(t.dirty),
+        savedId: t.savedId || null,
+        vx: t.vx,
+        vy: t.vy,
+        vk: t.vk,
+        graph: t.graph,
+        quickStart: t.quickStart === true
+      }));
     writeJsonStorage(OPEN_TABS_KEY, { activeTabId: CS.activeTabId, tabs: slimTabs });
   }
 
@@ -2322,7 +2327,11 @@
 
     const storedOpen = readJsonStorage(OPEN_TABS_KEY, null);
     if (storedOpen && Array.isArray(storedOpen.tabs) && storedOpen.tabs.length > 0) {
-      CS.tabs = storedOpen.tabs.map((t) => {
+      CS.tabs = storedOpen.tabs
+        // Older builds saved the article workspace as a tab; drop it so the
+        // preset that bounced users into 文章模式 does not come back.
+        .filter((t) => t && t.blueprint !== "article")
+        .map((t) => {
         const bp = t.blueprint === "xhs" ? "series" : t.blueprint;
         const cleanTabTitle = String(t.title || "").includes("小红书组图") ? "🗂️ 套图创作" : t.title;
         return {
