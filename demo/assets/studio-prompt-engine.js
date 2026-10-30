@@ -764,10 +764,16 @@
         .filter(Boolean)
     ];
 
-    const userNoteText = textEntries.map((t) => t.text).filter(Boolean).join("\n") || String(cd.inlineTheme || "").trim();
+    // ``userNoteText`` is the short steer a user types ("暖一点", "放在海边").
+    // When the text box holds the article itself — the common case for article
+    // illustration — using it verbatim repeated the whole body in every card's
+    // prompt, so keep only a compact excerpt here.
+    const rawNote = textEntries.map((t) => t.text).filter(Boolean).join("\n") || String(cd.inlineTheme || "").trim();
+    const userNoteText = rawNote.length > 160 ? rawNote.slice(0, 160).replace(/\s+/g, " ").trim() + "…" : rawNote;
     const attachedFileContent = textEntries.map((t) => t.fileContent).filter(Boolean).join("\n\n");
-    const articleSource = attachedFileContent || userNoteText;
-    const combinedText = [userNoteText, attachedFileContent].filter(Boolean).join("\n\n");
+    // These two feed article parsing, which needs the whole body.
+    const articleSource = attachedFileContent || rawNote;
+    const combinedText = [rawNote, attachedFileContent].filter(Boolean).join("\n\n");
     const attachedFileName = textEntries.find((t) => t.fileName)?.fileName || "";
 
     return {
@@ -1461,11 +1467,14 @@
     const role = slotInfo.role === "cover" ? "cover" : "inline";
     const ratio = slotInfo.ratio || (role === "cover" ? "2.35:1" : "4:3");
     const subjectLine = String(slotInfo.subject || "").trim() || "温暖手绘编辑风叙事插画";
-    // Only a short steer belongs in a per-card prompt.  userNoteText is the
-    // whole user input for the run, and appending all of it to every card made
-    // each image prompt repeat the entire article.
-    const extraNoteRaw = rec && rec.userNoteText ? String(rec.userNoteText).trim() : "";
-    const extraNote = extraNoteRaw.length > 160 ? extraNoteRaw.slice(0, 160) + "…" : extraNoteRaw;
+    // Only a short steer belongs in a per-card prompt.  The recipe's note fields
+    // hold whatever text the user supplied, which for article illustration is
+    // usually the article itself; appending that made every card repeat the whole
+    // body.  A steer is one short line, so anything longer or multi-line is not
+    // a steer and is dropped.
+    const noteText = rec ? String(rec.userNoteText || "").replace(/\s+/g, " ").trim() : "";
+    const looksLikeBody = noteText.length > 100 || /\n/.test(String(rec?.userNoteText || ""));
+    const extraNote = !noteText || looksLikeBody ? "" : noteText;
 
     const lines = [];
     if (role === "cover") {
@@ -1623,6 +1632,31 @@
         status: withSampleImages ? "done" : "idle"
       });
     });
+
+    // Final guard: whatever produced these prompts, a card must not carry the
+    // whole article.  Every card is inspected here because several call sites
+    // build plans and each one used to append the full body as 补充创作要求.
+    const bodyFingerprint = String(effectiveMd || "")
+      .replace(/\s+/g, "")
+      .slice(0, 40);
+    for (const card of cards) {
+      if (!card || typeof card.prompt !== "string") continue;
+      const marker = "【补充创作要求】：";
+      const at = card.prompt.indexOf(marker);
+      if (at < 0) continue;
+      const head = card.prompt.slice(0, at + marker.length);
+      const tail = card.prompt.slice(at + marker.length);
+      // Cut the steer at the first newline group; a real steer is one short line.
+      const firstBreak = tail.search(/\n\s*\n|【锁定手绘画风|【构图与图型参考/);
+      let steer = (firstBreak >= 0 ? tail.slice(0, firstBreak) : tail).replace(/\s+/g, " ").trim();
+      if (steer.length > 120) steer = steer.slice(0, 120) + "…";
+      const rest = firstBreak >= 0 ? tail.slice(firstBreak) : "";
+      card.prompt = head + steer + rest;
+      if (bodyFingerprint && card.prompt.replace(/\s+/g, "").includes(bodyFingerprint)) {
+        // Still holds the article body; drop the steer entirely.
+        card.prompt = head + rest;
+      }
+    }
 
     return {
       articleTitle,

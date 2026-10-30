@@ -4143,13 +4143,18 @@
       const mdText =
         rec.articleSource ||
         "# 视觉笔记创作指南\n\n导语：用清晰的结构与手绘温度表达复杂观点。\n\n## 一、建立视觉层级\n\n## 二、统一全篇色彩与留白";
+      // userNoteText here is the whole text the user attached or typed, so
+      // appending it verbatim to every slot repeated the entire article in each
+      // image prompt.  Keep only a short steer.
+      const noteSteer = String(rec.userNoteText || "").trim();
+      const shortNote = noteSteer.length > 120 ? noteSteer.slice(0, 120) + "…" : noteSteer;
       const slots = E.buildArticleSlotsSpec(mdText, {
         coverRatio: cd.coverRatio || "2.35:1",
         inlineRatio: cd.inlineRatio || "4:3",
         includeCover: cd.includeCover !== false
       }).map((s) =>
-        rec.attachedFileContent && rec.userNoteText
-          ? { ...s, theme: `${s.theme}（补充要求：${rec.userNoteText}）` }
+        rec.attachedFileContent && shortNote
+          ? { ...s, theme: `${s.theme}（补充要求：${shortNote}）` }
           : s
       );
       return {
