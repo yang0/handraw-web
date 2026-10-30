@@ -1,0 +1,537 @@
+/* interaction.css — site-wide interaction layer (2026-10-30).
+   Spec: docs/architecture/interaction-design-20261030.md
+   Loaded LAST on index/forum/studio/admin so it wins on order, not on
+   !important; !important is used only where an inline style must be beaten.
+   Uses the theme.css tokens only (warm paper, ink, vermilion, serif). */
+
+:root {
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+  --frame-mat: var(--paper-inset, #efeae0);
+  --frame-line: inset 0 0 0 1px var(--line-soft, #e3dcd0);
+  --stage-max-h: min(72vh, 720px);
+  --tap-min: 40px;
+}
+
+/* ---------- 1. Feedback: focus, press, hover (pointer devices only) ---------- */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: 2px;
+}
+.btn:active,
+.hw-pill:active,
+.hw-seg-btn:active,
+.hw-discovery__btn:active {
+  transform: translateY(1px);
+  transition-duration: 80ms;
+}
+
+/* ---------- 2. Image containers ----------
+   Card frame  : fixed 1:1, contain, paper mat  -> rows line up, nothing cropped
+   Stage       : the picture's own ratio, height-capped, contain
+   Thumb       : 1:1, contain (a thumb is for choosing; a crop chooses wrong)
+   Exception   : avatars and <=40px style/layout chips may stay `cover`. */
+
+/* 2.1 Home "作品与做法" — the ragged-row bug (572px vs 429px cards). */
+.hw-discovery__gallery { gap: var(--sp-5); align-items: start; }
+.hw-discovery__media {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--frame-mat);
+  box-shadow: var(--frame-line);
+  transition: box-shadow 0.18s ease;
+}
+.hw-discovery__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: opacity 0.2s ease;
+}
+/* Zooming a contained picture pushes its edges out of the frame — that is a crop. */
+.hw-discovery__card:hover .hw-discovery__media img { transform: none; }
+
+.hw-discovery__card .hw-discovery__meta {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-3) 2px 0;
+}
+.hw-discovery__card .hw-discovery__title {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s ease;
+}
+.hw-discovery__card .hw-discovery__author {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Ids and "查看做法 →" used to run together ("SC-001查看做法"). */
+.hw-discovery__card .hw-discovery__tags { gap: var(--sp-2); margin-top: 2px; }
+.hw-discovery__card .hw-discovery__tag { color: var(--ink-faint); font-size: 11.5px; }
+.hw-discovery__card .hw-discovery__more { margin-top: var(--sp-1); font-size: 12.5px; }
+@media (hover: hover) {
+  .hw-discovery__card:hover .hw-discovery__media {
+    box-shadow: inset 0 0 0 1px var(--vermilion-border), var(--shadow-md);
+  }
+  .hw-discovery__card:hover .hw-discovery__title { color: var(--vermilion); }
+}
+
+/* Sections: "按用途开始" had 0px before "最新资源". */
+.hw-discovery__tasks,
+.hw-discovery__section { margin-bottom: var(--sp-7); }
+.hw-discovery__tasks .hw-discovery__heading,
+.hw-discovery__section .hw-discovery__heading {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  color: var(--ink-strong);
+}
+/* 2.2 Home "最新资源" and the works browser use the same card frame. */
+.hw-discovery__res-item img {
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  background: var(--frame-mat);
+  box-shadow: var(--frame-line);
+  border-radius: var(--radius-sm);
+}
+.hw-discovery__res-name { margin-top: var(--sp-1); }
+.hw-works-browser .hw-wb-media { aspect-ratio: 1 / 1; box-shadow: var(--frame-line); }
+
+/* 2.3 Forum list thumbnails: 186x126 `cover` kept only a band of a portrait. */
+.forum-card-split { grid-template-columns: minmax(0, 1fr) 132px; gap: var(--sp-5); }
+.forum-split-thumb,
+.forum-media-item {
+  width: auto;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  background: var(--frame-mat);
+}
+.forum-split-thumb { width: 132px; }
+.forum-split-thumb img,
+.forum-media-item img { object-fit: contain; }
+.forum-topic-card:hover .forum-split-thumb img,
+.forum-media-item:hover img { transform: none; }
+.forum-media-strip.cols-2 { grid-template-columns: repeat(2, minmax(0, 200px)); }
+.forum-media-strip { grid-template-columns: repeat(3, minmax(0, 200px)); }
+.forum-media-strip.cols-4 { grid-template-columns: repeat(4, minmax(0, 170px)); }
+
+/* 2.4 Stages: own ratio, height-capped. */
+.fwp-main { max-height: var(--stage-max-h); width: auto; max-width: 100%; margin: 0 auto; }
+.hw-detail-stage img.main-stage-img,
+.hw-stage-box img.main-stage-img { max-height: var(--stage-max-h); }
+/* Resource detail hero keeps a stable 4:3 stage so switching pictures does not
+   jump the layout, but the picture inside is contained, not cropped. */
+.hrp-hero-img { object-fit: contain; }
+.hrp-hero-main { background: var(--frame-mat); }
+
+/* 2.5 Thumbs: 1:1, contained. */
+.fwp-thumb img,
+.hrp-thumb-img,
+.hw-thumb-strip img,
+.hw-prolific-thumbs img,
+.hw-new-card-media img,
+.smart-embed-card img,
+.hw-intext-card-thumb,
+.curation-thumb,
+.adm-thumb {
+  object-fit: contain;
+  background: var(--frame-mat);
+}
+.hrp-sib-img { height: auto; aspect-ratio: 1 / 1; object-fit: contain; background: var(--frame-mat); }
+.hrp-card-media { aspect-ratio: 1 / 1; background: var(--frame-mat); }
+.hrp-card-img { object-fit: contain; }
+.hw-new-card-media:hover img,
+.hw-card:hover .hw-new-card-media img { transform: none; }
+
+/* ---------- 3. States ---------- */
+.qc-empty,
+.hw-empty-state {
+  padding: var(--sp-6) var(--sp-4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  text-align: center;
+  color: var(--ink-muted);
+  background: var(--paper-card);
+}
+.hrp-error-inline,
+.curation-err:not(:empty) {
+  color: var(--vermilion-hover);
+}
+.curation-err:not(:empty) {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--vermilion-wash);
+  border: 1px solid var(--vermilion-border);
+  border-radius: var(--radius-sm);
+}
+/* ---------- 4. Global header ----------
+   account-tools.js appends .hw-account-quicklinks AFTER .hw-topbar-inner,
+   which gave "使用指南 / 消息" a 25px row of its own. Flatten the inner box so
+   the quick links can sit in the same row as search + avatar. */
+.hw-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 18px;
+  row-gap: var(--sp-2);
+  padding: 10px max(24px, calc((100% - 1520px) / 2 + 24px));
+}
+.hw-topbar > .hw-topbar-inner { display: contents; }
+.hw-topbar .hw-brand { order: 1; }
+.hw-topbar .hw-nav-links { order: 2; }
+.hw-topbar .hw-account-quicklinks { order: 3; margin-left: auto; padding: 0; gap: var(--sp-4); font-size: 13px; }
+.hw-topbar .hw-topbar-right { order: 4; margin-left: 0; }
+.hw-account-quicklinks a { color: var(--ink-muted); padding: var(--sp-1) 0; }
+.hw-account-quicklinks a:hover { color: var(--vermilion); }
+
+/* ---------- 5. Forum list ---------- */
+/* An inline display:flex beat theme.css's "hide at <=1120px", so the right
+   column wrapped under the stream on tablets. */
+@media (max-width: 1120px) and (min-width: 761px) {
+  .forum-aside-right { display: none !important; }
+}
+/* `1fr` has an auto minimum, so a nowrap strip widened the whole page. */
+@media (max-width: 760px) {
+  .forum-layout { grid-template-columns: minmax(0, 1fr); }
+  .forum-layout > * { min-width: 0; }
+}
+.forum-topic-card { padding: var(--sp-4) var(--sp-5); }
+@media (hover: hover) {
+  .forum-topic-card:hover h2 { color: var(--vermilion); }
+}
+
+/* ---------- 6. Topic page and work receipt ---------- */
+/* The work post sat in three nested boxes (article card > grey rounded body >
+   stage). Drop the middle one when it only wraps the work post. */
+.forum-article-body:has(> .fwp) {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.fwp-gallery-stage { background: var(--frame-mat); border-color: var(--line-soft); }
+/* "全部画风 →全部图型 →" had no gap between the two links. */
+.fwp-asset-links { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin: 0 0 var(--sp-2); font-size: 13px; }
+.fwp-asset-links a { color: var(--vermilion); display: inline-flex; align-items: center; min-height: 32px; }
+.fwp-asset-links a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.fwp-asset-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--sp-2); }
+.fwp-asset { width: auto; }
+.fwp-assets-title,
+.fwp-notes-title { font-family: var(--font-serif); color: var(--ink-strong); font-size: 15px; }
+
+/* Work receipt: the article was 1040px centred while the crumb, discussion and
+   comments ran the full 1392px — one column for the whole page. */
+.hrp-page:has(> .hrp-work-thread) > * {
+  max-width: 1040px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.hrp-page:has(> .hrp-work-thread) > .hrp-crumb { margin-bottom: var(--sp-4); }
+.hrp-h2 { font-family: var(--font-serif); }
+
+/* ---------- 7. Curation (共创投稿) ---------- */
+.curation-page { max-width: 760px; }
+.curation-form { max-width: none; }
+.curation-h1 { font-family: var(--font-serif); letter-spacing: 0; }
+.curation-field input,
+.curation-field textarea,
+.curation-field select { background: var(--paper-card); }
+.curation-field input[type=file] { padding: 7px 10px; background: var(--paper-card); cursor: pointer; }
+.curation-field input[type=file]::file-selector-button {
+  margin-right: var(--sp-3);
+  min-height: 28px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--paper-bg);
+  color: var(--ink-body);
+  font: inherit;
+  cursor: pointer;
+}
+.curation-item { background: var(--paper-card); border-color: var(--line-soft); }
+/* A destructive secondary action should not look like the primary one. */
+.curation-page .curation-x-item {
+  justify-self: end;
+  min-height: 36px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+.curation-page .curation-x-item:hover { color: var(--vermilion); border-color: var(--vermilion-border); background: var(--vermilion-wash); }
+.curation-page .curation-add { border-style: dashed; background: transparent; color: var(--ink-body); }
+.curation-page .curation-add:hover { border-color: var(--vermilion); color: var(--vermilion); }
+/* ---------- 8. Article editor (参照公众号编辑器) ----------
+   --ic-canvas-bg / --ic-ink / --ic-paper were never defined, so the editor fell
+   back to cool grey #f6f7f9. Map them onto the studio tokens (light + dark). */
+.ic-wechat-editor-root {
+  --ic-canvas-bg: var(--ic-bg);
+  --ic-paper: var(--ic-bg);
+  --ic-ink: var(--ic-text);
+}
+.ic-wechat-scroll-area { background: var(--ic-bg); padding: var(--sp-5) var(--sp-5) var(--sp-8); }
+.ic-wechat-paper {
+  background: var(--ic-panel-solid);
+  border: 1px solid var(--ic-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  padding: 40px 56px 48px;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+/* Title, author and body sit on the paper without boxes, as in the WeChat
+   editor; a later override had boxed all three. */
+.ic-wechat-paper .ic-wechat-title-input,
+.ic-wechat-paper .ic-wechat-author-input,
+.ic-wechat-paper .ic-wechat-textarea {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding-left: 0;
+  padding-right: 0;
+  box-shadow: none;
+}
+.ic-wechat-paper .ic-wechat-title-input {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 0 64px 0 0;
+  margin: 0;
+}
+.ic-wechat-title-count { top: 50%; bottom: auto; transform: translateY(-50%); }
+.ic-wechat-paper .ic-wechat-author-input { font-size: 14px; color: var(--ic-muted); margin: var(--sp-2) 0 var(--sp-4); }
+.ic-wechat-paper .ic-wechat-textarea { font-size: 16px; line-height: 1.85; resize: none; overflow: hidden; }
+.ic-wechat-title-input:focus,
+.ic-wechat-author-input:focus,
+.ic-wechat-textarea:focus { outline: none; }
+.ic-wechat-title-box:focus-within { box-shadow: 0 2px 0 0 var(--vermilion-border); }
+
+/* Illustration cards: same column as the paper (was 1152px vs 820px). */
+#pv-notion-article-sheet { max-width: 820px; width: 100%; margin: var(--sp-4) auto 0; }
+/* A 4:3 illustration was shown in a 5.2:1 strip (max-height 216px + cover). */
+.ic-plan-slot-img-box {
+  max-height: none;
+  display: flex;
+  justify-content: center;
+  background: var(--ic-surface);
+}
+.ic-plan-slot-img-box img {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+}
+/* ---------- 9. Tablet <=1080px ---------- */
+@media (max-width: 1080px) {
+  .hw-discovery__gallery { gap: var(--sp-4); }
+  /* Editor: at <=1000px the history list was squeezed to a 120px column (one
+     character of title). Put it above the writing column as a strip. */
+  .ic-wechat-body { flex-direction: column; flex-wrap: nowrap; overflow: hidden; }
+  .ic-wechat-body .ic-pv-outline {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: none;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    overflow: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--ic-border);
+  }
+  .ic-wechat-body .ic-pv-outline > div:first-child { flex: 0 0 auto; gap: var(--sp-2); }
+  .ic-wechat-body .ic-hist-art-list {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: row;
+    gap: var(--sp-2);
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-height: none;
+    scrollbar-width: thin;
+  }
+  .ic-wechat-body .ic-hist-art-item { flex: 0 0 200px; margin: 0; }
+  .ic-wechat-body .ic-hist-art-foot { flex: 0 0 auto; padding: 0; border: 0; margin: 0; }
+  .ic-wechat-scroll-area { flex: 1 1 auto; min-height: 0; width: 100%; }
+}
+
+/* ---------- 10. Phone <=720px ---------- */
+@media (max-width: 720px) {
+  /* Header: 172px -> two rows. Row 1 brand + search + avatar, row 2 nav +
+     quick links. theme.css targeted `.hw-nav`, a class that does not exist. */
+  .hw-topbar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "brand right right" "nav nav links";
+    align-items: center;
+    padding: var(--sp-2) var(--sp-3) 0;
+    column-gap: var(--sp-3);
+    row-gap: 2px;
+  }
+  .hw-topbar .hw-brand { grid-area: brand; margin: 0; }
+  .hw-topbar .hw-brand-title { font-size: 16px; }
+  .hw-topbar .hw-topbar-right { grid-area: right; min-width: 0; flex-wrap: nowrap; gap: var(--sp-2); justify-content: flex-end; margin: 0; }
+  .hw-topbar .hw-global-search { flex: 1 1 auto; min-width: 0; }
+  .hw-topbar .hw-global-search input,
+  .hw-topbar .hw-global-search input:focus { width: 100%; min-width: 0; min-height: 36px; }
+  .hw-topbar .hw-nav-links {
+    grid-area: nav;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-left: calc(-1 * var(--sp-2));
+  }
+  .hw-topbar .hw-nav-links::-webkit-scrollbar { display: none; }
+  .hw-topbar .hw-nav-item { flex: 0 0 auto; white-space: nowrap; padding: 0 10px; min-height: var(--tap-min); }
+  .hw-topbar .hw-account-quicklinks { grid-area: links; margin: 0; gap: var(--sp-3); }
+  .hw-account-quicklinks a { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+  /* Announcement: max two lines. */
+  #hw-announcement-mount > div { padding: 6px var(--sp-3) !important; font-size: 12px !important; gap: var(--sp-2) !important; }
+  #hw-announcement-mount > div > span:first-child {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Home: two columns, so six works are three rows instead of a 3000px stack. */
+  .hw-discovery__gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4) var(--sp-3); }
+  .hw-discovery__card .hw-discovery__title { font-size: 14px; }
+  .hw-discovery__card .hw-discovery__tags { display: none; }
+  .hw-discovery__tasks,
+  .hw-discovery__section { margin-bottom: var(--sp-6); }
+  /* Catalog: the 8/5/3-column density switch means nothing at two columns. */
+  .hw-controls-right:has(#catalog-density) { display: none; }
+  /* Two-column cards are ~150px wide; "看作品 (1)" + "去创作 ↗" need ~164px
+     and the second button ran off the card. Stack them full-width. */
+  .hw-waterfall .hw-card-footer { flex-wrap: wrap; gap: 6px; }
+  .hw-waterfall .hw-card-footer > .btn { flex: 1 1 100%; justify-content: center; min-height: 32px; }
+
+  /* Forum list: the 450px sidebar sat above every topic. Make it a strip. */
+  .forum-layout > aside.forum-side-card {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: var(--sp-2);
+    padding: var(--sp-2);
+    align-items: center;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .forum-layout > aside.forum-side-card::-webkit-scrollbar { display: none; }
+  .forum-layout > aside.forum-side-card > div:first-child,
+  .forum-layout > aside.forum-side-card #forum-moderators-panel { display: none; }
+  .forum-layout > aside.forum-side-card .forum-cat-btn {
+    flex: 0 0 auto;
+    width: auto;
+    margin: 0;
+    gap: var(--sp-2);
+    min-height: var(--tap-min);
+    white-space: nowrap;
+  }
+  /* inline style: margin:12px 0; padding-top:12px; border-top */
+  .forum-layout > aside.forum-side-card > div:last-child { flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-2); margin: 0 !important; padding: 0 0 0 var(--sp-2) !important; border-top: 0 !important; border-left: 1px solid var(--line-soft); }
+  .forum-layout > aside.forum-side-card > div:last-child > div:first-child { display: none; }
+  .forum-layout > aside.forum-side-card .hw-pills-row { flex-wrap: nowrap; padding: 0; }
+  .forum-layout > aside.forum-side-card .hw-pill { min-height: 36px; }
+  .forum-layout div:has(> .hw-segmented) { min-width: 0; max-width: 100%; flex: 1 1 100%; }
+  .forum-layout .hw-segmented { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+  .forum-layout .hw-seg-btn { flex: 0 0 auto; white-space: nowrap; min-height: 36px; }
+  #forum-search-input { width: 100%; min-width: 0 !important; }
+  .forum-topic-card { padding: var(--sp-3) var(--sp-4); }
+  /* Keep the picture beside the text instead of a 170px full-width crop. */
+  .forum-card-split { grid-template-columns: minmax(0, 1fr) 104px; gap: var(--sp-3); align-items: start; }
+  .forum-split-thumb { width: 104px; height: auto; }
+  .forum-media-strip,
+  .forum-media-strip.cols-2,
+  .forum-media-strip.cols-4 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+
+  /* Topic page and work receipt: 40px tap targets, even gaps. */
+  .forum-thread-article { padding: var(--sp-4); }
+  .forum-thread-article .btn,
+  .hw-detail-page .btn,
+  .hrp .btn,
+  .fwp-copy,
+  .fwp-fork { min-height: var(--tap-min); display: inline-flex; align-items: center; }
+  .fwp-asset-list { grid-template-columns: 1fr; }
+  .hrp-thread-link { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+
+  /* Curation */
+  .curation-page { padding: 0 var(--sp-3); }
+
+  /* Editor: one-row scrolling toolbar, compact history strip, two-row bar. */
+  /* product-refresh.css fixed these at 48px / 60px; wrapped rows spilled over
+     the history strip and below the screen. */
+  .ic-wechat-topbar { height: auto; flex-wrap: wrap; row-gap: 6px; padding: 6px var(--sp-2); }
+  .ic-wechat-bottombar { height: auto; min-height: 0; }
+  .ic-wechat-topbar > div:nth-child(2) { order: 3; flex: 1 1 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .ic-wechat-topbar > div:nth-child(2)::-webkit-scrollbar { display: none; }
+  .ic-wechat-topbar > div:nth-child(3) { margin-left: auto; }
+  .ic-wechat-topbar > div:first-child > span { display: none !important; } /* inline display:flex */
+  .ic-wechat-topbar > div:first-child,
+  .ic-wechat-topbar > div:nth-child(3) { gap: 6px; }
+  .ic-wechat-tools-group { flex-wrap: nowrap; }
+  .ic-wechat-tool-btn { flex: 0 0 auto; min-width: 36px; min-height: 36px; white-space: nowrap; }
+  .ic-wechat-body .ic-pv-outline { padding: 6px var(--sp-2); gap: var(--sp-2); }
+  .ic-wechat-body .ic-pv-outline > div:first-child > span { display: none; }
+  .ic-wechat-body .ic-hist-art-item { flex-basis: 168px; }
+  .ic-wechat-body .ic-hist-art-foot { display: none; }
+  .ic-wechat-scroll-area { padding: var(--sp-3) var(--sp-2) var(--sp-6); }
+  .ic-wechat-paper { padding: var(--sp-5) var(--sp-4) var(--sp-6); }
+  .ic-wechat-paper .ic-wechat-title-input { font-size: 20px; }
+  .ic-wechat-bottombar { padding: 6px var(--sp-2); gap: 6px; }
+  .ic-wechat-bottombar-left { flex: 1 1 100%; min-width: 0; gap: var(--sp-3); overflow-x: auto; scrollbar-width: none; }
+  .ic-wechat-bottombar-left::-webkit-scrollbar { display: none; }
+  .ic-wechat-bottom-select-group { flex-wrap: nowrap; }
+  .ic-wechat-bottom-select-group span { white-space: nowrap; }
+  .ic-wechat-bottombar-right { flex: 1 1 100%; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 6px; }
+  .ic-wechat-bottombar-right .btn { justify-content: center; min-height: var(--tap-min); padding-left: 6px !important; padding-right: 6px !important; }
+}
+
+/* ---------- 11. Admin <=980px ----------
+   The sidebar stacked to 574px on a phone before any content. Same treatment
+   as the forum: the module list becomes one scrolling strip. */
+@media (max-width: 980px) {
+  .admin-sidebar { padding: var(--sp-3); gap: var(--sp-2); }
+  .admin-nav {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: 0;
+  }
+  .admin-nav::-webkit-scrollbar { display: none; }
+  .admin-nav-btn { flex: 0 0 auto; width: auto; white-space: nowrap; min-height: var(--tap-min); margin: 0; }
+  .admin-sidebar-footer { margin-top: 0; padding-top: var(--sp-2); }
+  .admin-channel-links { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+  .admin-channel-link { flex: 0 0 auto; white-space: nowrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hw-discovery__media,
+  .hw-discovery__media img,
+  .hw-discovery__card .hw-discovery__title { transition: none; }
+}
