@@ -30,14 +30,19 @@
   border: 1px solid var(--fwp-border);
   border-radius: 6px;
   overflow: hidden;
+  /* Cap the height only; the image keeps its own aspect ratio so a square or
+     portrait work is not forced into a 4:3 letterbox with empty bands. */
+  width: 100%;
 }
 
 .fwp-main {
   display: block;
-  max-width: 100%;
+  width: 100%;
   height: auto;
-  object-fit: contain;
   max-height: 640px;
+  /* 'contain' keeps the whole artwork visible; because the stage now sizes to
+     the image, there are no empty bands to hide. */
+  object-fit: contain;
 }
 
 .fwp-thumbs {
