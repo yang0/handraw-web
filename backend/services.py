@@ -3003,7 +3003,16 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
         cleaned = raw_prompt
         if injected_notes:
             cleaned += "\n\n" + "\n".join(injected_notes)
-        final_prompt = f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
+        # A caller that already ran the hand-drawn style Skill hands over a
+        # finished prompt: it names the style, the layout and the colour and
+        # carries the layout's own composition rules.  Wrapping that in the
+        # website's generic envelope would discard the layout requirements, so
+        # the prompt is forwarded as written.
+        from_skill = bool(body.get("promptFromSkill"))
+        if from_skill:
+            final_prompt = cleaned
+        else:
+            final_prompt = f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
 
         tx.execute(
             """

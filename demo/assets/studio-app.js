@@ -206,6 +206,8 @@
     CS.activeTabId = null;
     CS.activeArticleId = null;
     CS.activePlanNodeId = null;
+    CS.articleEditorDraft = null;
+    CS.articleEditorFlush = null;
     CS.graph = { blueprint: "single", nodes: [], edges: [], selectedIds: [] };
     CS.selectedEdgeId = null;
     CS.selectedEdgePt = null;
@@ -280,7 +282,7 @@
     if (billable <= 0) return true;
     const perImage = Math.max(0, Number(CS.serverCfg.creditPerImage || 0));
     const total = billable * perImage;
-    const text = `本次预计消耗 ${billable} 张付费额度${perImage ? `，约 ${total} 积分` : ""}。生成失败会自动退还，是否继续？`;
+    const text = `本次预计消耗 ${billable} 张付费额度${perImage ? `，约 ${total} 积分` : ""}。任务与退款以服务端确认为准，是否继续？`;
     return typeof window.confirm === "function" ? window.confirm(text) : true;
   }
 
@@ -761,7 +763,8 @@
       vx: t.vx,
       vy: t.vy,
       vk: t.vk,
-      graph: t.graph
+      graph: t.graph,
+      quickStart: t.quickStart === true
     }));
     writeJsonStorage(OPEN_TABS_KEY, { activeTabId: CS.activeTabId, tabs: slimTabs });
   }
@@ -801,6 +804,112 @@
     return tab;
   }
 
+  function isArticleBlueprint(graph) {
+    return String(graph?.blueprint || "") === "article";
+  }
+
+  function isArticleGraph(graph) {
+    if (!graph) return false;
+    if (isArticleBlueprint(graph)) return true;
+    const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+    return nodes.some((n) =>
+      n.type === "article_plan" ||
+      n.type === "article" ||
+      (n.type === "output_control" && n.data?.mode === "article-illust")
+    );
+  }
+
+  function isArticleTab(tab) {
+    if (!tab) return false;
+    return isArticleGraph(tab.id === CS.activeTabId ? CS.graph : tab.graph);
+  }
+
+  function currentCacheScopeKey() {
+    try {
+      return String(typeof activeCacheScope !== "undefined" && activeCacheScope ? activeCacheScope : "");
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function findArticleWorkspaceTab() {
+    return CS.tabs.find((t) => isArticleTab(t)) || null;
+  }
+
+  function ensureArticleWorkspace() {
+    if (isArticleGraph(CS.graph)) {
+      return CS.tabs.find((t) => t.id === CS.activeTabId) || null;
+    }
+    let target = findArticleWorkspaceTab();
+    if (!target) {
+      const g = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, { withPresetAssets: false });
+      // Created on demand only; it is not offered as a preset tab any more.
+      target = createWorkflowTab({ title: "📝 文章配图", blueprint: "article", graph: g, makeActive: false });
+    }
+    activateWorkflowTab(target.id);
+    return target;
+  }
+
+  function pickReturnCanvasTab(excludeId) {
+    // Existing non-article tab other than the current article tab.
+    const candidates = CS.tabs.filter((t) => t.id !== excludeId && !isArticleTab(t));
+    if (candidates.length) return candidates[candidates.length - 1].id;
+    return null;
+  }
+
+  function readScopedReturnTab() {
+    const rec = CS.articleReturnTab;
+    if (!rec || typeof rec !== "object") return null;
+    if (rec.scope !== currentCacheScopeKey()) return null;
+    const tab = CS.tabs.find((t) => t.id === rec.id);
+    return tab && !isArticleTab(tab) ? tab.id : null;
+  }
+
+  function writeScopedReturnTab(id) {
+    if (id && CS.tabs.some((t) => t.id === id && !isArticleTab(t))) {
+      CS.articleReturnTab = { scope: currentCacheScopeKey(), id };
+    } else {
+      delete CS.articleReturnTab;
+    }
+  }
+
+  function switchIntoArticleMode() {
+    syncAllTabsArticlesIntoStore();
+    const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
+    if (cur && !isArticleTab(cur)) {
+      writeScopedReturnTab(cur.id);
+    } else if (!readScopedReturnTab()) {
+      writeScopedReturnTab(pickReturnCanvasTab(CS.activeTabId));
+    }
+    ensureArticleWorkspace();
+    ensureMyArticlesInitialized();
+
+    if (CS.stageView !== "preview" || CS.articleSubView !== "editor" || !CS.articleEditorDraft) {
+      const targetId = CS.activeArticleId || null;
+      openUnifiedArticleEditor(targetId, { createNew: !targetId, renderNow: false });
+    } else {
+      CS.stageView = "preview";
+      CS.articleSubView = "editor";
+    }
+  }
+
+  function switchToCanvasFromArticle() {
+    const remembered = readScopedReturnTab();
+    let targetId = remembered;
+    if (!targetId) {
+      targetId = pickReturnCanvasTab(CS.activeTabId);
+    }
+    if (!targetId) {
+      // No non-article return tab exists: activate a clean quick graph so the
+      // article graph is not left displayed on canvas. The article original
+      // graph is retained in its own tab.
+      ensureQuickTab();
+      targetId = CS.activeTabId;
+    }
+    activateWorkflowTab(targetId, { switchToCanvas: true });
+    delete CS.articleReturnTab;
+  }
+
   function activateWorkflowTab(tabId, { autoFit = false, switchToCanvas = false } = {}) {
     if (CS.activeTabId) {
       syncCurrentTabSnapshot();
@@ -815,6 +924,10 @@
     }
     const target = CS.tabs.find((t) => t.id === tabId);
     if (!target) return;
+    const targetIsArticle = isArticleGraph(normalizeGraphSchema(target.graph));
+    if (switchToCanvas && targetIsArticle && !isArticleGraph(CS.graph) && CS.activeTabId) {
+      writeScopedReturnTab(CS.activeTabId);
+    }
     CS.activeTabId = target.id;
     CS.graph = normalizeGraphSchema(target.graph);
     CS.vx = target.vx ?? 290;
@@ -824,10 +937,21 @@
     CS.redoStack = target.redoStack || [];
     CS.selectedEdgeId = null;
     CS.arrangeUndoSnapshot = null;
-    if (CS.graph.blueprint === "article") {
+    if (isArticleGraph(CS.graph)) {
       CS.previewTab = "article";
     } else if (CS.graph.blueprint === "series" || CS.graph.blueprint === "xhs") {
       CS.previewTab = "series";
+    }
+    if (switchToCanvas && targetIsArticle) {
+      CS.stageView = "preview";
+      CS.articleSubView = "portal";
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.delete("view");
+        u.searchParams.delete("tab");
+        u.searchParams.set("entry", "article");
+        window.history.replaceState(null, "", u.pathname + u.search);
+      } catch (_) {}
     }
     if (DOM.world) {
       fullRenderCanvas();
@@ -965,7 +1089,8 @@
       graph: normGraph,
       savedId,
       makeActive: true,
-      autoFit: true
+      autoFit: true,
+      switchToCanvas: true
     });
     toast(`🎉 已导入并打开工作流《${title}》！`);
   }
@@ -1187,7 +1312,8 @@
           graph: wf.graph,
           savedId: wf.id,
           makeActive: true,
-          autoFit: true
+          autoFit: true,
+          switchToCanvas: true
         });
         toast(`✨ 已打开工作流《${wf.title}》`);
       };
@@ -1548,9 +1674,9 @@
     );
 
     const titles = {
-      style1: sd.fusion ? "🎭 选择角色画风（372 款手绘视觉词典）" : "🎨 选择画风（372 款手绘视觉词典）",
+      style1: sd.fusion ? `🎭 选择角色画风（${Catalog.styles.length} 款）` : `🎨 选择画风（${Catalog.styles.length} 款）`,
       style2: "🌄 选择场景画风（跨媒介画面融合）",
-      layout: "📐 选择图型（171 款版式与构图骨架）",
+      layout: `📐 选择图型（${Catalog.layouts.length} 款）`,
       colors: "🌈 选择主题色（支持多选叠加色卡）",
       tones: "💡 选择影调（支持多选明暗与光效）"
     };
@@ -1592,6 +1718,7 @@
 
         searchInp.oninput = () => {
           searchQuery = searchInp.value.trim().toLowerCase();
+          renderGroups();
           renderGrid();
         };
 
@@ -1656,15 +1783,12 @@
         }
 
         function getGroupTabs() {
-          if (field === "style1" || field === "style2") {
-            const s = new Set();
-            Catalog.styles.forEach((x) => { if (x.group) s.add(x.group); });
-            return [{ key: "ALL", label: `全部画风 (${Catalog.styles.length})` }, { key: "FAV", label: "⭐ 收藏" }, ...[...s].slice(0, 11).map((g) => ({ key: g, label: g }))];
-          }
-          if (field === "layout") {
-            const s = new Set();
-            Catalog.layouts.forEach((x) => { if (x.group) s.add(x.group); });
-            return [{ key: "ALL", label: `全部图型 (${Catalog.layouts.length})` }, { key: "FAV", label: "⭐ 收藏" }, ...[...s].slice(0, 11).map((g) => ({ key: g, label: g }))];
+          if (["style1", "style2", "layout"].includes(field)) {
+            const kind = field === "layout" ? "layout" : "style";
+            const pool = kind === "style" ? Catalog.styles : Catalog.layouts;
+            const groups = [{ key: "ALL", label: kind === "style" ? "全部画风" : "全部图型" }, { key: "FAV", label: "⭐ 收藏" },
+              ...[...new Set(pool.map(x => x.group).filter(Boolean))].map(g => ({ key: g, label: S.resourceGroupLabel(g, kind) }))];
+            return S.visibleResourceGroups(pool, groups, searchQuery).map(g => ({ ...g, label: `${g.label} (${g.count})` }));
           }
           if (field === "colors") {
             return E.COLOR_FAMILIES.map((f) => ({ key: f.key, label: f.label }));
@@ -1679,6 +1803,7 @@
 
         function renderGroups() {
           const tabs = getGroupTabs();
+          if (!tabs.some(g => g.key === activeGroup)) activeGroup = "ALL";
           groupsEl.innerHTML = tabs
             .map(
               (g) => `
@@ -1700,17 +1825,9 @@
         function renderGrid() {
           let list = [];
           if (field === "style1" || field === "style2") {
-            list = Catalog.styles.filter((s) => {
-              if (activeGroup === "FAV") return S.isFavorited(s.id);
-              if (activeGroup !== "ALL" && s.group !== activeGroup) return false;
-              return true;
-            });
+            list = Catalog.styles.filter((s) => S.resourceMatchesGroup(s, activeGroup));
           } else if (field === "layout") {
-            list = Catalog.layouts.filter((l) => {
-              if (activeGroup === "FAV") return S.isFavorited(l.id);
-              if (activeGroup !== "ALL" && l.group !== activeGroup) return false;
-              return true;
-            });
+            list = Catalog.layouts.filter((l) => S.resourceMatchesGroup(l, activeGroup));
           } else if (field === "colors") {
             list = Catalog.colors.filter((c) => E.colorMatchesFamily(c.id, activeGroup));
           } else if (field === "tones") {
@@ -1718,7 +1835,7 @@
           }
 
           if (searchQuery) {
-            list = list.filter((it) => `${it.id} ${it.name || it.name_zh || ""} ${it.description || it.desc_zh || ""} ${it.group || ""}`.toLowerCase().includes(searchQuery));
+            list = list.filter((it) => S.resourceSearchText(it).includes(searchQuery));
           }
 
           countEl.textContent = `共筛出 ${list.length} 项${selectedSet.size ? ` · 当前已选：${[...selectedSet].join("、")}` : ""}`;
@@ -1749,7 +1866,7 @@
                   </div>
                   <div style="padding:8px 10px;">
                     <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
-                    <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.group || it.category || it.desc_zh || it.description || "点击选用")}</div>
+                    <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(["style1", "style2", "layout"].includes(field) ? S.resourceGroupLabel(it.group, it.kind) : it.category || it.desc_zh || it.description || "点击选用")}</div>
                   </div>
                 </div>
               `;
@@ -2165,7 +2282,7 @@
 
   /* ======================== URL DEEP-LINK & TAB HYDRATION ======================== */
   function buildForkGraphFromWork(w) {
-    const styles = Array.isArray(w.styles) && w.styles.length ? w.styles : ["FX-001"];
+    const styles = Array.isArray(w.styles) ? w.styles : [];
     const isDual = styles.length >= 2;
     const sp = E.makeSkillParamsNode(64, 56, {
       fusion: isDual,
@@ -2195,6 +2312,7 @@
 
   function hydrateTabsAndUrlParams() {
     ensureDefaultSavedWorkflows();
+    CS.resourceEntryWarning = "";
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get("tab");
     const forkId = params.get("fork");
@@ -2221,12 +2339,13 @@
       const tSingle = E.createBlueprintGraph("single", Catalog, window.HANDRAW_MOCK, { withPresetAssets: true });
       const tLoop100 = E.createBlueprintGraph("loop_100", Catalog, window.HANDRAW_MOCK, { withPresetAssets: true });
       const tOmni = E.createBlueprintGraph("omnimedia", Catalog, window.HANDRAW_MOCK, { withPresetAssets: true });
-      const tArticle = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, { withPresetAssets: false });
+      // The "深度长文自动配图" workflow tab was removed: article illustration has
+      // its own mode in the Studio navigation (文章模式), and this tab only
+      // bounced the user there.
       CS.tabs = [
         { id: E.uid("wftab"), title: "🎯 节气海报极速出图", blueprint: "single", dirty: false, savedId: "preset_v24_single", vx: 276, vy: 48, vk: 0.84, undoStack: [], redoStack: [], graph: tSingle },
         { id: E.uid("wftab"), title: "🔁 百图矩阵批量生产", blueprint: "loop_100", dirty: false, savedId: "preset_v24_loop100", vx: 256, vy: 44, vk: 0.78, undoStack: [], redoStack: [], graph: tLoop100 },
-        { id: E.uid("wftab"), title: "🔗 全媒体一稿三端", blueprint: "omnimedia", dirty: false, savedId: "preset_v24_omnimedia", vx: 248, vy: 36, vk: 0.68, undoStack: [], redoStack: [], graph: tOmni },
-        { id: E.uid("wftab"), title: "📰 深度长文自动配图", blueprint: "article", dirty: false, savedId: "preset_v24_article", vx: 256, vy: 44, vk: 0.78, undoStack: [], redoStack: [], graph: tArticle }
+        { id: E.uid("wftab"), title: "🔗 全媒体一稿三端", blueprint: "omnimedia", dirty: false, savedId: "preset_v24_omnimedia", vx: 248, vy: 36, vk: 0.68, undoStack: [], redoStack: [], graph: tOmni }
       ];
       CS.activeTabId = CS.tabs[0].id;
     }
@@ -2268,23 +2387,31 @@
           mode: r.mode,
           ratio: r.ratio,
           mood: r.mood,
-          prompt: r.theme || t.title,
-          styles: [r.style1, r.style2].filter(Boolean),
-          layout: r.layout,
+          prompt: r.prompt || r.theme || t.title,
+          styles: [r.style1, r.style2, ...(t.styles || [])].filter((id,index,ids) => id && ids.indexOf(id) === index).slice(0,2),
+          layout: r.layout || t.layout,
           color: r.color,
           tone: r.tone
         });
         const created = createWorkflowTab({ title: `💬 帖子配方 · ${t.title.slice(0, 9)}`, blueprint: fg.blueprint, graph: fg, makeActive: false });
         CS.activeTabId = created.id;
       }
-    } else if ((styleParam && Catalog.resourceMap.has(styleParam)) || (layoutParam && Catalog.resourceMap.has(layoutParam))) {
-      const g = E.createBlueprintGraph("single", Catalog, window.HANDRAW_MOCK);
-      const sp = g.nodes.find((n) => n.type === "skill_params");
-      if (sp) {
-        if (styleParam && Catalog.resourceMap.has(styleParam)) sp.data.style1 = styleParam;
-        if (layoutParam && Catalog.resourceMap.has(layoutParam)) sp.data.layout = layoutParam;
-      }
-      const label = styleParam ? `🎨 试用 #${styleParam}` : `📐 试用 ${layoutParam}`;
+    } else if (styleParam !== null || layoutParam !== null) {
+      // Resource links start with a clean, form-compatible graph, never a preset.
+      const code = value => String(value || "").trim().replace(/^#\s*/, "").toUpperCase();
+      const styleCode = code(styleParam);
+      const layoutCode = code(layoutParam);
+      const validStyle = Catalog.resourceMap.get(styleCode)?.kind === "style" ? styleCode : "";
+      const validLayout = Catalog.resourceMap.get(layoutCode)?.kind === "layout" ? layoutCode : "";
+      const warnings = [];
+      if (styleParam !== null && !validStyle) warnings.push("链接中的画风不存在或尚未收录，请重新选择");
+      if (layoutParam !== null && !validLayout) warnings.push("链接中的图型不存在或尚未收录，请重新选择");
+      CS.resourceEntryWarning = warnings.join("；");
+      const g = buildForkGraphFromWork({
+        styles: validStyle ? [validStyle] : [], layout: validLayout,
+        mode: "graphic-text", ratio: "3:4", prompt: "", title: ""
+      });
+      const label = validStyle ? `🎨 试用 #${validStyle}` : validLayout ? `📐 试用 ${validLayout}` : "快速创作";
       const created = createWorkflowTab({ title: label, blueprint: "single", graph: g, makeActive: false });
       CS.activeTabId = created.id;
     }
@@ -2300,6 +2427,10 @@
     syncAllTabsArticlesIntoStore();
 
     const viewParam = params.get("view");
+    if (!viewParam && normTabParam === "article" && isArticleGraph(CS.graph)) {
+      CS.stageView = "preview";
+      if (!CS.articleSubView) CS.articleSubView = "portal";
+    }
     if (viewParam === "articles-all") {
       CS.stageView = "preview";
       CS.articleSubView = "all-list";
@@ -2311,6 +2442,31 @@
       CS.historyPage = Math.max(1, Number(params.get("page")) || 1);
     } else if (viewParam === "workflows") {
       CS.stageView = "workflows";
+    }
+    if (!viewParam && !tabParam) {
+      if (params.get("entry") === "canvas") {
+        CS.stageView = "canvas";
+      } else if (params.get("entry") === "article") {
+        syncAllTabsArticlesIntoStore();
+        ensureArticleWorkspace();
+        CS.stageView = "preview";
+        const aidParam = params.get("articleId");
+        const subviewParam = params.get("subview");
+        const targetAid = aidParam || CS.activeArticleId;
+        const targetArt = targetAid ? (CS.myArticles || []).find((a) => a.id === targetAid) : null;
+
+        // All legacy subviews (detail/preview/portal/editor/undefined) normalize to the unified editor.
+        if (targetArt) {
+          openUnifiedArticleEditor(targetArt.id, { renderNow: false });
+        } else if (aidParam) {
+          openUnifiedArticleEditor(null, { createNew: true, renderNow: false });
+        } else {
+          openUnifiedArticleEditor(CS.activeArticleId || null, { renderNow: false });
+        }
+      } else {
+        if (!forkId && !forkTopicId && styleParam === null && layoutParam === null) ensureQuickTab();
+        CS.stageView = "quick";
+      }
     }
   }
 
@@ -2758,6 +2914,7 @@
 
         searchInp.oninput = () => {
           searchQuery = searchInp.value.trim().toLowerCase();
+          renderGroups();
           renderGrid();
         };
 
@@ -2797,16 +2954,17 @@
           pool.forEach((x) => {
             if (x.group) grpSet.add(x.group);
           });
-          const tabs = [
-            { key: "ALL", label: `全部${isStyle ? "画风" : "图型"} (${pool.length})` },
+          const tabs = S.visibleResourceGroups(pool, [
+            { key: "ALL", label: `全部${isStyle ? "画风" : "图型"}` },
             { key: "FAV", label: "⭐ 收藏" },
-            ...[...grpSet].slice(0, 10).map((g) => ({ key: g, label: g }))
-          ];
+            ...[...grpSet].map((g) => ({ key: g, label: S.resourceGroupLabel(g, isStyle ? "style" : "layout") }))
+          ], searchQuery);
+          if (!tabs.some(g => g.key === activeGroup)) activeGroup = "ALL";
           groupsEl.innerHTML = tabs
             .map(
               (g) => `
               <button type="button" class="ic-shelf-group-chip ${activeGroup === g.key ? "is-active" : ""}" data-lp-grp="${esc(g.key)}" style="padding:5px 11px;font-size:12px;">
-                ${esc(g.label)}
+                ${esc(g.label)}${g.count !== undefined ? ` (${g.count})` : ""}
               </button>
             `
             )
@@ -2821,15 +2979,10 @@
         }
 
         function renderGrid() {
-          let list = pool.filter((it) => {
-            if (activeGroup === "FAV") return S.isFavorited(it.id);
-            if (activeGroup !== "ALL" && it.group !== activeGroup) return false;
-            return true;
-          });
+          let list = pool.filter((it) => S.resourceMatchesGroup(it, activeGroup));
           if (searchQuery) {
             list = list.filter((it) =>
-              `${it.id} ${it.name || it.name_zh || ""} ${it.description || ""} ${it.group || ""}`
-                .toLowerCase()
+              S.resourceSearchText(it)
                 .includes(searchQuery)
             );
           }
@@ -2862,7 +3015,7 @@
                   </div>
                   <div style="padding:8px 10px;">
                     <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
-                    <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.group || it.description || "点击加入循环")}</div>
+                    <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(S.resourceGroupLabel(it.group, it.kind))}</div>
                   </div>
                 </div>
               `;
@@ -3858,14 +4011,15 @@
     }
   }
 
-  function openMyArticlesPage({ preferredPlanNodeId = null, preferredArticleId = null, subView = "detail", renderNow = true } = {}) {
+  function openMyArticlesPage({ preferredPlanNodeId = null, preferredArticleId = null, subView = "editor", renderNow = true } = {}) {
+    flushUnifiedArticleEditor();
     syncAllTabsArticlesIntoStore();
 
     let chosenArt = null;
 
     if (preferredArticleId) {
       const t = resolveArticleTarget(preferredArticleId);
-      chosenArt = t?.art || null;
+      chosenArt = t?.art || (CS.myArticles || []).find((a) => a.id === preferredArticleId) || null;
     } else if (preferredPlanNodeId) {
       const liveNode = getNodeById(preferredPlanNodeId);
       if (liveNode && liveNode.type === "article_plan") {
@@ -3877,9 +4031,6 @@
         chosenArt = t?.art || null;
       }
     } else {
-      // Default behavior when clicking "我的文章" button:
-      // 1) Prioritize any article currently generating images (preferring active canvas first)
-      // 2) Otherwise display the latest article (sorted by updatedAtMs desc)
       const activeGeneratingPlan = CS.graph.nodes.find(
         (n) => n.type === "article_plan" && isArticleGenerating(n.data)
       );
@@ -3897,31 +4048,30 @@
       }
     }
 
-    if (chosenArt) {
-      CS.activeArticleId = chosenArt.id;
-      CS.activePlanNodeId = chosenArt.linkedPlanNodeId || null;
-    }
-
     CS.previewTab = "article";
     CS.articlePreviewMode = "desktop";
-    CS.articleSubView = subView;
     CS.stageView = "preview";
 
     if (subView === "all-list") {
+      CS.articleSubView = "all-list";
       try {
         window.history.replaceState(null, "", `?view=articles-all&page=${CS.articleListPage || 1}`);
       } catch (_) {}
-    } else {
-      try {
-        if (window.location.search.includes("view=articles-all")) {
-          window.history.replaceState(null, "", window.location.pathname);
-        }
-      } catch (_) {}
+      if (renderNow) renderTopAndBottomDocks();
+      return;
     }
 
-    if (renderNow) {
-      renderTopAndBottomDocks();
-    }
+    const targetId = chosenArt ? chosenArt.id : null;
+    try {
+      if (window.location.search.includes("view=articles-all")) {
+        window.history.replaceState(null, "", window.location.pathname);
+      }
+    } catch (_) {}
+
+    // Route all article entry views through the single unified editor.
+    openUnifiedArticleEditor(targetId, { createNew: !chosenArt, renderNow: false });
+
+    if (renderNow) renderTopAndBottomDocks();
   }
 
   function openArticlePlanWidePage(planNodeId = null) {
@@ -5560,6 +5710,7 @@
   }
 
   function openHistoryPage({ page, renderNow = true } = {}) {
+    flushUnifiedArticleEditor();
     ensureGenerationHistoryInitialized();
     CS.stageView = "history";
     if (typeof page === "number" && page >= 1) {
@@ -5583,6 +5734,15 @@
     ensureGenerationHistoryInitialized();
     const h = (CS.generationHistory || []).find((item) => item.id === entryId);
     if (!h) return;
+
+    const articleHistory = h.mode === "article-illust" && !!h.markdown;
+    if (articleHistory !== isArticleGraph(CS.graph)) {
+      if (articleHistory) {
+        switchIntoArticleMode();
+      } else {
+        switchToCanvasFromArticle();
+      }
+    }
 
     pushUndo();
     const histItems = JSON.parse(JSON.stringify(h.items || []));
@@ -5616,16 +5776,20 @@
         syncArticlePlanDisplayNodes(planNode);
         syncPlanNodeToMyArticles(planNode, { tabId: CS.activeTabId, bumpTime: true, hostGraph: CS.graph });
       }
-      CS.stageView = "canvas";
+      CS.stageView = "preview";
+      CS.articleSubView = "detail";
+      CS.previewTab = "article";
       try {
-        if (window.location.search.includes("view=")) {
-          window.history.replaceState(null, "", window.location.pathname);
-        }
+        const u = new URL(window.location.href);
+        u.searchParams.delete("view");
+        u.searchParams.delete("tab");
+        u.searchParams.set("entry", "article");
+        window.history.replaceState(null, "", u.pathname + u.search);
       } catch (_) {}
       fullRenderCanvas();
       persistOpenTabs();
       requestAnimationFrame(() => fitView());
-      toast(`↩ 已将 ${h.timeShort} 的文章配图记录恢复到画布！`);
+      toast(`↩ 已将 ${h.timeShort} 的文章配图记录恢复到文章模式！`);
       return;
     }
 
@@ -5910,16 +6074,7 @@
       }
     }
 
-    const goBackCanvas = () => {
-      CS.stageView = "canvas";
-      try {
-        if (window.location.search.includes("view=")) {
-          window.history.replaceState(null, "", window.location.pathname);
-        }
-      } catch (_) {}
-      renderTopAndBottomDocks();
-      requestAnimationFrame(() => renderMinimap());
-    };
+    const goBackCanvas = () => switchCreationStage("canvas");
 
     const backBtn = DOM.historyStage.querySelector("#hist-back-canvas");
     if (backBtn) backBtn.onclick = goBackCanvas;
@@ -6983,7 +7138,7 @@
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head"><span>📌 输出模式</span></div>
                   <div class="ic-ctrl-mode-grid">
-                    ${E.OUTPUT_MODES.map(
+                    ${E.OUTPUT_MODES.filter((m) => m.id !== "article-illust").map(
                       (m) => `
                       <button type="button" class="ic-ctrl-mode-btn ${curMode === m.id ? "is-active" : ""}" data-ctrl-mode="${esc(n.id)}" data-val="${esc(m.id)}" title="${esc(m.desc)}">
                         <span style="font-size:14px;line-height:1;">${m.icon}</span>
@@ -7086,6 +7241,7 @@
                       })()
                 }
 
+                <p class="qc-advanced-cost" role="status">${esc(generationCostText(plan.specs.length))}<br>资源解锁费用另计。</p>
                 <button type="button" class="ic-ctrl-generate-btn" data-ctrl-run="${esc(n.id)}" ${cd.status === "generating" ? "disabled" : ""}>
                   ${
                     cd.status === "generating"
@@ -8230,13 +8386,14 @@
 
     const isFromArticle = isPlan || upParent?.type === "article_plan" || dispNode.data?.mode === "article-illust";
 
-    S.goToForumCompose({
+    S.goToCurationShare({
+      kind: "work",
       category: isFromArticle ? "experience" : "tuning",
       title: (isPlan ? dispNode.data?.articleTitle : rawItems[0]?.title) || "Handraw 画布创作",
       topicTitle: isFromArticle
         ? `【文章配图晒图】${rawItems[0]?.title || dispNode.data?.articleTitle || "专栏配图实测"}`
         : `【画布创作晒图】${rawItems[0]?.title || "工作流实测"}`,
-      topicBody: `我的画布拼装指令：\n${prompt}`,
+      topicBody: "我的创作实测分享",
       prompt,
       images: imgs,
       topicImages: imgs.slice(0, 4).map((u, i) => ({ url: u, tag: `P${i + 1}` })),
@@ -8816,16 +8973,11 @@
         <div class="ic-tabs-pinned">
           <button type="button" class="ic-tab-action-pill" id="tb-new-wf" title="新建工作流标签页">＋ 新建 ▾</button>
           <button type="button" class="ic-tab-action-pill" id="tb-all-tabs" title="展开全部已打开标签页列表">📑 ${CS.tabs.length} ▾</button>
+          <button type="button" class="ic-tab-action-pill ${CS.stageView === "workflows" ? "is-active" : ""}" id="tb-open-wflib" title="查看我保存的工作流">📂 工作流</button>
         </div>
       </div>
 
       <div class="ic-workbench-tools">
-        <div class="ic-view-seg" title="查看我的文章、历史记录或工作流">
-          <button type="button" class="ic-view-seg-btn ${CS.stageView === "preview" ? "is-active" : ""}" id="tb-view-preview">📖 我的文章</button>
-          <button type="button" class="ic-view-seg-btn ${CS.stageView === "history" ? "is-active" : ""}" id="tb-open-hist" title="查看历次生成的图片与压缩包历史记录页面">🕒 历史记录(${histCount})</button>
-          <button type="button" class="ic-view-seg-btn ${CS.stageView === "workflows" ? "is-active" : ""}" id="tb-open-wflib" title="查看我保存的工作流">📂 工作流</button>
-        </div>
-
         <button type="button" class="ic-icon-btn" id="tb-theme-toggle" title="切换宣纸暖昼 / 暗房深空">${CS.canvasTheme === "dark" ? "📜" : "🌙"}</button>
         <button type="button" class="ic-icon-btn" id="tb-grid-toggle" title="切换网格">${CS.gridMode === "dots" ? "⠿" : CS.gridMode === "lines" ? "┼" : "□"}</button>
       </div>
@@ -8903,31 +9055,30 @@
     });
 
     const newWfBtn = DOM.workbenchBar.querySelector("#tb-new-wf");
-    newWfBtn.onclick = (e) => {
+    if (newWfBtn) newWfBtn.onclick = (e) => {
       e.stopPropagation();
       const rect = newWfBtn.getBoundingClientRect();
       openContextMenu(rect.left, rect.bottom + 6, { x: 240, y: 180 }, { newWorkflowMenu: true });
     };
 
     const allTabsBtn = DOM.workbenchBar.querySelector("#tb-all-tabs");
-    allTabsBtn.onclick = (e) => {
+    if (allTabsBtn) allTabsBtn.onclick = (e) => {
       e.stopPropagation();
       openAllTabsPopover(allTabsBtn);
     };
 
-    DOM.workbenchBar.querySelector("#tb-view-preview").onclick = () => {
-      openMyArticlesPage({ subView: "detail" });
-    };
-
-    DOM.workbenchBar.querySelector("#tb-open-hist").onclick = () => openHistoryPage();
-    DOM.workbenchBar.querySelector("#tb-open-wflib").onclick = () => openWorkflowsPage();
-    DOM.workbenchBar.querySelector("#tb-theme-toggle").onclick = () => {
+    const btnOpenWflib = DOM.workbenchBar.querySelector("#tb-open-wflib");
+    if (btnOpenWflib) btnOpenWflib.onclick = () => openWorkflowsPage();
+    const btnThemeToggle = DOM.workbenchBar.querySelector("#tb-theme-toggle");
+    if (btnThemeToggle) btnThemeToggle.onclick = () => {
       CS.canvasTheme = CS.canvasTheme === "dark" ? "paper" : "dark";
       savePrefs();
       renderTopAndBottomDocks();
       updateGridBackground();
     };
-    DOM.workbenchBar.querySelector("#tb-grid-toggle").onclick = () => {
+    const btnGridToggle = DOM.workbenchBar.querySelector("#tb-grid-toggle");
+    if (!btnGridToggle) { requestAnimationFrame(updateTabScrollButtons); return; }
+    btnGridToggle.onclick = () => {
       const order = ["dots", "lines", "blank"];
       CS.gridMode = order[(order.indexOf(CS.gridMode) + 1) % order.length];
       savePrefs();
@@ -9542,7 +9693,7 @@
     htmlParts.push(renderCardsAt(-1));
     htmlParts.push(`
       <div class="ic-notion-gap" data-gap-idx="-1">
-        <button type="button" class="ic-notion-insert-btn" data-plan-insert-at="-1">＋ 在此处添加配图卡片</button>
+        <button type="button" class="ic-notion-insert-btn" data-plan-insert-at="-1">＋ 在此处添加封面图或首图卡片</button>
       </div>
     `);
 
@@ -9551,7 +9702,7 @@
       htmlParts.push(renderCardsAt(b.idx));
       htmlParts.push(`
         <div class="ic-notion-gap" data-gap-idx="${b.idx}">
-          <button type="button" class="ic-notion-insert-btn" data-plan-insert-at="${b.idx}">＋ 在此处添加配图卡片</button>
+          <button type="button" class="ic-notion-insert-btn" data-plan-insert-at="${b.idx}">＋ 在此处添加章节插图卡片</button>
         </div>
       `);
     }
@@ -9802,9 +9953,12 @@
     DOM.previewStage.innerHTML = `
       <div class="ic-pv-topbar">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;">
-          <button type="button" class="btn btn-sm" id="pv-all-back-detail" style="font-weight:850;">← 返回我的文章</button>
+          <button type="button" class="btn btn-sm" id="pv-all-back-detail" style="font-weight:850;">← 返回文章模式</button>
           <button type="button" class="btn btn-sm" id="pv-all-back-canvas">🎨 返回画布</button>
-          <span style="font-size:13.5px;font-weight:850;color:var(--ic-ink);margin-left:6px;">📚 全部历史文章 (${filtered.length})</span>
+          <span style="font-size:13.5px;font-weight:850;color:var(--ic-ink);margin-left:6px;">📚 全部历史文章分页 (${filtered.length})</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button type="button" class="btn btn-sm btn-primary" id="pv-all-new-article" style="font-weight:800;">＋ 新建文章</button>
         </div>
 
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;">
@@ -9891,7 +10045,7 @@
                               ${esc(a.timeLabel || formatArticleTimeLabel(a.updatedAtMs))}
                             </span>
                             <div style="display:flex;align-items:center;gap:6px;">
-                              <button type="button" class="btn btn-sm btn-primary" data-open-art-btn="${esc(a.id)}" style="padding:3px 10px;font-size:11.5px;">📖 查看文章</button>
+                              <button type="button" class="btn btn-sm btn-primary" data-edit-art-btn="${esc(a.id)}" style="padding:3px 10px;font-size:11.5px;font-weight:750;">📖 打开文章</button>
                               <button type="button" class="ic-icon-btn" data-del-art-id="${esc(a.id)}" title="删除此历史文章记录" style="padding:3px 6px;font-size:12px;color:#dc2626;">🗑️</button>
                             </div>
                           </div>
@@ -9919,24 +10073,31 @@
       </div>
     `;
 
-    DOM.previewStage.querySelector("#pv-all-back-detail").onclick = () => {
-      CS.articleSubView = "detail";
-      try {
-        if (window.location.search.includes("view=")) {
-          window.history.replaceState(null, "", window.location.pathname);
+    const allBackDetailBtn = DOM.previewStage.querySelector("#pv-all-back-detail");
+    if (allBackDetailBtn) {
+      allBackDetailBtn.onclick = () => {
+        try {
+          if (window.location.search.includes("view=")) {
+            window.history.replaceState(null, "", window.location.pathname);
+          }
+        } catch (_) {}
+        if (CS.activeArticleId) {
+          openUnifiedArticleEditor(CS.activeArticleId);
+        } else {
+          openUnifiedArticleEditor(null, { createNew: true });
         }
-      } catch (_) {}
-      renderFullPreviewStage();
+      };
+    }
+
+    const allNewArtBtn = DOM.previewStage.querySelector("#pv-all-new-article");
+    if (allNewArtBtn) {
+      allNewArtBtn.onclick = () => {
+        openUnifiedArticleEditor(null, { createNew: true });
+      };
     };
 
     DOM.previewStage.querySelector("#pv-all-back-canvas").onclick = () => {
-      CS.stageView = "canvas";
-      try {
-        if (window.location.search.includes("view=")) {
-          window.history.replaceState(null, "", window.location.pathname);
-        }
-      } catch (_) {}
-      renderTopAndBottomDocks();
+      switchCreationStage("canvas");
     };
 
     DOM.previewStage.querySelectorAll("[data-art-filter]").forEach((btn) => {
@@ -9984,11 +10145,20 @@
 
     DOM.previewStage.querySelectorAll("[data-open-art-id]").forEach((cardEl) => {
       cardEl.onclick = (e) => {
-        if (e.target.closest("[data-del-art-id]")) return;
+        if (e.target.closest("[data-del-art-id]") || e.target.closest("[data-edit-art-btn]")) return;
         const aid = cardEl.getAttribute("data-open-art-id");
         if (aid) {
-          openMyArticlesPage({ preferredArticleId: aid, subView: "detail" });
+          openUnifiedArticleEditor(aid);
         }
+      };
+    });
+
+    DOM.previewStage.querySelectorAll("[data-edit-art-btn]").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const aid = btn.getAttribute("data-edit-art-btn");
+        if (!aid) return;
+        openUnifiedArticleEditor(aid);
       };
     });
 
@@ -10019,213 +10189,32 @@
     syncAllTabsArticlesIntoStore();
     const sortedArticles = getSortedMyArticles();
 
-    /* -------- SUBVIEW 1: PAGINATED ALL-ARTICLES BROWSE PAGE (文章分页浏览页面) -------- */
     if (CS.articleSubView === "all-list") {
       renderAllArticlesPaginatedPage(sortedArticles);
       return;
     }
 
-    /* -------- SUBVIEW 2: MY ARTICLES DETAIL PAGE (我的文章) -------- */
-    let activeTarget = CS.activeArticleId ? resolveArticleTarget(CS.activeArticleId) : null;
-    if (!activeTarget && CS.activePlanNodeId) {
-      activeTarget = resolveArticleTarget(CS.activePlanNodeId);
-    }
-    if (!activeTarget && sortedArticles.length > 0) {
-      const generatingFirst = sortedArticles.find((a) => isArticleGenerating(a));
-      const pick = generatingFirst || sortedArticles[0];
-      activeTarget = resolveArticleTarget(pick.id);
+    // Every non-directory article subview funnels into the unified editor workbench.
+    if (CS.articleSubView !== "editor") {
+      CS.articleSubView = "editor";
     }
 
-    const planNode = activeTarget?.planNode || null;
-    const activeArt = activeTarget?.art || null;
-    if (activeArt) {
-      CS.activeArticleId = activeArt.id;
-      CS.activePlanNodeId = activeArt.linkedPlanNodeId || null;
+    const draft = CS.articleEditorDraft;
+    const draftId = draft ? draft.id : null;
+    const shouldLoadActiveIncoming = !!(
+      CS.activeArticleId &&
+      draftId !== CS.activeArticleId &&
+      !(draft && draft.isNewDraft && !CS.activeArticleId)
+    );
+    if (!draft) {
+      const art = CS.activeArticleId ? findArticleById(CS.activeArticleId) : null;
+      CS.articleEditorDraft = art ? draftFromArticle(art) : makeBlankArticleDraft();
+    } else if (shouldLoadActiveIncoming) {
+      const art = findArticleById(CS.activeArticleId);
+      if (art) CS.articleEditorDraft = draftFromArticle(art);
     }
 
-    const latestTen = sortedArticles.slice(0, 10);
-    const isBatchRunning = planNode ? isArticleGenerating(planNode.data) : false;
-    const actionTargetId = activeTarget?.isActiveCanvas
-      ? planNode.id
-      : activeArt?.id || planNode?.id || null;
-
-    DOM.previewStage.innerHTML = `
-      <div class="ic-pv-topbar">
-        <button type="button" class="btn btn-sm" id="pv-back-canvas" style="font-weight:850;">← 返回画布</button>
-
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;">
-          <button
-            type="button"
-            class="btn btn-sm btn-primary"
-            id="pv-plan-gen-all"
-            ${!planNode || isBatchRunning ? "disabled" : ""}
-            style="font-weight:850;"
-          >
-            ${isBatchRunning ? "⏳ 批量生图中…" : "⚡ 批量生图"}
-          </button>
-          <button
-            type="button"
-            class="btn btn-sm"
-            id="pv-dl-zip"
-            ${!planNode || CS.zipExporting ? "disabled" : ""}
-            style="background:#1f6f4a;color:#fff;border-color:#1f6f4a;font-weight:800;"
-          >
-            ${CS.zipExporting ? "⏳ 打包中…" : "📦 导出图文 ZIP 包"}
-          </button>
-          <button
-            type="button"
-            class="btn btn-sm"
-            id="pv-pub-forum"
-            ${!planNode ? "disabled" : ""}
-            style="font-weight:800;"
-          >
-            💬 发布到论坛
-          </button>
-        </div>
-      </div>
-
-      <div class="ic-pv-body">
-        <aside class="ic-pv-outline">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px;">
-            <span style="font-size:13px;font-weight:850;color:var(--ic-ink);">📚 历史文章</span>
-            <span style="font-size:11px;color:var(--ic-muted);font-weight:750;">最新 ${latestTen.length} 条</span>
-          </div>
-
-          <div class="ic-hist-art-list" id="pv-hist-art-list">
-            ${
-              !latestTen.length
-                ? `<div style="padding:24px 8px;text-align:center;font-size:12px;color:var(--ic-muted);">暂无历史文章</div>`
-                : latestTen
-                    .map((a) => {
-                      const isCur = activeArt && a.id === activeArt.id;
-                      const cards = sortPlanCardsInDocOrder(a.cards || []);
-                      const readyCnt = cards.filter((c) => c.imageUrl).length;
-                      const thumbUrl =
-                        cards.find((c) => c.role === "cover" && c.imageUrl)?.imageUrl ||
-                        cards.find((c) => c.imageUrl)?.imageUrl ||
-                        "";
-                      const genNow = isArticleGenerating(a);
-                      return `
-                        <div class="ic-hist-art-item ${isCur ? "is-active" : ""}" data-hist-art-id="${esc(a.id)}" title="${esc(a.articleTitle || "文章")}">
-                          ${
-                            thumbUrl
-                              ? `<img class="ic-hist-art-thumb" data-hw-src="${esc(thumbUrl)}" alt="" />`
-                              : `<div class="ic-hist-art-placeholder">📄</div>`
-                          }
-                          <div style="min-width:0;flex:1;">
-                            <div style="font-size:12.2px;font-weight:800;color:var(--ic-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                              ${esc(a.articleTitle || "未命名文章")}
-                            </div>
-                            <div style="font-size:10.6px;margin-top:2px;display:flex;align-items:center;gap:5px;color:var(--ic-muted);">
-                              ${
-                                genNow
-                                  ? `<span style="color:var(--vermilion);font-weight:800;">⏳ 正在生图…</span>`
-                                  : `
-                                    <span>${esc(a.timeLabel || formatArticleTimeLabel(a.updatedAtMs))}</span>
-                                    <span>·</span>
-                                    <span style="color:${readyCnt > 0 ? "#1f6f4a" : "var(--ic-muted)"};font-weight:750;">配图 ${readyCnt}/${cards.length}</span>
-                                  `
-                              }
-                            </div>
-                          </div>
-                        </div>
-                      `;
-                    })
-                    .join("")
-            }
-          </div>
-
-          <div class="ic-hist-art-foot">
-            <button type="button" class="btn btn-sm" id="pv-view-all-articles" style="width:100%;justify-content:center;font-weight:850;">
-              查看全部 (${sortedArticles.length})
-            </button>
-          </div>
-        </aside>
-
-        <div class="ic-pv-main-scroll">
-          ${
-            planNode
-              ? `
-                <article class="ic-pv-article-sheet" id="pv-notion-article-sheet" style="position:relative;">
-                  ${renderNotionPlanSheetHtml(planNode)}
-                </article>
-              `
-              : `
-                <div style="max-width:560px;margin:72px auto;padding:40px 32px;text-align:center;background:var(--ic-panel-solid);border:1px dashed var(--ic-border-strong);border-radius:18px;">
-                  <div style="font-size:32px;margin-bottom:10px;">📖</div>
-                  <div style="font-size:16px;font-weight:850;color:var(--ic-ink);">当前暂无文章</div>
-                  <div style="font-size:13px;color:var(--ic-muted);margin:8px 0 18px;line-height:1.6;">可返回无限画布，在「输出控制」中选择「文章配图」创建你的第一篇图文专栏。</div>
-                  <button type="button" class="btn btn-primary" id="pv-empty-go-canvas">← 返回画布创建文章</button>
-                </div>
-              `
-          }
-        </div>
-      </div>
-    `;
-
-    DOM.previewStage.querySelector("#pv-back-canvas").onclick = () => {
-      CS.stageView = "canvas";
-      try {
-        if (window.location.search.includes("view=")) {
-          window.history.replaceState(null, "", window.location.pathname);
-        }
-      } catch (_) {}
-      renderTopAndBottomDocks();
-    };
-
-    const emptyGoBtn = DOM.previewStage.querySelector("#pv-empty-go-canvas");
-    if (emptyGoBtn) {
-      emptyGoBtn.onclick = () => {
-        CS.stageView = "canvas";
-        renderTopAndBottomDocks();
-      };
-    }
-
-    const genAllBtn = DOM.previewStage.querySelector("#pv-plan-gen-all");
-    if (genAllBtn && actionTargetId) {
-      genAllBtn.onclick = () => {
-        generateBatchPlanCards(actionTargetId, { onlyPending: false });
-      };
-    }
-
-    const dlZipBtn = DOM.previewStage.querySelector("#pv-dl-zip");
-    if (dlZipBtn && actionTargetId) {
-      dlZipBtn.onclick = () => exportZipPackage(actionTargetId);
-    }
-
-    const pubForumBtn = DOM.previewStage.querySelector("#pv-pub-forum");
-    if (pubForumBtn && planNode) {
-      pubForumBtn.onclick = () => publishArticleToForum(activeTarget || planNode);
-    }
-
-    DOM.previewStage.querySelectorAll("[data-hist-art-id]").forEach((rowEl) => {
-      rowEl.onclick = () => {
-        const aid = rowEl.getAttribute("data-hist-art-id");
-        if (!aid || (activeArt && aid === activeArt.id)) return;
-        CS.activeArticleId = aid;
-        const nextT = resolveArticleTarget(aid);
-        CS.activePlanNodeId = nextT?.art?.linkedPlanNodeId || null;
-        renderFullPreviewStage();
-        const sc = DOM.previewStage.querySelector(".ic-pv-main-scroll");
-        if (sc) sc.scrollTop = 0;
-      };
-    });
-
-    const viewAllBtn = DOM.previewStage.querySelector("#pv-view-all-articles");
-    if (viewAllBtn) {
-      viewAllBtn.onclick = () => {
-        CS.articleSubView = "all-list";
-        CS.articleListPage = 1;
-        try {
-          window.history.replaceState(null, "", "?view=articles-all&page=1");
-        } catch (_) {}
-        renderFullPreviewStage();
-      };
-    }
-
-    if (planNode) {
-      bindNotionPlanSheetInteractions(planNode);
-    }
+    renderArticleEditorPage(sortedArticles);
   }
 
   function renderTopAndBottomDocks() {
@@ -10239,11 +10228,17 @@
       DOM.canvasStage.classList.toggle("minimap-hidden", !CS.minimapOpen);
     }
 
+    if (DOM.workbenchBar) {
+      DOM.workbenchBar.style.display = (CS.stageView === "canvas" || CS.stageView === "workflows") ? "" : "none";
+    }
+
+    renderCreationModeBar();
     renderWorkbenchBar();
     renderCanvasToolstrip();
     renderFullPreviewStage();
     renderHistoryStage();
     renderWorkflowsStage();
+    renderQuickStart();
 
     if (DOM.bottomRight) {
       const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
@@ -10464,6 +10459,1846 @@
           spawnShelfItem({ kind }, { x: wx, y: wy }, null);
         }
       };
+    });
+  }
+
+  // Quick-create shares the canvas graph and the existing guarded task runner.
+  let quickBusy = null;
+
+  function generationCostText(count) {
+    const qty = count != null && Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : null;
+    if (CS.engineMode === "demo") return `演示模式 · 本批 ${qty ?? "待确认"} 张，不消耗真实生图额度`;
+    if (!App.state?.loggedIn) return "登录后查看免费额度、积分余额与本批预计费用";
+    const rawFree = App.state.freeQuotaRemaining ?? App.state.free_quota_remaining;
+    const rawPrice = CS.serverCfg?.creditPerImage;
+    const free = rawFree == null ? NaN : Number(rawFree);
+    const price = rawPrice == null ? NaN : Number(rawPrice);
+    const freeKnown = Number.isFinite(free) && free >= 0;
+    const priceKnown = Number.isFinite(price) && price >= 0;
+    const total = qty !== null && freeKnown && priceKnown ? Math.max(0, qty - free) * price : null;
+    const balance = Number(App.state.credits);
+    return `本批 ${qty ?? "待确认"} 张 · 免费额度 ${freeKnown ? free : "待确认"} 张 · 单张 ${priceKnown ? price : "待确认"} 积分 · 预计 ${total ?? "待确认"} 积分${Number.isFinite(balance) ? ` · 余额 ${balance} 积分` : ""}`;
+  }
+
+  function getQuickParts(graph = CS.graph) {
+    const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+    const allowed = new Set(["skill_params", "text_input", "output_control", "output_display", "asset"]);
+    const controls = nodes.filter(n => n.type === "output_control");
+    const skills = nodes.filter(n => n.type === "skill_params");
+    const texts = nodes.filter(n => n.type === "text_input");
+    if (nodes.some(n => !allowed.has(n.type)) || controls.length !== 1 || skills.length !== 1 || texts.length !== 1) return null;
+    const ctrl = controls[0];
+    if (!["graphic-text", "pure-image", "series"].includes(ctrl.data?.mode)) return null;
+    // Multiple inputs or disconnected graphs must stay in the full canvas.
+    const inbound = edges.filter(e => e.to === ctrl.id).map(e => e.from);
+    if (!inbound.includes(skills[0].id) || !inbound.includes(texts[0].id)) return null;
+    return { ctrl, skill: skills[0], text: texts[0] };
+  }
+
+  function ensureQuickTab() {
+    let tab = CS.tabs.find(t => {
+      const graph = t.id === CS.activeTabId ? CS.graph : t.graph;
+      return t.quickStart === true && graph && getQuickParts(graph);
+    });
+    if (!tab) {
+      const sp = E.makeSkillParamsNode(64, 56, {});
+      const txt = E.makeTextInputNode(64, 548, { text: "" });
+      const ctrl = E.makeOutputControlNode(488, 176, { mode: "graphic-text", count: 1, ratio: "3:4" });
+      const graph = { blueprint: "single", nodes: [sp, txt, ctrl], edges: [
+        { id: E.uid("edge"), from: sp.id, to: ctrl.id },
+        { id: E.uid("edge"), from: txt.id, to: ctrl.id }
+      ], selectedIds: [] };
+      tab = createWorkflowTab({ title: "快速创作", blueprint: "single", graph, makeActive: false });
+      tab.quickStart = true;
+    }
+    activateWorkflowTab(tab.id);
+    persistOpenTabs();
+    return tab;
+  }
+
+  function setQuickField(field, value) {
+    const p = getQuickParts();
+    if (!p || p.ctrl.data.status === "generating") return;
+    if (field === "topic") p.text.data.text = String(value);
+    else if (field === "count") {
+      if (!/^\d+$/.test(String(value)) || Number(value) < 1 || Number(value) > 200) return;
+      p.ctrl.data.count = Number(value);
+    } else if (field === "ratio") {
+      if (!/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(String(value)) || String(value).split(":").some(x => Number(x) <= 0)) return;
+      p.ctrl.data.ratio = String(value);
+    } else if (field === "mode" && ["graphic-text", "pure-image", "series"].includes(value)) p.ctrl.data.mode = value;
+    else return;
+    const tab = CS.tabs.find(t => t.id === CS.activeTabId);
+    if (tab) tab.dirty = true;
+    persistOpenTabs();
+    window.HandrawQuickCreate?.updateCost(DOM.quickStage, generationCostText(buildExecutionPlanForControl(p.ctrl).specs.length));
+  }
+
+  function ensureArticleForArticleMode() {
+    syncAllTabsArticlesIntoStore();
+    const sorted = getSortedMyArticles();
+    if (sorted.length > 0) return;
+    const tab = findArticleWorkspaceTab();
+    const planNode = (isArticleGraph(CS.graph) ? CS.graph : tab?.graph)?.nodes?.find((n) => n.type === "article_plan");
+    if (planNode) {
+      syncPlanNodeToMyArticles(planNode, { tabId: tab ? tab.id : CS.activeTabId, bumpTime: false, hostGraph: tab ? tab.graph : CS.graph });
+      return;
+    }
+    createNewArticlePlan();
+  }
+
+  function createNewArticlePlan({ title = "", markdown = "", coverRatio = "2.35:1", inlineRatio = "4:3", styleId = "FA-001", layoutId = "IG-001", articleId = null } = {}) {
+    if (articleId) return planUnifiedArticleDraft({ id: articleId, title, markdown, styleId, layoutId, coverRatio, inlineRatio });
+    ensureArticleWorkspace();
+    const md = (markdown || "").trim() || (title ? `# ${title}\n\n在这里输入正文内容…` : E.DEFAULT_STARTER_ARTICLE_MD);
+
+    let skillNode = CS.graph.nodes.find((n) => n.type === "skill_params" || n.type === "skill");
+    if (!skillNode) {
+      skillNode = E.makeSkillParamsNode(64, 48, {
+        style1: styleId || "FA-001",
+        layout: layoutId || "IG-001"
+      });
+      CS.graph.nodes.push(skillNode);
+    } else {
+      if (styleId) skillNode.data.style1 = styleId;
+      if (layoutId) skillNode.data.layout = layoutId;
+    }
+
+    let ctrlNode = CS.graph.nodes.find((n) => n.type === "output_control" && n.data?.mode === "article-illust");
+    if (!ctrlNode) {
+      ctrlNode = E.makeOutputControlNode(488, 176, {
+        mode: "article-illust",
+        coverRatio: coverRatio || "2.35:1",
+        inlineRatio: inlineRatio || "4:3",
+        status: "ready"
+      });
+      CS.graph.nodes.push(ctrlNode);
+    } else {
+      ctrlNode.data.coverRatio = coverRatio || ctrlNode.data.coverRatio || "2.35:1";
+      ctrlNode.data.inlineRatio = inlineRatio || ctrlNode.data.inlineRatio || "4:3";
+    }
+    ensureEdge(skillNode.id, ctrlNode.id);
+
+    const built = E.buildArticlePlanData(md, ctrlNode, CS.graph, Catalog);
+    if (title) built.articleTitle = title;
+
+    let planNode = getDownstreamArticlePlanNode(ctrlNode);
+    if (!planNode) {
+      planNode = E.makeArticlePlanNode(
+        snapVal(ctrlNode.x + (ctrlNode.w || 344) + 96),
+        snapVal(Math.max(48, ctrlNode.y - 12)),
+        {
+          status: "ready",
+          articleId: articleId || null,
+          sourceControlId: ctrlNode.id,
+          articleTitle: built.articleTitle,
+          markdown: built.markdown,
+          cards: built.cards,
+          updatedAt: "已生成方案"
+        }
+      );
+      CS.graph.nodes.push(planNode);
+      ensureEdge(ctrlNode.id, planNode.id);
+    } else {
+      if (articleId) planNode.data.articleId = articleId;
+      planNode.data.articleTitle = built.articleTitle;
+      planNode.data.markdown = built.markdown;
+      planNode.data.cards = built.cards;
+      planNode.data.updatedAt = "已生成方案";
+    }
+
+    syncArticlePlanDisplayNodes(planNode);
+    const art = syncPlanNodeToMyArticles(planNode, { tabId: CS.activeTabId, bumpTime: true, hostGraph: CS.graph });
+    if (art) {
+      CS.activeArticleId = art.id;
+      CS.activePlanNodeId = planNode.id;
+    }
+    markActiveTabDirty();
+    persistOpenTabs();
+    return planNode;
+  }
+
+  function renderArticleSidebarHtml(sortedArticles, activeArtId) {
+    const latestTen = sortedArticles.slice(0, 10);
+    return `
+      <aside class="ic-pv-outline">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px;">
+          <span style="font-size:13px;font-weight:850;color:var(--ic-ink);">📚 历史文章</span>
+          <button type="button" class="btn btn-sm btn-primary" id="pv-sidebar-new-btn" style="padding:2px 8px;font-size:11.5px;font-weight:800;">＋ 新建</button>
+        </div>
+
+        <div class="ic-hist-art-list" id="pv-hist-art-list">
+          ${
+            !latestTen.length
+              ? `<div style="padding:24px 8px;text-align:center;font-size:12px;color:var(--ic-muted);">暂无历史文章</div>`
+              : latestTen
+                  .map((a) => {
+                    const isCur = activeArtId && a.id === activeArtId;
+                    const cards = sortPlanCardsInDocOrder(a.cards || []);
+                    const readyCnt = cards.filter((c) => c.imageUrl).length;
+                    const thumbUrl =
+                      cards.find((c) => c.role === "cover" && c.imageUrl)?.imageUrl ||
+                      cards.find((c) => c.imageUrl)?.imageUrl ||
+                      "";
+                    const genNow = isArticleGenerating(a);
+                    return `
+                      <div class="ic-hist-art-item ${isCur ? "is-active" : ""}" data-hist-art-id="${esc(a.id)}" title="${esc(a.articleTitle || "文章")}">
+                        ${
+                          thumbUrl
+                            ? `<img class="ic-hist-art-thumb" data-hw-src="${esc(thumbUrl)}" alt="" />`
+                            : `<div class="ic-hist-art-placeholder">📄</div>`
+                        }
+                        <div style="min-width:0;flex:1;">
+                          <div style="font-size:12.2px;font-weight:800;color:var(--ic-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                            ${esc(a.articleTitle || "未命名文章")}
+                          </div>
+                          <div style="font-size:10.6px;margin-top:2px;display:flex;align-items:center;gap:5px;color:var(--ic-muted);">
+                            ${
+                              genNow
+                                ? `<span style="color:var(--vermilion);font-weight:800;">⏳ 正在生图…</span>`
+                                : `
+                                  <span>${esc(a.timeLabel || formatArticleTimeLabel(a.updatedAtMs))}</span>
+                                  <span>·</span>
+                                  <span style="color:${readyCnt > 0 ? "#1f6f4a" : "var(--ic-muted)"};font-weight:750;">配图 ${readyCnt}/${cards.length}</span>
+                                `
+                            }
+                          </div>
+                        </div>
+                      </div>
+                    `;
+                  })
+                  .join("")
+          }
+        </div>
+
+        <div class="ic-hist-art-foot">
+          <button type="button" class="btn btn-sm" id="pv-view-all-articles" style="width:100%;justify-content:center;font-weight:850;font-size:11.5px;">
+            📑 历史文章分页 (${sortedArticles.length})
+          </button>
+        </div>
+      </aside>
+    `;
+  }
+
+  function bindArticleSidebar(container, activeArtId) {
+    const newBtn = container.querySelector("#pv-sidebar-new-btn");
+    if (newBtn) {
+      newBtn.onclick = () => {
+        openUnifiedArticleEditor(null, { createNew: true });
+      };
+    }
+    const allBtn = container.querySelector("#pv-view-all-articles");
+    if (allBtn) {
+      allBtn.onclick = () => {
+        openMyArticlesPage({ subView: "all-list" });
+      };
+    }
+    container.querySelectorAll("[data-hist-art-id]").forEach((rowEl) => {
+      rowEl.onclick = () => {
+        const aid = rowEl.getAttribute("data-hist-art-id");
+        if (!aid) return;
+        if (CS.articleEditorDraft && CS.articleEditorDraft.id === aid && !CS.articleEditorDraft.isNewDraft) return;
+        openUnifiedArticleEditor(aid);
+        const sc = DOM.previewStage.querySelector(".ic-pv-main-scroll");
+        if (sc) sc.scrollTop = 0;
+      };
+    });
+  }
+
+  function syncArticleEditorDraftToHistory(draft, { bumpTime = false } = {}) {
+    if (!draft) return null;
+    ensureMyArticlesInitialized();
+    const targetId = draft.id || null;
+    let targetArt = targetId ? (CS.myArticles || []).find((a) => a.id === targetId) : null;
+    const now = Date.now();
+
+    const title = (draft.title || "").trim();
+    const md = draft.markdown || "";
+
+    if (!targetArt && !title && !md) {
+      return null;
+    }
+
+    if (!targetArt) {
+      const newId = targetId || E.uid("art");
+      draft.id = newId;
+      draft.isNewDraft = false;
+      targetArt = {
+        id: newId,
+        articleTitle: title || "未命名文章",
+        author: draft.author || "",
+        markdown: md,
+        cards: [],
+        status: "ready",
+        createdAtMs: now,
+        updatedAtMs: now,
+        timeLabel: formatArticleTimeLabel(now),
+        linkedTabId: null,
+        linkedPlanNodeId: null,
+        style1: draft.styleId || "FA-001",
+        layout: "IG-001",
+        coverRatio: draft.coverRatio || "2.35:1",
+        inlineRatio: draft.inlineRatio || "4:3",
+        runCount: 0
+      };
+      CS.myArticles.unshift(targetArt);
+      CS.activeArticleId = newId;
+    } else {
+      targetArt.articleTitle = title || targetArt.articleTitle || "未命名文章";
+      targetArt.author = draft.author || "";
+      targetArt.markdown = md;
+      targetArt.style1 = draft.styleId || targetArt.style1 || "FA-001";
+      targetArt.coverRatio = draft.coverRatio || targetArt.coverRatio || "2.35:1";
+      targetArt.inlineRatio = draft.inlineRatio || targetArt.inlineRatio || "4:3";
+      if (bumpTime) {
+        targetArt.updatedAtMs = now;
+        targetArt.timeLabel = formatArticleTimeLabel(now);
+      }
+      draft.isNewDraft = false;
+    }
+
+    // Text-only save: never rebuild cards here. Cards are rebuilt only by explicit planning.
+    if (targetArt.linkedPlanNodeId) {
+      let hostGraph = null;
+      let hostTabId = targetArt.linkedTabId || null;
+      const planNodeId = targetArt.linkedPlanNodeId;
+      const activeNode = (CS.graph?.nodes || []).find((n) => n.id === planNodeId);
+      if (activeNode && activeNode.data) {
+        hostGraph = CS.graph;
+        hostTabId = CS.activeTabId;
+      } else {
+        for (const t of CS.tabs || []) {
+          const tabNode = (t.graph?.nodes || []).find((n) => n.id === planNodeId);
+          if (tabNode && tabNode.data) {
+            hostGraph = t.graph;
+            hostTabId = t.id;
+            break;
+          }
+        }
+      }
+      if (hostGraph) {
+        const planNode = hostGraph.nodes.find((n) => n.id === planNodeId);
+        if (planNode && planNode.data) {
+          planNode.data.articleTitle = targetArt.articleTitle;
+          planNode.data.markdown = targetArt.markdown;
+          targetArt.linkedTabId = hostTabId;
+          if (hostTabId === CS.activeTabId) markActiveTabDirty();
+        }
+      }
+    }
+
+    persistMyArticles();
+    return targetArt;
+  }
+
+  function renderArticlePortalPage(sortedArticles) {
+    DOM.previewStage.innerHTML = `
+      <div class="ic-pv-topbar">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:13.5px;font-weight:850;color:var(--ic-ink);">📰 文章模式</span>
+          <span style="font-size:12px;color:var(--ic-muted);">为文章智能配置插图与封面图</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button type="button" class="btn btn-sm" id="portal-back-canvas" style="font-weight:750;">返回画布 ↗</button>
+        </div>
+      </div>
+
+      <div class="ic-pv-body">
+        ${renderArticleSidebarHtml(sortedArticles, null)}
+
+        <div class="ic-pv-main-scroll" style="display:flex;align-items:center;justify-content:center;">
+          <div style="max-width:820px;width:100%;padding:40px 24px;">
+            <div style="text-align:center;margin-bottom:38px;">
+              <div style="font-size:44px;margin-bottom:12px;">📰</div>
+              <h1 style="font-size:24px;font-weight:850;color:var(--ic-ink);margin:0 0 10px;">文章模式：为文章配置插图与封面图</h1>
+              <p style="font-size:13.5px;color:var(--ic-muted);margin:0;line-height:1.68;">
+                支持上传文档由 AI 自动解析标题与正文结构，或直接在编辑器中撰写，一键生成微信公众号超宽封面与各章节生动手绘插图。
+              </p>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;">
+              <!-- Action 1: 上传文章 -->
+              <div class="ic-art-portal-card" id="portal-card-upload" style="border:2px dashed var(--ic-border-strong);border-radius:16px;padding:36px 20px;text-align:center;cursor:pointer;background:var(--ic-panel-solid);transition:all 0.2s;" title="点击上传文档">
+                <div style="font-size:40px;margin-bottom:12px;">📁</div>
+                <div style="font-size:18px;font-weight:850;color:var(--ic-ink);margin-bottom:8px;">上传文章</div>
+                <div style="font-size:12.5px;color:var(--ic-muted);line-height:1.6;margin-bottom:18px;">
+                  支持 <strong>.md / .doc / .docx / .txt / .pdf</strong> 格式<br/>
+                  服务端 AI 自动提取标题与标准 Markdown 正文
+                </div>
+                <button type="button" class="btn btn-primary" id="portal-btn-upload-file" style="font-weight:800;padding:8px 24px;">选择文件上传</button>
+                <input type="file" id="portal-file-input" accept=".md,.markdown,.txt,.doc,.docx,.pdf" hidden />
+              </div>
+
+              <!-- Action 2: 新建文章 -->
+              <div class="ic-art-portal-card" id="portal-card-new" style="border:1px solid var(--ic-border);border-radius:16px;padding:36px 20px;text-align:center;cursor:pointer;background:var(--ic-panel-solid);transition:all 0.2s;" title="进入 Markdown 编辑器">
+                <div style="font-size:40px;margin-bottom:12px;">✍️</div>
+                <div style="font-size:18px;font-weight:850;color:var(--ic-ink);margin-bottom:8px;">新建文章</div>
+                <div style="font-size:12.5px;color:var(--ic-muted);line-height:1.6;margin-bottom:18px;">
+                  直接进入 Markdown 编辑器<br/>
+                  自由撰写或粘贴正文内容，随时调整各章节
+                </div>
+                <button type="button" class="btn" id="portal-btn-new-direct" style="font-weight:800;padding:8px 24px;">进入编辑器撰写</button>
+              </div>
+            </div>
+
+            <div id="portal-upload-loading" style="display:none;text-align:center;padding:28px;background:var(--ic-panel-solid);border-radius:14px;border:1px solid var(--ic-border);">
+              <div style="font-size:32px;margin-bottom:10px;">⏳</div>
+              <div style="font-size:15px;font-weight:800;color:var(--vermilion);margin-bottom:6px;">正在由 AI 智能解析文档结构…</div>
+              <div style="font-size:12.5px;color:var(--ic-muted);">正在提取文章标题、清洗噪点并排版为标准 Markdown，请稍候</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    bindArticleSidebar(DOM.previewStage, null);
+
+    const backBtn = DOM.previewStage.querySelector("#portal-back-canvas");
+    if (backBtn) backBtn.onclick = () => switchCreationStage("canvas");
+
+    const fileInput = DOM.previewStage.querySelector("#portal-file-input");
+    const uploadCard = DOM.previewStage.querySelector("#portal-card-upload");
+    const uploadBtn = DOM.previewStage.querySelector("#portal-btn-upload-file");
+    const newCard = DOM.previewStage.querySelector("#portal-card-new");
+    const newBtn = DOM.previewStage.querySelector("#portal-btn-new-direct");
+    const loadingBox = DOM.previewStage.querySelector("#portal-upload-loading");
+
+    if (uploadBtn && fileInput) uploadBtn.onclick = (e) => { e.stopPropagation(); fileInput.click(); };
+    if (uploadCard && fileInput) uploadCard.onclick = () => fileInput.click();
+
+    if (fileInput) {
+      fileInput.onchange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        fileInput.value = "";
+        if (loadingBox) loadingBox.style.display = "block";
+        const reader = new FileReader();
+        reader.onload = async (evt) => {
+          const dataUrl = evt.target.result;
+          try {
+            const res = await S.apiJson("/api/studio/parse-article", {
+              method: "POST",
+              body: {
+                fileName: file.name,
+                fileData: dataUrl
+              }
+            });
+            if (loadingBox) loadingBox.style.display = "none";
+
+            ensureMyArticlesInitialized();
+            const now = Date.now();
+            const artId = E.uid("art");
+            const parsedTitle = (res.title || file.name.replace(/\.[^.]+$/, "") || "未命名文章").trim();
+            const parsedMd = res.markdown || "";
+
+            let cards = [];
+            try {
+              const dummyCtrl = {
+                data: {
+                  coverRatio: "2.35:1",
+                  inlineRatio: "4:3",
+                  mode: "article-illust"
+                }
+              };
+              const built = E.buildArticlePlanData(parsedMd, dummyCtrl, CS.graph, Catalog);
+              cards = built.cards || [];
+            } catch (_) {}
+
+            const newArt = {
+              id: artId,
+              articleTitle: parsedTitle,
+              markdown: parsedMd,
+              author: "",
+              cards: cards,
+              status: "ready",
+              createdAtMs: now,
+              updatedAtMs: now,
+              timeLabel: formatArticleTimeLabel(now),
+              linkedTabId: null,
+              linkedPlanNodeId: null,
+              style1: "FA-001",
+              layout: "IG-001",
+              coverRatio: "2.35:1",
+              inlineRatio: "4:3",
+              runCount: 0
+            };
+            CS.myArticles.unshift(newArt);
+            persistMyArticles();
+            CS.activeArticleId = artId;
+
+            CS.articleEditorDraft = {
+              id: artId,
+              title: parsedTitle,
+              author: "",
+              markdown: parsedMd,
+              styleId: "FA-001",
+              coverRatio: "2.35:1",
+              inlineRatio: "4:3"
+            };
+            CS.articleSubView = "editor";
+
+            const url = new URL(window.location.href);
+            url.searchParams.set("entry", "article");
+            url.searchParams.set("articleId", artId);
+            url.searchParams.set("subview", "editor");
+            window.history.replaceState(null, "", url.pathname + url.search);
+
+            renderFullPreviewStage();
+            toast("🎉 AI 解析成功，文章已直接存入历史文章列表！");
+          } catch (err) {
+            if (loadingBox) loadingBox.style.display = "none";
+            toast("解析文档失败：" + (err.message || "请检查文件格式"));
+            console.error("[Article Parse Error]", err);
+          }
+        };
+        reader.readAsDataURL(file);
+      };
+    }
+
+    const startNewEditor = () => {
+      ensureMyArticlesInitialized();
+      const now = Date.now();
+      const artId = E.uid("art");
+      const newArt = {
+        id: artId,
+        articleTitle: "未命名文章",
+        markdown: "",
+        author: "",
+        cards: [],
+        status: "ready",
+        createdAtMs: now,
+        updatedAtMs: now,
+        timeLabel: formatArticleTimeLabel(now),
+        linkedTabId: null,
+        linkedPlanNodeId: null,
+        style1: "FA-001",
+        layout: "IG-001",
+        coverRatio: "2.35:1",
+        inlineRatio: "4:3",
+        runCount: 0
+      };
+      CS.myArticles.unshift(newArt);
+      persistMyArticles();
+      CS.activeArticleId = artId;
+
+      CS.articleEditorDraft = {
+        id: artId,
+        title: "",
+        markdown: "",
+        author: "",
+        styleId: "FA-001",
+        coverRatio: "2.35:1",
+        inlineRatio: "4:3"
+      };
+      CS.articleSubView = "editor";
+
+      const url = new URL(window.location.href);
+      url.searchParams.set("entry", "article");
+      url.searchParams.set("articleId", artId);
+      url.searchParams.set("subview", "editor");
+      window.history.replaceState(null, "", url.pathname + url.search);
+
+      renderFullPreviewStage();
+    };
+
+    if (newBtn) newBtn.onclick = (e) => { e.stopPropagation(); startNewEditor(); };
+    if (newCard) newCard.onclick = () => startNewEditor();
+  }
+
+  function renderWeChatArticlePreviewHtml(draft, styleObj, isMobile = false) {
+    const rawMd = (draft.markdown || "").trim();
+    const title = (draft.title || "").trim() || "未命名文章";
+    const author = (draft.author || "").trim() || "作者";
+    const today = new Date().toISOString().slice(0, 10);
+
+    function renderInline(text) {
+      if (!text) return "";
+      let s = esc(text);
+
+      // Images: ![alt](url)
+      s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
+        return `<div style="text-align:center;margin:18px 0;"><img src="${url}" alt="${alt}" style="max-width:100%;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,0.08);" />${alt ? `<div style="font-size:12px;color:#888;margin-top:5px;">${alt}</div>` : ""}</div>`;
+      });
+
+      // Links: [text](url)
+      s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:#576b95;text-decoration:none;border-bottom:1px solid #576b95;">$1</a>');
+
+      // Bold + Italic: ***text*** or ___text___
+      s = s.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
+      s = s.replace(/___([^_]+)___/g, '<strong><em>$1</em></strong>');
+
+      // Bold: **text** or __text__ (handles **AI 头像：** perfectly)
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong style="font-weight:850;color:#111;">$1</strong>');
+      s = s.replace(/__([^_]+)__/g, '<strong style="font-weight:850;color:#111;">$1</strong>');
+
+      // Italic: *text* or _text_
+      s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      s = s.replace(/_([^_]+)_/g, '<em>$1</em>');
+
+      // Strikethrough: ~~text~~
+      s = s.replace(/~~([^~]+)~~/g, '<del style="color:#999;">$1</del>');
+
+      // Inline Code: `code`
+      s = s.replace(/`([^`]+)`/g, '<code style="background:#f0f2f5;color:#d63384;padding:2px 6px;border-radius:4px;font-family:var(--font-mono,monospace);font-size:13px;border:1px solid #e1e4e8;">$1</code>');
+
+      return s;
+    }
+
+    function parseMarkdownBlocks(md) {
+      if (!md) return `<div style="padding:48px 16px;text-align:center;color:var(--ic-muted,#999);">暂无正文内容，请切换到编写模式输入文字</div>`;
+
+      const lines = md.split(/\r?\n/);
+      const out = [];
+      let i = 0;
+
+      while (i < lines.length) {
+        const line = lines[i];
+
+        if (!line.trim()) {
+          i++;
+          continue;
+        }
+
+        // 1. Fenced Code Block (```lang ... ```)
+        if (line.trim().startsWith("```")) {
+          const codeLines = [];
+          i++;
+          while (i < lines.length && !lines[i].trim().startsWith("```")) {
+            codeLines.push(lines[i]);
+            i++;
+          }
+          if (i < lines.length) i++; // skip closing ```
+          const codeText = esc(codeLines.join("\n"));
+          out.push(`
+            <pre style="margin:16px 0;padding:14px 16px;border-radius:8px;background:#2d3035;color:#f8f8f2;font-family:var(--font-mono,monospace);font-size:12.8px;line-height:1.6;overflow-x:auto;"><code>${codeText}</code></pre>
+          `);
+          continue;
+        }
+
+        // 2. Table parsing (| col1 | col2 |)
+        if (line.includes("|") && i + 1 < lines.length && /^\s*\|?\s*[-:]+[-| :]*\|?\s*$/.test(lines[i + 1])) {
+          const headerLine = line;
+          const sepLine = lines[i + 1];
+          i += 2;
+
+          const parseCells = (row) => {
+            let trimmed = row.trim();
+            if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+            if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+            return trimmed.split("|").map((c) => c.trim());
+          };
+
+          const headers = parseCells(headerLine);
+          const seps = parseCells(sepLine);
+          const aligns = seps.map((s) => {
+            const left = s.startsWith(":");
+            const right = s.endsWith(":");
+            if (left && right) return "center";
+            if (right) return "right";
+            return "left";
+          });
+
+          const bodyRows = [];
+          while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+            bodyRows.push(parseCells(lines[i]));
+            i++;
+          }
+
+          let tableHtml = `<div style="overflow-x:auto;margin:20px 0;border-radius:8px;border:1px solid #e7e7e7;box-shadow:0 1px 3px rgba(0,0,0,0.03);">`;
+          tableHtml += `<table style="width:100%;border-collapse:collapse;font-size:13.5px;color:#333;text-align:left;background:#ffffff;">`;
+          tableHtml += `<thead><tr style="background:#f6f8fa;border-bottom:2px solid #dee2e6;">`;
+          headers.forEach((h, idx) => {
+            const a = aligns[idx] || "left";
+            tableHtml += `<th style="padding:10px 14px;font-weight:850;color:#222;text-align:${a};border-right:1px solid #e9ecef;">${renderInline(h)}</th>`;
+          });
+          tableHtml += `</tr></thead><tbody>`;
+
+          bodyRows.forEach((row, rIdx) => {
+            const bg = rIdx % 2 === 1 ? "#fafbfc" : "#ffffff";
+            tableHtml += `<tr style="background:${bg};border-bottom:1px solid #e9ecef;">`;
+            headers.forEach((_, cIdx) => {
+              const val = row[cIdx] || "";
+              const a = aligns[cIdx] || "left";
+              tableHtml += `<td style="padding:9px 14px;text-align:${a};border-right:1px solid #e9ecef;line-height:1.6;">${renderInline(val)}</td>`;
+            });
+            tableHtml += `</tr>`;
+          });
+          tableHtml += `</tbody></table></div>`;
+          out.push(tableHtml);
+          continue;
+        }
+
+        // 3. Headings (# H1, ## H2, ### H3, #### H4)
+        const hMatch = line.match(/^(#{1,6})\s+(.*)$/);
+        if (hMatch) {
+          const level = hMatch[1].length;
+          const hText = hMatch[2];
+          // Skip first H1 if it duplicates the article title
+          if (level === 1 && out.length === 0 && hText.trim() === title.trim()) {
+            i++;
+            continue;
+          }
+          if (level === 1) {
+            out.push(`<h2 style="font-size:20px;font-weight:850;color:#222;margin:28px 0 12px;line-height:1.42;">${renderInline(hText)}</h2>`);
+          } else if (level === 2) {
+            out.push(`
+              <h3 style="font-size:18px;font-weight:850;color:#222;margin:30px 0 14px;padding-left:11px;border-left:4px solid #07c160;line-height:1.45;">
+                <span>${renderInline(hText)}</span>
+              </h3>
+            `);
+          } else if (level === 3) {
+            out.push(`<h4 style="font-size:16.5px;font-weight:800;color:#222;margin:22px 0 10px;line-height:1.45;">${renderInline(hText)}</h4>`);
+          } else {
+            out.push(`<h5 style="font-size:15px;font-weight:800;color:#333;margin:18px 0 8px;line-height:1.45;">${renderInline(hText)}</h5>`);
+          }
+          i++;
+          continue;
+        }
+
+        // 4. Horizontal Rule (---, ***, ___)
+        if (/^(\*{3,}|-{3,}|_{3,})$/.test(line.trim())) {
+          out.push(`<hr style="border:none;border-top:1px dashed #dcdcdc;margin:26px 0;" />`);
+          i++;
+          continue;
+        }
+
+        // 5. Blockquote (> ...)
+        if (line.trim().startsWith(">")) {
+          const bqLines = [];
+          while (i < lines.length && lines[i].trim().startsWith(">")) {
+            bqLines.push(lines[i].replace(/^>\s*/, ""));
+            i++;
+          }
+          const bqContent = bqLines.join("\n").trim();
+
+          // Check if it is an AI Illustration Slot Tag
+          if (bqContent.includes("插图位建议") || bqContent.includes("🖼️") || bqContent.includes("配图")) {
+            const cleanDesc = bqContent.replace(/^[>🖼️\s【插图位建议：】]+/, "").replace(/[】\s]+$/, "").trim() || bqContent;
+            out.push(`
+              <div style="border:2px dashed #07c160;border-radius:10px;padding:16px 18px;background:#fbfdfc;margin:22px 0;">
+                <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:850;color:#07c160;margin-bottom:6px;">
+                  <span>🖼️ AI 章节规划插图位</span>
+                  <span style="font-size:11px;background:#eaf8f0;padding:2px 7px;border-radius:4px;font-weight:750;">画幅 ${esc(draft.inlineRatio || "4:3")}</span>
+                  ${styleObj?.id ? `<span style="font-size:11px;background:#eaf8f0;padding:2px 7px;border-radius:4px;font-weight:750;">#${esc(styleObj.id)}</span>` : ""}
+                </div>
+                <div style="font-size:13.5px;color:#444;line-height:1.68;">${renderInline(cleanDesc)}</div>
+              </div>
+            `);
+          } else {
+            out.push(`
+              <blockquote style="margin:16px 0;padding:12px 16px;background:#f8f9fa;border-left:3.5px solid #07c160;border-radius:0 6px 6px 0;color:#555;font-size:14px;line-height:1.75;">
+                ${renderInline(bqContent).replace(/\n/g, "<br/>")}
+              </blockquote>
+            `);
+          }
+          continue;
+        }
+
+        // 6. Unordered List (- , * , + )
+        if (/^\s*[-*+]\s+/.test(line)) {
+          const listItems = [];
+          while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+            listItems.push(lines[i].replace(/^\s*[-*+]\s+/, ""));
+            i++;
+          }
+          const lisHtml = listItems
+            .map((item) => `<li style="margin-bottom:6px;">${renderInline(item)}</li>`)
+            .join("");
+          out.push(`<ul style="margin:12px 0 12px 20px;font-size:15px;line-height:1.8;color:#333;padding-left:14px;">${lisHtml}</ul>`);
+          continue;
+        }
+
+        // 7. Ordered List (1. , 2. )
+        if (/^\s*\d+\.\s+/.test(line)) {
+          const listItems = [];
+          while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+            listItems.push(lines[i].replace(/^\s*\d+\.\s+/, ""));
+            i++;
+          }
+          const lisHtml = listItems
+            .map((item) => `<li style="margin-bottom:6px;">${renderInline(item)}</li>`)
+            .join("");
+          out.push(`<ol style="margin:12px 0 12px 20px;font-size:15px;line-height:1.8;color:#333;padding-left:14px;">${lisHtml}</ol>`);
+          continue;
+        }
+
+        // 8. Paragraph
+        const pLines = [line];
+        i++;
+        while (
+          i < lines.length &&
+          lines[i].trim() &&
+          !lines[i].trim().startsWith("```") &&
+          !lines[i].trim().startsWith("#") &&
+          !lines[i].trim().startsWith(">") &&
+          !/^\s*[-*+]\s+/.test(lines[i]) &&
+          !/^\s*\d+\.\s+/.test(lines[i]) &&
+          !/^(\*{3,}|-{3,}|_{3,})$/.test(lines[i].trim()) &&
+          !(lines[i].includes("|") && i + 1 < lines.length && /^\s*\|?\s*[-:]+[-| :]*\|?\s*$/.test(lines[i + 1]))
+        ) {
+          pLines.push(lines[i]);
+          i++;
+        }
+
+        const pText = pLines.map((pl) => renderInline(pl)).join("<br/>");
+        out.push(`<p style="font-size:15.5px;line-height:1.88;margin:14px 0;color:#333;text-align:justify;letter-spacing:0.02em;">${pText}</p>`);
+      }
+
+      return out.join("\n");
+    }
+
+    const bodyHtml = parseMarkdownBlocks(rawMd);
+
+    return `
+      <div class="ic-wechat-preview-wrap ${isMobile ? "is-mobile-vp" : "is-desktop-vp"}">
+        ${
+          isMobile
+            ? `
+          <div class="ic-wechat-phone-notch">
+            <span style="font-size:11px;font-weight:800;">9:41</span>
+            <span style="font-size:11px;">5G ▮▮▮ 100%</span>
+          </div>
+        `
+            : ""
+        }
+
+        <!-- Article Title -->
+        <h1 style="font-size:${isMobile ? "21px" : "25px"};font-weight:850;line-height:1.42;color:#222;margin:0 0 12px;">
+          ${esc(title)}
+        </h1>
+
+        <!-- Author / Metadata Line -->
+        <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:#888;margin-bottom:18px;flex-wrap:wrap;">
+          <span style="font-weight:750;color:#333;">${esc(author)}</span>
+          <span style="color:#576b95;font-weight:750;">手绘风格社区</span>
+          <span>${today}</span>
+          <span style="background:#f2f2f2;color:#666;font-size:11px;padding:1px 6px;border-radius:3px;">原创</span>
+        </div>
+
+        <!-- Selected Style Banner Badge -->
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#f4f9f5;border-radius:8px;border:1px solid #d1ead7;margin-bottom:22px;">
+          <img src="${esc(styleObj.image || '')}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;border:1px solid #c2e2ca;flex-shrink:0;" alt="" onerror="this.style.display='none'" />
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12.5px;font-weight:850;color:#1f6f4a;display:flex;align-items:center;gap:6px;">
+              <span>配图画风：#${esc(styleObj.id)} · ${esc(styleObj.name)}</span>
+            </div>
+            <div style="font-size:11.5px;color:#666;margin-top:2px;">
+              封面画幅：<strong>${esc(draft.coverRatio)}</strong> · 章节插图：<strong>${esc(draft.inlineRatio)}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-bottom:1px solid #eee;margin-bottom:20px;"></div>
+
+        <!-- Body Content -->
+        <div class="ic-wechat-preview-body" style="min-height:360px;">
+          ${bodyHtml}
+        </div>
+
+        <!-- WeChat Reader Footer -->
+        <div style="margin-top:36px;padding-top:18px;border-top:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#8c8c8c;">
+          <span>阅读 10万+</span>
+          <div style="display:flex;align-items:center;gap:16px;">
+            <span>在看 248</span>
+            <span>👍 860</span>
+            <span>分享</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function flushUnifiedArticleEditor() {
+    const fn = CS.articleEditorFlush;
+    if (typeof fn !== "function") return;
+    try {
+      fn();
+    } catch (err) {
+      try { console.warn("[article-editor] flush failed", err); } catch (_) {}
+    } finally {
+      if (CS.articleEditorFlush === fn) CS.articleEditorFlush = null;
+    }
+  }
+
+  function clearUnifiedArticleEditorFlush() {
+    CS.articleEditorFlush = null;
+  }
+
+  function makeBlankArticleDraft() {
+    return {
+      id: E.uid("art"),
+      title: "",
+      author: "",
+      markdown: "",
+      styleId: "FA-001",
+      coverRatio: "2.35:1",
+      inlineRatio: "4:3",
+      isNewDraft: true
+    };
+  }
+
+  function draftFromArticle(art) {
+    return {
+      id: art.id,
+      title: art.articleTitle || "",
+      author: art.author || "",
+      markdown: art.markdown || "",
+      styleId: art.style1 || "FA-001",
+      coverRatio: art.coverRatio || "2.35:1",
+      inlineRatio: art.inlineRatio || "4:3",
+      isNewDraft: false
+    };
+  }
+
+  function findArticleById(articleId) {
+    return (CS.myArticles || []).find((a) => a.id === articleId) || null;
+  }
+
+  function openUnifiedArticleEditor(articleId = null, { createNew = false, renderNow = true } = {}) {
+    flushUnifiedArticleEditor();
+    if (!createNew) syncAllTabsArticlesIntoStore();
+    ensureMyArticlesInitialized();
+
+    let draft = null;
+    if (createNew) {
+      CS.activeArticleId = null;
+      CS.activePlanNodeId = null;
+      draft = makeBlankArticleDraft();
+    } else {
+      let art = null;
+      if (articleId) {
+        art = findArticleById(articleId);
+      }
+      if (!art && !articleId) {
+        const currentDraft = CS.articleEditorDraft;
+        if (currentDraft && currentDraft.id) art = findArticleById(currentDraft.id);
+      }
+      if (!art && !articleId && CS.activeArticleId) {
+        art = findArticleById(CS.activeArticleId);
+      }
+      if (!art && !articleId) {
+        const sorted = getSortedMyArticles();
+        art = sorted.length ? sorted[0] : null;
+      }
+      if (art) {
+        CS.activeArticleId = art.id;
+        CS.activePlanNodeId = art.linkedPlanNodeId || null;
+        draft = draftFromArticle(art);
+      }
+    }
+
+    if (!draft) {
+      CS.activePlanNodeId = null;
+      draft = makeBlankArticleDraft();
+    }
+
+    CS.articleEditorDraft = draft;
+    CS.previewTab = "article";
+    CS.stageView = "preview";
+    CS.articleSubView = "editor";
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("entry", "article");
+    if (draft.id && !draft.isNewDraft) {
+      url.searchParams.set("articleId", draft.id);
+    } else {
+      url.searchParams.delete("articleId");
+    }
+    url.searchParams.set("subview", "editor");
+    url.searchParams.delete("view");
+    window.history.replaceState(null, "", url.pathname + url.search);
+
+    if (renderNow) renderFullPreviewStage();
+    return draft;
+  }
+
+  function planUnifiedArticleDraft(draft) {
+    const {
+      id: articleId = null,
+      title = "",
+      markdown = "",
+      styleId = "FA-001",
+      layoutId = "IG-001",
+      coverRatio = "2.35:1",
+      inlineRatio = "4:3"
+    } = draft || {};
+    if (!articleId) return null;
+
+    syncArticleEditorDraftToHistory(draft, { bumpTime: true });
+
+    const target = typeof resolveArticleTarget === "function"
+      ? resolveArticleTarget(articleId)
+      : null;
+    if (!target) return null;
+    if (isArticleGenerating(target.planNode?.data || target.art)) return target.planNode || null;
+
+    const md = (markdown || "").trim() ||
+      (title ? `# ${title}\n\n在这里输入正文内容…` : E.DEFAULT_STARTER_ARTICLE_MD);
+
+    const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
+      withPresetAssets: false
+    });
+
+    const tmpSkill = tmpGraph.nodes.find(
+      (n) => n.type === "skill_params" || n.type === "skill"
+    );
+    if (tmpSkill) {
+      tmpSkill.data = tmpSkill.data || {};
+      tmpSkill.data.style1 = styleId || "FA-001";
+      tmpSkill.data.layout = layoutId || "IG-001";
+    }
+
+    const tmpText = tmpGraph.nodes.find((n) => n.type === "text_input");
+    if (tmpText) {
+      tmpText.data = tmpText.data || {};
+      tmpText.data.text = md;
+      tmpText.data.value = md;
+      tmpText.data.markdown = md;
+    }
+
+    const tmpCtrl = tmpGraph.nodes.find(
+      (n) => n.type === "output_control" && n.data?.mode === "article-illust"
+    ) || tmpGraph.nodes.find((n) => n.type === "output_control");
+    if (tmpCtrl) {
+      tmpCtrl.data = tmpCtrl.data || {};
+      tmpCtrl.data.mode = "article-illust";
+      tmpCtrl.data.coverRatio = coverRatio || "2.35:1";
+      tmpCtrl.data.inlineRatio = inlineRatio || "4:3";
+      tmpCtrl.data.status = "ready";
+    }
+
+    const built = E.buildArticlePlanData(md, tmpCtrl, tmpGraph, Catalog);
+    if (title) built.articleTitle = title;
+
+    const oldCards = Array.isArray(target.art?.cards) ? target.art.cards : [];
+    const newCards = Array.isArray(built.cards) ? built.cards : [];
+    const consumed = new Set();
+
+    const matchedCards = newCards.map((card, idx) => {
+      const role = card.role;
+      let hit = null;
+
+      if (role === "cover") {
+        hit = oldCards.find((o) => o.role === "cover" && !consumed.has(o));
+      } else {
+        const afterBlockIdx = card.afterBlockIdx;
+        const cardTitle = card.title;
+        hit = oldCards.find((o) => {
+          if (consumed.has(o)) return false;
+          if (o.role !== role) return false;
+          if (o.title !== cardTitle) return false;
+          if (afterBlockIdx != null && o.afterBlockIdx != null) {
+            return o.afterBlockIdx === afterBlockIdx;
+          }
+          return true;
+        });
+        if (!hit) {
+          hit = oldCards.find((o) =>
+            !consumed.has(o) &&
+            o.role === role &&
+            o.title === cardTitle &&
+            o.section === card.section
+          );
+        }
+      }
+
+      if (!hit) return card;
+      consumed.add(hit);
+
+      const merged = Object.assign({}, card);
+      if (hit.id != null) merged.id = hit.id;
+      if (hit.imageUrl != null) merged.imageUrl = hit.imageUrl;
+      if (hit.status != null) merged.status = hit.status;
+      if (hit.promptCustomized === true && hit.prompt != null) {
+        merged.promptCustomized = true;
+        merged.prompt = hit.prompt;
+      }
+      return merged;
+    });
+
+    const planNode = target.planNode;
+    if (planNode) {
+      planNode.data = planNode.data || {};
+      planNode.data.articleTitle = built.articleTitle;
+      planNode.data.markdown = built.markdown;
+      planNode.data.cards = matchedCards;
+      planNode.data.updatedAt = "已生成方案";
+    }
+
+    const art = target.art || null;
+    if (art) {
+      art.articleTitle = built.articleTitle;
+      art.style1 = styleId || art.style1 || "FA-001";
+      art.coverRatio = coverRatio || art.coverRatio || "2.35:1";
+      art.inlineRatio = inlineRatio || art.inlineRatio || "4:3";
+      art.cards = matchedCards;
+      art.markdown = built.markdown;
+    }
+
+    commitArticleTargetChanges(target, { bumpTime: true });
+
+    CS.activeArticleId = draft.id;
+    CS.activePlanNodeId = target.art?.linkedPlanNodeId || null;
+
+    return target.planNode || null;
+  }
+
+  function renderUnifiedArticleCardsHtml(draft) {
+    const target = resolveArticleTarget(draft.id);
+    const cards = sortPlanCardsInDocOrder(target?.planNode?.data?.cards || []);
+    const blocks = E.parseArticleReadonlyBlocks(draft.markdown || "");
+    const blockIndexes = blocks.map((b) => b.idx).sort((a, b) => a - b);
+    const cardsByPos = new Map();
+    cards.forEach((card) => {
+      const pos = card.afterBlockIdx;
+      const key = Number.isInteger(pos) && pos !== -1 ? pos : -1;
+      if (!cardsByPos.has(key)) cardsByPos.set(key, []);
+      cardsByPos.get(key).push(card);
+    });
+    const parts = [];
+    let inlineCounter = 0;
+    const renderCardAt = (card) => {
+      if (card && card.role !== "cover") inlineCounter += 1;
+      parts.push(renderPlanSlotCardHtml(card, inlineCounter));
+    };
+    (cardsByPos.get(-1) || []).forEach(renderCardAt);
+    parts.push(renderNotionGapHtml(-1, "文章开头"));
+    blockIndexes.forEach((idx) => {
+      (cardsByPos.get(idx) || []).forEach(renderCardAt);
+      const block = blocks.find((b) => b.idx === idx);
+      const label = block && block.text ? String(block.text).slice(0, 24) : `第 ${idx + 1} 段`;
+      parts.push(renderNotionGapHtml(idx, label));
+    });
+    const overflow = [];
+    cardsByPos.forEach((cardList, pos) => {
+      if (pos !== -1 && !blockIndexes.includes(pos)) overflow.push(...cardList);
+    });
+    if (overflow.length) {
+      const tailIdx = blockIndexes.length ? blockIndexes[blockIndexes.length - 1] : -1;
+      overflow.forEach(renderCardAt);
+      parts.push(renderNotionGapHtml(tailIdx, "文章末尾"));
+    }
+    return parts.join("");
+  }
+
+  function renderNotionGapHtml(idx, label) {
+    return `<div class="ic-notion-gap" data-gap-idx="${idx}"><button type="button" class="ic-notion-insert-btn" data-plan-insert-at="${idx}">＋ 在${esc(label)}添加配图</button></div>`;
+  }
+
+  function renderArticleEditorPage(sortedArticles) {
+    const draft = CS.articleEditorDraft || {
+      title: "",
+      markdown: "",
+      styleId: "FA-001",
+      coverRatio: "2.35:1",
+      inlineRatio: "4:3",
+      author: ""
+    };
+
+    const isPreview = false;
+    const previewOpen = CS.articlePreviewOpen !== false;
+    flushUnifiedArticleEditor();
+    const target = resolveArticleTarget(draft.id);
+    const cards = target?.planNode?.data?.cards || [];
+    const hasImageUrl = cards.some((c) => c.imageUrl);
+    const isGenerating = isArticleGenerating(target?.planNode?.data || {});
+    const canGenerate = cards.length > 0 && !isGenerating;
+    const hasBodyText = !!(draft.markdown || "").trim();
+    const canExport = hasImageUrl && hasBodyText && !isGenerating;
+    const canPublish = hasImageUrl && hasBodyText && !isGenerating;
+
+    const styleObj = Catalog.resourceMap?.get(draft.styleId) || {
+      id: draft.styleId || "FA-001",
+      name: "手绘钢笔淡彩",
+      image: "/images/individual/FA/FA-001.webp"
+    };
+
+    DOM.previewStage.innerHTML = `
+      <div class="ic-wechat-editor-root">
+        <!-- 1. FIXED TOP TOOLBAR (顶部固定工具栏) -->
+        <header class="ic-wechat-topbar" id="wechat-topbar">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button type="button" class="btn btn-sm" id="editor-btn-back" style="font-weight:750;padding:3px 10px;">← 文章列表</button>
+            <span style="font-size:13px;font-weight:850;color:var(--ic-ink);display:flex;align-items:center;gap:5px;">
+              📰 <span>文章编辑器</span>
+            </span>
+            <span style="font-size:11px;color:var(--ic-muted);background:var(--ic-surface,#f0f2f5);padding:2px 7px;border-radius:4px;">微信公众号排版</span>
+          </div>
+
+          <!-- Mode / Formatting Tools -->
+          <div style="display:flex;align-items:center;gap:10px;">
+            ${
+              !isPreview
+                ? `
+              <div class="ic-wechat-tools-group">
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="h1" title="一级主标题">H1</button>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="h2" title="二级章节标题">H2</button>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="h3" title="三级小节标题">H3</button>
+                <div class="ic-wechat-tool-sep"></div>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="bold" title="加粗 (Ctrl+B)"><strong>B</strong></button>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="italic" title="斜体 (Ctrl+I)"><em>I</em></button>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="quote" title="重点引用">❝</button>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="hr" title="分割线">—</button>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="ul" title="无序列表">• 列表</button>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="ol" title="有序列表">1. 列表</button>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="code" title="代码块">&lt;/&gt;</button>
+                <div class="ic-wechat-tool-sep"></div>
+                <button type="button" class="ic-wechat-tool-btn" data-fmt="illust" title="在此插入AI插图位标记" style="color:var(--vermilion);font-weight:800;">
+                  🖼️ 插入配图位
+                </button>
+              </div>
+            `
+                : `
+              <div class="qc-mode-switch" role="group" style="padding:2px;background:var(--ic-surface,#f0f2f5);border-radius:6px;display:flex;gap:3px;">
+                <button type="button" class="btn btn-sm ${isMobileVp ? "btn-primary" : ""}" id="vp-btn-mobile" style="padding:3px 12px;font-size:12px;font-weight:800;">
+                  📱 手机视口 (375px)
+                </button>
+                <button type="button" class="btn btn-sm ${!isMobileVp ? "btn-primary" : ""}" id="vp-btn-desktop" style="padding:3px 12px;font-size:12px;font-weight:800;">
+                  🖥️ 宽屏视口 (800px)
+                </button>
+              </div>
+            `
+            }
+          </div>
+
+          <!-- Top-right: Edit/Preview toggle tabs & Document Upload -->
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button type="button" class="btn btn-sm" id="editor-btn-toggle-preview" style="padding:3px 12px;font-size:12px;font-weight:800;" aria-expanded="${previewOpen ? "true" : "false"}">
+              ${previewOpen ? "收起预览" : "排版预览"}
+            </button>
+
+            <label class="btn btn-sm" style="cursor:pointer;padding:3px 10px;font-size:12px;font-weight:750;" title="上传文档重新由 AI 解析覆盖当前正文">
+              🔄 导入/替换文档
+              <input type="file" id="editor-file-replace-inp" accept=".md,.markdown,.txt,.doc,.docx,.pdf" hidden />
+            </label>
+          </div>
+        </header>
+
+        <!-- 2. MIDDLE AREA (左侧大纲/历史 + 中间无滚动条滚动纸张) -->
+        <div class="ic-wechat-body">
+          ${renderArticleSidebarHtml(sortedArticles, CS.activeArticleId)}
+
+          <div class="ic-wechat-scroll-area" id="wechat-scroll-container">
+            ${
+              !isPreview
+                ? `
+              <article class="ic-wechat-paper">
+                <!-- Article Title -->
+                <div class="ic-wechat-title-box">
+                  <input
+                    type="text"
+                    class="ic-wechat-title-input"
+                    id="editor-title-inp"
+                    maxlength="64"
+                    value="${esc(draft.title || "")}"
+                    placeholder="请输入文章主标题（留空自动使用 Markdown 首行一级标题）"
+                  />
+                  <span class="ic-wechat-title-count" id="editor-title-count">${(draft.title || "").length}/64</span>
+                </div>
+
+                <!-- Author / Subtitle -->
+                <input
+                  type="text"
+                  class="ic-wechat-author-input"
+                  id="editor-author-inp"
+                  value="${esc(draft.author || "")}"
+                  placeholder="请输入作者（可选）"
+                />
+
+                <div class="ic-wechat-paper-divider"></div>
+
+                <!-- Body Textarea -->
+                <textarea
+                  class="ic-wechat-textarea"
+                  id="editor-md-ta"
+                  placeholder="# 文章主标题&#10;&#10;引言与核心导语，在此展开背景与核心论点…&#10;&#10;## 第一章：核心概念&#10;章节第一部分阐述…&#10;&#10;## 第二章：实战与落地&#10;章节第二部分内容…"
+                >${esc(draft.markdown || "")}</textarea>
+              </article>
+
+              <section id="pv-notion-article-sheet">
+                ${renderUnifiedArticleCardsHtml(draft)}
+              </section>
+            `
+                : renderWeChatArticlePreviewHtml(draft, styleObj, false)
+            }
+          </div>
+
+          <aside id="editor-inline-preview" ${previewOpen ? "" : "hidden"}>
+            <div id="editor-inline-preview-content">${renderWeChatArticlePreviewHtml(draft, styleObj, false)}</div>
+          </aside>
+        </div>
+
+        <!-- 3. FIXED BOTTOM BAR (底部固定状态与主操作栏) -->
+        <footer class="ic-wechat-bottombar" id="wechat-bottombar">
+          <div class="ic-wechat-bottombar-left">
+            <div class="ic-wechat-char-counter">
+              正文字数 <strong id="editor-char-count">${(draft.markdown || "").length}</strong>
+              <span id="editor-save-state" style="font-size:11px;color:var(--ic-muted);font-weight:750;margin-left:8px;"></span>
+            </div>
+
+            <div class="ic-wechat-bottom-select-group">
+              <!-- Visual Style Picker with Thumbnail Image -->
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">画风:</span>
+                <button type="button" class="btn btn-sm ic-wechat-style-badge" id="editor-style-picker" title="点击更换手绘视觉画风（展示代表图，防止同名混淆）">
+                  <img src="${esc(styleObj.image || '')}" class="ic-wechat-style-thumb" id="editor-style-thumb" alt="" onerror="this.style.display='none'" />
+                  <div class="ic-wechat-style-meta">
+                    <span class="ic-wechat-style-id" id="editor-style-id">#${esc(styleObj.id)}</span>
+                    <span class="ic-wechat-style-name" id="editor-style-name">${esc(styleObj.name || styleObj.id)}</span>
+                  </div>
+                  <span style="font-size:10px;color:var(--vermilion);font-weight:800;margin-left:4px;">更换 ▾</span>
+                </button>
+              </div>
+
+              <!-- Cover Aspect Ratio Selector -->
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">封面画幅:</span>
+                <select class="hw-select" id="editor-cover-ratio" style="padding:4px 8px;font-size:12px;">
+                  <option value="2.35:1" ${draft.coverRatio === "2.35:1" ? "selected" : ""}>2.35:1（微信公众号超宽封面）</option>
+                  <option value="16:9" ${draft.coverRatio === "16:9" ? "selected" : ""}>16:9（B站 / 视频横版封面）</option>
+                  <option value="3:4" ${draft.coverRatio === "3:4" ? "selected" : ""}>3:4（小红书竖版封面）</option>
+                  <option value="1:1" ${draft.coverRatio === "1:1" ? "selected" : ""}>1:1（方形封面）</option>
+                </select>
+              </div>
+
+              <!-- Inline Illustration Ratio Selector -->
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">章节插图:</span>
+                <select class="hw-select" id="editor-inline-ratio" style="padding:4px 8px;font-size:12px;">
+                  <option value="4:3" ${draft.inlineRatio === "4:3" ? "selected" : ""}>4:3（经典阅读插图）</option>
+                  <option value="16:9" ${draft.inlineRatio === "16:9" ? "selected" : ""}>16:9（宽屏图表插图）</option>
+                  <option value="3:4" ${draft.inlineRatio === "3:4" ? "selected" : ""}>3:4（竖版信息卡）</option>
+                  <option value="1:1" ${draft.inlineRatio === "1:1" ? "selected" : ""}>1:1（方形插图）</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="ic-wechat-bottombar-right">
+            <!-- Main Primary Action Button -->
+            <button type="button" class="btn btn-primary ic-wechat-btn-plan" id="editor-btn-plan" ${isGenerating ? "disabled" : ""}>
+              规划封面与插图
+            </button>
+            <button type="button" class="btn btn-sm" id="editor-btn-batch" ${canGenerate ? "" : "disabled"}>生成配图</button>
+            <button type="button" class="btn btn-sm" id="editor-btn-export" ${canExport ? "" : "disabled"}>导出</button>
+            <button type="button" class="btn btn-sm" id="editor-btn-publish" ${canPublish ? "" : "disabled"}>发布</button>
+          </div>
+        </footer>
+      </div>
+    `;
+
+    bindArticleSidebar(DOM.previewStage, CS.activeArticleId);
+
+    const planSheet = DOM.previewStage.querySelector("#pv-notion-article-sheet");
+    if (planSheet && target?.planNode) bindNotionPlanSheetInteractions(target.planNode);
+
+    const updateInlineArticlePreview = () => {
+      const contentEl = DOM.previewStage.querySelector("#editor-inline-preview-content");
+      if (!contentEl) return;
+      const styleRes = Catalog.resourceMap?.get(draft.styleId) || styleObj;
+      contentEl.innerHTML = renderWeChatArticlePreviewHtml(draft, styleRes, false);
+    };
+
+    const backBtn = DOM.previewStage.querySelector("#editor-btn-back");
+    if (backBtn) {
+      backBtn.onclick = () => {
+        openMyArticlesPage({ subView: "all-list" });
+      };
+    }
+
+    const titleInp = DOM.previewStage.querySelector("#editor-title-inp");
+    const titleCountEl = DOM.previewStage.querySelector("#editor-title-count");
+    const authorInp = DOM.previewStage.querySelector("#editor-author-inp");
+    const mdTa = DOM.previewStage.querySelector("#editor-md-ta");
+    const charCountEl = DOM.previewStage.querySelector("#editor-char-count");
+    const coverSel = DOM.previewStage.querySelector("#editor-cover-ratio");
+    const inlineSel = DOM.previewStage.querySelector("#editor-inline-ratio");
+    const stylePickerBtn = DOM.previewStage.querySelector("#editor-style-picker");
+    const replaceInp = DOM.previewStage.querySelector("#editor-file-replace-inp");
+    const planBtn = DOM.previewStage.querySelector("#editor-btn-plan");
+    const togglePreviewBtn = DOM.previewStage.querySelector("#editor-btn-toggle-preview");
+    const inlinePreviewPane = DOM.previewStage.querySelector("#editor-inline-preview");
+    const batchBtn = DOM.previewStage.querySelector("#editor-btn-batch");
+    const exportBtn = DOM.previewStage.querySelector("#editor-btn-export");
+    const publishBtn = DOM.previewStage.querySelector("#editor-btn-publish");
+
+    const saveCurrentDraftFromInputs = () => {
+      if (titleInp) draft.title = titleInp.value;
+      if (authorInp) draft.author = authorInp.value;
+      if (mdTa) draft.markdown = mdTa.value;
+      if (coverSel) draft.coverRatio = coverSel.value;
+      if (inlineSel) draft.inlineRatio = inlineSel.value;
+    };
+
+    const autosaveScope = currentCacheScopeKey();
+    let autosaveActive = true;
+    let autoSyncTimer = null;
+
+    const isCurrentEditor = () => {
+      if (!autosaveActive || autosaveScope !== currentCacheScopeKey()) return false;
+      if (CS.articleEditorDraft !== draft) return false;
+      return DOM.previewStage.querySelector("#editor-md-ta") === mdTa;
+    };
+
+    const collectDraftFromInputs = (d) => {
+      if (!d) return d;
+      if (titleInp) d.title = titleInp.value;
+      if (authorInp) d.author = authorInp.value;
+      if (mdTa) d.markdown = mdTa.value;
+      if (coverSel) d.coverRatio = coverSel.value;
+      if (inlineSel) d.inlineRatio = inlineSel.value;
+      return d;
+    };
+
+    const updateSavedState = (state) => {
+      const el = DOM.previewStage.querySelector("#editor-save-state");
+      if (!el) return;
+      if (state === "dirty") el.textContent = "保存中";
+      else if (state === "saved") el.textContent = "已保存";
+      else if (state === "empty") el.textContent = "未填写";
+    };
+
+    const commitSync = ({ bumpTime = true, markSaved = true } = {}) => {
+      if (!isCurrentEditor()) return false;
+      collectDraftFromInputs(draft);
+      const saved = syncArticleEditorDraftToHistory(draft, { bumpTime });
+      if (markSaved) {
+        if (saved && draft.id) {
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.set("entry", "article");
+            url.searchParams.set("articleId", draft.id);
+            url.searchParams.set("subview", "editor");
+            window.history.replaceState(null, "", url.pathname + url.search);
+          } catch (_) {}
+          updateSavedState("saved");
+        } else if (!saved) {
+          updateSavedState("dirty");
+        }
+      }
+      return saved;
+    };
+
+    const hasEditorContent = () =>
+      !!((draft.title || "").trim() || (draft.markdown || "").trim() || (draft.author || "").trim());
+
+    const triggerDebouncedSync = () => {
+      if (!isCurrentEditor()) return;
+      updateSavedState(hasEditorContent() ? "dirty" : "empty");
+      if (autoSyncTimer) clearTimeout(autoSyncTimer);
+      autoSyncTimer = setTimeout(() => {
+        autoSyncTimer = null;
+        if (!isCurrentEditor()) return;
+        collectDraftFromInputs(draft);
+        if (!commitSync({ bumpTime: true, markSaved: true }) && isCurrentEditor()) {
+          updateSavedState(hasEditorContent() ? "dirty" : "empty");
+        }
+      }, 500);
+    };
+
+    const handleBeforeUnload = () => {
+      if (!isCurrentEditor()) return;
+      collectDraftFromInputs(draft);
+      syncArticleEditorDraftToHistory(draft, { bumpTime: false });
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    CS.articleEditorFlush = () => {
+      if (autosaveActive && isCurrentEditor()) {
+        collectDraftFromInputs(draft);
+        syncArticleEditorDraftToHistory(draft, { bumpTime: false });
+      }
+      autosaveActive = false;
+      if (autoSyncTimer) {
+        clearTimeout(autoSyncTimer);
+        autoSyncTimer = null;
+      }
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+
+    // Inline preview pane toggle
+    if (togglePreviewBtn) {
+      togglePreviewBtn.onclick = () => {
+        const nextOpen = !(CS.articlePreviewOpen !== false);
+        CS.articlePreviewOpen = nextOpen;
+        if (inlinePreviewPane) inlinePreviewPane.hidden = !nextOpen;
+        togglePreviewBtn.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+        togglePreviewBtn.textContent = nextOpen ? "收起预览" : "排版预览";
+        if (nextOpen) updateInlineArticlePreview();
+      };
+    }
+
+    // Dynamic auto-expansion of textarea height to prevent internal scrollbar
+    const adjustHeight = () => {
+      if (!mdTa) return;
+      mdTa.style.height = "auto";
+      mdTa.style.height = Math.max(540, mdTa.scrollHeight) + "px";
+    };
+
+    if (titleInp) {
+      titleInp.oninput = () => {
+        draft.title = titleInp.value;
+        if (titleCountEl) titleCountEl.textContent = `${titleInp.value.length}/64`;
+        updateInlineArticlePreview();
+        triggerDebouncedSync();
+      };
+    }
+    if (authorInp) {
+      authorInp.oninput = () => {
+        draft.author = authorInp.value;
+        updateInlineArticlePreview();
+        triggerDebouncedSync();
+      };
+    }
+
+    if (mdTa) {
+      mdTa.oninput = () => {
+        draft.markdown = mdTa.value;
+        if (charCountEl) charCountEl.textContent = mdTa.value.length;
+        adjustHeight();
+        updateInlineArticlePreview();
+        triggerDebouncedSync();
+      };
+      setTimeout(adjustHeight, 50);
+    }
+
+    if (coverSel) {
+      coverSel.onchange = () => {
+        draft.coverRatio = coverSel.value;
+        syncArticleEditorDraftToHistory(draft);
+      };
+    }
+    if (inlineSel) {
+      inlineSel.onchange = () => {
+        draft.inlineRatio = inlineSel.value;
+        syncArticleEditorDraftToHistory(draft);
+      };
+    }
+
+    // Format toolbar button handlers
+    const insertFormat = (prefix, suffix = "", defaultPlaceholder = "") => {
+      if (!mdTa) return;
+      const start = mdTa.selectionStart;
+      const end = mdTa.selectionEnd;
+      const val = mdTa.value;
+      const selected = val.substring(start, end) || defaultPlaceholder;
+      const replacement = prefix + selected + suffix;
+      const newPos = start + prefix.length + selected.length;
+      mdTa.setRangeText(replacement, start, end, "select");
+      draft.markdown = mdTa.value;
+      if (charCountEl) charCountEl.textContent = mdTa.value.length;
+      adjustHeight();
+      mdTa.focus();
+      try {
+        mdTa.setSelectionRange(newPos, newPos);
+      } catch (_) {}
+      saveCurrentDraftFromInputs();
+      syncArticleEditorDraftToHistory(draft, { bumpTime: true });
+      updateInlineArticlePreview();
+    };
+
+    DOM.previewStage.querySelectorAll("[data-fmt]").forEach((btn) => {
+      btn.onclick = () => {
+        const fmt = btn.getAttribute("data-fmt");
+        if (fmt === "h1") insertFormat("\n# ", "\n", "主标题");
+        else if (fmt === "h2") insertFormat("\n## ", "\n", "章节标题");
+        else if (fmt === "h3") insertFormat("\n### ", "\n", "小节标题");
+        else if (fmt === "bold") insertFormat("**", "**", "加粗文本");
+        else if (fmt === "italic") insertFormat("*", "*", "斜体文本");
+        else if (fmt === "quote") insertFormat("\n> ", "\n", "重点引用内容");
+        else if (fmt === "hr") insertFormat("\n\n---\n\n", "");
+        else if (fmt === "ul") insertFormat("\n- ", "\n", "列表要点");
+        else if (fmt === "ol") insertFormat("\n1. ", "\n", "列表序号");
+        else if (fmt === "code") insertFormat("\n```\n", "\n```\n", "代码或提纲");
+        else if (fmt === "illust") insertFormat("\n\n> 🖼️ 【插图位建议：", "】\n\n", "描述此处的插图画面与场景");
+      };
+    });
+
+    if (stylePickerBtn) {
+      stylePickerBtn.onclick = () => {
+        S.openAssetPickerModal({
+          kind: "style",
+          currentId: draft.styleId || "FA-001",
+          onSelect: (id) => {
+            if (!isCurrentEditor()) return;
+            draft.styleId = id;
+            syncArticleEditorDraftToHistory(draft);
+            const res = Catalog.resourceMap?.get(id);
+            const thumbEl = DOM.previewStage.querySelector("#editor-style-thumb");
+            const idEl = DOM.previewStage.querySelector("#editor-style-id");
+            const nameEl = DOM.previewStage.querySelector("#editor-style-name");
+            if (thumbEl && res?.image) {
+              thumbEl.src = res.image;
+              thumbEl.style.display = "block";
+            }
+            if (idEl) idEl.textContent = `#${id}`;
+            if (nameEl) nameEl.textContent = res?.name || id;
+            updateInlineArticlePreview();
+          }
+        });
+      };
+    }
+
+    if (replaceInp) {
+      replaceInp.onchange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        replaceInp.value = "";
+        replaceInp.disabled = true;
+        collectDraftFromInputs(draft);
+        const savedSnapshot = { title: draft.title, markdown: draft.markdown };
+        toast("正在解析文档…");
+        const finishReplace = () => {
+          replaceInp.disabled = false;
+        };
+        const reader = new FileReader();
+        reader.onerror = () => {
+          finishReplace();
+          toast("文档读取失败，正文未更改");
+        };
+        reader.onabort = () => finishReplace();
+        reader.onload = async (evt) => {
+          try {
+            const res = await S.apiJson("/api/studio/parse-article", {
+              method: "POST",
+              body: { fileName: file.name, fileData: evt.target.result }
+            });
+            if (!isCurrentEditor()) return;
+            const okTitle = res && typeof res.title === "string" ? res.title : savedSnapshot.title;
+            const okMarkdown = res && typeof res.markdown === "string" ? res.markdown : savedSnapshot.markdown;
+            draft.title = okTitle;
+            draft.markdown = okMarkdown;
+            if (titleInp) titleInp.value = draft.title || "";
+            if (mdTa) mdTa.value = draft.markdown || "";
+            if (titleCountEl) titleCountEl.textContent = `${(draft.title || "").length}/64`;
+            if (charCountEl) charCountEl.textContent = (draft.markdown || "").length;
+            adjustHeight();
+            commitSync({ bumpTime: true, markSaved: true });
+            updateInlineArticlePreview();
+            toast("已更新正文");
+          } catch (err) {
+            if (isCurrentEditor()) {
+              draft.title = savedSnapshot.title;
+              draft.markdown = savedSnapshot.markdown;
+              if (titleInp) titleInp.value = draft.title || "";
+              if (mdTa) mdTa.value = draft.markdown || "";
+            }
+            toast("解析文档失败：" + (err.message || "请检查文件格式"));
+            console.error("[Article Replace Error]", err);
+          } finally {
+            finishReplace();
+          }
+        };
+        reader.readAsDataURL(file);
+      };
+    }
+
+    updateSavedState(hasEditorContent() ? "saved" : "empty");
+
+    if (planBtn) {
+      planBtn.onclick = () => {
+        saveCurrentDraftFromInputs();
+        const title = (draft.title || "").trim();
+        const md = (draft.markdown || "").trim();
+        const cr = draft.coverRatio || "2.35:1";
+        const ir = draft.inlineRatio || "4:3";
+        if (!title && !md) {
+          toast("请输入文章标题或正文内容");
+          return;
+        }
+        syncArticleEditorDraftToHistory(draft, { bumpTime: true });
+        createNewArticlePlan({
+          articleId: draft.id || null,
+          title,
+          markdown: md,
+          coverRatio: cr,
+          inlineRatio: ir,
+          styleId: draft.styleId || "FA-001"
+        });
+        CS.articleSubView = "editor";
+        const url = new URL(window.location.href);
+        url.searchParams.set("entry", "article");
+        if (draft.id) url.searchParams.set("articleId", draft.id);
+        url.searchParams.set("subview", "editor");
+        window.history.replaceState(null, "", url.pathname + url.search);
+        renderFullPreviewStage();
+        toast("🎉 已成功规划文章封面与章节插图！");
+      };
+    }
+
+    const persistBeforeAction = () => {
+      saveCurrentDraftFromInputs();
+      syncArticleEditorDraftToHistory(draft, { bumpTime: true });
+    };
+
+    const readTargetCards = (t) => t?.planNode?.data?.cards || t?.art?.cards || [];
+    const readTargetHasImage = (t) => readTargetCards(t).some((c) => c?.imageUrl);
+    const readTargetGenerating = (t) => isArticleGenerating(t?.planNode?.data || {});
+
+    if (batchBtn) {
+      batchBtn.onclick = async () => {
+        persistBeforeAction();
+        const t = resolveArticleTarget(draft.id);
+        if (!readTargetCards(t).length) {
+          toast("请先规划封面与插图位");
+          return;
+        }
+        await generateBatchPlanCards(draft.id);
+      };
+    }
+    if (exportBtn) {
+      exportBtn.onclick = async () => {
+        if (!isCurrentEditor()) return;
+        persistBeforeAction();
+        const t = resolveArticleTarget(draft.id);
+        if (!readTargetHasImage(t)) {
+          toast("请先生成配图");
+          return;
+        }
+        if (!((draft.markdown || "").trim())) {
+          toast("请先填写正文");
+          return;
+        }
+        await exportZipPackage(draft.id);
+      };
+    }
+    if (publishBtn) {
+      publishBtn.onclick = async () => {
+        if (!isCurrentEditor()) return;
+        persistBeforeAction();
+        const t = resolveArticleTarget(draft.id);
+        if (!readTargetHasImage(t)) {
+          toast("请先生成配图");
+          return;
+        }
+        if (!((draft.markdown || "").trim())) {
+          toast("请先填写正文");
+          return;
+        }
+        if (readTargetGenerating(t)) {
+          toast("配图生成中，请稍候");
+          return;
+        }
+        await publishArticleToForum(draft.id);
+      };
+    }
+  }
+
+  function switchCreationStage(next) {
+    if (next !== "article") flushUnifiedArticleEditor();
+    if (next === "article") {
+      switchIntoArticleMode();
+    } else if (next === "canvas" && (CS.stageView === "preview" || CS.stageView === "article" || isArticleGraph(CS.graph))) {
+      switchToCanvasFromArticle();
+    } else if (next === "quick") {
+      if (CS.stageView === "preview" || CS.stageView === "article" || isArticleGraph(CS.graph)) {
+        const fallbackId = readScopedReturnTab() || pickReturnCanvasTab(CS.activeTabId);
+        if (fallbackId) {
+          activateWorkflowTab(fallbackId);
+        }
+        delete CS.articleReturnTab;
+      }
+      if (!getQuickParts()) {
+        ensureQuickTab();
+        toast("已打开表单草稿，原画布保留在工作流标签页中");
+      }
+      CS.stageView = "quick";
+    } else {
+      CS.stageView = next;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("view");
+    url.searchParams.delete("tab");
+    url.searchParams.delete("fork");
+    url.searchParams.delete("forkTopic");
+    url.searchParams.delete("style");
+    url.searchParams.delete("layout");
+    url.searchParams.set("entry", next === "quick" ? "quick" : next === "article" ? "article" : "canvas");
+    window.history.replaceState(null, "", url.pathname + url.search);
+    fullRenderCanvas();
+    if (next === "canvas") requestAnimationFrame(() => fitView());
+  }
+
+  function renderCreationModeBar() {
+    if (!DOM.entryBar) return;
+    DOM.entryBar.hidden = false;
+    const quick = CS.stageView === "quick";
+    const canvas = CS.stageView === "canvas";
+    const article = CS.stageView === "preview" || CS.stageView === "article";
+    const history = CS.stageView === "history";
+    const historyCount = (CS.generationHistory || []).length;
+    DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作模式">
+      <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">表单模式</button>
+      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布模式</button>
+      <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章模式</button>
+    </div><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看历次生成的图片与压缩包历史记录（当前 ${historyCount} 条）">🕒 生图历史(${historyCount})</button>`;
+    const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
+    if (btnQuick) btnQuick.onclick = () => switchCreationStage("quick");
+    const btnCanvas = DOM.entryBar.querySelector("#studio-mode-canvas");
+    if (btnCanvas) btnCanvas.onclick = () => switchCreationStage("canvas");
+    const btnArticle = DOM.entryBar.querySelector("#studio-mode-article");
+    if (btnArticle) btnArticle.onclick = () => switchCreationStage("article");
+    const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
+    if (btnHistory) btnHistory.onclick = () => openHistoryPage();
+  }
+
+  function renderQuickStart() {
+    if (!DOM.quickStage || !window.HandrawQuickCreate) return;
+    const visible = CS.stageView === "quick";
+    DOM.quickStage.style.display = visible ? "block" : "none";
+    renderCreationModeBar();
+    if (!visible) return;
+    const p = getQuickParts();
+    const busy = Boolean(p && (p.ctrl.data.status === "generating" || (quickBusy?.id === p.ctrl.id && quickBusy.scope === activeCacheScope)));
+    const displays = p ? getDownstreamDisplayNodes(p.ctrl.id) : [];
+    const results = displays.flatMap(dn => (dn.data.items || []).filter(it => it.imageUrl).map((it, index) => ({
+      id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn
+    })));
+    const extra = p ? [p.skill.data.style2 ? `角色与场景画风：${[p.skill.data.style1, p.skill.data.style2].join(" + ")}` : "",
+      CS.resourceEntryWarning || "",
+      CS.graph.nodes.some(n => n.type === "asset") ? "已保留参考图片，可在高级画布中调整" : "",
+      new URLSearchParams(window.location.search).get("purpose") || ""].filter(Boolean).join(" · ") : "";
+    window.HandrawQuickCreate.render(DOM.quickStage, {
+      available: Boolean(p), busy, loggedIn: Boolean(App.state?.loggedIn), engineMode: CS.engineMode,
+      topic: p?.text.data.text || "", count: p?.ctrl.data.count || 1, ratio: p?.ctrl.data.ratio || "3:4",
+      mode: p?.ctrl.data.mode || "graphic-text", contextLabel: extra,
+      styleResource: p?.skill.data.style1 ? Catalog.resourceMap.get(p.skill.data.style1) : null,
+      layoutResource: p?.skill.data.layout ? Catalog.resourceMap.get(p.skill.data.layout) : null,
+      costText: generationCostText(p ? buildExecutionPlanForControl(p.ctrl).specs.length : null), results,
+      status: busy ? "正在生成，可以稍后回到历史记录查看。" : p?.ctrl.data.status === "error" ? "本批未全部完成，可点击生成重试；任务与费用以服务端结果为准。" : results.length ? `已显示 ${results.length} 张结果，保存在你的生成历史中。` : "填写主题后开始。"
+    }, {
+      set: setQuickField,
+      pick: kind => {
+        if (!p || busy) return;
+        const field = kind === "style" ? "style1" : "layout";
+        S.openAssetPickerModal({ kind, currentId: p.skill.data[field] || "", onSelect: id => {
+          if (!CS.graph.nodes.includes(p.skill)) return;
+          p.skill.data[field] = id;
+          CS.resourceEntryWarning = "";
+          markActiveTabDirty(); persistOpenTabs(); renderQuickStart();
+        } });
+      },
+      run: async () => {
+        if (!p || busy || !p.text.data.text.trim()) return;
+        const scope = activeCacheScope;
+        quickBusy = { id: p.ctrl.id, scope };
+        renderQuickStart();
+        try { await runOutputControlNode(p.ctrl.id); }
+        finally {
+          if (quickBusy?.scope === scope && quickBusy.id === p.ctrl.id) quickBusy = null;
+          renderQuickStart();
+        }
+      },
+      openCanvas: () => switchCreationStage("canvas"),
+      openHistory: () => { openHistoryPage(); },
+      share: id => { const result = results.find(it => it.id === id); if (result) openPublishModalForDisplay(result.node); },
+      download: id => {
+        const result = results.find(it => it.id === id);
+        if (!result) return;
+        const anchor = document.createElement("a"); anchor.href = result.imageUrl;
+        anchor.download = "handraw-output.webp"; anchor.rel = "noopener"; anchor.click();
+      }
     });
   }
 
@@ -10863,8 +12698,10 @@
   function mountStudioShell() {
     DOM.root = document.getElementById("studio-app-root");
     DOM.root.innerHTML = `
+      <div class="qc-entry-bar" id="ic-entry-bar"></div>
       <header class="ic-workbench-bar" id="ic-workbench-bar"></header>
       <div class="ic-stage-wrap" id="ic-stage-wrap">
+        <section class="ic-quick-stage" id="ic-quick-stage" style="display:none;"></section>
         <div class="ic-canvas-stage" id="ic-canvas-stage">
           <div class="ic-viewport is-pan-tool" id="ic-viewport">
             <div class="ic-grid-layer" id="ic-grid-layer"></div>
@@ -10885,6 +12722,8 @@
       </div>
     `;
 
+    DOM.entryBar = document.getElementById("ic-entry-bar");
+    DOM.quickStage = document.getElementById("ic-quick-stage");
     DOM.workbenchBar = document.getElementById("ic-workbench-bar");
     DOM.stageWrap = document.getElementById("ic-stage-wrap");
     DOM.canvasStage = document.getElementById("ic-canvas-stage");
@@ -10917,10 +12756,11 @@
   async function boot() {
     try {
       await S.initApp("studio", () => {
-        hydrateLocalScopedState();
+        const scopeChanged = hydrateLocalScopedState();
         syncCatalogFromShared();
         hydrateCloudStudioWorkspace().then(() => {
           if (DOM.root && DOM.nodesLayer) {
+            if (scopeChanged) hydrateTabsAndUrlParams();
             renderShelfDrawer();
             fullRenderCanvas();
             if (CS.stageView === "workflows") renderWorkflowsStage();

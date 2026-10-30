@@ -625,13 +625,34 @@
 }
 
 .ic-wechat-body .ic-pv-outline {
-  flex: 0 0 180px;
-  width: 180px;
-  max-width: 180px;
+  /* The article list needs room for a date, a title and a thumbnail; at 180px
+     the titles were truncated to a handful of characters. */
+  flex: 0 0 260px;
+  width: 260px;
+  max-width: 260px;
   overflow-y: auto;
   border-right: 1px solid var(--ic-border, #e2dcd2);
   background: var(--ic-panel-solid, #ffffff);
   min-height: 0;
+}
+
+/* The bottom bar carries counts, the style picker and the four actions; at
+   narrow widths it used to overflow off-screen. */
+.ic-wechat-bottombar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 14px;
+  background: var(--ic-panel-solid, #ffffff);
+  border-top: 1px solid var(--ic-border, #e2dcd2);
+  flex-shrink: 0;
+  min-height: 60px;
+  box-sizing: border-box;
+}
+
+.ic-wechat-bottombar > * {
+  min-width: 0;
 }
 
 .ic-wechat-scroll-area {

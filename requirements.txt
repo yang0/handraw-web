@@ -1,0 +1,16 @@
+# Runtime dependencies for the Handraw web backend.
+#
+# The site itself runs on the Python standard library; these add the pieces the
+# standard library cannot do on its own.  Keep this list minimal and additive.
+#
+# Document import (backend/document_parser.py): without these, .docx and .pdf
+# uploads silently fall back to "无法解析文档" instead of extracting text.
+python-docx>=1.1
+PyMuPDF>=1.24
+
+# Image handling for the starter illustrations and uploads.
+Pillow>=10.0
+
+# Browser-side checks (tests/test_browser_render.py).  The suite skips these
+# tests when Playwright or its Chromium build is unavailable.
+# playwright>=1.40
