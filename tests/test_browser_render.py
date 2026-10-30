@@ -26,6 +26,7 @@ WORK_TITLE = "浏览器渲染断言作品"
 WORK_PROMPT = "浏览器渲染断言提示词"
 HIDDEN_THREAD_TITLE = "主帖被隐藏的作品"
 CURATION_ITEM = "浏览器共创条目"
+DELETED_THREAD_TITLE = "作者删除了主帖的作品"
 
 try:  # pragma: no cover - environment dependent
     from playwright.sync_api import sync_playwright  # type: ignore
@@ -65,6 +66,15 @@ class BrowserRenderTests(unittest.TestCase):
         from backend.admin_services import admin_moderate_topic
 
         admin_moderate_topic(cls.db, admin, cls.hidden["topicId"], "hide")
+        # A third work whose thread its author deleted.
+        cls.deleted = publish_user_work(
+            cls.db,
+            author,
+            {"title": DELETED_THREAD_TITLE, "prompt": "p", "images": [IMG], "styles": ["FA-013"]},
+        )
+        from backend.services import forum_moderator_action
+
+        forum_moderator_action(cls.db, author, {"topicId": cls.deleted["topicId"], "action": "delete"})
         # A curation submission, so the logged-in "my submissions" tab has a
         # known item to render.
         from backend import curation
@@ -196,6 +206,33 @@ class BrowserRenderTests(unittest.TestCase):
         self.assertIn(WORK_TITLE, body, "the published thread must be listed")
         self.assertNotIn(HIDDEN_THREAD_TITLE, body, "a moderator-hidden thread must not be listed")
         self.assertEqual(self.js_errors, [])
+
+    def test_admin_topic_list_offers_no_restore_on_a_deleted_thread(self):
+        response = self.page.request.post(
+            self.base + "/api/auth/login",
+            data={"account": "br_admin", "password": "password-admin"},
+            headers={"Origin": "http://trusted.test"},
+        )
+        self.assertEqual(response.status, 200, response.text())
+        self.page.goto(self.base + "/admin.html", wait_until="networkidle", timeout=20000)
+        self.page.locator('[data-nav-mod="governance"]').first.click()
+        self.page.locator('[data-subtab="governance:topics_list"]').first.click()
+        self.page.wait_for_function(
+            "t => document.body.innerText.includes(t)", arg=DELETED_THREAD_TITLE, timeout=15000
+        )
+        deleted_id = self.deleted["topicId"]
+        self.assertEqual(
+            self.page.locator(f'[data-topic-act="publish"][data-topic-id="{deleted_id}"]').count(), 0,
+            "a deleted thread must not offer a restore button",
+        )
+        # The hidden (not deleted) thread still offers it, so the check above
+        # is not passing just because the list did not render buttons.
+        hidden_id = self.hidden["topicId"]
+        self.assertEqual(
+            self.page.locator(f'[data-topic-act="publish"][data-topic-id="{hidden_id}"]').count(), 1
+        )
+        self.assertIn("已删除，不可恢复", self.page.inner_text("body"))
+        self.assertEqual(self.js_errors, [], f"JS errors on admin: {self.js_errors}")
 
     def test_hidden_thread_page_does_not_show_the_thread(self):
         body = self._load(f"/forum/?view=topic&id={self.hidden['topicId']}")

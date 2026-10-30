@@ -314,6 +314,16 @@ class PrecedenceTests(unittest.TestCase):
         self.assertEqual(self._resolve_first("topic", self.tid, "confirmed", who="pc_mod", autoAction=True)[0], 200)
         self.assertEqual(self._state(), ("published", "hidden"))
 
+    def test_thread_reports_do_not_pause_a_thread_that_mirrors_its_work(self):
+        # H4: the thread is dark only because its work is hidden.  Reports on
+        # it must not turn that into a report pause, or republishing the work
+        # would leave the thread dark until someone handles the reports.
+        self._work("pc_admin", "hide")
+        self.assertEqual(self._report_by_all("topic", self.tid), [False, False, False])
+        self.assertEqual(self._topic_source(), "work")
+        self._work("pc_admin", "publish")
+        self.assertEqual(self._state(), ("published", "published"))
+
     def test_thread_reports_do_not_turn_a_moderator_hide_into_a_pause(self):
         # H4: auto-pause only applies to a live thread.
         self._forum("pc_mod", "hide")
