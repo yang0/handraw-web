@@ -220,11 +220,12 @@ class ForumModerateEndpointTests(_HttpBase):
 
 
 class PageRendersTests(_HttpBase):
-    """Pages must contain real content, asserted against live data.
+    """HTTP-level page checks: the data a page is given and the files it links.
 
-    The earlier version of this class looked for a marker string that only JS
-    inserts, which was true even when the page rendered nothing.  These cases
-    seed a known work and look for its specific title on the rendered page.
+    These do not execute JavaScript, so they cannot tell whether a page
+    actually renders; tests/test_browser_render.py does that in Chromium.
+    These catch a missing script reference, a missing asset file, or an API
+    that stops returning the seeded work.
     """
 
     WORK_TITLE = "渲染断言用的作品标题"

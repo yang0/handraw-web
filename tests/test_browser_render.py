@@ -24,6 +24,8 @@ from backend.services import publish_user_work, register_user
 IMG = "/images/individual/FA/FA-013.webp"
 WORK_TITLE = "浏览器渲染断言作品"
 WORK_PROMPT = "浏览器渲染断言提示词"
+HIDDEN_THREAD_TITLE = "主帖被隐藏的作品"
+CURATION_ITEM = "浏览器共创条目"
 
 try:  # pragma: no cover - environment dependent
     from playwright.sync_api import sync_playwright  # type: ignore
@@ -46,6 +48,38 @@ class BrowserRenderTests(unittest.TestCase):
             cls.db,
             author,
             {"title": WORK_TITLE, "prompt": WORK_PROMPT, "images": [IMG], "styles": ["FA-013"]},
+        )
+        # A second work whose thread an admin hid: the forum must not show it,
+        # while the work itself stays public.
+        cls.hidden = publish_user_work(
+            cls.db,
+            author,
+            {"title": HIDDEN_THREAD_TITLE, "prompt": "p", "images": [IMG], "styles": ["FA-013"]},
+        )
+        register_user(cls.db, "br_admin", "password-admin")
+        conn = cls.db.get_conn()
+        conn.execute("UPDATE users SET role = 'admin' WHERE username = 'br_admin'")
+        conn.commit()
+        admin = dict(conn.execute("SELECT * FROM users WHERE username = 'br_admin'").fetchone())
+        cls.db.close_thread_conn()
+        from backend.admin_services import admin_moderate_topic
+
+        admin_moderate_topic(cls.db, admin, cls.hidden["topicId"], "hide")
+        # A curation submission, so the logged-in "my submissions" tab has a
+        # known item to render.
+        from backend import curation
+
+        curation.submit(
+            cls.db,
+            author,
+            {
+                "title": "浏览器共创投稿",
+                "text": "介绍",
+                "items": [{
+                    "kind": "style", "name": CURATION_ITEM, "title": CURATION_ITEM, "images": [IMG],
+                    "definition": "定义：纸纹墨线", "prompt": "提示：窗边一束花", "unlockCost": 5,
+                }],
+            },
         )
         cls.server = create_channel_server(0, "main", cls.db)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -135,6 +169,38 @@ class BrowserRenderTests(unittest.TestCase):
         body = self._load("/forum/?view=curation&tab=share")
         self.assertNotIn("接口不存在", body, "the curation view must not report a missing API")
         self.assertEqual(self.js_errors, [], f"JS errors on curation: {self.js_errors}")
+
+    def test_work_detail_page_shows_title_and_prompt(self):
+        body = self._load(f"/?view=work&id={self.work['workId']}", wait_text=WORK_PROMPT)
+        self.assertIn(WORK_TITLE, body)
+        self.assertIn(WORK_PROMPT, body)
+        self.assertEqual(self.js_errors, [], f"JS errors on work detail: {self.js_errors}")
+
+    def test_logged_in_curation_tab_lists_the_submission(self):
+        # The anonymous check above only proves the view did not error; this
+        # one needs the curation API and its renderer to actually work.
+        response = self.page.request.post(
+            self.base + "/api/auth/login",
+            data={"account": "br_author", "password": "password-a"},
+            headers={"Origin": "http://trusted.test"},
+        )
+        self.assertEqual(response.status, 200, response.text())
+        body = self._load("/forum/?view=curation&tab=mine", wait_text=CURATION_ITEM)
+        self.assertIn(CURATION_ITEM, body)
+        for bad in ("接口不存在", "加载失败"):
+            self.assertNotIn(bad, body)
+        self.assertEqual(self.js_errors, [], f"JS errors on my submissions: {self.js_errors}")
+
+    def test_forum_list_omits_a_hidden_thread_but_keeps_the_published_one(self):
+        body = self._load("/forum/", wait_text=WORK_TITLE)
+        self.assertIn(WORK_TITLE, body, "the published thread must be listed")
+        self.assertNotIn(HIDDEN_THREAD_TITLE, body, "a moderator-hidden thread must not be listed")
+        self.assertEqual(self.js_errors, [])
+
+    def test_hidden_thread_page_does_not_show_the_thread(self):
+        body = self._load(f"/forum/?view=topic&id={self.hidden['topicId']}")
+        self.assertNotIn(HIDDEN_THREAD_TITLE, body)
+        self.assertEqual(self.js_errors, [], f"JS errors on a hidden thread: {self.js_errors}")
 
 
 if __name__ == "__main__":
