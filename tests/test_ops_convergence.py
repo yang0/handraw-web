@@ -125,8 +125,9 @@ class ConvergeCommentsTests(unittest.TestCase):
         conn.row_factory = sqlite3.Row
         try:
             todo = converge_work_comments.plan(conn)
-            copied = converge_work_comments.apply(conn, todo)
+            copied, failures = converge_work_comments.apply(conn, todo)
             self.assertEqual(copied, 1)
+            self.assertEqual(failures, [])
             reply = conn.execute(
                 "SELECT * FROM forum_replies WHERE legacy_source = 'work_comments:wc_1'"
             ).fetchone()

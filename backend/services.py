@@ -781,8 +781,10 @@ def compute_public_asset_counts_and_creators(conn: sqlite3.Connection) -> tuple[
         if is_new_release_active(w["published_at_ms"]):
             rec["hasFresh"] = True
 
+    from .resource_discussions import placeholder_topic_sql_filter
+    placeholder_filter = placeholder_topic_sql_filter("public")
     for tp in conn.execute(
-        f"SELECT author_username, author_name FROM forum_topics WHERE status = 'published' AND {topic_filter}",
+        f"SELECT author_username, author_name FROM forum_topics WHERE status = 'published' AND TRIM(author_username) <> '' AND {placeholder_filter} AND {topic_filter}",
         topic_ids,
     ).fetchall():
         rec = ensure_rec(tp["author_username"], tp["author_name"])
@@ -2132,11 +2134,13 @@ def publish_forum_reply_post(
     text: str,
     mounted_style: str = "",
     mounted_layout: str = "",
+    direct: bool = False,
 ) -> dict[str, Any]:
     from .resource_discussions import find_topic_source, comment
-    source=find_topic_source(db,topic_id)
-    if source and source['origin']!='submission':
-        return comment(db,user,source['kind'],source['target_id'],text)
+    if not direct:
+        source=find_topic_source(db,topic_id)
+        if source and source['origin']!='submission':
+            return comment(db,user,source['kind'],source['target_id'],text)
     clean = (text or "").strip()[:3000]
     if not clean:
         raise ServiceError("请输入回复内容")

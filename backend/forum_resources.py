@@ -97,8 +97,8 @@ def _is_public_work(conn, wid: str) -> bool:
 
 def _mapping(db, kind: str, target: str):
     row = db.get_conn().execute(
-        "SELECT * FROM curation_resource_topics WHERE kind=? AND target_id=?",
-        (kind, target),
+        "SELECT * FROM curation_resource_topics WHERE kind=? AND (target_id=? OR UPPER(target_id)=?)",
+        (kind, target, target),
     ).fetchone()
     return dict(row) if row else None
 
@@ -153,20 +153,15 @@ def _thread_block(conn, topic: dict[str, Any] | None, sub_kind: str, target: str
     if not topic:
         return None, False
     mapping = conn.execute(
-        "SELECT origin FROM curation_resource_topics WHERE kind=? AND target_id=?",
-        (sub_kind, target),
+        "SELECT origin FROM curation_resource_topics WHERE kind=? AND (target_id=? OR UPPER(target_id)=?)",
+        (sub_kind, target, target),
     ).fetchone()
     origin = mapping["origin"] if mapping else None
     # Hidden override: published resource with an unpublished discussion topic.
     if topic["status"] != "published":
         return {"id": topic["id"], "title": "资源讨论", "body": "", "category": topic["category"],
                 "closed": True, "origin": origin, "commentCount": 0}, True
-    if origin == 'submission':
-        table,where,args='forum_replies','topic_id=?',[topic['id']]
-    elif sub_kind=='work':
-        table,where,args='work_comments','work_id=?',[target]
-    else:
-        table,where,args='asset_comments','asset_code=? AND asset_kind=?',[target,sub_kind]
+    table,where,args='forum_replies','topic_id=?',[topic['id']]
     sf,sp=S._seed_filter('id',table)
     row=conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where} AND status='published' AND {sf}",args+list(sp)).fetchone()
     count = int(row[0]) if row else 0
@@ -429,12 +424,9 @@ def resource_comments(db,user,kind,target,offset=0,limit=20):
     result={'ok':True,'items':[],'total':0,'offset':offset,'limit':limit}
     if topic and topic['status']!='published':
         return result
-    if mapping and mapping['origin']=='submission':
-        table,where,args,ctype='forum_replies','topic_id=?',[mapping['topic_id']],'forum_reply'
-    elif kind=='work':
-        table,where,args,ctype='work_comments','work_id=?',[target],'work_comment'
-    else:
-        table,where,args,ctype='asset_comments','asset_code=? AND asset_kind=?',[target,kind],'asset_comment'
+    if not mapping or not mapping.get('topic_id'):
+        return result
+    table,where,args,ctype='forum_replies','topic_id=?',[mapping['topic_id']],'forum_reply'
     sf,sp=S._seed_filter('id',table)
     where+=f" AND status='published' AND {sf}";args+=list(sp)
     conn=db.get_conn()

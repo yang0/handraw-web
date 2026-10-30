@@ -150,9 +150,9 @@ class CurationTests(unittest.TestCase):
         topic=next(t for t in boot['topics'] if t['id']==topicid)
         self.assertEqual(topic['replies'][0]['id'],boot['assetComments'][code][0]['id'])
         S.publish_forum_reply_post(self.db,self.users['outsider'],topicid,'我也试了')
-        self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM forum_replies WHERE topic_id=?',(topicid,)).fetchone()[0],0)
+        self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM forum_replies WHERE topic_id=?',(topicid,)).fetchone()[0],2)
         with self.db.transaction() as tx:
-            tx.execute("UPDATE asset_comments SET status='hidden' WHERE asset_code=?",(code,))
+            tx.execute("UPDATE forum_replies SET status='hidden' WHERE topic_id=?",(topicid,))
         self.assertNotIn(topicid,[t['id'] for t in S.build_boot_payload(self.db,None)['topics']])
         restored=S.add_comment_to_asset(self.db,self.author,code,'新的使用心得','style')
         self.assertEqual(restored['topicId'],topicid)

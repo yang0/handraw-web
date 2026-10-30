@@ -1670,6 +1670,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             from .forum_resource_routes import handle_get as resource_get
         except ImportError:  # pragma: no cover - partial checkout
             resource_get = None
+        try:
+            from .post_routes import handle_get as post_get
+        except ImportError:  # pragma: no cover - partial checkout
+            post_get = None
+        if post_get and post_get(self, req_path, qs):
+            return
         if resource_get and resource_get(self, req_path, qs):
             return
         if curation_get and curation_get(self, req_path, qs):
