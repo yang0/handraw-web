@@ -355,6 +355,23 @@ CREATE TABLE IF NOT EXISTS device_codes (
 CREATE INDEX IF NOT EXISTS idx_device_codes_status_expires ON device_codes(status, expires_at);
 """
 
+STUDIO_IMPORT_JOBS_SQL = """
+CREATE TABLE IF NOT EXISTS studio_import_jobs (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    progress_done INTEGER NOT NULL DEFAULT 0,
+    progress_total INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    result_json TEXT NOT NULL DEFAULT '',
+    file_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_studio_import_jobs_user ON studio_import_jobs(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_studio_import_jobs_status ON studio_import_jobs(status);
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -370,4 +387,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (51, "051_generation_prompt_ready", GENERATION_PROMPT_READY_SQL),
     (52, "052_api_tokens", API_TOKENS_SQL),
     (53, "053_device_codes", DEVICE_CODES_SQL),
+    (62, "062_studio_import_jobs", STUDIO_IMPORT_JOBS_SQL),
 ]

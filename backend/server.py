@@ -1801,6 +1801,28 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(get_studio_workspace(self.db, user))
             return
 
+        m_import = re.match(r"^/api/studio/imports/([^/]+)$", req_path)
+        if m_import:
+            user = self._current_user(required=True)
+            import_id = m_import.group(1)
+            with self.db.transaction() as tx:
+                job = tx.execute(
+                    "SELECT * FROM studio_import_jobs WHERE id = ?",
+                    (import_id,),
+                ).fetchone()
+            if not job or int(job["user_id"]) != int(user["id"]):
+                raise ServiceError("导入任务不存在", status=404, code="not_found")
+
+            res_payload = json.loads(job["result_json"]) if job["result_json"] else None
+            self._send_json({
+                "ok": True,
+                "status": job["status"],
+                "progress": {"done": job["progress_done"], "total": job["progress_total"]},
+                "error": job["error"],
+                "result": res_payload,
+            })
+            return
+
         if req_path == "/api/studio/tasks":
             user = self._current_user(required=True)
             task_id = q1("id") or q1("taskId")
@@ -2482,7 +2504,6 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             return
 
         if req_path == "/api/studio/parse-article":
-            import base64
             from backend.document_parser import parse_article_file
 
             user = self._current_user(required=True)
@@ -2511,6 +2532,95 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             logger.info("POST /api/studio/parse-article: user=%s, filename=%s, bytes=%d", user["username"], file_name, len(file_bytes))
             parsed_res = parse_article_file(file_bytes, file_name)
             self._send_json({"ok": True, **parsed_res})
+            return
+
+        if req_path == "/api/studio/imports":
+            from backend.db import local_today_str
+            from backend.document_importer import get_import_manager, utc_now_iso
+
+            user = self._current_user(required=True)
+            user_id = int(user["id"])
+
+            file_name = str(body.get("fileName") or body.get("name") or "")
+            file_data = body.get("fileData") or body.get("data") or body.get("dataUrl") or ""
+            raw_text = str(body.get("text") or "")
+
+            if file_data and isinstance(file_data, str):
+                if "," in file_data:
+                    file_data = file_data.split(",", 1)[1]
+                try:
+                    file_bytes = base64.b64decode(file_data)
+                except Exception as exc:
+                    raise ServiceError(f"文件数据 Base64 解码失败：{exc}", status=400) from exc
+            elif raw_text:
+                file_bytes = raw_text.encode("utf-8")
+            else:
+                raise ServiceError("未提供有效的文件数据或文本正文", status=400)
+
+            if len(file_bytes) > 10 * 1024 * 1024:
+                raise ServiceError("解码后文件大小超过 10MB 限制", status=413, code="payload_too_large")
+
+            mgr = getattr(self.server, "import_manager", None) or get_import_manager(self.db)
+            if mgr.queue.full():
+                raise ServiceError("导入队列已满，请稍后再试", status=429, code="import_queue_full")
+
+            job_id = f"imp_{uuid.uuid4().hex}"
+            now = utc_now_iso()
+            today = local_today_str()
+
+            with self.db.transaction() as tx:
+                active_job = tx.execute(
+                    "SELECT 1 FROM studio_import_jobs WHERE user_id = ? AND status IN ('queued', 'running') LIMIT 1",
+                    (user_id,),
+                ).fetchone()
+                if active_job:
+                    raise ServiceError("已有导入任务正在进行中，请稍后再试", status=429, code="import_in_progress")
+
+                queued_count = tx.execute(
+                    "SELECT COUNT(1) as cnt FROM studio_import_jobs WHERE status = 'queued'",
+                ).fetchone()
+                if (queued_count and int(queued_count["cnt"]) >= 20) or mgr.queue.full():
+                    raise ServiceError("导入队列已满，请稍后再试", status=429, code="import_queue_full")
+
+                usage_row = tx.execute(
+                    "SELECT count FROM daily_usage WHERE user_id = ? AND scope = 'parse' AND usage_date = ?",
+                    (user_id, today),
+                ).fetchone()
+                current_usage = int(usage_row["count"]) if usage_row else 0
+                if current_usage >= 20:
+                    raise ServiceError("今日文档解析次数已达上限（20次/天），请明天再试", status=429, code="rate_limited")
+
+                tx.execute(
+                    """
+                    INSERT INTO daily_usage (user_id, scope, usage_date, count)
+                    VALUES (?, 'parse', ?, 1)
+                    ON CONFLICT (user_id, scope, usage_date)
+                    DO UPDATE SET count = daily_usage.count + 1
+                    """,
+                    (user_id, today),
+                )
+
+                tx.execute(
+                    """
+                    INSERT INTO studio_import_jobs
+                    (id, user_id, status, progress_done, progress_total, error, result_json, file_name, created_at, updated_at)
+                    VALUES (?, ?, 'queued', 0, 0, '', '', ?, ?, ?)
+                    """,
+                    (job_id, user_id, file_name, now, now),
+                )
+
+            try:
+                mgr.enqueue_job(job_id, user_id, file_name, file_bytes)
+            except Exception as exc:
+                with self.db.transaction() as tx:
+                    tx.execute("DELETE FROM studio_import_jobs WHERE id = ?", (job_id,))
+                    tx.execute(
+                        "UPDATE daily_usage SET count = MAX(0, count - 1) WHERE user_id = ? AND scope = 'parse' AND usage_date = ?",
+                        (user_id, today),
+                    )
+                raise ServiceError("导入队列已满，请稍后再试", status=429, code="import_queue_full") from exc
+
+            self._send_json({"ok": True, "importId": job_id})
             return
 
         if req_path == "/api/studio/history":
@@ -2858,6 +2968,8 @@ def create_channel_server(
     srv.db = db  # type: ignore[attr-defined]
     srv.allow_demo_routes = demo_mode if demo_mode is not None else demo_mode_enabled()  # type: ignore[attr-defined]
     srv.bind_host = safe_host  # type: ignore[attr-defined]
+    from backend.document_importer import get_import_manager
+    srv.import_manager = get_import_manager(db)  # type: ignore[attr-defined]
     return srv
 
 
@@ -2865,6 +2977,8 @@ def init_database(db_path: Path | str | None = None, force_reset: bool = False) 
     db = Database(db_path)
     db.migrate()
     ensure_seeded(db, force_reset=force_reset)
+    from backend.document_importer import mark_legacy_imports_failed
+    mark_legacy_imports_failed(db)
     return db
 
 
@@ -2889,6 +3003,7 @@ def main(argv: list[str] | None = None) -> None:
     requested_host = args.host or None
     server = create_channel_server(args.port, "main", db, host=requested_host, demo_mode=args.demo_mode or None)
     reconciler = GenerationReconciler(db).start()
+    import_manager = getattr(server, "import_manager", None)
 
     print("Handraw Web single backend running (SQLite WAL + safe bind):")
     print(f"  [bind] {getattr(server, 'bind_host', '127.0.0.1')}")
@@ -2904,6 +3019,8 @@ def main(argv: list[str] | None = None) -> None:
         pass
     finally:
         reconciler.stop()
+        if import_manager and hasattr(import_manager, "stop"):
+            import_manager.stop()
         server.server_close()
         db.close()
 
