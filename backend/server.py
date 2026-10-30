@@ -1992,7 +1992,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         # An unmatched API path must not fall through to the SPA shell: a client
         # would receive 200 + index.html and treat a missing endpoint as success.
-        if req_path.startswith("/api/"):
+        # "/api" itself and other casings are API paths too, not pages.
+        api_path = req_path.lower()
+        if api_path == "/api" or api_path.startswith("/api/"):
             self._send_json(
                 {"ok": False, "error": "接口不存在", "code": "not_found"}, status=404
             )

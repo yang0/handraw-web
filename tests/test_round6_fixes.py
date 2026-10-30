@@ -59,6 +59,14 @@ class UnknownApiPathTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(payload.get("code"), "not_found")
 
+    def test_bare_and_uppercase_api_paths_are_404_json(self):
+        for path in ("/api", "/API/boot", "/Api/not-a-route"):
+            with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
+                status, content_type, body = self._get(path)
+            self.assertEqual(status, 404, path)
+            self.assertIn("application/json", content_type, path)
+            self.assertNotIn(b"<html", body.lower(), path)
+
     def test_missing_resource_route_also_404s(self):
         with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
             status, _, body = self._get("/api/entries/00000000-0000-0000-0000-000000000000")
