@@ -26,16 +26,29 @@ class SkillPromptTests(unittest.TestCase):
     def test_a_style_and_layout_produce_a_composed_prompt(self):
         if not skill_prompt.skill_available():
             self.skipTest("hand-drawn style Skill checkout not present")
-        prompt = _compose_skill_prompt("FA-013", "SC-021", "a boy holding a surfboard")
-        self.assertTrue(prompt, "the Skill must return a prompt for a real style and layout")
-        # The layout's own composition rules must be present, not just the style.
-        style = skill_prompt.find_style("FA-013")
-        self.assertIsNotNone(style)
-        self.assertIn(
-            str(style.get("generation_name") or "")[:8] or "FA-013",
-            prompt,
-            "the composed prompt should name the chosen style",
-        )
+        composed = skill_prompt.compose_prompt("FA-013", "SC-021", "", "a boy holding a surfboard")
+        self.assertTrue(composed["prompt"], "the Skill must return a prompt for a real style and layout")
+        # Assert on the facts the Skill resolved, not on the model's wording: the
+        # generated text varies between runs and asserting on it made this test
+        # flake.
+        self.assertEqual(composed["facts"]["style"]["id"], "FA-013")
+        self.assertEqual(composed["facts"]["layout"]["id"], "SC-021")
+        self.assertTrue(composed["facts"]["style"]["traits"], "the style's traits should resolve")
+        self.assertTrue(composed["facts"]["layout"]["rules"], "the layout's rules should resolve")
+        self.assertIn(composed["source"], ("model", "template"))
+
+    def test_the_layout_rules_reach_the_prompt(self):
+        # The point of the Skill is that the layout constrains the picture; a
+        # prompt that only names the style has not used it.
+        if not skill_prompt.skill_available():
+            self.skipTest("hand-drawn style Skill checkout not present")
+        composed = skill_prompt.compose_prompt("FA-013", "SC-021", "", "a boy holding a surfboard")
+        rules = composed["facts"]["layout"]["rules"]
+        self.assertTrue(len(rules) > 100, "SC-021 should carry its own composition rules")
+        # The template path is deterministic, so it can be checked exactly.
+        template = skill_prompt._template(composed["facts"])
+        self.assertIn("SC-021", template)
+        self.assertGreater(len(template), len(composed["facts"]["style"]["traits"]))
 
     def test_without_parameters_the_helper_returns_nothing(self):
         # An empty request must fall back, not invent a prompt.
