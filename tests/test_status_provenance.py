@@ -55,10 +55,13 @@ class StatusProvenanceTests(unittest.TestCase):
             admin_resolve_report(self.db, self.admin, report["id"], "dismissed", auto_action=False)
 
     def _report(self, times=1):
+        # One open report per account counts, so each call uses a new account.
         for _ in range(times):
+            self._reporters = getattr(self, "_reporters", 0) + 1
+            reporter, _ = register_user(self.db, f"prov_rep{self._reporters}", "password-r")
             submit_abuse_report(
                 self.db,
-                self.author,
+                reporter,
                 {"targetType": "work", "targetId": self.work["workId"], "reason": "垃圾内容"},
             )
 
@@ -175,10 +178,22 @@ class StatusProvenanceTests(unittest.TestCase):
 
         from backend.admin_services import admin_moderate_topic
 
+        from backend.services import ServiceError
+
         admin_moderate_topic(self.db, self.admin, self.work["topicId"], "hide")
+        # Callers now state their rank.  A lower rank is refused...
+        with self.assertRaises(ServiceError) as ctx:
+            with self.db.transaction() as tx:
+                set_topic_visibility(
+                    tx, self.work["topicId"], "published", "2026-01-01T00:00:00Z",
+                    source="moderator", actor_role="operator",
+                )
+        self.assertEqual(ctx.exception.code, "decision_locked")
+        # ...and the same rank may reverse its own decision.
         with self.db.transaction() as tx:
             set_topic_visibility(
-                tx, self.work["topicId"], "published", "2026-01-01T00:00:00Z", source="moderator"
+                tx, self.work["topicId"], "published", "2026-01-01T00:00:00Z",
+                source="moderator", actor_role="admin",
             )
         topic = self.db.get_conn().execute(
             "SELECT status FROM forum_topics WHERE id = ?", (self.work["topicId"],)
@@ -186,9 +201,10 @@ class StatusProvenanceTests(unittest.TestCase):
         self.db.close_thread_conn()
         self.assertEqual(topic["status"], "published", "a moderator may reverse their own hide")
 
-    def test_dismissal_passes_the_report_source(self):
-        # M-g: the dismissal must identify itself as the report flow, so the
-        # topic-level moderator guard applies.
+    def test_dismissal_leaves_a_moderator_hidden_topic(self):
+        # A single report does not pause the work, so this dismissal is a
+        # no-op on the work; the case where the dismissal really republishes
+        # the work (M3/M4) is in test_governance_precedence.py.
         from backend.admin_services import admin_moderate_topic
 
         admin_moderate_topic(self.db, self.admin, self.work["topicId"], "hide")

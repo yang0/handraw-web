@@ -225,6 +225,8 @@ CREATE INDEX IF NOT EXISTS idx_curation_events_sub ON curation_events(submission
 #   ''          never moderated
 #   'report'    paused automatically by the abuse-report threshold
 #   'moderator' hidden/paused by a human (admin, operator or board moderator)
+#   'work'      (threads only, since 049) mirrors the linked work's state
+#   'author'    (threads only, since 049) the author deleted the thread
 STATUS_SOURCE_SQL = """
 ALTER TABLE works ADD COLUMN status_source TEXT NOT NULL DEFAULT '';
 ALTER TABLE works ADD COLUMN status_reason TEXT NOT NULL DEFAULT '';
@@ -242,6 +244,72 @@ CREATE INDEX IF NOT EXISTS idx_works_popular_v2
 DROP INDEX IF EXISTS idx_works_popular;
 """
 
+# Thread visibility had one source value, 'moderator', for two different facts:
+# "a human hid this thread" and "this thread mirrors its work, which a human
+# hid".  Publishing the work could not tell them apart, so it republished
+# threads a moderator had hidden on their own (M8).  Mirrored state now carries
+# status_source = 'work'.
+#
+# ``status_actor_role`` records the rank of whoever made the current decision
+# ('admin' > 'operator' > 'moderator' > 'author' / '' for automation).  A lower
+# rank may not reverse a higher rank's decision (M9: admin wins, see
+# services.actor_may_override).  Comments and replies get the same column so a
+# board moderator cannot republish a reply an admin hid (R4).
+#
+# Backfill, in order:
+#   1. Threads whose status, source and reason all equal their work's were
+#      written by the old mirror code; mark them 'work'.  This must run before
+#      step 2 changes works.status_source.
+#   2. Rows paused before migration 047 have an empty source, so a dismissal
+#      could never restore them.  When the audit log has an automatic pause
+#      for the row and no human hide/pause/confirm ever, the automatic pause is
+#      the only thing that can have paused it, so record it as 'report'.  (Old
+#      code logged auto_pause even when it changed nothing, so "latest entry
+#      is auto_pause" would misread an admin pause followed by reports.)
+#   3. Mirrored threads of a work fixed by step 2 still say 'work', which is
+#      already correct: the next dismissal publishes the work and the thread
+#      follows it.
+STATUS_ACTOR_DDL = """
+ALTER TABLE works ADD COLUMN status_actor_role TEXT NOT NULL DEFAULT '';
+ALTER TABLE forum_topics ADD COLUMN status_actor_role TEXT NOT NULL DEFAULT '';
+ALTER TABLE forum_replies ADD COLUMN status_actor_role TEXT NOT NULL DEFAULT '';
+ALTER TABLE work_comments ADD COLUMN status_actor_role TEXT NOT NULL DEFAULT '';
+ALTER TABLE asset_comments ADD COLUMN status_actor_role TEXT NOT NULL DEFAULT '';
+"""
+
+# Kept separate from the DDL so tests can run it against legacy-shaped rows.
+STATUS_ACTOR_BACKFILL_SQL = """
+UPDATE forum_topics SET status_source = 'work'
+WHERE status <> 'published' AND status <> 'deleted'
+  AND EXISTS (
+    SELECT 1 FROM curation_resource_topics m JOIN works w ON w.id = m.target_id
+    WHERE m.kind = 'work' AND m.topic_id = forum_topics.id
+      AND w.status = forum_topics.status
+      AND w.status_source = forum_topics.status_source
+      AND w.status_reason = forum_topics.status_reason
+  );
+
+UPDATE works SET status_source = 'report'
+WHERE status = 'paused' AND status_source = ''
+  AND EXISTS (
+    SELECT 1 FROM audit_logs a WHERE a.target_type = 'work' AND a.target_id = works.id
+      AND a.action = 'moderation.auto_pause')
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_logs a WHERE a.target_type = 'work' AND a.target_id = works.id
+      AND a.action IN ('work.pause', 'work.hide', 'report.confirmed'));
+
+UPDATE forum_topics SET status_source = 'report'
+WHERE status = 'paused' AND status_source = ''
+  AND EXISTS (
+    SELECT 1 FROM audit_logs a WHERE a.target_type = 'topic' AND a.target_id = forum_topics.id
+      AND a.action = 'moderation.auto_pause')
+  AND NOT EXISTS (
+    SELECT 1 FROM audit_logs a WHERE a.target_type = 'topic' AND a.target_id = forum_topics.id
+      AND a.action IN ('topic.hide', 'forum.mod.hide', 'report.confirmed'));
+"""
+
+STATUS_ACTOR_SQL = STATUS_ACTOR_DDL + STATUS_ACTOR_BACKFILL_SQL
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -252,4 +320,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (46, "046_curation_tables", CURATION_TABLES_SQL),
     (47, "047_status_source", STATUS_SOURCE_SQL),
     (48, "048_popular_index_v2", POPULAR_INDEX_V2_SQL),
+    (49, "049_status_actor_role", STATUS_ACTOR_SQL),
 ]

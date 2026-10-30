@@ -1335,6 +1335,45 @@ def toggle_user_collection(db: Database, user: dict[str, Any], bucket: str, targ
     return {"ok": True, "collected": collected, "rewarded": rewarded, "credits": bal}
 
 
+# Authority ranks for visibility decisions.  A decision may only be reversed by
+# someone of the same or a higher rank, so a board moderator cannot undo an
+# operator's hide and an operator cannot undo an admin's.
+#
+# Product rule (M9), chosen as the safer default and pending founder
+# confirmation: **admin wins**.  When an admin hides or pauses something, only
+# an admin can bring it back.  Deleting is always allowed for anyone already
+# authorised to delete, because it only makes content less visible.
+ACTOR_RANK = {"": 0, "author": 1, "moderator": 2, "operator": 3, "admin": 4}
+
+
+def staff_actor_role(user: dict[str, Any] | None, *, board_moderator: bool = False) -> str:
+    """Map a user to the rank recorded with a visibility decision."""
+    role = str((user or {}).get("role") or "")
+    if role == "admin":
+        return "admin"
+    if role in ("operator", "reviewer"):
+        return "operator"
+    if board_moderator:
+        return "moderator"
+    return "author"
+
+
+def actor_may_override(current_actor: str, actor_role: str) -> bool:
+    return ACTOR_RANK.get(str(actor_role or ""), 0) >= ACTOR_RANK.get(str(current_actor or ""), 0)
+
+
+def _decision_locked(current_actor: str) -> ServiceError:
+    label = {"admin": "超级管理员", "operator": "运营审查员", "moderator": "版主"}.get(current_actor, current_actor)
+    return ServiceError(
+        f"该内容由{label}处理，需同级或更高权限才能变更", status=403, code="decision_locked"
+    )
+
+
+# status_source values on a thread that record a decision about the thread
+# itself.  Automation ('report' and 'work') never overrides them.
+_THREAD_HUMAN_SOURCES = ("moderator", "author")
+
+
 def set_topic_visibility(
     tx,
     topic_id: str,
@@ -1343,42 +1382,81 @@ def set_topic_visibility(
     *,
     source: str = "moderator",
     reason: str = "",
-    allow_overwrite_deleted: bool = False,
-) -> None:
+    actor_role: str = "",
+    automated: bool = False,
+    allow_from: tuple[str, ...] | None = None,
+    allow_sources: tuple[str, ...] | None = None,
+) -> bool:
     """The single place a discussion thread's visibility changes.
 
-    Both moderation entries (``/api/admin/topics/...`` and
-    ``/api/forum/moderate``), the report flow and the work-sync path route
-    through here, so the rules cannot drift apart again — that drift is what let
-    one entry publish a thread the other entry was protecting.
+    Every writer of ``forum_topics.status`` calls this: both moderation entries
+    (``/api/admin/topics/...`` and ``/api/forum/moderate``), author and admin
+    deletion, report auto-pause, report confirm and dismissal, and the
+    work-to-thread mirror in ``set_work_visibility``.
 
-    Rules:
-      * ``deleted`` is terminal.  Nothing may publish a thread whose work was
-        deleted, and nothing may silently downgrade ``deleted`` to ``hidden``.
-        Automated callers pass ``allow_overwrite_deleted=True`` to mean
-        "silently skip" instead of raising.
-      * Publishing requires the linked work to be published (or no work link).
-      * Every change records its source, so a dismissal knows what it may undo.
+    ``source`` says why: 'moderator' (a human decided about this thread),
+    'author' (the author deleted it), 'report' (abuse-report automation) or
+    'work' (mirroring the linked work).  ``actor_role`` is the rank of the
+    human, '' for automation.
+
+    Rules, in order:
+      1. ``deleted`` is terminal.  Human callers get 409 ``topic_deleted``.
+      2. ``allow_from`` / ``allow_sources`` are explicit preconditions, used by
+         the report flow to say exactly which state it may undo.  When given,
+         rule 3 is not consulted: the caller has stated what it overrides.
+      3. Precedence: automation never overrides a human decision on the
+         thread, and the work mirror never overrides the thread's own report
+         hold (that hold ends with its own dismissal or confirmation).
+      4. Rank: a human may not reverse a higher-ranked human's decision
+         (403 ``decision_locked``).  Deleting is exempt.
+      5. Publishing requires the linked work to be published.
+
+    Automated callers (``automated=True``) get ``False`` instead of an error
+    when a rule refuses the change.  Returns True when the row changed.
     """
     current = tx.execute(
-        "SELECT status, status_source FROM forum_topics WHERE id = ?", (topic_id,)
+        "SELECT status, status_source, status_actor_role FROM forum_topics WHERE id = ?", (topic_id,)
     ).fetchone()
     if not current:
+        if automated:
+            return False
         raise ServiceError("帖子不存在", status=404)
+    cur_status = str(current["status"] or "")
+    cur_source = str(current["status_source"] or "")
+    cur_actor = str(current["status_actor_role"] or "")
 
-    if str(current["status"]) == "deleted" and status != "deleted":
-        if allow_overwrite_deleted:
-            return
-        raise ServiceError("该帖子已随作品删除，不能恢复", status=409, code="topic_deleted")
+    def refuse(error: ServiceError) -> bool:
+        if automated:
+            return False
+        raise error
 
-    # A moderator's decision on the thread outranks automated flows in both
-    # directions.  This guard lives here, not in the callers, so every path —
-    # the report threshold, the dismissal, and work-state sync — is covered.
-    current_source = str(current["status_source"] or "")
-    if current_source == "moderator" and source != "moderator":
-        if allow_overwrite_deleted:
-            return
-        return
+    if cur_status == "deleted":
+        if status == "deleted":
+            return False
+        return refuse(ServiceError("该帖子已删除，不能恢复", status=409, code="topic_deleted"))
+
+    if allow_from is not None and cur_status not in allow_from:
+        return False
+    if allow_sources is not None and cur_source not in allow_sources:
+        return False
+
+    if allow_sources is None and source in ("report", "work") and cur_status != "published":
+        # A non-published thread with no recorded source predates provenance;
+        # treat it as a human decision rather than guess.
+        human_hold = cur_source in _THREAD_HUMAN_SOURCES or cur_source == ""
+        report_hold = cur_source == "report"
+        if human_hold or (source == "work" and report_hold):
+            return False
+
+    # Mirrored state is the work's decision; rank was checked on the work.
+    if (
+        status != "deleted"
+        and cur_status != "published"
+        and cur_source != "work"
+        and source not in ("report", "work")
+        and not actor_may_override(cur_actor, actor_role)
+    ):
+        return refuse(_decision_locked(cur_actor))
 
     if status == "published":
         linked = tx.execute(
@@ -1386,31 +1464,53 @@ def set_topic_visibility(
             (topic_id,),
         ).fetchone()
         if linked:
+            # Deleting a work deletes this mapping, so a missing work here only
+            # happens with inconsistent data; refuse rather than publish.
             work = tx.execute(
                 "SELECT status FROM works WHERE id = ?", (str(linked["target_id"]),)
             ).fetchone()
             if work is None or str(work["status"]) != "published":
-                raise ServiceError(
+                return refuse(ServiceError(
                     "该主帖关联的作品当前不可见，请先恢复作品", status=409, code="work_not_published"
-                )
+                ))
         tx.execute(
             "UPDATE forum_topics SET status = 'published', status_source = '', status_reason = '', "
-            "updated_at = ? WHERE id = ?",
+            "status_actor_role = '', updated_at = ? WHERE id = ?",
             (now_iso, topic_id),
         )
-        return
+        return True
 
-    # 'deleted' is set only by the delete path; other transitions record a cause.
-    if status == "deleted":
-        tx.execute(
-            "UPDATE forum_topics SET status = 'deleted', status_source = ?, status_reason = ?, "
-            "updated_at = ? WHERE id = ?",
-            (source, reason, now_iso, topic_id),
-        )
-        return
     tx.execute(
-        "UPDATE forum_topics SET status = ?, status_source = ?, status_reason = ?, updated_at = ? WHERE id = ?",
-        (status, source, reason, now_iso, topic_id),
+        "UPDATE forum_topics SET status = ?, status_source = ?, status_reason = ?, "
+        "status_actor_role = ?, updated_at = ? WHERE id = ?",
+        (status, source, reason, actor_role, now_iso, topic_id),
+    )
+    return True
+
+
+def release_topic_report_hold(tx, topic_id: str, now_iso: str) -> bool:
+    """Undo an automatic report pause on a thread, and nothing else.
+
+    The thread returns to what its work allows: published when the work is
+    published (or there is no work), otherwise the work's own state as a
+    mirror.  Publishing outright used to expose a thread whose work was still
+    paused (M7).
+    """
+    linked = tx.execute(
+        "SELECT w.status, w.status_reason, w.status_actor_role FROM curation_resource_topics m "
+        "JOIN works w ON w.id = m.target_id WHERE m.kind = 'work' AND m.topic_id = ?",
+        (topic_id,),
+    ).fetchone()
+    if linked is not None and str(linked["status"]) != "published":
+        return set_topic_visibility(
+            tx, topic_id, str(linked["status"]), now_iso,
+            source="work", reason=str(linked["status_reason"] or ""),
+            actor_role=str(linked["status_actor_role"] or ""), automated=True,
+            allow_from=("paused", "hidden"), allow_sources=("report",),
+        )
+    return set_topic_visibility(
+        tx, topic_id, "published", now_iso, source="report", automated=True,
+        allow_from=("paused", "hidden"), allow_sources=("report",),
     )
 
 
@@ -1422,23 +1522,30 @@ def set_work_visibility(
     *,
     source: str = "moderator",
     reason: str = "",
+    actor_role: str = "",
+    automated: bool = False,
     allow_from: tuple[str, ...] | None = None,
     allow_sources: tuple[str, ...] | None = None,
 ) -> bool:
-    """Change a work's status and keep its discussion topic in step.
+    """Change a work's status and keep its discussion thread in step.
 
     Every path that hides, pauses or restores a work must go through here.
 
     ``source`` records who caused the change: ``'report'`` for the abuse-report
     threshold, ``'moderator'`` for a human decision.  Restoring passes
     ``allow_sources=('report',)`` so a dismissed report only undoes an automatic
-    pause — never an admin's hide, and never a human pause.
+    pause — never an admin's hide, and never a human pause.  ``allow_from``
+    guards the previous status in the same way.
 
-    ``allow_from`` guards the previous status in the same way.  Returns True when
-    a row was actually changed.
+    ``actor_role`` is the human's rank; a lower rank may not reverse a higher
+    rank's decision (403 ``decision_locked``, or ``False`` when ``automated``).
+
+    The thread mirrors the work with ``status_source='work'``, so a decision a
+    moderator made about the thread itself survives any change to the work.
+    Returns True when the work row was changed.
     """
     current = tx.execute(
-        "SELECT status, status_source FROM works WHERE id = ?", (work_id,)
+        "SELECT status, status_source, status_actor_role FROM works WHERE id = ?", (work_id,)
     ).fetchone()
     if not current:
         return False
@@ -1446,24 +1553,59 @@ def set_work_visibility(
         return False
     if allow_sources is not None and str(current["status_source"] or "") not in allow_sources:
         return False
+    cur_actor = str(current["status_actor_role"] or "")
+    if str(current["status"]) != "published" and not actor_may_override(cur_actor, actor_role):
+        if automated:
+            return False
+        raise _decision_locked(cur_actor)
 
     publishing = status == "published"
     tx.execute(
-        "UPDATE works SET status = ?, status_source = ?, status_reason = ?, updated_at = ? WHERE id = ?",
-        (status, "" if publishing else source, "" if publishing else reason, now_iso, work_id),
+        "UPDATE works SET status = ?, status_source = ?, status_reason = ?, status_actor_role = ?, "
+        "updated_at = ? WHERE id = ?",
+        (
+            status,
+            "" if publishing else source,
+            "" if publishing else reason,
+            "" if publishing else actor_role,
+            now_iso,
+            work_id,
+        ),
     )
     mapped = tx.execute(
         "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
         (work_id,),
     ).fetchone()
     if mapped:
-        topic_id = str(mapped["topic_id"])
-        # Sync goes through the same rule keeper, which also holds the
-        # moderator-outranks-automation guard; a deleted thread is skipped.
         set_topic_visibility(
-            tx, topic_id, status, now_iso,
-            source=source, reason=reason, allow_overwrite_deleted=True,
+            tx, str(mapped["topic_id"]), status, now_iso,
+            source="work", reason="" if publishing else reason,
+            actor_role="" if publishing else actor_role, automated=True,
         )
+    return True
+
+
+_COMMENT_TABLES = ("forum_replies", "work_comments", "asset_comments")
+
+
+def set_comment_visibility(tx, table: str, comment_id: str, status: str, actor_role: str) -> bool:
+    """Hide or publish a reply/comment, recording who decided (R4).
+
+    The same rank rule as threads: a board moderator cannot republish a reply
+    an admin or operator hid, for instance after confirming a report.
+    """
+    if table not in _COMMENT_TABLES:
+        raise ServiceError("无效的评论类型")
+    row = tx.execute(f"SELECT status, status_actor_role FROM {table} WHERE id = ?", (comment_id,)).fetchone()
+    if not row:
+        return False
+    cur_actor = str(row["status_actor_role"] or "")
+    if str(row["status"]) != "published" and not actor_may_override(cur_actor, actor_role):
+        raise _decision_locked(cur_actor)
+    tx.execute(
+        f"UPDATE {table} SET status = ?, status_actor_role = ? WHERE id = ?",
+        (status, "" if status == "published" else actor_role, comment_id),
+    )
     return True
 
 
@@ -2158,6 +2300,7 @@ def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict
             raise ServiceError("风控限制：运营审查员禁止自审自荐本人发布的内容（如加精、置顶）", status=403, code="self_review_forbidden")
 
         actor_for_audit = user if is_staff else (dict(user, role=f"moderator:{mod_row['category']}") if mod_row else user)
+        actor_role = staff_actor_role(user, board_moderator=bool(mod_row))
 
         if action == "pin":
             tx.execute("UPDATE forum_topics SET pinned = 1, updated_at = ? WHERE id = ?", (now_iso, topic_id))
@@ -2188,12 +2331,13 @@ def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict
             set_topic_visibility(
                 tx, topic_id, "hidden", now_iso,
                 source="moderator", reason=str(body.get("reason") or "")[:200] or "版主隐藏",
+                actor_role=actor_role,
             )
         elif action == "publish":
             # Every rule lives in set_topic_visibility, shared with the admin
             # entry, so the two cannot disagree about a deleted or job-blocked
             # thread.
-            set_topic_visibility(tx, topic_id, "published", now_iso, source="moderator")
+            set_topic_visibility(tx, topic_id, "published", now_iso, source="moderator", actor_role=actor_role)
         elif action in ("delete", "delete_topic"):
             if not is_admin and not is_topic_author:
                 author_u = tx.execute("SELECT role FROM users WHERE username = ?", (tp["author_username"],)).fetchone()
@@ -2203,7 +2347,14 @@ def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict
             tx.execute("DELETE FROM collections WHERE bucket = 'topics' AND target_id = ?", (topic_id,))
             mapped=tx.execute('SELECT 1 FROM curation_resource_topics WHERE topic_id=?',(topic_id,)).fetchone()
             if mapped:
-                tx.execute("UPDATE forum_topics SET status='deleted',updated_at=? WHERE id=?",(now_iso,topic_id))
+                # A resource thread keeps its row so the mapping stays valid;
+                # 'deleted' with a source means no later work change revives it.
+                set_topic_visibility(
+                    tx, topic_id, "deleted", now_iso,
+                    source="author" if is_topic_author and not (is_staff or mod_row) else "moderator",
+                    reason="作者删除" if is_topic_author else (reason or "版主删除"),
+                    actor_role=actor_role,
+                )
             else:
                 tx.execute("DELETE FROM forum_topics WHERE id = ?", (topic_id,))
         elif action == "hide_reply":
@@ -2212,11 +2363,11 @@ def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict
             rp_author_u = tx.execute("SELECT role FROM users WHERE username = ?", (rp["author_username"],)).fetchone()
             if not is_admin and rp_author_u and rp_author_u["role"] == "admin":
                 raise ServiceError("无权隐藏超级管理员的回复", status=403)
-            tx.execute(f"UPDATE {reply_table} SET status='hidden' WHERE id=?", (reply_id,))
+            set_comment_visibility(tx, reply_table, reply_id, "hidden", actor_role)
         elif action == "publish_reply":
             if not rp:
                 raise ServiceError("未找到目标回复", status=404)
-            tx.execute(f"UPDATE {reply_table} SET status='published' WHERE id=?", (reply_id,))
+            set_comment_visibility(tx, reply_table, reply_id, "published", actor_role)
         elif action == "delete_reply":
             if not rp:
                 raise ServiceError("未找到目标回复", status=404)
@@ -2300,26 +2451,20 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
                 auto_paused = set_work_visibility(
                     tx, target_id, "paused", now_iso,
                     source="report", reason=f"举报达到阈值（{open_cnt} 条）",
-                    allow_from=("published",), allow_sources=("",),
+                    automated=True, allow_from=("published",), allow_sources=("",),
                 )
             elif target_type == "topic":
-                # Route through the rule keeper so 'deleted' is respected and the
-                # cause is recorded; skip silently when the thread is not live.
-                before = tx.execute(
-                    "SELECT status FROM forum_topics WHERE id = ?", (target_id,)
-                ).fetchone()
-                if before and str(before["status"]) == "published":
-                    set_topic_visibility(
-                        tx, target_id, "paused", now_iso,
-                        source="report", reason=f"举报达到阈值（{open_cnt} 条）",
-                        allow_overwrite_deleted=True,
-                    )
-                    auto_paused = True
-                else:
-                    auto_paused = False
+                # Only a live thread is paused; anything already dark (hidden by
+                # a human, deleted, mirroring a hidden work) is left alone.
+                auto_paused = set_topic_visibility(
+                    tx, target_id, "paused", now_iso,
+                    source="report", reason=f"举报达到阈值（{open_cnt} 条）",
+                    automated=True, allow_from=("published",),
+                )
             elif target_type == "asset":
-                tx.execute("UPDATE catalog_assets SET status = 'paused', updated_at = ? WHERE code = ? AND status = 'published'", (now_iso, target_id))
-                auto_paused = True
+                cursor = tx.execute("UPDATE catalog_assets SET status = 'paused', updated_at = ? WHERE code = ? AND status = 'published'", (now_iso, target_id))
+                auto_paused = cursor.rowcount > 0
+        if auto_paused:
             record_audit_log(
                 tx,
                 None,

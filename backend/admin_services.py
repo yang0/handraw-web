@@ -14,6 +14,7 @@ from .config import CONTENT_DIR, get_image_config_path
 from .db import Database, local_today_str, utc_now_iso
 from .security import generate_api_key, hash_password
 from .services import (
+    ACTOR_RANK,
     FORUM_BOARD_LABELS,
     FORUM_BOARD_SHORT_LABELS,
     FORUM_BOARDS,
@@ -822,18 +823,23 @@ def admin_moderate_work(
             if author_u and author_u["role"] == "admin":
                 raise ServiceError("运营审查员无权删除超级管理员发布的作品", status=403)
 
+        from .services import set_work_visibility, staff_actor_role
+
+        # Rank of this decision.  An operator cannot reverse an admin's hide or
+        # pause (M9, admin wins; see services.ACTOR_RANK).
+        actor_role = staff_actor_role(user)
         if act == "publish":
-            from .services import set_work_visibility
-
-            set_work_visibility(tx, wid, "published", now_iso)
+            set_work_visibility(tx, wid, "published", now_iso, actor_role=actor_role)
         elif act == "pause":
-            from .services import set_work_visibility
-
-            set_work_visibility(tx, wid, "paused", now_iso, source="moderator", reason=reason or "管理员暂停")
+            set_work_visibility(
+                tx, wid, "paused", now_iso,
+                source="moderator", reason=reason or "管理员暂停", actor_role=actor_role,
+            )
         elif act == "hide":
-            from .services import set_work_visibility
-
-            set_work_visibility(tx, wid, "hidden", now_iso, source="moderator", reason=reason or "管理员隐藏")
+            set_work_visibility(
+                tx, wid, "hidden", now_iso,
+                source="moderator", reason=reason or "管理员隐藏", actor_role=actor_role,
+            )
         elif act == "feature":
             # Featuring is a promotion flag, not a visibility decision.  It used
             # to also set status='published', which let an operator un-hide a
@@ -893,9 +899,11 @@ def admin_moderate_work(
                 # Mark the thread deleted, not merely hidden: once the mapping is
                 # gone nothing else can tell it apart from an ordinary post, so
                 # the state itself must carry the fact that its work is gone.
+                # automated=True: an already-deleted thread is left as it is.
                 set_topic_visibility(
                     tx, str(mapped["topic_id"]), "deleted", now_iso,
-                    source="moderator", reason="作品已删除",
+                    source="author" if is_author and not (is_admin or is_operator) else "moderator",
+                    reason="作品已删除", actor_role=actor_role, automated=True,
                 )
             tx.execute("DELETE FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?", (wid,))
             tx.execute("DELETE FROM works WHERE id = ?", (wid,))
@@ -1067,10 +1075,13 @@ def admin_moderate_comment(
             if not is_admin and target_author_u and target_author_u["role"] == "admin":
                 raise ServiceError("无权操作超级管理员发表的评论或回复", status=403)
 
+        from .services import set_comment_visibility, staff_actor_role
+
+        actor_role = staff_actor_role(user, board_moderator=is_board_mod)
         if act == "hide":
-            tx.execute(f"UPDATE {table} SET status = 'hidden' WHERE id = ?", (cid,))
+            set_comment_visibility(tx, table, cid, "hidden", actor_role)
         elif act == "publish":
-            tx.execute(f"UPDATE {table} SET status = 'published' WHERE id = ?", (cid,))
+            set_comment_visibility(tx, table, cid, "published", actor_role)
         elif act == "delete":
             tx.execute(f"DELETE FROM {table} WHERE id = ?", (cid,))
             if ctype == "forum_reply":
@@ -1529,6 +1540,9 @@ def admin_moderate_topic(
             _assert_not_self_review(user, t["author_username"], settings)
 
         actor = user
+        from .services import set_topic_visibility, staff_actor_role
+
+        actor_role = staff_actor_role(user, board_moderator=is_board_mod)
 
         if act == "pin":
             tx.execute("UPDATE forum_topics SET pinned = 1, updated_at = ? WHERE id = ?", (now_iso, tid))
@@ -1539,15 +1553,11 @@ def admin_moderate_topic(
         elif act == "unfeature":
             tx.execute("UPDATE forum_topics SET featured = 0, updated_at = ? WHERE id = ?", (now_iso, tid))
         elif act == "publish":
-            from .services import set_topic_visibility
-
-            set_topic_visibility(tx, str(tid), "published", now_iso, source="moderator")
+            set_topic_visibility(tx, str(tid), "published", now_iso, source="moderator", actor_role=actor_role)
         elif act == "hide":
-            from .services import set_topic_visibility
-
             set_topic_visibility(
                 tx, str(tid), "hidden", now_iso,
-                source="moderator", reason=reason or "管理员隐藏",
+                source="moderator", reason=reason or "管理员隐藏", actor_role=actor_role,
             )
         elif act == "edit":
             cat = str(payload.get("category") or t["category"]).strip()
@@ -1611,7 +1621,18 @@ def admin_moderate_topic(
         elif act == "delete":
             tx.execute("DELETE FROM forum_replies WHERE topic_id = ?", (tid,))
             tx.execute("DELETE FROM collections WHERE bucket = 'topics' AND target_id = ?", (tid,))
-            tx.execute("DELETE FROM forum_topics WHERE id = ?", (tid,))
+            mapped = tx.execute("SELECT 1 FROM curation_resource_topics WHERE topic_id = ?", (tid,)).fetchone()
+            if mapped:
+                # A resource thread keeps its row, as the forum entry does:
+                # removing it left the mapping pointing at nothing, so the
+                # resource page could never take comments again (N5).
+                set_topic_visibility(
+                    tx, str(tid), "deleted", now_iso,
+                    source="author" if is_author and not (is_admin or is_operator or is_board_mod) else "moderator",
+                    reason=reason or "管理员删除", actor_role=actor_role, automated=True,
+                )
+            else:
+                tx.execute("DELETE FROM forum_topics WHERE id = ?", (tid,))
         else:
             raise ServiceError(f"不支持的帖子操作：{act}")
 
@@ -1775,15 +1796,6 @@ def admin_revoke_forum_moderator(
     return {"ok": True, "username": row["username"], "category": row["category"]}
 
 
-def _has_other_open_reports(tx, target_type: str, target_id: str, report_id) -> bool:
-    """True when other reports on this target are still open."""
-    row = tx.execute(
-        "SELECT COUNT(*) FROM reports WHERE target_type = ? AND target_id = ? AND status = 'open' AND id <> ?",
-        (target_type, target_id, report_id),
-    ).fetchone()
-    return bool(row and int(row[0]) > 0)
-
-
 def admin_list_reports(db: Database, user: dict[str, Any] | None, status: str = "") -> dict[str, Any]:
     require_staff(user, allow_reviewer=True)
     conn = db.get_conn()
@@ -1875,81 +1887,105 @@ def admin_resolve_report(
         if target_author:
             _assert_not_self_review(actor, target_author, settings)
 
-        # Resolving one report also closes its siblings on the same target, so
-        # capture the count *before* that sweep: the restoration decision below
-        # needs to know whether other people's reports were still pending.
-        sibling_open_before = int(
-            tx.execute(
-                "SELECT COUNT(*) FROM reports WHERE target_type = ? AND target_id = ? AND status = 'open' AND id <> ?",
-                (rep["target_type"], rep["target_id"], int(report_id)),
-            ).fetchone()[0]
-        )
+        # One verdict per target.  Reports on the same target are about the same
+        # content, and since each account has at most one open report per
+        # target they are all from different people, so the verdict closes
+        # every open report on it.  The audit log names the report that was
+        # actually reviewed.
         tx.execute(
-            "UPDATE reports SET status = ?, resolved_by = ?, resolution_note = ?, resolved_at = ? WHERE id = ?",
-            (res, actor["username"], (note or "").strip(), now_iso, int(report_id)),
+            "UPDATE reports SET status = ?, resolved_by = ?, resolution_note = ?, resolved_at = ? "
+            "WHERE status = 'open' AND (id = ? OR (target_type = ? AND target_id = ?))",
+            (res, actor["username"], (note or "").strip(), now_iso, int(report_id), rep["target_type"], rep["target_id"]),
         )
 
-        # Resolve any sibling open reports on the exact same target cleanly
-        tx.execute(
-            "UPDATE reports SET status = ?, resolved_by = ?, resolution_note = ?, resolved_at = ? WHERE target_type = ? AND target_id = ? AND status = 'open'",
-            (res, actor["username"], (note or "").strip(), now_iso, rep["target_type"], rep["target_id"]),
+        from .services import (
+            release_topic_report_hold,
+            set_comment_visibility,
+            set_topic_visibility,
+            set_work_visibility,
         )
 
         ttype = rep["target_type"]
-        tid = rep["target_id"]
-        # ``auto_action`` only decides whether the *hide* half runs.  Restoring
-        # must not depend on it: when abuse handling paused the target earlier,
-        # dismissing the report has to undo that regardless of this flag.
-        if auto_action and res == "confirmed":
+        tid = str(rep["target_id"])
+        actor_role = {"admin": "admin", "operator": "operator", "reviewer": "operator"}.get(
+            prof["effectiveRole"], "moderator"
+        )
+        verdict = f"举报成立（#{report_id}）"
+        if res == "confirmed" and auto_action:
+            # Confirming is a human verdict, recorded as 'moderator' with the
+            # reviewer's rank, so a later dismissal cannot republish it.  Each
+            # call skips quietly when a higher-ranked decision or a deletion
+            # already covers the target: the report still gets resolved.
             if ttype == "work":
-                from .services import set_work_visibility
-
-                # Confirming a report is a human verdict, not an automatic
-                # action: it must be recorded as 'moderator' so a later
-                # dismissal cannot republish content a decision already hid.
                 set_work_visibility(
-                    tx, str(tid), "hidden", now_iso,
-                    source="moderator", reason=f"举报成立（#{report_id}）",
-                    allow_sources=("", "report"),
+                    tx, tid, "hidden", now_iso,
+                    source="moderator", reason=verdict, actor_role=actor_role,
+                    automated=True, allow_sources=("", "report"),
                 )
             elif ttype == "topic":
-                from .services import set_topic_visibility
-
-                # Confirming a report is a human verdict: record it as such.  A
-                # thread whose work was deleted is skipped rather than raising, so
-                # the report can still be resolved.
                 set_topic_visibility(
-                    tx, str(tid), "hidden", now_iso,
-                    source="moderator", reason=f"举报成立（#{report_id}）",
-                    allow_overwrite_deleted=True,
+                    tx, tid, "hidden", now_iso,
+                    source="moderator", reason=verdict, actor_role=actor_role, automated=True,
                 )
+                # A work's main thread shows the work itself (title, images,
+                # prompt), so a confirmed report on it is a verdict on the work
+                # (V9).  Board moderators cannot moderate works, so only staff
+                # verdicts reach the work.  Needs founder confirmation.
+                linked = tx.execute(
+                    "SELECT target_id FROM curation_resource_topics WHERE kind = 'work' AND topic_id = ?",
+                    (tid,),
+                ).fetchone()
+                if linked and actor_role in ("admin", "operator"):
+                    set_work_visibility(
+                        tx, str(linked["target_id"]), "hidden", now_iso,
+                        source="moderator", reason=verdict, actor_role=actor_role,
+                        automated=True, allow_sources=("", "report"),
+                    )
             elif ttype == "asset":
                 tx.execute("UPDATE catalog_assets SET status = 'hidden', updated_at = ? WHERE code = ?", (now_iso, tid))
-            elif ttype == "comment":
-                tx.execute("UPDATE work_comments SET status = 'hidden' WHERE id = ?", (tid,))
-            elif ttype == "reply":
-                tx.execute("UPDATE forum_replies SET status = 'hidden' WHERE id = ?", (tid,))
-        elif res == "dismissed":
-            # The sibling sweep above closed every open report on this target,
-            # so a dismissal always settles it.  A dismissal only undoes what
-            # the report flow itself did: it must never publish a work an admin
-            # hid or paused (status_source enforces that).
+            elif ttype in ("comment", "reply"):
+                table = "work_comments" if ttype == "comment" else "forum_replies"
+                row = tx.execute(f"SELECT status, status_actor_role FROM {table} WHERE id = ?", (tid,)).fetchone()
+                if row is not None and (
+                    str(row["status"]) == "published"
+                    or ACTOR_RANK.get(actor_role, 0) >= ACTOR_RANK.get(str(row["status_actor_role"] or ""), 0)
+                ):
+                    set_comment_visibility(tx, table, tid, "hidden", actor_role)
+        elif res == "confirmed":
+            # autoAction=false: the reviewer agrees it is a violation but takes
+            # no new action.  If the report flow had paused the target, the
+            # pause now rests on a human verdict, so a later dismissal of some
+            # other report cannot lift it (M11).  The visible state is kept.
             if ttype == "work":
-                from .services import set_work_visibility
-
-                # source='report' keeps this in the report flow, so a thread a
-                # moderator hid is not republished along with the work.
+                cur = tx.execute("SELECT status FROM works WHERE id = ?", (tid,)).fetchone()
+                if cur is not None:
+                    set_work_visibility(
+                        tx, tid, str(cur["status"]), now_iso,
+                        source="moderator", reason=verdict, actor_role=actor_role,
+                        automated=True, allow_from=("paused", "hidden"), allow_sources=("report",),
+                    )
+            elif ttype == "topic":
+                cur = tx.execute("SELECT status FROM forum_topics WHERE id = ?", (tid,)).fetchone()
+                if cur is not None:
+                    set_topic_visibility(
+                        tx, tid, str(cur["status"]), now_iso,
+                        source="moderator", reason=verdict, actor_role=actor_role,
+                        automated=True, allow_from=("paused", "hidden"), allow_sources=("report",),
+                    )
+        elif res == "dismissed":
+            # A dismissal only undoes what the report flow itself did: the
+            # allow_sources guards mean it never publishes something a human
+            # hid or paused.  Its thread mirror is written with source 'work',
+            # which never overrides a thread-level decision, so no source
+            # needs to be passed here (M-g).
+            if ttype == "work":
                 set_work_visibility(
-                    tx, str(tid), "published", now_iso,
-                    source="report", reason=f"举报驳回（#{report_id}）",
-                    allow_from=("paused", "hidden"), allow_sources=("report",),
+                    tx, tid, "published", now_iso,
+                    automated=True, allow_from=("paused", "hidden"), allow_sources=("report",),
                 )
             elif ttype == "topic":
-                tx.execute(
-                    "UPDATE forum_topics SET status = 'published', status_source = '', updated_at = ? "
-                    "WHERE id = ? AND status IN ('paused', 'hidden') AND status_source = 'report'",
-                    (now_iso, tid),
-                )
+                # Returns to what its work allows, not straight to published (M7).
+                release_topic_report_hold(tx, tid, now_iso)
             elif ttype == "asset":
                 tx.execute("UPDATE catalog_assets SET status = 'published', updated_at = ? WHERE code = ? AND status = 'paused'", (now_iso, tid))
 
