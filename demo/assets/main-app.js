@@ -162,7 +162,7 @@
       return {};
     }
 
-    if (["discover", "styles", "layouts", "works", "rankings", "collections", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic"].includes(view)) {
+    if (["discover", "styles", "layouts", "works", "rankings", "collections", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic", "device", "devices"].includes(view)) {
       App.view = view;
     } else {
       App.view = !view && p.get("q") ? "styles" : "discover";
@@ -204,7 +204,7 @@
       works: `作品与做法（${wc} 件社区作品）— 手绘风创作社区`,
       rankings: "创作者荣誉榜单与作品风云榜 — 手绘风创作社区",
       collections: "我的四合一云端收藏夹 — 手绘风创作社区",
-      wallet: "统一积分钱包与创作密钥中心 — 手绘风创作社区",
+      wallet: "统一积分钱包与资产中心 — 手绘风创作社区",
       auth: "登录 / 注册统一通行证 — 手绘风创作社区",
       skill: "开源画廊与官网在线创作联动 — 手绘风创作社区"
     };
@@ -251,6 +251,11 @@
       const uname = UI.profileUser || (App.state?.user?.username && App.state.user.username !== "guest" ? App.state.user.username : "");
       if (uname) p.set("user", uname);
       if (UI.profileTab && UI.profileTab !== "works") p.set("ptab", UI.profileTab);
+    } else if (App.view === "device") {
+      const rawCode = (new URLSearchParams(window.location.search).get("code") || "").trim().toUpperCase();
+      if (/^[A-Z0-9-]{4,20}$/.test(rawCode)) {
+        p.set("code", rawCode);
+      }
     }
     const next = `${window.location.pathname}?${p.toString()}`;
     if (pushHistory && window.location.search !== `?${p.toString()}`) {
@@ -333,7 +338,8 @@
         activeAssetId: UI.activeAssetId,
         activeWorkId: UI.activeWorkId,
         profileUser: UI.profileUser,
-        profileTab: UI.profileTab
+        profileTab: UI.profileTab,
+        deviceCode: App.view === "device" ? (new URLSearchParams(window.location.search).get("code") || "").trim() : ""
       };
     }
     UI.authReason = reasonText || "";
@@ -387,6 +393,11 @@
 
     if (window.HandrawAccountTools?.views.has(App.view)) {
       window.HandrawAccountTools.render(root, App.view);
+      return;
+    }
+
+    if (window.HandrawDeviceAuth?.views.has(App.view)) {
+      window.HandrawDeviceAuth.render(root, App.view);
       return;
     }
 
@@ -1872,6 +1883,11 @@
       UI.activeWorkId = snap.activeWorkId || UI.activeWorkId;
       UI.profileUser = snap.profileUser || UI.profileUser;
       UI.profileTab = snap.profileTab || UI.profileTab;
+      if (snap.view === "device" && snap.deviceCode) {
+        const p = new URLSearchParams(window.location.search);
+        p.set("code", snap.deviceCode);
+        window.history.replaceState({ view: "device" }, "", `${window.location.pathname}?${p.toString()}`);
+      }
     } else {
       App.view = UI.lastPrimaryView || "styles";
     }
@@ -1931,7 +1947,7 @@
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;">
             <a class="btn btn-primary" href="${esc(channelUrl("studio"))}">✨ 进入无限画布创作台 ↗</a>
-            <button type="button" class="btn" id="skill-go-wallet-btn">🔑 获取个人资产库同步密钥</button>
+            <button type="button" class="btn" id="skill-go-devices-btn">管理已授权设备</button>
           </div>
         </section>
 
@@ -1961,7 +1977,10 @@
     `;
 
     root.querySelector("#skill-page-back-btn").onclick = () => navigateBack("styles");
-    root.querySelector("#skill-go-wallet-btn").onclick = () => switchView("wallet");
+    const skillDevBtn = root.querySelector("#skill-go-devices-btn");
+    if (skillDevBtn) {
+      skillDevBtn.onclick = () => switchView("devices");
+    }
     root.querySelectorAll("[data-skill-asset]").forEach((card) => {
       card.onclick = () => openAssetPage(card.getAttribute("data-skill-asset"));
     });
@@ -2099,7 +2118,7 @@
   /* ======================== 4. CREDITS WALLET & FLYWHEEL CENTER ======================== */
   function renderWalletCenter(root) {
     if (!App.state.loggedIn) {
-      openAuthPage("登录后即可查看积分钱包、签到领额度与管理个人创作密钥", () => switchView("wallet"));
+      openAuthPage("登录后即可查看积分钱包、签到领额度与管理已授权设备", () => switchView("wallet"));
       return;
     }
     const s = App.state;
@@ -2159,20 +2178,11 @@
           <button type="button" class="btn btn-sm" id="wallet-btn-contrib">去共创交流板块</button>
         </div>
 
-        ${
-          s.user && s.user.apiKey
-            ? `
-              <div class="studio-step-card" style="margin:0;">
-                <div style="font-weight:800;margin-bottom:6px;">🔌 本地资产库同步创作密钥</div>
-                <p style="font-size:12px;color:var(--ink-muted);margin:0 0 8px;">用于本地工具一键同步已收藏与已解锁资产（独占黑盒受云端保护不可导出）：</p>
-                <div style="display:flex;gap:6px;align-items:center;">
-                  <code style="flex:1;padding:5px 8px;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:6px;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;">${esc(s.user.apiKeyMasked || s.user.apiKey)}</code>
-                  <button type="button" class="btn btn-sm" id="wallet-btn-copy-apikey">复制</button>
-                </div>
-              </div>
-            `
-            : ""
-        }
+        <div class="studio-step-card" style="margin:0;">
+          <div style="font-weight:800;margin-bottom:6px;">已授权设备与客户端</div>
+          <p style="font-size:12.8px;color:var(--ink-muted);margin:0 0 12px;">管理已授予个人令牌的本地扩展与终端工具。</p>
+          <button type="button" class="btn btn-sm" id="wallet-btn-go-devices">管理已授权设备</button>
+        </div>
       </div>
 
       <div class="studio-step-card">
@@ -2252,14 +2262,9 @@
       };
     }
 
-    const copyKeyBtn = root.querySelector("#wallet-btn-copy-apikey");
-    if (copyKeyBtn) {
-      copyKeyBtn.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(App.state.user.apiKey || "");
-        } catch (_) {}
-        toast("🔑 已复制个人本地扩展同步密钥！");
-      };
+    const devBtn = root.querySelector("#wallet-btn-go-devices");
+    if (devBtn) {
+      devBtn.onclick = () => switchView("devices");
     }
 
     root.querySelector("#wallet-btn-pioneer").onclick = () => S.goToForumCompose({ style1: "FB-055", category: "assets" });

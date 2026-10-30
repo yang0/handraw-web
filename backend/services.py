@@ -10,7 +10,7 @@ import sqlite3
 import time
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger("backend.services")
@@ -273,39 +273,121 @@ def _count_user_published_items(conn: sqlite3.Connection, username: str) -> int:
 
 # ======================== AUTHENTICATION & SESSIONS ========================
 
+def _header_ci_val(headers: dict[str, str], name: str) -> str:
+    target = name.lower()
+    for k, v in headers.items():
+        if k.lower() == target:
+            return str(v or "")
+    return ""
+
+
+def _has_header_ci(headers: dict[str, str], name: str) -> bool:
+    target = name.lower()
+    for k in headers.keys():
+        if k.lower() == target:
+            return True
+    return False
+
+
 def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any] | None:
     conn = db.get_conn()
     now_ts = int(time.time())
 
     # 1. Bearer token or X-Handraw-Token
-    token = ""
-    auth_hdr = headers.get("Authorization") or headers.get("authorization") or ""
-    if auth_hdr.lower().startswith("bearer "):
-        token = auth_hdr[7:].strip()
-    if not token:
-        token = (headers.get("X-Handraw-Token") or headers.get("x-handraw-token") or "").strip()
+    has_auth_hdr = _has_header_ci(headers, "Authorization")
+    has_x_hdr = _has_header_ci(headers, "X-Handraw-Token")
 
-    # 2. Skill-Addon API Key headers (Api-Key / User-Api-Key)
-    api_key = (
-        headers.get("Api-Key")
-        or headers.get("api-key")
-        or headers.get("User-Api-Key")
-        or headers.get("user-api-key")
-        or ""
-    ).strip()
-    if api_key or token.startswith("hwk_"):
-        key_val = api_key or token
-        u = conn.execute("SELECT * FROM users WHERE api_key = ?", (key_val,)).fetchone()
-        if u and u["status"] == "active":
-            return dict(u)
-        return None
+    # If ANY Authorization or X-Handraw-Token header is provided (regardless of casing,
+    # empty value, scheme, or format), ONLY token auth is evaluated.
+    # Invalid/malformed/revoked/unknown tokens MUST return None immediately without
+    # ever falling back to Session Cookie.
+    if has_auth_hdr or has_x_hdr:
+        token = ""
+        if has_auth_hdr:
+            raw_auth = _header_ci_val(headers, "Authorization").strip()
+            if raw_auth.lower().startswith("bearer "):
+                token = raw_auth[7:].strip()
+            else:
+                # Non-Bearer scheme (e.g. Basic), empty string, or malformed Authorization header
+                return None
+        elif has_x_hdr:
+            token = _header_ci_val(headers, "X-Handraw-Token").strip()
 
-    # 3. Session Cookie
-    if not token:
-        cookies = parse_cookie_header(headers.get("Cookie") or headers.get("cookie"))
-        token = (cookies.get(SESSION_COOKIE_NAME) or "").strip()
+        if not token:
+            return None
 
-    if not token:
+        # Deprecated legacy keys are strictly rejected
+        if token.startswith("hwk_"):
+            return None
+
+        # Personal access token (hwt_...)
+        if token.startswith("hwt_"):
+            tok_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            tok_row = conn.execute(
+                "SELECT * FROM api_tokens WHERE token_hash = ? AND revoked_at = ''",
+                (tok_hash,),
+            ).fetchone()
+            if not tok_row:
+                return None
+            u = conn.execute(
+                "SELECT * FROM users WHERE id = ? AND status = 'active'",
+                (tok_row["user_id"],),
+            ).fetchone()
+            if not u:
+                return None
+
+            # Explicit exception to the "GET does not write to database" rule:
+            # We track last_used_at for token auditing in user device management UI.
+            # To prevent SQLite write lock contention on frequent read queries (e.g. Skill sync),
+            # this update is throttled to at most once every 5 minutes (300 seconds).
+            last_used = tok_row["last_used_at"] or ""
+            should_update = True
+            if last_used:
+                try:
+                    dt = datetime.fromisoformat(last_used.replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - dt).total_seconds() < 300:
+                        should_update = False
+                except Exception:
+                    pass
+            if should_update:
+                now_iso = utc_now_iso()
+                conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", (now_iso, tok_row["id"]))
+
+            user_dict = dict(u)
+            user_dict["_auth_kind"] = "token"
+            user_dict["_token_id"] = tok_row["id"]
+            try:
+                scopes = json.loads(tok_row["scopes"])
+                if not isinstance(scopes, list):
+                    scopes = [str(scopes)]
+            except Exception:
+                scopes = [s.strip() for s in tok_row["scopes"].split(",") if s.strip()]
+            user_dict["_token_scopes"] = scopes
+            return user_dict
+
+        # Bearer session token (e.g. session token passed via Authorization header)
+        row = conn.execute(
+            """
+            SELECT u.*
+            FROM sessions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.token = ? AND s.expires_at > ?
+            """,
+            (token, now_ts),
+        ).fetchone()
+        if not row or row["status"] != "active":
+            return None
+        result = dict(row)
+        result["_session_token"] = token
+        result["_auth_kind"] = "session"
+        result["_token_scopes"] = ["*"]
+        return result
+
+    # 2. Session Cookie (only evaluated when NO Authorization or X-Handraw-Token header is present)
+    cookie_str = _header_ci_val(headers, "Cookie")
+    cookies = parse_cookie_header(cookie_str)
+    sess_token = (cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    if not sess_token:
         return None
 
     row = conn.execute(
@@ -315,12 +397,14 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
         JOIN users u ON u.id = s.user_id
         WHERE s.token = ? AND s.expires_at > ?
         """,
-        (token, now_ts),
+        (sess_token, now_ts),
     ).fetchone()
     if not row or row["status"] != "active":
         return None
     result = dict(row)
-    result["_session_token"] = token
+    result["_session_token"] = sess_token
+    result["_auth_kind"] = "session"
+    result["_token_scopes"] = ["*"]
     return result
 
 
@@ -379,7 +463,7 @@ def register_user(
             ).fetchone()
 
         pw_hash = hash_password(password)
-        api_key = generate_api_key()
+        api_key = ""
         cur = tx.execute(
             """
             INSERT INTO users (
@@ -387,7 +471,7 @@ def register_user(
                 role, status, bio, invite_code, invited_by, api_key, created_at, last_login_at
             ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', 'user', 'active', 'Handraw 新锐社区创作者', ?, ?, ?, ?, ?)
             """,
-            (uname, dname, clean_email, pw_hash, uname, inviter_row["username"] if inviter_row else "", api_key, now_iso, now_iso),
+            (uname, dname, clean_email, pw_hash, uname, inviter_row["username"] if inviter_row else "", api_key or None, now_iso, now_iso),
         )
         uid = int(cur.lastrowid)
         tx.execute(
@@ -3543,7 +3627,7 @@ def import_discourse_users_batch(
 
             disc_id = int(rec["id"]) if str(rec.get("id") or "").isdigit() else None
             created_at = str(rec.get("created_at") or now_iso)
-            api_key = generate_api_key()
+            api_key = ""
 
             cur = tx.execute(
                 """
@@ -3553,7 +3637,7 @@ def import_discourse_users_batch(
                     invite_code, api_key, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', '原 Discourse 社区老用户迁移账号', ?, ?, ?)
                 """,
-                (uname, dname, email, pw_hash, pw_algo, disc_salt, disc_id, role, uname, api_key, created_at),
+                (uname, dname, email, pw_hash, pw_algo, disc_salt, disc_id, role, uname, api_key or None, created_at),
             )
             uid = int(cur.lastrowid)
             tx.execute(

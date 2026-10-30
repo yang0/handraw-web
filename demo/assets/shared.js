@@ -3259,13 +3259,10 @@
 
         <div style="background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
           <div style="font-size:12.8px;color:var(--ink-body);">
-            <strong>🔌 本地扩展个人库同步密钥：</strong> <code>${esc(u.apiKeyMasked || u.apiKey || "未生成")}</code>
+            <strong>已授权设备与客户端：</strong> <span>管理已授权的 Skill 插件与终端应用</span>
           </div>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <button type="button" class="btn btn-sm" id="acc-copy-apikey-btn">📋 复制完整密钥</button>
-            <label style="font-size:12.5px;cursor:pointer;">
-              <input type="checkbox" id="acc-regen-key" /> 保存时轮换生成新同步密钥
-            </label>
+          <div>
+            <a class="btn btn-sm" href="/?view=devices">管理已授权设备</a>
           </div>
         </div>
 
@@ -3281,16 +3278,6 @@
     if (!formEl || !App.state || !App.state.user) return;
     const u = App.state.user;
 
-    const copyBtn = formEl.querySelector("#acc-copy-apikey-btn");
-    if (copyBtn) {
-      copyBtn.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(u.apiKey || "");
-        } catch (_) {}
-        toast("🔑 已复制个人本地扩展同步密钥！");
-      };
-    }
-
     const saveBtn = formEl.querySelector("#acc-save-btn");
     if (saveBtn) {
       saveBtn.onclick = async () => {
@@ -3299,7 +3286,6 @@
         const bio = formEl.querySelector("#acc-bio").value.trim();
         const currentPassword = formEl.querySelector("#acc-cur-pw").value;
         const newPassword = formEl.querySelector("#acc-new-pw").value;
-        const regenerateApiKey = formEl.querySelector("#acc-regen-key").checked;
         if (!displayName) {
           toast("显示昵称不能为空");
           return;
@@ -3308,10 +3294,10 @@
           try {
             const res = await apiJson("/api/auth/profile", {
               method: "POST",
-              body: { displayName, email, bio, currentPassword, newPassword, regenerateApiKey }
+              body: { displayName, email, bio, currentPassword, newPassword }
             });
             if (res.boot) applyBootState(res.boot);
-            toast("✅ 个人账号资料与安全设置已保存！");
+            toast("个人账号资料与安全设置已保存！");
             if (onSaved) onSaved();
           } catch (err) {
             toast(`保存失败：${err.message}`);
@@ -3323,7 +3309,7 @@
         u.email = email;
         u.bio = bio;
         saveState();
-        toast("✅ 个人资料已更新");
+        toast("个人资料已更新");
         if (onSaved) onSaved();
       };
     }

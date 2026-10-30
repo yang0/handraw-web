@@ -123,7 +123,7 @@ def check_write_origin(headers: Mapping[str, str], *, allow_missing_for_bearer: 
         return (True, "") if origin_allowed(ref_origin) else (False, "untrusted_referer")
     if allow_missing_for_bearer and any(
         _header_ci(headers, key)
-        for key in ("Authorization", "X-Handraw-Token", "Api-Key", "User-Api-Key")
+        for key in ("Authorization", "X-Handraw-Token")
     ):
         return True, ""
     if _header_ci(headers, "Cookie"):

@@ -1592,11 +1592,44 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             raise ServiceError(f"JSON 请求体格式错误：{exc}", status=400) from exc
 
     def _current_user(self, required: bool = False) -> dict[str, Any] | None:
-        hdr_dict = {k: v for k, v in self.headers.items()}
-        user = authenticate_request(self.db, hdr_dict)
+        if not hasattr(self, "_cached_auth_user"):
+            hdr_dict = {k.lower(): v for k, v in self.headers.items()}
+            self._cached_auth_user = authenticate_request(self.db, hdr_dict)
+        user = self._cached_auth_user
         if required and not user:
             raise ServiceError("请先登录账号后再执行该操作", status=401, code="login_required")
         return user
+
+    def _enforce_token_scope(self) -> None:
+        user = self._current_user()
+        if not user or user.get("_auth_kind") != "token":
+            return
+
+        parsed = urlparse(self.path)
+        req_path = unquote(parsed.path)
+        method = self.command.upper()
+        scopes = set(user.get("_token_scopes") or [])
+
+        # 1. Any valid token: GET /api/auth/me
+        if method == "GET" and req_path == "/api/auth/me":
+            return
+
+        # 2. 'publish' scope: POST /api/uploads, POST /api/studio/uploads
+        if "publish" in scopes:
+            if method == "POST" and req_path in ("/api/uploads", "/api/studio/uploads"):
+                return
+
+        # 3. 'library' scope: personal library read endpoints and collection toggle
+        if "library" in scopes:
+            if method == "GET":
+                if req_path in ("/studio/api/library", "/api/skill/library"):
+                    return
+                if re.fullmatch(r"^/(?:studio/api|api/skill)/assets/[^/]+/content$", req_path):
+                    return
+            elif method == "POST" and req_path == "/api/collections/toggle":
+                return
+
+        raise ServiceError("token_scope_denied", status=403, code="token_scope_denied")
 
     def _cookie_for_token(self, token: str, clear: bool = False) -> str:
         host = self.headers.get("Host") or "localhost"
@@ -1622,6 +1655,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         try:
+            self._enforce_token_scope()
             self._enforce_write_origin()
             parsed = urlparse(self.path)
             req_path = unquote(parsed.path)
@@ -1639,6 +1673,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         try:
+            self._enforce_token_scope()
             self._handle_get()
         except ServiceError as se:
             self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
@@ -1681,6 +1716,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if curation_get and curation_get(self, req_path, qs):
             return
         if self._feature_get(req_path, qs):
+            return
+
+        try:
+            from .device_auth_routes import handle_get as device_auth_get
+        except ImportError:  # pragma: no cover
+            device_auth_get = None
+        if device_auth_get and device_auth_get(self, req_path, qs):
             return
 
         if req_path == "/robots.txt":
@@ -2091,6 +2133,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            self._enforce_token_scope()
             self._handle_post()
         except ServiceError as se:
             self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
@@ -2139,6 +2182,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if curation_post and curation_post(self, req_path, body):
             return
         if self._feature_post(req_path, body):
+            return
+
+        try:
+            from .device_auth_routes import handle_post as device_auth_post
+        except ImportError:  # pragma: no cover
+            device_auth_post = None
+        if device_auth_post and device_auth_post(self, req_path, body):
             return
 
         # Auth & Session Endpoints

@@ -324,6 +324,37 @@ GENERATION_PROMPT_READY_SQL = """
 ALTER TABLE studio_generations ADD COLUMN prompt_ready INTEGER NOT NULL DEFAULT 1;
 """
 
+API_TOKENS_SQL = """
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    scopes TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL DEFAULT '',
+    revoked_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id);
+"""
+
+DEVICE_CODES_SQL = """
+CREATE TABLE IF NOT EXISTS device_codes (
+    device_code_hash TEXT PRIMARY KEY,
+    user_code TEXT NOT NULL UNIQUE,
+    client_name TEXT NOT NULL DEFAULT '',
+    scopes TEXT NOT NULL,
+    user_id INTEGER,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    approved_at TEXT NOT NULL DEFAULT '',
+    last_polled_at TEXT NOT NULL DEFAULT '',
+    interval INTEGER NOT NULL DEFAULT 5
+);
+CREATE INDEX IF NOT EXISTS idx_device_codes_status_expires ON device_codes(status, expires_at);
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -337,4 +368,6 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (49, "049_status_actor_role", STATUS_ACTOR_SQL),
     (50, "050_daily_usage", DAILY_USAGE_SQL),
     (51, "051_generation_prompt_ready", GENERATION_PROMPT_READY_SQL),
+    (52, "052_api_tokens", API_TOKENS_SQL),
+    (53, "053_device_codes", DEVICE_CODES_SQL),
 ]
