@@ -58,9 +58,11 @@ class GovernanceRegressionTests(_Base):
         admin_moderate_work(self.db, self.admin, self.work["workId"], "hide")
         self.assertEqual(self._statuses(), ("hidden", "hidden"))
 
-        for _ in range(3):
+        # Three distinct accounts: one account's repeat reports do not count.
+        for i in range(3):
+            reporter, _ = register_user(self.db, f"g_rep{i}", "password-r")
             submit_abuse_report(
-                self.db, self.author, {"targetType": "work", "targetId": self.work["workId"], "reason": "垃圾内容"}
+                self.db, reporter, {"targetType": "work", "targetId": self.work["workId"], "reason": "垃圾内容"}
             )
         self.assertEqual(
             self._statuses(), ("hidden", "hidden"), "auto-pause must not touch an admin-hidden work"

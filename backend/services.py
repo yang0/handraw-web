@@ -2428,29 +2428,38 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
             if r:
                 target_title = f"{target_id} {r['name']}"
 
-        tx.execute(
-            """
-            INSERT INTO reports (reporter_id, reporter_username, target_type, target_id, target_title, reason, detail, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
-            """,
-            (uid, user["username"], target_type, target_id, target_title, reason, detail, now_iso),
-        )
+        # One open report per account per target.  Counting rows let a single
+        # account pause any content by reporting it `threshold` times.
+        duplicate = tx.execute(
+            "SELECT 1 FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ? AND status = 'open'",
+            (uid, target_type, target_id),
+        ).fetchone() is not None
+        if not duplicate:
+            tx.execute(
+                """
+                INSERT INTO reports (reporter_id, reporter_username, target_type, target_id, target_title, reason, detail, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+                """,
+                (uid, user["username"], target_type, target_id, target_title, reason, detail, now_iso),
+            )
 
+        # The threshold counts distinct reporters, so legacy duplicate rows
+        # cannot reach it either.
         open_cnt = int(
             tx.execute(
-                "SELECT COUNT(*) FROM reports WHERE target_type = ? AND target_id = ? AND status = 'open'",
+                "SELECT COUNT(DISTINCT reporter_id) FROM reports WHERE target_type = ? AND target_id = ? AND status = 'open'",
                 (target_type, target_id),
             ).fetchone()[0]
         )
         auto_paused = False
-        if open_cnt >= threshold:
+        if open_cnt >= threshold and not duplicate:
             if target_type == "work":
                 # Only auto-pause a live work.  A work an admin already hid must
                 # not be downgraded to "paused", because a later rejection would
                 # then republish it.
                 auto_paused = set_work_visibility(
                     tx, target_id, "paused", now_iso,
-                    source="report", reason=f"举报达到阈值（{open_cnt} 条）",
+                    source="report", reason=f"举报达到阈值（{open_cnt} 人）",
                     automated=True, allow_from=("published",), allow_sources=("",),
                 )
             elif target_type == "topic":
@@ -2458,7 +2467,7 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
                 # a human, deleted, mirroring a hidden work) is left alone.
                 auto_paused = set_topic_visibility(
                     tx, target_id, "paused", now_iso,
-                    source="report", reason=f"举报达到阈值（{open_cnt} 条）",
+                    source="report", reason=f"举报达到阈值（{open_cnt} 人）",
                     automated=True, allow_from=("published",),
                 )
             elif target_type == "asset":

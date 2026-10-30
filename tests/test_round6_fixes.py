@@ -95,10 +95,13 @@ class TopicPauseProvenanceTests(unittest.TestCase):
         return (row["status"], row["status_source"]) if row else (None, None)
 
     def _report(self, times=1, target_type="topic"):
+        # One open report per account counts, so the threshold needs distinct
+        # reporters.
         target = self.work["topicId"] if target_type == "topic" else self.work["workId"]
-        for _ in range(times):
+        for i in range(times):
+            reporter, _ = register_user(self.db, f"tp_rep{target_type}{i}", "password-r")
             submit_abuse_report(
-                self.db, self.author, {"targetType": target_type, "targetId": target, "reason": "垃圾内容"}
+                self.db, reporter, {"targetType": target_type, "targetId": target, "reason": "垃圾内容"}
             )
 
     def test_auto_paused_topic_records_the_report_source(self):
