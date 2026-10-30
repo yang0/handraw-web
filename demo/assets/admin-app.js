@@ -2900,9 +2900,13 @@
         const sp = new URLSearchParams(window.location.search);
         const reqMod = sp.get("module");
         const reqSub = sp.get("subtab");
+        const reqQ = sp.get("q");
         if (reqMod) state.module = reqMod;
         if (reqMod && reqSub && state.subtab[reqMod] !== undefined) {
           state.subtab[reqMod] = reqSub;
+        }
+        if (reqQ && reqQ.trim()) {
+          state.filters.usersQ = reqQ.trim();
         }
       }
 

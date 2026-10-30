@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import logging
@@ -112,6 +113,7 @@ from .services import (
     complete_cloud_generation,
     claim_cloud_generation_submission,
     compute_public_asset_counts_and_creators,
+    consume_daily_usage,
     delete_user_studio_workflow,
     forum_moderator_action,
     get_site_settings,
@@ -333,6 +335,12 @@ class GenerationReconciler:
         self._thread: threading.Thread | None = None
 
     def reconcile_once(self) -> int:
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.db.transaction() as tx:
+            tx.execute(
+                "UPDATE studio_generations SET prompt_ready = 1 WHERE prompt_ready = 0 AND created_at < ?",
+                (cutoff_iso,),
+            )
         rows = self.db.get_conn().execute(
             """
             SELECT id, task_id, request_id, status
@@ -2421,6 +2429,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             import base64
             from backend.document_parser import parse_article_file
 
+            user = self._current_user(required=True)
+            if not consume_daily_usage(self.db, user["id"], "parse", 20):
+                raise ServiceError("今日文档解析次数已达上限（20次/天），请明天再试", status=429, code="rate_limited")
+
             file_name = str(body.get("fileName") or body.get("name") or "")
             file_data = body.get("fileData") or body.get("data") or body.get("dataUrl") or ""
             raw_text = str(body.get("text") or "")
@@ -2437,7 +2449,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             else:
                 raise ServiceError("未提供有效的文件数据或文本正文", status=400)
 
-            logger.info("POST /api/studio/parse-article: filename=%s, bytes=%d", file_name, len(file_bytes))
+            if len(file_bytes) > 10 * 1024 * 1024:
+                raise ServiceError("解码后文件大小超过 10MB 限制", status=413, code="payload_too_large")
+
+            logger.info("POST /api/studio/parse-article: user=%s, filename=%s, bytes=%d", user["username"], file_name, len(file_bytes))
             parsed_res = parse_article_file(file_bytes, file_name)
             self._send_json({"ok": True, **parsed_res})
             return

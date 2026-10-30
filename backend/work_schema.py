@@ -310,6 +310,20 @@ WHERE status = 'paused' AND status_source = ''
 
 STATUS_ACTOR_SQL = STATUS_ACTOR_DDL + STATUS_ACTOR_BACKFILL_SQL
 
+DAILY_USAGE_SQL = """
+CREATE TABLE IF NOT EXISTS daily_usage (
+    user_id INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    usage_date TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, scope, usage_date)
+);
+"""
+
+GENERATION_PROMPT_READY_SQL = """
+ALTER TABLE studio_generations ADD COLUMN prompt_ready INTEGER NOT NULL DEFAULT 1;
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -321,4 +335,6 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (47, "047_status_source", STATUS_SOURCE_SQL),
     (48, "048_popular_index_v2", POPULAR_INDEX_V2_SQL),
     (49, "049_status_actor_role", STATUS_ACTOR_SQL),
+    (50, "050_daily_usage", DAILY_USAGE_SQL),
+    (51, "051_generation_prompt_ready", GENERATION_PROMPT_READY_SQL),
 ]

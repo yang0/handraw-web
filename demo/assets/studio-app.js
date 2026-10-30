@@ -4314,7 +4314,9 @@
       const d = await resp.json();
       if (d.status === "success" && d.images && d.images.length > 0) return d.images;
       if (["error", "failed", "refunded", "cancelled"].includes(d.status)) {
-        throw new Error(d.message || d.error || `云端生图${d.status}`);
+        const err = new Error(d.message || d.error || `云端生图${d.status}`);
+        err.terminal = true;
+        throw err;
       }
     }
     throw new Error("云端生图等待超时");
@@ -4411,19 +4413,19 @@
     const pendingArticles = [];
     for (const art of Array.isArray(CS.myArticles) ? CS.myArticles : []) {
       for (const card of Array.isArray(art.cards) ? art.cards : []) {
-        if (card && card.status === "generating" && card.taskId) pendingArticles.push({ art, card });
+        if (card && card.status === "generating" && (card.taskId || card.requestId)) pendingArticles.push({ art, card });
       }
     }
 
     const resumeArticle = async ({ art, card }) => {
       try {
-        const images = await pollCloudTask(card.taskId, {
+        const images = await pollCloudTask(card.taskId || "", {
           requestId: card.requestId || "",
           immediate: true,
           signal: resumeController ? resumeController.signal : undefined
         });
         if (resumeEpoch !== cacheScopeEpoch || resumeScope !== activeCacheScope) return;
-        card.imageUrl = images[0] || "";
+        card.imageUrl = (images && images[0]) || "";
         card.status = card.imageUrl ? "done" : "error";
         card.generationMode = "live";
         card.demoMode = false;
@@ -4434,6 +4436,8 @@
         if (resumeEpoch !== cacheScopeEpoch || resumeScope !== activeCacheScope) return;
         card.status = "error";
         card.error = err.message || String(err);
+        card.taskId = "";
+        if (err.terminal) card.requestId = "";
         persistMyArticles();
         renderFullPreviewStage();
       }
@@ -4444,15 +4448,16 @@
     // the already-submitted request without creating a second charge.
     const pendingDisplays = [];
     for (const tab of CS.tabs || []) {
-      for (const node of tab.graph?.nodes || []) {
-        if (node.type !== "output_display" || !node.data?.pendingTaskId) continue;
-        pendingDisplays.push({ tab, node });
+      const graph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
+      for (const node of graph?.nodes || []) {
+        if (node.type !== "output_display" || (!node.data?.pendingTaskId && !node.data?.pendingRequestId)) continue;
+        pendingDisplays.push({ tab, nodeId: node.id, node });
       }
     }
     await Promise.allSettled(
-      pendingDisplays.map(async ({ tab, node }) => {
-        const taskId = node.data.pendingTaskId;
-        const requestId = node.data.pendingRequestId || "";
+      pendingDisplays.map(async ({ tab, nodeId, node: initialNode }) => {
+        const taskId = initialNode.data?.pendingTaskId || "";
+        const requestId = initialNode.data?.pendingRequestId || "";
         try {
           const images = await pollCloudTask(taskId, {
             requestId,
@@ -4460,7 +4465,9 @@
             signal: resumeController ? resumeController.signal : undefined
           });
           if (resumeEpoch !== cacheScopeEpoch || resumeScope !== activeCacheScope) return;
-          const spec = node.data.pendingSpec?.[requestId] || {};
+          const currentGraph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
+          const targetNode = currentGraph?.nodes?.find((n) => n.id === nodeId) || initialNode;
+          const spec = targetNode.data?.pendingSpec?.[requestId] || (taskId ? targetNode.data?.pendingSpec?.[taskId] : null) || initialNode.data?.pendingSpec?.[requestId] || {};
           const item = {
             id: E.uid("outit"),
             requestId,
@@ -4474,23 +4481,53 @@
             ratio: spec.ratio || "3:4",
             theme: spec.theme || "",
             prompt: spec.prompt || "",
-            imageUrl: images[0] || ""
+            imageUrl: (images && images[0]) || ""
           };
-          node.data.items = [item];
-          node.data.status = item.imageUrl ? "done" : "error";
-          delete node.data.pendingTaskId;
-          delete node.data.pendingRequestId;
-          if (node.data.pendingRequestIds) delete node.data.pendingRequestIds[spec.slotKey || requestId];
-          delete node.data.pendingSpec?.[requestId];
+          targetNode.data.items = item.imageUrl ? [item] : [];
+          targetNode.data.status = item.imageUrl ? "done" : "error";
+          delete targetNode.data.pendingTaskId;
+          delete targetNode.data.pendingRequestId;
+          if (targetNode.data.pendingRequestIds) delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
+          if (targetNode.data.pendingSpec) {
+            delete targetNode.data.pendingSpec[requestId];
+            if (taskId) delete targetNode.data.pendingSpec[taskId];
+          }
+          const ctrlNode = targetNode.data.sourceNodeId ? currentGraph?.nodes?.find((n) => n.id === targetNode.data.sourceNodeId) : null;
+          if (ctrlNode && ctrlNode.data && ctrlNode.data.status === "generating") {
+            ctrlNode.data.status = item.imageUrl ? "done" : "error";
+          }
           persistOpenTabs();
-          if (tab.id === CS.activeTabId) fullRenderCanvas();
+          if (tab.id === CS.activeTabId) {
+            fullRenderCanvas();
+            renderQuickStart();
+          }
         } catch (err) {
           if (resumeEpoch !== cacheScopeEpoch || resumeScope !== activeCacheScope) return;
-          node.data.status = "error";
-          node.data.error = err.message || String(err);
-          delete node.data.pendingTaskId;
-          delete node.data.pendingRequestId;
+          const currentGraph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
+          const targetNode = currentGraph?.nodes?.find((n) => n.id === nodeId) || initialNode;
+          targetNode.data.status = "error";
+          targetNode.data.error = err.message || String(err);
+          delete targetNode.data.pendingTaskId;
+          delete targetNode.data.pendingRequestId;
+          const spec = targetNode.data?.pendingSpec?.[requestId] || (taskId ? targetNode.data?.pendingSpec?.[taskId] : null) || initialNode.data?.pendingSpec?.[requestId] || {};
+          if (err.terminal) {
+            if (targetNode.data.pendingRequestIds) {
+              delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
+            }
+          }
+          if (targetNode.data.pendingSpec) {
+            delete targetNode.data.pendingSpec[requestId];
+            if (taskId) delete targetNode.data.pendingSpec[taskId];
+          }
+          const ctrlNode = targetNode.data.sourceNodeId ? currentGraph?.nodes?.find((n) => n.id === targetNode.data.sourceNodeId) : null;
+          if (ctrlNode && ctrlNode.data && ctrlNode.data.status === "generating") {
+            ctrlNode.data.status = "error";
+          }
           persistOpenTabs();
+          if (tab.id === CS.activeTabId) {
+            fullRenderCanvas();
+            renderQuickStart();
+          }
         }
       })
     );
@@ -4708,14 +4745,25 @@
         if (typeof data.credits === "number") App.state.credits = data.credits;
         if (typeof data.freeQuotaRemaining === "number") App.state.freeQuotaRemaining = data.freeQuotaRemaining;
         if (S.renderChrome) S.renderChrome();
-        if (data.imageUrl) imgUrl = data.imageUrl;
-        else if (Array.isArray(data.images) && data.images.length) imgUrl = data.images[0];
-        else if (data.taskId) {
-          card.taskId = data.taskId;
+        const activeReqId = data.requestId || requestId;
+        if (data.imageUrl) {
+          imgUrl = data.imageUrl;
+        } else if (Array.isArray(data.images) && data.images.length) {
+          imgUrl = data.images[0];
+        } else if (data.taskId || activeReqId) {
+          card.taskId = data.taskId || "";
           commitArticleTargetChanges(target, { bumpTime: false });
-          const imgs = await pollCloudTask(data.taskId, { requestId, signal: controller ? controller.signal : undefined });
+          const imgs = await pollCloudTask(data.taskId || "", {
+            requestId: activeReqId,
+            signal: controller ? controller.signal : undefined
+          });
           if (isStaleScope(runEpoch, runScope)) return false;
-          imgUrl = imgs[0] || "";
+          imgUrl = (imgs && imgs[0]) || "";
+        } else {
+          throw new Error("云端未返回任务编号或图片");
+        }
+        if (!imgUrl) {
+          throw new Error("云端没有返回图片");
         }
       } else {
         await new Promise((r) => setTimeout(r, 220));
@@ -4757,6 +4805,7 @@
     } catch (err) {
       if (isStaleScope(runEpoch, runScope)) return false;
       card.status = "error";
+      if (err.terminal) card.requestId = "";
       commitArticleTargetChanges(target, { bumpTime: false });
       if (!silent) toast(`⚠️ 配图生成失败：${err.message || err}`);
       return false;
@@ -4999,6 +5048,9 @@
       }
     }, 450);
 
+    let currentSlotKey = "";
+    let currentReqId = "";
+
     try {
       const rec = E.resolveControlRecipe(CS.graph, ctrl, Catalog);
       if (rec.audience) recordRecentFieldValue("audience", rec.audience);
@@ -5050,10 +5102,13 @@
         const nextRunCount = (dn?.data?.runCount || 0) + 1;
         const skillPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "skill", sp);
         let imgUrl = "";
+        let activeReqId = "";
 
         const requestId =
           (dn && dn.data && dn.data.pendingRequestIds && dn.data.pendingRequestIds[sp.slotKey || String(i)]) ||
           ensureStableRequestId("", `output_${sp.slotKey || i}`);
+        currentSlotKey = sp.slotKey || String(i);
+        currentReqId = requestId;
         if (dn) {
           dn.data.pendingRequestIds = dn.data.pendingRequestIds || {};
           dn.data.pendingRequestIds[sp.slotKey || String(i)] = requestId;
@@ -5096,17 +5151,40 @@
           if (typeof data.credits === "number") App.state.credits = data.credits;
           if (typeof data.freeQuotaRemaining === "number") App.state.freeQuotaRemaining = data.freeQuotaRemaining;
           if (S.renderChrome) S.renderChrome();
-          if (data.imageUrl) imgUrl = data.imageUrl;
-          else if (Array.isArray(data.images) && data.images.length) imgUrl = data.images[0];
-          else if (data.taskId) {
+          activeReqId = data.requestId || requestId;
+          if (data.imageUrl) {
+            imgUrl = data.imageUrl;
+          } else if (Array.isArray(data.images) && data.images.length) {
+            imgUrl = data.images[0];
+          } else if (data.taskId || activeReqId) {
             if (dn) {
-              dn.data.pendingTaskId = data.taskId;
-              dn.data.pendingRequestId = requestId;
+              if (data.taskId) dn.data.pendingTaskId = data.taskId;
+              dn.data.pendingRequestId = activeReqId;
+              dn.data.pendingSpec = dn.data.pendingSpec || {};
+              if (!dn.data.pendingSpec[activeReqId]) {
+                dn.data.pendingSpec[activeReqId] = dn.data.pendingSpec[requestId] || {
+                  slotKey: sp.slotKey,
+                  role: sp.role || "image",
+                  title: sp.title || `图片 #${i + 1}`,
+                  anchorHeading: sp.anchorHeading || "",
+                  ratio: sp.ratio || "3:4",
+                  theme: sp.theme || "",
+                  prompt: skillPrompt
+                };
+              }
               persistOpenTabs();
             }
-            const imgs = await pollCloudTask(data.taskId, { requestId, signal: controller ? controller.signal : undefined });
+            const imgs = await pollCloudTask(data.taskId || "", {
+              requestId: activeReqId,
+              signal: controller ? controller.signal : undefined
+            });
             if (isStaleScope(runEpoch, runScope)) return false;
-            imgUrl = imgs[0] || "";
+            imgUrl = (imgs && imgs[0]) || "";
+          } else {
+            throw new Error("云端未返回任务编号或图片");
+          }
+          if (!imgUrl) {
+            throw new Error("云端没有返回图片");
           }
         } else {
           const stepDelay = plan.specs.length > 25 ? 10 : plan.specs.length > 6 ? 35 : plan.specs.length > 1 ? 110 : 240;
@@ -5139,12 +5217,13 @@
         };
 
         if (dn) {
-          if (dn.data.pendingTaskId && dn.data.pendingRequestId === requestId) {
-            delete dn.data.pendingTaskId;
-            delete dn.data.pendingRequestId;
-          }
+          delete dn.data.pendingTaskId;
+          delete dn.data.pendingRequestId;
           if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[sp.slotKey || String(i)];
-          if (dn.data.pendingSpec) delete dn.data.pendingSpec[requestId];
+          if (dn.data.pendingSpec) {
+            delete dn.data.pendingSpec[requestId];
+            if (activeReqId) delete dn.data.pendingSpec[activeReqId];
+          }
         }
 
         if (dn) {
@@ -5210,7 +5289,18 @@
       if (activeLoopNode) activeLoopNode.data.status = "idle";
       for (const dn of dispNodes) {
         if (dn.data.status === "generating") dn.data.status = "error";
+        delete dn.data.pendingTaskId;
+        delete dn.data.pendingRequestId;
+        if (err.terminal) {
+          if (dn.data.pendingRequestIds && currentSlotKey) {
+            delete dn.data.pendingRequestIds[currentSlotKey];
+          }
+          if (dn.data.pendingSpec && currentReqId) {
+            delete dn.data.pendingSpec[currentReqId];
+          }
+        }
       }
+      persistOpenTabs();
       toast(`⚠️ 生成异常：${err.message || err}`);
       return false;
     } finally {
@@ -10988,11 +11078,20 @@
             window.history.replaceState(null, "", url.pathname + url.search);
 
             renderFullPreviewStage();
-            toast("🎉 AI 解析成功，文章已直接存入历史文章列表！");
+            let succMsg = res.aiUsed ? "已用 AI 整理为 Markdown" : "AI 不可用，已按原文导入，标题需要手动调整";
+            if (res.truncated) succMsg += "（正文过长，已截断）";
+            toast(succMsg);
           } catch (err) {
             if (loadingBox) loadingBox.style.display = "none";
-            toast("解析文档失败：" + (err.message || "请检查文件格式"));
-            console.error("[Article Parse Error]", err);
+            if (err.status === 401 || err.code === "login_required") {
+              toast("请先登录后再导入文档");
+              if (typeof S.openLoginModal === "function") {
+                S.openLoginModal("请先登录后再导入文档");
+              }
+            } else {
+              toast("解析文档失败：" + (err.message || "请检查文件格式"));
+              console.error("[Article Parse Error]", err);
+            }
           }
         };
         reader.readAsDataURL(file);
@@ -12202,7 +12301,9 @@
             adjustHeight();
             commitSync({ bumpTime: true, markSaved: true });
             updateInlineArticlePreview();
-            toast("已更新正文");
+            let succMsg = res.aiUsed ? "已用 AI 整理为 Markdown" : "AI 不可用，已按原文导入，标题需要手动调整";
+            if (res.truncated) succMsg += "（正文过长，已截断）";
+            toast(succMsg);
           } catch (err) {
             if (isCurrentEditor()) {
               draft.title = savedSnapshot.title;
@@ -12210,8 +12311,15 @@
               if (titleInp) titleInp.value = draft.title || "";
               if (mdTa) mdTa.value = draft.markdown || "";
             }
-            toast("解析文档失败：" + (err.message || "请检查文件格式"));
-            console.error("[Article Replace Error]", err);
+            if (err.status === 401 || err.code === "login_required") {
+              toast("请先登录后再导入文档");
+              if (typeof S.openLoginModal === "function") {
+                S.openLoginModal("请先登录后再导入文档");
+              }
+            } else {
+              toast("解析文档失败：" + (err.message || "请检查文件格式"));
+              console.error("[Article Replace Error]", err);
+            }
           } finally {
             finishReplace();
           }
@@ -12984,9 +13092,15 @@
       }),
       setPrivateState: (patch) => Object.assign(CS, patch || {}),
       getHistory: () => (Array.isArray(CS.generationHistory) ? JSON.parse(JSON.stringify(CS.generationHistory)) : null),
+      getTabs: () => CS.tabs,
+      getGraph: () => CS.graph,
       applyDurableTaskResult,
       isStaleScope,
-      ensureStableRequestId
+      ensureStableRequestId,
+      generateSinglePlanCard,
+      runOutputControlNode,
+      pollCloudTask,
+      resumePendingCloudTasks
     };
   }
 

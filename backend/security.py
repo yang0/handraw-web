@@ -17,6 +17,8 @@ def hash_password(password: str, salt: str | None = None) -> str:
 
 
 def verify_password(password: str, stored_hash: str, password_algo: str = "pbkdf2_sha256", discourse_salt: str = "") -> bool:
+    if password_algo == "reset_required":
+        return False
     if not stored_hash or not password:
         return False
 

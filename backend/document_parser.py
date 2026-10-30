@@ -191,12 +191,26 @@ def extract_text_from_file(file_bytes: bytes, filename: str = "") -> str:
     return _extract_text_runs(fallback_decoded, min_len=4) or fallback_decoded
 
 
-def fallback_parse_article(raw_text: str, filename: str = "") -> Dict[str, str]:
+def fallback_parse_article(
+    raw_text: str,
+    filename: str = "",
+    *,
+    fallback_reason: str = "no_key",
+    truncated: bool = False,
+) -> Dict[str, Any]:
     """Fallback parser when AI service is unavailable."""
     clean = (raw_text or "").strip()
     if not clean:
         title = (filename.rsplit(".", 1)[0] if "." in filename else filename) or "未命名文章"
-        return {"title": title, "markdown": f"# {title}\n\n请在此输入正文内容…"}
+        res: Dict[str, Any] = {
+            "title": title,
+            "markdown": f"# {title}\n\n请在此输入正文内容…",
+            "aiUsed": False,
+            "fallbackReason": fallback_reason,
+        }
+        if truncated:
+            res["truncated"] = True
+        return res
 
     lines = [l.strip() for l in clean.splitlines() if l.strip()]
     first_line = lines[0] if lines else "未命名文章"
@@ -208,17 +222,26 @@ def fallback_parse_article(raw_text: str, filename: str = "") -> Dict[str, str]:
     else:
         markdown_body = clean
 
-    return {"title": title, "markdown": markdown_body}
+    res = {
+        "title": title,
+        "markdown": markdown_body,
+        "aiUsed": False,
+        "fallbackReason": fallback_reason,
+    }
+    if truncated:
+        res["truncated"] = True
+    return res
 
 
-def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, str]:
+def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
     """Call local AI service to extract a clean title and Markdown content."""
     clean_raw = (raw_text or "").strip()
     if not clean_raw:
-        return fallback_parse_article(raw_text, filename)
+        return fallback_parse_article(raw_text, filename, fallback_reason="empty", truncated=False)
 
     max_input_chars = 32000
-    if len(clean_raw) > max_input_chars:
+    truncated = len(clean_raw) > max_input_chars
+    if truncated:
         clean_raw = clean_raw[:max_input_chars] + "\n\n[正文文本过长，已截断]"
 
     cfg = load_ai_config()
@@ -228,7 +251,7 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, str]:
     ai_key = cfg.get("key") or ""
     if not ai_key:
         logger.info("No AI key configured; using heuristic parsing for '%s'", filename)
-        return fallback_parse_article(raw_text, filename)
+        return fallback_parse_article(clean_raw, filename, fallback_reason="no_key", truncated=truncated)
     ai_model = cfg.get("model") or "deepseek-v4.1-flash"
 
     logger.info("Calling local AI service at %s (model: %s) for file '%s'...", ai_url, ai_model, filename)
@@ -285,16 +308,28 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, str]:
             if json_match:
                 content_clean = json_match.group(0)
 
-            parsed = json.loads(content_clean)
-            title = str(parsed.get("title") or "").strip()
-            markdown = str(parsed.get("markdown") or "").strip()
-            if title and markdown:
-                logger.info("AI parsing succeeded! Extracted title: '%s', Markdown length: %d", title, len(markdown))
-                return {"title": title, "markdown": markdown}
+            try:
+                parsed = json.loads(content_clean)
+            except Exception:
+                logger.warning("AI parse returned non-JSON content; falling back to heuristic parsing")
+                return fallback_parse_article(clean_raw, filename, fallback_reason="invalid_json", truncated=truncated)
+
+            if isinstance(parsed, dict):
+                title = str(parsed.get("title") or "").strip()
+                markdown = str(parsed.get("markdown") or "").strip()
+                if title and markdown:
+                    logger.info("AI parsing succeeded! Extracted title: '%s', Markdown length: %d", title, len(markdown))
+                    res = {"title": title, "markdown": markdown, "aiUsed": True, "fallbackReason": ""}
+                    if truncated:
+                        res["truncated"] = True
+                    return res
+                else:
+                    return fallback_parse_article(clean_raw, filename, fallback_reason="empty", truncated=truncated)
+            else:
+                return fallback_parse_article(clean_raw, filename, fallback_reason="invalid_json", truncated=truncated)
     except Exception as e:
         logger.warning("AI parse failed (%s); falling back to heuristic parsing", e)
-
-    return fallback_parse_article(raw_text, filename)
+        return fallback_parse_article(clean_raw, filename, fallback_reason="timeout_or_error", truncated=truncated)
 
 
 def parse_article_file(file_bytes: bytes, filename: str = "") -> Dict[str, Any]:

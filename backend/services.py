@@ -9,8 +9,11 @@ import re
 import sqlite3
 import time
 import uuid
+import logging
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger("backend.services")
 
 from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
 from .db import Database, local_today_str, utc_now_iso
@@ -441,6 +444,8 @@ def login_user(
             raise ServiceError("账号不存在或密码不正确", status=401, code="invalid_credentials")
         if row["status"] != "active":
             raise ServiceError("该账号已被冻结，如有疑问请联系社区管理员", status=403, code="account_frozen")
+        if row["password_algo"] == "reset_required":
+            raise ServiceError("这是老论坛迁移的账号，请先通过邮件重设密码", status=401, code="password_reset_required")
         if (
             not is_demo_mode()
             and password == DEMO_DEFAULT_PASSWORD
@@ -2836,7 +2841,7 @@ def claim_cloud_generation_submission(db: Database, user: dict[str, Any] | None,
         if int(row["user_id"] or 0) != uid:
             raise ServiceError("无权提交其他账号的生图任务", status=403, code="generation_forbidden")
         cur = tx.execute(
-            "UPDATE studio_generations SET status = 'queued' WHERE id = ? AND user_id = ? AND status = 'running' AND COALESCE(task_id, '') = ''",
+            "UPDATE studio_generations SET status = 'queued' WHERE id = ? AND user_id = ? AND status = 'running' AND COALESCE(task_id, '') = '' AND prompt_ready = 1",
             (gid, uid),
         )
         current = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gid,)).fetchone()
@@ -2877,6 +2882,36 @@ def _cloud_generation_result(
         "reservationDate": row["reservation_date"] or "",
         "model": str(settings.get("gateway", {}).get("model", "gpt-image-2")),
     }
+
+
+def consume_daily_usage(db: Database, user_id: int | str, scope: str, limit: int) -> bool:
+    """Durably record and enforce daily resource usage per user.
+
+    In a short transaction, reads the day's count, checks against ``limit``,
+    and atomically increments the counter via upsert. Returns False when
+    the usage would exceed ``limit``.
+    """
+    uid = int(user_id)
+    clean_scope = str(scope or "").strip()
+    today = local_today_str()
+    with db.transaction() as tx:
+        row = tx.execute(
+            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND usage_date = ?",
+            (uid, clean_scope, today),
+        ).fetchone()
+        current = int(row["count"]) if row else 0
+        if current >= limit:
+            return False
+        tx.execute(
+            """
+            INSERT INTO daily_usage (user_id, scope, usage_date, count)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT (user_id, scope, usage_date)
+            DO UPDATE SET count = daily_usage.count + 1
+            """,
+            (uid, clean_scope, today),
+        )
+        return True
 
 
 def _compose_skill_prompt(style_code: str, layout_code: str, theme: str) -> str:
@@ -2925,6 +2960,8 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
     today = local_today_str()
     now_iso = utc_now_iso()
     gen_id = f"gen_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+    from_skill = bool(body.get("promptFromSkill"))
+    injected_notes: list[str] = []
 
     with db.transaction() as tx:
         settings = get_site_settings(tx)
@@ -2973,7 +3010,6 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 fork_target = ""
 
         # 1. Verify unlock status and fetch DB blackbox secrets.
-        injected_notes: list[str] = []
         for code in (style1, style2, layout):
             if not code:
                 continue
@@ -3024,31 +3060,25 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             )
             free_remaining = 0
 
-        # Every picture goes through the hand-drawn style Skill before it is
-        # generated: the Skill resolves the style's traits and the layout's
-        # composition rules, and the image model is asked to follow that.
-        # A caller may hand over a prompt it already built (promptFromSkill);
-        # otherwise the server builds one here, so no path can skip the Skill.
-        from_skill = bool(body.get("promptFromSkill"))
+        # Initial prompt without skill (written in Transaction A)
         cleaned = raw_prompt
         if injected_notes:
             cleaned += "\n\n" + "\n".join(injected_notes)
-        if not from_skill:
-            composed = _compose_skill_prompt(style1 or style2, layout, raw_prompt)
-            if composed:
-                from_skill = True
-                cleaned = composed + ("\n\n" + "\n".join(injected_notes) if injected_notes else "")
-        final_prompt = cleaned if from_skill else (
+        initial_prompt = cleaned if from_skill else (
             f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
         )
+
+        needs_compose = (not from_skill) and bool(style1 or style2 or layout)
+        prompt_ready = 0 if needs_compose else 1
 
         tx.execute(
             """
             INSERT INTO studio_generations (
                 id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
                 prompt, markdown, items_json, engine, cost_type, credits_spent, task_id,
-                status, error_msg, request_id, reservation_date, created_at, fork_work_id
-            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?)
+                status, error_msg, request_id, reservation_date, created_at, fork_work_id,
+                prompt_ready
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?)
             """,
             (
                 gen_id,
@@ -3056,13 +3086,14 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 uname,
                 str(body.get("ratio") or "3:4"),
                 f"{style1} {style2} {layout}".strip(),
-                final_prompt[:4000],
+                initial_prompt[:4000],
                 cost_type,
                 credits_spent,
                 request_id,
                 today,
                 now_iso,
                 fork_target,
+                prompt_ready,
             ),
         )
         if cost_type == "free_quota":
@@ -3076,10 +3107,35 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             )
         inserted = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
 
+    # Outside transaction: model call for freshly inserted rows
+    if needs_compose:
+        composed = None
+        try:
+            composed = _compose_skill_prompt(style1 or style2, layout, raw_prompt)
+        except Exception:
+            logger.exception("Failed to compose skill prompt for generation %s", gen_id)
+            composed = None
+
+        skill_prompt_text = (composed + ("\n\n" + "\n".join(injected_notes) if injected_notes else ""))[:4000] if composed else None
+
+        with db.transaction() as tx:
+            cur = tx.execute(
+                "UPDATE studio_generations SET prompt = COALESCE(?, prompt), prompt_ready = 1 WHERE id = ? AND prompt_ready = 0",
+                (skill_prompt_text, gen_id),
+            )
+            if cur.rowcount == 0:
+                logger.warning("Transaction B: generation %s was not in prompt_ready=0 state (rowcount=0)", gen_id)
+
     # Keep the historical response keys while making request/retry state
     # explicit for the server and the canvas recovery client.
-    result = _cloud_generation_result(db.get_conn(), inserted, settings)
-    result.update({"credits": cur_balance, "freeQuotaRemaining": free_remaining})
+    # Re-read final row and finalPrompt directly from the database.
+    current_row = db.get_conn().execute("SELECT * FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
+    result = _cloud_generation_result(db.get_conn(), current_row, settings)
+    result.update({
+        "credits": cur_balance,
+        "freeQuotaRemaining": free_remaining,
+        "finalPrompt": current_row["prompt"] or "",
+    })
     return result
 
 
@@ -3414,6 +3470,10 @@ def import_discourse_users_batch(
     imported = 0
     skipped = 0
     imported_usernames: list[str] = []
+    skipped_no_email: list[str] = []
+    invalid_usernames: list[str] = []
+    conflicts: list[dict[str, Any]] = []
+    staff_candidates: list[str] = []
 
     with db.transaction() as tx:
         settings = get_site_settings(tx)
@@ -3424,23 +3484,42 @@ def import_discourse_users_batch(
         )
 
         for rec in records:
-            uname = re.sub(r"[^a-zA-Z0-9_\-]", "", str(rec.get("username") or "").strip())
-            if not uname or uname.lower() in ("system", "discobot"):
+            raw_uname = str(rec.get("username") or "").strip()
+            cleaned_uname = re.sub(r"[^a-zA-Z0-9_\-]", "", raw_uname)
+            if not raw_uname or cleaned_uname != raw_uname:
+                invalid_usernames.append(raw_uname)
                 skipped += 1
                 continue
-            email = str(rec.get("email") or f"{uname}@handraw-style.com").strip().lower()
-            exists = tx.execute(
-                "SELECT id FROM users WHERE username = ? OR email = ?",
-                (uname, email),
-            ).fetchone()
-            if exists:
+            if cleaned_uname.lower() in ("system", "discobot"):
+                skipped += 1
+                continue
+            uname = cleaned_uname
+
+            email = str(rec.get("email") or "").strip().lower()
+            if not email:
+                skipped_no_email.append(uname)
+                skipped += 1
+                continue
+
+            exists_uname = tx.execute("SELECT id FROM users WHERE username = ?", (uname,)).fetchone()
+            exists_email = tx.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+            if exists_uname or exists_email:
+                if exists_uname and exists_email:
+                    hit = "both"
+                elif exists_uname:
+                    hit = "username"
+                else:
+                    hit = "email"
+                conflicts.append({"username": uname, "email": email, "hit": hit, "conflict": hit})
                 skipped += 1
                 continue
 
             dname = str(rec.get("name") or rec.get("display_name") or uname).strip()[:40]
-            is_admin = str(rec.get("admin") or "").lower() in ("true", "1", "t", "yes")
-            is_mod = str(rec.get("moderator") or "").lower() in ("true", "1", "t", "yes")
-            role = "admin" if is_admin else ("reviewer" if is_mod else "user")
+            is_admin = str(rec.get("admin") or "").lower() in ("true", "1", "t", "yes") or rec.get("admin") is True
+            is_mod = str(rec.get("moderator") or "").lower() in ("true", "1", "t", "yes") or rec.get("moderator") is True
+            role = "user"
+            if is_admin or is_mod:
+                staff_candidates.append(uname)
 
             disc_hash = str(rec.get("password_hash") or "").strip()
             disc_salt = str(rec.get("salt") or "").strip()
@@ -3449,9 +3528,13 @@ def import_discourse_users_batch(
             if disc_hash and disc_salt and len(disc_hash) == 64:
                 pw_hash = disc_hash.lower()
                 pw_algo = "discourse_pbkdf2"
-            else:
-                pw_hash = hash_password(plain_pw or "handraw123")
+            elif plain_pw:
+                pw_hash = hash_password(plain_pw)
                 pw_algo = "pbkdf2_sha256"
+                disc_salt = ""
+            else:
+                pw_hash = ""
+                pw_algo = "reset_required"
                 disc_salt = ""
 
             disc_id = int(rec["id"]) if str(rec.get("id") or "").isdigit() else None
@@ -3495,4 +3578,14 @@ def import_discourse_users_batch(
             {"imported": imported, "skipped": skipped, "sample": imported_usernames[:10]},
         )
 
-    return {"ok": True, "imported": imported, "skipped": skipped, "bonusPerUser": bonus, "usernames": imported_usernames}
+    return {
+        "ok": True,
+        "imported": imported,
+        "skipped": skipped,
+        "bonusPerUser": bonus,
+        "usernames": imported_usernames,
+        "skippedNoEmail": skipped_no_email,
+        "invalidUsernames": invalid_usernames,
+        "conflicts": conflicts,
+        "staffCandidates": staff_candidates,
+    }
