@@ -554,7 +554,9 @@
                         <option value="">📂 移至板块…</option>
                         ${FORUM_BOARD_OPTIONS.filter((b) => b.id !== "all" && b.id !== t.category).map((b) => `<option value="${esc(b.id)}">→ ${esc(b.short)}</option>`).join("")}
                       </select>
-                      ${t.status === "published"
+                      ${t.status === "deleted"
+                        ? `<span class="adm-badge deleted">已删除，不可恢复</span>`
+                        : t.status === "published"
                         ? `<button class="adm-btn adm-btn-sm adm-btn-danger" data-mod-op="hide" data-mod-tid="${esc(t.id)}">🙈 隐藏</button>`
                         : `<button class="adm-btn adm-btn-sm adm-btn-jade" data-mod-op="publish" data-mod-tid="${esc(t.id)}">✅ 恢复</button>`}
                     </div>
@@ -1164,7 +1166,9 @@
                       <div class="adm-actions">
                         <button class="adm-btn adm-btn-sm" data-topic-act="${t.pinned ? "unpin" : "pin"}" data-topic-id="${esc(t.id)}">${t.pinned ? "取消置顶" : "📌 置顶"}</button>
                         <button class="adm-btn adm-btn-sm" data-topic-act="${t.featured ? "unfeature" : "feature"}" data-topic-id="${esc(t.id)}">${t.featured ? "取消精华" : "🌟 精华"}</button>
-                        ${t.status === "published"
+                        ${t.status === "deleted"
+                          ? `<span class="adm-badge deleted">已删除，不可恢复</span>`
+                          : t.status === "published"
                           ? `<button class="adm-btn adm-btn-sm adm-btn-danger" data-topic-act="hide" data-topic-id="${esc(t.id)}">🚫 隐藏</button>`
                           : `<button class="adm-btn adm-btn-sm adm-btn-jade" data-topic-act="publish" data-topic-id="${esc(t.id)}">✅ 恢复</button>`}
                         ${isOpenBounty && caps().canArbitrateBounty
