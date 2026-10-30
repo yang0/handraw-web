@@ -2971,7 +2971,10 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     raise ServiceError(f"尚未解锁付费编号 {code}《{arow['name']}》，请先解锁后再调用", status=403, code="asset_locked")
             secret = (arow["secret_blackbox_prompt"] or "").strip()
             if secret:
-                injected_notes.append(f"【云端黑盒注入 {code}】：{secret}")
+                # Give the model the style's written guidance, not an internal
+                # catalogue code: "【云端黑盒注入 FA-001】" leaked implementation
+                # vocabulary into the picture and read as noise.
+                injected_notes.append(secret)
 
         # 2. Enforce daily free quota -> automatic credit fallback.
         w = tx.execute("SELECT * FROM wallets WHERE user_id = ?", (uid,)).fetchone()

@@ -424,7 +424,9 @@
   font-size: 15px;
   line-height: 1.85;
   color: var(--ic-ink, #333333);
-  min-height: 540px;
+  /* Grow with the text so the illustration cards sit right after the last
+     paragraph instead of being pushed below a fixed-height box. */
+  min-height: 240px;
   box-sizing: border-box;
   overflow: hidden;
 }

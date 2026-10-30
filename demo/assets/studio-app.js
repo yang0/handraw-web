@@ -9622,6 +9622,15 @@
           <span class="ic-plan-slot-ratio">${esc(card.ratio || (isCover ? "2.35:1" : "4:3"))}</span>
           <button
             type="button"
+            class="btn btn-sm"
+            data-plan-edit="${esc(card.id)}"
+            title="编辑这张图的完整生图提示词"
+            style="padding:2px 9px;font-size:11px;font-weight:800;flex-shrink:0;"
+          >
+            ✏️ 调提示词
+          </button>
+          <button
+            type="button"
             class="btn btn-sm ${card.imageUrl ? "" : "btn-primary"}"
             data-plan-gen-one="${esc(card.id)}"
             ${isGen ? "disabled" : ""}
@@ -9728,6 +9737,7 @@
         if (
           e.target.closest("[data-plan-drag]") ||
           e.target.closest("[data-plan-gen-one]") ||
+          e.target.closest("[data-plan-edit]") ||
           e.target.closest("[data-plan-del]") ||
           e.target.closest("[data-plan-zoom]") ||
           e.target.closest("button")
@@ -9735,6 +9745,16 @@
           return;
         }
         const cid = cardEl.getAttribute("data-plan-card-id");
+        if (cid) openPlanCardPromptModal(planNode, cid);
+      };
+    });
+
+    // 1b. The explicit 调提示词 button. Clicking the card body also opens this,
+    // but a labelled button makes the affordance visible.
+    sheetEl.querySelectorAll("[data-plan-edit]").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const cid = btn.getAttribute("data-plan-edit");
         if (cid) openPlanCardPromptModal(planNode, cid);
       };
     });
