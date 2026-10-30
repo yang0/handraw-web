@@ -83,10 +83,8 @@ def trusted_origins() -> frozenset[str]:
         "https://forum.handraw-style.com",
         "https://admin.handraw-style.com",
     }
-    for port in range(3080, 3084):
-        defaults.add(f"http://localhost:{port}")
-        defaults.add(f"http://127.0.0.1:{port}")
-        defaults.add(f"http://[::1]:{port}")
+    for host in ("localhost", "127.0.0.1", "[::1]"):
+        defaults.add(f"http://{host}:3080")
     return frozenset(defaults)
 
 
@@ -222,7 +220,8 @@ def sanitize_media_url(value: str, *, allow_data: bool = False) -> str:
         except ValueError:
             return ""
         return clean
-    if clean.startswith(("/images/", "/uploads/", "/generated/")):
+    # ``/starter/`` serves the illustrations that ship with this repository.
+    if clean.startswith(("/images/", "/uploads/", "/generated/", "/starter/")):
         return clean
     parsed = urlparse(clean)
     if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:

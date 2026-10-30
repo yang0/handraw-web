@@ -27,12 +27,17 @@ class StarterLibraryTests(unittest.TestCase):
         self.db.close()
         self.temp.cleanup()
 
-    def test_plan_uses_only_shipped_images_and_known_resources(self):
+    def test_plan_uses_generated_illustrations_and_known_resources(self):
         plan = seed_starter_library.build_plan(self.db)
         self.assertGreater(len(plan["works"]), 0)
         for work in plan["works"]:
             image = work["images"][0]
-            self.assertTrue(image.startswith("/images/"), image)
+            # Each work points at an illustration generated for it, not at a
+            # style-gallery cover, so title, prompt and picture agree.
+            self.assertTrue(image.startswith("/starter/"), image)
+            stem = image.rsplit("/", 1)[-1].removesuffix(".webp")
+            shipped = Path(__file__).resolve().parent.parent / "demo" / "starter" / f"{stem}.webp"
+            self.assertTrue(shipped.is_file(), f"missing illustration {shipped}")
             self.assertEqual(plan["skipped"], [], "every starter work must resolve")
 
     def test_apply_creates_published_works_with_zero_counters(self):
@@ -49,7 +54,10 @@ class StarterLibraryTests(unittest.TestCase):
             self.assertEqual(work["cheers"], 0)
             self.assertEqual(work["forks"], 0)
             self.assertTrue(work["styles"], "each starter work references a real style")
-            self.assertIn("/images/", work["images"][0])
+            self.assertTrue(
+                work["images"][0].startswith("/starter/"),
+                "a seeded work shows its own generated illustration",
+            )
 
         showcase = [t for t in boot["topics"] if t.get("category") == "showcase"]
         self.assertEqual(len(showcase), len(plan["works"]), "every work topic lands in 晒作品")
