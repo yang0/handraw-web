@@ -1343,17 +1343,20 @@ def set_topic_visibility(
     *,
     source: str = "moderator",
     reason: str = "",
+    allow_overwrite_deleted: bool = False,
 ) -> None:
     """The single place a discussion thread's visibility changes.
 
     Both moderation entries (``/api/admin/topics/...`` and
-    ``/api/forum/moderate``) and the automatic report pause route through here,
-    so the rules cannot drift apart again — that drift is what let one entry
-    publish a thread the other was protecting.
+    ``/api/forum/moderate``), the report flow and the work-sync path route
+    through here, so the rules cannot drift apart again — that drift is what let
+    one entry publish a thread the other entry was protecting.
 
     Rules:
       * ``deleted`` is terminal.  Nothing may publish a thread whose work was
         deleted, and nothing may silently downgrade ``deleted`` to ``hidden``.
+        Automated callers pass ``allow_overwrite_deleted=True`` to mean
+        "silently skip" instead of raising.
       * Publishing requires the linked work to be published (or no work link).
       * Every change records its source, so a dismissal knows what it may undo.
     """
@@ -1364,7 +1367,18 @@ def set_topic_visibility(
         raise ServiceError("帖子不存在", status=404)
 
     if str(current["status"]) == "deleted" and status != "deleted":
+        if allow_overwrite_deleted:
+            return
         raise ServiceError("该帖子已随作品删除，不能恢复", status=409, code="topic_deleted")
+
+    # A moderator's decision on the thread outranks automated flows in both
+    # directions.  This guard lives here, not in the callers, so every path —
+    # the report threshold, the dismissal, and work-state sync — is covered.
+    current_source = str(current["status_source"] or "")
+    if current_source == "moderator" and source != "moderator":
+        if allow_overwrite_deleted:
+            return
+        return
 
     if status == "published":
         linked = tx.execute(
@@ -1444,18 +1458,11 @@ def set_work_visibility(
     ).fetchone()
     if mapped:
         topic_id = str(mapped["topic_id"])
-        # A human decision on the thread outranks the report flow in both
-        # directions: reports must neither resurrect a moderator-hidden thread
-        # nor downgrade a moderator-hidden thread into a temporary pause.
-        topic_row = tx.execute(
-            "SELECT status, status_source FROM forum_topics WHERE id = ?", (topic_id,)
-        ).fetchone()
-        topic_source = str(topic_row["status_source"] or "") if topic_row else ""
-        if topic_source == "moderator" and source != "moderator":
-            return True
-        tx.execute(
-            "UPDATE forum_topics SET status = ?, status_source = ?, status_reason = ?, updated_at = ? WHERE id = ?",
-            (status, "" if publishing else source, "" if publishing else reason, now_iso, topic_id),
+        # Sync goes through the same rule keeper, which also holds the
+        # moderator-outranks-automation guard; a deleted thread is skipped.
+        set_topic_visibility(
+            tx, topic_id, status, now_iso,
+            source=source, reason=reason, allow_overwrite_deleted=True,
         )
     return True
 
@@ -2296,14 +2303,20 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
                     allow_from=("published",), allow_sources=("",),
                 )
             elif target_type == "topic":
-                # Record the cause, otherwise a dismissal cannot tell this apart
-                # from a moderator pause and the thread never comes back.
-                cursor = tx.execute(
-                    "UPDATE forum_topics SET status = 'paused', status_source = 'report', "
-                    "status_reason = ?, updated_at = ? WHERE id = ? AND status = 'published'",
-                    (f"举报达到阈值（{open_cnt} 条）", now_iso, target_id),
-                )
-                auto_paused = cursor.rowcount > 0
+                # Route through the rule keeper so 'deleted' is respected and the
+                # cause is recorded; skip silently when the thread is not live.
+                before = tx.execute(
+                    "SELECT status FROM forum_topics WHERE id = ?", (target_id,)
+                ).fetchone()
+                if before and str(before["status"]) == "published":
+                    set_topic_visibility(
+                        tx, target_id, "paused", now_iso,
+                        source="report", reason=f"举报达到阈值（{open_cnt} 条）",
+                        allow_overwrite_deleted=True,
+                    )
+                    auto_paused = True
+                else:
+                    auto_paused = False
             elif target_type == "asset":
                 tx.execute("UPDATE catalog_assets SET status = 'paused', updated_at = ? WHERE code = ? AND status = 'published'", (now_iso, target_id))
                 auto_paused = True

@@ -141,6 +141,62 @@ class ForumModerateEndpointTests(_HttpBase):
         self.assertEqual(status, 409, payload)
         self.assertEqual(payload.get("code"), "work_not_published")
 
+    def test_confirming_a_report_cannot_downgrade_a_deleted_thread(self):
+        # The confirm path must skip a terminal thread silently: it may resolve
+        # the report, but it must not turn 'deleted' back into 'hidden', which
+        # would reopen it for a later publish.
+        token = self._login("hv_admin", "password-admin")
+        from backend.services import submit_abuse_report
+
+        submit_abuse_report(
+            self.db,
+            self.author,
+            {"targetType": "work", "targetId": self.work["workId"], "reason": "垃圾内容"},
+        )
+        status, payload = self._request(
+            "POST", f"/api/works/{self.work['workId']}/moderate", {"action": "delete"}, token
+        )
+        self.assertEqual(status, 200, payload)
+
+        report = self.db.get_conn().execute(
+            "SELECT id FROM reports WHERE target_type = 'work' AND status = 'open' LIMIT 1"
+        ).fetchone()
+        self.db.close_thread_conn()
+        self.assertIsNotNone(report, "the report should still be open")
+        status, payload = self._request(
+            "POST", f"/api/admin/reports/{report['id']}/resolve",
+            {"resolution": "confirmed", "autoAction": True}, token,
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(
+            self._topic_status(), ("deleted", "moderator"),
+            "confirming a report must not resurrect a deleted thread",
+        )
+
+    def test_dismissal_does_not_undo_a_moderator_hidden_topic(self):
+        # The dismissal runs as the report flow, so the topic-level moderator
+        # guard applies and the hide survives.
+        token = self._login("hv_admin", "password-admin")
+        self._request("POST", f"/api/admin/topics/{self.work['topicId']}/moderate",
+                      {"action": "hide"}, token)
+        from backend.services import submit_abuse_report
+
+        submit_abuse_report(
+            self.db,
+            self.author,
+            {"targetType": "work", "targetId": self.work["workId"], "reason": "垃圾内容"},
+        )
+        report = self.db.get_conn().execute(
+            "SELECT id FROM reports WHERE target_type = 'work' AND status = 'open' LIMIT 1"
+        ).fetchone()
+        self.db.close_thread_conn()
+        status, payload = self._request(
+            "POST", f"/api/admin/reports/{report['id']}/resolve",
+            {"resolution": "dismissed"}, token,
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(self._topic_status(), ("hidden", "moderator"))
+
     def test_deleted_thread_cannot_be_revived_by_either_entry(self):
         token = self._login("hv_admin", "password-admin")
         status, payload = self._request(

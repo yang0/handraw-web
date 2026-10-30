@@ -121,6 +121,85 @@ class StatusProvenanceTests(unittest.TestCase):
         self._dismiss_all_open_reports()
         self.assertEqual(self._state(), ("published", ""), "restoring clears the provenance")
 
+    def test_confirmed_report_is_recorded_as_a_moderator_verdict(self):
+        # Confirming a report is a human decision: the record must say
+        # 'moderator', otherwise a later dismissal republishes the content.
+        self._report()
+        reports = self.db.get_conn().execute(
+            "SELECT id FROM reports WHERE target_type = 'work' AND target_id = ? AND status = 'open'",
+            (self.work["workId"],),
+        ).fetchall()
+        self.db.close_thread_conn()
+        self.assertTrue(reports)
+        admin_resolve_report(self.db, self.admin, reports[0]["id"], "confirmed", auto_action=True)
+        self.assertEqual(self._state(), ("hidden", "moderator"))
+
+    def test_moderator_verdict_survives_a_later_dismissal(self):
+        self._report()
+        reports = self.db.get_conn().execute(
+            "SELECT id FROM reports WHERE target_type = 'work' AND target_id = ? AND status = 'open'",
+            (self.work["workId"],),
+        ).fetchall()
+        self.db.close_thread_conn()
+        admin_resolve_report(self.db, self.admin, reports[0]["id"], "confirmed", auto_action=True)
+        self._report()  # someone reports again
+        self._dismiss_all_open_reports()
+        self.assertEqual(
+            self._state(), ("hidden", "moderator"),
+            "a dismissed report must not undo a confirmed violation",
+        )
+
+    def test_topic_source_guard_blocks_report_flow_from_touching_a_moderator_state(self):
+        # M-c: automation must not overwrite a moderator decision on the topic.
+        # The guard is silent (a no-op), so assert on the stored state.
+        from backend.services import set_topic_visibility
+
+        from backend.admin_services import admin_moderate_topic
+
+        admin_moderate_topic(self.db, self.admin, self.work["topicId"], "hide")
+        with self.db.transaction() as tx:
+            set_topic_visibility(
+                tx, self.work["topicId"], "published", "2026-01-01T00:00:00Z", source="report"
+            )
+        topic = self.db.get_conn().execute(
+            "SELECT status, status_source FROM forum_topics WHERE id = ?", (self.work["topicId"],)
+        ).fetchone()
+        self.db.close_thread_conn()
+        self.assertEqual(
+            (topic["status"], topic["status_source"]), ("hidden", "moderator"),
+            "an automated flow must not republish a moderator-hidden thread",
+        )
+
+    def test_moderator_can_still_republish_its_own_decision(self):
+        from backend.services import set_topic_visibility
+
+        from backend.admin_services import admin_moderate_topic
+
+        admin_moderate_topic(self.db, self.admin, self.work["topicId"], "hide")
+        with self.db.transaction() as tx:
+            set_topic_visibility(
+                tx, self.work["topicId"], "published", "2026-01-01T00:00:00Z", source="moderator"
+            )
+        topic = self.db.get_conn().execute(
+            "SELECT status FROM forum_topics WHERE id = ?", (self.work["topicId"],)
+        ).fetchone()
+        self.db.close_thread_conn()
+        self.assertEqual(topic["status"], "published", "a moderator may reverse their own hide")
+
+    def test_dismissal_passes_the_report_source(self):
+        # M-g: the dismissal must identify itself as the report flow, so the
+        # topic-level moderator guard applies.
+        from backend.admin_services import admin_moderate_topic
+
+        admin_moderate_topic(self.db, self.admin, self.work["topicId"], "hide")
+        self._report()
+        self._dismiss_all_open_reports()
+        topic = self.db.get_conn().execute(
+            "SELECT status, status_source FROM forum_topics WHERE id = ?", (self.work["topicId"],)
+        ).fetchone()
+        self.db.close_thread_conn()
+        self.assertEqual((topic["status"], topic["status_source"]), ("hidden", "moderator"))
+
 
 if __name__ == "__main__":
     unittest.main()

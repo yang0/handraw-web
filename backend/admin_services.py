@@ -888,13 +888,14 @@ def admin_moderate_work(
                 (wid,),
             ).fetchone()
             if mapped:
+                from .services import set_topic_visibility
+
                 # Mark the thread deleted, not merely hidden: once the mapping is
                 # gone nothing else can tell it apart from an ordinary post, so
                 # the state itself must carry the fact that its work is gone.
-                tx.execute(
-                    "UPDATE forum_topics SET status = 'deleted', status_source = 'moderator', "
-                    "status_reason = '作品已删除', updated_at = ? WHERE id = ?",
-                    (now_iso, str(mapped["topic_id"])),
+                set_topic_visibility(
+                    tx, str(mapped["topic_id"]), "deleted", now_iso,
+                    source="moderator", reason="作品已删除",
                 )
             tx.execute("DELETE FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?", (wid,))
             tx.execute("DELETE FROM works WHERE id = ?", (wid,))
@@ -1912,7 +1913,16 @@ def admin_resolve_report(
                     allow_sources=("", "report"),
                 )
             elif ttype == "topic":
-                tx.execute("UPDATE forum_topics SET status = 'hidden', status_source = 'moderator', updated_at = ? WHERE id = ?", (now_iso, tid))
+                from .services import set_topic_visibility
+
+                # Confirming a report is a human verdict: record it as such.  A
+                # thread whose work was deleted is skipped rather than raising, so
+                # the report can still be resolved.
+                set_topic_visibility(
+                    tx, str(tid), "hidden", now_iso,
+                    source="moderator", reason=f"举报成立（#{report_id}）",
+                    allow_overwrite_deleted=True,
+                )
             elif ttype == "asset":
                 tx.execute("UPDATE catalog_assets SET status = 'hidden', updated_at = ? WHERE code = ?", (now_iso, tid))
             elif ttype == "comment":
