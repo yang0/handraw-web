@@ -205,9 +205,11 @@ def admin_get_moderator_console(db: Database, user: dict[str, Any] | None, board
     placeholders = ",".join("?" for _ in active_cats)
     q = (query or "").strip().lower()
 
+    from .resource_discussions import placeholder_topic_sql_filter
+    f_placeholder = placeholder_topic_sql_filter("admin")
     topic_seed_filter, topic_seed_params = _seed_filter("id", "topics")
     topic_rows = conn.execute(
-        f"SELECT * FROM forum_topics WHERE category IN ({placeholders}) AND {topic_seed_filter} ORDER BY pinned DESC, published_at_ms DESC",
+        f"SELECT * FROM forum_topics WHERE category IN ({placeholders}) AND {f_placeholder} AND {topic_seed_filter} ORDER BY pinned DESC, published_at_ms DESC",
         (*active_cats, *topic_seed_params),
     ).fetchall()
     topic_map = {r["id"]: r for r in topic_rows}
@@ -532,8 +534,10 @@ def admin_get_dashboard(db: Database, user: dict[str, Any] | None) -> dict[str, 
     override_count = int(conn.execute(f"SELECT COUNT(*) FROM catalog_assets WHERE source_type = 'official_override' AND {asset_seed_filter}", asset_seed_params).fetchone()[0])
 
     # Forum & Bounties
-    topics_total = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE {topic_seed_filter}", topic_seed_params).fetchone()[0])
-    topics_published = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE status = 'published' AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
+    from .resource_discussions import placeholder_topic_sql_filter
+    f_placeholder = placeholder_topic_sql_filter("admin")
+    topics_total = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE {f_placeholder} AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
+    topics_published = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE status = 'published' AND {f_placeholder} AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
     bounty_row = conn.execute(
         f"SELECT COUNT(*) AS cnt, COALESCE(SUM(bounty), 0) AS escrow FROM forum_topics WHERE status = 'published' AND bounty > 0 AND bounty_status IN ('open', 'escrowed') AND {topic_seed_filter}",
         topic_seed_params,
@@ -717,13 +721,21 @@ def admin_list_works(
 
     comment_seed_filter, comment_seed_params = _seed_filter("id", "work_comments")
     comment_work_filter, comment_work_params = _seed_filter("work_id", "works")
-    comment_counts = {
-        r["work_id"]: int(r["cnt"])
-        for r in conn.execute(
-            f"SELECT work_id, COUNT(*) AS cnt FROM work_comments WHERE {comment_seed_filter} AND {comment_work_filter} GROUP BY work_id",
-            (*comment_seed_params, *comment_work_params),
-        ).fetchall()
-    }
+    reply_seed_filter, reply_seed_params = _seed_filter("id", "forum_replies")
+
+    comment_counts: dict[str, int] = {}
+    for r in conn.execute(
+        f"SELECT work_id, COUNT(*) AS cnt FROM work_comments WHERE status = 'published' AND {comment_seed_filter} AND {comment_work_filter} GROUP BY work_id",
+        (*comment_seed_params, *comment_work_params),
+    ).fetchall():
+        comment_counts[str(r["work_id"])] = int(r["cnt"])
+
+    for r in conn.execute(
+        f"SELECT m.target_id AS work_id, COUNT(*) AS cnt FROM forum_replies fr JOIN curation_resource_topics m ON m.topic_id = fr.topic_id AND m.kind = 'work' WHERE fr.status = 'published' AND {reply_seed_filter} GROUP BY m.target_id",
+        reply_seed_params,
+    ).fetchall():
+        wid = str(r["work_id"])
+        comment_counts[wid] = comment_counts.get(wid, 0) + int(r["cnt"])
     report_target_filter, report_target_params = _admin_visible_target_clause("target_type", "target_id")
     report_counts = {
         r["target_id"]: int(r["cnt"])
@@ -937,7 +949,7 @@ def admin_list_comments(
     work_comment_filter, work_comment_params = _seed_filter("c.id", "work_comments")
     work_parent_filter, work_parent_params = _seed_filter("c.work_id", "works")
     for r in conn.execute(
-        f"SELECT c.*, w.title AS parent_title FROM work_comments c LEFT JOIN works w ON w.id = c.work_id WHERE {work_comment_filter} AND {work_parent_filter} ORDER BY c.created_at DESC LIMIT ?",
+        f"SELECT c.*, w.title AS parent_title FROM work_comments c LEFT JOIN works w ON w.id = c.work_id WHERE c.status <> 'migrated' AND {work_comment_filter} AND {work_parent_filter} AND NOT EXISTS (SELECT 1 FROM forum_replies fr WHERE fr.legacy_source = 'work_comments:' || c.id) ORDER BY c.created_at DESC LIMIT ?",
         (*work_comment_params, *work_parent_params, max(1, min(500, int(limit)))),
     ).fetchall():
         if status and status != "all" and r["status"] != status:
@@ -962,19 +974,20 @@ def admin_list_comments(
     forum_reply_filter, forum_reply_params = _seed_filter("fr.id", "forum_replies")
     forum_topic_filter, forum_topic_params = _seed_filter("fr.topic_id", "topics")
     for r in conn.execute(
-        f"SELECT fr.*, ft.title AS parent_title FROM forum_replies fr LEFT JOIN forum_topics ft ON ft.id = fr.topic_id WHERE {forum_reply_filter} AND {forum_topic_filter} ORDER BY fr.created_at DESC LIMIT ?",
+        f"SELECT fr.*, ft.title AS parent_title, m.kind AS resource_kind, m.target_id AS resource_target FROM forum_replies fr LEFT JOIN forum_topics ft ON ft.id = fr.topic_id LEFT JOIN curation_resource_topics m ON m.topic_id = fr.topic_id WHERE {forum_reply_filter} AND {forum_topic_filter} ORDER BY fr.created_at DESC LIMIT ?",
         (*forum_reply_params, *forum_topic_params, max(1, min(500, int(limit)))),
     ).fetchall():
         if status and status != "all" and r["status"] != status:
             continue
-        blob = f"{r['id']} {r['topic_id']} {r['author_username']} {r['text']} {r['parent_title'] or ''}".lower()
+        blob = f"{r['id']} {r['topic_id']} {r['author_username']} {r['text']} {r['parent_title'] or ''} {r['resource_target'] or ''}".lower()
         if q and q not in blob:
             continue
+        is_asset = r["resource_kind"] in ("style", "layout")
         items.append(
             {
-                "commentType": "forum_reply",
+                "commentType": "asset_comment" if is_asset else "forum_reply",
                 "id": r["id"],
-                "parentId": r["topic_id"],
+                "parentId": r["resource_target"] if is_asset else r["topic_id"],
                 "parentTitle": r["parent_title"] or r["topic_id"],
                 "authorUsername": r["author_username"],
                 "authorName": r["author_name"],
@@ -988,7 +1001,7 @@ def admin_list_comments(
     asset_comment_filter, asset_comment_params = _seed_filter("ac.id", "asset_comments")
     asset_parent_filter, asset_parent_params = _seed_filter("ac.asset_code", "assets")
     for r in conn.execute(
-        f"SELECT ac.*, ca.name AS asset_name FROM asset_comments ac LEFT JOIN catalog_assets ca ON ca.code = ac.asset_code WHERE {asset_comment_filter} AND {asset_parent_filter} ORDER BY ac.created_at DESC LIMIT ?",
+        f"SELECT ac.*, ca.name AS asset_name FROM asset_comments ac LEFT JOIN catalog_assets ca ON ca.code = ac.asset_code WHERE ac.status <> 'migrated' AND {asset_comment_filter} AND {asset_parent_filter} AND NOT EXISTS (SELECT 1 FROM forum_replies fr WHERE fr.legacy_source = 'asset_comments:' || ac.id) ORDER BY ac.created_at DESC LIMIT ?",
         (*asset_comment_params, *asset_parent_params, max(1, min(500, int(limit)))),
     ).fetchall():
         if status and status != "all" and r["status"] != status:
@@ -1013,6 +1026,69 @@ def admin_list_comments(
         )
 
     return {"items": items[:limit], "total": len(items)}
+
+
+def resolve_migrated_comment(
+    tx: sqlite3.Connection,
+    comment_type: str,
+    comment_id: str,
+) -> tuple[str, str, sqlite3.Row | None]:
+    """
+    Given (comment_type, comment_id), check if it points to a migrated legacy comment.
+    - If active in forum_replies: returns ('forum_reply', reply_id, reply_row).
+    - If migrated but current reply in forum_replies was deleted: returns ('deleted', comment_id, None).
+    - Otherwise returns (comment_type, comment_id, original_row).
+    """
+    ctype = (comment_type or "").strip()
+    cid = (comment_id or "").strip()
+    if not cid:
+        return (ctype, cid, None)
+
+    # 1. If explicitly forum_reply / reply, look up in forum_replies
+    if ctype in ("reply", "forum_reply"):
+        r = tx.execute("SELECT * FROM forum_replies WHERE id = ?", (cid,)).fetchone()
+        return ("forum_reply", cid, r)
+
+    # 2. Check legacy_source in forum_replies
+    sources = []
+    if ctype in ("work_comment", "comment"):
+        sources.append(f"work_comments:{cid}")
+    elif ctype == "asset_comment":
+        sources.append(f"asset_comments:{cid}")
+    else:
+        sources.extend([f"work_comments:{cid}", f"asset_comments:{cid}"])
+
+    for s in sources:
+        r = tx.execute("SELECT * FROM forum_replies WHERE legacy_source = ?", (s,)).fetchone()
+        if r:
+            return ("forum_reply", str(r["id"]), r)
+
+    # 3. Check legacy tables if status is 'migrated'
+    if ctype in ("work_comment", "comment"):
+        w = tx.execute("SELECT * FROM work_comments WHERE id = ?", (cid,)).fetchone()
+        if w:
+            if str(w["status"]) == "migrated":
+                # Migrated, but no row found in forum_replies -> reply was deleted!
+                return ("deleted", cid, None)
+            return (ctype, cid, w)
+
+    if ctype == "asset_comment":
+        a = tx.execute("SELECT * FROM asset_comments WHERE id = ?", (cid,)).fetchone()
+        if a:
+            if str(a["status"]) == "migrated":
+                # Migrated, but no row found in forum_replies -> reply was deleted!
+                return ("deleted", cid, None)
+            return (ctype, cid, a)
+
+    # If ctype is unknown or generic, check both legacy tables
+    w = tx.execute("SELECT * FROM work_comments WHERE id = ?", (cid,)).fetchone()
+    if w and str(w["status"]) == "migrated":
+        return ("deleted", cid, None)
+    a = tx.execute("SELECT * FROM asset_comments WHERE id = ?", (cid,)).fetchone()
+    if a and str(a["status"]) == "migrated":
+        return ("deleted", cid, None)
+
+    return (ctype, cid, None)
 
 
 def admin_moderate_comment(
@@ -1042,11 +1118,34 @@ def admin_moderate_comment(
     is_operator = norm_role == "operator"
 
     with db.transaction() as tx:
-        row = tx.execute(f"SELECT * FROM {table} WHERE id = ?", (cid,)).fetchone()
+        # L1/M1: Resolve migrated comments to their forum_replies row
+        resolved_type, actual_id, m_row = resolve_migrated_comment(tx, ctype, cid)
+        if resolved_type == "deleted":
+            if act == "publish":
+                raise ServiceError("该评论已被删除，不能恢复", status=409, code="comment_deleted")
+            # hide or delete: considered already completed (idempotent), keep old row unchanged
+            return {"ok": True, "id": cid, "action": act}
+
+        if resolved_type == "forum_reply" and m_row:
+            table = "forum_replies"
+            ctype = "forum_reply"
+            row = m_row
+            target_cid = actual_id
+        else:
+            target_cid = cid
+            row = tx.execute(f"SELECT * FROM {table} WHERE id = ?", (cid,)).fetchone()
+            if not row and table in ("asset_comments", "work_comments"):
+                for fallback_table, fallback_type in (("forum_replies", "forum_reply"), ("asset_comments", "asset_comment"), ("work_comments", "work_comment")):
+                    fallback_row = tx.execute(f"SELECT * FROM {fallback_table} WHERE id = ?", (cid,)).fetchone()
+                    if fallback_row:
+                        table = fallback_table
+                        ctype = fallback_type
+                        row = fallback_row
+                        break
         if not row:
             raise ServiceError("评论或回复不存在", status=404)
 
-        _admin_reject_seed_value(cid, "work_comments" if ctype == "work_comment" else ("forum_replies" if ctype == "forum_reply" else "asset_comments"), "评论")
+        _admin_reject_seed_value(target_cid, "work_comments" if ctype == "work_comment" else ("forum_replies" if ctype == "forum_reply" else "asset_comments"), "评论")
         parent_kind = "works" if ctype == "work_comment" else ("topics" if ctype == "forum_reply" else "assets")
         parent_id = row["work_id"] if ctype == "work_comment" else (row["topic_id"] if ctype == "forum_reply" else row["asset_code"])
         _admin_reject_seed_value(parent_id, parent_kind, "评论所属内容")
@@ -1079,17 +1178,17 @@ def admin_moderate_comment(
 
         actor_role = staff_actor_role(user, board_moderator=is_board_mod)
         if act == "hide":
-            set_comment_visibility(tx, table, cid, "hidden", actor_role)
+            set_comment_visibility(tx, table, target_cid, "hidden", actor_role)
         elif act == "publish":
-            set_comment_visibility(tx, table, cid, "published", actor_role)
+            set_comment_visibility(tx, table, target_cid, "published", actor_role)
         elif act == "delete":
-            tx.execute(f"DELETE FROM {table} WHERE id = ?", (cid,))
+            tx.execute(f"DELETE FROM {table} WHERE id = ?", (target_cid,))
             if ctype == "forum_reply":
-                tx.execute("UPDATE forum_topics SET accepted_reply_id = NULL, solved = 0 WHERE id = ? AND accepted_reply_id = ?", (row["topic_id"], cid))
+                tx.execute("UPDATE forum_topics SET accepted_reply_id = NULL, solved = 0 WHERE id = ? AND accepted_reply_id = ?", (row["topic_id"], target_cid))
         else:
             raise ServiceError(f"不支持的评论操作：{act}")
 
-        record_audit_log(tx, user, f"{ctype}.{act}", ctype, cid, reason or f"评论治理：{act}", {"author": row["author_username"]})
+        record_audit_log(tx, user, f"{ctype}.{act}", ctype, target_cid, reason or f"评论治理：{act}", {"author": row["author_username"]})
     return {"ok": True, "id": cid, "action": act}
 
 
@@ -1420,7 +1519,9 @@ def admin_list_topics(
     require_staff(user, allow_reviewer=True)
     conn = db.get_conn()
     topic_seed_filter, topic_seed_params = _seed_filter("id", "topics")
-    sql = f"SELECT * FROM forum_topics WHERE {topic_seed_filter}"
+    from .resource_discussions import placeholder_topic_sql_filter
+    f_placeholder = placeholder_topic_sql_filter("admin")
+    sql = f"SELECT * FROM forum_topics WHERE {f_placeholder} AND {topic_seed_filter}"
     params: list[Any] = list(topic_seed_params)
     if status and status != "all":
         sql += " AND status = ?"
@@ -1826,6 +1927,15 @@ def admin_list_reports(db: Database, user: dict[str, Any] | None, status: str = 
 
 
 def _lookup_target_author(tx: sqlite3.Connection, target_type: str, target_id: str) -> str:
+    resolved_type, actual_id, m_row = resolve_migrated_comment(tx, target_type, target_id)
+    if resolved_type == "forum_reply" and m_row:
+        return str(m_row["author_username"] or "")
+    if resolved_type == "deleted":
+        for tbl in ("work_comments", "asset_comments"):
+            row = tx.execute(f"SELECT author_username FROM {tbl} WHERE id = ?", (target_id,)).fetchone()
+            if row:
+                return str(row["author_username"] or "")
+        return ""
     if target_type == "work":
         row = tx.execute("SELECT author_username FROM works WHERE id = ?", (target_id,)).fetchone()
     elif target_type == "topic":
@@ -1867,17 +1977,29 @@ def admin_resolve_report(
         if not rep:
             raise ServiceError("举报记录不存在", status=404)
 
+        # L1/M1: Resolve migrated comments
+        r_type, r_id, r_row = resolve_migrated_comment(tx, rep["target_type"], rep["target_id"])
+        if r_type == "deleted":
+            effective_target_type = "deleted"
+            effective_target_id = r_id
+        elif r_type == "forum_reply" and r_row:
+            effective_target_type = "reply"
+            effective_target_id = r_id
+        else:
+            effective_target_type = rep["target_type"]
+            effective_target_id = rep["target_id"]
+
         if prof["effectiveRole"] == "moderator":
-            if rep["target_type"] not in ("topic", "reply"):
+            if effective_target_type not in ("topic", "reply"):
                 raise ServiceError("论坛版主仅可裁定本板块内的帖子或回复举报", status=403)
             if "all" not in prof["moderatedBoards"]:
-                if rep["target_type"] == "topic":
-                    tr = tx.execute("SELECT category FROM forum_topics WHERE id = ?", (rep["target_id"],)).fetchone()
+                if effective_target_type == "topic":
+                    tr = tx.execute("SELECT category FROM forum_topics WHERE id = ?", (effective_target_id,)).fetchone()
                     tcat = tr["category"] if tr else ""
                 else:
                     rr = tx.execute(
                         "SELECT ft.category FROM forum_replies fr JOIN forum_topics ft ON ft.id = fr.topic_id WHERE fr.id = ?",
-                        (rep["target_id"],),
+                        (effective_target_id,),
                     ).fetchone()
                     tcat = rr["category"] if rr else ""
                 if tcat not in prof["moderatedBoards"]:
@@ -1905,8 +2027,8 @@ def admin_resolve_report(
             set_work_visibility,
         )
 
-        ttype = rep["target_type"]
-        tid = str(rep["target_id"])
+        ttype = effective_target_type
+        tid = str(effective_target_id)
         actor_role = {"admin": "admin", "operator": "operator", "reviewer": "operator"}.get(
             prof["effectiveRole"], "moderator"
         )

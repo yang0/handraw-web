@@ -1,14 +1,14 @@
 """Converge legacy ``work_comments`` into each work's discussion topic.
 
 After the change every work reads its comments from ``forum_replies`` through
-the ``origin='submission'`` mapping.  Older works still keep their comments in
+the ``origin='submission'`` mapping. Older works still keep their comments in
 ``work_comments``; this script copies them across once, using
 ``forum_replies.legacy_source`` to stay idempotent, then flips the mapping so
 the reader path is the same for old and new works.
 
 Comments are inserted with ``status='migrating'`` and only afterwards updated to
 their real status, because the notification trigger fires only on
-``INSERT ... status='published'``.  Without that step the migration would
+``INSERT ... status='published'``. Without that step the migration would
 re-notify every author about historical comments.
 
 Usage (dry run first, always):
@@ -19,12 +19,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sqlite3
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend import services as S
 
 LEGACY_ORIGIN = "legacy"
 
@@ -40,81 +46,185 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def backup(conn: sqlite3.Connection, db_path: Path) -> Path:
+    """Copy the database through SQLite's backup API and verify integrity."""
+    target = db_path.with_name(db_path.name + f".bak-work-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    dest = sqlite3.connect(str(target))
+    try:
+        conn.backup(dest)
+    finally:
+        dest.close()
+
+    verify = sqlite3.connect(str(target))
+    try:
+        verify.execute("SELECT COUNT(*) FROM forum_topics").fetchone()
+    except Exception as e:
+        target.unlink(missing_ok=True)
+        raise RuntimeError(f"备份数据库完整性验证失败：{e}") from e
+    finally:
+        verify.close()
+    return target
+
+
 def plan(conn: sqlite3.Connection) -> list[dict]:
-    """Return the comments that still need copying."""
-    mappings = conn.execute(
-        "SELECT target_id, topic_id FROM curation_resource_topics WHERE kind = 'work' AND origin = ?",
-        (LEGACY_ORIGIN,),
+    """Return the comments that still need copying. Starts from unmigrated comments (K3)."""
+    seed_wc = S.seed_ids("work_comments")
+
+    unmigrated = conn.execute(
+        """
+        SELECT wc.* FROM work_comments wc
+        WHERE wc.status <> 'migrated'
+          AND NOT EXISTS (
+              SELECT 1 FROM forum_replies fr WHERE fr.legacy_source = 'work_comments:' || wc.id
+          )
+        ORDER BY wc.created_at ASC
+        """
     ).fetchall()
+
     todo: list[dict] = []
-    for mapping in mappings:
-        work_id = str(mapping["target_id"])
-        topic_id = str(mapping["topic_id"])
-        comments = conn.execute(
-            # Every status, not just published: after the mapping flips to
-            # ``submission`` the reader only looks at forum_replies, so leaving
-            # hidden or pending comments behind would lose them permanently.
-            "SELECT * FROM work_comments WHERE work_id = ? ORDER BY created_at",
-            (work_id,),
-        ).fetchall()
-        for comment in comments:
-            source = f"work_comments:{comment['id']}"
-            already = conn.execute(
-                "SELECT 1 FROM forum_replies WHERE legacy_source = ?", (source,)
+    for c in unmigrated:
+        cid = str(c["id"])
+        if cid in seed_wc:
+            continue
+        wid = str(c["work_id"])
+        source = f"work_comments:{cid}"
+
+        # 1. Existing curation mapping
+        mapping = conn.execute(
+            "SELECT topic_id, origin FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
+            (wid,),
+        ).fetchone()
+        topic_id = str(mapping["topic_id"]) if mapping else None
+
+        # 2. Existing forum_topics row by work_id
+        if not topic_id:
+            t_row = conn.execute(
+                "SELECT id FROM forum_topics WHERE work_id = ?",
+                (wid,),
             ).fetchone()
-            if already:
-                continue
-            todo.append(
-                {
-                    "workId": work_id,
-                    "topicId": topic_id,
-                    "comment": dict(comment),
-                    "legacySource": source,
-                }
-            )
+            if t_row:
+                topic_id = str(t_row["id"])
+
+        todo.append({
+            "workId": wid,
+            "topicId": topic_id,
+            "comment": dict(c),
+            "legacySource": source,
+        })
+
     return todo
 
 
-def apply(conn: sqlite3.Connection, todo: list[dict]) -> int:
+def apply(conn: sqlite3.Connection, todo: list[dict]) -> tuple[int, list[str]]:
+    from backend.resource_discussions import ensure_topic
+
     now = _now()
     copied = 0
+    failures: list[str] = []
+    work_failures: dict[str, list[str]] = {}
+    work_counts: dict[str, int] = {}
+
+    # Ensure topic & mapping exist for works needing migration (L2 / L3)
+    created_topics: dict[str, str] = {}
     for item in todo:
+        wid = item["workId"]
+        tid = item.get("topicId") or created_topics.get(wid)
+        if not tid:
+            w_row = conn.execute("SELECT * FROM works WHERE id = ?", (wid,)).fetchone()
+            if not w_row:
+                err = f"找不到作品记录：work_id={wid}"
+                failures.append(err)
+                work_failures.setdefault(wid, []).append(err)
+                continue
+            tid = ensure_topic(conn, "work", wid, dict(w_row), initial_origin="legacy")
+            created_topics[wid] = tid
+
+        # Ensure mapping with origin='legacy' exists before migration
+        conn.execute(
+            "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'legacy', ?)",
+            (wid, tid, S.utc_now_iso()),
+        )
+
+    for item in todo:
+        wid = item["workId"]
+        work_counts[wid] = work_counts.get(wid, 0) + 1
+        topic_id = item.get("topicId") or created_topics.get(wid)
+        if not topic_id:
+            m = conn.execute("SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?", (wid,)).fetchone()
+            if m:
+                topic_id = str(m["topic_id"])
+        if not topic_id:
+            err = f"缺少目标讨论帖，跳过评论：{item['legacySource']}"
+            failures.append(err)
+            work_failures.setdefault(wid, []).append(err)
+            continue
+
+        already = conn.execute(
+            "SELECT 1 FROM forum_replies WHERE legacy_source = ?", (item["legacySource"],)
+        ).fetchone()
+        if already:
+            # Still ensure status is updated to migrated
+            conn.execute("UPDATE work_comments SET status = 'migrated' WHERE id = ?", (item["comment"]["id"],))
+            continue
+
         comment = item["comment"]
         reply_id = f"reply_{uuid.uuid4().hex[:16]}"
-        conn.execute(
-            """
-            INSERT INTO forum_replies (
-                id, topic_id, author_username, author_name, text,
-                mounted_style, mounted_layout, likes, accepted, status, time_label, created_at, legacy_source
-            ) VALUES (?, ?, ?, ?, ?, '', '', ?, 0, 'migrating', ?, ?, ?)
-            """,
-            (
-                reply_id,
-                item["topicId"],
-                str(comment.get("author_username") or ""),
-                str(comment.get("author_name") or ""),
-                str(comment.get("text") or ""),
-                0,
-                str(comment.get("time_label") or ""),
-                str(comment.get("created_at") or now),
-                item["legacySource"],
-            ),
-        )
-        # Promote to the original status only now, so the notification trigger
-        # does not fire for historical content.
-        conn.execute(
-            "UPDATE forum_replies SET status = ? WHERE id = ?",
-            (str(comment.get("status") or "published"), reply_id),
-        )
-        copied += 1
+        st = str(comment.get("status") or "published")
+        actor_role = comment.get("status_actor_role")
+        if not actor_role and st == "hidden":
+            actor_role = "admin"
+        else:
+            actor_role = str(actor_role or "")
 
-    # Flip the mapping so both old and new works read comments the same way.
-    conn.execute(
-        "UPDATE curation_resource_topics SET origin = 'submission' WHERE kind = 'work' AND origin = ?",
-        (LEGACY_ORIGIN,),
-    )
+        conn.execute("SAVEPOINT copy_work_comment")
+        try:
+            conn.execute(
+                """
+                INSERT INTO forum_replies (
+                    id, topic_id, author_username, author_name, text,
+                    mounted_style, mounted_layout, likes, accepted, status, time_label, created_at, legacy_source, status_actor_role
+                ) VALUES (?, ?, ?, ?, ?, '', '', ?, 0, 'migrating', ?, ?, ?, ?)
+                """,
+                (
+                    reply_id,
+                    topic_id,
+                    str(comment.get("author_username") or ""),
+                    str(comment.get("author_name") or ""),
+                    str(comment.get("text") or ""),
+                    0,
+                    str(comment.get("time_label") or ""),
+                    str(comment.get("created_at") or now),
+                    item["legacySource"],
+                    actor_role,
+                ),
+            )
+            conn.execute(
+                "UPDATE forum_replies SET status = ?, status_actor_role = ? WHERE id = ?",
+                (st, actor_role, reply_id),
+            )
+            # K2: Mark old record as migrated in the same SAVEPOINT
+            conn.execute(
+                "UPDATE work_comments SET status = 'migrated' WHERE id = ?",
+                (comment["id"],),
+            )
+            conn.execute("RELEASE SAVEPOINT copy_work_comment")
+            copied += 1
+        except Exception as e:
+            conn.execute("ROLLBACK TO SAVEPOINT copy_work_comment")
+            err = f"{item['legacySource']}: {e}"
+            failures.append(err)
+            work_failures.setdefault(wid, []).append(err)
+
+    # Flip mapping only for works that had zero failures
+    for wid in work_counts:
+        if wid not in work_failures:
+            conn.execute(
+                "UPDATE curation_resource_topics SET origin = 'submission' WHERE kind = 'work' AND target_id = ?",
+                (wid,),
+            )
+
     conn.commit()
-    return copied
+    return copied, failures
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -147,15 +257,19 @@ def main(argv: list[str] | None = None) -> int:
             print("没有需要迁移的评论。")
             return 0
 
-        backup = db_path.with_name(db_path.name + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
-        shutil.copy2(db_path, backup)
-        print(f"已备份：{backup}")
-        copied = apply(conn, todo)
-        print(f"已迁移 {copied} 条，映射已改为 submission。")
+        bak_path = backup(conn, db_path)
+        print(f"已备份并通过验证：{bak_path}")
+        copied, failures = apply(conn, todo)
+        print(f"已迁移 {copied} 条。")
+        if failures:
+            print(f"迁移存在 {len(failures)} 处失败清单：", file=sys.stderr)
+            for f in failures:
+                print(f"  - {f}", file=sys.stderr)
+            return 1
         return 0
     finally:
         conn.close()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
