@@ -119,7 +119,7 @@
     stageView: "canvas", // "canvas" | "preview" | "history" | "workflows"
     previewTab: "article",
     articlePreviewMode: "desktop",
-    articleSubView: "detail", // "detail" | "all-list"
+    articleSubView: "detail", // "detail" | "all-list" | "editor" | "reader" (?subview=preview)
     activeArticleId: null,
     articleListPage: 1,
     articleListQuery: "",
@@ -10232,6 +10232,11 @@
       return;
     }
 
+    if (CS.articleSubView === "reader" && CS.activeArticleId) {
+      renderArticlePreviewPage(CS.activeArticleId);
+      return;
+    }
+
     // Every non-directory article subview funnels into the unified editor workbench.
     if (CS.articleSubView !== "editor") {
       CS.articleSubView = "editor";
@@ -11639,10 +11644,15 @@
     if (!art) {
       console.warn("[preview] no draft to preview:", articleId,
                    "known:", (CS.myArticles || []).map((a) => a.id).slice(0, 5));
+      CS.articleSubView = "editor";
       renderArticleEditorPage(CS.myArticles || []);
       return;
     }
     CS.stageView = "preview";
+    // The reader page needs its own sub-view: without it the next
+    // renderFullPreviewStage() (boot calls it right after URL routing) drew the
+    // editor over a ?subview=preview deep link or reload.
+    CS.articleSubView = "reader";
     CS.activeArticleId = art.id;
     const styleObj = Catalog.resourceMap?.get(art.styleId) || {
       id: art.styleId || "FA-001",
@@ -11696,13 +11706,10 @@
     };
     DOM.previewStage.querySelector("#preview-btn-back-editor")?.addEventListener("click", back);
     DOM.previewStage.querySelector("#preview-btn-back-editor-2")?.addEventListener("click", back);
+    // Same destination as the editor's "← 文章列表"; this used to call an
+    // undefined renderArticleDirectoryPage and threw.
     DOM.previewStage.querySelector("#preview-btn-list")?.addEventListener("click", () => {
-      const url = new URL(location.href);
-      url.searchParams.set("entry", "article");
-      url.searchParams.delete("subview");
-      url.searchParams.delete("articleId");
-      history.pushState({}, "", url.toString());
-      renderArticleDirectoryPage(CS.myArticles || []);
+      openMyArticlesPage({ subView: "all-list" });
     });
   }
 
