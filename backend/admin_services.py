@@ -2135,7 +2135,7 @@ def admin_get_user_detail(db: Database, user: dict[str, Any] | None, target_user
             "honor": honor,
             "moderatedBoards": mod_boards,
             "publishedCount": pub_cnt,
-            "apiKeyMasked": _mask_secret_key(u["api_key"] or "") if actor.get("role") != "admin" else (u["api_key"] or ""),
+            "apiKeyMasked": "",
             "wallet": wq,
             "activeSessions": active_sessions,
             "createdAt": format_short_time(u["created_at"]),
@@ -2184,7 +2184,7 @@ def admin_create_user(
                 role, status, bio, invite_code, api_key, created_at, last_login_at
             ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', ?, 'active', ?, ?, ?, ?, '')
             """,
-            (uname, dname, email, hash_password(raw_pw), role, bio, uname, generate_api_key(), now_iso),
+            (uname, dname, email, hash_password(raw_pw), role, bio, uname, None, now_iso),
         )
         uid = int(cur.lastrowid)
         tx.execute(

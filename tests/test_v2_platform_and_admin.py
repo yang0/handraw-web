@@ -274,10 +274,17 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         self.assertTrue(len(fx1_adm["secretBlackboxPrompt"]) > 15)
 
         # Skill-Addon endpoint strictly blocks exclusive blackbox export (403)
+        tok_raw = "hwt_test_token_yang0_bb_export"
+        tok_hash = hashlib.sha256(tok_raw.encode("utf-8")).hexdigest()
+        self.db.get_conn().execute(
+            "INSERT OR REPLACE INTO api_tokens (id, user_id, name, scopes, token_hash, created_at) "
+            "VALUES ('tok_bb_test', (SELECT id FROM users WHERE username = 'yang0'), 'Test', '[\"library\"]', ?, '2026-10-31T00:00:00Z')",
+            (tok_hash,),
+        )
         code_sk, _ = admin.request(
             "GET",
             "/studio/api/assets/FX-001/content",
-            headers={"Api-Key": "hwk_yang0_local_dev_key"},
+            headers={"Authorization": f"Bearer {tok_raw}"},
         )
         self.assertEqual(code_sk, 403)
 
@@ -611,6 +618,14 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         if "FA-005" not in adm_boot["collections"]["styles"]:
             admin.request("POST", "/api/collections/toggle", {"bucket": "styles", "id": "FA-005", "title": "FA-005"})
 
+        tok_sync = "hwt_test_token_yang0_sync"
+        tok_sync_hash = hashlib.sha256(tok_sync.encode("utf-8")).hexdigest()
+        self.db.get_conn().execute(
+            "INSERT OR REPLACE INTO api_tokens (id, user_id, name, scopes, token_hash, created_at) "
+            "VALUES ('tok_sync_test', (SELECT id FROM users WHERE username = 'yang0'), 'Test', '[\"library\"]', ?, '2026-10-31T00:00:00Z')",
+            (tok_sync_hash,),
+        )
+
         profile_dir = Path(self.temp_dir.name) / "skill_profile"
         profile_dir.mkdir(parents=True, exist_ok=True)
         (profile_dir / "community_auth.json").write_text(
@@ -618,7 +633,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 {
                     "base_url": "https://handraw-style.com",
                     "username": "yang0",
-                    "api_key": "hwk_yang0_local_dev_key",
+                    "token": tok_sync,
                 }
             ),
             encoding="utf-8",

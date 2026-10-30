@@ -217,13 +217,10 @@ class Client:
             raise ValueError("下载地址不属于本站资源 API")
         headers = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest",
                    "User-Agent": "HandRawStudio/1.0"}
-        if self.profile.get("api_key"):
-            headers["Api-Key"] = self.profile["api_key"]
-            username = self.profile.get("username", "")
-            if username and username.isascii():
-                headers["Api-Username"] = username
-        if self.profile.get("user_api_key"):
-            headers["User-Api-Key"] = self.profile["user_api_key"]
+        if self.profile.get("token"):
+            headers["Authorization"] = f"Bearer {self.profile['token']}"
+        elif self.profile.get("api_key") or self.profile.get("user_api_key"):
+            raise ValueError("同步密钥已停用，请运行 login 重新绑定设备")
         request = urllib.request.Request(BASE_URL + path, headers=headers)
         with self.opener.open(request, timeout=35) as response:
             if urllib.parse.urlsplit(response.url).netloc != "handraw-style.com":
