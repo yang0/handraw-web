@@ -204,6 +204,11 @@ def compose_prompt(style_code: str, layout_code: str = "", colour: str = "", the
     facts = build_facts(style_code, layout_code, colour, theme)
     if not facts["theme"]:
         return {"prompt": "", "source": "none", "facts": facts}
+    # Without a resolved style or layout there is nothing for the Skill to
+    # contribute; answering anyway produced a chat reply ("please provide more
+    # information") that looked like a prompt.
+    if not facts["style"]["name"] and not facts["layout"]["name"]:
+        return {"prompt": "", "source": "none", "facts": facts}
 
     user = (
         f"Style id: {facts['style']['id']}\n"
@@ -216,6 +221,32 @@ def compose_prompt(style_code: str, layout_code: str = "", colour: str = "", the
         f"Subject / theme (may be Chinese): {facts['theme']}\n"
     )
     text = _call_model(_SYSTEM, user)
-    if text:
+    if text and _looks_like_prompt(text):
         return {"prompt": text, "source": "model", "facts": facts}
     return {"prompt": _template(facts), "source": "template", "facts": facts}
+
+
+# A reply that asks for more information is not a prompt.  The model sometimes
+# answers a thin request with "please provide the style name", which would then
+# be sent to the image model verbatim.
+_REFUSAL_MARKERS = (
+    "请补充",
+    "请提供",
+    "需要更多",
+    "信息不足",
+    "无法生成",
+    "please provide",
+    "need more information",
+    "cannot generate",
+    "could you provide",
+)
+
+
+def _looks_like_prompt(text: str) -> bool:
+    body = text.strip()
+    if len(body) < 40:
+        return False
+    lowered = body.lower()
+    if any(marker in lowered for marker in _REFUSAL_MARKERS):
+        return False
+    return True

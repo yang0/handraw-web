@@ -2879,6 +2879,27 @@ def _cloud_generation_result(
     }
 
 
+def _compose_skill_prompt(style_code: str, layout_code: str, theme: str) -> str:
+    """Build an image prompt through the hand-drawn style Skill.
+
+    Returns ``""`` when the Skill is unavailable or cannot produce a prompt, so
+    the caller can fall back to the plain prompt instead of failing the request.
+    """
+    if not (style_code or layout_code):
+        return ""
+    try:
+        from . import skill_prompt
+    except Exception:  # noqa: BLE001 - Skill module is optional
+        return ""
+    try:
+        if not skill_prompt.skill_available():
+            return ""
+        composed = skill_prompt.compose_prompt(str(style_code or ""), str(layout_code or ""), "", str(theme or ""))
+    except Exception:  # noqa: BLE001 - never fail a paid generation on this
+        return ""
+    return str(composed.get("prompt") or "").strip()
+
+
 def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
     """Reserve one generation atomically and inject DB blackbox prompts.
 
@@ -3003,19 +3024,23 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             )
             free_remaining = 0
 
+        # Every picture goes through the hand-drawn style Skill before it is
+        # generated: the Skill resolves the style's traits and the layout's
+        # composition rules, and the image model is asked to follow that.
+        # A caller may hand over a prompt it already built (promptFromSkill);
+        # otherwise the server builds one here, so no path can skip the Skill.
+        from_skill = bool(body.get("promptFromSkill"))
         cleaned = raw_prompt
         if injected_notes:
             cleaned += "\n\n" + "\n".join(injected_notes)
-        # A caller that already ran the hand-drawn style Skill hands over a
-        # finished prompt: it names the style, the layout and the colour and
-        # carries the layout's own composition rules.  Wrapping that in the
-        # website's generic envelope would discard the layout requirements, so
-        # the prompt is forwarded as written.
-        from_skill = bool(body.get("promptFromSkill"))
-        if from_skill:
-            final_prompt = cleaned
-        else:
-            final_prompt = f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
+        if not from_skill:
+            composed = _compose_skill_prompt(style1 or style2, layout, raw_prompt)
+            if composed:
+                from_skill = True
+                cleaned = composed + ("\n\n" + "\n".join(injected_notes) if injected_notes else "")
+        final_prompt = cleaned if from_skill else (
+            f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
+        )
 
         tx.execute(
             """
