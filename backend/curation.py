@@ -349,6 +349,29 @@ def _safe_preview(payload: dict[str, Any]) -> dict[str, Any]:
     return preview
 
 
+def sanitize_curation_payload_for_client(payload: Any, conn: Any = None) -> Any:
+    """Mask secret-bearing prompt text in curation submission payloads for client views."""
+    if not isinstance(payload, dict):
+        return payload
+    p = dict(payload)
+    from .services import check_text_has_secret, check_obj_has_secret, mask_recipe_data
+    if "prompt" in p and isinstance(p["prompt"], str) and p["prompt"]:
+        try:
+            if check_text_has_secret(p["prompt"], conn):
+                p["prompt"] = "[包含资源专属指令，已隐藏]"
+                p["promptMasked"] = True
+        except Exception:
+            p["prompt"] = "[包含资源专属指令，已隐藏]"
+            p["promptMasked"] = True
+    if "recipe" in p and p["recipe"]:
+        try:
+            if check_obj_has_secret(p["recipe"], conn):
+                p["recipe"] = mask_recipe_data(p["recipe"], conn=conn)
+        except Exception:
+            p["recipe"] = mask_recipe_data(p["recipe"], conn=conn)
+    return p
+
+
 # ---------------------------------------------------------------------------
 # Core submission
 # ---------------------------------------------------------------------------
@@ -432,9 +455,9 @@ def submit(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str
             INSERT INTO forum_topics (
                 id, category, category_label, pinned, featured, title, author_username, author_name,
                 views, likes, favorites, price, bounty, bounty_status, solved, accepted_reply_id,
-                images_json, styles_json, layout_code, work_id, recipe_json, summary, locked_body,
+                images_json, styles_json, layout_code, work_id, recipe_json, recipe_has_secret, summary, locked_body,
                 status, published_at_ms, created_label, created_at, updated_at
-            ) VALUES (?, 'assets', '🎨 画风与图型专区', 0, 0, ?, ?, ?, 0, 0, 0, 0, 0, 'none', 0, '', ?, ?, ?, '', '', ?, '', 'published', ?, '刚刚', ?, ?)
+            ) VALUES (?, 'assets', '🎨 画风与图型专区', 0, 0, ?, ?, ?, 0, 0, 0, 0, 0, 'none', 0, '', ?, ?, ?, '', '', 0, ?, '', 'published', ?, '刚刚', ?, ?)
             """,
             (
                 topic_id,
@@ -526,7 +549,7 @@ def my_submissions(db: Database, user: dict[str, Any]) -> dict[str, Any]:
         for row in rows:
             sub = _row_to_dict(row) or {}
             sid = sub["id"]
-            payload = _current_payload(tx, sid, int(sub["current_revision"]))
+            payload = sanitize_curation_payload_for_client(_current_payload(tx, sid, int(sub["current_revision"])), tx)
             versions = []
             vrows = tx.execute(
                 "SELECT revision, payload_json, created_at FROM curation_versions WHERE submission_id = ? ORDER BY revision",
@@ -541,7 +564,7 @@ def my_submissions(db: Database, user: dict[str, Any]) -> dict[str, Any]:
                 versions.append(
                     {
                         "revision": int(vd["revision"]),
-                        "payload": _load_json(vd.get("payload_json"), {}),
+                        "payload": sanitize_curation_payload_for_client(_load_json(vd.get("payload_json"), {}), tx),
                         "createdAt": vd.get("created_at"),
                         "votes": [
                             {
@@ -750,7 +773,7 @@ def review_queue(db, user):
 
 
 def _assignment_view(tx: Any, assignment: dict[str, Any], sub: dict[str, Any]) -> dict[str, Any]:
-    payload = _current_payload(tx, sub["id"], int(assignment["revision"]))
+    payload = sanitize_curation_payload_for_client(_current_payload(tx, sub["id"], int(assignment["revision"])), tx)
     return {
         "id": assignment["id"],
         "assignmentId": assignment["id"],
@@ -997,6 +1020,12 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
     else:
         images = payload.get("images") or []
         styles = payload.get("styles") or []
+        prompt_val = str(payload.get("prompt") or "")
+        from .services import check_text_has_secret
+        try:
+            prompt_has_sec = 1 if check_text_has_secret(prompt_val, tx) else 0
+        except Exception:
+            prompt_has_sec = None
         existing_work = tx.execute(
             "SELECT id FROM works WHERE id = ?",
             (target_id,),
@@ -1006,10 +1035,10 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                 """
                 INSERT INTO works (
                     id, author_username, author_name, title, images_json, styles_json,
-                    layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, notes,
+                    layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, prompt_has_secret, notes,
                     status, featured, is_new_release, pioneer_rewarded, cheers, likes, favorites, forks,
                     published_at_ms, created_label, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0, ?, '刚刚', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0, ?, '刚刚', ?, ?)
                 """,
                 (
                     target_id,
@@ -1025,7 +1054,8 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     payload.get("mode") or "graphic-text",
                     payload.get("mood") or "治愈",
                     int(payload.get("price") or 0),
-                    payload.get("prompt") or "",
+                    prompt_val,
+                    prompt_has_sec,
                     payload.get("notes") or "",
                     now_ms,
                     now_iso,
@@ -1038,7 +1068,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                 UPDATE works SET
                     author_username = ?, author_name = ?, title = ?, images_json = ?, styles_json = ?,
                     layout_code = ?, color_code = ?, tone_code = ?, ratio = ?, mode = ?, mood = ?,
-                    price = ?, prompt = ?, notes = ?, status = 'published', updated_at = ?
+                    price = ?, prompt = ?, prompt_has_secret = ?, notes = ?, status = 'published', updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -1054,7 +1084,8 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     payload.get("mode") or "graphic-text",
                     payload.get("mood") or "治愈",
                     int(payload.get("price") or 0),
-                    payload.get("prompt") or "",
+                    prompt_val,
+                    prompt_has_sec,
                     payload.get("notes") or "",
                     now_iso,
                     target_id,
@@ -1167,7 +1198,7 @@ def revise(db: Database, user: dict[str, Any], submission_id: str, body: dict[st
             "targetId": updated["target_id"],
             "status": updated["status"],
             "revision": int(updated["current_revision"]),
-            "payload": normalised,
+            "payload": sanitize_curation_payload_for_client(normalised, tx),
         }
 
 
@@ -1274,14 +1305,14 @@ def admin_overview(db: Database, user: dict[str, Any]) -> dict[str, Any]:
                     "status": s["status"],
                     "revision": int(s["current_revision"]),
                     "createdAt": s["created_at"],
-                    "payload": _current_payload(tx, s["id"], int(s["current_revision"])),
+                    "payload": sanitize_curation_payload_for_client(_current_payload(tx, s["id"], int(s["current_revision"])), tx),
                 }
             )
         appeal_rows = tx.execute("SELECT * FROM curation_appeals ORDER BY created_at DESC").fetchall()
         appeals = [_row_to_dict(r) for r in appeal_rows]
         for entry in appeals:
             sub=_submission_row(tx,entry['submission_id'])
-            entry.update(kind=sub['kind'],revision=sub['current_revision'],topicId=sub['topic_id'],payload=_current_payload(tx,sub['id'],sub['current_revision']))
+            entry.update(kind=sub['kind'],revision=sub['current_revision'],topicId=sub['topic_id'],payload=sanitize_curation_payload_for_client(_current_payload(tx,sub['id'],sub['current_revision']), tx))
         action_rows = tx.execute("SELECT * FROM curation_admin_actions ORDER BY created_at DESC LIMIT 200").fetchall()
         actions = [_row_to_dict(r) for r in action_rows]
     return {
@@ -1522,16 +1553,23 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
             if not subject:
                 subject = _s(r_row["subject"], 2000)
 
+        from .services import check_text_has_secret
+        try:
+            prompt_has_secret = 1 if check_text_has_secret(prompt, tx) else 0
+        except Exception:
+            prompt_has_secret = None
+
         work_id = str(uuid.uuid4())
         tx.execute(
             """
             INSERT INTO works (
                 id, author_username, author_name, title, images_json, styles_json,
                 layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, notes,
+                prompt_has_secret,
                 status, featured, is_new_release, pioneer_rewarded, cheers, likes, favorites, forks,
                 published_at_ms, created_label, created_at, updated_at, origin, request_id, forked_from_id,
                 subject
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0,
                       ?, '刚刚', ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -1550,6 +1588,7 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
                 price,
                 prompt,
                 _s(body.get("notes"), 20000),
+                prompt_has_secret,
                 now_ms,
                 now_iso,
                 now_iso,
@@ -1731,10 +1770,10 @@ def _ensure_work_topic(tx, work_id, username, display, title, images, styles, la
         INSERT INTO forum_topics (
             id, category, category_label, pinned, featured, title, author_username, author_name,
             views, likes, favorites, price, bounty, bounty_status, solved, accepted_reply_id,
-            images_json, styles_json, layout_code, work_id, recipe_json, summary, locked_body,
+            images_json, styles_json, layout_code, work_id, recipe_json, recipe_has_secret, summary, locked_body,
             status, published_at_ms, created_label, created_at, updated_at
         ) VALUES (?, ?, '🎨 晒作品', 0, 0, ?, ?, ?, 0, 0, 0, 0, 0, 'none', 0, '',
-                  ?, ?, ?, ?, '', ?, '', 'published', ?, '刚刚', ?, ?)
+                  ?, ?, ?, ?, '', 0, ?, '', 'published', ?, '刚刚', ?, ?)
         """,
         (
             topic_id,

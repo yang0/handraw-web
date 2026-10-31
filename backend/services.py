@@ -7,10 +7,12 @@ import io
 import json
 import re
 import sqlite3
+import threading
 import time
 import uuid
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("backend.services")
@@ -677,11 +679,769 @@ def _serialize_catalog_asset(row: sqlite3.Row, unlocked_set: set[str], current_u
     }
 
 
+class SecretsScanError(ServiceError):
+    """Raised when catalog secrets cannot be queried (fail-closed, G1)."""
+    def __init__(self, message: str = "资源安全扫描查询失败") -> None:
+        super().__init__(message, status=500, code="secrets_scan_failed")
+
+
+_SECRETS_CACHE: dict[str, Any] = {
+    "hash": "",
+    "secrets": [],
+    "windows": set(),
+    "loaded_at": 0.0,
+}
+_LAST_SCANNED_SECRETS_HASH = ""
+
+
+def get_secrets_cache(conn: sqlite3.Connection | None = None, force: bool = False) -> tuple[str, list[str], set[str]]:
+    global _SECRETS_CACHE
+    now = time.time()
+    secrets: list[str] = []
+    if conn is not None:
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT secret_blackbox_prompt FROM catalog_assets WHERE secret_blackbox_prompt IS NOT NULL AND TRIM(secret_blackbox_prompt) <> ''"
+            ).fetchall()
+            secrets = [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
+        except Exception as exc:
+            raise SecretsScanError(f"Failed to query catalog secrets: {exc}") from exc
+    else:
+        try:
+            from .config import get_db_path
+            target = get_db_path()
+            if not Path(target).exists():
+                raise SecretsScanError(f"Database path not found: {target}")
+            one_shot = sqlite3.connect(str(target), timeout=5.0)
+            try:
+                rows = one_shot.execute(
+                    "SELECT DISTINCT secret_blackbox_prompt FROM catalog_assets WHERE secret_blackbox_prompt IS NOT NULL AND TRIM(secret_blackbox_prompt) <> ''"
+                ).fetchall()
+                secrets = [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
+            finally:
+                one_shot.close()
+        except Exception as exc:
+            raise SecretsScanError(f"Failed to query catalog secrets from db path: {exc}") from exc
+
+    secrets.sort()
+    vhash = hashlib.sha256(repr(secrets).encode("utf-8")).hexdigest()
+    if vhash == _SECRETS_CACHE["hash"] and _SECRETS_CACHE["secrets"]:
+        _SECRETS_CACHE["loaded_at"] = now
+        return _SECRETS_CACHE["hash"], _SECRETS_CACHE["secrets"], _SECRETS_CACHE["windows"]
+
+    windows: set[str] = set()
+    for s in secrets:
+        if len(s) >= 20:
+            for i in range(len(s) - 19):
+                windows.add(s[i : i + 20])
+
+    _SECRETS_CACHE = {
+        "hash": vhash,
+        "secrets": secrets,
+        "windows": windows,
+        "loaded_at": now,
+    }
+    return vhash, secrets, windows
+
+
+def check_text_has_secret(
+    text: str,
+    conn: sqlite3.Connection | None = None,
+    preloaded: tuple[str, list[str], set[str]] | None = None,
+) -> bool:
+    """Return True if text contains any whole secret or any 20-character window of one.
+    Raises SecretsScanError if querying catalog secrets fails (fail-closed, G1).
+    """
+    if not text or not isinstance(text, str):
+        return False
+    if preloaded is not None:
+        vhash, secrets, windows = preloaded
+    else:
+        vhash, secrets, windows = get_secrets_cache(conn)
+    if not secrets:
+        return False
+    for s in secrets:
+        if s in text:
+            return True
+    for w in windows:
+        if w in text:
+            return True
+    return False
+
+
+def extract_strings_from_obj(obj: Any) -> list[str]:
+    """Recursively collect all decoded string values from arbitrary data structures (G5)."""
+    strings: list[str] = []
+    if isinstance(obj, str):
+        strings.append(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            strings.extend(extract_strings_from_obj(v))
+    elif isinstance(obj, (list, tuple, set)):
+        for item in obj:
+            strings.extend(extract_strings_from_obj(item))
+    return strings
+
+
+def check_obj_has_secret(
+    obj: Any,
+    conn: sqlite3.Connection | None = None,
+    preloaded: tuple[str, list[str], set[str]] | None = None,
+) -> bool:
+    """Check if any decoded string in obj contains a secret or 20-char window (G5)."""
+    if not obj:
+        return False
+    strings = extract_strings_from_obj(obj)
+    for s in strings:
+        if s and check_text_has_secret(s, conn, preloaded=preloaded):
+            return True
+    return False
+
+
+_RECIPE_CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_RECIPE_RATIO_PATTERN = re.compile(r"^\d+(?:\.\d+)?:\d+(?:\.\d+)?$")
+_RECIPE_COLOR_PATTERN = re.compile(r"^[A-Za-z0-9_#-]{1,32}$")
+
+_STATIC_CATALOG_CODES: dict[str, set[str]] | None = None
+
+
+def _get_static_catalog_codes() -> dict[str, set[str]]:
+    global _STATIC_CATALOG_CODES
+    if _STATIC_CATALOG_CODES is not None:
+        return _STATIC_CATALOG_CODES
+
+    styles: set[str] = set()
+    layouts: set[str] = set()
+    colors: set[str] = set()
+    tones: set[str] = set()
+
+    cat_file = CONTENT_DIR / "catalog.json"
+    if cat_file.is_file():
+        try:
+            cat_data = json.loads(cat_file.read_text(encoding="utf-8"))
+            for item in cat_data.get("resources", []):
+                code = str(item.get("id") or "").strip().upper()
+                kind = str(item.get("kind") or "").strip().lower()
+                if not code:
+                    continue
+                if kind == "style":
+                    styles.add(code)
+                elif kind == "layout":
+                    layouts.add(code)
+                elif kind == "color":
+                    colors.add(code)
+        except Exception:
+            pass
+
+    opt_file = CONTENT_DIR / "studio-options.json"
+    if opt_file.is_file():
+        try:
+            opt_data = json.loads(opt_file.read_text(encoding="utf-8"))
+            for t in opt_data.get("tones", []):
+                tid = str(t.get("id") or "").strip().upper()
+                if tid:
+                    tones.add(tid)
+            for s_id in opt_data.get("styles", {}):
+                sid = str(s_id).strip().upper()
+                if sid:
+                    styles.add(sid)
+            for a_id in opt_data.get("assets", {}):
+                aid = str(a_id).strip().upper()
+                if aid:
+                    styles.add(aid)
+        except Exception:
+            pass
+
+    try:
+        from .seed import SERVER_EXCLUSIVE_BLACKBOX, SEED_JSON_PATH
+
+        for code in SERVER_EXCLUSIVE_BLACKBOX:
+            c = code.strip().upper()
+            if c.startswith("F"):
+                styles.add(c)
+            elif c.startswith("L"):
+                layouts.add(c)
+
+        if SEED_JSON_PATH.is_file():
+            seed_raw = json.loads(SEED_JSON_PATH.read_text(encoding="utf-8"))
+            for r in seed_raw.get("exclusiveResources", []) + seed_raw.get("communityResources", []):
+                c = str(r.get("id") or "").strip().upper()
+                k = str(r.get("kind") or "").strip().lower()
+                if not c:
+                    continue
+                if k == "style":
+                    styles.add(c)
+                elif k == "layout":
+                    layouts.add(c)
+                elif k == "color":
+                    colors.add(c)
+                elif k == "tone":
+                    tones.add(c)
+    except Exception:
+        pass
+
+    _STATIC_CATALOG_CODES = {
+        "styles": styles,
+        "layouts": layouts,
+        "colors": colors,
+        "tones": tones,
+        "all": styles | layouts | colors | tones,
+    }
+    return _STATIC_CATALOG_CODES
+
+
+def get_valid_catalog_codes(conn: sqlite3.Connection | None = None) -> dict[str, set[str]]:
+    """Return dictionary of real catalog codes {styles, layouts, colors, tones, all} (J2, J3)."""
+    static = _get_static_catalog_codes()
+    styles = set(static["styles"])
+    layouts = set(static["layouts"])
+    colors = set(static["colors"])
+    tones = set(static["tones"])
+
+    rows: list[Any] = []
+    if conn is not None:
+        try:
+            rows = conn.execute("SELECT code, kind FROM catalog_assets").fetchall()
+        except Exception:
+            rows = []
+    else:
+        try:
+            from .config import get_db_path
+
+            target = get_db_path()
+            if target and Path(target).is_file():
+                one_shot = sqlite3.connect(str(target), timeout=5.0)
+                try:
+                    rows = one_shot.execute("SELECT code, kind FROM catalog_assets").fetchall()
+                finally:
+                    one_shot.close()
+        except Exception:
+            rows = []
+
+    for r in rows:
+        code = str(r[0] if isinstance(r, (tuple, list)) else r["code"]).strip().upper()
+        raw_kind = (r[1] if isinstance(r, (tuple, list)) else r["kind"]) or ""
+        kind = str(raw_kind).strip().lower()
+        if not code:
+            continue
+        if kind == "style":
+            styles.add(code)
+        elif kind == "layout":
+            layouts.add(code)
+        elif kind == "color":
+            colors.add(code)
+        elif kind == "tone":
+            tones.add(code)
+        else:
+            styles.add(code)
+            layouts.add(code)
+
+    return {
+        "styles": styles,
+        "layouts": layouts,
+        "colors": colors,
+        "tones": tones,
+        "all": styles | layouts | colors | tones,
+    }
+
+
+def _rebuild_recipe_dict(d: dict[str, Any], catalog_codes: dict[str, set[str]] | None = None) -> dict[str, Any]:
+    """Rebuild a recipe or card dict by strictly validating and copying typed fields only (H1, J1-J3).
+    - J1/J2: Does NOT output moods, whitespace, or references at all (stripped entirely).
+    - J3: Style, layout, color, tone IDs must exist in the real catalog codes set; invalid/non-catalog dropped.
+    """
+    if catalog_codes is None:
+        catalog_codes = get_valid_catalog_codes()
+    valid_styles = catalog_codes["styles"]
+    valid_layouts = catalog_codes["layouts"]
+    valid_colors = catalog_codes["colors"]
+    valid_tones = catalog_codes["tones"]
+    valid_all = catalog_codes["all"]
+
+    out: dict[str, Any] = {}
+
+    raw_id = d.get("id")
+    if isinstance(raw_id, str) and _RECIPE_CODE_PATTERN.fullmatch(raw_id.strip()):
+        clean_id = raw_id.strip()
+        if clean_id.upper() in valid_all or re.fullmatch(r"^(?:rcp|card)[-_][A-Za-z0-9_-]{1,32}$", clean_id, re.IGNORECASE):
+            out["id"] = clean_id
+
+    raw_kind = d.get("kind")
+    if raw_kind in ("single", "batch", "article_card"):
+        out["kind"] = raw_kind
+
+    raw_styles = (
+        d.get("styleIds")
+        if d.get("styleIds") is not None
+        else (d.get("styles") if d.get("styles") is not None else d.get("style_ids"))
+    )
+    if isinstance(raw_styles, list):
+        clean_styles = []
+        for s in raw_styles:
+            if isinstance(s, str) and _RECIPE_CODE_PATTERN.fullmatch(s.strip()):
+                clean_s = s.strip()
+                if clean_s.upper() in valid_styles or clean_s.upper() in valid_all:
+                    clean_styles.append(clean_s)
+        out["styleIds"] = clean_styles
+    elif isinstance(raw_styles, str) and _RECIPE_CODE_PATTERN.fullmatch(raw_styles.strip()):
+        clean_s = raw_styles.strip()
+        if clean_s.upper() in valid_styles or clean_s.upper() in valid_all:
+            out["styleIds"] = [clean_s]
+
+    raw_layout = (
+        d.get("layoutId")
+        if d.get("layoutId") is not None
+        else (
+            d.get("layout_id")
+            if d.get("layout_id") is not None
+            else (d.get("layout") if d.get("layout") is not None else d.get("layout_code"))
+        )
+    )
+    if isinstance(raw_layout, str) and _RECIPE_CODE_PATTERN.fullmatch(raw_layout.strip()):
+        clean_l = raw_layout.strip()
+        if clean_l.upper() in valid_layouts or clean_l.upper() in valid_all:
+            out["layoutId"] = clean_l
+
+    raw_colors = (
+        d.get("colors")
+        if d.get("colors") is not None
+        else (d.get("color") if d.get("color") is not None else d.get("color_code"))
+    )
+    if isinstance(raw_colors, list):
+        clean_colors = []
+        for c in raw_colors:
+            if isinstance(c, str) and _RECIPE_COLOR_PATTERN.fullmatch(c.strip()):
+                clean_c = c.strip()
+                if clean_c.upper() in valid_colors:
+                    clean_colors.append(clean_c)
+        out["colors"] = clean_colors
+    elif isinstance(raw_colors, str) and _RECIPE_COLOR_PATTERN.fullmatch(raw_colors.strip()):
+        clean_c = raw_colors.strip()
+        if clean_c.upper() in valid_colors:
+            out["colors"] = [clean_c]
+
+    raw_tones = (
+        d.get("tones")
+        if d.get("tones") is not None
+        else (d.get("tone") if d.get("tone") is not None else d.get("tone_code"))
+    )
+    if isinstance(raw_tones, list):
+        clean_tones = []
+        for t in raw_tones:
+            if isinstance(t, str) and _RECIPE_CODE_PATTERN.fullmatch(t.strip()):
+                clean_t = t.strip()
+                if clean_t.upper() in valid_tones:
+                    clean_tones.append(clean_t)
+        out["tones"] = clean_tones
+    elif isinstance(raw_tones, str) and _RECIPE_CODE_PATTERN.fullmatch(raw_tones.strip()):
+        clean_t = raw_tones.strip()
+        if clean_t.upper() in valid_tones:
+            out["tones"] = [clean_t]
+
+    # J1: moods and whitespace are entirely omitted from output for masked recipes.
+
+    raw_ratio = d.get("ratio")
+    if isinstance(raw_ratio, str) and _RECIPE_RATIO_PATTERN.fullmatch(raw_ratio.strip()):
+        out["ratio"] = raw_ratio.strip()
+
+    raw_mode = d.get("mode")
+    if isinstance(raw_mode, str) and _RECIPE_CODE_PATTERN.fullmatch(raw_mode.strip()):
+        clean_mode = raw_mode.strip()
+        if clean_mode in ("pure", "graphic-text", "poster", "article-illust", "article-cover", "photo"):
+            out["mode"] = clean_mode
+
+    for cnt_key in ("cardCount", "totalCards", "count", "revision"):
+        raw_cnt = d.get(cnt_key)
+        if isinstance(raw_cnt, int) and not isinstance(raw_cnt, bool):
+            out[cnt_key] = raw_cnt
+
+    raw_cards = d.get("cards")
+    if isinstance(raw_cards, list):
+        clean_cards = []
+        for c in raw_cards:
+            if isinstance(c, dict):
+                clean_cards.append(_rebuild_recipe_dict(c, catalog_codes=catalog_codes))
+        out["cards"] = clean_cards
+
+    raw_sc = d.get("sharedCard")
+    if isinstance(raw_sc, dict):
+        out["sharedCard"] = _rebuild_recipe_dict(raw_sc, catalog_codes=catalog_codes)
+
+    # J2: references and refImages are entirely omitted from output for masked recipes.
+
+    out["prompt"] = ""
+    out["promptMasked"] = True
+    return out
+
+
+def mask_recipe_data(data: Any, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Rebuild masked recipe from typed fields only; drop all free-text fields and non-dict shapes (H1, J1-J3)."""
+    if not isinstance(data, dict):
+        return {"prompt": "", "promptMasked": True}
+    catalog_codes = get_valid_catalog_codes(conn=conn)
+    return _rebuild_recipe_dict(data, catalog_codes=catalog_codes)
+
+
+def get_generation_visible_prompt(row: sqlite3.Row | dict[str, Any] | None) -> tuple[str, bool]:
+    """Return (visible_prompt, prompt_masked) for a studio_generations row.
+
+    Reads never scan for secrets.
+    If visible_prompt is NOT NULL -> return it (with promptMasked when prompt_masked == 1).
+    If visible_prompt is NULL -> return ('', True) [fail-closed].
+    """
+    if row is None:
+        return "", False
+    has_col = "visible_prompt" in row.keys() if hasattr(row, "keys") else ("visible_prompt" in row)
+    if has_col:
+        vis = row["visible_prompt"]
+        if vis is not None:
+            has_mask = "prompt_masked" in row.keys() if hasattr(row, "keys") else ("prompt_masked" in row)
+            masked = bool(row["prompt_masked"]) if has_mask else False
+            return str(vis), masked
+    # NULL or column missing -> fail closed
+    return "", True
+
+
+def get_work_client_prompt(row: sqlite3.Row | dict[str, Any] | None, is_admin_route: bool = False) -> tuple[str, bool]:
+    """Return (prompt, prompt_masked) for a works row.
+
+    Reads never scan for secrets.
+    If is_admin_route: returns stored prompt, False.
+    Otherwise:
+      If prompt_has_secret == 0: returns stored prompt, False.
+      If prompt_has_secret in (1, None) or missing: returns ('', True) [fail-closed].
+    """
+    if row is None:
+        return "", False
+    stored = str(row["prompt"] or "") if ("prompt" in row.keys() if hasattr(row, "keys") else "prompt" in row) else ""
+    if is_admin_route:
+        return stored, False
+    has_col = "prompt_has_secret" in row.keys() if hasattr(row, "keys") else ("prompt_has_secret" in row)
+    if has_col:
+        flag = row["prompt_has_secret"]
+        if flag == 0:
+            return stored, False
+    # Flag is 1, NULL, or column missing -> fail closed
+    return "", True
+
+
+def get_topic_client_recipe_json(
+    row: sqlite3.Row | dict[str, Any] | None,
+    is_admin_route: bool = False,
+    conn: sqlite3.Connection | None = None,
+) -> tuple[dict | list | None, bool]:
+    """Return (recipe_data, prompt_masked) for a forum_topics row.
+
+    Reads never scan for secrets.
+    If recipe_json is empty: returns (None, False).
+    If is_admin_route: returns parsed recipe, False.
+    If recipe_has_secret == 0: returns parsed recipe, False.
+    If recipe_has_secret in (1, None): masks prompt and free-text fields (G5, J1-J3), returns (recipe, True).
+    """
+    if row is None:
+        return None, False
+    has_col = "recipe_json" in row.keys() if hasattr(row, "keys") else ("recipe_json" in row)
+    raw = row["recipe_json"] if has_col else None
+    if not raw:
+        return None, False
+    try:
+        recipe = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return None, False
+    if is_admin_route:
+        return recipe, False
+    has_flag = "recipe_has_secret" in row.keys() if hasattr(row, "keys") else ("recipe_has_secret" in row)
+    flag = row["recipe_has_secret"] if has_flag else None
+    if flag == 0:
+        return recipe, False
+    # Flag is 1 or NULL: keep only structure, mask all free-text fields
+    return mask_recipe_data(recipe, conn=conn), True
+
+
+def sanitize_items_json_for_client(items: Any, visible_prompt: str, was_masked: bool) -> list[Any]:
+    """Ensure all client-facing items in items_json derive prompt strictly from the row's visible prompt.
+    Preserves string URLs as strings to keep polling and replay images compatible (G12).
+    """
+    if not isinstance(items, list):
+        return []
+    cleaned_items = []
+    for it in items:
+        if isinstance(it, dict):
+            it_copy = dict(it)
+            it_copy["prompt"] = visible_prompt
+            if was_masked:
+                it_copy["promptMasked"] = True
+            cleaned_items.append(it_copy)
+        elif isinstance(it, str):
+            cleaned_items.append(it)
+        else:
+            cleaned_items.append(it)
+    return cleaned_items
+
+
+def sanitize_prompt_for_client(prompt: str, conn: sqlite3.Connection | None = None) -> tuple[str, bool]:
+    """Compatibility adapter: returns ('', True) if text contains secret, else (prompt, False)."""
+    if not prompt or not isinstance(prompt, str):
+        return "", False
+    try:
+        if check_text_has_secret(prompt, conn):
+            return "", True
+    except Exception:
+        return "", True
+    return prompt, False
+
+
+def _resolve_generation_visible_prompt(row: sqlite3.Row | dict[str, Any], conn: sqlite3.Connection | None = None) -> tuple[str, bool]:
+    """Compatibility adapter for get_generation_visible_prompt."""
+    return get_generation_visible_prompt(row)
+
+
+def _strip_injection_suffix_only(raw_p: str, secrets: list[str]) -> str:
+    """Strip only the exact trailing injected notes suffix; never remove secrets from middle of user text (G10, H7).
+    Matches only "\n\n" + s at the very end. Never strips single newline or mid-text.
+    """
+    if not raw_p:
+        return ""
+    cleaned = raw_p
+    changed = True
+    while changed:
+        changed = False
+        for s in secrets:
+            if not s:
+                continue
+            suffix1 = "\n\n" + s
+            if cleaned.endswith(suffix1):
+                cleaned = cleaned[:-len(suffix1)].rstrip()
+                changed = True
+                break
+    return cleaned
+
+
+def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
+    """Batched, idempotent backfill for legacy rows without scanning at read time.
+    Processes in batches of 200 rows with LIMIT queries and conditional writes (G3, G11).
+    Loads secrets once per backfill round (H8).
+    Persists scanned secrets hash in site_settings only if entirely error-free (G2, H2).
+    Rescans generation rows when secrets set changes (H5).
+    """
+    global _LAST_SCANNED_SECRETS_HASH
+    conn = db.get_conn()
+    try:
+        vhash, secrets, windows = get_secrets_cache(conn, force=True)
+    except Exception:
+        logger.warning("run_blackbox_backfill aborted: failed to query catalog secrets (fail-closed, G1)")
+        return {"generations": 0, "works": 0, "topics": 0}
+
+    preloaded = (vhash, secrets, windows)
+
+    # Check persisted hash from site_settings (G2)
+    try:
+        st_row = conn.execute("SELECT value_json FROM site_settings WHERE key = 'blackbox_secrets_hash'").fetchone()
+        stored_hash = ""
+        if st_row and st_row["value_json"]:
+            try:
+                pj = json.loads(st_row["value_json"])
+                stored_hash = pj.get("hash") if isinstance(pj, dict) else str(pj)
+            except Exception:
+                pass
+        if stored_hash != vhash:
+            force = True
+    except Exception:
+        pass
+
+    counts = {"generations": 0, "works": 0, "topics": 0}
+    BATCH_SIZE = 200
+    has_errors = False
+
+    # 1. Backfill studio_generations:
+    # If force: rescan ALL generation rows (H5)
+    # If not force: scan rows where visible_prompt IS NULL
+    last_id = ""
+    while True:
+        if force:
+            gen_sql = (
+                "SELECT id, prompt, visible_prompt, prompt_masked FROM studio_generations WHERE id > ? ORDER BY id ASC LIMIT ?"
+            )
+        else:
+            gen_sql = (
+                "SELECT id, prompt, visible_prompt, prompt_masked FROM studio_generations WHERE visible_prompt IS NULL AND id > ? ORDER BY id ASC LIMIT ?"
+            )
+        gen_rows = conn.execute(gen_sql, (last_id, BATCH_SIZE)).fetchall()
+        if not gen_rows:
+            break
+        last_id = gen_rows[-1]["id"]
+        gen_updates = []
+        for row in gen_rows:
+            gid = row["id"]
+            raw_p = row["prompt"] or ""
+            curr_vis = row["visible_prompt"]
+            curr_masked = row["prompt_masked"]
+            try:
+                if curr_vis is None:
+                    # Legacy or pending generation:
+                    if not check_text_has_secret(raw_p, conn, preloaded=preloaded):
+                        vis = raw_p
+                        masked = 0
+                    else:
+                        cleaned = _strip_injection_suffix_only(raw_p, secrets)
+                        if cleaned and not check_text_has_secret(cleaned, conn, preloaded=preloaded):
+                            vis = cleaned
+                            masked = 0
+                        else:
+                            vis = ""
+                            masked = 1
+                    gen_updates.append((vis, masked, gid, raw_p))
+                else:
+                    # Row already has visible_prompt: check if secret set change impacts it (H5)
+                    if curr_vis and check_text_has_secret(curr_vis, conn, preloaded=preloaded):
+                        # Masked because visible prompt contains secret
+                        vis = ""
+                        masked = 1
+                        gen_updates.append((vis, masked, gid, raw_p))
+                    elif curr_masked == 0 and check_text_has_secret(raw_p, conn, preloaded=preloaded):
+                        # Row was not masked, but prompt contains secret (e.g. newly added secret)
+                        cleaned = _strip_injection_suffix_only(raw_p, secrets)
+                        if cleaned and not check_text_has_secret(cleaned, conn, preloaded=preloaded):
+                            vis = cleaned
+                            masked = 0
+                        else:
+                            vis = ""
+                            masked = 1
+                        if vis != curr_vis or masked != curr_masked:
+                            gen_updates.append((vis, masked, gid, raw_p))
+                    elif curr_masked == 1:
+                        # Row was previously masked: check if secrets were removed and row is now clean
+                        if not check_text_has_secret(raw_p, conn, preloaded=preloaded):
+                            vis = raw_p
+                            masked = 0
+                            gen_updates.append((vis, masked, gid, raw_p))
+                        else:
+                            cleaned = _strip_injection_suffix_only(raw_p, secrets)
+                            if cleaned and not check_text_has_secret(cleaned, conn, preloaded=preloaded):
+                                vis = cleaned
+                                masked = 0
+                                gen_updates.append((vis, masked, gid, raw_p))
+            except Exception:
+                has_errors = True
+                continue
+
+        if gen_updates:
+            try:
+                with db.transaction() as tx:
+                    tx.executemany(
+                        "UPDATE studio_generations SET visible_prompt = ?, prompt_masked = ? WHERE id = ? AND prompt = ?",
+                        gen_updates,
+                    )
+                counts["generations"] += len(gen_updates)
+            except Exception:
+                has_errors = True
+
+    # 2. Backfill works where prompt_has_secret IS NULL (or all if force)
+    last_wid = ""
+    while True:
+        if force:
+            work_sql = "SELECT id, prompt FROM works WHERE id > ? ORDER BY id ASC LIMIT ?"
+            work_rows = conn.execute(work_sql, (last_wid, BATCH_SIZE)).fetchall()
+        else:
+            work_sql = "SELECT id, prompt FROM works WHERE prompt_has_secret IS NULL AND id > ? ORDER BY id ASC LIMIT ?"
+            work_rows = conn.execute(work_sql, (last_wid, BATCH_SIZE)).fetchall()
+        if not work_rows:
+            break
+        last_wid = work_rows[-1]["id"]
+        work_updates = []
+        for row in work_rows:
+            wid = row["id"]
+            raw_p = row["prompt"] or ""
+            try:
+                has_sec = 1 if check_text_has_secret(raw_p, conn, preloaded=preloaded) else 0
+                work_updates.append((has_sec, wid, raw_p))
+            except Exception:
+                has_errors = True
+                continue
+
+        if work_updates:
+            try:
+                with db.transaction() as tx:
+                    tx.executemany("UPDATE works SET prompt_has_secret = ? WHERE id = ? AND prompt = ?", work_updates)
+                counts["works"] += len(work_updates)
+            except Exception:
+                has_errors = True
+
+    # 3. Backfill forum_topics where recipe_has_secret IS NULL (or all if force)
+    last_tid = ""
+    while True:
+        if force:
+            topic_sql = "SELECT id, recipe_json FROM forum_topics WHERE id > ? ORDER BY id ASC LIMIT ?"
+            topic_rows = conn.execute(topic_sql, (last_tid, BATCH_SIZE)).fetchall()
+        else:
+            topic_sql = "SELECT id, recipe_json FROM forum_topics WHERE recipe_has_secret IS NULL AND id > ? ORDER BY id ASC LIMIT ?"
+            topic_rows = conn.execute(topic_sql, (last_tid, BATCH_SIZE)).fetchall()
+        if not topic_rows:
+            break
+        last_tid = topic_rows[-1]["id"]
+        topic_updates = []
+        for row in topic_rows:
+            tid = row["id"]
+            raw_rj = row["recipe_json"] or ""
+            try:
+                if raw_rj:
+                    parsed_rj = json.loads(raw_rj) if isinstance(raw_rj, str) else raw_rj
+                    has_sec = 1 if check_obj_has_secret(parsed_rj, conn, preloaded=preloaded) else 0
+                else:
+                    has_sec = 0
+                topic_updates.append((has_sec, tid, raw_rj))
+            except Exception:
+                has_errors = True
+                continue
+
+        if topic_updates:
+            try:
+                with db.transaction() as tx:
+                    tx.executemany("UPDATE forum_topics SET recipe_has_secret = ? WHERE id = ? AND recipe_json = ?", topic_updates)
+                counts["topics"] += len(topic_updates)
+            except Exception:
+                has_errors = True
+
+    # Persist the scanned hash in site_settings only if no errors occurred (G2, H2)
+    if not has_errors:
+        now_iso = utc_now_iso()
+        try:
+            with db.transaction() as tx:
+                tx.execute(
+                    """
+                    INSERT INTO site_settings (key, value_json, updated_by, updated_at)
+                    VALUES ('blackbox_secrets_hash', ?, 'system', ?)
+                    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+                    """,
+                    (json.dumps({"hash": vhash}), now_iso),
+                )
+            _LAST_SCANNED_SECRETS_HASH = vhash
+        except Exception:
+            logger.warning("Failed to persist blackbox_secrets_hash to site_settings")
+    else:
+        logger.warning("run_blackbox_backfill completed with errors; scan hash NOT persisted so next run will rescan (H2)")
+
+    return counts
+
+
+def start_blackbox_backfill(db: Database) -> threading.Thread:
+    """Launch backfill in background thread to never block startup."""
+    def _worker():
+        try:
+            run_blackbox_backfill(db)
+        except Exception:
+            logger.warning("Blackbox backfill worker encountered error", exc_info=True)
+    t = threading.Thread(target=_worker, name="blackbox-backfill", daemon=True)
+    t.start()
+    return t
+
+
 def _serialize_work(
     row: sqlite3.Row,
     comments_by_work: dict[str, list[dict[str, Any]]],
     unlocked_set: set[str],
     current_user: dict[str, Any] | None,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     wid = row["id"]
     price = int(row["price"] or 0)
@@ -689,7 +1449,7 @@ def _serialize_work(
     is_author = bool(current_user and current_user.get("username") == row["author_username"])
     is_unlocked = price <= 0 or (wid in unlocked_set) or is_author or is_staff
 
-    full_prompt = row["prompt"] or ""
+    full_prompt, was_masked = get_work_client_prompt(row, is_admin_route=False)
     if is_unlocked:
         safe_prompt = full_prompt
     else:
@@ -731,7 +1491,7 @@ def _serialize_work(
         "views": int(row["views"]),
         "stampCounts": stamps,
         "prompt": safe_prompt,
-        "promptMasked": not is_unlocked,
+        "promptMasked": bool((not is_unlocked) or was_masked),
         "reproducible": bool(str(row["prompt"] or "").strip()),
         "notes": row["notes"] or "",
         "comments": comments_by_work.get(wid, []),
@@ -743,6 +1503,7 @@ def _serialize_topic(
     replies_by_topic: dict[str, list[dict[str, Any]]],
     unlocked_set: set[str],
     current_user: dict[str, Any] | None,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     tid = row["id"]
     price = int(row["price"] or 0)
@@ -750,13 +1511,7 @@ def _serialize_topic(
     is_author = bool(current_user and current_user.get("username") == row["author_username"])
     is_unlocked = price <= 0 or (tid in unlocked_set) or is_author or is_staff
 
-    recipe = None
-    if row["recipe_json"]:
-        try:
-            recipe = json.loads(row["recipe_json"])
-        except Exception:
-            recipe = None
-
+    recipe, was_masked = get_topic_client_recipe_json(row, is_admin_route=False, conn=conn)
     shared_card = None
     if isinstance(recipe, dict) and "sharedCard" in recipe:
         shared_card = recipe["sharedCard"]
@@ -1013,7 +1768,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} ORDER BY pinned DESC, published_at_ms DESC",
         topic_ids,
     ).fetchall()
-    topics_out = [_serialize_topic(r, replies_by_topic, unlocked_set, current_user) for r in topic_rows]
+    topics_out = [_serialize_topic(r, replies_by_topic, unlocked_set, current_user, conn=conn) for r in topic_rows]
 
     # A work's discussion topic reports the work's counters.  Without this the
     # same piece shows one number in the square (works.likes) and another in the
@@ -1061,7 +1816,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         f"SELECT * FROM works WHERE status = 'published' AND TRIM(prompt) <> '' AND {work_filter} ORDER BY featured DESC, published_at_ms DESC",
         work_ids,
     ).fetchall()
-    works_out: list[dict[str, Any]] = [_serialize_work(w, comments_by_work, unlocked_set, current_user) for w in work_rows]
+    works_out: list[dict[str, Any]] = [_serialize_work(w, comments_by_work, unlocked_set, current_user, conn=conn) for w in work_rows]
 
     # Active Official Studio Presets
     preset_rows = conn.execute(
@@ -1971,6 +2726,7 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
         author_uname = ""
         author_name = ""
         unlocked_content = ""
+        was_masked = False
 
         w_row = tx.execute("SELECT * FROM works WHERE id = ?", (tid,)).fetchone()
         t_row = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (tid,)).fetchone() if not w_row else None
@@ -1982,7 +2738,7 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
             title = w_row["title"]
             author_uname = w_row["author_username"]
             author_name = w_row["author_name"]
-            unlocked_content = w_row["prompt"]
+            unlocked_content, was_masked = get_work_client_prompt(w_row, is_admin_route=False)
         elif t_row:
             resolved_type = "topic"
             cost = int(t_row["price"] or 0)
@@ -2007,11 +2763,17 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
         ).fetchone()
         if existing and existing["status"] == "settled":
             bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
-            return {"ok": True, "alreadyUnlocked": True, "credits": bal, "unlockedContent": unlocked_content, "targetType": resolved_type, "targetId": tid}
+            res = {"ok": True, "alreadyUnlocked": True, "credits": bal, "unlockedContent": unlocked_content, "targetType": resolved_type, "targetId": tid}
+            if was_masked:
+                res["promptMasked"] = True
+            return res
 
         if cost <= 0 or author_uname == user["username"]:
             bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
-            return {"ok": True, "alreadyUnlocked": True, "credits": bal, "unlockedContent": unlocked_content, "targetType": resolved_type, "targetId": tid}
+            res = {"ok": True, "alreadyUnlocked": True, "credits": bal, "unlockedContent": unlocked_content, "targetType": resolved_type, "targetId": tid}
+            if was_masked:
+                res["promptMasked"] = True
+            return res
 
         author_share = max(1, round(cost * share_ratio)) if author_uname else 0
         new_bal, _ = apply_wallet_delta(
@@ -2053,7 +2815,7 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
                 (uid, author_uname, resolved_type, tid, cost, author_share, now),
             )
 
-    return {
+    res = {
         "ok": True,
         "credits": new_bal,
         "cost": cost,
@@ -2061,6 +2823,9 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
         "targetId": tid,
         "unlockedContent": unlocked_content,
     }
+    if was_masked:
+        res["promptMasked"] = True
+    return res
 
 
 # ======================== PUBLISHING: WORKS, ASSETS, FORUM & BOUNTIES ========================
@@ -2176,14 +2941,19 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
 
         if not work_id:
             work_id = str(body.get("workId") or "").strip()[:64]
+        recipe_str = json.dumps(recipe, ensure_ascii=False) if recipe else ""
+        try:
+            recipe_has_sec = 1 if (recipe and check_obj_has_secret(recipe, tx)) else 0
+        except Exception:
+            recipe_has_sec = None
         tx.execute(
             """
             INSERT INTO forum_topics (
                 id, category, category_label, pinned, featured, title, author_username, author_name,
                 views, likes, favorites, price, bounty, bounty_status, solved, accepted_reply_id,
-                images_json, styles_json, layout_code, work_id, recipe_json, summary, locked_body,
+                images_json, styles_json, layout_code, work_id, recipe_json, recipe_has_secret, summary, locked_body,
                 status, published_at_ms, created_label, created_at, updated_at
-            ) VALUES (?, ?, ?, 0, 0, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, 'published', ?, '刚刚', ?, ?)
+            ) VALUES (?, ?, ?, 0, 0, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, '刚刚', ?, ?)
             """,
             (
                 tid,
@@ -2199,7 +2969,8 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
                 json.dumps(styles, ensure_ascii=False),
                 layout_code,
                 work_id,
-                json.dumps(recipe, ensure_ascii=False) if recipe else "",
+                recipe_str,
+                recipe_has_sec,
                 summary,
                 locked_body,
                 now_ms,
@@ -2582,6 +3353,21 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
 
 # ======================== STUDIO CLOUD PERSISTENCE & QUOTA/BLACKBOX ENGINE ========================
 
+def sanitize_client_error_msg(error_msg: Any, status: Any = None) -> str:
+    """Map client-facing error message to generic status/code, never leaking raw stored text (H4)."""
+    if status not in ("failed", "error") and not error_msg:
+        return ""
+    err_str = str(error_msg or "").strip()
+    m = re.search(r"\b(4\d\d|5\d\d)\b", err_str)
+    if m:
+        return f"网关请求失败 (HTTP {m.group(1)})"
+    if "4000" in err_str or "prompt_too_long" in err_str:
+        return "提示词加上系统说明后超过 4000 字上限，请精简提示词"
+    if "timeout" in err_str.lower() or "超时" in err_str:
+        return "云端任务超时，请稍后重试"
+    return "云端生成失败，请稍后重试"
+
+
 def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
     conn = db.get_conn()
     presets = [
@@ -2637,43 +3423,51 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
         f"SELECT * FROM studio_generations WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT 40",
         (uid, *history_ids),
     ).fetchall():
-        items = json.loads(r["items_json"] or "[]")
-        if items and isinstance(items[0], str):
-            items = [{"id": f"{r['id']}_0", "title": r["tab_title"] or "生成图", "imageUrl": u, "prompt": r["prompt"]} for u in items]
-        hist.append(
-            {
-                "id": r["id"],
-                "createdAt": format_short_time(r["created_at"]),
-                "tabTitle": r["tab_title"],
-                "mode": r["mode"],
-                "modeLabel": r["mode_label"],
-                "kind": r["kind"],
-                "recipeSummary": r["recipe_summary"],
-                "prompt": r["prompt"],
-                "markdown": r["markdown"],
-                "items": items,
-                "status": r["status"],
-                "engine": r["engine"],
-                "taskId": r["task_id"] or "",
-                "requestId": r["request_id"] or "",
-                "error": r["error_msg"] or "",
-            }
-        )
+        vis_prompt, was_masked = get_generation_visible_prompt(r)
+        raw_items = json.loads(r["items_json"] or "[]")
+        if raw_items and isinstance(raw_items[0], str):
+            items = [{"id": f"{r['id']}_{idx}", "title": r["tab_title"] or "生成项", "imageUrl": u, "prompt": vis_prompt} for idx, u in enumerate(raw_items)]
+            if was_masked:
+                for it in items:
+                    it["promptMasked"] = True
+        else:
+            items = sanitize_items_json_for_client(raw_items, vis_prompt, was_masked)
+        hist_entry = {
+            "id": r["id"],
+            "createdAt": format_short_time(r["created_at"]),
+            "tabTitle": r["tab_title"],
+            "mode": r["mode"],
+            "modeLabel": r["mode_label"],
+            "kind": r["kind"],
+            "recipeSummary": r["recipe_summary"],
+            "prompt": vis_prompt,
+            "markdown": r["markdown"],
+            "items": items,
+            "status": r["status"],
+            "engine": r["engine"],
+            "taskId": r["task_id"] or "",
+            "requestId": r["request_id"] or "",
+            "error": sanitize_client_error_msg(r["error_msg"], r["status"]),
+        }
+        if was_masked:
+            hist_entry["promptMasked"] = True
+        hist.append(hist_entry)
         if r["status"] in ("queued", "running"):
-            pending_tasks.append(
-                {
-                    "genId": r["id"],
-                    "requestId": r["request_id"] or "",
-                    "clientRequestId": r["request_id"] or "",
-                    "taskId": r["task_id"] or "",
-                    "status": r["status"],
-                    "createdAt": r["created_at"],
-                    "mode": r["mode"],
-                    "kind": r["kind"],
-                    "prompt": r["prompt"],
-                    "reservationDate": r["reservation_date"] or "",
-                }
-            )
+            pending_entry = {
+                "genId": r["id"],
+                "requestId": r["request_id"] or "",
+                "clientRequestId": r["request_id"] or "",
+                "taskId": r["task_id"] or "",
+                "status": r["status"],
+                "createdAt": r["created_at"],
+                "mode": r["mode"],
+                "kind": r["kind"],
+                "prompt": vis_prompt,
+                "reservationDate": r["reservation_date"] or "",
+            }
+            if was_masked:
+                pending_entry["promptMasked"] = True
+            pending_tasks.append(pending_entry)
 
     uploads = [
         {
@@ -2783,13 +3577,31 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
         if existing and int(existing["user_id"] or 0) != uid:
             raise ServiceError("该历史记录编号属于其他账号，不能覆盖", status=409, code="history_conflict")
 
+        user_p = str(entry.get("prompt") or "")
+        scan_failed = False
+        try:
+            has_sec = check_text_has_secret(user_p, tx)
+        except Exception:
+            scan_failed = True
+            has_sec = False
+        if scan_failed:
+            vis_p = None
+            prompt_masked = 0
+        elif has_sec:
+            vis_p = ""
+            prompt_masked = 1
+        else:
+            vis_p = user_p
+            prompt_masked = 0
         values = (
             str(entry.get("tabTitle") or ""),
             str(entry.get("mode") or ""),
             str(entry.get("modeLabel") or ""),
             str(entry.get("kind") or "single"),
             str(entry.get("recipeSummary") or ""),
-            str(entry.get("prompt") or ""),
+            user_p,
+            vis_p,
+            prompt_masked,
             str(entry.get("markdown") or ""),
             json.dumps(entry.get("items") or [], ensure_ascii=False),
         )
@@ -2801,7 +3613,7 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 """
                 UPDATE studio_generations
                 SET tab_title = ?, mode = ?, mode_label = ?, kind = ?, recipe_summary = ?,
-                    prompt = ?, markdown = ?, items_json = ?, deleted_at = ''
+                    prompt = ?, visible_prompt = ?, prompt_masked = ?, markdown = ?, items_json = ?, deleted_at = ''
                 WHERE id = ? AND user_id = ?
                 """,
                 (*values, hid, uid),
@@ -2811,8 +3623,8 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 """
                 INSERT INTO studio_generations (
                     id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
-                    prompt, markdown, items_json, engine, cost_type, credits_spent, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?)
+                    prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type, credits_spent, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?)
                 """,
                 (hid, uid, user["username"], *values, now_iso),
             )
@@ -2893,20 +3705,30 @@ def get_user_studio_task(
         ).fetchone()
     if not row:
         return None
+    vis_prompt, was_masked = get_generation_visible_prompt(row)
     try:
-        items = json.loads(row["items_json"] or "[]")
+        raw_items = json.loads(row["items_json"] or "[]")
     except Exception:
-        items = []
-    return {
+        raw_items = []
+    clean_images: list[str] = []
+    for it in (raw_items if isinstance(raw_items, list) else []):
+        if isinstance(it, str):
+            clean_images.append(it)
+        elif isinstance(it, dict) and it.get("imageUrl"):
+            clean_images.append(str(it["imageUrl"]))
+    ret = {
         "genId": row["id"],
         "requestId": row["request_id"] or "",
         "clientRequestId": row["request_id"] or "",
         "taskId": row["task_id"] or "",
         "status": row["status"],
-        "images": items if isinstance(items, list) else [],
-        "error": row["error_msg"] or "",
+        "images": clean_images,
+        "error": sanitize_client_error_msg(row["error_msg"], row["status"]),
         "reservationDate": row["reservation_date"] or "",
     }
+    if was_masked:
+        ret["promptMasked"] = True
+    return ret
 
 
 def claim_cloud_generation_submission(db: Database, user: dict[str, Any] | None, gen_id: str) -> dict[str, Any]:
@@ -2955,14 +3777,15 @@ def _cloud_generation_result(
     wallet = conn.execute("SELECT * FROM wallets WHERE user_id = ?", (uid,)).fetchone()
     max_free = max(0, int(settings.get("economy", {}).get("daily_free_quota", 3)))
     used = int(wallet["free_quota_used"]) if (wallet and wallet["free_quota_date"] == today) else 0
-    return {
+    vis_prompt, was_masked = get_generation_visible_prompt(row)
+    res = {
         "genId": row["id"],
         "requestId": row["request_id"] or "",
         "clientRequestId": row["request_id"] or "",
         "idempotent": bool(idempotent),
         "status": row["status"],
         "taskId": row["task_id"] or "",
-        "finalPrompt": row["prompt"] or "",
+        "finalPrompt": vis_prompt,
         "costType": row["cost_type"],
         "creditsSpent": int(row["credits_spent"] or 0),
         "credits": int(wallet["balance"]) if wallet else 0,
@@ -2970,6 +3793,9 @@ def _cloud_generation_result(
         "reservationDate": row["reservation_date"] or "",
         "model": str(settings.get("gateway", {}).get("model", "gpt-image-2")),
     }
+    if was_masked:
+        res["promptMasked"] = True
+    return res
 
 
 def consume_daily_usage(db: Database, user_id: int | str, scope: str, limit: int) -> bool:
@@ -3159,16 +3985,32 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 orig_recipe_id = str(existing["recipe_id"] or "").strip()
                 if orig_recipe_id:
                     res["recipeId"] = orig_recipe_id
-                    codes = [c.strip().upper() for c in (existing["recipe_summary"] or "").split() if c.strip()]
-                    sys_append = []
-                    for code in codes:
-                        ca = tx.execute(
-                            "SELECT secret_blackbox_prompt FROM catalog_assets WHERE code = ? AND status = 'published'",
-                            (code,),
-                        ).fetchone()
-                        if ca and (ca["secret_blackbox_prompt"] or "").strip():
-                            sys_append.append({"type": "asset_instructions", "code": code})
-                    res["systemAppend"] = sys_append
+                    has_snap = False
+                    snap_raw = existing["system_append_json"] if "system_append_json" in existing.keys() else None
+                    if snap_raw is not None:
+                        try:
+                            snap_data = json.loads(snap_raw)
+                            has_snap = True
+                        except Exception:
+                            has_snap = False
+                    if has_snap:
+                        if isinstance(snap_data, dict):
+                            res["systemAppend"] = snap_data.get("systemAppend") or snap_data.get("system_append") or []
+                            if snap_data.get("promptTrimmed") or snap_data.get("prompt_trimmed"):
+                                res["promptTrimmed"] = True
+                        elif isinstance(snap_data, list):
+                            res["systemAppend"] = snap_data
+                    else:
+                        codes = [c.strip().upper() for c in (existing["recipe_summary"] or "").split() if c.strip()]
+                        sys_append = []
+                        for code in codes:
+                            ca = tx.execute(
+                                "SELECT secret_blackbox_prompt FROM catalog_assets WHERE code = ? AND status = 'published'",
+                                (code,),
+                            ).fetchone()
+                            if ca and (ca["secret_blackbox_prompt"] or "").strip():
+                                sys_append.append({"type": "asset_instructions", "code": code})
+                        res["systemAppend"] = sys_append
                 return res
 
         max_inflight = max(0, int(gateway.get("max_inflight_per_user", 1)))
@@ -3229,6 +4071,8 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
         if recipe_id:
             recipe_full_prompt = build_recipe_gateway_prompt(raw_prompt, injected_notes)
             if len(recipe_full_prompt) > 4000:
+                if not raw_prompt.strip():
+                    raise ServiceError("所选资源系统说明超过 4000 字上限，请精简所选资源", status=400, code="prompt_too_long")
                 raise ServiceError("提示词加上系统说明后超过 4000 字上限，请精简提示词", status=400, code="prompt_too_long")
 
         # 2. Enforce daily free quota -> automatic credit fallback.
@@ -3258,9 +4102,24 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             )
             free_remaining = 0
 
+        # Check if client-supplied prompt contains blackbox secrets (G9, H6)
+        client_scan_failed = False
+        client_prompt_has_secret = False
+        try:
+            if raw_prompt and check_text_has_secret(raw_prompt, tx):
+                client_prompt_has_secret = True
+        except Exception:
+            client_scan_failed = True
+
         # Initial prompt without skill (written in Transaction A)
         if recipe_id:
             initial_prompt = build_recipe_gateway_prompt(raw_prompt, injected_notes)
+            if client_scan_failed:
+                initial_visible_prompt = None
+            elif client_prompt_has_secret:
+                initial_visible_prompt = ""
+            else:
+                initial_visible_prompt = raw_prompt
         else:
             cleaned = raw_prompt
             if injected_notes:
@@ -3268,18 +4127,28 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             initial_prompt = cleaned if from_skill else (
                 f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
             )
+            if client_scan_failed:
+                initial_visible_prompt = None
+            elif client_prompt_has_secret:
+                initial_visible_prompt = ""
+            else:
+                cleaned_visible = raw_prompt
+                initial_visible_prompt = cleaned_visible if from_skill else (
+                    f"立即生成图片：\n{cleaned_visible}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
+                )
 
         needs_compose = (not from_skill) and bool(style1 or style2 or layout)
         prompt_ready = 0 if needs_compose else 1
+        prompt_masked_init = 1 if client_prompt_has_secret else 0
 
         tx.execute(
             """
             INSERT INTO studio_generations (
                 id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
-                prompt, markdown, items_json, engine, cost_type, credits_spent, task_id,
+                prompt, visible_prompt, prompt_masked, system_append_json, markdown, items_json, engine, cost_type, credits_spent, task_id,
                 status, error_msg, request_id, reservation_date, created_at, fork_work_id,
                 prompt_ready, recipe_id
-            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?)
             """,
             (
                 gen_id,
@@ -3288,6 +4157,9 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 str(body.get("ratio") or "3:4"),
                 f"{style1} {style2} {layout}".strip(),
                 initial_prompt if recipe_id else initial_prompt[:4000],
+                initial_visible_prompt if (initial_visible_prompt is None or recipe_id) else initial_visible_prompt[:4000],
+                prompt_masked_init,
+                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False}, ensure_ascii=False),
                 cost_type,
                 credits_spent,
                 request_id,
@@ -3343,18 +4215,61 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     max_budget = 4000 - separator_len - len(append_text)
                     trimmed = trim_composed_prompt(composed, max_budget)
                     skill_prompt_text = build_recipe_gateway_prompt(trimmed, injected_notes)
+                    skill_visible_prompt_text = trimmed
                     prompt_trimmed = True
                 else:
                     skill_prompt_text = full_test
+                    skill_visible_prompt_text = composed
             else:
                 skill_prompt_text = None
+                skill_visible_prompt_text = None
         else:
-            skill_prompt_text = (composed + ("\n\n" + "\n".join(injected_notes) if injected_notes else ""))[:4000] if composed else None
+            if composed:
+                skill_prompt_text = (composed + ("\n\n" + "\n".join(injected_notes) if injected_notes else ""))[:4000]
+                skill_visible_prompt_text = composed[:4000]
+            else:
+                skill_prompt_text = None
+                skill_visible_prompt_text = None
 
         with db.transaction() as tx:
+            if client_scan_failed:
+                final_vis_prompt = None
+                final_masked = 0
+            elif client_prompt_has_secret:
+                final_vis_prompt = ""
+                final_masked = 1
+            elif skill_visible_prompt_text:
+                try:
+                    if check_text_has_secret(skill_visible_prompt_text, tx):
+                        final_vis_prompt = ""
+                        final_masked = 1
+                    else:
+                        final_vis_prompt = skill_visible_prompt_text
+                        final_masked = 0
+                except Exception:
+                    final_vis_prompt = None
+                    final_masked = 0
+            else:
+                final_vis_prompt = initial_visible_prompt
+                final_masked = prompt_masked_init
+
             cur = tx.execute(
-                "UPDATE studio_generations SET prompt = COALESCE(?, prompt), prompt_ready = 1 WHERE id = ? AND prompt_ready = 0",
-                (skill_prompt_text, gen_id),
+                """
+                UPDATE studio_generations
+                SET prompt = COALESCE(?, prompt),
+                    visible_prompt = ?,
+                    prompt_masked = ?,
+                    system_append_json = ?,
+                    prompt_ready = 1
+                WHERE id = ? AND prompt_ready = 0
+                """,
+                (
+                    skill_prompt_text,
+                    final_vis_prompt,
+                    final_masked,
+                    json.dumps({"systemAppend": system_append_list, "promptTrimmed": bool(prompt_trimmed)}, ensure_ascii=False),
+                    gen_id,
+                ),
             )
             if cur.rowcount == 0:
                 logger.warning("Transaction B: generation %s was not in prompt_ready=0 state (rowcount=0)", gen_id)
@@ -3367,7 +4282,6 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
     result.update({
         "credits": cur_balance,
         "freeQuotaRemaining": free_remaining,
-        "finalPrompt": current_row["prompt"] or "",
     })
     if recipe_id:
         result["recipeId"] = recipe_id
