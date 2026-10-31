@@ -404,6 +404,14 @@ CREATE INDEX IF NOT EXISTS idx_studio_import_jobs_user ON studio_import_jobs(use
 CREATE INDEX IF NOT EXISTS idx_studio_import_jobs_status ON studio_import_jobs(status);
 """
 
+GENERATION_VISIBLE_PROMPT_AND_SNAPSHOT_SQL = """
+ALTER TABLE studio_generations ADD COLUMN visible_prompt TEXT DEFAULT NULL;
+ALTER TABLE studio_generations ADD COLUMN prompt_masked INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE studio_generations ADD COLUMN system_append_json TEXT DEFAULT NULL;
+ALTER TABLE works ADD COLUMN prompt_has_secret INTEGER DEFAULT NULL;
+ALTER TABLE forum_topics ADD COLUMN recipe_has_secret INTEGER DEFAULT NULL;
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -422,4 +430,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (60, "060_studio_recipes", STUDIO_RECIPES_SQL),
     (61, "061_recipe_and_subject_columns", RECIPE_AND_SUBJECT_COLUMNS_SQL),
     (62, "062_studio_import_jobs", STUDIO_IMPORT_JOBS_SQL),
+    (63, "063_generation_visible_prompt_and_snapshot", GENERATION_VISIBLE_PROMPT_AND_SNAPSHOT_SQL),
 ]

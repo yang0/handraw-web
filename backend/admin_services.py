@@ -745,41 +745,49 @@ def admin_list_works(
         ).fetchall()
     }
 
+    is_admin = bool(user and user.get("role") == "admin")
     items = []
     for w in conn.execute(sql, params).fetchall():
         images = json.loads(w["images_json"] or "[]")
         styles = json.loads(w["styles_json"] or "[]")
-        items.append(
-            {
-                "id": w["id"],
-                "title": w["title"],
-                "authorUsername": w["author_username"],
-                "authorName": w["author_name"],
-                "images": images,
-                "image": images[0] if images else "",
-                "styles": styles,
-                "layout": w["layout_code"],
-                "color": w["color_code"],
-                "tone": w["tone_code"],
-                "ratio": w["ratio"],
-                "mode": w["mode"],
-                "mood": w["mood"],
-                "price": int(w["price"] or 0),
-                "prompt": w["prompt"],
-                "notes": w["notes"],
-                "status": w["status"],
-                "featured": bool(w["featured"]),
-                "isNew": bool(w["is_new_release"]),
-                "pioneerRewarded": bool(w["pioneer_rewarded"]),
-                "cheers": int(w["cheers"] or 0),
-                "tips": int(w["tips"] or 0),
-                "views": int(w["views"] or 0),
-                "commentsCount": comment_counts.get(w["id"], 0),
-                "openReportsCount": report_counts.get(w["id"], 0),
-                "publishedAtMs": int(w["published_at_ms"] or 0),
-                "createdAt": format_relative_cn(int(w["published_at_ms"] or 0), w["created_label"]),
-            }
-        )
+        if is_admin:
+            work_prompt = w["prompt"]
+            work_masked = False
+        else:
+            from .services import get_work_client_prompt
+            work_prompt, work_masked = get_work_client_prompt(w, is_admin_route=False)
+        w_item = {
+            "id": w["id"],
+            "title": w["title"],
+            "authorUsername": w["author_username"],
+            "authorName": w["author_name"],
+            "images": images,
+            "image": images[0] if images else "",
+            "styles": styles,
+            "layout": w["layout_code"],
+            "color": w["color_code"],
+            "tone": w["tone_code"],
+            "ratio": w["ratio"],
+            "mode": w["mode"],
+            "mood": w["mood"],
+            "price": int(w["price"] or 0),
+            "prompt": work_prompt,
+            "notes": w["notes"],
+            "status": w["status"],
+            "featured": bool(w["featured"]),
+            "isNew": bool(w["is_new_release"]),
+            "pioneerRewarded": bool(w["pioneer_rewarded"]),
+            "cheers": int(w["cheers"] or 0),
+            "tips": int(w["tips"] or 0),
+            "views": int(w["views"] or 0),
+            "commentsCount": comment_counts.get(w["id"], 0),
+            "openReportsCount": report_counts.get(w["id"], 0),
+            "publishedAtMs": int(w["published_at_ms"] or 0),
+            "createdAt": format_relative_cn(int(w["published_at_ms"] or 0), w["created_label"]),
+        }
+        if work_masked:
+            w_item["promptMasked"] = True
+        items.append(w_item)
     return {"items": items, "total": len(items)}
 
 
@@ -887,13 +895,20 @@ def admin_moderate_work(
             # Keep the stored prompt byte-for-byte unless the admin actually
             # rewrote it: stripping would silently change the author's text.
             prompt = str(payload.get("prompt") if payload.get("prompt") is not None else w["prompt"])
+            subject = str(payload.get("subject") if payload.get("subject") is not None else (w["subject"] if "subject" in w.keys() else ""))
             notes = str(payload.get("notes") if payload.get("notes") is not None else w["notes"]).strip()
+            from .services import check_text_has_secret
+            try:
+                has_sec = check_text_has_secret(prompt, tx) or check_text_has_secret(subject, tx)
+                prompt_has_sec = 1 if has_sec else 0
+            except Exception:
+                prompt_has_sec = None
             tx.execute(
                 """
-                UPDATE works SET title = ?, price = ?, styles_json = ?, layout_code = ?, mood = ?, prompt = ?, notes = ?, updated_at = ?
+                UPDATE works SET title = ?, price = ?, styles_json = ?, layout_code = ?, mood = ?, prompt = ?, prompt_has_secret = ?, notes = ?, subject = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (title, price, json.dumps(styles, ensure_ascii=False), layout, mood, prompt, notes, now_iso, wid),
+                (title, price, json.dumps(styles, ensure_ascii=False), layout, mood, prompt, prompt_has_sec, notes, subject, now_iso, wid),
             )
         elif act == "delete":
             tx.execute("DELETE FROM work_comments WHERE work_id = ?", (wid,))
