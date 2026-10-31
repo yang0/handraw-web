@@ -1765,7 +1765,7 @@
             </div>
             <div class="hw-profile-kpi">
               <strong>${prof.totalForks}</strong>
-              <span>被一键复刻同款</span>
+              <span>被做同款</span>
             </div>
             <div class="hw-profile-kpi">
               <strong>${prof.topics.length}</strong>
@@ -2024,7 +2024,7 @@
                     <h3 class="hw-card-title" data-fav-open-work="${esc(w.id)}">${esc(w.title)}</h3>
                     <div class="hw-card-footer">
                       <button type="button" class="btn btn-sm" data-unfav="${esc(w.id)}">移除</button>
-                      <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", { fork: w.id }))}">复刻同款 ↗</a>
+                      <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", { fork: w.id }))}">做同款 ↗</a>
                     </div>
                   </div>
                 </article>

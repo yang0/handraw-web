@@ -2580,6 +2580,49 @@ img[data-hw-src].hw-img-failed {
   align-items: start;
 }
 
+.forum-thread-layout > aside,
+.forum-thread-layout .forum-thread-sidebar {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.forum-thread-layout .forum-side-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#topic-paired-resources-card,
+#topic-paired-resources-container {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#topic-paired-resources-container a {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#topic-paired-resources-container a div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#topic-related-works-container,
+#topic-related-works-container > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#topic-related-works-container a {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#topic-related-works-container a div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 980px) {
   .forum-thread-layout {
     grid-template-columns: 1fr;

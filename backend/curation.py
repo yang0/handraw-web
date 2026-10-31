@@ -994,6 +994,27 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
         published: dict[str, Any] = {"kind": kind, "code": target_id}
         ref_type = "asset"
         ref_id = target_id
+
+        norm_target = target_id.upper().lstrip("#")
+        mapped_asset = tx.execute(
+            "SELECT topic_id FROM curation_resource_topics WHERE kind = ? AND UPPER(target_id) = ?",
+            (kind, norm_target),
+        ).fetchone()
+        if not mapped_asset:
+            from .resource_discussions import ensure_topic
+            res_dict = {
+                "code": norm_target,
+                "kind": kind,
+                "name": payload.get("name") or ("社区共创画风" if kind == "style" else "社区共创图型"),
+                "image_url": image_url,
+                "description": payload.get("description") or "",
+                "definition": payload.get("definition") or "",
+                "source_type": "community",
+                "author_username": owner,
+                "author_name": display,
+                "status": "published",
+            }
+            ensure_topic(tx, kind, norm_target, res_dict, initial_origin="submission")
     else:
         images = payload.get("images") or []
         styles = payload.get("styles") or []
@@ -1068,6 +1089,22 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
         published = {"kind": "work", "workId": target_id}
         ref_type = "work"
         ref_id = target_id
+
+        mapped_work = tx.execute(
+            "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
+            (target_id,),
+        ).fetchone()
+        if not mapped_work:
+            from .resource_discussions import ensure_topic
+            res_work = {
+                "id": target_id,
+                "title": payload.get("title") or "社区作品",
+                "images_json": json.dumps(images, ensure_ascii=False),
+                "author_username": owner,
+                "author_name": display,
+                "status": "published",
+            }
+            ensure_topic(tx, "work", target_id, res_work, initial_origin="submission")
 
     # Traceable snapshot per revision (table optional; guarded).
     snap_exists = tx.execute(

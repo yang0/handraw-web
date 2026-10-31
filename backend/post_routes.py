@@ -109,15 +109,20 @@ def _resolve_ref_to_topic_id(conn: Any, ref: str, user: dict[str, Any] | None = 
     return None
 
 
-def _handle_t_redirect(handler: Any, ref: str) -> bool:
+def _handle_t_redirect(handler: Any, ref: str, qs: dict[str, list[str]] | None = None) -> bool:
     conn = handler.db.get_conn()
     user = handler._current_user(required=False)
     topic_id = _resolve_ref_to_topic_id(conn, ref, user)
     if not topic_id:
         handler.send_error(404, "Not found")
         return True
+    location = f"/forum/?view=topic&id={topic_id}"
+    if qs and qs.get("focus"):
+        focus_vals = qs.get("focus") or []
+        if focus_vals and focus_vals[0] == "comment":
+            location += "&focus=comment"
     handler.send_response(302)
-    handler.send_header("Location", f"/forum/?view=topic&id={topic_id}")
+    handler.send_header("Location", location)
     handler._cors_headers()
     handler.end_headers()
     return True
@@ -152,6 +157,41 @@ def _handle_by_ref(handler: Any, kind: str, target_id: str) -> bool:
 
     handler._send_json({"ok": True, "topicId": tid})
     return True
+
+
+def _get_asset_social_metrics(conn: Any, code: str) -> tuple[int, int]:
+    clean = (code or "").strip().upper().lstrip("#")
+    if not clean:
+        return 0, 0
+    if S.is_demo_mode():
+        seed_filter, seed_params = S._seed_filter("asset_code", "assets")
+        row = conn.execute(
+            f"SELECT base_likes, base_favorites FROM asset_social_seeds WHERE asset_code = ? AND {seed_filter}",
+            (clean, *seed_params),
+        ).fetchone()
+        if row:
+            base_likes = int(row["base_likes"])
+            base_favorites = int(row["base_favorites"])
+        else:
+            base_likes, base_favorites = 0, 0
+    else:
+        base_likes = 0
+        base_favorites = 0
+
+    live_filter, live_params = S._seed_filter("target_id", "assets")
+    like_row = conn.execute(
+        f"SELECT COUNT(*) AS cnt FROM interactions WHERE target_type IN ('like_style', 'like_layout') AND target_id = ? AND {live_filter}",
+        (clean, *live_params),
+    ).fetchone()
+    live_likes = int(like_row["cnt"]) if like_row else 0
+
+    fav_row = conn.execute(
+        f"SELECT COUNT(*) AS cnt FROM collections WHERE bucket IN ('styles', 'layouts') AND target_id = ? AND {live_filter}",
+        (clean, *live_params),
+    ).fetchone()
+    live_favorites = int(fav_row["cnt"]) if fav_row else 0
+
+    return max(0, base_likes + live_likes), max(0, base_favorites + live_favorites)
 
 
 def _handle_detail(handler: Any, topic_id: str) -> bool:
@@ -210,6 +250,7 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
         else:
             asset_res = forum_resources._static_resource(raw, m_kind)
 
+        res_likes, res_favorites = _get_asset_social_metrics(conn, code)
         mount = {
             "kind": m_kind,
             "resource": {
@@ -221,8 +262,12 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
                 "unlocked": bool(asset_res.get("unlocked")),
                 "unlockCost": int(asset_res.get("unlockCost") or 0),
                 "useUrl": f"/studio/?{m_kind}={code}",
+                "likes": res_likes,
+                "favorites": res_favorites,
             },
         }
+        topic_dict["likes"] = res_likes
+        topic_dict["favorites"] = res_favorites
     else:
         mount = {"kind": "discussion"}
 
@@ -410,7 +455,7 @@ def handle_get(handler: Any, path: str, qs: dict[str, list[str]]) -> bool:
         return True
     if path.startswith("/t/"):
         ref = path[3:].strip()
-        return _handle_t_redirect(handler, ref)
+        return _handle_t_redirect(handler, ref, qs)
 
     # 2. /api/posts/...
     if not path.startswith("/api/posts/"):

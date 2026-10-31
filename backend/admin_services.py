@@ -1412,6 +1412,28 @@ def admin_upsert_catalog_asset(
             )
             action_key = "catalog.create"
 
+        if status == "published":
+            norm_code = code.strip().upper().lstrip("#")
+            mapped = tx.execute(
+                "SELECT topic_id FROM curation_resource_topics WHERE kind = ? AND UPPER(target_id) = ?",
+                (kind, norm_code),
+            ).fetchone()
+            if not mapped:
+                from .resource_discussions import ensure_topic
+                res_dict = {
+                    "code": norm_code,
+                    "kind": kind,
+                    "name": name,
+                    "image_url": image_url,
+                    "description": description,
+                    "definition": definition,
+                    "source_type": source_type,
+                    "author_username": author_uname,
+                    "author_name": author_name,
+                    "status": status,
+                }
+                ensure_topic(tx, kind, norm_code, res_dict, initial_origin="submission")
+
         secret_hash = hashlib.sha256(secret_blackbox.encode("utf-8")).hexdigest()[:12] if secret_blackbox else ""
         record_audit_log(
             tx,

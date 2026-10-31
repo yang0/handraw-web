@@ -521,6 +521,173 @@ class PostRoutesHTTPTests(unittest.TestCase):
         code, _ = self._request_raw_redirect("/t/topic_201")
         self.assertEqual(code, 404)
 
+    def test_r1_catalog_assets_and_admin_save_ensure_topic(self):
+        """R1: catalog_assets (exclusive & community) mapped by ensure_resource_topics;
+        admin_upsert_catalog_asset automatically creates topic mapping in same transaction;
+        repeat run of ensure_resource_topics is idempotent."""
+        conn = self.db.get_conn()
+        now = "2026-10-31T06:00:00Z"
+
+        # 1. Insert published exclusive and community assets
+        conn.execute(
+            """INSERT OR REPLACE INTO catalog_assets (code, kind, name, status, source_type, author_username, image_url, published_at_ms, created_at, updated_at)
+               VALUES ('FX-001', 'style', '独家画风FX', 'published', 'exclusive', 'official', '/fx.png', 1700000000000, ?, ?)""",
+            (now, now)
+        )
+        conn.execute(
+            """INSERT OR REPLACE INTO catalog_assets (code, kind, name, status, source_type, author_username, image_url, published_at_ms, created_at, updated_at)
+               VALUES ('USR-L02', 'layout', '社区图型L02', 'published', 'community', 'pr_author', '/l02.png', 1700000000000, ?, ?)""",
+            (now, now)
+        )
+        conn.commit()
+
+        # Run ensure_resource_topics --apply
+        ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+
+        with patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "1"}):
+            # Check by-ref and /t/ for FX-001
+            status, data = self._request("GET", "/api/posts/by-ref/style/FX-001")
+            self.assertEqual(status, 200, f"Expected 200 for FX-001 by-ref, got {status}: {data}")
+            self.assertTrue(data.get("ok"))
+            fx_topic_id = data["topicId"]
+
+            code, loc = self._request_raw_redirect("/t/FX-001")
+            self.assertEqual(code, 302)
+            self.assertEqual(loc, f"/forum/?view=topic&id={fx_topic_id}")
+
+            # Check by-ref and /t/ for USR-L02
+            status, data = self._request("GET", "/api/posts/by-ref/layout/USR-L02")
+            self.assertEqual(status, 200, f"Expected 200 for USR-L02 by-ref, got {status}: {data}")
+            self.assertTrue(data.get("ok"))
+            usr_topic_id = data["topicId"]
+
+            code, loc = self._request_raw_redirect("/t/USR-L02")
+            self.assertEqual(code, 302)
+            self.assertEqual(loc, f"/forum/?view=topic&id={usr_topic_id}")
+
+            # 2. Check admin_upsert_catalog_asset auto-creation in same transaction
+            from backend.admin_services import admin_upsert_catalog_asset
+            admin_user = dict(conn.execute("SELECT * FROM users WHERE username = 'pr_admin'").fetchone())
+            res = admin_upsert_catalog_asset(
+                self.db,
+                admin_user,
+                {
+                    "kind": "style",
+                    "name": "后台直接发布的独家画风",
+                    "status": "published",
+                    "sourceType": "exclusive",
+                }
+            )
+            new_code = res["code"]
+            # Immediately accessible via by-ref without needing to run ensure_resource_topics
+            status, data = self._request("GET", f"/api/posts/by-ref/style/{new_code}")
+            self.assertEqual(status, 200, f"admin_upsert_catalog_asset should have ensured topic: {data}")
+            self.assertTrue(data.get("ok"))
+
+            # 3. Repeat run idempotency
+            count_before = conn.execute("SELECT count(*) as cnt FROM curation_resource_topics").fetchone()["cnt"]
+            ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+            count_after = conn.execute("SELECT count(*) as cnt FROM curation_resource_topics").fetchone()["cnt"]
+            self.assertEqual(count_before, count_after, "Repeat run must not create duplicate topics")
+
+    def test_r8_focus_comment_redirect(self):
+        """R8: /t/{id}?focus=comment preserves focus query parameter on 302 redirect, and discards unwhitelisted query params."""
+        # 1. Whitelisted focus=comment is preserved
+        code, loc = self._request_raw_redirect("/t/FB-041?focus=comment")
+        self.assertEqual(code, 302)
+        self.assertEqual(loc, f"/forum/?view=topic&id={self.fb041_topic_id}&focus=comment")
+
+        # 2. Unwhitelisted parameters are dropped
+        code, loc2 = self._request_raw_redirect("/t/FB-041?focus=comment&hack=1&random=param")
+        self.assertEqual(code, 302)
+        self.assertEqual(loc2, f"/forum/?view=topic&id={self.fb041_topic_id}&focus=comment")
+
+    def test_u1_resource_post_counters_match_boot_and_increment(self):
+        """U1/W1: GET /api/posts/{id} returns resource likes and favorites matching boot payload per shared.js rules across demo on/off, with/without seed, case differences, and verifies delta=1 on like."""
+        conn = self.db.get_conn()
+
+        def calc_shared_counts(boot_payload: dict, code: str) -> tuple[int, int]:
+            clean = (code or "").strip().upper().lstrip("#")
+            seed = (boot_payload.get("assetSeedMetrics") or {}).get(clean) or {}
+            base_l = int(seed.get("likes") or 0)
+            base_f = int(seed.get("favorites") or 0)
+            live_l = int((boot_payload.get("assetLiveLikes") or {}).get(clean) or 0)
+            live_f = int((boot_payload.get("assetLiveFavorites") or {}).get(clean) or 0)
+            return max(0, base_l + live_l), max(0, base_f + live_f)
+
+        fb_tid = self.fb041_topic_id
+        sc_row = conn.execute("SELECT topic_id FROM curation_resource_topics WHERE kind = 'layout' AND target_id = 'SC-021'").fetchone()
+        self.assertIsNotNone(sc_row, "SC-021 should have an ensured topic")
+        sc_tid = str(sc_row["topic_id"])
+
+        # Setup test data:
+        # FB-041: ensure seed exists in asset_social_seeds
+        conn.execute("INSERT OR REPLACE INTO asset_social_seeds (asset_code, base_likes, base_favorites) VALUES ('FB-041', 5, 2)")
+        # SC-021: ensure NO seed exists in asset_social_seeds
+        conn.execute("DELETE FROM asset_social_seeds WHERE asset_code = 'SC-021'")
+        # Insert lowercase target_id interaction & collection records for FB-041 (must NOT be counted)
+        conn.execute("DELETE FROM interactions WHERE target_id IN ('FB-041', 'fb-041')")
+        conn.execute("DELETE FROM collections WHERE target_id IN ('FB-041', 'fb-041')")
+        conn.execute(
+            "INSERT INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, 'like_style', 'fb-041', '', '2026-01-01T00:00:00Z')",
+            (self.author["id"],),
+        )
+        conn.execute(
+            "INSERT INTO collections (user_id, bucket, target_id, created_at) VALUES (?, 'styles', 'fb-041', '2026-01-01T00:00:00Z')",
+            (self.author["id"],),
+        )
+        # Insert uppercase live interaction for FB-041
+        conn.execute(
+            "INSERT INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, 'like_style', 'FB-041', '', '2026-01-01T00:00:00Z')",
+            (self.buyer["id"],),
+        )
+        conn.commit()
+
+        try:
+            for demo_flag in ["1", "0"]:
+                with patch.dict(os.environ, {"HANDRAW_DEMO_MODE": demo_flag}):
+                    boot = services.build_boot_payload(self.db, None)
+
+                    # 1. FB-041 (seed exists in demo; 1 uppercase live like; lowercase ignored)
+                    exp_fb_likes, exp_fb_favs = calc_shared_counts(boot, "FB-041")
+                    status_fb, data_fb = self._request("GET", f"/api/posts/{fb_tid}")
+                    self.assertEqual(status_fb, 200)
+                    mount_fb = data_fb.get("mount", {}).get("resource", {})
+                    self.assertEqual(mount_fb.get("likes"), exp_fb_likes)
+                    self.assertEqual(mount_fb.get("favorites"), exp_fb_favs)
+                    self.assertEqual(data_fb.get("topic", {}).get("likes"), exp_fb_likes)
+                    self.assertEqual(data_fb.get("topic", {}).get("favorites"), exp_fb_favs)
+
+                    # 2. SC-021 (no seed; baseline is 0)
+                    exp_sc_likes, exp_sc_favs = calc_shared_counts(boot, "SC-021")
+                    status_sc, data_sc = self._request("GET", f"/api/posts/{sc_tid}")
+                    self.assertEqual(status_sc, 200)
+                    mount_sc = data_sc.get("mount", {}).get("resource", {})
+                    self.assertEqual(mount_sc.get("likes"), exp_sc_likes)
+                    self.assertEqual(mount_sc.get("favorites"), exp_sc_favs)
+                    self.assertEqual(data_sc.get("topic", {}).get("likes"), exp_sc_likes)
+                    self.assertEqual(data_sc.get("topic", {}).get("favorites"), exp_sc_favs)
+
+            # 3. Verify detail count difference before and after like is exactly 1
+            with patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "1"}):
+                _, before_data = self._request("GET", f"/api/posts/{fb_tid}")
+                likes_before = before_data["mount"]["resource"]["likes"]
+
+                u_liker, _ = register_user(self.db, f"u1_liker_{int(time.time() * 1000)}", "pass-u1")
+                services.toggle_user_like(self.db, u_liker, "style", "FB-041")
+
+                _, after_data = self._request("GET", f"/api/posts/{fb_tid}")
+                likes_after = after_data["mount"]["resource"]["likes"]
+                self.assertEqual(likes_after - likes_before, 1, "Detail likes count delta must be exactly 1 after liking")
+
+                boot_after = services.build_boot_payload(self.db, None)
+                exp_after_likes, _ = calc_shared_counts(boot_after, "FB-041")
+                self.assertEqual(likes_after, exp_after_likes, "Detail likes after liking must match boot per shared.js rules")
+        finally:
+            conn.execute("DELETE FROM interactions WHERE target_id IN ('FB-041', 'fb-041')")
+            conn.execute("DELETE FROM collections WHERE target_id IN ('FB-041', 'fb-041')")
+            conn.commit()
+
 
 if __name__ == "__main__":
     unittest.main()
