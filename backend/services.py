@@ -690,13 +690,20 @@ def _serialize_work(
     is_unlocked = price <= 0 or (wid in unlocked_set) or is_author or is_staff
 
     full_prompt = row["prompt"] or ""
+    try:
+        raw_subject = str(row["subject"] or "")
+    except (KeyError, IndexError):
+        raw_subject = ""
+
     if is_unlocked:
         safe_prompt = full_prompt
+        safe_subject = raw_subject
     else:
         # No preview.  A 34-character teaser leaks the opening of a paid recipe,
         # and paid works now go live instantly (D-02), so the exposure window is
         # no longer limited by review.
         safe_prompt = ""
+        safe_subject = ""
 
     try:
         stamps = json.loads(row["stamp_counts_json"] or "{}")
@@ -731,6 +738,7 @@ def _serialize_work(
         "views": int(row["views"]),
         "stampCounts": stamps,
         "prompt": safe_prompt,
+        "subject": safe_subject,
         "promptMasked": not is_unlocked,
         "reproducible": bool(str(row["prompt"] or "").strip()),
         "notes": row["notes"] or "",

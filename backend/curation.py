@@ -182,6 +182,10 @@ def _normalise_item(kind: str, item: dict[str, Any]) -> dict[str, Any]:
         raise ServiceError("作品标题不能为空", status=400, code="missing_title")
     if not prompt:
         raise ServiceError("作品提示词不能为空", status=400, code="missing_prompt")
+    raw_subject = item.get("subject")
+    if raw_subject is not None and len(str(raw_subject)) > 2000:
+        raise ServiceError("主题内容过长（最多2000字）", status=400, code="subject_too_long")
+    subject = _s(raw_subject, 2000)
     images = _clean_images(item.get("images") or item.get("image"))
     if not images:
         raise ServiceError("作品需上传至少一张真实图", status=400, code="missing_image")
@@ -205,6 +209,7 @@ def _normalise_item(kind: str, item: dict[str, Any]) -> dict[str, Any]:
         "kind": "work",
         "title": title,
         "prompt": prompt,
+        "subject": subject,
         "images": images,
         "styles": styles,
         "layout": _s(item.get("layout"), 40).upper().lstrip("#"),
@@ -1018,6 +1023,11 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
     else:
         images = payload.get("images") or []
         styles = payload.get("styles") or []
+        raw_sub = payload.get("subject")
+        if raw_sub is not None and len(str(raw_sub)) > 2000:
+            sub_subject = str(raw_sub)[:2000]
+        else:
+            sub_subject = _s(raw_sub, 2000)
         existing_work = tx.execute(
             "SELECT id FROM works WHERE id = ?",
             (target_id,),
@@ -1027,10 +1037,10 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                 """
                 INSERT INTO works (
                     id, author_username, author_name, title, images_json, styles_json,
-                    layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, notes,
+                    layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, notes, subject,
                     status, featured, is_new_release, pioneer_rewarded, cheers, likes, favorites, forks,
                     published_at_ms, created_label, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0, ?, '刚刚', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0, ?, '刚刚', ?, ?)
                 """,
                 (
                     target_id,
@@ -1048,6 +1058,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     int(payload.get("price") or 0),
                     payload.get("prompt") or "",
                     payload.get("notes") or "",
+                    sub_subject,
                     now_ms,
                     now_iso,
                     now_iso,
@@ -1059,7 +1070,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                 UPDATE works SET
                     author_username = ?, author_name = ?, title = ?, images_json = ?, styles_json = ?,
                     layout_code = ?, color_code = ?, tone_code = ?, ratio = ?, mode = ?, mood = ?,
-                    price = ?, prompt = ?, notes = ?, status = 'published', updated_at = ?
+                    price = ?, prompt = ?, notes = ?, subject = ?, status = 'published', updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -1077,6 +1088,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     int(payload.get("price") or 0),
                     payload.get("prompt") or "",
                     payload.get("notes") or "",
+                    sub_subject,
                     now_iso,
                     target_id,
                 ),

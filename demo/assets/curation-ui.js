@@ -55,7 +55,7 @@
     if (!payload) return [];
     if (Array.isArray(payload.items) && payload.items.length) return payload.items.slice();
     var one = {};
-    ["kind", "name", "title", "description", "notes", "definition", "prompt", "images", "styles", "layout", "ratio", "price", "unlockCost", "color", "tone", "mode", "mood"].forEach(function (k) {
+    ["kind", "name", "title", "subject", "description", "notes", "definition", "prompt", "images", "styles", "layout", "ratio", "price", "unlockCost", "color", "tone", "mode", "mood"].forEach(function (k) {
       if (payload[k] != null) one[k] = payload[k];
     });
     if (one.kind) one.images = Array.isArray(one.images) ? one.images.slice() : (one.images ? [one.images] : []);
@@ -263,6 +263,7 @@
         if (kind === "work") {
           item.description = it.description || "";
           item.prompt = it.prompt || "";
+          if (it.subject) item.subject = it.subject;
           item.ratio = it.ratio || "3:4";
           if (it.styles && it.styles[0]) item.styles = [it.styles[0]];
           if (it.layout) item.layout = it.layout;
@@ -293,6 +294,7 @@
           ratio: work.ratio || "3:4",
           requestId: model.requestId
         };
+        if (work.subject) body.subject = work.subject;
       } else {
         url = "/api/curation/submissions";
       }

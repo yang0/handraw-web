@@ -3198,6 +3198,7 @@
     const kind = ["style", "layout", "work"].includes(prefill.kind) ? prefill.kind : "work";
     try {
       const payload = Object.assign({}, prefill, {kind, styles: prefill.styles || (prefill.style1 ? [prefill.style1] : [])});
+      if (prefill.subject != null) payload.subject = String(prefill.subject);
       const saved = await apiJson("/api/curation/drafts", {method:"POST", body:{payload}});
       if (App.state.user.username !== user) return;
       window.location.href = channelUrl("forum", {view:"curation", tab:"share",kind,draft:saved.id});
