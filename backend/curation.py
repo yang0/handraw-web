@@ -1506,6 +1506,22 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
         ).fetchone():
             forked_from = ""
 
+        # Resolve subject (optional <= 2000 chars, or from recipeId)
+        raw_subject = body.get("subject")
+        if raw_subject is not None and len(str(raw_subject)) > 2000:
+            raise ServiceError("主题内容过长（最多2000字）", status=400, code="subject_too_long")
+        subject = _s(raw_subject, 2000)
+        recipe_id = str(body.get("recipeId") or "").strip()
+        if recipe_id:
+            r_row = tx.execute(
+                "SELECT subject FROM studio_recipes WHERE id = ? AND user_id = ?",
+                (recipe_id, uid),
+            ).fetchone()
+            if not r_row:
+                raise ServiceError("配方不存在或无权访问", status=404, code="recipe_not_found")
+            if not subject:
+                subject = _s(r_row["subject"], 2000)
+
         work_id = str(uuid.uuid4())
         tx.execute(
             """
@@ -1513,9 +1529,10 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
                 id, author_username, author_name, title, images_json, styles_json,
                 layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, notes,
                 status, featured, is_new_release, pioneer_rewarded, cheers, likes, favorites, forks,
-                published_at_ms, created_label, created_at, updated_at, origin, request_id, forked_from_id
+                published_at_ms, created_label, created_at, updated_at, origin, request_id, forked_from_id,
+                subject
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0,
-                      ?, '刚刚', ?, ?, ?, ?, ?)
+                      ?, '刚刚', ?, ?, ?, ?, ?, ?)
             """,
             (
                 work_id,
@@ -1539,6 +1556,7 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
                 str(body.get("origin") or "web"),
                 request_id,
                 forked_from,
+                subject,
             ),
         )
 
