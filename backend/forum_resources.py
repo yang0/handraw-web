@@ -236,6 +236,7 @@ def _work_resource(row: dict[str, Any], unlocked: set[str], user) -> dict[str, A
         "sourceType": "community", "tier": "paid" if price > 0 else "free",
         "price": price, "unlockCost": price,
         "unlocked": is_unlocked, "canUse": is_unlocked, "reproducible": bool(str(row["prompt"] or "").strip()),
+        "promptMasked": bool(ser.get("promptMasked")),
         "status": row["status"], "publishedAtMs": int(row["published_at_ms"] or 0),
         "styles": ser["styles"], "layout": ser["layout"],
         **{key:ser[key] for key in ('ratio','mode','color','tone','mood','sc021Type','shootType') if key in ser},
