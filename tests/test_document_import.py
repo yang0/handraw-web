@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import re
 import sqlite3
 import tempfile
@@ -183,6 +184,10 @@ class DocumentStructureTests(unittest.TestCase):
 class DocumentImportWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.uploads_dir = Path(self.temp_dir.name) / "uploads"
+        self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        self.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(self.uploads_dir)})
+        self.env_patch.start()
         self.db_path = Path(self.temp_dir.name) / "test.db"
         self.db = Database(self.db_path)
         self.db.migrate()
@@ -190,6 +195,12 @@ class DocumentImportWorkflowTests(unittest.TestCase):
         self.user, self.token = register_user(self.db, "import_tester", "password123")
 
     def tearDown(self):
+        self.env_patch.stop()
+        from backend.document_importer import _IMPORT_MANAGERS, _IMPORT_MANAGERS_LOCK
+        with _IMPORT_MANAGERS_LOCK:
+            mgr = _IMPORT_MANAGERS.pop(str(self.db_path), None)
+            if mgr:
+                mgr.stop()
         self.db.close()
         self.temp_dir.cleanup()
 
@@ -414,11 +425,11 @@ class DocumentImportWorkflowTests(unittest.TestCase):
         self.assertEqual(row["error"], "处理超时")
 
         # 2. Worker attempting to complete a timed-out job cannot overwrite 'failed'
-        uploads_dir = Path(tempfile.gettempdir()) / f"uploads_{int(time.time()*1000)}"
+        uploads_dir = Path(self.temp_dir.name) / f"uploads_{uuid.uuid4().hex}"
         uploads_dir.mkdir(parents=True, exist_ok=True)
         img_file = uploads_dir / "discarded.png"
         img_file.write_bytes(b"\x89PNG\r\n\x1a\nfake")
-        img_url = "/uploads/discarded.png"
+        img_url = f"/uploads/{uuid.uuid4().hex}_discarded.png"
         with self.db.transaction() as tx:
             tx.execute(
                 """
@@ -816,6 +827,10 @@ class ImportHttpApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp_dir = tempfile.TemporaryDirectory()
+        cls.uploads_dir = Path(cls.temp_dir.name) / "uploads"
+        cls.uploads_dir.mkdir(parents=True, exist_ok=True)
+        cls.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(cls.uploads_dir)})
+        cls.env_patch.start()
         cls.db_path = Path(cls.temp_dir.name) / "http_test.db"
         cls.db = init_database(cls.db_path)
         from backend.services import register_user
@@ -833,6 +848,7 @@ class ImportHttpApiTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join(timeout=3)
         cls.db.close()
+        cls.env_patch.stop()
         cls.temp_dir.cleanup()
 
     def _request(self, method: str, path: str, body: dict | None = None, cookie: str = "") -> tuple[int, dict]:
@@ -974,6 +990,15 @@ class ImportHttpApiTests(unittest.TestCase):
 
         barrier = threading.Barrier(2)
         results: list[tuple[int, dict]] = []
+        results_lock = threading.Lock()
+
+        pause_worker = threading.Event()
+        orig_process = ImportManager._process_job
+
+        def held_process_job(mgr_self, job_id, uid, file_name, file_bytes):
+            if uid == user_c["id"]:
+                pause_worker.wait(timeout=15.0)
+            return orig_process(mgr_self, job_id, uid, file_name, file_bytes)
 
         def worker_post():
             barrier.wait()
@@ -983,14 +1008,19 @@ class ImportHttpApiTests(unittest.TestCase):
                 {"fileName": "race.txt", "text": "concurrency test payload"},
                 cookie=cookie_c,
             )
-            results.append((status, resp))
+            with results_lock:
+                results.append((status, resp))
 
-        t1 = threading.Thread(target=worker_post)
-        t2 = threading.Thread(target=worker_post)
-        t1.start()
-        t2.start()
-        t1.join(timeout=5)
-        t2.join(timeout=5)
+        try:
+            with patch.object(ImportManager, "_process_job", new=held_process_job):
+                t1 = threading.Thread(target=worker_post)
+                t2 = threading.Thread(target=worker_post)
+                t1.start()
+                t2.start()
+                t1.join(timeout=15)
+                t2.join(timeout=15)
+        finally:
+            pause_worker.set()
 
         statuses = sorted([r[0] for r in results])
         self.assertEqual(statuses, [200, 429])
