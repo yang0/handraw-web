@@ -1801,6 +1801,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(get_studio_workspace(self.db, user))
             return
 
+        if req_path.startswith("/api/studio/recipes"):
+            from .recipe_routes import handle_recipe_get
+            if handle_recipe_get(self, req_path, qs):
+                return
+
         m_import = re.match(r"^/api/studio/imports/([^/]+)$", req_path)
         if m_import:
             user = self._current_user(required=True)
@@ -2157,6 +2162,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         try:
             self._enforce_token_scope()
             self._handle_post()
+        except ServiceError as se:
+            self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
+        except Exception as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=500)
+
+    def do_PUT(self) -> None:
+        try:
+            self._enforce_token_scope()
+            self._enforce_write_origin()
+            parsed = urlparse(self.path)
+            req_path = unquote(parsed.path)
+            if req_path.startswith("/api/studio/recipes"):
+                from .recipe_routes import handle_recipe_put
+                body = self._read_json_body()
+                if handle_recipe_put(self, req_path, body):
+                    return
+            self._send_json({"ok": False, "error": "Not Found"}, status=404)
         except ServiceError as se:
             self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
         except Exception as exc:
@@ -2623,6 +2645,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "importId": job_id})
             return
 
+        if req_path.startswith("/api/studio/recipes"):
+            from .recipe_routes import handle_recipe_post
+            if handle_recipe_post(self, req_path, body):
+                return
+
         if req_path == "/api/studio/history":
             user = self._current_user(required=True)
             self._send_json(record_user_studio_history(self.db, user, body))  # type: ignore[arg-type]
@@ -2665,6 +2692,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                         "credits": prep.get("credits") or 0,
                         "freeQuotaRemaining": prep.get("freeQuotaRemaining") or 0,
                     }
+                    if "systemAppend" in prep:
+                        response["systemAppend"] = prep["systemAppend"]
+                    if prep.get("recipeId"):
+                        response["recipeId"] = prep["recipeId"]
+                    if prep.get("promptTrimmed"):
+                        response["promptTrimmed"] = True
                     self._send_json(response, status=202 if response["status"] in ("queued", "running") else 200)
                     return
                 if simulation == "fail":
@@ -2672,21 +2705,26 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 if simulation == "ok":
                     fake_tid = f"sim_{uuid.uuid4().hex[:10]}"
                     complete_cloud_generation(self.db, gen_id, fake_tid, ["/images/poster-demo-autumn-equinox.webp"])
-                    self._send_json(
-                        {
-                            "ok": True,
-                            "genId": gen_id,
-                            "requestId": prep.get("requestId") or "",
-                            "idempotent": bool(prep.get("idempotent")),
-                            "taskId": fake_tid,
-                            "status": "success",
-                            "images": ["/images/poster-demo-autumn-equinox.webp"],
-                            "costType": prep["costType"],
-                            "creditsSpent": prep["creditsSpent"],
-                            "credits": prep["credits"],
-                            "freeQuotaRemaining": prep["freeQuotaRemaining"],
-                        }
-                    )
+                    sim_res = {
+                        "ok": True,
+                        "genId": gen_id,
+                        "requestId": prep.get("requestId") or "",
+                        "idempotent": bool(prep.get("idempotent")),
+                        "taskId": fake_tid,
+                        "status": "success",
+                        "images": ["/images/poster-demo-autumn-equinox.webp"],
+                        "costType": prep["costType"],
+                        "creditsSpent": prep["creditsSpent"],
+                        "credits": prep["credits"],
+                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
+                    }
+                    if "systemAppend" in prep:
+                        sim_res["systemAppend"] = prep["systemAppend"]
+                    if prep.get("recipeId"):
+                        sim_res["recipeId"] = prep["recipeId"]
+                    if prep.get("promptTrimmed"):
+                        sim_res["promptTrimmed"] = True
+                    self._send_json(sim_res)
                     return
 
                 ratio = str(body.get("ratio") or "3:4")
@@ -2727,20 +2765,25 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 gw_res = gateway_request(endpoint, payload=gw_payload, timeout=28)
                 actual_id = str(gw_res.get("id") or task_id)
                 complete_cloud_generation(self.db, gen_id, actual_id)
-                self._send_json(
-                    {
-                        "ok": True,
-                        "genId": gen_id,
-                        "requestId": prep.get("requestId") or "",
-                        "idempotent": bool(prep.get("idempotent")),
-                        "taskId": actual_id,
-                        "status": gw_res.get("status") or "queued",
-                        "costType": prep["costType"],
-                        "creditsSpent": prep["creditsSpent"],
-                        "credits": prep["credits"],
-                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
-                    }
-                )
+                gw_out = {
+                    "ok": True,
+                    "genId": gen_id,
+                    "requestId": prep.get("requestId") or "",
+                    "idempotent": bool(prep.get("idempotent")),
+                    "taskId": actual_id,
+                    "status": gw_res.get("status") or "queued",
+                    "costType": prep["costType"],
+                    "creditsSpent": prep["creditsSpent"],
+                    "credits": prep["credits"],
+                    "freeQuotaRemaining": prep["freeQuotaRemaining"],
+                }
+                if "systemAppend" in prep:
+                    gw_out["systemAppend"] = prep["systemAppend"]
+                if prep.get("recipeId"):
+                    gw_out["recipeId"] = prep["recipeId"]
+                if prep.get("promptTrimmed"):
+                    gw_out["promptTrimmed"] = True
+                self._send_json(gw_out)
             except urllib.error.HTTPError as he:
                 err_body = he.read().decode("utf-8", errors="ignore")
                 err_msg = f"网关返回 HTTP {he.code}: {err_body[:200]}"

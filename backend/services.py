@@ -3002,13 +3002,46 @@ def consume_daily_usage(db: Database, user_id: int | str, scope: str, limit: int
         return True
 
 
-def _compose_skill_prompt(style_code: str, layout_code: str, theme: str) -> str:
+def build_recipe_gateway_prompt(raw_prompt: str, injected_notes: list[str]) -> str:
+    """Combine base prompt and injected notes cleanly with double newlines."""
+    parts = [p.strip() for p in [raw_prompt] + list(injected_notes) if p and str(p).strip()]
+    return "\n\n".join(parts)
+
+
+def trim_composed_prompt(composed: str, max_budget: int) -> str:
+    """Trim composed prompt within max_budget, preferring sentence end or newline."""
+    if len(composed) <= max_budget:
+        return composed
+    candidate = composed[:max(0, max_budget)]
+    last_idx = -1
+    for i in range(len(candidate) - 1, -1, -1):
+        if candidate[i] in ("。", "！", "？", ".", "!", "?", "\n"):
+            last_idx = i + 1
+            break
+    if last_idx >= int(max_budget * 0.4):
+        return candidate[:last_idx].strip()
+    return candidate.strip()
+
+
+def _compose_skill_prompt(
+    style_code: str,
+    layout_code: str,
+    theme: str,
+    *,
+    style2_code: str = "",
+    colors: list[str] | None = None,
+    tones: list[str] | None = None,
+    moods: list[str] | None = None,
+    whitespace: str = "",
+    ratio: str = "",
+    mode: str = "",
+) -> str:
     """Build an image prompt through the hand-drawn style Skill.
 
     Returns ``""`` when the Skill is unavailable or cannot produce a prompt, so
     the caller can fall back to the plain prompt instead of failing the request.
     """
-    if not (style_code or layout_code):
+    if not (style_code or layout_code or style2_code):
         return ""
     try:
         from . import skill_prompt
@@ -3017,7 +3050,19 @@ def _compose_skill_prompt(style_code: str, layout_code: str, theme: str) -> str:
     try:
         if not skill_prompt.skill_available():
             return ""
-        composed = skill_prompt.compose_prompt(str(style_code or ""), str(layout_code or ""), "", str(theme or ""))
+        composed = skill_prompt.compose_prompt(
+            str(style_code or ""),
+            str(layout_code or ""),
+            "",
+            str(theme or ""),
+            style2_code=str(style2_code or ""),
+            colors=colors,
+            tones=tones,
+            moods=moods,
+            whitespace=str(whitespace or ""),
+            ratio=str(ratio or ""),
+            mode=str(mode or ""),
+        )
     except Exception:  # noqa: BLE001 - never fail a paid generation on this
         return ""
     return str(composed.get("prompt") or "").strip()
@@ -3038,6 +3083,49 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
     uid = int(user["id"])
     uname = user["username"]
     is_staff = user.get("role") in ("admin", "reviewer")
+
+    recipe_id = str(body.get("recipeId") or "").strip()
+    r_colors: list[str] = []
+    r_tones: list[str] = []
+    r_moods: list[str] = []
+    r_whitespace = ""
+    r_ratio = "3:4"
+    r_mode = "graphic-text"
+    if recipe_id:
+        r_row = db.get_conn().execute(
+            "SELECT * FROM studio_recipes WHERE id = ? AND user_id = ?",
+            (recipe_id, uid),
+        ).fetchone()
+        if not r_row:
+            raise ServiceError("配方不存在或无权访问", status=404, code="recipe_not_found")
+
+        body["recipeId"] = recipe_id
+        r_styles = json.loads(r_row["style_ids"] or "[]")
+        body["style1"] = r_styles[0] if len(r_styles) > 0 else ""
+        body["style2"] = r_styles[1] if len(r_styles) > 1 else ""
+        body["layout"] = r_row["layout_id"] or ""
+        body["ratio"] = r_row["ratio"] or "3:4"
+        body["mode"] = r_row["mode"] or "graphic-text"
+        r_refs = json.loads(r_row["references_json"] or "[]")
+        body["refImages"] = r_refs
+        body.pop("useCh001", None)
+        body.pop("customRefImg", None)
+
+        r_colors = json.loads(r_row["colors"] or "[]")
+        r_tones = json.loads(r_row["tones"] or "[]")
+        r_moods = json.loads(r_row["moods"] or "[]")
+        r_whitespace = str(r_row["whitespace"] or "")
+        r_ratio = str(r_row["ratio"] or "3:4")
+        r_mode = str(r_row["mode"] or "graphic-text")
+
+        r_prompt = str(r_row["prompt"] or "").strip()
+        if r_prompt:
+            body["prompt"] = r_prompt
+            body["promptFromSkill"] = True
+        else:
+            body["prompt"] = str(r_row["subject"] or "").strip()
+            body.pop("promptFromSkill", None)
+
     raw_prompt = str(body.get("prompt") or "").strip()
     style1 = str(body.get("style1") or "").strip().upper()
     style2 = str(body.get("style2") or "").strip().upper()
@@ -3067,7 +3155,21 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 (uid, request_id),
             ).fetchone()
             if existing:
-                return _cloud_generation_result(tx, existing, settings, idempotent=True)
+                res = _cloud_generation_result(tx, existing, settings, idempotent=True)
+                orig_recipe_id = str(existing["recipe_id"] or "").strip()
+                if orig_recipe_id:
+                    res["recipeId"] = orig_recipe_id
+                    codes = [c.strip().upper() for c in (existing["recipe_summary"] or "").split() if c.strip()]
+                    sys_append = []
+                    for code in codes:
+                        ca = tx.execute(
+                            "SELECT secret_blackbox_prompt FROM catalog_assets WHERE code = ? AND status = 'published'",
+                            (code,),
+                        ).fetchone()
+                        if ca and (ca["secret_blackbox_prompt"] or "").strip():
+                            sys_append.append({"type": "asset_instructions", "code": code})
+                    res["systemAppend"] = sys_append
+                return res
 
         max_inflight = max(0, int(gateway.get("max_inflight_per_user", 1)))
         if max_inflight:
@@ -3098,6 +3200,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 fork_target = ""
 
         # 1. Verify unlock status and fetch DB blackbox secrets.
+        system_append_list: list[dict[str, str]] = []
         for code in (style1, style2, layout):
             if not code:
                 continue
@@ -3120,6 +3223,13 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 # catalogue code: "【云端黑盒注入 FA-001】" leaked implementation
                 # vocabulary into the picture and read as noise.
                 injected_notes.append(secret)
+                system_append_list.append({"type": "asset_instructions", "code": code})
+
+        # Length check before charging (X6)
+        if recipe_id:
+            recipe_full_prompt = build_recipe_gateway_prompt(raw_prompt, injected_notes)
+            if len(recipe_full_prompt) > 4000:
+                raise ServiceError("提示词加上系统说明后超过 4000 字上限，请精简提示词", status=400, code="prompt_too_long")
 
         # 2. Enforce daily free quota -> automatic credit fallback.
         w = tx.execute("SELECT * FROM wallets WHERE user_id = ?", (uid,)).fetchone()
@@ -3149,12 +3259,15 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             free_remaining = 0
 
         # Initial prompt without skill (written in Transaction A)
-        cleaned = raw_prompt
-        if injected_notes:
-            cleaned += "\n\n" + "\n".join(injected_notes)
-        initial_prompt = cleaned if from_skill else (
-            f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
-        )
+        if recipe_id:
+            initial_prompt = build_recipe_gateway_prompt(raw_prompt, injected_notes)
+        else:
+            cleaned = raw_prompt
+            if injected_notes:
+                cleaned += "\n\n" + "\n".join(injected_notes)
+            initial_prompt = cleaned if from_skill else (
+                f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
+            )
 
         needs_compose = (not from_skill) and bool(style1 or style2 or layout)
         prompt_ready = 0 if needs_compose else 1
@@ -3165,8 +3278,8 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
                 prompt, markdown, items_json, engine, cost_type, credits_spent, task_id,
                 status, error_msg, request_id, reservation_date, created_at, fork_work_id,
-                prompt_ready
-            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?)
+                prompt_ready, recipe_id
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?)
             """,
             (
                 gen_id,
@@ -3174,7 +3287,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 uname,
                 str(body.get("ratio") or "3:4"),
                 f"{style1} {style2} {layout}".strip(),
-                initial_prompt[:4000],
+                initial_prompt if recipe_id else initial_prompt[:4000],
                 cost_type,
                 credits_spent,
                 request_id,
@@ -3182,6 +3295,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 now_iso,
                 fork_target,
                 prompt_ready,
+                recipe_id,
             ),
         )
         if cost_type == "free_quota":
@@ -3195,16 +3309,47 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             )
         inserted = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
 
+    prompt_trimmed = False
     # Outside transaction: model call for freshly inserted rows
     if needs_compose:
         composed = None
         try:
-            composed = _compose_skill_prompt(style1 or style2, layout, raw_prompt)
+            if recipe_id:
+                composed = _compose_skill_prompt(
+                    style1 or style2,
+                    layout,
+                    raw_prompt,
+                    style2_code=style2 if style1 else "",
+                    colors=r_colors,
+                    tones=r_tones,
+                    moods=r_moods,
+                    whitespace=r_whitespace,
+                    ratio=r_ratio,
+                    mode=r_mode,
+                )
+            else:
+                composed = _compose_skill_prompt(style1 or style2, layout, raw_prompt)
         except Exception:
             logger.exception("Failed to compose skill prompt for generation %s", gen_id)
             composed = None
 
-        skill_prompt_text = (composed + ("\n\n" + "\n".join(injected_notes) if injected_notes else ""))[:4000] if composed else None
+        if recipe_id:
+            if composed:
+                full_test = build_recipe_gateway_prompt(composed, injected_notes)
+                if len(full_test) > 4000:
+                    append_parts = [n.strip() for n in injected_notes if n and str(n).strip()]
+                    append_text = "\n\n".join(append_parts)
+                    separator_len = 2 if (append_text and composed) else 0
+                    max_budget = 4000 - separator_len - len(append_text)
+                    trimmed = trim_composed_prompt(composed, max_budget)
+                    skill_prompt_text = build_recipe_gateway_prompt(trimmed, injected_notes)
+                    prompt_trimmed = True
+                else:
+                    skill_prompt_text = full_test
+            else:
+                skill_prompt_text = None
+        else:
+            skill_prompt_text = (composed + ("\n\n" + "\n".join(injected_notes) if injected_notes else ""))[:4000] if composed else None
 
         with db.transaction() as tx:
             cur = tx.execute(
@@ -3224,6 +3369,11 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
         "freeQuotaRemaining": free_remaining,
         "finalPrompt": current_row["prompt"] or "",
     })
+    if recipe_id:
+        result["recipeId"] = recipe_id
+        result["systemAppend"] = system_append_list
+        if prompt_trimmed:
+            result["promptTrimmed"] = True
     return result
 
 

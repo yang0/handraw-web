@@ -109,9 +109,23 @@ def _layout_rules(code: str) -> str:
     return str(layout.get("name") or "")
 
 
-def build_facts(style_code: str, layout_code: str = "", colour: str = "", theme: str = "") -> dict:
+def build_facts(
+    style_code: str,
+    layout_code: str = "",
+    colour: str = "",
+    theme: str = "",
+    *,
+    style2_code: str = "",
+    colors: list[str] | None = None,
+    tones: list[str] | None = None,
+    moods: list[str] | None = None,
+    whitespace: str = "",
+    ratio: str = "",
+    mode: str = "",
+) -> dict:
     """Collect everything the Skill would consider before writing a prompt."""
     style = find_style(style_code) or {}
+    style2 = find_style(style2_code) or {} if style2_code else {}
     layout = find_layout(layout_code) or {}
     return {
         "theme": str(theme or "").strip(),
@@ -122,6 +136,13 @@ def build_facts(style_code: str, layout_code: str = "", colour: str = "", theme:
             "traits": style.get("traits") or "",
             "reference": style.get("reference") or "",
         },
+        "style2": {
+            "id": str(style2.get("number") or style2_code or ""),
+            "name": style2.get("generation_name") or "",
+            "group": style2.get("group") or "",
+            "traits": style2.get("traits") or "",
+            "reference": style2.get("reference") or "",
+        } if style2_code else {},
         "layout": {
             "id": layout.get("id") or layout_code,
             "name": layout.get("name") or "",
@@ -129,6 +150,12 @@ def build_facts(style_code: str, layout_code: str = "", colour: str = "", theme:
             "rules": _layout_rules(layout_code) if layout_code else "",
         },
         "colour": str(colour or ""),
+        "colors": [str(c).strip() for c in colors if str(c).strip()] if colors else [],
+        "tones": [str(t).strip() for t in tones if str(t).strip()] if tones else [],
+        "moods": [str(m).strip() for m in moods if str(m).strip()] if moods else [],
+        "whitespace": str(whitespace or "").strip(),
+        "ratio": str(ratio or "").strip(),
+        "mode": str(mode or "").strip(),
     }
 
 
@@ -169,8 +196,25 @@ def _template(facts: dict) -> str:
         parts.append(f"Hand-drawn illustration in the style '{style['name']}'")
     if style.get("traits"):
         parts.append(str(style["traits"]).strip())
+    style2 = facts.get("style2") or {}
+    if style2.get("name"):
+        parts.append(f"incorporating elements of '{style2['name']}'")
+    if style2.get("traits"):
+        parts.append(str(style2["traits"]).strip())
     if facts.get("colour"):
         parts.append(f"dominant colour: {facts['colour']}")
+    if facts.get("colors"):
+        parts.append(f"colour palette: {', '.join(facts['colors'])}")
+    if facts.get("tones"):
+        parts.append(f"tones: {', '.join(facts['tones'])}")
+    if facts.get("moods"):
+        parts.append(f"mood: {', '.join(facts['moods'])}")
+    if facts.get("whitespace"):
+        parts.append(f"negative space: {facts['whitespace']}")
+    if facts.get("ratio"):
+        parts.append(f"aspect ratio: {facts['ratio']}")
+    if facts.get("mode"):
+        parts.append(f"mode: {facts['mode']}")
     if facts.get("theme"):
         parts.append(f"Subject: {facts['theme']}")
     if layout.get("name_en") or layout.get("name"):
@@ -182,20 +226,45 @@ def _template(facts: dict) -> str:
     return ". ".join(p for p in parts if p)
 
 
-def compose_prompt(style_code: str, layout_code: str = "", colour: str = "", theme: str = "") -> dict:
+def compose_prompt(
+    style_code: str,
+    layout_code: str = "",
+    colour: str = "",
+    theme: str = "",
+    *,
+    style2_code: str = "",
+    colors: list[str] | None = None,
+    tones: list[str] | None = None,
+    moods: list[str] | None = None,
+    whitespace: str = "",
+    ratio: str = "",
+    mode: str = "",
+) -> dict:
     """Return ``{prompt, source, facts}`` for one image request.
 
     ``source`` is ``"model"`` when the text model wrote the prompt and
     ``"template"`` when the deterministic fallback was used, so callers can tell
     how much to trust the wording.
     """
-    facts = build_facts(style_code, layout_code, colour, theme)
+    facts = build_facts(
+        style_code,
+        layout_code,
+        colour,
+        theme,
+        style2_code=style2_code,
+        colors=colors,
+        tones=tones,
+        moods=moods,
+        whitespace=whitespace,
+        ratio=ratio,
+        mode=mode,
+    )
     if not facts["theme"]:
         return {"prompt": "", "source": "none", "facts": facts}
     # Without a resolved style or layout there is nothing for the Skill to
     # contribute; answering anyway produced a chat reply ("please provide more
     # information") that looked like a prompt.
-    if not facts["style"]["name"] and not facts["layout"]["name"]:
+    if not facts["style"]["name"] and not facts["layout"]["name"] and not (facts.get("style2") and facts["style2"].get("name")):
         return {"prompt": "", "source": "none", "facts": facts}
 
     user = (
@@ -208,6 +277,26 @@ def compose_prompt(style_code: str, layout_code: str = "", colour: str = "", the
         f"Colour: {facts['colour'] or 'not specified'}\n"
         f"Subject / theme (may be Chinese): {facts['theme']}\n"
     )
+    if facts.get("style2") and (facts["style2"].get("id") or facts["style2"].get("name")):
+        s2 = facts["style2"]
+        user += (
+            f"Secondary style id: {s2['id']}\n"
+            f"Secondary style name: {s2['name']}\n"
+            f"Secondary style traits: {s2['traits']}\n"
+        )
+    if facts.get("colors"):
+        user += f"Palette: {', '.join(facts['colors'])}\n"
+    if facts.get("tones"):
+        user += f"Tones: {', '.join(facts['tones'])}\n"
+    if facts.get("moods"):
+        user += f"Moods: {', '.join(facts['moods'])}\n"
+    if facts.get("whitespace"):
+        user += f"Whitespace: {facts['whitespace']}\n"
+    if facts.get("ratio"):
+        user += f"Aspect ratio: {facts['ratio']}\n"
+    if facts.get("mode"):
+        user += f"Mode: {facts['mode']}\n"
+
     text = _call_model(_SYSTEM, user)
     if text and _looks_like_prompt(text):
         return {"prompt": text, "source": "model", "facts": facts}

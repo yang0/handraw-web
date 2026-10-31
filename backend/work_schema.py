@@ -355,6 +355,38 @@ CREATE TABLE IF NOT EXISTS device_codes (
 CREATE INDEX IF NOT EXISTS idx_device_codes_status_expires ON device_codes(status, expires_at);
 """
 
+STUDIO_RECIPES_SQL = """
+CREATE TABLE IF NOT EXISTS studio_recipes (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'single',
+    style_ids TEXT NOT NULL DEFAULT '[]',
+    layout_id TEXT NOT NULL DEFAULT '',
+    colors TEXT NOT NULL DEFAULT '[]',
+    tones TEXT NOT NULL DEFAULT '[]',
+    moods TEXT NOT NULL DEFAULT '[]',
+    whitespace TEXT NOT NULL DEFAULT '',
+    ratio TEXT NOT NULL DEFAULT '3:4',
+    mode TEXT NOT NULL DEFAULT 'graphic-text',
+    subject TEXT NOT NULL DEFAULT '',
+    references_json TEXT NOT NULL DEFAULT '[]',
+    prompt TEXT NOT NULL DEFAULT '',
+    prompt_customized INTEGER NOT NULL DEFAULT 0,
+    prompt_stale INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 0,
+    input_fingerprint TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_studio_recipes_user_kind ON studio_recipes(user_id, kind, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_studio_recipes_user_created ON studio_recipes(user_id, created_at DESC);
+"""
+
+RECIPE_AND_SUBJECT_COLUMNS_SQL = """
+ALTER TABLE studio_generations ADD COLUMN recipe_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE works ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+"""
+
 STUDIO_IMPORT_JOBS_SQL = """
 CREATE TABLE IF NOT EXISTS studio_import_jobs (
     id TEXT PRIMARY KEY,
@@ -387,5 +419,7 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (51, "051_generation_prompt_ready", GENERATION_PROMPT_READY_SQL),
     (52, "052_api_tokens", API_TOKENS_SQL),
     (53, "053_device_codes", DEVICE_CODES_SQL),
+    (60, "060_studio_recipes", STUDIO_RECIPES_SQL),
+    (61, "061_recipe_and_subject_columns", RECIPE_AND_SUBJECT_COLUMNS_SQL),
     (62, "062_studio_import_jobs", STUDIO_IMPORT_JOBS_SQL),
 ]
