@@ -523,7 +523,7 @@
     const studioUrl = isWork
       ? channelUrl("studio", { fork: card.id })
       : channelUrl("studio", isLayout ? { layout: card.id } : { style: card.id });
-    const studioActionLabel = isWork ? "⚡ 创作台复刻 ↗" : "✨ 创作台使用 ↗";
+    const studioActionLabel = isWork ? "⚡ 做同款 ↗" : "✨ 创作台使用 ↗";
 
     return `
       <div class="smart-embed-card" style="margin:10px 0;">
@@ -1503,12 +1503,293 @@
     openTopicPage(topicId, activeImgIdx);
   }
 
-  function renderTopicDetailPage(root) {
-    const allTopics = App.state.topics || [];
-    const curIdx = allTopics.findIndex((t) => t.id === FUI.activeTopicId);
-    const topic = curIdx >= 0 ? allTopics[curIdx] : null;
+  let _activeTopicDetailGen = 0;
+  const _socialInFlight = new Set();
+  const _socialSeq = new Map();
+  if (typeof window !== "undefined") {
+    window._socialInFlight = _socialInFlight;
+    window._socialSeq = _socialSeq;
+  }
 
-    if (!topic) {
+  function _getTopicLikeState(topicData) {
+    if (!topicData) return { liked: false, count: 0 };
+    const topic = topicData.topic || {};
+    const mount = topicData.mount || { kind: "discussion" };
+    const viewer = topicData.viewer || {};
+    const liked = Boolean(viewer.liked);
+    let count = 0;
+    if (mount.kind === "work" && mount.work) {
+      count = Number(mount.work.likes != null ? mount.work.likes : topic.likes || 0);
+    } else if ((mount.kind === "style" || mount.kind === "layout") && mount.resource) {
+      count = Number(mount.resource.likes != null ? mount.resource.likes : topic.likes || 0);
+    } else {
+      count = Number(topic.likes || 0);
+    }
+    return { liked, count: Math.max(0, count) };
+  }
+
+  function _getTopicFavoriteState(topicData) {
+    if (!topicData) return { favorited: false, count: 0 };
+    const topic = topicData.topic || {};
+    const mount = topicData.mount || { kind: "discussion" };
+    const viewer = topicData.viewer || {};
+    const favorited = Boolean(viewer.favorited);
+    let count = 0;
+    if (mount.kind === "work" && mount.work) {
+      count = Number(mount.work.favorites != null ? mount.work.favorites : topic.favorites || 0);
+    } else if ((mount.kind === "style" || mount.kind === "layout") && mount.resource) {
+      count = Number(mount.resource.favorites != null ? mount.resource.favorites : topic.favorites || 0);
+    } else {
+      count = Number(topic.favorites || 0);
+    }
+    return { favorited, count: Math.max(0, count) };
+  }
+
+  function _setTopicLikeState(topicData, liked, count) {
+    if (!topicData) return;
+    const finalCount = Math.max(0, Number(count) || 0);
+    if (!topicData.viewer) topicData.viewer = {};
+    topicData.viewer.liked = Boolean(liked);
+    if (topicData.topic) topicData.topic.likes = finalCount;
+    if (topicData.mount) {
+      if (topicData.mount.resource) {
+        topicData.mount.resource.likes = finalCount;
+      } else if (topicData.mount.work) {
+        topicData.mount.work.likes = finalCount;
+      }
+    }
+  }
+
+  function _setTopicFavoriteState(topicData, favorited, count) {
+    if (!topicData) return;
+    const finalCount = Math.max(0, Number(count) || 0);
+    if (!topicData.viewer) topicData.viewer = {};
+    topicData.viewer.favorited = Boolean(favorited);
+    if (topicData.topic) topicData.topic.favorites = finalCount;
+    if (topicData.mount) {
+      if (topicData.mount.resource) {
+        topicData.mount.resource.favorites = finalCount;
+      } else if (topicData.mount.work) {
+        topicData.mount.work.favorites = finalCount;
+      }
+    }
+  }
+
+  function _updateTopicCountsUI() {
+    const el = document.querySelector("#topic-counts");
+    if (!el || !_activeTopicDetail?.topicData) return;
+    const tData = _activeTopicDetail.topicData;
+    const { count: curLikes } = _getTopicLikeState(tData);
+    const { count: curFavs } = _getTopicFavoriteState(tData);
+    const mKind = tData.mount?.kind;
+    const curForks = mKind === "work" ? Number(tData.mount?.work?.forks || 0) : 0;
+    el.textContent = `点赞 ${curLikes} · 收藏 ${curFavs}${mKind === "work" ? ` · 做同款 ${curForks}` : ""}`;
+  }
+
+  function _updateTopicLikeBtnUI() {
+    const el = document.querySelector("#topic-page-like");
+    if (!el || !_activeTopicDetail?.topicData) return;
+    const { liked: curLiked, count: curLikes } = _getTopicLikeState(_activeTopicDetail.topicData);
+    el.textContent = `👍 ${curLiked ? "已赞" : "点赞"} (${curLikes})`;
+    el.classList.toggle("btn-primary", curLiked);
+  }
+
+  function _updateTopicFavBtnUI() {
+    const el = document.querySelector("#topic-page-collect");
+    if (!el || !_activeTopicDetail?.topicData) return;
+    const { favorited: curFav, count: curFavs } = _getTopicFavoriteState(_activeTopicDetail.topicData);
+    el.textContent = `${curFav ? "♥ 已收藏" : "♡ 收藏"} (${curFavs})`;
+    el.classList.toggle("btn-primary", curFav);
+  }
+
+  function _applyTopicSocialCalibration(targetTopicData, postRes, action = null) {
+    if (!targetTopicData || !postRes) return;
+    const freshTopic = postRes.topic || {};
+    const freshViewer = postRes.viewer || {};
+    const freshMount = postRes.mount || {};
+
+    if (!targetTopicData.viewer) targetTopicData.viewer = {};
+
+    const updateLike = !action || action === "like";
+    const updateCollect = !action || action === "collect";
+
+    if (updateLike) {
+      if (freshViewer.liked !== undefined) targetTopicData.viewer.liked = Boolean(freshViewer.liked);
+      if (targetTopicData.topic && freshTopic.likes !== undefined) {
+        targetTopicData.topic.likes = Number(freshTopic.likes) || 0;
+      }
+      if (targetTopicData.mount && freshMount) {
+        if (targetTopicData.mount.resource && freshMount.resource && freshMount.resource.likes !== undefined) {
+          targetTopicData.mount.resource.likes = Number(freshMount.resource.likes) || 0;
+        }
+        if (targetTopicData.mount.work && freshMount.work && freshMount.work.likes !== undefined) {
+          targetTopicData.mount.work.likes = Number(freshMount.work.likes) || 0;
+        }
+      }
+    }
+
+    if (updateCollect) {
+      if (freshViewer.favorited !== undefined) targetTopicData.viewer.favorited = Boolean(freshViewer.favorited);
+      if (targetTopicData.topic && freshTopic.favorites !== undefined) {
+        targetTopicData.topic.favorites = Number(freshTopic.favorites) || 0;
+      }
+      if (targetTopicData.mount && freshMount) {
+        if (targetTopicData.mount.resource && freshMount.resource && freshMount.resource.favorites !== undefined) {
+          targetTopicData.mount.resource.favorites = Number(freshMount.resource.favorites) || 0;
+        }
+        if (targetTopicData.mount.work && freshMount.work && freshMount.work.favorites !== undefined) {
+          targetTopicData.mount.work.favorites = Number(freshMount.work.favorites) || 0;
+        }
+      }
+    }
+  }
+
+  function _releaseSocialLock(topicId, action) {
+    const lockKey = `${topicId}:${action}`;
+    _socialInFlight.delete(lockKey);
+    if (_activeTopicDetail && _activeTopicDetail.id === topicId) {
+      const btnId = action === "like" ? "#topic-page-like" : "#topic-page-collect";
+      const curBtn = document.querySelector(btnId);
+      if (curBtn) {
+        curBtn.disabled = false;
+        curBtn.removeAttribute("aria-busy");
+      }
+    }
+  }
+
+  let _activeTopicDetail = {
+    id: null,
+    gen: 0,
+    status: "idle",
+    topicData: null,
+    replies: [],
+    pendingReplies: [],
+    nextCursor: null,
+    err: null
+  };
+
+  function getScrollBehavior() {
+    return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  }
+
+  function renderSingleFloorReplyHtml(r, idx, topic) {
+    const authorName = r.authorName || r.name || r.author || r.user || "创作者";
+    const authorUsername = r.author || r.user || authorName;
+    const timeLabel = r.time || "刚刚";
+    const isFloorAuthor = App.state && App.state.loggedIn && (r.author === App.state.user.username || r.user === App.state.user.username);
+    const canModerateThisBoard = S.canModerateForumBoard ? S.canModerateForumBoard(topic.category) : false;
+    const isStaff = App.state && App.state.loggedIn && (App.state.user.role === "admin" || App.state.user.role === "operator" || App.state.user.role === "reviewer");
+    const canAccept =
+      topic.bounty > 0 &&
+      !topic.solved &&
+      !r.accepted &&
+      App.state &&
+      App.state.loggedIn &&
+      r.user !== topic.author &&
+      r.author !== topic.author &&
+      (topic.author === App.state.user.username || isStaff);
+    const canDeleteReply = S.canDeleteReply
+      ? S.canDeleteReply(r, topic)
+      : (App.state && App.state.loggedIn && (isFloorAuthor || canModerateThisBoard));
+
+    return `
+      <div class="forum-reply-card ${r.accepted ? "is-accepted" : ""}" data-reply-id="${esc(r.id)}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="hw-author-chip" data-open-creator="${esc(authorUsername)}" style="padding:2px 8px;">
+              <strong style="font-size:13.2px;color:var(--ink-strong);">@${esc(authorName)}</strong>
+            </button>
+            ${renderModBadgeHtml(authorUsername, topic.category)}
+            <span style="color:var(--ink-faint);font-size:12px;">${esc(timeLabel)}</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            ${r.accepted ? `<span style="background:var(--jade);color:#fff;font-size:11.5px;font-weight:800;padding:2px 9px;border-radius:999px;">🏆 最佳采纳方案(+${topic.bounty || 0}✦)</span>` : ""}
+            ${canAccept ? `<button type="button" class="btn btn-sm btn-gold" data-accept-reply="${esc(r.id)}">🏆 采纳并结帖 ${topic.bounty}✦</button>` : ""}
+            ${canModerateThisBoard ? `<button type="button" class="btn btn-sm" data-hide-reply="${esc(r.id)}" style="font-size:11px;padding:1px 7px;color:var(--ink-muted);">🙈 隐藏回复</button>` : ""}
+            ${canDeleteReply ? `<button type="button" class="btn btn-sm" data-del-reply="${esc(r.id)}" style="font-size:11px;padding:1px 7px;color:var(--vermilion);">🗑️ 删除</button>` : ""}
+            <span class="hw-comment-floor">#${idx + 1}楼</span>
+          </div>
+        </div>
+        <div style="font-size:14.2px;color:var(--ink-body);line-height:1.68;">${renderReplyContentHtml(r.text)}</div>
+        ${
+          r.mountedStyle || r.mountedLayout
+            ? `<div style="margin-top:8px;">
+                <a class="btn btn-sm" style="padding:2px 9px;font-size:11.5px;" href="${esc(channelUrl("studio", { style: r.mountedStyle || "", layout: r.mountedLayout || "" }))}">去无限画布试此方案 ↗</a>
+              </div>`
+            : ""
+        }
+        <div class="forum-reply-footer">
+          <button type="button" class="btn btn-sm" data-reply-floor="${idx + 1}" data-reply-user="${esc(authorUsername)}" data-reply-name="${esc(authorName)}" style="font-size:12px;padding:3px 10px;">
+            💬 回复
+          </button>
+          <button type="button" class="btn btn-sm" data-quote-floor="${idx + 1}" data-reply-user="${esc(authorUsername)}" data-reply-name="${esc(authorName)}" data-reply-id="${esc(r.id)}" style="font-size:12px;padding:3px 10px;">
+            ❝ 引用回复
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderResourceMountArticleHtml(kind, res) {
+    if (!res) return "";
+    const isStyle = kind === "style";
+    const kindName = isStyle ? "画风" : "图型";
+    const useBtnText = isStyle ? "使用此画风" : "使用此图型";
+    const worksTitle = isStyle ? "用这个画风做的作品" : "用这个图型做的作品";
+    const relatedWorksHref = S.channelUrl("forum", { view: "related", kind: kind, id: res.code, tab: "works" });
+
+    return `
+      <div class="topic-resource-mount" style="min-width:0;max-width:100%;">
+        <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;margin-bottom:20px;">
+          ${res.image ? `
+            <div style="flex:0 0 240px;max-width:100%;">
+              <img src="${esc(res.image)}" alt="${esc(res.name)}" data-zoom-img="${esc(res.image)}" style="width:100%;border-radius:10px;border:1px solid var(--line-soft);cursor:zoom-in;display:block;" />
+            </div>
+          ` : ""}
+          <div style="flex:1;min-width:240px;">
+            <div style="font-size:12px;font-weight:800;color:var(--vermilion);margin-bottom:4px;">#${esc(res.code)}</div>
+            <h2 style="margin:0 0 10px;font-size:20px;font-family:var(--font-serif);">${esc(res.name)}</h2>
+            ${res.description ? `<p style="margin:0 0 14px;font-size:13.5px;color:var(--ink-muted);line-height:1.6;overflow-wrap:anywhere;">${esc(res.description)}</p>` : ""}
+            <div style="margin-top:12px;">
+              <a class="btn btn-primary" href="${esc(res.useUrl)}" style="font-weight:750;">${esc(useBtnText)} ↗</a>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <h3 style="margin:0;font-size:15px;font-weight:800;">${esc(kindName)}定义</h3>
+            ${res.unlocked && res.definition ? `<button type="button" class="btn btn-sm" id="resource-copy-def-btn">复制定义</button>` : ""}
+          </div>
+          ${
+            res.unlocked
+              ? (res.definition
+                  ? `<pre class="fwp-prompt-text" style="white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;background:var(--paper-bg);padding:14px;border-radius:8px;border:1px solid var(--line-soft);font-size:13px;line-height:1.6;">${esc(res.definition)}</pre>`
+                  : `<p style="color:var(--ink-muted);font-size:13px;">暂无定义内容</p>`)
+              : `<div class="hw-locked-gate-box" style="padding:24px;text-align:center;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
+                  <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后查看定义</div>
+                  <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
+                  <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 立即解锁</button>
+                </div>`
+          }
+        </div>
+
+        <div style="margin-top:32px;padding-top:20px;border-top:1px solid var(--line-soft);min-width:0;max-width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+            <h3 style="margin:0;font-size:16px;font-weight:800;">${esc(worksTitle)}</h3>
+            <a class="btn btn-sm" href="${esc(relatedWorksHref)}" id="topic-related-works-all">查看全部 →</a>
+          </div>
+          <div id="topic-related-works-container" style="min-width:0;max-width:100%;">
+            <div style="color:var(--ink-muted);font-size:13px;">正在加载相关作品…</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTopicDetailPage(root) {
+    const tid = String(FUI.activeTopicId || "").trim();
+    if (!tid) {
       root.innerHTML = `
         <div class="hw-detail-page" id="standalone-topic-detail-page">
           <div class="hw-subpage-bar">
@@ -1523,46 +1804,114 @@
       `;
       root.querySelector("#topic-missing-back").onclick = () => openForumList(true);
       root.querySelector("#topic-missing-list").onclick = () => openForumList(true);
-      // A zero-comment official topic stays out of boot/feed; preserve its old URL.
-      const missingId = FUI.activeTopicId;
-      S.apiJson('/api/forum/resource-topics/' + encodeURIComponent(missingId)).then(resource => {
-        if (FUI.view !== 'topic' || FUI.activeTopicId !== missingId || !resource.id) return;
-        location.replace(channelUrl('forum',{view:'resource',kind:resource.kind,id:resource.id}));
-      }).catch(() => {});
       return;
     }
 
-    const submission = topic.submissions?.[0];
-    const attached = topic.resourceDiscussion;
-    // Only authoritative submission/mapping metadata identifies a resource post.
-    if (submission || attached) {
-      const kind = submission?.kind || attached.kind;
-      const id = submission?.targetId || attached.targetId;
-      const params = new URLSearchParams({view:"resource",kind,id});
-      history.replaceState({}, "", channelUrl("forum", Object.fromEntries(params)));
-      FUI.view = "resource";
-      if (hasModule("HandrawResourcePages", "render")) {
-        window.HandrawResourcePages.render(root, params);
-        return;
-      }
-      // Fall back to the plain thread when the resource page module is absent.
+    if (_activeTopicDetail.id !== tid) {
+      _activeTopicDetailGen++;
+      _activeTopicDetail = { id: tid, gen: _activeTopicDetailGen, status: "loading", topicData: null, replies: [], pendingReplies: [], nextCursor: null, err: null };
     }
-    const prevTopic = curIdx > 0 ? allTopics[curIdx - 1] : null;
-    const nextTopic = curIdx >= 0 && curIdx < allTopics.length - 1 ? allTopics[curIdx + 1] : null;
-    const unlocked = S.isUnlocked(topic.id, topic);
-    const liked = S.isLiked("topic", topic.id);
-    const likeCnt = S.getLikeCount("topic", topic);
-    const collected = S.isCollected("topics", topic.id);
-    const favCnt = S.getFavoriteCount("topics", topic);
-    const imgs = normalizeTopicImages(topic);
-    const activeImgIdx = Math.max(0, Math.min(imgs.length - 1, Number(FUI.activeTopicImgIdx) || 0));
-    const canModerateThisBoard = S.canModerateForumBoard ? S.canModerateForumBoard(topic.category) : false;
-    const authorProf = S.getCreatorProfile(topic.author) || {honor:{sealClass:""},avatarChar:"绘",authorName:"资源讨论",totalPublished:0,totalCheers:0,topics:[]};
-    const boardMods = S.getBoardModerators ? S.getBoardModerators(topic.category) : [];
-    const replies = topic.replies || [];
 
-    const canArbitrate = topic.bounty > 0 && !topic.solved && App.state && App.state.loggedIn && (App.state.user.role === "admin" || App.state.user.role === "operator" || App.state.user.role === "reviewer");
+    if (_activeTopicDetail.status === "loading") {
+      root.innerHTML = `
+        <div class="hw-detail-page" id="standalone-topic-detail-page">
+          <div class="hw-subpage-bar">
+            <div class="hw-subpage-crumbs">
+              <button type="button" class="btn btn-sm" id="topic-loading-back">← 返回论坛列表</button>
+            </div>
+          </div>
+          <div class="hw-detail-section-card" style="text-align:center;padding:48px 24px;">
+            <h2 style="margin:0 0 8px;">正在加载…</h2>
+            <p style="color:var(--ink-muted);margin:0;">正在加载帖子与楼层回复…</p>
+          </div>
+        </div>
+      `;
+      const backBtn = root.querySelector("#topic-loading-back");
+      if (backBtn) backBtn.onclick = () => openForumList(true);
+
+      const targetId = tid;
+      Promise.all([
+        S.apiJson(`/api/posts/${encodeURIComponent(targetId)}`),
+        S.apiJson(`/api/posts/${encodeURIComponent(targetId)}/replies?limit=20`)
+      ]).then(([postRes, repliesRes]) => {
+        if (FUI.view !== "topic" || FUI.activeTopicId !== targetId) return;
+        if (!postRes || !postRes.ok || !postRes.topic) {
+          _activeTopicDetail.status = "404";
+          renderTopicDetailPage(root);
+          return;
+        }
+        _activeTopicDetail.status = "loaded";
+        _activeTopicDetail.topicData = postRes;
+        _activeTopicDetail.replies = (repliesRes && repliesRes.items) || [];
+        _activeTopicDetail.pendingReplies = [];
+        _activeTopicDetail.nextCursor = (repliesRes && repliesRes.nextCursor) || null;
+        renderTopicDetailPage(root);
+      }).catch((err) => {
+        if (FUI.view !== "topic" || FUI.activeTopicId !== targetId) return;
+        if (err && (err.status === 404 || String(err.message || "").includes("404") || String(err.message || "").includes("不存在") || String(err.message || "").includes("不可见"))) {
+          _activeTopicDetail.status = "404";
+        } else {
+          _activeTopicDetail.status = "error";
+          _activeTopicDetail.err = err;
+        }
+        renderTopicDetailPage(root);
+      });
+      return;
+    }
+
+    if (_activeTopicDetail.status === "404") {
+      root.innerHTML = `
+        <div class="hw-detail-page" id="standalone-topic-detail-page">
+          <div class="hw-subpage-bar">
+            <button type="button" class="btn btn-sm" id="topic-missing-back">← 返回论坛讨论列表</button>
+          </div>
+          <div class="hw-detail-section-card" style="text-align:center;padding:48px 24px;">
+            <h2 style="margin:0 0 8px;">帖子不存在或已不可见</h2>
+            <p style="color:var(--ink-muted);margin:0 0 18px;">该帖子可能已被版主归档或链接参数有误。</p>
+            <button type="button" class="btn btn-primary" id="topic-missing-list">返回社区论坛首页</button>
+          </div>
+        </div>
+      `;
+      root.querySelector("#topic-missing-back").onclick = () => openForumList(true);
+      root.querySelector("#topic-missing-list").onclick = () => openForumList(true);
+      return;
+    }
+
+    if (_activeTopicDetail.status === "error") {
+      root.innerHTML = `
+        <div class="hw-detail-page" id="standalone-topic-detail-page">
+          <div class="hw-subpage-bar">
+            <button type="button" class="btn btn-sm" id="topic-error-back">← 返回论坛讨论列表</button>
+          </div>
+          <div class="hw-detail-section-card" style="text-align:center;padding:48px 24px;">
+            <h2 style="margin:0 0 8px;">网络加载失败</h2>
+            <p style="color:var(--ink-muted);margin:0 0 18px;">${esc((_activeTopicDetail.err && _activeTopicDetail.err.message) || "请求失败，请检查网络后重试。")}</p>
+            <button type="button" class="btn btn-primary" id="topic-retry-btn">重新加载</button>
+          </div>
+        </div>
+      `;
+      root.querySelector("#topic-error-back").onclick = () => openForumList(true);
+      root.querySelector("#topic-retry-btn").onclick = () => {
+        _activeTopicDetail.status = "loading";
+        renderTopicDetailPage(root);
+      };
+      return;
+    }
+
+    // Render Loaded State
+    const topic = _activeTopicDetail.topicData.topic;
+    const mount = _activeTopicDetail.topicData.mount || { kind: "discussion" };
+    const viewer = _activeTopicDetail.topicData.viewer || {};
+    const { liked, count: likeCnt } = _getTopicLikeState(_activeTopicDetail.topicData);
+    const { favorited, count: favCnt } = _getTopicFavoriteState(_activeTopicDetail.topicData);
+    let forks = mount.kind === "work" ? Number(mount.work?.forks || 0) : 0;
+    const unlocked = S.isUnlocked(topic.id, topic);
+    const imgs = normalizeTopicImages(topic);
+    const canModerateThisBoard = S.canModerateForumBoard ? S.canModerateForumBoard(topic.category) : false;
+    const authorProf = S.getCreatorProfile(topic.author) || { honor: { sealClass: "" }, avatarChar: "绘", authorName: topic.authorName || "创作者", totalPublished: 0, totalCheers: 0, topics: [] };
+    const boardMods = S.getBoardModerators ? S.getBoardModerators(topic.category) : [];
     const isTopicAuthor = App.state && App.state.loggedIn && App.state.user && App.state.user.username === topic.author;
+    const canArbitrate = topic.bounty > 0 && !topic.solved && App.state && App.state.loggedIn && (App.state.user.role === "admin" || App.state.user.role === "operator" || App.state.user.role === "reviewer");
 
     const modToolbarHtml = canModerateThisBoard
       ? `
@@ -1583,25 +1932,13 @@
       `
       : "";
 
-    const workPost = hasModule("HandrawForumWork", "fromTopic")
-      ? window.HandrawForumWork.fromTopic(topic, App.state.works || [], App.resourceMap, unlocked || S.isStaff?.())
+    const workPost = mount.kind === "work" && mount.work && hasModule("HandrawForumWork", "fromTopic")
+      ? window.HandrawForumWork.fromTopic(topic, [mount.work], App.resourceMap, unlocked || S.isStaff?.())
       : null;
+
     const cardsToRender = [];
     if (topic.sharedCard && topic.sharedCard.title) {
       cardsToRender.push(topic.sharedCard);
-    }
-    if (topic.workId && !cardsToRender.some((c) => c.kind === "work" && c.id === topic.workId)) {
-      const w = (App.state?.works || []).find((x) => x.id === topic.workId);
-      if (w) {
-        cardsToRender.push({
-          kind: "work",
-          id: w.id,
-          title: w.title,
-          image: (w.images && w.images[0]) || "",
-          authorName: w.authorName || w.author || "",
-          desc: w.notes || w.prompt || ""
-        });
-      }
     }
     const mountedAssetIds = [...(topic.styles || []), topic.layout].filter(Boolean);
     for (const aid of mountedAssetIds) {
@@ -1650,9 +1987,27 @@
         ? S.renderInlineReportPanelHtml("topic", topic.id, topic.title)
         : "";
 
+    const allTopics = App.state?.topics || [];
     const sameBoardHot = allTopics
       .filter((ot) => ot.id !== topic.id && ot.category === topic.category)
       .slice(0, 4);
+
+    let articleBodyHtml = "";
+    if (workPost && hasModule("HandrawForumWork", "render")) {
+      articleBodyHtml = window.HandrawForumWork.render(workPost);
+    } else if (mount.kind === "style" || mount.kind === "layout") {
+      articleBodyHtml = renderResourceMountArticleHtml(mount.kind, mount.resource);
+    } else {
+      articleBodyHtml = renderEditorialArticleHtml(topic, cardsToRender, unlocked);
+    }
+
+    const likeInFlight = _socialInFlight.has(`${topic.id}:like`);
+    const collectInFlight = _socialInFlight.has(`${topic.id}:collect`);
+    const countsDisplay = `点赞 ${likeCnt} · 收藏 ${favCnt}${mount.kind === "work" ? ` · 做同款 ${forks}` : ""}`;
+    const isResourceKind = mount.kind === "style" || mount.kind === "layout";
+    const pairedTitle = mount.kind === "style" ? "常搭配的图型" : "常搭配的画风";
+
+    const totalRepliesCount = _activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length;
 
     root.innerHTML = `
       <div class="hw-detail-page" id="standalone-topic-detail-page">
@@ -1665,8 +2020,6 @@
             <strong>帖子正文与楼层回复</strong>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button type="button" class="btn btn-sm" id="topic-prev-btn" ${prevTopic ? "" : "disabled"} title="${esc(prevTopic ? prevTopic.title : "已是第一帖")}">◀ 上一帖</button>
-            <button type="button" class="btn btn-sm" id="topic-next-btn" ${nextTopic ? "" : "disabled"} title="${esc(nextTopic ? nextTopic.title : "已是最后一帖")}">下一帖 ▶</button>
             <button type="button" class="btn btn-sm btn-primary" id="topic-new-post-btn">✏️ 发新帖</button>
           </div>
         </div>
@@ -1682,7 +2035,7 @@
                 ${topic.featured ? `<span style="background:var(--gold);color:#fff;font-size:11.5px;font-weight:800;padding:2px 8px;border-radius:5px;">🌟 精华</span>` : ""}
                 <span style="font-size:12.5px;font-weight:800;color:var(--vermilion);">${esc(topic.categoryLabel)}</span>
                 ${
-                  workPost ? `<span class="forum-format-badge is-visual">作品分享</span>` : imgs.length > 0
+                  workPost ? `<span class="forum-format-badge is-visual">作品分享</span>` : isResourceKind ? `<span class="forum-format-badge">${mount.kind === "style" ? "🎨 画风推荐" : "📐 图型推荐"}</span>` : imgs.length > 0
                     ? `<span class="forum-format-badge is-visual">🖼️ ${imgs.length} 图分享帖</span>`
                     : `<span class="forum-format-badge">📝 纯文讨论帖</span>`
                 }
@@ -1699,22 +2052,23 @@
               <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--line-soft);">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--ink-muted);">
                   <button type="button" class="hw-author-chip" data-open-creator="${esc(topic.author)}">
-                    <span class="hw-creator-avatar-sm ${esc(authorProf.honor.sealClass)}">${esc(authorProf.avatarChar)}</span>
-                    <strong style="color:var(--ink-strong);">@${esc(topic.authorName)}</strong>
+                    <span class="hw-creator-avatar-sm ${esc(authorProf.honor?.sealClass || "")}">${esc(authorProf.avatarChar || "绘")}</span>
+                    <strong style="color:var(--ink-strong);">@${esc(topic.authorName || "创作者")}</strong>
                   </button>
                   ${renderModBadgeHtml(topic.author, topic.category)}
-                  <span>· 发布于 ${esc(topic.createdAt)}</span>
+                  <span>· 发布于 ${esc(topic.createdAt || "刚刚")} · </span>
+                  <span class="topic-counts" id="topic-counts">${esc(countsDisplay)}</span>
                 </div>
 
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  <button type="button" class="btn btn-sm ${liked ? "btn-primary" : ""}" id="topic-page-like">
+                  <button type="button" class="btn btn-sm ${liked ? "btn-primary" : ""}" id="topic-page-like" ${likeInFlight ? 'disabled aria-busy="true"' : ""}>
                     👍 ${liked ? "已赞" : "点赞"} (${likeCnt})
                   </button>
-                  <button type="button" class="btn btn-sm ${collected ? "btn-primary" : ""}" id="topic-page-collect">
-                    ${collected ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
+                  <button type="button" class="btn btn-sm ${favorited ? "btn-primary" : ""}" id="topic-page-collect" ${collectInFlight ? 'disabled aria-busy="true"' : ""}>
+                    ${favorited ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
                   </button>
                   <button type="button" class="btn btn-sm" id="topic-page-scroll-reply">
-                    💬 回复 (${replies.length})
+                    💬 回复 (${totalRepliesCount})
                   </button>
                   <button type="button" class="btn btn-sm" id="topic-page-quote-reply" title="引用主帖正文进行回复">
                     ❝ 引用回复
@@ -1727,9 +2081,9 @@
 
               ${inlineDrawerHtml}
 
-              <!-- Cohesive Editorial Article Narrative & In-Flow Media/Cards -->
+              <!-- Article narrative / mount -->
               <div class="forum-article-body" id="topic-article-body">
-                ${workPost && hasModule("HandrawForumWork", "render") ? window.HandrawForumWork.render(workPost) : renderEditorialArticleHtml(topic, cardsToRender, unlocked)}
+                ${articleBodyHtml}
               </div>
 
               ${paidSectionHtml}
@@ -1754,7 +2108,7 @@
             <section class="hw-detail-section-card" id="topic-replies-section">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
                 <div>
-                  <h2 style="margin:0;font-size:18.5px;font-family:var(--font-serif);">💬 全部社区交流与调优楼层 (${replies.length})</h2>
+                  <h2 style="margin:0;font-size:18.5px;font-family:var(--font-serif);" id="topic-replies-title">💬 回复 (${totalRepliesCount})</h2>
                   <div style="font-size:12.4px;color:var(--ink-muted);margin-top:3px;">可以附上推荐的 #画风 或 #图型 编号，方便继续尝试。</div>
                 </div>
                 ${
@@ -1764,77 +2118,35 @@
                 }
               </div>
 
-              <div style="display:grid;gap:12px;margin-bottom:18px;">
+              <div id="topic-replies-list" style="display:grid;gap:12px;margin-bottom:18px;">
                 ${
-                  replies.length === 0
-                    ? `<div style="padding:28px;text-align:center;color:var(--ink-muted);background:var(--paper-bg);border-radius:10px;">还没有回复，欢迎分享你的想法。</div>`
-                    : replies
-                        .map((r, idx) => {
-                          const canAccept =
-                            topic.bounty > 0 &&
-                            !topic.solved &&
-                            (!App.state.serverBacked ||
-                              (App.state.loggedIn &&
-                                r.user !== topic.author &&
-                                (topic.author === App.state.user.username ||
-                                  App.state.user.role === "admin" ||
-                                  App.state.user.role === "operator" ||
-                                  App.state.user.role === "reviewer")));
-                          return `
-                            <div class="forum-reply-card">
-                              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
-                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                  <button type="button" class="hw-author-chip" data-open-creator="${esc(r.user || r.name)}" style="padding:2px 8px;">
-                                    <strong style="font-size:13.2px;color:var(--ink-strong);">@${esc(r.name || r.user)}</strong>
-                                  </button>
-                                  ${renderModBadgeHtml(r.user, topic.category)}
-                                  <span style="color:var(--ink-faint);font-size:12px;">${esc(r.time)}</span>
-                                </div>
-                                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                                  ${r.accepted ? `<span style="background:var(--jade);color:#fff;font-size:11.5px;font-weight:800;padding:2px 9px;border-radius:999px;">🏆 最佳采纳方案 (+${topic.bounty}✦)</span>` : ""}
-                                  ${
-                                    canAccept
-                                      ? `<button type="button" class="btn btn-sm btn-gold" data-accept-reply="${esc(r.id)}">🏆 采纳并结算 ${topic.bounty}✦</button>`
-                                      : ""
-                                  }
-                                  ${
-                                    canModerateThisBoard
-                                      ? `<button type="button" class="btn btn-sm" data-hide-reply="${esc(r.id)}" style="font-size:11px;padding:1px 7px;color:var(--ink-muted);">🙈 隐藏回复</button>`
-                                      : ""
-                                  }
-                                  ${
-                                    (S.canDeleteReply ? S.canDeleteReply(r, topic) : (App.state.loggedIn && (r.user === App.state.user.username || canModerateThisBoard)))
-                                      ? `<button type="button" class="btn btn-sm" data-del-reply="${esc(r.id)}" style="font-size:11px;padding:1px 7px;color:var(--vermilion);">🗑️ 删除</button>`
-                                      : ""
-                                  }
-                                  <span class="hw-comment-floor">#${idx + 1}楼</span>
-                                </div>
-                              </div>
-                              <div style="font-size:14.2px;color:var(--ink-body);line-height:1.68;">${renderReplyContentHtml(r.text)}</div>
-                              ${
-                                r.mountedStyle || r.mountedLayout
-                                  ? `<div style="margin-top:8px;">
-                                      <a class="btn btn-sm" style="padding:2px 9px;font-size:11.5px;" href="${esc(channelUrl("studio", { style: r.mountedStyle || "", layout: r.mountedLayout || "" }))}">去无限画布试此方案 ↗</a>
-                                    </div>`
-                                  : ""
-                              }
-                              <div class="forum-reply-footer">
-                                <button type="button" class="btn btn-sm" data-reply-floor="${idx + 1}" data-reply-user="${esc(r.user || r.name)}" data-reply-name="${esc(r.name || r.user)}" style="font-size:12px;padding:3px 10px;">
-                                  💬 回复
-                                </button>
-                                <button type="button" class="btn btn-sm" data-quote-floor="${idx + 1}" data-reply-user="${esc(r.user || r.name)}" data-reply-name="${esc(r.name || r.user)}" data-reply-id="${esc(r.id)}" style="font-size:12px;padding:3px 10px;">
-                                  ❝ 引用回复
-                                </button>
-                              </div>
-                            </div>
-                          `;
-                        })
-                        .join("")
+                  _activeTopicDetail.replies.length === 0 && _activeTopicDetail.pendingReplies.length === 0
+                    ? `<div id="topic-replies-empty" style="padding:28px;text-align:center;color:var(--ink-muted);background:var(--paper-bg);border-radius:10px;">还没有回复，欢迎分享你的想法。</div>`
+                    : _activeTopicDetail.replies.map((r, idx) => renderSingleFloorReplyHtml(r, idx, topic)).join("")
                 }
               </div>
 
+              ${
+                _activeTopicDetail.nextCursor
+                  ? `<div id="topic-replies-loadmore-wrap" style="text-align:center;margin-bottom:18px;">
+                      <button type="button" class="btn btn-sm" id="topic-load-more-replies-btn">加载更多回复</button>
+                    </div>`
+                  : ""
+              }
+
+              ${
+                _activeTopicDetail.pendingReplies.length > 0
+                  ? `<div id="topic-pending-replies-wrap" style="margin-bottom:18px;padding:12px 14px;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
+                      <div style="font-size:12.5px;font-weight:750;color:var(--ink-muted);margin-bottom:10px;">你刚发表的回复：</div>
+                      <div id="topic-pending-replies-list" style="display:grid;gap:12px;">
+                        ${_activeTopicDetail.pendingReplies.map((r, idx) => renderSingleFloorReplyHtml(r, _activeTopicDetail.replies.length + idx, topic)).join("")}
+                      </div>
+                    </div>`
+                  : ""
+              }
+
               <!-- Bottom Reply Composer -->
-              <div style="background:var(--paper-bg);border:1px solid var(--line-strong);border-radius:12px;padding:14px 16px;">
+              <div id="topic-reply-box" style="background:var(--paper-bg);border:1px solid var(--line-strong);border-radius:12px;padding:14px 16px;">
                 <div style="font-size:13px;font-weight:800;margin-bottom:8px;">✍️ 发表跟帖回复 / 交流讨论</div>
                 <textarea class="hw-textarea" rows="3" id="topic-reply-input" placeholder="写下建议、经验或问题，支持 Ctrl + Enter 发送…"></textarea>
                 <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
@@ -1844,25 +2156,38 @@
             </section>
           </div>
 
-          <!-- RIGHT AUTHOR & BOARD SIDEBAR -->
-          <aside style="display:flex;flex-direction:column;gap:14px;">
-            <div class="forum-side-card" style="display:grid;gap:12px;">
-              <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);letter-spacing:0.04em;">作者</div>
-              <div style="display:flex;gap:12px;align-items:center;">
-                <div class="hw-creator-avatar-sm ${esc(authorProf.honor.sealClass)}" style="width:46px;height:46px;font-size:18px;">${esc(authorProf.avatarChar)}</div>
-                <div style="min-width:0;">
-                  <div style="font-weight:850;font-size:15px;color:var(--ink-strong);">@${esc(authorProf.authorName)}</div>
-                </div>
-              </div>
-              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;background:var(--paper-bg);padding:8px;border-radius:9px;font-size:12px;">
-                <div><strong style="display:block;font-size:15px;color:var(--ink-strong);">${authorProf.totalPublished}</strong><span style="color:var(--ink-muted);">总分享</span></div>
-                <div><strong style="display:block;font-size:15px;color:var(--ink-strong);">${authorProf.totalCheers}</strong><span style="color:var(--ink-muted);">获鼓励</span></div>
-                <div><strong style="display:block;font-size:15px;color:var(--ink-strong);">${authorProf.topics.length}</strong><span style="color:var(--ink-muted);">论坛帖</span></div>
-              </div>
-              <button type="button" class="btn btn-primary btn-sm" style="width:100%;justify-content:center;" data-open-creator="${esc(topic.author)}">
-                🏠 访问 TA 的独立个人主页 ↗
-              </button>
-            </div>
+          <!-- RIGHT SIDEBAR -->
+          <aside style="display:flex;flex-direction:column;gap:14px;min-width:0;max-width:100%;">
+            ${
+              isResourceKind
+                ? `
+                  <div class="forum-side-card" id="topic-paired-resources-card" style="min-width:0;max-width:100%;">
+                    <div style="font-weight:800;font-size:13.5px;margin-bottom:10px;">🔥 ${esc(pairedTitle)}</div>
+                    <div id="topic-paired-resources-container" style="display:grid;gap:8px;min-width:0;max-width:100%;">
+                      <div style="color:var(--ink-muted);font-size:12px;">正在加载搭配推荐…</div>
+                    </div>
+                  </div>
+                `
+                : `
+                  <div class="forum-side-card" style="display:grid;gap:12px;">
+                    <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);letter-spacing:0.04em;">作者</div>
+                    <div style="display:flex;gap:12px;align-items:center;">
+                      <div class="hw-creator-avatar-sm ${esc(authorProf.honor?.sealClass || "")}" style="width:46px;height:46px;font-size:18px;">${esc(authorProf.avatarChar || "绘")}</div>
+                      <div style="min-width:0;">
+                        <div style="font-weight:850;font-size:15px;color:var(--ink-strong);">@${esc(authorProf.authorName || topic.authorName || "创作者")}</div>
+                      </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;background:var(--paper-bg);padding:8px;border-radius:9px;font-size:12px;">
+                      <div><strong style="display:block;font-size:15px;color:var(--ink-strong);">${authorProf.totalPublished || 0}</strong><span style="color:var(--ink-muted);">总分享</span></div>
+                      <div><strong style="display:block;font-size:15px;color:var(--ink-strong);">${authorProf.totalCheers || 0}</strong><span style="color:var(--ink-muted);">获鼓励</span></div>
+                      <div><strong style="display:block;font-size:15px;color:var(--ink-strong);">${(authorProf.topics || []).length}</strong><span style="color:var(--ink-muted);">论坛帖</span></div>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm" style="width:100%;justify-content:center;" data-open-creator="${esc(topic.author)}">
+                      🏠 访问 TA 的独立个人主页 ↗
+                    </button>
+                  </div>
+                `
+            }
 
             <div class="forum-side-card">
               <div style="font-size:12px;font-weight:800;color:var(--ink-muted);margin-bottom:8px;">🛡️ 本版值班版主</div>
@@ -1887,7 +2212,7 @@
             </div>
 
             ${
-              sameBoardHot.length
+              !isResourceKind && sameBoardHot.length
                 ? `
                   <div class="forum-side-card">
                     <div style="font-weight:800;font-size:13.5px;margin-bottom:10px;">🔥 同板块相关讨论</div>
@@ -1912,29 +2237,26 @@
       </div>
     `;
 
+    // Bind HandrawCuration
     if (hasModule("HandrawCuration", "bindTopicPanel")) {
-      window.HandrawCuration.bindTopicPanel(root,topic);
+      window.HandrawCuration.bindTopicPanel(root, topic);
     }
     if (!topic.author && topic.resourceDiscussion) {
-      const authorCard=root.querySelector('aside .forum-side-card');
-      if (authorCard) authorCard.remove();
+      const authorCard = root.querySelector("aside .forum-side-card");
+      if (authorCard && !isResourceKind) authorCard.remove();
     }
+
+    // Navigation buttons
     root.querySelector("#topic-back-list-btn").onclick = () => openForumList(true);
     root.querySelector("#topic-crumb-board").onclick = () => {
       FUI.category = topic.category || "all";
       openForumList(true);
     };
-    if (prevTopic) {
-      root.querySelector("#topic-prev-btn").onclick = () => openTopicPage(prevTopic.id, 0);
-    }
-    if (nextTopic) {
-      root.querySelector("#topic-next-btn").onclick = () => openTopicPage(nextTopic.id, 0);
-    }
     root.querySelector("#topic-new-post-btn").onclick = () =>
       openComposeView({ category: topic.category || "experience" }, true);
 
     root.querySelectorAll("[data-open-creator]").forEach((btn) => {
-      if (!btn.getAttribute("data-open-creator")) { btn.outerHTML='<span class="curation-muted">资源讨论</span>'; return; }
+      if (!btn.getAttribute("data-open-creator")) { btn.outerHTML = '<span class="curation-muted">资源讨论</span>'; return; }
       btn.onclick = () => S.goToCreatorProfile(btn.getAttribute("data-open-creator"));
     });
     root.querySelectorAll("[data-switch-topic]").forEach((btn) => {
@@ -1954,32 +2276,299 @@
     });
 
     root.querySelectorAll("[data-topic-page-img]").forEach((imgEl) => {
-      imgEl.onclick = () => {
-        openImageLightboxModal(imgEl.src);
-      };
+      imgEl.onclick = () => openImageLightboxModal(imgEl.src);
     });
 
-    if (workPost && hasModule("HandrawForumWork", "bind")) window.HandrawForumWork.bind(root,workPost);
+    if (workPost && hasModule("HandrawForumWork", "bind")) {
+      window.HandrawForumWork.bind(root, workPost);
+    }
 
-    root.querySelector("#topic-page-like").onclick = () => {
-      S.toggleLike("topic", topic.id, topic.title);
-    };
-    root.querySelector("#topic-page-collect").onclick = () => {
-      S.toggleCollect("topics", topic.id, topic.title);
-    };
-    root.querySelector("#topic-page-scroll-reply").onclick = () => {
-      const sec = root.querySelector("#topic-replies-section");
-      if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" });
-      const inp = root.querySelector("#topic-reply-input");
-      if (inp) setTimeout(() => inp.focus(), 180);
-    };
+    // Dynamic Updates for Like & Favorite (Optimistic UI, no refreshFromServer)
+    const updateCountsUI = _updateTopicCountsUI;
+    const updateLikeBtnUI = _updateTopicLikeBtnUI;
+    const updateFavBtnUI = _updateTopicFavBtnUI;
+
+    const isStyleMount = mount.kind === "style";
+    const isLayoutMount = mount.kind === "layout";
+    const isAssetMount = isStyleMount || isLayoutMount;
+
+    const likeBtn = root.querySelector("#topic-page-like");
+    if (likeBtn) {
+      likeBtn.onclick = () => {
+        const lockKey = `${topic.id}:like`;
+        if (_socialInFlight.has(lockKey)) return;
+        if (!App.state?.loggedIn) {
+          openForumAuthPage("登录后即可点赞！");
+          return;
+        }
+        _socialInFlight.add(lockKey);
+        likeBtn.disabled = true;
+        likeBtn.setAttribute("aria-busy", "true");
+
+        const reqTopicId = topic.id;
+        const reqGen = _activeTopicDetail.gen;
+        const currentSeq = (_socialSeq.get(lockKey) || 0) + 1;
+        _socialSeq.set(lockKey, currentSeq);
+        const reqSeq = currentSeq;
+
+        const curLikeState = _getTopicLikeState(_activeTopicDetail.topicData);
+        const oldLiked = curLikeState.liked;
+        const oldLikeCnt = curLikeState.count;
+        const optimisticLiked = !oldLiked;
+        const optimisticLikeCnt = optimisticLiked ? oldLikeCnt + 1 : Math.max(0, oldLikeCnt - 1);
+
+        _setTopicLikeState(_activeTopicDetail.topicData, optimisticLiked, optimisticLikeCnt);
+        _updateTopicLikeBtnUI();
+        _updateTopicCountsUI();
+
+        const likePayload = isAssetMount
+          ? { targetType: isStyleMount ? "style" : "layout", id: mount.resource.code }
+          : { targetType: "topic", id: topic.id };
+
+        S.apiJson("/api/interactions/like", {
+          method: "POST",
+          body: likePayload
+        }).then((res) => {
+          if (!_activeTopicDetail) {
+            _releaseSocialLock(reqTopicId, "like");
+            return;
+          }
+          if (_activeTopicDetail.id === reqTopicId && _activeTopicDetail.gen === reqGen) {
+            if (_socialSeq.get(lockKey) === reqSeq) {
+              let finalLiked = optimisticLiked;
+              if (res && res.liked != null) finalLiked = Boolean(res.liked);
+              let finalCount;
+              if (isAssetMount) {
+                finalCount = Math.max(0, oldLikeCnt + (finalLiked ? 1 : -1));
+              } else if (res && res.likes != null) {
+                finalCount = Number(res.likes);
+              } else {
+                finalCount = Math.max(0, oldLikeCnt + (finalLiked ? 1 : -1));
+              }
+              _setTopicLikeState(_activeTopicDetail.topicData, finalLiked, finalCount);
+              _updateTopicLikeBtnUI();
+              _updateTopicCountsUI();
+              toast(finalLiked ? "👍 已点赞" : "已取消点赞");
+            }
+            _releaseSocialLock(reqTopicId, "like");
+          } else if (_activeTopicDetail.id === reqTopicId && _activeTopicDetail.gen !== reqGen) {
+            const calibGen = _activeTopicDetail.gen;
+            const calibSeq = reqSeq;
+            S.apiJson(`/api/posts/${encodeURIComponent(reqTopicId)}`).then((postRes) => {
+              if (postRes && postRes.ok && postRes.topic &&
+                  _activeTopicDetail && _activeTopicDetail.id === reqTopicId &&
+                  _activeTopicDetail.gen === calibGen &&
+                  _socialSeq.get(lockKey) === calibSeq) {
+                _applyTopicSocialCalibration(_activeTopicDetail.topicData, postRes, "like");
+                _updateTopicLikeBtnUI();
+                _updateTopicCountsUI();
+              }
+            }).catch(() => {})
+            .finally(() => {
+              _releaseSocialLock(reqTopicId, "like");
+            });
+          } else {
+            _releaseSocialLock(reqTopicId, "like");
+          }
+        }).catch((err) => {
+          if (!_activeTopicDetail) {
+            _releaseSocialLock(reqTopicId, "like");
+            return;
+          }
+          if (_activeTopicDetail.id === reqTopicId && _activeTopicDetail.gen === reqGen) {
+            _setTopicLikeState(_activeTopicDetail.topicData, oldLiked, oldLikeCnt);
+            _updateTopicLikeBtnUI();
+            _updateTopicCountsUI();
+            toast(`点赞失败：${(err && err.message) || err}`);
+            _releaseSocialLock(reqTopicId, "like");
+          } else if (_activeTopicDetail.id === reqTopicId && _activeTopicDetail.gen !== reqGen) {
+            const calibGen = _activeTopicDetail.gen;
+            const calibSeq = reqSeq;
+            S.apiJson(`/api/posts/${encodeURIComponent(reqTopicId)}`).then((postRes) => {
+              if (postRes && postRes.ok && postRes.topic &&
+                  _activeTopicDetail && _activeTopicDetail.id === reqTopicId &&
+                  _activeTopicDetail.gen === calibGen &&
+                  _socialSeq.get(lockKey) === calibSeq) {
+                _applyTopicSocialCalibration(_activeTopicDetail.topicData, postRes, "like");
+                _updateTopicLikeBtnUI();
+                _updateTopicCountsUI();
+              }
+            }).catch(() => {})
+            .finally(() => {
+              _releaseSocialLock(reqTopicId, "like");
+            });
+          } else {
+            _releaseSocialLock(reqTopicId, "like");
+          }
+        });
+      };
+    }
+
+    const collectBtn = root.querySelector("#topic-page-collect");
+    if (collectBtn) {
+      collectBtn.onclick = () => {
+        const lockKey = `${topic.id}:collect`;
+        if (_socialInFlight.has(lockKey)) return;
+        if (!App.state?.loggedIn) {
+          openForumAuthPage("登录后即可收藏！");
+          return;
+        }
+        _socialInFlight.add(lockKey);
+        collectBtn.disabled = true;
+        collectBtn.setAttribute("aria-busy", "true");
+
+        const reqTopicId = topic.id;
+        const reqGen = _activeTopicDetail.gen;
+        const currentSeq = (_socialSeq.get(lockKey) || 0) + 1;
+        _socialSeq.set(lockKey, currentSeq);
+        const reqSeq = currentSeq;
+
+        const curFavState = _getTopicFavoriteState(_activeTopicDetail.topicData);
+        const oldFav = curFavState.favorited;
+        const oldFavCnt = curFavState.count;
+        const optimisticFav = !oldFav;
+        const optimisticFavCnt = optimisticFav ? oldFavCnt + 1 : Math.max(0, oldFavCnt - 1);
+
+        _setTopicFavoriteState(_activeTopicDetail.topicData, optimisticFav, optimisticFavCnt);
+        _updateTopicFavBtnUI();
+        _updateTopicCountsUI();
+
+        const collectPayload = isAssetMount
+          ? { bucket: isStyleMount ? "styles" : "layouts", targetId: mount.resource.code, id: mount.resource.code, title: mount.resource.name }
+          : { bucket: "topics", targetId: topic.id, title: topic.title };
+
+        S.apiJson("/api/collections/toggle", {
+          method: "POST",
+          body: collectPayload
+        }).then((res) => {
+          if (!_activeTopicDetail) {
+            _releaseSocialLock(reqTopicId, "collect");
+            return;
+          }
+          if (_activeTopicDetail.id === reqTopicId && _activeTopicDetail.gen === reqGen) {
+            if (_socialSeq.get(lockKey) === reqSeq) {
+              let finalFav = optimisticFav;
+              if (res && res.collected != null) finalFav = Boolean(res.collected);
+              let finalCount;
+              if (isAssetMount) {
+                finalCount = Math.max(0, oldFavCnt + (finalFav ? 1 : -1));
+              } else if (res && res.favorites != null) {
+                finalCount = Number(res.favorites);
+              } else {
+                finalCount = Math.max(0, oldFavCnt + (finalFav ? 1 : -1));
+              }
+              _setTopicFavoriteState(_activeTopicDetail.topicData, finalFav, finalCount);
+              _updateTopicFavBtnUI();
+              _updateTopicCountsUI();
+              toast(finalFav ? "♥ 已收藏" : "已取消收藏");
+            }
+            _releaseSocialLock(reqTopicId, "collect");
+          } else if (_activeTopicDetail.id === reqTopicId && _activeTopicDetail.gen !== reqGen) {
+            const calibGen = _activeTopicDetail.gen;
+            const calibSeq = reqSeq;
+            S.apiJson(`/api/posts/${encodeURIComponent(reqTopicId)}`).then((postRes) => {
+              if (postRes && postRes.ok && postRes.topic &&
+                  _activeTopicDetail && _activeTopicDetail.id === reqTopicId &&
+                  _activeTopicDetail.gen === calibGen &&
+                  _socialSeq.get(lockKey) === calibSeq) {
+                _applyTopicSocialCalibration(_activeTopicDetail.topicData, postRes, "collect");
+                _updateTopicFavBtnUI();
+                _updateTopicCountsUI();
+              }
+            }).catch(() => {})
+            .finally(() => {
+              _releaseSocialLock(reqTopicId, "collect");
+            });
+          } else {
+            _releaseSocialLock(reqTopicId, "collect");
+          }
+        }).catch((err) => {
+          if (!_activeTopicDetail) {
+            _releaseSocialLock(reqTopicId, "collect");
+            return;
+          }
+          if (_activeTopicDetail.id === reqTopicId && _activeTopicDetail.gen === reqGen) {
+            _setTopicFavoriteState(_activeTopicDetail.topicData, oldFav, oldFavCnt);
+            _updateTopicFavBtnUI();
+            _updateTopicCountsUI();
+            toast(`收藏失败：${(err && err.message) || err}`);
+            _releaseSocialLock(reqTopicId, "collect");
+          } else if (_activeTopicDetail.id === reqTopicId && _activeTopicDetail.gen !== reqGen) {
+            const calibGen = _activeTopicDetail.gen;
+            const calibSeq = reqSeq;
+            S.apiJson(`/api/posts/${encodeURIComponent(reqTopicId)}`).then((postRes) => {
+              if (postRes && postRes.ok && postRes.topic &&
+                  _activeTopicDetail && _activeTopicDetail.id === reqTopicId &&
+                  _activeTopicDetail.gen === calibGen &&
+                  _socialSeq.get(lockKey) === calibSeq) {
+                _applyTopicSocialCalibration(_activeTopicDetail.topicData, postRes, "collect");
+                _updateTopicFavBtnUI();
+                _updateTopicCountsUI();
+              }
+            }).catch(() => {})
+            .finally(() => {
+              _releaseSocialLock(reqTopicId, "collect");
+            });
+          } else {
+            _releaseSocialLock(reqTopicId, "collect");
+          }
+        });
+      };
+    }
+
+    const scrollReplyBtn = root.querySelector("#topic-page-scroll-reply");
+    if (scrollReplyBtn) {
+      scrollReplyBtn.onclick = () => {
+        const sec = root.querySelector("#topic-replies-section");
+        if (sec) sec.scrollIntoView({ behavior: getScrollBehavior(), block: "start" });
+        const inp = root.querySelector("#topic-reply-input");
+        if (inp) setTimeout(() => inp.focus(), 180);
+      };
+    }
+
+    const bottomReplyBtn = root.querySelector("#topic-page-bottom-reply");
+    if (bottomReplyBtn) {
+      bottomReplyBtn.onclick = () => {
+        const inp = root.querySelector("#topic-reply-input");
+        if (inp) {
+          inp.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
+          inp.focus();
+        }
+      };
+    }
+
+    const quoteReplyBtn = root.querySelector("#topic-page-quote-reply");
+    if (quoteReplyBtn) {
+      quoteReplyBtn.onclick = () => {
+        const inp = root.querySelector("#topic-reply-input");
+        if (inp) {
+          const authorText = topic.authorName || topic.author || "楼主";
+          inp.value = `引用 @${authorText} 楼主正文：\n> ` + (inp.value || "");
+          inp.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
+          inp.focus();
+        }
+      };
+    }
+
+    const bottomQuoteBtn = root.querySelector("#topic-page-bottom-quote");
+    if (bottomQuoteBtn) {
+      bottomQuoteBtn.onclick = () => {
+        const inp = root.querySelector("#topic-reply-input");
+        if (inp) {
+          const authorText = topic.authorName || topic.author || "楼主";
+          inp.value = `引用 @${authorText} 楼主正文：\n> ` + (inp.value || "");
+          inp.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
+          inp.focus();
+        }
+      };
+    }
 
     root.querySelector("#topic-page-share").onclick = () => {
       FUI.topicInlineDrawer = FUI.topicInlineDrawer === "share" ? "" : "share";
       renderForum();
     };
     root.querySelector("#topic-page-report").onclick = () => {
-      if (!App.state.loggedIn) {
+      if (!App.state?.loggedIn) {
         openForumAuthPage("登录后即可参与社区内容自治举报反馈", () => {
           FUI.topicInlineDrawer = "report";
           renderForum();
@@ -2002,6 +2591,7 @@
       });
     }
 
+    // Mod Toolbar Actions
     root.querySelectorAll("[data-mod-op]").forEach((btn) => {
       btn.onclick = async () => {
         const op = btn.getAttribute("data-mod-op");
@@ -2013,7 +2603,6 @@
             method: "POST",
             body: { topicId: topic.id, op }
           });
-          await S.refreshFromServer();
           if (op === "hide") {
             toast("🛡️ 版务操作生效：已隐藏该违规帖子");
             openForumList(true);
@@ -2022,7 +2611,8 @@
             openForumList(true);
           } else {
             toast("🛡️ 版务操作已生效！");
-            renderForum();
+            _activeTopicDetail.status = "loading";
+            renderTopicDetailPage(root);
           }
         } catch (err) {
           toast(`版务操作失败：${err.message}`);
@@ -2039,7 +2629,6 @@
             method: "POST",
             body: { topicId: topic.id, op: "delete" }
           });
-          await S.refreshFromServer();
           toast("您的帖子已成功删除");
           openForumList(true);
         } catch (err) {
@@ -2047,54 +2636,6 @@
         }
       };
     }
-
-    const arbitrateBtn = root.querySelector("#topic-mod-arbitrate-bounty");
-    if (arbitrateBtn) {
-      arbitrateBtn.onclick = () => {
-        const reps = topic.replies || [];
-        if (!reps.length) {
-          toast("该悬赏帖暂无回复可供仲裁采纳", "warning");
-          return;
-        }
-        const repSummary = reps.map((r, i) => `#${i + 1}楼 @${r.name || r.user}: ${r.text.slice(0, 30)}`).join("\n");
-        const chosenStr = prompt(`请输入要采纳的楼层编号 (1 到 ${reps.length})：\n\n${repSummary}`, "1");
-        if (!chosenStr) return;
-        const floorIdx = parseInt(chosenStr, 10) - 1;
-        if (isNaN(floorIdx) || floorIdx < 0 || floorIdx >= reps.length) {
-          toast("输入的楼层编号无效", "warning");
-          return;
-        }
-        const chosenReply = reps[floorIdx];
-        if (!confirm(`确定要代表社区运营将 ${topic.bounty} 悬赏积分仲裁结算给 @${chosenReply.name || chosenReply.user} 吗？`)) return;
-        S.apiJson(`/api/admin/topics/${topic.id}/moderate`, {
-          method: "POST",
-          body: { action: "settle_bounty", replyId: chosenReply.id, reason: "管理人员前台仲裁采纳悬赏" }
-        }).then(async (res) => {
-          if (!res.ok) throw new Error(res.error || "仲裁失败");
-          await S.refreshFromServer();
-          toast(`🏆 悬赏仲裁采纳成功！${topic.bounty} 积分已发放给 @${chosenReply.name || chosenReply.user}`);
-          renderForum();
-        }).catch((err) => toast("仲裁失败：" + (err.message || err)));
-      };
-    }
-
-    root.querySelectorAll("[data-del-reply]").forEach((btn) => {
-      btn.onclick = async () => {
-        const replyId = btn.getAttribute("data-del-reply");
-        if (!confirm("确定要删除这条回复吗？此操作不可撤销。")) return;
-        try {
-          await S.apiJson("/api/forum/moderate", {
-            method: "POST",
-            body: { topicId: topic.id, replyId, op: "delete_reply" }
-          });
-          await S.refreshFromServer();
-          toast("回复已成功删除");
-          renderForum();
-        } catch (err) {
-          toast(`删除回复失败：${err.message}`);
-        }
-      };
-    });
 
     const moveBtn = root.querySelector("#topic-mod-move-btn");
     if (moveBtn) {
@@ -2109,123 +2650,440 @@
             method: "POST",
             body: { topicId: topic.id, op: "move", targetCategory }
           });
-          await S.refreshFromServer();
           toast("🛡️ 已将该帖移动至目标板块！");
-          renderForum();
+          _activeTopicDetail.status = "loading";
+          renderTopicDetailPage(root);
         } catch (err) {
           toast(`移帖失败：${err.message}`);
         }
       };
     }
 
-    root.querySelectorAll("[data-hide-reply]").forEach((btn) => {
-      btn.onclick = async () => {
-        const replyId = btn.getAttribute("data-hide-reply");
-        try {
-          await S.apiJson("/api/forum/moderate", {
-            method: "POST",
-            body: { topicId: topic.id, replyId, op: "hide_reply" }
-          });
-          await S.refreshFromServer();
-          toast("🛡️ 已隐藏该条违规回复");
-          renderForum();
-        } catch (err) {
-          toast(`操作失败：${err.message}`);
+    const arbitrateBtn = root.querySelector("#topic-mod-arbitrate-bounty");
+    if (arbitrateBtn) {
+      arbitrateBtn.onclick = () => {
+        const reps = [..._activeTopicDetail.replies, ..._activeTopicDetail.pendingReplies];
+        if (!reps.length) {
+          toast("该悬赏帖暂无回复可供仲裁采纳", "warning");
+          return;
         }
+        const repSummary = reps.map((r, i) => `#${i + 1}楼 @${r.name || r.user || r.author}: ${(r.text || "").slice(0, 30)}`).join("\n");
+        const chosenStr = prompt(`请输入要采纳的楼层编号(1 到 ${reps.length})：\n\n${repSummary}`, "1");
+        if (!chosenStr) return;
+        const floorIdx = parseInt(chosenStr, 10) - 1;
+        if (isNaN(floorIdx) || floorIdx < 0 || floorIdx >= reps.length) {
+          toast("输入的楼层编号无效", "warning");
+          return;
+        }
+        const chosenReply = reps[floorIdx];
+        if (!confirm(`确定要代表社区运营将 ${topic.bounty} 悬赏积分仲裁结算给 @${chosenReply.name || chosenReply.user || chosenReply.author} 吗？`)) return;
+        S.apiJson(`/api/admin/topics/${topic.id}/moderate`, {
+          method: "POST",
+          body: { action: "settle_bounty", replyId: chosenReply.id, reason: "管理人员前台仲裁采纳悬赏" }
+        }).then(async (res) => {
+          if (!res.ok) throw new Error(res.error || "仲裁失败");
+          topic.solved = true;
+          chosenReply.accepted = true;
+          if (_activeTopicDetail.topicData?.topic) {
+            _activeTopicDetail.topicData.topic.solved = true;
+          }
+          toast(`🏆 悬赏仲裁采纳成功！${topic.bounty} 积分已发放给 @${chosenReply.name || chosenReply.user || chosenReply.author}`);
+          renderTopicDetailPage(root);
+        }).catch((err) => toast("仲裁失败：" + (err.message || err)));
       };
-    });
+    }
 
     const unlockBtn = root.querySelector("#topic-btn-unlock");
     if (unlockBtn) {
       unlockBtn.onclick = () => {
-        S.unlockWithCredits(topic.id, topic.price, topic.title, topic.authorName, () => renderForum());
+        S.unlockWithCredits(topic.id, topic.price, topic.title, topic.authorName, () => {
+          _activeTopicDetail.status = "loading";
+          renderTopicDetailPage(root);
+        });
       };
     }
 
-    root.querySelectorAll("[data-accept-reply]").forEach((btn) => {
-      btn.onclick = async () => {
-        if (!App.state.loggedIn) {
-          openForumAuthPage("登录后即可采纳最佳调优方案");
-          return;
-        }
-        const rid = btn.getAttribute("data-accept-reply");
-        if (App.state.serverBacked) {
-          try {
-            const res = await S.apiJson(`/api/forum/topics/${encodeURIComponent(topic.id)}/accept-bounty`, {
-              method: "POST",
-              body: { replyId: rid }
-            });
-            await S.refreshFromServer();
-            toast(`🏆 已采纳 @${res.winnerName} 的调优方案，托管的 ${res.bounty}✦ 悬赏金已实时结算入账！`);
-            renderForum();
-          } catch (err) {
-            toast(`采纳失败：${err.message}`);
+    // Resource Mount - copy button & related works & paired resources
+    if (mount.kind === "style" || mount.kind === "layout") {
+      const copyDefBtn = root.querySelector("#resource-copy-def-btn");
+      if (copyDefBtn && mount.resource?.definition) {
+        copyDefBtn.onclick = () => {
+          const text = String(mount.resource.definition || "");
+          if (navigator?.clipboard?.writeText) {
+            navigator.clipboard.writeText(text)
+              .then(() => toast("定义已复制"))
+              .catch(() => toast("复制失败，请手动选择复制"));
+          } else {
+            toast("定义已复制");
           }
+        };
+      }
+
+      const resUnlockBtn = root.querySelector("#resource-btn-unlock");
+      if (resUnlockBtn) {
+        resUnlockBtn.onclick = () => {
+          if (!App.state?.loggedIn) {
+            openForumAuthPage("登录后即可解锁资源！");
+            return;
+          }
+          resUnlockBtn.disabled = true;
+          S.apiJson("/api/unlocks", {
+            method: "POST",
+            body: { targetId: mount.resource.code, targetType: "asset" }
+          }).then(() => {
+            toast("🔓 解锁成功");
+            _activeTopicDetail.status = "loading";
+            renderTopicDetailPage(root);
+          }).catch((err) => {
+            toast("解锁失败：" + ((err && err.message) || "未知错误"));
+            resUnlockBtn.disabled = false;
+          });
+        };
+      }
+
+      // Fetch related works
+      const worksContainer = root.querySelector("#topic-related-works-container");
+      if (worksContainer && mount.resource?.code) {
+        S.apiJson(`/api/forum/resources/${encodeURIComponent(mount.kind)}/${encodeURIComponent(mount.resource.code)}/related?tab=works&limit=8`)
+          .then((res) => {
+            const items = (res && res.items) || [];
+            if (!items.length) {
+              worksContainer.innerHTML = `<div style="padding:16px;text-align:center;color:var(--ink-muted);font-size:13px;background:var(--paper-bg);border-radius:8px;">暂无使用此资源创作的作品</div>`;
+              return;
+            }
+            worksContainer.innerHTML = `
+              <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:12px;min-width:0;max-width:100%;">
+                ${items.slice(0, 8).map((w) => `
+                  <a href="${esc(S.channelUrl("main", { view: "work", id: w.id }))}" style="text-decoration:none;color:inherit;display:block;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:8px;overflow:hidden;min-width:0;max-width:100%;">
+                    <div style="aspect-ratio:1;background:var(--paper-deep);overflow:hidden;">
+                      <img src="${esc(w.image || (w.images && w.images[0]) || "")}" alt="${esc(w.title || "")}" style="width:100%;height:100%;object-fit:cover;" />
+                    </div>
+                    <div style="padding:6px 8px;min-width:0;">
+                      <div style="font-size:12px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:anywhere;">${esc(w.title || "作品")}</div>
+                      <div style="font-size:11px;color:var(--ink-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@${esc(w.authorName || w.author || "")}</div>
+                    </div>
+                  </a>
+                `).join("")}
+              </div>
+            `;
+          })
+          .catch(() => {
+            worksContainer.innerHTML = `<div style="color:var(--ink-muted);font-size:13px;">加载相关作品失败</div>`;
+          });
+      }
+
+      // Fetch paired resources
+      const pairedContainer = root.querySelector("#topic-paired-resources-container");
+      if (pairedContainer && mount.resource?.code) {
+        const pairedTab = mount.kind === "style" ? "layouts" : "styles";
+        S.apiJson(`/api/forum/resources/${encodeURIComponent(mount.kind)}/${encodeURIComponent(mount.resource.code)}/related?tab=${pairedTab}&limit=6`)
+          .then((res) => {
+            const items = (res && res.items) || [];
+            if (!items.length) {
+              pairedContainer.innerHTML = `<div style="color:var(--ink-muted);font-size:12px;padding:8px 0;">暂无搭配推荐</div>`;
+              return;
+            }
+            pairedContainer.innerHTML = items.slice(0, 6).map((it) => `
+              <a href="${esc(S.channelUrl("main", { view: "asset", id: it.id }))}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:8px;text-decoration:none;color:inherit;min-width:0;max-width:100%;">
+                ${it.image ? `<img src="${esc(it.image)}" alt="${esc(it.name || it.title || it.id)}" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0;" />` : ""}
+                <div style="min-width:0;flex:1;overflow:hidden;">
+                  <div style="font-size:12.5px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:anywhere;">${esc(it.name || it.title || it.id)}</div>
+                  <div style="font-size:11px;color:var(--vermilion);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">#${esc(it.id)}</div>
+                </div>
+              </a>
+            `).join("");
+          })
+          .catch(() => {
+            pairedContainer.innerHTML = `<div style="color:var(--ink-muted);font-size:12px;">加载搭配推荐失败</div>`;
+          });
+      }
+    }
+
+    // Delegated click handler on floor replies (R6 + R3)
+    const handleFloorAction = async (e) => {
+      const btn = e.target.closest("button, a, [data-open-creator]");
+      if (!btn) return;
+
+      const replyFloor = btn.getAttribute("data-reply-floor");
+      if (replyFloor) {
+        const name = btn.getAttribute("data-reply-name");
+        const repInp = root.querySelector("#topic-reply-input");
+        if (repInp) {
+          repInp.value = `@${name} #${replyFloor}楼 ` + (repInp.value || "");
+          repInp.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
+          repInp.focus();
+        }
+        return;
+      }
+
+      const quoteFloor = btn.getAttribute("data-quote-floor");
+      if (quoteFloor) {
+        const user = btn.getAttribute("data-reply-user");
+        const name = btn.getAttribute("data-reply-name");
+        const repInp = root.querySelector("#topic-reply-input");
+        if (repInp) {
+          repInp.value = `回复 #${quoteFloor} 楼 @${name || user}：\n> ` + (repInp.value || "");
+          repInp.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
+          repInp.focus();
+        }
+        return;
+      }
+
+      const openCreator = btn.getAttribute("data-open-creator");
+      if (openCreator) {
+        S.goToCreatorProfile(openCreator);
+        return;
+      }
+
+      const acceptRid = btn.getAttribute("data-accept-reply");
+      if (acceptRid) {
+        if (!App.state?.loggedIn) {
+          openForumAuthPage("登录后即可采纳最佳调优方案！");
           return;
         }
-        const rep = (topic.replies || []).find((x) => x.id === rid);
-        if (!rep) return;
-        topic.solved = true;
-        rep.accepted = true;
-        if (rep.user === App.state.user.username) {
-          S.addLedger(`调优方案被采纳赏金入账《${topic.title.slice(0, 14)}…》`, +topic.bounty);
+        try {
+          const res = await S.apiJson(`/api/forum/topics/${encodeURIComponent(topic.id)}/accept-bounty`, {
+            method: "POST",
+            body: { replyId: acceptRid }
+          });
+          topic.solved = true;
+          if (_activeTopicDetail.topicData?.topic) {
+            _activeTopicDetail.topicData.topic.solved = true;
+          }
+          const allReps = [..._activeTopicDetail.replies, ..._activeTopicDetail.pendingReplies];
+          const rep = allReps.find((x) => x.id === acceptRid);
+          if (rep) rep.accepted = true;
+          toast(`🏆 已采纳 @${res.winnerName || (rep && (rep.name || rep.user || rep.author))} 的调优方案，托管的 ${res.bounty || topic.bounty}✦ 悬赏金已实时结算入账！`);
+          renderTopicDetailPage(root);
+        } catch (err) {
+          toast(`采纳失败：${err.message}`);
         }
-        S.saveState();
-        toast(`🏆 已采纳 @${rep.name} 的调优方案，${topic.bounty} 悬赏积分已自动结算！`);
-        renderForum();
-      };
-    });
+        return;
+      }
 
+      const delRid = btn.getAttribute("data-del-reply");
+      if (delRid) {
+        if (!confirm("确定要删除这条回复吗？此操作不可撤销。")) return;
+        try {
+          await S.apiJson("/api/forum/moderate", {
+            method: "POST",
+            body: { topicId: topic.id, replyId: delRid, op: "delete_reply" }
+          });
+          _activeTopicDetail.replies = _activeTopicDetail.replies.filter((x) => x.id !== delRid);
+          _activeTopicDetail.pendingReplies = _activeTopicDetail.pendingReplies.filter((x) => x.id !== delRid);
+          toast("回复已成功删除");
+          renderTopicDetailPage(root);
+        } catch (err) {
+          toast(`删除回复失败：${err.message}`);
+        }
+        return;
+      }
+
+      const hideRid = btn.getAttribute("data-hide-reply");
+      if (hideRid) {
+        try {
+          await S.apiJson("/api/forum/moderate", {
+            method: "POST",
+            body: { topicId: topic.id, replyId: hideRid, op: "hide_reply" }
+          });
+          _activeTopicDetail.replies = _activeTopicDetail.replies.filter((x) => x.id !== hideRid);
+          _activeTopicDetail.pendingReplies = _activeTopicDetail.pendingReplies.filter((x) => x.id !== hideRid);
+          toast("🛡️ 已隐藏该条违规回复");
+          renderTopicDetailPage(root);
+        } catch (err) {
+          toast(`操作失败：${err.message}`);
+        }
+        return;
+      }
+    };
+
+    const repListEl = root.querySelector("#topic-replies-list");
+    if (repListEl) repListEl.onclick = handleFloorAction;
+    const pendListEl = root.querySelector("#topic-pending-replies-list");
+    if (pendListEl) pendListEl.onclick = handleFloorAction;
+
+    // Load More Replies Pagination (R7: de-duplicate & chronological order)
+    const loadMoreBtn = root.querySelector("#topic-load-more-replies-btn");
+    if (loadMoreBtn) {
+      loadMoreBtn.onclick = () => {
+        if (!_activeTopicDetail.nextCursor) return;
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.textContent = "正在加载…";
+        S.apiJson(`/api/posts/${encodeURIComponent(topic.id)}/replies?limit=20&cursor=${encodeURIComponent(_activeTopicDetail.nextCursor)}`)
+          .then((res) => {
+            const newItems = (res && res.items) || [];
+            _activeTopicDetail.nextCursor = (res && res.nextCursor) || null;
+
+            // De-duplicate against existing replies
+            const seenIds = new Set(_activeTopicDetail.replies.map((r) => r.id));
+            const freshItems = newItems.filter((r) => !seenIds.has(r.id));
+
+            // Also check if any item is in pendingReplies, remove from pendingReplies
+            if (_activeTopicDetail.pendingReplies.length > 0) {
+              const freshIds = new Set(freshItems.map((r) => r.id));
+              _activeTopicDetail.pendingReplies = _activeTopicDetail.pendingReplies.filter((r) => !freshIds.has(r.id));
+            }
+
+            const currentCount = _activeTopicDetail.replies.length;
+            _activeTopicDetail.replies.push(...freshItems);
+
+            const listEl = root.querySelector("#topic-replies-list");
+            if (listEl) {
+              const emptyEl = listEl.querySelector("#topic-replies-empty");
+              if (emptyEl) emptyEl.remove();
+              freshItems.forEach((r, i) => {
+                const div = document.createElement("div");
+                div.innerHTML = renderSingleFloorReplyHtml(r, currentCount + i, topic);
+                const child = div.firstElementChild;
+                if (child) listEl.appendChild(child);
+              });
+            }
+
+            if (!_activeTopicDetail.nextCursor) {
+              const loadWrap = root.querySelector("#topic-replies-loadmore-wrap");
+              if (loadWrap) loadWrap.remove();
+
+              // Merge pending replies if any
+              if (_activeTopicDetail.pendingReplies.length > 0) {
+                const remainingIds = new Set(_activeTopicDetail.replies.map((r) => r.id));
+                const remainingPending = _activeTopicDetail.pendingReplies.filter((r) => !remainingIds.has(r.id));
+                const pendCount = _activeTopicDetail.replies.length;
+                _activeTopicDetail.replies.push(...remainingPending);
+                _activeTopicDetail.pendingReplies = [];
+                if (listEl) {
+                  remainingPending.forEach((r, i) => {
+                    const div = document.createElement("div");
+                    div.innerHTML = renderSingleFloorReplyHtml(r, pendCount + i, topic);
+                    const child = div.firstElementChild;
+                    if (child) listEl.appendChild(child);
+                  });
+                }
+              }
+            } else {
+              loadMoreBtn.disabled = false;
+              loadMoreBtn.textContent = "加载更多回复";
+            }
+
+            // Unconditionally update pending replies wrap
+            const pendWrap = root.querySelector("#topic-pending-replies-wrap");
+            if (_activeTopicDetail.pendingReplies.length === 0) {
+              if (pendWrap) pendWrap.remove();
+            } else {
+              const pendList = root.querySelector("#topic-pending-replies-list");
+              if (pendList) {
+                pendList.innerHTML = _activeTopicDetail.pendingReplies
+                  .map((r, i) => renderSingleFloorReplyHtml(r, _activeTopicDetail.replies.length + i, topic))
+                  .join("");
+              }
+            }
+
+            const titleEl = root.querySelector("#topic-replies-title");
+            if (titleEl) {
+              titleEl.textContent = `💬 回复 (${_activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length})`;
+            }
+            const scrollRepBtn = root.querySelector("#topic-page-scroll-reply");
+            if (scrollRepBtn) {
+              scrollRepBtn.textContent = `💬 回复 (${_activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length})`;
+            }
+          })
+          .catch((err) => {
+            loadMoreBtn.disabled = false;
+            loadMoreBtn.textContent = "加载更多回复";
+            toast(`加载回复失败：${(err && err.message) || err}`);
+          });
+      };
+    }
+
+    // Submit Reply
     const repInp = root.querySelector("#topic-reply-input");
     const submitReply = async () => {
-      if (!App.state.loggedIn) {
+      if (!App.state?.loggedIn) {
         openForumAuthPage("登录后即可参与社区讨论并赢取悬赏积分！");
         return;
       }
-      const txt = repInp.value.trim();
+      const txt = (repInp?.value || "").trim();
       if (!txt) {
         toast("请输入回复内容");
         return;
       }
-      const styleInp = root.querySelector("#reply-mount-style");
-      const layoutInp = root.querySelector("#reply-mount-layout");
-      const ms = styleInp ? styleInp.value.trim().toUpperCase().replace(/^#/, "") : "";
-      const ml = layoutInp ? layoutInp.value.trim().toUpperCase().replace(/^#/, "") : "";
+      const submitBtn = root.querySelector("#topic-reply-submit");
+      if (submitBtn) submitBtn.disabled = true;
 
-      if (App.state.serverBacked) {
-        try {
-          const res = await S.apiJson(`/api/forum/topics/${encodeURIComponent(topic.id)}/replies`, {
-            method: "POST",
-            body: { text: txt, mountedStyle: ms || "", mountedLayout: ml || "" }
-          });
-          await S.refreshFromServer();
-          toast(
-            res.rewarded > 0
-              ? `🎉 楼层回复已发布！获得 +${res.rewarded}✦ 互助积分`
-              : "🎉 楼层回复已发布！（今日回帖积分奖励已达上限）"
-          );
-          renderForum();
-        } catch (err) {
-          toast(`回复失败：${err.message}`);
+      try {
+        const res = await S.apiJson(`/api/forum/topics/${encodeURIComponent(topic.id)}/replies`, {
+          method: "POST",
+          body: { text: txt, mountedStyle: "", mountedLayout: "" }
+        });
+
+        const user = App.state.user || {};
+        const newRep = {
+          id: res.replyId || `rep_${Date.now()}`,
+          topicId: topic.id,
+          author: user.username || "me",
+          authorName: user.name || user.display_name || user.username || "创作者",
+          time: "刚刚",
+          text: txt,
+          likes: 0,
+          accepted: false
+        };
+
+        if (_activeTopicDetail.nextCursor) {
+          // Pagination in progress, put in pendingReplies so order remains strictly chronological
+          _activeTopicDetail.pendingReplies.push(newRep);
+
+          // Append to pending replies wrap or create it
+          let pendWrap = root.querySelector("#topic-pending-replies-wrap");
+          let pendList = root.querySelector("#topic-pending-replies-list");
+          if (!pendWrap) {
+            pendWrap = document.createElement("div");
+            pendWrap.id = "topic-pending-replies-wrap";
+            pendWrap.style.cssText = "margin-bottom:18px;padding:12px 14px;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;";
+            pendWrap.innerHTML = `
+              <div style="font-size:12.5px;font-weight:750;color:var(--ink-muted);margin-bottom:10px;">你刚发表的回复：</div>
+              <div id="topic-pending-replies-list" style="display:grid;gap:12px;"></div>
+            `;
+            const box = root.querySelector("#topic-reply-box");
+            if (box && box.parentNode) {
+              box.parentNode.insertBefore(pendWrap, box);
+            }
+            pendList = pendWrap.querySelector("#topic-pending-replies-list");
+            if (pendList) pendList.onclick = handleFloorAction;
+          }
+          if (pendList) {
+            const div = document.createElement("div");
+            div.innerHTML = renderSingleFloorReplyHtml(newRep, _activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length - 1, topic);
+            const child = div.firstElementChild;
+            if (child) pendList.appendChild(child);
+          }
+        } else {
+          _activeTopicDetail.replies.push(newRep);
+          const listEl = root.querySelector("#topic-replies-list");
+          if (listEl) {
+            const emptyEl = listEl.querySelector("#topic-replies-empty");
+            if (emptyEl) emptyEl.remove();
+            const div = document.createElement("div");
+            div.innerHTML = renderSingleFloorReplyHtml(newRep, _activeTopicDetail.replies.length - 1, topic);
+            const child = div.firstElementChild;
+            if (child) listEl.appendChild(child);
+          }
         }
-        return;
-      }
 
-      topic.replies = topic.replies || [];
-      topic.replies.push({
-        id: "rep_" + Date.now(),
-        user: App.state.user.username,
-        name: App.state.user.name,
-        time: "刚刚",
-        text: txt,
-        mountedStyle: ms || "",
-        mountedLayout: ml || "",
-        likes: 1
-      });
-      S.addLedger(`参与帖子《${topic.title.slice(0, 14)}…》深度回复激励`, +2);
-      S.saveState();
-      toast("🎉 楼层回复已发布！获得 +2 互助积分");
-      renderForum();
+        const titleEl = root.querySelector("#topic-replies-title");
+        if (titleEl) {
+          titleEl.textContent = `💬 回复 (${_activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length})`;
+        }
+        const scrollRepBtn = root.querySelector("#topic-page-scroll-reply");
+        if (scrollRepBtn) {
+          scrollRepBtn.textContent = `💬 回复 (${_activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length})`;
+        }
+
+        if (repInp) repInp.value = "";
+        toast(res.rewarded > 0 ? `🎉 回复已发布！获得 +${res.rewarded}✦ 互助积分` : "🎉 回复已发布！");
+      } catch (err) {
+        toast(`回复失败：${(err && err.message) || err}`);
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
+      }
     };
 
     root.querySelector("#topic-reply-submit").onclick = submitReply;
@@ -2236,6 +3094,17 @@
           submitReply();
         }
       });
+    }
+
+    // Check focus=comment query parameter on load
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("focus") === "comment") {
+      setTimeout(() => {
+        const sec = root.querySelector("#topic-replies-section");
+        if (sec) sec.scrollIntoView({ behavior: getScrollBehavior(), block: "start" });
+        const inp = root.querySelector("#topic-reply-input");
+        if (inp) inp.focus();
+      }, 120);
     }
   }
 
@@ -2360,7 +3229,7 @@
             ${cardBadgeHtml}
             ${
               t.recipe
-                ? `<a class="btn btn-sm" style="padding:1px 8px;font-size:11.5px;" href="${esc(channelUrl("studio", { forkTopic: t.id }))}" data-stop-prop="1">⚡ 一键带入创作台复刻 ↗</a>`
+                ? `<a class="btn btn-sm" style="padding:1px 8px;font-size:11.5px;" href="${esc(channelUrl("studio", { forkTopic: t.id }))}" data-stop-prop="1">⚡ 做同款 ↗</a>`
                 : ""
             }
           </div>

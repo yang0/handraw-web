@@ -18,7 +18,7 @@ const html=W.render(model);
 assert.ok(html.indexOf('fwp-gallery')<html.indexOf('生图提示词'));
 assert.ok(html.indexOf('生图提示词')<html.indexOf('作者点评'));
 assert.ok(html.indexOf('作者点评')<html.indexOf('使用的画风与图型'));
-assert.match(html,/一键复刻/);assert.match(html,/data-hw-src="\/style.webp"/);assert.match(html,/data-hw-src="\/layout.webp"/);
+assert.match(html,/做同款/);assert.match(html,/data-hw-src="\/style.webp"/);assert.match(html,/data-hw-src="\/layout.webp"/);
 assert.doesNotMatch(html,/<img[^>]*\ssrc=/,'initial image loading uses existing queue');
 const paid=W.fromTopic({...topic,price:5,recipe},[],resources,false);
 assert.equal(paid.locked,true);assert.equal(paid.prompt,'');assert.equal(paid.canFork,false);

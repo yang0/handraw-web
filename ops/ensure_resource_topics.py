@@ -100,6 +100,28 @@ def plan(conn: sqlite3.Connection) -> tuple[list[tuple[str, str, dict]], list[tu
         if not row:
             needed_assets.append((kind, norm_code, item))
 
+    # 1b. Published styles & layouts from catalog_assets (exclusive, community, etc.)
+    db_assets = conn.execute(
+        """
+        SELECT * FROM catalog_assets
+        WHERE status = 'published' AND kind IN ('style', 'layout')
+        """
+    ).fetchall()
+    for row in db_assets:
+        item = dict(row)
+        kind = str(item.get("kind") or "style")
+        norm_code = str(item.get("code") or "").strip().upper().lstrip("#")
+        if not norm_code:
+            continue
+        if any(a[0] == kind and a[1] == norm_code for a in needed_assets):
+            continue
+        exists = conn.execute(
+            "SELECT topic_id FROM curation_resource_topics WHERE kind = ? AND UPPER(target_id) = ?",
+            (kind, norm_code),
+        ).fetchone()
+        if not exists:
+            needed_assets.append((kind, norm_code, item))
+
     # 2. Published works without mapping
     needed_works: list[tuple[str, str, dict]] = []
     works = conn.execute(
@@ -174,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         norm_mappings = find_normalizable_mappings(conn)
         total_needed = len(needed_assets) + len(needed_works) + len(norm_mappings)
         print(
-            f"待建讨论帖：官方资源 {len(needed_assets)} 个，作品 {len(needed_works)} 个，待规范化大小写映射 {len(norm_mappings)} 个 (共 {total_needed} 个)"
+            f"待建讨论帖：资源 {len(needed_assets)} 个，作品 {len(needed_works)} 个，待规范化大小写映射 {len(norm_mappings)} 个 (共 {total_needed} 个)"
         )
 
         if not args.apply:

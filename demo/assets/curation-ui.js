@@ -304,7 +304,7 @@
         if (isWork) {
           // The work is already live; send the author to its detail page.
           try {
-            location.href = S.channelUrl("forum", { view: "resource", kind: "work", id: res.workId });
+            location.href = res.topicId ? S.channelUrl("forum", { view: "topic", id: res.topicId }) : S.channelUrl("main", { view: "work", id: res.workId });
           } catch (e) {
             if (errEl) errEl.textContent = "作品已发布。";
           }

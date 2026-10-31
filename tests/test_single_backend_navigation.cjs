@@ -32,12 +32,12 @@ console.log("Single backend navigation: same-origin local paths and production s
   const context={window:{location:{protocol:'http:',hostname:'127.0.0.1',port:'3080'}},URLSearchParams,App:{resourceMap:new Map([['IG-001',{kind:'layout'}]])}};
   vm.createContext(context);
   vm.runInContext(getFunction('demo/assets/shared.js','channelUrl'),context);
-  assert.equal(context.channelUrl('main',{view:'asset',id:'IG-001'}),'/forum/?view=resource&kind=layout&id=IG-001');
-  assert.equal(context.channelUrl('main',{view:'asset',id:'PENDING-STYLE',tab:'comments'}),'/forum/?view=resource&kind=asset&id=PENDING-STYLE&focus=comment');
-  assert.equal(context.channelUrl('main',{view:'work',id:'work_one',focus:'comment'}),'/forum/?view=resource&kind=work&id=work_one&focus=comment');
+  assert.equal(context.channelUrl('main',{view:'asset',id:'IG-001'}),'/t/IG-001');
+  assert.equal(context.channelUrl('main',{view:'asset',id:'PENDING-STYLE',tab:'comments'}),'/t/PENDING-STYLE?focus=comment');
+  assert.equal(context.channelUrl('main',{view:'work',id:'work_one',focus:'comment'}),'/t/work_one?focus=comment');
   assert.equal(context.channelUrl('main',{view:'asset',id:'IG-001',tab:'topics'}),'/forum/?view=related&kind=layout&id=IG-001&tab=topics');
   context.window.location={protocol:'https:',hostname:'handraw-style.com',port:''};
-  assert.equal(context.channelUrl('main',{view:'work',id:'work_one'}),'https://forum.handraw-style.com/?view=resource&kind=work&id=work_one');
+  assert.equal(context.channelUrl('main',{view:'work',id:'work_one'}),'https://forum.handraw-style.com/t/work_one');
   vm.runInContext(getFunction('demo/assets/forum-resources.js','topicUrl'),context);
   assert.equal(context.topicUrl('ordinary_topic'),'https://forum.handraw-style.com/?view=topic&id=ordinary_topic');
 }

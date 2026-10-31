@@ -83,6 +83,9 @@
     if (topic.workId) {
       work = works.find((w) => w && w.id === topic.workId) || null;
     }
+    if (!work && topic.work && topic.work.id) {
+      work = topic.work;
+    }
     if (!work && topic.sharedCard && topic.sharedCard.kind === "work" && topic.sharedCard.id) {
       work = works.find((w) => w && w.id === topic.sharedCard.id) || null;
     }
@@ -198,7 +201,7 @@
 
   function assetHref(asset) {
     if (!asset || (asset.kind !== "style" && asset.kind !== "layout") || !asset.id) return "";
-    return S.channelUrl("forum", { view: "resource", kind: asset.kind, id: asset.id });
+    return S.channelUrl("main", { view: "asset", id: asset.id });
   }
 
   function renderGallery(images) {
@@ -238,9 +241,9 @@
       : "";
     let forkHtml = "";
     if (model.canFork && safeHref(model.forkUrl)) {
-      forkHtml = `<a class="fwp-fork" href="${esc(safeHref(model.forkUrl))}">一键复刻</a>`;
+      forkHtml = `<a class="fwp-fork" href="${esc(safeHref(model.forkUrl))}">做同款</a>`;
     } else if (!model.locked) {
-      forkHtml = `<button type="button" class="fwp-fork is-disabled" disabled>暂不可复刻</button>`;
+      forkHtml = `<button type="button" class="fwp-fork is-disabled" disabled>暂不可做同款</button>`;
     }
     return `<div class="fwp-prompt">
   <div class="fwp-prompt-head">

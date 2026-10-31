@@ -96,7 +96,7 @@
               (w.discussion ? '<span class="hw-discovery__author">' + S.esc(w.imageLabel) + "</span>" : "") +
               '<span class="hw-discovery__author">' + S.esc(w.authorName || w.author || "") + "</span>" +
               (tags ? '<span class="hw-discovery__tags">' + tags + "</span>" : "") +
-              '<span class="hw-discovery__more">' + (w.discussion ? "查看讨论 →" : "查看做法 →") + '</span>' +
+              '<span class="hw-discovery__more">' + (w.discussion ? "查看讨论 →" : "查看帖子 →") + '</span>' +
               "</span>" +
               "</a>"
             );
