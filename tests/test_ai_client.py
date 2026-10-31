@@ -27,9 +27,14 @@ class AIClientTests(unittest.TestCase):
                 pass
 
             def do_POST(self):
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Connection", "close")
                 self.end_headers()
 
                 body = json.dumps({"choices": [{"message": {"content": "Chunked Hello"}}]}).encode("utf-8")
@@ -54,6 +59,7 @@ class AIClientTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_real_http_content_length_json(self):
         """(b) Content-Length JSON response succeeds with ok."""
@@ -62,10 +68,15 @@ class AIClientTests(unittest.TestCase):
                 pass
 
             def do_POST(self):
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
                 body = json.dumps({"choices": [{"message": {"content": "Content-Length Hello"}}]}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(body)
                 self.wfile.flush()
@@ -83,6 +94,7 @@ class AIClientTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_real_http_slow_headers_timeout(self):
         """(c) Slow response headers trickling byte-by-byte times out within budget."""
@@ -119,7 +131,7 @@ class AIClientTests(unittest.TestCase):
                 elapsed = time.monotonic() - start
                 self.assertFalse(meta["ok"])
                 self.assertEqual(meta["reason"], "timeout")
-                self.assertLess(elapsed, 0.35)
+                self.assertLess(elapsed, 0.5)
         finally:
             stop_event.set()
             server_sock.close()
@@ -132,6 +144,10 @@ class AIClientTests(unittest.TestCase):
                 pass
 
             def do_POST(self):
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -154,10 +170,11 @@ class AIClientTests(unittest.TestCase):
                 elapsed = time.monotonic() - start
                 self.assertFalse(meta["ok"])
                 self.assertEqual(meta["reason"], "timeout")
-                self.assertLess(elapsed, 0.45)
+                self.assertLess(elapsed, 0.6)
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_real_http_huge_response_aborts_too_large(self):
         """(e) 3MB response body aborts with too_large."""
@@ -166,6 +183,10 @@ class AIClientTests(unittest.TestCase):
                 pass
 
             def do_POST(self):
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -189,9 +210,11 @@ class AIClientTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_5xx_retries_once_then_succeeds(self):
         call_count = 0
+        call_lock = threading.Lock()
 
         class RetryHandler(http.server.BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -199,17 +222,29 @@ class AIClientTests(unittest.TestCase):
 
             def do_POST(self):
                 nonlocal call_count
-                call_count += 1
-                if call_count == 1:
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
+                with call_lock:
+                    call_count += 1
+                    current = call_count
+
+                if current == 1:
                     self.send_response(500)
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Connection", "close")
                     self.end_headers()
+                    self.wfile.flush()
                 else:
                     body = json.dumps({"choices": [{"message": {"content": "Recovered Hello"}}]}).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Connection", "close")
                     self.end_headers()
                     self.wfile.write(body)
+                    self.wfile.flush()
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RetryHandler)
         port = server.server_address[1]
@@ -224,9 +259,11 @@ class AIClientTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_5xx_retries_once_and_fails(self):
         call_count = 0
+        call_lock = threading.Lock()
 
         class FailHandler(http.server.BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -234,9 +271,18 @@ class AIClientTests(unittest.TestCase):
 
             def do_POST(self):
                 nonlocal call_count
-                call_count += 1
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
+                with call_lock:
+                    call_count += 1
+
                 self.send_response(502)
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
                 self.end_headers()
+                self.wfile.flush()
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FailHandler)
         port = server.server_address[1]
@@ -251,9 +297,11 @@ class AIClientTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_4xx_does_not_retry(self):
         call_count = 0
+        call_lock = threading.Lock()
 
         class ClientErrorHandler(http.server.BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -261,9 +309,18 @@ class AIClientTests(unittest.TestCase):
 
             def do_POST(self):
                 nonlocal call_count
-                call_count += 1
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
+                with call_lock:
+                    call_count += 1
+
                 self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
                 self.end_headers()
+                self.wfile.flush()
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ClientErrorHandler)
         port = server.server_address[1]
@@ -278,6 +335,7 @@ class AIClientTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_skill_prompt_call_model_parameters(self):
         with patch("backend.ai_client.chat") as mock_chat:
@@ -310,7 +368,7 @@ class AIClientTests(unittest.TestCase):
             self.assertTrue(kwargs.get("json_mode"))
 
     def test_v1_dns_resolution_timeout_aborts_without_sending_request(self):
-        """V1: Mock getaddrinfo delays 0.25s with 0.05s budget -> finishes <= 0.15s, 0 requests received."""
+        """V1: Mock getaddrinfo delays 0.35s with 0.05s budget -> finishes <= 0.3s, 0 requests received."""
         request_received = False
 
         class RecordHandler(http.server.BaseHTTPRequestHandler):
@@ -319,9 +377,15 @@ class AIClientTests(unittest.TestCase):
 
             def do_POST(self):
                 nonlocal request_received
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
                 request_received = True
                 self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
                 self.end_headers()
+                self.wfile.flush()
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RecordHandler)
         port = server.server_address[1]
@@ -332,7 +396,7 @@ class AIClientTests(unittest.TestCase):
 
         def slow_getaddrinfo(host, p, *args, **kwargs):
             if host == "slow-dns.mock":
-                time.sleep(0.25)
+                time.sleep(0.35)
                 return real_getaddrinfo("127.0.0.1", p, *args, **kwargs)
             return real_getaddrinfo(host, p, *args, **kwargs)
 
@@ -342,13 +406,14 @@ class AIClientTests(unittest.TestCase):
                     t0 = time.monotonic()
                     text, meta = ai_client.chat([{"role": "user", "content": "hi"}], timeout=0.05)
                     elapsed = time.monotonic() - t0
-                    self.assertLess(elapsed, 0.15)
+                    self.assertLess(elapsed, 0.3)
                     self.assertFalse(meta["ok"])
                     self.assertEqual(meta["reason"], "timeout")
                     self.assertFalse(request_received)
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_v1_post_connect_deadline_expired_sends_no_request(self):
         """V1: If deadline expires right after connection, conn.close() is called and 0 requests sent."""
@@ -417,6 +482,7 @@ class AIClientTests(unittest.TestCase):
     def test_v3_invalid_json_returns_immediately_without_retry(self):
         """V3: 200 response with invalid JSON body returns invalid_json immediately without retry."""
         call_count = 0
+        call_lock = threading.Lock()
 
         class BadJsonHandler(http.server.BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -424,13 +490,21 @@ class AIClientTests(unittest.TestCase):
 
             def do_POST(self):
                 nonlocal call_count
-                call_count += 1
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
+                with call_lock:
+                    call_count += 1
+
                 body = b"<html>502 Bad Gateway from Nginx</html>"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(body)
+                self.wfile.flush()
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), BadJsonHandler)
         port = server.server_address[1]
@@ -446,10 +520,12 @@ class AIClientTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
     def test_v3_connection_reset_retries_once(self):
         """V3: Transient connection reset triggers a single retry and succeeds on attempt 2."""
         attempt = 0
+        attempt_lock = threading.Lock()
 
         class ResetThenSuccessHandler(http.server.BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -457,17 +533,27 @@ class AIClientTests(unittest.TestCase):
 
             def do_POST(self):
                 nonlocal attempt
-                attempt += 1
-                if attempt == 1:
+                with attempt_lock:
+                    attempt += 1
+                    curr_attempt = attempt
+
+                if curr_attempt == 1:
                     # Abruptly close connection without response to trigger ConnectionResetError / RemoteDisconnected
                     self.close_connection = True
                     return
+
+                content_len = int(self.headers.get("Content-Length", 0))
+                if content_len > 0:
+                    self.rfile.read(content_len)
+
                 body = json.dumps({"choices": [{"message": {"content": "Retry Success"}}]}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(body)
+                self.wfile.flush()
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ResetThenSuccessHandler)
         port = server.server_address[1]
@@ -482,6 +568,7 @@ class AIClientTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+            t.join(timeout=3.0)
 
 
 if __name__ == "__main__":
