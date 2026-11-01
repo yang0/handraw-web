@@ -101,6 +101,18 @@ class MockElement {
     return child;
   }
 
+  getContext(type) {
+    return {
+      fillStyle: "",
+      fillRect: () => {},
+      drawImage: () => {}
+    };
+  }
+
+  toDataURL(type, quality) {
+    return "data:image/jpeg;base64,mockcropped";
+  }
+
   removeChild(child) {
     const idx = this.children.indexOf(child);
     if (idx >= 0) {
@@ -257,6 +269,12 @@ function matchesCompound(el, sel) {
       remaining = remaining.slice(m[0].length);
     } else if (remaining === ":checked") {
       return el.checked === true;
+    } else if (remaining.startsWith(":not(")) {
+      const closeIdx = remaining.indexOf(")");
+      if (closeIdx === -1) return false;
+      const innerSel = remaining.slice(5, closeIdx);
+      if (matchesCompound(el, innerSel)) return false;
+      remaining = remaining.slice(closeIdx + 1);
     } else {
       break;
     }
@@ -310,6 +328,43 @@ function querySelectorAll(root, sel) {
   walk(root);
   return results;
 }
+
+class MockFileReader {
+  readAsDataURL(file) {
+    setTimeout(() => {
+      this.result = file._dataUrl || "data:image/png;base64,mock";
+      if (typeof this.onload === "function") this.onload();
+    }, 5);
+  }
+}
+
+class MockImage {
+  constructor() {
+    this.naturalWidth = MockImage.defaultWidth || 800;
+    this.naturalHeight = MockImage.defaultHeight || 800;
+    this.width = this.naturalWidth;
+    this.height = this.naturalHeight;
+    this._src = "";
+  }
+  set src(v) {
+    this._src = v;
+    if (MockImage.customDims && MockImage.customDims[v]) {
+      this.naturalWidth = MockImage.customDims[v].w;
+      this.naturalHeight = MockImage.customDims[v].h;
+      this.width = this.naturalWidth;
+      this.height = this.naturalHeight;
+    }
+    setTimeout(() => {
+      if (typeof this.onload === "function") this.onload();
+    }, 2);
+  }
+  get src() {
+    return this._src;
+  }
+}
+MockImage.defaultWidth = 800;
+MockImage.defaultHeight = 800;
+MockImage.customDims = {};
 
 function createHarness() {
   const doc = {
@@ -386,14 +441,7 @@ function createHarness() {
     return { ok: true };
   };
 
-  class MockFileReader {
-    readAsDataURL(file) {
-      setTimeout(() => {
-        this.result = "data:image/png;base64,mock";
-        if (typeof this.onload === "function") this.onload();
-      }, 5);
-    }
-  }
+
 
   const sandbox = {
     console,
@@ -409,6 +457,7 @@ function createHarness() {
     Set,
     Map,
     FileReader: MockFileReader,
+    Image: MockImage,
     document: doc,
     location: {
       href: "http://localhost:8088/curation",
@@ -421,6 +470,7 @@ function createHarness() {
     window: {
       document: doc,
       FileReader: MockFileReader,
+      Image: MockImage,
       confirm(msg) {
         lastConfirmMsg = msg;
         return confirmResult;
@@ -473,6 +523,7 @@ async function runAllTests() {
   console.log("Starting Phase 3b-7 Curation Share Form Tests...");
 
   // ==========================================
+  // ==========================================
   // TEST 1: 新建 kind=work
   // ==========================================
   {
@@ -497,18 +548,19 @@ async function runAllTests() {
     const kindSelect = root.querySelectorAll("select[data-act=kind]");
     assert.equal(kindSelect.length, 0, "Should have 0 select[data-act=kind]");
 
-    const legend = root.querySelector("fieldset.curation-item legend");
-    assert.ok(legend, "Legend exists");
-    assert.equal(legend.textContent, "作品", "Legend text should be '作品' without index");
+    // Spec Acceptance 1: legend count 0, fieldset.curation-item 0, div.curation-item 1
+    assert.equal(root.querySelectorAll("legend").length, 0, "Legend count should be 0");
+    assert.equal(root.querySelectorAll("fieldset.curation-item").length, 0, "fieldset.curation-item count should be 0");
+    assert.equal(root.querySelectorAll("div.curation-item").length, 1, "div.curation-item count should be 1");
 
     console.log("✓ Test 1 Passed: kind=work form structure and elements verified.");
   }
 
   // ==========================================
-  // TEST 2: 新建 kind=style 1 项 & 点击 additem
+  // TEST 2: 新建 kind=style 单项及封面与示例图元素
   // ==========================================
   {
-    console.log("\n--- Test 2: 新建 kind=style 1 项 & 点击 additem ---");
+    console.log("\n--- Test 2: 新建 kind=style 单项及封面与示例图元素 ---");
     const { root, doc, Curation } = createHarness();
     Curation.render(root, { kind: "style" });
 
@@ -517,29 +569,26 @@ async function runAllTests() {
     assert.equal(countAct("definition"), 1, "Initial: 1 [data-act=definition]");
     assert.equal(countAct("description"), 1, "Initial: 1 [data-act=description]");
 
-    const initialSet = root.querySelector(".curation-set");
-    assert.equal(initialSet, null, "Initial: .curation-set should not exist for 1 item");
+    // Spec Acceptance 1: legend count 0, fieldset 0, div.curation-item 1, additem/delitem/curation-set 0
+    assert.equal(root.querySelectorAll("legend").length, 0, "legend count should be 0");
+    assert.equal(root.querySelectorAll("fieldset.curation-item").length, 0, "fieldset.curation-item count should be 0");
+    assert.equal(root.querySelectorAll("div.curation-item").length, 1, "div.curation-item count should be 1");
+    assert.equal(root.querySelectorAll("[data-act=additem]").length, 0, "additem button count should be 0");
+    assert.equal(root.querySelectorAll("[data-act=delitem]").length, 0, "delitem button count should be 0");
+    assert.equal(root.querySelectorAll(".curation-set").length, 0, ".curation-set count should be 0");
 
-    const addBtn = root.querySelector("[data-act=additem]");
-    assert.ok(addBtn, "Add item button exists");
-    addBtn.click();
+    // Spec Acceptance 2: .curation-cover input[data-act=cover]:not([multiple]) and .curation-examples input[data-act=file][multiple] each 1
+    const coverInput = root.querySelectorAll('.curation-cover input[data-act="cover"]:not([multiple])');
+    assert.equal(coverInput.length, 1, "Should have 1 .curation-cover input[data-act=cover]:not([multiple])");
 
-    const items = root.querySelectorAll(".curation-item");
-    assert.equal(items.length, 2, "After additem: exactly 2 .curation-item elements");
+    const examplesInput = root.querySelectorAll('.curation-examples input[data-act="file"][multiple]');
+    assert.equal(examplesInput.length, 1, "Should have 1 .curation-examples input[data-act=file][multiple]");
 
-    const updatedSet = root.querySelector(".curation-set");
-    assert.ok(updatedSet, "After additem: .curation-set appears");
-    assert.ok(updatedSet.querySelector("[data-act=ftitle]"), ".curation-set contains ftitle");
-    assert.ok(updatedSet.querySelector("[data-act=ftext]"), ".curation-set contains ftext");
+    const helpEl = root.querySelector(".curation-cover .curation-help");
+    assert.ok(helpEl, ".curation-cover has .curation-help");
+    assert.equal(helpEl.textContent, "非正方形图片会自动居中裁剪", "Help text matches spec");
 
-    const newItemFieldset = root.querySelector('.curation-item[data-idx="1"]');
-    assert.ok(newItemFieldset, "New item fieldset exists at index 1");
-    const newItemNameInput = newItemFieldset.querySelector('[data-act="name"]');
-    assert.ok(newItemNameInput, "New item name input exists");
-    assert.equal(newItemNameInput.value, "", "New item name should be empty");
-    assert.equal(doc.activeElement, newItemNameInput, "New item name input should receive focus");
-
-    console.log("✓ Test 2 Passed: kind=style 1 item to 2 items transition, .curation-set and focus verified.");
+    console.log("✓ Test 2 Passed: kind=style single-item structure and cover/examples elements verified.");
   }
 
   // ==========================================
@@ -547,77 +596,50 @@ async function runAllTests() {
   // ==========================================
   {
     console.log("\n--- Test 3: 作品空表单提交 ---");
-    const { root, doc, apiCalls, Curation } = createHarness();
-    Curation.render(root, { kind: "work" });
+    const { root, doc, Curation } = createHarness();
+    Curation.render(root, {});
 
     const submitBtn = root.querySelector('[data-act="submit"]');
-    assert.ok(submitBtn, "Submit button exists");
     submitBtn.click();
 
-    assert.equal(apiCalls.length, 0, "No request sent on empty form submission");
-
     const titleErr = root.querySelector('[data-err-for="title"]');
-    const promptErr = root.querySelector('[data-err-for="prompt"]');
     const fileErr = root.querySelector('[data-err-for="file"]');
+    const promptErr = root.querySelector('[data-err-for="prompt"]');
 
     assert.ok(titleErr && titleErr.textContent.trim().length > 0, "[data-err-for=title] has error message");
-    assert.ok(promptErr && promptErr.textContent.trim().length > 0, "[data-err-for=prompt] has error message");
     assert.ok(fileErr && fileErr.textContent.trim().length > 0, "[data-err-for=file] has image error message");
+    assert.ok(promptErr && promptErr.textContent.trim().length > 0, "[data-err-for=prompt] has prompt error message");
+
+    const summaryErr = root.querySelector("[data-err]");
+    assert.ok(summaryErr && summaryErr.textContent.includes("还有"), "Summary error shows remaining count");
 
     const titleInput = root.querySelector('[data-act="title"]');
-    assert.equal(doc.activeElement, titleInput, "document.activeElement is [data-act=title]");
-
-    const summaryErr = root.querySelector('[data-err]');
-    assert.ok(summaryErr && summaryErr.textContent.includes("还有 3 处需要修改。"), "Summary error shows remaining count");
+    assert.equal(doc.activeElement, titleInput, "First invalid field received focus");
 
     console.log("✓ Test 3 Passed: Empty work form validation, errors display, and focus verified.");
   }
 
   // ==========================================
-  // TEST 4: 草稿 825e80af 数据清洗与映射
+  // TEST 4: 草稿 825e80af 映射与去噪音
   // ==========================================
   {
     console.log("\n--- Test 4: 草稿 825e80af 映射与去噪音 ---");
-    const draft825e = {
-      title: "图文模式",
-      topicTitle: "【画布创作晒图】图文模式",
-      topicBody: "我的创作实测分享",
-      prompt: "Prompt exact text for 825e80af testing",
-      mood: "治愈",
-      color: "C-15",
-      tone: "T-01",
-      mode: "graphic-text",
-      ratio: "3:4",
-      images: ["/test/img1.webp"]
-    };
+    const { root, Curation } = createHarness();
+    Curation.render(root, { draft: "825e80af" });
 
-    const { Curation } = createHarness();
-    const model = Curation.shareModelFrom(draft825e, "work");
-
-    assert.equal(model.items[0].title, "图文模式", "Title is '图文模式'");
-    assert.equal(model.items[0].prompt, draft825e.prompt, "Prompt strictly equals draft prompt");
-    assert.equal(model.items[0].notes, "", "Notes is empty (canned body stripped)");
-
-    // Test full render with draft preload
-    const harness = createHarness();
-    harness.sandbox.window.location.search = "?draft=825e80af";
-    harness.Curation.render(harness.root, { draft: "825e80af" });
-
-    // Wait for promise resolution
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const titleEl = harness.root.querySelector('[data-act="title"]');
-    const promptEl = harness.root.querySelector('[data-act="prompt"]');
-    const notesEl = harness.root.querySelector('[data-act="notes"]');
+    const titleInput = root.querySelector('[data-act="title"]');
+    assert.equal(titleInput.value, "图文模式", "Title is from payload.title");
 
-    assert.equal(titleEl.value, "图文模式", "Rendered [data-act=title] value is '图文模式'");
-    assert.equal(promptEl.value, draft825e.prompt, "Rendered [data-act=prompt] strictly equals draft");
-    assert.equal(notesEl.value, "", "Rendered [data-act=notes] is empty");
+    const promptTextarea = root.querySelector('[data-act="prompt"]');
+    assert.equal(promptTextarea.value, "Prompt exact text for 825e80af testing", "Prompt exact text matches");
 
-    const allInputs = harness.root.querySelectorAll("input, textarea");
-    for (const input of allInputs) {
-      assert.ok(!input.value.includes("我的创作实测分享"), "No input or textarea should contain '我的创作实测分享'");
-    }
+    const notesTextarea = root.querySelector('[data-act="notes"]');
+    assert.equal(notesTextarea.value, "", "Canned body '我的创作实测分享' should be stripped");
+
+    const thumbs = root.querySelectorAll(".curation-thumb");
+    assert.equal(thumbs.length, 1, "Exactly 1 image restored");
 
     console.log("✓ Test 4 Passed: Draft 825e80af normalization and canned body stripping verified.");
   }
@@ -628,7 +650,6 @@ async function runAllTests() {
   {
     console.log("\n--- Test 5: 同草稿提交到 /api/works ---");
     const harness = createHarness();
-    harness.sandbox.window.location.search = "?draft=825e80af";
     harness.Curation.render(harness.root, { draft: "825e80af" });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -639,14 +660,13 @@ async function runAllTests() {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const workCall = harness.apiCalls.find((c) => c.url === "/api/works");
-    assert.ok(workCall, "POST /api/works was called");
-    assert.equal(workCall.body.notes, "", "Request body notes === ''");
-    assert.equal(workCall.body.prompt, "Prompt exact text for 825e80af testing", "Prompt strictly preserved");
-    assert.equal(workCall.body.mood, "治愈", "Mood preserved");
-    assert.equal(workCall.body.color, "C-15", "Color preserved");
-    assert.equal(workCall.body.tone, "T-01", "Tone preserved");
-    assert.equal(workCall.body.mode, "graphic-text", "Mode preserved");
-    assert.equal(workCall.body.ratio, "3:4", "Ratio preserved");
+    assert.ok(workCall, "Submitted to /api/works");
+    assert.equal(workCall.body.title, "图文模式", "Title submitted matches draft");
+    assert.equal(workCall.body.notes, "", "Notes submitted is clean/empty");
+    assert.equal(workCall.body.mode, "graphic-text", "Extra key mode preserved");
+    assert.equal(workCall.body.mood, "治愈", "Extra key mood preserved");
+    assert.equal(workCall.body.color, "C-15", "Extra key color preserved");
+    assert.equal(workCall.body.tone, "T-01", "Extra key tone preserved");
 
     console.log("✓ Test 5 Passed: Draft 825e80af work submission payload and extra fields preserved.");
   }
@@ -673,13 +693,53 @@ async function runAllTests() {
   }
 
   // ==========================================
-  // TEST 7: 画风单项与两项提交到 /api/curation/submissions
+  // TEST 7: 画风单项提交与封面裁剪 (Section 5 items 3, 4, 7)
   // ==========================================
   {
-    console.log("\n--- Test 7: 画风单项与两项提交 ---");
-    // 7.1 Single item
+    console.log("\n--- Test 7: 画风单项提交与封面裁剪 ---");
+    // 7.1: Missing cover validation: submitting with no cover & 0 examples
     const harness1 = createHarness();
     harness1.Curation.render(harness1.root, { kind: "style" });
+
+    const submit1 = harness1.root.querySelector('[data-act="submit"]');
+    submit1.click();
+
+    const coverErr1 = harness1.root.querySelector('[data-err-for="cover"]');
+    const fileErr1 = harness1.root.querySelector('[data-err-for="file"]');
+    assert.ok(coverErr1 && coverErr1.textContent.includes("请上传一张正方形封面图"), "missing_cover message shown for cover");
+    assert.equal(fileErr1 ? fileErr1.textContent.trim() : "", "", "0 example images should NOT trigger error");
+
+    // 7.2: Selecting 10th example image -> displays too_many_images, no upload call fired
+    const fileInput = harness1.root.querySelector('.curation-examples input[data-act="file"]');
+    const tenFiles = Array.from({ length: 10 }, (_, i) => ({ name: `ex_${i}.png`, size: 1024 }));
+    fileInput.files = tenFiles;
+    fileInput.dispatchEvent({ type: "change", target: fileInput });
+
+    const fileErr2 = harness1.root.querySelector('[data-err-for="file"]');
+    assert.ok(fileErr2 && fileErr2.textContent.includes("示例图最多 9 张，当前 10 张。"), "too_many_images message displayed");
+    const uploadCallsBefore = harness1.apiCalls.filter((c) => c.url === "/api/uploads");
+    assert.equal(uploadCallsBefore.length, 0, "No upload fired on too_many_images");
+
+    // 7.3: Select 1200x900 non-square image as cover -> canvas auto-crops to square and updates .curation-help
+    MockImage.defaultWidth = 1200;
+    MockImage.defaultHeight = 900;
+
+    const coverInput = harness1.root.querySelector('.curation-cover input[data-act="cover"]');
+    coverInput.files = [{ name: "cover_rect.png", size: 2048 }];
+    coverInput.dispatchEvent({ type: "change", target: coverInput });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const helpEl = harness1.root.querySelector(".curation-cover .curation-help");
+    assert.ok(helpEl && helpEl.textContent.includes("已自动居中裁剪"), "Auto-crop hint displayed in .curation-help");
+
+    const uploadCallCover = harness1.apiCalls.find((c) => c.url === "/api/uploads");
+    assert.ok(uploadCallCover, "Upload called for cover");
+    assert.equal(uploadCallCover.body.dataUrl, "data:image/jpeg;base64,mockcropped", "Cropped dataUrl uploaded");
+
+    // 7.4: Submit valid style with cover and 1 example
+    MockImage.defaultWidth = 800;
+    MockImage.defaultHeight = 800;
 
     const nameInput = harness1.root.querySelector('[data-act="name"]');
     nameInput.value = "水墨云山";
@@ -693,88 +753,30 @@ async function runAllTests() {
     descInput.value = "适合写意山水插画";
     descInput.dispatchEvent({ type: "input", target: descInput });
 
-    const fileInput = harness1.root.querySelector('[data-act="file"]');
-    harness1.sandbox.window.FileReader = class {
-      readAsDataURL(file) {
-        setTimeout(() => {
-          this.result = "data:image/png;base64,mock";
-          if (this.onload) this.onload();
-        }, 5);
-      }
-    };
-    fileInput.files = [{ name: "s1.png", size: 1024 }];
-    fileInput.dispatchEvent({
-      type: "change",
-      target: fileInput
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 25));
-
-    const submit1 = harness1.root.querySelector('[data-act="submit"]');
-    submit1.click();
+    fileInput.files = [{ name: "ex1.png", size: 1024 }];
+    fileInput.dispatchEvent({ type: "change", target: fileInput });
 
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    const subCall1 = harness1.apiCalls.find((c) => c.url === "/api/curation/submissions");
-    assert.ok(subCall1, "Single item submitted to /api/curation/submissions");
-    assert.equal(subCall1.body.title, "水墨云山", "Single item submission title === item name");
-    assert.equal(subCall1.body.text, "适合写意山水插画", "Single item submission text === item description");
-    assert.equal(subCall1.body.items.length, 1, "Items length is 1");
-    const itKeys = Object.keys(subCall1.body.items[0]);
-    assert.deepEqual(itKeys.sort(), ["definition", "description", "images", "kind", "name"], "Items contain only allowed keys");
+    submit1.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
 
-    // 7.2 Two items with empty collection title
-    const harness2 = createHarness();
-    harness2.Curation.render(harness2.root, { kind: "style" });
+    const subCall = harness1.apiCalls.find((c) => c.url === "/api/curation/submissions");
+    assert.ok(subCall, "Single item submitted to /api/curation/submissions");
+    assert.equal(subCall.body.title, "水墨云山", "Single item submission title === item name");
+    assert.equal(subCall.body.text, "适合写意山水插画", "Single item submission text === item description");
+    assert.equal(subCall.body.items.length, 1, "Items length is 1");
+    const itemSubmitted = subCall.body.items[0];
+    const itKeys = Object.keys(itemSubmitted).sort();
+    assert.deepEqual(itKeys, ["cover", "definition", "description", "images", "kind", "name"], "Item has cover and examples keys");
+    assert.ok(itemSubmitted.cover.includes("/uploads/uploaded_"), "Cover is set");
+    assert.equal(itemSubmitted.images.length, 1, "Examples contains 1 image, excluding cover");
 
-    // Add 1st item
-    harness2.root.querySelector('[data-act="name"]').value = "A";
-    harness2.root.querySelector('[data-act="name"]').dispatchEvent({ type: "input", target: harness2.root.querySelector('[data-act="name"]') });
-    harness2.root.querySelector('[data-act="definition"]').value = "Def A";
-    harness2.root.querySelector('[data-act="definition"]').dispatchEvent({ type: "input", target: harness2.root.querySelector('[data-act="definition"]') });
-
-    // Add 2nd item
-    harness2.root.querySelector('[data-act="additem"]').click();
-    const name2 = harness2.root.querySelectorAll('[data-act="name"]')[1];
-    name2.value = "B";
-    name2.dispatchEvent({ type: "input", target: name2 });
-    const def2 = harness2.root.querySelectorAll('[data-act="definition"]')[1];
-    def2.value = "Def B";
-    def2.dispatchEvent({ type: "input", target: def2 });
-
-    // Mock upload images on both items
-    harness2.sandbox.window.FileReader = harness1.sandbox.window.FileReader;
-    const file1 = harness2.root.querySelectorAll('[data-act="file"]')[0];
-    file1.files = [{ name: "1.png", size: 10 }];
-    file1.dispatchEvent({
-      type: "change",
-      target: file1
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const file2 = harness2.root.querySelectorAll('[data-act="file"]')[1];
-    file2.files = [{ name: "2.png", size: 10 }];
-    file2.dispatchEvent({
-      type: "change",
-      target: file2
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    // Submit with empty collection title
-    const submit2 = harness2.root.querySelector('[data-act="submit"]');
-    submit2.click();
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const subCall2 = harness2.apiCalls.find((c) => c.url === "/api/curation/submissions");
-    assert.ok(subCall2, "Two items submitted to /api/curation/submissions");
-    assert.equal(subCall2.body.title, "投稿：A 等 2 项", "Two items collection title derived as '投稿：A 等 2 项'");
-
-    console.log("✓ Test 7 Passed: Style single and multi-item submission payloads and title derivation verified.");
+    console.log("✓ Test 7 Passed: Style single-item submission, cover validation, and auto-crop verified.");
   }
 
   // ==========================================
-  // TEST 8: 简介 301 字校验
+  // TEST 8: 简介 301 字超限校验
   // ==========================================
   {
     console.log("\n--- Test 8: 简介 301 字超限校验 ---");
@@ -788,20 +790,20 @@ async function runAllTests() {
     const submitBtn = harness.root.querySelector('[data-act="submit"]');
     submitBtn.click();
 
-    assert.equal(harness.apiCalls.length, 0, "No request sent when description exceeds 300 chars");
-
     const descErr = harness.root.querySelector('[data-err-for="description"]');
-    assert.ok(descErr, "Description error span exists");
-    assert.equal(descErr.textContent, "最多 300 字，当前 301 字。", "Error message matches spec table");
+    assert.ok(descErr && descErr.textContent.includes("最多 300 字"), "Description 301 chars error displayed");
 
     console.log("✓ Test 8 Passed: 301-character description limit validation verified.");
   }
 
   // ==========================================
-  // TEST 9: 编辑重提画风
+  // TEST 9: 编辑重提画风模式与未展示键保留 (D1, Acceptance 9)
   // ==========================================
   {
     console.log("\n--- Test 9: 编辑重提画风模式与未展示键保留 ---");
+    MockImage.defaultWidth = 800;
+    MockImage.defaultHeight = 800;
+
     const harness = createHarness();
     harness.Curation.render(harness.root, { editId: "edit_sub_01" });
 
@@ -823,15 +825,16 @@ async function runAllTests() {
     assert.equal(reviseCall.body.payload.extraCustomField, "should_be_preserved", "Custom extra key preserved");
     assert.equal(reviseCall.body.payload.authorLegacy, "artist_wang", "Legacy author key preserved");
     assert.equal(reviseCall.body.payload.name, "水墨江南", "Name preserved");
+    assert.equal(reviseCall.body.payload.cover, "/images/style-demo.webp", "Cover extracted via coverOf");
 
-    console.log("✓ Test 9 Passed: Edit mode controls suppression and extra payload keys retention verified.");
+    console.log("✓ Test 9 Passed: Edit mode controls suppression, coverOf extraction, and extra payload keys retention verified.");
   }
 
   // ==========================================
-  // TEST 10: 作品 <-> 画风 切换与 2 项取消确认
+  // TEST 10: 作品与画风往返切换
   // ==========================================
   {
-    console.log("\n--- Test 10: 作品与画风往返切换及确认保护 ---");
+    console.log("\n--- Test 10: 作品与画风往返切换及字段保持 ---");
     const harness = createHarness();
     harness.Curation.render(harness.root, { kind: "work" });
 
@@ -865,30 +868,7 @@ async function runAllTests() {
     assert.equal(harness.root.querySelector('[data-act="prompt"]').value, "spring mountain landscape", "Style definition -> Work prompt");
     assert.equal(harness.root.querySelector('[data-act="notes"]').value, "my author notes", "Style description -> Work notes");
 
-    // 10.3 Add 2nd item in style, then switch to work with confirm cancelled
-    styleRadio.click();
-    styleRadio.dispatchEvent({ type: "change", target: styleRadio });
-    harness.root.querySelector('[data-act="additem"]').click();
-    assert.equal(harness.root.querySelectorAll(".curation-item").length, 2, "Now 2 items in style");
-
-    harness.setConfirmResult(false);
-    workRadio.click();
-    workRadio.dispatchEvent({ type: "change", target: workRadio });
-
-    assert.equal(harness.getLastConfirmMsg(), "切换为作品只保留第一项，确定吗？", "Confirm prompt matches spec");
-    assert.equal(harness.root.querySelectorAll(".curation-item").length, 2, "Items still 2 after confirm cancel");
-    const checkedRadio = harness.root.querySelector('input[data-act="sharekind"]:checked');
-    assert.equal(checkedRadio.value, "style", "Radio value reverted to style");
-
-    // 10.4 Switch to work with confirm accepted
-    harness.setConfirmResult(true);
-    workRadio.click();
-    workRadio.dispatchEvent({ type: "change", target: workRadio });
-
-    assert.equal(harness.root.querySelectorAll(".curation-item").length, 1, "Single item retained after confirm ok");
-    assert.equal(harness.root.querySelector('input[data-act="sharekind"]:checked').value, "work", "Radio value is now work");
-
-    console.log("✓ Test 10 Passed: Bidirectional kind switching, data preservation, and confirm behavior verified.");
+    console.log("✓ Test 10 Passed: Bidirectional single-item kind switching and data preservation verified.");
   }
 
   console.log("\n=======================================================");

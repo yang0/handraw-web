@@ -28,12 +28,26 @@ class CurationTests(unittest.TestCase):
         self.admin=dict(self.users['admin_user'],role='admin')
         self.author=self.users['author']
         C.grant_access(self.db,self.admin,{'usernames':['review_a','review_b','review_c'],'kinds':['style','layout','work'],'action':'grant','reason':'验收审核组'})
+        uploads = Path(self.tmp.name) / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+        img = Image.new("RGB", (200, 200), color=(255, 255, 255))
+        img.save(uploads / "cover_square.jpg")
+        self.cover_url = "/uploads/cover_square.jpg"
+        with self.db.transaction() as tx:
+            tx.execute(
+                "INSERT INTO user_uploads (id, user_id, cat, name_zh, image_url, file_path, bytes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("upl_cover_01", self.author["id"], "other", "cover_square.jpg", "/uploads/cover_square.jpg", str(uploads / "cover_square.jpg"), 100, C._now(), C._now())
+            )
 
     def tearDown(self):
         self.db.close();self.env.stop();self.tmp.cleanup()
 
     def item(self,kind='style',**overrides):
-        return dict({'kind':kind,'name':'纸上微光','title':'纸上微光作品','images':['/images/FA-001.webp'],'definition':'秘密定义：自然纸纹和墨线','prompt':'秘密提示：窗边一束花','unlockCost':5},**overrides)
+        base = {'kind':kind,'name':'纸上微光','title':'纸上微光作品','images':['/images/FA-001.webp'],'definition':'秘密定义：自然纸纹和墨线','prompt':'秘密提示：窗边一束花','unlockCost':5}
+        if kind in ('style', 'layout'):
+            base['cover'] = getattr(self, 'cover_url', '/uploads/cover_square.jpg')
+        return dict(base, **overrides)
 
     def submit(self,kind='style',**overrides):
         return C.submit(self.db,self.author,{'title':'微光投稿测试','text':'公开介绍','items':[self.item(kind,**overrides)],'requestId':overrides.get('requestId','')})
@@ -50,20 +64,37 @@ class CurationTests(unittest.TestCase):
         S.publish_user_work(self.db,self.author,{
             'title':work_item['title'],'prompt':work_item['prompt'],'images':work_item['images'],
             'styles':work_item.get('styles') or [],'layout':work_item.get('layout') or ''})
-        body={'title':'多项分享','requestId':'stable-key','items':[self.item('style'),self.item('layout')]}
-        res=C.submit(self.db,self.author,body)
-        self.assertEqual(C.submit(self.db,self.author,body)['topicId'],res['topicId'])
-        self.assertEqual(len(res['submissions']),2)
+        # Phase 3b-10: Multi-item submission is rejected with 400 single_item_only
+        multi_body={'title':'多项分享','requestId':'stable-key-multi','items':[self.item('style'),self.item('layout')]}
+        with self.assertRaises(S.ServiceError) as multi_ctx:
+            C.submit(self.db,self.author,multi_body)
+        self.assertEqual(multi_ctx.exception.code,'single_item_only')
+        self.assertEqual(multi_ctx.exception.status,400)
+
+        # Single item style submission
+        body_style={'title':'画风分享','requestId':'stable-key-style','items':[self.item('style')]}
+        res_style=C.submit(self.db,self.author,body_style)
+        self.assertEqual(C.submit(self.db,self.author,body_style)['topicId'],res_style['topicId'])
+        self.assertEqual(len(res_style['submissions']),1)
+
+        # Single item layout submission
+        body_layout={'title':'图型分享','requestId':'stable-key-layout','items':[self.item('layout')]}
+        res_layout=C.submit(self.db,self.author,body_layout)
+        self.assertEqual(C.submit(self.db,self.author,body_layout)['topicId'],res_layout['topicId'])
+        self.assertEqual(len(res_layout['submissions']),1)
+
         boot=S.build_boot_payload(self.db,None)
-        self.assertEqual(len([t for t in boot['topics'] if t['id']==res['topicId']]),1)
+        self.assertEqual(len([t for t in boot['topics'] if t['id']==res_style['topicId']]),1)
+        self.assertEqual(len([t for t in boot['topics'] if t['id']==res_layout['topicId']]),1)
         self.assertNotIn('秘密定义',json.dumps(boot,ensure_ascii=False))
         self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM catalog_assets').fetchone()[0],0)
-        pending_code=res['submissions'][0]['targetId']
+        pending_code=res_style['submissions'][0]['targetId']
         with self.assertRaises(S.ServiceError) as generation_error:
             S.prepare_cloud_generation(self.db,self.author,{'style1':pending_code,'prompt':'不能绕过收录'})
         self.assertEqual(generation_error.exception.code,'asset_not_collected')
         with self.assertRaises(S.ServiceError):
             S.build_skill_asset_content(self.db,self.author,pending_code)
+        # 2 votes for style, 2 votes for layout
         for _ in range(2):
             self.ballot('review_a');self.ballot('review_b')
         boot=S.build_boot_payload(self.db,None)

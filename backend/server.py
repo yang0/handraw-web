@@ -754,7 +754,7 @@ def validate_publish_media(db: Database, user: dict[str, Any] | None, body: dict
     if not user:
         raise ServiceError("请先登录账号后再发布媒体", status=401, code="login_required")
     uid = int(user["id"])
-    for key in ("image", "imageUrl"):
+    for key in ("image", "imageUrl", "cover"):
         raw = out.get(key)
         if isinstance(raw, str) and raw.startswith("data:image/"):
             saved = save_data_url_upload(db, user, raw, name_zh=str(out.get("title") or "作品配图"))
@@ -1313,6 +1313,7 @@ def _grant_published_media(
     if not row or row["status"] != "published":
         return
     values: list[str] = []
+    values.extend(str(v) for v in _iter_media_values(body.get("cover")))
     values.extend(str(v) for v in _iter_media_values(body.get("image")))
     values.extend(str(v) for v in _iter_media_values(body.get("images")))
     for media_url in values:

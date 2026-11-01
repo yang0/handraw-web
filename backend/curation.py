@@ -15,6 +15,7 @@ import uuid
 from typing import Any
 
 from .db import Database
+from .media_dims import image_size, is_square
 from .services import ServiceError, apply_wallet_delta, get_site_settings, utc_now_iso
 
 KINDS: tuple[str, ...] = ("style", "layout", "work")
@@ -62,7 +63,7 @@ def _s(value: Any, limit: int = 240) -> str:
     return str(value or "").strip()[:limit]
 
 
-def _clean_images(images: Any) -> list[str]:
+def _clean_images(images: Any, limit: int = 50) -> list[str]:
     """Accept {url}-shaped objects or plain strings; normalize via sanitize_media_url.
 
     No filename heuristics. Router owns network URL / local path ownership checks;
@@ -94,9 +95,34 @@ def _clean_images(images: Any) -> list[str]:
             continue
         seen.add(cleaned)
         out.append(cleaned[:500])
-        if len(out) >= MAX_IMAGES:
+        if len(out) >= limit:
             break
     return out
+
+
+def cover_of(p: dict[str, Any] | None) -> str | None:
+    if not isinstance(p, dict):
+        return None
+    raw = p.get("cover") or p.get("image")
+    if raw and isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    imgs = p.get("images")
+    if isinstance(imgs, list) and imgs:
+        first = imgs[0]
+        if isinstance(first, str) and first.strip():
+            return first.strip()
+    return None
+
+
+def examples_of(p: dict[str, Any] | None) -> list[str]:
+    if not isinstance(p, dict):
+        return []
+    c = cover_of(p)
+    imgs = p.get("images")
+    if not isinstance(imgs, list):
+        return []
+    return [u for u in imgs if isinstance(u, str) and u.strip() and u.strip() != c]
+
 
 
 
@@ -132,49 +158,69 @@ def _event(tx: Any, submission_id: str, actor: str, event_type: str, detail: dic
 # Payload validation / normalisation
 # ---------------------------------------------------------------------------
 
-def _normalise_item(kind: str, item: dict[str, Any]) -> dict[str, Any]:
-    if kind == "style":
+def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = False) -> dict[str, Any]:
+    if kind in ("style", "layout"):
         name = _s(item.get("name") or item.get("title"), 80)
         definition = _s(item.get("definition") or item.get("prompt"), MAX_PAYLOAD_TEXT)
+        label = "画风" if kind == "style" else "图型"
         if not name:
-            raise ServiceError("画风名称不能为空", status=400, code="missing_name")
+            raise ServiceError(f"{label}名称不能为空", status=400, code="missing_name")
         if not definition:
-            raise ServiceError("画风定义不能为空", status=400, code="missing_definition")
-        images = _clean_images(item.get("images") or item.get("image"))
-        if not images:
-            raise ServiceError("画风需上传至少一张真实示例图", status=400, code="missing_image")
+            raise ServiceError(f"{label}定义不能为空", status=400, code="missing_definition")
         cost = max(0, min(50, _int(item.get("unlockCost") or item.get("price") or 0)))
-        return {
-            "kind": "style",
+
+        raw_cov = str(item.get("cover") or item.get("image") or "").strip()
+        cover_cand = _clean_images(item.get("cover") or item.get("image"))[:1]
+
+        if strict_cover:
+            # 1. External URL rejection
+            if raw_cov.startswith(("http://", "https://", "//")):
+                raise ServiceError("封面请上传到本站，不能使用外部链接。", status=400, code="cover_external")
+            # 2. Missing cover
+            if not cover_cand:
+                raise ServiceError("请上传一张正方形封面图。", status=400, code="missing_cover")
+            c = cover_cand[0]
+            if c.startswith(("http://", "https://", "//")):
+                raise ServiceError("封面请上传到本站，不能使用外部链接。", status=400, code="cover_external")
+            # 3. Read image dimensions
+            dims = image_size(c)
+            if dims is None:
+                raise ServiceError("封面图无法读取，请重新上传。", status=400, code="cover_unreadable")
+            w, h = dims
+            # 4. Square check
+            if not is_square(w, h):
+                raise ServiceError(
+                    f"封面需要是正方形（当前 {w}×{h}），请重新选择或使用自动裁剪。",
+                    status=400,
+                    code="cover_not_square",
+                )
+            # 5. Example images (0-9, ratio free, excluding cover)
+            examples = [u for u in _clean_images(item.get("images")) if u != c]
+            if len(examples) > 9:
+                raise ServiceError(f"示例图最多 9 张，当前 {len(examples)} 张。", status=400, code="too_many_images")
+        else:
+            if cover_cand:
+                c = cover_cand[0]
+                examples = [u for u in _clean_images(item.get("images")) if u != c]
+            else:
+                imgs = _clean_images(item.get("images"))
+                c = imgs[0] if imgs else ""
+                examples = imgs[1:] if len(imgs) > 1 else []
+
+        group_name = _s(item.get("group"), 80)
+        res = dict(item)
+        res.update({
+            "kind": kind,
             "name": name,
             "description": _s(item.get("description") or item.get("notes"), 300),
             "definition": definition,
-            "group": _s(item.get("group"), 80),
+            "group": group_name,
             "unlockCost": cost,
-            "image": images[0],
-            "images": images,
-        }
-    if kind == "layout":
-        name = _s(item.get("name") or item.get("title"), 80)
-        definition = _s(item.get("definition") or item.get("prompt"), MAX_PAYLOAD_TEXT)
-        if not name:
-            raise ServiceError("图型名称不能为空", status=400, code="missing_name")
-        if not definition:
-            raise ServiceError("图型定义不能为空", status=400, code="missing_definition")
-        images = _clean_images(item.get("images") or item.get("image"))
-        if not images:
-            raise ServiceError("图型需上传至少一张真实示例图", status=400, code="missing_image")
-        cost = max(0, min(50, _int(item.get("unlockCost") or item.get("price") or 0)))
-        return {
-            "kind": "layout",
-            "name": name,
-            "description": _s(item.get("description") or item.get("notes"), 300),
-            "definition": definition,
-            "group": _s(item.get("group"), 80),
-            "unlockCost": cost,
-            "image": images[0],
-            "images": images,
-        }
+            "cover": c,
+            "image": c,
+            "images": examples,
+        })
+        return res
     # work
     title = _s(item.get("title") or item.get("name"), 120)
     prompt = _s(item.get("prompt") or item.get("definition"), MAX_PAYLOAD_TEXT)
@@ -223,21 +269,25 @@ def _normalise_item(kind: str, item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _parse_items(body: dict[str, Any]) -> list[dict[str, Any]]:
+def _parse_items(body: dict[str, Any], *, strict_cover: bool = True) -> list[dict[str, Any]]:
     raw_items = body.get("items")
     if not isinstance(raw_items, list) or not raw_items:
         raise ServiceError("请至少提交一项内容", status=400, code="missing_items")
-    items: list[dict[str, Any]] = []
-    for raw in raw_items:
-        if not isinstance(raw, dict):
-            raise ServiceError("提交项格式错误", status=400, code="bad_item")
-        kind = _s(raw.get("kind"), 20).lower()
-        if kind not in KINDS:
-            raise ServiceError(f"不支持的收录类型：{kind or '(空)'}", status=400, code="bad_kind")
-        items.append(_normalise_item(kind, raw))
-        if len(items) > 20:
-            raise ServiceError("单次提交项过多", status=400, code="too_many_items")
-    return items
+    raw_kinds = [str(r.get("kind") or "").lower() for r in raw_items if isinstance(r, dict)]
+    if "work" in raw_kinds and len(raw_items) > 1:
+        raise ServiceError("作品已改为即时发布，请通过作品发布接口单独提交", status=400, code="work_publish_moved")
+    if len(raw_items) != 1:
+        raise ServiceError("每次投稿只能提交一个画风或一个图型。", status=400, code="single_item_only")
+    raw = raw_items[0]
+    if not isinstance(raw, dict):
+        raise ServiceError("提交项格式错误", status=400, code="bad_item")
+    kind = _s(raw.get("kind"), 20).lower()
+    if kind not in KINDS:
+        raise ServiceError(f"不支持的收录类型：{kind or '(空)'}", status=400, code="bad_kind")
+    norm = _normalise_item(kind, raw, strict_cover=strict_cover)
+    if kind == "work":
+        raise ServiceError("作品已改为即时发布，请通过作品发布接口单独提交", status=400, code="work_publish_moved")
+    return [norm]
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +399,13 @@ def _safe_preview(payload: dict[str, Any]) -> dict[str, Any]:
     for key in ("name", "title", "description", "notes", "layout", "ratio", "mode", "styles", "price", "unlockCost", "mood", "color", "tone"):
         if key in payload:
             preview[key] = payload[key]
-    images = payload.get("images") or ([payload["image"]] if payload.get("image") else [])
-    preview["images"] = images[:MAX_IMAGES]
+    c = cover_of(payload)
+    if c:
+        preview["cover"] = c
+        preview["image"] = c
+    exs = examples_of(payload)
+    combined = ([c] if c else []) + exs
+    preview["images"] = combined[:10]
     return preview
 
 
@@ -399,7 +454,7 @@ def submit(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str
     uid = _user_id(user)
     body = body or {}
     request_id = _s(body.get("requestId"), 80)
-    items = _parse_items(body)
+    items = _parse_items(body, strict_cover=True)
 
     # Works no longer travel through review at all (D-02).  Publishing is the
     # single path for a work, so a work item inside a submission — alone or
@@ -411,9 +466,12 @@ def submit(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str
             "作品已改为即时发布，请通过作品发布接口单独提交", status=400, code="work_publish_moved"
         )
 
-    title = _s(body.get("title"), 140) or "社区投稿征集"
+    it0 = items[0]
+    default_title = _s(it0.get("name") or it0.get("title"), 140) or "社区投稿征集"
+    default_text = _s(it0.get("description") or it0.get("notes"), 60000) or "以下为本帖投稿内容，等待社区审核收录。"
+    title = _s(body.get("title"), 140) or default_title
     from .runtime_policy import sanitize_html
-    text = sanitize_html(_s(body.get("text") or body.get("summary"), 60000)) or "以下为本帖投稿内容，等待社区审核收录。"
+    text = sanitize_html(_s(body.get("text") or body.get("summary"), 60000)) or default_text
     now_iso = _now()
     now_ms = _now_ms()
 
@@ -454,9 +512,11 @@ def submit(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str
         topic_id = f"topic_{now_ms}_{uuid.uuid4().hex[:4]}"
         images_preview: list[str] = []
         for it in items:
-            imgs = it.get("images") or ([it["image"]] if it.get("image") else [])
-            for url in imgs:
-                if url not in images_preview:
+            c = cover_of(it)
+            exs = examples_of(it)
+            combined = ([c] if c else []) + exs
+            for url in combined:
+                if url and url not in images_preview:
                     images_preview.append(url)
         styles_preview: list[str] = []
         layout_preview = ""
@@ -482,7 +542,7 @@ def submit(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str
                 title,
                 username,
                 str(user.get("display_name") or username),
-                json.dumps(images_preview[:MAX_IMAGES], ensure_ascii=False),
+                json.dumps(images_preview[:10], ensure_ascii=False),
                 json.dumps(styles_preview[:3], ensure_ascii=False),
                 layout_preview,
                 text,
@@ -960,10 +1020,9 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
     pioneer = kind == 'work' and any(counts.get(code, 0) < threshold for code in refs)
 
     if kind in ("style", "layout"):
-        images = payload.get("images") or ([payload.get("image")] if payload.get("image") else [])
-        if not images:
+        image_url = cover_of(payload)
+        if not image_url:
             raise ServiceError("发布失败：缺少图像", status=500, code="publish_missing_image")
-        image_url = images[0]
         cost = int(payload.get("unlockCost") or 0)
         group_name = payload.get("group") or (
             "USR 社区共创画风 / Community" if kind == "style" else "social-card"
@@ -1199,7 +1258,11 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
         if honor_credited:
             upgraded = after_honor['badge']
     # Preserve explicit public grants for the collected resource, independently of its forum entry.
-    for url in payload.get('images',[]):
+    all_urls = list(payload.get('images', []))
+    cov = cover_of(payload)
+    if cov and cov not in all_urls:
+        all_urls.append(cov)
+    for url in all_urls:
         media = tx.execute('SELECT user_id FROM studio_generation_media WHERE media_url=? UNION SELECT user_id FROM user_uploads WHERE image_url=? LIMIT 1',(url,url)).fetchone()
         if media and media[0] == owner_uid:
             tx.execute('INSERT INTO media_public_grants (id,media_url,owner_user_id,target_type,target_id,granted_by_user_id,granted_at,revoked_at) VALUES (?,?,?,?,?,?,?,NULL) ON CONFLICT(media_url,target_type,target_id) DO UPDATE SET revoked_at=NULL,granted_at=excluded.granted_at',(_uid(),url,owner_uid,ref_type,target_id,owner_uid,now_iso))
@@ -1245,7 +1308,7 @@ def revise(db: Database, user: dict[str, Any], submission_id: str, body: dict[st
             val = item.get(field)
             if (val is None or val == "" or val == "[包含资源专属指令，已隐藏]") and field in prev_payload:
                 item[field] = prev_payload[field]
-        normalised = _normalise_item(kind, item)
+        normalised = _normalise_item(kind, item, strict_cover=True)
         _validate_references(tx,normalised)
         new_rev = int(sub["current_revision"]) + 1
         now = _now()
@@ -1484,13 +1547,16 @@ def _release_invalid_assignments(tx, reviewer=None, kind=None):
 
 
 def _sync_topic_preview(tx, topic_id):
-    images=[]
+    images = []
     for r in tx.execute('SELECT id,current_revision FROM curation_submissions WHERE topic_id=?',(topic_id,)).fetchall():
-        payload=_current_payload(tx,r['id'],r['current_revision'])
-        for url in payload.get('images',[]):
-            if url not in images:
+        payload = _current_payload(tx, r['id'], r['current_revision'])
+        c = cover_of(payload)
+        exs = examples_of(payload)
+        combined = ([c] if c else []) + exs
+        for url in combined:
+            if url and url not in images:
                 images.append(url)
-    tx.execute('UPDATE forum_topics SET images_json=?,updated_at=? WHERE id=?',(json.dumps(images[:MAX_IMAGES],ensure_ascii=False),_now(),topic_id))
+    tx.execute('UPDATE forum_topics SET images_json=?,updated_at=? WHERE id=?',(json.dumps(images[:10], ensure_ascii=False), _now(), topic_id))
 
 
 def _int(value):
