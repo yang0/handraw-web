@@ -1340,10 +1340,10 @@ def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
     last_wid = ""
     while True:
         if force:
-            work_sql = "SELECT id, prompt FROM works WHERE id > ? ORDER BY id ASC LIMIT ?"
+            work_sql = "SELECT id, prompt, subject FROM works WHERE id > ? ORDER BY id ASC LIMIT ?"
             work_rows = conn.execute(work_sql, (last_wid, BATCH_SIZE)).fetchall()
         else:
-            work_sql = "SELECT id, prompt FROM works WHERE prompt_has_secret IS NULL AND id > ? ORDER BY id ASC LIMIT ?"
+            work_sql = "SELECT id, prompt, subject FROM works WHERE prompt_has_secret IS NULL AND id > ? ORDER BY id ASC LIMIT ?"
             work_rows = conn.execute(work_sql, (last_wid, BATCH_SIZE)).fetchall()
         if not work_rows:
             break
@@ -1352,8 +1352,9 @@ def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
         for row in work_rows:
             wid = row["id"]
             raw_p = row["prompt"] or ""
+            raw_s = (row["subject"] if "subject" in row.keys() else "") or ""
             try:
-                has_sec = 1 if check_text_has_secret(raw_p, conn, preloaded=preloaded) else 0
+                has_sec = 1 if (check_text_has_secret(raw_p, conn, preloaded=preloaded) or check_text_has_secret(raw_s, conn, preloaded=preloaded)) else 0
                 work_updates.append((has_sec, wid, raw_p))
             except Exception:
                 has_errors = True
@@ -1450,13 +1451,20 @@ def _serialize_work(
     is_unlocked = price <= 0 or (wid in unlocked_set) or is_author or is_staff
 
     full_prompt, was_masked = get_work_client_prompt(row, is_admin_route=False)
-    if is_unlocked:
+    try:
+        raw_subject = str(row["subject"] or "")
+    except (KeyError, IndexError):
+        raw_subject = ""
+
+    if is_unlocked and not was_masked:
         safe_prompt = full_prompt
+        safe_subject = raw_subject
     else:
         # No preview.  A 34-character teaser leaks the opening of a paid recipe,
         # and paid works now go live instantly (D-02), so the exposure window is
         # no longer limited by review.
         safe_prompt = ""
+        safe_subject = ""
 
     try:
         stamps = json.loads(row["stamp_counts_json"] or "{}")
@@ -1491,6 +1499,7 @@ def _serialize_work(
         "views": int(row["views"]),
         "stampCounts": stamps,
         "prompt": safe_prompt,
+        "subject": safe_subject,
         "promptMasked": bool((not is_unlocked) or was_masked),
         "reproducible": bool(str(row["prompt"] or "").strip()),
         "notes": row["notes"] or "",

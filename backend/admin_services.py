@@ -895,18 +895,20 @@ def admin_moderate_work(
             # Keep the stored prompt byte-for-byte unless the admin actually
             # rewrote it: stripping would silently change the author's text.
             prompt = str(payload.get("prompt") if payload.get("prompt") is not None else w["prompt"])
+            subject = str(payload.get("subject") if payload.get("subject") is not None else (w["subject"] if "subject" in w.keys() else ""))
             notes = str(payload.get("notes") if payload.get("notes") is not None else w["notes"]).strip()
             from .services import check_text_has_secret
             try:
-                prompt_has_sec = 1 if check_text_has_secret(prompt, tx) else 0
+                has_sec = check_text_has_secret(prompt, tx) or check_text_has_secret(subject, tx)
+                prompt_has_sec = 1 if has_sec else 0
             except Exception:
                 prompt_has_sec = None
             tx.execute(
                 """
-                UPDATE works SET title = ?, price = ?, styles_json = ?, layout_code = ?, mood = ?, prompt = ?, prompt_has_secret = ?, notes = ?, updated_at = ?
+                UPDATE works SET title = ?, price = ?, styles_json = ?, layout_code = ?, mood = ?, prompt = ?, prompt_has_secret = ?, notes = ?, subject = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (title, price, json.dumps(styles, ensure_ascii=False), layout, mood, prompt, prompt_has_sec, notes, now_iso, wid),
+                (title, price, json.dumps(styles, ensure_ascii=False), layout, mood, prompt, prompt_has_sec, notes, subject, now_iso, wid),
             )
         elif act == "delete":
             tx.execute("DELETE FROM work_comments WHERE work_id = ?", (wid,))

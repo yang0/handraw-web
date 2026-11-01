@@ -155,6 +155,7 @@ def _owned_content(db: Any, user: dict, kind: str, item_id: str) -> dict:
         result["prompt"] = safe_p
         if was_masked:
             result["promptMasked"] = True
+            result["subject"] = ""
     elif kind == "topics":
         from .runtime_policy import sanitize_html
         result["summary"] = sanitize_html(result["summary"])
@@ -177,6 +178,9 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
             req_prompt = body.get("prompt")
             if req_prompt and req_prompt != "[包含资源专属指令，已隐藏]":
                 payload["prompt"] = req_prompt
+            req_subject = body.get("subject")
+            if req_subject and req_subject != "[包含资源专属指令，已隐藏]":
+                payload["subject"] = req_subject
             if "title" in body:
                 payload["title"] = body["title"]
             if "notes" in body:
@@ -188,26 +192,43 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
     now = utc_now_iso()
     with db.transaction() as tx:
         if kind == "works":
-            cur_work = tx.execute("SELECT prompt, prompt_has_secret FROM works WHERE id=?", (item_id,)).fetchone()
+            cur_work = tx.execute("SELECT prompt, prompt_has_secret, subject FROM works WHERE id=?", (item_id,)).fetchone()
             cur_prompt = str(cur_work["prompt"] or "") if cur_work else ""
             cur_has_sec = cur_work["prompt_has_secret"] if cur_work else 0
+            cur_subject = str(cur_work["subject"] or "") if (cur_work and "subject" in cur_work.keys()) else ""
 
             # If author omits prompt, or sends empty string/placeholder, keep stored prompt and flag
             req_prompt = body.get("prompt")
             if req_prompt is None or req_prompt == "" or req_prompt == "[包含资源专属指令，已隐藏]":
                 prompt = cur_prompt
-                prompt_has_sec = cur_has_sec
+                prompt_provided = False
             else:
                 prompt = str(req_prompt)
                 if not prompt.strip() or len(prompt) > 20000:
                     raise ServiceError("请填写有效的实际提示词（最多 20000 字）")
+                prompt_provided = True
+
+            req_subject = body.get("subject")
+            if req_subject is None or req_subject == "[包含资源专属指令，已隐藏]":
+                subject = cur_subject
+                subject_provided = False
+            else:
+                subject = str(req_subject)
+                if len(subject) > 2000:
+                    raise ServiceError("主题内容过长（最多2000字）")
+                subject_provided = True
+
+            if not prompt_provided and not subject_provided:
+                prompt_has_sec = cur_has_sec
+            else:
                 from .services import check_text_has_secret
                 try:
-                    prompt_has_sec = 1 if check_text_has_secret(prompt, tx) else 0
+                    has_sec = check_text_has_secret(prompt, tx) or check_text_has_secret(subject, tx)
+                    prompt_has_sec = 1 if has_sec else 0
                 except Exception:
                     prompt_has_sec = None
             notes = str(body.get("notes", row["notes"]))[:20000]
-            tx.execute("UPDATE works SET title=?,prompt=?,prompt_has_secret=?,notes=?,updated_at=? WHERE id=? AND author_username=?", (title,prompt,prompt_has_sec,notes,now,item_id,user["username"]))
+            tx.execute("UPDATE works SET title=?,prompt=?,prompt_has_secret=?,notes=?,subject=?,updated_at=? WHERE id=? AND author_username=?", (title,prompt,prompt_has_sec,notes,subject,now,item_id,user["username"]))
         else:
             from .runtime_policy import sanitize_html
             summary = sanitize_html(str(body.get("body",row["summary"])))

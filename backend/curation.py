@@ -182,6 +182,10 @@ def _normalise_item(kind: str, item: dict[str, Any]) -> dict[str, Any]:
         raise ServiceError("作品标题不能为空", status=400, code="missing_title")
     if not prompt:
         raise ServiceError("作品提示词不能为空", status=400, code="missing_prompt")
+    raw_subject = item.get("subject")
+    if raw_subject is not None and len(str(raw_subject)) > 2000:
+        raise ServiceError("主题内容过长（最多2000字）", status=400, code="subject_too_long")
+    subject = _s(raw_subject, 2000)
     images = _clean_images(item.get("images") or item.get("image"))
     if not images:
         raise ServiceError("作品需上传至少一张真实图", status=400, code="missing_image")
@@ -205,6 +209,7 @@ def _normalise_item(kind: str, item: dict[str, Any]) -> dict[str, Any]:
         "kind": "work",
         "title": title,
         "prompt": prompt,
+        "subject": subject,
         "images": images,
         "styles": styles,
         "layout": _s(item.get("layout"), 40).upper().lstrip("#"),
@@ -363,6 +368,19 @@ def sanitize_curation_payload_for_client(payload: Any, conn: Any = None) -> Any:
         except Exception:
             p["prompt"] = "[包含资源专属指令，已隐藏]"
             p["promptMasked"] = True
+    if "subject" in p and isinstance(p["subject"], str) and p["subject"]:
+        try:
+            if check_text_has_secret(p["subject"], conn):
+                p["subject"] = "[包含资源专属指令，已隐藏]"
+                p["promptMasked"] = True
+        except Exception:
+            p["subject"] = "[包含资源专属指令，已隐藏]"
+            p["promptMasked"] = True
+    if p.get("promptMasked"):
+        if "subject" in p and isinstance(p["subject"], str) and p["subject"]:
+            p["subject"] = "[包含资源专属指令，已隐藏]"
+        if "prompt" in p and isinstance(p["prompt"], str) and p["prompt"]:
+            p["prompt"] = "[包含资源专属指令，已隐藏]"
     if "recipe" in p and p["recipe"]:
         try:
             if check_obj_has_secret(p["recipe"], conn):
@@ -1042,9 +1060,19 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
         images = payload.get("images") or []
         styles = payload.get("styles") or []
         prompt_val = str(payload.get("prompt") or "")
+        raw_subject = payload.get("subject")
+        if raw_subject is not None and len(str(raw_subject)) > 2000:
+            import logging
+            logging.getLogger("curation").error(
+                "Approved work payload subject exceeds 2000 characters: %d chars for sub %s",
+                len(str(raw_subject)), sub.get("id"),
+            )
+            raise ServiceError("主题内容过长（最多2000字）", status=400, code="subject_too_long")
+        sub_subject = str(raw_subject or "").strip()
         from .services import check_text_has_secret
         try:
-            prompt_has_sec = 1 if check_text_has_secret(prompt_val, tx) else 0
+            has_sec = check_text_has_secret(prompt_val, tx) or check_text_has_secret(sub_subject, tx)
+            prompt_has_sec = 1 if has_sec else 0
         except Exception:
             prompt_has_sec = None
         existing_work = tx.execute(
@@ -1056,10 +1084,10 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                 """
                 INSERT INTO works (
                     id, author_username, author_name, title, images_json, styles_json,
-                    layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, prompt_has_secret, notes,
+                    layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, prompt_has_secret, notes, subject,
                     status, featured, is_new_release, pioneer_rewarded, cheers, likes, favorites, forks,
                     published_at_ms, created_label, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0, ?, '刚刚', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0, ?, '刚刚', ?, ?)
                 """,
                 (
                     target_id,
@@ -1078,6 +1106,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     prompt_val,
                     prompt_has_sec,
                     payload.get("notes") or "",
+                    sub_subject,
                     now_ms,
                     now_iso,
                     now_iso,
@@ -1089,7 +1118,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                 UPDATE works SET
                     author_username = ?, author_name = ?, title = ?, images_json = ?, styles_json = ?,
                     layout_code = ?, color_code = ?, tone_code = ?, ratio = ?, mode = ?, mood = ?,
-                    price = ?, prompt = ?, prompt_has_secret = ?, notes = ?, status = 'published', updated_at = ?
+                    price = ?, prompt = ?, prompt_has_secret = ?, notes = ?, subject = ?, status = 'published', updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -1108,6 +1137,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     prompt_val,
                     prompt_has_sec,
                     payload.get("notes") or "",
+                    sub_subject,
                     now_iso,
                     target_id,
                 ),
@@ -1206,6 +1236,15 @@ def revise(db: Database, user: dict[str, Any], submission_id: str, body: dict[st
         kind = sub["kind"]
         item = dict(raw_payload)
         item["kind"] = kind
+        try:
+            prev_payload = _current_payload(tx, submission_id, int(sub["current_revision"]))
+        except Exception:
+            prev_payload = {}
+        # Protect against placeholder overwriting original secret-bearing prompt / subject / definition
+        for field in ("prompt", "subject", "definition"):
+            val = item.get(field)
+            if (val is None or val == "" or val == "[包含资源专属指令，已隐藏]") and field in prev_payload:
+                item[field] = prev_payload[field]
         normalised = _normalise_item(kind, item)
         _validate_references(tx,normalised)
         new_rev = int(sub["current_revision"]) + 1
@@ -1592,7 +1631,8 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
 
         from .services import check_text_has_secret
         try:
-            prompt_has_secret = 1 if check_text_has_secret(prompt, tx) else 0
+            has_sec = check_text_has_secret(prompt, tx) or check_text_has_secret(subject, tx)
+            prompt_has_secret = 1 if has_sec else 0
         except Exception:
             prompt_has_secret = None
 

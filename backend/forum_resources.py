@@ -231,6 +231,7 @@ def _work_resource(row: dict[str, Any], unlocked: set[str], user) -> dict[str, A
         "id": ser["id"], "kind": "work", "title": ser["title"], "name": ser["title"],
         "notes": ser["notes"], "description": ser["notes"],
         "prompt": ser["prompt"] if is_unlocked else "",
+        "subject": ser.get("subject", ""),
         "image": _image_of(ser["images"]), "images": [_local_image(_image_of([i])) for i in ser["images"]],
         "author": ser["author"], "authorName": ser["authorName"],
         "sourceType": "community", "tier": "paid" if price > 0 else "free",
