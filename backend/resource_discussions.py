@@ -35,16 +35,46 @@ def resolve_resource(conn,kind,target,viewer=None,include_pending=False):
         return dict(row) if row and str(row['prompt'] or '').strip() and (S.is_demo_mode() or target not in S.seed_ids('works')) else None
     if kind not in ('style','layout'):
         return None
-    target_norm = str(target or '').strip().upper().lstrip('#')
-    row=conn.execute('SELECT * FROM catalog_assets WHERE (code=? OR UPPER(code)=?) AND kind=?',(target_norm, target_norm, kind)).fetchone()
-    if row:
-        return dict(row) if row['status']=='published' and (S.is_demo_mode() or target_norm not in S.seed_ids('assets')) else None
-    item=static_catalog().get(target_norm)
-    if item and item['kind']==kind:
-        return item
-    if include_pending:
-        return _pending_submission_resource(conn, kind, target_norm, viewer)
-    return None
+    from . import resource_registry
+    res = resource_registry.resolve(conn, target, viewer=viewer, purpose="view")
+    if not res:
+        return None
+    if res.get("kind") != kind:
+        return None
+    if not include_pending and res.get("status") != "published":
+        return None
+    if res.get("status") == "withdrawn":
+        return None
+
+    # 1. catalog_assets: Return full DB row dictionary for backward compatibility with _asset_resource
+    if res.get("_raw_row"):
+        if res.get("status") == "published" and (S.is_demo_mode() or res["code"] not in S.seed_ids('assets')):
+            return dict(res["_raw_row"])
+        return None
+
+    # 2. static catalog.json: Return item dict (keys: id, name, ..., NO "code")
+    if res.get("source") == "official":
+        item = static_catalog().get(res["code"])
+        if item and item.get("kind") == kind:
+            return item
+
+    # 3. curation_submissions (pending): Return pending dict (keys: id, name, ..., NO "code", pending: True)
+    # Notice: It MUST NOT contain "code", so forum_resources and post_routes take the _static_resource branch.
+    is_pending = res.get("status") in ("pending", "changes_requested") or res.get("source") == "pending"
+    return {
+        "id": res["code"],
+        "name": res["name"],
+        "description": res.get("description") or "",
+        "definition": res.get("definition") or "",
+        "image": res.get("image") or "",
+        "unlockCost": 0,
+        "sourceType": "community",
+        "author": res.get("author") or "",
+        "authorName": res.get("authorName") or res.get("author") or "",
+        "status": res.get("status") or "pending",
+        "pending": is_pending,
+        "definitionHidden": not bool(res.get("definition")),
+    }
 
 
 def _pending_submission_resource(conn, kind, target_norm, viewer=None):
@@ -54,46 +84,8 @@ def _pending_submission_resource(conn, kind, target_norm, viewer=None):
     publishing and the detail endpoint answers 404, so publishing looks broken
     until a moderator approves the entry.
     """
-    row = conn.execute(
-        "SELECT s.owner_username, s.status, v.payload_json "
-        "FROM curation_submissions s "
-        "JOIN curation_versions v ON v.submission_id = s.id AND v.revision = s.current_revision "
-        "WHERE UPPER(s.target_id) = ? AND s.kind = ? AND s.status <> 'withdrawn' "
-        "ORDER BY s.updated_at DESC LIMIT 1",
-        (target_norm, kind),
-    ).fetchone()
-    if not row:
-        return None
-    try:
-        payload = json.loads(row["payload_json"] or "{}")
-    except (TypeError, ValueError):
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
-    owner = str(row["owner_username"] or "")
-    viewer_name = ""
-    if isinstance(viewer, dict):
-        viewer_name = str(viewer.get("username") or "")
-    can_read_definition = bool(viewer_name) and viewer_name == owner
-    cover = payload.get("cover") or payload.get("image") or ""
-    images = payload.get("images") or []
-    if not cover and images:
-        first = images[0]
-        cover = first.get("url", "") if isinstance(first, dict) else str(first or "")
-    return {
-        "id": target_norm,
-        "name": payload.get("name") or target_norm,
-        "description": payload.get("description") or "",
-        "definition": (payload.get("definition") or "") if can_read_definition else "",
-        "image": sanitize_media_url(cover),
-        "unlockCost": 0,
-        "sourceType": "community",
-        "author": owner,
-        "authorName": owner,
-        "status": "pending",
-        "pending": True,
-        "definitionHidden": not can_read_definition,
-    }
+    return resolve_resource(conn, kind, target_norm, viewer=viewer, include_pending=True)
+
 
 
 def ensure_topic(tx,kind,target,resource,initial_origin: str = 'submission'):

@@ -89,11 +89,15 @@ class CurationTests(unittest.TestCase):
         self.assertNotIn('秘密定义',json.dumps(boot,ensure_ascii=False))
         self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM catalog_assets').fetchone()[0],0)
         pending_code=res_style['submissions'][0]['targetId']
-        with self.assertRaises(S.ServiceError) as generation_error:
-            S.prepare_cloud_generation(self.db,self.author,{'style1':pending_code,'prompt':'不能绕过收录'})
-        self.assertEqual(generation_error.exception.code,'asset_not_collected')
-        with self.assertRaises(S.ServiceError):
-            S.build_skill_asset_content(self.db,self.author,pending_code)
+        # Phase 3b-13a: pending submission can be used for cloud generation by logged-in users
+        gen_res = S.prepare_cloud_generation(self.db,self.author,{'style1':pending_code,'prompt':'测试试用'})
+        self.assertIn('genId', gen_res)
+        # In 13a, author can export skill content with definition, while outsider cannot (403)
+        skill_content = S.build_skill_asset_content(self.db,self.author,pending_code)
+        self.assertIn('秘密定义', json.dumps(skill_content, ensure_ascii=False))
+        with self.assertRaises(S.ServiceError) as skill_err:
+            S.build_skill_asset_content(self.db,self.users['outsider'],pending_code)
+        self.assertEqual(skill_err.exception.status, 403)
         # 2 votes for style, 2 votes for layout
         for _ in range(2):
             self.ballot('review_a');self.ballot('review_b')

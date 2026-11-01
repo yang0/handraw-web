@@ -409,6 +409,8 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
                     "unlocked": bool(asset_res.get("unlocked")),
                     "unlockCost": int(asset_res.get("unlockCost") or 0),
                     "sourceType": source_type,
+                    "status": asset_res.get("status") or raw.get("status") or "published",
+                    "pending": bool(asset_res.get("pending") or raw.get("pending")),
                     "author": author_username,
                     "authorName": author_name,
                     "useUrl": f"/studio/?{m_kind}={code}",

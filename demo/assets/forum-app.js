@@ -1749,16 +1749,17 @@
 
     const isStaff = Boolean(App.state?.loggedIn && App.state?.user && ["admin", "superadmin", "moderator", "operator", "reviewer"].includes(App.state.user.role));
     const isExclusive = res.sourceType === "exclusive";
+    const isPending = Boolean(res.pending || res.status === "pending" || res.sourceType === "pending");
 
     const viewerStamps = res.viewerStamps || _activeTopicDetail?.topicData?.viewer?.stamps || [];
     const stampedRecipe = viewerStamps.includes("超实用配方");
     const stampedAesthetic = viewerStamps.includes("审美在线");
     const recipeCount = (res.stampCounts && res.stampCounts["超实用配方"]) || 0;
     const aestheticCount = (res.stampCounts && res.stampCounts["审美在线"]) || 0;
-    const isCommunity = res.sourceType === "community";
-    const canTip = isCommunity
+    const isCommunity = res.sourceType === "community" && !isPending;
+    const canTip = !isPending && (isCommunity
       ? Boolean(res.author && (!App.state?.loggedIn || !App.state?.user || App.state.user.username !== res.author))
-      : true;
+      : true);
     const tipBtnLabel = isCommunity
       ? `🎁 赞赏 2✦ 给 @${esc(res.authorName || res.author)}`
       : `🎁 赞赏 2✦`;
@@ -1823,13 +1824,16 @@
           ` : ""}
           <div style="flex:1;min-width:240px;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <div style="font-size:12px;font-weight:800;color:var(--vermilion);margin-bottom:4px;">#${esc(res.code)}</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                <div style="font-size:12px;font-weight:800;color:var(--vermilion);">#${esc(res.code)}</div>
+                ${isPending ? `<span class="badge" style="font-size:11px;padding:2px 8px;border-radius:999px;background:var(--gold-soft, #fef3c7);color:var(--gold-strong, #92400e);font-weight:700;">投稿中 · 可试用</span>` : ""}
+              </div>
               ${isStaff ? `<a href="${esc(S.channelUrl("admin", { module: "catalog", q: res.code }))}" target="_blank" class="btn btn-sm btn-ghost" style="font-size:12px;color:var(--ink-muted);padding:2px 8px;text-decoration:none;" title="在后台目录中管理此资源">🛠 在后台编辑 ↗</a>` : ""}
             </div>
             <h2 style="margin:0 0 10px;font-size:20px;font-family:var(--font-serif);">${esc(res.name)}</h2>
             ${res.description ? `<p style="margin:0 0 14px;font-size:13.5px;color:var(--ink-muted);line-height:1.6;overflow-wrap:anywhere;">${esc(res.description)}</p>` : ""}
             <div style="margin-top:12px;">
-              <a class="btn btn-primary" href="${esc(res.useUrl)}" style="font-weight:750;">${esc(useBtnText)} ↗</a>
+              <a class="btn btn-primary" id="topic-resource-use-btn" href="${esc(res.useUrl)}" style="font-weight:750;">${esc(useBtnText)} ↗</a>
             </div>
           </div>
         </div>
@@ -1862,15 +1866,19 @@
                       <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">官网独占：只能在创作台在线调用，不展示定义。解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
                       <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 解锁后可在线使用</button>
                     </div>`)
-              : (res.unlocked
+              : isPending
                   ? (res.definition
                       ? `<pre class="fwp-prompt-text" style="white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;background:var(--paper-bg);padding:14px;border-radius:8px;border:1px solid var(--line-soft);font-size:13px;line-height:1.6;">${esc(res.definition)}</pre>`
-                      : `<p style="color:var(--ink-muted);font-size:13px;">暂无定义内容</p>`)
-                  : `<div class="hw-locked-gate-box" style="padding:24px;text-align:center;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
-                      <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后查看定义</div>
-                      <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
-                      <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 立即解锁</button>
-                    </div>`)
+                      : `<p style="color:var(--ink-muted);font-size:13px;padding:14px;background:var(--paper-bg);border-radius:8px;border:1px solid var(--line-soft);margin:0;">投稿中 · 定义审核后公开</p>`)
+                  : (res.unlocked
+                      ? (res.definition
+                          ? `<pre class="fwp-prompt-text" style="white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;background:var(--paper-bg);padding:14px;border-radius:8px;border:1px solid var(--line-soft);font-size:13px;line-height:1.6;">${esc(res.definition)}</pre>`
+                          : `<p style="color:var(--ink-muted);font-size:13px;">暂无定义内容</p>`)
+                      : `<div class="hw-locked-gate-box" style="padding:24px;text-align:center;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
+                          <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后查看定义</div>
+                          <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
+                          <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 立即解锁</button>
+                        </div>`)
           }
         </div>
 
@@ -2873,6 +2881,17 @@
 
       bindStampBtn("#topic-stamp-recipe", "超实用配方");
       bindStampBtn("#topic-stamp-aesthetic", "审美在线");
+
+      const useBtn = root.querySelector("#topic-resource-use-btn");
+      if (useBtn) {
+        useBtn.onclick = (e) => {
+          if (!App.state?.loggedIn) {
+            e.preventDefault();
+            S.openLoginModal();
+            return;
+          }
+        };
+      }
 
       const tipBtn = root.querySelector("#topic-stamp-tip-btn");
       if (tipBtn && mount.resource) {

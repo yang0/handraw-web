@@ -577,7 +577,9 @@
     const all = [
       ...exclusiveList,
       ...((App.state && App.state.communityResources) || []),
-      ...officialMerged
+      ...officialMerged,
+      ...((App.state && App.state.myResources) || []),
+      ...((App.state && App.state.pendingResources) || [])
     ];
 
     for (const item of all) {
@@ -728,6 +730,8 @@
   function ensureCommunityEcosystemData(st) {
     if (!st) return;
     st.communityResources = Array.isArray(st.communityResources) ? st.communityResources : [];
+    st.myResources = Array.isArray(st.myResources) ? st.myResources : [];
+    st.pendingResources = Array.isArray(st.pendingResources) ? st.pendingResources : [];
     st.works = Array.isArray(st.works) ? st.works : [];
     st.cheeredIds = Array.isArray(st.cheeredIds) ? st.cheeredIds : [];
 

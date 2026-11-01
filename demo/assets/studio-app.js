@@ -2454,7 +2454,7 @@
     return { blueprint: isDual ? "fusion" : "single", nodes, edges, selectedIds: [] };
   }
 
-  function hydrateTabsAndUrlParams() {
+  async function hydrateTabsAndUrlParams() {
     ensureDefaultSavedWorkflows();
     CS.resourceEntryWarning = "";
     const params = new URLSearchParams(window.location.search);
@@ -2582,6 +2582,48 @@
       const code = value => String(value || "").trim().replace(/^#\s*/, "").toUpperCase();
       const styleCode = code(styleParam);
       const layoutCode = code(layoutParam);
+
+      const ensureResourceLoaded = async (c) => {
+        if (!c || Catalog.resourceMap.has(c)) return;
+        try {
+          const resp = await fetch(`/api/resources/${encodeURIComponent(c)}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            const res = data.resource || data;
+            if (res && res.code) {
+              const item = {
+                id: res.code,
+                name: res.name || res.code,
+                originalName: res.name || res.code,
+                kind: res.kind,
+                sourceType: res.sourceType || res.source || "pending",
+                image: res.image || res.cover || "",
+                cover: res.image || res.cover || "",
+                description: res.description || "",
+                definition: res.definition || null,
+                access: res.access || {},
+                canUse: res.canUse !== false,
+              };
+              Catalog.resourceMap.set(item.id, item);
+              if (item.kind === "style") {
+                if (!Catalog.styles.some(s => s.id === item.id)) Catalog.styles.push(item);
+              } else if (item.kind === "layout") {
+                if (!Catalog.layouts.some(l => l.id === item.id)) Catalog.layouts.push(item);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to fetch resource", c, e);
+        }
+      };
+
+      if (styleCode && !Catalog.resourceMap.has(styleCode)) {
+        await ensureResourceLoaded(styleCode);
+      }
+      if (layoutCode && !Catalog.resourceMap.has(layoutCode)) {
+        await ensureResourceLoaded(layoutCode);
+      }
+
       const validStyle = Catalog.resourceMap.get(styleCode)?.kind === "style" ? styleCode : "";
       const validLayout = Catalog.resourceMap.get(layoutCode)?.kind === "layout" ? layoutCode : "";
       const warnings = [];
@@ -15107,9 +15149,9 @@
       await S.initApp("studio", () => {
         const scopeChanged = hydrateLocalScopedState();
         syncCatalogFromShared();
-        hydrateCloudStudioWorkspace().then(() => {
+        hydrateCloudStudioWorkspace().then(async () => {
           if (DOM.root && DOM.nodesLayer) {
-            if (scopeChanged) hydrateTabsAndUrlParams();
+            if (scopeChanged) await hydrateTabsAndUrlParams();
             renderShelfDrawer();
             fullRenderCanvas();
             if (CS.stageView === "workflows") renderWorkflowsStage();
@@ -15159,7 +15201,7 @@
       }
 
       mountStudioShell();
-      hydrateTabsAndUrlParams();
+      await hydrateTabsAndUrlParams();
       renderShelfDrawer();
       fullRenderCanvas();
       bindViewportInteractions();

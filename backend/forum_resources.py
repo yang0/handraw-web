@@ -192,7 +192,8 @@ def _static_resource(item: dict[str, Any], kind: str) -> dict[str, Any]:
     out["price"] = int(item.get("price") or 0)
     out["unlocked"] = True
     out["canUse"] = True
-    out["status"] = "published"
+    out["status"] = item.get("status") or "published"
+    out["pending"] = bool(item.get("pending") or item.get("status") in ("pending", "changes_requested"))
     out["publishedAtMs"] = int(item.get("publishedAtMs") or 0)
     out['image']=_local_image(out.get('image',''))
     return out

@@ -1641,15 +1641,22 @@
                           <div class="hw-card-body"><h3 class="hw-card-title">${esc(it.title)}</h3></div>
                         </article>
                       `
-                      : `
-                        <article class="hw-card" data-prof-asset="${esc(it.id)}" style="cursor:pointer;">
-                          <div class="hw-card-media"><img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" /></div>
-                          <div class="hw-card-body">
-                            <div class="hw-card-code">${esc(it.id)}</div>
-                            <h3 class="hw-card-title">${esc(it.name)}</h3>
-                          </div>
-                        </article>
-                      `
+                      : (() => {
+                          const isWithdrawn = it.status === "withdrawn" || it.status === "hidden" || it.access?.hiddenBy === "withdrawn";
+                          const isPending = !isWithdrawn && (it.status === "pending" || it.status === "changes_requested" || it.sourceType === "pending" || it.access?.hiddenBy === "pending");
+                          return `
+                            <article class="hw-card ${isWithdrawn ? "hw-card-withdrawn" : ""}" data-prof-asset="${esc(it.id)}" style="cursor:pointer;${isWithdrawn ? "opacity:0.75;filter:grayscale(0.85);background:var(--paper-soft, #f4efe6);" : ""}">
+                              <div class="hw-card-media"><img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" /></div>
+                              <div class="hw-card-body">
+                                <div class="hw-card-code">
+                                  ${esc(it.id)}
+                                  ${isWithdrawn ? `<span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--line-soft, #e5e5e5);color:var(--ink-muted);">已下架</span>` : isPending ? `<span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--gold-soft, #fef3c7);color:var(--gold-strong, #92400e);font-weight:700;">投稿中</span>` : ""}
+                                </div>
+                                <h3 class="hw-card-title">${esc(it.name)}</h3>
+                              </div>
+                            </article>
+                          `;
+                        })()
                   ),
                   "standard"
                 )
@@ -1983,17 +1990,74 @@
 
     if (UI.favTab === "styles" || UI.favTab === "layouts") {
       const ids = cols[UI.favTab] || [];
+      const missingIds = ids.filter((id) => !App.resourceMap.has(id));
+      if (missingIds.length && !UI._fetchingFavs) {
+        UI._fetchingFavs = true;
+        Promise.all(
+          missingIds.map((mid) =>
+            fetch(`/api/resources/${encodeURIComponent(mid)}`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => {
+                const res = data?.resource || data;
+                if (res && res.code) {
+                  const it = {
+                    id: res.code,
+                    code: res.code,
+                    name: res.name || res.code,
+                    originalName: res.name || res.code,
+                    kind: res.kind,
+                    sourceType: res.sourceType || res.source || "pending",
+                    status: res.status,
+                    image: res.image || res.cover || "",
+                    cover: res.image || res.cover || "",
+                    description: res.description || "",
+                    definition: res.definition || null,
+                    access: res.access || {},
+                    canUse: res.canUse !== false,
+                  };
+                  App.resourceMap.set(it.id, it);
+                }
+              })
+              .catch(() => null)
+          )
+        ).finally(() => {
+          UI._fetchingFavs = false;
+          renderMain();
+        });
+      }
       const items = ids.map((id) => App.resourceMap.get(id)).filter(Boolean);
       bodyHtml = items.length
         ? S.renderMasonry(
-            items.map(
-              (item) => `
+            items.map((item) => {
+              const isWithdrawn = item.status === "withdrawn" || item.status === "hidden" || item.access?.hiddenBy === "withdrawn";
+              const isPending = !isWithdrawn && (item.status === "pending" || item.status === "changes_requested" || item.sourceType === "pending" || item.access?.hiddenBy === "pending");
+              if (isWithdrawn) {
+                return `
+                  <article class="hw-card hw-card-withdrawn" style="opacity:0.75;filter:grayscale(0.85);background:var(--paper-soft, #f4efe6);">
+                    <div class="hw-card-media" style="cursor:default;">
+                      <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" />
+                    </div>
+                    <div class="hw-card-body">
+                      <div class="hw-card-code" style="color:var(--ink-muted);">${esc(item.id)} <span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--line-soft, #e5e5e5);color:var(--ink-muted);">已下架</span></div>
+                      <h3 class="hw-card-title">${esc(item.name)}</h3>
+                      <div class="hw-card-footer">
+                        <button type="button" class="btn btn-sm" data-unfav="${esc(item.id)}">取消收藏</button>
+                        <button type="button" class="btn btn-sm" disabled style="opacity:0.5;cursor:not-allowed;">不可使用</button>
+                      </div>
+                    </div>
+                  </article>
+                `;
+              }
+              return `
                 <article class="hw-card">
                   <div class="hw-card-media" data-fav-open-asset="${esc(item.id)}">
                     <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" />
                   </div>
                   <div class="hw-card-body">
-                    <div class="hw-card-code">${esc(item.id)}</div>
+                    <div class="hw-card-code">
+                      ${esc(item.id)}
+                      ${isPending ? `<span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--gold-soft, #fef3c7);color:var(--gold-strong, #92400e);font-weight:700;">投稿中</span>` : ""}
+                    </div>
                     <h3 class="hw-card-title" data-fav-open-asset="${esc(item.id)}">${esc(item.name)}</h3>
                     <div class="hw-card-footer">
                       <button type="button" class="btn btn-sm" data-unfav="${esc(item.id)}">移除</button>
@@ -2001,8 +2065,8 @@
                     </div>
                   </div>
                 </article>
-              `
-            ),
+              `;
+            }),
             "standard"
           )
         : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏该类资产，去库里点亮 ♡ 吧！</div>`;

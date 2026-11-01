@@ -1259,7 +1259,8 @@
       );
     } else if (effectiveStyle1Res) {
       const s = effectiveStyle1Res;
-      lines.push(`【锁定画风 #${s.id}】：${s.sourceType === "exclusive" ? `${s.name}（云端黑盒注入）` : s.definition || s.description || s.name}`);
+      const isCloudInjected = s.sourceType === "exclusive" || (s.sourceType === "pending" && !s.definition);
+      lines.push(`【锁定画风 #${s.id}】：${s.sourceType === "exclusive" ? `${s.name}（云端黑盒注入）` : isCloudInjected ? `${s.name}（云端注入）` : s.definition || s.description || s.name}`);
     }
     if (effectiveLayoutRes && (!isArticleMode || forceLayout)) {
       lines.push(`【锁定图型 ${effectiveLayoutRes.id}】：${effectiveLayoutRes.name} —— ${effectiveLayoutRes.description || ""}`);
@@ -1641,9 +1642,10 @@
         );
       } else if (rec.style1Res) {
         const s = rec.style1Res;
+        const isCloudInjected = s.sourceType === "exclusive" || (s.sourceType === "pending" && !s.definition);
         lines.push(
           `【锁定手绘画风 #${s.id} ${s.name}】：${
-            s.sourceType === "exclusive" ? `${s.name}（专属精调画风）` : s.definition || s.description || s.name
+            s.sourceType === "exclusive" ? `${s.name}（专属精调画风）` : isCloudInjected ? `${s.name}（云端注入）` : s.definition || s.description || s.name
           }`
         );
       } else {
