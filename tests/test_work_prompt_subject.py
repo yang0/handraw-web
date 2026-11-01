@@ -26,7 +26,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
-from backend import curation as C, services as S
+from backend import admin_services as A, curation as C, services as S
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler, init_database
 
 
@@ -49,7 +49,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
         self.db = init_database(self.db_path)
         self.user, token = S.register_user(self.db, "alice", "alice-pass-123")
         self.reviewer, _ = S.register_user(self.db, "rev_a", "rev-pass-123")
-        self.admin, _ = S.register_user(self.db, "admin_user", "admin-pass-123")
+        self.admin, token_admin = S.register_user(self.db, "admin_user", "admin-pass-123")
         self.stranger, token_stranger = S.register_user(self.db, "bob_stranger", "bob-pass-123")
         with self.db.transaction() as tx:
             tx.execute("UPDATE users SET role='admin' WHERE username='admin_user'")
@@ -57,6 +57,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
 
         self.cookie_user = f"{SESSION_COOKIE_NAME}={token}"
         self.cookie_stranger = f"{SESSION_COOKIE_NAME}={token_stranger}"
+        self.cookie_admin = f"{SESSION_COOKIE_NAME}={token_admin}"
 
         self.secret = "BLACKBOX_SUBJECT_SECRET_INSTRUCTION_9999"
         with self.db.transaction() as tx:
@@ -709,6 +710,129 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 C._publish_approved(tx, sub, 1)
             self.assertEqual(ctx.exception.code, "subject_too_long")
             self.assertEqual(ctx.exception.status, 400)
+
+    def test_admin_edit_work_rejects_oversized_subject(self):
+        """Admin edit rejects subject exceeding 2000 chars with subject_too_long (400)."""
+        pub = C.publish_work_direct(
+            self.db,
+            self.user,
+            {
+                "title": "管理员编辑测试作品",
+                "prompt": "正常提示词",
+                "subject": "正常主题",
+                "images": ["/images/individual/FA/FA-001.webp"],
+                "styles": ["FA-001"],
+                "price": 0,
+            },
+        )
+        wid = pub["workId"]
+
+        # 1. Direct function call raises ServiceError 400 subject_too_long
+        with self.assertRaises(S.ServiceError) as ctx:
+            A.admin_moderate_work(
+                self.db,
+                self.admin,
+                wid,
+                "edit",
+                {"subject": "S" * 2001},
+            )
+        self.assertEqual(ctx.exception.code, "subject_too_long")
+        self.assertEqual(ctx.exception.status, 400)
+
+        # 2. HTTP endpoint also returns 400
+        st, body = self._req(
+            "POST",
+            f"/api/works/{wid}/moderate",
+            {
+                "action": "edit",
+                "subject": "S" * 2001,
+            },
+            cookie=self.cookie_admin,
+        )
+        self.assertEqual(st, 400)
+        self.assertIn("最多2000字", str(body.get("error", "")))
+
+    def test_admin_edit_work_preserves_subject_on_placeholder_or_none(self):
+        """Admin edit preserves original subject when placeholder or None is supplied."""
+        pub = C.publish_work_direct(
+            self.db,
+            self.user,
+            {
+                "title": "占位符测试作品",
+                "prompt": "原始提示词",
+                "subject": "原始绝密主题",
+                "images": ["/images/individual/FA/FA-001.webp"],
+                "styles": ["FA-001"],
+                "price": 0,
+            },
+        )
+        wid = pub["workId"]
+
+        # 1. Edit with placeholder subject preserves original subject
+        res = A.admin_moderate_work(
+            self.db,
+            self.admin,
+            wid,
+            "edit",
+            {
+                "title": "修改标题保留主题",
+                "subject": "[包含资源专属指令，已隐藏]",
+            },
+        )
+        self.assertTrue(res.get("ok"))
+        with self.db.transaction() as tx:
+            row = tx.execute("SELECT title, subject FROM works WHERE id = ?", (wid,)).fetchone()
+            self.assertEqual(row["title"], "修改标题保留主题")
+            self.assertEqual(row["subject"], "原始绝密主题")
+
+        # 2. Edit with None / omitted subject preserves original subject
+        res2 = A.admin_moderate_work(
+            self.db,
+            self.admin,
+            wid,
+            "edit",
+            {
+                "title": "二次修改标题",
+                "subject": None,
+            },
+        )
+        self.assertTrue(res2.get("ok"))
+        with self.db.transaction() as tx:
+            row2 = tx.execute("SELECT title, subject FROM works WHERE id = ?", (wid,)).fetchone()
+            self.assertEqual(row2["title"], "二次修改标题")
+            self.assertEqual(row2["subject"], "原始绝密主题")
+
+        # 3. HTTP endpoint with placeholder also preserves original subject
+        st, _ = self._req(
+            "POST",
+            f"/api/works/{wid}/moderate",
+            {
+                "action": "edit",
+                "title": "HTTP改标题",
+                "subject": "[包含资源专属指令，已隐藏]",
+            },
+            cookie=self.cookie_admin,
+        )
+        self.assertEqual(st, 200)
+        with self.db.transaction() as tx:
+            row3 = tx.execute("SELECT title, subject FROM works WHERE id = ?", (wid,)).fetchone()
+            self.assertEqual(row3["title"], "HTTP改标题")
+            self.assertEqual(row3["subject"], "原始绝密主题")
+
+        # 4. Editing with real new subject updates it successfully
+        st4, _ = self._req(
+            "POST",
+            f"/api/works/{wid}/moderate",
+            {
+                "action": "edit",
+                "subject": "管理员更新后的真实主题",
+            },
+            cookie=self.cookie_admin,
+        )
+        self.assertEqual(st4, 200)
+        with self.db.transaction() as tx:
+            row4 = tx.execute("SELECT subject FROM works WHERE id = ?", (wid,)).fetchone()
+            self.assertEqual(row4["subject"], "管理员更新后的真实主题")
 
 
 if __name__ == "__main__":

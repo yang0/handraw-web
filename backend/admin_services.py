@@ -895,7 +895,14 @@ def admin_moderate_work(
             # Keep the stored prompt byte-for-byte unless the admin actually
             # rewrote it: stripping would silently change the author's text.
             prompt = str(payload.get("prompt") if payload.get("prompt") is not None else w["prompt"])
-            subject = str(payload.get("subject") if payload.get("subject") is not None else (w["subject"] if "subject" in w.keys() else ""))
+            orig_subject = str(w["subject"] or "") if "subject" in w.keys() else ""
+            req_subject = payload.get("subject")
+            if req_subject is None or req_subject == "[包含资源专属指令，已隐藏]":
+                subject = orig_subject
+            else:
+                subject = str(req_subject)
+                if len(subject) > 2000:
+                    raise ServiceError("主题内容过长（最多2000字）", status=400, code="subject_too_long")
             notes = str(payload.get("notes") if payload.get("notes") is not None else w["notes"]).strip()
             from .services import check_text_has_secret
             try:
