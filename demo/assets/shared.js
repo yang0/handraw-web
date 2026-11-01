@@ -414,13 +414,13 @@
 
   function channelUrl(targetChannel, paramsObj) {
     // All public resource links have one canonical forum destination.
-    if (targetChannel === "main" && paramsObj?.tab === "topics" && ["asset", "work"].includes(paramsObj?.view)) {
+    if (targetChannel === "main" && ["topics", "works"].includes(paramsObj?.tab) && ["asset", "work"].includes(paramsObj?.view)) {
       const { view, id, tab, panel } = paramsObj;
       const item = App.resourceMap?.get(String(id || "").toUpperCase());
       targetChannel = "forum";
-      paramsObj = { view: "related", kind: view === "work" ? "work" : item?.kind || "asset", id, tab: "topics" };
+      paramsObj = { view: "related", kind: view === "work" ? "work" : item?.kind || "asset", id, tab };
       if (panel === 'report' || tab === 'report') paramsObj.panel = 'report';
-    } else if (targetChannel === "main" && paramsObj?.view === "work") {
+    } else if (targetChannel === "main" && ["asset", "work"].includes(paramsObj?.view)) {
       const { id, tab, focus, panel } = paramsObj;
       const extra = {};
       if (focus || tab === "comments") extra.focus = "comment";

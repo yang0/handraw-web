@@ -324,7 +324,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         self.assertEqual(code, 404)
 
     def test_t_redirect_fallback_to_standalone_asset(self):
-        """When style/layout has no mapped topic, /t/{ref} 302s to /?view=asset&id=<CODE>."""
+        """When style/layout has no mapped topic, /t/{ref} creates topic on-demand and 302s to /forum/?view=topic&id=<TID>."""
         conn = self.db.get_conn()
         saved = [
             dict(r)
@@ -336,35 +336,38 @@ class PostRoutesHTTPTests(unittest.TestCase):
             conn.execute("DELETE FROM curation_resource_topics WHERE UPPER(target_id) IN ('FA-001', 'SC-021')")
             conn.commit()
 
-            # 1. Plain style code
+            # 1. Plain style code creates topic on-demand
             code, loc = self._request_raw_redirect("/t/FA-001")
             self.assertEqual(code, 302)
-            self.assertEqual(loc, "/?view=asset&id=FA-001")
+            self.assertTrue(loc.startswith("/forum/?view=topic&id=topic_"))
+            fa_tid = loc.split("id=")[1].split("&")[0]
 
-            # 2. Semantic prefix style-
+            # 2. Semantic prefix style- reuses the newly created topic
             code, loc = self._request_raw_redirect("/t/style-FA-001")
             self.assertEqual(code, 302)
-            self.assertEqual(loc, "/?view=asset&id=FA-001")
+            self.assertEqual(loc, f"/forum/?view=topic&id={fa_tid}")
 
-            # 3. Plain layout code
+            # 3. Plain layout code creates topic on-demand
             code, loc = self._request_raw_redirect("/t/SC-021")
             self.assertEqual(code, 302)
-            self.assertEqual(loc, "/?view=asset&id=SC-021")
+            self.assertTrue(loc.startswith("/forum/?view=topic&id=topic_"))
+            sc_tid = loc.split("id=")[1].split("&")[0]
 
-            # 4. Semantic prefix layout-
+            # 4. Semantic prefix layout- reuses newly created topic
             code, loc = self._request_raw_redirect("/t/layout-SC-021")
             self.assertEqual(code, 302)
-            self.assertEqual(loc, "/?view=asset&id=SC-021")
+            self.assertEqual(loc, f"/forum/?view=topic&id={sc_tid}")
 
-            # 5. With focus=comment
+            # 5. With focus=comment preserved
             code, loc = self._request_raw_redirect("/t/FA-001?focus=comment")
             self.assertEqual(code, 302)
-            self.assertEqual(loc, "/?view=asset&id=FA-001&tab=comments")
+            self.assertEqual(loc, f"/forum/?view=topic&id={fa_tid}&focus=comment")
 
             # 6. Truly nonexistent resource -> 404
             code, _ = self._request_raw_redirect("/t/nonexistent_ref_999999")
             self.assertEqual(code, 404)
         finally:
+            conn.execute("DELETE FROM curation_resource_topics WHERE UPPER(target_id) IN ('FA-001', 'SC-021')")
             for r in saved:
                 conn.execute(
                     "INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)",

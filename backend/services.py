@@ -2597,29 +2597,45 @@ def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, targ
     now = utc_now_iso()
 
     with db.transaction() as tx:
+        is_official_asset = False
         if target_type == "work":
             target = tx.execute("SELECT id, title, author_name, cheers, stamp_counts_json FROM works WHERE id = ?", (tid,)).fetchone()
         else:
-            target = tx.execute("SELECT code AS id, name AS title, author_name, cheers, stamp_counts_json FROM catalog_assets WHERE code = ?", (tid,)).fetchone()
+            clean_code = tid.strip().upper().lstrip("#")
+            target = tx.execute("SELECT code AS id, name AS title, author_name, cheers, stamp_counts_json FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (tid, clean_code)).fetchone()
+            if not target:
+                from .resource_discussions import resolve_resource
+                cat_res = resolve_resource(tx, "style", clean_code) or resolve_resource(tx, "layout", clean_code)
+                if cat_res:
+                    is_official_asset = True
+                    tid = clean_code
+                    c_row = tx.execute("SELECT COUNT(*) AS cnt FROM interactions WHERE target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ''", (clean_code, clean_code)).fetchone()
+                    target = {
+                        "id": clean_code,
+                        "title": cat_res.get("name") or clean_code,
+                        "author_name": cat_res.get("author_name") or "官方资源",
+                        "cheers": int(c_row["cnt"] if c_row else 0),
+                        "stamp_counts_json": "{}",
+                    }
 
         if not target:
             raise ServiceError("未找到目标内容", status=404)
 
         existing = tx.execute(
-            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ?",
-            (uid, target_type, tid, stamp),
+            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type = ? AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ?",
+            (uid, target_type, tid, tid, stamp),
         ).fetchone()
 
         rewarded = 0
         if existing and not stamp:
             tx.execute(
-                "DELETE FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ''",
-                (uid, target_type, tid),
+                "DELETE FROM interactions WHERE user_id = ? AND target_type = ? AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ''",
+                (uid, target_type, tid, tid),
             )
             new_cheers = max(0, int(target["cheers"]) - 1)
             if target_type == "work":
                 tx.execute("UPDATE works SET cheers = ? WHERE id = ?", (new_cheers, tid))
-            else:
+            elif not is_official_asset:
                 tx.execute("UPDATE catalog_assets SET cheers = ? WHERE code = ?", (new_cheers, tid))
             cheered = False
         elif existing and stamp:
@@ -2635,20 +2651,21 @@ def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, targ
                 (uid, target_type, tid, now),
             )
             new_cheers = int(target["cheers"]) + 1
-            stamps_dict = json.loads(target["stamp_counts_json"] or "{}")
-            if stamp:
-                prev = int(stamps_dict.get(stamp, 0))
-                stamps_dict[stamp] = prev + 1
-            if target_type == "work":
-                tx.execute(
-                    "UPDATE works SET cheers = ?, stamp_counts_json = ? WHERE id = ?",
-                    (new_cheers, json.dumps(stamps_dict, ensure_ascii=False), tid),
-                )
-            else:
-                tx.execute(
-                    "UPDATE catalog_assets SET cheers = ?, stamp_counts_json = ? WHERE code = ?",
-                    (new_cheers, json.dumps(stamps_dict, ensure_ascii=False), tid),
-                )
+            if not is_official_asset:
+                stamps_dict = json.loads(target["stamp_counts_json"] or "{}")
+                if stamp:
+                    prev = int(stamps_dict.get(stamp, 0))
+                    stamps_dict[stamp] = prev + 1
+                if target_type == "work":
+                    tx.execute(
+                        "UPDATE works SET cheers = ?, stamp_counts_json = ? WHERE id = ?",
+                        (new_cheers, json.dumps(stamps_dict, ensure_ascii=False), tid),
+                    )
+                else:
+                    tx.execute(
+                        "UPDATE catalog_assets SET cheers = ?, stamp_counts_json = ? WHERE code = ?",
+                        (new_cheers, json.dumps(stamps_dict, ensure_ascii=False), tid),
+                    )
             cheered = True
 
             u_row = tx.execute("SELECT first_cheer_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
@@ -2680,15 +2697,24 @@ def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, tar
         if target_type == "work":
             target = tx.execute("SELECT id, title, author_username, author_name FROM works WHERE id = ?", (target_id,)).fetchone()
         elif target_type == "asset":
-            target = tx.execute("SELECT code AS id, name AS title, author_username, author_name FROM catalog_assets WHERE code = ?", (target_id,)).fetchone()
+            clean_code = str(target_id or "").strip().upper().lstrip("#")
+            target = tx.execute("SELECT code AS id, name AS title, author_username, author_name, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (target_id, clean_code)).fetchone()
+            if not target:
+                from .resource_discussions import resolve_resource
+                if resolve_resource(tx, "style", clean_code) or resolve_resource(tx, "layout", clean_code):
+                    raise ServiceError("官方资源不接受赞赏", status=400)
+                raise ServiceError("目标不存在", status=404)
+            if target.get("source_type") in ("official", "exclusive") or not target["author_username"]:
+                raise ServiceError("官方资源不接受赞赏", status=400)
         else:
             raise ServiceError("不支持的赞赏类型")
 
         if not target:
             raise ServiceError("目标不存在", status=404)
         if target["author_username"] == user["username"]:
-            raise ServiceError("不能给自己赞赏积分哦")
+            raise ServiceError("不能给自己赞赏积分哦", status=400)
 
+        tid = target["id"]
         new_bal, _ = apply_wallet_delta(
             tx,
             uid,
@@ -2696,7 +2722,7 @@ def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, tar
             "tip_out",
             f"🎁 赞赏鼓励 @{target['author_name']} 的《{target['title']}》（100% 直达作者）",
             ref_type=target_type,
-            ref_id=target_id,
+            ref_id=tid,
         )
 
         author_row = tx.execute("SELECT id FROM users WHERE username = ?", (target["author_username"],)).fetchone()
@@ -2708,17 +2734,17 @@ def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, tar
                 "tip_in",
                 f"🎁 收到 @{user['display_name']} 对《{target['title']}》的赞赏鼓励",
                 ref_type=target_type,
-                ref_id=target_id,
+                ref_id=tid,
             )
 
         if target_type == "work":
-            tx.execute("UPDATE works SET cheers = cheers + 3, tips = tips + ? WHERE id = ?", (amt, target_id))
+            tx.execute("UPDATE works SET cheers = cheers + 3, tips = tips + ? WHERE id = ?", (amt, tid))
         else:
-            tx.execute("UPDATE catalog_assets SET cheers = cheers + 3, tips = tips + ? WHERE code = ?", (amt, target_id))
+            tx.execute("UPDATE catalog_assets SET cheers = cheers + 3, tips = tips + ? WHERE code = ?", (amt, tid))
 
         tx.execute(
             "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-            (uid, target_type, target_id, now),
+            (uid, target_type, tid, now),
         )
     return {"ok": True, "credits": new_bal, "amount": amt}
 

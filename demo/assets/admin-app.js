@@ -2907,6 +2907,11 @@
         }
         if (reqQ && reqQ.trim()) {
           state.filters.usersQ = reqQ.trim();
+          state.filters.catQ = reqQ.trim();
+        }
+        const reqCatQ = sp.get("catQ");
+        if (reqCatQ && reqCatQ.trim()) {
+          state.filters.catQ = reqCatQ.trim();
         }
       }
 

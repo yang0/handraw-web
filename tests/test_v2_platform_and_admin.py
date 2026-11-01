@@ -204,10 +204,14 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
             self.assertIn("VisualArtwork", wpage_html)
             self.assertIn(sample_w["title"], wpage_html)
 
-        with urllib.request.urlopen(f"{self.base_url}/?view=asset&id=FA-001", timeout=5) as r_apage:
-            apage_html = r_apage.read().decode("utf-8")
-            self.assertIn("FA-001", apage_html)
-            self.assertIn("详情与实测评论", apage_html)
+        # Verify legacy asset detail 302 redirect to /t/FA-001 per Phase 3b-12
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def http_error_302(self, req, fp, code, msg, headers):
+                return fp
+        _opener = urllib.request.build_opener(_NoRedirect)
+        with _opener.open(f"{self.base_url}/?view=asset&id=FA-001", timeout=5) as r_apage:
+            self.assertEqual(r_apage.status, 302)
+            self.assertEqual(r_apage.headers.get("Location"), "/t/FA-001")
 
         with urllib.request.urlopen(f"{self.base_url}/?view=profile&user=yang0", timeout=5) as r_ppage:
             ppage_html = r_ppage.read().decode("utf-8")

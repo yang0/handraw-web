@@ -143,6 +143,7 @@
     activeTopicId: "",
     activeTopicImgIdx: 0,
     topicInlineDrawer: "", // '' | 'share' | 'report'
+    notFoundCode: "",
     topicCountedViews: new Set(),
     modInitialBoard: "assets",
     modListData: null,
@@ -195,6 +196,13 @@
   });
 
   function parseInitialForumUrl() {
+    const tPathMatch = window.location.pathname.match(/^\/t\/(.+)$/);
+    if (tPathMatch) {
+      FUI.view = "not_found";
+      FUI.notFoundCode = decodeURIComponent(tPathMatch[1]).trim();
+      return;
+    }
+
     const p = new URLSearchParams(window.location.search);
     const view = p.get("view") || "";
     const legacyTopic = (p.get("topic") || "").trim();
@@ -216,7 +224,7 @@
         FUI.view = "topic";
         FUI.activeTopicId = tid;
         FUI.activeTopicImgIdx = 0;
-        FUI.topicInlineDrawer = "";
+        FUI.topicInlineDrawer = p.get("panel") === "report" ? "report" : "";
         return;
       }
     }
@@ -337,6 +345,7 @@
     if (FUI.view === "topic" && FUI.activeTopicId) {
       u.searchParams.set("view", "topic");
       u.searchParams.set("id", FUI.activeTopicId);
+      if (FUI.topicInlineDrawer === "report") u.searchParams.set("panel", "report");
     } else if (FUI.view === "compose") {
       u.searchParams.set("view", "compose");
       u.searchParams.set("category", FUI.composeDraft.category);
@@ -382,7 +391,7 @@
     FUI.view = "topic";
     FUI.activeTopicId = tid;
     FUI.activeTopicImgIdx = Number(activeImgIdx) || 0;
-    if (isEntering) FUI.topicInlineDrawer = "";
+    if (isEntering && FUI.topicInlineDrawer !== "report") FUI.topicInlineDrawer = "";
     syncForumUrl(isEntering);
     if (isEntering) {
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1738,16 +1747,83 @@
     const worksTitle = isStyle ? "用这个画风做的作品" : "用这个图型做的作品";
     const relatedWorksHref = S.channelUrl("forum", { view: "related", kind: kind, id: res.code, tab: "works" });
 
+    const isStaff = Boolean(App.state?.loggedIn && App.state?.user && ["admin", "superadmin", "moderator", "operator", "reviewer"].includes(App.state.user.role));
+    const isExclusive = res.sourceType === "exclusive";
+
+    const viewerStamps = res.viewerStamps || _activeTopicDetail?.topicData?.viewer?.stamps || [];
+    const stampedRecipe = viewerStamps.includes("超实用配方");
+    const stampedAesthetic = viewerStamps.includes("审美在线");
+    const recipeCount = (res.stampCounts && res.stampCounts["超实用配方"]) || 0;
+    const aestheticCount = (res.stampCounts && res.stampCounts["审美在线"]) || 0;
+    const canTip = Boolean(
+      res.sourceType === "community" &&
+      res.author &&
+      (!App.state?.loggedIn || !App.state?.user || App.state.user.username !== res.author)
+    );
+
     return `
+      <style>
+        .topic-resource-stamps {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 14px;
+          margin-bottom: 14px;
+          flex-wrap: wrap;
+        }
+        .topic-resource-stamps .hw-stamp-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 12px;
+          border-radius: 999px;
+          border: 1px solid var(--line-soft);
+          background: var(--paper-card);
+          font-size: 13px;
+          cursor: pointer;
+          color: var(--ink-base);
+          transition: all 0.15s ease;
+        }
+        .topic-resource-stamps .hw-stamp-btn:hover {
+          border-color: var(--gold);
+        }
+        .topic-resource-stamps .hw-stamp-btn.is-active {
+          background: #fbf5e8;
+          border-color: var(--gold);
+          color: #8a5a00;
+          font-weight: 700;
+        }
+        .topic-resource-stamps .topic-stamp-tip-btn {
+          margin-left: auto;
+        }
+        @media (max-width: 480px) {
+          .topic-resource-stamps .topic-stamp-tip-btn {
+            margin-left: 0;
+            width: 100%;
+            text-align: center;
+            margin-top: 6px;
+          }
+        }
+      </style>
       <div class="topic-resource-mount" style="min-width:0;max-width:100%;">
         <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;margin-bottom:20px;">
           ${res.image ? `
             <div style="flex:0 0 240px;max-width:100%;">
               <img src="${esc(res.image)}" alt="${esc(res.name)}" data-zoom-img="${esc(res.image)}" style="width:100%;border-radius:10px;border:1px solid var(--line-soft);cursor:zoom-in;display:block;" />
+              ${Array.isArray(res.examples) && res.examples.length ? `
+                <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+                  ${res.examples.map(ex => `
+                    <img src="${esc(ex)}" alt="示例图" data-zoom-img="${esc(ex)}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid var(--line-soft);cursor:zoom-in;display:block;" />
+                  `).join("")}
+                </div>
+              ` : ""}
             </div>
           ` : ""}
           <div style="flex:1;min-width:240px;">
-            <div style="font-size:12px;font-weight:800;color:var(--vermilion);margin-bottom:4px;">#${esc(res.code)}</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div style="font-size:12px;font-weight:800;color:var(--vermilion);margin-bottom:4px;">#${esc(res.code)}</div>
+              ${isStaff ? `<a href="${esc(S.channelUrl("admin", { module: "catalog", q: res.code }))}" target="_blank" class="btn btn-sm btn-ghost" style="font-size:12px;color:var(--ink-muted);padding:2px 8px;text-decoration:none;" title="在后台目录中管理此资源">🛠 在后台编辑 ↗</a>` : ""}
+            </div>
             <h2 style="margin:0 0 10px;font-size:20px;font-family:var(--font-serif);">${esc(res.name)}</h2>
             ${res.description ? `<p style="margin:0 0 14px;font-size:13.5px;color:var(--ink-muted);line-height:1.6;overflow-wrap:anywhere;">${esc(res.description)}</p>` : ""}
             <div style="margin-top:12px;">
@@ -1756,21 +1832,43 @@
           </div>
         </div>
 
+        <div class="topic-resource-stamps">
+          <button type="button" class="hw-stamp-btn ${stampedRecipe ? "is-active" : ""}" id="topic-stamp-recipe" data-stamp-label="超实用配方">
+            🎯 超实用配方 (${recipeCount})
+          </button>
+          <button type="button" class="hw-stamp-btn ${stampedAesthetic ? "is-active" : ""}" id="topic-stamp-aesthetic" data-stamp-label="审美在线">
+            ✨ 审美在线 (${aestheticCount})
+          </button>
+          ${canTip ? `
+            <button type="button" class="btn btn-sm btn-gold topic-stamp-tip-btn" id="topic-stamp-tip-btn">
+              🎁 赞赏 2✦ 给 @${esc(res.authorName || res.author)}
+            </button>
+          ` : ""}
+        </div>
+
         <div style="margin-top:16px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
             <h3 style="margin:0;font-size:15px;font-weight:800;">${esc(kindName)}定义</h3>
-            ${res.unlocked && res.definition ? `<button type="button" class="btn btn-sm" id="resource-copy-def-btn">复制定义</button>` : ""}
+            ${(!isExclusive && res.unlocked && res.definition) ? `<button type="button" class="btn btn-sm" id="resource-copy-def-btn">复制定义</button>` : ""}
           </div>
           ${
-            res.unlocked
-              ? (res.definition
-                  ? `<pre class="fwp-prompt-text" style="white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;background:var(--paper-bg);padding:14px;border-radius:8px;border:1px solid var(--line-soft);font-size:13px;line-height:1.6;">${esc(res.definition)}</pre>`
-                  : `<p style="color:var(--ink-muted);font-size:13px;">暂无定义内容</p>`)
-              : `<div class="hw-locked-gate-box" style="padding:24px;text-align:center;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
-                  <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后查看定义</div>
-                  <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
-                  <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 立即解锁</button>
-                </div>`
+            isExclusive
+              ? (res.unlocked || !res.unlockCost
+                  ? `<p style="color:var(--ink-muted);font-size:13px;padding:14px;background:var(--paper-bg);border-radius:8px;border:1px solid var(--line-soft);margin:0;">官网独占：只能在创作台在线调用，不展示定义</p>`
+                  : `<div class="hw-locked-gate-box" style="padding:24px;text-align:center;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
+                      <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后在线使用</div>
+                      <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">官网独占：只能在创作台在线调用，不展示定义。解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
+                      <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 解锁后可在线使用</button>
+                    </div>`)
+              : (res.unlocked
+                  ? (res.definition
+                      ? `<pre class="fwp-prompt-text" style="white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;background:var(--paper-bg);padding:14px;border-radius:8px;border:1px solid var(--line-soft);font-size:13px;line-height:1.6;">${esc(res.definition)}</pre>`
+                      : `<p style="color:var(--ink-muted);font-size:13px;">暂无定义内容</p>`)
+                  : `<div class="hw-locked-gate-box" style="padding:24px;text-align:center;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
+                      <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后查看定义</div>
+                      <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
+                      <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 立即解锁</button>
+                    </div>`)
           }
         </div>
 
@@ -2015,7 +2113,13 @@
           <div class="hw-subpage-crumbs">
             <button type="button" class="btn btn-sm" id="topic-back-list-btn">← 返回论坛列表</button>
             <span>/</span>
-            <button type="button" class="hw-pill" id="topic-crumb-board" style="padding:2px 9px;font-size:11.8px;">${esc(topic.categoryLabel || "社区讨论")}</button>
+            <button type="button" class="hw-pill" id="topic-crumb-board" style="padding:2px 9px;font-size:11.8px;">${
+              mount.kind === "style"
+                ? "← 画风频道"
+                : mount.kind === "layout"
+                ? "← 图型频道"
+                : esc(topic.categoryLabel || "社区讨论")
+            }</button>
             <span>/</span>
             <strong>帖子正文与楼层回复</strong>
           </div>
@@ -2249,11 +2353,26 @@
     // Navigation buttons
     root.querySelector("#topic-back-list-btn").onclick = () => openForumList(true);
     root.querySelector("#topic-crumb-board").onclick = () => {
+      if (mount.kind === "style") {
+        window.location.href = S.channelUrl("main", { view: "styles" });
+        return;
+      }
+      if (mount.kind === "layout") {
+        window.location.href = S.channelUrl("main", { view: "layouts" });
+        return;
+      }
       FUI.category = topic.category || "all";
       openForumList(true);
     };
-    root.querySelector("#topic-new-post-btn").onclick = () =>
-      openComposeView({ category: topic.category || "experience" }, true);
+    root.querySelector("#topic-new-post-btn").onclick = () => {
+      if (mount.kind === "style" && mount.resource?.code) {
+        openComposeView({ category: "assets", style1: mount.resource.code }, true);
+      } else if (mount.kind === "layout" && mount.resource?.code) {
+        openComposeView({ category: "assets", layout: mount.resource.code }, true);
+      } else {
+        openComposeView({ category: topic.category || "experience" }, true);
+      }
+    };
 
     root.querySelectorAll("[data-open-creator]").forEach((btn) => {
       if (!btn.getAttribute("data-open-creator")) { btn.outerHTML = '<span class="curation-muted">资源讨论</span>'; return; }
@@ -2705,6 +2824,81 @@
 
     // Resource Mount - copy button & related works & paired resources
     if (mount.kind === "style" || mount.kind === "layout") {
+      const bindStampBtn = (btnId, stampLabel) => {
+        const btn = root.querySelector(btnId);
+        if (!btn || !mount.resource) return;
+        btn.onclick = () => {
+          if (!App.state?.loggedIn) {
+            openForumAuthPage("登录后即可盖印章！");
+            return;
+          }
+          const viewerStamps = mount.resource.viewerStamps || _activeTopicDetail?.topicData?.viewer?.stamps || [];
+          if (viewerStamps.includes(stampLabel) || btn.classList.contains("is-active")) {
+            toast("已盖过此印章");
+            return;
+          }
+          viewerStamps.push(stampLabel);
+          mount.resource.viewerStamps = viewerStamps;
+          if (_activeTopicDetail?.topicData?.viewer) {
+            _activeTopicDetail.topicData.viewer.stamps = viewerStamps;
+          }
+          if (!mount.resource.stampCounts) mount.resource.stampCounts = {};
+          const curCount = (mount.resource.stampCounts[stampLabel] || 0) + 1;
+          mount.resource.stampCounts[stampLabel] = curCount;
+          btn.classList.add("is-active");
+          btn.innerHTML = `${stampLabel === "超实用配方" ? "🎯 超实用配方" : "✨ 审美在线"} (${curCount})`;
+
+          S.apiJson("/api/interactions/cheer", {
+            method: "POST",
+            body: { targetType: "asset", targetId: mount.resource.code, stampLabel: stampLabel, stamp: stampLabel }
+          }).then((res) => {
+            if (res && res.firstCheerReward) {
+              toast(`🎯 盖章成功！首次盖章获得 ${res.firstCheerReward}✦ 积分奖励`);
+              if (App.state?.user) App.state.user.credits = (App.state.user.credits || 0) + res.firstCheerReward;
+            } else {
+              toast("🎯 盖章成功！");
+            }
+          }).catch((err) => {
+            const idx = viewerStamps.indexOf(stampLabel);
+            if (idx >= 0) viewerStamps.splice(idx, 1);
+            mount.resource.stampCounts[stampLabel] = Math.max(0, curCount - 1);
+            btn.classList.remove("is-active");
+            btn.innerHTML = `${stampLabel === "超实用配方" ? "🎯 超实用配方" : "✨ 审美在线"} (${mount.resource.stampCounts[stampLabel]})`;
+            toast(`盖章失败：${(err && err.message) || err}`);
+          });
+        };
+      };
+
+      bindStampBtn("#topic-stamp-recipe", "超实用配方");
+      bindStampBtn("#topic-stamp-aesthetic", "审美在线");
+
+      const tipBtn = root.querySelector("#topic-stamp-tip-btn");
+      if (tipBtn && mount.resource) {
+        tipBtn.onclick = () => {
+          if (!App.state?.loggedIn) {
+            openForumAuthPage("登录后即可赞赏支持作者！");
+            return;
+          }
+          const author = mount.resource.authorName || mount.resource.author || "创作者";
+          if (!confirm(`赞赏 2✦ 给 @${author}，不会解锁任何内容。确定赞赏吗？`)) return;
+          tipBtn.disabled = true;
+          S.apiJson("/api/interactions/tip", {
+            method: "POST",
+            body: { targetType: "asset", targetId: mount.resource.code, amount: 2 }
+          }).then((res) => {
+            if (res && res.credits != null && App.state?.user) {
+              App.state.user.credits = res.credits;
+            }
+            toast(`🎁 赞赏成功！已向 @${author} 送出 2✦ 积分`);
+            mount.resource.tips = (mount.resource.tips || 0) + 2;
+          }).catch((err) => {
+            toast(`赞赏失败：${(err && err.message) || err}`);
+          }).finally(() => {
+            tipBtn.disabled = false;
+          });
+        };
+      }
+
       const copyDefBtn = root.querySelector("#resource-copy-def-btn");
       if (copyDefBtn && mount.resource?.definition) {
         copyDefBtn.onclick = () => {
@@ -2748,7 +2942,10 @@
           .then((res) => {
             const items = (res && res.items) || [];
             if (!items.length) {
-              worksContainer.innerHTML = `<div style="padding:16px;text-align:center;color:var(--ink-muted);font-size:13px;background:var(--paper-bg);border-radius:8px;">暂无使用此资源创作的作品</div>`;
+              const useUrl = mount.kind === "style"
+                ? S.channelUrl("studio", { style: mount.resource.code })
+                : S.channelUrl("studio", { layout: mount.resource.code });
+              worksContainer.innerHTML = `<div style="padding:16px;text-align:center;color:var(--ink-muted);font-size:13px;background:var(--paper-bg);border-radius:8px;">暂无使用此资源创作的作品 · <a href="${esc(useUrl)}" class="btn-link" style="color:var(--vermilion);text-decoration:none;font-weight:700;">用它做第一张 ↗</a></div>`;
               return;
             }
             worksContainer.innerHTML = `
@@ -3263,9 +3460,37 @@
     `;
   }
 
+  function renderNotFoundPage(root, code = "") {
+    document.title = "没有找到这个帖子或资源 — Handraw 手绘风社区";
+    root.innerHTML = `
+      <div class="hw-detail-page" id="standalone-topic-not-found-page">
+        <div class="hw-subpage-bar">
+          <button type="button" class="btn btn-sm" id="topic-404-back">← 返回论坛</button>
+        </div>
+        <div class="hw-detail-section-card" style="text-align:center;padding:48px 24px;">
+          <h2 style="margin:0 0 8px;">没有找到这个帖子或资源</h2>
+          <p style="color:var(--ink-muted);margin:0 0 18px;">该资源可能尚未入库、已被移除或链接有误。</p>
+          <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary" id="btn-return-forum">返回论坛</button>
+            <a href="/?q=${encodeURIComponent(code)}" class="btn btn-primary" id="btn-search-channel">在频道页搜索 ${esc(code)}</a>
+          </div>
+        </div>
+      </div>
+    `;
+    const back1 = root.querySelector("#topic-404-back");
+    if (back1) back1.onclick = () => openForumList(true);
+    const back2 = root.querySelector("#btn-return-forum");
+    if (back2) back2.onclick = () => openForumList(true);
+  }
+
   function renderForum() {
     const root = document.getElementById("forum-app-root");
     if (!root || !App.state) return;
+
+    if (FUI.view === "not_found") {
+      renderNotFoundPage(root, FUI.notFoundCode);
+      return;
+    }
 
     if (["resource", "related"].includes(FUI.view)) {
       if (hasModule("HandrawResourcePages", "render")) {

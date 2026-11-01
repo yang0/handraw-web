@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import json
+import sqlite3
 import time
 import uuid
 import re
@@ -192,10 +193,19 @@ def ensure_topic(tx,kind,target,resource,initial_origin: str = 'submission'):
             now,
         ),
     )
-    tx.execute(
-        'INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
-        (kind, target, tid, initial_origin, now),
-    )
+    try:
+        tx.execute(
+            'INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
+            (kind, target, tid, initial_origin, now),
+        )
+    except sqlite3.IntegrityError:
+        if kind in ('style', 'layout', 'asset'):
+            row = tx.execute('SELECT topic_id FROM curation_resource_topics WHERE kind=? AND UPPER(target_id)=?', (kind, target)).fetchone()
+        else:
+            row = tx.execute('SELECT topic_id FROM curation_resource_topics WHERE kind=? AND target_id=?', (kind, target)).fetchone()
+        if row:
+            return row['topic_id']
+        raise
     return tid
 
 

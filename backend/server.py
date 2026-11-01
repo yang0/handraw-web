@@ -1382,7 +1382,7 @@ def build_sitemap_xml(db: Database, origin: str) -> bytes:
     for a in conn.execute(
         "SELECT code, kind FROM catalog_assets WHERE status = 'published' ORDER BY published_at_ms DESC"
     ).fetchall():
-        urls.append((f"{base}/?view=asset&id={urllib.parse.quote(a['code'])}", "0.7"))
+        urls.append((f"{base}/t/{urllib.parse.quote(a['code'])}", "0.7"))
 
     items_xml = "\n".join(
         f"  <url><loc>{html.escape(loc)}</loc><changefreq>daily</changefreq><priority>{prio}</priority></url>"
@@ -1860,6 +1860,36 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         def q1(key: str, default: str = "") -> str:
             vals = qs.get(key)
             return vals[0].strip() if vals and vals[0] else default
+
+        # Legacy asset detail link 302 redirects to /t/<id>
+        if req_path in ("/", "", "/main", "/main/", "/index.html", "/main/index.html"):
+            is_legacy_asset = (q1("view") == "asset") or bool(q1("asset"))
+            legacy_code = (q1("id") if q1("view") == "asset" else "") or q1("asset")
+            if is_legacy_asset and legacy_code:
+                clean_code = legacy_code.strip().upper().lstrip("#")
+                extra_params = {}
+                tab_val = q1("tab")
+                focus_val = q1("focus")
+                panel_val = q1("panel")
+                if tab_val in ("topics", "works"):
+                    conn = self.db.get_conn()
+                    from .resource_discussions import resolve_resource
+                    kind = "style" if resolve_resource(conn, "style", clean_code) else ("layout" if resolve_resource(conn, "layout", clean_code) else "asset")
+                    dest = f"/forum/?view=related&kind={kind}&id={urllib.parse.quote(clean_code)}&tab={tab_val}"
+                    if panel_val == "report":
+                        dest += "&panel=report"
+                else:
+                    if focus_val == "comment" or tab_val == "comments":
+                        extra_params["focus"] = "comment"
+                    if panel_val == "report" or tab_val == "report":
+                        extra_params["panel"] = "report"
+                    qs_part = f"?{urllib.parse.urlencode(extra_params)}" if extra_params else ""
+                    dest = f"/t/{urllib.parse.quote(clean_code)}{qs_part}"
+                self.send_response(302)
+                self.send_header("Location", dest)
+                self._cors_headers()
+                self.end_headers()
+                return
 
         # Optional feature modules load lazily and degrade to "no route" when a
         # partial checkout omits them, so the rest of the server still boots.
@@ -2537,7 +2567,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     user,  # type: ignore[arg-type]
                     target_type=str(body.get("targetType") or "work"),
                     target_id=str(body.get("targetId") or body.get("id") or ""),
-                    stamp_label=str(body.get("stampLabel") or ""),
+                    stamp_label=str(body.get("stampLabel") or body.get("stamp") or ""),
                 )
             )
             return

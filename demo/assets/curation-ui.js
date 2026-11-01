@@ -1271,7 +1271,6 @@
           links += '<a href="' + esc(S.channelUrl("main", { view: "work", id: s.targetId })) + '">查看作品</a>';
           links += '<a href="' + esc(S.channelUrl("studio", { fork: s.targetId })) + '">复刻作品</a>';
         } else if (s.kind === "style" || s.kind === "layout") {
-          links += '<a href="' + esc(S.channelUrl("main", { view: "asset", kind: s.kind, id: s.targetId })) + '">去查看资源</a>';
           links += '<a href="' + esc(S.channelUrl("studio", s.kind === "style" ? {style:s.targetId} : {layout:s.targetId})) + '">在创作台使用</a>';
         }
       }

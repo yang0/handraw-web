@@ -11,7 +11,9 @@ from __future__ import annotations
 import base64
 import json
 import re
+import sqlite3
 from typing import Any
+import urllib.parse
 
 from . import forum_resources
 from . import services as S
@@ -52,7 +54,13 @@ def _resolve_ref_to_topic_id(conn: Any, ref: str, user: dict[str, Any] | None = 
             m_target = m["target_id"].upper().lstrip("#") if m["kind"] in ("style", "layout") else m["target_id"]
             res = resolve_resource(conn, m["kind"], m_target)
             if not res:
-                return None
+                sub = conn.execute(
+                    "SELECT status FROM curation_submissions WHERE topic_id = ?", (ref,)
+                ).fetchone()
+                if sub and sub["status"] in ("pending", "changes_requested", "approved"):
+                    res = True
+                else:
+                    return None
             if m["kind"] == "work":
                 wf, wp = S._seed_filter("id", "works")
                 w_valid = conn.execute(
@@ -99,6 +107,12 @@ def _resolve_ref_to_topic_id(conn: Any, ref: str, user: dict[str, Any] | None = 
     ).fetchone()
     if m_asset:
         res = resolve_resource(conn, m_asset["kind"], m_asset["target_id"])
+        if not res:
+            sub = conn.execute(
+                "SELECT status FROM curation_submissions WHERE topic_id = ?", (m_asset["topic_id"],)
+            ).fetchone()
+            if sub and sub["status"] in ("pending", "changes_requested", "approved"):
+                res = True
         if res:
             t = conn.execute(
                 "SELECT id, status FROM forum_topics WHERE id = ?", (m_asset["topic_id"],)
@@ -120,42 +134,67 @@ def _handle_t_redirect(handler: Any, ref: str, qs: dict[str, list[str]] | None =
         ref_lower = ref_clean.lower()
         if ref_lower.startswith("style-"):
             cand = ref_clean[6:].strip().upper().lstrip("#")
-            if resolve_resource(conn, "style", cand):
+            if resolve_resource(conn, "style", cand, viewer=user, include_pending=True):
                 code = cand
                 kind = "style"
         elif ref_lower.startswith("layout-"):
             cand = ref_clean[7:].strip().upper().lstrip("#")
-            if resolve_resource(conn, "layout", cand):
+            if resolve_resource(conn, "layout", cand, viewer=user, include_pending=True):
                 code = cand
                 kind = "layout"
         else:
             cand = ref_clean.upper().lstrip("#")
-            if resolve_resource(conn, "style", cand):
+            if resolve_resource(conn, "style", cand, viewer=user, include_pending=True):
                 code = cand
                 kind = "style"
-            elif resolve_resource(conn, "layout", cand):
+            elif resolve_resource(conn, "layout", cand, viewer=user, include_pending=True):
                 code = cand
                 kind = "layout"
 
         if kind and code:
-            location = f"/?view=asset&id={code}"
-            if qs and qs.get("focus"):
-                focus_vals = qs.get("focus") or []
-                if focus_vals and focus_vals[0] == "comment":
-                    location += "&tab=comments"
-            handler.send_response(302)
-            handler.send_header("Location", location)
+            res = resolve_resource(conn, kind, code, viewer=user, include_pending=True)
+            if res:
+                from .resource_discussions import ensure_topic
+                try:
+                    topic_id = ensure_topic(conn, kind, code, res)
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    conn.rollback()
+                    topic_id = _resolve_ref_to_topic_id(conn, ref, user)
+
+        if not topic_id:
+            from .config import DEMO_DIR
+            forum_html = DEMO_DIR / "forum.html"
+            data = forum_html.read_bytes() if forum_html.is_file() else b"Not Found"
+            handler.send_response(404)
+            handler.send_header("Content-Type", "text/html; charset=utf-8")
+            handler.send_header("X-Content-Type-Options", "nosniff")
+            handler.send_header("Cache-Control", "no-cache")
             handler._cors_headers()
+            handler.send_header("Content-Length", str(len(data)))
             handler.end_headers()
+            handler.wfile.write(data)
             return True
 
-        handler.send_error(404, "Not found")
-        return True
     location = f"/forum/?view=topic&id={topic_id}"
+    extra = {}
     if qs and qs.get("focus"):
         focus_vals = qs.get("focus") or []
         if focus_vals and focus_vals[0] == "comment":
-            location += "&focus=comment"
+            extra["focus"] = "comment"
+    if qs and qs.get("panel"):
+        panel_vals = qs.get("panel") or []
+        if panel_vals and panel_vals[0] == "report":
+            extra["panel"] = "report"
+    if qs and qs.get("tab"):
+        tab_vals = qs.get("tab") or []
+        if tab_vals and tab_vals[0] == "comments":
+            extra["focus"] = "comment"
+        elif tab_vals and tab_vals[0] == "report":
+            extra["panel"] = "report"
+    if extra:
+        location += "&" + urllib.parse.urlencode(extra)
+
     handler.send_response(302)
     handler.send_header("Location", location)
     handler._cors_headers()
@@ -278,37 +317,113 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
         code = str(mapping["target_id"]).strip().upper().lstrip("#")
         raw = resolve_resource(conn, m_kind, code, viewer=user, include_pending=True)
         if not raw:
-            raise S.ServiceError("关联资源不存在或不可见", status=404)
-
-        if "code" in raw:
-            asset_res = forum_resources._asset_resource(raw, unlocked_set, user)
+            sub = conn.execute(
+                "SELECT status FROM curation_submissions WHERE topic_id = ?", (topic_id,)
+            ).fetchone()
+            if sub and sub["status"] in ("pending", "changes_requested", "approved"):
+                mount = {"kind": "discussion"}
+            else:
+                raise S.ServiceError("关联资源不存在或不可见", status=404)
         else:
-            asset_res = forum_resources._static_resource(raw, m_kind)
+            if "code" in raw:
+                asset_res = forum_resources._asset_resource(raw, unlocked_set, user)
+            else:
+                asset_res = forum_resources._static_resource(raw, m_kind)
 
-        res_likes, res_favorites = _get_asset_social_metrics(conn, code)
-        mount = {
-            "kind": m_kind,
-            "resource": {
-                "code": code,
-                "name": asset_res.get("name") or asset_res.get("title") or code,
-                "image": asset_res.get("image") or "",
-                "description": asset_res.get("description") or "",
-                "definition": asset_res.get("definition") or "",
-                "unlocked": bool(asset_res.get("unlocked")),
-                "unlockCost": int(asset_res.get("unlockCost") or 0),
-                "useUrl": f"/studio/?{m_kind}={code}",
-                "likes": res_likes,
-                "favorites": res_favorites,
-            },
-        }
-        topic_dict["likes"] = res_likes
-        topic_dict["favorites"] = res_favorites
+            res_likes, res_favorites = _get_asset_social_metrics(conn, code)
+
+            image = asset_res.get("image") or ""
+            examples = []
+            sub_row = conn.execute(
+                "SELECT id, current_revision FROM curation_submissions WHERE kind = ? AND UPPER(target_id) = ? ORDER BY id DESC LIMIT 1",
+                (m_kind, code),
+            ).fetchone()
+            if sub_row:
+                v_row = conn.execute(
+                    "SELECT payload_json FROM curation_versions WHERE submission_id = ? AND revision = ?",
+                    (sub_row["id"], sub_row["current_revision"]),
+                ).fetchone()
+                if v_row:
+                    try:
+                        p_data = json.loads(v_row["payload_json"] or "{}")
+                        from .curation import cover_of, examples_of
+                        c = cover_of(p_data)
+                        if c:
+                            image = c
+                        examples = examples_of(p_data) or []
+                    except Exception:
+                        pass
+
+            a_row = conn.execute(
+                "SELECT cheers, tips, stamp_counts_json, author_username, author_name, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?",
+                (code, code),
+            ).fetchone()
+            if a_row:
+                res_cheers = int(a_row["cheers"] or 0)
+                res_tips = int(a_row["tips"] or 0)
+                stamp_counts_raw = json.loads(a_row["stamp_counts_json"] or "{}")
+                source_type = a_row["source_type"] or asset_res.get("sourceType") or ""
+                author_username = a_row["author_username"] or asset_res.get("author") or ""
+                author_name = a_row["author_name"] or asset_res.get("authorName") or ""
+            else:
+                total_cheers_row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM interactions WHERE target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ''",
+                    (code, code),
+                ).fetchone()
+                res_cheers = int(total_cheers_row["cnt"] if total_cheers_row else 0)
+                res_tips = 0
+                stamp_rows = conn.execute(
+                    "SELECT stamp_label, COUNT(*) AS cnt FROM interactions WHERE target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label <> '' GROUP BY stamp_label",
+                    (code, code),
+                ).fetchall()
+                stamp_counts_raw = {r["stamp_label"]: int(r["cnt"]) for r in stamp_rows}
+                source_type = asset_res.get("sourceType") or raw.get("source_type") or "official"
+                author_username = asset_res.get("author") or ""
+                author_name = asset_res.get("authorName") or ""
+
+            stamp_counts = {
+                "超实用配方": int(stamp_counts_raw.get("超实用配方", 0)),
+                "审美在线": int(stamp_counts_raw.get("审美在线", 0)),
+            }
+
+            mount = {
+                "kind": m_kind,
+                "resource": {
+                    "code": code,
+                    "name": asset_res.get("name") or asset_res.get("title") or code,
+                    "image": image,
+                    "examples": examples,
+                    "description": asset_res.get("description") or "",
+                    "definition": asset_res.get("definition") or "",
+                    "unlocked": bool(asset_res.get("unlocked")),
+                    "unlockCost": int(asset_res.get("unlockCost") or 0),
+                    "sourceType": source_type,
+                    "author": author_username,
+                    "authorName": author_name,
+                    "useUrl": f"/studio/?{m_kind}={code}",
+                    "likes": res_likes,
+                    "favorites": res_favorites,
+                    "cheers": res_cheers,
+                    "stampCounts": stamp_counts,
+                    "tips": res_tips,
+                },
+            }
+            topic_dict["likes"] = res_likes
+            topic_dict["favorites"] = res_favorites
     else:
         mount = {"kind": "discussion"}
 
-    # Viewer state (liked and favorited per mount kind)
+    # Viewer state (liked, favorited, stamps per mount kind)
+    viewer_stamps: list[str] = []
     if user:
         uid = int(user["id"])
+        if mapping and mapping["kind"] in ("style", "layout"):
+            m_code = str(mapping["target_id"]).strip().upper().lstrip("#")
+            v_rows = conn.execute(
+                "SELECT stamp_label FROM interactions WHERE user_id = ? AND target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?)",
+                (uid, m_code, m_code),
+            ).fetchall()
+            viewer_stamps = [r["stamp_label"] for r in v_rows]
         if mapping and mapping["kind"] == "work":
             wid = str(mapping["target_id"])
             liked = bool(
@@ -368,6 +483,9 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
         liked = False
         favorited = False
 
+    if mount.get("resource"):
+        mount["resource"]["viewerStamps"] = viewer_stamps
+
     handler._send_json({
         "ok": True,
         "topic": topic_dict,
@@ -375,6 +493,7 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
         "viewer": {
             "liked": liked,
             "favorited": favorited,
+            "stamps": viewer_stamps,
         },
     })
     return True
