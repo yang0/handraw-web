@@ -59,6 +59,7 @@ DEFAULT_SITE_SETTINGS: dict[str, object] = {
         "studio_credit_per_image": 2,
         "author_share_ratio": 0.80,
         "discourse_migration_credits": 50,
+        "official_tip_payee": "",
     },
     "announcement": {
         "enabled": True,

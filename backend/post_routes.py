@@ -365,13 +365,24 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
                 source_type = a_row["source_type"] or asset_res.get("sourceType") or ""
                 author_username = a_row["author_username"] or asset_res.get("author") or ""
                 author_name = a_row["author_name"] or asset_res.get("authorName") or ""
+                if source_type in ("official", "exclusive"):
+                    tip_row = conn.execute(
+                        "SELECT COALESCE(SUM(delta), 0) AS total FROM ledgers WHERE ref_type = 'asset' AND (ref_id = ? OR UPPER(ref_id) = ?) AND kind = 'tip_official_in'",
+                        (code, code),
+                    ).fetchone()
+                    if tip_row:
+                        res_tips = max(res_tips, int(tip_row["total"] or 0))
             else:
                 total_cheers_row = conn.execute(
                     "SELECT COUNT(*) AS cnt FROM interactions WHERE target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ''",
                     (code, code),
                 ).fetchone()
                 res_cheers = int(total_cheers_row["cnt"] if total_cheers_row else 0)
-                res_tips = 0
+                tip_row = conn.execute(
+                    "SELECT COALESCE(SUM(delta), 0) AS total FROM ledgers WHERE ref_type = 'asset' AND (ref_id = ? OR UPPER(ref_id) = ?) AND kind = 'tip_official_in'",
+                    (code, code),
+                ).fetchone()
+                res_tips = int(tip_row["total"] if tip_row else 0)
                 stamp_rows = conn.execute(
                     "SELECT stamp_label, COUNT(*) AS cnt FROM interactions WHERE target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label <> '' GROUP BY stamp_label",
                     (code, code),

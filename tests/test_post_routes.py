@@ -740,6 +740,147 @@ class PostRoutesHTTPTests(unittest.TestCase):
             conn.execute("DELETE FROM collections WHERE target_id IN ('FB-041', 'fb-041')")
             conn.commit()
 
+    def test_official_and_community_asset_tips(self):
+        """Test Issue #24: Official resource tipping with designated payee, ledgers distinction, and rejection when payee missing."""
+        conn = self.db.get_conn()
+        now_ts = int(time.time() * 1000)
+
+        # 1. Create test users: tipper (alice), payee superadmin (admin_payee), community creator (bob)
+        u_tipper, _ = register_user(self.db, f"tipper_{now_ts}", "pass123")
+        u_payee, _ = register_user(self.db, f"admin_payee_{now_ts}", "pass123")
+        u_bob, _ = register_user(self.db, f"bob_creator_{now_ts}", "pass123")
+
+        tipper_uid = int(u_tipper["id"])
+        payee_uid = int(u_payee["id"])
+        payee_username = u_payee["username"]
+
+        try:
+            # Ensure official_tip_payee is EMPTY initially
+            conn.execute(
+                "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', json_object('official_tip_payee', ''), 'system', '2026-11-01T00:00:00Z')"
+            )
+            conn.commit()
+
+            # A. Tipping official asset (FA-002) with NO payee configured -> rejects with 400 '官方资源赞赏暂未开放'
+            tipper_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper_uid,)).fetchone()["balance"])
+            with self.assertRaises(services.ServiceError) as cm:
+                services.send_encourage_tip(self.db, u_tipper, "asset", "FA-002", amount=2)
+            self.assertEqual(cm.exception.status, 400)
+            self.assertEqual(cm.exception.code, "official_tips_disabled")
+            self.assertIn("官方资源赞赏暂未开放", str(cm.exception))
+            # Ensure tipper balance was NOT deducted
+            tipper_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper_uid,)).fetchone()["balance"])
+            self.assertEqual(tipper_bal_before, tipper_bal_after, "Balance must not change when payee is unconfigured")
+
+            # B. Configure non-existent payee username
+            conn.execute(
+                "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', json_object('official_tip_payee', 'nonexistent_user_999'), 'system', '2026-11-01T00:00:00Z')"
+            )
+            conn.commit()
+            with self.assertRaises(services.ServiceError) as cm:
+                services.send_encourage_tip(self.db, u_tipper, "asset", "FA-002", amount=2)
+            self.assertEqual(cm.exception.status, 400)
+            self.assertEqual(cm.exception.code, "official_tips_disabled")
+
+            # C. Configure inactive payee (status != 'active')
+            conn.execute("UPDATE users SET status = 'suspended' WHERE id = ?", (payee_uid,))
+            conn.execute(
+                "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', json_object('official_tip_payee', ?), 'system', '2026-11-01T00:00:00Z')",
+                (payee_username,),
+            )
+            conn.commit()
+            with self.assertRaises(services.ServiceError) as cm:
+                services.send_encourage_tip(self.db, u_tipper, "asset", "FA-002", amount=2)
+            self.assertEqual(cm.exception.status, 400)
+            self.assertEqual(cm.exception.code, "official_tips_disabled")
+
+            # D. Activate payee -> Tipping official asset succeeds!
+            conn.execute("UPDATE users SET status = 'active' WHERE id = ?", (payee_uid,))
+            conn.commit()
+            payee_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (payee_uid,)).fetchone()["balance"])
+
+            tip_res = services.send_encourage_tip(self.db, u_tipper, "asset", "FA-002", amount=2)
+            self.assertTrue(tip_res["ok"])
+            self.assertEqual(tip_res["credits"], tipper_bal_before - 2)
+
+            # Payee balance increased by 2
+            payee_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (payee_uid,)).fetchone()["balance"])
+            self.assertEqual(payee_bal_after, payee_bal_before + 2)
+
+            # Check ledger entries: kind is tip_official_out and tip_official_in
+            tipper_ledger = conn.execute(
+                "SELECT kind, delta, ref_type, ref_id FROM ledgers WHERE user_id = ? AND ref_type = 'asset' AND ref_id = 'FA-002' ORDER BY id DESC LIMIT 1",
+                (tipper_uid,),
+            ).fetchone()
+            self.assertEqual(tipper_ledger["kind"], "tip_official_out")
+            self.assertEqual(int(tipper_ledger["delta"]), -2)
+            self.assertEqual(tipper_ledger["ref_id"], "FA-002")
+
+            payee_ledger = conn.execute(
+                "SELECT kind, delta, ref_type, ref_id FROM ledgers WHERE user_id = ? AND ref_type = 'asset' AND ref_id = 'FA-002' ORDER BY id DESC LIMIT 1",
+                (payee_uid,),
+            ).fetchone()
+            self.assertEqual(payee_ledger["kind"], "tip_official_in")
+            self.assertEqual(int(payee_ledger["delta"]), 2)
+            self.assertEqual(payee_ledger["ref_id"], "FA-002")
+
+            # Check interactions table: has record with target_id='FA-002'
+            inter = conn.execute(
+                "SELECT * FROM interactions WHERE user_id = ? AND target_type = 'asset' AND target_id = 'FA-002'",
+                (tipper_uid,),
+            ).fetchone()
+            self.assertIsNotNone(inter)
+
+            # Check /t/FA-002 topic endpoint: res_tips aggregates from ledgers
+            _, fa_loc = self._request_raw_redirect("/t/FA-002")
+            fa_tid = fa_loc.split("id=")[1].split("&")[0]
+            status, detail = self._request("GET", f"/api/posts/{fa_tid}")
+            self.assertEqual(status, 200)
+            self.assertEqual(detail["mount"]["resource"]["tips"], 2)
+
+            # E. Payee cannot tip their own managed official resource
+            with self.assertRaises(services.ServiceError) as cm:
+                services.send_encourage_tip(self.db, u_payee, "asset", "FA-002", amount=2)
+            self.assertEqual(cm.exception.status, 400)
+            self.assertIn("不能赞赏自己管理的官方资源", str(cm.exception))
+
+            # F. Community resource behavior remains unchanged (tip_out -> tip_in)
+            conn.execute(
+                """INSERT INTO catalog_assets (code, kind, name, status, source_type, author_username, author_name, image_url, published_at_ms, created_at, updated_at)
+                   VALUES ('USR-TEST-01', 'style', 'Bob Style', 'published', 'community', ?, 'Bob', '/img.png', 1700000000000, '2026-11-01', '2026-11-01')""",
+                (u_bob["username"],)
+            )
+            conn.commit()
+
+            # Bob cannot tip own resource
+            with self.assertRaises(services.ServiceError) as cm:
+                services.send_encourage_tip(self.db, u_bob, "asset", "USR-TEST-01", amount=2)
+            self.assertEqual(cm.exception.status, 400)
+            self.assertIn("不能给自己赞赏积分哦", str(cm.exception))
+
+            # Tipper tips Bob's resource
+            bob_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (int(u_bob["id"]),)).fetchone()["balance"])
+            c_tip_res = services.send_encourage_tip(self.db, u_tipper, "asset", "USR-TEST-01", amount=2)
+            self.assertTrue(c_tip_res["ok"])
+
+            # Bob's balance increased by 2
+            bob_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (int(u_bob["id"]),)).fetchone()["balance"])
+            self.assertEqual(bob_bal_after, bob_bal_before + 2)
+
+            # Check ledger kind is standard tip_out and tip_in (not tip_official)
+            bob_ledger = conn.execute(
+                "SELECT kind, delta FROM ledgers WHERE user_id = ? AND ref_type = 'asset' AND ref_id = 'USR-TEST-01' ORDER BY id DESC LIMIT 1",
+                (int(u_bob["id"]),),
+            ).fetchone()
+            self.assertEqual(bob_ledger["kind"], "tip_in")
+            self.assertEqual(int(bob_ledger["delta"]), 2)
+        finally:
+            conn.execute("DELETE FROM site_settings WHERE key = 'economy'")
+            conn.execute("DELETE FROM catalog_assets WHERE code = 'USR-TEST-01'")
+            conn.execute("DELETE FROM ledgers WHERE ref_id IN ('FA-002', 'USR-TEST-01')")
+            conn.execute("DELETE FROM interactions WHERE target_id IN ('FA-002', 'USR-TEST-01')")
+            conn.commit()
+
 
 if __name__ == "__main__":
     unittest.main()

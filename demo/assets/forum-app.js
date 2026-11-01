@@ -1755,11 +1755,13 @@
     const stampedAesthetic = viewerStamps.includes("审美在线");
     const recipeCount = (res.stampCounts && res.stampCounts["超实用配方"]) || 0;
     const aestheticCount = (res.stampCounts && res.stampCounts["审美在线"]) || 0;
-    const canTip = Boolean(
-      res.sourceType === "community" &&
-      res.author &&
-      (!App.state?.loggedIn || !App.state?.user || App.state.user.username !== res.author)
-    );
+    const isCommunity = res.sourceType === "community";
+    const canTip = isCommunity
+      ? Boolean(res.author && (!App.state?.loggedIn || !App.state?.user || App.state.user.username !== res.author))
+      : true;
+    const tipBtnLabel = isCommunity
+      ? `🎁 赞赏 2✦ 给 @${esc(res.authorName || res.author)}`
+      : `🎁 赞赏 2✦`;
 
     return `
       <style>
@@ -1841,7 +1843,7 @@
           </button>
           ${canTip ? `
             <button type="button" class="btn btn-sm btn-gold topic-stamp-tip-btn" id="topic-stamp-tip-btn">
-              🎁 赞赏 2✦ 给 @${esc(res.authorName || res.author)}
+              ${tipBtnLabel}
             </button>
           ` : ""}
         </div>
@@ -2876,11 +2878,15 @@
       if (tipBtn && mount.resource) {
         tipBtn.onclick = () => {
           if (!App.state?.loggedIn) {
-            openForumAuthPage("登录后即可赞赏支持作者！");
+            openForumAuthPage("登录后即可赞赏支持！");
             return;
           }
+          const isCommunityRes = mount.resource.sourceType === "community";
           const author = mount.resource.authorName || mount.resource.author || "创作者";
-          if (!confirm(`赞赏 2✦ 给 @${author}，不会解锁任何内容。确定赞赏吗？`)) return;
+          const confirmMsg = isCommunityRes
+            ? `赞赏 2✦ 给 @${author}，不会解锁任何内容。确定赞赏吗？`
+            : `赞赏 2✦ 支持官方模型与资源运营（入账官方运营账户），不会解锁任何内容。确定赞赏吗？`;
+          if (!confirm(confirmMsg)) return;
           tipBtn.disabled = true;
           S.apiJson("/api/interactions/tip", {
             method: "POST",
@@ -2889,7 +2895,10 @@
             if (res && res.credits != null && App.state?.user) {
               App.state.user.credits = res.credits;
             }
-            toast(`🎁 赞赏成功！已向 @${author} 送出 2✦ 积分`);
+            const successMsg = isCommunityRes
+              ? `🎁 赞赏成功！已向 @${author} 送出 2✦ 积分`
+              : `🎁 赞赏成功！感谢对官方资源的支持，已送出 2✦ 积分`;
+            toast(successMsg);
             mount.resource.tips = (mount.resource.tips || 0) + 2;
           }).catch((err) => {
             toast(`赞赏失败：${(err && err.message) || err}`);

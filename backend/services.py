@@ -2688,33 +2688,101 @@ def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, targ
     return {"ok": True, "cheered": cheered, "cheers": new_cheers, "rewarded": rewarded, "credits": bal}
 
 
+def get_official_tip_payee(settings: dict[str, Any]) -> str:
+    val = settings.get("economy", {}).get("official_tip_payee")
+    if not val:
+        val = settings.get("official_tip_payee")
+    return str(val or "").strip()
+
+
 def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, target_id: str, amount: int = 2) -> dict[str, Any]:
     amt = max(1, min(50, int(amount or 2)))
     uid = int(user["id"])
     now = utc_now_iso()
 
     with db.transaction() as tx:
+        is_official = False
+        target = None
         if target_type == "work":
-            target = tx.execute("SELECT id, title, author_username, author_name FROM works WHERE id = ?", (target_id,)).fetchone()
+            row = tx.execute("SELECT id, title, author_username, author_name FROM works WHERE id = ?", (target_id,)).fetchone()
+            target = dict(row) if row else None
         elif target_type == "asset":
             clean_code = str(target_id or "").strip().upper().lstrip("#")
-            target = tx.execute("SELECT code AS id, name AS title, author_username, author_name, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (target_id, clean_code)).fetchone()
+            row = tx.execute("SELECT code AS id, name AS title, author_username, author_name, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (target_id, clean_code)).fetchone()
+            target = dict(row) if row else None
             if not target:
                 from .resource_discussions import resolve_resource
-                if resolve_resource(tx, "style", clean_code) or resolve_resource(tx, "layout", clean_code):
-                    raise ServiceError("官方资源不接受赞赏", status=400)
-                raise ServiceError("目标不存在", status=404)
-            if target.get("source_type") in ("official", "exclusive") or not target["author_username"]:
-                raise ServiceError("官方资源不接受赞赏", status=400)
+                cat_res = resolve_resource(tx, "style", clean_code) or resolve_resource(tx, "layout", clean_code)
+                if cat_res:
+                    is_official = True
+                    target = {
+                        "id": clean_code,
+                        "title": cat_res.get("name") or clean_code,
+                        "author_username": "",
+                        "author_name": "官方团队",
+                        "source_type": "official",
+                    }
+                else:
+                    raise ServiceError("目标不存在", status=404)
+            elif target.get("source_type") in ("official", "exclusive") or not target.get("author_username"):
+                is_official = True
         else:
             raise ServiceError("不支持的赞赏类型")
 
         if not target:
             raise ServiceError("目标不存在", status=404)
+
+        tid = target["id"]
+
+        if is_official:
+            settings = get_site_settings(tx)
+            payee_name = get_official_tip_payee(settings)
+            if not payee_name:
+                raise ServiceError("官方资源赞赏暂未开放", status=400, code="official_tips_disabled")
+
+            payee_row = tx.execute(
+                "SELECT id, username, display_name, status FROM users WHERE username = ? OR id = ?",
+                (payee_name, payee_name),
+            ).fetchone()
+            if not payee_row or payee_row["status"] != "active":
+                raise ServiceError("官方资源赞赏暂未开放", status=400, code="official_tips_disabled")
+
+            payee_uid = int(payee_row["id"])
+            if payee_uid == uid:
+                raise ServiceError("不能赞赏自己管理的官方资源", status=400)
+
+            new_bal, _ = apply_wallet_delta(
+                tx,
+                uid,
+                -amt,
+                "tip_official_out",
+                f"🎁 赞赏官方资源《{target['title']}》（{tid}）",
+                ref_type=target_type,
+                ref_id=tid,
+            )
+
+            apply_wallet_delta(
+                tx,
+                payee_uid,
+                amt,
+                "tip_official_in",
+                f"🎁 收到 @{user['display_name']} 对官方资源《{target['title']}》（{tid}）的赞赏",
+                ref_type=target_type,
+                ref_id=tid,
+            )
+
+            tx.execute("UPDATE catalog_assets SET cheers = cheers + 3, tips = tips + ? WHERE code = ? OR UPPER(code) = ?", (amt, tid, tid))
+
+            tx.execute(
+                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
+                (uid, target_type, tid, now),
+            )
+            return {"ok": True, "credits": new_bal, "amount": amt}
+
+        # Community resources
         if target["author_username"] == user["username"]:
             raise ServiceError("不能给自己赞赏积分哦", status=400)
 
-        tid = target["id"]
         new_bal, _ = apply_wallet_delta(
             tx,
             uid,
