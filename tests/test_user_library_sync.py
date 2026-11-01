@@ -1490,45 +1490,107 @@ class UserLibrarySyncTests(unittest.TestCase):
         self.assertTrue(res_del.get("deletedAt"))
 
     def test_33_migration_066_normalizes_uppercase_and_braced_uuids(self):
-        """Test N2: Migration 066 normalizes historical uppercase and braced UUIDs to lowercase."""
+        """Test N2: Migration 066 normalizes historical uppercase, braced, URN, and unhyphenated UUIDs to lowercase 8-4-4-4-12."""
         raw_uuid_1 = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
         upper_uuid = raw_uuid_1.upper()
         raw_uuid_2 = "2fa12345-6789-4abc-def0-123456789abc"
         braced_uuid = f"{{{raw_uuid_2}}}"
+        raw_uuid_3 = "3e4f5a6b-7c8d-9e0f-1a2b-3c4d5e6f7a8b"
+        urn_uuid = f"urn:uuid:{raw_uuid_3.upper()}"
+        raw_uuid_4 = "4f5a6b7c-8d9e-0f1a-2b3c-4d5e6f7a8b9c"
+        nodash_uuid = raw_uuid_4.replace("-", "")
+        invalid_uid = "abc-not-a-uuid"
 
-        # Insert historical rows directly into database with uppercase / braced asset_uid
+        uploads_dir = Path(os.environ["HANDRAW_UPLOADS_DIR"])
+        dummy_file = uploads_dir / "dummy_norm.png"
+        dummy_file.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\rIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82")
+
+        # Insert historical rows directly into database with various non-canonical formats and invalid format
         with self.db.transaction() as tx:
             tx.execute(
                 """
                 INSERT INTO user_uploads (id, user_id, cat, name_zh, asset_uid, image_url, file_path, bytes, sha256, revision, change_seq, created_at, updated_at)
-                VALUES ('UPL_hist_1', ?, 'characters', 'Hist Upper', ?, '/uploads/dummy1.png', '', 100, 'sha1', 1, 100, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
-                       ('UPL_hist_2', ?, 'props', 'Hist Braced', ?, '/uploads/dummy2.png', '', 100, 'sha2', 1, 101, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+                VALUES ('UPL_hist_1', ?, 'characters', 'Hist Upper', ?, '/uploads/dummy_norm.png', ?, 100, 'sha1', 1, 100, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                       ('UPL_hist_2', ?, 'props', 'Hist Braced', ?, '/uploads/dummy_norm.png', ?, 100, 'sha2', 1, 101, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                       ('UPL_hist_3', ?, 'scenes', 'Hist URN', ?, '/uploads/dummy_norm.png', ?, 100, 'sha3', 1, 102, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                       ('UPL_hist_4', ?, 'other', 'Hist NoDash', ?, '/uploads/dummy_norm.png', ?, 100, 'sha4', 1, 103, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                       ('UPL_hist_5', ?, 'other', 'Hist Invalid', ?, '/uploads/dummy_norm.png', ?, 100, 'sha5', 1, 104, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
                 """,
-                (self.user_a["id"], upper_uuid, self.user_a["id"], braced_uuid),
+                (
+                    self.user_a["id"], upper_uuid, str(dummy_file),
+                    self.user_a["id"], braced_uuid, str(dummy_file),
+                    self.user_a["id"], urn_uuid, str(dummy_file),
+                    self.user_a["id"], nodash_uuid, str(dummy_file),
+                    self.user_a["id"], invalid_uid, str(dummy_file),
+                ),
             )
 
-        # Run Migration 066 logic
-        from backend.work_schema import USER_LIBRARY_NORMALIZE_ASSET_UID_SQL
+        # Run Migration 066 logic (first run)
+        from backend.work_schema import normalize_historical_asset_uids
         conn = self.db.get_conn()
-        conn.executescript(USER_LIBRARY_NORMALIZE_ASSET_UID_SQL)
+        normalize_historical_asset_uids(conn)
 
-        # Verify DB rows are now canonical lowercase
-        row1 = self.db.get_conn().execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_1'").fetchone()
+        # Verify DB rows are now canonical lowercase 8-4-4-4-12
+        row1 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_1'").fetchone()
         self.assertEqual(row1["asset_uid"], raw_uuid_1.lower())
 
-        row2 = self.db.get_conn().execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_2'").fetchone()
+        row2 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_2'").fetchone()
         self.assertEqual(row2["asset_uid"], raw_uuid_2.lower())
 
-        # Calling PUT with canonical lowercase updates this row (baseRevision=1) instead of creating a second row
-        s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{raw_uuid_1.lower()}", {"baseRevision": 1, "name": "Updated Upper"}, cookie=self.cookie_a)
+        # Check URN row -> canonical lowercase
+        row3 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_3'").fetchone()
+        self.assertEqual(row3["asset_uid"], raw_uuid_3.lower())
+
+        # Check unhyphenated row -> canonical lowercase
+        row4 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_4'").fetchone()
+        self.assertEqual(row4["asset_uid"], raw_uuid_4.lower())
+
+        # Check invalid non-UUID row -> preserved as original, whole batch did not rollback
+        row5 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_5'").fetchone()
+        self.assertEqual(row5["asset_uid"], invalid_uid)
+
+        # Check Idempotence: run migration hook a second time
+        normalize_historical_asset_uids(conn)
+        row1_again = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_1'").fetchone()
+        self.assertEqual(row1_again["asset_uid"], raw_uuid_1.lower())
+        row3_again = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_3'").fetchone()
+        self.assertEqual(row3_again["asset_uid"], raw_uuid_3.lower())
+        row4_again = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_4'").fetchone()
+        self.assertEqual(row4_again["asset_uid"], raw_uuid_4.lower())
+        row5_again = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_5'").fetchone()
+        self.assertEqual(row5_again["asset_uid"], invalid_uid)
+
+        # Verify URN row operates cleanly via HTTP:
+        tok = self._create_token(self.user_a["id"], ["library"])
+        # GET .../image returns 200
+        s_img, _, b_img = self._request("GET", f"/api/library/assets/{raw_uuid_3.lower()}/image", bearer=tok)
+        self.assertEqual(s_img, 200)
+
+        # PUT updates existing row (baseRevision=1) instead of creating second row
+        s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{raw_uuid_3.lower()}", {"baseRevision": 1, "name": "Updated URN"}, cookie=self.cookie_a)
         self.assertEqual(s_put, 200)
         self.assertEqual(res_put["revision"], 2)
-        count = self.db.get_conn().execute("SELECT COUNT(*) FROM user_uploads WHERE asset_uid = ?", (raw_uuid_1.lower(),)).fetchone()[0]
-        self.assertEqual(count, 1)
+        count_urn = self.db.get_conn().execute("SELECT COUNT(*) FROM user_uploads WHERE asset_uid = ?", (raw_uuid_3.lower(),)).fetchone()[0]
+        self.assertEqual(count_urn, 1)
 
-        # Calling DELETE with canonical lowercase works
-        s_del, res_del, _ = self._request("DELETE", f"/api/library/assets/{raw_uuid_2.lower()}?baseRevision=1", cookie=self.cookie_a)
+        # DELETE returns 200
+        s_del, res_del, _ = self._request("DELETE", f"/api/library/assets/{raw_uuid_3.lower()}?baseRevision=2", cookie=self.cookie_a)
         self.assertEqual(s_del, 200)
+
+        # Verify unhyphenated row operates cleanly via HTTP:
+        # GET .../image returns 200
+        s_img4, _, _ = self._request("GET", f"/api/library/assets/{raw_uuid_4.lower()}/image", bearer=tok)
+        self.assertEqual(s_img4, 200)
+
+        # PUT updates row
+        s_put4, res_put4, _ = self._request("PUT", f"/api/library/assets/{raw_uuid_4.lower()}", {"baseRevision": 1, "name": "Updated NoDash"}, cookie=self.cookie_a)
+        self.assertEqual(s_put4, 200)
+        count_nodash = self.db.get_conn().execute("SELECT COUNT(*) FROM user_uploads WHERE asset_uid = ?", (raw_uuid_4.lower(),)).fetchone()[0]
+        self.assertEqual(count_nodash, 1)
+
+        # DELETE returns 200
+        s_del4, res_del4, _ = self._request("DELETE", f"/api/library/assets/{raw_uuid_4.lower()}?baseRevision=2", cookie=self.cookie_a)
+        self.assertEqual(s_del4, 200)
 
     def test_34_backfill_does_not_let_forum_steal_sha(self):
         """Test N3: ensure_user_uploads_synced does not let forum rows steal sha256 from library assets."""

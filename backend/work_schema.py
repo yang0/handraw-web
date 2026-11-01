@@ -1,3 +1,11 @@
+from __future__ import annotations
+
+import logging
+import sqlite3
+import uuid
+
+logger = logging.getLogger("handraw.work_schema")
+
 """Additive schema for work identity, social counters, forks and reply provenance.
 
 Migration numbers live in the 40 block.  Every statement here must stay
@@ -447,25 +455,92 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_uploads_user_sha256_active
 """
 
 USER_LIBRARY_NORMALIZE_ASSET_UID_SQL = """
--- Resolve conflicts: if multiple rows for same user have the same normalized asset_uid, keep the lowest id and clear the others
-UPDATE user_uploads
-SET asset_uid = NULL
-WHERE id IN (
-    SELECT u1.id
-    FROM user_uploads u1
-    JOIN user_uploads u2 ON u1.user_id = u2.user_id
-        AND replace(replace(lower(u1.asset_uid), '{', ''), '}', '') = replace(replace(lower(u2.asset_uid), '{', ''), '}', '')
-        AND u1.id > u2.id
-    WHERE u1.asset_uid IS NOT NULL AND u1.asset_uid NOT LIKE 'UPL-%'
-);
-
--- Lowercase and strip curly braces from asset_uid
-UPDATE user_uploads
-SET asset_uid = replace(replace(lower(asset_uid), '{', ''), '}', '')
-WHERE asset_uid IS NOT NULL
-  AND (asset_uid <> lower(asset_uid) OR asset_uid LIKE '{%}')
-  AND asset_uid NOT LIKE 'UPL-%';
+-- 066_user_library_normalize_asset_uid: schema bookkeeping; normalization performed via python post-hook
+SELECT 1;
 """
+
+
+def normalize_historical_asset_uids(conn: sqlite3.Connection) -> None:
+    """Normalize user_uploads asset_uid values to canonical lowercase 8-4-4-4-12 UUID format.
+
+    Handles uppercase, curly braces, URN prefixes ('urn:uuid:...'), and 32-hex unhyphenated UUIDs.
+    Preserves non-UUID custom identifiers without error or rollback.
+    Resolves collisions within the same user by keeping the earliest row (lowest id)
+    and setting conflicting rows' asset_uid to NULL.
+    Idempotent across repeated executions.
+    """
+    rows = conn.execute(
+        """
+        SELECT id, user_id, asset_uid
+        FROM user_uploads
+        WHERE asset_uid IS NOT NULL AND asset_uid <> '' AND asset_uid NOT LIKE 'UPL-%'
+        ORDER BY user_id ASC, id ASC
+        """
+    ).fetchall()
+
+    if not rows:
+        return
+
+    in_tx = getattr(conn, "in_transaction", False)
+    if not in_tx:
+        conn.execute("BEGIN IMMEDIATE;")
+
+    try:
+        user_seen_uids: dict[int, set[str]] = {}
+
+        for r in rows:
+            row_id = r["id"]
+            user_id = int(r["user_id"])
+            raw = str(r["asset_uid"] or "").strip()
+            if not raw:
+                continue
+
+            try:
+                canon = str(uuid.UUID(raw)).lower()
+            except (ValueError, AttributeError, TypeError):
+                logger.warning("user_uploads id=%s has invalid UUID asset_uid=%r; leaving untouched", row_id, raw)
+                continue
+
+            if user_id not in user_seen_uids:
+                user_seen_uids[user_id] = set()
+
+            if canon == raw:
+                user_seen_uids[user_id].add(canon)
+                continue
+
+            # canon != raw
+            if canon in user_seen_uids[user_id]:
+                logger.warning(
+                    "user_uploads id=%s uid normalization collision on canon=%s for user_id=%s; clearing asset_uid",
+                    row_id, canon, user_id,
+                )
+                conn.execute("UPDATE user_uploads SET asset_uid = NULL WHERE id = ?", (row_id,))
+            else:
+                existing = conn.execute(
+                    "SELECT id FROM user_uploads WHERE user_id = ? AND asset_uid = ? AND id <> ? LIMIT 1",
+                    (user_id, canon, row_id),
+                ).fetchone()
+                if existing is not None:
+                    logger.warning(
+                        "user_uploads id=%s uid normalization collision on canon=%s with existing id=%s; clearing asset_uid",
+                        row_id, canon, existing["id"],
+                    )
+                    conn.execute("UPDATE user_uploads SET asset_uid = NULL WHERE id = ?", (row_id,))
+                else:
+                    conn.execute("UPDATE user_uploads SET asset_uid = ? WHERE id = ?", (canon, row_id))
+                    user_seen_uids[user_id].add(canon)
+
+        if not in_tx:
+            conn.execute("COMMIT;")
+    except Exception:
+        if not in_tx and getattr(conn, "in_transaction", False):
+            conn.execute("ROLLBACK;")
+        raise
+
+
+WORK_POST_MIGRATION_HOOKS: dict[int, Any] = {
+    66: normalize_historical_asset_uids,
+}
 
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
