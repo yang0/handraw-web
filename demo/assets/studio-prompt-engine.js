@@ -822,6 +822,24 @@
 
   /* ======================== LOOP BATCH ITERATION RESOLVER ======================== */
 
+  const MAX_MERGED_REFS = 7;
+
+  function dedupeByIdOrImage(items) {
+    if (!Array.isArray(items)) return [];
+    const seen = new Set();
+    const result = [];
+    for (const item of items) {
+      if (!item) continue;
+      const key = item.image ? String(item.image).trim() : (item.id ? String(item.id).trim() : "");
+      if (!key) continue;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(item);
+      }
+    }
+    return result;
+  }
+
   function resolveLoopIterations(graph, loopNode, baseRec, catalog) {
     if (!loopNode || loopNode.type !== "loop") return [];
     const ld = loopNode.data || {};
@@ -937,6 +955,17 @@
           }
         }
         const cleanShort = rowTheme.replace(/^#+\s*/, "").slice(0, 16);
+
+        const rowRefs = (row && Array.isArray(row.assetItems))
+          ? row.assetItems.filter((a) => a && (a.id || a.image))
+          : [];
+        const skipGlobal = Boolean(row && row.skipGlobalRefs);
+        let iterAssetItems = null;
+        if (rowRefs.length > 0 || skipGlobal) {
+          const baseRefs = skipGlobal ? [] : (Array.isArray(rec.assetItems) ? rec.assetItems : []);
+          iterAssetItems = dedupeByIdOrImage([...baseRefs, ...rowRefs]).slice(0, MAX_MERGED_REFS);
+        }
+
         return {
           index: idx,
           loopMode: "prompts",
@@ -945,7 +974,8 @@
           title: `循环 #${idx + 1} · ${cleanShort}${rowTheme.length > 16 ? "…" : ""}`,
           style1: "",
           layout: effLayout,
-          assetItems: null,
+          assetItems: iterAssetItems,
+          skipGlobalRefs: skipGlobal,
           theme: mergedTheme,
           sampleImg: lRes?.image || sampleVisuals[idx % sampleVisuals.length]
         };
@@ -2156,6 +2186,8 @@
     expandUpstreamNodes,
     resolveControlRecipe,
     resolveLoopIterations,
+    dedupeByIdOrImage,
+    MAX_MERGED_REFS,
     assembleControlPrompt,
     // Alias for backward compatibility
     resolveGeneratorRecipe: resolveControlRecipe,

@@ -246,6 +246,32 @@
       `;
     }
 
+    renderRowLayoutButtonHtml(row, idx, globalLayoutId) {
+      const catalog = this.context?.catalog;
+      const rMap = (catalog && catalog.resourceMap) || new Map();
+      const hasSpecific = Boolean(row && row.layout && String(row.layout).trim());
+      const specificId = hasSpecific ? String(row.layout).trim() : "";
+      const effectiveId = specificId || globalLayoutId || "SC-021";
+      const res = effectiveId ? (rMap.get(effectiveId) || catalog?.layouts?.find((l) => l.id === effectiveId)) : null;
+      const thumbUrl = res?.image || "/images/layouts/social-cards/SC-021.webp";
+      const codeText = effectiveId;
+      const nameText = res ? (res.name_zh || res.name || effectiveId) : (hasSpecific ? specificId : "默认图型");
+      const btnTitle = hasSpecific ? `图型版式：${effectiveId} ${nameText}（点击更换）` : `跟随全局图型 ${effectiveId}（点击更换）`;
+      const ariaLabel = hasSpecific ? `图型版式：${effectiveId} ${nameText}` : `跟随全局图型 ${effectiveId} ${nameText}`;
+
+      return `
+        <button type="button" class="btn batch-row-layout-btn" data-pick-layout-idx="${idx}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
+          <span class="batch-row-layout-thumb-wrap">
+            <img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />
+          </span>
+          <span class="batch-row-layout-info">
+            <span class="batch-row-layout-code">${esc(codeText)}</span>
+            <span class="batch-row-layout-name">${esc(nameText)}</span>
+          </span>
+        </button>
+      `;
+    }
+
     renderLayoutSelectOptions(selectedLayoutId) {
       const catalog = this.context?.catalog;
       const layouts = (catalog && Array.isArray(catalog.layouts) ? catalog.layouts : [])
@@ -294,6 +320,16 @@
       const ld = p.loop.data || {};
       const ad = p.asset?.data || {};
 
+      // M1: ctrl.data.count folded into batchCount if > 1, then reset to 1
+      if (p.ctrl?.data && Number(p.ctrl.data.count) > 1) {
+        const rawCtrlCount = Math.round(Number(p.ctrl.data.count));
+        const currentBatchCount = Math.max(1, Math.min(20, Number(ld.batchCount) || 6));
+        const foldedCount = Math.max(1, Math.min(20, currentBatchCount * rawCtrlCount));
+        p.loop.data.batchCount = foldedCount;
+        p.ctrl.data.count = 1;
+        this.planNotice = `已按每行一张折算，共 ${foldedCount} 张`;
+      }
+
       // Batch set planning state
       const isFusion = Boolean(sd.fusion);
       const style1Id = sd.style1 || "";
@@ -327,9 +363,10 @@
       const batchLayoutReq = ld.batchLayoutReq || "";
       const batchRows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
       const promptListText = typeof ld.promptListText === "string" ? ld.promptListText : "";
+      const globalAssetItems = Array.isArray(this.parts?.asset?.data?.items) ? this.parts.asset.data.items : [];
 
-      // Defect 2 fix: count is iterations.length * perIterCount (capped at 200)
-      const perIterCount = Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
+      // M1: Single truth - each iteration generates 1 image in batch set planning
+      const perIterCount = 1;
       const iterations = this.resolveIterations();
       const totalCount = Math.min(200, iterations.length * perIterCount);
 
@@ -423,10 +460,12 @@
                         <div class="make-image-slot-card is-inline batch-chip" data-pick-kind="layout">
                           <div class="make-image-slot-thumb-wrap">
                             ${layoutObj.image ? `<img data-hw-src="${esc(layoutObj.image)}" alt="${esc(layoutObj.name || layoutObj.id)}" loading="lazy" />` : ""}
-                            <span class="make-image-slot-badge">${esc(layoutObj.id)}</span>
                             <button type="button" class="make-image-slot-clear" data-clear-kind="layout" title="清除">×</button>
                           </div>
-                          <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
+                          <div class="make-image-slot-meta">
+                            <span class="make-image-slot-code">${esc(layoutObj.id)}</span>
+                            <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
+                          </div>
                         </div>
                       ` : `<span class="make-image-picker-hint">未选图型（将使用默认版式）</span>`}
                     </div>
@@ -451,36 +490,65 @@
                   <div class="batch-edit-area batch-ai-edit-area">
                     <div class="batch-field-head">
                       <span class="make-image-field-label">逐张主题与图型调整</span>
+                      <button type="button" class="btn btn-sm batch-fission-trigger" id="batch-btn-fission-ai">从母题裂变</button>
                     </div>
                     <div class="batch-table-wrap">
                       <table class="batch-edit-table">
                         <thead>
                           <tr>
-                            <th style="width:48px;">序号</th>
+                            <th style="width:44px;" class="batch-col-idx">序号</th>
                             <th>画面主题</th>
-                            <th style="width:220px;">图型版式</th>
-                            <th style="width:60px;text-align:center;">操作</th>
+                            <th style="width:190px;" class="batch-col-layout">图型版式</th>
+                            <th style="width:160px;" class="batch-col-refs">参考图</th>
+                            <th style="width:52px;text-align:center;">操作</th>
                           </tr>
                         </thead>
                         <tbody>
                           ${batchRows.length === 0 ? `
-                            <tr><td colspan="4" class="batch-table-empty">暂无主题，请点击「AI 规划这套图」或「＋ 添加一张」</td></tr>
-                          ` : batchRows.map((row, idx) => `
+                            <tr><td colspan="5" class="batch-table-empty">暂无主题，请点击「AI 规划这套图」或「＋ 添加一张」</td></tr>
+                          ` : batchRows.map((row, idx) => {
+                            const rowRefs = (row && Array.isArray(row.assetItems)) ? row.assetItems : [];
+                            const isSkipGlobal = Boolean(row && row.skipGlobalRefs);
+                            return `
                             <tr class="batch-edit-row" data-row-idx="${idx}">
                               <td class="batch-col-idx">#${idx + 1}</td>
                               <td>
                                 <input type="text" class="make-image-input batch-row-theme-input" data-row-idx="${idx}" value="${esc(row.theme)}" placeholder="输入该张画面主题..." />
                               </td>
-                              <td>
-                                <select class="make-image-select batch-row-layout-select" data-row-idx="${idx}">
-                                  ${this.renderLayoutSelectOptions(row.layout)}
-                                </select>
+                              <td class="batch-col-layout">
+                                ${this.renderRowLayoutButtonHtml(row, idx, sd.layout)}
+                              </td>
+                              <td class="batch-col-refs">
+                                <div class="batch-row-refs-wrap">
+                                  <div class="batch-row-refs-desktop">
+                                    ${rowRefs.length === 0 ? `
+                                      <button type="button" class="btn btn-sm batch-btn-pick-row-refs" data-pick-row-refs-idx="${idx}">+ 选择</button>
+                                    ` : `
+                                      <div class="batch-row-refs-thumbs" data-pick-row-refs-idx="${idx}" role="button" tabindex="0" title="点击调整此条参考图（共 ${rowRefs.length} 张）">
+                                        ${rowRefs.slice(0, 3).map((ast, rIdx) => `
+                                          <img src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${rIdx + 1}`)}" class="batch-row-ref-thumb" loading="lazy" />
+                                        `).join("")}
+                                        ${rowRefs.length < 3 ? `<span class="batch-row-refs-plus-badge" title="继续添加">+</span>` : ""}
+                                      </div>
+                                    `}
+                                  </div>
+                                  <div class="batch-row-refs-mobile">
+                                    <button type="button" class="btn btn-sm batch-btn-row-refs-mobile" data-pick-row-refs-idx="${idx}">参考图：已选 ${rowRefs.length} 张</button>
+                                  </div>
+                                  <div class="batch-row-skip-global-wrap">
+                                    <label class="batch-row-skip-global-label" title="本条生成时不使用全局参考图">
+                                      <input type="checkbox" class="batch-row-skip-global-checkbox" data-row-skip-global="${idx}" ${isSkipGlobal ? "checked" : ""} />
+                                      <span>不用全局</span>
+                                    </label>
+                                    ${isSkipGlobal ? `<span class="batch-ref-skip-badge">仅本条</span>` : ""}
+                                  </div>
+                                </div>
                               </td>
                               <td style="text-align:center;">
                                 <button type="button" class="btn btn-sm btn-ghost batch-row-del-btn" data-del-row-idx="${idx}" title="删除此张">删除</button>
                               </td>
                             </tr>
-                          `).join("")}
+                          `;}).join("")}
                         </tbody>
                       </table>
                     </div>
@@ -524,13 +592,35 @@
                             <div class="make-image-slot-card is-inline">
                               <div class="make-image-slot-thumb-wrap">
                                 ${tObj?.image ? `<img data-hw-src="${esc(tObj.image)}" alt="${esc(tObj.name || tid)}" loading="lazy" />` : ""}
-                                <span class="make-image-slot-badge">${esc(tid)}</span>
                                 <button type="button" class="make-image-slot-clear" data-remove-tone="${esc(tid)}" title="移除">×</button>
                               </div>
-                              <span class="make-image-slot-title">${esc(tObj?.name || tid)}</span>
+                              <div class="make-image-slot-meta">
+                                <span class="make-image-slot-code">${esc(tid)}</span>
+                                <span class="make-image-slot-title">${esc(tObj?.name || tid)}</span>
+                              </div>
                             </div>
                           `;
                         }).join("") : `<span class="make-image-picker-hint">未指定影调</span>`}
+                      </div>
+                    </div>
+
+                    <!-- Global References -->
+                    <div class="make-image-more-row" id="batch-more-row-refs">
+                      <span class="make-image-more-label">参考图</span>
+                      <button type="button" class="btn btn-sm" id="batch-btn-pick-global-refs">选择参考图</button>
+                      <div class="make-image-more-thumbs" id="batch-global-refs-thumbs">
+                        ${globalAssetItems.length ? globalAssetItems.map((ast, idx) => `
+                          <div class="make-image-slot-card is-inline">
+                            <div class="make-image-slot-thumb-wrap">
+                              ${ast.image ? `<img data-hw-src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}" loading="lazy" />` : ""}
+                              <button type="button" class="make-image-slot-clear" data-remove-global-ref="${idx}" title="移除">×</button>
+                            </div>
+                            <div class="make-image-slot-meta">
+                              <span class="make-image-slot-code">${esc(ast.id || `REF-${idx + 1}`)}</span>
+                              <span class="make-image-slot-title">${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}</span>
+                            </div>
+                          </div>
+                        `).join("") : `<span class="make-image-picker-hint">未指定，可点此添加（最多 4 张）</span>`}
                       </div>
                     </div>
 
@@ -616,12 +706,23 @@
                       ` : iterations.map((iter, idx) => {
                         const itemResult = this.getItemResult(idx, displays, isBatchGallery);
                         const rowStatus = this.getRowStatus(idx, busy, currentStep, itemResult);
+                        const iterLayoutId = iter.layout || "";
+                        const catalog = this.context?.catalog;
+                        const rMap = (catalog && catalog.resourceMap) || new Map();
+                        const layoutRes = iterLayoutId ? (rMap.get(iterLayoutId) || catalog?.layouts?.find((l) => l.id === iterLayoutId)) : null;
+                        const layoutName = layoutRes ? (layoutRes.name_zh || layoutRes.name || iterLayoutId) : "";
+                        const zoomTitle = iterLayoutId && layoutName ? `${iterLayoutId} ${layoutName}` : (iterLayoutId || iter.shortLabel || iter.title || "图型预览");
+
                         return `
                           <tr class="batch-table-row ${rowStatus.className}">
                             <td class="batch-col-idx">#${idx + 1}</td>
                             <td class="batch-col-content">
                               <div class="batch-iter-cell">
-                                ${iter.sampleImg ? `<img data-hw-src="${esc(iter.sampleImg)}" class="batch-iter-thumb" alt="" loading="lazy" />` : ""}
+                                ${iter.sampleImg ? `
+                                  <button type="button" class="batch-iter-thumb-btn" data-zoom-src="${esc(iter.sampleImg)}" data-zoom-title="${esc(zoomTitle)}" aria-label="放大查看${esc(zoomTitle)}">
+                                    <img data-hw-src="${esc(iter.sampleImg)}" class="batch-iter-thumb" alt="${esc(zoomTitle)}" loading="lazy" />
+                                  </button>
+                                ` : ""}
                                 <span class="batch-iter-label">${esc(iter.shortLabel || iter.title || iter.theme)}</span>
                               </div>
                             </td>
@@ -748,6 +849,9 @@
       const markDirty = () => {
         if (self.actions?.markDirtyAndRender) {
           self.actions.markDirtyAndRender();
+        } else {
+          const S = global.HANDRAW_SHARED;
+          if (S?.toast) S.toast("当前操作不可用（缺少 action: markDirtyAndRender）");
         }
       };
 
@@ -791,7 +895,12 @@
           if (e.target.closest("[data-clear-kind]")) return;
           const kind = card.getAttribute("data-pick-kind");
           if (kind === "style1" || kind === "style2" || kind === "layout" || kind === "color") {
-            self.actions?.openAssetPicker?.({ kind, field: kind === "color" ? "colors" : kind });
+            if (self.actions?.openAssetPicker) {
+              self.actions.openAssetPicker({ kind, field: kind === "color" ? "colors" : kind });
+            } else {
+              const S = global.HANDRAW_SHARED;
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+            }
           }
         };
       });
@@ -819,12 +928,15 @@
         };
       }
 
-      // (b) Count input
+      // (b) Count input (M1: write batchCount and enforce ctrl.count = 1)
       const countInput = root.querySelector("#batch-count-input");
       if (countInput) {
         countInput.oninput = () => {
           const val = Math.max(1, Math.min(20, Number(countInput.value) || 6));
           loop.data.batchCount = val;
+          if (ctrl?.data) {
+            ctrl.data.count = 1;
+          }
         };
       }
 
@@ -873,7 +985,12 @@
       const btnPickFixedLayout = root.querySelector("#batch-btn-pick-fixed-layout");
       if (btnPickFixedLayout) {
         btnPickFixedLayout.onclick = () => {
-          self.actions?.openAssetPicker?.({ kind: "layout", field: "layout" });
+          if (self.actions?.openAssetPicker) {
+            self.actions.openAssetPicker({ kind: "layout", field: "layout" });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+          }
         };
       }
 
@@ -949,6 +1066,15 @@
               self.planNotice = "";
             }
 
+            if (data.defaultLayoutUsed && items.length > 0 && items[0].layout) {
+              const defLayout = items[0].layout;
+              if (skill?.data) {
+                skill.data.layout = defLayout;
+              }
+              const defaultMsg = `未选图型，已使用默认图型 ${defLayout}`;
+              self.planNotice = self.planNotice ? `${self.planNotice}（${defaultMsg}）` : defaultMsg;
+            }
+
             markDirty();
           } catch (err) {
             const S = global.HANDRAW_SHARED;
@@ -974,13 +1100,12 @@
         };
       }
 
-      // (h) Fission button in fixed edit area
-      const btnFission = root.querySelector("#batch-btn-fission");
-      if (btnFission) {
-        btnFission.onclick = () => {
+      // (h) Fission button in fixed and AI edit areas
+      root.querySelectorAll(".batch-fission-trigger, #batch-btn-fission, #batch-btn-fission-ai").forEach((btn) => {
+        btn.onclick = () => {
           self.openFissionModal(root, parts);
         };
-      }
+      });
 
       // (i) AI mode table events
       root.querySelectorAll(".batch-row-theme-input").forEach((inp) => {
@@ -996,11 +1121,63 @@
         };
       });
 
-      root.querySelectorAll(".batch-row-layout-select").forEach((sel) => {
-        sel.onchange = () => {
-          const idx = Number(sel.getAttribute("data-row-idx"));
+      root.querySelectorAll("[data-pick-layout-idx]").forEach((btn) => {
+        btn.onclick = () => {
+          const idx = Number(btn.getAttribute("data-pick-layout-idx"));
           if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
-          loop.data.batchRows[idx].layout = sel.value;
+          const currentRow = loop.data.batchRows[idx];
+          const curLayout = currentRow.layout || "";
+
+          const onPick = (pickedId) => {
+            currentRow.layout = pickedId || "";
+            markDirty();
+          };
+
+          if (self.actions?.openAssetPicker) {
+            self.actions.openAssetPicker({
+              kind: "layout",
+              field: "layout",
+              current: curLayout,
+              title: `选择第 ${idx + 1} 张的图型`,
+              onPick
+            });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+          }
+        };
+      });
+
+      root.querySelectorAll("[data-pick-row-refs-idx]").forEach((btn) => {
+        btn.onclick = () => {
+          const idx = Number(btn.getAttribute("data-pick-row-refs-idx"));
+          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
+          const currentRow = loop.data.batchRows[idx];
+          const curRefs = Array.isArray(currentRow.assetItems) ? currentRow.assetItems : [];
+
+          if (self.actions?.openReferencePicker) {
+            self.actions.openReferencePicker({
+              items: curRefs,
+              currentRefs: curRefs,
+              maxCount: 3,
+              title: `第 ${idx + 1} 张参考图（最多 3 张）`,
+              onConfirm: (selectedItems) => {
+                currentRow.assetItems = selectedItems;
+                markDirty();
+              }
+            });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openReferencePicker）");
+          }
+        };
+      });
+
+      root.querySelectorAll("[data-row-skip-global]").forEach((chk) => {
+        chk.onchange = () => {
+          const idx = Number(chk.getAttribute("data-row-skip-global"));
+          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
+          loop.data.batchRows[idx].skipGlobalRefs = Boolean(chk.checked);
           markDirty();
         };
       });
@@ -1019,7 +1196,12 @@
       if (btnAddRow) {
         btnAddRow.onclick = () => {
           if (!Array.isArray(loop.data.batchRows)) loop.data.batchRows = [];
-          loop.data.batchRows.push({ theme: "", layout: skill.data.layout || "" });
+          loop.data.batchRows.push({
+            theme: "",
+            layout: skill.data.layout || "",
+            assetItems: [],
+            skipGlobalRefs: false
+          });
           markDirty();
         };
       }
@@ -1063,11 +1245,16 @@
         };
       }
 
-      // Tones picker button
+      // Tones picker button (B2: openAssetPicker with tone)
       const btnPickTones = root.querySelector("#batch-btn-pick-tones");
       if (btnPickTones) {
         btnPickTones.onclick = () => {
-          self.actions?.openMultiPicker?.("tones");
+          if (self.actions?.openAssetPicker) {
+            self.actions.openAssetPicker({ kind: "tone", field: "tones" });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+          }
         };
       }
       root.querySelectorAll("[data-remove-tone]").forEach((btn) => {
@@ -1080,11 +1267,45 @@
         };
       });
 
-      // Moods picker button
+      // Global References Picker
+      const btnPickGlobalRefs = root.querySelector("#batch-btn-pick-global-refs");
+      if (btnPickGlobalRefs) {
+        btnPickGlobalRefs.onclick = () => {
+          if (self.actions?.openReferencePicker) {
+            self.actions.openReferencePicker();
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openReferencePicker）");
+          }
+        };
+      }
+
+      root.querySelectorAll("[data-remove-global-ref]").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const rIdx = Number(btn.getAttribute("data-remove-global-ref"));
+          const curAsset = parts.asset || bp?.asset;
+          if (curAsset && Array.isArray(curAsset.data?.items) && !isNaN(rIdx)) {
+            curAsset.data.items.splice(rIdx, 1);
+            if (self.actions?.ensureAssetItems) {
+              self.actions.ensureAssetItems(curAsset.data.items);
+            } else {
+              markDirty();
+            }
+          }
+        };
+      });
+
+      // Moods picker button (B2: openAssetPicker with mood)
       const btnPickMoods = root.querySelector("#batch-btn-pick-moods");
       if (btnPickMoods) {
         btnPickMoods.onclick = () => {
-          self.actions?.openMultiPicker?.("moods");
+          if (self.actions?.openAssetPicker) {
+            self.actions.openAssetPicker({ kind: "mood", field: "moods" });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+          }
         };
       }
       const moodsInput = root.querySelector("#batch-moods-input");
@@ -1143,12 +1364,17 @@
         };
       }
 
-      // 7. Preview Row Retries & Results
+      // 7. Preview Row Retries & Results (B2: openPublish / runSingleRow toast fallback)
       root.querySelectorAll("[data-retry-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-retry-idx"));
           if (!isNaN(idx)) {
-            self.actions?.runSingleRow?.(idx);
+            if (self.actions?.runSingleRow) {
+              self.actions.runSingleRow(idx);
+            } else {
+              const S = global.HANDRAW_SHARED;
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: runSingleRow）");
+            }
           }
         };
       });
@@ -1159,19 +1385,40 @@
           const displays = Array.isArray(self.context?.displays) ? self.context.displays : [];
           const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
           const itemResult = self.getItemResult(idx, displays, isBatchGallery);
-          if (itemResult) {
-            self.actions?.openPublishForBatchItem?.(itemResult, idx);
+          const S = global.HANDRAW_SHARED;
+          if (itemResult?.node) {
+            if (self.actions?.openPublish) {
+              self.actions.openPublish(itemResult.node);
+            } else {
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: openPublish）");
+            }
+          } else {
+            if (S?.toast) S.toast("该行还没有生成结果");
           }
         };
       });
 
-      // 8. Start Batch Generation Button (Defect 2 Fixed)
+      // 7.5. Batch Iteration Thumbnail Zoom (Lightbox)
+      root.querySelectorAll(".batch-iter-thumb-btn").forEach((btn) => {
+        btn.onclick = () => {
+          const src = btn.getAttribute("data-zoom-src");
+          const title = btn.getAttribute("data-zoom-title") || "图型预览";
+          if (!src) return;
+          if (self.actions?.openImageLightbox) {
+            self.actions.openImageLightbox(src, title);
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openImageLightbox）");
+          }
+        };
+      });
+
+      // 8. Start Batch Generation Button (M1: single confirmation via confirmPotentialGenerationCost)
       const btnStart = root.querySelector("#batch-btn-start");
       if (btnStart) {
         btnStart.onclick = async () => {
-          const perIterCount = Math.min(50, Math.max(1, Math.round(Number(ctrl.data.count) || 1)));
           const currentIters = self.resolveIterations();
-          const totalCount = Math.min(200, currentIters.length * perIterCount);
+          const totalCount = currentIters.length;
 
           if (totalCount === 0) {
             const S = global.HANDRAW_SHARED;
@@ -1179,18 +1426,12 @@
             return;
           }
 
-          // Secondary confirmation when totalCount > 20
-          if (totalCount > 20) {
-            const cost = self.calculateCost(totalCount);
-            const costDesc = cost.loggedIn
-              ? `预计消耗 ${cost.totalCost} 积分（其中免费额度 ${cost.freeCount} 张）`
-              : "预计批量出图超20张";
-            const confirmMsg = `本次将批量生成 ${totalCount} 张图片，${costDesc}。确认开始批量生成吗？`;
-            const ok = typeof window.confirm === "function" ? window.confirm(confirmMsg) : true;
-            if (!ok) return;
+          if (self.actions?.run) {
+            self.actions.run();
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: run）");
           }
-
-          self.actions?.run?.();
         };
       }
 
@@ -1198,7 +1439,12 @@
       const btnStop = root.querySelector("#batch-btn-stop");
       if (btnStop) {
         btnStop.onclick = () => {
-          self.actions?.cancel?.();
+          if (self.actions?.cancel) {
+            self.actions.cancel();
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: cancel）");
+          }
         };
       }
 
@@ -1231,19 +1477,27 @@
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-res-pub-idx"));
           const res = (self.context?.results || [])[idx];
+          const S = global.HANDRAW_SHARED;
           if (res?.node) {
-            self.actions?.openPublish?.(res.node);
+            if (self.actions?.openPublish) {
+              self.actions.openPublish(res.node);
+            } else {
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: openPublish）");
+            }
+          } else {
+            if (S?.toast) S.toast("该项还没有生成结果");
           }
         };
       });
+
+      if (global.HandrawImageLoader?.scan) {
+        global.HandrawImageLoader.scan(root);
+      }
     }
 
     updatePreviewAndCost(root) {
-      const p = this.getParts();
-      const cd = p?.ctrl?.data || {};
-      const perIterCount = Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
       const iterations = this.resolveIterations();
-      const totalCount = Math.min(200, iterations.length * perIterCount);
+      const totalCount = Math.min(200, iterations.length);
 
       const costWrap = root.querySelector(".batch-cost-wrap");
       if (costWrap) {
@@ -1266,6 +1520,8 @@
       const self = this;
       const S = global.HANDRAW_SHARED;
       if (!S?.openModal) return;
+
+      const isAiMode = parts.loop.data.batchLayoutMode === "ai";
 
       const seedDefault = (parts.loop.data.batchSeed || parts.text?.data?.text || "").trim() ||
         (parts.loop.data.promptListText || "").split(/\r?\n/)[0]?.trim() ||
@@ -1315,8 +1571,8 @@
               <div id="fission-result-list" style="max-height:160px;overflow-y:auto;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:6px;padding:8px 12px;font-size:12px;line-height:1.6;display:flex;flex-direction:column;gap:4px;"></div>
 
               <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-                <button type="button" class="btn btn-sm" id="fission-append-btn">追加到列表</button>
-                <button type="button" class="btn btn-sm btn-primary" id="fission-replace-btn">替换列表</button>
+                <button type="button" class="btn btn-sm" id="fission-append-btn">${isAiMode ? "追加为新的逐张行" : "追加到列表"}</button>
+                <button type="button" class="btn btn-sm btn-primary" id="fission-replace-btn">${isAiMode ? "替换全部逐张行" : "替换列表"}</button>
               </div>
             </div>
           </div>
@@ -1394,25 +1650,74 @@
 
           const applyItems = (replace) => {
             if (!generatedItems.length) return;
-            const existing = (parts.loop.data.promptListText || "").trim();
-            if (replace || !existing) {
-              parts.loop.data.promptListText = generatedItems.join("\n");
-            } else {
-              parts.loop.data.promptListText = `${existing}\n${generatedItems.join("\n")}`;
+
+            if (replace) {
+              const hasExisting = isAiMode
+                ? Array.isArray(parts.loop.data.batchRows) && parts.loop.data.batchRows.length > 0
+                : Boolean((parts.loop.data.promptListText || "").trim());
+              if (hasExisting && typeof window.confirm === "function") {
+                const confirmMsg = isAiMode
+                  ? "替换将清空现有的逐张主题与图型设置，是否继续？"
+                  : "替换将清空现有的主题列表，是否继续？";
+                if (!window.confirm(confirmMsg)) return;
+              }
             }
 
-            if (parts.loop.data.batchLayoutMode === "ai") {
-              const lines = parts.loop.data.promptListText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-              parts.loop.data.batchRows = lines.map((l) => ({ theme: l, layout: parts.skill.data.layout || "" }));
+            if (isAiMode) {
+              let targetRows = [];
+              if (replace) {
+                targetRows = generatedItems.map((item) => ({
+                  theme: String(item).trim(),
+                  layout: "",
+                  assetItems: [],
+                  skipGlobalRefs: false
+                }));
+              } else {
+                const existingRows = Array.isArray(parts.loop.data.batchRows) ? parts.loop.data.batchRows : [];
+                const newRows = generatedItems.map((item) => ({
+                  theme: String(item).trim(),
+                  layout: "",
+                  assetItems: [],
+                  skipGlobalRefs: false
+                }));
+                targetRows = [...existingRows, ...newRows];
+              }
+              let truncated = false;
+              if (targetRows.length > 20) {
+                targetRows = targetRows.slice(0, 20);
+                truncated = true;
+              }
+              parts.loop.data.batchRows = targetRows;
+              parts.loop.data.promptListText = targetRows.map((r) => r.theme).filter(Boolean).join("\n");
+              if (truncated && S?.toast) {
+                S.toast("超出 20 张部分已截断");
+              }
+            } else {
+              const existingLines = (parts.loop.data.promptListText || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+              let combinedLines = replace ? [...generatedItems] : [...existingLines, ...generatedItems];
+              let truncated = false;
+              if (combinedLines.length > 20) {
+                combinedLines = combinedLines.slice(0, 20);
+                truncated = true;
+              }
+              parts.loop.data.promptListText = combinedLines.join("\n");
+              if (truncated && S?.toast) {
+                S.toast("超出 20 张部分已截断");
+              }
             }
 
             S.closeModal();
             // Defect 1 Fixed: self.actions?.markDirtyAndRender() correctly called
             if (self.actions?.markDirtyAndRender) {
               self.actions.markDirtyAndRender();
+            } else {
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: markDirtyAndRender）");
             }
-            if (S.toast) {
-              S.toast(replace ? `已替换为 ${generatedItems.length} 条主题！` : `已追加 ${generatedItems.length} 条主题！`);
+            if (S?.toast) {
+              const actionLabel = replace ? "替换" : "追加";
+              const count = isAiMode ? parts.loop.data.batchRows.length : parts.loop.data.promptListText.split(/\r?\n/).filter(Boolean).length;
+              const targetDesc = isAiMode ? "逐张行" : "条主题";
+              S.toast(`已${actionLabel}为 ${count} ${targetDesc}！`);
             }
           };
 
