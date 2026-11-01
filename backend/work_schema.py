@@ -404,6 +404,32 @@ CREATE INDEX IF NOT EXISTS idx_studio_import_jobs_user ON studio_import_jobs(use
 CREATE INDEX IF NOT EXISTS idx_studio_import_jobs_status ON studio_import_jobs(status);
 """
 
+USER_LIBRARY_SYNC_SQL = """
+ALTER TABLE user_uploads ADD COLUMN asset_uid TEXT;
+ALTER TABLE user_uploads ADD COLUMN local_id TEXT;
+ALTER TABLE user_uploads ADD COLUMN name_en TEXT;
+ALTER TABLE user_uploads ADD COLUMN tags_json TEXT DEFAULT '[]';
+ALTER TABLE user_uploads ADD COLUMN sha256 TEXT;
+ALTER TABLE user_uploads ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE user_uploads ADD COLUMN change_seq INTEGER;
+ALTER TABLE user_uploads ADD COLUMN updated_at TEXT;
+ALTER TABLE user_uploads ADD COLUMN deleted_at TEXT;
+ALTER TABLE user_uploads ADD COLUMN origin TEXT DEFAULT 'web';
+
+CREATE TABLE IF NOT EXISTS library_change_counter (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    current_seq INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO library_change_counter (id, current_seq) VALUES (1, 0);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_uploads_user_asset_uid
+    ON user_uploads(user_id, asset_uid) WHERE asset_uid IS NOT NULL AND asset_uid <> '';
+CREATE INDEX IF NOT EXISTS idx_user_uploads_user_seq
+    ON user_uploads(user_id, change_seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_uploads_user_sha256_active
+    ON user_uploads(user_id, sha256) WHERE deleted_at IS NULL AND sha256 IS NOT NULL AND sha256 <> '' AND (cat IS NULL OR cat <> 'import');
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -422,4 +448,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (60, "060_studio_recipes", STUDIO_RECIPES_SQL),
     (61, "061_recipe_and_subject_columns", RECIPE_AND_SUBJECT_COLUMNS_SQL),
     (62, "062_studio_import_jobs", STUDIO_IMPORT_JOBS_SQL),
+    (64, "064_user_library_sync", USER_LIBRARY_SYNC_SQL),
 ]

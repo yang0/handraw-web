@@ -2684,7 +2684,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "image": r["image_url"],
             "custom": True,
         }
-        for r in conn.execute("SELECT * FROM user_uploads WHERE user_id = ? ORDER BY created_at DESC", (uid,)).fetchall()
+        for r in conn.execute("SELECT * FROM user_uploads WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", (uid,)).fetchall()
     ]
 
     return {

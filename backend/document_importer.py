@@ -637,6 +637,11 @@ class ImportManager:
         if time.monotonic() - self._last_media_cleanup > 3600.0:
             try:
                 cleanup_unreferenced_import_media(self.db, max_age_hours=24)
+                try:
+                    from .user_library import cleanup_expired_library_tombstones
+                    cleanup_expired_library_tombstones(self.db, max_age_days=30)
+                except Exception as lib_exc:
+                    logger.warning("Periodic library tombstone cleanup failed: %s", lib_exc)
                 self._last_media_cleanup = time.monotonic()
             except Exception as exc:
                 logger.warning("Periodic media cleanup failed: %s", exc)

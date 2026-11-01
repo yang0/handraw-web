@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
 import html
 import io
 import ipaddress
@@ -429,6 +430,104 @@ def save_data_url_upload(
     except ValueError as exc:
         raise ServiceError(str(exc), status=400, code="invalid_image_upload") from exc
 
+    sha256_hex = hashlib.sha256(raw_bytes).hexdigest()
+
+    raw_cat = str(cat or "other").strip().lower()
+    PUBLIC_CATS = ("characters", "props", "scenes", "other")
+    INTERNAL_CATS = ("forum",)          # 仅由论坛/投稿发布写入，原样保留
+    if raw_cat in PUBLIC_CATS or raw_cat in INTERNAL_CATS:
+        safe_cat = raw_cat
+    else:
+        safe_cat = "other"              # 未知值、以及 'import' 一律降级
+
+    if user:
+        user_id = int(user["id"])
+        # Ensure historical uploads are backfilled so deduplication can match them
+        from .user_library import check_user_upload_quota, ensure_user_uploads_synced, next_change_seq
+        ensure_user_uploads_synced(db, user_id)
+
+        with db.transaction() as tx:
+            # Check deduplication against existing active assets
+            existing_dup = tx.execute(
+                """
+                SELECT * FROM user_uploads
+                WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND (cat IS NULL OR cat <> 'import')
+                LIMIT 1
+                """,
+                (user_id, sha256_hex),
+            ).fetchone()
+            if existing_dup is not None:
+                return {
+                    "id": existing_dup["id"],
+                    "url": existing_dup["image_url"],
+                    "cat": existing_dup["cat"],
+                    "nameZh": existing_dup["name_zh"],
+                    "descZh": existing_dup["desc_zh"],
+                    "image": existing_dup["image_url"],
+                    "isCustom": True,
+                    "deduped": True,
+                    "assetUid": existing_dup["asset_uid"],
+                }
+
+            # Enforce unified quota (500 assets, 1 GB storage)
+            check_user_upload_quota(tx, user_id, len(raw_bytes), is_new_item=True)
+
+            uploads_dir = get_uploads_dir()
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+            up_id = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
+            fname = f"{up_id}{ext}"
+            fpath = uploads_dir / fname
+            try:
+                with fpath.open("xb") as fp:
+                    fp.write(raw_bytes)
+            except FileExistsError as exc:
+                raise ServiceError("上传文件名冲突，请重试", status=503, code="upload_collision") from exc
+            public_url = f"/uploads/{fname}"
+
+            asset_uid = str(uuid.uuid4())
+            now_iso = utc_now_iso()
+            seq = next_change_seq(tx)
+            tx.execute(
+                """
+                INSERT INTO user_uploads (
+                    id, user_id, cat, name_zh, desc_zh, image_url, file_path, bytes, created_at,
+                    asset_uid, local_id, name_en, tags_json, sha256, revision, change_seq, updated_at, origin
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    up_id,
+                    user_id,
+                    safe_cat,
+                    (name_zh or "上传素材").strip()[:60],
+                    (desc_zh or "").strip()[:200],
+                    public_url,
+                    str(fpath),
+                    len(raw_bytes),
+                    now_iso,
+                    asset_uid,
+                    None,
+                    "",
+                    "[]",
+                    sha256_hex,
+                    1,
+                    seq,
+                    now_iso,
+                    "web",
+                ),
+            )
+            return {
+                "id": up_id,
+                "url": public_url,
+                "cat": safe_cat,
+                "nameZh": name_zh or "上传素材",
+                "descZh": desc_zh or "",
+                "image": public_url,
+                "isCustom": True,
+                "deduped": False,
+                "assetUid": asset_uid,
+            }
+
     uploads_dir = get_uploads_dir()
     uploads_dir.mkdir(parents=True, exist_ok=True)
     up_id = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
@@ -440,34 +539,15 @@ def save_data_url_upload(
     except FileExistsError as exc:
         raise ServiceError("上传文件名冲突，请重试", status=503, code="upload_collision") from exc
     public_url = f"/uploads/{fname}"
-
-    if user:
-        with db.transaction() as tx:
-            tx.execute(
-                """
-                INSERT INTO user_uploads (id, user_id, cat, name_zh, desc_zh, image_url, file_path, bytes, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    up_id,
-                    int(user["id"]),
-                    (cat or "other").strip(),
-                    (name_zh or "上传素材").strip()[:60],
-                    (desc_zh or "").strip()[:200],
-                    public_url,
-                    str(fpath),
-                    len(raw_bytes),
-                    utc_now_iso(),
-                ),
-            )
     return {
         "id": up_id,
         "url": public_url,
-        "cat": cat or "other",
+        "cat": safe_cat,
         "nameZh": name_zh or "上传素材",
         "descZh": desc_zh or "",
         "image": public_url,
         "isCustom": True,
+        "deduped": False,
     }
 
 
@@ -925,7 +1005,7 @@ def load_benchmark_assets_json(db: Database, user: dict[str, Any] | None = None)
 
     if user:
         for r in db.get_conn().execute(
-            "SELECT * FROM user_uploads WHERE user_id = ? AND cat IN ('characters', 'props', 'scenes', 'other') ORDER BY created_at DESC LIMIT 60",
+            "SELECT * FROM user_uploads WHERE user_id = ? AND cat IN ('characters', 'props', 'scenes', 'other') AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 60",
             (int(user["id"]),),
         ).fetchall():
             if r["id"] not in seen:
@@ -1622,12 +1702,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # 3. 'library' scope: personal library read endpoints and collection toggle
         if "library" in scopes:
             if method == "GET":
-                if req_path in ("/studio/api/library", "/api/skill/library"):
+                if req_path in ("/studio/api/library", "/api/skill/library", "/api/library/assets"):
                     return
                 if re.fullmatch(r"^/(?:studio/api|api/skill)/assets/[^/]+/content$", req_path):
                     return
-            elif method == "POST" and req_path == "/api/collections/toggle":
-                return
+                if re.fullmatch(r"^/api/library/assets/[^/]+/image$", req_path):
+                    return
+            elif method == "POST":
+                if req_path == "/api/collections/toggle":
+                    return
+                if re.fullmatch(r"^/api/library/assets/[^/]+/restore$", req_path):
+                    return
+            elif method == "PUT":
+                if re.fullmatch(r"^/api/library/assets/[^/]+$", req_path):
+                    return
+            elif method == "DELETE":
+                if re.fullmatch(r"^/api/library/assets/[^/]+$", req_path):
+                    return
 
         raise ServiceError("token_scope_denied", status=403, code="token_scope_denied")
 
@@ -1665,6 +1756,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 res = delete_user_studio_workflow(self.db, user, m_wf.group(1))  # type: ignore[arg-type]
                 self._send_json(res)
                 return
+            if req_path.startswith("/api/library/assets/"):
+                from .user_library import handle_library_delete
+                qs = parse_qs(parsed.query, keep_blank_values=True)
+                if handle_library_delete(self, req_path, qs):
+                    return
             self._send_json({"ok": False, "error": "Not found"}, status=404)
         except ServiceError as se:
             self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
@@ -1723,6 +1819,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         except ImportError:  # pragma: no cover
             device_auth_get = None
         if device_auth_get and device_auth_get(self, req_path, qs):
+            return
+
+        try:
+            from .user_library import handle_library_get
+        except ImportError:  # pragma: no cover
+            handle_library_get = None
+        if handle_library_get and handle_library_get(self, req_path, qs):
             return
 
         if req_path == "/robots.txt":
@@ -2178,6 +2281,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 body = self._read_json_body()
                 if handle_recipe_put(self, req_path, body):
                     return
+            if req_path.startswith("/api/library/assets/"):
+                from .user_library import handle_library_put
+                body = self._read_json_body()
+                if handle_library_put(self, req_path, body):
+                    return
             self._send_json({"ok": False, "error": "Not Found"}, status=404)
         except ServiceError as se:
             self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
@@ -2233,6 +2341,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         except ImportError:  # pragma: no cover
             device_auth_post = None
         if device_auth_post and device_auth_post(self, req_path, body):
+            return
+
+        try:
+            from .user_library import handle_library_post
+        except ImportError:  # pragma: no cover
+            handle_library_post = None
+        if handle_library_post and handle_library_post(self, req_path, body):
             return
 
         # Auth & Session Endpoints
@@ -2401,13 +2516,20 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # Uploads, Works, Community Assets & Forum
         if req_path in ("/api/uploads", "/api/studio/uploads"):
             user = self._current_user(required=True)
+            raw_cat = str(body.get("cat") or "other").strip().lower()
+            PUBLIC_CATS = ("characters", "props", "scenes", "other")
+            INTERNAL_CATS = ("forum",)          # 仅由论坛/投稿发布写入，原样保留
+            if raw_cat in PUBLIC_CATS or raw_cat in INTERNAL_CATS:
+                safe_cat = raw_cat
+            else:
+                safe_cat = "other"              # 未知值、以及 'import' 一律降级
             saved = save_data_url_upload(
                 self.db,
                 user,
                 data_url=str(body.get("dataUrl") or body.get("image") or ""),
                 name_zh=str(body.get("nameZh") or body.get("name") or "上传素材"),
                 desc_zh=str(body.get("descZh") or ""),
-                cat=str(body.get("cat") or "other"),
+                cat=safe_cat,
             )
             self._send_json({"ok": True, **saved})
             return
