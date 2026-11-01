@@ -451,88 +451,98 @@ def save_data_url_upload(
         from .user_library import check_user_upload_quota, ensure_user_uploads_synced, next_change_seq
         ensure_user_uploads_synced(db, user_id)
 
-        with db.transaction() as tx:
-            # Check deduplication against existing active assets (library categories only)
-            if safe_cat in PUBLIC_CATS:
-                existing_dup = tx.execute(
+        new_file_path: Path | None = None
+        try:
+            with db.transaction() as tx:
+                # Check deduplication against existing active assets (library categories only)
+                if safe_cat in PUBLIC_CATS:
+                    existing_dup = tx.execute(
+                        """
+                        SELECT * FROM user_uploads
+                        WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
+                        LIMIT 1
+                        """,
+                        (user_id, sha256_hex),
+                    ).fetchone()
+                    if existing_dup is not None:
+                        return {
+                            "id": existing_dup["id"],
+                            "url": existing_dup["image_url"],
+                            "cat": existing_dup["cat"],
+                            "nameZh": existing_dup["name_zh"],
+                            "descZh": existing_dup["desc_zh"],
+                            "image": existing_dup["image_url"],
+                            "isCustom": True,
+                            "deduped": True,
+                            "assetUid": existing_dup["asset_uid"],
+                        }
+
+                    # Enforce unified quota (500 assets, 1 GB storage) for library assets
+                    check_user_upload_quota(tx, user_id, len(raw_bytes), is_new_item=True)
+
+                uploads_dir = get_uploads_dir()
+                uploads_dir.mkdir(parents=True, exist_ok=True)
+                up_id = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
+                fname = f"{up_id}{ext}"
+                fpath = uploads_dir / fname
+                try:
+                    with fpath.open("xb") as fp:
+                        fp.write(raw_bytes)
+                except FileExistsError as exc:
+                    raise ServiceError("上传文件名冲突，请重试", status=503, code="upload_collision") from exc
+                new_file_path = fpath
+                public_url = f"/uploads/{fname}"
+
+                asset_uid = str(uuid.uuid4())
+                now_iso = utc_now_iso()
+                seq = next_change_seq(tx)
+                tx.execute(
                     """
-                    SELECT * FROM user_uploads
-                    WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
-                    LIMIT 1
+                    INSERT INTO user_uploads (
+                        id, user_id, cat, name_zh, desc_zh, image_url, file_path, bytes, created_at,
+                        asset_uid, local_id, name_en, tags_json, sha256, revision, change_seq, updated_at, origin
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (user_id, sha256_hex),
-                ).fetchone()
-                if existing_dup is not None:
-                    return {
-                        "id": existing_dup["id"],
-                        "url": existing_dup["image_url"],
-                        "cat": existing_dup["cat"],
-                        "nameZh": existing_dup["name_zh"],
-                        "descZh": existing_dup["desc_zh"],
-                        "image": existing_dup["image_url"],
-                        "isCustom": True,
-                        "deduped": True,
-                        "assetUid": existing_dup["asset_uid"],
-                    }
-
-                # Enforce unified quota (500 assets, 1 GB storage) for library assets
-                check_user_upload_quota(tx, user_id, len(raw_bytes), is_new_item=True)
-
-            uploads_dir = get_uploads_dir()
-            uploads_dir.mkdir(parents=True, exist_ok=True)
-            up_id = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
-            fname = f"{up_id}{ext}"
-            fpath = uploads_dir / fname
-            try:
-                with fpath.open("xb") as fp:
-                    fp.write(raw_bytes)
-            except FileExistsError as exc:
-                raise ServiceError("上传文件名冲突，请重试", status=503, code="upload_collision") from exc
-            public_url = f"/uploads/{fname}"
-
-            asset_uid = str(uuid.uuid4())
-            now_iso = utc_now_iso()
-            seq = next_change_seq(tx)
-            tx.execute(
-                """
-                INSERT INTO user_uploads (
-                    id, user_id, cat, name_zh, desc_zh, image_url, file_path, bytes, created_at,
-                    asset_uid, local_id, name_en, tags_json, sha256, revision, change_seq, updated_at, origin
+                    (
+                        up_id,
+                        user_id,
+                        safe_cat,
+                        (name_zh or "上传素材").strip()[:60],
+                        (desc_zh or "").strip()[:200],
+                        public_url,
+                        str(fpath),
+                        len(raw_bytes),
+                        now_iso,
+                        asset_uid,
+                        None,
+                        "",
+                        "[]",
+                        sha256_hex,
+                        1,
+                        seq,
+                        now_iso,
+                        "web",
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    up_id,
-                    user_id,
-                    safe_cat,
-                    (name_zh or "上传素材").strip()[:60],
-                    (desc_zh or "").strip()[:200],
-                    public_url,
-                    str(fpath),
-                    len(raw_bytes),
-                    now_iso,
-                    asset_uid,
-                    None,
-                    "",
-                    "[]",
-                    sha256_hex,
-                    1,
-                    seq,
-                    now_iso,
-                    "web",
-                ),
-            )
-            return {
-                "id": up_id,
-                "url": public_url,
-                "cat": safe_cat,
-                "nameZh": name_zh or "上传素材",
-                "descZh": desc_zh or "",
-                "image": public_url,
-                "isCustom": True,
-                "deduped": False,
-                "assetUid": asset_uid,
-            }
+                return {
+                    "id": up_id,
+                    "url": public_url,
+                    "cat": safe_cat,
+                    "nameZh": name_zh or "上传素材",
+                    "descZh": desc_zh or "",
+                    "image": public_url,
+                    "isCustom": True,
+                    "deduped": False,
+                    "assetUid": asset_uid,
+                }
+        except Exception:
+            if new_file_path is not None:
+                try:
+                    new_file_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
 
     uploads_dir = get_uploads_dir()
     uploads_dir.mkdir(parents=True, exist_ok=True)

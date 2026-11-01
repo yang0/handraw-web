@@ -1440,5 +1440,252 @@ class UserLibrarySyncTests(unittest.TestCase):
             t.join()
 
 
+    def test_32_forum_uid_adoption_and_idempotent_put(self):
+        """Test N1: PUT with forum assetUid adopts it into personal library without 500 or orphan files."""
+        # 1. Upload forum image via POST /api/uploads with cat='forum'
+        d1, sha1, _ = _make_data_url(color=(80, 80, 80))
+        s_upl, res_upl, _ = self._request("POST", "/api/uploads", {"dataUrl": d1, "cat": "forum", "nameZh": "Forum Image"}, cookie=self.cookie_a)
+        self.assertEqual(s_upl, 200)
+        forum_uid = res_upl.get("assetUid")
+        self.assertTrue(forum_uid)
+
+        # GET /api/library/assets does NOT show forum upload initially
+        s_get1, res_get1, _ = self._request("GET", "/api/library/assets", cookie=self.cookie_a)
+        self.assertEqual(s_get1, 200)
+        uids_initial = [it["uid"] for it in res_get1["items"]]
+        self.assertNotIn(forum_uid, uids_initial)
+
+        # 2. PUT /api/library/assets/{forum_uid} adopts this forum image
+        d2, sha2, _ = _make_data_url(color=(85, 85, 85))
+        s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{forum_uid}", {"dataUrl": d2, "name": "Adopted Asset"}, cookie=self.cookie_a)
+        self.assertIn(s_put, (200, 201))
+        self.assertEqual(res_put["uid"], forum_uid)
+
+        # Verify only 1 row in database for this UID
+        rows = self.db.get_conn().execute("SELECT * FROM user_uploads WHERE asset_uid = ?", (forum_uid,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["cat"], "other")
+
+        # 3. GET /api/library/assets shows the adopted asset
+        s_get2, res_get2, _ = self._request("GET", "/api/library/assets", cookie=self.cookie_a)
+        self.assertEqual(s_get2, 200)
+        uids_after = [it["uid"] for it in res_get2["items"]]
+        self.assertIn(forum_uid, uids_after)
+
+        # 4. GET /api/library/assets/{forum_uid}/image returns 200
+        tok = self._create_token(self.user_a["id"], ["library"])
+        s_img, _, b_img = self._request("GET", f"/api/library/assets/{forum_uid}/image", bearer=tok)
+        self.assertEqual(s_img, 200)
+        self.assertTrue(len(b_img) > 0)
+
+        # 5. Repeat PUT with identical data is idempotent (returns 200 without creating duplicate row)
+        s_put_repeat, res_put_repeat, _ = self._request("PUT", f"/api/library/assets/{forum_uid}", {"dataUrl": d2, "name": "Adopted Asset"}, cookie=self.cookie_a)
+        self.assertEqual(s_put_repeat, 200)
+        rows_repeat = self.db.get_conn().execute("SELECT * FROM user_uploads WHERE asset_uid = ?", (forum_uid,)).fetchall()
+        self.assertEqual(len(rows_repeat), 1)
+
+        # 6. DELETE /api/library/assets/{forum_uid}?baseRevision=1 returns 200
+        s_del, res_del, _ = self._request("DELETE", f"/api/library/assets/{forum_uid}?baseRevision=1", cookie=self.cookie_a)
+        self.assertEqual(s_del, 200)
+        self.assertTrue(res_del.get("deletedAt"))
+
+    def test_33_migration_066_normalizes_uppercase_and_braced_uuids(self):
+        """Test N2: Migration 066 normalizes historical uppercase, braced, URN, and unhyphenated UUIDs to lowercase 8-4-4-4-12."""
+        raw_uuid_1 = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        upper_uuid = raw_uuid_1.upper()
+        raw_uuid_2 = "2fa12345-6789-4abc-def0-123456789abc"
+        braced_uuid = f"{{{raw_uuid_2}}}"
+        raw_uuid_3 = "3e4f5a6b-7c8d-9e0f-1a2b-3c4d5e6f7a8b"
+        urn_uuid = f"urn:uuid:{raw_uuid_3.upper()}"
+        raw_uuid_4 = "4f5a6b7c-8d9e-0f1a-2b3c-4d5e6f7a8b9c"
+        nodash_uuid = raw_uuid_4.replace("-", "")
+        invalid_uid = "abc-not-a-uuid"
+
+        uploads_dir = Path(os.environ["HANDRAW_UPLOADS_DIR"])
+        dummy_file = uploads_dir / "dummy_norm.png"
+        dummy_file.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\rIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82")
+
+        # Insert historical rows directly into database with various non-canonical formats and invalid format
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO user_uploads (id, user_id, cat, name_zh, asset_uid, image_url, file_path, bytes, sha256, revision, change_seq, created_at, updated_at)
+                VALUES ('UPL_hist_1', ?, 'characters', 'Hist Upper', ?, '/uploads/dummy_norm.png', ?, 100, 'sha1', 1, 100, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                       ('UPL_hist_2', ?, 'props', 'Hist Braced', ?, '/uploads/dummy_norm.png', ?, 100, 'sha2', 1, 101, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                       ('UPL_hist_3', ?, 'scenes', 'Hist URN', ?, '/uploads/dummy_norm.png', ?, 100, 'sha3', 1, 102, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                       ('UPL_hist_4', ?, 'other', 'Hist NoDash', ?, '/uploads/dummy_norm.png', ?, 100, 'sha4', 1, 103, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                       ('UPL_hist_5', ?, 'other', 'Hist Invalid', ?, '/uploads/dummy_norm.png', ?, 100, 'sha5', 1, 104, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+                """,
+                (
+                    self.user_a["id"], upper_uuid, str(dummy_file),
+                    self.user_a["id"], braced_uuid, str(dummy_file),
+                    self.user_a["id"], urn_uuid, str(dummy_file),
+                    self.user_a["id"], nodash_uuid, str(dummy_file),
+                    self.user_a["id"], invalid_uid, str(dummy_file),
+                ),
+            )
+
+        # Run Migration 066 logic (first run)
+        from backend.work_schema import normalize_historical_asset_uids
+        conn = self.db.get_conn()
+        normalize_historical_asset_uids(conn)
+
+        # Verify DB rows are now canonical lowercase 8-4-4-4-12
+        row1 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_1'").fetchone()
+        self.assertEqual(row1["asset_uid"], raw_uuid_1.lower())
+
+        row2 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_2'").fetchone()
+        self.assertEqual(row2["asset_uid"], raw_uuid_2.lower())
+
+        # Check URN row -> canonical lowercase
+        row3 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_3'").fetchone()
+        self.assertEqual(row3["asset_uid"], raw_uuid_3.lower())
+
+        # Check unhyphenated row -> canonical lowercase
+        row4 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_4'").fetchone()
+        self.assertEqual(row4["asset_uid"], raw_uuid_4.lower())
+
+        # Check invalid non-UUID row -> preserved as original, whole batch did not rollback
+        row5 = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_5'").fetchone()
+        self.assertEqual(row5["asset_uid"], invalid_uid)
+
+        # Check Idempotence: run migration hook a second time
+        normalize_historical_asset_uids(conn)
+        row1_again = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_1'").fetchone()
+        self.assertEqual(row1_again["asset_uid"], raw_uuid_1.lower())
+        row3_again = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_3'").fetchone()
+        self.assertEqual(row3_again["asset_uid"], raw_uuid_3.lower())
+        row4_again = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_4'").fetchone()
+        self.assertEqual(row4_again["asset_uid"], raw_uuid_4.lower())
+        row5_again = conn.execute("SELECT asset_uid FROM user_uploads WHERE id = 'UPL_hist_5'").fetchone()
+        self.assertEqual(row5_again["asset_uid"], invalid_uid)
+
+        # Verify URN row operates cleanly via HTTP:
+        tok = self._create_token(self.user_a["id"], ["library"])
+        # GET .../image returns 200
+        s_img, _, b_img = self._request("GET", f"/api/library/assets/{raw_uuid_3.lower()}/image", bearer=tok)
+        self.assertEqual(s_img, 200)
+
+        # PUT updates existing row (baseRevision=1) instead of creating second row
+        s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{raw_uuid_3.lower()}", {"baseRevision": 1, "name": "Updated URN"}, cookie=self.cookie_a)
+        self.assertEqual(s_put, 200)
+        self.assertEqual(res_put["revision"], 2)
+        count_urn = self.db.get_conn().execute("SELECT COUNT(*) FROM user_uploads WHERE asset_uid = ?", (raw_uuid_3.lower(),)).fetchone()[0]
+        self.assertEqual(count_urn, 1)
+
+        # DELETE returns 200
+        s_del, res_del, _ = self._request("DELETE", f"/api/library/assets/{raw_uuid_3.lower()}?baseRevision=2", cookie=self.cookie_a)
+        self.assertEqual(s_del, 200)
+
+        # Verify unhyphenated row operates cleanly via HTTP:
+        # GET .../image returns 200
+        s_img4, _, _ = self._request("GET", f"/api/library/assets/{raw_uuid_4.lower()}/image", bearer=tok)
+        self.assertEqual(s_img4, 200)
+
+        # PUT updates row
+        s_put4, res_put4, _ = self._request("PUT", f"/api/library/assets/{raw_uuid_4.lower()}", {"baseRevision": 1, "name": "Updated NoDash"}, cookie=self.cookie_a)
+        self.assertEqual(s_put4, 200)
+        count_nodash = self.db.get_conn().execute("SELECT COUNT(*) FROM user_uploads WHERE asset_uid = ?", (raw_uuid_4.lower(),)).fetchone()[0]
+        self.assertEqual(count_nodash, 1)
+
+        # DELETE returns 200
+        s_del4, res_del4, _ = self._request("DELETE", f"/api/library/assets/{raw_uuid_4.lower()}?baseRevision=2", cookie=self.cookie_a)
+        self.assertEqual(s_del4, 200)
+
+    def test_34_backfill_does_not_let_forum_steal_sha(self):
+        """Test N3: ensure_user_uploads_synced does not let forum rows steal sha256 from library assets."""
+        d, test_sha, _ = _make_data_url(color=(100, 100, 100))
+        from backend.runtime_policy import decode_data_image_url
+
+        uploads_dir = Path(os.environ["HANDRAW_UPLOADS_DIR"])
+        dummy_file = uploads_dir / "lib_dummy_sha.png"
+        dummy_file.write_bytes(decode_data_image_url(d)[0])
+
+        with self.db.transaction() as tx:
+            # 1. Existing forum row with this sha
+            tx.execute(
+                """
+                INSERT INTO user_uploads (id, user_id, cat, name_zh, asset_uid, image_url, file_path, bytes, sha256, revision, change_seq, created_at, updated_at)
+                VALUES ('UPL_forum_sha', ?, 'forum', 'Forum Pic', 'uid-forum-sha', '/uploads/forum.png', '', 100, ?, 1, 200, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+                """,
+                (self.user_a["id"], test_sha),
+            )
+            # 2. Existing library row without sha256 and without asset_uid
+            tx.execute(
+                """
+                INSERT INTO user_uploads (id, user_id, cat, name_zh, asset_uid, image_url, file_path, bytes, sha256, revision, change_seq, created_at, updated_at)
+                VALUES ('UPL_lib_nosha', ?, 'props', 'Library Asset No SHA', NULL, '/uploads/lib_dummy_sha.png', ?, 100, NULL, 1, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+                """,
+                (self.user_a["id"], str(dummy_file)),
+            )
+
+        from backend.user_library import ensure_user_uploads_synced
+        ensure_user_uploads_synced(self.db, self.user_a["id"])
+
+        # Library row must have received the sha256
+        lib_row = self.db.get_conn().execute("SELECT asset_uid, sha256 FROM user_uploads WHERE id = 'UPL_lib_nosha'").fetchone()
+        self.assertEqual(lib_row["sha256"], test_sha)
+        self.assertTrue(lib_row["asset_uid"])
+
+        # Sending PUT with same image data returns deduped: true mapping to this library row
+        new_uid = str(uuid.uuid4())
+        s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{new_uid}", {"dataUrl": d, "name": "Dedup Test"}, cookie=self.cookie_a)
+        self.assertEqual(s_put, 200)
+        self.assertTrue(res_put.get("deduped"))
+        self.assertEqual(res_put.get("uid"), lib_row["asset_uid"])
+
+    def test_35_get_assets_fast_and_non_blocking_under_write_lock(self):
+        """Test N4: GET /api/library/assets executes in < 1s and returns 200 without partial data when write lock is held."""
+        # Insert an unsynced row for user_a
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO user_uploads (id, user_id, cat, name_zh, asset_uid, image_url, file_path, bytes, sha256, revision, change_seq, created_at, updated_at)
+                VALUES ('UPL_unsynced_lock', ?, 'characters', 'Unsynced Asset', NULL, '/uploads/dummy.png', '', 100, NULL, 1, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+                """,
+                (self.user_a["id"],),
+            )
+
+        holding_event = threading.Event()
+        release_event = threading.Event()
+
+        def _hold_write():
+            with self.db.transaction() as tx:
+                tx.execute("SELECT 1")
+                holding_event.set()
+                release_event.wait(timeout=3.0)
+
+        t = threading.Thread(target=_hold_write)
+        t.start()
+        try:
+            holding_event.wait(timeout=2.0)
+            start_t = time.time()
+            s_get, res_get, _ = self._request("GET", "/api/library/assets", cookie=self.cookie_a)
+            elapsed = time.time() - start_t
+            self.assertEqual(s_get, 200)
+            self.assertLess(elapsed, 1.0)
+            # Verify no partial asset (empty uid) is returned
+            for it in res_get.get("items", []):
+                self.assertTrue(it.get("uid"), "Item must not have empty uid")
+        finally:
+            release_event.set()
+            t.join()
+
+    def test_36_commit_failure_cleans_up_orphan_files(self):
+        """Test N5: When transaction fails or is aborted before commit, newly created files are cleaned up."""
+        uploads_dir = Path(os.environ["HANDRAW_UPLOADS_DIR"])
+        files_before = set(uploads_dir.glob("UPL-*"))
+
+        d, _, _ = _make_data_url(color=(110, 110, 110))
+        target_uid = str(uuid.uuid4())
+
+        from unittest.mock import patch
+        with patch("backend.user_library.next_change_seq", side_effect=RuntimeError("Simulated Commit Crash")):
+            s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{target_uid}", {"dataUrl": d, "name": "Fail Asset"}, cookie=self.cookie_a)
+            self.assertEqual(s_put, 500)
+
+        files_after = set(uploads_dir.glob("UPL-*"))
+        self.assertEqual(files_before, files_after, "No orphan files should remain in uploads dir after failure")
+
 if __name__ == "__main__":
     unittest.main()

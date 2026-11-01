@@ -11,7 +11,7 @@ from typing import Iterator
 from zoneinfo import ZoneInfo
 
 from .config import get_db_path
-from .migrations import MIGRATIONS
+from .migrations import MIGRATIONS, POST_MIGRATION_HOOKS
 
 
 def utc_now_iso() -> str:
@@ -143,6 +143,8 @@ class Database:
                     if conn.in_transaction:
                         conn.execute("ROLLBACK;")
                     raise
+                if version in POST_MIGRATION_HOOKS:
+                    POST_MIGRATION_HOOKS[version](conn)
                 applied_names.append(name)
         return applied_names
 

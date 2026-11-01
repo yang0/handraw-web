@@ -529,9 +529,13 @@ except ImportError:  # pragma: no cover - compatibility for partial checkouts
 
 MIGRATIONS.extend(CURATION_MIGRATIONS)
 
+# Post-migration Python hooks for non-DDL schema/data normalizations.
+POST_MIGRATION_HOOKS: dict[int, Any] = {}
+
 # Work identity / social counters / forks (migration block 040+).
 try:
-    from .work_schema import WORK_MIGRATIONS
+    from .work_schema import WORK_MIGRATIONS, WORK_POST_MIGRATION_HOOKS
+    POST_MIGRATION_HOOKS.update(WORK_POST_MIGRATION_HOOKS)
 except ImportError:  # pragma: no cover - compatibility for staged rollouts
     WORK_MIGRATIONS = []
 
