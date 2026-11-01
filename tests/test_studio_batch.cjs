@@ -167,13 +167,16 @@ function parseHtml(html) {
         return html.includes('id="batch-mode-fusion"') ? getNode("batch-mode-fusion", () => ({ id: "batch-mode-fusion", onclick: null })) : null;
       }
       if (selector === "#batch-strategy-fixed") {
-        return html.includes('id="batch-strategy-fixed"') ? getNode("batch-strategy-fixed", () => ({ id: "batch-strategy-fixed", onclick: null })) : null;
+        return html.includes('id="batch-strategy-fixed"') ? getNode("batch-strategy-fixed", () => ({ id: "batch-strategy-fixed", onclick: null, onkeydown: null, focus() {} })) : null;
       }
       if (selector === "#batch-strategy-ai") {
-        return html.includes('id="batch-strategy-ai"') ? getNode("batch-strategy-ai", () => ({ id: "batch-strategy-ai", onclick: null })) : null;
+        return html.includes('id="batch-strategy-ai"') ? getNode("batch-strategy-ai", () => ({ id: "batch-strategy-ai", onclick: null, onkeydown: null, focus() {} })) : null;
       }
       if (selector === "#batch-btn-plan") {
         return html.includes('id="batch-btn-plan"') ? getNode("batch-btn-plan", () => ({ id: "batch-btn-plan", onclick: null, disabled: html.includes('id="batch-btn-plan" disabled') })) : null;
+      }
+      if (selector === "#batch-btn-reset") {
+        return html.includes('id="batch-btn-reset"') ? getNode("batch-btn-reset", () => ({ id: "batch-btn-reset", onclick: null, disabled: html.includes('id="batch-btn-reset" disabled') })) : null;
       }
       if (selector === "#batch-btn-pick-fixed-layout") {
         return html.includes('id="batch-btn-pick-fixed-layout"') ? getNode("batch-btn-pick-fixed-layout", () => ({ id: "batch-btn-pick-fixed-layout", onclick: null })) : null;
@@ -217,15 +220,6 @@ function parseHtml(html) {
     },
     querySelectorAll(selector) {
       const results = [];
-      if (selector.includes("batch-fission-trigger") || selector.includes("batch-btn-fission")) {
-        if (html.includes('id="batch-btn-fission"')) {
-          results.push(this.querySelector("#batch-btn-fission"));
-        }
-        if (html.includes('id="batch-btn-fission-ai"')) {
-          results.push(this.querySelector("#batch-btn-fission-ai"));
-        }
-        return results;
-      }
       if (selector === "[data-set-mode]") {
         const regex = /data-set-mode="([^"]+)"/g;
         let match;
@@ -612,51 +606,30 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 }
 
 // ==========================================
-// Defect 1 Fix Verification: Fission modal applyItems does not throw and calls markDirtyAndRender
+// Removal of Fission: No #batch-btn-fission or #batch-btn-fission-ai in either mode
 // ==========================================
 {
-  let dirtyCalled = false;
-  let toastMsg = "";
-  sandbox.HANDRAW_SHARED.toast = (msg) => { toastMsg = msg; };
-  sandbox.HANDRAW_SHARED.closeModal = () => {};
-
-  let modalMountCb = null;
-  sandbox.HANDRAW_SHARED.openModal = (cfg) => {
-    modalMountCb = cfg.onMount;
-  };
-
-  const graph = createTestBatchGraph();
-  const parts = {
-    ctrl: graph.nodes.find(n => n.type === "output_control"),
-    loop: graph.nodes.find(n => n.type === "loop"),
-    skill: graph.nodes.find(n => n.type === "skill_params"),
-    text: graph.nodes.find(n => n.type === "text_input"),
-    asset: graph.nodes.find(n => n.type === "asset")
-  };
-
-  HandrawBatchCreate.actions = {
-    markDirtyAndRender: () => { dirtyCalled = true; }
-  };
-
-  HandrawBatchCreate.openFissionModal(null, parts);
-  assert.ok(typeof modalMountCb === "function", "openModal must pass onMount callback");
-
-  // Mock modalRoot with elements
-  const mockModalRoot = {
-    querySelector: (sel) => ({
-      value: "测试母题",
-      focus() {},
-      style: {},
-      classList: { remove() {}, add() {} },
-      querySelectorAll: (s) => []
-    }),
-    querySelectorAll: (sel) => []
-  };
-
-  // Mount modal: ensure it attaches event listeners without crashing
-  modalMountCb(mockModalRoot);
-
-  console.log("✓ Defect 1 Passed: openFissionModal correctly binds self context for markDirtyAndRender");
+  for (const mode of ["fixed", "ai"]) {
+    const fakeHost = createFakeDom();
+    const graph = createTestBatchGraph({
+      batchLayoutMode: mode,
+      batchRows: mode === "ai" ? [{ theme: "测试", layout: "SC-001" }] : []
+    });
+    const parts = {
+      ctrl: graph.nodes.find(n => n.type === "output_control"),
+      loop: graph.nodes.find(n => n.type === "loop"),
+      skill: graph.nodes.find(n => n.type === "skill_params"),
+      text: graph.nodes.find(n => n.type === "text_input"),
+      asset: graph.nodes.find(n => n.type === "asset")
+    };
+    HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {});
+    const html = fakeHost.innerHTML;
+    assert.ok(!html.includes('id="batch-btn-fission"'), "Must not contain #batch-btn-fission");
+    assert.ok(!html.includes('id="batch-btn-fission-ai"'), "Must not contain #batch-btn-fission-ai");
+    assert.ok(!html.includes("从母题裂变"), "Must not contain text 从母题裂变");
+  }
+  assert.equal(typeof HandrawBatchCreate.openFissionModal, "undefined", "openFissionModal must be removed");
+  console.log("✓ Requirement: Fission buttons and openFissionModal removed successfully");
 }
 
 // ==========================================
@@ -994,54 +967,88 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 }
 
 // ==========================================
-// Requirement 12: Fission in AI Recommended Layouts Mode
+// Requirement 12: Unified Planning Inputs Section, Segmented Control & Unique Hero Plan Button
 // ==========================================
 {
-  const fakeHost = createFakeDom();
-  const graph = createTestBatchGraph({
-    batchLayoutMode: "ai",
-    batchRows: [
-      { theme: "原主题1", layout: "SC-001" },
-      { theme: "原主题2", layout: "SC-022" }
-    ]
-  });
-  const parts = {
-    ctrl: graph.nodes.find(n => n.type === "output_control"),
-    loop: graph.nodes.find(n => n.type === "loop"),
-    skill: graph.nodes.find(n => n.type === "skill_params"),
-    text: graph.nodes.find(n => n.type === "text_input"),
-    asset: graph.nodes.find(n => n.type === "asset")
-  };
+  for (const mode of ["fixed", "ai"]) {
+    const fakeHost = createFakeDom();
+    const graph = createTestBatchGraph({
+      batchLayoutMode: mode,
+      layout: "SC-001",
+      batchRows: mode === "ai" ? [{ theme: "原主题1", layout: "SC-001" }] : []
+    });
+    const parts = {
+      ctrl: graph.nodes.find(n => n.type === "output_control"),
+      loop: graph.nodes.find(n => n.type === "loop"),
+      skill: graph.nodes.find(n => n.type === "skill_params"),
+      text: graph.nodes.find(n => n.type === "text_input"),
+      asset: graph.nodes.find(n => n.type === "asset")
+    };
 
-  let dirtyCalled = false;
-  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {
-    markDirtyAndRender: () => { dirtyCalled = true; }
-  });
+    let dirtyCalled = false;
+    HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {
+      markDirtyAndRender: () => { dirtyCalled = true; }
+    });
 
-  // Verify fission button exists in AI mode
-  const btnFissionAi = fakeHost.querySelector("#batch-btn-fission-ai");
-  assert.ok(btnFissionAi, "AI recommended layouts mode must render #batch-btn-fission-ai button");
-  assert.equal(btnFissionAi.textContent.trim(), "从母题裂变");
+    const html = fakeHost.innerHTML;
 
-  // Verify openFissionModal in AI mode adapts button labels
-  let capturedModalHtml = "";
-  let capturedOnMount = null;
-  const mockShared = {
-    esc: (s) => String(s == null ? "" : s),
-    openModal: (cfg) => {
-      capturedModalHtml = cfg.html;
-      capturedOnMount = cfg.onMount;
-    },
-    closeModal: () => {},
-    toast: () => {}
-  };
-  sandbox.HANDRAW_SHARED = mockShared;
+    // 1. Planning Inputs Panel & Tag
+    assert.ok(html.includes("batch-plan-inputs-panel"), "Must render .batch-plan-inputs-panel");
+    assert.ok(html.includes("batch-plan-inputs-tag"), "Must render .batch-plan-inputs-tag");
+    assert.ok(html.includes("规划输入"), "Must display 规划输入 tag");
 
-  btnFissionAi.onclick();
-  assert.ok(capturedModalHtml.includes("追加为新的逐张行"), "Fission modal in AI mode must have '追加为新的逐张行' button");
-  assert.ok(capturedModalHtml.includes("替换全部逐张行"), "Fission modal in AI mode must have '替换全部逐张行' button");
+    // 2. Segmented Control for Strategy: NOT .btn, but .batch-strategy-seg-btn
+    assert.ok(html.includes("batch-strategy-seg"), "Must render .batch-strategy-seg container");
+    assert.ok(html.includes('id="batch-strategy-fixed"'), "Must render #batch-strategy-fixed");
+    assert.ok(html.includes('id="batch-strategy-ai"'), "Must render #batch-strategy-ai");
+    assert.ok(html.includes("batch-strategy-seg-btn"), "Must use .batch-strategy-seg-btn class");
 
-  console.log("✓ Requirement 12 Passed: AI mode fission button exists and modal button labels adapt");
+    // Make sure strategy items do not use button classes that look like action buttons
+    const stratFixedTag = html.match(/<button[^>]*id="batch-strategy-fixed"[^>]*>/);
+    const stratAiTag = html.match(/<button[^>]*id="batch-strategy-ai"[^>]*>/);
+    assert.ok(stratFixedTag, "#batch-strategy-fixed button tag must exist");
+    assert.ok(stratAiTag, "#batch-strategy-ai button tag must exist");
+    const stratFixedClass = stratFixedTag[0].match(/class="([^"]*)"/)?.[1] || "";
+    const stratAiClass = stratAiTag[0].match(/class="([^"]*)"/)?.[1] || "";
+    assert.ok(!stratFixedClass.split(/\s+/).includes("btn"), "#batch-strategy-fixed must NOT have class .btn");
+    assert.ok(!stratAiClass.split(/\s+/).includes("btn"), "#batch-strategy-ai must NOT have class .btn");
+
+    // 3. Fixed layout picker button has class btn btn-sm and NOT btn-primary
+    if (mode === "fixed") {
+      const pickBtnTag = html.match(/<button[^>]*id="batch-btn-pick-fixed-layout"[^>]*>/);
+      assert.ok(pickBtnTag, "#batch-btn-pick-fixed-layout must exist");
+      const pickBtnClass = pickBtnTag[0].match(/class="([^"]*)"/)?.[1] || "";
+      assert.ok(!pickBtnClass.includes("btn-primary"), "#batch-btn-pick-fixed-layout must NOT be btn-primary");
+    }
+
+    // 4. Hero Plan Button has unique hero class and SVG icon
+    assert.ok(html.includes("batch-btn-plan-hero"), "#batch-btn-plan must have class .batch-btn-plan-hero");
+    assert.ok(html.includes("batch-plan-icon"), "Plan button must contain .batch-plan-icon SVG");
+    assert.ok(html.includes("AI 规划这套图"), "Plan button must display 'AI 规划这套图'");
+
+    // 5. Test keyboard navigation on strategy toggle
+    const btnStratFixed = fakeHost.querySelector("#batch-strategy-fixed");
+    const btnStratAi = fakeHost.querySelector("#batch-strategy-ai");
+    assert.ok(btnStratFixed && btnStratAi, "Strategy elements must be accessible");
+
+    // Simulate ArrowRight on fixed
+    let aiClicked = false;
+    btnStratAi.click = () => { aiClicked = true; };
+    if (btnStratFixed.onkeydown) {
+      btnStratFixed.onkeydown({ key: "ArrowRight", preventDefault() {} });
+      assert.ok(aiClicked, "ArrowRight on fixed strategy must activate AI strategy");
+    }
+
+    // Simulate ArrowLeft on AI
+    let fixedClicked = false;
+    btnStratFixed.click = () => { fixedClicked = true; };
+    if (btnStratAi.onkeydown) {
+      btnStratAi.onkeydown({ key: "ArrowLeft", preventDefault() {} });
+      assert.ok(fixedClicked, "ArrowLeft on AI strategy must activate fixed strategy");
+    }
+  }
+
+  console.log("✓ Requirement 12 Passed: Unified Planning Inputs Section, Segmented Control & Unique Hero Plan Button verified");
 }
 
 // ==========================================
@@ -1195,6 +1202,205 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   console.log("✓ Requirement 16 Passed: Touch / 390 mode skips hover listener registration");
 }
 
+// ==========================================
+// Requirement 17: Global References Row relocated outside 更多设置 collapsible
+// ==========================================
+{
+  // Test both modes with moreSettingsOpen = false (the default state)
+  for (const mode of ["fixed", "ai"]) {
+    const fakeHost = createFakeDom();
+    const graph = createTestBatchGraph({
+      batchLayoutMode: mode,
+      layout: "SC-001",
+      tones: ["TN-001"],
+      assets: [{ id: "AST-001", name: "测试参考图", image: "/uploads/test.webp" }],
+      batchRows: mode === "ai" ? [{ theme: "行1", layout: "SC-001" }] : []
+    });
+    const parts = {
+      ctrl: graph.nodes.find(n => n.type === "output_control"),
+      loop: graph.nodes.find(n => n.type === "loop"),
+      skill: graph.nodes.find(n => n.type === "skill_params"),
+      text: graph.nodes.find(n => n.type === "text_input"),
+      asset: graph.nodes.find(n => n.type === "asset")
+    };
+
+    HandrawBatchCreate.moreSettingsOpen = false;
+    HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {});
+
+    const html = fakeHost.innerHTML;
+
+    // 1. Must contain #batch-more-row-refs
+    assert.ok(html.includes('id="batch-more-row-refs"'), `#batch-more-row-refs must be present in ${mode} mode`);
+
+    // 2. Position check: after Row 2 (.batch-pickers-row) and before Set Planning card (.batch-plan-card)
+    const idxPickers = html.indexOf("batch-pickers-row");
+    const idxGlobalRefs = html.indexOf('id="batch-more-row-refs"');
+    const idxPlanCard = html.indexOf("batch-plan-card");
+    const idxMoreSettingsToggle = html.indexOf('id="batch-toggle-more-settings"');
+
+    assert.ok(idxPickers !== -1, "Pickers row must exist");
+    assert.ok(idxGlobalRefs !== -1, "Global refs row must exist");
+    assert.ok(idxPlanCard !== -1, "Plan card must exist");
+    assert.ok(idxMoreSettingsToggle !== -1, "More settings toggle must exist");
+
+    assert.ok(idxPickers < idxGlobalRefs, "Global refs row must come after pickers row");
+    assert.ok(idxGlobalRefs < idxPlanCard, "Global refs row must come before set planning card");
+    assert.ok(idxPlanCard < idxMoreSettingsToggle, "Set planning card must come before more settings");
+
+    // 3. More settings body must NOT contain #batch-more-row-refs or #batch-btn-pick-global-refs
+    const moreSettingsBodyMatch = html.match(/id="batch-body-more-settings"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/);
+    if (moreSettingsBodyMatch) {
+      assert.ok(
+        !moreSettingsBodyMatch[1].includes('id="batch-more-row-refs"'),
+        "batch-body-more-settings must NOT contain #batch-more-row-refs"
+      );
+      assert.ok(
+        !moreSettingsBodyMatch[1].includes('id="batch-btn-pick-global-refs"'),
+        "batch-body-more-settings must NOT contain #batch-btn-pick-global-refs"
+      );
+    }
+
+    // 4. Verify contents of #batch-more-row-refs
+    assert.ok(html.includes('class="make-image-field-label">参考图</span>'), "Must have field label 参考图");
+    assert.ok(html.includes('id="batch-btn-pick-global-refs"'), "Must have button #batch-btn-pick-global-refs");
+    assert.ok(html.includes('id="batch-global-refs-thumbs"'), "Must have thumbs container #batch-global-refs-thumbs");
+    assert.ok(html.includes('data-remove-global-ref="0"'), "Must render clear button for existing global ref");
+  }
+
+  // Also verify empty state hint
+  {
+    const fakeHostEmpty = createFakeDom();
+    const graphEmpty = createTestBatchGraph({
+      batchLayoutMode: "fixed",
+      assets: []
+    });
+    const partsEmpty = {
+      ctrl: graphEmpty.nodes.find(n => n.type === "output_control"),
+      loop: graphEmpty.nodes.find(n => n.type === "loop"),
+      skill: graphEmpty.nodes.find(n => n.type === "skill_params"),
+      text: graphEmpty.nodes.find(n => n.type === "text_input"),
+      asset: graphEmpty.nodes.find(n => n.type === "asset")
+    };
+    HandrawBatchCreate.moreSettingsOpen = false;
+    HandrawBatchCreate.render(fakeHostEmpty, { parts: partsEmpty, graph: graphEmpty, catalog: sharedCatalog }, {});
+    const htmlEmpty = fakeHostEmpty.innerHTML;
+    assert.ok(htmlEmpty.includes("未指定，可点此添加（最多 4 张）"), "Empty state must display hint text");
+  }
+
+  console.log("✓ Requirement 17 Passed: Global References Row relocated outside 更多设置 collapsible (between Row 2 and Set Planning card)");
+}
+
+// ==========================================
+// Requirement 18: Form Reset (清空表单) in Batch and Make-Image
+// ==========================================
+{
+  // 1. Batch Form Reset
+  const fakeHost = createFakeDom();
+  const graph = createTestBatchGraph({
+    mode: "pure-image",
+    ratio: "16:9",
+    fusion: true,
+    style1: "FA-002",
+    style2: "FA-003",
+    layout: "SC-022",
+    colors: ["CL-002"],
+    tones: ["TN-001"],
+    moods: ["治愈"],
+    customMood: "清静",
+    whitespace: "spacious",
+    audience: "学生",
+    businessScene: "壁纸",
+    batchSeed: "自定义母题",
+    batchCount: 12,
+    batchLayoutMode: "ai",
+    batchLayoutReq: "前两张分镜",
+    batchRows: [{ theme: "第1行", layout: "SC-001" }, { theme: "第2行", layout: "SC-022" }],
+    promptListText: "第1行\n第2行",
+    assets: [{ id: "AST-001", name: "参考1", image: "/ref1.webp" }]
+  });
+  const parts = {
+    ctrl: graph.nodes.find(n => n.type === "output_control"),
+    loop: graph.nodes.find(n => n.type === "loop"),
+    skill: graph.nodes.find(n => n.type === "skill_params"),
+    text: graph.nodes.find(n => n.type === "text_input"),
+    asset: graph.nodes.find(n => n.type === "asset")
+  };
+
+  let dirtyCalled = false;
+  HandrawBatchCreate.planNotice = "测试提示";
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {
+    markDirtyAndRender: () => { dirtyCalled = true; },
+    ensureAssetItems: (items) => { parts.asset.data.items = items; }
+  });
+
+  const html = fakeHost.innerHTML;
+  assert.ok(html.includes('id="batch-btn-reset"'), "Must render #batch-btn-reset");
+  assert.ok(html.includes("清空表单"), "Reset button must have text 清空表单");
+
+  const btnReset = fakeHost.querySelector("#batch-btn-reset");
+  assert.ok(btnReset, "Should find #batch-btn-reset");
+
+  // A. Cancel confirm: nothing changes
+  let confirmPrompt = "";
+  sandbox.window.confirm = (msg) => { confirmPrompt = msg; return false; };
+  btnReset.onclick();
+  assert.ok(confirmPrompt.includes("清空后当前表单的所有设置都会恢复默认"), "Confirm message must match specification");
+  assert.equal(parts.loop.data.batchLayoutMode, "ai", "Mode should remain AI on cancel");
+  assert.equal(dirtyCalled, false, "markDirty must not be called on cancel");
+
+  // B. Accept confirm: restores all defaults
+  sandbox.window.confirm = () => true;
+  btnReset.onclick();
+
+  assert.equal(dirtyCalled, true, "markDirty must be called on confirm");
+  assert.equal(parts.ctrl.data.mode, "graphic-text", "mode must reset to graphic-text");
+  assert.equal(parts.ctrl.data.ratio, "3:4", "ratio must reset to 3:4");
+  assert.equal(parts.ctrl.data.count, 1, "count must reset to 1");
+
+  assert.equal(parts.skill.data.fusion, false, "fusion must reset to false");
+  assert.equal(parts.skill.data.style1, "", "style1 must reset to empty");
+  assert.equal(parts.skill.data.style2, "", "style2 must reset to empty");
+  assert.equal(parts.skill.data.layout, "", "layout must reset to empty");
+  assert.equal(parts.skill.data.colors.length, 0, "colors must reset to empty array");
+  assert.equal(parts.skill.data.tones.length, 0, "tones must reset to empty array");
+  assert.equal(parts.skill.data.moods.length, 0, "moods must reset to empty array");
+  assert.equal(parts.skill.data.customMood, "", "customMood must reset to empty");
+  assert.equal(parts.skill.data.whitespace, "balanced", "whitespace must reset to balanced");
+  assert.equal(parts.skill.data.audience, "", "audience must reset to empty");
+  assert.equal(parts.skill.data.businessScene, "", "businessScene must reset to empty");
+  assert.equal(parts.skill.data.negativePrompt, "", "negativePrompt must reset to empty");
+
+  assert.equal(parts.loop.data.batchSeed, "", "batchSeed must reset to empty");
+  assert.equal(parts.loop.data.batchCount, 6, "batchCount must reset to 6");
+  assert.equal(parts.loop.data.batchLayoutMode, "fixed", "batchLayoutMode must reset to fixed");
+  assert.equal(parts.loop.data.batchLayoutReq, "", "batchLayoutReq must reset to empty");
+  assert.equal(parts.loop.data.batchRows.length, 0, "batchRows must reset to empty array");
+  assert.equal(
+    parts.loop.data.promptListText,
+    "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集",
+    "promptListText must reset to default 3 lines"
+  );
+  assert.equal(parts.asset.data.items.length, 0, "asset items must reset to empty");
+  assert.equal(HandrawBatchCreate.planNotice, "", "planNotice must be cleared");
+
+  // Verify totalCount is 3 from 3 promptListText lines
+  const iters = HandrawBatchCreate.resolveIterations();
+  assert.equal(iters.length, 3, "Reset promptListText must resolve to exactly 3 iterations");
+
+  // 2. Check disabled state when busy
+  HandrawBatchCreate.context.busy = true;
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog, busy: true }, {});
+  assert.ok(fakeHost.innerHTML.includes('id="batch-btn-reset" disabled'), "#batch-btn-reset must be disabled when busy");
+  HandrawBatchCreate.context.busy = false;
+
+  // 3. Verify Make-Image source contains #make-image-btn-reset
+  const makeImageSource = fs.readFileSync("demo/assets/studio-make-image.js", "utf8");
+  assert.ok(makeImageSource.includes('id="make-image-btn-reset"'), "studio-make-image.js must render #make-image-btn-reset");
+  assert.ok(makeImageSource.includes("清空后当前表单的所有设置都会恢复默认"), "studio-make-image.js must check confirmation");
+
+  console.log("✓ Requirement 18 Passed: Form Reset (清空表单) in Batch and Make-Image verified");
+}
+
 console.log("\n==========================================");
-console.log("All 18 Studio Batch tests passed successfully!");
+console.log("All 19 Studio Batch tests passed successfully!");
 console.log("==========================================");

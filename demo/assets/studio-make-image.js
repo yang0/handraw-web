@@ -530,9 +530,12 @@
                 <div class="make-image-cost" aria-live="polite">
                   ${this.renderCostHtml()}
                 </div>
-                <button type="button" class="btn btn-primary make-image-btn-run" id="make-image-btn-run" ${busy ? "disabled" : ""}>
-                  ${busy ? "正在生成中…" : "开始生成 (1张)"}
-                </button>
+                <div class="make-image-btn-wrap">
+                  <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
+                  <button type="button" class="btn btn-primary make-image-btn-run" id="make-image-btn-run" ${busy ? "disabled" : ""}>
+                    ${busy ? "正在生成中…" : "开始生成 (1张)"}
+                  </button>
+                </div>
               </div>
 
               <!-- Status text -->
@@ -575,6 +578,7 @@
     bindEvents(root) {
       const p = this.getParts();
       if (!p) return;
+      const busy = Boolean(this.context?.busy);
       const sd = p.skill.data;
       const td = p.text.data;
       const cd = p.ctrl.data;
@@ -883,7 +887,49 @@
         };
       }
 
-      // 8. Run button
+      // 8. Reset form button
+      const resetBtn = root.querySelector("#make-image-btn-reset");
+      if (resetBtn) {
+        resetBtn.onclick = () => {
+          if (busy) return;
+          const ok = typeof window.confirm === "function"
+            ? window.confirm("清空后当前表单的所有设置都会恢复默认，已生成的图片不受影响。确定清空吗？")
+            : true;
+          if (!ok) return;
+
+          cd.mode = "graphic-text";
+          cd.ratio = "3:4";
+          cd.count = 1;
+
+          sd.fusion = false;
+          sd.style1 = "";
+          sd.style2 = "";
+          sd.layout = "";
+          sd.colors = [];
+          sd.tones = [];
+          sd.moods = [];
+          sd.customMood = "";
+          sd.whitespace = "balanced";
+          sd.audience = "";
+          sd.businessScene = "";
+          sd.sc021Type = "";
+          sd.sc022Name = "";
+          sd.sc022Pinyin = "";
+          sd.negativePrompt = "";
+
+          td.text = "";
+          td.subjectHint = "";
+
+          if (ad) ad.items = [];
+          if (this.actions?.ensureAssetItems) {
+            this.actions.ensureAssetItems([]);
+          }
+
+          this.actions?.markDirtyAndRender();
+        };
+      }
+
+      // 9. Run button
       const runBtn = root.querySelector("#make-image-btn-run");
       if (runBtn) {
         runBtn.onclick = () => {
