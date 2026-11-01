@@ -392,7 +392,8 @@ def _handle_replies(handler: Any, topic_id: str, qs: dict[str, list[str]]) -> bo
         "SELECT * FROM curation_resource_topics WHERE topic_id = ?", (topic_id,)
     ).fetchone()
     if mapping:
-        res = resolve_resource(conn, mapping["kind"], mapping["target_id"])
+        res = resolve_resource(conn, mapping["kind"], mapping["target_id"],
+                               viewer=user, include_pending=True)
         if not res:
             raise S.ServiceError("关联资源不存在或不可见", status=404)
 
