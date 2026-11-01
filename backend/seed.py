@@ -689,10 +689,10 @@ def ensure_seeded(db: Database, force_reset: bool = False) -> None:
                 INSERT INTO works (
                     id, author_username, author_name, title, images_json, styles_json,
                     layout_code, sc021_type, color_code, tone_code, ratio, mode, shoot_type,
-                    mood, price, prompt, notes, status, featured, is_new_release, pioneer_rewarded,
+                    mood, price, prompt, prompt_has_secret, notes, status, featured, is_new_release, pioneer_rewarded,
                     cheers, likes, favorites, forks, tips, views, stamp_counts_json,
                     published_at_ms, created_label, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?, 0, ?, ?, ?, ?, 0, ?, '{}', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'published', ?, ?, 0, ?, ?, ?, ?, 0, ?, '{}', ?, ?, ?, ?)
                 """,
                 (
                     wid,
@@ -756,9 +756,9 @@ def ensure_seeded(db: Database, force_reset: bool = False) -> None:
                 INSERT INTO forum_topics (
                     id, category, category_label, pinned, featured, title, author_username, author_name,
                     views, likes, favorites, price, bounty, bounty_status, solved, accepted_reply_id,
-                    images_json, styles_json, layout_code, work_id, recipe_json, summary, locked_body,
+                    images_json, styles_json, layout_code, work_id, recipe_json, recipe_has_secret, summary, locked_body,
                     status, published_at_ms, created_label, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, 0, ?, ?, 'published', ?, ?, ?, ?)
                 """,
                 (
                     tid,

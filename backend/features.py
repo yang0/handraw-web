@@ -149,10 +149,21 @@ def _owned_content(db: Any, user: dict, kind: str, item_id: str) -> dict:
     if row["author_username"] != user["username"]:
         raise ServiceError("只能编辑自己发布的内容",status=403)
     result = dict(row)
-    if kind == "topics":
+    if kind == "works":
+        from .services import get_work_client_prompt
+        safe_p, was_masked = get_work_client_prompt(result, is_admin_route=False)
+        result["prompt"] = safe_p
+        if was_masked:
+            result["promptMasked"] = True
+    elif kind == "topics":
         from .runtime_policy import sanitize_html
         result["summary"] = sanitize_html(result["summary"])
         result["locked_body"] = sanitize_html(result["locked_body"])
+        from .services import get_topic_client_recipe_json
+        safe_recipe, was_masked = get_topic_client_recipe_json(result, is_admin_route=False, conn=db.get_conn())
+        result["recipe_json"] = json.dumps(safe_recipe, ensure_ascii=False) if safe_recipe is not None else ""
+        if was_masked:
+            result["promptMasked"] = True
     return result
 
 
@@ -163,9 +174,13 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
         if sub:
             from .curation import revise, _current_payload
             payload=_current_payload(db.get_conn(),sub['id'],sub['current_revision'])
-            for key in ('title','prompt','notes'):
-                if key in body:
-                    payload[key]=body[key]
+            req_prompt = body.get("prompt")
+            if req_prompt and req_prompt != "[包含资源专属指令，已隐藏]":
+                payload["prompt"] = req_prompt
+            if "title" in body:
+                payload["title"] = body["title"]
+            if "notes" in body:
+                payload["notes"] = body["notes"]
             return revise(db,user,sub['id'],{'payload':payload})
     title = str(body.get("title",row["title"])).strip()
     if not 4 <= len(title) <= 140:
@@ -173,13 +188,26 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
     now = utc_now_iso()
     with db.transaction() as tx:
         if kind == "works":
-            # Stored verbatim: the Skill promises the author's text survives a
-            # round trip, so editing must not trim it.
-            prompt = str(body.get("prompt",row["prompt"]))
-            if not prompt.strip() or len(prompt) > 20000:
-                raise ServiceError("请填写有效的实际提示词（最多 20000 字）")
-            notes = str(body.get("notes",row["notes"]))[:20000]
-            tx.execute("UPDATE works SET title=?,prompt=?,notes=?,updated_at=? WHERE id=? AND author_username=?", (title,prompt,notes,now,item_id,user["username"]))
+            cur_work = tx.execute("SELECT prompt, prompt_has_secret FROM works WHERE id=?", (item_id,)).fetchone()
+            cur_prompt = str(cur_work["prompt"] or "") if cur_work else ""
+            cur_has_sec = cur_work["prompt_has_secret"] if cur_work else 0
+
+            # If author omits prompt, or sends empty string/placeholder, keep stored prompt and flag
+            req_prompt = body.get("prompt")
+            if req_prompt is None or req_prompt == "" or req_prompt == "[包含资源专属指令，已隐藏]":
+                prompt = cur_prompt
+                prompt_has_sec = cur_has_sec
+            else:
+                prompt = str(req_prompt)
+                if not prompt.strip() or len(prompt) > 20000:
+                    raise ServiceError("请填写有效的实际提示词（最多 20000 字）")
+                from .services import check_text_has_secret
+                try:
+                    prompt_has_sec = 1 if check_text_has_secret(prompt, tx) else 0
+                except Exception:
+                    prompt_has_sec = None
+            notes = str(body.get("notes", row["notes"]))[:20000]
+            tx.execute("UPDATE works SET title=?,prompt=?,prompt_has_secret=?,notes=?,updated_at=? WHERE id=? AND author_username=?", (title,prompt,prompt_has_sec,notes,now,item_id,user["username"]))
         else:
             from .runtime_policy import sanitize_html
             summary = sanitize_html(str(body.get("body",row["summary"])))

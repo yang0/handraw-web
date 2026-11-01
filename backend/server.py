@@ -342,6 +342,11 @@ class GenerationReconciler:
                 "UPDATE studio_generations SET prompt_ready = 1 WHERE prompt_ready = 0 AND created_at < ?",
                 (cutoff_iso,),
             )
+        try:
+            from .services import run_blackbox_backfill
+            run_blackbox_backfill(self.db)
+        except Exception:
+            pass
         rows = self.db.get_conn().execute(
             """
             SELECT id, task_id, request_id, status
@@ -389,7 +394,7 @@ class GenerationReconciler:
                     refund_failed_cloud_generation(
                         self.db,
                         generation_id,
-                        str(item.get("error") or item.get("message") or status),
+                        f"云端任务失败 ({status})",
                     )
                     handled += 1
             except Exception:
@@ -1332,6 +1337,7 @@ def build_sitemap_xml(db: Database, origin: str) -> bytes:
 
 
 def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[str, list[str]]) -> bytes:
+    from .services import get_work_client_prompt
     base = origin.rstrip("/")
     conn = db.get_conn()
     view = (qs.get("view", ["discover"])[0] or "discover").strip()
@@ -1342,7 +1348,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         profile_user = ""
 
     work_rows = conn.execute(
-        "SELECT id, title, author_username, author_name, images_json, styles_json, layout_code, price, prompt, notes, cheers "
+        "SELECT id, title, author_username, author_name, images_json, styles_json, layout_code, price, prompt, prompt_has_secret, notes, cheers "
         "FROM works WHERE status = 'published' ORDER BY featured DESC, published_at_ms DESC"
     ).fetchall()
     if not demo_mode_enabled():
@@ -1365,10 +1371,12 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         og_image = first_img if first_img.startswith("http") else f"{base}{first_img}"
         styles_list = json.loads(target_work["styles_json"] or "[]")
         recipe_tags = " / ".join([*styles_list, *([target_work["layout_code"]] if target_work["layout_code"] else [])])
+        from .services import get_work_client_prompt
+        safe_p, _ = get_work_client_prompt(target_work, is_admin_route=False)
         snippet_src = target_work["notes"] or (
             # Paid recipes must not appear in server-rendered HTML: crawlers and
             # anonymous visitors would read them without unlocking.
-            target_work["prompt"][:80] if int(target_work["price"] or 0) <= 0 else ""
+            safe_p[:80] if int(target_work["price"] or 0) <= 0 else ""
         )
         page_title = f"{target_work['title']} (@{target_work['author_name']}) 作品详情与评论 — Handraw 实测作品广场"
         meta_desc = f"由 @{target_work['author_name']} 分享的手绘实测作品《{target_work['title']}》" + (
@@ -1466,7 +1474,8 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         img0 = imgs[0] if imgs else "/images/poster-demo-autumn-equinox.webp"
         styles = json.loads(w["styles_json"] or "[]")
         tags = " · ".join([*styles, *([w["layout_code"]] if w["layout_code"] else [])]) or "自由手绘创作"
-        summary_txt = w["notes"] or (w["prompt"][:80] if int(w["price"] or 0) <= 0 else "")
+        safe_p, _ = get_work_client_prompt(w, is_admin_route=False)
+        summary_txt = w["notes"] or (safe_p[:80] if int(w["price"] or 0) <= 0 else "")
         w_href = f"/?view=work&id={urllib.parse.quote(w['id'])}"
         ssr_cards.append(
             f'<article class="hw-seo-work-item">'
@@ -1973,16 +1982,17 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                                 continue
                     complete_cloud_generation(self.db, gen_id, task_id, local_urls)
                 elif status in ("failed", "error", "cancelled", "canceled"):
-                    refund_failed_cloud_generation(self.db, gen_id, str(item.get("error") or item.get("message") or status))
+                    refund_failed_cloud_generation(self.db, gen_id, f"云端任务失败 ({status})")
                 self._send_json(
                     {
                         "status": status,
                         "images": local_urls,
-                        "message": item.get("error") or item.get("message") or "",
+                        "message": f"任务执行未成功 ({status})" if status in ("failed", "error", "cancelled", "canceled") else "",
                     }
                 )
             except Exception as exc:
-                self._send_json({"status": "error", "message": str(exc)}, status=502)
+                logger.warning("Gateway task polling failed: %s", type(exc).__name__)
+                self._send_json({"status": "error", "message": "云端任务轮询异常"}, status=502)
             return
 
         # Skill-Addon Personal Library Compatibility
@@ -2820,6 +2830,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                         response["recipeId"] = prep["recipeId"]
                     if prep.get("promptTrimmed"):
                         response["promptTrimmed"] = True
+                    if prep.get("promptMasked"):
+                        response["promptMasked"] = True
+                    response["finalPrompt"] = prep.get("finalPrompt") or ""
                     self._send_json(response, status=202 if response["status"] in ("queued", "running") else 200)
                     return
                 if simulation == "fail":
@@ -2835,6 +2848,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                         "taskId": fake_tid,
                         "status": "success",
                         "images": ["/images/poster-demo-autumn-equinox.webp"],
+                        "finalPrompt": prep.get("finalPrompt") or "",
                         "costType": prep["costType"],
                         "creditsSpent": prep["creditsSpent"],
                         "credits": prep["credits"],
@@ -2846,6 +2860,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                         sim_res["recipeId"] = prep["recipeId"]
                     if prep.get("promptTrimmed"):
                         sim_res["promptTrimmed"] = True
+                    if prep.get("promptMasked"):
+                        sim_res["promptMasked"] = True
                     self._send_json(sim_res)
                     return
 
@@ -2871,9 +2887,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                         if resolved:
                             refs.append(resolved)
 
+                grow = self.db.get_conn().execute(
+                    "SELECT prompt FROM studio_generations WHERE id = ?", (gen_id,)
+                ).fetchone()
+                full_prompt = (grow["prompt"] if grow else "") or prep["finalPrompt"]
                 gw_payload: dict[str, Any] = {
                     "client_task_id": task_id,
-                    "prompt": prep["finalPrompt"],
+                    "prompt": full_prompt,
                     "model": prep["model"],
                     "size": size_for_ratio(ratio),
                     "quality": "auto",
@@ -2907,12 +2927,17 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     gw_out["promptTrimmed"] = True
                 self._send_json(gw_out)
             except urllib.error.HTTPError as he:
-                err_body = he.read().decode("utf-8", errors="ignore")
-                err_msg = f"网关返回 HTTP {he.code}: {err_body[:200]}"
+                try:
+                    err_body = he.read().decode("utf-8", errors="ignore")
+                except Exception:
+                    err_body = ""
+                logger.warning("Gateway error: HTTP %s (body length: %s)", he.code, len(err_body))
+                err_msg = f"网关请求失败 (HTTP {he.code})"
                 refund_failed_cloud_generation(self.db, gen_id, err_msg)
                 self._send_json({"ok": False, "refunded": True, "error": f"{err_msg}（已自动退还额度/积分）"}, status=502)
             except Exception as exc:
-                err_msg = str(exc)
+                logger.warning("Gateway exception: %s", type(exc).__name__)
+                err_msg = "生图网关连接失败"
                 refund_failed_cloud_generation(self.db, gen_id, err_msg)
                 self._send_json({"ok": False, "refunded": True, "error": f"{err_msg}（已自动退还额度/积分）"}, status=502)
             return
@@ -3168,6 +3193,11 @@ def main(argv: list[str] | None = None) -> None:
     requested_host = args.host or None
     server = create_channel_server(args.port, "main", db, host=requested_host, demo_mode=args.demo_mode or None)
     reconciler = GenerationReconciler(db).start()
+    try:
+        from .services import start_blackbox_backfill
+        start_blackbox_backfill(db)
+    except Exception:
+        pass
     import_manager = getattr(server, "import_manager", None)
 
     print("Handraw Web single backend running (SQLite WAL + safe bind):")
