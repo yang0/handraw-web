@@ -205,11 +205,11 @@ def admin_get_moderator_console(db: Database, user: dict[str, Any] | None, board
     placeholders = ",".join("?" for _ in active_cats)
     q = (query or "").strip().lower()
 
-    from .resource_discussions import placeholder_topic_sql_filter
-    f_placeholder = placeholder_topic_sql_filter("admin")
+    from .resource_discussions import topic_visibility_sql
+    f_vis = topic_visibility_sql(reply_filter="1=1", admin=True)
     topic_seed_filter, topic_seed_params = _seed_filter("id", "topics")
     topic_rows = conn.execute(
-        f"SELECT * FROM forum_topics WHERE category IN ({placeholders}) AND {f_placeholder} AND {topic_seed_filter} ORDER BY pinned DESC, published_at_ms DESC",
+        f"SELECT * FROM forum_topics WHERE category IN ({placeholders}) AND {f_vis} AND {topic_seed_filter} ORDER BY pinned DESC, published_at_ms DESC",
         (*active_cats, *topic_seed_params),
     ).fetchall()
     topic_map = {r["id"]: r for r in topic_rows}
@@ -534,10 +534,10 @@ def admin_get_dashboard(db: Database, user: dict[str, Any] | None) -> dict[str, 
     override_count = int(conn.execute(f"SELECT COUNT(*) FROM catalog_assets WHERE source_type = 'official_override' AND {asset_seed_filter}", asset_seed_params).fetchone()[0])
 
     # Forum & Bounties
-    from .resource_discussions import placeholder_topic_sql_filter
-    f_placeholder = placeholder_topic_sql_filter("admin")
-    topics_total = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE {f_placeholder} AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
-    topics_published = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE status = 'published' AND {f_placeholder} AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
+    from .resource_discussions import topic_visibility_sql
+    f_vis = topic_visibility_sql(reply_filter="1=1", admin=True)
+    topics_total = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE {f_vis} AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
+    topics_published = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE status = 'published' AND {f_vis} AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
     bounty_row = conn.execute(
         f"SELECT COUNT(*) AS cnt, COALESCE(SUM(bounty), 0) AS escrow FROM forum_topics WHERE status = 'published' AND bounty > 0 AND bounty_status IN ('open', 'escrowed') AND {topic_seed_filter}",
         topic_seed_params,
@@ -1563,9 +1563,9 @@ def admin_list_topics(
     require_staff(user, allow_reviewer=True)
     conn = db.get_conn()
     topic_seed_filter, topic_seed_params = _seed_filter("id", "topics")
-    from .resource_discussions import placeholder_topic_sql_filter
-    f_placeholder = placeholder_topic_sql_filter("admin")
-    sql = f"SELECT * FROM forum_topics WHERE {f_placeholder} AND {topic_seed_filter}"
+    from .resource_discussions import topic_visibility_sql
+    f_vis = topic_visibility_sql(reply_filter="1=1", admin=True)
+    sql = f"SELECT * FROM forum_topics WHERE {f_vis} AND {topic_seed_filter}"
     params: list[Any] = list(topic_seed_params)
     if status and status != "all":
         sql += " AND status = ?"

@@ -12,9 +12,10 @@ Usage (dry run first, always):
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -83,6 +84,20 @@ def find_normalizable_mappings(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def find_affected_exclusive_mappings(conn: sqlite3.Connection) -> int:
+    """Find historical exclusive mappings that have a non-empty author_username (report only)."""
+    row = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM curation_resource_topics m
+        JOIN catalog_assets a ON UPPER(a.code) = UPPER(m.target_id) AND a.kind = m.kind
+        JOIN forum_topics t ON t.id = m.topic_id
+        WHERE a.source_type = 'exclusive' AND TRIM(COALESCE(t.author_username, '')) <> ''
+        """
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
 def plan(conn: sqlite3.Connection) -> tuple[list[tuple[str, str, dict]], list[tuple[str, str, dict]]]:
     """Return (needed_assets, needed_works)."""
     # 1. Official styles & layouts from catalog.json
@@ -144,7 +159,7 @@ def apply(
     conn: sqlite3.Connection,
     needed_assets: list[tuple[str, str, dict]],
     needed_works: list[tuple[str, str, dict]],
-) -> int:
+) -> tuple[int, list[str]]:
     # Normalize single lowercase mappings to uppercase where no uppercase mapping exists yet
     conn.execute(
         """
@@ -160,23 +175,24 @@ def apply(
         """
     )
 
-    created = 0
+    created_topic_ids: list[str] = []
     for kind, target_id, res in needed_assets:
-        ensure_topic(conn, kind, target_id, res, initial_origin="submission")
-        created += 1
+        tid = ensure_topic(conn, kind, target_id, res, initial_origin="submission")
+        created_topic_ids.append(tid)
 
     for kind, target_id, res in needed_works:
-        ensure_topic(conn, kind, target_id, res, initial_origin="submission")
-        created += 1
+        tid = ensure_topic(conn, kind, target_id, res, initial_origin="submission")
+        created_topic_ids.append(tid)
 
     conn.commit()
-    return created
+    return len(created_topic_ids), created_topic_ids
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ensure discussion topics exist for all catalog resources and works.")
     parser.add_argument("--db", required=True, help="Path to the SQLite database")
     parser.add_argument("--apply", action="store_true", help="Write changes (default is a dry run)")
+    parser.add_argument("--manifest", default="", help="Path to write JSON manifest of created topic IDs")
     args = parser.parse_args(argv)
 
     db_path = Path(args.db).resolve()
@@ -194,22 +210,44 @@ def main(argv: list[str] | None = None) -> int:
 
         needed_assets, needed_works = plan(conn)
         norm_mappings = find_normalizable_mappings(conn)
+        affected_exclusives = find_affected_exclusive_mappings(conn)
         total_needed = len(needed_assets) + len(needed_works) + len(norm_mappings)
         print(
             f"待建讨论帖：资源 {len(needed_assets)} 个，作品 {len(needed_works)} 个，待规范化大小写映射 {len(norm_mappings)} 个 (共 {total_needed} 个)"
         )
+        print(f"历史受影响的 exclusive 映射数：{affected_exclusives} 个")
 
         if not args.apply:
             print("干跑完成，未写入。加 --apply 执行。")
             return 0
         if total_needed == 0 and not dup_cases:
             print("所有资源均已建立讨论帖子且映射规范，无需更新。")
+            if args.manifest:
+                manifest_path = Path(args.manifest).resolve()
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_data = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "created_count": 0,
+                    "topic_ids": [],
+                }
+                manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                print(f"已写入回填清单：{manifest_path}")
             return 0
 
         bak_path = backup(conn, db_path)
         print(f"已备份并通过验证：{bak_path}")
-        created = apply(conn, needed_assets, needed_works)
-        print(f"已为 {created} 个资源创建帖子与映射（单项小写映射已规范化为大写）。")
+        created_count, created_topic_ids = apply(conn, needed_assets, needed_works)
+        print(f"已为 {created_count} 个资源创建帖子与映射（单项小写映射已规范化为大写）。")
+        if args.manifest:
+            manifest_path = Path(args.manifest).resolve()
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_data = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "created_count": len(created_topic_ids),
+                "topic_ids": created_topic_ids,
+            }
+            manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"已写入回填清单：{manifest_path}")
         return 0
     finally:
         conn.close()
