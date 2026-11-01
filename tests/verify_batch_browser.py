@@ -171,7 +171,9 @@ def main() -> int:
             assert notice_el.is_visible(), "Plan notice must be visible"
             notice_text = notice_el.inner_text()
             assert "未选图型，已使用默认图型" in notice_text, f"Notice must mention default layout: {notice_text}"
-            assert page.locator(".batch-fixed-layout-card-wrap .make-image-slot-badge").is_visible(), "Layout card badge must be visible with default code"
+            assert page.locator(".batch-fixed-layout-card-wrap .make-image-slot-code").is_visible(), "Layout card code must be visible with default code"
+            # Visual 2 verification: make sure no badge is overlaid on the slot thumbnail image
+            assert page.locator(".batch-fixed-layout-card-wrap .make-image-slot-thumb-wrap .make-image-slot-badge").count() == 0, "No badge should be overlaid on slot image"
             print(f"PASS Scenario 1: Plan notice verified: {notice_text}")
 
             shot1 = ARTIFACT_DIR / "batch_1440_fixed.png"
@@ -217,12 +219,131 @@ def main() -> int:
             assert row_count >= 1, "Planned rows must be populated into table"
             assert page.locator(".batch-plan-notice").is_visible(), "Template fallback notice must be visible"
 
-            # Scenario 3: Row-by-row actions
-            print("Verifying Scenario 3: Row-by-row actions in table...")
-            retry_btn = page.locator("[data-retry-idx='0']")
-            if retry_btn.count() > 0:
-                assert retry_btn.is_visible(), "Retry button must be visible for row"
-            print("PASS Scenario 3: Row actions wired and verified.")
+            # Verify Defect 1 / Feedback 1: AI mode fission button
+            btn_fission_ai = page.locator("#batch-btn-fission-ai")
+            assert btn_fission_ai.is_visible(), "#batch-btn-fission-ai must be visible in AI recommended layouts mode"
+            btn_fission_ai.click()
+            page.wait_for_timeout(500)
+            modal_html = page.locator(".hw-modal-panel").inner_html()
+            assert "追加为新的逐张行" in modal_html, "Fission modal in AI mode must offer 追加为新的逐张行"
+            assert "替换全部逐张行" in modal_html, "Fission modal in AI mode must offer 替换全部逐张行"
+
+            # Click 开始扩写 and verify results appear
+            page.locator("#fission-submit-btn").click()
+            page.wait_for_timeout(1000)
+            assert page.locator("#fission-result-box").is_visible(), "Fission result box must become visible"
+            assert page.locator("#fission-append-btn").is_visible(), "Append button must be visible in result box"
+            assert page.locator("#fission-replace-btn").is_visible(), "Replace button must be visible in result box"
+
+            shot_fission = ARTIFACT_DIR / "batch_1440_fission_modal_ai.png"
+            page.screenshot(path=str(shot_fission), full_page=False)
+            page.evaluate("() => window.HANDRAW_SHARED?.closeModal()")
+            page.wait_for_timeout(300)
+            print("PASS: AI mode fission button, modal button adaptations, and fission execution verified.")
+
+            # Verify Global reference images in '更多设置'
+            assert page.locator("#batch-btn-pick-global-refs").is_visible(), "Global reference pick button must be visible"
+            page.locator("#batch-btn-pick-global-refs").click()
+            page.wait_for_timeout(500)
+            ref_modal_title = page.locator(".hw-modal-header h2, .hw-modal-header h3, #hw-modal-title, .hw-modal-title").first.inner_text()
+            assert "全局参考图" in ref_modal_title or "参考图" in ref_modal_title, f"Modal title should indicate reference image picker: {ref_modal_title}"
+            shot_ref = ARTIFACT_DIR / "batch_1440_ref_picker.png"
+            page.screenshot(path=str(shot_ref), full_page=False)
+            page.evaluate("() => window.HANDRAW_SHARED?.closeModal()")
+            page.wait_for_timeout(300)
+            print("PASS: Global reference picker verified.")
+
+            # Verify Row reference images and '不用全局' toggle in AI mode table
+            assert page.locator(".batch-col-refs").count() > 0, "Reference column must exist in AI table"
+            row_ref_btn = page.locator(".batch-btn-pick-row-refs[data-pick-row-refs-idx='0']")
+            assert row_ref_btn.is_visible(), "Row 0 reference pick button must be visible"
+            row_ref_btn.click()
+            page.wait_for_timeout(500)
+            row_ref_title = page.locator(".hw-modal-header h2, .hw-modal-header h3, #hw-modal-title, .hw-modal-title").first.inner_text()
+            assert "单条参考图" in row_ref_title or "参考图" in row_ref_title, f"Modal title should indicate row reference image picker: {row_ref_title}"
+            page.evaluate("() => window.HANDRAW_SHARED?.closeModal()")
+            page.wait_for_timeout(300)
+            print("PASS: Row reference picker verified.")
+
+            skip_checkbox = page.locator(".batch-row-skip-global-checkbox[data-row-skip-global='0']")
+            assert skip_checkbox.is_visible(), "Skip global checkbox must be visible on row 0"
+            assert page.locator(".batch-ref-skip-badge").count() == 0, "No skip badge before checking"
+            skip_checkbox.check()
+            page.wait_for_timeout(300)
+            assert page.locator(".batch-ref-skip-badge").count() > 0, "Skip badge '仅本条' must appear when checked"
+            print("PASS: '不用全局' toggle and '仅本条' badge verified.")
+
+            # Scenario 3: Row-by-row layout picker & preview lightbox actions
+            print("Verifying Scenario 3: Row-by-row layout picker & preview lightbox actions...")
+            layout_btn = page.locator(".batch-row-layout-btn[data-pick-layout-idx='0']")
+            assert layout_btn.is_visible(), "Row 0 layout button must be visible"
+            thumb_img = layout_btn.locator("img.batch-row-layout-thumb")
+            assert thumb_img.is_visible(), "Row 0 layout button must contain thumbnail image"
+            assert thumb_img.get_attribute("data-hw-src"), "Thumbnail image must have data-hw-src"
+
+            # Click layout button -> shared picker modal opens
+            print("Clicking row 0 layout button...")
+            layout_btn.click()
+            page.wait_for_timeout(600)
+
+            modal_title = page.locator(".hw-modal-header h2, .hw-modal-header h3, #hw-modal-title, .hw-modal-title").first.inner_text()
+            print(f"Opened layout picker modal with title: {modal_title}")
+            assert "图型" in modal_title or "📐" in modal_title, f"Modal title should indicate layout picker: {modal_title}"
+            assert page.locator("#sp-picker-search").is_visible(), "Search input must be visible in picker modal"
+            assert page.locator("#sp-picker-rand").is_visible(), "Random pick button must be visible in picker modal"
+            assert page.locator(".ic-picker-card").count() > 0, "Resource cards must be visible in picker modal"
+
+            shot_picker = ARTIFACT_DIR / "batch_1440_layout_picker.png"
+            page.screenshot(path=str(shot_picker), full_page=False)
+            print(f"Captured screenshot: {shot_picker}")
+
+            # Pick a layout card (e.g. SC-002 or first card with different ID)
+            target_card = page.locator(".ic-picker-card[data-pick-id='SC-002']")
+            if target_card.count() == 0:
+                target_card = page.locator(".ic-picker-card").first
+            picked_id = target_card.get_attribute("data-pick-id")
+            print(f"Picking card {picked_id} in modal...")
+            target_card.click()
+            page.wait_for_timeout(600)
+
+            # Modal must close and row 0 layout button must reflect picked layout
+            assert page.locator("#hw-active-modal, .hw-modal-panel").count() == 0 or not page.locator(".hw-modal-panel").is_visible(), "Modal must close on card pick"
+            updated_code = page.locator(".batch-row-layout-btn[data-pick-layout-idx='0'] .batch-row-layout-code").inner_text()
+            assert updated_code == picked_id, f"Row 0 layout code must be updated to {picked_id}, got {updated_code}"
+            print(f"PASS: Layout picker selected {picked_id} and updated row 0.")
+
+            # Batch preview table thumbnail zoom (Lightbox)
+            print("Verifying batch iteration thumbnail zoom button...")
+            iter_thumb_btn = page.locator(".batch-iter-thumb-btn").first
+            assert iter_thumb_btn.is_visible(), "Iteration thumbnail zoom button must be visible"
+            zoom_src = iter_thumb_btn.get_attribute("data-zoom-src")
+            zoom_title = iter_thumb_btn.get_attribute("data-zoom-title")
+            assert zoom_src, "Zoom button must have data-zoom-src"
+            print(f"Zoom button attributes: title='{zoom_title}', src='{zoom_src}'")
+
+            # Check computed size of thumbnail on desktop: 56x42
+            thumb_box = page.locator(".batch-iter-thumb").first.bounding_box()
+            assert thumb_box and round(thumb_box["width"]) == 56 and round(thumb_box["height"]) == 42, f"Desktop thumb size should be 56x42, got {thumb_box}"
+            print("PASS: Iteration thumbnail size is 56x42 on desktop.")
+
+            # Click thumbnail zoom button to open lightbox
+            iter_thumb_btn.click()
+            page.wait_for_timeout(600)
+
+            lightbox_modal = page.locator(".hw-modal-panel")
+            assert lightbox_modal.is_visible(), "Lightbox modal must be visible on clicking thumb"
+            lightbox_title = page.locator(".hw-modal-header h2, .hw-modal-header h3, #hw-modal-title, .hw-modal-title").first.inner_text()
+            assert "🔍" in lightbox_title or zoom_title in lightbox_title, f"Lightbox title mismatch: {lightbox_title}"
+            assert page.locator(".hw-modal-panel img").is_visible(), "Lightbox image must be visible"
+
+            shot_lightbox = ARTIFACT_DIR / "batch_1440_lightbox.png"
+            page.screenshot(path=str(shot_lightbox), full_page=False)
+            print(f"Captured screenshot: {shot_lightbox}")
+
+            # Close lightbox modal
+            page.evaluate("() => window.HANDRAW_SHARED?.closeModal()")
+            page.wait_for_timeout(300)
+            print("PASS Scenario 3: Shared layout picker and lightbox zoom verified.")
 
             shot2 = ARTIFACT_DIR / "batch_1440_ai_recommended.png"
             page.screenshot(path=str(shot2), full_page=False)
@@ -299,6 +420,13 @@ def main() -> int:
                 inner_w = page_mob.evaluate("() => window.innerWidth")
                 print(f"FAILED: Horizontal overflow detected on 390 mobile in AI mode! scrollWidth={scroll_w}, innerWidth={inner_w}")
                 return 1
+
+            if page_mob.locator(".batch-iter-thumb").count() > 0:
+                thumb_box_mob = page_mob.locator(".batch-iter-thumb").first.bounding_box()
+                if thumb_box_mob:
+                    print(f"Mobile thumbnail size: {thumb_box_mob['width']}x{thumb_box_mob['height']}")
+                    assert round(thumb_box_mob["width"]) == 48 and round(thumb_box_mob["height"]) == 36, f"Mobile thumb size should be 48x36, got {thumb_box_mob}"
+                    print("PASS: Iteration thumbnail size is 48x36 on mobile.")
 
             shot5 = ARTIFACT_DIR / "batch_390_ai_recommended.png"
             page_mob.screenshot(path=str(shot5), full_page=False)

@@ -1613,9 +1613,10 @@
   }
 
   // 1) Picker for Skill Params Node: Single-select (style1/style2/layout) & Multi-select (colors/tones/moods)
-  function openSkillFieldPickerModal(skillNode, field) {
-    if (!skillNode || skillNode.type !== "skill_params") return;
-    const sd = skillNode.data;
+  function openSkillFieldPickerModal(skillNode, field, options = {}) {
+    const hasCustomPick = typeof options?.onPick === "function";
+    if (!hasCustomPick && (!skillNode || skillNode.type !== "skill_params")) return;
+    const sd = (skillNode && skillNode.type === "skill_params") ? skillNode.data : {};
 
     // Dedicated Moods Multi-Select Modal
     if (field === "moods") {
@@ -1694,15 +1695,17 @@
       return;
     }
 
-    const isMulti = field === "colors" || field === "tones";
+    const isMulti = !hasCustomPick && (field === "colors" || field === "tones");
     const selectedSet = new Set(
-      field === "colors"
-        ? sd.colors || []
-        : field === "tones"
-          ? sd.tones || []
-          : sd[field]
-            ? [sd[field]]
-            : []
+      options?.current !== undefined
+        ? (options.current ? [String(options.current).trim()] : [])
+        : (field === "colors"
+            ? sd.colors || []
+            : field === "tones"
+              ? sd.tones || []
+              : sd[field]
+                ? [sd[field]]
+                : [])
     );
 
     const titles = {
@@ -1716,8 +1719,10 @@
     let activeGroup = "ALL";
     let searchQuery = "";
 
+    const modalTitle = (options && options.title) || titles[field] || "选择参数";
+
     S.openModal({
-      title: titles[field] || "选择参数",
+      title: modalTitle,
       sizeClass: "modal-wide",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;min-height:540px;">
@@ -1755,6 +1760,15 @@
         };
 
         root.querySelector("#sp-picker-rand").onclick = () => {
+          if (hasCustomPick) {
+            const pool = (field === "style1" || field === "style2") ? Catalog.styles : Catalog.layouts;
+            const freeFirst = pool.filter((x) => x.tier !== "pro_credit");
+            const src = freeFirst.length > 0 ? freeFirst : pool;
+            const pick = src[Math.floor(Math.random() * src.length)];
+            if (pick) options.onPick(pick.id);
+            S.closeModal();
+            return;
+          }
           pushUndo();
           if (field === "style1" || field === "style2") {
             const pick = Catalog.styles[Math.floor(Math.random() * Catalog.styles.length)];
@@ -1788,6 +1802,11 @@
         };
 
         root.querySelector("#sp-picker-clear").onclick = () => {
+          if (hasCustomPick) {
+            options.onPick("");
+            S.closeModal();
+            return;
+          }
           if (isMulti) {
             selectedSet.clear();
             updateConfirmText();
@@ -1880,14 +1899,13 @@
               const isSel = selectedSet.has(id);
               const proLocked = it.tier === "pro_credit" && !S.isUnlocked(id, it);
               return `
-                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" style="border:1.5px solid ${
+                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" tabindex="0" role="button" aria-label="${esc(id)} ${esc(title)}" style="border:1.5px solid ${
                 isSel ? "var(--vermilion)" : "var(--line-soft)"
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
                 isSel ? "0 0 0 3px rgba(209,75,40,0.18)" : "0 2px 6px rgba(24,20,17,0.04)"
               };">
                   <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
                     <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                    <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:700;">${esc(id)}</span>
                     ${
                       isSel
                         ? `<span style="position:absolute;right:6px;top:6px;padding:2px 7px;border-radius:999px;background:var(--vermilion);color:#fff;font-size:10.5px;font-weight:800;">✓ 已选</span>`
@@ -1896,7 +1914,8 @@
                           : ""
                     }
                   </div>
-                  <div style="padding:8px 10px;">
+                  <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px;">
+                    <div style="font-family:var(--font-mono, monospace);font-size:11px;font-weight:700;color:var(--ink-muted, #786f65);">${esc(id)}</div>
                     <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
                     <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(["style1", "style2", "layout"].includes(field) ? S.resourceGroupLabel(it.group, it.kind) : it.category || it.desc_zh || it.description || "点击选用")}</div>
                   </div>
@@ -1906,7 +1925,7 @@
             .join("");
 
           gridEl.querySelectorAll("[data-pick-id]").forEach((card) => {
-            card.onclick = () => {
+            const onSelect = () => {
               const id = card.getAttribute("data-pick-id");
               const resObj = Catalog.resourceMap.get(id);
               if (resObj && resObj.tier === "pro_credit" && !S.isUnlocked(id, resObj)) {
@@ -1916,6 +1935,12 @@
                   return;
                 }
                 if (!S.unlockWithCredits(id, resObj.unlockCost || 5, `解锁 ${id}`)) return;
+              }
+
+              if (hasCustomPick) {
+                options.onPick(id);
+                S.closeModal();
+                return;
               }
 
               if (isMulti) {
@@ -1932,8 +1957,25 @@
                 toast(`✨ 已选用 ${id}`);
               }
             };
+            card.onclick = onSelect;
+            card.onkeydown = (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect();
+              }
+            };
           });
+
+          if (window.HandrawImageLoader?.scan) {
+            window.HandrawImageLoader.scan(gridEl);
+          }
         }
+
+        gridEl.addEventListener("scroll", () => {
+          if (window.HandrawImageLoader?.scan) {
+            window.HandrawImageLoader.scan(gridEl);
+          }
+        }, { passive: true });
 
         renderGroups();
         renderGrid();
@@ -1943,10 +1985,20 @@
   }
 
   // 2) Asset Picker Modal (我的图库 / 官方示例 / 本地上传 + 角色/道具/场景/其他分类)
-  function openAssetPickerModal(targetOrOptions) {
+  function openAssetPickerModal(targetOrOptions, options = {}) {
     let curItems = [];
     let isNode = false;
     let onCommitCallback = null;
+
+    const opts = (options && typeof options === "object") ? options : {};
+    const maxCount = Math.max(1, Number(opts.maxCount || targetOrOptions?.maxCount) || 6);
+    const modalTitle = opts.title || targetOrOptions?.title || "参考图与图参（我的图库 / 官方示例 / 本地上传）";
+
+    function getMaxCountToast() {
+      if (maxCount === 4) return "全局参考图最多 4 张";
+      if (maxCount === 3) return "单条参考图最多 3 张";
+      return `最多选用 ${maxCount} 张参考图`;
+    }
 
     if (targetOrOptions && targetOrOptions.type === "asset") {
       isNode = true;
@@ -1956,6 +2008,9 @@
         targetOrOptions.data.items = items;
         fullRenderCanvas();
         persistOpenTabs();
+        if (typeof opts.onConfirm === "function") {
+          opts.onConfirm(items);
+        }
         toast(
           items.length
             ? `✓ 已选用 ${items.length} 项图参：${items.map((x) => x.name || x.id).join("、")}`
@@ -1963,11 +2018,16 @@
         );
       };
     } else if (targetOrOptions && typeof targetOrOptions === "object") {
-      const rawRefs = Array.isArray(targetOrOptions.currentRefs)
-        ? targetOrOptions.currentRefs
-        : (Array.isArray(targetOrOptions.references) ? targetOrOptions.references : []);
+      const rawRefs = Array.isArray(targetOrOptions.items)
+        ? targetOrOptions.items
+        : (Array.isArray(targetOrOptions.currentRefs)
+          ? targetOrOptions.currentRefs
+          : (Array.isArray(targetOrOptions.references) ? targetOrOptions.references : []));
       const allItems = getAllAssetItems();
       curItems = rawRefs.map((r, idx) => {
+        if (r && typeof r === "object" && (r.id || r.image)) {
+          return { ...r };
+        }
         const url = typeof r === "string" ? r : (r.url || r.image || "");
         const matched = allItems.find((it) => it.image === url || it.id === r || it.id === r.id);
         if (matched) return { ...matched };
@@ -1981,6 +2041,8 @@
       onCommitCallback = (items) => {
         if (typeof targetOrOptions.onConfirm === "function") {
           targetOrOptions.onConfirm(items);
+        } else if (typeof opts.onConfirm === "function") {
+          opts.onConfirm(items);
         }
       };
     } else {
@@ -1995,7 +2057,7 @@
     let showNewCatForm = false;
 
     S.openModal({
-      title: "参考图与图参（我的图库 / 官方示例 / 本地上传）",
+      title: modalTitle,
       sizeClass: "modal-wide",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;min-height:540px;">
@@ -2039,7 +2101,7 @@
         };
 
         const syncConfirmText = () => {
-          confirmBtn.textContent = `✓ 确认选用 (${selectedMap.size} / 6)`;
+          confirmBtn.textContent = `✓ 确认选用 (${selectedMap.size} / ${maxCount})`;
         };
 
         topTabsEl.querySelectorAll("[data-top-tab]").forEach((btn) => {
@@ -2239,7 +2301,7 @@
                 };
                 CS.customUploads = [newItem, ...(CS.customUploads || []).filter((x) => x.id !== finalId)];
                 writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
-                if (selectedMap.size < 6) {
+                if (selectedMap.size < maxCount) {
                   selectedMap.set(newItem.id, newItem);
                 }
                 syncConfirmText();
@@ -2262,7 +2324,7 @@
             list = list.filter((it) => `${it.id} ${it.name_zh || it.name || ""} ${it.desc_zh || ""}`.toLowerCase().includes(searchQuery));
           }
 
-          countEl.textContent = `共 ${list.length} 项 · 已选 ${selectedMap.size} / 6`;
+          countEl.textContent = `共 ${list.length} 项 · 已选 ${selectedMap.size} / ${maxCount}`;
 
           if (!list.length) {
             gridEl.innerHTML = `<div style="grid-column:1/-1;padding:42px;text-align:center;color:var(--ink-muted);">暂无图参，可通过上方「本地上传」添加图片</div>`;
@@ -2283,7 +2345,6 @@
               };">
                   <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
                     <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                    <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:700;">${esc(id)}</span>
                     <span style="position:absolute;right:6px;top:6px;padding:2px 6px;border-radius:5px;background:${
                       isSel ? "var(--vermilion)" : "rgba(255,252,247,0.92)"
                     };color:${isSel ? "#fff" : "#2b2520"};font-size:10px;font-weight:700;">
@@ -2291,7 +2352,10 @@
                     </span>
                   </div>
                   <div style="padding:8px 10px;display:flex;flex-direction:column;gap:4px;flex:1;justify-content:space-between;">
-                    <div style="font-size:12.5px;font-weight:700;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
+                    <div>
+                      <div style="font-family:var(--font-mono, monospace);font-size:11px;font-weight:700;color:var(--ink-muted, #786f65);">${esc(id)}</div>
+                      <div style="font-size:12.5px;font-weight:700;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
+                    </div>
                     ${!it.builtin ? `
                       <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;" data-stop-card-click="1">
                         <button type="button" class="btn btn-sm" data-del-asset-id="${esc(id)}" style="padding:1px 6px;font-size:10.5px;color:#dc2626;">删除</button>
@@ -2337,8 +2401,8 @@
               if (selectedMap.has(id)) {
                 selectedMap.delete(id);
               } else {
-                if (selectedMap.size >= 6) {
-                  toast("最多选用 6 张参考图");
+                if (selectedMap.size >= maxCount) {
+                  toast(getMaxCountToast());
                   return;
                 }
                 selectedMap.set(id, itemObj);
@@ -3042,7 +3106,9 @@
         const confirmBtn = root.querySelector("#loop-pick-confirm");
 
         const syncConfirm = () => {
-          confirmBtn.textContent = `✓ 确认加入循环 (${selectedOrder.length})`;
+          if (confirmBtn) {
+            confirmBtn.textContent = `✓ 确认加入循环 (${selectedOrder.length})`;
+          }
         };
 
         searchInp.oninput = () => {
@@ -3052,10 +3118,11 @@
         };
 
         root.querySelector("#loop-pick-rand4").onclick = () => {
-          selectedOrder.length = 0;
           const freeFirst = pool.filter((x) => x.tier !== "pro_credit");
-          const source = freeFirst.length >= 4 ? freeFirst : pool;
-          const shuffled = [...source].sort(() => Math.random() - 0.5).slice(0, 4);
+          const source = freeFirst.length > 0 ? freeFirst : pool;
+          selectedOrder.length = 0;
+          const src = source.length >= 4 ? source : pool;
+          const shuffled = [...src].sort(() => Math.random() - 0.5).slice(0, 4);
           shuffled.forEach((x) => selectedOrder.push(x.id));
           syncConfirm();
           renderGrid();
@@ -3067,20 +3134,22 @@
           renderGrid();
         };
 
-        confirmBtn.onclick = () => {
-          pushUndo();
-          if (isStyle) {
-            ld.styleIds = [...selectedOrder];
-            ld.loopMode = "styles";
-          } else {
-            ld.layoutIds = [...selectedOrder];
-            ld.loopMode = "layouts";
-          }
-          S.closeModal();
-          fullRenderCanvas();
-          persistOpenTabs();
-          toast(`🔁 已设置 ${selectedOrder.length} 款循环${isStyle ? "画风" : "图型"}！`);
-        };
+        if (confirmBtn) {
+          confirmBtn.onclick = () => {
+            pushUndo();
+            if (isStyle) {
+              ld.styleIds = [...selectedOrder];
+              ld.loopMode = "styles";
+            } else {
+              ld.layoutIds = [...selectedOrder];
+              ld.loopMode = "layouts";
+            }
+            S.closeModal();
+            fullRenderCanvas();
+            persistOpenTabs();
+            toast(`🔁 已设置 ${selectedOrder.length} 款循环${isStyle ? "画风" : "图型"}！`);
+          };
+        }
 
         function renderGroups() {
           const grpSet = new Set();
@@ -3120,9 +3189,7 @@
             );
           }
 
-          countEl.textContent = `共筛出 ${list.length} 项${
-            selectedOrder.length ? ` · 循环顺序：${selectedOrder.join(" → ")}` : ""
-          }`;
+          countEl.textContent = `共筛出 ${list.length} 项${selectedOrder.length ? ` · 循环顺序：${selectedOrder.join(" → ")}` : ""}`;
 
           gridEl.innerHTML = list
             .slice(0, 180)
@@ -3139,14 +3206,14 @@
               };">
                   <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
                     <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                    <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:700;">${esc(id)}</span>
                     ${
                       isSel
                         ? `<span style="position:absolute;right:6px;top:6px;padding:2px 8px;border-radius:999px;background:#0d9488;color:#fff;font-size:10.5px;font-weight:850;">循环 #${orderIdx + 1}</span>`
                         : ""
                     }
                   </div>
-                  <div style="padding:8px 10px;">
+                  <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px;">
+                    <div style="font-family:var(--font-mono, monospace);font-size:11px;font-weight:700;color:var(--ink-muted, #786f65);">${esc(id)}</div>
                     <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
                     <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(S.resourceGroupLabel(it.group, it.kind))}</div>
                   </div>
@@ -4311,7 +4378,7 @@
             anchorHeading: "",
             style1: iter.style1 || "",
             layout: iter.layout || rec.layoutId || "",
-            assetItems: iter.assetItems || null,
+            assetItems: Array.isArray(iter.assetItems) ? iter.assetItems : null,
             mode,
             ratio: cd.ratio || "3:4",
             theme: iter.theme,
@@ -12912,19 +12979,33 @@
           {
             markDirtyAndRender,
             ensureAssetItems: (items) => ensureBatchAssetNode(items),
-            openAssetPicker: ({ kind, field }) => {
+            openAssetPicker: ({ kind, field, current, onPick, title } = {}) => {
               if (!bp || busy) return;
               const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
-              openSkillFieldPickerModal(bp.skill, targetField);
+              openSkillFieldPickerModal(bp.skill, targetField, { current, onPick, title });
             },
-            openReferencePicker: () => {
+            openReferencePicker: (opts = {}) => {
               if (!bp || busy) return;
               ensureBatchAssetNode();
-              openAssetPickerModal(bp.asset);
+              if (opts && typeof opts === "object" && typeof opts.onConfirm === "function") {
+                openAssetPickerModal(opts, {
+                  maxCount: opts.maxCount || 3,
+                  title: opts.title || "单条参考图（最多 3 张）"
+                });
+              } else {
+                openAssetPickerModal(bp.asset, {
+                  maxCount: 4,
+                  title: "全局参考图（最多 4 张）",
+                  ...opts
+                });
+              }
             },
             openLoopMultiPicker: (kind) => {
               if (!bp || busy) return;
               openLoopMultiPickerModal(bp.loop, kind);
+            },
+            openImageLightbox: (url, title) => {
+              openImageLightbox(url, title);
             },
             openPublish: (node) => {
               openPublishModalForDisplay(node);
@@ -13760,6 +13841,8 @@
   window.HANDRAW_STUDIO.getEngineMode = () => CS.engineMode;
   window.HANDRAW_STUDIO.openReferenceAssetPickerModal = openAssetPickerModal;
   window.HANDRAW_STUDIO.openLoopMultiPickerModal = openLoopMultiPickerModal;
+  window.HANDRAW_STUDIO.openSkillFieldPickerModal = openSkillFieldPickerModal;
+  window.HANDRAW_STUDIO.openImageLightbox = openImageLightbox;
   window.HANDRAW_STUDIO.getBatchParts = getBatchParts;
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   if (window.__HANDRAW_TESTING__ === true) {
