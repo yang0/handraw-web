@@ -198,8 +198,16 @@ def execute_batch_plan(
     valid_layouts = get_valid_layout_map(db)
 
     # Validate fixed layout in fixed mode
+    default_layout_used = False
     if norm_mode == "fixed":
-        if not norm_fixed_layout or norm_fixed_layout not in valid_layouts:
+        if not norm_fixed_layout:
+            default_candidates = [d for d in DEFAULT_TEMPLATE_LAYOUTS if d in valid_layouts]
+            if not default_candidates:
+                default_candidates = list(valid_layouts.keys()) or ["SC-001"]
+            seed_hash = sum(ord(c) for c in clean_seed)
+            norm_fixed_layout = default_candidates[seed_hash % len(default_candidates)]
+            default_layout_used = True
+        elif norm_fixed_layout not in valid_layouts:
             raise ServiceError("指定的固定图型编号不存在或非法", status=400, code="invalid_fixed_layout")
 
     # Rate limiting: 50 requests/day per user
@@ -311,13 +319,19 @@ def execute_batch_plan(
                 if pad_it["subject"] not in {it["subject"] for it in items}:
                     items.append(pad_it)
 
-        return {"ok": True, "items": items[:cnt], "source": "model"}
+        res = {"ok": True, "items": items[:cnt], "source": "model"}
+        if default_layout_used:
+            res["defaultLayoutUsed"] = True
+        return res
 
     # Fallback to deterministic template logic
     template_items = generate_template_batch_plan(
         clean_seed, cnt, norm_mode, norm_fixed_layout, clean_req, valid_layouts
     )
-    return {"ok": True, "items": template_items, "source": "template"}
+    res = {"ok": True, "items": template_items, "source": "template"}
+    if default_layout_used:
+        res["defaultLayoutUsed"] = True
+    return res
 
 
 def handle_batch_plan_post(handler: Any, req_path: str, body: dict[str, Any]) -> bool:

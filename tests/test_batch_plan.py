@@ -168,6 +168,28 @@ class BatchPlanRoutesTests(unittest.TestCase):
         self.assertEqual(st, 400)
         self.assertEqual(res.get("code"), "invalid_fixed_layout")
 
+        # Unselected / empty fixedLayout in fixed mode -> 200 with defaultLayoutUsed: true
+        st, res = self._req(
+            "POST",
+            "/api/studio/batch-plan",
+            {
+                "seed": "治愈咖啡馆的一天",
+                "count": 4,
+                "layoutMode": "fixed",
+                "fixedLayout": "",
+            },
+            cookie=self.cookie,
+        )
+        self.assertEqual(st, 200)
+        self.assertTrue(res.get("ok"))
+        self.assertTrue(res.get("defaultLayoutUsed"))
+        items_def = res.get("items", [])
+        self.assertEqual(len(items_def), 4)
+        def_code = items_def[0]["layout"]
+        self.assertTrue(def_code, "Default layout code must not be empty")
+        for it in items_def:
+            self.assertEqual(it["layout"], def_code)
+
     def test_03_ai_invalid_layout_sanitized(self) -> None:
         """3. AI returned invalid layout codes are discarded and fall back cleanly."""
         fake_ai_response = json.dumps({
