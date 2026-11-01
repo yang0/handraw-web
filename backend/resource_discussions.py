@@ -80,9 +80,7 @@ def ensure_topic(tx,kind,target,resource,initial_origin: str = 'submission'):
 
     category = 'showcase' if kind == 'work' else 'assets'
     category_label = '🎨 晒作品' if kind == 'work' else '画风与图型专区'
-    is_community_asset = (kind != 'work') and (
-        resource.get('source_type') == 'community' or bool(resource.get('author_username'))
-    )
+    is_community_asset = (kind != 'work') and (resource.get('source_type') == 'community')
 
     t_status = 'published'
     t_source = ''
@@ -183,58 +181,77 @@ def _activity(conn,replies,fallback):
     return latest or fallback
 
 
-def is_resource_placeholder(conn: Any, topic_id: str, kind: str) -> bool:
-    """Return True if topic is a resource placeholder (style/layout not submitted via curation_submissions)."""
-    if kind not in ('style', 'layout'):
-        return False
-    is_submission = conn.execute("SELECT 1 FROM curation_submissions WHERE topic_id = ?", (topic_id,)).fetchone()
-    return is_submission is None
+OFFICIAL_TOPIC_MIN_REPLIES = 1
 
 
-def placeholder_topic_sql_filter(kind: str = "public") -> str:
-    """SQL filter ensuring resource placeholder topics appear only when they have replies.
+def official_topic_ids_sql() -> str:
+    """Return SQL subquery selecting topic_ids of official style/layout discussion topics."""
+    return (
+        "SELECT m.topic_id FROM curation_resource_topics m "
+        "WHERE m.kind IN ('style', 'layout') "
+        "AND NOT EXISTS (SELECT 1 FROM curation_submissions s WHERE s.topic_id = m.topic_id) "
+        "AND NOT EXISTS (SELECT 1 FROM catalog_assets a "
+        "WHERE UPPER(a.code) = UPPER(m.target_id) AND a.kind = m.kind "
+        "AND a.source_type = 'community')"
+    )
 
-    kind="public": requires status='published' replies (for boot, creator stats).
-    kind="admin": requires any reply in forum_replies (for admin dashboard, moderator console, admin list).
+
+def topic_visibility_sql(reply_filter: str = "1=1", admin: bool = False) -> str:
+    """Return SQL condition for topic visibility.
+
+    Official style/layout topics are hidden from the topic list unless they have >= OFFICIAL_TOPIC_MIN_REPLIES.
+    When admin=False (public boot & stats), replies must have status='published' and satisfy reply_filter.
+    When admin=True (admin views & stats), replies of any status satisfying reply_filter count.
     """
-    if kind == "public":
-        reply_cond = "id IN (SELECT topic_id FROM forum_replies WHERE status = 'published')"
+    official_sql = official_topic_ids_sql()
+    rf = reply_filter if reply_filter and reply_filter.strip() else "1=1"
+    if admin:
+        reply_cond = (
+            f"(SELECT COUNT(*) FROM forum_replies r "
+            f"WHERE r.topic_id = forum_topics.id AND {rf}) >= {OFFICIAL_TOPIC_MIN_REPLIES}"
+        )
     else:
-        reply_cond = "id IN (SELECT topic_id FROM forum_replies)"
-    return f"(id NOT IN (SELECT topic_id FROM curation_resource_topics WHERE kind IN ('style', 'layout')) OR id IN (SELECT topic_id FROM curation_submissions) OR {reply_cond})"
+        reply_cond = (
+            f"(SELECT COUNT(*) FROM forum_replies r "
+            f"WHERE r.topic_id = forum_topics.id AND r.status = 'published' AND {rf}) >= {OFFICIAL_TOPIC_MIN_REPLIES}"
+        )
+    return f"(id NOT IN ({official_sql}) OR {reply_cond})"
 
 
-def apply_boot(db,payload,current_user):
-    conn=db.get_conn()
+def apply_boot(db, payload, current_user):
+    conn = db.get_conn()
     for w in payload.get('works', []):
         w['comments'] = []
     payload['assetComments'] = {}
-    works={w['id']:w for w in payload.get('works', [])}
-    assets=payload['assetComments']
-    topics={t['id']:t for t in payload.get('topics', [])}
-    hidden=set()
-    payload['discussions']={}
+    works = {w['id']: w for w in payload.get('works', [])}
+    assets = payload['assetComments']
+    topics = {t['id']: t for t in payload.get('topics', [])}
+    hidden = set()
+    payload['discussions'] = {}
     for row in conn.execute('SELECT * FROM curation_resource_topics').fetchall():
-        kind,target,tid,origin=row['kind'],row['target_id'],row['topic_id'],row['origin']
-        norm_target=target.upper().lstrip('#') if kind in ('style','layout') else target
-        topic=topics.get(tid)
+        kind, target, tid, origin = row['kind'], row['target_id'], row['topic_id'], row['origin']
+        norm_target = target.upper().lstrip('#') if kind in ('style', 'layout') else target
+        topic = topics.get(tid)
         if not topic:
             continue
-        replies=topic.get('replies',[])
-        raw=resolve_resource(conn,kind,norm_target)
-        is_placeholder = is_resource_placeholder(conn, tid, kind)
-        if kind=='work':
+        replies = topic.get('replies', [])
+        raw = resolve_resource(conn, kind, norm_target)
+        if kind == 'work':
             if target in works:
-                works[target]['comments']=replies
+                works[target]['comments'] = replies
         else:
-            assets[norm_target]=replies
-            if is_placeholder and not replies:
+            assets[norm_target] = replies
+        if not raw:
+            is_pending_submission = (
+                kind in ('style', 'layout')
+                and conn.execute('SELECT 1 FROM curation_submissions WHERE topic_id = ?', (tid,)).fetchone() is not None
+                and conn.execute('SELECT 1 FROM catalog_assets WHERE (code = ? OR UPPER(code) = ?) AND kind = ?', (norm_target, norm_target, kind)).fetchone() is None
+            )
+            if not is_pending_submission:
                 hidden.add(tid)
-        if is_placeholder and not raw:
-            hidden.add(tid)
-            continue
-        topic['resourceDiscussion']={'kind':kind,'targetId':norm_target,'origin':origin,'commentCount':len(replies)}
-        topic['activityAtMs']=_activity(conn,replies,topic['publishedAtMs'])
-        payload['discussions'][norm_target]={'topicId':tid,'count':len(replies),'origin':origin}
-    payload['topics']=[t for tid,t in topics.items() if tid not in hidden]
+                continue
+        topic['resourceDiscussion'] = {'kind': kind, 'targetId': norm_target, 'origin': origin, 'commentCount': len(replies)}
+        topic['activityAtMs'] = _activity(conn, replies, topic['publishedAtMs'])
+        payload['discussions'][norm_target] = {'topicId': tid, 'count': len(replies), 'origin': origin}
+    payload['topics'] = [t for tid, t in topics.items() if tid not in hidden]
     return payload

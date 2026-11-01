@@ -1629,11 +1629,12 @@ def compute_public_asset_counts_and_creators(conn: sqlite3.Connection) -> tuple[
         if is_new_release_active(w["published_at_ms"]):
             rec["hasFresh"] = True
 
-    from .resource_discussions import placeholder_topic_sql_filter
-    placeholder_filter = placeholder_topic_sql_filter("public")
+    from .resource_discussions import topic_visibility_sql
+    reply_filter, reply_ids = _seed_filter("r.id", "forum_replies")
+    vis_filter = topic_visibility_sql(reply_filter=reply_filter, admin=False)
     for tp in conn.execute(
-        f"SELECT author_username, author_name FROM forum_topics WHERE status = 'published' AND TRIM(author_username) <> '' AND {placeholder_filter} AND {topic_filter}",
-        topic_ids,
+        f"SELECT author_username, author_name FROM forum_topics WHERE status = 'published' AND TRIM(author_username) <> '' AND {topic_filter} AND {vis_filter}",
+        (*topic_ids, *reply_ids),
     ).fetchall():
         rec = ensure_rec(tp["author_username"], tp["author_name"])
         rec["topicsCount"] += 1
@@ -1772,10 +1773,13 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
             }
         )
 
+    from .resource_discussions import topic_visibility_sql
     topic_filter, topic_ids = _seed_filter("id", "topics")
+    reply_seed_filter, reply_seed_ids = _seed_filter("r.id", "forum_replies")
+    topic_vis_filter = topic_visibility_sql(reply_filter=reply_seed_filter, admin=False)
     topic_rows = conn.execute(
-        f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} ORDER BY pinned DESC, published_at_ms DESC",
-        topic_ids,
+        f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} AND {topic_vis_filter} ORDER BY pinned DESC, published_at_ms DESC",
+        (*topic_ids, *reply_seed_ids),
     ).fetchall()
     topics_out = [_serialize_topic(r, replies_by_topic, unlocked_set, current_user, conn=conn) for r in topic_rows]
 
