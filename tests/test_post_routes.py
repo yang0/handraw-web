@@ -881,6 +881,29 @@ class PostRoutesHTTPTests(unittest.TestCase):
             conn.execute("DELETE FROM interactions WHERE target_id IN ('FA-002', 'USR-TEST-01')")
             conn.commit()
 
+    def test_layout_topic_detail_definition_chinese_only(self):
+        conn = self.db.get_conn()
+        row = conn.execute(
+            "SELECT topic_id FROM curation_resource_topics WHERE kind = 'layout' AND target_id = 'SB-001'"
+        ).fetchone()
+        self.assertIsNotNone(row, "Topic for SB-001 must exist")
+        topic_id = str(row["topic_id"])
+
+        status, payload = self._request("GET", f"/api/posts/{topic_id}")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload.get("ok"))
+        mount = payload.get("mount") or {}
+        self.assertEqual(mount.get("kind"), "layout")
+        resource = mount.get("resource") or {}
+        defn = resource.get("definition") or ""
+        self.assertTrue(defn, "Layout SB-001 definition must not be empty")
+        self.assertNotIn("<!-- en -->", defn)
+        self.assertNotIn("<!--en-->", defn)
+        self.assertNotIn("<!-- zh -->", defn)
+        self.assertNotIn("<!--zh-->", defn)
+        self.assertNotIn("Comic storyboard", defn)
+        self.assertIn("漫画分镜", defn)
+
 
 if __name__ == "__main__":
     unittest.main()

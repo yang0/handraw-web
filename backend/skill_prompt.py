@@ -13,6 +13,7 @@ falls back to a deterministic template built from the same data.
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from functools import lru_cache
 from pathlib import Path
@@ -93,6 +94,21 @@ def find_layout(code: str) -> dict | None:
     return None
 
 
+def strip_bilingual_definition(text: str) -> str:
+    """Extract only the Chinese portion from a bilingual definition string.
+
+    Layout definitions in the Skill repository contain bilingual sections marked
+    by ``<!-- zh -->`` and ``<!-- en -->``. This helper extracts the Chinese text
+    before ``<!-- en -->`` and removes any ``<!-- zh -->`` tag.
+    """
+    if not text:
+        return ""
+    parts = re.split(r"<!--\s*en\s*-->", str(text), maxsplit=1, flags=re.IGNORECASE)
+    zh_part = parts[0]
+    cleaned = re.sub(r"<!--\s*zh\s*-->", "", zh_part, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _layout_rules(code: str) -> str:
     """The layout's own composition prompt, from its Markdown definition."""
     layout = find_layout(code)
@@ -103,10 +119,10 @@ def _layout_rules(code: str) -> str:
         path = (base / rel) if rel else None
         if path and path.is_file():
             try:
-                return path.read_text(encoding="utf-8").strip()
+                return strip_bilingual_definition(path.read_text(encoding="utf-8"))
             except OSError:
                 pass
-    return str(layout.get("name") or "")
+    return strip_bilingual_definition(str(layout.get("name") or ""))
 
 
 def build_facts(

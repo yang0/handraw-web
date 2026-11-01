@@ -50,6 +50,61 @@ class SkillPromptTests(unittest.TestCase):
         self.assertIn("SC-021", template)
         self.assertGreater(len(template), len(composed["facts"]["style"]["traits"]))
 
+    def test_strip_bilingual_definition(self):
+        sample = (
+            "<!-- zh -->\n"
+            "漫画分镜。排版：规则网格，所有面板大小接近。\n\n"
+            "<!-- en -->\n"
+            "Comic storyboard. Layout: Regular Grid.\n"
+        )
+        cleaned = skill_prompt.strip_bilingual_definition(sample)
+        self.assertEqual(cleaned, "漫画分镜。排版：规则网格，所有面板大小接近。")
+        self.assertNotIn("<!-- zh -->", cleaned)
+        self.assertNotIn("<!-- en -->", cleaned)
+        self.assertNotIn("Comic storyboard", cleaned)
+
+        # Variations of spacing and case
+        self.assertEqual(skill_prompt.strip_bilingual_definition("<!--zh-->测试<!--en-->test"), "测试")
+        self.assertEqual(skill_prompt.strip_bilingual_definition("<!--  ZH  -->内容<!--  EN  -->content"), "内容")
+        self.assertEqual(skill_prompt.strip_bilingual_definition("无标签中文"), "无标签中文")
+        self.assertEqual(skill_prompt.strip_bilingual_definition(""), "")
+        self.assertEqual(skill_prompt.strip_bilingual_definition(None), "")
+
+    def test_layout_rules_contain_no_english_or_tags(self):
+        if not skill_prompt.skill_available():
+            self.skipTest("hand-drawn style Skill checkout not present")
+        for code in ("SB-001", "SC-001", "SC-021", "EC-001", "IG-001"):
+            rules = skill_prompt._layout_rules(code)
+            self.assertTrue(rules, f"Rules for {code} should not be empty")
+            self.assertNotIn("<!-- en -->", rules)
+            self.assertNotIn("<!--en-->", rules)
+            self.assertNotIn("<!-- zh -->", rules)
+            self.assertNotIn("<!--zh-->", rules)
+
+    def test_catalog_and_editorial_layouts_are_chinese_only(self):
+        import json
+        catalog_path = Path(__file__).resolve().parent.parent / "plugin" / "content" / "catalog.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        layouts = [r for r in catalog["resources"] if r.get("kind") == "layout"]
+        self.assertEqual(len(layouts), 168, "Must contain exactly 168 layout definitions")
+        for item in layouts:
+            defn = item.get("definition", "")
+            self.assertTrue(defn, f"Layout {item['id']} definition must not be empty")
+            self.assertNotIn("<!-- en -->", defn)
+            self.assertNotIn("<!--en-->", defn)
+            self.assertNotIn("<!-- zh -->", defn)
+            self.assertNotIn("<!--zh-->", defn)
+
+        editorial_path = Path(__file__).resolve().parent.parent / "plugin" / "content" / "editorial.json"
+        editorial = json.loads(editorial_path.read_text(encoding="utf-8"))
+        for item in editorial.get("featured_layouts", []):
+            defn = item.get("definition", "")
+            self.assertTrue(defn, f"Featured layout {item['id']} definition must not be empty")
+            self.assertNotIn("<!-- en -->", defn)
+            self.assertNotIn("<!--en-->", defn)
+            self.assertNotIn("<!-- zh -->", defn)
+            self.assertNotIn("<!--zh-->", defn)
+
     def test_without_parameters_the_helper_returns_nothing(self):
         # An empty request must fall back, not invent a prompt.
         self.assertEqual(_compose_skill_prompt("", "", ""), "")

@@ -2,7 +2,13 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from backend.skill_prompt import strip_bilingual_definition
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('skill', type=Path, help='Path to skills/handdraw-style-prompter')
@@ -17,7 +23,7 @@ for item in styles:
     resources.append({'id': number, 'legacy': legacy.get(number, ''), 'kind': 'style', 'name': item['generation_name'], 'group': item['group'], 'description': item['traits'], 'definition': definition, 'image': f'https://img.handraw-style.com/images/individual/{number.split("-")[0]}/{number}.webp'})
 for item in layouts:
     prompt = references / item['prompt_file']
-    resources.append({'id': item['id'], 'kind': 'layout', 'name': item['name'], 'group': item['category'], 'description': '、'.join(item.get('keywords', [])), 'definition': prompt.read_text(encoding='utf-8') if prompt.exists() else '', 'image': item['image'].replace('../../../images/', 'https://img.handraw-style.com/images/')})
+    resources.append({'id': item['id'], 'kind': 'layout', 'name': item['name'], 'group': item['category'], 'description': '、'.join(item.get('keywords', [])), 'definition': strip_bilingual_definition(prompt.read_text(encoding='utf-8')) if prompt.exists() else '', 'image': item['image'].replace('../../../images/', 'https://img.handraw-style.com/images/')})
 for item in colors:
     resources.append({'id': item['id'], 'kind': 'color', 'name': item['name_zh'], 'group': item['category_zh'], 'description': item['quote_zh'], 'definition': item['prompt_zh'], 'image': item['image'].replace('../../../images/', 'https://img.handraw-style.com/images/')})
 target = Path(__file__).resolve().parents[1] / 'plugin/content'

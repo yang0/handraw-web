@@ -14,6 +14,7 @@ from urllib.parse import unquote
 from . import services as S
 from . import resource_discussions as RD
 from . import curation as C
+from .skill_prompt import strip_bilingual_definition
 
 _STAFF = ("admin", "operator", "reviewer")
 _REL_LIMIT = 36
@@ -195,6 +196,8 @@ def _static_resource(item: dict[str, Any], kind: str) -> dict[str, Any]:
     out["status"] = "published"
     out["publishedAtMs"] = int(item.get("publishedAtMs") or 0)
     out['image']=_local_image(out.get('image',''))
+    if kind == "layout" and "definition" in out:
+        out["definition"] = strip_bilingual_definition(out["definition"])
     return out
 
 
@@ -207,6 +210,8 @@ def _asset_resource(row: dict[str, Any], unlocked: set[str], user) -> dict[str, 
     allowed = int(row['unlock_cost'] or 0) <= 0 or row['code'] in unlocked or bool(user and (user.get('role') in _STAFF or user.get('username') == row['author_username']))
     if not allowed:
         definition = ''
+    elif ser.get("kind") == "layout" and definition:
+        definition = strip_bilingual_definition(definition)
     return {
         "id": ser["id"], "kind": ser["kind"], "name": ser["name"],
         "description": ser["description"], "definition": definition,

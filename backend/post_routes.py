@@ -18,6 +18,7 @@ import urllib.parse
 from . import forum_resources
 from . import services as S
 from .resource_discussions import resolve_resource
+from .skill_prompt import strip_bilingual_definition
 
 
 def _is_topic_visible(conn: Any, t_row: Any, user: dict[str, Any] | None = None) -> bool:
@@ -405,7 +406,11 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
                     "image": image,
                     "examples": examples,
                     "description": asset_res.get("description") or "",
-                    "definition": asset_res.get("definition") or "",
+                    "definition": (
+                        strip_bilingual_definition(asset_res.get("definition") or "")
+                        if m_kind == "layout"
+                        else (asset_res.get("definition") or "")
+                    ),
                     "unlocked": bool(asset_res.get("unlocked")),
                     "unlockCost": int(asset_res.get("unlockCost") or 0),
                     "sourceType": source_type,

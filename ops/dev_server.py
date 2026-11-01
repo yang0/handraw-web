@@ -50,8 +50,11 @@ DEV_DATA_FILE = SCRIPT_DIR / "dev_data.json"
 
 # Import Config and Forum Emulators
 sys.path.insert(0, str(SCRIPT_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 from config import get_config
 from local_forum import render_forum_latest, render_forum_topic
+from backend.skill_prompt import strip_bilingual_definition
 
 # Global active configuration
 ACTIVE_CONFIG = get_config("local")
@@ -648,7 +651,7 @@ def resolve_creation_prompt(input_data):
                 'version': '1.0.0',
                 'role': 'layout'
             })
-            definition = (layout.get('definition') or layout.get('description') or '').split('<!-- en -->')[0].replace('<!-- zh -->', '').strip()
+            definition = strip_bilingual_definition(layout.get('definition') or layout.get('description') or '')
             if layout['id'] == 'SC-021':
                 variant = int(input_data.get('layout_variant') or 1)
                 sc021_types = STUDIO_OPTIONS.get('sc021_types', [])
