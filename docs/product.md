@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 最后更新 | 2026-11-01 |
-| 适用版本 | `integration` 分支 `501a1f9` |
+| 适用版本 | `integration` 分支 `183a711`（事实核对基于 `501a1f9`，并已核对 `183a711` 的收录封面改动） |
 | 姊妹文档 | [`architecture.md`](architecture.md)、[`database.md`](database.md) |
 
 **与历史文档的关系**：`docs/` 下带日期的验收、评审、修复报告（如 `acceptance-2026-10-21.md`、`v2-acceptance-2026-10-27.md`、`architecture/*-20261029/30.md`）和 `product-direction.md`、`studio.md`、`功能全景树与缺口清单-本地2.0-2026-10-27.md` 均为阶段性快照，只作留档。产品现状以本文为准；本文与代码冲突时以代码为准，并回来修订本文。
@@ -146,7 +146,7 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 只适用于画风、图型进入官方目录。作品不走收录（`curation.submit` 收到 `kind='work'` 返回 400 `work_publish_moved`）。
 
 ```text
-投稿 POST /api/curation/submissions（1–20 项，每项最多 9 图）
+投稿 POST /api/curation/submissions（1–20 项；每项一张本站上传的正方形封面，另加 0–9 张任意比例示例图）
   → 建投稿帖（assets 版）+ 每项一条 curation_submissions(status=pending)
   → 审核者从 /api/curation/review-queue 领取分配（每项最多 2 个活动分配）
   → 2 票 approve → approved → _publish_approved 写入 catalog_assets，作者获奖励
@@ -249,7 +249,7 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 
 | 项 | 现状 | 依据 |
 |---|---|---|
-| 帖子页作为唯一详情页 | 创始人已决定，`forum-resources.js` 的资源详情视图仍在；`publish_work_direct` 返回的回执 `url` 仍是 `/forum/?view=resource&kind=work&id=` | `curation.py:1912`、`forum-app.js:210` |
+| 帖子页作为唯一详情页 | 创始人已决定，`forum-resources.js` 的资源详情视图仍在；`publish_work_direct` 返回的回执 `url` 仍是 `/forum/?view=resource&kind=work&id=` | `curation.py:1978`、`forum-app.js:210` |
 | 作品双人审核进精选 | 未实现 | design-v1 决策 5 |
 | 关注、楼中楼、自由标签 | 未实现，有意不做 | design-v1 决策 8 |
 | 官方资源评论 `asset_comments` 收敛 | 新评论已统一写 `forum_replies`；历史数据由 `ops/converge_asset_comments.py` 迁移，生产是否执行：待核实 | `resource_discussions.py` |

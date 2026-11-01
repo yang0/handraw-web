@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 最后更新 | 2026-11-01 |
-| 适用版本 | `integration` 分支 `501a1f9` |
+| 适用版本 | `integration` 分支 `183a711`（事实核对基于 `501a1f9`，并已核对 `183a711` 的收录封面改动） |
 | 姊妹文档 | [`product.md`](product.md)、[`database.md`](database.md) |
 
 **与历史文档的关系**：`architecture/decisions-20261029.md`（D-01…D-03）、`architecture/design-v1-20261029.md`（决策 1–10）、`single-backend.md`、`implementation.md` 等记录了决策当时的理由与方案，只作留档。当前结构以本文为准；本文与代码冲突时以代码为准。
@@ -25,6 +25,7 @@
 │ services（认证、boot、经济、作品、论坛、创作台）· admin_services（RBAC、治理）│
 │ curation · resource_discussions · forum_resources · ranking · user_library   │
 │ device_auth · document_importer / parser / structure · skill_prompt         │
+│ media_dims（本站媒体尺寸读取，用于收录封面校验）                             │
 │ ai_client（文本模型） · runtime_policy（安全策略） · security（密码、会话）   │
 └──────────────────────────────────────────────────────────────────────────────┘
                     ▼
@@ -276,4 +277,4 @@ for f in tests/*.cjs; do node "$f" || exit 1; done
 | 10 | 限流与令牌频率计数都在内存 | 重启清零；多进程不共享 | `runtime_policy._AUTH_LIMITERS`、`user_library` |
 | 11 | 外部目录默认值是 Windows 绝对路径 | 新环境必须设置 `HANDRAW_STYLE_IMAGES_DIR`、`HANDRAW_STYLE_SKILL_DIR`、`HANDRAW_STYLE_REFS_DIR` | `config.py`、`skill_paths.py` |
 | 12 | 各环境的 `schema_migrations` 不一致 | `main` 工作区未提交的 `curation_schema.py` 会登记 030 / 031；本分支不认识这两个版本（DDL 均为 IF NOT EXISTS，暂无冲突） | `migrations.py:525` |
-| 13 | 作品回执地址仍指向待移除的资源详情视图 | 移除视图后 Skill 回执链接失效 | `curation.py:1912` |
+| 13 | 作品回执地址仍指向待移除的资源详情视图 | 移除视图后 Skill 回执链接失效 | `curation.py:1978` |

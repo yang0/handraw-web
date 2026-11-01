@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 最后更新 | 2026-11-01 |
-| 适用版本 | `integration` 分支 `501a1f9` |
+| 适用版本 | `integration` 分支 `183a711`（`501a1f9` → `183a711` 未改迁移与表结构） |
 | 引擎 | SQLite 3，WAL，`foreign_keys=ON`，`busy_timeout=10000`（`backend/db.py`） |
 | 默认路径 | `.local/handraw_v2.db`；`HANDRAW_DB_PATH` 或 `HANDRAW_PRIVATE_STORAGE` 覆盖（`backend/config.py`） |
 | 姊妹文档 | [`architecture.md`](architecture.md)、[`product.md`](product.md) |
