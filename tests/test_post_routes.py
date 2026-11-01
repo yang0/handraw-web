@@ -452,6 +452,46 @@ class PostRoutesHTTPTests(unittest.TestCase):
         self.assertEqual(data_admin["mount"]["resource"]["definition"], "SUPER_SECRET_STYLE_DEFINITION")
         self.assertTrue(data_admin["mount"]["resource"]["unlocked"])
 
+    def test_author_exempt_from_paying_own_paid_work_and_asset(self):
+        """Author is exempted from unlock costs when unlocking/using their own paid work or asset."""
+        conn = self.db.get_conn()
+        now = services.utc_now_iso()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO catalog_assets (code, kind, name, description, image_url, definition, author_username, author_name, source_type, status, unlock_cost, published_at_ms, created_at, updated_at)
+            VALUES ('PAID-STYLE-AUTH', 'style', '作者付费画风', '测试', '/img/paid.webp', 'AUTH_SECRET_STYLE_DEF', 'pr_author', '作者', 'community', 'published', 25, 1000, ?, ?)
+            """,
+            (now, now),
+        )
+        conn.commit()
+
+        author_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (self.author["id"],)).fetchone()["balance"])
+
+        # 1. Author unlocks their own paid work (price = 10)
+        res_work = unlock_paid_item(self.db, self.author, "work", self.paid_work_id)
+        self.assertTrue(res_work.get("ok"))
+        self.assertTrue(res_work.get("alreadyUnlocked"), "Author should be recognized as already unlocked for their own work")
+
+        # Balance remains unchanged
+        author_bal_mid = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (self.author["id"],)).fetchone()["balance"])
+        self.assertEqual(author_bal_mid, author_bal_before, "Author must not be charged points for their own paid work")
+
+        # 2. Author unlocks their own paid style asset (unlock_cost = 25)
+        res_asset = unlock_paid_item(self.db, self.author, "asset", "PAID-STYLE-AUTH")
+        self.assertTrue(res_asset.get("ok"))
+        self.assertTrue(res_asset.get("alreadyUnlocked"), "Author should be recognized as already unlocked for their own style asset")
+
+        # Balance remains unchanged
+        author_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (self.author["id"],)).fetchone()["balance"])
+        self.assertEqual(author_bal_after, author_bal_before, "Author must not be charged points for their own paid asset")
+
+        # 3. In Studio generation, author canUse is True without prior purchase
+        from backend import resource_registry
+        res = resource_registry.resolve(conn, "PAID-STYLE-AUTH", viewer=self.author, purpose="generate")
+        self.assertIsNotNone(res)
+        self.assertTrue(res.get("canUse"), "Author can use own paid style directly in Studio without unlocking")
+        self.assertIsNone((res.get("access") or {}).get("hiddenBy"), "Author access not hiddenBy locked")
+
     def test_j9_detail_full_topic_payload(self):
         """J9: GET /api/posts/{topicId} returns serialized topic with summary, images, styles."""
         status, data = self._request("GET", f"/api/posts/{self.fb041_topic_id}")

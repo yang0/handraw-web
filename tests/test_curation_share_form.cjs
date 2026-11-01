@@ -418,9 +418,22 @@ function createHarness() {
               name: "水墨江南",
               definition: "江南水墨烟雨淡彩",
               description: "适合江南园林水乡",
+              unlockCost: 20,
               images: ["/images/style-demo.webp"],
               extraCustomField: "should_be_preserved",
               authorLegacy: "artist_wang"
+            }
+          },
+          {
+            id: "edit_sub_work",
+            kind: "work",
+            payload: {
+              kind: "work",
+              title: "复古海报",
+              prompt: "vintage poster prompt",
+              notes: "work notes",
+              price: 65,
+              images: ["/images/work-demo.webp"]
             }
           }
         ]
@@ -768,7 +781,8 @@ async function runAllTests() {
     assert.equal(subCall.body.items.length, 1, "Items length is 1");
     const itemSubmitted = subCall.body.items[0];
     const itKeys = Object.keys(itemSubmitted).sort();
-    assert.deepEqual(itKeys, ["cover", "definition", "description", "images", "kind", "name"], "Item has cover and examples keys");
+    assert.deepEqual(itKeys, ["cover", "definition", "description", "images", "kind", "name", "unlockCost"], "Item has cover, examples and unlockCost keys");
+    assert.equal(itemSubmitted.unlockCost, 0, "Default unlockCost is 0");
     assert.ok(itemSubmitted.cover.includes("/uploads/uploaded_"), "Cover is set");
     assert.equal(itemSubmitted.images.length, 1, "Examples contains 1 image, excluding cover");
 
@@ -871,8 +885,241 @@ async function runAllTests() {
     console.log("✓ Test 10 Passed: Bidirectional single-item kind switching and data preservation verified.");
   }
 
+  // ==========================================
+  // TEST 11: 画风/图型解锁积分输入、范围夹取 (0–50) 与提交
+  // ==========================================
+  {
+    console.log("\n--- Test 11: 画风/图型解锁积分输入、范围夹取 (0–50) 与提交 ---");
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "style" });
+
+    const costInput = harness.root.querySelector('[data-act="unlockCost"]');
+    assert.ok(costInput, "Should have input[data-act=unlockCost]");
+    assert.equal(costInput.value, "0", "Initial unlockCost should be 0");
+
+    let helpEl = harness.root.querySelector('[data-help-for="unlockCost"]');
+    assert.ok(helpEl && helpEl.textContent.includes("0 为免费公开资源"), "Default 0 help text verified");
+
+    // Input 15
+    costInput.value = "15";
+    costInput.dispatchEvent({ type: "input", target: costInput });
+
+    helpEl = harness.root.querySelector('[data-help-for="unlockCost"]');
+    assert.ok(helpEl, "Help element exists when unlockCost > 0");
+    const helpText = helpEl.textContent;
+    assert.ok(helpText.includes("创作台使用"), "Help text explains Studio use requirement");
+    assert.ok(helpText.includes("定义不会公开显示"), "Help text explains definition is not public");
+    assert.ok(helpText.includes("按比例获得分成"), "Help text explains creator revenue share");
+    assert.ok(helpText.includes("你自己使用不扣积分"), "Help text explicitly notes author exemption");
+
+    // Boundary test: input 60 -> clamped to 50
+    costInput.value = "60";
+    costInput.dispatchEvent({ type: "input", target: costInput });
+    costInput.dispatchEvent({ type: "change", target: costInput });
+    assert.equal(costInput.value, "50", "60 clamped to 50");
+
+    // Boundary test: input -5 -> clamped to 0
+    costInput.value = "-5";
+    costInput.dispatchEvent({ type: "input", target: costInput });
+    costInput.dispatchEvent({ type: "change", target: costInput });
+    assert.equal(costInput.value, "0", "-5 clamped to 0");
+
+    // Set to 15 for submission
+    costInput.value = "15";
+    costInput.dispatchEvent({ type: "input", target: costInput });
+
+    // Fill remaining required fields
+    const nameInput = harness.root.querySelector('[data-act="name"]');
+    nameInput.value = "青绿山水";
+    nameInput.dispatchEvent({ type: "input", target: nameInput });
+
+    const defInput = harness.root.querySelector('[data-act="definition"]');
+    defInput.value = "矿物颜料青绿山水风格";
+    defInput.dispatchEvent({ type: "input", target: defInput });
+
+    const coverInput = harness.root.querySelector('.curation-cover input[data-act="cover"]');
+    coverInput.files = [{ name: "cover.png", type: "image/png" }];
+    coverInput.dispatchEvent({ type: "change", target: coverInput });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const submitBtn = harness.root.querySelector('[data-act="submit"]');
+    submitBtn.click();
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const subCall = harness.apiCalls.find((c) => c.url === "/api/curation/submissions" && c.body.title === "青绿山水");
+    assert.ok(subCall, "Submitted to /api/curation/submissions");
+    assert.equal(subCall.body.items[0].unlockCost, 15, "Payload includes unlockCost: 15");
+
+    console.log("✓ Test 11 Passed: Style/Layout unlockCost (0-50 clamping, helper copy, submit payload) verified.");
+  }
+
+  // ==========================================
+  // TEST 12: 作品定价输入、范围夹取 (0–100) 与提交
+  // ==========================================
+  {
+    console.log("\n--- Test 12: 作品定价输入、范围夹取 (0–100) 与提交 ---");
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "work" });
+
+    const priceInput = harness.root.querySelector('[data-act="price"]');
+    assert.ok(priceInput, "Should have input[data-act=price]");
+    assert.equal(priceInput.value, "0", "Initial price should be 0");
+
+    let helpEl = harness.root.querySelector('[data-help-for="price"]');
+    assert.ok(helpEl && helpEl.textContent.includes("0 为免费公开作品"), "Default 0 work help text verified");
+
+    // Input 80 (must NOT be clamped to 50!)
+    priceInput.value = "80";
+    priceInput.dispatchEvent({ type: "input", target: priceInput });
+
+    helpEl = harness.root.querySelector('[data-help-for="price"]');
+    assert.ok(helpEl, "Help element exists when price > 0");
+    const helpText = helpEl.textContent;
+    assert.ok(helpText.includes("查看提示词与做法（做同款）"), "Help text explains prompt/fork unlock requirement");
+    assert.ok(helpText.includes("提示词与配方不会向未解锁用户公开"), "Help text explains prompt secrecy");
+    assert.ok(helpText.includes("80% 积分实时分账原作者"), "Help text explains creator 80% revenue share");
+    assert.ok(helpText.includes("你自己查看与做同款不扣积分"), "Help text explicitly notes author exemption");
+
+    // Boundary test: input 120 -> clamped to 100
+    priceInput.value = "120";
+    priceInput.dispatchEvent({ type: "input", target: priceInput });
+    priceInput.dispatchEvent({ type: "change", target: priceInput });
+    assert.equal(priceInput.value, "100", "120 clamped to 100");
+
+    // Boundary test: input -10 -> clamped to 0
+    priceInput.value = "-10";
+    priceInput.dispatchEvent({ type: "input", target: priceInput });
+    priceInput.dispatchEvent({ type: "change", target: priceInput });
+    assert.equal(priceInput.value, "0", "-10 clamped to 0");
+
+    // Set to 80 for submission
+    priceInput.value = "80";
+    priceInput.dispatchEvent({ type: "input", target: priceInput });
+
+    // Fill work fields
+    const titleInput = harness.root.querySelector('[data-act="title"]');
+    titleInput.value = "绝密配方水彩画";
+    titleInput.dispatchEvent({ type: "input", target: titleInput });
+
+    const promptInput = harness.root.querySelector('[data-act="prompt"]');
+    promptInput.value = "super secret masterpiece prompt";
+    promptInput.dispatchEvent({ type: "input", target: promptInput });
+
+    const fileInput = harness.root.querySelector('input[data-act="file"]');
+    fileInput.files = [{ name: "work.png", type: "image/png" }];
+    fileInput.dispatchEvent({ type: "change", target: fileInput });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const submitBtn = harness.root.querySelector('[data-act="submit"]');
+    submitBtn.click();
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const workCall = harness.apiCalls.find((c) => c.url === "/api/works" && c.body.title === "绝密配方水彩画");
+    assert.ok(workCall, "Submitted to /api/works");
+    assert.equal(workCall.body.price, 80, "Work payload includes price: 80 (not clamped to 50)");
+
+    console.log("✓ Test 12 Passed: Work price (0-100 clamping, 80 not clamped to 50, helper copy, submit payload) verified.");
+  }
+
+  // ==========================================
+  // TEST 13: 编辑重提回填 unlockCost 与 price
+  // ==========================================
+  {
+    console.log("\n--- Test 13: 编辑重提回填 unlockCost 与 price ---");
+    // 13.1 Style editId: "edit_sub_01" (unlockCost = 20)
+    const harness1 = createHarness();
+    harness1.Curation.render(harness1.root, { editId: "edit_sub_01" });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const costInput = harness1.root.querySelector('[data-act="unlockCost"]');
+    assert.ok(costInput, "unlockCost input present in edit mode");
+    assert.equal(costInput.value, "20", "unlockCost回填原值 20");
+
+    const submitBtn1 = harness1.root.querySelector('[data-act="submit"]');
+    submitBtn1.click();
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const reviseCall1 = harness1.apiCalls.find((c) => c.url.includes("edit_sub_01/revise"));
+    assert.ok(reviseCall1, "Revise API called for edit_sub_01");
+    assert.equal(reviseCall1.body.payload.unlockCost, 20, "unlockCost: 20 preserved in revise payload");
+
+    // 13.2 Work editId: "edit_sub_work" (price = 65)
+    const harness2 = createHarness();
+    harness2.Curation.render(harness2.root, { editId: "edit_sub_work" });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const priceInput = harness2.root.querySelector('[data-act="price"]');
+    assert.ok(priceInput, "price input present in work edit mode");
+    assert.equal(priceInput.value, "65", "price回填原值 65");
+
+    const submitBtn2 = harness2.root.querySelector('[data-act="submit"]');
+    submitBtn2.click();
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const reviseCall2 = harness2.apiCalls.find((c) => c.url.includes("edit_sub_work/revise"));
+    assert.ok(reviseCall2, "Revise API called for edit_sub_work");
+    assert.equal(reviseCall2.body.payload.price, 65, "price: 65 preserved in work revise payload");
+
+    console.log("✓ Test 13 Passed: Revise backfill and re-submission for unlockCost and price verified.");
+  }
+
+  // ==========================================
+  // TEST 14: 往返切换保留与上限夹取
+  // ==========================================
+  {
+    console.log("\n--- Test 14: 往返切换保留与上限夹取 ---");
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "work" });
+
+    const priceInput = harness.root.querySelector('[data-act="price"]');
+    priceInput.value = "35";
+    priceInput.dispatchEvent({ type: "input", target: priceInput });
+
+    // Switch work -> style
+    const styleRadio = harness.root.querySelector('input[data-act="sharekind"][value="style"]');
+    styleRadio.click();
+    styleRadio.dispatchEvent({ type: "change", target: styleRadio });
+
+    const costInput = harness.root.querySelector('[data-act="unlockCost"]');
+    assert.equal(costInput.value, "35", "Price 35 preserved as unlockCost 35");
+
+    // Switch style -> layout
+    const layoutRadio = harness.root.querySelector('input[data-act="sharekind"][value="layout"]');
+    layoutRadio.click();
+    layoutRadio.dispatchEvent({ type: "change", target: layoutRadio });
+
+    assert.equal(harness.root.querySelector('[data-act="unlockCost"]').value, "35", "unlockCost 35 preserved across style/layout");
+
+    // Switch layout -> work
+    const workRadio = harness.root.querySelector('input[data-act="sharekind"][value="work"]');
+    workRadio.click();
+    workRadio.dispatchEvent({ type: "change", target: workRadio });
+
+    assert.equal(harness.root.querySelector('[data-act="price"]').value, "35", "unlockCost 35 preserved as price 35");
+
+    // Set price to 80, then switch to style -> clamped to 50
+    const priceInput2 = harness.root.querySelector('[data-act="price"]');
+    priceInput2.value = "80";
+    priceInput2.dispatchEvent({ type: "input", target: priceInput2 });
+
+    styleRadio.click();
+    styleRadio.dispatchEvent({ type: "change", target: styleRadio });
+
+    assert.equal(harness.root.querySelector('[data-act="unlockCost"]').value, "50", "Price 80 clamped to unlockCost 50 when switched to style");
+
+    console.log("✓ Test 14 Passed: Preserved values and clamping across kind switches verified.");
+  }
+
   console.log("\n=======================================================");
-  console.log("ALL 10 CURATION SHARE FORM TESTS PASSED SUCCESSFULLY!");
+  console.log("ALL 14 CURATION SHARE FORM TESTS PASSED SUCCESSFULLY!");
   console.log("=======================================================\n");
 }
 
