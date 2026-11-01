@@ -14415,6 +14415,11 @@
         renderQuickStart();
       };
 
+      const persistDraft = () => {
+        markActiveTabDirty();
+        persistOpenTabs();
+      };
+
       const ensureAssetNode = (items) => {
         if (!p) return;
         let ast = p.asset;
@@ -14444,6 +14449,7 @@
         statusText
       }, {
         markDirtyAndRender,
+        persistDraft,
         ensureAssetItems: (items) => ensureAssetNode(items),
         openAssetPicker: ({ kind, field, currentId, onSelect }) => {
           if (!p || busy) return;

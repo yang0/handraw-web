@@ -67,6 +67,8 @@ const sandbox = {
   Map,
   JSON,
   RegExp,
+  setTimeout,
+  clearTimeout,
   console
 };
 sandbox.window = sandbox;
@@ -640,4 +642,121 @@ function createTestGraph(options = {}) {
   console.log("✓ Test 9 Passed: Compact Layout Architecture & Data Fidelity verified.");
 }
 
-console.log("\nALL 9 TESTS PASSED SUCCESSFULLY!");
+// ==========================================
+// Test 10: Subject input focus preservation & no re-render on input
+// ==========================================
+{
+  const graph = createTestGraph({ text: "" });
+  const sp = graph.nodes.find((n) => n.type === "skill_params");
+  const txt = graph.nodes.find((n) => n.type === "text_input");
+  const ctrlNode = graph.nodes.find((n) => n.type === "output_control");
+  const parts = { ctrl: ctrlNode, skill: sp, text: txt };
+
+  const controller = new HandrawMakeImage.MakeImageController();
+
+  const subjInput = {
+    id: "make-image-subject",
+    value: "",
+    focus() {
+      sandbox.document.activeElement = this;
+    }
+  };
+  const clearSubjBtn = {
+    id: "make-image-clear-subject",
+    style: { display: "none" },
+    onclick: null
+  };
+  const promptPreview = {
+    id: "make-image-prompt",
+    value: ""
+  };
+
+  const elementsById = new Map([
+    ["make-image-subject", subjInput],
+    ["make-image-clear-subject", clearSubjBtn],
+    ["make-image-prompt", promptPreview]
+  ]);
+
+  const fakeDom = {
+    innerHTML: "",
+    querySelector(sel) {
+      if (sel.startsWith("#")) {
+        return elementsById.get(sel.slice(1)) || null;
+      }
+      return null;
+    },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+    removeEventListener() {}
+  };
+
+  controller.hostElement = fakeDom;
+  controller.context = { parts, graph, catalog: sharedCatalog };
+
+  let markDirtyAndRenderCalls = 0;
+  let persistDraftCalls = 0;
+  const actions = {
+    markDirtyAndRender() {
+      markDirtyAndRenderCalls++;
+      // If markDirtyAndRender is invoked, in the real app renderQuickStart would rebuild the textarea,
+      // which causes activeElement to be lost to body.
+      sandbox.document.activeElement = sandbox.document.body;
+    },
+    persistDraft() {
+      persistDraftCalls++;
+    }
+  };
+
+  sandbox.document.body = { id: "body" };
+  sandbox.document.activeElement = null;
+
+  // Bind events with our controller
+  controller.bindEvents(fakeDom);
+  controller.actions = actions;
+
+  // 1. User focuses the textarea
+  subjInput.focus();
+  assert.equal(sandbox.document.activeElement, subjInput, "Textarea must be focused initially");
+
+  // 2. User types first character: '暖'
+  subjInput.value = "暖";
+  assert.ok(typeof subjInput.oninput === "function", "subjInput must have oninput listener");
+  subjInput.oninput();
+
+  // Assertions after 1 char:
+  assert.equal(markDirtyAndRenderCalls, 0, "markDirtyAndRender must NOT be called on input");
+  assert.equal(sandbox.document.activeElement, subjInput, "document.activeElement must still be the textarea");
+  assert.equal(txt.data.text, "暖", "td.text must update in memory immediately");
+  assert.equal(clearSubjBtn.style.display, "", "Clear subject button must be shown when text is present");
+  assert.match(promptPreview.value, /暖/, "Prompt preview must synchronize immediately");
+
+  // 3. User types full string: '暖阳下的单车少女'
+  const fullText = "暖阳下的单车少女";
+  for (let i = 2; i <= fullText.length; i++) {
+    subjInput.value = fullText.slice(0, i);
+    subjInput.oninput();
+    assert.equal(sandbox.document.activeElement, subjInput, `Focus preserved at char ${i}`);
+    assert.equal(markDirtyAndRenderCalls, 0, `No re-renders while typing char ${i}`);
+  }
+
+  assert.equal(subjInput.value, fullText, "Textarea value must be the full string");
+  assert.equal(txt.data.text, fullText, "Data text must match full string");
+  assert.match(promptPreview.value, /暖阳下的单车少女/, "Prompt preview has full string");
+
+  // 4. User blurs: onchange fires without destroying DOM, and persists draft immediately
+  assert.ok(typeof subjInput.onchange === "function", "subjInput must have onchange listener");
+  subjInput.onchange();
+  assert.equal(markDirtyAndRenderCalls, 0, "markDirtyAndRender must not be called on blur to prevent swallowing clicks on clear/run buttons");
+  assert.ok(persistDraftCalls > 0, "persistDraft must be called on change/blur to persist draft without re-rendering");
+
+  // 5. Clicking clear subject button
+  assert.ok(typeof clearSubjBtn.onclick === "function", "Clear button must have onclick listener");
+  clearSubjBtn.onclick();
+  assert.equal(txt.data.text, "", "Data text cleared");
+  assert.equal(markDirtyAndRenderCalls, 1, "markDirtyAndRender called on clear");
+  assert.equal(sandbox.document.activeElement, subjInput, "Focus returned to textarea on clear");
+
+  console.log("✓ Test 10 Passed: Subject input focus preservation & no re-render on input verified.");
+}
+
+console.log("\nALL 10 TESTS PASSED SUCCESSFULLY!");

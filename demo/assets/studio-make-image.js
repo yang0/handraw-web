@@ -24,6 +24,19 @@
 (function (global) {
   "use strict";
 
+  let activeSubjectFlush = null;
+
+  function ensureBeforeUnloadHandler() {
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function" && !window.__handrawSubjectBeforeUnloadRegistered) {
+      window.__handrawSubjectBeforeUnloadRegistered = true;
+      window.addEventListener("beforeunload", () => {
+        if (typeof activeSubjectFlush === "function") {
+          activeSubjectFlush();
+        }
+      });
+    }
+  }
+
   const OUTPUT_MODE_OPTIONS = [
     { id: "graphic-text", label: "图文", defaultRatio: "3:4" },
     { id: "pure", label: "纯图", defaultRatio: "3:4" },
@@ -349,7 +362,7 @@
                 ${subjectHint ? `<div class="make-image-subject-banner" role="note">换成你的主题 · 原作主题：${esc(subjectHint)}</div>` : ""}
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                   <label for="make-image-subject" class="make-image-field-label" style="margin-bottom:0;">创作主题</label>
-                  ${topicText ? `<button type="button" class="btn btn-sm" id="make-image-clear-subject" style="font-size:11.5px;padding:2px 8px;color:var(--ink-muted);">清空主题</button>` : ""}
+                  <button type="button" class="btn btn-sm" id="make-image-clear-subject" style="font-size:11.5px;padding:2px 8px;color:var(--ink-muted);${topicText ? "" : "display:none;"}">清空主题</button>
                 </div>
                 <textarea
                   id="make-image-subject"
@@ -640,21 +653,57 @@
 
       // 3. Subject input
       const subjInput = root.querySelector("#make-image-subject");
+      const clearSubjBtn = root.querySelector("#make-image-clear-subject");
+
+      const updateClearSubjBtn = () => {
+        if (clearSubjBtn) {
+          clearSubjBtn.style.display = subjInput && subjInput.value ? "" : "none";
+        }
+      };
+
+      let debounceTimer = null;
+      const flushPersist = () => {
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          debounceTimer = null;
+        }
+        if (typeof this.actions?.persistDraft === "function") {
+          this.actions.persistDraft();
+        }
+      };
+
       if (subjInput) {
+        activeSubjectFlush = flushPersist;
+        ensureBeforeUnloadHandler();
         subjInput.oninput = () => {
           td.text = subjInput.value;
-          this.actions?.markDirtyAndRender();
+          this.syncPromptPreview();
+          updateClearSubjBtn();
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            debounceTimer = null;
+            flushPersist();
+          }, 350);
+        };
+        subjInput.onchange = () => {
+          td.text = subjInput.value;
+          this.syncPromptPreview();
+          updateClearSubjBtn();
+          flushPersist();
+        };
+        subjInput.onblur = () => {
+          flushPersist();
         };
       }
 
       // Clear subject button
-      const clearSubjBtn = root.querySelector("#make-image-clear-subject");
       if (clearSubjBtn) {
         clearSubjBtn.onclick = () => {
           td.text = "";
           td.subjectHint = "";
           this.actions?.markDirtyAndRender();
-          if (subjInput) subjInput.focus();
+          const input = this.hostElement?.querySelector("#make-image-subject");
+          if (input) input.focus();
         };
       }
 
