@@ -446,6 +446,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_uploads_user_sha256_active
       AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'));
 """
 
+USER_LIBRARY_NORMALIZE_ASSET_UID_SQL = """
+-- Resolve conflicts: if multiple rows for same user have the same normalized asset_uid, keep the lowest id and clear the others
+UPDATE user_uploads
+SET asset_uid = NULL
+WHERE id IN (
+    SELECT u1.id
+    FROM user_uploads u1
+    JOIN user_uploads u2 ON u1.user_id = u2.user_id
+        AND replace(replace(lower(u1.asset_uid), '{', ''), '}', '') = replace(replace(lower(u2.asset_uid), '{', ''), '}', '')
+        AND u1.id > u2.id
+    WHERE u1.asset_uid IS NOT NULL AND u1.asset_uid NOT LIKE 'UPL-%'
+);
+
+-- Lowercase and strip curly braces from asset_uid
+UPDATE user_uploads
+SET asset_uid = replace(replace(lower(asset_uid), '{', ''), '}', '')
+WHERE asset_uid IS NOT NULL
+  AND (asset_uid <> lower(asset_uid) OR asset_uid LIKE '{%}')
+  AND asset_uid NOT LIKE 'UPL-%';
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -467,4 +488,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (63, "063_generation_visible_prompt_and_snapshot", GENERATION_VISIBLE_PROMPT_AND_SNAPSHOT_SQL),
     (64, "064_user_library_sync", USER_LIBRARY_SYNC_SQL),
     (65, "065_user_library_sha256_exclude_forum", USER_LIBRARY_SHA256_EXCLUDE_FORUM_SQL),
+    (66, "066_user_library_normalize_asset_uid", USER_LIBRARY_NORMALIZE_ASSET_UID_SQL),
 ]

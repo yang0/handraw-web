@@ -113,10 +113,6 @@ def _normalize_uuid(val: Any) -> str | None:
         return None
 
 
-def _is_valid_uuid(val: str) -> bool:
-    """Validate that val conforms to standard UUID format."""
-    return _normalize_uuid(val) is not None
-
 
 def check_token_rate_limit(
     token_key: str,
@@ -224,12 +220,18 @@ def format_asset(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def ensure_user_uploads_synced(db_or_conn: Database | sqlite3.Connection, user_id: int) -> None:
+def ensure_user_uploads_synced(
+    db_or_conn: Database | sqlite3.Connection,
+    user_id: int,
+    *,
+    non_blocking: bool = False,
+) -> bool:
     """Backfill missing sync fields on existing user uploads in non-blocking batches.
 
     If multiple active rows share the same sha256, only the first row is assigned the sha256;
     subsequent duplicate rows retain sha256 = NULL to comply with the unique index while syncing normally.
     File reads and SHA256 computations are executed outside the write transaction to avoid blocking writers.
+    When non_blocking=True, skips backfill immediately if the database write lock is held.
     """
     is_db = isinstance(db_or_conn, Database)
 
@@ -279,7 +281,7 @@ def ensure_user_uploads_synced(db_or_conn: Database | sqlite3.Connection, user_i
             active_rows = tx.execute(
                 """
                 SELECT id, sha256 FROM user_uploads
-                WHERE user_id = ? AND deleted_at IS NULL AND sha256 IS NOT NULL AND sha256 <> '' AND (cat IS NULL OR cat <> 'import')
+                WHERE user_id = ? AND deleted_at IS NULL AND sha256 IS NOT NULL AND sha256 <> '' AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
                 """,
                 (user_id,),
             ).fetchall()
@@ -311,13 +313,40 @@ def ensure_user_uploads_synced(db_or_conn: Database | sqlite3.Connection, user_i
                 )
 
         if is_db:
-            with db_or_conn.transaction() as tx:
-                _apply_batch(tx)
+            if non_blocking:
+                acquired = db_or_conn._write_lock.acquire(blocking=False)
+                if not acquired:
+                    logger.info("Database write lock is busy; skipping non-blocking backfill for user %s", user_id)
+                    return False
+                try:
+                    conn = db_or_conn.get_conn()
+                    conn.execute("PRAGMA busy_timeout=50;")
+                    try:
+                        conn.execute("BEGIN IMMEDIATE;")
+                        try:
+                            _apply_batch(conn)
+                            conn.execute("COMMIT;")
+                        except Exception:
+                            conn.execute("ROLLBACK;")
+                            raise
+                    except sqlite3.OperationalError as exc:
+                        if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                            logger.info("Database locked/busy, skipping non-blocking backfill for user %s", user_id)
+                            return False
+                        raise
+                    finally:
+                        conn.execute("PRAGMA busy_timeout=10000;")
+                finally:
+                    db_or_conn._write_lock.release()
+            else:
+                with db_or_conn.transaction() as tx:
+                    _apply_batch(tx)
         else:
             _apply_batch(db_or_conn)
 
         if len(rows) < 50:
             break
+    return True
 
 
 def _enforce_caller(handler: Any) -> tuple[dict[str, Any], int]:
@@ -582,13 +611,14 @@ def list_assets(
 ) -> dict[str, Any]:
     """List assets incrementally with cursor (excluding cat='import'), or list all undeleted assets."""
     limit = max(1, min(limit, 500))
-    ensure_user_uploads_synced(db, user_id)
+    ensure_user_uploads_synced(db, user_id, non_blocking=True)
     conn = db.get_conn()
     if since is not None:
         rows = conn.execute(
             """
             SELECT * FROM user_uploads
             WHERE user_id = ? AND change_seq > ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
+              AND asset_uid IS NOT NULL AND asset_uid <> '' AND change_seq IS NOT NULL
             ORDER BY change_seq ASC
             LIMIT ?
             """,
@@ -599,6 +629,7 @@ def list_assets(
             """
             SELECT * FROM user_uploads
             WHERE user_id = ? AND deleted_at IS NULL AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
+              AND asset_uid IS NOT NULL AND asset_uid <> '' AND change_seq IS NOT NULL
             ORDER BY change_seq ASC
             LIMIT ?
             """,
@@ -656,7 +687,7 @@ def handle_library_get(handler: Any, req_path: str, qs: dict[str, list[str]]) ->
             return True
         conn = handler.db.get_conn()
         row = conn.execute(
-            "SELECT * FROM user_uploads WHERE user_id = ? AND asset_uid = ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other')) LIMIT 1",
+            "SELECT * FROM user_uploads WHERE user_id = ? AND asset_uid = ? LIMIT 1",
             (user_id, uid),
         ).fetchone()
         if not row or row["deleted_at"] is not None:
@@ -704,248 +735,373 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
     resp_payload: dict[str, Any] | None = None
     resp_status: int = 200
     file_to_unlink: str | None = None
+    newly_created_file: Path | None = None
 
-    with handler.db.transaction() as tx:
-        # Check if UID belongs to another user (UID is globally unique: foreign UID returns 404)
-        foreign = tx.execute(
-            "SELECT user_id FROM user_uploads WHERE asset_uid = ? AND user_id <> ? LIMIT 1",
-            (uid, user_id),
-        ).fetchone()
-        if foreign is not None:
-            resp_payload = {"ok": False, "error": "Asset not found"}
-            resp_status = 404
-        else:
-            existing = tx.execute(
-                "SELECT * FROM user_uploads WHERE user_id = ? AND asset_uid = ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other')) LIMIT 1",
-                (user_id, uid),
+    try:
+        with handler.db.transaction() as tx:
+            # Check if UID belongs to another user (UID is globally unique: foreign UID returns 404)
+            foreign = tx.execute(
+                "SELECT user_id FROM user_uploads WHERE asset_uid = ? AND user_id <> ? LIMIT 1",
+                (uid, user_id),
             ).fetchone()
+            if foreign is not None:
+                resp_payload = {"ok": False, "error": "Asset not found"}
+                resp_status = 404
+            else:
+                existing = tx.execute(
+                    "SELECT * FROM user_uploads WHERE user_id = ? AND asset_uid = ? LIMIT 1",
+                    (user_id, uid),
+                ).fetchone()
 
-            if existing is not None:
-                is_tombstone = existing["deleted_at"] is not None
+                if existing is not None:
+                    is_forum = (existing["cat"] == "forum")
+                    is_tombstone = existing["deleted_at"] is not None
 
-                # 1. If tombstone, check 30-day expiry first
-                if is_tombstone:
-                    dt_str = str(existing["deleted_at"])
-                    try:
-                        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-                        if (datetime.now(timezone.utc) - dt).total_seconds() > 30 * 86400:
-                            raise ServiceError("资产已超过30天恢复期限", status=410, code="asset_expired")
-                    except ValueError:
-                        pass
-
-                # Updating an existing record (either active or tombstone) requires baseRevision
-                if "baseRevision" not in body or body.get("baseRevision") is None:
-                    raise ServiceError("更新资产必须提供 baseRevision", status=400, code="missing_base_revision")
-                try:
-                    base_rev_int = int(body["baseRevision"])
-                except (ValueError, TypeError):
-                    raise ServiceError("invalid_base_revision", status=400, code="invalid_base_revision")
-
-                if base_rev_int != int(existing["revision"]):
-                    resp_payload = {
-                        "ok": False,
-                        "error": "资产版本冲突",
-                        "code": "conflict",
-                        "current": format_asset(existing),
-                    }
-                    resp_status = 409
-                elif is_tombstone:
-                    # Check if reviving collides with an existing active asset's sha256 (library categories only)
-                    target_sha = computed_sha if raw_bytes is not None else existing["sha256"]
-                    dup_active = tx.execute(
-                        """
-                        SELECT asset_uid FROM user_uploads
-                        WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND asset_uid <> ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
-                        LIMIT 1
-                        """,
-                        (user_id, target_sha, uid),
-                    ).fetchone()
-                    if dup_active is not None:
-                        resp_payload = {
-                            "ok": False,
-                            "error": "同一账号下已存在相同内容的活动资产，无法恢复",
-                            "code": "duplicate_image",
-                            "existingUid": dup_active["asset_uid"],
-                        }
-                        resp_status = 409
-                    else:
-                        # Check quota (reviving tombstone adds to active count and storage)
+                    if is_forum and not is_tombstone:
+                        # N1: Adopt forum row into personal library asset
+                        # Forum row did not count toward library quota; adopting it counts as a new item.
                         new_image_len = len(raw_bytes) if raw_bytes is not None else int(existing["bytes"] or 0)
                         check_user_upload_quota(tx, user_id, new_image_len, is_new_item=True)
-                elif raw_bytes is not None:
-                    dup_active = tx.execute(
+
+                        target_sha = computed_sha if raw_bytes is not None else existing["sha256"]
+                        if target_sha:
+                            dup_active = tx.execute(
+                                """
+                                SELECT asset_uid FROM user_uploads
+                                WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND asset_uid <> ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
+                                LIMIT 1
+                                """,
+                                (user_id, target_sha, uid),
+                            ).fetchone()
+                            if dup_active is not None:
+                                resp_payload = {
+                                    "ok": False,
+                                    "error": "同一账号下图库资产内容不可重复",
+                                    "code": "duplicate_image",
+                                    "existingUid": dup_active["asset_uid"],
+                                }
+                                resp_status = 409
+
+                        if resp_payload is None:
+                            old_file_path = existing["file_path"]
+                            old_image_url = existing["image_url"]
+                            if raw_bytes is not None:
+                                uploads_dir = get_uploads_dir()
+                                uploads_dir.mkdir(parents=True, exist_ok=True)
+                                fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
+                                fpath = uploads_dir / fname
+                                fpath.write_bytes(raw_bytes)
+                                newly_created_file = fpath
+                                image_url = f"/uploads/{fname}"
+                                file_path_str = str(fpath)
+                                bytes_count = len(raw_bytes)
+                                final_sha = computed_sha
+
+                                if old_file_path and old_file_path != file_path_str:
+                                    if not is_media_referenced(tx, old_image_url, old_file_path, exclude_upload_id=existing["id"]):
+                                        file_to_unlink = old_file_path
+                            else:
+                                image_url = existing["image_url"]
+                                file_path_str = existing["file_path"]
+                                bytes_count = existing["bytes"]
+                                final_sha = existing["sha256"]
+
+                            c = str(body.get("cat") or "other").strip().lower()
+                            final_cat = c if c in ("characters", "props", "scenes", "other") else "other"
+                            raw_n = body.get("name") if "name" in body else body.get("nameZh")
+                            final_name = str(raw_n or existing["name_zh"] or "自建资产").strip()[:60] or "自建资产"
+                            raw_ne = body.get("nameEn") if "nameEn" in body else body.get("name_en")
+                            final_name_en = str(raw_ne or existing["name_en"] or "").strip()[:100]
+                            raw_l = body.get("localId")
+                            final_local_id = str(raw_l).strip() if raw_l else existing["local_id"]
+
+                            if "tags" in body:
+                                raw_t = body.get("tags")
+                                final_tags = [str(t) for t in raw_t] if isinstance(raw_t, list) else []
+                                tags_json = json.dumps(final_tags, ensure_ascii=False)
+                            else:
+                                tags_json = existing["tags_json"]
+
+                            now = utc_now_iso_ms()
+                            new_seq = next_change_seq(tx)
+
+                            tx.execute(
+                                """
+                                UPDATE user_uploads
+                                SET cat = ?, name_zh = ?, name_en = ?, tags_json = ?, local_id = ?,
+                                    sha256 = ?, revision = 1, change_seq = ?, updated_at = ?, deleted_at = NULL,
+                                    image_url = ?, file_path = ?, bytes = ?, origin = COALESCE(origin, 'web')
+                                WHERE id = ? AND user_id = ?
+                                """,
+                                (
+                                    final_cat, final_name, final_name_en, tags_json, final_local_id,
+                                    final_sha, new_seq, now,
+                                    image_url, file_path_str, bytes_count,
+                                    existing["id"], user_id,
+                                ),
+                            )
+                            updated_row = tx.execute("SELECT * FROM user_uploads WHERE id = ?", (existing["id"],)).fetchone()
+                            res_asset = format_asset(updated_row)
+                            resp_payload = {"ok": True, "deduped": False, "item": res_asset, **res_asset}
+                            resp_status = 200
+
+                    elif is_tombstone:
+                        # 1. If tombstone, check 30-day expiry first
+                        dt_str = str(existing["deleted_at"])
+                        try:
+                            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                            if (datetime.now(timezone.utc) - dt).total_seconds() > 30 * 86400:
+                                raise ServiceError("资产已超过30天恢复期限", status=410, code="asset_expired")
+                        except ValueError:
+                            pass
+
+                        # Updating a tombstone requires baseRevision
+                        if "baseRevision" not in body or body.get("baseRevision") is None:
+                            raise ServiceError("更新资产必须提供 baseRevision", status=400, code="missing_base_revision")
+                        try:
+                            base_rev_int = int(body["baseRevision"])
+                        except (ValueError, TypeError):
+                            raise ServiceError("invalid_base_revision", status=400, code="invalid_base_revision")
+
+                        if base_rev_int != int(existing["revision"]):
+                            resp_payload = {
+                                "ok": False,
+                                "error": "资产版本冲突",
+                                "code": "conflict",
+                                "current": format_asset(existing),
+                            }
+                            resp_status = 409
+                        else:
+                            # Check if reviving collides with an existing active asset's sha256 (library categories only)
+                            target_sha = computed_sha if raw_bytes is not None else existing["sha256"]
+                            dup_active = tx.execute(
+                                """
+                                SELECT asset_uid FROM user_uploads
+                                WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND asset_uid <> ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
+                                LIMIT 1
+                                """,
+                                (user_id, target_sha, uid),
+                            ).fetchone()
+                            if dup_active is not None:
+                                resp_payload = {
+                                    "ok": False,
+                                    "error": "同一账号下已存在相同内容的活动资产，无法恢复",
+                                    "code": "duplicate_image",
+                                    "existingUid": dup_active["asset_uid"],
+                                }
+                                resp_status = 409
+                            else:
+                                # Check quota (reviving tombstone adds to active count and storage)
+                                new_image_len = len(raw_bytes) if raw_bytes is not None else int(existing["bytes"] or 0)
+                                check_user_upload_quota(tx, user_id, new_image_len, is_new_item=True)
+
+                    else:
+                        # Active library asset
+                        has_base_rev = "baseRevision" in body and body.get("baseRevision") is not None
+                        if not has_base_rev:
+                            # Check if idempotent retry (same image / content)
+                            if computed_sha and computed_sha == existing["sha256"]:
+                                res_asset = format_asset(existing)
+                                resp_payload = {"ok": True, "deduped": False, "item": res_asset, **res_asset}
+                                resp_status = 200
+                            else:
+                                raise ServiceError("更新资产必须提供 baseRevision", status=400, code="missing_base_revision")
+                        else:
+                            try:
+                                base_rev_int = int(body["baseRevision"])
+                            except (ValueError, TypeError):
+                                raise ServiceError("invalid_base_revision", status=400, code="invalid_base_revision")
+
+                            if base_rev_int != int(existing["revision"]):
+                                resp_payload = {
+                                    "ok": False,
+                                    "error": "资产版本冲突",
+                                    "code": "conflict",
+                                    "current": format_asset(existing),
+                                }
+                                resp_status = 409
+                            elif raw_bytes is not None:
+                                dup_active = tx.execute(
+                                    """
+                                    SELECT asset_uid FROM user_uploads
+                                    WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND asset_uid <> ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
+                                    LIMIT 1
+                                    """,
+                                    (user_id, computed_sha, uid),
+                                ).fetchone()
+                                if dup_active is not None:
+                                    resp_payload = {
+                                        "ok": False,
+                                        "error": "同一账号下图库资产内容不可重复",
+                                        "code": "duplicate_image",
+                                        "existingUid": dup_active["asset_uid"],
+                                    }
+                                    resp_status = 409
+                                else:
+                                    check_user_upload_quota(
+                                        tx,
+                                        user_id,
+                                        len(raw_bytes),
+                                        is_new_item=False,
+                                        existing_bytes=int(existing["bytes"] or 0),
+                                    )
+
+                    # If no conflict so far and not already handled in forum adoption or idempotent retry, perform update
+                    if resp_payload is None:
+                        old_file_path = existing["file_path"]
+                        old_image_url = existing["image_url"]
+                        if raw_bytes is not None:
+                            uploads_dir = get_uploads_dir()
+                            uploads_dir.mkdir(parents=True, exist_ok=True)
+                            fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
+                            fpath = uploads_dir / fname
+                            fpath.write_bytes(raw_bytes)
+                            newly_created_file = fpath
+                            image_url = f"/uploads/{fname}"
+                            file_path_str = str(fpath)
+                            bytes_count = len(raw_bytes)
+                            final_sha = computed_sha
+
+                            # Mark unreferenced old file for deletion after commit
+                            if old_file_path and old_file_path != file_path_str:
+                                if not is_media_referenced(tx, old_image_url, old_file_path, exclude_upload_id=existing["id"]):
+                                    file_to_unlink = old_file_path
+                        else:
+                            image_url = existing["image_url"]
+                            file_path_str = existing["file_path"]
+                            bytes_count = existing["bytes"]
+                            final_sha = existing["sha256"]
+
+                        if "name" in body or "nameZh" in body:
+                            raw_n = body.get("name") if "name" in body else body.get("nameZh")
+                            final_name = str(raw_n or "").strip()[:60]
+                            if not final_name:
+                                final_name = "自建资产"
+                        else:
+                            final_name = existing["name_zh"]
+
+                        if "nameEn" in body or "name_en" in body:
+                            raw_ne = body.get("nameEn") if "nameEn" in body else body.get("name_en")
+                            final_name_en = str(raw_ne or "").strip()[:100]
+                        else:
+                            final_name_en = existing["name_en"]
+
+                        if "tags" in body:
+                            raw_t = body.get("tags")
+                            final_tags = [str(t) for t in raw_t] if isinstance(raw_t, list) else []
+                            tags_json = json.dumps(final_tags, ensure_ascii=False)
+                        else:
+                            tags_json = existing["tags_json"]
+
+                        if "cat" in body:
+                            c = str(body.get("cat") or "other").strip().lower()
+                            final_cat = c if c in ("characters", "props", "scenes", "other") else "other"
+                        else:
+                            final_cat = existing["cat"]
+
+                        if "localId" in body:
+                            raw_l = body.get("localId")
+                            final_local_id = str(raw_l).strip() if raw_l else None
+                        else:
+                            final_local_id = existing["local_id"]
+
+                        now = utc_now_iso_ms()
+                        new_seq = next_change_seq(tx)
+                        new_revision = int(existing["revision"]) + 1
+
+                        tx.execute(
+                            """
+                            UPDATE user_uploads
+                            SET local_id = ?, cat = ?, name_zh = ?, name_en = ?, tags_json = ?,
+                                sha256 = ?, revision = ?, change_seq = ?, updated_at = ?, deleted_at = NULL,
+                                image_url = ?, file_path = ?, bytes = ?
+                            WHERE id = ? AND user_id = ?
+                            """,
+                            (
+                                final_local_id, final_cat, final_name, final_name_en, tags_json,
+                                final_sha, new_revision, new_seq, now,
+                                image_url, file_path_str, bytes_count,
+                                existing["id"], user_id,
+                            ),
+                        )
+                        updated_row = tx.execute("SELECT * FROM user_uploads WHERE id = ?", (existing["id"],)).fetchone()
+                        res_asset = format_asset(updated_row)
+                        resp_payload = {"ok": True, "deduped": False, "item": res_asset, **res_asset}
+                        resp_status = 200
+
+                else:
+                    # Creating a brand new asset: requires dataUrl
+                    if not data_url or raw_bytes is None:
+                        raise ServiceError("创建资产必须提供 dataUrl", status=400, code="missing_data_url")
+
+                    # Deduplication check against active assets for this user (library categories only)
+                    existing_dup = tx.execute(
                         """
-                        SELECT asset_uid FROM user_uploads
-                        WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND asset_uid <> ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
+                        SELECT * FROM user_uploads
+                        WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
                         LIMIT 1
                         """,
-                        (user_id, computed_sha, uid),
+                        (user_id, computed_sha),
                     ).fetchone()
-                    if dup_active is not None:
+                    if existing_dup is not None:
+                        res_dup = format_asset(existing_dup)
                         resp_payload = {
-                            "ok": False,
-                            "error": "同一账号下图库资产内容不可重复",
-                            "code": "duplicate_image",
-                            "existingUid": dup_active["asset_uid"],
+                            "ok": True,
+                            "deduped": True,
+                            "requestedUid": uid,
+                            "uid": res_dup["uid"],
+                            "item": res_dup,
+                            **res_dup,
                         }
-                        resp_status = 409
+                        resp_status = 200
                     else:
-                        check_user_upload_quota(
-                            tx,
-                            user_id,
-                            len(raw_bytes),
-                            is_new_item=False,
-                            existing_bytes=int(existing["bytes"] or 0),
-                        )
+                        # Check unified quotas (500 assets, 1 GB storage)
+                        check_user_upload_quota(tx, user_id, len(raw_bytes), is_new_item=True)
 
-                # If no conflict so far, perform update
-                if resp_payload is None:
-                    old_file_path = existing["file_path"]
-                    old_image_url = existing["image_url"]
-                    if raw_bytes is not None:
                         uploads_dir = get_uploads_dir()
                         uploads_dir.mkdir(parents=True, exist_ok=True)
                         fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                         fpath = uploads_dir / fname
                         fpath.write_bytes(raw_bytes)
+                        newly_created_file = fpath
                         image_url = f"/uploads/{fname}"
-                        file_path_str = str(fpath)
-                        bytes_count = len(raw_bytes)
-                        final_sha = computed_sha
 
-                        # Mark unreferenced old file for deletion after commit
-                        if old_file_path and old_file_path != file_path_str:
-                            if not is_media_referenced(tx, old_image_url, old_file_path, exclude_upload_id=existing["id"]):
-                                file_to_unlink = old_file_path
-                    else:
-                        image_url = existing["image_url"]
-                        file_path_str = existing["file_path"]
-                        bytes_count = existing["bytes"]
-                        final_sha = existing["sha256"]
+                        name = str(body.get("name") or body.get("nameZh") or "").strip()[:60] or "自建资产"
+                        name_en = str(body.get("nameEn") or body.get("name_en") or "").strip()[:100]
+                        local_id = str(body.get("localId") or "").strip() or None
+                        cat_in = str(body.get("cat") or "other").strip().lower()
+                        cat = cat_in if cat_in in ("characters", "props", "scenes", "other") else "other"
+                        tags = body.get("tags")
+                        tags_list = [str(t) for t in tags] if isinstance(tags, list) else []
+                        tags_json = json.dumps(tags_list, ensure_ascii=False)
 
-                    if "name" in body or "nameZh" in body:
-                        raw_n = body.get("name") if "name" in body else body.get("nameZh")
-                        final_name = str(raw_n or "").strip()[:60]
-                        if not final_name:
-                            final_name = "自建资产"
-                    else:
-                        final_name = existing["name_zh"]
-
-                    if "nameEn" in body or "name_en" in body:
-                        raw_ne = body.get("nameEn") if "nameEn" in body else body.get("name_en")
-                        final_name_en = str(raw_ne or "").strip()[:100]
-                    else:
-                        final_name_en = existing["name_en"]
-
-                    if "tags" in body:
-                        raw_t = body.get("tags")
-                        final_tags = [str(t) for t in raw_t] if isinstance(raw_t, list) else []
-                        tags_json = json.dumps(final_tags, ensure_ascii=False)
-                    else:
-                        tags_json = existing["tags_json"]
-
-                    if "cat" in body:
-                        c = str(body.get("cat") or "other").strip().lower()
-                        final_cat = c if c in ("characters", "props", "scenes", "other") else "other"
-                    else:
-                        final_cat = existing["cat"]
-
-                    if "localId" in body:
-                        raw_l = body.get("localId")
-                        final_local_id = str(raw_l).strip() if raw_l else None
-                    else:
-                        final_local_id = existing["local_id"]
-
-                    now = utc_now_iso_ms()
-                    new_seq = next_change_seq(tx)
-                    new_revision = int(existing["revision"]) + 1
-
-                    tx.execute(
-                        """
-                        UPDATE user_uploads
-                        SET local_id = ?, cat = ?, name_zh = ?, name_en = ?, tags_json = ?,
-                            sha256 = ?, revision = ?, change_seq = ?, updated_at = ?, deleted_at = NULL,
-                            image_url = ?, file_path = ?, bytes = ?
-                        WHERE id = ? AND user_id = ?
-                        """,
-                        (
-                            final_local_id, final_cat, final_name, final_name_en, tags_json,
-                            final_sha, new_revision, new_seq, now,
-                            image_url, file_path_str, bytes_count,
-                            existing["id"], user_id,
-                        ),
-                    )
-                    updated_row = tx.execute("SELECT * FROM user_uploads WHERE id = ?", (existing["id"],)).fetchone()
-                    res_asset = format_asset(updated_row)
-                    resp_payload = {"ok": True, "deduped": False, "item": res_asset, **res_asset}
-                    resp_status = 200
-
-            else:
-                # Creating a brand new asset: requires dataUrl
-                if not data_url or raw_bytes is None:
-                    raise ServiceError("创建资产必须提供 dataUrl", status=400, code="missing_data_url")
-
-                # Deduplication check against active assets for this user (library categories only)
-                existing_dup = tx.execute(
-                    """
-                    SELECT * FROM user_uploads
-                    WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
-                    LIMIT 1
-                    """,
-                    (user_id, computed_sha),
-                ).fetchone()
-                if existing_dup is not None:
-                    res_dup = format_asset(existing_dup)
-                    resp_payload = {
-                        "ok": True,
-                        "deduped": True,
-                        "requestedUid": uid,
-                        "uid": res_dup["uid"],
-                        "item": res_dup,
-                        **res_dup,
-                    }
-                    resp_status = 200
-                else:
-                    # Check unified quotas (500 assets, 1 GB storage)
-                    check_user_upload_quota(tx, user_id, len(raw_bytes), is_new_item=True)
-
-                    uploads_dir = get_uploads_dir()
-                    uploads_dir.mkdir(parents=True, exist_ok=True)
-                    fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
-                    fpath = uploads_dir / fname
-                    fpath.write_bytes(raw_bytes)
-                    image_url = f"/uploads/{fname}"
-
-                    name = str(body.get("name") or body.get("nameZh") or "").strip()[:60] or "自建资产"
-                    name_en = str(body.get("nameEn") or body.get("name_en") or "").strip()[:100]
-                    local_id = str(body.get("localId") or "").strip() or None
-                    cat_in = str(body.get("cat") or "other").strip().lower()
-                    cat = cat_in if cat_in in ("characters", "props", "scenes", "other") else "other"
-                    tags = body.get("tags")
-                    tags_list = [str(t) for t in tags] if isinstance(tags, list) else []
-                    tags_json = json.dumps(tags_list, ensure_ascii=False)
-
-                    now = utc_now_iso_ms()
-                    up_id = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
-                    new_seq = next_change_seq(tx)
-
-                    tx.execute(
-                        """
-                        INSERT INTO user_uploads (
-                            id, user_id, cat, name_zh, desc_zh, image_url, file_path, bytes, created_at,
-                            asset_uid, local_id, name_en, tags_json, sha256, revision, change_seq, updated_at, deleted_at, origin
+                        now = utc_now_iso_ms()
+                        up_id = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
+                        new_seq = next_change_seq(tx)
+                        tx.execute(
+                            """
+                            INSERT INTO user_uploads (
+                                id, user_id, cat, name_zh, desc_zh, image_url, file_path, bytes, created_at,
+                                asset_uid, local_id, name_en, tags_json, sha256, revision, change_seq, updated_at, deleted_at, origin
+                            )
+                            VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?)
+                            """,
+                            (
+                                up_id, user_id, cat, name, image_url, str(fpath), len(raw_bytes), now,
+                                uid, local_id, name_en, tags_json, computed_sha, new_seq, now, origin,
+                            ),
                         )
-                        VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?)
-                        """,
-                        (
-                            up_id, user_id, cat, name, image_url, str(fpath), len(raw_bytes), now,
-                            uid, local_id, name_en, tags_json, computed_sha, new_seq, now, origin,
-                        ),
-                    )
-                    new_row = tx.execute("SELECT * FROM user_uploads WHERE id = ?", (up_id,)).fetchone()
-                    res_asset = format_asset(new_row)
-                    resp_payload = {"ok": True, "deduped": False, "item": res_asset, **res_asset}
-                    resp_status = 201
+                        new_row = tx.execute("SELECT * FROM user_uploads WHERE id = ?", (up_id,)).fetchone()
+                        res_asset = format_asset(new_row)
+                        resp_payload = {"ok": True, "deduped": False, "item": res_asset, **res_asset}
+                        resp_status = 201
+    except Exception:
+        if newly_created_file is not None:
+            try:
+                newly_created_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise
 
     # Cleanup old file if marked for unlinking (only executed if commit succeeded!)
     if file_to_unlink:
