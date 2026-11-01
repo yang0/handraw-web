@@ -28,7 +28,7 @@ def find_topic_source(db, topic_id):
     return dict(row) if row else None
 
 
-def resolve_resource(conn,kind,target):
+def resolve_resource(conn,kind,target,viewer=None,include_pending=False):
     if kind=='work':
         row=conn.execute("SELECT * FROM works WHERE id=? AND status='published'",(target,)).fetchone()
         return dict(row) if row and str(row['prompt'] or '').strip() and (S.is_demo_mode() or target not in S.seed_ids('works')) else None
@@ -39,7 +39,60 @@ def resolve_resource(conn,kind,target):
     if row:
         return dict(row) if row['status']=='published' and (S.is_demo_mode() or target_norm not in S.seed_ids('assets')) else None
     item=static_catalog().get(target_norm)
-    return item if item and item['kind']==kind else None
+    if item and item['kind']==kind:
+        return item
+    if include_pending:
+        return _pending_submission_resource(conn, kind, target_norm, viewer)
+    return None
+
+
+def _pending_submission_resource(conn, kind, target_norm, viewer=None):
+    """A resource that exists only as a submission still owns its topic.
+
+    Without this the author is sent to their brand new topic right after
+    publishing and the detail endpoint answers 404, so publishing looks broken
+    until a moderator approves the entry.
+    """
+    row = conn.execute(
+        "SELECT s.owner_username, s.status, v.payload_json "
+        "FROM curation_submissions s "
+        "JOIN curation_versions v ON v.submission_id = s.id AND v.revision = s.current_revision "
+        "WHERE UPPER(s.target_id) = ? AND s.kind = ? AND s.status <> 'withdrawn' "
+        "ORDER BY s.updated_at DESC LIMIT 1",
+        (target_norm, kind),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        payload = json.loads(row["payload_json"] or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    owner = str(row["owner_username"] or "")
+    viewer_name = ""
+    if isinstance(viewer, dict):
+        viewer_name = str(viewer.get("username") or "")
+    can_read_definition = bool(viewer_name) and viewer_name == owner
+    cover = payload.get("cover") or payload.get("image") or ""
+    images = payload.get("images") or []
+    if not cover and images:
+        first = images[0]
+        cover = first.get("url", "") if isinstance(first, dict) else str(first or "")
+    return {
+        "id": target_norm,
+        "name": payload.get("name") or target_norm,
+        "description": payload.get("description") or "",
+        "definition": (payload.get("definition") or "") if can_read_definition else "",
+        "image": sanitize_media_url(cover),
+        "unlockCost": 0,
+        "sourceType": "community",
+        "author": owner,
+        "authorName": owner,
+        "status": "pending",
+        "pending": True,
+        "definitionHidden": not can_read_definition,
+    }
 
 
 def ensure_topic(tx,kind,target,resource,initial_origin: str = 'submission'):

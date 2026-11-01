@@ -276,7 +276,7 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
     elif mapping["kind"] in ("style", "layout"):
         m_kind = str(mapping["kind"])
         code = str(mapping["target_id"]).strip().upper().lstrip("#")
-        raw = resolve_resource(conn, m_kind, code)
+        raw = resolve_resource(conn, m_kind, code, viewer=user, include_pending=True)
         if not raw:
             raise S.ServiceError("关联资源不存在或不可见", status=404)
 
