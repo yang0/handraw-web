@@ -276,14 +276,36 @@
     return Math.max(0, Number(count || 0) - Math.max(0, free));
   }
 
-  function confirmPotentialGenerationCost(count) {
-    if (!isLiveGenerationEnabled()) return true;
+  function confirmSecondaryBatchCost(count) {
+    if (count <= 20) return true;
     const billable = estimateBillableImages(count);
-    if (billable <= 0) return true;
     const perImage = Math.max(0, Number(CS.serverCfg.creditPerImage || 0));
     const total = billable * perImage;
-    const text = `本次预计消耗 ${billable} 张付费额度${perImage ? `，约 ${total} 积分` : ""}。任务与退款以服务端确认为准，是否继续？`;
-    return typeof window.confirm === "function" ? window.confirm(text) : true;
+    const free = Math.max(0, Number(CS.serverCfg.freeRemainingToday ?? CS.serverCfg.freeDailyQuota ?? 0));
+    const costDesc = App.state?.loggedIn
+      ? `预计消耗 ${total} 积分（其中免费额度 ${Math.min(count, free)} 张）`
+      : "预计批量出图超20张";
+    const confirmMsg = `本次将批量生成 ${count} 张图片，${costDesc}。确认开始批量生成吗？`;
+    return typeof window.confirm === "function" ? window.confirm(confirmMsg) : true;
+  }
+
+  function confirmPotentialGenerationCost(count) {
+    if (!isLiveGenerationEnabled()) {
+      if (count > 20) return confirmSecondaryBatchCost(count);
+      return true;
+    }
+    const billable = estimateBillableImages(count);
+    if (billable > 0) {
+      const perImage = Math.max(0, Number(CS.serverCfg.creditPerImage || 0));
+      const total = billable * perImage;
+      const text = `本次预计消耗 ${billable} 张付费额度${perImage ? `，约 ${total} 积分` : ""}。任务与退款以服务端确认为准，是否继续？`;
+      const ok = typeof window.confirm === "function" ? window.confirm(text) : true;
+      if (!ok) return false;
+    }
+    if (count > 20) {
+      return confirmSecondaryBatchCost(count);
+    }
+    return true;
   }
 
   function cancelActiveBatchGeneration() {
@@ -849,7 +871,7 @@
     if (!target) {
       const g = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, { withPresetAssets: false });
       // Created on demand only; it is not offered as a preset tab any more.
-      target = createWorkflowTab({ title: "📝 文章配图", blueprint: "article", graph: g, makeActive: false });
+      target = createWorkflowTab({ title: "文章配图", blueprint: "article", graph: g, makeActive: false });
     }
     activateWorkflowTab(target.id);
     return target;
@@ -972,7 +994,10 @@
     if (idx < 0) return;
     CS.tabs.splice(idx, 1);
     if (!CS.tabs.length) {
-      createWorkflowTab({ title: "🧹 空白工作流", blueprint: "blank", makeActive: true, autoFit: true });
+      CS.activeTabId = null;
+      CS.graph = { blueprint: "blank", nodes: [], edges: [], selectedIds: [] };
+      persistOpenTabs();
+      fullRenderCanvas();
       return;
     }
     if (CS.activeTabId === tabId) {
@@ -1139,27 +1164,27 @@
     });
 
     const nodeTypeMeta = {
-      skill_params: "🎨 风格参数",
-      asset: "🖼️ 图片参数",
-      text_input: "📝 文本参数",
-      fission: "💡 选题裂变",
-      loop: "🔁 循环批量",
-      bridge: "🔗 桥接",
-      output_control: "🎛️ 输出控制",
-      article_plan: "📋 文章配图方案",
-      output_display: "🖼️ 图片显示"
+      skill_params: "风格参数",
+      asset: "图片参数",
+      text_input: "文本参数",
+      fission: "AI 扩写主题",
+      loop: "批量",
+      bridge: "多尺寸输出",
+      output_control: "生成设置",
+      article_plan: "文章配图方案",
+      output_display: "成图显示"
     };
 
     DOM.workflowsStage.innerHTML = `
       <div class="ic-pv-topbar">
         <div style="display:flex;align-items:center;gap:10px;min-width:0;">
           <button type="button" class="btn btn-sm" id="wf-back-canvas" style="font-weight:800;">← 返回画布</button>
-          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">📂 预置示范与我的工作流 (${allWf.length})</span>
+          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">预置示范与我的工作流 (${allWf.length})</span>
           <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">按典型真实创作场景按需编排节点 · 点击「打开」即可在画布直接运行体验</span>
         </div>
 
         <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-          <button type="button" class="btn btn-sm" id="wf-restore-presets" title="恢复全部 7 套官方典型场景示范工作流" style="font-weight:800;">✨ 恢复官方示范</button>
+          <button type="button" class="btn btn-sm" id="wf-restore-presets" title="恢复全部 7 套官方典型场景示范工作流" style="font-weight:800;">恢复官方示范</button>
           <input
             type="search"
             class="hw-input"
@@ -1169,7 +1194,7 @@
             style="width:220px;height:32px;padding:4px 10px;font-size:12.5px;"
           />
           <label class="btn btn-primary btn-sm" style="cursor:pointer;font-weight:800;">
-            📂 选择 JSON 文件导入
+            选择 JSON 文件导入
             <input type="file" id="wf-import-file-inp" accept=".json,application/json" hidden />
           </label>
         </div>
@@ -1181,12 +1206,11 @@
             filtered.length === 0
               ? `
                 <div style="padding:76px 24px;text-align:center;background:var(--ic-panel-solid);border:1px dashed var(--ic-border-strong);border-radius:18px;">
-                  <div style="font-size:34px;margin-bottom:10px;">📂</div>
                   <div style="font-size:16px;font-weight:850;color:var(--ic-ink);margin-bottom:6px;">${
                     allWf.length === 0 ? "暂无已保存的工作流" : "没有匹配搜索词的工作流"
                   }</div>
-                  <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">可在无限画布右下角鹰眼旁点击「💾 保存」保存当前画布，或点击上方「✨ 恢复官方示范」。</div>
-                  <button type="button" class="btn btn-primary" id="wf-empty-go-canvas">🎨 返回无限画布</button>
+                  <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">可在无限画布右下角缩略图旁点击「保存」保存当前画布，或点击上方「恢复官方示范」。</div>
+                  <button type="button" class="btn btn-primary" id="wf-empty-go-canvas">返回无限画布</button>
                 </div>
               `
               : `
@@ -1220,7 +1244,7 @@
                           </div>
 
                           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-                            <button type="button" class="btn btn-sm btn-primary" data-wf-open="${esc(wf.id)}" style="min-width:82px;font-weight:850;">🚀 打开体验</button>
+                            <button type="button" class="btn btn-sm btn-primary" data-wf-open="${esc(wf.id)}" style="min-width:82px;font-weight:850;">打开体验</button>
                             <button type="button" class="btn btn-sm" data-wf-dl="${esc(wf.id)}" style="font-weight:750;">导出 JSON</button>
                             <button type="button" class="btn btn-sm" data-wf-rm="${esc(wf.id)}" style="color:#dc2626;font-weight:750;">删除</button>
                           </div>
@@ -1518,8 +1542,10 @@
 
   function fitView(padding = 64) {
     if (!DOM.viewport) return;
-    const nodes = CS.graph.nodes || [];
+    if (CS.stageView !== "canvas") return;
     const vRect = DOM.viewport.getBoundingClientRect();
+    if (vRect.width <= 0 || vRect.height <= 0) return;
+    const nodes = CS.graph.nodes || [];
     const leftOffset = CS.shelfOpen ? 252 : 32;
     const rightOffset = CS.minimapOpen ? 224 : padding;
     const bottomOffset = 60;
@@ -1915,40 +1941,89 @@
     });
   }
 
-  // 2) Asset Picker Modal (角色 / 道具 / 场景 / 其他 / 用户自建分类 + 本地上传图片图参 + 支持单选更换或多选图参)
-  function openAssetPickerModal(assetNode) {
-    if (!assetNode || assetNode.type !== "asset") return;
-    const curItems = Array.isArray(assetNode.data.items) ? assetNode.data.items : [];
+  // 2) Asset Picker Modal (我的图库 / 官方示例 / 本地上传 + 角色/道具/场景/其他分类)
+  function openAssetPickerModal(targetOrOptions) {
+    let curItems = [];
+    let isNode = false;
+    let onCommitCallback = null;
+
+    if (targetOrOptions && targetOrOptions.type === "asset") {
+      isNode = true;
+      curItems = Array.isArray(targetOrOptions.data.items) ? targetOrOptions.data.items : [];
+      onCommitCallback = (items) => {
+        pushUndo();
+        targetOrOptions.data.items = items;
+        fullRenderCanvas();
+        persistOpenTabs();
+        toast(
+          items.length
+            ? `✓ 已选用 ${items.length} 项图参：${items.map((x) => x.name || x.id).join("、")}`
+            : "已置空资产节点"
+        );
+      };
+    } else if (targetOrOptions && typeof targetOrOptions === "object") {
+      const rawRefs = Array.isArray(targetOrOptions.currentRefs)
+        ? targetOrOptions.currentRefs
+        : (Array.isArray(targetOrOptions.references) ? targetOrOptions.references : []);
+      const allItems = getAllAssetItems();
+      curItems = rawRefs.map((r, idx) => {
+        const url = typeof r === "string" ? r : (r.url || r.image || "");
+        const matched = allItems.find((it) => it.image === url || it.id === r || it.id === r.id);
+        if (matched) return { ...matched };
+        return {
+          id: typeof r === "string" ? `REF-${idx + 1}` : (r.id || `REF-${idx + 1}`),
+          name: typeof r === "string" ? `参考图 ${idx + 1}` : (r.name || r.name_zh || `参考图 ${idx + 1}`),
+          image: url,
+          cat: "other"
+        };
+      });
+      onCommitCallback = (items) => {
+        if (typeof targetOrOptions.onConfirm === "function") {
+          targetOrOptions.onConfirm(items);
+        }
+      };
+    } else {
+      return;
+    }
+
     const selectedMap = new Map(curItems.map((x) => [x.id, { ...x }]));
 
-    let activeGroup = curItems[0]?.cat || "ALL";
+    let topTab = App.state.loggedIn ? "my" : "official"; // "my" | "official" | "upload"
+    let activeCategory = "ALL";
     let searchQuery = "";
     let showNewCatForm = false;
 
     S.openModal({
-      title: "🖼️ 图片参数（角色 / 道具 / 场景 / 其他 / 自建分类 / 本地上传）",
+      title: "参考图与图参（我的图库 / 官方示例 / 本地上传）",
       sizeClass: "modal-wide",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;min-height:540px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-            <input type="search" class="hw-input" id="ast-picker-search" placeholder="🔍 搜索资产编号、名称、分类..." style="flex:1;min-width:240px;padding:8px 12px;font-size:13px;" />
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm" id="ast-picker-clear" style="color:var(--ink-muted);">✕ 清空已选</button>
+          <!-- Top 3 Tabs -->
+          <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line-soft);padding-bottom:10px;gap:10px;flex-wrap:wrap;">
+            <div class="hw-pills-row" id="ast-top-tabs">
+              <button type="button" class="hw-pill ${topTab === "my" ? "is-active" : ""}" data-top-tab="my">我的图库</button>
+              <button type="button" class="hw-pill ${topTab === "official" ? "is-active" : ""}" data-top-tab="official">官方示例</button>
+              <button type="button" class="hw-pill ${topTab === "upload" ? "is-active" : ""}" data-top-tab="upload">本地上传</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button type="button" class="btn btn-sm" id="ast-picker-clear" style="color:var(--ink-muted);">清空已选</button>
               <button type="button" class="btn btn-sm btn-primary" id="ast-picker-confirm">✓ 确认选用 (${selectedMap.size})</button>
             </div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <input type="search" class="hw-input" id="ast-picker-search" placeholder="搜索资产编号、名称、分类..." style="flex:1;min-width:240px;padding:8px 12px;font-size:13px;" />
+            <span style="font-size:12px;color:var(--ink-muted);" id="ast-picker-count">正在加载...</span>
           </div>
 
           <div id="ast-cats-wrap" style="display:flex;flex-direction:column;gap:8px;"></div>
           <div id="ast-upload-bar"></div>
 
-          <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--ink-muted);">
-            <span id="ast-picker-count">正在加载...</span>
-            <span>单击卡片勾选/取消图参（支持多选组合），双击卡片可直接单选装备</span>
-          </div>
-          <div id="ast-picker-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:12px;max-height:52vh;overflow-y:auto;padding:2px 4px 10px 2px;"></div>
+          <div id="ast-picker-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:12px;max-height:50vh;overflow-y:auto;padding:2px 4px 10px 2px;"></div>
         </div>
       `,
       onMount(root) {
+        const topTabsEl = root.querySelector("#ast-top-tabs");
         const searchInp = root.querySelector("#ast-picker-search");
         const catsWrap = root.querySelector("#ast-cats-wrap");
         const uploadBar = root.querySelector("#ast-upload-bar");
@@ -1957,21 +2032,25 @@
         const confirmBtn = root.querySelector("#ast-picker-confirm");
 
         const commitSelection = () => {
-          pushUndo();
-          assetNode.data.items = [...selectedMap.values()];
+          const items = [...selectedMap.values()];
           S.closeModal();
-          fullRenderCanvas();
-          persistOpenTabs();
-          toast(
-            assetNode.data.items.length
-              ? `✨ 已装备 ${assetNode.data.items.length} 项图参：${assetNode.data.items.map((x) => x.name).join("、")}`
-              : "已置空资产节点"
-          );
+          if (onCommitCallback) onCommitCallback(items);
         };
 
         const syncConfirmText = () => {
-          confirmBtn.textContent = `✓ 确认选用 (${selectedMap.size})`;
+          confirmBtn.textContent = `✓ 确认选用 (${selectedMap.size} / 6)`;
         };
+
+        topTabsEl.querySelectorAll("[data-top-tab]").forEach((btn) => {
+          btn.onclick = () => {
+            topTab = btn.getAttribute("data-top-tab");
+            topTabsEl.querySelectorAll("[data-top-tab]").forEach((b) => {
+              b.classList.toggle("is-active", b === btn);
+            });
+            activeCategory = "ALL";
+            renderView();
+          };
+        });
 
         searchInp.oninput = () => {
           searchQuery = searchInp.value.trim().toLowerCase();
@@ -1986,190 +2065,206 @@
 
         confirmBtn.onclick = commitSelection;
 
-        function renderCatsAndUpload() {
+        function getPoolItems() {
           const allItems = getAllAssetItems();
+          if (topTab === "my") {
+            return allItems.filter((x) => Boolean(x.custom || !x.builtin));
+          }
+          if (topTab === "official") {
+            return allItems.filter((x) => Boolean(x.builtin));
+          }
+          return allItems;
+        }
+
+        function renderView() {
+          if (topTab === "upload") {
+            catsWrap.innerHTML = "";
+            renderUploadSection();
+            gridEl.innerHTML = "";
+            countEl.textContent = "支持本地上传图片并存入你的图库";
+            return;
+          }
+
+          uploadBar.innerHTML = "";
+
+          if (topTab === "my" && !App.state.loggedIn) {
+            catsWrap.innerHTML = "";
+            gridEl.innerHTML = `
+              <div style="grid-column:1/-1;padding:50px 20px;text-align:center;color:var(--ink-muted);">
+                <div style="font-size:14px;font-weight:700;margin-bottom:12px;">登录后可使用你的图库</div>
+                <button type="button" class="btn btn-sm btn-primary" id="ast-login-btn">去登录</button>
+              </div>
+            `;
+            countEl.textContent = "未登录";
+            const loginBtn = gridEl.querySelector("#ast-login-btn");
+            if (loginBtn) {
+              loginBtn.onclick = () => {
+                S.openLoginModal("使用图库请先登录账号", () => {
+                  renderView();
+                });
+              };
+            }
+            return;
+          }
+
+          renderCategoryPills();
+          renderGrid();
+        }
+
+        function renderCategoryPills() {
+          const pool = getPoolItems();
           const cats = getAssetCategoryList();
           const groups = [
-            { key: "ALL", label: `📦 全部 (${allItems.length})`, builtin: true },
+            { key: "ALL", label: `全部 (${pool.length})`, builtin: true },
             ...cats.map((c) => ({
               key: c.key,
-              label: `${c.icon} ${c.label} (${allItems.filter((x) => (x.cat || "other") === c.key).length})`,
+              label: `${c.label} (${pool.filter((x) => (x.cat || "other") === c.key).length})`,
               builtin: c.builtin,
               rawLabel: c.label
             }))
           ];
-          if (!groups.some((g) => g.key === activeGroup)) activeGroup = "ALL";
+          if (!groups.some((g) => g.key === activeCategory)) activeCategory = "ALL";
 
           catsWrap.innerHTML = `
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              ${groups
-                .map(
-                  (g) => `
-                  <span style="display:inline-flex;align-items:center;gap:2px;">
-                    <button type="button" class="ic-shelf-group-chip ${activeGroup === g.key ? "is-active" : ""}" data-ing-grp="${esc(g.key)}" style="padding:5px 11px;font-size:12px;">
-                      ${esc(g.label)}
-                    </button>
-                    ${
-                      !g.builtin && g.key !== "ALL"
-                        ? `<button type="button" data-del-custom-cat="${esc(g.key)}" title="删除自建分类「${esc(g.rawLabel)}」" style="border:none;background:transparent;color:var(--ink-muted);cursor:pointer;font-size:12px;padding:2px 4px;">×</button>`
-                        : ""
-                    }
-                  </span>
-                `
-                )
-                .join("")}
-              <button type="button" class="btn btn-sm" id="ing-toggle-new-cat" style="padding:4px 10px;font-size:12px;border-style:dashed;color:var(--vermilion);border-color:var(--vermilion-border);">＋ 新建分类</button>
+              ${groups.map((g) => `
+                <button type="button" class="hw-pill ${activeCategory === g.key ? "is-active" : ""}" data-ing-grp="${esc(g.key)}" style="padding:4px 10px;font-size:12px;">
+                  ${esc(g.label)}
+                </button>
+              `).join("")}
+              ${topTab === "my" ? `
+                <button type="button" class="btn btn-sm" id="ing-toggle-new-cat" style="padding:3px 8px;font-size:11.5px;border-style:dashed;color:var(--vermilion);border-color:var(--vermilion-border);">＋ 新建分类</button>
+              ` : ""}
             </div>
-            ${
-              showNewCatForm
-                ? `
-                <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--vermilion-wash);border:1px solid var(--vermilion-border);border-radius:10px;flex-wrap:wrap;">
-                  <span style="font-size:12px;font-weight:800;color:var(--vermilion);">🏷️ 新建资产分类：</span>
-                  <input type="text" class="hw-input" id="ing-new-cat-name" placeholder="输入分类名，如：我的IP宇宙 / 产品实物图..." style="width:260px;padding:5px 10px;font-size:12.5px;" />
-                  <button type="button" class="btn btn-sm btn-primary" id="ing-confirm-new-cat">创建分类</button>
-                  <button type="button" class="btn btn-sm" id="ing-cancel-new-cat">取消</button>
-                </div>
-              `
-                : ""
-            }
+            ${showNewCatForm && topTab === "my" ? `
+              <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;font-weight:700;">新建资产分类：</span>
+                <input type="text" class="hw-input" id="ing-new-cat-name" placeholder="分类名（如：角色IP）" style="width:200px;padding:4px 8px;font-size:12px;" />
+                <button type="button" class="btn btn-sm btn-primary" id="ing-confirm-new-cat">创建</button>
+                <button type="button" class="btn btn-sm" id="ing-cancel-new-cat">取消</button>
+              </div>
+            ` : ""}
           `;
 
           catsWrap.querySelectorAll("[data-ing-grp]").forEach((btn) => {
             btn.onclick = () => {
-              activeGroup = btn.getAttribute("data-ing-grp");
-              renderCatsAndUpload();
+              activeCategory = btn.getAttribute("data-ing-grp");
+              renderCategoryPills();
               renderGrid();
             };
           });
 
-          catsWrap.querySelectorAll("[data-del-custom-cat]").forEach((btn) => {
-            btn.onclick = (e) => {
-              e.stopPropagation();
-              const delKey = btn.getAttribute("data-del-custom-cat");
-              CS.customAssetCats = (CS.customAssetCats || []).filter((c) => c.key !== delKey);
-              writeJsonStorage(CUSTOM_ASSET_CATS_KEY, CS.customAssetCats);
-              (CS.customUploads || []).forEach((u) => {
-                if (u.cat === delKey) u.cat = "other";
-              });
-              writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
-              if (activeGroup === delKey) activeGroup = "ALL";
-              renderCatsAndUpload();
-              renderGrid();
-              toast("已删除自建分类，原资产已归入「其他」");
-            };
-          });
-
-          catsWrap.querySelector("#ing-toggle-new-cat").onclick = () => {
-            showNewCatForm = !showNewCatForm;
-            renderCatsAndUpload();
-            if (showNewCatForm) setTimeout(() => catsWrap.querySelector("#ing-new-cat-name")?.focus(), 20);
-          };
-
-          const confirmCatBtn = catsWrap.querySelector("#ing-confirm-new-cat");
-          if (confirmCatBtn) {
-            const doCreate = () => {
-              const raw = (catsWrap.querySelector("#ing-new-cat-name")?.value || "").trim();
-              if (!raw) return toast("请输入新分类名称");
-              if (getAssetCategoryList().some((c) => c.label === raw)) return toast("该分类名称已存在");
-              const newKey = "cat_" + Date.now().toString(36);
-              CS.customAssetCats = [...(CS.customAssetCats || []), { key: newKey, icon: "🏷️", label: raw }];
-              writeJsonStorage(CUSTOM_ASSET_CATS_KEY, CS.customAssetCats);
-              activeGroup = newKey;
-              showNewCatForm = false;
-              renderCatsAndUpload();
-              renderGrid();
-              toast(`🎉 已创建资产分类「${raw}」`);
-            };
-            confirmCatBtn.onclick = doCreate;
-            catsWrap.querySelector("#ing-new-cat-name")?.addEventListener("keydown", (ev) => {
-              if (ev.key === "Enter") {
-                ev.preventDefault();
-                doCreate();
-              }
-            });
-            catsWrap.querySelector("#ing-cancel-new-cat").onclick = () => {
-              showNewCatForm = false;
-              renderCatsAndUpload();
+          const toggleNewCat = catsWrap.querySelector("#ing-toggle-new-cat");
+          if (toggleNewCat) {
+            toggleNewCat.onclick = () => {
+              showNewCatForm = !showNewCatForm;
+              renderCategoryPills();
             };
           }
 
-          const defaultUploadCat = activeGroup !== "ALL" ? activeGroup : "characters";
+          const confirmNewCat = catsWrap.querySelector("#ing-confirm-new-cat");
+          if (confirmNewCat) {
+            confirmNewCat.onclick = () => {
+              const raw = (catsWrap.querySelector("#ing-new-cat-name")?.value || "").trim();
+              if (!raw) return toast("请输入新分类名称");
+              const newKey = "cat_" + Date.now().toString(36);
+              CS.customAssetCats = [...(CS.customAssetCats || []), { key: newKey, icon: "", label: raw }];
+              writeJsonStorage(CUSTOM_ASSET_CATS_KEY, CS.customAssetCats);
+              activeCategory = newKey;
+              showNewCatForm = false;
+              renderCategoryPills();
+              renderGrid();
+              toast(`已创建分类「${raw}」`);
+            };
+            catsWrap.querySelector("#ing-cancel-new-cat").onclick = () => {
+              showNewCatForm = false;
+              renderCategoryPills();
+            };
+          }
+        }
+
+        function renderUploadSection() {
+          const cats = getAssetCategoryList();
           uploadBar.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;flex-wrap:wrap;">
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span style="font-size:12.5px;font-weight:800;">📷 上传自定义图片作为图参：</span>
-                <input type="text" class="hw-input" id="ing-upload-name" placeholder="可选：图参名称（如 主角阿柴）" style="width:190px;padding:5px 9px;font-size:12px;" />
+            <div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
+              <div style="font-size:13px;font-weight:700;">本地图片上传并存入你的图库：</div>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <input type="text" class="hw-input" id="ing-upload-name" placeholder="图参名称（如：主角设计稿）" style="width:220px;padding:6px 10px;font-size:12.5px;" />
                 <span style="font-size:12px;color:var(--ink-muted);">归入分类：</span>
-                <select class="hw-input" id="ing-upload-cat" style="width:auto;padding:5px 9px;font-size:12px;">
-                  ${cats.map((c) => `<option value="${esc(c.key)}" ${c.key === defaultUploadCat ? "selected" : ""}>${esc(c.icon)} ${esc(c.label)}</option>`).join("")}
+                <select class="hw-input" id="ing-upload-cat" style="width:auto;padding:6px 10px;font-size:12.5px;">
+                  ${cats.map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join("")}
                 </select>
+                <label class="btn btn-sm btn-primary" style="cursor:pointer;margin-left:auto;">
+                  ＋ 选择本地图片上传
+                  <input type="file" id="ing-upload-file" accept="image/*" hidden />
+                </label>
               </div>
-              <label class="btn btn-sm btn-primary" style="cursor:pointer;">
-                ＋ 选择本地图片上传并选用
-                <input type="file" id="ing-upload-file" accept="image/*" hidden />
-              </label>
+              <div style="font-size:11.5px;color:var(--ink-muted);">上传后图片将存入你的个人图库，可重复用于做图与画布创作。</div>
             </div>
           `;
 
-          uploadBar.querySelector("#ing-upload-file").onchange = (ev) => {
-            const f = ev.target.files && ev.target.files[0];
-            if (!f) return;
-            const customName = (uploadBar.querySelector("#ing-upload-name")?.value || "").trim() || f.name.replace(/\.[^.]+$/, "");
-            const chosenCat = uploadBar.querySelector("#ing-upload-cat")?.value || "other";
-            const catMeta = getAssetCatMeta(chosenCat);
-            const reader = new FileReader();
-            reader.onload = async () => {
-              const rawDataUrl = String(reader.result || "");
-              let finalId = "USR-" + String((CS.customUploads?.length || 0) + 1).padStart(2, "0");
-              let finalImg = rawDataUrl;
-              const uploaded = await studioApiPost("/api/studio/uploads", {
-                dataUrl: rawDataUrl,
-                nameZh: customName,
-                descZh: `${catMeta.label} · 本地上传图参`,
-                cat: chosenCat
-              });
-              if (uploaded && uploaded.ok && uploaded.image) {
-                finalId = uploaded.id || finalId;
-                finalImg = uploaded.image;
-              }
-              const newItem = {
-                id: finalId,
-                name: customName,
-                desc: `${catMeta.label} · 本地上传图参`,
-                cat: chosenCat,
-                image: finalImg,
-                dataUrl: finalImg
+          const fileInp = uploadBar.querySelector("#ing-upload-file");
+          if (fileInp) {
+            fileInp.onchange = (ev) => {
+              const f = ev.target.files && ev.target.files[0];
+              if (!f) return;
+              const customName = (uploadBar.querySelector("#ing-upload-name")?.value || "").trim() || f.name.replace(/\.[^.]+$/, "");
+              const chosenCat = uploadBar.querySelector("#ing-upload-cat")?.value || "other";
+              const catMeta = getAssetCatMeta(chosenCat);
+              const reader = new FileReader();
+              reader.onload = async () => {
+                const rawDataUrl = String(reader.result || "");
+                let finalId = "USR-" + String((CS.customUploads?.length || 0) + 1).padStart(2, "0");
+                let finalImg = rawDataUrl;
+                const uploaded = await studioApiPost("/api/studio/uploads", {
+                  dataUrl: rawDataUrl,
+                  nameZh: customName,
+                  descZh: `${catMeta.label} · 本地上传图参`,
+                  cat: chosenCat
+                });
+                if (uploaded && uploaded.ok && uploaded.image) {
+                  finalId = uploaded.id || finalId;
+                  finalImg = uploaded.image;
+                }
+                const newItem = {
+                  id: finalId,
+                  name: customName,
+                  desc: `${catMeta.label} · 本地上传图参`,
+                  cat: chosenCat,
+                  image: finalImg,
+                  dataUrl: finalImg,
+                  custom: true,
+                  builtin: false
+                };
+                CS.customUploads = [newItem, ...(CS.customUploads || []).filter((x) => x.id !== finalId)];
+                writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
+                if (selectedMap.size < 6) {
+                  selectedMap.set(newItem.id, newItem);
+                }
+                syncConfirmText();
+                toast(`已上传《${customName}》并加入图参！`);
+                topTab = "my";
+                topTabsEl.querySelectorAll("[data-top-tab]").forEach((b) => {
+                  b.classList.toggle("is-active", b.getAttribute("data-top-tab") === "my");
+                });
+                renderView();
               };
-              CS.customUploads = [newItem, ...(CS.customUploads || []).filter((x) => x.id !== finalId)];
-              writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
-              selectedMap.set(newItem.id, {
-                id: newItem.id,
-                name: newItem.name,
-                image: finalImg,
-                cat: chosenCat,
-                catLabel: catMeta.label,
-                custom: true
-              });
-              syncConfirmText();
-              renderCatsAndUpload();
-              renderGrid();
-              toast(`📷 已上传《${customName}》并加入当前图参选择！`);
+              reader.readAsDataURL(f);
             };
-            reader.readAsDataURL(f);
-          };
+          }
         }
 
         function renderGrid() {
-          const cats = getAssetCategoryList();
-          let list = getAllAssetItems().filter((x) => activeGroup === "ALL" || (x.cat || "other") === activeGroup);
+          const pool = getPoolItems();
+          let list = pool.filter((x) => activeCategory === "ALL" || (x.cat || "other") === activeCategory);
           if (searchQuery) {
             list = list.filter((it) => `${it.id} ${it.name_zh || it.name || ""} ${it.desc_zh || ""}`.toLowerCase().includes(searchQuery));
           }
 
-          countEl.textContent = `共筛出 ${list.length} 项 · 当前已选 ${selectedMap.size} 项图参`;
+          countEl.textContent = `共 ${list.length} 项 · 已选 ${selectedMap.size} / 6`;
 
           if (!list.length) {
-            gridEl.innerHTML = `<div style="grid-column:1/-1;padding:42px;text-align:center;color:var(--ink-muted);">该分类暂无图参资产，可通过上方「＋ 选择本地图片上传」入库</div>`;
+            gridEl.innerHTML = `<div style="grid-column:1/-1;padding:42px;text-align:center;color:var(--ink-muted);">暂无图参，可通过上方「本地上传」添加图片</div>`;
             return;
           }
 
@@ -2190,24 +2285,17 @@
                     <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:700;">${esc(id)}</span>
                     <span style="position:absolute;right:6px;top:6px;padding:2px 6px;border-radius:5px;background:${
                       isSel ? "var(--vermilion)" : "rgba(255,252,247,0.92)"
-                    };color:${isSel ? "#fff" : "#2b2520"};font-size:10px;font-weight:800;">
-                      ${isSel ? "✓ 已选" : `${esc(catMeta.icon)} ${esc(catMeta.label)}`}
+                    };color:${isSel ? "#fff" : "#2b2520"};font-size:10px;font-weight:700;">
+                      ${isSel ? "✓ 已选" : esc(catMeta.label)}
                     </span>
                   </div>
                   <div style="padding:8px 10px;display:flex;flex-direction:column;gap:4px;flex:1;justify-content:space-between;">
-                    <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
-                    ${
-                      !it.builtin
-                        ? `
-                        <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:2px;" data-stop-card-click="1">
-                          <select class="hw-input" data-move-asset-id="${esc(id)}" style="padding:2px 4px;font-size:10.5px;height:22px;flex:1;">
-                            ${cats.map((c) => `<option value="${esc(c.key)}" ${c.key === it.cat ? "selected" : ""}>移至: ${esc(c.label)}</option>`).join("")}
-                          </select>
-                          <button type="button" class="btn btn-sm" data-del-asset-id="${esc(id)}" style="padding:1px 6px;font-size:10.5px;color:#dc2626;">删</button>
-                        </div>
-                      `
-                        : `<div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.desc_zh || "点击勾选作为图参")}</div>`
-                    }
+                    <div style="font-size:12.5px;font-weight:700;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
+                    ${!it.builtin ? `
+                      <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;" data-stop-card-click="1">
+                        <button type="button" class="btn btn-sm" data-del-asset-id="${esc(id)}" style="padding:1px 6px;font-size:10.5px;color:#dc2626;">删除</button>
+                      </div>
+                    ` : `<div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.desc_zh || "官方示例图参")}</div>`}
                   </div>
                 </div>
               `;
@@ -2218,25 +2306,6 @@
             el.onclick = (ev) => ev.stopPropagation();
           });
 
-          gridEl.querySelectorAll("[data-move-asset-id]").forEach((sel) => {
-            sel.onchange = () => {
-              const aid = sel.getAttribute("data-move-asset-id");
-              const target = (CS.customUploads || []).find((u) => u.id === aid);
-              if (target) {
-                target.cat = sel.value;
-                writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
-                if (selectedMap.has(aid)) {
-                  const cm = getAssetCatMeta(sel.value);
-                  selectedMap.get(aid).cat = sel.value;
-                  selectedMap.get(aid).catLabel = cm.label;
-                }
-                renderCatsAndUpload();
-                renderGrid();
-                toast("已更新资产所属分类");
-              }
-            };
-          });
-
           gridEl.querySelectorAll("[data-del-asset-id]").forEach((btn) => {
             btn.onclick = () => {
               const aid = btn.getAttribute("data-del-asset-id");
@@ -2244,9 +2313,8 @@
               writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
               selectedMap.delete(aid);
               syncConfirmText();
-              renderCatsAndUpload();
               renderGrid();
-              toast("已删除自定义图参");
+              toast("已删除图参");
             };
           });
 
@@ -2265,8 +2333,15 @@
             };
 
             card.onclick = () => {
-              if (selectedMap.has(id)) selectedMap.delete(id);
-              else selectedMap.set(id, itemObj);
+              if (selectedMap.has(id)) {
+                selectedMap.delete(id);
+              } else {
+                if (selectedMap.size >= 6) {
+                  toast("最多选用 6 张参考图");
+                  return;
+                }
+                selectedMap.set(id, itemObj);
+              }
               syncConfirmText();
               renderGrid();
             };
@@ -2279,8 +2354,7 @@
           });
         }
 
-        renderCatsAndUpload();
-        renderGrid();
+        renderView();
       }
     });
   }
@@ -2343,20 +2417,10 @@
           graph: normalizeGraphSchema(t.graph)
         };
       });
-      CS.activeTabId = storedOpen.activeTabId || CS.tabs[0].id;
+      CS.activeTabId = storedOpen.activeTabId || (CS.tabs.length ? CS.tabs[0].id : null);
     } else {
-      const tSingle = E.createBlueprintGraph("single", Catalog, window.HANDRAW_MOCK, { withPresetAssets: true });
-      const tLoop100 = E.createBlueprintGraph("loop_100", Catalog, window.HANDRAW_MOCK, { withPresetAssets: true });
-      const tOmni = E.createBlueprintGraph("omnimedia", Catalog, window.HANDRAW_MOCK, { withPresetAssets: true });
-      // The "深度长文自动配图" workflow tab was removed: article illustration has
-      // its own mode in the Studio navigation (文章模式), and this tab only
-      // bounced the user there.
-      CS.tabs = [
-        { id: E.uid("wftab"), title: "🎯 节气海报极速出图", blueprint: "single", dirty: false, savedId: "preset_v24_single", vx: 276, vy: 48, vk: 0.84, undoStack: [], redoStack: [], graph: tSingle },
-        { id: E.uid("wftab"), title: "🔁 百图矩阵批量生产", blueprint: "loop_100", dirty: false, savedId: "preset_v24_loop100", vx: 256, vy: 44, vk: 0.78, undoStack: [], redoStack: [], graph: tLoop100 },
-        { id: E.uid("wftab"), title: "🔗 全媒体一稿三端", blueprint: "omnimedia", dirty: false, savedId: "preset_v24_omnimedia", vx: 248, vy: 36, vk: 0.68, undoStack: [], redoStack: [], graph: tOmni }
-      ];
-      CS.activeTabId = CS.tabs[0].id;
+      CS.tabs = [];
+      CS.activeTabId = null;
     }
 
     const normTabParam = tabParam === "xhs" || tabParam === "series" ? "ip_story" : tabParam;
@@ -2367,26 +2431,69 @@
         CS.activeTabId = existing.id;
       } else {
         const titles = {
-          single: "🎯 节气海报极速出图",
-          loop_100: "🔁 百图矩阵批量生产",
-          style_ab: "🎨 同文案多画风横评",
-          ip_story: "👤 IP角色连续绘本",
-          omnimedia: "🔗 全媒体一稿三端",
-          article: "📰 深度长文自动配图",
-          fusion: "🎭 跨媒介双画风融合",
-          loop: "🔁 循环批量出图",
-          blank: "🧹 空白工作流"
+          single: "节气海报极速出图",
+          loop_100: "百图矩阵批量生产",
+          style_ab: "同文案多画风横评",
+          ip_story: "IP角色连续绘本",
+          omnimedia: "全媒体一稿三端",
+          article: "深度长文自动配图",
+          fusion: "跨媒介双画风融合",
+          loop: "批量出图",
+          blank: "空白工作流"
         };
         const created = createWorkflowTab({ title: titles[normTabParam], blueprint: normTabParam, makeActive: false });
         CS.activeTabId = created.id;
       }
     } else if (forkId) {
-      const w = (App.state.works || []).find((x) => x.id === forkId);
-      if (w) {
-        const fg = buildForkGraphFromWork(w);
-        const created = createWorkflowTab({ title: `🔀 同款 · ${w.title.slice(0, 10)}`, blueprint: fg.blueprint, graph: fg, makeActive: false });
-        CS.activeTabId = created.id;
-      }
+      // Phase 3b-1: Open in "做图" directly via recipes/from-work, never create a new tab!
+      CS.stageView = "quick";
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("fork");
+      cleanUrl.searchParams.set("entry", "quick");
+      window.history.replaceState(null, "", cleanUrl.pathname + cleanUrl.search);
+
+      const executeFork = async () => {
+        if (!App.state?.loggedIn) {
+          window.__pendingForkId = forkId;
+          S.openLoginModal("做同款请先登录账号", () => {
+            if (App.state?.loggedIn && window.__pendingForkId) {
+              const fid = window.__pendingForkId;
+              window.__pendingForkId = null;
+              fetch(`/api/studio/recipes/from-work/${encodeURIComponent(fid)}`, { credentials: "include" })
+                .then((r) => {
+                  if (r.status === 404 || !r.ok) {
+                    toast("这件作品不可用");
+                    return null;
+                  }
+                  return r.json();
+                })
+                .then((data) => {
+                  if (data && data.draft && window.HandrawMakeImage) {
+                    window.HandrawMakeImage.applyForkDraft(data.draft);
+                  }
+                })
+                .catch(() => toast("这件作品不可用"));
+            }
+          });
+          return;
+        }
+        try {
+          const resp = await fetch(`/api/studio/recipes/from-work/${encodeURIComponent(forkId)}`, {
+            credentials: "include"
+          });
+          if (resp.status === 404 || !resp.ok) {
+            toast("这件作品不可用");
+            return;
+          }
+          const data = await resp.json();
+          if (data && data.draft && window.HandrawMakeImage) {
+            window.HandrawMakeImage.applyForkDraft(data.draft);
+          }
+        } catch (_) {
+          toast("这件作品不可用");
+        }
+      };
+      executeFork();
     } else if (forkTopicId) {
       const t = (App.state.topics || []).find((x) => x.id === forkTopicId);
       if (t && t.recipe) {
@@ -2425,12 +2532,20 @@
       CS.activeTabId = created.id;
     }
 
-    const activeTab = CS.tabs.find((t) => t.id === CS.activeTabId) || CS.tabs[0];
-    CS.activeTabId = activeTab.id;
-    CS.graph = normalizeGraphSchema(activeTab.graph);
-    CS.vx = activeTab.vx ?? 276;
-    CS.vy = activeTab.vy ?? 48;
-    CS.vk = activeTab.vk ?? 0.84;
+    const activeTab = CS.tabs.find((t) => t.id === CS.activeTabId) || (CS.tabs.length ? CS.tabs[0] : null);
+    if (activeTab) {
+      CS.activeTabId = activeTab.id;
+      CS.graph = normalizeGraphSchema(activeTab.graph);
+      CS.vx = activeTab.vx ?? 276;
+      CS.vy = activeTab.vy ?? 48;
+      CS.vk = activeTab.vk ?? 0.84;
+    } else {
+      CS.activeTabId = null;
+      CS.graph = { blueprint: "blank", nodes: [], edges: [], selectedIds: [] };
+      CS.vx = 276;
+      CS.vy = 48;
+      CS.vk = 0.84;
+    }
 
     ensureGenerationHistoryInitialized();
     syncAllTabsArticlesIntoStore();
@@ -2453,9 +2568,13 @@
       CS.stageView = "workflows";
     }
     if (!viewParam && !tabParam) {
-      if (params.get("entry") === "canvas") {
+      const entryParam = params.get("entry");
+      if (entryParam === "canvas") {
         CS.stageView = "canvas";
-      } else if (params.get("entry") === "article") {
+      } else if (entryParam === "batch") {
+        ensureBatchTab();
+        CS.stageView = "batch";
+      } else if (entryParam === "article") {
         syncAllTabsArticlesIntoStore();
         ensureArticleWorkspace();
         CS.stageView = "preview";
@@ -2491,7 +2610,7 @@
 
     const presets = [
       {
-        label: "✨ 四节气茶席海报",
+        label: "四节气茶席海报",
         lines: [
           "春分 · 龙井新茶与青团手绘节气卡",
           "夏至 · 冰镇杨梅饮与竹编团扇海报",
@@ -2500,7 +2619,7 @@
         ]
       },
       {
-        label: "✨ 电商 4 大核心卖点卡",
+        label: "电商 4 大核心卖点卡",
         lines: [
           "卖点 01 · 100% 原叶冷萃，0 糖 0 脂轻负担",
           "卖点 02 · 高山云雾春采，三道慢焙锁住兰花香",
@@ -2509,7 +2628,7 @@
         ]
       },
       {
-        label: "✨ 科普手绘 4 图鉴系列",
+        label: "科普手绘 4 图鉴系列",
         lines: [
           "图鉴 01 · 手冲咖啡粉水比与水温黄金区间",
           "图鉴 02 · 浅烘、中烘、深烘风味轮对照图解",
@@ -2518,13 +2637,13 @@
         ]
       },
       {
-        label: "⚡ 100条日签批量压测",
+        label: "100条日签批量测试",
         lines: E.generateFissionTopics("打工人反内卷治愈手绘日签", "daily_quote", 100)
       }
     ];
 
     S.openModal({
-      title: "🔁 编辑循环批量文案列表（每行 1 条 → 循环生成 1 张图）",
+      title: "编辑批量文案列表（每行 1 条 → 生成 1 张图）",
       sizeClass: "modal-wide",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;">
@@ -2539,7 +2658,7 @@
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
               <label class="btn btn-sm" style="cursor:pointer;color:var(--vermilion);border-color:var(--vermilion-border);font-weight:800;">
-                📂 导入 .txt / .csv 列表
+                导入 .txt / .csv 列表
                 <input type="file" id="loop-import-txt-inp" accept=".txt,.csv,.md,text/plain,text/csv,text/markdown" hidden />
               </label>
               <button type="button" class="btn btn-sm" id="loop-clear-txt-btn" style="color:var(--ink-muted);">✕ 清空</button>
@@ -2559,7 +2678,7 @@
           </div>
 
           <div style="display:flex;justify-content:flex-end;gap:10px;">
-            <button type="button" class="btn btn-primary" id="loop-modal-save" style="padding:8px 22px;font-weight:850;">✓ 保存循环列表</button>
+            <button type="button" class="btn btn-primary" id="loop-modal-save" style="padding:8px 22px;font-weight:850;">保存批量列表</button>
           </div>
         </div>
       `,
@@ -2644,27 +2763,27 @@
       : E.generateFissionTopics(curSeed, curStrat, curCount, curCustomStrat);
 
     S.openModal({
-      title: "💡 查看与编辑全部裂变子选题",
+      title: "查看与编辑全部扩写子主题",
       sizeClass: "modal-wide",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;">
           <div style="display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:12px;background:var(--paper-bg);border:1px solid var(--line-soft);">
-            <div style="display:grid;grid-template-columns:1fr 140px auto;gap:10px;align-items:end;">
+            <div style="grid-template-columns:1fr 140px auto;gap:10px;align-items:end;display:grid;">
               <div>
-                <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);margin-bottom:4px;">🌱 核心母题</div>
+                <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);margin-bottom:4px;">核心母题</div>
                 <input type="text" id="fis-modal-seed" class="hw-input" value="${esc(curSeed)}" style="width:100%;padding:7px 10px;font-size:13px;" placeholder="输入 1 个母题，例如：24节气茶饮海报 / 咖啡萃取科普…" />
               </div>
               <div>
-                <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);margin-bottom:4px;">🔢 裂变条数 (1~200)</div>
+                <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);margin-bottom:4px;">扩写条数 (1~200)</div>
                 <input type="number" id="fis-modal-cnt" class="hw-input" min="1" max="200" value="${curCount}" style="width:100%;padding:7px 8px;font-size:13px;text-align:center;font-weight:800;" />
               </div>
               <button type="button" class="btn btn-sm btn-primary" id="fis-modal-regen" style="padding:8px 15px;font-weight:850;background:#6d28d9;border-color:#6d28d9;">
-                ⚡ 重新裂变生成
+                重新扩写生成
               </button>
             </div>
 
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <span style="font-size:11.5px;font-weight:800;color:var(--ink-muted);">🧭 裂变方向：</span>
+              <span style="font-size:11.5px;font-weight:800;color:var(--ink-muted);">扩写方向：</span>
               <div id="fis-modal-strat-pills" style="display:flex;gap:6px;flex-wrap:wrap;">
                 ${(E.FISSION_STRATEGIES || [])
                   .map(
@@ -2674,7 +2793,7 @@
                       class="ic-shelf-group-chip ${!curCustomStrat && curStrat === st.id ? "is-active" : ""}"
                       data-fis-m-strat="${esc(st.id)}"
                       style="padding:4px 10px;font-size:12px;"
-                    >${st.icon} ${esc(st.label)}</button>
+                    >${esc(st.label)}</button>
                   `
                   )
                   .join("")}
@@ -2684,7 +2803,7 @@
                 id="fis-modal-custom-strat"
                 class="hw-input"
                 value="${esc(curCustomStrat)}"
-                placeholder="✍️ 或自行填写裂变方向（如：反常识职场痛点提问、节气特调配方拆解…）"
+                placeholder="或自行填写扩写方向（如：反常识职场痛点提问、节气特调配方拆解…）"
                 style="flex:1;min-width:220px;padding:5px 10px;font-size:12.5px;"
               />
             </div>
@@ -2694,16 +2813,16 @@
             id="fis-modal-ta"
             class="hw-input"
             style="width:100%;min-height:280px;padding:12px 14px;font-size:13px;line-height:1.65;resize:vertical;font-family:var(--font-sans);"
-            placeholder="每行 1 条裂变子选题，可直接在此增删微调…"
+            placeholder="每行 1 条扩写子主题，可直接在此增删微调…"
           >${esc(initLines.join("\n"))}</textarea>
 
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--ink-muted);">
-            <span id="fis-modal-summary" style="font-weight:850;color:#6d28d9;">共 ${initLines.length} 条子选题</span>
-            <span>连入右侧「🔁 循环批量」+ <strong>1 个</strong>「🎛️ 输出控制」即可一键批量出图。</span>
+            <span id="fis-modal-summary" style="font-weight:850;color:#6d28d9;">共 ${initLines.length} 条子主题</span>
+            <span>连入右侧「批量」+ <strong>1 个</strong>「生成设置」即可一键批量出图。</span>
           </div>
 
           <div style="display:flex;justify-content:flex-end;gap:10px;">
-            <button type="button" class="btn btn-primary" id="fis-modal-save" style="padding:8px 22px;font-weight:850;">✓ 保存裂变清单</button>
+            <button type="button" class="btn btn-primary" id="fis-modal-save" style="padding:8px 22px;font-weight:850;">保存扩写清单</button>
           </div>
         </div>
       `,
@@ -2726,7 +2845,7 @@
             .split(/\r?\n/)
             .map((s) => s.trim())
             .filter(Boolean);
-          sumEl.textContent = `当前共 ${lines.length} 条不重样子选题 → 下游循环将自动按序生成 ${lines.length} 张图`;
+          sumEl.textContent = `当前共 ${lines.length} 条不重样子主题 → 下游批量将自动按序生成 ${lines.length} 张图`;
         };
         syncSummary();
         ta.oninput = syncSummary;
@@ -4558,32 +4677,56 @@
   function recordGenerationHistory(ctrlNode, items = [], kind = "single", markdown = "") {
     ensureGenerationHistoryInitialized();
     if (!ctrlNode || !Array.isArray(items) || !items.length) return;
-    const rec = E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
+    const isRecipe = Boolean(ctrlNode.styleIds || ctrlNode.style_ids || (typeof ctrlNode.id === "string" && ctrlNode.id.startsWith("rcp_")));
+    const recipeId = isRecipe ? (ctrlNode.id || "") : (ctrlNode.recipeId || "");
+    const mode = isRecipe ? (ctrlNode.mode || "graphic-text") : (ctrlNode.data?.mode || "graphic-text");
+    const rec = isRecipe ? null : E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
     const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
     const now = new Date();
     const timeShort = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const dateFull = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${timeShort}`;
-    const modeMeta = E.OUTPUT_MODES.find((m) => m.id === ctrlNode.data.mode);
+    const modeMeta = E.OUTPUT_MODES.find((m) => m.id === mode);
     const isLoopBatch = kind === "loop";
+
+    let summaryText = "";
+    if (isRecipe) {
+      const parts = [];
+      const sIds = ctrlNode.styleIds || ctrlNode.style_ids || [];
+      if (sIds.length) parts.push(`画风:${sIds.join("+")}`);
+      if (ctrlNode.layoutId || ctrlNode.layout_id) parts.push(`图型:${ctrlNode.layoutId || ctrlNode.layout_id}`);
+      const cIds = ctrlNode.colors || [];
+      if (cIds.length) parts.push(`主题色:${cIds.join(",")}`);
+      const tIds = ctrlNode.tones || [];
+      if (tIds.length) parts.push(`影调:${tIds.join(",")}`);
+      const mIds = ctrlNode.moods || [];
+      if (mIds.length) parts.push(`情绪:${mIds.join(",")}`);
+      if (!parts.length) parts.push(`做图配方 · ${ctrlNode.ratio || "3:4"}`);
+      summaryText = parts.join(" · ");
+    } else {
+      summaryText = buildRecipeSummaryText(rec, ctrlNode);
+    }
 
     const entry = {
       id: E.uid("hist"),
       createdAt: dateFull,
       timeShort,
-      tabTitle: curTab ? curTab.title : "当前工作流",
-      ctrlId: ctrlNode.id,
+      tabTitle: isRecipe ? "做图配方" : (curTab ? curTab.title : "当前工作流"),
+      ctrlId: isRecipe ? "" : ctrlNode.id,
+      recipeId: recipeId || "",
       dispId: "",
-      mode: ctrlNode.data.mode,
+      mode: mode,
       modeLabel: `${isDemoGenerationEnabled() ? "🧪 演示样图 · " : ""}${
         isLoopBatch ? `循环批量 · ${items.length} 张` : `${modeMeta ? modeMeta.label : "生成"} · ${items.length} 张`
       }`,
       kind: kind || (items.length > 1 ? "multi" : "single"),
       engine: isLiveGenerationEnabled() ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
-      recipeSummary: buildRecipeSummaryText(rec, ctrlNode),
-      prompt: isLoopBatch
-        ? items.map((it, idx) => `【第 ${idx + 1} 轮】${it.prompt || it.theme || ""}`).join("\n\n")
-        : E.assembleControlPrompt(CS.graph, ctrlNode, Catalog, "skill"),
+      recipeSummary: summaryText,
+      prompt: isRecipe
+        ? (ctrlNode.prompt || ctrlNode.subject || "")
+        : isLoopBatch
+          ? items.map((it, idx) => `【第 ${idx + 1} 轮】${it.prompt || it.theme || ""}`).join("\n\n")
+          : E.assembleControlPrompt(CS.graph, ctrlNode, Catalog, "skill"),
       markdown: markdown || "",
       items: JSON.parse(JSON.stringify(items))
     };
@@ -6089,7 +6232,7 @@
                             </div>
 
                             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
-                              <button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">↩ 恢复到画布</button>
+                              ${h.recipeId ? `<button type="button" class="btn btn-sm btn-primary" data-hist-redo-recipe="${esc(h.recipeId)}" style="font-weight:800;">再做一次</button>` : `<button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">↩ 恢复到画布</button>`}
                               <button type="button" class="btn btn-sm" data-hist-zip="${esc(h.id)}" style="color:#1f6f4a;border-color:rgba(31,111,74,0.35);font-weight:750;">📦 下载 ZIP</button>
                               <button type="button" class="btn btn-sm" data-hist-share="${esc(h.id)}" style="font-weight:750;">✨ 晒图</button>
                               <button type="button" class="btn btn-sm" data-hist-del="${esc(h.id)}" style="color:#dc2626;" title="删除此条历史记录">🗑️ 删除</button>
@@ -6230,6 +6373,21 @@
 
     DOM.historyStage.querySelectorAll("[data-hist-restore]").forEach((btn) => {
       btn.onclick = () => restoreHistoryEntryToCanvas(btn.getAttribute("data-hist-restore"));
+    });
+
+    DOM.historyStage.querySelectorAll("[data-hist-redo-recipe]").forEach((btn) => {
+      btn.onclick = async () => {
+        const rcpId = btn.getAttribute("data-hist-redo-recipe");
+        if (rcpId && window.HandrawMakeImage) {
+          const ok = await window.HandrawMakeImage.loadRecipe(rcpId);
+          if (ok) {
+            switchCreationStage("quick");
+            toast("已原样打开配方");
+          } else {
+            toast("配方不存在或无法加载");
+          }
+        }
+      };
     });
 
     DOM.historyStage.querySelectorAll("[data-hist-zip]").forEach((btn) => {
@@ -6415,7 +6573,7 @@
       return `
         <div class="ic-v4-visual-slot" data-sp-pick="${esc(nodeId)}" data-sp-field="${esc(field)}" title="点击选择${esc(label)}">
           <div style="text-align:center;padding:8px 6px;display:flex;flex-direction:column;align-items:center;gap:4px;">
-            <span style="font-size:17px;line-height:1;">${icon}</span>
+            ${icon ? `<span style="font-size:17px;line-height:1;">${icon}</span>` : ""}
             <span style="font-size:11.2px;font-weight:800;color:var(--ic-ink);">${esc(label)} · 未选</span>
             <span class="btn btn-sm btn-primary" style="padding:1px 8px;font-size:10.5px;pointer-events:none;">＋ 选择</span>
           </div>
@@ -6427,7 +6585,7 @@
         <div style="position:relative;">
           <img class="ic-v4-slot-thumb" src="${esc(res.image)}" alt="${esc(res.name)}" />
           <span style="position:absolute;left:5px;top:5px;padding:1px 5px;border-radius:4px;background:rgba(20,17,15,0.72);color:#fff;font-size:9.5px;font-family:var(--font-mono);font-weight:700;">${esc(res.id)}</span>
-          <button type="button" class="ic-mini-glass-btn" data-sp-clear-field="${esc(nodeId)}" data-sp-field="${esc(field)}" style="position:absolute;right:4px;top:4px;padding:1px 5px;font-size:10px;" title="清空此项">✕</button>
+          <button type="button" class="ic-mini-glass-btn" data-sp-clear-field="${esc(nodeId)}" data-sp-field="${esc(field)}" style="position:absolute;right:4px;top:4px;padding:1px 5px;font-size:10px;" title="清空此项">×</button>
         </div>
         <div class="ic-v4-slot-meta">
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${esc(res.name)}</span>
@@ -6491,7 +6649,7 @@
           return `
             <div class="ic-node ic-node-skill_params ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
               <div class="ic-node-header-above">
-                <span>🎨 风格参数</span>
+                <span>风格参数</span>
                 <div style="display:flex;align-items:center;gap:5px;">
                   ${hasAnyValue ? `<button type="button" class="ic-opt-pill" data-sp-reset-all="${esc(n.id)}" style="padding:1px 6px;font-size:10px;">重置</button>` : ""}
                   <span class="ic-node-badge ic-badge-input">输入</span>
@@ -6501,7 +6659,7 @@
               <div class="ic-v4-card">
                 <!-- Fusion Switch -->
                 <div class="ic-v4-row-head">
-                  <span>🧬 是否画面融合</span>
+                  <span>是否画面融合</span>
                   <div class="ic-ctrl-seg">
                     <button type="button" class="ic-ctrl-pill ${!sd.fusion ? "is-active" : ""}" data-sp-fusion="${esc(n.id)}" data-val="0">单画风</button>
                     <button type="button" class="ic-ctrl-pill ${sd.fusion ? "is-active" : ""}" data-sp-fusion="${esc(n.id)}" data-val="1">双画风融合</button>
@@ -6513,17 +6671,17 @@
                   sd.fusion
                     ? `
                     <div class="ic-v4-slot-grid">
-                      ${renderVisualSlotHtml(n.id, "style1", "角色画风", "🎭", sd.style1)}
-                      ${renderVisualSlotHtml(n.id, "style2", "场景画风", "🌄", sd.style2)}
+                      ${renderVisualSlotHtml(n.id, "style1", "角色画风", "", sd.style1)}
+                      ${renderVisualSlotHtml(n.id, "style2", "场景画风", "", sd.style2)}
                     </div>
                     <div>
-                      ${renderVisualSlotHtml(n.id, "layout", "图型", "📐", sd.layout)}
+                      ${renderVisualSlotHtml(n.id, "layout", "图型", "", sd.layout)}
                     </div>
                   `
                     : `
                     <div class="ic-v4-slot-grid">
-                      ${renderVisualSlotHtml(n.id, "style1", "画风", "🎨", sd.style1)}
-                      ${renderVisualSlotHtml(n.id, "layout", "图型", "📐", sd.layout)}
+                      ${renderVisualSlotHtml(n.id, "style1", "画风", "", sd.style1)}
+                      ${renderVisualSlotHtml(n.id, "layout", "图型", "", sd.layout)}
                     </div>
                   `
                 }
@@ -6551,7 +6709,7 @@
                 <!-- Theme Colors (Multi-select!) -->
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head">
-                    <span>🌈 主题色（可多选）</span>
+                    <span>主题色（可多选）</span>
                     <button type="button" class="ic-opt-pill" data-sp-pick="${esc(n.id)}" data-sp-field="colors">${colors.length ? `更换 (${colors.length})` : "未选 · ＋选择"}</button>
                   </div>
                   ${
@@ -6569,7 +6727,7 @@
                 <!-- Tones (Multi-select) -->
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head">
-                    <span>💡 影调</span>
+                    <span>影调</span>
                     <button type="button" class="ic-opt-pill" data-sp-pick="${esc(n.id)}" data-sp-field="tones">${tones.length ? `更换 (${tones.length})` : "未选 · ＋选择"}</button>
                   </div>
                   ${
@@ -6587,7 +6745,7 @@
                 <!-- Moods (Multi-select) -->
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head">
-                    <span>✨ 情绪（可多选）</span>
+                    <span>情绪（可多选）</span>
                     <button type="button" class="ic-opt-pill" data-sp-pick="${esc(n.id)}" data-sp-field="moods">${allMoodTags.length ? `更换 (${allMoodTags.length})` : "未选 · ＋多选"}</button>
                   </div>
                   ${
@@ -6602,7 +6760,7 @@
 
                 <!-- Whitespace -->
                 <div class="ic-v4-section">
-                  <div class="ic-v4-row-head"><span>🍃 留白</span></div>
+                  <div class="ic-v4-row-head"><span>留白</span></div>
                   <div class="ic-ctrl-seg">
                     ${E.WHITESPACE_OPTIONS.map(
                       (w) =>
@@ -6614,17 +6772,17 @@
                 <!-- Audience & Business Scene -->
                 <div class="ic-v4-slot-grid">
                   <div class="ic-v4-section">
-                    <span style="font-size:11px;font-weight:800;color:var(--ic-ink);">👥 受众</span>
+                    <span style="font-size:11px;font-weight:800;color:var(--ic-ink);">受众</span>
                     <input type="text" list="${audDatalistId}" class="ic-v4-mini-inp" data-sp-aud="${esc(n.id)}" value="${esc(sd.audience || "")}" placeholder="可选：目标受众" />
                   </div>
                   <div class="ic-v4-section">
-                    <span style="font-size:11px;font-weight:800;color:var(--ic-ink);">🎯 业务场景</span>
+                    <span style="font-size:11px;font-weight:800;color:var(--ic-ink);">业务场景</span>
                     <input type="text" list="${sceneDatalistId}" class="ic-v4-mini-inp" data-sp-scene="${esc(n.id)}" value="${esc(sd.businessScene || "")}" placeholder="可选：投放/使用场景" />
                   </div>
                 </div>
               </div>
 
-              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="连入右侧「输出控制」节点">
+              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="连入右侧「生成设置」节点">
                 <span class="ic-port-dot">+</span>
               </div>
             </div>
@@ -6637,7 +6795,7 @@
           return `
             <div class="ic-node ic-node-asset ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
               <div class="ic-node-header-above">
-                <span>🖼️ 图片参数</span>
+                <span>图片参数</span>
                 <span class="ic-node-badge ic-badge-input">输入</span>
               </div>
 
@@ -6646,7 +6804,7 @@
                   !items.length
                     ? `
                     <div class="ic-ing-empty-slot" data-ast-open="${esc(n.id)}" style="height:142px;padding:12px;" title="选择图片资产或上传本地参考图片">
-                      <div style="font-size:22px;line-height:1;">🖼️</div>
+                      <div style="font-size:12px;font-weight:750;color:var(--ic-muted);">[图片]</div>
                       <div style="font-size:12px;font-weight:850;color:var(--ic-ink);">未选择参考图片</div>
                       <div style="font-size:10.8px;color:var(--ic-muted);text-align:center;">角色 / 道具 / 场景 / 其他 / 上传本地图</div>
                       <button type="button" class="btn btn-sm btn-primary" data-ast-open="${esc(n.id)}" style="padding:3px 11px;font-size:11.2px;margin-top:2px;">＋ 选择 / 上传图片</button>
@@ -6659,10 +6817,10 @@
                           return `
                             <div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--ic-border);height:132px;background:var(--ic-surface);" data-ast-open="${esc(n.id)}">
                               <img src="${esc(it.image)}" alt="${esc(it.name)}" style="width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;" />
-                              <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-weight:750;">${esc(cm.icon)} ${esc(it.catLabel || cm.label)}</span>
+                              <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-weight:750;">${esc(it.catLabel || cm.label)}</span>
                               <div style="position:absolute;right:6px;top:6px;display:flex;gap:4px;">
                                 <button type="button" class="ic-mini-glass-btn" data-ast-open="${esc(n.id)}">更换</button>
-                                <button type="button" class="ic-mini-glass-btn" data-ast-clear="${esc(n.id)}" title="清空图片参数">✕</button>
+                                <button type="button" class="ic-mini-glass-btn" data-ast-clear="${esc(n.id)}" title="清空图片参数">×</button>
                               </div>
                             </div>
                             <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
@@ -6699,7 +6857,7 @@
                 }
               </div>
 
-              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="将图片参数连入右侧「输出控制」节点">
+              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="将图片参数连入右侧「生成设置」节点">
                 <span class="ic-port-dot">+</span>
               </div>
             </div>
@@ -6716,14 +6874,14 @@
           return `
             <div class="ic-node ic-node-text_input ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
               <div class="ic-node-header-above">
-                <span>📝 文本参数</span>
+                <span>文本参数</span>
                 <span class="ic-node-badge ic-badge-input">输入</span>
               </div>
 
               <div class="ic-v4-card">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;">
                   <label class="ic-opt-pill" style="cursor:pointer;color:var(--vermilion);border-color:var(--vermilion-border);font-weight:800;" title="选择文件作为附件">
-                    📎 选择文件
+                    选择文件
                     <input type="file" data-txt-file="${esc(n.id)}" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
                   </label>
                 </div>
@@ -6732,8 +6890,8 @@
                   td.fileName
                     ? `
                     <div class="ic-file-banner">
-                      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎 ${esc(td.fileName)}${attSizeLabel ? ` · ${esc(attSizeLabel)}` : ""}</span>
-                      <button type="button" data-txt-clear-file="${esc(n.id)}" style="border:0;background:transparent;color:inherit;cursor:pointer;font-weight:900;" title="移除附件">✕</button>
+                      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">附件: ${esc(td.fileName)}${attSizeLabel ? ` · ${esc(attSizeLabel)}` : ""}</span>
+                      <button type="button" data-txt-clear-file="${esc(n.id)}" style="border:0;background:transparent;color:inherit;cursor:pointer;font-weight:900;" title="移除附件">×</button>
                     </div>
                   `
                     : ""
@@ -6750,19 +6908,19 @@
                 >${esc(td.text || "")}</textarea>
 
                 <div style="display:flex;justify-content:space-between;align-items:center;font-size:10.8px;color:var(--ic-muted);">
-                  <span>${(td.text || "").length} 字${td.fileName ? " · 已添加附件" : ""}</span>
+                  <span>${td.fileName ? "已添加附件" : "文本输入"}</span>
                   <span>点击输入框编辑</span>
                 </div>
               </div>
 
-              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="连入右侧「桥接」或「输出控制」节点">
+              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="连入右侧「多尺寸输出」或「生成设置」节点">
                 <span class="ic-port-dot">+</span>
               </div>
             </div>
           `;
         }
 
-        /* -------- 3.5) BRIDGE HUB NODE (桥接：位于输入与输出之间，一分多分发) -------- */
+        /* -------- 3.5) BRIDGE HUB NODE (多尺寸输出：位于输入与输出之间，一分多分发) -------- */
         if (n.type === "bridge") {
           const rec = E.resolveControlRecipe(CS.graph, n, Catalog);
           const downCtrls = CS.graph.edges
@@ -6772,33 +6930,27 @@
 
           const bridgeTags = [];
           if (rec.skillNode) {
-            const cnt =
-              (rec.style1Id ? 1 : 0) +
-              (rec.style2Id ? 1 : 0) +
-              (rec.layoutId ? 1 : 0) +
-              rec.colorIds.length +
-              rec.toneIds.length +
-              rec.allMoods.length;
-            bridgeTags.push(`🎨 风格${cnt ? `(${cnt}项)` : ""}`);
+            const styleSummary = [rec.style1Id, rec.layoutId].filter(Boolean).join(" · ");
+            bridgeTags.push(`风格参数${styleSummary ? `（${styleSummary}）` : ""}`);
           }
-          if (rec.assetItems.length) bridgeTags.push(`🖼️ 图参×${rec.assetItems.length}`);
+          if (rec.assetItems.length) bridgeTags.push("图片参数");
           if (rec.textNode) {
-            if (rec.attachedFileName) bridgeTags.push(`📎 ${rec.attachedFileName}`);
+            if (rec.attachedFileName) bridgeTags.push(`附件: ${rec.attachedFileName}`);
             if (!rec.attachedFileName || rec.userNoteText) {
-              bridgeTags.push(`📝 文本(${(rec.userNoteText || "").length}字)`);
+              bridgeTags.push("文本参数");
             }
           }
 
           return `
             <div class="ic-node ic-node-bridge ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
               <div class="ic-node-header-above">
-                <span>🔗 桥接</span>
-                <span class="ic-node-badge ic-badge-bridge">中继</span>
+                <span>多尺寸输出</span>
+                <span class="ic-node-badge ic-badge-bridge">多尺寸输出</span>
               </div>
 
               <div class="ic-v4-card">
                 <div class="ic-bridge-hub-box">
-                  <div style="font-size:10.8px;font-weight:800;color:var(--ic-ink);">📥 已汇总上游输入</div>
+                  <div style="font-size:10.8px;font-weight:800;color:var(--ic-ink);">已汇总输入</div>
                   <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
                     ${
                       bridgeTags.length
@@ -6807,12 +6959,12 @@
                     }
                   </div>
                   <div style="font-size:10.5px;color:var(--ic-muted);border-top:1px dashed var(--ic-border);padding-top:5px;">
-                    ${downCtrls.length ? `➡️ 已分发至 ${downCtrls.length} 个输出控制节点` : "➡️ 右侧可同时连出多个输出控制"}
+                    ${downCtrls.length ? `已分发至 ${downCtrls.length} 个生成设置节点` : "右侧可同时连出多个生成设置"}
                   </div>
                 </div>
 
-                <button type="button" class="ic-bridge-add-btn" data-bridge-add-ctrl="${esc(n.id)}" title="新增一个下游输出控制节点并自动连线">
-                  ＋ 新增下游输出控制
+                <button type="button" class="ic-bridge-add-btn" data-bridge-add-ctrl="${esc(n.id)}" title="新增一个下游生成设置节点并自动连线">
+                  ＋ 新增下游生成设置
                 </button>
               </div>
 
@@ -6826,7 +6978,7 @@
           `;
         }
 
-        /* -------- 3.55) TOPIC FISSION NODE (选题裂变：默认裂变 10 条，支持自填裂变方向与点击输入框弹窗查看全部) -------- */
+        /* -------- 3.55) TOPIC FISSION NODE (AI 扩写主题：默认扩写 10 条，支持自填扩写方向与点击输入框弹窗查看全部) -------- */
         if (n.type === "fission") {
           const fd = n.data || {};
           const curStrat = fd.strategy || "daily_quote";
@@ -6838,14 +6990,14 @@
           return `
             <div class="ic-node ic-node-fission ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
               <div class="ic-node-header-above">
-                <span>💡 选题裂变</span>
-                <span class="ic-node-badge ic-badge-fission">已裂变 ${genItems.length} 条</span>
+                <span>AI 扩写主题</span>
+                <span class="ic-node-badge ic-badge-fission">已扩写 ${genItems.length} 条</span>
               </div>
 
               <div class="ic-v4-card">
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head">
-                    <span>🌱 核心母题</span>
+                    <span>核心母题</span>
                   </div>
                   <input
                     type="text"
@@ -6859,7 +7011,7 @@
 
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head">
-                    <span>🧭 裂变方向</span>
+                    <span>扩写方向</span>
                     ${hasCustomStrat ? `<span style="font-size:10px;color:#6d28d9;font-weight:800;">已自填方向</span>` : ""}
                   </div>
                   <div class="ic-fission-strat-grid">
@@ -6867,7 +7019,6 @@
                       .map(
                         (st) => `
                         <button type="button" class="ic-fission-strat-btn ${!hasCustomStrat && curStrat === st.id ? "is-active" : ""}" data-fis-strat="${esc(n.id)}" data-val="${esc(st.id)}" title="${esc(st.desc)}">
-                          <span style="font-size:12.5px;line-height:1;">${st.icon}</span>
                           <span>${esc(st.label)}</span>
                         </button>
                       `
@@ -6880,15 +7031,15 @@
                     data-fis-custom-strat="${esc(n.id)}"
                     data-canvas-no-zoom
                     value="${esc(customStrat)}"
-                    placeholder="✍️ 或自行填写裂变方向（如：反常识痛点提问…）"
+                    placeholder="或自行填写扩写方向（如：反常识痛点提问…）"
                     style="${hasCustomStrat ? "border-color:#7c3aed;background:rgba(124,58,237,0.06);" : ""}"
                   />
                 </div>
 
                 <div class="ic-v4-section">
                   <div class="ic-count-row">
-                    <span style="font-size:11.5px;font-weight:800;color:var(--ic-ink);">🔢 裂变条数</span>
-                    <div class="ic-count-custom-box" title="自行填写裂变条数 (默认 10 条，支持 1~200 条)">
+                    <span style="font-size:11.5px;font-weight:800;color:var(--ic-ink);">扩写条数</span>
+                    <div class="ic-count-custom-box" title="自行填写扩写条数 (默认 10 条，支持 1~200 条)">
                       <button type="button" class="ic-count-step-btn" data-fis-cnt-step="${esc(n.id)}" data-delta="-1">−</button>
                       <input
                         type="number"
@@ -6908,7 +7059,7 @@
 
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head">
-                    <span>📋 裂变子选题（共 ${genItems.length} 条）</span>
+                    <span>扩写子主题（共 ${genItems.length} 条）</span>
                     <span style="font-size:10px;color:#6d28d9;font-weight:750;">点击输入框查看全部</span>
                   </div>
                   <textarea
@@ -6917,27 +7068,27 @@
                     data-canvas-no-zoom
                     readonly
                     style="min-height:84px;max-height:92px;font-size:11.3px;line-height:1.52;cursor:pointer;background:rgba(124,58,237,0.04);border-color:rgba(124,58,237,0.28);"
-                    title="点击弹出查看与编辑全部裂变子选题窗口"
-                    placeholder="点击查看或微调全部裂变子选题…"
+                    title="点击弹出查看与编辑全部扩写子主题窗口"
+                    placeholder="点击查看或微调全部扩写子主题…"
                   >${esc(genItems.slice(0, 6).join("\n"))}</textarea>
                 </div>
 
                 <button type="button" class="ic-fission-gen-btn" data-fis-gen="${esc(n.id)}">
-                  ✨ 重新裂变 ${targetCnt} 条子选题
+                  AI 扩写 ${targetCnt} 条子主题
                 </button>
               </div>
 
               <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="可选接收左侧「文本参数」作为母题补充">
                 <span class="ic-port-dot">+</span>
               </div>
-              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="连入右侧「循环批量」节点，驱动大批量出图">
+              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="连入右侧「批量」节点，驱动大批量出图">
                 <span class="ic-port-dot">+</span>
               </div>
             </div>
           `;
         }
 
-        /* -------- 3.6) LOOP BATCH NODE (循环批量：支持多文案 / 多画风 / 多图型 / 多图参循环出图) -------- */
+        /* -------- 3.6) LOOP BATCH NODE (批量：支持多文案 / 多画风 / 多图型 / 多图参循环出图) -------- */
         if (n.type === "loop") {
           const ld = n.data || {};
           const curLoopMode = ["prompts", "styles", "layouts", "assets"].includes(ld.loopMode) ? ld.loopMode : "prompts";
@@ -6956,10 +7107,10 @@
             .find((x) => x && x.type === "fission") || rec.fissionNode || null;
 
           const upTags = [];
-          if (rec.skillNode) upTags.push("🎨 公共风格");
-          if (upFission) upTags.push(`💡 裂变×${(upFission.data?.generatedItems || []).length}`);
-          if (rec.assetItems.length) upTags.push(`🖼️ 图参×${rec.assetItems.length}`);
-          if (rec.textNode) upTags.push("📝 文本母本");
+          if (rec.skillNode) upTags.push("公共风格");
+          if (upFission) upTags.push(`AI扩写×${(upFission.data?.generatedItems || []).length}`);
+          if (rec.assetItems.length) upTags.push(`图参×${rec.assetItems.length}`);
+          if (rec.textNode) upTags.push("文本母本");
 
           const doneDispItems = downCtrls
             .flatMap((c) => getDownstreamDisplayNodes(c.id))
@@ -6976,13 +7127,13 @@
             modeBodyHtml = `
               <div class="ic-v4-section">
                 <div class="ic-v4-row-head">
-                  <span data-loop-line-cnt="${esc(n.id)}">📋 循环文案（共 ${iterCount} 条 · 每行 1 张）</span>
+                  <span data-loop-line-cnt="${esc(n.id)}">批量文案（共 ${iterCount} 条 · 每行 1 张）</span>
                   <div style="display:flex;gap:4px;">
-                    <button type="button" class="ic-opt-pill" data-loop-open-prompts="${esc(n.id)}" style="color:#0f766e;border-color:rgba(13,148,136,0.4);">🔍 大窗/导入</button>
+                    <button type="button" class="ic-opt-pill" data-loop-open-prompts="${esc(n.id)}" style="color:#0f766e;border-color:rgba(13,148,136,0.4);">大窗/导入</button>
                     ${
                       rawLines.length
                         ? `<button type="button" class="ic-opt-pill" data-loop-clear-prompts="${esc(n.id)}">清空</button>`
-                        : `<button type="button" class="ic-opt-pill" data-loop-fill-demo="${esc(n.id)}">✨ 示例</button>`
+                        : `<button type="button" class="ic-opt-pill" data-loop-fill-demo="${esc(n.id)}">示例</button>`
                     }
                   </div>
                 </div>
@@ -6991,10 +7142,10 @@
                     ? `
                       <div
                         data-fis-open-modal="${esc(upFission.id)}"
-                        title="点击查看或微调全部裂变子选题"
+                        title="点击查看或微调全部扩写子主题"
                         style="padding:8px 10px;border-radius:9px;background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.26);font-size:11px;line-height:1.5;color:var(--ic-ink);cursor:pointer;"
                       >
-                        <div style="font-weight:850;color:#6d28d9;margin-bottom:3px;">💡 已自动接入上游「选题裂变」共 ${iterCount} 条（点击查看全部）</div>
+                        <div style="font-weight:850;color:#6d28d9;margin-bottom:3px;">已自动接入上游「AI 扩写主题」共 ${iterCount} 条（点击查看全部）</div>
                         <div style="color:var(--ic-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">首条：${esc(iters[0]?.theme || "")}</div>
                       </div>
                     `
@@ -7003,12 +7154,12 @@
                         class="ic-loop-list-ta"
                         data-loop-ta="${esc(n.id)}"
                         data-canvas-no-zoom
-                        placeholder="每行输入一条出图主题或文案…&#10;（也可点击右上角导入 .txt/.csv，或从左侧连入「选题裂变」）"
+                        placeholder="每行输入一条出图主题或文案…&#10;（也可点击右上角导入 .txt/.csv，或从左侧连入「AI 扩写主题」）"
                       >${esc(ld.promptListText || "")}</textarea>
                     `
                 }
                 <div style="font-size:10.3px;color:var(--ic-muted);display:flex;justify-content:space-between;gap:6px;">
-                  <span>${rec.textNode ? "支持 {item} / {index} 变量" : iterCount > 6 ? "🗂️ 超 6 张自动聚合成 1 个图集节点" : "每行独立作为一轮出图主题"}</span>
+                  <span>${rec.textNode ? "支持 {item} / {index} 变量" : iterCount > 6 ? "超 6 张自动聚合成 1 个图集节点" : "每行独立作为一轮出图主题"}</span>
                   <span>支持 1~200 轮</span>
                 </div>
               </div>
@@ -7019,14 +7170,13 @@
             modeBodyHtml = `
               <div class="ic-v4-section">
                 <div class="ic-v4-row-head">
-                  <span>${isStyle ? `🎨 待循环画风 (${ids.length} 款)` : `📐 待循环图型 (${ids.length} 款)`}</span>
-                  <button type="button" class="ic-opt-pill" data-loop-rand="${esc(n.id)}" data-kind="${curLoopMode}" style="color:#0f766e;border-color:rgba(13,148,136,0.4);">🎲 随机4款</button>
+                  <span>${isStyle ? `待循环画风 (${ids.length} 款)` : `待循环图型 (${ids.length} 款)`}</span>
+                  <button type="button" class="ic-opt-pill" data-loop-rand="${esc(n.id)}" data-kind="${curLoopMode}" style="color:#0f766e;border-color:rgba(13,148,136,0.4);">随机4款</button>
                 </div>
                 ${
                   ids.length === 0
                     ? `
                       <div class="ic-ing-empty-slot" data-loop-pick="${esc(n.id)}" data-kind="${curLoopMode}" style="min-height:86px;padding:10px;">
-                        <div style="font-size:18px;">${isStyle ? "🎨" : "📐"}</div>
                         <div style="font-size:11.5px;font-weight:800;">点击选择多款${isStyle ? "画风横评" : "图型对比"}</div>
                       </div>
                     `
@@ -7062,14 +7212,13 @@
             modeBodyHtml = `
               <div class="ic-v4-section">
                 <div class="ic-v4-row-head">
-                  <span>🖼️ 逐张遍历参考图 (${astItems.length} 张)</span>
+                  <span>逐张遍历参考图 (${astItems.length} 张)</span>
                   <button type="button" class="ic-opt-pill" data-loop-setup-assets="${esc(n.id)}" style="color:#0f766e;border-color:rgba(13,148,136,0.4);">＋ 选图参</button>
                 </div>
                 ${
                   astItems.length === 0
                     ? `
                       <div class="ic-ing-empty-slot" data-loop-setup-assets="${esc(n.id)}" style="min-height:86px;padding:10px;">
-                        <div style="font-size:18px;">🖼️</div>
                         <div style="font-size:11.3px;font-weight:800;">点击添加或从左侧连入「图片参数」</div>
                         <div style="font-size:10.2px;color:var(--ic-muted);">每张参考图单独作为 1 轮主体批量出图</div>
                       </div>
@@ -7105,9 +7254,9 @@
           return `
             <div class="ic-node ic-node-loop ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
               <div class="ic-node-header-above">
-                <span>🔁 循环批量</span>
+                <span>批量</span>
                 <span class="ic-node-badge ic-badge-loop" data-loop-head-badge="${esc(n.id)}">${
-            isLoopRunning ? `⏳ ${curStep}/${totSteps}` : `共 ${iterCount} 轮`
+            isLoopRunning ? `${curStep}/${totSteps}` : `共 ${iterCount} 轮`
           }</span>
               </div>
 
@@ -7117,11 +7266,11 @@
                     ${
                       upTags.length
                         ? upTags.map((t) => `<span class="ic-v4-tag" style="background:var(--ic-panel-solid);font-size:10px;">${esc(t)}</span>`).join("")
-                        : `<span style="color:var(--ic-muted);">👈 可连入公共风格/文本</span>`
+                        : `<span style="color:var(--ic-muted);">可连入公共风格/文本</span>`
                     }
                   </div>
                   <span style="color:${downCtrls.length ? "#0f766e" : "var(--ic-muted)"};font-weight:800;">
-                    ${downCtrls.length ? `➡️ 已连 ${downCtrls.length} 个输出` : "➡️ 自动连输出控制"}
+                    ${downCtrls.length ? `已连 ${downCtrls.length} 个生成设置` : "自动连生成设置"}
                   </span>
                 </div>
 
@@ -7130,7 +7279,6 @@
                     ${E.LOOP_MODES.map(
                       (m) => `
                         <button type="button" class="ic-loop-mode-btn ${curLoopMode === m.id ? "is-active" : ""}" data-loop-mode="${esc(n.id)}" data-val="${esc(m.id)}" title="${esc(m.desc)}">
-                          <span style="font-size:13px;line-height:1;">${m.icon}</span>
                           <span>${esc(m.label)}</span>
                         </button>
                       `
@@ -7145,7 +7293,7 @@
                     ? `
                       <div class="ic-loop-progress-wrap">
                         <div style="font-size:11px;font-weight:800;color:#0f766e;" data-loop-prog-text="${esc(n.id)}">
-                          ⏳ 正在循环第 ${curStep} / ${totSteps} 轮…
+                          正在循环第 ${curStep} / ${totSteps} 轮…
                         </div>
                         <div class="ic-loop-progress-track">
                           <div class="ic-loop-progress-fill" data-loop-prog-bar="${esc(n.id)}" style="width:${pct}%;"></div>
@@ -7155,7 +7303,7 @@
                     : !downCtrls.length
                       ? `
                         <button type="button" class="ic-bridge-add-btn" data-loop-add-ctrl="${esc(n.id)}" style="color:#0f766e;border-color:rgba(13,148,136,0.38);">
-                          ＋ 连接下游「输出控制」节点
+                          ＋ 连接下游「生成设置」节点
                         </button>
                       `
                       : `
@@ -7165,8 +7313,8 @@
                         >
                           ${
                             doneDispItems.length > 0
-                              ? `✓ 已完成 ${doneDispItems.length} 张循环出图 · 在右侧「输出控制」重新运行`
-                              : `➡️ 已编排 ${iterCount} 轮队列 · 由右侧「输出控制」统一触发运行`
+                              ? `已完成 ${doneDispItems.length} 张批量出图 · 在右侧「生成设置」重新运行`
+                              : `已编排 ${iterCount} 轮队列 · 由右侧「生成设置」统一触发运行`
                           }
                         </div>
                       `
@@ -7176,14 +7324,14 @@
               <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="接收上游公共参数（风格参数 / 图片参数 / 文本参数）">
                 <span class="ic-port-dot">+</span>
               </div>
-              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="连入右侧「输出控制」节点，驱动循环批量出图">
+              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="连入右侧「生成设置」节点，驱动批量出图">
                 <span class="ic-port-dot">+</span>
               </div>
             </div>
           `;
         }
 
-        /* -------- 4) OUTPUT CONTROL NODE (输出控制：纯创作台，直接出图，1个节点即可驱动1~200张批量出图) -------- */
+        /* -------- 4) OUTPUT CONTROL NODE (生成设置：纯创作台，直接出图，1个节点即可驱动1~200张批量出图) -------- */
         if (n.type === "output_control") {
           const cd = n.data || {};
           const curMode =
@@ -7202,34 +7350,27 @@
           const connectedTags = [];
           if (rec.loopNode) {
             const lmObj = E.LOOP_MODES.find((m) => m.id === (rec.loopNode.data?.loopMode || "prompts"));
-            connectedTags.push(`🔁 循环(${lmObj ? lmObj.label : "批量"}·${plan.loopCount || 0}轮)`);
+            connectedTags.push(`批量(${lmObj ? lmObj.label : "批量"})`);
           } else if (rec.fissionNode) {
-            connectedTags.push(`💡 选题裂变(${(rec.fissionNode.data?.generatedItems || []).length}条)`);
+            connectedTags.push("AI 扩写主题");
           }
-          if (hasBridgeUp) connectedTags.push("🔗 经桥接接入");
+          if (hasBridgeUp) connectedTags.push("经多尺寸输出接入");
           if (rec.skillNode) {
-            const cnt =
-              (rec.style1Id ? 1 : 0) +
-              (rec.style2Id ? 1 : 0) +
-              (rec.layoutId ? 1 : 0) +
-              rec.colorIds.length +
-              rec.toneIds.length +
-              rec.allMoods.length;
-            connectedTags.push(`🎨 风格参数${cnt ? `(${cnt}项)` : "(待选)"}`);
+            connectedTags.push("风格参数");
           }
-          if (rec.assetItems.length) connectedTags.push(`🖼️ 图片参数×${rec.assetItems.length}`);
+          if (rec.assetItems.length) connectedTags.push(`图片参数×${rec.assetItems.length}`);
           if (rec.textNode) {
-            if (rec.attachedFileName) connectedTags.push(`📎 ${rec.attachedFileName}`);
+            if (rec.attachedFileName) connectedTags.push(rec.attachedFileName);
             if (!rec.attachedFileName || rec.userNoteText) {
-              connectedTags.push(`📝 文本参数(${(rec.userNoteText || "").length}字)`);
+              connectedTags.push("文本参数");
             }
           }
 
           return `
             <div class="ic-node ic-node-output_control ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
               <div class="ic-node-header-above">
-                <span>🎛️ ${esc(n.title || "输出控制")}</span>
-                <span class="ic-node-badge ic-badge-output-ctrl">输出控制</span>
+                <span>${esc(n.title === "输出控制" ? "生成设置" : (n.title || "生成设置"))}</span>
+                <span class="ic-node-badge ic-badge-output-ctrl">生成设置</span>
               </div>
 
               <div class="ic-v4-card">
@@ -7238,18 +7379,17 @@
                   ${
                     connectedTags.length
                       ? connectedTags.map((t) => `<span class="ic-v4-tag" style="background:var(--ic-panel-solid);font-size:10.5px;">${esc(t)}</span>`).join("")
-                      : `<span style="color:var(--ic-muted);">👈 可从左侧连入输入节点或「桥接」节点</span>`
+                      : `<span style="color:var(--ic-muted);">可从左侧连入输入节点或「多尺寸输出」节点</span>`
                   }
                 </div>
 
                 <!-- 5 Modes Grid (文章封面+插图已合并为统一的「文章配图」) -->
                 <div class="ic-v4-section">
-                  <div class="ic-v4-row-head"><span>📌 输出模式</span></div>
+                  <div class="ic-v4-row-head"><span>输出模式</span></div>
                   <div class="ic-ctrl-mode-grid">
                     ${E.OUTPUT_MODES.filter((m) => m.id !== "article-illust").map(
                       (m) => `
                       <button type="button" class="ic-ctrl-mode-btn ${curMode === m.id ? "is-active" : ""}" data-ctrl-mode="${esc(n.id)}" data-val="${esc(m.id)}" title="${esc(m.desc)}">
-                        <span style="font-size:14px;line-height:1;">${m.icon}</span>
                         <span>${esc(m.label)}</span>
                       </button>
                     `
@@ -7263,7 +7403,7 @@
                     ? `
                     <div class="ic-v4-section" style="padding:8px 10px;border-radius:9px;background:var(--ic-surface);border:1px solid var(--ic-border);">
                       <div class="ic-v4-row-head">
-                        <span>📰 文章配图（封面+插图 · 共 ${planSlotCount} 卡）</span>
+                        <span>文章配图（封面+插图）</span>
                       </div>
                       <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;margin-top:2px;cursor:pointer;">
                         <input type="checkbox" data-ctrl-inc-cover="${esc(n.id)}" ${cd.includeCover !== false ? "checked" : ""} />
@@ -7294,7 +7434,7 @@
                         <div class="ic-v4-section">
                           <div class="ic-count-row">
                             <span style="font-size:11.5px;font-weight:800;color:var(--ic-ink);">${
-                              rec.loopNode ? "🔢 每轮张数" : "🔢 图片数量"
+                              rec.loopNode ? "每轮张数" : "图片数量"
                             }</span>
                             <div class="ic-count-custom-box" title="自主调节或直接填写图片数量 (1~200 张，>6张自动聚合为1个批量图集节点)">
                               <button type="button" class="ic-count-step-btn" data-ctrl-count-step="${esc(n.id)}" data-delta="-1">−</button>
@@ -7305,12 +7445,12 @@
                           </div>
                           ${
                             rec.loopNode
-                              ? `<div style="font-size:10.8px;color:#0f766e;font-weight:800;">🔁 循环 ${plan.loopCount || 0} 轮 × 每轮 ${curCount} 张 = 批量共出 ${plan.specs.length} 张</div>`
+                              ? `<div style="font-size:10.8px;color:#0f766e;font-weight:800;">循环 ${plan.loopCount || 0} 轮 × 每轮 ${curCount} 张 = 批量共出 ${plan.specs.length} 张</div>`
                               : ""
                           }
                           ${
                             plan.specs.length > BATCH_GALLERY_THRESHOLD
-                              ? `<div style="font-size:10.5px;color:#1f6f4a;font-weight:750;">🗂️ 超过 ${BATCH_GALLERY_THRESHOLD} 张：右侧自动聚合为 1 个「批量图集」节点，画布零爆炸</div>`
+                              ? `<div style="font-size:10.5px;color:#1f6f4a;font-weight:750;">超过 ${BATCH_GALLERY_THRESHOLD} 张：右侧自动聚合为 1 个「批量图集」节点，画布零爆炸</div>`
                               : ""
                           }
                           ${
@@ -7326,7 +7466,7 @@
                         </div>
                         <div class="ic-v4-section">
                           <div class="ic-v4-row-head">
-                            <span>📐 画幅比例</span>
+                            <span>画幅比例</span>
                             <div class="ic-ratio-custom-wrap ${isCustomRatio ? "is-custom-active" : ""}" title="除下方预置外，可直接填写任意画幅比例（如 5:2、21:9、2:3）">
                               <span class="ic-ratio-custom-lbl">自定义</span>
                               <input
@@ -7353,20 +7493,20 @@
                 <button type="button" class="ic-ctrl-generate-btn" data-ctrl-run="${esc(n.id)}" ${cd.status === "generating" ? "disabled" : ""}>
                   ${
                     cd.status === "generating"
-                      ? "⏳ 运行中…"
+                      ? "运行中…"
                       : plan.kind === "loop"
-                        ? `🔁 循环运行 (共 ${plan.specs.length} 张)`
+                        ? `批量运行 (共 ${plan.specs.length} 张)`
                         : plan.specs.length > 1 && curMode !== "article-illust"
-                          ? `⚡ 批量运行 (共 ${plan.specs.length} 张)`
-                          : "⚡ 运行"
+                          ? `批量运行 (共 ${plan.specs.length} 张)`
+                          : "运行"
                   }
                 </button>
               </div>
 
-              <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="接收上游输入节点、循环批量或桥接节点">
+              <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="接收上游输入节点、批量或多尺寸输出节点">
                 <span class="ic-port-dot">+</span>
               </div>
-              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="输出「文章配图方案」、「图片显示」或「批量图集」节点">
+              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="输出「文章配图方案」、「成图显示」或「批量图集」节点">
                 <span class="ic-port-dot">+</span>
               </div>
             </div>
@@ -7383,14 +7523,14 @@
           return `
             <div class="ic-node ic-node-article_plan ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}" title="点击查看文章并编排配图方案">
               <div class="ic-node-header-above">
-                <span>📋 文章配图方案</span>
-                <span class="ic-node-badge ic-badge-output-disp">${pd.status === "generating" ? "⏳ 运行中" : `共 ${orderedCards.length} 卡 · 已出 ${doneCount}`}</span>
+                <span>文章配图方案</span>
+                <span class="ic-node-badge ic-badge-output-disp">${pd.status === "generating" ? "运行中" : `共 ${orderedCards.length} 卡 · 已出 ${doneCount}`}</span>
               </div>
 
               <div class="ic-v4-card">
                 <div style="padding:7px 9px;border-radius:9px;background:rgba(31,111,74,0.07);border:1px solid rgba(31,111,74,0.22);">
                   <div style="font-size:12.5px;font-weight:850;color:var(--ic-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                    📄 ${esc(pd.articleTitle || "文章配图方案")}
+                    ${esc(pd.articleTitle || "文章配图方案")}
                   </div>
                   <div style="font-size:10.5px;color:var(--ic-muted);margin-top:1px;">
                     桌面宽屏排版 · 支持拖动排序与点击卡片改词
@@ -7434,21 +7574,21 @@
                 </div>
 
                 <button type="button" class="ic-ctrl-generate-btn" data-plan-open-wide="${esc(n.id)}" style="background:#1f6f4a;box-shadow:0 4px 12px rgba(31,111,74,0.22);">
-                  📖 查看文章
+                  查看文章
                 </button>
               </div>
 
-              <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="来自左侧「输出控制」节点">
+              <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="来自左侧「生成设置」节点">
                 <span class="ic-port-dot">+</span>
               </div>
-              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="自动连接右侧已生成的「图片显示」节点">
+              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="自动连接右侧已生成的「成图显示」节点">
                 <span class="ic-port-dot">+</span>
               </div>
             </div>
           `;
         }
 
-        /* -------- 5) AUTO-SPAWNED DISPLAY NODE (≤6张一图一节点；>6张自动收纳为1个分页「🗂️ 批量图集」节点) -------- */
+        /* -------- 5) AUTO-SPAWNED DISPLAY NODE (≤6张一图一节点；>6张自动收纳为1个分页「批量图集」节点) -------- */
         if (n.type === "output_display") {
           const dd = n.data || {};
           const items = Array.isArray(dd.items) ? dd.items : [];
@@ -7470,9 +7610,9 @@
             return `
               <div class="ic-node ic-node-output_display ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
                 <div class="ic-node-header-above">
-                  <span>🗂️ 批量图集</span>
+                  <span>批量图集</span>
                   <span class="ic-node-badge ic-badge-output-disp">${
-                    dd.status === "generating" ? "⏳ 批量生成中" : `共 ${items.length} 张`
+                    dd.status === "generating" ? "批量生成中" : `共 ${items.length} 张`
                   }</span>
                 </div>
 
@@ -7481,9 +7621,8 @@
                     dd.status === "generating"
                       ? `
                       <div style="padding:24px 14px;border-radius:10px;background:rgba(31,111,74,0.06);border:1px dashed rgba(31,111,74,0.38);text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px;">
-                        <div style="font-size:20px;">🗂️</div>
                         <div style="font-size:12.5px;font-weight:850;color:#1f6f4a;" data-gal-prog-for="${esc(n.id)}">
-                          ⏳ 正在批量出图 ${items.length} / ${dd.totalTarget || items.length || 100} 张…
+                          正在批量出图 ${items.length} / ${dd.totalTarget || items.length || 100} 张…
                         </div>
                         <div style="font-size:10.8px;color:var(--ic-muted);">所有成图自动汇聚于此节点，无需堆叠百个显示框</div>
                       </div>
@@ -7511,9 +7650,9 @@
                         </div>
                         <div class="ic-disp-deliverable-bar">
                           <div style="display:flex;gap:6px;">
-                            <button type="button" class="btn btn-sm" data-disp-open-gal="${esc(n.id)}" style="flex:1.18;font-weight:800;">🔍 百图画廊</button>
-                            <button type="button" class="btn btn-sm" data-disp-zip="${esc(n.id)}" style="flex:1;">📦 ZIP</button>
-                            <button type="button" class="btn btn-sm btn-primary" data-disp-pub="${esc(n.id)}" style="flex:0.95;font-weight:850;">🚀 晒图</button>
+                            <button type="button" class="btn btn-sm" data-disp-open-gal="${esc(n.id)}" style="flex:1.18;font-weight:800;">百图画廊</button>
+                            <button type="button" class="btn btn-sm" data-disp-zip="${esc(n.id)}" style="flex:1;">ZIP</button>
+                            <button type="button" class="btn btn-sm btn-primary" data-disp-pub="${esc(n.id)}" style="flex:0.95;font-weight:850;">晒图</button>
                           </div>
                         </div>
                       `
@@ -7525,10 +7664,10 @@
                   }
                 </div>
 
-                <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="来自左侧「输出控制」节点">
+                <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="来自左侧「生成设置」节点">
                   <span class="ic-port-dot">+</span>
                 </div>
-                <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="可将图集首图连入下游新的「输出控制」节点">
+                <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="可将图集首图连入下游新的「生成设置」节点">
                   <span class="ic-port-dot">+</span>
                 </div>
               </div>
@@ -7538,8 +7677,8 @@
           return `
             <div class="ic-node ic-node-output_display ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
               <div class="ic-node-header-above">
-                <span>🖼️ 图片显示</span>
-                <span class="ic-node-badge ic-badge-output-disp">${dd.status === "generating" ? "⏳ 生成中" : it?.demoMode ? "🧪 演示样图" : esc(it?.ratio || "成图")}</span>
+                <span>成图显示</span>
+                <span class="ic-node-badge ic-badge-output-disp">${dd.status === "generating" ? "生成中" : it?.demoMode ? "演示样图" : esc(it?.ratio || "成图")}</span>
               </div>
 
               <div class="ic-v4-card" style="position:relative;">
@@ -7547,7 +7686,6 @@
                   dd.status === "generating"
                     ? `
                     <div style="padding:32px 16px;border-radius:10px;background:var(--ic-surface);border:1px dashed var(--ic-border-strong);text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px;">
-                      <div style="font-size:20px;">✦</div>
                       <div style="font-size:12.5px;font-weight:850;">正在生成图片…</div>
                       <div style="font-size:11px;font-family:var(--font-mono);color:var(--ic-muted);" data-timer-for="${esc(n.id)}">${dd.elapsedSec || 0}s</div>
                     </div>
@@ -7557,8 +7695,8 @@
                       <div class="ic-disp-single-wrap">
                         <img src="${esc(it.imageUrl)}" alt="${esc(it.title || "生成图片")}" data-disp-zoom="${esc(it.imageUrl)}" data-disp-title="${esc(it.title || "生成图片")}" />
                         <div style="position:absolute;right:8px;top:8px;display:flex;gap:5px;">
-                          <button type="button" class="ic-mini-glass-btn" data-disp-zoom="${esc(it.imageUrl)}" data-disp-title="${esc(it.title || "生成图片")}">🔍 放大</button>
-                          ${upParentId ? `<button type="button" class="ic-mini-glass-btn" data-disp-regen-node="${esc(n.id)}" title="单张重绘此节点">🔄</button>` : ""}
+                          <button type="button" class="ic-mini-glass-btn" data-disp-zoom="${esc(it.imageUrl)}" data-disp-title="${esc(it.title || "生成图片")}">放大</button>
+                          ${upParentId ? `<button type="button" class="ic-mini-glass-btn" data-disp-regen-node="${esc(n.id)}" title="单张重绘此节点">重绘</button>` : ""}
                         </div>
                       </div>
                       <div class="ic-disp-deliverable-bar">
@@ -7566,8 +7704,8 @@
                           ${esc(it.title || "生成图片")}
                         </div>
                         <div style="display:flex;gap:6px;">
-                          <a class="btn btn-sm" href="${esc(it.imageUrl)}" download="handraw-output.webp" style="flex:1;text-align:center;">⬇️ 下载</a>
-                          <button type="button" class="btn btn-sm btn-primary" data-disp-pub="${esc(n.id)}" style="flex:1;font-weight:850;">🚀 晒图</button>
+                          <a class="btn btn-sm" href="${esc(it.imageUrl)}" download="handraw-output.webp" style="flex:1;text-align:center;">下载</a>
+                          <button type="button" class="btn btn-sm btn-primary" data-disp-pub="${esc(n.id)}" style="flex:1;font-weight:850;">晒图</button>
                         </div>
                       </div>
                     `
@@ -7579,10 +7717,10 @@
                 }
               </div>
 
-              <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="来自左侧「输出控制」或「文章配图方案」节点">
+              <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="来自左侧「生成设置」或「文章配图方案」节点">
                 <span class="ic-port-dot">+</span>
               </div>
-              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="可将此成图作为参考图参连入下游新的「输出控制」节点继续改图">
+              <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="可将此成图作为参考图参连入下游新的「生成设置」节点继续改图">
                 <span class="ic-port-dot">+</span>
               </div>
             </div>
@@ -7894,7 +8032,7 @@
       fullRenderCanvas();
       persistOpenTabs();
       if (showToast) {
-        toast(`💡 已裂变生成 ${cnt} 条不重样子选题！`);
+        toast(`已扩写生成 ${cnt} 条不重样子主题！`);
       }
     };
 
@@ -8045,15 +8183,15 @@
         const lineCnt = DOM.nodesLayer.querySelector(`[data-loop-line-cnt="${n.id}"]`);
         const readyHint = DOM.nodesLayer.querySelector(`[data-loop-ready-hint="${n.id}"]`);
         if (headBadge) headBadge.textContent = `共 ${cnt} 轮`;
-        if (lineCnt) lineCnt.textContent = `📋 循环文案（共 ${cnt} 条 · 每行 1 张）`;
+        if (lineCnt) lineCnt.textContent = `批量文案（共 ${cnt} 条 · 每行 1 张）`;
         if (readyHint && n.data.status !== "running") {
-          readyHint.textContent = `➡️ 已编排 ${cnt} 轮队列 · 由右侧「输出控制」统一触发运行`;
+          readyHint.textContent = `已编排 ${cnt} 轮队列 · 由右侧「生成设置」统一触发运行`;
         }
         downCtrls.forEach((dc) => {
           const ctrlBtn = DOM.nodesLayer.querySelector(`[data-ctrl-run="${dc.id}"]`);
           if (ctrlBtn && dc.data?.status !== "generating") {
             const perRound = Math.max(1, Math.min(200, Math.round(Number(dc.data?.count) || 1)));
-            ctrlBtn.textContent = `🔁 循环运行 (共 ${Math.min(200, cnt * perRound)} 张)`;
+            ctrlBtn.textContent = `批量运行 (共 ${Math.min(200, cnt * perRound)} 张)`;
           }
         });
       };
@@ -8095,7 +8233,7 @@
         n.data.splitUpstreamText = true;
         fullRenderCanvas();
         persistOpenTabs();
-        toast("✨ 已填入 4 条节气循环出图示例");
+        toast("已填入 4 条节气出图示例");
       };
     });
 
@@ -8128,7 +8266,7 @@
         }
         fullRenderCanvas();
         persistOpenTabs();
-        toast(`🎲 已随机挑选 4 款${kind === "styles" ? "画风" : "图型"}加入循环队列`);
+        toast(`已随机挑选 4 款${kind === "styles" ? "画风" : "图型"}加入批量队列`);
       };
     });
 
@@ -8494,7 +8632,21 @@
 
     const isFromArticle = isPlan || upParent?.type === "article_plan" || dispNode.data?.mode === "article-illust";
 
-    S.goToCurationShare({
+    let subject = "";
+    const qParts = getQuickParts(CS.graph);
+    if (qParts?.text?.data?.text) {
+      subject = String(qParts.text.data.text).trim();
+    } else if (ctrl) {
+      const upTextEdge = CS.graph.edges.find((e) => e.to === ctrl.id && getNodeById(e.from)?.type === "text_input");
+      if (upTextEdge) {
+        const upTextNode = getNodeById(upTextEdge.from);
+        if (upTextNode?.data?.text) {
+          subject = String(upTextNode.data.text).trim();
+        }
+      }
+    }
+
+    const sharePayload = {
       kind: "work",
       category: isFromArticle ? "experience" : "tuning",
       title: (isPlan ? dispNode.data?.articleTitle : rawItems[0]?.title) || "Handraw 画布创作",
@@ -8512,7 +8664,12 @@
       ratio: rawItems[0]?.ratio || ctrl?.data?.ratio || "3:4",
       mode: isFromArticle ? "article-illust" : ctrl?.data?.mode === "series" || ctrl?.data?.mode === "xhs-batch" ? "graphic-text" : ctrl?.data?.mode || "graphic-text",
       mood: rec?.allMoods?.[0] || "诗意"
-    });
+    };
+    if (subject) {
+      sharePayload.subject = subject;
+    }
+
+    S.goToCurationShare(sharePayload);
   }
 
   /* ======================== FLOATING SELECTION BAR & ITEM DELETION ======================== */
@@ -8550,7 +8707,7 @@
     if (CS.selectedEdgeId && CS.selectedEdgePt) {
       htmlParts.push(`
         <button type="button" class="ic-edge-unlink-btn" id="ic-unlink-edge-btn" style="pointer-events:auto;left:${CS.selectedEdgePt.x}px;top:${CS.selectedEdgePt.y}px;">
-          ✂️ 断开此连线 (Del)
+          断开此连线 (Del)
         </button>
       `);
     }
@@ -8560,7 +8717,7 @@
       const single = selNodes.length === 1 ? selNodes[0] : null;
       const existingLoop = CS.graph.nodes.find((n) => n.type === "loop");
       const existingBridge = CS.graph.nodes.find((n) => n.type === "bridge");
-      const linkTargetLabel = existingLoop ? "循环批量" : existingBridge ? "桥接" : "输出控制";
+      const linkTargetLabel = existingLoop ? "批量" : existingBridge ? "多尺寸输出" : "生成设置";
       htmlParts.push(`
         <div class="ic-node-topbar" data-float-topbar data-canvas-no-zoom>
           <span style="font-size:11.5px;font-weight:800;padding:0 6px;color:var(--ic-select);">
@@ -8569,36 +8726,36 @@
           <div class="ic-divider-v"></div>
           ${
             single && isInputNodeType(single.type)
-              ? `<button type="button" class="ic-icon-btn" id="ov-link-ctrl">➡️ 连线到${linkTargetLabel}</button>`
+              ? `<button type="button" class="ic-icon-btn" id="ov-link-ctrl">连线到${linkTargetLabel}</button>`
               : ""
           }
           ${
             single && single.type === "loop"
-              ? `<button type="button" class="ic-icon-btn is-active" id="ov-loop-add-ctrl">➕ 新增下游输出控制</button>`
+              ? `<button type="button" class="ic-icon-btn is-active" id="ov-loop-add-ctrl">＋ 新增下游生成设置</button>`
               : ""
           }
           ${
             single && single.type === "bridge"
-              ? `<button type="button" class="ic-icon-btn is-active" id="ov-bridge-add-ctrl">➕ 新增下游输出控制</button>`
+              ? `<button type="button" class="ic-icon-btn is-active" id="ov-bridge-add-ctrl">＋ 新增下游生成设置</button>`
               : ""
           }
           ${
             single && single.type === "output_control"
-              ? `<button type="button" class="ic-icon-btn is-active" id="ov-run-ctrl">⚡ 运行</button>`
+              ? `<button type="button" class="ic-icon-btn is-active" id="ov-run-ctrl">运行</button>`
               : ""
           }
           ${
             single && single.type === "article_plan"
-              ? `<button type="button" class="ic-icon-btn is-active" id="ov-open-plan">📖 查看文章</button>`
+              ? `<button type="button" class="ic-icon-btn is-active" id="ov-open-plan">查看文章</button>`
               : ""
           }
           ${
             single && single.type === "output_display"
-              ? `<button type="button" class="ic-icon-btn is-active" id="ov-pub-disp">🚀 晒图</button>`
+              ? `<button type="button" class="ic-icon-btn is-active" id="ov-pub-disp">晒图</button>`
               : ""
           }
-          ${single && single.type !== "output_display" && single.type !== "article_plan" ? `<button type="button" class="ic-icon-btn" id="ov-dup">📋 复制</button>` : ""}
-          <button type="button" class="ic-icon-btn" id="ov-del" style="color:#dc2626;">🗑️</button>
+          ${single && single.type !== "output_display" && single.type !== "article_plan" ? `<button type="button" class="ic-icon-btn" id="ov-dup">复制</button>` : ""}
+          <button type="button" class="ic-icon-btn" id="ov-del" style="color:#dc2626;">删除</button>
         </div>
       `);
     }
@@ -8631,7 +8788,7 @@
         fullRenderCanvas();
         persistOpenTabs();
         toast(
-          `🔗 已连接至「${target.type === "loop" ? "循环批量" : target.type === "bridge" ? "桥接" : "输出控制"}」节点`
+          `已连接至「${target.type === "loop" ? "批量" : target.type === "bridge" ? "多尺寸输出" : "生成设置"}」节点`
         );
       };
     }
@@ -8670,7 +8827,7 @@
       CS.selectedEdgePt = null;
       fullRenderCanvas();
       persistOpenTabs();
-      toast("✂️ 已断开连线");
+      toast("已断开连线");
       return;
     }
     const sel = new Set(CS.graph.selectedIds || []);
@@ -8686,7 +8843,7 @@
   function duplicateNodes(ids) {
     const srcNodes = ids.map(getNodeById).filter((n) => n && n.type !== "output_display" && n.type !== "article_plan");
     if (!srcNodes.length) {
-      toast("「文章配图方案」与「图片显示」由输出控制自动生成和连接，无需手动复制");
+      toast("「文章配图方案」与「成图显示」由生成设置自动生成和连接，无需手动复制");
       return;
     }
     pushUndo();
@@ -8714,28 +8871,28 @@
     CS.graph.selectedIds = clones.map((c) => c.id);
     fullRenderCanvas();
     persistOpenTabs();
-    toast(`📋 已复制 ${clones.length} 个节点`);
+    toast(`已复制 ${clones.length} 个节点`);
   }
 
-  /* ======================== CLEAN 3-GROUP LEFT TOOLBOX (输入节点 / 循环与桥接 / 输出节点) ======================== */
+  /* ======================== CLEAN 3-GROUP LEFT TOOLBOX (输入节点 / 批量与多尺寸 / 输出节点) ======================== */
   const NODE_TOOLBOX_GROUPS = [
     {
-      section: "📥 输入节点",
+      section: "输入节点",
       items: [
         {
-          icon: "🎨",
+          icon: "",
           title: "风格参数",
           desc: "画风 / 图型 / 主题色 / 情绪 / 受众 / 场景 / 留白 / 影调 / 融合",
           payload: { kind: "skill_params" }
         },
         {
-          icon: "🖼️",
+          icon: "",
           title: "图片参数",
           desc: "角色 / 道具 / 场景 / 其他 / 上传本地参考图片",
           payload: { kind: "asset" }
         },
         {
-          icon: "📝",
+          icon: "",
           title: "文本参数",
           desc: "点击输入框弹窗撰写提示词或长文 · 支持附带文件",
           payload: { kind: "text_input" }
@@ -8743,34 +8900,34 @@
       ]
     },
     {
-      section: "🔁 裂变、循环与桥接",
+      section: "扩写、批量与多尺寸",
       items: [
         {
-          icon: "💡",
-          title: "选题裂变",
-          desc: "输入 1 个母题，默认裂变 10 条（可自填方向与条数）子选题",
+          icon: "",
+          title: "AI 扩写主题",
+          desc: "输入 1 个母题，默认扩写 10 条（可自填方向与条数）子选题",
           payload: { kind: "fission" }
         },
         {
-          icon: "🔁",
-          title: "循环批量",
-          desc: "编排多文案 / 多画风 / 多图型 / 多图参迭代队列，交由右侧输出控制运行",
+          icon: "",
+          title: "批量",
+          desc: "编排多文案 / 多画风 / 多图型 / 多图参迭代队列，交由右侧生成设置运行",
           payload: { kind: "loop" }
         },
         {
-          icon: "🔗",
-          title: "桥接",
-          desc: "位于输入与输出之间，汇总一套输入同时分发多个输出控制",
+          icon: "",
+          title: "多尺寸输出",
+          desc: "位于输入与输出之间，汇总一套输入同时分发多个生成设置",
           payload: { kind: "bridge" }
         }
       ]
     },
     {
-      section: "📤 输出节点",
+      section: "输出节点",
       items: [
         {
-          icon: "🎛️",
-          title: "输出控制",
+          icon: "",
+          title: "生成设置",
           desc: "选模式 / 调整数量与比例 / 点击运行",
           payload: { kind: "output_control" }
         }
@@ -8780,10 +8937,16 @@
 
   function renderShelfDrawer() {
     if (!DOM.shelf) return;
+    const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
+    if (isShowingTemplateLib) {
+      DOM.shelf.style.display = "none";
+      return;
+    }
+    DOM.shelf.style.display = "";
     DOM.shelf.classList.toggle("is-collapsed", !CS.shelfOpen);
     DOM.shelf.innerHTML = `
       <div style="padding:10px 12px;border-bottom:1px solid var(--ic-border);display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:12.5px;font-weight:850;color:var(--ic-ink);">🧩 节点工具箱</span>
+        <span style="font-size:12.5px;font-weight:850;color:var(--ic-ink);">节点工具箱</span>
         <button type="button" class="ic-icon-btn" id="ic-shelf-collapse-btn" title="收拢左侧节点箱" style="padding:2px 6px;font-size:11px;">«</button>
       </div>
       <div class="ic-shelf-grid" id="ic-shelf-grid-box" data-canvas-no-zoom style="grid-template-columns:1fr;padding:10px 10px 14px;gap:8px;"></div>
@@ -8816,7 +8979,7 @@
         flatSpecs.push(it);
         htmlBlocks.push(`
           <div class="ic-node-toolbox-item" draggable="true" data-toolbox-idx="${idx}" title="拖拽到画布或点击直接添加">
-            <span class="ic-node-toolbox-icon">${it.icon}</span>
+            ${it.icon ? `<span class="ic-node-toolbox-icon">${it.icon}</span>` : ""}
             <div style="min-width:0;flex:1;">
               <div style="font-size:12.6px;font-weight:850;color:var(--ic-ink);line-height:1.25;">${esc(it.title)}</div>
               <div style="font-size:10.8px;color:var(--ic-muted);line-height:1.38;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${esc(it.desc)}</div>
@@ -8843,7 +9006,8 @@
   /* ======================== MINIMAP, TOP MULTI-TAB BAR & TOOLSTRIP ======================== */
   function renderMinimap() {
     if (!DOM.minimap) return;
-    const show = CS.minimapOpen && CS.stageView === "canvas";
+    const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
+    const show = CS.minimapOpen && CS.stageView === "canvas" && !isShowingTemplateLib;
     DOM.minimap.style.display = show ? "block" : "none";
     DOM.minimap.style.right = "14px";
     if (!show || !DOM.viewport) return;
@@ -8903,7 +9067,7 @@
 
     DOM.minimap.innerHTML = `
       <div class="ic-minimap-head">
-        <span>🧭 鹰眼 (${nodes.length})</span>
+        <span>缩略图 (${nodes.length})</span>
         <span>${Math.round(CS.vk * 100)}%</span>
       </div>
       <svg width="${W}" height="${H}" style="display:block;">
@@ -8961,35 +9125,34 @@
     pop.style.top = `${rect.bottom + 6}px`;
 
     const bpIcons = {
-      loop_100: "🔁",
-      loop: "🔁",
-      style_ab: "🎨",
-      ip_story: "👤",
-      omnimedia: "🔗",
-      article: "📰",
-      series: "🗂️",
-      xhs: "🗂️",
-      fusion: "🎭",
-      single: "🎯",
-      blank: "🧹"
+      loop_100: "",
+      loop: "",
+      style_ab: "",
+      ip_story: "",
+      omnimedia: "",
+      article: "",
+      series: "",
+      xhs: "",
+      fusion: "",
+      single: "",
+      blank: ""
     };
 
     pop.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 4px 6px;border-bottom:1px solid var(--ic-border);">
-        <span style="font-size:12px;font-weight:850;">📑 全部已打开工作流 (${CS.tabs.length})</span>
+        <span style="font-size:12px;font-weight:850;">全部已打开工作流 (${CS.tabs.length})</span>
         <button type="button" class="btn btn-sm btn-primary" id="atp-new-blank" style="padding:2px 8px;font-size:11px;">＋ 新建空白页</button>
       </div>
       <div class="ic-all-tabs-list">
         ${CS.tabs
           .map((t, idx) => {
             const nCnt = t.graph?.nodes?.length || 0;
-            const ico = bpIcons[t.blueprint] || "📄";
             const cleanTitle = String(t.title || "未命名").replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, "") || "未命名";
             return `
               <div class="ic-all-tabs-item ${t.id === CS.activeTabId ? "is-active" : ""}" data-atp-jump="${esc(t.id)}">
                 <div style="min-width:0;flex:1;">
                   <div style="font-size:12.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                    ${idx + 1}. ${ico} ${esc(cleanTitle)} ${t.dirty ? "●" : ""}
+                    ${idx + 1}. ${esc(cleanTitle)} ${t.dirty ? "●" : ""}
                   </div>
                   <div style="font-size:10.8px;color:var(--ic-muted);">${nCnt} 个节点 · ${t.dirty ? "有未保存修改" : "已同步"}</div>
                 </div>
@@ -9006,7 +9169,7 @@
 
     pop.querySelector("#atp-new-blank").onclick = () => {
       closeAllTabsPopover();
-      createWorkflowTab({ title: "🧹 空白工作流", blueprint: "blank", makeActive: true, autoFit: true, switchToCanvas: true });
+      createWorkflowTab({ title: "空白工作流", blueprint: "blank", makeActive: true, autoFit: true, switchToCanvas: true });
     };
 
     pop.querySelectorAll("[data-atp-jump]").forEach((row) => {
@@ -9031,23 +9194,23 @@
   function renderWorkbenchBar() {
     if (!DOM.workbenchBar) return;
     const bpIcons = {
-      loop_100: "🔁",
-      loop: "🔁",
-      style_ab: "🎨",
-      ip_story: "👤",
-      omnimedia: "🔗",
-      article: "📰",
-      series: "🗂️",
-      xhs: "🗂️",
-      fusion: "🎭",
-      single: "🎯",
-      blank: "🧹"
+      loop_100: "",
+      loop: "",
+      style_ab: "",
+      ip_story: "",
+      omnimedia: "",
+      article: "",
+      series: "",
+      xhs: "",
+      fusion: "",
+      single: "",
+      blank: ""
     };
     const dispItemsCount =
-      CS.graph.nodes
+      (CS.graph?.nodes || [])
         .filter((n) => n.type === "output_display" && !n.data?.planCardId)
         .reduce((acc, n) => acc + (n.data?.items?.length || 0), 0) +
-      CS.graph.nodes
+      (CS.graph?.nodes || [])
         .filter((n) => n.type === "article_plan")
         .reduce((acc, n) => acc + (n.data?.cards?.length || 0), 0);
     const histCount = (CS.generationHistory || []).length;
@@ -9061,10 +9224,10 @@
               const isAct = CS.stageView === "canvas" && t.id === CS.activeTabId;
               const isRenaming = CS.renamingTabId === t.id;
               const cleanTitle = String(t.title || "未命名").replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, "") || "未命名";
-              const icon = bpIcons[t.blueprint] || "📄";
+              const icon = bpIcons[t.blueprint] || "";
               return `
                 <div class="ic-doc-tab ${isAct ? "is-active" : ""}" data-wftab-id="${esc(t.id)}" title="${esc(t.title)}（单击进入画布 · 双击直接改名）">
-                  <span class="ic-doc-tab-icon">${icon}</span>
+                  ${icon ? `<span class="ic-doc-tab-icon">${icon}</span>` : ""}
                   ${
                     isRenaming
                       ? `<input type="text" class="ic-tab-rename-inp" id="ic-tab-rename-active" value="${esc(cleanTitle)}" />`
@@ -9080,13 +9243,13 @@
         <button type="button" class="ic-tab-nav-btn" id="tb-scroll-right" title="向右滚动标签栏" style="display:none;">›</button>
         <div class="ic-tabs-pinned">
           <button type="button" class="ic-tab-action-pill" id="tb-new-wf" title="新建工作流标签页">＋ 新建 ▾</button>
-          <button type="button" class="ic-tab-action-pill" id="tb-all-tabs" title="展开全部已打开标签页列表">📑 ${CS.tabs.length} ▾</button>
-          <button type="button" class="ic-tab-action-pill ${CS.stageView === "workflows" ? "is-active" : ""}" id="tb-open-wflib" title="查看我保存的工作流">📂 工作流</button>
+          <button type="button" class="ic-tab-action-pill" id="tb-all-tabs" title="展开全部已打开标签页列表">已打开 ${CS.tabs.length} ▾</button>
+          <button type="button" class="ic-tab-action-pill ${CS.stageView === "workflows" ? "is-active" : ""}" id="tb-open-wflib" title="查看我保存的工作流">工作流</button>
         </div>
       </div>
 
       <div class="ic-workbench-tools">
-        <button type="button" class="ic-icon-btn" id="tb-theme-toggle" title="切换宣纸暖昼 / 暗房深空">${CS.canvasTheme === "dark" ? "📜" : "🌙"}</button>
+        <button type="button" class="ic-icon-btn" id="tb-theme-toggle" title="切换宣纸暖昼 / 暗房深空" style="font-size:11px;font-weight:750;padding:2px 8px;">${CS.canvasTheme === "dark" ? "暖昼" : "深空"}</button>
         <button type="button" class="ic-icon-btn" id="tb-grid-toggle" title="切换网格">${CS.gridMode === "dots" ? "⠿" : CS.gridMode === "lines" ? "┼" : "□"}</button>
       </div>
     `;
@@ -9199,12 +9362,19 @@
 
   function renderCanvasToolstrip() {
     if (!DOM.canvasToolstrip) return;
+    const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
+    if (isShowingTemplateLib) {
+      DOM.canvasToolstrip.style.display = "none";
+      DOM.canvasToolstrip.innerHTML = "";
+      return;
+    }
+    DOM.canvasToolstrip.style.display = "";
 
     DOM.canvasToolstrip.innerHTML = `
       ${
         !CS.shelfOpen
           ? `<div class="ic-float-pill">
-              <button type="button" class="ic-icon-btn" id="ic-shelf-reopen-btn" title="展开左侧节点箱">🧩 展开节点箱 »</button>
+              <button type="button" class="ic-icon-btn" id="ic-shelf-reopen-btn" title="展开左侧节点箱">展开节点箱 »</button>
             </div>`
           : ""
       }
@@ -9212,7 +9382,7 @@
         <button type="button" class="ic-icon-btn" id="bc-undo" title="撤销 (Ctrl+Z)">↩</button>
         <button type="button" class="ic-icon-btn" id="bc-redo" title="重做 (Ctrl+Y)">↪</button>
         <div class="ic-divider-v"></div>
-        <button type="button" class="ic-icon-btn" id="bl-arrange">✨ 自动整理</button>
+        <button type="button" class="ic-icon-btn" id="bl-arrange">自动整理</button>
       </div>
     `;
 
@@ -9237,10 +9407,10 @@
       const hasBridge = CS.graph.nodes.some((n) => n.type === "bridge");
       toast(
         hasLoop
-          ? "✨ 已按「输入节点 → 循环批量 → 输出控制 → 输出显示」自动整理对齐！"
+          ? "已按「输入节点 → 批量 → 生成设置 → 成图显示」自动整理对齐！"
           : hasBridge
-            ? "✨ 已按「输入节点 → 桥接 → 输出控制 → 输出显示」自动整理对齐！"
-            : "✨ 已按「输入节点 → 输出控制 → 输出显示」自动整理对齐！"
+            ? "已按「输入节点 → 多尺寸输出 → 生成设置 → 成图显示」自动整理对齐！"
+            : "已按「输入节点 → 生成设置 → 成图显示」自动整理对齐！"
       );
     };
   }
@@ -9253,7 +9423,7 @@
     const curVal = txt.data.text || "";
 
     S.openModal({
-      title: "📝 文本参数",
+      title: "文本参数",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;">
           <textarea
@@ -10359,6 +10529,24 @@
       DOM.canvasStage.style.display = CS.stageView === "canvas" ? "block" : "none";
       DOM.canvasStage.classList.toggle("shelf-collapsed", !CS.shelfOpen);
       DOM.canvasStage.classList.toggle("minimap-hidden", !CS.minimapOpen);
+
+      if (CS.stageView === "canvas" && typeof window !== "undefined" && window.innerWidth <= 768) {
+        let mobileBanner = DOM.canvasStage.querySelector("#canvas-mobile-prompt-banner");
+        if (!mobileBanner) {
+          mobileBanner = document.createElement("div");
+          mobileBanner.id = "canvas-mobile-prompt-banner";
+          mobileBanner.className = "canvas-mobile-prompt-banner";
+          mobileBanner.innerHTML = `
+            <p>请在电脑上使用高级画布</p>
+            <button type="button" class="btn btn-primary btn-sm" id="canvas-mobile-go-make">用做图打开</button>
+          `;
+          DOM.canvasStage.prepend(mobileBanner);
+          mobileBanner.querySelector("#canvas-mobile-go-make").onclick = () => switchCreationStage("quick");
+        }
+      } else if (DOM.canvasStage) {
+        const mobileBanner = DOM.canvasStage.querySelector("#canvas-mobile-prompt-banner");
+        if (mobileBanner) mobileBanner.remove();
+      }
     }
 
     if (DOM.workbenchBar) {
@@ -10374,38 +10562,43 @@
     renderQuickStart();
 
     if (DOM.bottomRight) {
+      const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
       const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
-      DOM.bottomRight.style.display = CS.stageView === "canvas" ? "flex" : "none";
-      DOM.bottomRight.innerHTML = `
+      DOM.bottomRight.style.display = (CS.stageView === "canvas" && !isShowingTemplateLib) ? "flex" : "none";
+      if (isShowingTemplateLib) {
+        DOM.bottomRight.innerHTML = "";
+      } else {
+        DOM.bottomRight.innerHTML = `
         <button type="button" class="ic-canvas-save-btn ${curTab?.dirty ? "is-dirty" : ""}" id="bl-save-wf" title="保存当前工作流到「工作流」 (Ctrl+S)">
-          <span>💾 保存</span>
+          <span>保存</span>
           ${curTab?.dirty ? `<span class="ic-save-dirty-dot" title="有未保存改动"></span>` : ""}
         </button>
         <div class="ic-float-pill">
-          <button type="button" class="ic-icon-btn ${CS.minimapOpen ? "is-active" : ""}" id="bl-minimap">🧭 鹰眼</button>
+          <button type="button" class="ic-icon-btn ${CS.minimapOpen ? "is-active" : ""}" id="bl-minimap">缩略图</button>
           <div class="ic-divider-v"></div>
           <button type="button" class="ic-icon-btn" id="bl-zoom-out">−</button>
           <button type="button" class="ic-icon-btn" id="bl-zoom-pct" style="min-width:50px;font-family:var(--font-mono);">${Math.round(CS.vk * 100)}%</button>
           <button type="button" class="ic-icon-btn" id="bl-zoom-in">＋</button>
-          <button type="button" class="ic-icon-btn" id="bl-fit">🎯 适应</button>
+          <button type="button" class="ic-icon-btn" id="bl-fit">适应</button>
         </div>
       `;
-      DOM.zoomPctBtn = DOM.bottomRight.querySelector("#bl-zoom-pct");
+        DOM.zoomPctBtn = DOM.bottomRight.querySelector("#bl-zoom-pct");
 
-      DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(false);
-      DOM.bottomRight.querySelector("#bl-minimap").onclick = () => {
-        CS.minimapOpen = !CS.minimapOpen;
-        savePrefs();
-        renderMinimap();
-        renderTopAndBottomDocks();
-      };
-      DOM.bottomRight.querySelector("#bl-zoom-out").onclick = () => zoomAroundCenter(1 / 1.2);
-      DOM.bottomRight.querySelector("#bl-zoom-in").onclick = () => zoomAroundCenter(1.2);
-      DOM.bottomRight.querySelector("#bl-zoom-pct").onclick = () => {
-        CS.vk = 1;
-        applyViewportTransform();
-      };
-      DOM.bottomRight.querySelector("#bl-fit").onclick = () => fitView();
+        DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(false);
+        DOM.bottomRight.querySelector("#bl-minimap").onclick = () => {
+          CS.minimapOpen = !CS.minimapOpen;
+          savePrefs();
+          renderMinimap();
+          renderTopAndBottomDocks();
+        };
+        DOM.bottomRight.querySelector("#bl-zoom-out").onclick = () => zoomAroundCenter(1 / 1.2);
+        DOM.bottomRight.querySelector("#bl-zoom-in").onclick = () => zoomAroundCenter(1.2);
+        DOM.bottomRight.querySelector("#bl-zoom-pct").onclick = () => {
+          CS.vk = 1;
+          applyViewportTransform();
+        };
+        DOM.bottomRight.querySelector("#bl-fit").onclick = () => fitView();
+      }
     }
   }
 
@@ -10446,63 +10639,63 @@
     menu.style.left = `${Math.min(window.innerWidth - 268, clientX)}px`;
     menu.style.top = `${Math.min(window.innerHeight - 320, clientY)}px`;
 
-    let headerText = "➕ 添加节点";
+    let headerText = "添加节点";
     let actions = [];
 
     if (fromPort && fromPort.newWorkflowMenu) {
-      headerText = "✨ 新建典型场景示范工作流（按需分配节点）";
+      headerText = "新建典型场景示范工作流";
       actions = [
-        { icon: "🎯", label: "节气海报极速出图（3节点·极简）", act: "wf_single" },
-        { icon: "🔁", label: "百图矩阵批量生产（1母题→100张·仅1输出）", act: "wf_loop_100" },
-        { icon: "🎨", label: "同文案多画风横评比稿（循环画风×4）", act: "wf_style_ab" },
-        { icon: "👤", label: "IP角色连续故事绘本（锁角色·套图混排）", act: "wf_ip_story" },
-        { icon: "🔗", label: "全媒体一稿三端宣发包（桥接→3规格输出）", act: "wf_omnimedia" },
-        { icon: "📰", label: "深度长文自动配图与排版（.md+ZIP）", act: "wf_article" },
-        { icon: "🎭", label: "跨媒介双画风融合实验（双画风合成）", act: "wf_fusion" },
-        { icon: "🧹", label: "空白画布", act: "wf_blank" },
-        { icon: "📂", label: "打开预置与我的工作流库…", act: "wf_lib" }
+        { icon: "", label: "节气海报极速出图（3节点·极简）", act: "wf_single" },
+        { icon: "", label: "百图矩阵批量生产（1母题→100张·仅1输出）", act: "wf_loop_100" },
+        { icon: "", label: "同文案多画风横评比稿（多画风×4）", act: "wf_style_ab" },
+        { icon: "", label: "IP角色连续故事绘本（锁角色·套图混排）", act: "wf_ip_story" },
+        { icon: "", label: "全媒体一稿三端宣发包（多尺寸→3规格生成设置）", act: "wf_omnimedia" },
+        { icon: "", label: "深度长文自动配图与排版（.md+ZIP）", act: "wf_article" },
+        { icon: "", label: "跨媒介双画风融合实验（双画风合成）", act: "wf_fusion" },
+        { icon: "", label: "空白画布", act: "wf_blank" },
+        { icon: "", label: "打开预置与我的工作流库…", act: "wf_lib" }
       ];
     } else if (fromPort && fromPort.dir === "out") {
       const srcNode = getNodeById(fromPort.nodeId);
-      headerText = "⚡ 松手新建下游节点";
+      headerText = "松手新建下游节点";
       actions =
         srcNode && isInputNodeType(srcNode.type)
           ? [
-              { icon: "🔁", label: "新建【循环批量】并连线（批量出图）", act: "spawn_down_loop" },
-              { icon: "🎛️", label: "新建【输出控制】并连线", act: "spawn_down_ctrl" },
-              { icon: "🔗", label: "新建【桥接】并连线（一分多规格）", act: "spawn_down_bridge" }
+              { icon: "", label: "新建【批量】并连线（批量出图）", act: "spawn_down_loop" },
+              { icon: "", label: "新建【生成设置】并连线", act: "spawn_down_ctrl" },
+              { icon: "", label: "新建【多尺寸输出】并连线（一分多规格）", act: "spawn_down_bridge" }
             ]
-          : [{ icon: "🎛️", label: "新建【输出控制】并连线", act: "spawn_down_ctrl" }];
+          : [{ icon: "", label: "新建【生成设置】并连线", act: "spawn_down_ctrl" }];
     } else if (fromPort && fromPort.dir === "in") {
       const dstNode = getNodeById(fromPort.nodeId);
-      headerText = "⚡ 松手补充上游节点";
+      headerText = "松手补充上游节点";
       actions = [
-        { icon: "🎨", label: "连入【风格参数】节点", act: "spawn_up_skill_params" },
-        { icon: "🖼️", label: "连入【图片参数】节点", act: "spawn_up_asset" },
-        { icon: "📝", label: "连入【文本参数】节点（含文件选择）", act: "spawn_up_text_input" },
-        { icon: "💡", label: "连入【选题裂变】节点（默认10条·支持自填）", act: "spawn_up_fission" },
+        { icon: "", label: "连入【风格参数】节点", act: "spawn_up_skill_params" },
+        { icon: "", label: "连入【图片参数】节点", act: "spawn_up_asset" },
+        { icon: "", label: "连入【文本参数】节点（含文件选择）", act: "spawn_up_text_input" },
+        { icon: "", label: "连入【AI 扩写主题】节点（默认10条·支持自填）", act: "spawn_up_fission" },
         ...(dstNode && dstNode.type === "output_control"
           ? [
-              { icon: "🔁", label: "连入【循环批量】节点", act: "spawn_up_loop" },
-              { icon: "🔗", label: "连入【桥接】节点", act: "spawn_up_bridge" }
+              { icon: "", label: "连入【批量】节点", act: "spawn_up_loop" },
+              { icon: "", label: "连入【多尺寸输出】节点", act: "spawn_up_bridge" }
             ]
           : [])
       ];
     } else {
       actions = [
-        { icon: "🎨", label: "输入：风格参数", act: "new_skill_params" },
-        { icon: "🖼️", label: "输入：图片参数", act: "new_asset" },
-        { icon: "📝", label: "输入：文本参数（可附带文件）", act: "new_text_input" },
-        { icon: "💡", label: "裂变：选题裂变（默认10条·支持自填）", act: "new_fission" },
-        { icon: "🔁", label: "循环：循环批量（批量出图）", act: "new_loop" },
-        { icon: "🔗", label: "桥接：桥接（一稿多规格）", act: "new_bridge" },
-        { icon: "🎛️", label: "输出：输出控制", act: "new_output_control" }
+        { icon: "", label: "输入：风格参数", act: "new_skill_params" },
+        { icon: "", label: "输入：图片参数", act: "new_asset" },
+        { icon: "", label: "输入：文本参数（可附带文件）", act: "new_text_input" },
+        { icon: "", label: "扩写：AI 扩写主题（默认10条·支持自填）", act: "new_fission" },
+        { icon: "", label: "批量：批量（批量出图）", act: "new_loop" },
+        { icon: "", label: "多尺寸：多尺寸输出（一稿多规格）", act: "new_bridge" },
+        { icon: "", label: "输出：生成设置", act: "new_output_control" }
       ];
     }
 
     menu.innerHTML = `
       <div style="padding:4px 8px;font-size:10.8px;font-weight:800;color:var(--ic-muted);">${esc(headerText)}</div>
-      ${actions.map((a) => `<button type="button" class="ic-context-item" data-ctx-act="${a.act}"><span>${a.icon}</span><span>${esc(a.label)}</span></button>`).join("")}
+      ${actions.map((a) => `<button type="button" class="ic-context-item" data-ctx-act="${a.act}">${a.icon ? `<span>${a.icon}</span>` : ""}<span>${esc(a.label)}</span></button>`).join("")}
     `;
 
     (DOM.root || document.body).appendChild(menu);
@@ -10521,16 +10714,16 @@
           }
           const bp = act.replace("wf_", "");
           const names = {
-            single: "🎯 节气海报极速出图",
-            loop_100: "🔁 百图矩阵批量生产",
-            loop: "🔁 百图矩阵批量生产",
-            style_ab: "🎨 同文案多画风横评比稿",
-            ip_story: "👤 IP角色连续故事绘本",
-            omnimedia: "🔗 全媒体一稿三端宣发包",
-            article: "📰 深度长文自动配图",
-            series: "👤 IP角色连续故事绘本",
-            fusion: "🎭 跨媒介双画风融合",
-            blank: "🧹 空白工作流"
+            single: "节气海报极速出图",
+            loop_100: "百图矩阵批量生产",
+            loop: "百图矩阵批量生产",
+            style_ab: "同文案多画风横评比稿",
+            ip_story: "IP角色连续故事绘本",
+            omnimedia: "全媒体一稿三端宣发包",
+            article: "深度长文自动配图",
+            series: "IP角色连续故事绘本",
+            fusion: "跨媒介双画风融合",
+            blank: "空白工作流"
           };
           createWorkflowTab({ title: names[bp] || "新工作流", blueprint: bp, makeActive: true, autoFit: true, switchToCanvas: true });
           return;
@@ -10617,20 +10810,29 @@
     const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
     const edges = Array.isArray(graph?.edges) ? graph.edges : [];
     const allowed = new Set(["skill_params", "text_input", "output_control", "output_display", "asset"]);
-    const controls = nodes.filter(n => n.type === "output_control");
-    const skills = nodes.filter(n => n.type === "skill_params");
-    const texts = nodes.filter(n => n.type === "text_input");
-    if (nodes.some(n => !allowed.has(n.type)) || controls.length !== 1 || skills.length !== 1 || texts.length !== 1) return null;
+    const controls = nodes.filter((n) => n.type === "output_control");
+    const skills = nodes.filter((n) => n.type === "skill_params");
+    const texts = nodes.filter((n) => n.type === "text_input");
+    const assets = nodes.filter((n) => n.type === "asset");
+    if (nodes.some((n) => !allowed.has(n.type)) || controls.length !== 1 || skills.length !== 1 || texts.length !== 1) return null;
     const ctrl = controls[0];
-    if (!["graphic-text", "pure-image", "series"].includes(ctrl.data?.mode)) return null;
+    if (!["graphic-text", "pure", "pure-image", "poster", "series"].includes(ctrl.data?.mode)) return null;
     // Multiple inputs or disconnected graphs must stay in the full canvas.
-    const inbound = edges.filter(e => e.to === ctrl.id).map(e => e.from);
+    const inbound = edges.filter((e) => e.to === ctrl.id).map((e) => e.from);
     if (!inbound.includes(skills[0].id) || !inbound.includes(texts[0].id)) return null;
-    return { ctrl, skill: skills[0], text: texts[0] };
+    return { ctrl, skill: skills[0], text: texts[0], asset: assets[0] || null };
   }
 
   function ensureQuickTab() {
-    let tab = CS.tabs.find(t => {
+    const activeParts = getQuickParts(CS.graph);
+    if (activeParts) {
+      const activeTab = CS.tabs.find((t) => t.id === CS.activeTabId);
+      if (activeTab) {
+        activeTab.quickStart = true;
+        return activeTab;
+      }
+    }
+    let tab = CS.tabs.find((t) => {
       const graph = t.id === CS.activeTabId ? CS.graph : t.graph;
       return t.quickStart === true && graph && getQuickParts(graph);
     });
@@ -10638,12 +10840,80 @@
       const sp = E.makeSkillParamsNode(64, 56, {});
       const txt = E.makeTextInputNode(64, 548, { text: "" });
       const ctrl = E.makeOutputControlNode(488, 176, { mode: "graphic-text", count: 1, ratio: "3:4" });
-      const graph = { blueprint: "single", nodes: [sp, txt, ctrl], edges: [
-        { id: E.uid("edge"), from: sp.id, to: ctrl.id },
-        { id: E.uid("edge"), from: txt.id, to: ctrl.id }
-      ], selectedIds: [] };
+      const graph = {
+        blueprint: "single",
+        nodes: [sp, txt, ctrl],
+        edges: [
+          { id: E.uid("edge"), from: sp.id, to: ctrl.id },
+          { id: E.uid("edge"), from: txt.id, to: ctrl.id }
+        ],
+        selectedIds: []
+      };
       tab = createWorkflowTab({ title: "快速创作", blueprint: "single", graph, makeActive: false });
       tab.quickStart = true;
+    }
+    activateWorkflowTab(tab.id);
+    persistOpenTabs();
+    return tab;
+  }
+
+  function getBatchParts(graph = CS.graph) {
+    const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+    const controls = nodes.filter((n) => n.type === "output_control");
+    const loops = nodes.filter((n) => n.type === "loop");
+    const skills = nodes.filter((n) => n.type === "skill_params");
+    const texts = nodes.filter((n) => n.type === "text_input");
+    const assets = nodes.filter((n) => n.type === "asset");
+    if (controls.length !== 1 || loops.length !== 1 || skills.length !== 1) return null;
+    const ctrl = controls[0];
+    const loop = loops[0];
+    const skill = skills[0];
+    const text = texts[0] || null;
+    const asset = assets[0] || null;
+    const loopToCtrl = edges.some((e) => e.from === loop.id && e.to === ctrl.id);
+    if (!loopToCtrl) return null;
+    return { ctrl, loop, skill, text, asset };
+  }
+
+  function ensureBatchTab() {
+    const activeParts = getBatchParts(CS.graph);
+    if (activeParts) {
+      const activeTab = CS.tabs.find((t) => t.id === CS.activeTabId);
+      if (activeTab) {
+        activeTab.batchStart = true;
+        return activeTab;
+      }
+    }
+    let tab = CS.tabs.find((t) => {
+      const graph = t.id === CS.activeTabId ? CS.graph : t.graph;
+      return t.batchStart === true && graph && getBatchParts(graph);
+    });
+    if (!tab) {
+      const sp = E.makeSkillParamsNode(64, 56, {});
+      const txt = E.makeTextInputNode(64, 480, { text: "" });
+      const ast = E.makeAssetNode(64, 760, { items: [] });
+      const lp = E.makeLoopNode(468, 200, {
+        loopMode: "prompts",
+        promptListText: "春日阳光下的街角手账\n午后一杯热咖啡的治愈时光\n暮色中的旧书摊与晚霞",
+        maxIterations: 200
+      });
+      const ctrl = E.makeOutputControlNode(880, 200, { mode: "graphic-text", count: 1, ratio: "3:4" });
+      const graph = {
+        blueprint: "loop_100",
+        nodes: [sp, txt, ast, lp, ctrl],
+        edges: [
+          { id: E.uid("edge"), from: sp.id, to: lp.id },
+          { id: E.uid("edge"), from: sp.id, to: ctrl.id },
+          { id: E.uid("edge"), from: txt.id, to: lp.id },
+          { id: E.uid("edge"), from: ast.id, to: lp.id },
+          { id: E.uid("edge"), from: ast.id, to: ctrl.id },
+          { id: E.uid("edge"), from: lp.id, to: ctrl.id }
+        ],
+        selectedIds: []
+      };
+      tab = createWorkflowTab({ title: "批量生成", blueprint: "loop_100", graph, makeActive: false });
+      tab.batchStart = true;
     }
     activateWorkflowTab(tab.id);
     persistOpenTabs();
@@ -10655,17 +10925,84 @@
     if (!p || p.ctrl.data.status === "generating") return;
     if (field === "topic") p.text.data.text = String(value);
     else if (field === "count") {
-      if (!/^\d+$/.test(String(value)) || Number(value) < 1 || Number(value) > 200) return;
-      p.ctrl.data.count = Number(value);
+      p.ctrl.data.count = 1;
     } else if (field === "ratio") {
-      if (!/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(String(value)) || String(value).split(":").some(x => Number(x) <= 0)) return;
+      if (!/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(String(value)) || String(value).split(":").some((x) => Number(x) <= 0)) return;
       p.ctrl.data.ratio = String(value);
-    } else if (field === "mode" && ["graphic-text", "pure-image", "series"].includes(value)) p.ctrl.data.mode = value;
-    else return;
-    const tab = CS.tabs.find(t => t.id === CS.activeTabId);
+    } else if (field === "mode") {
+      const mode = value === "pure-image" ? "pure" : value;
+      if (["graphic-text", "pure", "pure-image", "poster", "series"].includes(value)) {
+        p.ctrl.data.mode = mode;
+        const defaultRatio = mode === "poster" ? "9:16" : (mode === "graphic-text" || mode === "pure" || mode === "pure-image") ? "3:4" : p.ctrl.data.ratio;
+        p.ctrl.data.ratio = defaultRatio;
+      }
+    } else if (field === "fusion") {
+      p.skill.data.fusion = Boolean(value);
+      if (!p.skill.data.fusion) p.skill.data.style2 = "";
+    } else if (field === "style1") {
+      p.skill.data.style1 = String(value || "");
+    } else if (field === "style2") {
+      p.skill.data.style2 = String(value || "");
+    } else if (field === "layout") {
+      p.skill.data.layout = String(value || "");
+    } else if (field === "colors") {
+      p.skill.data.colors = Array.isArray(value) ? value : [];
+    } else if (field === "tones") {
+      p.skill.data.tones = Array.isArray(value) ? value : [];
+    } else if (field === "moods") {
+      p.skill.data.moods = Array.isArray(value) ? value : [];
+    } else if (field === "customMood") {
+      p.skill.data.customMood = String(value || "");
+    } else if (field === "whitespace") {
+      p.skill.data.whitespace = String(value || "");
+    } else if (field === "audience") {
+      p.skill.data.audience = String(value || "");
+    } else if (field === "businessScene") {
+      p.skill.data.businessScene = String(value || "");
+    } else if (field === "sc021Type") {
+      p.skill.data.sc021Type = String(value || "");
+    } else if (field === "sc022Name") {
+      p.skill.data.sc022Name = String(value || "");
+    } else if (field === "sc022Pinyin") {
+      p.skill.data.sc022Pinyin = String(value || "");
+    } else return;
+    const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
     if (tab) tab.dirty = true;
     persistOpenTabs();
-    window.HandrawQuickCreate?.updateCost(DOM.quickStage, generationCostText(buildExecutionPlanForControl(p.ctrl).specs.length));
+    if (CS.stageView === "quick") renderQuickStart();
+  }
+
+  function applyForkDraftToQuickNodes(draft) {
+    if (!draft) return;
+    ensureQuickTab();
+    const p = getQuickParts();
+    if (!p) return;
+    const sd = p.skill.data;
+    const td = p.text.data;
+    const cd = p.ctrl.data;
+
+    sd.fusion = Array.isArray(draft.styleIds) && draft.styleIds.length > 1;
+    sd.style1 = draft.styleIds?.[0] || "";
+    sd.style2 = draft.styleIds?.[1] || "";
+    sd.layout = draft.layoutId || "";
+    sd.colors = Array.isArray(draft.colors) ? [...draft.colors] : [];
+    sd.tones = Array.isArray(draft.tones) ? [...draft.tones] : [];
+    sd.moods = (Array.isArray(draft.moods) ? draft.moods : []).map(normalizeMoodLabel).filter(Boolean);
+    sd.whitespace = draft.whitespace || "";
+
+    td.text = "";
+    td.subjectHint = draft.subjectHint || "";
+
+    cd.ratio = draft.ratio || "3:4";
+    cd.mode = draft.mode === "pure-image" ? "pure" : (draft.mode || "graphic-text");
+    cd.count = 1;
+
+    markActiveTabDirty();
+    persistOpenTabs();
+    if (CS.stageView === "quick") renderQuickStart();
+  }
+  if (window.HandrawMakeImage) {
+    window.HandrawMakeImage.applyForkDraft = applyForkDraftToQuickNodes;
   }
 
   function ensureArticleForArticleMode() {
@@ -11764,15 +12101,14 @@
       <div class="ic-wechat-editor-root ic-article-preview-root">
         <header class="ic-wechat-topbar">
           <div style="display:flex;align-items:center;gap:10px;">
-            <button type="button" class="btn btn-sm" id="preview-btn-back-editor" style="font-weight:750;padding:3px 10px;">← 返回编辑</button>
-            <span style="font-size:13px;font-weight:850;color:var(--ic-ink);display:flex;align-items:center;gap:5px;">
-              👁 <span>预览</span>
-            </span>
+            <button type="button" class="btn btn-sm" id="preview-btn-list" style="font-weight:750;padding:3px 10px;height:28px;box-sizing:border-box;">← 文章列表</button>
+            <div class="ic-article-segmented-switch" id="preview-switch-group" role="group" aria-label="模式切换">
+              <button type="button" class="ic-article-seg-btn" id="preview-switch-editor">编辑</button>
+              <button type="button" class="ic-article-seg-btn is-active" id="preview-switch-preview">预览</button>
+            </div>
             <span style="font-size:11px;color:var(--ic-muted);background:var(--ic-surface,#f0f2f5);padding:2px 7px;border-radius:4px;">微信公众号排版</span>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;">
-            <button type="button" class="btn btn-sm" id="preview-btn-list">← 文章列表</button>
-          </div>
+          <div style="display:flex;align-items:center;gap:8px;"></div>
         </header>
 
         <div class="ic-wechat-body">
@@ -11785,8 +12121,6 @@
 
         <footer class="ic-wechat-bottombar">
           <span class="ic-article-preview-meta">${art.markdown ? (art.markdown.replace(/[#*\s]/g, "").length) : 0} 字 · 配图 ${cards.filter((c) => c.imageUrl).length}/${cards.length} 张</span>
-          <div style="flex:1 1 auto;"></div>
-          <button type="button" class="btn btn-sm" id="preview-btn-back-editor-2">← 返回编辑</button>
         </footer>
       </div>
     `;
@@ -11803,8 +12137,8 @@
       history.pushState({}, "", url.toString());
       openUnifiedArticleEditor(art.id);
     };
+    DOM.previewStage.querySelector("#preview-switch-editor")?.addEventListener("click", back);
     DOM.previewStage.querySelector("#preview-btn-back-editor")?.addEventListener("click", back);
-    DOM.previewStage.querySelector("#preview-btn-back-editor-2")?.addEventListener("click", back);
     // Same destination as the editor's "← 文章列表"; this used to call an
     // undefined renderArticleDirectoryPage and threw.
     DOM.previewStage.querySelector("#preview-btn-list")?.addEventListener("click", () => {
@@ -11845,10 +12179,11 @@
         <!-- 1. FIXED TOP TOOLBAR (顶部固定工具栏) -->
         <header class="ic-wechat-topbar" id="wechat-topbar">
           <div style="display:flex;align-items:center;gap:10px;">
-            <button type="button" class="btn btn-sm" id="editor-btn-back" style="font-weight:750;padding:3px 10px;">← 文章列表</button>
-            <span style="font-size:13px;font-weight:850;color:var(--ic-ink);display:flex;align-items:center;gap:5px;">
-              📰 <span>文章编辑器</span>
-            </span>
+            <button type="button" class="btn btn-sm" id="editor-btn-back" style="font-weight:750;padding:3px 10px;height:28px;box-sizing:border-box;">← 文章列表</button>
+            <div class="ic-article-segmented-switch" id="editor-switch-group" role="group" aria-label="模式切换">
+              <button type="button" class="ic-article-seg-btn is-active" id="editor-switch-editor">编辑</button>
+              <button type="button" class="ic-article-seg-btn" id="editor-switch-preview">预览</button>
+            </div>
             <span style="font-size:11px;color:var(--ic-muted);background:var(--ic-surface,#f0f2f5);padding:2px 7px;border-radius:4px;">微信公众号排版</span>
           </div>
 
@@ -11871,17 +12206,17 @@
                 <button type="button" class="ic-wechat-tool-btn" data-fmt="code" title="代码块">&lt;/&gt;</button>
                 <div class="ic-wechat-tool-sep"></div>
                 <button type="button" class="ic-wechat-tool-btn" data-fmt="illust" title="在此插入AI插图位标记" style="color:var(--vermilion);font-weight:800;">
-                  🖼️ 插入配图位
+                  插入配图位
                 </button>
               </div>
             `
                 : `
               <div class="qc-mode-switch" role="group" style="padding:2px;background:var(--ic-surface,#f0f2f5);border-radius:6px;display:flex;gap:3px;">
                 <button type="button" class="btn btn-sm ${isMobileVp ? "btn-primary" : ""}" id="vp-btn-mobile" style="padding:3px 12px;font-size:12px;font-weight:800;">
-                  📱 手机视口 (375px)
+                  手机视口 (375px)
                 </button>
                 <button type="button" class="btn btn-sm ${!isMobileVp ? "btn-primary" : ""}" id="vp-btn-desktop" style="padding:3px 12px;font-size:12px;font-weight:800;">
-                  🖥️ 宽屏视口 (800px)
+                  宽屏视口 (800px)
                 </button>
               </div>
             `
@@ -11890,12 +12225,8 @@
 
           <!-- Top-right: reader preview (its own page) & Document Upload -->
           <div style="display:flex;align-items:center;gap:10px;">
-            <button type="button" class="btn btn-sm" id="editor-btn-toggle-preview" style="padding:3px 12px;font-size:12px;font-weight:800;" title="打开独立预览页">
-              👁 预览
-            </button>
-
             <label class="btn btn-sm" style="cursor:pointer;padding:3px 10px;font-size:12px;font-weight:750;" title="上传文档重新由 AI 解析覆盖当前正文">
-              🔄 导入/替换文档
+              导入/替换文档
               <input type="file" id="editor-file-replace-inp" accept=".md,.markdown,.txt,.doc,.docx,.pdf" hidden />
             </label>
           </div>
@@ -12041,7 +12372,7 @@
     const stylePickerBtn = DOM.previewStage.querySelector("#editor-style-picker");
     const replaceInp = DOM.previewStage.querySelector("#editor-file-replace-inp");
     const planBtn = DOM.previewStage.querySelector("#editor-btn-plan");
-    const togglePreviewBtn = DOM.previewStage.querySelector("#editor-btn-toggle-preview");
+    const togglePreviewBtn = DOM.previewStage.querySelector("#editor-switch-preview, #editor-btn-toggle-preview");
     const batchBtn = DOM.previewStage.querySelector("#editor-btn-batch");
     const exportBtn = DOM.previewStage.querySelector("#editor-btn-export");
     const publishBtn = DOM.previewStage.querySelector("#editor-btn-publish");
@@ -12419,6 +12750,8 @@
     }
   }
 
+  let _modeMoreOpen = false;
+
   function switchCreationStage(next) {
     if (next !== "article") flushUnifiedArticleEditor();
     if (next === "article") {
@@ -12433,11 +12766,18 @@
         }
         delete CS.articleReturnTab;
       }
-      if (!getQuickParts()) {
-        ensureQuickTab();
-        toast("已打开表单草稿，原画布保留在工作流标签页中");
-      }
+      ensureQuickTab();
       CS.stageView = "quick";
+    } else if (next === "batch") {
+      if (CS.stageView === "preview" || CS.stageView === "article" || isArticleGraph(CS.graph)) {
+        const fallbackId = readScopedReturnTab() || pickReturnCanvasTab(CS.activeTabId);
+        if (fallbackId) {
+          activateWorkflowTab(fallbackId);
+        }
+        delete CS.articleReturnTab;
+      }
+      ensureBatchTab();
+      CS.stageView = "batch";
     } else {
       CS.stageView = next;
     }
@@ -12448,7 +12788,7 @@
     url.searchParams.delete("forkTopic");
     url.searchParams.delete("style");
     url.searchParams.delete("layout");
-    url.searchParams.set("entry", next === "quick" ? "quick" : next === "article" ? "article" : "canvas");
+    url.searchParams.set("entry", next === "quick" ? "quick" : next === "batch" ? "batch" : next === "article" ? "article" : "canvas");
     window.history.replaceState(null, "", url.pathname + url.search);
     fullRenderCanvas();
     if (next === "canvas") requestAnimationFrame(() => fitView());
@@ -12458,32 +12798,268 @@
     if (!DOM.entryBar) return;
     DOM.entryBar.hidden = false;
     const quick = CS.stageView === "quick";
+    const batch = CS.stageView === "batch";
     const canvas = CS.stageView === "canvas";
     const article = CS.stageView === "preview" || CS.stageView === "article";
     const history = CS.stageView === "history";
     const historyCount = (CS.generationHistory || []).length;
-    DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作模式">
-      <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">表单模式</button>
-      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布模式</button>
-      <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章模式</button>
-    </div><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看历次生成的图片与压缩包历史记录（当前 ${historyCount} 条）">🕒 生图历史(${historyCount})</button>`;
+    DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作任务">
+      <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
+      <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
+      <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
+      <div class="qc-mode-more" id="studio-mode-more-wrap">
+        <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-more-btn" aria-haspopup="true" aria-expanded="${_modeMoreOpen}">更多 ▾</button>
+        <div class="qc-more-menu" id="studio-mode-more-menu" ${_modeMoreOpen ? "" : "hidden"}>
+          <button type="button" class="qc-more-menu-item" id="studio-mode-canvas">高级画布</button>
+        </div>
+      </div>
+    </div><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看历次生图历史记录">生图历史 (${historyCount})</button>`;
+
     const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
-    if (btnQuick) btnQuick.onclick = () => switchCreationStage("quick");
-    const btnCanvas = DOM.entryBar.querySelector("#studio-mode-canvas");
-    if (btnCanvas) btnCanvas.onclick = () => switchCreationStage("canvas");
+    if (btnQuick) btnQuick.onclick = () => { _modeMoreOpen = false; switchCreationStage("quick"); };
+    const btnBatch = DOM.entryBar.querySelector("#studio-mode-batch");
+    if (btnBatch) btnBatch.onclick = () => { _modeMoreOpen = false; switchCreationStage("batch"); };
     const btnArticle = DOM.entryBar.querySelector("#studio-mode-article");
-    if (btnArticle) btnArticle.onclick = () => switchCreationStage("article");
+    if (btnArticle) btnArticle.onclick = () => { _modeMoreOpen = false; switchCreationStage("article"); };
+    const btnMore = DOM.entryBar.querySelector("#studio-mode-more-btn");
+    const menuMore = DOM.entryBar.querySelector("#studio-mode-more-menu");
+    if (btnMore && menuMore) {
+      btnMore.onclick = (e) => {
+        e.stopPropagation();
+        _modeMoreOpen = !_modeMoreOpen;
+        btnMore.setAttribute("aria-expanded", String(_modeMoreOpen));
+        menuMore.hidden = !_modeMoreOpen;
+      };
+    }
+    const btnCanvas = DOM.entryBar.querySelector("#studio-mode-canvas");
+    if (btnCanvas) {
+      btnCanvas.onclick = () => {
+        _modeMoreOpen = false;
+        switchCreationStage("canvas");
+      };
+    }
     const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
-    if (btnHistory) btnHistory.onclick = () => openHistoryPage();
+    if (btnHistory) btnHistory.onclick = () => { _modeMoreOpen = false; openHistoryPage(); };
   }
 
   function renderQuickStart() {
-    if (!DOM.quickStage || !window.HandrawQuickCreate) return;
-    const visible = CS.stageView === "quick";
-    DOM.quickStage.style.display = visible ? "block" : "none";
+    if (!DOM.quickStage) return;
+    const isQuick = CS.stageView === "quick";
+    const isBatch = CS.stageView === "batch";
+    DOM.quickStage.style.display = (isQuick || isBatch) ? "block" : "none";
     renderCreationModeBar();
-    if (!visible) return;
-    const p = getQuickParts();
+    if (!isQuick && !isBatch) return;
+
+    if (isBatch) {
+      let bp = getBatchParts();
+      if (!bp) {
+        const tab = ensureBatchTab();
+        bp = getBatchParts(tab?.graph || CS.graph);
+      }
+      if (window.HandrawBatchCreate && bp) {
+        const busy = Boolean(
+          bp && (bp.ctrl.data.status === "generating" || bp.loop.data.status === "running" || (quickBusy?.id === bp.ctrl.id && quickBusy.scope === activeCacheScope))
+        );
+        const displays = bp ? getDownstreamDisplayNodes(bp.ctrl.id) : [];
+        const results = displays.flatMap((dn) =>
+          (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
+            id: `${dn.id}:${index}`,
+            imageUrl: it.imageUrl,
+            title: it.title || "生成结果",
+            node: dn,
+            item: it,
+            index
+          }))
+        );
+        const markDirtyAndRender = () => {
+          markActiveTabDirty();
+          persistOpenTabs();
+          renderQuickStart();
+        };
+        const ensureBatchAssetNode = (items) => {
+          if (!bp) return;
+          let ast = bp.asset;
+          if (!ast) {
+            ast = E.makeAssetNode(64, 760, { items: items || [] });
+            CS.graph.nodes.push(ast);
+            CS.graph.edges.push({ id: E.uid("edge"), from: ast.id, to: bp.loop.id });
+            CS.graph.edges.push({ id: E.uid("edge"), from: ast.id, to: bp.ctrl.id });
+            bp.asset = ast;
+          } else if (items) {
+            ast.data.items = items;
+          }
+          markDirtyAndRender();
+        };
+
+        window.HandrawBatchCreate.render(
+          DOM.quickStage,
+          {
+            parts: bp,
+            graph: CS.graph,
+            loggedIn: Boolean(App.state?.loggedIn),
+            serverCfg: CS.serverCfg,
+            engineMode: CS.engineMode,
+            freeQuotaRemaining: App.state?.freeQuotaRemaining ?? App.state?.free_quota_remaining,
+            credits: App.state?.credits,
+            siteSettings: App.state?.siteSettings,
+            catalog: Catalog,
+            results,
+            displays,
+            busy,
+            statusText: busy ? "正在批量生成中…" : ""
+          },
+          {
+            markDirtyAndRender,
+            ensureAssetItems: (items) => ensureBatchAssetNode(items),
+            openAssetPicker: ({ kind, field }) => {
+              if (!bp || busy) return;
+              const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
+              openSkillFieldPickerModal(bp.skill, targetField);
+            },
+            openReferencePicker: () => {
+              if (!bp || busy) return;
+              ensureBatchAssetNode();
+              openAssetPickerModal(bp.asset);
+            },
+            openLoopMultiPicker: (kind) => {
+              if (!bp || busy) return;
+              openLoopMultiPickerModal(bp.loop, kind);
+            },
+            openPublish: (node) => {
+              openPublishModalForDisplay(node);
+            },
+            run: async () => {
+              if (!bp || busy) return;
+              const scope = activeCacheScope;
+              quickBusy = { id: bp.ctrl.id, scope };
+              renderQuickStart();
+              try {
+                await runLoopNode(bp.loop.id);
+              } finally {
+                if (quickBusy?.scope === scope && quickBusy.id === bp.ctrl.id) quickBusy = null;
+                renderQuickStart();
+              }
+            },
+            runSingleRow: async (rowIndex) => {
+              if (!bp || busy) return;
+              const scope = activeCacheScope;
+              quickBusy = { id: bp.ctrl.id, scope };
+              renderQuickStart();
+              try {
+                await runOutputControlNode(bp.ctrl.id, { onlyItemIdx: rowIndex });
+              } finally {
+                if (quickBusy?.scope === scope && quickBusy.id === bp.ctrl.id) quickBusy = null;
+                renderQuickStart();
+              }
+            },
+            cancel: () => {
+              cancelActiveBatchGeneration();
+            }
+          }
+        );
+        return;
+      }
+    }
+
+    let p = getQuickParts();
+    if (!p) {
+      const tab = ensureQuickTab();
+      p = getQuickParts(tab?.graph || CS.graph);
+    }
+
+    if (window.HandrawMakeImage) {
+      const busy = Boolean(p && (p.ctrl.data.status === "generating" || (quickBusy?.id === p.ctrl.id && quickBusy.scope === activeCacheScope)));
+      const displays = p ? getDownstreamDisplayNodes(p.ctrl.id) : [];
+      const results = displays.flatMap((dn) => (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
+        id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn
+      })));
+      let statusText = busy
+        ? "正在生成，可以稍后回到历史记录查看。"
+        : p?.ctrl.data.status === "error"
+        ? "生成失败，可检查提示词后点击生成重试；任务与费用以服务端结果为准。"
+        : results.length
+        ? `已显示 ${results.length} 张结果，保存在你的生成历史中。`
+        : "";
+
+      const markDirtyAndRender = () => {
+        markActiveTabDirty();
+        persistOpenTabs();
+        renderQuickStart();
+      };
+
+      const ensureAssetNode = (items) => {
+        if (!p) return;
+        let ast = p.asset;
+        if (!ast) {
+          ast = E.makeAssetNode(64, 800, { items: items || [] });
+          CS.graph.nodes.push(ast);
+          CS.graph.edges.push({ id: E.uid("edge"), from: ast.id, to: p.ctrl.id });
+          p.asset = ast;
+        } else {
+          ast.data.items = items || [];
+        }
+        markDirtyAndRender();
+      };
+
+      window.HandrawMakeImage.render(DOM.quickStage, {
+        parts: p,
+        graph: CS.graph,
+        loggedIn: Boolean(App.state?.loggedIn),
+        serverCfg: CS.serverCfg,
+        engineMode: CS.engineMode,
+        freeQuotaRemaining: App.state?.freeQuotaRemaining ?? App.state?.free_quota_remaining,
+        credits: App.state?.credits,
+        siteSettings: App.state?.siteSettings,
+        catalog: Catalog,
+        results,
+        busy,
+        statusText
+      }, {
+        markDirtyAndRender,
+        ensureAssetItems: (items) => ensureAssetNode(items),
+        openAssetPicker: ({ kind, field, currentId, onSelect }) => {
+          if (!p || busy) return;
+          const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
+          openSkillFieldPickerModal(p.skill, targetField);
+        },
+        openReferencePicker: ({ currentRefs, onConfirm }) => {
+          openAssetPickerModal({
+            currentRefs,
+            onConfirm: (selectedItems) => {
+              ensureAssetNode(selectedItems);
+            }
+          });
+        },
+        openPublish: (node) => {
+          openPublishModalForDisplay(node);
+        },
+        run: async () => {
+          if (!p || busy) return;
+          const topic = String(p.text.data.text || "").trim();
+          if (!topic) {
+            toast("请先填写创作主题");
+            const input = DOM.quickStage.querySelector("#make-image-subject");
+            if (input) input.focus();
+            return;
+          }
+          // Strictly 1 image per brief
+          p.ctrl.data.count = 1;
+          const scope = activeCacheScope;
+          quickBusy = { id: p.ctrl.id, scope };
+          renderQuickStart();
+          try {
+            await runOutputControlNode(p.ctrl.id);
+          } finally {
+            if (quickBusy?.scope === scope && quickBusy.id === p.ctrl.id) quickBusy = null;
+            renderQuickStart();
+          }
+        }
+      });
+      return;
+    }
+
+    if (!window.HandrawQuickCreate) return;
+    p = getQuickParts();
     const busy = Boolean(p && (p.ctrl.data.status === "generating" || (quickBusy?.id === p.ctrl.id && quickBusy.scope === activeCacheScope)));
     const displays = p ? getDownstreamDisplayNodes(p.ctrl.id) : [];
     const results = displays.flatMap(dn => (dn.data.items || []).filter(it => it.imageUrl).map((it, index) => ({
@@ -12536,12 +13112,120 @@
     });
   }
 
+  function renderCanvasTemplateLibrary() {
+    if (!DOM.canvasStage) return;
+    let libEl = DOM.canvasStage.querySelector("#canvas-template-library");
+    if (!libEl) {
+      libEl = document.createElement("div");
+      libEl.id = "canvas-template-library";
+      libEl.className = "ic-canvas-template-library";
+      DOM.canvasStage.appendChild(libEl);
+    }
+    const defs = [
+      {
+        bp: "single",
+        title: "节气海报极速出图",
+        badge: "日常单图 · 3节点",
+        desc: "最常用的日常海报/图文工作流：仅用「风格参数 + 文本参数 → 生成设置」3 个核心节点，零冗余极速出图。"
+      },
+      {
+        bp: "loop_100",
+        title: "百图矩阵批量生产（1母题→100张）",
+        badge: "百图批量 · 4节点",
+        desc: "演示如何输出 100 张图而不建 100 个节点：「AI 扩写主题」从 1 个母题生成 100 条日签 →「批量」驱动仅 1 个「生成设置」，结果自动收敛进 1 个分页「批量图集」节点。"
+      },
+      {
+        bp: "style_ab",
+        title: "同文案多画风横评比稿",
+        badge: "提案选风 · 3节点",
+        desc: "定好一句主文案，无需单独连风格参数，直接用「批量（多画风模式）」一次横评 4 款手绘风格快速定稿。"
+      },
+      {
+        bp: "ip_story",
+        title: "IP角色连续故事绘本",
+        badge: "角色一致性 · 4节点",
+        desc: "通过「图片参数」锁定原创角色与道具外观一致性，配合「套图模式」一次生成 4 幕连续故事分镜。"
+      },
+      {
+        bp: "omnimedia",
+        title: "全媒体一稿三端宣发包",
+        badge: "多尺寸一分多 · 6节点",
+        desc: "新品发布标准链路：一套视觉与卖点经「多尺寸输出」同时分发给 3 个不同规格生成设置（2.35:1 公众号头图 + 3:4 种草套图 + 9:16 竖版海报）。"
+      },
+      {
+        bp: "fusion",
+        title: "跨媒介双画风融合实验",
+        badge: "双风碰撞 · 3节点",
+        desc: "开启「风格参数」双画风融合开关：主体采用手作插画肌理，场景环境采用纪实胶片/水墨山水，打造高辨识度跨次元视觉。"
+      },
+      {
+        bp: "blank",
+        title: "空白工作流",
+        badge: "自由搭建",
+        desc: "从一张干净的空白画布开始，自由从左侧工具箱拖入或双击画布添加任意连接节点。"
+      }
+    ];
+
+    libEl.innerHTML = `
+      <div class="ic-tmpl-lib-wrap">
+        <div class="ic-tmpl-lib-head">
+          <h2 class="ic-tmpl-lib-title">工作流模板库</h2>
+          <p class="ic-tmpl-lib-desc">选择一个典型场景模板快速开始创作，或从空白画布自由编排节点工作流。</p>
+        </div>
+        <div class="ic-tmpl-grid">
+          ${defs
+            .map(
+              (d) => `
+            <div class="ic-tmpl-card" data-tmpl-bp="${d.bp}">
+              <div class="ic-tmpl-card-head">
+                <span class="ic-tmpl-card-title">${esc(d.title)}</span>
+                <span class="ic-tmpl-card-badge">${esc(d.badge)}</span>
+              </div>
+              <div class="ic-tmpl-card-desc">${esc(d.desc)}</div>
+              <button type="button" class="ic-tmpl-card-btn" data-tmpl-bp="${d.bp}">使用此模板</button>
+            </div>
+          `
+            )
+            .join("")}
+        </div>
+      </div>
+    `;
+
+    libEl.querySelectorAll("[data-tmpl-bp]").forEach((el) => {
+      el.onclick = (e) => {
+        e.stopPropagation();
+        const bp = el.getAttribute("data-tmpl-bp");
+        const found = defs.find((d) => d.bp === bp);
+        createWorkflowTab({
+          title: found ? found.title : "新工作流",
+          blueprint: bp,
+          makeActive: true,
+          autoFit: true,
+          switchToCanvas: true
+        });
+        libEl.remove();
+        fullRenderCanvas();
+      };
+    });
+  }
+
   function fullRenderCanvas() {
     syncAllDownstreamArticlePlans();
-    renderWorldNodes();
-    renderFloatingOverlays();
+    if (CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length)) {
+      if (DOM.nodesLayer) DOM.nodesLayer.innerHTML = "";
+      if (DOM.edgesSvg) DOM.edgesSvg.innerHTML = "";
+      renderCanvasTemplateLibrary();
+    } else {
+      const tLib = DOM.canvasStage?.querySelector("#canvas-template-library");
+      if (tLib) tLib.remove();
+      renderWorldNodes();
+      renderFloatingOverlays();
+    }
     renderTopAndBottomDocks();
     renderMinimap();
+    if (CS.stageView === "quick" || CS.stageView === "batch") {
+      renderQuickStart();
+    }
   }
 
   function bindViewportInteractions() {
@@ -12590,15 +13274,15 @@
       ) {
         spawnShelfItem(spec, { x: targetNode.x - 416, y: targetNode.y }, targetNode.id);
         toast(
-          `🔗 已将「${spec.kind === "skill_params" ? "风格参数" : spec.kind === "asset" ? "图片参数" : "文本参数"}」连入${
-            targetNode.type === "loop" ? "循环批量" : targetNode.type === "bridge" ? "桥接" : "输出控制"
+          `已将「${spec.kind === "skill_params" ? "风格参数" : spec.kind === "asset" ? "图片参数" : "文本参数"}」连入${
+            targetNode.type === "loop" ? "批量" : targetNode.type === "bridge" ? "多尺寸输出" : "生成设置"
           }！`
         );
         return;
       }
       if (targetNode && targetNode.type === "output_control" && spec.kind === "loop") {
         spawnShelfItem(spec, { x: targetNode.x - 416, y: targetNode.y }, targetNode.id);
-        toast("🔁 已将「循环批量」连入输出控制！");
+        toast("已将「批量」连入生成设置！");
         return;
       }
 
@@ -13048,7 +13732,7 @@
       renderShelfDrawer();
       fullRenderCanvas();
       bindViewportInteractions();
-      requestAnimationFrame(() => fitView());
+      if (CS.stageView === "canvas") requestAnimationFrame(() => fitView());
       resumePendingCloudTasks();
     } catch (err) {
       console.error("[Handraw Canvas Studio v4 Boot Error]", err);
@@ -13073,6 +13757,10 @@
   window.HANDRAW_STUDIO.cancelActiveBatchGeneration = cancelActiveBatchGeneration;
   window.HANDRAW_STUDIO.getCacheScope = () => activeCacheScope;
   window.HANDRAW_STUDIO.getEngineMode = () => CS.engineMode;
+  window.HANDRAW_STUDIO.openReferenceAssetPickerModal = openAssetPickerModal;
+  window.HANDRAW_STUDIO.openLoopMultiPickerModal = openLoopMultiPickerModal;
+  window.HANDRAW_STUDIO.getBatchParts = getBatchParts;
+  window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   if (window.__HANDRAW_TESTING__ === true) {
     window.HANDRAW_STUDIO_TESTING = {
       readScopedCache: (key, fallback = null) => readJsonStorage(key, fallback),

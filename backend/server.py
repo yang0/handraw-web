@@ -2650,6 +2650,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if handle_recipe_post(self, req_path, body):
                 return
 
+        if req_path == "/api/studio/fission":
+            from .fission_routes import handle_fission_post
+            if handle_fission_post(self, req_path, body):
+                return
+
         if req_path == "/api/studio/history":
             user = self._current_user(required=True)
             self._send_json(record_user_studio_history(self.db, user, body))  # type: ignore[arg-type]

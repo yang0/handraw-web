@@ -52,18 +52,18 @@
 
   // Photography mode ("photo") excluded; "文章封面" + "文章插图" unified into "文章配图" (article-illust)
   const OUTPUT_MODES = [
-    { id: "graphic-text", icon: "🖼️", label: "图文模式", desc: "社媒图文卡 / 知识信息图", defaultRatio: "3:4" },
-    { id: "pure", icon: "🎨", label: "纯图模式", desc: "纯画面叙事，不含说明杂字", defaultRatio: "3:4" },
-    { id: "poster", icon: "🪧", label: "海报模式", desc: "主副标题视觉海报 / 展架", defaultRatio: "9:16" },
-    { id: "article-illust", icon: "📰", label: "文章配图", desc: "统一生成文章封面与各章节配图方案，支持宽屏拖拽与生图", defaultRatio: "4:3" },
-    { id: "series", icon: "🗂️", label: "套图", desc: "自由设定张数，成套生成连贯系列图", defaultRatio: "3:4" }
+    { id: "graphic-text", icon: "", label: "图文模式", desc: "社媒图文卡 / 知识信息图", defaultRatio: "3:4" },
+    { id: "pure", icon: "", label: "纯图模式", desc: "纯画面叙事，不含说明杂字", defaultRatio: "3:4" },
+    { id: "poster", icon: "", label: "海报模式", desc: "主副标题视觉海报 / 展架", defaultRatio: "9:16" },
+    { id: "article-illust", icon: "", label: "文章配图", desc: "统一生成文章封面与各章节配图方案，支持宽屏拖拽与生图", defaultRatio: "4:3" },
+    { id: "series", icon: "", label: "套图", desc: "自由设定张数，成套生成连贯系列图", defaultRatio: "3:4" }
   ];
 
   const LOOP_MODES = [
-    { id: "prompts", icon: "📝", label: "多文案", desc: "每行一条主题或文案，逐条循环批量出图" },
-    { id: "styles", icon: "🎨", label: "多画风", desc: "固定主题与构图，遍历多款画风横评出图" },
-    { id: "layouts", icon: "📐", label: "多图型", desc: "固定主题与画风，遍历多款图型版式出图" },
-    { id: "assets", icon: "🖼️", label: "多图参", desc: "逐张遍历上游图片参数中的参考图批量出图" }
+    { id: "prompts", icon: "", label: "多文案", desc: "每行一条主题或文案，逐条批量出图" },
+    { id: "styles", icon: "", label: "多画风", desc: "固定主题与构图，遍历多款画风横评出图" },
+    { id: "layouts", icon: "", label: "多图型", desc: "固定主题与画风，遍历多款图型版式出图" },
+    { id: "assets", icon: "", label: "多图参", desc: "逐张遍历上游图片参数中的参考图批量出图" }
   ];
 
   const DEFAULT_LOOP_PROMPT_LINES = [
@@ -74,10 +74,10 @@
   ];
 
   const FISSION_STRATEGIES = [
-    { id: "daily_quote", icon: "📅", label: "系列日签", desc: "按日常情绪与生活切片裂变连续日签文案" },
-    { id: "selling_points", icon: "🛍️", label: "卖点切角", desc: "围绕产品痛点、成分、场景与礼赠多维种草" },
-    { id: "knowledge_cards", icon: "📚", label: "科普图鉴", desc: "把知识母题拆解为概念、原理、步骤与避坑图卡" },
-    { id: "story_beats", icon: "🎬", label: "连续分镜", desc: "按起承转合与时间推移生成连续叙事画面" }
+    { id: "daily_quote", icon: "", label: "系列日签", desc: "按日常情绪与生活切片扩写连续日签文案" },
+    { id: "selling_points", icon: "", label: "卖点切角", desc: "围绕产品痛点、成分、场景与礼赠多维种草" },
+    { id: "knowledge_cards", icon: "", label: "科普图鉴", desc: "把知识母题拆解为概念、原理、步骤与避坑图卡" },
+    { id: "story_beats", icon: "", label: "连续分镜", desc: "按起承转合与时间推移生成连续叙事画面" }
   ];
 
   function generateFissionTopics(seedTopic = "", strategy = "daily_quote", count = 10, customStrategy = "") {
@@ -223,51 +223,51 @@
     {
       id: "preset_v24_single",
       blueprint: "single",
-      title: "🎯 节气海报极速出图",
+      title: "节气海报极速出图",
       scenarioBadge: "日常单图 · 3节点",
-      scenarioDesc: "最常用的日常海报/图文工作流：仅用「风格参数 + 文本参数 → 输出控制」3 个核心节点，零冗余极速出图。"
+      scenarioDesc: "最常用的日常海报/图文工作流：仅用「风格参数 + 文本参数 → 生成设置」3 个核心节点，零冗余极速出图。"
     },
     {
       id: "preset_v24_loop100",
       blueprint: "loop_100",
-      title: "🔁 百图矩阵批量生产（1母题→100张）",
+      title: "百图矩阵批量生产（1母题→100张）",
       scenarioBadge: "百图批量 · 4节点",
-      scenarioDesc: "演示如何输出 100 张图而不建 100 个节点：「选题裂变」从 1 个母题生成 100 条日签 →「循环批量」驱动仅 1 个「输出控制」，结果自动收敛进 1 个分页「批量图集」节点。"
+      scenarioDesc: "演示如何输出 100 张图而不建 100 个节点：「AI 扩写主题」从 1 个母题生成 100 条日签 →「批量」驱动仅 1 个「生成设置」，结果自动收敛进 1 个分页「批量图集」节点。"
     },
     {
       id: "preset_v24_style_ab",
       blueprint: "style_ab",
-      title: "🎨 同文案多画风横评比稿",
+      title: "同文案多画风横评比稿",
       scenarioBadge: "提案选风 · 3节点",
-      scenarioDesc: "定好一句主文案，无需单独连风格参数，直接用「循环批量（多画风模式）」一次横评 4 款手绘风格快速定稿。"
+      scenarioDesc: "定好一句主文案，无需单独连风格参数，直接用「批量（多画风模式）」一次横评 4 款手绘风格快速定稿。"
     },
     {
       id: "preset_v24_ip_story",
       blueprint: "ip_story",
-      title: "👤 IP角色连续故事绘本",
+      title: "IP角色连续故事绘本",
       scenarioBadge: "角色一致性 · 4节点",
       scenarioDesc: "通过「图片参数」锁定原创角色与道具外观一致性，配合「套图模式」一次生成 4 幕连续故事分镜。"
     },
     {
       id: "preset_v24_omnimedia",
       blueprint: "omnimedia",
-      title: "🔗 全媒体一稿三端宣发包",
-      scenarioBadge: "桥接一分多 · 6节点",
-      scenarioDesc: "新品发布标准链路：一套视觉与卖点经「桥接」同时分发给 3 个不同规格输出控制（2.35:1 公众号头图 + 3:4 种草套图 + 9:16 竖版海报）。"
+      title: "全媒体一稿三端宣发包",
+      scenarioBadge: "多尺寸一分多 · 6节点",
+      scenarioDesc: "新品发布标准链路：一套视觉与卖点经「多尺寸输出」同时分发给 3 个不同规格生成设置（2.35:1 公众号头图 + 3:4 种草套图 + 9:16 竖版海报）。"
     },
     {
       id: "preset_v24_article",
       blueprint: "article",
-      title: "📰 深度长文自动配图与排版",
+      title: "深度长文自动配图与排版",
       scenarioBadge: "专栏配图 · .md交付",
-      scenarioDesc: "「文本参数」挂载 Markdown 长文，「输出控制」设为文章配图，自动拆解章节生成封面与正文插图并支持打包下载 ZIP。"
+      scenarioDesc: "「文本参数」挂载 Markdown 长文，「生成设置」设为文章配图，自动拆解章节生成封面与正文插图并支持打包下载 ZIP。"
     },
     {
       id: "preset_v24_fusion",
       blueprint: "fusion",
-      title: "🎭 跨媒介双画风融合实验",
+      title: "跨媒介双画风融合实验",
       scenarioBadge: "双风碰撞 · 3节点",
-      scenarioDesc: "开启「风格参数」双画风融合开关：角色主体采用手作插画肌理，场景环境采用纪实胶片/水墨山水，打造高辨识度跨次元视觉。"
+      scenarioDesc: "开启「风格参数」双画风融合开关：主体采用手作插画肌理，场景环境采用纪实胶片/水墨山水，打造高辨识度跨次元视觉。"
     }
   ];
 
