@@ -263,7 +263,21 @@ function parseHtml(html) {
             getAttribute: (attr) => (attr === "data-row-idx" ? idx : null),
             value: val,
             oninput: null,
-            onblur: null
+            onblur: null,
+            onclick: null,
+            onkeydown: null
+          });
+        }
+      }
+      if (selector === "[data-iter-theme-idx]" || selector === ".batch-iter-label-btn") {
+        const regex = /data-iter-theme-idx="(\d+)"/g;
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+          const idx = match[1];
+          results.push({
+            getAttribute: (attr) => (attr === "data-iter-theme-idx" ? idx : null),
+            onclick: null,
+            onkeydown: null
           });
         }
       }
@@ -1066,6 +1080,121 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   console.log("✓ Requirement 13 Passed: Visual 2 verified (no badges or IDs overlaid on images, moved to meta text)");
 }
 
+// ==========================================
+// Requirement 14: Theme input is readonly and has click handler; List label has click handler
+// ==========================================
+{
+  const fakeHost = createFakeDom();
+  const graph = createTestBatchGraph({
+    batchLayoutMode: "ai",
+    batchRows: [
+      { theme: "主题第一张", layout: "SC-001" },
+      { theme: "主题第二张", layout: "SC-022" }
+    ]
+  });
+  const parts = {
+    ctrl: graph.nodes.find(n => n.type === "output_control"),
+    loop: graph.nodes.find(n => n.type === "loop"),
+    skill: graph.nodes.find(n => n.type === "skill_params"),
+    text: graph.nodes.find(n => n.type === "text_input"),
+    asset: graph.nodes.find(n => n.type === "asset")
+  };
+
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {});
+
+  // 1. Verify batch-row-theme-input has readonly in HTML
+  assert.ok(
+    fakeHost.innerHTML.includes('class="make-image-input batch-row-theme-input" data-row-idx="0" value="主题第一张" placeholder="输入该张画面主题..." readonly'),
+    "batch-row-theme-input must be readonly"
+  );
+
+  // 2. Verify click handler is bound
+  const themeInputs = fakeHost.querySelectorAll(".batch-row-theme-input");
+  assert.equal(themeInputs.length, 2);
+  assert.equal(typeof themeInputs[0].onclick, "function", "batch-row-theme-input must have onclick function");
+
+  // 3. Verify list table theme label has click handler
+  const iterLabels = fakeHost.querySelectorAll("[data-iter-theme-idx]");
+  assert.ok(iterLabels.length >= 2, "Must render iter theme click targets");
+  assert.equal(typeof iterLabels[0].onclick, "function", "iter theme target must have onclick function");
+
+  console.log("✓ Requirement 14 Passed: Theme inputs are readonly and click handlers open theme modal");
+}
+
+// ==========================================
+// Requirement 15: Hover preview floating element is a global singleton
+// ==========================================
+{
+  // Test with mock document in sandbox
+  const mockDoc = {
+    _elements: {},
+    body: {
+      appendChild: (el) => { mockDoc._elements[el.id] = el; },
+      contains: (el) => Boolean(mockDoc._elements[el.id])
+    },
+    getElementById: (id) => mockDoc._elements[id] || null,
+    createElement: (tag) => ({
+      tagName: tag,
+      id: "",
+      className: "",
+      style: {},
+      innerHTML: "",
+      setAttribute: () => {},
+      querySelector: () => ({ setAttribute: () => {}, style: {} })
+    })
+  };
+
+  sandbox.document = mockDoc;
+  sandbox.window.document = mockDoc;
+
+  try {
+    const el1 = HandrawBatchCreate.ensureHoverPreviewElement();
+    const el2 = HandrawBatchCreate.ensureHoverPreviewElement();
+    assert.ok(el1, "ensureHoverPreviewElement must return an element");
+    assert.strictEqual(el1, el2, "ensureHoverPreviewElement must return the exact same singleton instance");
+    assert.equal(el1.id, "batch-layout-hover-preview", "Element ID must be batch-layout-hover-preview");
+  } finally {
+    delete sandbox.document;
+    delete sandbox.window.document;
+  }
+
+  console.log("✓ Requirement 15 Passed: Hover preview floating element is a verified global singleton");
+}
+
+// ==========================================
+// Requirement 16: Touch / 390 mode does not register hover listeners
+// ==========================================
+{
+  sandbox.window.innerWidth = 390;
+  sandbox.window.matchMedia = (query) => {
+    if (query === "(hover: none)") return { matches: true };
+    return { matches: false };
+  };
+
+  try {
+    const isTouch = HandrawBatchCreate.isTouchDevice();
+    assert.equal(isTouch, true, "390 width / (hover: none) must be detected as touch device");
+
+    let boundEvents = [];
+    const mockRoot = {
+      querySelectorAll: () => [
+        {
+          getAttribute: () => "SC-001",
+          addEventListener: (evt) => boundEvents.push(evt)
+        }
+      ]
+    };
+
+    HandrawBatchCreate.bindHoverPreview(mockRoot);
+    assert.equal(boundEvents.length, 0, "Touch device must not register hover listeners");
+  } finally {
+    sandbox.window.innerWidth = 1440;
+    sandbox.window.matchMedia = () => ({ matches: false });
+  }
+
+  console.log("✓ Requirement 16 Passed: Touch / 390 mode skips hover listener registration");
+}
+
 console.log("\n==========================================");
-console.log("All 15 Studio Batch tests passed successfully!");
+console.log("All 18 Studio Batch tests passed successfully!");
 console.log("==========================================");

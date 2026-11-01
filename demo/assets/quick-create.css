@@ -513,12 +513,14 @@
 @media(max-width:720px) {
   .batch-edit-table { min-width:0;width:100%;table-layout:fixed; }
   .batch-edit-table th, .batch-edit-table td { padding:4px 3px;font-size:11px; }
-  .batch-col-idx { width:32px;text-align:center; }
+  .batch-col-idx { width:28px !important;text-align:center; }
+  .batch-col-layout { width:100px !important; }
+  .batch-row-theme-input { font-size:11px;padding:4px 6px; }
   .batch-row-layout-btn { max-width:100%;padding:2px 4px;gap:4px; }
   .batch-row-layout-thumb-wrap { width:28px;height:21px; }
   .batch-row-layout-code { font-size:10px; }
   .batch-row-layout-name { font-size:10px; }
-  .batch-col-refs { width:95px;min-width:90px; }
+  .batch-col-refs { width:75px !important;min-width:70px; }
   .batch-row-refs-desktop { display:none; }
   .batch-row-refs-mobile { display:block; }
   .batch-btn-row-refs-mobile {
@@ -671,4 +673,153 @@
   background: var(--vermilion, #c94c2e);
   border-color: var(--vermilion, #c94c2e);
   color: #fff;
+}
+
+/* ==========================================================================
+   Batch Layout Hover Preview Singleton & Large Theme Modal
+   ========================================================================== */
+.batch-layout-hover-preview {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  display: none;
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: 420px;
+  box-sizing: border-box;
+  background: var(--surface-color, #ffffff);
+  border: 1px solid var(--line-soft, #e6ded3);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(43, 38, 35, 0.22);
+  overflow: hidden;
+}
+
+.batch-layout-hover-preview .batch-hover-img-wrap {
+  width: 100%;
+  height: auto;
+  max-height: 360px;
+  background: var(--paper-inset, #f3ede2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.batch-layout-hover-preview .batch-hover-img {
+  width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+  display: block;
+}
+
+.batch-layout-hover-preview .batch-hover-meta {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  background: var(--paper-inset, #f3ede2);
+  border-top: 1px solid var(--line-soft, #e6ded3);
+}
+
+.batch-layout-hover-preview .batch-hover-code {
+  font-weight: 700;
+  color: var(--ink-main, #2b2623);
+  font-family: monospace;
+}
+
+.batch-layout-hover-preview .batch-hover-name {
+  color: var(--ink-muted, #7c7267);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (hover: none) {
+  .batch-layout-hover-preview {
+    display: none !important;
+  }
+}
+
+/* Theme Modal & Inputs */
+.batch-row-theme-input[readonly] {
+  background-color: var(--paper-inset, #f3ede2);
+  border-color: var(--line-soft, #e6ded3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.batch-row-theme-input[readonly]:hover {
+  border-color: var(--ink-muted, #7c7267);
+  background-color: var(--surface-color, #ffffff);
+}
+
+.batch-row-theme-input[readonly]:focus-visible {
+  outline: 2px solid var(--vermilion, #b74227);
+  outline-offset: 1px;
+}
+
+.batch-iter-label-btn {
+  background: none;
+  border: 1px solid transparent;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  color: inherit;
+  font: inherit;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.batch-iter-label-btn:hover {
+  background-color: var(--paper-inset, #f3ede2);
+  border-color: var(--line-soft, #e6ded3);
+}
+
+.batch-iter-label-btn:focus-visible {
+  outline: 2px solid var(--vermilion, #b74227);
+  outline-offset: 1px;
+}
+
+.batch-iter-label-btn .batch-iter-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}
+
+.batch-theme-modal-textarea {
+  min-height: 200px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 12px;
+  border: 1px solid var(--line-soft, #e6ded3);
+  border-radius: 6px;
+  background: var(--surface-color, #ffffff);
+  color: var(--ink-main, #2b2623);
+}
+
+.batch-theme-modal-textarea:focus {
+  outline: none;
+  border-color: var(--vermilion, #b74227);
+  box-shadow: 0 0 0 2px rgba(183, 66, 39, 0.15);
+}
+
+@media (max-width: 768px) {
+  .batch-iter-label-btn .batch-iter-label {
+    max-width: 200px;
+  }
+  .batch-theme-modal-textarea {
+    min-height: 180px;
+  }
 }

@@ -260,8 +260,8 @@
       const ariaLabel = hasSpecific ? `图型版式：${effectiveId} ${nameText}` : `跟随全局图型 ${effectiveId} ${nameText}`;
 
       return `
-        <button type="button" class="btn batch-row-layout-btn" data-pick-layout-idx="${idx}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
-          <span class="batch-row-layout-thumb-wrap">
+        <button type="button" class="btn batch-row-layout-btn" data-pick-layout-idx="${idx}" data-hover-src="${esc(thumbUrl)}" data-hover-code="${esc(codeText)}" data-hover-name="${esc(nameText)}" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
+          <span class="batch-row-layout-thumb-wrap" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}">
             <img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />
           </span>
           <span class="batch-row-layout-info">
@@ -513,7 +513,7 @@
                             <tr class="batch-edit-row" data-row-idx="${idx}">
                               <td class="batch-col-idx">#${idx + 1}</td>
                               <td>
-                                <input type="text" class="make-image-input batch-row-theme-input" data-row-idx="${idx}" value="${esc(row.theme)}" placeholder="输入该张画面主题..." />
+                                <input type="text" class="make-image-input batch-row-theme-input" data-row-idx="${idx}" value="${esc(row.theme)}" placeholder="输入该张画面主题..." readonly role="button" aria-haspopup="dialog" aria-label="第 ${idx + 1} 张主题，点击编辑" title="点击编辑主题" style="cursor:pointer;" />
                               </td>
                               <td class="batch-col-layout">
                                 ${this.renderRowLayoutButtonHtml(row, idx, sd.layout)}
@@ -719,11 +719,13 @@
                             <td class="batch-col-content">
                               <div class="batch-iter-cell">
                                 ${iter.sampleImg ? `
-                                  <button type="button" class="batch-iter-thumb-btn" data-zoom-src="${esc(iter.sampleImg)}" data-zoom-title="${esc(zoomTitle)}" aria-label="放大查看${esc(zoomTitle)}">
+                                  <button type="button" class="batch-iter-thumb-btn" data-zoom-src="${esc(iter.sampleImg)}" data-zoom-title="${esc(zoomTitle)}" data-hover-src="${esc(iter.sampleImg)}" data-hover-code="${esc(iterLayoutId || '')}" data-hover-name="${esc(layoutName || '')}" aria-label="放大查看${esc(zoomTitle)}">
                                     <img data-hw-src="${esc(iter.sampleImg)}" class="batch-iter-thumb" alt="${esc(zoomTitle)}" loading="lazy" />
                                   </button>
                                 ` : ""}
-                                <span class="batch-iter-label">${esc(iter.shortLabel || iter.title || iter.theme)}</span>
+                                <button type="button" class="batch-iter-label-btn" data-iter-theme-idx="${idx}" title="点击编辑主题" aria-label="编辑第 ${idx + 1} 张主题">
+                                  <span class="batch-iter-label" data-iter-theme-idx="${idx}">${esc(iter.shortLabel || iter.title || iter.theme)}</span>
+                                </button>
                               </div>
                             </td>
                             <td class="batch-col-status">
@@ -1107,22 +1109,33 @@
         };
       });
 
-      // (i) AI mode table events
+      // (i) AI mode table events - Theme modal trigger (readonly input)
       root.querySelectorAll(".batch-row-theme-input").forEach((inp) => {
-        inp.oninput = () => {
+        inp.onclick = () => {
           const idx = Number(inp.getAttribute("data-row-idx"));
-          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
-          loop.data.batchRows[idx].theme = inp.value;
-          loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
-          self.updatePreviewAndCost(root);
+          self.openThemeEditModal(idx, "row");
         };
-        inp.onblur = () => {
-          markDirty();
+        inp.onkeydown = (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            const idx = Number(inp.getAttribute("data-row-idx"));
+            self.openThemeEditModal(idx, "row");
+          }
         };
       });
 
       root.querySelectorAll("[data-pick-layout-idx]").forEach((btn) => {
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          if (e && e.target && e.target.closest && e.target.closest(".batch-row-layout-thumb-wrap")) {
+            self.hideHoverPreview(true);
+            const src = btn.getAttribute("data-zoom-src");
+            const title = btn.getAttribute("data-zoom-title") || "图型预览";
+            if (src && self.actions?.openImageLightbox) {
+              self.actions.openImageLightbox(src, title);
+              return;
+            }
+          }
+          self.hideHoverPreview(true);
           const idx = Number(btn.getAttribute("data-pick-layout-idx"));
           if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
           const currentRow = loop.data.batchRows[idx];
@@ -1400,7 +1413,9 @@
 
       // 7.5. Batch Iteration Thumbnail Zoom (Lightbox)
       root.querySelectorAll(".batch-iter-thumb-btn").forEach((btn) => {
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          if (e && e.stopPropagation) e.stopPropagation();
+          self.hideHoverPreview(true);
           const src = btn.getAttribute("data-zoom-src");
           const title = btn.getAttribute("data-zoom-title") || "图型预览";
           if (!src) return;
@@ -1412,6 +1427,25 @@
           }
         };
       });
+
+      // 7.6. Batch Iteration Theme Editing (Modal)
+      root.querySelectorAll("[data-iter-theme-idx]").forEach((el) => {
+        el.onclick = (e) => {
+          if (e && e.stopPropagation) e.stopPropagation();
+          const idx = Number(el.getAttribute("data-iter-theme-idx"));
+          self.openThemeEditModal(idx, "iter");
+        };
+        el.onkeydown = (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            const idx = Number(el.getAttribute("data-iter-theme-idx"));
+            self.openThemeEditModal(idx, "iter");
+          }
+        };
+      });
+
+      // 7.7. Bind Layout Hover Preview Singleton
+      self.bindHoverPreview(root);
 
       // 8. Start Batch Generation Button (M1: single confirmation via confirmPotentialGenerationCost)
       const btnStart = root.querySelector("#batch-btn-start");
@@ -1513,6 +1547,393 @@
       if (title) {
         title.textContent = `批量清单与状态 (${totalCount} 张)`;
       }
+    }
+
+    isTouchDevice() {
+      if (typeof window === "undefined" || !window.matchMedia) return false;
+      return Boolean(
+        window.matchMedia("(hover: none)").matches ||
+        window.matchMedia("(pointer: coarse)").matches ||
+        (typeof window.innerWidth === "number" && window.innerWidth <= 768)
+      );
+    }
+
+    ensureHoverPreviewElement() {
+      const doc = (typeof document !== "undefined" && typeof document.getElementById === "function")
+        ? document
+        : ((global.document && typeof global.document.getElementById === "function") ? global.document : null);
+      if (!doc) {
+        return this._hoverPreviewEl || null;
+      }
+      if (this._hoverPreviewEl && doc.body && doc.body.contains && doc.body.contains(this._hoverPreviewEl)) {
+        return this._hoverPreviewEl;
+      }
+      let el = doc.getElementById("batch-layout-hover-preview");
+      if (!el) {
+        el = doc.createElement("div");
+        el.id = "batch-layout-hover-preview";
+        el.className = "batch-layout-hover-preview";
+        el.setAttribute("aria-hidden", "true");
+        el.style.display = "none";
+        el.style.opacity = "0";
+        el.innerHTML = `
+          <div class="batch-hover-img-wrap">
+            <img class="batch-hover-img" alt="" />
+          </div>
+          <div class="batch-hover-meta">
+            <span class="batch-hover-code"></span>
+            <span class="batch-hover-name"></span>
+          </div>
+        `;
+        if (doc.body && doc.body.appendChild) {
+          doc.body.appendChild(el);
+        }
+      }
+      this._hoverPreviewEl = el;
+      return el;
+    }
+
+    positionHoverPreview(el, clientX, clientY, triggerRect) {
+      if (!el) return;
+      const win = typeof window !== "undefined" ? window : null;
+      const vw = win && win.innerWidth ? win.innerWidth : 1440;
+      const vh = win && win.innerHeight ? win.innerHeight : 900;
+      const pad = 12;
+      const gap = 16;
+      const w = 320;
+      const h = el.offsetHeight || 280;
+
+      let x = clientX !== undefined ? clientX + gap : (triggerRect ? triggerRect.right + gap : 100);
+      let y = clientY !== undefined ? clientY + gap : (triggerRect ? triggerRect.top : 100);
+
+      if (x + w + pad > vw) {
+        if (clientX !== undefined) {
+          x = clientX - w - gap;
+        } else if (triggerRect) {
+          x = triggerRect.left - w - gap;
+        }
+      }
+      if (x + w + pad > vw) x = vw - w - pad;
+      if (x < pad) x = pad;
+
+      if (y + h + pad > vh) {
+        if (clientY !== undefined) {
+          y = clientY - h - gap;
+        } else if (triggerRect) {
+          y = triggerRect.bottom - h;
+        }
+      }
+      if (y + h + pad > vh) y = vh - h - pad;
+      if (y < pad) y = pad;
+
+      el.style.left = `${Math.round(x)}px`;
+      el.style.top = `${Math.round(y)}px`;
+    }
+
+    showHoverPreview({ src, code, name, clientX, clientY, triggerEl }) {
+      if (!src || this.isTouchDevice()) return;
+      const el = this.ensureHoverPreviewElement();
+      if (!el) return;
+
+      const img = el.querySelector(".batch-hover-img");
+      const codeEl = el.querySelector(".batch-hover-code");
+      const nameEl = el.querySelector(".batch-hover-name");
+
+      const ImageConstructor = typeof Image !== "undefined" ? Image : (global.Image || null);
+      if (ImageConstructor) {
+        const testImg = new ImageConstructor();
+        testImg.onload = () => {
+          if (el.dataset.activeSrc !== src) return;
+          if (img) {
+            img.src = src;
+            img.alt = name ? `${code} ${name}` : (code || "图型预览");
+          }
+          if (codeEl) {
+            codeEl.textContent = code || "";
+            codeEl.style.display = code ? "inline" : "none";
+          }
+          if (nameEl) {
+            nameEl.textContent = name || "";
+          }
+          el.style.display = "block";
+          this.positionHoverPreview(el, clientX, clientY, triggerEl && triggerEl.getBoundingClientRect ? triggerEl.getBoundingClientRect() : null);
+          if (typeof requestAnimationFrame !== "undefined") {
+            requestAnimationFrame(() => {
+              if (el.dataset.activeSrc === src) {
+                el.style.opacity = "1";
+              }
+            });
+          } else {
+            el.style.opacity = "1";
+          }
+        };
+        testImg.onerror = () => {
+          this.hideHoverPreview(true);
+        };
+        el.dataset.activeSrc = src;
+        testImg.src = src;
+      } else {
+        if (img) img.src = src;
+        if (codeEl) codeEl.textContent = code || "";
+        if (nameEl) nameEl.textContent = name || "";
+        el.style.display = "block";
+        el.style.opacity = "1";
+        el.dataset.activeSrc = src;
+      }
+    }
+
+    hideHoverPreview(immediate = false) {
+      this.clearHoverTimer();
+      const el = this.ensureHoverPreviewElement();
+      if (!el) return;
+      el.dataset.activeSrc = "";
+      if (immediate) {
+        el.style.opacity = "0";
+        el.style.display = "none";
+      } else {
+        el.style.opacity = "0";
+        if (this._hoverHideTimer) clearTimeout(this._hoverHideTimer);
+        this._hoverHideTimer = setTimeout(() => {
+          if (el && !el.dataset.activeSrc) {
+            el.style.display = "none";
+          }
+        }, 150);
+      }
+    }
+
+    clearHoverTimer() {
+      if (this._hoverTimer) {
+        clearTimeout(this._hoverTimer);
+        this._hoverTimer = null;
+      }
+    }
+
+    bindHoverPreview(root) {
+      const self = this;
+      if (this.isTouchDevice()) return;
+
+      const triggers = root.querySelectorAll ? root.querySelectorAll(".batch-row-layout-btn, .batch-iter-thumb-btn") : [];
+      triggers.forEach((btn) => {
+        const getMeta = () => ({
+          src: btn.getAttribute("data-hover-src") || btn.getAttribute("data-zoom-src"),
+          code: btn.getAttribute("data-hover-code") || "",
+          name: btn.getAttribute("data-hover-name") || btn.getAttribute("data-zoom-title") || ""
+        });
+
+        if (btn.addEventListener) {
+          btn.addEventListener("pointerenter", (e) => {
+            if (self.isTouchDevice()) return;
+            self.clearHoverTimer();
+            const meta = getMeta();
+            if (!meta.src) return;
+            const clientX = e.clientX;
+            const clientY = e.clientY;
+            self._hoverTimer = setTimeout(() => {
+              self.showHoverPreview({ ...meta, clientX, clientY, triggerEl: btn });
+            }, 300);
+          });
+
+          btn.addEventListener("pointermove", (e) => {
+            if (self.isTouchDevice()) return;
+            if (self._hoverPreviewEl && self._hoverPreviewEl.style.display !== "none") {
+              self.positionHoverPreview(self._hoverPreviewEl, e.clientX, e.clientY, btn.getBoundingClientRect ? btn.getBoundingClientRect() : null);
+            } else if (self._hoverTimer) {
+              const meta = getMeta();
+              self.clearHoverTimer();
+              self._hoverTimer = setTimeout(() => {
+                self.showHoverPreview({ ...meta, clientX: e.clientX, clientY: e.clientY, triggerEl: btn });
+              }, 300);
+            }
+          });
+
+          btn.addEventListener("pointerleave", () => {
+            self.hideHoverPreview();
+          });
+
+          btn.addEventListener("focus", () => {
+            if (self.isTouchDevice()) return;
+            self.clearHoverTimer();
+            const meta = getMeta();
+            if (!meta.src) return;
+            self._hoverTimer = setTimeout(() => {
+              self.showHoverPreview({ ...meta, triggerEl: btn });
+            }, 300);
+          });
+
+          btn.addEventListener("blur", () => {
+            self.hideHoverPreview(true);
+          });
+        }
+      });
+
+      if (typeof window !== "undefined" && !self._scrollListenerAttached && window.addEventListener) {
+        window.addEventListener("scroll", () => {
+          self.hideHoverPreview(true);
+        }, { capture: true, passive: true });
+        self._scrollListenerAttached = true;
+      }
+    }
+
+    openThemeEditModal(idx, source = "row") {
+      const self = this;
+      const S = global.HANDRAW_SHARED;
+      if (!S?.openModal) return;
+
+      const p = this.getParts();
+      const loop = p?.loop;
+      if (!loop || !loop.data) return;
+
+      const isAiMode = loop.data.batchLayoutMode === "ai" && Array.isArray(loop.data.batchRows);
+      let currentTheme = "";
+      if (isAiMode && loop.data.batchRows[idx]) {
+        currentTheme = loop.data.batchRows[idx].theme != null ? String(loop.data.batchRows[idx].theme) : "";
+      } else {
+        const rawLines = (loop.data.promptListText || "").split(/\r?\n/);
+        const nonEmpties = [];
+        rawLines.forEach((l, lIdx) => {
+          if (l.trim()) nonEmpties.push({ text: l, lineIdx: lIdx });
+        });
+        if (nonEmpties[idx]) {
+          currentTheme = nonEmpties[idx].text;
+        } else if (rawLines[idx] != null) {
+          currentTheme = rawLines[idx];
+        }
+      }
+
+      const MAX_CHARS = 200;
+      const title = `编辑第 ${idx + 1} 张的主题`;
+
+      S.openModal({
+        title,
+        sizeClass: "modal-md",
+        html: `
+          <div class="batch-theme-modal" style="display:flex;flex-direction:column;gap:12px;">
+            <div class="make-image-field-wrap">
+              <label class="make-image-field-label" for="batch-theme-modal-textarea">完整主题内容（最多 200 字）</label>
+              <textarea
+                id="batch-theme-modal-textarea"
+                class="make-image-textarea batch-theme-modal-textarea"
+                rows="8"
+                placeholder="输入该张画面的核心主题或场景描述…"
+                style="min-height:200px;width:100%;box-sizing:border-box;resize:vertical;font-size:14px;line-height:1.6;padding:12px;"
+              >${esc(currentTheme)}</textarea>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:12px;">
+                <span id="batch-theme-modal-tip" style="color:var(--ink-muted);">按 Ctrl+Enter 快速保存，Esc 取消</span>
+                <span id="batch-theme-modal-counter" style="color:var(--ink-muted);">
+                  <span id="batch-theme-char-count">0</span> / 200 字
+                </span>
+              </div>
+            </div>
+            <div class="make-image-modal-actions" style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;">
+              <button type="button" class="btn btn-sm" id="batch-theme-btn-cancel">取消</button>
+              <button type="button" class="btn btn-sm btn-primary" id="batch-theme-btn-save">保存</button>
+            </div>
+          </div>
+        `,
+        onMount(modalRoot) {
+          const ta = modalRoot.querySelector("#batch-theme-modal-textarea");
+          const countEl = modalRoot.querySelector("#batch-theme-char-count");
+          const counterWrap = modalRoot.querySelector("#batch-theme-modal-counter");
+          const tipEl = modalRoot.querySelector("#batch-theme-modal-tip");
+          const btnSave = modalRoot.querySelector("#batch-theme-btn-save");
+          const btnCancel = modalRoot.querySelector("#batch-theme-btn-cancel");
+
+          const updateCount = () => {
+            if (!ta || !countEl) return;
+            const val = ta.value;
+            const len = val.length;
+            countEl.textContent = String(len);
+            if (len > MAX_CHARS) {
+              if (btnSave) btnSave.disabled = true;
+              if (counterWrap) {
+                counterWrap.style.color = "var(--error-color, #e03131)";
+                counterWrap.style.fontWeight = "700";
+              }
+              if (tipEl) {
+                tipEl.textContent = "字数已超出 200 字上限，请精简";
+                tipEl.style.color = "var(--error-color, #e03131)";
+              }
+            } else {
+              if (btnSave) btnSave.disabled = false;
+              if (counterWrap) {
+                counterWrap.style.color = "var(--ink-muted)";
+                counterWrap.style.fontWeight = "normal";
+              }
+              if (tipEl) {
+                tipEl.textContent = "按 Ctrl+Enter 快速保存，Esc 取消";
+                tipEl.style.color = "var(--ink-muted)";
+              }
+            }
+          };
+
+          updateCount();
+          if (ta) {
+            ta.focus();
+            try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (_) {}
+            ta.oninput = updateCount;
+            ta.onkeydown = (e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                doSave();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                S.closeModal();
+              }
+            };
+          }
+
+          const doSave = () => {
+            if (!ta || (btnSave && btnSave.disabled)) return;
+            const newTheme = ta.value;
+            if (newTheme.length > MAX_CHARS) return;
+
+            if (isAiMode && Array.isArray(loop.data.batchRows) && loop.data.batchRows[idx]) {
+              loop.data.batchRows[idx].theme = newTheme;
+              loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
+            } else {
+              const rawLines = (loop.data.promptListText || "").split(/\r?\n/);
+              const nonEmpties = [];
+              rawLines.forEach((l, lIdx) => {
+                if (l.trim()) nonEmpties.push(lIdx);
+              });
+              if (nonEmpties[idx] !== undefined) {
+                rawLines[nonEmpties[idx]] = newTheme;
+              } else if (rawLines[idx] !== undefined) {
+                rawLines[idx] = newTheme;
+              } else {
+                rawLines.push(newTheme);
+              }
+              loop.data.promptListText = rawLines.join("\n");
+              if (Array.isArray(loop.data.batchRows) && loop.data.batchRows[idx]) {
+                loop.data.batchRows[idx].theme = newTheme;
+              }
+            }
+
+            S.closeModal();
+
+            if (self.actions?.markDirtyAndRender) {
+              self.actions.markDirtyAndRender();
+            } else {
+              self.render();
+            }
+
+            setTimeout(() => {
+              const rootEl = self.hostElement;
+              if (!rootEl) return;
+              if (source === "row") {
+                const inp = rootEl.querySelector(`.batch-row-theme-input[data-row-idx="${idx}"]`);
+                inp?.focus();
+              } else {
+                const btn = rootEl.querySelector(`[data-iter-theme-idx="${idx}"]`);
+                btn?.focus();
+              }
+            }, 60);
+          };
+
+          if (btnSave) btnSave.onclick = doSave;
+          if (btnCancel) btnCancel.onclick = () => S.closeModal();
+        }
+      });
     }
 
     // Fission Modal (Defect 1 Fixed: captures self = this)
