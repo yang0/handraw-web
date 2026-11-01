@@ -222,7 +222,8 @@ boot 载荷（`version: 4`）主要字段：`serverBacked`、`loggedIn`、`user`
 | 作品即时发布 | 审核只用于画风、图型进入官方目录 | 消除「论坛已发、广场没有」的不一致；内容安全靠举报阈值与巡查 | D-02 |
 | Skill 新契约，无旧接口兼容层 | 不模仿 Discourse 形状的接口；`/api/entries` 只做 Skill 载荷到作品发布的格式转换 | Skill 未发布，无存量用户 | D-03 |
 | 评论统一存 `forum_replies` | `origin='submission'` 表示评论在 `forum_replies`；旧表只读 | 沿用已有枚举值，代码回滚后旧代码仍按 `origin` 读到正确的表 | design-v1 决策 4 |
-| 排序只有一个实现 | `ranking.py` + 前端 `popularScore`，无时间衰减；复刻权重由设计的 3 降为 1 | 结果可解释、可用表达式索引；复刻可用免费额度刷出来 | design-v1 决策 3、`ranking.py` 注释 |
+| 排序只有一个实现 | `ranking.py` + 前端 `popularScore`，无时间衰减；复刻权重由设计的 3 降为 1。作品与帖子有 SQL 表达式（`WORK_POPULAR_EXPR`、`topic_popular_sql`）；画风、图型只有 `asset_popular_score = usageCount`（引用作品数），不读评价信号，也没有 SQL 表达式。资源榜单 `getRankedAssets` 目前没有遵守这条，见 §8 #14 | 结果可解释、可用表达式索引；复刻可用免费额度刷出来 | design-v1 决策 3、`ranking.py` 注释 |
+| 资源评价信号按编号聚合 | 点赞（`interactions.like_style/like_layout`）、收藏（`collections`）、印章（`interactions.target_type='asset'` 且 `stamp_label<>''`）、赞赏（`ledgers.tip_official_in` 或 `catalog_assets.tips`）都以资源编号为键。catalog.json 中的官方资源在 `catalog_assets` 里没有行，计数**只能从 `interactions` / `ledgers` 聚合**，不能读 `catalog_assets.cheers/tips/stamp_counts_json`；社区资源目前读这些缓存列 | 官方资源不入表（#10、#19），评价信号要能覆盖全部资源，供后续推荐排序使用（#24） | `post_routes._handle_detail`、`services.toggle_user_cheer` |
 | 浏览数冻结 | `views` 列保留，不写不读 | 匿名访客无法可信去重；与「GET 不写库」冲突 | design-v1 决策 2 |
 | 版块用常量 | `FORUM_BOARDS`，不建表 | 只有 6 个版块；超过 10 个或需要免发版新增时再建表 | design-v1 决策 7 |
 | 迁移只加不减、不回滚 | 加表、加列、加索引；改语义时冻结旧列 | 代码可随时回滚到旧提交而不动库 | AGENTS.md |
@@ -278,3 +279,4 @@ for f in tests/*.cjs; do node "$f" || exit 1; done
 | 11 | 外部目录默认值是 Windows 绝对路径 | 新环境必须设置 `HANDRAW_STYLE_IMAGES_DIR`、`HANDRAW_STYLE_SKILL_DIR`、`HANDRAW_STYLE_REFS_DIR` | `config.py`、`skill_paths.py` |
 | 12 | 各环境的 `schema_migrations` 不一致 | `main` 工作区未提交的 `curation_schema.py` 会登记 030 / 031；本分支不认识这两个版本（DDL 均为 IF NOT EXISTS，暂无冲突） | `migrations.py:525` |
 | 13 | 作品回执地址仍指向待移除的资源详情视图 | 移除视图后 Skill 回执链接失效 | `curation.py:1978` |
+| 14 | 评价信号还接不进资源排序（#24 的目标） | ① 资源榜单 `shared.js getRankedAssets` 自带公式（引用数 ×36 + `cheers` ×1.1 + 来源加分 + 荣誉 `boost`），与 `ranking.py` 和「荣誉不影响排序」不一致；② boot 只下发资源的点赞、收藏聚合（`assetLiveLikes` / `assetLiveFavorites`），不下发印章与赞赏，官方资源在前端的 `cheers` 恒为 0；③ 社区资源的 `cheers` 列每次赞赏 +3、每次鼓励 +1，官方资源按 interaction 行数计，两种口径不能放在一起比较；④ 没有资源的 SQL 排序表达式，排序只能在前端全量计算。补齐需要：在 `ranking.py` 定义资源热门公式和对应的前端一致性测试；按编号产出统一口径的聚合计数（boot 字段或排序接口）；`getRankedAssets` 改为调用该公式 | `ranking.py:74`、`shared.js:1670`、`services.py:1873`、`services.send_encourage_tip` |

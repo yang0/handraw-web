@@ -43,7 +43,7 @@
 
 | 表 | 用途 | 关键列 | 约束 / 索引 | 写入方 |
 |---|---|---|---|---|
-| `catalog_assets` | 静态目录之上的数据库覆盖层 | `code` PK，`kind`（style / layout），`source_type`（exclusive / community / official_override），`author_username`，`tier`，`unlock_cost`，`definition`，`prompt_en`，`secret_blackbox_prompt`（资源专属指令，永不下发），`status` | `idx_catalog_kind_status` | curation、admin_services、services、seed |
+| `catalog_assets` | 静态目录之上的数据库覆盖层 | `code` PK，`kind`（style / layout），`source_type`（exclusive / community / official_override），`author_username`，`tier`，`unlock_cost`，`definition`，`prompt_en`，`secret_blackbox_prompt`（资源专属指令，永不下发），`status`，`cheers` / `tips` / `stamp_counts_json`（评价缓存计数，只对有行的资源有效；catalog.json 官方资源没有行，计数改为聚合，见 §2.5） | `idx_catalog_kind_status` | curation、admin_services、services、seed |
 | `asset_social_seeds` | 演示用基础点赞、收藏数 | `asset_code` PK，`base_likes`，`base_favorites` | 非演示模式读取时视为空表 | seed |
 | `asset_comments` | 官方资源旧评论 | `id` PK，`asset_code`，`text`，`status`，`status_actor_role` | `idx_asset_comments_code` | seed 插入；审核经 `services._COMMENT_TABLES` 动态表名更新状态。新评论改写 `forum_replies` |
 ### 2.3 作品
@@ -66,7 +66,7 @@
 
 | 表 | 用途 | 关键列 | 约束 / 索引 | 写入方 |
 |---|---|---|---|---|
-| `interactions` | 点赞、鼓励、印章 | PK `(user_id, target_type, target_id, stamp_label)`；`target_type` 如 `like_work`、`work` | `idx_interactions_target` | services、admin_services |
+| `interactions` | 点赞、鼓励、印章 | PK `(user_id, target_type, target_id, stamp_label)`；`target_type`：`like_work` / `like_topic` / `like_style` / `like_layout`（点赞），`work` / `asset`（鼓励与印章，`stamp_label=''` 为无标签鼓励，非空为印章；赞赏也会插入一条无标签行）。资源的 `target_id` 是资源编号 | `idx_interactions_target` | services、admin_services |
 | `collections` | 收藏 | PK `(user_id, bucket, target_id)`；`bucket` ∈ styles / layouts / works / topics | `idx_collections_target` | services、admin_services、seed |
 
 ### 2.6 收录体系
@@ -114,6 +114,19 @@
 | `unlocks` | 付费解锁 | `user_id` →，`author_username`，`target_type`（work / topic / asset），`target_id`，`cost`，`author_share`，`status`（settled / refunded） | U `(user_id, target_type, target_id)` | services、admin_services、seed |
 | `redeem_codes` | 兑换码 | `code` PK，`credits`，`max_uses`，`used_count`，`active`，`expires_at` | — | admin_services、services、seed |
 | `redeem_code_uses` | 兑换记录 | PK `(code, user_id)` | — | services、admin_services |
+
+`ledgers.kind` 取值（代码中实际写入的，`apply_wallet_delta` 调用点；`seed.py` 另直接插入 `welcome`）：
+
+| 类别 | kind |
+|---|---|
+| 赠送与奖励 | `welcome`、`checkin`、`invite_inviter`、`invite_invitee`、`first_cheer`、`first_collect`、`publish_work`、`publish_asset`、`publish_topic`、`publish_reply`、`honor_upgrade`、`discourse_migration`、`redeem_code`、`admin_grant` |
+| 生图 | `studio_gen`（扣费）、`studio_refund`（失败退还） |
+| 付费解锁 | `unlock_spend`（付款）、`unlock_royalty`（作者分成；官方与 `exclusive` 资源没有这一条）、`unlock_refund`、`unlock_royalty_clawback`（退款时冲回分成） |
+| 赞赏 | `tip_out` / `tip_in`（作品与社区资源，收款人是作者）；`tip_official_out` / `tip_official_in`（官方资源，收款人是 `economy.official_tip_payee`，#24 起）。两组都是 `ref_type='asset'` 或 `'work'`、`ref_id=编号` |
+| 悬赏 | `bounty_escrow`、`bounty_win`、`bounty_admin_award`、`bounty_admin_refund` |
+| 充值 | `recharge`（仅演示模式） |
+
+官方资源的赞赏总额 = `SUM(delta) WHERE kind='tip_official_in' AND ref_type='asset' AND ref_id=<编号>`（`post_routes._handle_detail` 即按此读取）。
 
 ### 2.10 审计、通知与治理
 
@@ -222,7 +235,7 @@
 | `notify_wallet_income` | `ledgers` 插入，`delta > 0` 且 `kind IN ('unlock_income','tip_income','bounty_reward','studio_refund','refund')` | 收款人 |
 | `notify_generation_failure` | `studio_generations.status` 变为 `failed` / `refunded` | 任务用户与所有在职 admin |
 
-**已知问题**：代码实际写入的收入类流水 `kind` 是 `unlock_royalty`、`tip_in`、`bounty_win`、`unlock_refund`、`studio_refund`。触发器只匹配到 `studio_refund`，作者收到解锁分成、赞赏、悬赏奖金时不会产生通知。修复需要新增迁移重建触发器（`DROP TRIGGER` + `CREATE TRIGGER`），不能改 020。
+**已知问题**：代码实际写入的收入类流水 `kind` 是 `unlock_royalty`、`tip_in`、`tip_official_in`、`bounty_win`、`unlock_refund`、`studio_refund`。触发器只匹配到 `studio_refund`，作者收到解锁分成、赞赏、悬赏奖金时不会产生通知；官方资源收款账号收到赞赏同样不会。修复需要新增迁移重建触发器（`DROP TRIGGER` + `CREATE TRIGGER`），不能改 020。
 
 ## 6. 维护规则
 

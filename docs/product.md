@@ -71,6 +71,8 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 
 社区画风、图型只有经过 §3.6 双人收录才会写入 `catalog_assets`，进入频道页。`catalog_assets` 的写入方只有 `curation`、`admin_services`、`seed`。
 
+**评价信号（#24）**：官方资源与社区资源共用同一套评价信号：点赞、收藏、印章（🎯 超实用配方、✨ 审美在线）、赞赏，都按资源编号记录，从哪个入口进来都是同一份数据。无标签的「👏」与点赞重复，帖子页资源块不再显示（3b12）；存量数据继续计数。区别只在存储：社区资源的 `cheers` / `tips` / `stamp_counts_json` 缓存在 `catalog_assets` 列上；catalog.json 中的官方资源在该表里没有行，计数从 `interactions`（印章）和 `ledgers`（`tip_official_in`）聚合（`post_routes._handle_detail`）。这些信号**目前还没有进入资源排序**，见 §6。
+
 ### 3.3 创作台（`/studio/`）
 
 模式切换条在 `studio-app.js` 的 `renderCreationModeBar`，URL 参数 `?entry=quick|batch|article|canvas`。
@@ -233,7 +235,8 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 | `first_collect_credits` / `first_cheer_credits` | 2 / 2 | 首次收藏、首次鼓励 |
 | `daily_free_quota` | 3 | 每日免费生图张数 |
 | `studio_credit_per_image` | 2 | 免费用尽后每张积分 |
-| `author_share_ratio` | 0.80 | 付费解锁时作者分成；官方内容无分成 |
+| `author_share_ratio` | 0.80 | 付费解锁时作者分成；官方内容（含 `exclusive`）无分成，解锁积分不入任何账户 |
+| `official_tip_payee` | `""` | 官方资源赞赏的收款账号（用户名）。为空时官方资源赞赏关闭 |
 | `discourse_migration_credits` | 50 | Discourse 迁移用户赠送 |
 
 | 机制 | 规则 | 状态 |
@@ -241,7 +244,8 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 | 付费解锁 | 作品、帖子、社区资源三类；一次解锁永久有效（`unlocks` 唯一键）；作者本人与免费内容直接可见 | 已实现 |
 | 解锁退款 | 管理员 `/api/admin/unlocks/<id>/refund`，同时冲回作者分成 | 已实现 |
 | 兑换码 | `redeem_codes` 有次数上限和过期时间，每人每码一次 | 已实现 |
-| 赞赏 `/api/interactions/tip` | 对作品或资源赞赏 1–50 积分，全额转给作者；不能赞赏自己。作者账号不存在时（如官方资源）只扣不入：待核实是否为预期 | 已实现 |
+| 赞赏 `/api/interactions/tip`（作品、社区资源） | 赞赏 1–50 积分（前端固定 2），全额转给作者，流水 `tip_out` / `tip_in`；不能赞赏自己。作者账号已不存在时只扣不入（现在只有已删除账号的作品与社区资源会遇到） | 已实现 |
+| 赞赏官方资源（#24） | 官方画风、图型（catalog.json、`official_override`、`exclusive`）也可以赞赏。积分**不销毁**，入账给 `economy.official_tip_payee` 配置的超管账号，流水 `tip_official_out` / `tip_official_in`，与社区作者收入分开统计。未配置收款人、账号不存在或已停用时**拒绝赞赏**（400 `official_tips_disabled`），不静默扣分；收款人本人不能赞赏官方资源。前端文案不写「给 @作者」，确认框写明「入账官方运营账户」 | 已实现（`78bb703`） |
 | 现金充值 `/api/wallet/recharge` | 仓库内没有支付渠道和回调。只有演示模式且 `HANDRAW_ENABLE_RECHARGE=1` 时可用，否则返回 503 `payment_disabled` | 未实现 |
 | 荣誉等级 | 按已发布作品与资源数分 5 档（`CREATOR_HONOR_TIERS`），只显示徽章，不再影响排序 | 已实现 |
 
@@ -258,3 +262,4 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 | `allow_self_review_for_admin` | design-v1 要求新安装默认改为 `False`，`seed.py:74` 仍为 `True` | `seed.py:74` |
 | 公告文案 | 默认公告仍写「72h 首发曝光席」，热门排序已移除首发加分 | `seed.py:66`、`ranking.py` |
 | 现金充值 | 未接支付 | `runtime_policy.recharge_enabled` |
+| 资源推荐排序（#24 的目标） | 评价信号已经能记录，但还不能用于排序：① `ranking.asset_popular_score` 只按引用作品数（`usageCount`）排；② 榜单 `shared.js getRankedAssets` 另写了一套公式（引用数 ×36 + `cheers` ×1.1 + 来源加分 + 荣誉 `boost`），与「排序只有一个实现」「荣誉不影响排序」矛盾；③ boot 不下发官方资源的印章与赞赏聚合值，前端拿到的官方资源 `cheers` 恒为 0；④ 社区资源的 `cheers` 列混入了打赏（每次 +3），与官方资源按 interaction 计数的口径不同；⑤ 没有资源的 SQL 排序表达式与索引。需要：一个资源热门公式（写入 `ranking.py`，并与前端 `popularScore` 做一致性测试）、boot 或排序接口按编号下发统一口径的聚合计数、删除 `getRankedAssets` 中的荣誉与来源加分 | `ranking.py:74`、`shared.js:1670`、`services.py:1873` |
