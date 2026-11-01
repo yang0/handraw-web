@@ -40,7 +40,8 @@ class FissionRoutesTests(unittest.TestCase):
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
                 "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test",
-                "HANDRAW_AI_API_KEY": "",  # Unconfigured by default
+                "HANDRAW_AI_CONFIG": str(root / "absent-ai-service.json"),
+                "HANDRAW_IMAGE_CONFIG": str(root / "absent-image-service.json"),
             },
         )
         self.env.start()
