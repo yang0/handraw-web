@@ -791,7 +791,8 @@
         vy: t.vy,
         vk: t.vk,
         graph: t.graph,
-        quickStart: t.quickStart === true
+        quickStart: t.quickStart === true,
+        batchStart: t.batchStart === true
       }));
     writeJsonStorage(OPEN_TABS_KEY, { activeTabId: CS.activeTabId, tabs: slimTabs });
   }

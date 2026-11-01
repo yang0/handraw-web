@@ -1,37 +1,26 @@
 /**
- * Handraw Web Studio - Batch Creation Component (Phase 3b-2)
+ * Handraw Web Studio - Batch Creation Component (Phase 3b-2 & Phase 3b-4 Redesign)
  *
  * Requirements:
  * - Operates directly on quick batch workflow nodes:
  *   skill_params, text_input, asset, loop, output_control.
  * - No custom data structures; 100% two-way fidelity with canvas.
- * - Row 1: 批量方式 (多文案/多画风/多图型/多图参) + 生成方式 (图文/纯图/海报) + 画风模式 (单画风/双画风融合)
- *   in ONE row, left-aligned in order.
- * - Row 2: Fixed parameter picker cards (same as 做图);
- *   hide style card when 多画风; hide layout card when 多图型.
- * - Row 3: Dynamic by batch mode:
- *   - 多文案: prompt list textarea (one per line) + button 【从母题裂变】
- *   - 多画风: 【选择画风】(multi) + selected thumbnails in same row
- *   - 多图型: 【选择图型】(multi) + selected thumbnails in same row
- *   - 多图参: 【选择参考图】(multi) + selected thumbnails in same row
- * - Row 4: Ratio buttons + inline ratio text input in ONE row.
- * - 更多设置 (Collapsible): tones, moods, whitespace, audience, businessScene, SC-021/SC-022.
- * - 预览表: listed before generation (index, title/item, status: waiting/generating/done/failed, retry for failed).
- * - 底部栏: "共 N 张：免费 X 张 + Y 积分" + 【开始批量生成】; during generation shows progress + 【停止】.
- * - Secondary confirmation when count > 20 (dialog stating count & total cost).
- * - Results: per-image download & publish; 【全部下载】 sequentially downloads without ZIP.
- * - AI Fission modal: POST /api/studio/fission with fallback template notice.
- * - No emoji in new UI text.
+ * - Row 1: 生成方式 (图文/纯图/海报) + 画风模式 (单画风/双画风融合) in ONE row, left-aligned in order.
+ * - Row 2: Fixed parameter picker cards: 画风 / 角色画风, 场景画风 (when fusion), 主题色.
+ * - 套图规划 (Set Planning):
+ *   - 规划行 A: 母题 (seed) + 张数 (1-20, default 6) + 图型策略【固定图型 / AI 推荐图型】 + 【AI 规划这套图】按钮.
+ *   - 规划行 B (固定图型): 图型【选择图型】按钮 + 已选图型卡 (same row).
+ *   - 规划行 B (AI 推荐图型): 图型要求 (文本框，例如「前 3 张分镜、后面图鉴，不要封面图」).
+ *   - 编辑区 (固定图型): 单个文本框，每行一条主题，用户直接改；不出现逐张行.
+ *   - 编辑区 (AI 推荐图型): 逐张行表格：#1 [主题输入框] [图型下拉] [删除]，以及【＋ 添加一张】按钮.
+ * - Row 4: 画幅预设按钮 + 比例数值输入框 (fixed regex without double escaping).
+ * - 更多设置 (折叠): 影调、情绪、留白、受众、业务场景、SC-021/SC-022.
+ * - 底部栏与费用: 统一计算 Math.min(200, iterations.length * perIterCount)；二次确认 (>20) 也用该张数与费用.
+ * - 规划与裂变回调中的 this 正确绑定为控制器实例 (self).
+ * - 新增与修改界面不包含任何 emoji.
  */
 (function (global) {
   "use strict";
-
-  const BATCH_MODE_OPTIONS = [
-    { id: "prompts", label: "多文案" },
-    { id: "styles", label: "多画风" },
-    { id: "layouts", label: "多图型" },
-    { id: "assets", label: "多图参" }
-  ];
 
   const OUTPUT_MODE_OPTIONS = [
     { id: "graphic-text", label: "图文", defaultRatio: "3:4" },
@@ -147,6 +136,8 @@
       this.actions = null;
       this.moreSettingsOpen = false;
       this.fissionModalOpen = false;
+      this.planNotice = "";
+      this.isPlanning = false;
     }
 
     getParts() {
@@ -255,6 +246,30 @@
       `;
     }
 
+    renderLayoutSelectOptions(selectedLayoutId) {
+      const catalog = this.context?.catalog;
+      const layouts = (catalog && Array.isArray(catalog.layouts) ? catalog.layouts : [])
+        .filter((l) => l && l.id);
+
+      const normSel = String(selectedLayoutId || "").trim().toUpperCase();
+      let html = `<option value="">默认图型（跟随全局）</option>`;
+      let foundSelected = false;
+
+      layouts.forEach((l) => {
+        const lid = esc(l.id);
+        const lname = esc(l.name_zh || l.name || l.id);
+        const isSel = normSel === String(l.id).toUpperCase();
+        if (isSel) foundSelected = true;
+        html += `<option value="${lid}" ${isSel ? "selected" : ""}>${lid} ${lname}</option>`;
+      });
+
+      if (normSel && !foundSelected) {
+        html += `<option value="${esc(normSel)}" selected>${esc(normSel)}</option>`;
+      }
+
+      return html;
+    }
+
     render(host, context, actions) {
       if (host) this.hostElement = host;
       if (context) this.context = context;
@@ -279,7 +294,7 @@
       const ld = p.loop.data || {};
       const ad = p.asset?.data || {};
 
-      const currentLoopMode = ld.loopMode || "prompts";
+      // Batch set planning state
       const isFusion = Boolean(sd.fusion);
       const style1Id = sd.style1 || "";
       const style2Id = sd.style2 || "";
@@ -305,55 +320,42 @@
       const layoutObj = this.getResourceInfo(layoutId, "layouts");
       const colorObj = selectedColors[0] ? this.getResourceInfo(selectedColors[0], "colors") : null;
 
+      // Set Planning specifics
+      const batchLayoutMode = ld.batchLayoutMode || (Array.isArray(ld.batchRows) && ld.batchRows.length > 0 ? "ai" : "fixed");
+      const batchSeed = ld.batchSeed != null ? ld.batchSeed : (td.text || "");
+      const batchCount = Math.max(1, Math.min(20, Number(ld.batchCount) || 6));
+      const batchLayoutReq = ld.batchLayoutReq || "";
+      const batchRows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
       const promptListText = typeof ld.promptListText === "string" ? ld.promptListText : "";
-      const selectedStyleIds = Array.isArray(ld.styleIds) ? ld.styleIds : [];
-      const selectedLayoutIds = Array.isArray(ld.layoutIds) ? ld.layoutIds : [];
-      const refItems = Array.isArray(ad.items) ? ad.items : [];
-      const unifiedTheme = td.text || "";
 
+      // Defect 2 fix: count is iterations.length * perIterCount (capped at 200)
+      const perIterCount = Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
       const iterations = this.resolveIterations();
-      const totalCount = iterations.length;
+      const totalCount = Math.min(200, iterations.length * perIterCount);
 
       const busy = Boolean(this.context?.busy);
       const displays = Array.isArray(this.context?.displays) ? this.context.displays : [];
       const results = Array.isArray(this.context?.results) ? this.context.results : [];
 
-      // Check if batch gallery node is used
       const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
-      const galleryNode = isBatchGallery ? displays.find((d) => d.data?.kind === "batch_gallery") : null;
-
-      // Status text
       let currentStep = ld.currentStep || 0;
       let totalSteps = ld.totalSteps || totalCount;
       if (busy && currentStep === 0) currentStep = 1;
-
-      // Determine show/hide for Row 2 cards
-      const hideStyleCards = currentLoopMode === "styles";
-      const hideLayoutCard = currentLoopMode === "layouts";
 
       this.hostElement.innerHTML = `
         <div class="make-image-container batch-container">
           <div class="make-image-head">
             <div class="make-image-head-left">
               <h1 class="make-image-title">批量</h1>
-              <p class="make-image-lede">单维度循环批量出图：多文案、多画风、多图型或多图参，一键自动批量生产。</p>
+              <p class="make-image-lede">套图规划批量出图：统一画风与母题，AI 规划每张主题与图型，支持自由微调。</p>
             </div>
           </div>
 
           <form class="make-image-form" novalidate onsubmit="return false;">
             <div class="make-image-main-grid">
 
-              <!-- Row 1: Batch Mode, Output Mode, Fusion Toggle in ONE Row (left-aligned) -->
+              <!-- Row 1: Output Mode (Left) + Fusion Toggle in ONE Row -->
               <div class="make-image-top-row batch-top-row">
-                <div class="make-image-inline-group">
-                  <span class="make-image-field-label">批量方式</span>
-                  <div class="make-image-btn-group" role="group" aria-label="批量方式">
-                    ${BATCH_MODE_OPTIONS.map((m) => `
-                      <button type="button" class="btn btn-sm ${currentLoopMode === m.id ? "btn-primary is-active" : ""}" data-set-loop-mode="${esc(m.id)}" aria-pressed="${currentLoopMode === m.id}">${esc(m.label)}</button>
-                    `).join("")}
-                  </div>
-                </div>
-
                 <div class="make-image-inline-group">
                   <span class="make-image-field-label">生成方式</span>
                   <div class="make-image-btn-group" role="group" aria-label="生成方式">
@@ -372,127 +374,124 @@
                 </div>
               </div>
 
-              <!-- Row 2: Fixed parameter picker cards (hidden if varied) -->
-              <div class="make-image-pickers-row batch-pickers-row ${isFusion && !hideStyleCards ? "has-style2" : ""}">
-                ${!hideStyleCards ? `
-                  ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
-                  ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
-                ` : ""}
-                ${!hideLayoutCard ? `
-                  ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
-                ` : ""}
+              <!-- Row 2: Fixed Parameter Picker Cards (Style1, Style2 if fusion, Color) -->
+              <div class="make-image-pickers-row batch-pickers-row ${isFusion ? "has-style2" : ""}">
+                ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
+                ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
                 ${this.renderPickerSlot("color", "主题色", colorObj, true)}
               </div>
 
-              ${isFusion && !hideStyleCards ? `
+              ${isFusion ? `
                 <div class="make-image-style-note" role="note">角色画风决定人物与主体的画法，场景画风决定背景与环境</div>
               ` : ""}
 
-              <!-- Row 3: Dynamic by Batch Mode -->
-              <div class="batch-dimension-wrap">
-                ${currentLoopMode === "prompts" ? `
-                  <!-- Prompts Mode: Textarea + Button in same row -->
-                  <div class="make-image-field-wrap">
+              <!-- 套图规划 (Set Planning Section) -->
+              <div class="batch-plan-card">
+                <!-- 规划行 A: 母题 + 张数 + 图型策略 + AI 规划按钮 -->
+                <div class="batch-plan-row-a">
+                  <div class="batch-seed-wrap">
+                    <span class="make-image-field-label">母题</span>
+                    <input type="text" class="make-image-input batch-seed-input" id="batch-seed-input" placeholder="输入这套图的创作母题（如：都市慢生活与手绘手账）..." value="${esc(batchSeed)}" />
+                  </div>
+
+                  <div class="batch-count-wrap">
+                    <span class="make-image-field-label">张数</span>
+                    <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" />
+                  </div>
+
+                  <div class="batch-strategy-wrap">
+                    <span class="make-image-field-label">图型策略</span>
+                    <div class="make-image-btn-group" role="group" aria-label="图型策略">
+                      <button type="button" class="btn btn-sm ${batchLayoutMode === "fixed" ? "btn-primary is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}">固定图型</button>
+                      <button type="button" class="btn btn-sm ${batchLayoutMode === "ai" ? "btn-primary is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}">AI 推荐图型</button>
+                    </div>
+                  </div>
+
+                  <div class="batch-plan-action-wrap">
+                    <button type="button" class="btn btn-sm btn-primary batch-plan-trigger" id="batch-btn-plan" ${busy ? "disabled" : ""}>AI 规划这套图</button>
+                    ${this.planNotice ? `<span class="batch-plan-notice">${esc(this.planNotice)}</span>` : ""}
+                  </div>
+                </div>
+
+                <!-- 规划行 B: 固定图型时选择图型卡；AI 推荐图型时填写图型要求 -->
+                ${batchLayoutMode === "fixed" ? `
+                  <div class="batch-plan-row-b batch-fixed-layout-row">
+                    <span class="make-image-field-label">固定图型</span>
+                    <button type="button" class="btn btn-sm btn-primary" id="batch-btn-pick-fixed-layout">选择图型</button>
+                    <div class="batch-fixed-layout-card-wrap">
+                      ${layoutObj?.id ? `
+                        <div class="make-image-slot-card is-inline batch-chip" data-pick-kind="layout">
+                          <div class="make-image-slot-thumb-wrap">
+                            ${layoutObj.image ? `<img data-hw-src="${esc(layoutObj.image)}" alt="${esc(layoutObj.name || layoutObj.id)}" loading="lazy" />` : ""}
+                            <span class="make-image-slot-badge">${esc(layoutObj.id)}</span>
+                            <button type="button" class="make-image-slot-clear" data-clear-kind="layout" title="清除">×</button>
+                          </div>
+                          <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
+                        </div>
+                      ` : `<span class="make-image-picker-hint">未选图型（将使用默认版式）</span>`}
+                    </div>
+                  </div>
+                ` : `
+                  <div class="batch-plan-row-b batch-ai-layout-row">
+                    <span class="make-image-field-label">图型要求</span>
+                    <input type="text" class="make-image-input batch-layout-req-input" id="batch-layout-req-input" placeholder="例如：前 3 张分镜、后面图鉴，不要封面图（可留空）" value="${esc(batchLayoutReq)}" />
+                  </div>
+                `}
+
+                <!-- 编辑区: 固定图型为一个文本框；AI 推荐图型为逐张表格 -->
+                ${batchLayoutMode === "fixed" ? `
+                  <div class="batch-edit-area batch-fixed-edit-area">
                     <div class="batch-field-head">
-                      <span class="make-image-field-label">主题列表（每行一条）</span>
+                      <span class="make-image-field-label">主题列表（每行一条，直接编辑）</span>
                       <button type="button" class="btn btn-sm batch-fission-trigger" id="batch-btn-fission">从母题裂变</button>
                     </div>
-                    <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="4" placeholder="每行输入一个创作主题或文案，每行将生成一张独立画面...">${esc(promptListText)}</textarea>
+                    <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="5" placeholder="每行输入一个创作主题，每行将生成一张独立画面...">${esc(promptListText)}</textarea>
                   </div>
-                ` : ""}
-
-                ${currentLoopMode === "styles" ? `
-                  <!-- Styles Mode: Button + Selected Thumbnails in same row -->
-                  <div class="make-image-field-wrap">
-                    <div class="batch-chips-head">
-                      <span class="make-image-field-label">循环画风列表</span>
-                      <button type="button" class="btn btn-sm btn-primary" id="batch-btn-pick-styles">选择画风</button>
+                ` : `
+                  <div class="batch-edit-area batch-ai-edit-area">
+                    <div class="batch-field-head">
+                      <span class="make-image-field-label">逐张主题与图型调整</span>
                     </div>
-                    <div class="batch-chips-row" id="batch-styles-chips">
-                      ${selectedStyleIds.length === 0 ? `
-                        <div class="batch-empty-chips-hint">点击「选择画风」添加多款画风进行横评出图</div>
-                      ` : selectedStyleIds.map((sid) => {
-                        const sObj = this.getResourceInfo(sid, "styles");
-                        return `
-                          <div class="make-image-slot-card is-inline batch-chip" data-chip-style="${esc(sid)}">
-                            <div class="make-image-slot-thumb-wrap">
-                              ${sObj?.image ? `<img data-hw-src="${esc(sObj.image)}" alt="${esc(sObj.name || sid)}" loading="lazy" />` : ""}
-                              <span class="make-image-slot-badge">${esc(sid)}</span>
-                              <button type="button" class="make-image-slot-clear" data-remove-style="${esc(sid)}" title="移除">×</button>
-                            </div>
-                            <span class="make-image-slot-title">${esc(sObj?.name || sid)}</span>
-                          </div>
-                        `;
-                      }).join("")}
+                    <div class="batch-table-wrap">
+                      <table class="batch-edit-table">
+                        <thead>
+                          <tr>
+                            <th style="width:48px;">序号</th>
+                            <th>画面主题</th>
+                            <th style="width:220px;">图型版式</th>
+                            <th style="width:60px;text-align:center;">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${batchRows.length === 0 ? `
+                            <tr><td colspan="4" class="batch-table-empty">暂无主题，请点击「AI 规划这套图」或「＋ 添加一张」</td></tr>
+                          ` : batchRows.map((row, idx) => `
+                            <tr class="batch-edit-row" data-row-idx="${idx}">
+                              <td class="batch-col-idx">#${idx + 1}</td>
+                              <td>
+                                <input type="text" class="make-image-input batch-row-theme-input" data-row-idx="${idx}" value="${esc(row.theme)}" placeholder="输入该张画面主题..." />
+                              </td>
+                              <td>
+                                <select class="make-image-select batch-row-layout-select" data-row-idx="${idx}">
+                                  ${this.renderLayoutSelectOptions(row.layout)}
+                                </select>
+                              </td>
+                              <td style="text-align:center;">
+                                <button type="button" class="btn btn-sm btn-ghost batch-row-del-btn" data-del-row-idx="${idx}" title="删除此张">删除</button>
+                              </td>
+                            </tr>
+                          `).join("")}
+                        </tbody>
+                      </table>
                     </div>
-                    <div class="batch-unified-theme-row">
-                      <span class="batch-unified-theme-label">主文案（统一应用于各画风）：</span>
-                      <input type="text" class="make-image-input batch-unified-input" id="batch-unified-theme-input" placeholder="输入画面共同创作主题或主文案..." value="${esc(unifiedTheme)}" />
-                    </div>
-                  </div>
-                ` : ""}
-
-                ${currentLoopMode === "layouts" ? `
-                  <!-- Layouts Mode: Button + Selected Thumbnails in same row -->
-                  <div class="make-image-field-wrap">
-                    <div class="batch-chips-head">
-                      <span class="make-image-field-label">循环图型列表</span>
-                      <button type="button" class="btn btn-sm btn-primary" id="batch-btn-pick-layouts">选择图型</button>
-                    </div>
-                    <div class="batch-chips-row" id="batch-layouts-chips">
-                      ${selectedLayoutIds.length === 0 ? `
-                        <div class="batch-empty-chips-hint">点击「选择图型」添加多款版式进行批量排版出图</div>
-                      ` : selectedLayoutIds.map((lid) => {
-                        const lObj = this.getResourceInfo(lid, "layouts");
-                        return `
-                          <div class="make-image-slot-card is-inline batch-chip" data-chip-layout="${esc(lid)}">
-                            <div class="make-image-slot-thumb-wrap">
-                              ${lObj?.image ? `<img data-hw-src="${esc(lObj.image)}" alt="${esc(lObj.name || lid)}" loading="lazy" />` : ""}
-                              <span class="make-image-slot-badge">${esc(lid)}</span>
-                              <button type="button" class="make-image-slot-clear" data-remove-layout="${esc(lid)}" title="移除">×</button>
-                            </div>
-                            <span class="make-image-slot-title">${esc(lObj?.name || lid)}</span>
-                          </div>
-                        `;
-                      }).join("")}
-                    </div>
-                    <div class="batch-unified-theme-row">
-                      <span class="batch-unified-theme-label">主文案（统一应用于各图型）：</span>
-                      <input type="text" class="make-image-input batch-unified-input" id="batch-unified-theme-input" placeholder="输入画面共同创作主题或主文案..." value="${esc(unifiedTheme)}" />
+                    <div class="batch-add-row-wrap">
+                      <button type="button" class="btn btn-sm" id="batch-btn-add-row">＋ 添加一张</button>
                     </div>
                   </div>
-                ` : ""}
-
-                ${currentLoopMode === "assets" ? `
-                  <!-- Assets Mode: Button + Selected Thumbnails in same row -->
-                  <div class="make-image-field-wrap">
-                    <div class="batch-chips-head">
-                      <span class="make-image-field-label">循环图参列表</span>
-                      <button type="button" class="btn btn-sm btn-primary" id="batch-btn-pick-assets">选择参考图</button>
-                    </div>
-                    <div class="batch-chips-row" id="batch-assets-chips">
-                      ${refItems.length === 0 ? `
-                        <div class="batch-empty-chips-hint">点击「选择参考图」添加多张参考图片逐张驱动画面</div>
-                      ` : refItems.map((ast, idx) => `
-                        <div class="make-image-slot-card is-inline batch-chip" data-chip-asset="${esc(ast.id || idx)}">
-                          <div class="make-image-slot-thumb-wrap">
-                            ${ast.image ? `<img data-hw-src="${esc(ast.image)}" alt="${esc(ast.name || ast.id)}" loading="lazy" />` : ""}
-                            <span class="make-image-slot-badge">${esc(ast.id || `P${idx + 1}`)}</span>
-                            <button type="button" class="make-image-slot-clear" data-remove-asset-idx="${idx}" title="移除">×</button>
-                          </div>
-                          <span class="make-image-slot-title">${esc(ast.name || ast.id || `图参 ${idx + 1}`)}</span>
-                        </div>
-                      `).join("")}
-                    </div>
-                    <div class="batch-unified-theme-row">
-                      <span class="batch-unified-theme-label">主文案（统一应用于各参考图）：</span>
-                      <input type="text" class="make-image-input batch-unified-input" id="batch-unified-theme-input" placeholder="输入画面共同创作主题或主文案..." value="${esc(unifiedTheme)}" />
-                    </div>
-                  </div>
-                ` : ""}
+                `}
               </div>
 
-              <!-- Row 4: Ratio Buttons + Inline Ratio Input in ONE Row -->
+              <!-- Row 4: Ratio Buttons + Inline Ratio Input (Defect 3 Fixed) -->
               <div class="make-image-ratio-row">
                 <span class="make-image-field-label">画幅</span>
                 <div class="make-image-ratio-controls">
@@ -501,7 +500,7 @@
                       <button type="button" class="btn btn-sm ${currentRatio === r.value ? "btn-primary is-active" : ""}" data-set-ratio="${esc(r.value)}" aria-pressed="${currentRatio === r.value}">${esc(r.label)}</button>
                     `).join("")}
                   </div>
-                  <input type="text" class="make-image-input make-image-ratio-input" id="batch-ratio-input" value="${esc(currentRatio)}" pattern="^\\d+(\\.\\d+)?:\\d+(\\.\\d+)?$" placeholder="宽:高" aria-label="比例数值" />
+                  <input type="text" class="make-image-input make-image-ratio-input" id="batch-ratio-input" value="${esc(currentRatio)}" pattern="[0-9]+(?:\\.[0-9]+)?:[0-9]+(?:\\.[0-9]+)?" placeholder="宽:高" aria-label="比例数值" />
                 </div>
               </div>
 
@@ -539,13 +538,15 @@
                     <div class="make-image-more-row">
                       <span class="make-image-more-label">情绪</span>
                       <button type="button" class="btn btn-sm" id="batch-btn-pick-moods">选择情绪</button>
-                      <input type="text" class="make-image-input make-image-moods-input" id="batch-moods-input" value="${esc(moodTextValue)}" placeholder="输入或勾选情绪，多个用逗号隔开，如：诗意，松弛，治愈" />
+                      <div class="make-image-inline-inputs" style="flex:1;">
+                        <input type="text" class="make-image-input" id="batch-moods-input" value="${esc(moodTextValue)}" placeholder="点击「选择情绪」或输入逗号分隔情绪词..." />
+                      </div>
                     </div>
 
                     <!-- Whitespace -->
                     <div class="make-image-more-row">
                       <span class="make-image-more-label">留白</span>
-                      <div class="make-image-btn-group" role="group" aria-label="画面留白">
+                      <div class="make-image-btn-group" role="group" aria-label="留白程度">
                         ${WHITESPACE_OPTIONS.map((w) => `
                           <button type="button" class="btn btn-sm ${whitespace === w.value ? "btn-primary is-active" : ""}" data-set-whitespace="${esc(w.value)}" aria-pressed="${whitespace === w.value}">${esc(w.label)}</button>
                         `).join("")}
@@ -610,7 +611,7 @@
                     <tbody>
                       ${iterations.length === 0 ? `
                         <tr>
-                          <td colspan="4" class="batch-table-empty">暂无待批量生成的项，请在上方添加主题或选择维度</td>
+                          <td colspan="4" class="batch-table-empty">暂无待批量生成的项，请在上方规划主题或添加条目</td>
                         </tr>
                       ` : iterations.map((iter, idx) => {
                         const itemResult = this.getItemResult(idx, displays, isBatchGallery);
@@ -649,7 +650,7 @@
                 </div>
               </div>
 
-              <!-- Bottom Bar: Cost + Action -->
+              <!-- Bottom Bar: Cost + Action (Defect 2 Fixed) -->
               <div class="batch-action-bar">
                 <div class="batch-cost-wrap">
                   ${this.renderCostHtml(totalCount)}
@@ -702,7 +703,6 @@
         this.bindEvents(host, p, iterations);
       }
 
-      // Trigger lazy image loader if available
       if (global.HANDRAW_SHARED?.triggerImageLoaders) {
         global.HANDRAW_SHARED.triggerImageLoaders(this.hostElement);
       }
@@ -742,25 +742,16 @@
     }
 
     bindEvents(root, parts, iterations) {
+      const self = this;
       const { loop, skill, ctrl, asset, text } = parts;
 
       const markDirty = () => {
-        if (this.actions?.markDirtyAndRender) {
-          this.actions.markDirtyAndRender();
+        if (self.actions?.markDirtyAndRender) {
+          self.actions.markDirtyAndRender();
         }
       };
 
-      // 1. Batch Mode Switching
-      root.querySelectorAll("[data-set-loop-mode]").forEach((btn) => {
-        btn.onclick = () => {
-          const mode = btn.getAttribute("data-set-loop-mode");
-          if (!mode || loop.data.loopMode === mode) return;
-          loop.data.loopMode = mode;
-          markDirty();
-        };
-      });
-
-      // 2. Output Generation Mode
+      // 1. Output Generation Mode
       root.querySelectorAll("[data-set-mode]").forEach((btn) => {
         btn.onclick = () => {
           const mode = btn.getAttribute("data-set-mode");
@@ -772,7 +763,7 @@
         };
       });
 
-      // 3. Fusion Toggle
+      // 2. Fusion Toggle
       const btnSingle = root.querySelector("#batch-mode-single");
       if (btnSingle) {
         btnSingle.onclick = () => {
@@ -794,13 +785,13 @@
         };
       }
 
-      // 4. Fixed Card Pickers
+      // 3. Fixed Card Pickers
       root.querySelectorAll("[data-pick-kind]").forEach((card) => {
         card.onclick = (e) => {
           if (e.target.closest("[data-clear-kind]")) return;
           const kind = card.getAttribute("data-pick-kind");
           if (kind === "style1" || kind === "style2" || kind === "layout" || kind === "color") {
-            this.actions?.openAssetPicker?.({ kind, field: kind === "color" ? "colors" : kind });
+            self.actions?.openAssetPicker?.({ kind, field: kind === "color" ? "colors" : kind });
           }
         };
       });
@@ -818,14 +809,164 @@
         };
       });
 
-      // 5. Dynamic Row 3 Inputs
-      // (a) Prompts mode
+      // 4. Set Planning Controls
+      // (a) Seed input
+      const seedInput = root.querySelector("#batch-seed-input");
+      if (seedInput) {
+        seedInput.oninput = () => {
+          loop.data.batchSeed = seedInput.value;
+          if (text) text.data.text = seedInput.value;
+        };
+      }
+
+      // (b) Count input
+      const countInput = root.querySelector("#batch-count-input");
+      if (countInput) {
+        countInput.oninput = () => {
+          const val = Math.max(1, Math.min(20, Number(countInput.value) || 6));
+          loop.data.batchCount = val;
+        };
+      }
+
+      // (c) Strategy buttons (Fixed vs AI recommended)
+      const btnStratFixed = root.querySelector("#batch-strategy-fixed");
+      if (btnStratFixed) {
+        btnStratFixed.onclick = () => {
+          if (loop.data.batchLayoutMode === "fixed") return;
+          // Switching from AI to Fixed: prompt confirmation if rows have varied layouts
+          const rows = Array.isArray(loop.data.batchRows) ? loop.data.batchRows : [];
+          if (rows.length > 0) {
+            const hasCustomLayouts = rows.some((r) => r.layout && r.layout !== (skill.data.layout || ""));
+            if (hasCustomLayouts) {
+              const ok = typeof window.confirm === "function"
+                ? window.confirm("切换到固定图型将丢失每张独立的图型设置，所有图片将使用统一图型。是否继续？")
+                : true;
+              if (!ok) return;
+            }
+            loop.data.promptListText = rows.map((r) => r.theme).filter(Boolean).join("\n");
+            loop.data.batchRows = [];
+          }
+          loop.data.batchLayoutMode = "fixed";
+          markDirty();
+        };
+      }
+
+      const btnStratAi = root.querySelector("#batch-strategy-ai");
+      if (btnStratAi) {
+        btnStratAi.onclick = () => {
+          if (loop.data.batchLayoutMode === "ai") return;
+          // Switching from Fixed to AI: split promptListText lines into rows
+          loop.data.batchLayoutMode = "ai";
+          const rawText = typeof loop.data.promptListText === "string" ? loop.data.promptListText : "";
+          const lines = rawText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+          if (lines.length > 0) {
+            loop.data.batchRows = lines.map((line) => ({ theme: line, layout: skill.data.layout || "" }));
+          } else {
+            const cnt = Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6));
+            loop.data.batchRows = Array.from({ length: cnt }, () => ({ theme: "", layout: skill.data.layout || "" }));
+          }
+          markDirty();
+        };
+      }
+
+      // (d) Pick fixed layout button in Row B
+      const btnPickFixedLayout = root.querySelector("#batch-btn-pick-fixed-layout");
+      if (btnPickFixedLayout) {
+        btnPickFixedLayout.onclick = () => {
+          self.actions?.openAssetPicker?.({ kind: "layout", field: "layout" });
+        };
+      }
+
+      // (e) Layout requirement input
+      const layoutReqInput = root.querySelector("#batch-layout-req-input");
+      if (layoutReqInput) {
+        layoutReqInput.oninput = () => {
+          loop.data.batchLayoutReq = layoutReqInput.value;
+        };
+      }
+
+      // (f) AI Planning Trigger
+      const btnPlan = root.querySelector("#batch-btn-plan");
+      if (btnPlan) {
+        btnPlan.onclick = async () => {
+          const currentMode = loop.data.batchLayoutMode || "fixed";
+          const hasExisting = currentMode === "fixed"
+            ? Boolean(loop.data.promptListText && loop.data.promptListText.trim())
+            : (Array.isArray(loop.data.batchRows) && loop.data.batchRows.some((r) => r.theme && r.theme.trim()));
+
+          if (hasExisting) {
+            const ok = typeof window.confirm === "function"
+              ? window.confirm("重新规划将覆盖当前已有的主题与图型内容，是否继续？")
+              : true;
+            if (!ok) return;
+          }
+
+          const seed = String(loop.data.batchSeed || text?.data?.text || "").trim();
+          if (!seed) {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("请先填写母题（例如：都市慢生活与手绘手账）");
+            const seedEl = root.querySelector("#batch-seed-input");
+            if (seedEl) seedEl.focus();
+            return;
+          }
+
+          const reqBody = {
+            seed,
+            count: Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6)),
+            layoutMode: currentMode,
+            fixedLayout: skill.data.layout || "",
+            layoutRequirement: loop.data.batchLayoutReq || "",
+            styleId: skill.data.style1 || ""
+          };
+
+          btnPlan.disabled = true;
+          btnPlan.textContent = "AI 正在规划…";
+
+          try {
+            const resp = await fetch("/api/studio/batch-plan", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(reqBody)
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) {
+              throw new Error(data.error || `HTTP ${resp.status}`);
+            }
+
+            const items = Array.isArray(data.items) ? data.items : [];
+            if (currentMode === "fixed") {
+              loop.data.promptListText = items.map((it) => it.subject).join("\n");
+              loop.data.batchRows = [];
+            } else {
+              loop.data.batchRows = items.map((it) => ({ theme: it.subject, layout: it.layout || "" }));
+              loop.data.promptListText = items.map((it) => it.subject).join("\n");
+            }
+
+            if (data.source === "template") {
+              self.planNotice = "未使用 AI 规划，已按模板生成";
+            } else {
+              self.planNotice = "";
+            }
+
+            markDirty();
+          } catch (err) {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast(`规划失败：${err.message || err}`);
+          } finally {
+            btnPlan.disabled = false;
+            btnPlan.textContent = "AI 规划这套图";
+          }
+        };
+      }
+
+      // (g) Fixed layout textarea
       const promptsInput = root.querySelector("#batch-prompts-input");
       if (promptsInput) {
         promptsInput.oninput = () => {
           loop.data.promptListText = promptsInput.value;
-          // Re-render preview & cost without losing focus
-          this.updatePreviewAndCost(root);
+          loop.data.batchRows = [];
+          self.updatePreviewAndCost(root);
         };
         promptsInput.onblur = () => {
           loop.data.promptListText = promptsInput.value;
@@ -833,79 +974,57 @@
         };
       }
 
-      // Fission button trigger
+      // (h) Fission button in fixed edit area
       const btnFission = root.querySelector("#batch-btn-fission");
       if (btnFission) {
         btnFission.onclick = () => {
-          this.openFissionModal(root, parts);
+          self.openFissionModal(root, parts);
         };
       }
 
-      // (b) Styles mode
-      const btnPickStyles = root.querySelector("#batch-btn-pick-styles");
-      if (btnPickStyles) {
-        btnPickStyles.onclick = () => {
-          this.actions?.openLoopMultiPicker?.("styles");
+      // (i) AI mode table events
+      root.querySelectorAll(".batch-row-theme-input").forEach((inp) => {
+        inp.oninput = () => {
+          const idx = Number(inp.getAttribute("data-row-idx"));
+          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
+          loop.data.batchRows[idx].theme = inp.value;
+          loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
+          self.updatePreviewAndCost(root);
         };
-      }
-      root.querySelectorAll("[data-remove-style]").forEach((btn) => {
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          const sid = btn.getAttribute("data-remove-style");
-          if (!sid) return;
-          loop.data.styleIds = (loop.data.styleIds || []).filter((s) => s !== sid);
+        inp.onblur = () => {
           markDirty();
         };
       });
 
-      // (c) Layouts mode
-      const btnPickLayouts = root.querySelector("#batch-btn-pick-layouts");
-      if (btnPickLayouts) {
-        btnPickLayouts.onclick = () => {
-          this.actions?.openLoopMultiPicker?.("layouts");
-        };
-      }
-      root.querySelectorAll("[data-remove-layout]").forEach((btn) => {
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          const lid = btn.getAttribute("data-remove-layout");
-          if (!lid) return;
-          loop.data.layoutIds = (loop.data.layoutIds || []).filter((l) => l !== lid);
+      root.querySelectorAll(".batch-row-layout-select").forEach((sel) => {
+        sel.onchange = () => {
+          const idx = Number(sel.getAttribute("data-row-idx"));
+          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
+          loop.data.batchRows[idx].layout = sel.value;
           markDirty();
         };
       });
 
-      // (d) Assets mode
-      const btnPickAssets = root.querySelector("#batch-btn-pick-assets");
-      if (btnPickAssets) {
-        btnPickAssets.onclick = () => {
-          this.actions?.openReferencePicker?.();
-        };
-      }
-      root.querySelectorAll("[data-remove-asset-idx]").forEach((btn) => {
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          const idx = Number(btn.getAttribute("data-remove-asset-idx"));
-          if (isNaN(idx) || !asset?.data?.items) return;
-          asset.data.items.splice(idx, 1);
+      root.querySelectorAll("[data-del-row-idx]").forEach((btn) => {
+        btn.onclick = () => {
+          const idx = Number(btn.getAttribute("data-del-row-idx"));
+          if (!Array.isArray(loop.data.batchRows)) return;
+          loop.data.batchRows.splice(idx, 1);
+          loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
           markDirty();
         };
       });
 
-      // Unified theme input (for styles, layouts, assets)
-      const unifiedInput = root.querySelector("#batch-unified-theme-input");
-      if (unifiedInput && text) {
-        unifiedInput.oninput = () => {
-          text.data.text = unifiedInput.value;
-          this.updatePreviewAndCost(root);
-        };
-        unifiedInput.onblur = () => {
-          text.data.text = unifiedInput.value;
+      const btnAddRow = root.querySelector("#batch-btn-add-row");
+      if (btnAddRow) {
+        btnAddRow.onclick = () => {
+          if (!Array.isArray(loop.data.batchRows)) loop.data.batchRows = [];
+          loop.data.batchRows.push({ theme: "", layout: skill.data.layout || "" });
           markDirty();
         };
       }
 
-      // 6. Ratio Buttons & Inline Input
+      // 5. Ratio Buttons & Inline Input (Defect 3 Fixed: /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/)
       root.querySelectorAll("[data-set-ratio]").forEach((btn) => {
         btn.onclick = () => {
           const ratio = btn.getAttribute("data-set-ratio");
@@ -919,7 +1038,7 @@
       if (ratioInput) {
         ratioInput.onchange = () => {
           const val = ratioInput.value.trim();
-          if (/^\d+(\.\d+)?:\\d+(\\.\d+)?$/.test(val)) {
+          if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
             const parts = val.split(":").map(Number);
             if (parts[0] > 0 && parts[1] > 0) {
               ctrl.data.ratio = val;
@@ -931,16 +1050,16 @@
         };
       }
 
-      // 7. More Settings Toggle
+      // 6. More Settings Toggle
       const toggleMore = root.querySelector("#batch-toggle-more-settings");
       const bodyMore = root.querySelector("#batch-body-more-settings");
       if (toggleMore && bodyMore) {
         toggleMore.onclick = () => {
-          this.moreSettingsOpen = !this.moreSettingsOpen;
-          toggleMore.setAttribute("aria-expanded", String(this.moreSettingsOpen));
-          bodyMore.hidden = !this.moreSettingsOpen;
+          self.moreSettingsOpen = !self.moreSettingsOpen;
+          toggleMore.setAttribute("aria-expanded", String(self.moreSettingsOpen));
+          bodyMore.hidden = !self.moreSettingsOpen;
           const icon = toggleMore.querySelector(".make-image-toggle-icon");
-          if (icon) icon.textContent = this.moreSettingsOpen ? "▲ 收起" : "▼ 展开";
+          if (icon) icon.textContent = self.moreSettingsOpen ? "▲ 收起" : "▼ 展开";
         };
       }
 
@@ -948,146 +1067,146 @@
       const btnPickTones = root.querySelector("#batch-btn-pick-tones");
       if (btnPickTones) {
         btnPickTones.onclick = () => {
-          this.actions?.openAssetPicker?.({ kind: "tone", field: "tones" });
+          self.actions?.openMultiPicker?.("tones");
         };
       }
       root.querySelectorAll("[data-remove-tone]").forEach((btn) => {
         btn.onclick = (e) => {
           e.stopPropagation();
           const tid = btn.getAttribute("data-remove-tone");
+          if (!tid) return;
           skill.data.tones = (skill.data.tones || []).filter((t) => t !== tid);
           markDirty();
         };
       });
 
-      // Moods picker button & text input
+      // Moods picker button
       const btnPickMoods = root.querySelector("#batch-btn-pick-moods");
       if (btnPickMoods) {
         btnPickMoods.onclick = () => {
-          this.actions?.openAssetPicker?.({ kind: "mood", field: "moods" });
+          self.actions?.openMultiPicker?.("moods");
         };
       }
       const moodsInput = root.querySelector("#batch-moods-input");
       if (moodsInput) {
         moodsInput.onchange = () => {
-          const parsed = parseMoodsText(moodsInput.value, this.getKnownPresetMoods());
+          const presetSet = self.getKnownPresetMoods();
+          const parsed = parseMoodsText(moodsInput.value, presetSet);
           skill.data.moods = parsed.moods;
           skill.data.customMood = parsed.customMood;
           markDirty();
         };
       }
 
-      // Whitespace buttons
+      // Whitespace
       root.querySelectorAll("[data-set-whitespace]").forEach((btn) => {
         btn.onclick = () => {
-          const val = btn.getAttribute("data-set-whitespace");
-          skill.data.whitespace = val || "";
+          const ws = btn.getAttribute("data-set-whitespace");
+          skill.data.whitespace = ws || "";
           markDirty();
         };
       });
 
       // Audience & Business Scene
-      const audienceInput = root.querySelector("#batch-audience-input");
-      if (audienceInput) {
-        audienceInput.onchange = () => {
-          skill.data.audience = audienceInput.value.trim();
-          markDirty();
+      const audInput = root.querySelector("#batch-audience-input");
+      if (audInput) {
+        audInput.onchange = () => {
+          skill.data.audience = audInput.value.trim();
         };
       }
-      const sceneInput = root.querySelector("#batch-business-scene-input");
-      if (sceneInput) {
-        sceneInput.onchange = () => {
-          skill.data.businessScene = sceneInput.value.trim();
-          markDirty();
+      const bzInput = root.querySelector("#batch-business-scene-input");
+      if (bzInput) {
+        bzInput.onchange = () => {
+          skill.data.businessScene = bzInput.value.trim();
         };
       }
 
-      // SC-021 & SC-022
+      // SC-021 Select
       const sc021Select = root.querySelector("#batch-sc021-select");
       if (sc021Select) {
         sc021Select.onchange = () => {
           skill.data.sc021Type = sc021Select.value;
-          markDirty();
-        };
-      }
-      const sc022Name = root.querySelector("#batch-sc022-name");
-      if (sc022Name) {
-        sc022Name.onchange = () => {
-          skill.data.sc022Name = sc022Name.value.trim();
-          markDirty();
-        };
-      }
-      const sc022Pinyin = root.querySelector("#batch-sc022-pinyin");
-      if (sc022Pinyin) {
-        sc022Pinyin.onchange = () => {
-          skill.data.sc022Pinyin = sc022Pinyin.value.trim();
-          markDirty();
         };
       }
 
-      // 8. Single Row Retry Action
+      // SC-022 Inputs
+      const sc022NameInput = root.querySelector("#batch-sc022-name");
+      if (sc022NameInput) {
+        sc022NameInput.onchange = () => {
+          skill.data.sc022Name = sc022NameInput.value.trim();
+        };
+      }
+      const sc022PinyinInput = root.querySelector("#batch-sc022-pinyin");
+      if (sc022PinyinInput) {
+        sc022PinyinInput.onchange = () => {
+          skill.data.sc022Pinyin = sc022PinyinInput.value.trim();
+        };
+      }
+
+      // 7. Preview Row Retries & Results
       root.querySelectorAll("[data-retry-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-retry-idx"));
-          if (isNaN(idx)) return;
-          this.actions?.runSingleRow?.(idx);
+          if (!isNaN(idx)) {
+            self.actions?.runSingleRow?.(idx);
+          }
         };
       });
 
-      // 9. Single Row Publish Action
       root.querySelectorAll("[data-publish-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-publish-idx"));
-          const displays = this.context?.displays || [];
+          const displays = Array.isArray(self.context?.displays) ? self.context.displays : [];
           const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
-          const targetNode = isBatchGallery
-            ? (displays.find((d) => d.data?.kind === "batch_gallery") || displays[0])
-            : displays[idx];
-          if (targetNode) {
-            this.actions?.openPublish?.(targetNode);
+          const itemResult = self.getItemResult(idx, displays, isBatchGallery);
+          if (itemResult) {
+            self.actions?.openPublishForBatchItem?.(itemResult, idx);
           }
         };
       });
 
-      // 10. Start Batch Generation Button
+      // 8. Start Batch Generation Button (Defect 2 Fixed)
       const btnStart = root.querySelector("#batch-btn-start");
       if (btnStart) {
         btnStart.onclick = async () => {
-          const count = iterations.length;
-          if (count === 0) {
+          const perIterCount = Math.min(50, Math.max(1, Math.round(Number(ctrl.data.count) || 1)));
+          const currentIters = self.resolveIterations();
+          const totalCount = Math.min(200, currentIters.length * perIterCount);
+
+          if (totalCount === 0) {
             const S = global.HANDRAW_SHARED;
-            if (S?.toast) S.toast("请先添加要批量生成的项（文案、画风、图型或图参）");
+            if (S?.toast) S.toast("请先添加要批量生成的项（文案、图型）");
             return;
           }
 
-          // Secondary confirmation when count > 20
-          if (count > 20) {
-            const cost = this.calculateCost(count);
+          // Secondary confirmation when totalCount > 20
+          if (totalCount > 20) {
+            const cost = self.calculateCost(totalCount);
             const costDesc = cost.loggedIn
               ? `预计消耗 ${cost.totalCost} 积分（其中免费额度 ${cost.freeCount} 张）`
               : "预计批量出图超20张";
-            const confirmMsg = `本次将批量生成 ${count} 张图片，${costDesc}。确认开始批量生成吗？`;
+            const confirmMsg = `本次将批量生成 ${totalCount} 张图片，${costDesc}。确认开始批量生成吗？`;
             const ok = typeof window.confirm === "function" ? window.confirm(confirmMsg) : true;
             if (!ok) return;
           }
 
-          this.actions?.run?.();
+          self.actions?.run?.();
         };
       }
 
-      // 11. Stop Batch Generation Button
+      // 9. Stop Batch Generation Button
       const btnStop = root.querySelector("#batch-btn-stop");
       if (btnStop) {
         btnStop.onclick = () => {
-          this.actions?.cancel?.();
+          self.actions?.cancel?.();
         };
       }
 
-      // 12. Download All Button
+      // 10. Download All Button
       const btnDownloadAll = root.querySelector("#batch-btn-download-all");
       if (btnDownloadAll) {
         btnDownloadAll.onclick = async () => {
-          const results = this.context?.results || [];
+          const results = self.context?.results || [];
           if (!results.length) return;
           btnDownloadAll.disabled = true;
           btnDownloadAll.textContent = "正在下载…";
@@ -1107,46 +1226,48 @@
         };
       }
 
-      // 13. Result card publish buttons
+      // 11. Result Card Publish Buttons
       root.querySelectorAll("[data-res-pub-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-res-pub-idx"));
-          const res = (this.context?.results || [])[idx];
+          const res = (self.context?.results || [])[idx];
           if (res?.node) {
-            this.actions?.openPublish?.(res.node);
+            self.actions?.openPublish?.(res.node);
           }
         };
       });
     }
 
     updatePreviewAndCost(root) {
+      const p = this.getParts();
+      const cd = p?.ctrl?.data || {};
+      const perIterCount = Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
       const iterations = this.resolveIterations();
-      const totalCount = iterations.length;
+      const totalCount = Math.min(200, iterations.length * perIterCount);
 
-      // Update cost text
       const costWrap = root.querySelector(".batch-cost-wrap");
       if (costWrap) {
         costWrap.innerHTML = this.renderCostHtml(totalCount);
       }
 
-      // Update start button
       const btnStart = root.querySelector("#batch-btn-start");
       if (btnStart) {
         btnStart.disabled = totalCount === 0;
       }
 
-      // Update table title
       const title = root.querySelector(".batch-preview-title");
       if (title) {
         title.textContent = `批量清单与状态 (${totalCount} 张)`;
       }
     }
 
+    // Fission Modal (Defect 1 Fixed: captures self = this)
     openFissionModal(root, parts) {
+      const self = this;
       const S = global.HANDRAW_SHARED;
       if (!S?.openModal) return;
 
-      const seedDefault = (parts.text?.data?.text || "").trim() ||
+      const seedDefault = (parts.loop.data.batchSeed || parts.text?.data?.text || "").trim() ||
         (parts.loop.data.promptListText || "").split(/\r?\n/)[0]?.trim() ||
         "都市慢生活与手绘手账";
 
@@ -1186,7 +1307,6 @@
               <button type="button" class="btn btn-sm btn-primary" id="fission-submit-btn">开始扩写</button>
             </div>
 
-            <!-- Result Box -->
             <div id="fission-result-box" style="display:none;border-top:1px solid var(--line-soft);padding-top:12px;">
               <div id="fission-source-banner" style="display:none;padding:6px 10px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;font-size:12px;color:#92400e;margin-bottom:8px;">
                 未使用 AI 扩写，已按模板生成
@@ -1280,9 +1400,16 @@
             } else {
               parts.loop.data.promptListText = `${existing}\n${generatedItems.join("\n")}`;
             }
+
+            if (parts.loop.data.batchLayoutMode === "ai") {
+              const lines = parts.loop.data.promptListText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+              parts.loop.data.batchRows = lines.map((l) => ({ theme: l, layout: parts.skill.data.layout || "" }));
+            }
+
             S.closeModal();
-            if (this.actions?.markDirtyAndRender) {
-              this.actions.markDirtyAndRender();
+            // Defect 1 Fixed: self.actions?.markDirtyAndRender() correctly called
+            if (self.actions?.markDirtyAndRender) {
+              self.actions.markDirtyAndRender();
             }
             if (S.toast) {
               S.toast(replace ? `已替换为 ${generatedItems.length} 条主题！` : `已追加 ${generatedItems.length} 条主题！`);

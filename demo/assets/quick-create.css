@@ -255,7 +255,7 @@
   .make-image-picker-card,.make-image-run-btn,.make-image-btn-group .btn { transition:none !important; }
 }
 
-/* ==================== Phase 3b-2: Studio Batch Page ==================== */
+/* ==================== Phase 3b-2 & 3b-4: Studio Batch Page & Set Planning ==================== */
 .batch-container { width:min(100%,880px);margin:0 auto;box-sizing:border-box; }
 .batch-field-head,.batch-chips-head { display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;flex-wrap:wrap; }
 .batch-chips-row { display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:38px;padding:4px 0; }
@@ -264,6 +264,31 @@
 .batch-unified-theme-row { display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap; }
 .batch-unified-theme-label { font-size:12px;font-weight:700;color:var(--ink-main);white-space:nowrap; }
 .batch-unified-input { flex:1;min-width:200px; }
+
+/* Set Planning Cards & Controls (Phase 3b-4) */
+.batch-plan-card { background:var(--paper-card, #faf6ee);border:1px solid var(--line-strong, #e2d9cd);border-radius:8px;padding:14px 16px;margin-bottom:12px; }
+.batch-plan-row-a { display:flex;align-items:center;gap:12px;flex-wrap:wrap; }
+.batch-seed-wrap { display:flex;align-items:center;gap:6px;flex:2;min-width:220px; }
+.batch-seed-input { flex:1;min-width:160px; }
+.batch-count-wrap { display:flex;align-items:center;gap:6px; }
+.batch-count-input { width:58px;text-align:center; }
+.batch-strategy-wrap { display:flex;align-items:center;gap:6px; }
+.batch-plan-action-wrap { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
+.batch-plan-notice { font-size:11px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:2px 8px;white-space:nowrap; }
+.batch-plan-row-b { margin-top:10px;padding-top:10px;border-top:1px dashed var(--line-soft, #e6ded3);display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+.batch-fixed-layout-row { display:flex;align-items:center;gap:10px; }
+.batch-fixed-layout-card-wrap { display:flex;align-items:center;gap:8px; }
+.batch-ai-layout-row { display:flex;align-items:center;gap:8px;width:100%; }
+.batch-layout-req-input { flex:1;min-width:200px; }
+.batch-edit-area { margin-top:10px; }
+.batch-edit-table { width:100%;border-collapse:collapse;font-size:12px; }
+.batch-edit-table th { padding:6px 10px;background:var(--paper-inset, #f3ede2);border-bottom:1px solid var(--line-soft, #e6ded3);font-weight:700;color:var(--ink-main, #2b2623);text-align:left; }
+.batch-edit-table td { padding:6px 8px;border-bottom:1px solid var(--line-soft, #e6ded3);vertical-align:middle; }
+.batch-row-theme-input { width:100%;box-sizing:border-box; }
+.batch-row-layout-select { width:100%;box-sizing:border-box;font-size:12px; }
+.batch-row-del-btn { font-size:11px;padding:2px 6px;color:var(--ink-muted, #786f65); }
+.batch-row-del-btn:hover { color:#d32f2f; }
+.batch-add-row-wrap { margin-top:8px; }
 
 /* Batch Preview Table */
 .batch-preview-section { margin-top:8px;border-top:1px solid var(--line-soft);padding-top:14px; }
@@ -308,6 +333,13 @@
   .batch-action-bar { flex-direction:column;align-items:stretch;gap:10px; }
   .batch-btn-wrap button,.batch-btn-wrap .make-image-run-btn { width:100%;min-height:44px; }
   .batch-unified-theme-row { flex-direction:column;align-items:stretch; }
+  .batch-plan-row-a { flex-direction:column;align-items:stretch;gap:8px; }
+  .batch-seed-wrap, .batch-count-wrap, .batch-strategy-wrap, .batch-plan-action-wrap { width:100%; }
+  .batch-seed-input { width:100%; }
+  .batch-plan-action-wrap button { width:100%; }
+  .batch-ai-layout-row { flex-direction:column;align-items:stretch; }
+  .batch-layout-req-input { width:100%; }
+  .batch-edit-table { min-width:480px; }
 }
 
 /* ==================== Phase 3b-3: Article Preview / Editor Switch ==================== */

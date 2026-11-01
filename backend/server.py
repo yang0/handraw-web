@@ -2655,6 +2655,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if handle_fission_post(self, req_path, body):
                 return
 
+        if req_path == "/api/studio/batch-plan":
+            from .batch_plan_routes import handle_batch_plan_post
+            if handle_batch_plan_post(self, req_path, body):
+                return
+
         if req_path == "/api/studio/history":
             user = self._current_user(required=True)
             self._send_json(record_user_studio_history(self.db, user, body))  # type: ignore[arg-type]

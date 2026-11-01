@@ -470,6 +470,11 @@
         promptListText,
         styleIds: Array.isArray(overrides.styleIds) ? [...overrides.styleIds] : [],
         layoutIds: Array.isArray(overrides.layoutIds) ? [...overrides.layoutIds] : [],
+        batchLayoutMode: overrides.batchLayoutMode || "fixed",
+        batchSeed: overrides.batchSeed != null ? overrides.batchSeed : "",
+        batchCount: Math.max(1, Math.min(20, Math.round(Number(overrides.batchCount) || 6))),
+        batchLayoutReq: overrides.batchLayoutReq || "",
+        batchRows: Array.isArray(overrides.batchRows) ? [...overrides.batchRows] : (overrides.batchRows || null),
         splitUpstreamText: overrides.splitUpstreamText !== false,
         maxIterations: Math.max(1, Math.min(200, Math.round(Number(overrides.maxIterations) || 200))),
         status: "idle",
@@ -914,6 +919,39 @@
     }
 
     // Default: "prompts" mode — each non-empty line is 1 loop iteration
+    // When ld.batchRows is provided (Phase 3b-4 Set Planning / AI Recommended Layouts), each row specifies theme + layout
+    if (Array.isArray(ld.batchRows) && ld.batchRows.length > 0) {
+      return ld.batchRows.slice(0, maxIter).map((row, idx) => {
+        const rowTheme = typeof row === "string" ? row : (row && row.theme != null ? String(row.theme) : "");
+        const rowLayout = (row && typeof row === "object" && row.layout) ? String(row.layout).trim() : "";
+        const effLayout = rowLayout || rec.layoutId || "";
+        const lRes = effLayout ? rMap.get(effLayout) || null : null;
+        let mergedTheme = rowTheme;
+        if (rec.combinedText) {
+          if (/\{\{?item\}?\}|\{主题\}|\{文案\}/i.test(rec.combinedText)) {
+            mergedTheme = rec.combinedText
+              .replace(/\{\{?item\}?\}|\{主题\}|\{文案\}/gi, rowTheme)
+              .replace(/\{\{?index\}?\}|\{序号\}/gi, String(idx + 1));
+          } else {
+            mergedTheme = `${rowTheme}\n（统一要求：${rec.combinedText}）`;
+          }
+        }
+        const cleanShort = rowTheme.replace(/^#+\s*/, "").slice(0, 16);
+        return {
+          index: idx,
+          loopMode: "prompts",
+          itemKey: `row_${idx}`,
+          shortLabel: cleanShort + (rowTheme.length > 16 ? "…" : ""),
+          title: `循环 #${idx + 1} · ${cleanShort}${rowTheme.length > 16 ? "…" : ""}`,
+          style1: "",
+          layout: effLayout,
+          assetItems: null,
+          theme: mergedTheme,
+          sampleImg: lRes?.image || sampleVisuals[idx % sampleVisuals.length]
+        };
+      });
+    }
+
     // Priority: if an upstream "选题裂变" (fission) node is wired into this loop and loop has no custom override, stream fission's generatedItems!
     const directUpFission = (graph?.edges || [])
       .filter((e) => e.to === loopNode.id)
