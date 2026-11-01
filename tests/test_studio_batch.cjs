@@ -252,6 +252,43 @@ function parseHtml(html) {
           });
         }
       }
+      if (selector === "[data-pick-layout-idx]" || selector === ".batch-row-layout-btn") {
+        const regex = /<button[^>]*class="[^"]*batch-row-layout-btn[^"]*"[^>]*data-pick-layout-idx="(\d+)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g;
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+          const idx = match[1];
+          const title = match[2];
+          const inner = match[3];
+          const imgMatch = inner.match(/<img[^>]*data-hw-src="([^"]*)"[^>]*>/);
+          results.push({
+            getAttribute: (attr) => (attr === "data-pick-layout-idx" ? idx : attr === "title" ? title : null),
+            title,
+            innerHTML: inner,
+            querySelector: (sel) => {
+              if (sel === "img" || sel === ".batch-row-layout-thumb") {
+                return imgMatch ? { getAttribute: (a) => (a === "data-hw-src" ? imgMatch[1] : null) } : null;
+              }
+              return null;
+            },
+            onclick: null
+          });
+        }
+      }
+      if (selector === ".batch-iter-thumb-btn") {
+        const regex = /<button[^>]*class="[^"]*batch-iter-thumb-btn[^"]*"[^>]*data-zoom-src="([^"]*)"[^>]*data-zoom-title="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g;
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+          const zSrc = match[1];
+          const zTitle = match[2];
+          const inner = match[3];
+          results.push({
+            getAttribute: (attr) => (attr === "data-zoom-src" ? zSrc : attr === "data-zoom-title" ? zTitle : null),
+            title: zTitle,
+            innerHTML: inner,
+            onclick: null
+          });
+        }
+      }
       if (selector === ".batch-table-row") {
         const matches = html.match(/<tr class="batch-table-row/g);
         if (matches) {
@@ -275,10 +312,24 @@ function parseHtml(html) {
 }
 
 function createFakeDom() {
+  const elements = new Map();
   return {
-    innerHTML: "",
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
+    _html: "",
+    get innerHTML() { return this._html; },
+    set innerHTML(val) {
+      this._html = val;
+      elements.clear();
+    },
+    querySelector(sel) {
+      const all = this.querySelectorAll(sel);
+      return all[0] || null;
+    },
+    querySelectorAll(sel) {
+      if (!elements.has(sel)) {
+        elements.set(sel, parseHtml(this._html).querySelectorAll(sel));
+      }
+      return elements.get(sel);
+    },
     addEventListener() {},
     removeEventListener() {}
   };
@@ -694,7 +745,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 // Requirement 8: Action Names Validation (B2 Fix Verification)
 // ==========================================
 {
-  const renderCallMatch = studioAppSource.match(/window\.HandrawBatchCreate\.render\([\s\S]*?,\s*\{[\s\S]*?\},\s*\{([\s\S]*?)\n\s*\}\s*\);/);
+  const renderCallMatch = studioAppSource.match(/window\.HandrawBatchCreate\.render\([\s\S]*?,\s*\{[\s\S]*?\},\s*\{([\s\S]*?)\n\s*\}\s*\n\s*\);/);
   assert.ok(renderCallMatch, "HandrawBatchCreate.render call must be found in studio-app.js");
   const actionsBlock = renderCallMatch[1];
   const providedActionKeys = new Set();
@@ -705,10 +756,17 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
   assert.ok(providedActionKeys.size >= 8, `Expected at least 8 action keys, got ${providedActionKeys.size}`);
   assert.ok(providedActionKeys.has("openAssetPicker"), "studio-app.js must provide openAssetPicker");
+  assert.ok(providedActionKeys.has("openImageLightbox"), "studio-app.js must provide openImageLightbox");
   assert.ok(providedActionKeys.has("openPublish"), "studio-app.js must provide openPublish");
   assert.ok(providedActionKeys.has("run"), "studio-app.js must provide run");
   assert.ok(providedActionKeys.has("runSingleRow"), "studio-app.js must provide runSingleRow");
   assert.ok(providedActionKeys.has("cancel"), "studio-app.js must provide cancel");
+
+  // Ensure retired non-existent actions are completely gone
+  assert.ok(!providedActionKeys.has("openLayoutThumbPicker"), "openLayoutThumbPicker must NOT be in actions");
+  assert.ok(!studioBatchSource.includes("openLayoutThumbPicker"), "openLayoutThumbPicker must not be called in studio-batch.js");
+  assert.ok(!studioBatchSource.includes("openMultiPicker"), "openMultiPicker must not be called in studio-batch.js");
+  assert.ok(!studioBatchSource.includes("openPublishForBatchItem"), "openPublishForBatchItem must not be called in studio-batch.js");
 
   // Check all actions accessed in studio-batch.js
   const usedActions = new Set();
@@ -723,13 +781,108 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     );
   }
 
-  // Ensure retired non-existent actions are completely gone
-  assert.ok(!studioBatchSource.includes("openMultiPicker"), "openMultiPicker must not be called in studio-batch.js");
-  assert.ok(!studioBatchSource.includes("openPublishForBatchItem"), "openPublishForBatchItem must not be called in studio-batch.js");
-
   console.log(`✓ Requirement 8 Passed: Action names validated (${Array.from(usedActions).join(", ")}) against studio-app.js`);
 }
 
+// ==========================================
+// Requirement 9: Inline Layout Cell with Image and Shared Picker Verification
+// ==========================================
+{
+  const graph = createTestBatchGraph();
+  const loop = graph.nodes.find(n => n.type === "loop");
+  const skill = graph.nodes.find(n => n.type === "skill_params");
+  skill.data.layout = "SC-021";
+  loop.data.batchLayoutMode = "ai";
+  loop.data.batchRows = [
+    { theme: "山间清风", layout: "SC-001" },
+    { theme: "茶肆小憩", layout: "" } // global fallback
+  ];
+
+  const parts = {
+    ctrl: graph.nodes.find(n => n.type === "output_control"),
+    loop,
+    skill,
+    text: graph.nodes.find(n => n.type === "text_input"),
+    asset: graph.nodes.find(n => n.type === "asset")
+  };
+
+  let openedPickerOpts = null;
+  let openedLightbox = null;
+  const fakeActions = {
+    markDirtyAndRender: () => {},
+    openAssetPicker: (opts) => { openedPickerOpts = opts; },
+    openImageLightbox: (url, title) => { openedLightbox = { url, title }; }
+  };
+
+  const fakeHost = createFakeDom();
+  HandrawBatchCreate.render(fakeHost, {
+    parts,
+    graph,
+    catalog: sharedCatalog,
+    loggedIn: true
+  }, fakeActions);
+
+  const layoutBtns = fakeHost.querySelectorAll("[data-pick-layout-idx]");
+  assert.equal(layoutBtns.length, 2, "Must render 2 layout buttons for the 2 batch rows");
+
+  // Row 0: specific layout SC-001
+  const btn0 = layoutBtns[0];
+  assert.ok(btn0.innerHTML.includes("<img"), "Row 0 layout button must contain <img>");
+  assert.ok(btn0.innerHTML.includes("data-hw-src="), "Row 0 layout button must contain data-hw-src for lazy loading");
+  assert.ok(!btn0.innerHTML.includes(" src="), "Row 0 layout button must NOT contain src attribute (lazy loader only)");
+  assert.ok(btn0.innerHTML.includes("SC-001"), "Row 0 layout button must show SC-001");
+  assert.ok(btn0.innerHTML.includes("居中卡片"), "Row 0 layout button must show SC-001 title");
+  assert.ok(!btn0.innerHTML.includes("跟随全局"), "Row 0 specific layout must not say 跟随全局 in visible text");
+
+  // Row 1: global layout fallback SC-021
+  const btn1 = layoutBtns[1];
+  assert.ok(btn1.innerHTML.includes("<img"), "Row 1 layout button must contain <img>");
+  assert.ok(btn1.innerHTML.includes("data-hw-src="), "Row 1 layout button must contain data-hw-src for lazy loading");
+  assert.ok(!btn1.innerHTML.includes(" src="), "Row 1 layout button must NOT contain src attribute (lazy loader only)");
+  assert.ok(btn1.innerHTML.includes("SC-021"), "Row 1 layout button must show global layout SC-021");
+  assert.ok(btn1.innerHTML.includes("双拼信息卡"), "Row 1 layout button must show SC-021 title");
+  assert.ok(!btn1.innerHTML.includes("跟随全局"), "Row 1 layout button visible text must NOT include 跟随全局");
+  assert.ok(btn1.title.includes("跟随全局图型 SC-021"), "Row 1 title must explain 跟随全局图型 SC-021");
+
+  // Verify click calls openAssetPicker (shared picker mechanism)
+  btn0.onclick();
+  assert.ok(openedPickerOpts, "Clicking layout button must invoke openAssetPicker");
+  assert.equal(openedPickerOpts.kind, "layout");
+  assert.equal(openedPickerOpts.field, "layout");
+  assert.equal(openedPickerOpts.current, "SC-001");
+  assert.ok(typeof openedPickerOpts.onPick === "function", "openAssetPicker must receive onPick callback");
+
+  // Verify studio-app.js routes openAssetPicker to openSkillFieldPickerModal
+  assert.ok(
+    studioAppSource.includes("openSkillFieldPickerModal(skillNode, field, options = {})") ||
+    studioAppSource.includes("openSkillFieldPickerModal(bp.skill, targetField, { current, onPick, title })"),
+    "openAssetPicker must delegate to openSkillFieldPickerModal with options"
+  );
+  assert.ok(
+    !studioAppSource.includes("function openLayoutThumbPicker"),
+    "openLayoutThumbPicker must be completely removed from studio-app.js"
+  );
+  assert.ok(
+    !studioAppSource.includes("single: true"),
+    "openLoopMultiPickerModal must not have single mode branch"
+  );
+
+  // Requirement 10: Batch preview iteration thumbnail zoom button verification
+  const zoomBtns = fakeHost.querySelectorAll(".batch-iter-thumb-btn");
+  assert.ok(zoomBtns.length > 0, "Batch preview table must wrap thumbnail in .batch-iter-thumb-btn");
+  const zb0 = zoomBtns[0];
+  assert.ok(zb0.getAttribute("data-zoom-src"), ".batch-iter-thumb-btn must have data-zoom-src");
+  assert.ok(zb0.getAttribute("data-zoom-title"), ".batch-iter-thumb-btn must have data-zoom-title");
+  assert.ok(!zb0.innerHTML.includes(" src="), "Batch iteration thumbnail must use only data-hw-src");
+
+  zb0.onclick();
+  assert.ok(openedLightbox, "Clicking .batch-iter-thumb-btn must trigger openImageLightbox");
+  assert.equal(openedLightbox.url, zb0.getAttribute("data-zoom-src"));
+
+  console.log("✓ Requirement 9 Passed: Inline layout cell contains <img> and picker shares 168-card renderer");
+  console.log("✓ Requirement 10 Passed: Batch iteration thumbnail has lightbox zoom button");
+}
+
 console.log("\n==========================================");
-console.log("All 11 Studio Batch tests passed successfully!");
+console.log("All 12 Studio Batch tests passed successfully!");
 console.log("==========================================");

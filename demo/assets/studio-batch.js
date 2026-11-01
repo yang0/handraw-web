@@ -246,6 +246,32 @@
       `;
     }
 
+    renderRowLayoutButtonHtml(row, idx, globalLayoutId) {
+      const catalog = this.context?.catalog;
+      const rMap = (catalog && catalog.resourceMap) || new Map();
+      const hasSpecific = Boolean(row && row.layout && String(row.layout).trim());
+      const specificId = hasSpecific ? String(row.layout).trim() : "";
+      const effectiveId = specificId || globalLayoutId || "SC-021";
+      const res = effectiveId ? (rMap.get(effectiveId) || catalog?.layouts?.find((l) => l.id === effectiveId)) : null;
+      const thumbUrl = res?.image || "/images/layouts/social-cards/SC-021.webp";
+      const codeText = effectiveId;
+      const nameText = res ? (res.name_zh || res.name || effectiveId) : (hasSpecific ? specificId : "默认图型");
+      const btnTitle = hasSpecific ? `图型版式：${effectiveId} ${nameText}（点击更换）` : `跟随全局图型 ${effectiveId}（点击更换）`;
+      const ariaLabel = hasSpecific ? `图型版式：${effectiveId} ${nameText}` : `跟随全局图型 ${effectiveId} ${nameText}`;
+
+      return `
+        <button type="button" class="btn batch-row-layout-btn" data-pick-layout-idx="${idx}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
+          <span class="batch-row-layout-thumb-wrap">
+            <img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />
+          </span>
+          <span class="batch-row-layout-info">
+            <span class="batch-row-layout-code">${esc(codeText)}</span>
+            <span class="batch-row-layout-name">${esc(nameText)}</span>
+          </span>
+        </button>
+      `;
+    }
+
     renderLayoutSelectOptions(selectedLayoutId) {
       const catalog = this.context?.catalog;
       const layouts = (catalog && Array.isArray(catalog.layouts) ? catalog.layouts : [])
@@ -481,10 +507,8 @@
                               <td>
                                 <input type="text" class="make-image-input batch-row-theme-input" data-row-idx="${idx}" value="${esc(row.theme)}" placeholder="输入该张画面主题..." />
                               </td>
-                              <td>
-                                <select class="make-image-select batch-row-layout-select" data-row-idx="${idx}">
-                                  ${this.renderLayoutSelectOptions(row.layout)}
-                                </select>
+                              <td class="batch-col-layout">
+                                ${this.renderRowLayoutButtonHtml(row, idx, sd.layout)}
                               </td>
                               <td style="text-align:center;">
                                 <button type="button" class="btn btn-sm btn-ghost batch-row-del-btn" data-del-row-idx="${idx}" title="删除此张">删除</button>
@@ -626,12 +650,23 @@
                       ` : iterations.map((iter, idx) => {
                         const itemResult = this.getItemResult(idx, displays, isBatchGallery);
                         const rowStatus = this.getRowStatus(idx, busy, currentStep, itemResult);
+                        const iterLayoutId = iter.layout || "";
+                        const catalog = this.context?.catalog;
+                        const rMap = (catalog && catalog.resourceMap) || new Map();
+                        const layoutRes = iterLayoutId ? (rMap.get(iterLayoutId) || catalog?.layouts?.find((l) => l.id === iterLayoutId)) : null;
+                        const layoutName = layoutRes ? (layoutRes.name_zh || layoutRes.name || iterLayoutId) : "";
+                        const zoomTitle = iterLayoutId && layoutName ? `${iterLayoutId} ${layoutName}` : (iterLayoutId || iter.shortLabel || iter.title || "图型预览");
+
                         return `
                           <tr class="batch-table-row ${rowStatus.className}">
                             <td class="batch-col-idx">#${idx + 1}</td>
                             <td class="batch-col-content">
                               <div class="batch-iter-cell">
-                                ${iter.sampleImg ? `<img data-hw-src="${esc(iter.sampleImg)}" class="batch-iter-thumb" alt="" loading="lazy" />` : ""}
+                                ${iter.sampleImg ? `
+                                  <button type="button" class="batch-iter-thumb-btn" data-zoom-src="${esc(iter.sampleImg)}" data-zoom-title="${esc(zoomTitle)}" aria-label="放大查看${esc(zoomTitle)}">
+                                    <img data-hw-src="${esc(iter.sampleImg)}" class="batch-iter-thumb" alt="${esc(zoomTitle)}" loading="lazy" />
+                                  </button>
+                                ` : ""}
                                 <span class="batch-iter-label">${esc(iter.shortLabel || iter.title || iter.theme)}</span>
                               </div>
                             </td>
@@ -1031,12 +1066,30 @@
         };
       });
 
-      root.querySelectorAll(".batch-row-layout-select").forEach((sel) => {
-        sel.onchange = () => {
-          const idx = Number(sel.getAttribute("data-row-idx"));
+      root.querySelectorAll("[data-pick-layout-idx]").forEach((btn) => {
+        btn.onclick = () => {
+          const idx = Number(btn.getAttribute("data-pick-layout-idx"));
           if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
-          loop.data.batchRows[idx].layout = sel.value;
-          markDirty();
+          const currentRow = loop.data.batchRows[idx];
+          const curLayout = currentRow.layout || "";
+
+          const onPick = (pickedId) => {
+            currentRow.layout = pickedId || "";
+            markDirty();
+          };
+
+          if (self.actions?.openAssetPicker) {
+            self.actions.openAssetPicker({
+              kind: "layout",
+              field: "layout",
+              current: curLayout,
+              title: `选择第 ${idx + 1} 张的图型`,
+              onPick
+            });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+          }
         };
       });
 
@@ -1222,6 +1275,21 @@
         };
       });
 
+      // 7.5. Batch Iteration Thumbnail Zoom (Lightbox)
+      root.querySelectorAll(".batch-iter-thumb-btn").forEach((btn) => {
+        btn.onclick = () => {
+          const src = btn.getAttribute("data-zoom-src");
+          const title = btn.getAttribute("data-zoom-title") || "图型预览";
+          if (!src) return;
+          if (self.actions?.openImageLightbox) {
+            self.actions.openImageLightbox(src, title);
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openImageLightbox）");
+          }
+        };
+      });
+
       // 8. Start Batch Generation Button (M1: single confirmation via confirmPotentialGenerationCost)
       const btnStart = root.querySelector("#batch-btn-start");
       if (btnStart) {
@@ -1298,6 +1366,10 @@
           }
         };
       });
+
+      if (global.HandrawImageLoader?.scan) {
+        global.HandrawImageLoader.scan(root);
+      }
     }
 
     updatePreviewAndCost(root) {

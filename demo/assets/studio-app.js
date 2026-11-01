@@ -1613,9 +1613,10 @@
   }
 
   // 1) Picker for Skill Params Node: Single-select (style1/style2/layout) & Multi-select (colors/tones/moods)
-  function openSkillFieldPickerModal(skillNode, field) {
-    if (!skillNode || skillNode.type !== "skill_params") return;
-    const sd = skillNode.data;
+  function openSkillFieldPickerModal(skillNode, field, options = {}) {
+    const hasCustomPick = typeof options?.onPick === "function";
+    if (!hasCustomPick && (!skillNode || skillNode.type !== "skill_params")) return;
+    const sd = (skillNode && skillNode.type === "skill_params") ? skillNode.data : {};
 
     // Dedicated Moods Multi-Select Modal
     if (field === "moods") {
@@ -1694,15 +1695,17 @@
       return;
     }
 
-    const isMulti = field === "colors" || field === "tones";
+    const isMulti = !hasCustomPick && (field === "colors" || field === "tones");
     const selectedSet = new Set(
-      field === "colors"
-        ? sd.colors || []
-        : field === "tones"
-          ? sd.tones || []
-          : sd[field]
-            ? [sd[field]]
-            : []
+      options?.current !== undefined
+        ? (options.current ? [String(options.current).trim()] : [])
+        : (field === "colors"
+            ? sd.colors || []
+            : field === "tones"
+              ? sd.tones || []
+              : sd[field]
+                ? [sd[field]]
+                : [])
     );
 
     const titles = {
@@ -1716,8 +1719,10 @@
     let activeGroup = "ALL";
     let searchQuery = "";
 
+    const modalTitle = (options && options.title) || titles[field] || "选择参数";
+
     S.openModal({
-      title: titles[field] || "选择参数",
+      title: modalTitle,
       sizeClass: "modal-wide",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;min-height:540px;">
@@ -1755,6 +1760,15 @@
         };
 
         root.querySelector("#sp-picker-rand").onclick = () => {
+          if (hasCustomPick) {
+            const pool = (field === "style1" || field === "style2") ? Catalog.styles : Catalog.layouts;
+            const freeFirst = pool.filter((x) => x.tier !== "pro_credit");
+            const src = freeFirst.length > 0 ? freeFirst : pool;
+            const pick = src[Math.floor(Math.random() * src.length)];
+            if (pick) options.onPick(pick.id);
+            S.closeModal();
+            return;
+          }
           pushUndo();
           if (field === "style1" || field === "style2") {
             const pick = Catalog.styles[Math.floor(Math.random() * Catalog.styles.length)];
@@ -1788,6 +1802,11 @@
         };
 
         root.querySelector("#sp-picker-clear").onclick = () => {
+          if (hasCustomPick) {
+            options.onPick("");
+            S.closeModal();
+            return;
+          }
           if (isMulti) {
             selectedSet.clear();
             updateConfirmText();
@@ -1880,7 +1899,7 @@
               const isSel = selectedSet.has(id);
               const proLocked = it.tier === "pro_credit" && !S.isUnlocked(id, it);
               return `
-                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" style="border:1.5px solid ${
+                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" tabindex="0" role="button" aria-label="${esc(id)} ${esc(title)}" style="border:1.5px solid ${
                 isSel ? "var(--vermilion)" : "var(--line-soft)"
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
                 isSel ? "0 0 0 3px rgba(209,75,40,0.18)" : "0 2px 6px rgba(24,20,17,0.04)"
@@ -1906,7 +1925,7 @@
             .join("");
 
           gridEl.querySelectorAll("[data-pick-id]").forEach((card) => {
-            card.onclick = () => {
+            const onSelect = () => {
               const id = card.getAttribute("data-pick-id");
               const resObj = Catalog.resourceMap.get(id);
               if (resObj && resObj.tier === "pro_credit" && !S.isUnlocked(id, resObj)) {
@@ -1916,6 +1935,12 @@
                   return;
                 }
                 if (!S.unlockWithCredits(id, resObj.unlockCost || 5, `解锁 ${id}`)) return;
+              }
+
+              if (hasCustomPick) {
+                options.onPick(id);
+                S.closeModal();
+                return;
               }
 
               if (isMulti) {
@@ -1932,8 +1957,25 @@
                 toast(`✨ 已选用 ${id}`);
               }
             };
+            card.onclick = onSelect;
+            card.onkeydown = (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect();
+              }
+            };
           });
+
+          if (window.HandrawImageLoader?.scan) {
+            window.HandrawImageLoader.scan(gridEl);
+          }
         }
+
+        gridEl.addEventListener("scroll", () => {
+          if (window.HandrawImageLoader?.scan) {
+            window.HandrawImageLoader.scan(gridEl);
+          }
+        }, { passive: true });
 
         renderGroups();
         renderGrid();
@@ -3042,7 +3084,9 @@
         const confirmBtn = root.querySelector("#loop-pick-confirm");
 
         const syncConfirm = () => {
-          confirmBtn.textContent = `✓ 确认加入循环 (${selectedOrder.length})`;
+          if (confirmBtn) {
+            confirmBtn.textContent = `✓ 确认加入循环 (${selectedOrder.length})`;
+          }
         };
 
         searchInp.oninput = () => {
@@ -3052,10 +3096,11 @@
         };
 
         root.querySelector("#loop-pick-rand4").onclick = () => {
-          selectedOrder.length = 0;
           const freeFirst = pool.filter((x) => x.tier !== "pro_credit");
-          const source = freeFirst.length >= 4 ? freeFirst : pool;
-          const shuffled = [...source].sort(() => Math.random() - 0.5).slice(0, 4);
+          const source = freeFirst.length > 0 ? freeFirst : pool;
+          selectedOrder.length = 0;
+          const src = source.length >= 4 ? source : pool;
+          const shuffled = [...src].sort(() => Math.random() - 0.5).slice(0, 4);
           shuffled.forEach((x) => selectedOrder.push(x.id));
           syncConfirm();
           renderGrid();
@@ -3067,20 +3112,22 @@
           renderGrid();
         };
 
-        confirmBtn.onclick = () => {
-          pushUndo();
-          if (isStyle) {
-            ld.styleIds = [...selectedOrder];
-            ld.loopMode = "styles";
-          } else {
-            ld.layoutIds = [...selectedOrder];
-            ld.loopMode = "layouts";
-          }
-          S.closeModal();
-          fullRenderCanvas();
-          persistOpenTabs();
-          toast(`🔁 已设置 ${selectedOrder.length} 款循环${isStyle ? "画风" : "图型"}！`);
-        };
+        if (confirmBtn) {
+          confirmBtn.onclick = () => {
+            pushUndo();
+            if (isStyle) {
+              ld.styleIds = [...selectedOrder];
+              ld.loopMode = "styles";
+            } else {
+              ld.layoutIds = [...selectedOrder];
+              ld.loopMode = "layouts";
+            }
+            S.closeModal();
+            fullRenderCanvas();
+            persistOpenTabs();
+            toast(`🔁 已设置 ${selectedOrder.length} 款循环${isStyle ? "画风" : "图型"}！`);
+          };
+        }
 
         function renderGroups() {
           const grpSet = new Set();
@@ -3120,9 +3167,7 @@
             );
           }
 
-          countEl.textContent = `共筛出 ${list.length} 项${
-            selectedOrder.length ? ` · 循环顺序：${selectedOrder.join(" → ")}` : ""
-          }`;
+          countEl.textContent = `共筛出 ${list.length} 项${selectedOrder.length ? ` · 循环顺序：${selectedOrder.join(" → ")}` : ""}`;
 
           gridEl.innerHTML = list
             .slice(0, 180)
@@ -12912,10 +12957,10 @@
           {
             markDirtyAndRender,
             ensureAssetItems: (items) => ensureBatchAssetNode(items),
-            openAssetPicker: ({ kind, field }) => {
+            openAssetPicker: ({ kind, field, current, onPick, title } = {}) => {
               if (!bp || busy) return;
               const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
-              openSkillFieldPickerModal(bp.skill, targetField);
+              openSkillFieldPickerModal(bp.skill, targetField, { current, onPick, title });
             },
             openReferencePicker: () => {
               if (!bp || busy) return;
@@ -12925,6 +12970,9 @@
             openLoopMultiPicker: (kind) => {
               if (!bp || busy) return;
               openLoopMultiPickerModal(bp.loop, kind);
+            },
+            openImageLightbox: (url, title) => {
+              openImageLightbox(url, title);
             },
             openPublish: (node) => {
               openPublishModalForDisplay(node);
@@ -13760,6 +13808,8 @@
   window.HANDRAW_STUDIO.getEngineMode = () => CS.engineMode;
   window.HANDRAW_STUDIO.openReferenceAssetPickerModal = openAssetPickerModal;
   window.HANDRAW_STUDIO.openLoopMultiPickerModal = openLoopMultiPickerModal;
+  window.HANDRAW_STUDIO.openSkillFieldPickerModal = openSkillFieldPickerModal;
+  window.HANDRAW_STUDIO.openImageLightbox = openImageLightbox;
   window.HANDRAW_STUDIO.getBatchParts = getBatchParts;
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   if (window.__HANDRAW_TESTING__ === true) {
