@@ -16,7 +16,7 @@
  * - Row 4: 画幅预设按钮 + 比例数值输入框 (fixed regex without double escaping).
  * - 更多设置 (折叠): 影调、情绪、留白、受众、业务场景、SC-021/SC-022.
  * - 底部栏与费用: 统一计算 Math.min(200, iterations.length * perIterCount)；二次确认 (>20) 也用该张数与费用.
- * - 规划与裂变回调中的 this 正确绑定为控制器实例 (self).
+ * - 规划回调中的 this 正确绑定为控制器实例 (self).
  * - 新增与修改界面不包含任何 emoji.
  */
 (function (global) {
@@ -59,14 +59,6 @@
   const DEFAULT_MOODS = [
     "治愈", "诗意", "温暖", "宁静", "清幽", "松弛",
     "复古", "童趣", "浪漫", "幽默", "力量", "灵动"
-  ];
-
-  const FISSION_STRATEGIES = [
-    { id: "daily_quote", label: "系列日签" },
-    { id: "selling_points", label: "卖点切角" },
-    { id: "knowledge_cards", label: "科普图鉴" },
-    { id: "story_beats", label: "连续分镜" },
-    { id: "custom", label: "自定义" }
   ];
 
   function esc(str) {
@@ -135,7 +127,6 @@
       this.context = null;
       this.actions = null;
       this.moreSettingsOpen = false;
-      this.fissionModalOpen = false;
       this.planNotice = "";
       this.isPlanning = false;
     }
@@ -363,7 +354,7 @@
       const batchLayoutReq = ld.batchLayoutReq || "";
       const batchRows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
       const promptListText = typeof ld.promptListText === "string" ? ld.promptListText : "";
-      const globalAssetItems = Array.isArray(this.parts?.asset?.data?.items) ? this.parts.asset.data.items : [];
+      const globalAssetItems = Array.isArray(p.asset?.data?.items) ? p.asset.data.items : [];
 
       // M1: Single truth - each iteration generates 1 image in batch set planning
       const perIterCount = 1;
@@ -422,67 +413,100 @@
                 <div class="make-image-style-note" role="note">角色画风决定人物与主体的画法，场景画风决定背景与环境</div>
               ` : ""}
 
+              <!-- Global References Row (Independent row outside collapsible) -->
+              <div class="make-image-more-row batch-global-refs-row" id="batch-more-row-refs">
+                <span class="make-image-field-label">参考图</span>
+                <button type="button" class="btn btn-sm" id="batch-btn-pick-global-refs">选择参考图</button>
+                <div class="make-image-more-thumbs batch-global-refs-thumbs" id="batch-global-refs-thumbs">
+                  ${globalAssetItems.length ? globalAssetItems.map((ast, idx) => `
+                    <div class="make-image-slot-card is-inline">
+                      <div class="make-image-slot-thumb-wrap">
+                        ${ast.image ? `<img data-hw-src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}" loading="lazy" />` : ""}
+                        <button type="button" class="make-image-slot-clear" data-remove-global-ref="${idx}" title="移除">×</button>
+                      </div>
+                      <div class="make-image-slot-meta">
+                        <span class="make-image-slot-code">${esc(ast.id || `REF-${idx + 1}`)}</span>
+                        <span class="make-image-slot-title">${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}</span>
+                      </div>
+                    </div>
+                  `).join("") : `<span class="make-image-picker-hint">未指定，可点此添加（最多 4 张）</span>`}
+                </div>
+              </div>
+
               <!-- 套图规划 (Set Planning Section) -->
               <div class="batch-plan-card">
-                <!-- 规划行 A: 母题 + 张数 + 图型策略 + AI 规划按钮 -->
-                <div class="batch-plan-row-a">
-                  <div class="batch-seed-wrap">
-                    <span class="make-image-field-label">母题</span>
-                    <input type="text" class="make-image-input batch-seed-input" id="batch-seed-input" placeholder="输入这套图的创作母题（如：都市慢生活与手绘手账）..." value="${esc(batchSeed)}" />
+                <!-- 规划输入整体分区 (Planning Inputs Panel) -->
+                <div class="batch-plan-inputs-panel">
+                  <div class="batch-plan-inputs-head">
+                    <span class="batch-plan-inputs-tag">规划输入</span>
                   </div>
 
-                  <div class="batch-count-wrap">
-                    <span class="make-image-field-label">张数</span>
-                    <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" />
-                  </div>
+                  <!-- 规划第一行: 母题 + 张数 + 图型策略 -->
+                  <div class="batch-plan-row-a">
+                    <div class="batch-seed-wrap">
+                      <span class="make-image-field-label">母题</span>
+                      <input type="text" class="make-image-input batch-seed-input" id="batch-seed-input" placeholder="输入这套图的创作母题（如：都市慢生活与手绘手账）..." value="${esc(batchSeed)}" />
+                    </div>
 
-                  <div class="batch-strategy-wrap">
-                    <span class="make-image-field-label">图型策略</span>
-                    <div class="make-image-btn-group" role="group" aria-label="图型策略">
-                      <button type="button" class="btn btn-sm ${batchLayoutMode === "fixed" ? "btn-primary is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}">固定图型</button>
-                      <button type="button" class="btn btn-sm ${batchLayoutMode === "ai" ? "btn-primary is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}">AI 推荐图型</button>
+                    <div class="batch-count-wrap">
+                      <span class="make-image-field-label">张数</span>
+                      <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" />
+                    </div>
+
+                    <div class="batch-strategy-wrap">
+                      <span class="make-image-field-label">图型策略</span>
+                      <div class="batch-strategy-seg" role="group" aria-label="图型策略">
+                        <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "fixed" ? "is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}">固定图型</button>
+                        <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "ai" ? "is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}">AI 推荐图型</button>
+                      </div>
                     </div>
                   </div>
 
-                  <div class="batch-plan-action-wrap">
-                    <button type="button" class="btn btn-sm btn-primary batch-plan-trigger" id="batch-btn-plan" ${busy ? "disabled" : ""}>AI 规划这套图</button>
-                    ${this.planNotice ? `<span class="batch-plan-notice">${esc(this.planNotice)}</span>` : ""}
+                  <!-- 规划第二行: 固定图型/图型要求 + 右下角【AI 规划这套图】主操作 -->
+                  <div class="batch-plan-row-b-wrap">
+                    ${batchLayoutMode === "fixed" ? `
+                      <div class="batch-plan-row-b batch-fixed-layout-row">
+                        <span class="make-image-field-label">固定图型</span>
+                        <button type="button" class="btn btn-sm" id="batch-btn-pick-fixed-layout">选择图型</button>
+                        <div class="batch-fixed-layout-card-wrap">
+                          ${layoutObj?.id ? `
+                            <div class="make-image-slot-card is-inline batch-chip" data-pick-kind="layout">
+                              <div class="make-image-slot-thumb-wrap">
+                                ${layoutObj.image ? `<img data-hw-src="${esc(layoutObj.image)}" alt="${esc(layoutObj.name || layoutObj.id)}" loading="lazy" />` : ""}
+                                <button type="button" class="make-image-slot-clear" data-clear-kind="layout" title="清除">×</button>
+                              </div>
+                              <div class="make-image-slot-meta">
+                                <span class="make-image-slot-code">${esc(layoutObj.id)}</span>
+                                <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
+                              </div>
+                            </div>
+                          ` : `<span class="make-image-picker-hint">未选图型（将使用默认版式）</span>`}
+                        </div>
+                      </div>
+                    ` : `
+                      <div class="batch-plan-row-b batch-ai-layout-row">
+                        <span class="make-image-field-label">图型要求</span>
+                        <input type="text" class="make-image-input batch-layout-req-input" id="batch-layout-req-input" placeholder="例如：前 3 张分镜、后面图鉴，不要封面图（可留空）" value="${esc(batchLayoutReq)}" />
+                      </div>
+                    `}
+
+                    <div class="batch-plan-action-wrap">
+                      <button type="button" class="batch-btn-plan-hero batch-plan-trigger" id="batch-btn-plan" ${busy ? "disabled" : ""}>
+                        <svg class="batch-plan-icon" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+                          <path d="M7.5 0.5c.2 2.6 1.8 4.2 4.4 4.4.2 0 .2.3 0 .4-2.6.2-4.2 1.8-4.4 4.4 0 .2-.3.2-.4 0-.2-2.6-1.8-4.2-4.4-4.4-.2 0-.2-.3 0-.4 2.6-.2 4.2-1.8 4.4-4.4 0-.2.3-.2.4 0zm5 9c.1 1.5 1 2.4 2.5 2.5.1 0 .1.2 0 .2-1.5.1-2.4 1-2.5 2.5 0 .1-.2.1-.2 0-.1-1.5-1-2.4-2.5-2.5-.1 0-.1-.2 0-.2 1.5-.1 2.4-1 2.5-2.5 0-.1.2-.1.2 0z"/>
+                        </svg>
+                        <span>${busy ? "AI 规划中…" : "AI 规划这套图"}</span>
+                      </button>
+                      ${this.planNotice ? `<span class="batch-plan-notice">${esc(this.planNotice)}</span>` : ""}
+                    </div>
                   </div>
                 </div>
-
-                <!-- 规划行 B: 固定图型时选择图型卡；AI 推荐图型时填写图型要求 -->
-                ${batchLayoutMode === "fixed" ? `
-                  <div class="batch-plan-row-b batch-fixed-layout-row">
-                    <span class="make-image-field-label">固定图型</span>
-                    <button type="button" class="btn btn-sm btn-primary" id="batch-btn-pick-fixed-layout">选择图型</button>
-                    <div class="batch-fixed-layout-card-wrap">
-                      ${layoutObj?.id ? `
-                        <div class="make-image-slot-card is-inline batch-chip" data-pick-kind="layout">
-                          <div class="make-image-slot-thumb-wrap">
-                            ${layoutObj.image ? `<img data-hw-src="${esc(layoutObj.image)}" alt="${esc(layoutObj.name || layoutObj.id)}" loading="lazy" />` : ""}
-                            <button type="button" class="make-image-slot-clear" data-clear-kind="layout" title="清除">×</button>
-                          </div>
-                          <div class="make-image-slot-meta">
-                            <span class="make-image-slot-code">${esc(layoutObj.id)}</span>
-                            <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
-                          </div>
-                        </div>
-                      ` : `<span class="make-image-picker-hint">未选图型（将使用默认版式）</span>`}
-                    </div>
-                  </div>
-                ` : `
-                  <div class="batch-plan-row-b batch-ai-layout-row">
-                    <span class="make-image-field-label">图型要求</span>
-                    <input type="text" class="make-image-input batch-layout-req-input" id="batch-layout-req-input" placeholder="例如：前 3 张分镜、后面图鉴，不要封面图（可留空）" value="${esc(batchLayoutReq)}" />
-                  </div>
-                `}
 
                 <!-- 编辑区: 固定图型为一个文本框；AI 推荐图型为逐张表格 -->
                 ${batchLayoutMode === "fixed" ? `
                   <div class="batch-edit-area batch-fixed-edit-area">
                     <div class="batch-field-head">
                       <span class="make-image-field-label">主题列表（每行一条，直接编辑）</span>
-                      <button type="button" class="btn btn-sm batch-fission-trigger" id="batch-btn-fission">从母题裂变</button>
                     </div>
                     <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="5" placeholder="每行输入一个创作主题，每行将生成一张独立画面...">${esc(promptListText)}</textarea>
                   </div>
@@ -490,7 +514,6 @@
                   <div class="batch-edit-area batch-ai-edit-area">
                     <div class="batch-field-head">
                       <span class="make-image-field-label">逐张主题与图型调整</span>
-                      <button type="button" class="btn btn-sm batch-fission-trigger" id="batch-btn-fission-ai">从母题裂变</button>
                     </div>
                     <div class="batch-table-wrap">
                       <table class="batch-edit-table">
@@ -601,26 +624,6 @@
                             </div>
                           `;
                         }).join("") : `<span class="make-image-picker-hint">未指定影调</span>`}
-                      </div>
-                    </div>
-
-                    <!-- Global References -->
-                    <div class="make-image-more-row" id="batch-more-row-refs">
-                      <span class="make-image-more-label">参考图</span>
-                      <button type="button" class="btn btn-sm" id="batch-btn-pick-global-refs">选择参考图</button>
-                      <div class="make-image-more-thumbs" id="batch-global-refs-thumbs">
-                        ${globalAssetItems.length ? globalAssetItems.map((ast, idx) => `
-                          <div class="make-image-slot-card is-inline">
-                            <div class="make-image-slot-thumb-wrap">
-                              ${ast.image ? `<img data-hw-src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}" loading="lazy" />` : ""}
-                              <button type="button" class="make-image-slot-clear" data-remove-global-ref="${idx}" title="移除">×</button>
-                            </div>
-                            <div class="make-image-slot-meta">
-                              <span class="make-image-slot-code">${esc(ast.id || `REF-${idx + 1}`)}</span>
-                              <span class="make-image-slot-title">${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}</span>
-                            </div>
-                          </div>
-                        `).join("") : `<span class="make-image-picker-hint">未指定，可点此添加（最多 4 张）</span>`}
                       </div>
                     </div>
 
@@ -761,6 +764,7 @@
                 </div>
 
                 <div class="batch-btn-wrap">
+                  <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
                   ${busy ? `
                     <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop">停止</button>
                   ` : `
@@ -963,6 +967,13 @@
           loop.data.batchLayoutMode = "fixed";
           markDirty();
         };
+        btnStratFixed.onkeydown = (e) => {
+          if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+            e.preventDefault();
+            btnStratAi?.focus();
+            btnStratAi?.click();
+          }
+        };
       }
 
       const btnStratAi = root.querySelector("#batch-strategy-ai");
@@ -980,6 +991,13 @@
             loop.data.batchRows = Array.from({ length: cnt }, () => ({ theme: "", layout: skill.data.layout || "" }));
           }
           markDirty();
+        };
+        btnStratAi.onkeydown = (e) => {
+          if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+            e.preventDefault();
+            btnStratFixed?.focus();
+            btnStratFixed?.click();
+          }
         };
       }
 
@@ -1039,7 +1057,9 @@
           };
 
           btnPlan.disabled = true;
-          btnPlan.textContent = "AI 正在规划…";
+          const labelSpan = btnPlan.querySelector("span");
+          if (labelSpan) labelSpan.textContent = "AI 规划中…";
+          else btnPlan.textContent = "AI 规划中…";
 
           try {
             const resp = await fetch("/api/studio/batch-plan", {
@@ -1083,7 +1103,9 @@
             if (S?.toast) S.toast(`规划失败：${err.message || err}`);
           } finally {
             btnPlan.disabled = false;
-            btnPlan.textContent = "AI 规划这套图";
+            const labelSpan = btnPlan.querySelector("span");
+            if (labelSpan) labelSpan.textContent = "AI 规划这套图";
+            else btnPlan.textContent = "AI 规划这套图";
           }
         };
       }
@@ -1101,13 +1123,6 @@
           markDirty();
         };
       }
-
-      // (h) Fission button in fixed and AI edit areas
-      root.querySelectorAll(".batch-fission-trigger, #batch-btn-fission, #batch-btn-fission-ai").forEach((btn) => {
-        btn.onclick = () => {
-          self.openFissionModal(root, parts);
-        };
-      });
 
       // (i) AI mode table events - Theme modal trigger (readonly input)
       root.querySelectorAll(".batch-row-theme-input").forEach((inp) => {
@@ -1446,6 +1461,61 @@
 
       // 7.7. Bind Layout Hover Preview Singleton
       self.bindHoverPreview(root);
+
+      // 7.8. Reset Form Button
+      const btnReset = root.querySelector("#batch-btn-reset");
+      if (btnReset) {
+        btnReset.onclick = () => {
+          if (self.context?.busy) return;
+          const ok = typeof window.confirm === "function"
+            ? window.confirm("清空后当前表单的所有设置都会恢复默认，已生成的图片不受影响。确定清空吗？")
+            : true;
+          if (!ok) return;
+
+          ctrl.data.mode = "graphic-text";
+          ctrl.data.ratio = "3:4";
+          ctrl.data.count = 1;
+
+          skill.data.fusion = false;
+          skill.data.style1 = "";
+          skill.data.style2 = "";
+          skill.data.layout = "";
+          skill.data.colors = [];
+          skill.data.tones = [];
+          skill.data.moods = [];
+          skill.data.customMood = "";
+          skill.data.whitespace = "balanced";
+          skill.data.audience = "";
+          skill.data.businessScene = "";
+          skill.data.sc021Type = "";
+          skill.data.sc022Name = "";
+          skill.data.sc022Pinyin = "";
+          skill.data.negativePrompt = "";
+
+          if (text?.data) {
+            text.data.text = "";
+            text.data.subjectHint = "";
+          }
+
+          loop.data.batchSeed = "";
+          loop.data.batchCount = 6;
+          loop.data.batchLayoutMode = "fixed";
+          loop.data.batchLayoutReq = "";
+          loop.data.batchRows = [];
+          loop.data.promptListText = "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集";
+
+          const curAsset = parts.asset || bp?.asset;
+          if (curAsset?.data) {
+            curAsset.data.items = [];
+          }
+          if (self.actions?.ensureAssetItems) {
+            self.actions.ensureAssetItems([]);
+          }
+
+          self.planNotice = "";
+          markDirty();
+        };
+      }
 
       // 8. Start Batch Generation Button (M1: single confirmation via confirmPotentialGenerationCost)
       const btnStart = root.querySelector("#batch-btn-start");
@@ -1932,218 +2002,6 @@
 
           if (btnSave) btnSave.onclick = doSave;
           if (btnCancel) btnCancel.onclick = () => S.closeModal();
-        }
-      });
-    }
-
-    // Fission Modal (Defect 1 Fixed: captures self = this)
-    openFissionModal(root, parts) {
-      const self = this;
-      const S = global.HANDRAW_SHARED;
-      if (!S?.openModal) return;
-
-      const isAiMode = parts.loop.data.batchLayoutMode === "ai";
-
-      const seedDefault = (parts.loop.data.batchSeed || parts.text?.data?.text || "").trim() ||
-        (parts.loop.data.promptListText || "").split(/\r?\n/)[0]?.trim() ||
-        "都市慢生活与手绘手账";
-
-      let currentStrategy = "daily_quote";
-      let currentCount = 10;
-      let generatedItems = [];
-      let sourceTag = "model";
-
-      S.openModal({
-        title: "从母题裂变扩写主题",
-        sizeClass: "modal-md",
-        html: `
-          <div class="batch-fission-modal" style="display:flex;flex-direction:column;gap:14px;">
-            <div class="make-image-field-wrap">
-              <label class="make-image-field-label" for="fission-modal-seed">母题</label>
-              <input type="text" class="make-image-input" id="fission-modal-seed" value="${esc(seedDefault)}" placeholder="输入核心创作母题，例如：都市慢生活与手绘手账" />
-            </div>
-
-            <div class="make-image-field-wrap">
-              <label class="make-image-field-label">裂变策略</label>
-              <div class="make-image-btn-group" id="fission-strategy-group" role="group">
-                ${FISSION_STRATEGIES.map((s) => `
-                  <button type="button" class="btn btn-sm ${currentStrategy === s.id ? "btn-primary is-active" : ""}" data-fiss-strat="${esc(s.id)}">${esc(s.label)}</button>
-                `).join("")}
-              </div>
-              <div id="fission-custom-wrap" style="display:none;margin-top:6px;">
-                <input type="text" class="make-image-input" id="fission-custom-strategy" placeholder="输入自定义裂变角度，例如：四季时令节气风物" />
-              </div>
-            </div>
-
-            <div class="make-image-field-wrap">
-              <label class="make-image-field-label" for="fission-modal-count">扩写条数（1-50 条）</label>
-              <input type="number" class="make-image-input" id="fission-modal-count" min="1" max="50" value="10" style="width:120px;" />
-            </div>
-
-            <div style="display:flex;justify-content:flex-end;gap:8px;">
-              <button type="button" class="btn btn-sm btn-primary" id="fission-submit-btn">开始扩写</button>
-            </div>
-
-            <div id="fission-result-box" style="display:none;border-top:1px solid var(--line-soft);padding-top:12px;">
-              <div id="fission-source-banner" style="display:none;padding:6px 10px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;font-size:12px;color:#92400e;margin-bottom:8px;">
-                未使用 AI 扩写，已按模板生成
-              </div>
-              <div class="make-image-field-label" style="margin-bottom:6px;">扩写结果预览 (<span id="fission-result-count">0</span> 条)</div>
-              <div id="fission-result-list" style="max-height:160px;overflow-y:auto;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:6px;padding:8px 12px;font-size:12px;line-height:1.6;display:flex;flex-direction:column;gap:4px;"></div>
-
-              <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-                <button type="button" class="btn btn-sm" id="fission-append-btn">${isAiMode ? "追加为新的逐张行" : "追加到列表"}</button>
-                <button type="button" class="btn btn-sm btn-primary" id="fission-replace-btn">${isAiMode ? "替换全部逐张行" : "替换列表"}</button>
-              </div>
-            </div>
-          </div>
-        `,
-        onMount(modalRoot) {
-          const seedInput = modalRoot.querySelector("#fission-modal-seed");
-          const stratGroup = modalRoot.querySelector("#fission-strategy-group");
-          const customWrap = modalRoot.querySelector("#fission-custom-wrap");
-          const customInput = modalRoot.querySelector("#fission-custom-strategy");
-          const countInput = modalRoot.querySelector("#fission-modal-count");
-          const submitBtn = modalRoot.querySelector("#fission-submit-btn");
-          const resultBox = modalRoot.querySelector("#fission-result-box");
-          const sourceBanner = modalRoot.querySelector("#fission-source-banner");
-          const resultCount = modalRoot.querySelector("#fission-result-count");
-          const resultList = modalRoot.querySelector("#fission-result-list");
-          const appendBtn = modalRoot.querySelector("#fission-append-btn");
-          const replaceBtn = modalRoot.querySelector("#fission-replace-btn");
-
-          stratGroup.querySelectorAll("[data-fiss-strat]").forEach((btn) => {
-            btn.onclick = () => {
-              stratGroup.querySelectorAll("[data-fiss-strat]").forEach((b) => b.classList.remove("btn-primary", "is-active"));
-              btn.classList.add("btn-primary", "is-active");
-              currentStrategy = btn.getAttribute("data-fiss-strat");
-              customWrap.style.display = currentStrategy === "custom" ? "block" : "none";
-            };
-          });
-
-          submitBtn.onclick = async () => {
-            const seedVal = seedInput.value.trim();
-            if (!seedVal) {
-              if (S.toast) S.toast("请输入母题");
-              seedInput.focus();
-              return;
-            }
-            const cntVal = Math.max(1, Math.min(50, Number(countInput.value) || 10));
-            const customVal = currentStrategy === "custom" ? customInput.value.trim() : "";
-
-            submitBtn.disabled = true;
-            submitBtn.textContent = "AI 思考扩写中…";
-
-            try {
-              const resp = await fetch("/api/studio/fission", {
-                method: "POST",
-                credentials: "include",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  seed: seedVal,
-                  strategy: currentStrategy,
-                  customStrategy: customVal,
-                  count: cntVal
-                })
-              });
-              const data = await resp.json();
-              if (!resp.ok || !data.ok) {
-                throw new Error(data.error || `HTTP ${resp.status}`);
-              }
-
-              generatedItems = Array.isArray(data.items) ? data.items : [];
-              sourceTag = data.source || "model";
-
-              resultBox.style.display = "block";
-              sourceBanner.style.display = sourceTag === "template" ? "block" : "none";
-              resultCount.textContent = String(generatedItems.length);
-              resultList.innerHTML = generatedItems.map((item, idx) => `
-                <div>#${idx + 1} ${esc(item)}</div>
-              `).join("");
-
-            } catch (err) {
-              if (S.toast) S.toast(`扩写失败：${err.message || err}`);
-            } finally {
-              submitBtn.disabled = false;
-              submitBtn.textContent = "开始扩写";
-            }
-          };
-
-          const applyItems = (replace) => {
-            if (!generatedItems.length) return;
-
-            if (replace) {
-              const hasExisting = isAiMode
-                ? Array.isArray(parts.loop.data.batchRows) && parts.loop.data.batchRows.length > 0
-                : Boolean((parts.loop.data.promptListText || "").trim());
-              if (hasExisting && typeof window.confirm === "function") {
-                const confirmMsg = isAiMode
-                  ? "替换将清空现有的逐张主题与图型设置，是否继续？"
-                  : "替换将清空现有的主题列表，是否继续？";
-                if (!window.confirm(confirmMsg)) return;
-              }
-            }
-
-            if (isAiMode) {
-              let targetRows = [];
-              if (replace) {
-                targetRows = generatedItems.map((item) => ({
-                  theme: String(item).trim(),
-                  layout: "",
-                  assetItems: [],
-                  skipGlobalRefs: false
-                }));
-              } else {
-                const existingRows = Array.isArray(parts.loop.data.batchRows) ? parts.loop.data.batchRows : [];
-                const newRows = generatedItems.map((item) => ({
-                  theme: String(item).trim(),
-                  layout: "",
-                  assetItems: [],
-                  skipGlobalRefs: false
-                }));
-                targetRows = [...existingRows, ...newRows];
-              }
-              let truncated = false;
-              if (targetRows.length > 20) {
-                targetRows = targetRows.slice(0, 20);
-                truncated = true;
-              }
-              parts.loop.data.batchRows = targetRows;
-              parts.loop.data.promptListText = targetRows.map((r) => r.theme).filter(Boolean).join("\n");
-              if (truncated && S?.toast) {
-                S.toast("超出 20 张部分已截断");
-              }
-            } else {
-              const existingLines = (parts.loop.data.promptListText || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-              let combinedLines = replace ? [...generatedItems] : [...existingLines, ...generatedItems];
-              let truncated = false;
-              if (combinedLines.length > 20) {
-                combinedLines = combinedLines.slice(0, 20);
-                truncated = true;
-              }
-              parts.loop.data.promptListText = combinedLines.join("\n");
-              if (truncated && S?.toast) {
-                S.toast("超出 20 张部分已截断");
-              }
-            }
-
-            S.closeModal();
-            // Defect 1 Fixed: self.actions?.markDirtyAndRender() correctly called
-            if (self.actions?.markDirtyAndRender) {
-              self.actions.markDirtyAndRender();
-            } else {
-              if (S?.toast) S.toast("当前操作不可用（缺少 action: markDirtyAndRender）");
-            }
-            if (S?.toast) {
-              const actionLabel = replace ? "替换" : "追加";
-              const count = isAiMode ? parts.loop.data.batchRows.length : parts.loop.data.promptListText.split(/\r?\n/).filter(Boolean).length;
-              const targetDesc = isAiMode ? "逐张行" : "条主题";
-              S.toast(`已${actionLabel}为 ${count} ${targetDesc}！`);
-            }
-          };
-
-          appendBtn.onclick = () => applyItems(false);
-          replaceBtn.onclick = () => applyItems(true);
         }
       });
     }

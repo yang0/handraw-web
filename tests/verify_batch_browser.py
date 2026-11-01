@@ -119,9 +119,13 @@ def main() -> int:
 
             console_errors = []
             all_dialogs = []
+            dialog_decision = ["accept"]
             page.on("console", lambda msg: (print("CONSOLE:", msg.text), console_errors.append(msg.text) if msg.type == "error" else None))
             page.on("pageerror", lambda err: console_errors.append(f"PAGEERROR: {err}"))
-            page.on("dialog", lambda dialog: (all_dialogs.append(dialog.message), dialog.accept()))
+            page.on("dialog", lambda dialog: (
+                all_dialogs.append(dialog.message),
+                dialog.accept() if dialog_decision[0] == "accept" else dialog.dismiss()
+            ))
             page.on("request", lambda r: print("REQ:", r.url, r.post_data) if "batch-plan" in r.url else None)
             page.on("response", lambda r: print("RESP:", r.url, r.status, r.text()) if "batch-plan" in r.url else None)
 
@@ -157,6 +161,24 @@ def main() -> int:
             assert page.locator("#batch-prompts-input").is_visible(), "Textarea must be visible in Fixed edit area"
             assert not page.locator(".batch-edit-table").is_visible(), "Row table must not be visible in Fixed layout mode"
 
+            # Check Planning Inputs Panel & Tag
+            assert page.locator(".batch-plan-inputs-panel").is_visible(), "Planning inputs panel must be visible"
+            assert "规划输入" in page.locator(".batch-plan-inputs-tag").inner_text(), "Tag must show 规划输入"
+
+            # Check segmented control classes (must NOT have .btn)
+            strat_fixed = page.locator("#batch-strategy-fixed")
+            assert "batch-strategy-seg-btn" in (strat_fixed.get_attribute("class") or "")
+            assert "btn" not in (strat_fixed.get_attribute("class") or "").split()
+
+            # Check hero plan button
+            btn_plan = page.locator("#batch-btn-plan")
+            assert "batch-btn-plan-hero" in (btn_plan.get_attribute("class") or "")
+            assert btn_plan.locator("svg").count() > 0, "Hero plan button must contain SVG icon"
+
+            # Check Global refs row is outside more settings
+            assert page.locator("#batch-more-row-refs").is_visible(), "Global refs row must be visible outside collapsible"
+            assert page.locator("#batch-btn-pick-global-refs").is_visible(), "Global refs button must be visible"
+
             # Scenario 1: Fixed mode without selecting layout -> Click AI 规划这套图
             print("Verifying Scenario 1: Fixed mode without selecting layout can plan successfully...")
             page.fill("#batch-seed-input", "都市慢生活与手绘手账")
@@ -179,6 +201,10 @@ def main() -> int:
             shot1 = ARTIFACT_DIR / "batch_1440_fixed.png"
             page.screenshot(path=str(shot1), full_page=False)
             print(f"Captured screenshot: {shot1}")
+
+            shot_closeup = ARTIFACT_DIR / "batch_1440_hero_plan_closeup.png"
+            page.locator(".batch-plan-card").screenshot(path=str(shot_closeup))
+            print(f"Captured screenshot: {shot_closeup}")
 
             # Scenario 2: Tone and mood pickers open modal
             print("Verifying Scenario 2: Tone and Mood pickers open modal...")
@@ -219,29 +245,26 @@ def main() -> int:
             assert row_count >= 1, "Planned rows must be populated into table"
             assert page.locator(".batch-plan-notice").is_visible(), "Template fallback notice must be visible"
 
-            # Verify Defect 1 / Feedback 1: AI mode fission button
-            btn_fission_ai = page.locator("#batch-btn-fission-ai")
-            assert btn_fission_ai.is_visible(), "#batch-btn-fission-ai must be visible in AI recommended layouts mode"
-            btn_fission_ai.click()
-            page.wait_for_timeout(500)
-            modal_html = page.locator(".hw-modal-panel").inner_html()
-            assert "追加为新的逐张行" in modal_html, "Fission modal in AI mode must offer 追加为新的逐张行"
-            assert "替换全部逐张行" in modal_html, "Fission modal in AI mode must offer 替换全部逐张行"
+            # Verify Fission removal from batch create
+            assert page.locator("#batch-btn-fission").count() == 0, "#batch-btn-fission must be removed"
+            assert page.locator("#batch-btn-fission-ai").count() == 0, "#batch-btn-fission-ai must be removed"
+            plan_card_text = page.locator(".batch-plan-card").inner_text()
+            assert "从母题裂变" not in plan_card_text, "Fission button text must not appear in plan card"
+            print("PASS: Fission buttons completely removed from batch create.")
 
-            # Click 开始扩写 and verify results appear
-            page.locator("#fission-submit-btn").click()
-            page.wait_for_timeout(1000)
-            assert page.locator("#fission-result-box").is_visible(), "Fission result box must become visible"
-            assert page.locator("#fission-append-btn").is_visible(), "Append button must be visible in result box"
-            assert page.locator("#fission-replace-btn").is_visible(), "Replace button must be visible in result box"
+            # Verify Single solid vermilion button rule (Rule 4.6: exactly <= 1 vermilion solid button)
+            vermilion_btns = page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('.batch-container button:not([disabled])'));
+                return btns.filter(b => {
+                    const bg = window.getComputedStyle(b).backgroundColor;
+                    return bg === 'rgb(201, 76, 46)' || bg.includes('201, 76, 46');
+                }).map(b => b.id || b.className);
+            }""")
+            print(f"Active solid vermilion buttons in batch: {vermilion_btns}")
+            assert len(vermilion_btns) <= 1, f"There must be at most 1 active solid vermilion button, found {len(vermilion_btns)}: {vermilion_btns}"
+            print("PASS: Single solid vermilion button rule verified.")
 
-            shot_fission = ARTIFACT_DIR / "batch_1440_fission_modal_ai.png"
-            page.screenshot(path=str(shot_fission), full_page=False)
-            page.evaluate("() => window.HANDRAW_SHARED?.closeModal()")
-            page.wait_for_timeout(300)
-            print("PASS: AI mode fission button, modal button adaptations, and fission execution verified.")
-
-            # Verify Global reference images in '更多设置'
+            # Verify Global reference images
             assert page.locator("#batch-btn-pick-global-refs").is_visible(), "Global reference pick button must be visible"
             page.locator("#batch-btn-pick-global-refs").click()
             page.wait_for_timeout(500)
@@ -375,6 +398,60 @@ def main() -> int:
             assert len(dialog_records) == 1, f"Expected exactly 1 confirmation dialog, got {len(dialog_records)}: {dialog_records}"
             assert "21 张" in dialog_records[0] and "超过20张" in dialog_records[0], f"Confirmation dialog text missing required elements: {dialog_records[0]}"
             print(f"PASS Scenario 4: Exactly 1 confirmation dialog popped: {dialog_records[0]}")
+
+            # Scenario 5: Batch Form Reset
+            print("Verifying Scenario 5: Batch Form Reset...")
+            btn_reset_batch = page.locator("#batch-btn-reset")
+            assert btn_reset_batch.is_visible(), "#batch-btn-reset must be visible in batch action bar"
+
+            # Cancel reset
+            dialog_decision[0] = "dismiss"
+            btn_reset_batch.click()
+            page.wait_for_timeout(300)
+            assert "第 21 篇" in page.locator("#batch-prompts-input").input_value(), "Prompts should not reset if cancelled"
+
+            # Confirm reset
+            dialog_decision[0] = "accept"
+            dialog_reset_idx = len(all_dialogs)
+            btn_reset_batch.click()
+            page.wait_for_timeout(500)
+            reset_text = page.locator("#batch-prompts-input").input_value()
+            assert "早八一杯热美式" in reset_text and "第 21 篇" not in reset_text, f"Prompts should reset to default, got: {reset_text}"
+            assert len(all_dialogs) > dialog_reset_idx and "清空后当前表单的所有设置都会恢复默认" in all_dialogs[-1], f"Confirm dialog mismatch: {all_dialogs}"
+            print("PASS Scenario 5: Batch Form Reset verified.")
+
+            # Scenario 6: Make-Image Form Reset
+            print("Verifying Scenario 6: Make-Image Form Reset...")
+            page_mi = context.new_page()
+            mi_dialogs = []
+            mi_dialog_decision = ["accept"]
+            page_mi.on("dialog", lambda dialog: (
+                mi_dialogs.append(dialog.message),
+                dialog.accept() if mi_dialog_decision[0] == "accept" else dialog.dismiss()
+            ))
+            page_mi.goto(f"{BASE_URL}/studio/?demo_mode=1", wait_until="networkidle")
+            page_mi.wait_for_timeout(800)
+
+            btn_reset_mi = page_mi.locator("#make-image-btn-reset")
+            assert btn_reset_mi.is_visible(), "#make-image-btn-reset must be visible in Make-Image action bar"
+
+            page_mi.fill("#make-image-subject", "即将被清空的单图主题")
+            page_mi.wait_for_timeout(200)
+
+            # Cancel reset
+            mi_dialog_decision[0] = "dismiss"
+            btn_reset_mi.click()
+            page_mi.wait_for_timeout(300)
+            assert page_mi.locator("#make-image-subject").input_value() == "即将被清空的单图主题", "Subject should not change on cancel"
+
+            # Confirm reset
+            mi_dialog_decision[0] = "accept"
+            btn_reset_mi.click()
+            page_mi.wait_for_timeout(500)
+            assert page_mi.locator("#make-image-subject").input_value() == "", "Subject should be cleared on accept"
+            assert len(mi_dialogs) > 0 and "清空后当前表单的所有设置都会恢复默认" in mi_dialogs[-1], f"Confirm dialog mismatch: {mi_dialogs}"
+            print("PASS Scenario 6: Make-Image Form Reset verified.")
+            page_mi.close()
 
             context.close()
 
