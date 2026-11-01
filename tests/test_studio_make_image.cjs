@@ -462,7 +462,7 @@ function createTestGraph(options = {}) {
   assert.equal(sp.data.style1, "FA-002");
   assert.equal(sp.data.layout, "SC-001");
   assert.deepEqual(Array.from(sp.data.colors), ["CL-002"]);
-  assert.equal(txt.data.text, "", "Forked topic must be cleared for new theme");
+  assert.equal(txt.data.text, "原作者的主题：春日花海", "Forked topic must be populated into td.text");
   assert.equal(txt.data.subjectHint, "原作者的主题：春日花海", "Forked topic hint preserved");
   assert.equal(ctrl.data.ratio, "1:1");
   assert.equal(ctrl.data.mode, "pure");

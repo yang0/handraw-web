@@ -452,7 +452,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     const h = createHarness();
     const S = h.context.window.HANDRAW_SHARED;
     assert.equal(S.channelUrl("main", { view: "work", id: "w1" }), "/t/w1", "work link must resolve to /t/w1");
-    assert.equal(S.channelUrl("main", { view: "asset", id: "FB-041" }), "/t/FB-041", "asset link must resolve to /t/FB-041");
+    assert.equal(S.channelUrl("main", { view: "asset", id: "FB-041" }), "/?view=asset&id=FB-041", "asset link must resolve to /?view=asset&id=FB-041");
     assert.equal(S.channelUrl("main", { view: "work", id: "w1", focus: "comment" }), "/t/w1?focus=comment", "query params must be preserved");
     assert.equal(S.channelUrl("main", { view: "asset", id: "SC-001", tab: "topics" }), "/forum/?view=related&kind=asset&id=SC-001&tab=topics", "tab=topics must route to view=related");
 

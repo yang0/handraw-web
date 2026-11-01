@@ -323,6 +323,18 @@ function parseHtml(html) {
           });
         }
       }
+      if (selector === ".batch-iter-placeholder") {
+        const matches = html.match(/<div[^>]*class="[^"]*batch-iter-placeholder[^"]*"[^>]*>[\s\S]*?<\/div>/g);
+        if (matches) {
+          matches.forEach((m) => results.push({ innerHTML: m }));
+        }
+      }
+      if (selector === ".batch-iter-schematic-badge") {
+        const matches = html.match(/<span[^>]*class="[^"]*batch-iter-schematic-badge[^"]*"[^>]*>[\s\S]*?<\/span>/g);
+        if (matches) {
+          matches.forEach((m) => results.push({ innerHTML: m }));
+        }
+      }
       if (selector === ".batch-table-row") {
         const matches = html.match(/<tr class="batch-table-row/g);
         if (matches) {
@@ -1399,6 +1411,161 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   assert.ok(makeImageSource.includes("清空后当前表单的所有设置都会恢复默认"), "studio-make-image.js must check confirmation");
 
   console.log("✓ Requirement 18 Passed: Form Reset (清空表单) in Batch and Make-Image verified");
+}
+
+// ==========================================
+// Requirement 19: Batch Iteration Thumbnail Clean Semantics
+// 1. 无图型时 sampleImg 为空字符串、渲染占位框而非 <img>
+// 2. 有图型时 sampleImg 等于该图型 image、渲染带有「版式示意」角标的缩略图
+// 3. 已生成时渲染真实生成图，绝不显示无关的硬编码示例图
+// 4. sampleVisuals 常量被彻底删除
+// ==========================================
+{
+  // 1. Verify sampleVisuals is completely deleted from studio-prompt-engine.js
+  const promptEngineCode = fs.readFileSync("demo/assets/studio-prompt-engine.js", "utf8");
+  assert.ok(!promptEngineCode.includes("sampleVisuals"), "sampleVisuals constant must be completely removed from studio-prompt-engine.js");
+
+  // 2. Fixed mode without layout -> sampleImg is empty string, table renders .batch-iter-placeholder
+  const graphNoLayout = createTestBatchGraph({
+    batchLayoutMode: "fixed",
+    layout: "",
+    promptListText: "主题一\n主题二\n主题三",
+    batchRows: null
+  });
+  const partsNoLayout = {
+    ctrl: graphNoLayout.nodes.find(n => n.type === "output_control"),
+    loop: graphNoLayout.nodes.find(n => n.type === "loop"),
+    skill: graphNoLayout.nodes.find(n => n.type === "skill_params"),
+    text: graphNoLayout.nodes.find(n => n.type === "text_input"),
+    asset: graphNoLayout.nodes.find(n => n.type === "asset")
+  };
+  partsNoLayout.skill.data.layout = "";
+
+  const recNoLayout = Engine.resolveControlRecipe(graphNoLayout, partsNoLayout.ctrl, sharedCatalog);
+  const itersNoLayout = Engine.resolveLoopIterations(graphNoLayout, partsNoLayout.loop, recNoLayout, sharedCatalog);
+
+  assert.equal(itersNoLayout.length, 3);
+  itersNoLayout.forEach((it, i) => {
+    assert.equal(it.sampleImg, "", `Iteration ${i} sampleImg must be empty string when no layout is selected`);
+  });
+
+  const fakeHost = createFakeDom();
+  HandrawBatchCreate.render(fakeHost, {
+    parts: partsNoLayout,
+    graph: graphNoLayout,
+    catalog: sharedCatalog,
+    loggedIn: true
+  }, {});
+
+  const placeholders = fakeHost.querySelectorAll(".batch-iter-placeholder");
+  assert.equal(placeholders.length, 3, "Table must render 3 .batch-iter-placeholder elements when no layout");
+  const thumbBtns = fakeHost.querySelectorAll(".batch-iter-thumb-btn");
+  assert.equal(thumbBtns.length, 0, "Table must NOT render any .batch-iter-thumb-btn when no layout");
+  assert.ok(!fakeHost.innerHTML.includes("/images/poster-demo-autumn-equinox.webp"), "Must NOT include autumn equinox demo image");
+  assert.ok(!fakeHost.innerHTML.includes("/images/graphic-text-mode-demo.webp"), "Must NOT include graphic-text-mode-demo image");
+  assert.ok(!fakeHost.innerHTML.includes("/images/individual/FA/FA-003.webp"), "Must NOT include FA-003 demo image");
+
+  // 3. Fixed mode with SC-021 -> sampleImg equals SC-021 image, renders schematic thumbnail with badge
+  const graphWithLayout = createTestBatchGraph({
+    batchLayoutMode: "fixed",
+    layout: "SC-021",
+    promptListText: "主题一\n主题二\n主题三",
+    batchRows: null
+  });
+  const partsWithLayout = {
+    ctrl: graphWithLayout.nodes.find(n => n.type === "output_control"),
+    loop: graphWithLayout.nodes.find(n => n.type === "loop"),
+    skill: graphWithLayout.nodes.find(n => n.type === "skill_params"),
+    text: graphWithLayout.nodes.find(n => n.type === "text_input"),
+    asset: graphWithLayout.nodes.find(n => n.type === "asset")
+  };
+  partsWithLayout.skill.data.layout = "SC-021";
+
+  const recWithLayout = Engine.resolveControlRecipe(graphWithLayout, partsWithLayout.ctrl, sharedCatalog);
+  const itersWithLayout = Engine.resolveLoopIterations(graphWithLayout, partsWithLayout.loop, recWithLayout, sharedCatalog);
+
+  assert.equal(itersWithLayout.length, 3);
+  itersWithLayout.forEach((it, i) => {
+    assert.equal(
+      it.sampleImg,
+      "/images/sc-021.webp",
+      `Iteration ${i} sampleImg must equal SC-021 layout image`
+    );
+  });
+
+  HandrawBatchCreate.render(fakeHost, {
+    parts: partsWithLayout,
+    graph: graphWithLayout,
+    catalog: sharedCatalog,
+    loggedIn: true
+  }, {});
+
+  const placeholdersLayout = fakeHost.querySelectorAll(".batch-iter-placeholder");
+  assert.equal(placeholdersLayout.length, 0, "Table must NOT render placeholders when layout is selected");
+  const thumbBtnsLayout = fakeHost.querySelectorAll(".batch-iter-thumb-btn");
+  assert.equal(thumbBtnsLayout.length, 3, "Table must render 3 .batch-iter-thumb-btn elements");
+  const badgesLayout = fakeHost.querySelectorAll(".batch-iter-schematic-badge");
+  assert.equal(badgesLayout.length, 3, "Each layout schematic must have 版式示意 badge");
+  assert.equal(thumbBtnsLayout[0].getAttribute("data-zoom-src"), "/images/sc-021.webp");
+
+  // 4. AI recommended layout mode with diverse layouts
+  const graphAi = createTestBatchGraph({
+    batchLayoutMode: "ai",
+    layout: "",
+    batchRows: [
+      { theme: "行1", layout: "SC-001" },
+      { theme: "行2", layout: "IG-005" },
+      { theme: "行3", layout: "" } // No layout on row 3
+    ]
+  });
+  const partsAi = {
+    ctrl: graphAi.nodes.find(n => n.type === "output_control"),
+    loop: graphAi.nodes.find(n => n.type === "loop"),
+    skill: graphAi.nodes.find(n => n.type === "skill_params"),
+    text: graphAi.nodes.find(n => n.type === "text_input"),
+    asset: graphAi.nodes.find(n => n.type === "asset")
+  };
+  partsAi.skill.data.layout = "";
+
+  const recAi = Engine.resolveControlRecipe(graphAi, partsAi.ctrl, sharedCatalog);
+  const itersAi = Engine.resolveLoopIterations(graphAi, partsAi.loop, recAi, sharedCatalog);
+
+  assert.equal(itersAi[0].sampleImg, "/images/sc-001.webp");
+  assert.equal(itersAi[1].sampleImg, "/images/ig-005.webp");
+  assert.equal(itersAi[2].sampleImg, "");
+
+  HandrawBatchCreate.render(fakeHost, {
+    parts: partsAi,
+    graph: graphAi,
+    catalog: sharedCatalog,
+    loggedIn: true
+  }, {});
+
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-thumb-btn").length, 2, "Rows 1 and 2 with layout must have thumb buttons");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-placeholder").length, 1, "Row 3 without layout must have placeholder box");
+
+  // 5. Generated state: itemResult?.imageUrl overrides schematic
+  const fakeDisplays = [{
+    id: "disp_1",
+    data: {
+      sourceNodeId: partsWithLayout.ctrl.id,
+      items: [
+        { imageUrl: "/generated/real_output_1.webp", title: "真实图1" }
+      ]
+    }
+  }];
+  HandrawBatchCreate.render(fakeHost, {
+    parts: partsWithLayout,
+    graph: graphWithLayout,
+    catalog: sharedCatalog,
+    displays: fakeDisplays,
+    loggedIn: true
+  }, {});
+
+  assert.ok(fakeHost.innerHTML.includes("/generated/real_output_1.webp"), "Row 0 must render real generated imageUrl");
+  assert.ok(fakeHost.innerHTML.includes("is-generated"), "Row 0 button must have is-generated class");
+
+  console.log("✓ Requirement 19 Passed: Batch Iteration Thumbnail Clean Semantics & Placeholder verified");
 }
 
 console.log("\n==========================================");

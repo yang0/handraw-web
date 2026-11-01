@@ -63,16 +63,127 @@
   }
 
   /* ================= SHARE (page 1) ================= */
+  var CANNED_BODIES = ["我的创作实测分享"];
+
+  function stripTag(str) {
+    if (!str || typeof str !== "string") return "";
+    return str.replace(/^【[^】]*】\s*/, "").trim();
+  }
+
+  function shareModelFrom(payload, kind) {
+    var p = payload || {};
+    var targetKind = (kind === "style" || kind === "layout") ? kind : "work";
+    var allItems = normItems(p);
+
+    if (targetKind === "work") {
+      var it = allItems.find(function (x) { return x.kind === "work"; }) || p;
+      var title = it.title || p.title || stripTag(p.topicTitle) || "";
+      var prompt = it.prompt || p.prompt || "";
+      var rawBody = p.topicBody;
+      var cleanBody = (typeof rawBody === "string" && CANNED_BODIES.indexOf(rawBody.trim()) !== -1) ? "" : (rawBody || "");
+      var notes = it.notes || it.description || p.text || cleanBody || "";
+
+      var rawImgs = (it.images && it.images.length) ? it.images : p.images;
+      var images = Array.isArray(rawImgs) ? rawImgs.slice() : (rawImgs ? [rawImgs] : []);
+
+      var rawStyles = it.styles || p.styles || (p.style1 ? [p.style1] : []);
+      var styles = Array.isArray(rawStyles) ? rawStyles.slice() : (rawStyles ? [rawStyles] : []);
+      var layout = it.layout || p.layout || "";
+      var ratio = it.ratio || p.ratio || "";
+      var color = it.color || p.color || "";
+      var tone = it.tone || p.tone || "";
+      var mode = it.mode || p.mode || "";
+      var mood = it.mood || p.mood || "";
+      var subject = it.subject || p.subject || "";
+
+      var workItem = {
+        kind: "work",
+        title: title,
+        prompt: prompt,
+        notes: notes,
+        images: images,
+        styles: styles,
+        layout: layout
+      };
+      if (ratio) workItem.ratio = ratio;
+      if (color) workItem.color = color;
+      if (tone) workItem.tone = tone;
+      if (mode) workItem.mode = mode;
+      if (mood) workItem.mood = mood;
+      if (subject) workItem.subject = subject;
+
+      return {
+        kind: "work",
+        title: "",
+        text: "",
+        items: [workItem],
+        rawPayload: p,
+        skippedCount: 0
+      };
+    }
+
+    var matched = allItems.filter(function (x) { return x.kind === targetKind; });
+    var skippedCount = allItems.length - matched.length;
+
+    var items = [];
+    if (matched.length > 0) {
+      items = matched.map(function (it) {
+        var itemObj = Object.assign({}, it, {
+          kind: targetKind,
+          name: it.name || it.title || "",
+          description: it.description || it.notes || "",
+          definition: it.definition || it.prompt || "",
+          images: Array.isArray(it.images) ? it.images.slice() : (it.images ? [it.images] : [])
+        });
+        return itemObj;
+      });
+    } else {
+      var candidateKind = p.kind;
+      if (candidateKind === targetKind || (!candidateKind && !p.items)) {
+        var name = p.name || p.title || "";
+        var desc = p.description || p.notes || "";
+        var def = p.definition || p.prompt || "";
+        var rawImgs = Array.isArray(p.images) ? p.images.slice() : (p.images ? [p.images] : []);
+        if (name || desc || def || rawImgs.length) {
+          var singleObj = Object.assign({}, p, {
+            kind: targetKind,
+            name: name,
+            description: desc,
+            definition: def,
+            images: rawImgs
+          });
+          items = [singleObj];
+        }
+      }
+      if (items.length === 0) {
+        items = [{
+          kind: targetKind,
+          name: "",
+          description: "",
+          definition: "",
+          images: []
+        }];
+      }
+    }
+
+    return {
+      kind: targetKind,
+      title: p.title || "",
+      text: p.text || "",
+      items: items,
+      skippedCount: skippedCount,
+      rawPayload: p
+    };
+  }
+
   function renderShare(root, params) {
     var epoch = ++EPOCH, username = currentUser();
     var kindDefault = (params.kind === "style" || params.kind === "layout") ? params.kind : "work";
     var editId = params.editId || ""; // revise target
     var draftId = params.draft || "";
     var formKey = uuid();
-    var model = {
-      title: "", text: "", items: [],
-      requestId: uuid()
-    };
+    var model = shareModelFrom(null, kindDefault);
+    model.requestId = uuid();
     var resourceCache = {};
 
     function resourceLabel(code, kind) {
@@ -84,49 +195,6 @@
       return r ? { name: r.name || code, id: r.id || code, kind: r.kind, image: r.image } : { name: code, id: code, kind: kind, image: "" };
     }
 
-    function itemHtml(it, idx) {
-      var kind = it.kind || kindDefault;
-      var canUseStyle = kind === "work";
-      var stylesHtml = "";
-      if (kind === "style" || (canUseStyle && it.styles)) {
-        var st = it.styles || (kind === "style" ? (it.code ? [it.code] : []) : []);
-        stylesHtml = '';
-        st.forEach(function (c) { stylesHtml += resourceChip(c, idx, "style"); formStylesCache(idx)[c] = resourceLabel(c, "style"); });
-      }
-      var layoutHtml = "";
-      if (kind === "layout" || canUseStyle) {
-        var lay = it.layout || (kind === "layout" ? (it.code || "") : "");
-        if (lay) layoutHtml = resourceChip(lay, idx, "layout");
-      }
-      return (
-        '<fieldset class="curation-item" data-idx="' + idx + '">' +
-          '<legend>投稿项 ' + (idx + 1) + '</legend>' +
-          '<label class="curation-field">类型' +
-            '<select data-act="kind" data-idx="' + idx + '">' +
-              ["work", "style", "layout"].map(function (k) {
-                return '<option value="' + k + '"' + (k === kind ? " selected" : "") + '>' + KIND_LABEL[k] + '</option>';
-              }).join("") +
-            '</select></label>' +
-          (kind !== 'work' ? '<label class="curation-field">名称<input data-act="name" data-idx="' + idx + '" value="' + esc(it.name || "") + '" maxlength="80" placeholder="如：江南淡墨"></label>' : '') +
-          (kind === 'work' ? '<label class="curation-field">标题<input data-act="title" data-idx="' + idx + '" value="' + esc(it.title || "") + '" maxlength="120"></label>' : '') +
-          '<label class="curation-field">说明<textarea data-act="description" data-idx="' + idx + '" rows="2" maxlength="600">' + esc(it.description || "") + '</textarea></label>' +
-          '<label class="curation-field">' + (kind === "work" ? "做法 / 提示词" : "定义 / 使用说明") +
-            '<textarea data-act="prompt" data-idx="' + idx + '" rows="3" maxlength="6000">' + esc(kind === "work" ? (it.prompt || "") : (it.definition || it.prompt || "")) + '</textarea></label>' +
-          '<div class="curation-imgs" data-imgs="' + idx + '">' + (it.images || []).map(function (src, i) {
-            return '<figure class="curation-thumb-wrap">' + imgTag(src, "预览") +
-              '<button type="button" class="curation-x" data-act="delimg" data-idx="' + idx + '" data-i="' + i + '" aria-label="删除图片">×</button></figure>';
-          }).join("") + '</div>' +
-          '<label class="curation-field">预览图（可多选）<input type="file" accept="image/*" multiple data-act="file" data-idx="' + idx + '"></label>' +
-          (canUseStyle ?
-            '<div class="curation-pick">' +
-              '<div class="curation-pick-row"><span>画风</span><button type="button" data-act="pick" data-idx="' + idx + '" data-target="style">选择画风</button><span class="curation-chips" data-chip="style" data-idx="' + idx + '">' + stylesHtml + '</span></div>' +
-              '<div class="curation-pick-row"><span>图型</span><button type="button" data-act="pick" data-idx="' + idx + '" data-target="layout">选择图型</button><span class="curation-chips" data-chip="layout" data-idx="' + idx + '">' + layoutHtml + '</span></div>' +
-            '</div>' : '') +
-          '<button type="button" class="curation-x-item" data-act="delitem" data-idx="' + idx + '">删除此项</button>' +
-        '</fieldset>'
-      );
-    }
-
     var stylesCache = {};
     function formStylesCache(idx) { return stylesCache[idx] || (stylesCache[idx] = {}); }
 
@@ -136,6 +204,10 @@
       return '<span class="curation-chip" data-code="' + esc(code) + '">' + imgTag(src, r.name) + '<b>' + esc(code) + '</b> ' + esc(r.name) + '</span>';
     }
 
+    function getLen(str) {
+      return str ? [...str].length : 0;
+    }
+
     function draw() {
       var nav = ['share', 'mine', 'review'].map(function (tab) {
         return '<a class="curation-nav-' + (tab === "share" ? "on" : "") + '" href="' + esc(S.channelUrl("forum", { view: "curation", tab: tab })) + '">' +
@@ -143,29 +215,129 @@
       });
       if (isAdmin()) nav.push('<a class="curation-nav-admin" href="' + esc(S.channelUrl("forum", { view: "curation", tab: "admin" })) + '">管理</a>');
 
-      var itemsHtml = model.items.length ? model.items.map(itemHtml).join("") :
-        '<p class="curation-empty">还没有投稿项，请至少添加一项。</p>';
+      var h1Text = editId ? ("编辑重提 · " + esc(KIND_LABEL[model.kind] || "")) : "投稿并申请收录";
+
+      var kindSwitchHtml = editId ? "" : (
+        '<div class="curation-kind-switch" role="radiogroup" aria-label="投稿类型">' +
+          ['work', 'style', 'layout'].map(function (k) {
+            return '<label class="curation-kind-opt">' +
+              '<input type="radio" name="share-kind" data-act="sharekind" value="' + k + '"' + (model.kind === k ? " checked" : "") + '> ' +
+              esc(KIND_LABEL[k]) +
+            '</label>';
+          }).join("") +
+        '</div>'
+      );
+
+      var setHtml = (!editId && model.kind !== "work" && model.items.length >= 2) ? (
+        '<div class="curation-set">' +
+          '<label class="curation-field">合集标题<span class="curation-field-err" data-err-for="ftitle"></span>' +
+            '<input data-act="ftitle" value="' + esc(model.title) + '" maxlength="120" placeholder="留空则用「投稿：首项名称 等 N 项」">' +
+          '</label>' +
+          '<label class="curation-field">合集说明<span class="curation-field-err" data-err-for="ftext"></span>' +
+            '<textarea data-act="ftext" rows="3" maxlength="1200" placeholder="这组资源的共同用途（可选）">' + esc(model.text) + '</textarea>' +
+          '</label>' +
+        '</div>'
+      ) : "";
+
+      var itemsHtml = "";
+      if (model.kind === "work") {
+        var it = model.items[0] || {};
+        var stylesHtml = "";
+        if (it.styles && it.styles.length) {
+          it.styles.forEach(function (c) {
+            stylesHtml += resourceChip(c, 0, "style");
+            formStylesCache(0)[c] = resourceLabel(c, "style");
+          });
+        }
+        var layoutHtml = "";
+        if (it.layout) {
+          layoutHtml = resourceChip(it.layout, 0, "layout");
+        }
+
+        itemsHtml = (
+          '<fieldset class="curation-item" data-idx="0">' +
+            '<legend>作品</legend>' +
+            '<label class="curation-field">作品标题<span class="curation-field-err" data-err-for="title"></span>' +
+              '<input data-act="title" data-idx="0" value="' + esc(it.title || "") + '" maxlength="120" placeholder="如：雨中街角面馆">' +
+            '</label>' +
+            '<div class="curation-imgs" data-imgs="0">' + (it.images || []).map(function (src, i) {
+              return '<figure class="curation-thumb-wrap">' + imgTag(src, "预览") +
+                '<button type="button" class="curation-x" data-act="delimg" data-idx="0" data-i="' + i + '" aria-label="删除图片">×</button></figure>';
+            }).join("") + '</div>' +
+            '<label class="curation-field">作品图片（最多 9 张）<span class="curation-field-err" data-err-for="file"></span>' +
+              '<input type="file" accept="image/*" multiple data-act="file" data-idx="0">' +
+            '</label>' +
+            '<label class="curation-field">生图提示词<span class="curation-field-err" data-err-for="prompt"></span>' +
+              '<textarea data-act="prompt" data-idx="0" rows="5" maxlength="20000" placeholder="粘贴实际发给模型的完整提示词">' + esc(it.prompt || "") + '</textarea>' +
+            '</label>' +
+            '<p class="curation-help">读者看到并复制的就是这段原文。</p>' +
+            '<label class="curation-field">作者点评<span class="curation-field-err" data-err-for="notes"></span>' +
+              '<textarea data-act="notes" data-idx="0" rows="3" maxlength="1200" placeholder="说说做法、取舍或踩过的坑（可选）">' + esc(it.notes || "") + '</textarea>' +
+            '</label>' +
+            '<div class="curation-pick">' +
+              '<div class="curation-pick-row"><span>画风</span><button type="button" data-act="pick" data-idx="0" data-target="style">选择画风</button><span class="curation-chips" data-chip="style" data-idx="0">' + stylesHtml + '</span></div>' +
+              '<div class="curation-pick-row"><span>图型</span><button type="button" data-act="pick" data-idx="0" data-target="layout">选择图型</button><span class="curation-chips" data-chip="layout" data-idx="0">' + layoutHtml + '</span></div>' +
+            '</div>' +
+          '</fieldset>'
+        );
+      } else {
+        itemsHtml = model.items.map(function (it, idx) {
+          var kLabel = KIND_LABEL[model.kind] || "资源";
+          var legendText = esc(kLabel) + " " + (idx + 1);
+          return (
+            '<fieldset class="curation-item" data-idx="' + idx + '">' +
+              '<legend>' + legendText + '</legend>' +
+              '<label class="curation-field">名称<span class="curation-field-err" data-err-for="name"></span>' +
+                '<input data-act="name" data-idx="' + idx + '" value="' + esc(it.name || "") + '" maxlength="80" placeholder="如：江南淡墨">' +
+              '</label>' +
+              '<div class="curation-imgs" data-imgs="' + idx + '">' + (it.images || []).map(function (src, i) {
+                return '<figure class="curation-thumb-wrap">' + imgTag(src, "预览") +
+                  '<button type="button" class="curation-x" data-act="delimg" data-idx="' + idx + '" data-i="' + i + '" aria-label="删除图片">×</button></figure>';
+              }).join("") + '</div>' +
+              '<label class="curation-field">示例图（最多 9 张）<span class="curation-field-err" data-err-for="file"></span>' +
+                '<input type="file" accept="image/*" multiple data-act="file" data-idx="' + idx + '">' +
+              '</label>' +
+              '<label class="curation-field">定义<span class="curation-field-err" data-err-for="definition"></span>' +
+                '<textarea data-act="definition" data-idx="' + idx + '" rows="4" maxlength="6000" placeholder="' +
+                  (model.kind === "style" ? "画风：笔触、用色、质感" : "图型：版式结构与元素位置") + '">' + esc(it.definition || "") + '</textarea>' +
+              '</label>' +
+              '<label class="curation-field">简介<span class="curation-field-err" data-err-for="description"></span>' +
+                '<textarea data-act="description" data-idx="' + idx + '" rows="2" maxlength="300" placeholder="一句话说明适合画什么（可选）">' + esc(it.description || "") + '</textarea>' +
+              '</label>' +
+              ((!editId && model.items.length >= 2) ?
+                '<button type="button" class="curation-x-item" data-act="delitem" data-idx="' + idx + '">删除此项</button>' : '') +
+            '</fieldset>'
+          );
+        }).join("");
+      }
+
+      var addBtnHtml = (!editId && model.kind !== "work") ? (
+        '<button type="button" class="curation-add" data-act="additem"' + (model.items.length >= 20 ? ' disabled' : '') + '>＋ 添加' + esc(KIND_LABEL[model.kind] || "") + '</button>'
+      ) : "";
+
+      var submitText = editId ? "提交新版本" : (model.kind === "work" ? "发布作品" : "发布到论坛并申请收录");
 
       root.innerHTML =
         '<div class="curation-page">' +
           '<nav class="curation-nav">' + nav.join("") + '</nav>' +
-          '<h1 class="curation-h1">' + (editId ? "编辑重提 · " + esc(KIND_LABEL[kindDefault] || "") : "投稿并申请收录") + '</h1>' +
+          '<h1 class="curation-h1">' + h1Text + '</h1>' +
           '<p class="curation-hint">图片先存入你的私有上传库，点击发布才公开。</p>' +
           (editId ? '<p class="curation-note">已收录项编辑后保留原帖；新版本审核期间旧版本继续使用。</p>' : '') +
           '<div class="curation-form">' +
-            '<label class="curation-field">论坛标题<input data-act="ftitle" value="' + esc(model.title) + '" maxlength="120" placeholder="给这次分享起个标题"></label>' +
-            '<label class="curation-field">公开说明<textarea data-act="ftext" rows="3" maxlength="1200" placeholder="介绍你的作品或画风（资源定义请写在下面各项）">' + esc(model.text) + '</textarea></label>' +
+            kindSwitchHtml +
+            setHtml +
             '<div data-items>' + itemsHtml + '</div>' +
-            (editId ? '' : '<button type="button" class="curation-add" data-act="additem">＋ 添加投稿项</button>') +
+            addBtnHtml +
             '<p class="curation-err" data-err aria-live="polite"></p>' +
-            '<button type="button" class="curation-submit" data-act="submit"' + (editId ? ' data-edit="1"' : '') + '>' + (editId ? "提交新版本" : "发布到论坛并申请收录") + '</button>' +
+            '<button type="button" class="curation-submit" data-act="submit"' + (editId ? ' data-edit="1"' : '') + '>' + submitText + '</button>' +
           '</div>' +
         '</div>';
-      if (editId) {
-        root.querySelector('[data-act="ftitle"]').closest('label').hidden=true;
-        root.querySelector('[data-act="ftext"]').closest('label').hidden=true;
-        root.querySelectorAll('[data-act="kind"]').forEach(function(el){el.disabled=true;});
+
+      if (model.skippedCount > 0) {
+        var errEl = root.querySelector('[data-err]');
+        if (errEl) errEl.textContent = "草稿中有 " + model.skippedCount + " 项与当前类型不符，已略过。";
       }
+
       bindImgs(root);
       bindShare();
     }
@@ -175,19 +347,79 @@
       if (!act) return;
       if (act === "ftitle") model.title = t.value;
       else if (act === "ftext") model.text = t.value;
-      else if (act === "name" || act === "title" || act === "description" || act === "prompt") {
-        var i = +t.getAttribute("data-idx"), it = model.items[i]; if (!it) return;
-        if (act === "prompt") { if (it.kind === "work" || !it.kind) it.prompt = t.value; else it.definition = t.value; if (!it.kind) it.prompt = t.value; }
-        else { it[act] = t.value; if (act === "description" && it.kind === "work") it.notes=t.value; }
-        model.requestId = uuid(); // content changed -> new request key
+      else if (act === "title") {
+        if (model.items[0]) model.items[0].title = t.value;
+      } else if (act === "prompt") {
+        if (model.items[0]) model.items[0].prompt = t.value;
+      } else if (act === "notes") {
+        if (model.items[0]) model.items[0].notes = t.value;
+      } else if (act === "name" || act === "definition" || act === "description") {
+        var i = +t.getAttribute("data-idx"), it = model.items[i];
+        if (it) it[act] = t.value;
+      }
+      model.requestId = uuid();
+
+      var label = t.closest("label");
+      if (label) {
+        var errSpan = label.querySelector('[data-err-for="' + act + '"]');
+        if (errSpan) errSpan.textContent = "";
+        t.removeAttribute("aria-invalid");
+        t.removeAttribute("aria-describedby");
+      }
+      var errEl = root.querySelector('[data-err]');
+      if (errEl && errEl.textContent.indexOf("还有") === 0) {
+        var remaining = 0;
+        root.querySelectorAll('.curation-field-err').forEach(function (s) {
+          if (s.textContent.trim()) remaining++;
+        });
+        if (remaining > 0) {
+          errEl.textContent = "还有 " + remaining + " 处需要修改。";
+        } else {
+          errEl.textContent = "";
+        }
       }
     }
 
     function onKindChange(e) {
-      var idx = +e.target.getAttribute("data-idx"), it = model.items[idx];
-      if (!it) return;
-      it.kind = e.target.value;
-      if (it.kind !== "work") { delete it.styles; delete it.layout; }
+      var newKind = e.target.value;
+      if (newKind === model.kind) return;
+
+      if (newKind === "work") {
+        if (model.items.length >= 2) {
+          if (!confirm("切换为作品只保留第一项，确定吗？")) {
+            var prevRadio = root.querySelector('input[name="share-kind"][value="' + model.kind + '"]');
+            if (prevRadio) prevRadio.checked = true;
+            return;
+          }
+        }
+        var it = model.items[0] || {};
+        model.items = [{
+          kind: "work",
+          title: it.name || it.title || "",
+          prompt: it.definition || it.prompt || "",
+          notes: it.description || it.notes || "",
+          images: (it.images || []).slice(),
+          styles: it.styles || [],
+          layout: it.layout || ""
+        }];
+        model.kind = "work";
+      } else if (model.kind === "work") {
+        var it = model.items[0] || {};
+        model.items = [{
+          kind: newKind,
+          name: it.title || it.name || "",
+          definition: it.prompt || it.definition || "",
+          description: it.notes || it.description || "",
+          images: (it.images || []).slice()
+        }];
+        model.kind = newKind;
+      } else {
+        model.kind = newKind;
+        model.items.forEach(function (it) {
+          it.kind = newKind;
+        });
+      }
+
       model.requestId = uuid();
       draw();
     }
@@ -197,6 +429,15 @@
       var files = e.target.files; if (!it || !files || !files.length) return;
       if (files.length + (it.images || []).length > 9) { alert('每项最多9张图片'); return; }
       if (Array.from(files).some(function(f){return f.size>15*1024*1024;})) { alert('单张图片请小于15MB'); return; }
+
+      var label = e.target.closest("label");
+      if (label) {
+        var errSpan = label.querySelector('[data-err-for="file"]');
+        if (errSpan) errSpan.textContent = "";
+        e.target.removeAttribute("aria-invalid");
+        e.target.removeAttribute("aria-describedby");
+      }
+
       var btn = root.querySelector('[data-act="submit"]'); if (btn) btn.disabled = true;
       var errEl = root.querySelector('[data-err]');
       var jobs = Array.prototype.map.call(files, function (f) {
@@ -220,13 +461,30 @@
       var act = t.getAttribute("data-act");
       var idx = +t.getAttribute("data-idx");
       if (act === "additem") {
-        if (editId || model.items.length >= 20) return;
-        model.items.push({ kind: kindDefault, images: [] }); model.requestId = uuid(); draw();
+        if (editId || model.kind === "work" || model.items.length >= 20) return;
+        model.items.push({ kind: model.kind, name: "", description: "", definition: "", images: [] });
+        model.requestId = uuid();
+        draw();
+        var lastFieldset = root.querySelector('.curation-item[data-idx="' + (model.items.length - 1) + '"]');
+        if (lastFieldset) {
+          if (typeof lastFieldset.scrollIntoView === "function") {
+            lastFieldset.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+          var nameInput = lastFieldset.querySelector('[data-act="name"]');
+          if (nameInput && typeof nameInput.focus === "function") {
+            nameInput.focus();
+          }
+        }
       } else if (act === "delitem") {
-        model.items.splice(idx, 1); model.requestId = uuid(); draw();
+        if (model.items.length <= 1) return;
+        model.items.splice(idx, 1);
+        model.requestId = uuid();
+        draw();
       } else if (act === "delimg") {
         var it = model.items[idx]; if (!it) return;
-        it.images.splice(+t.getAttribute("data-i"), 1); model.requestId = uuid(); draw();
+        it.images.splice(+t.getAttribute("data-i"), 1);
+        model.requestId = uuid();
+        draw();
       } else if (act === "pick") {
         pickResource(idx, t.getAttribute("data-target"));
       } else if (act === "submit") {
@@ -238,69 +496,212 @@
       var it = model.items[idx]; if (!it) return;
       var cur = target === "layout" ? it.layout : (it.styles && it.styles[0]);
       if (typeof S.openAssetPickerModal !== "function") return;
-      S.openAssetPickerModal({ kind: target === "layout" ? "layout" : "style", currentId: cur || "", onSelect: function (asset) {
-        if (!asset) return;
-        if (!guard(epoch, username)) return;
-        if (typeof asset === "string") asset = App.resourceMap.get(asset) || { id: asset };
-        var code = asset.code || asset.id || asset.style || asset.layout || "";
-        var label = { name: asset.name || code, id: code, kind: asset.kind || target, image: asset.image || asset.thumb || "" };
-        resourceCache[code] = label;
-        if (target === "layout") it.layout = code;
-        else { it.styles = [code]; }
-        model.requestId = uuid();
-        draw();
-      } });
+      S.openAssetPickerModal({
+        kind: target === "layout" ? "layout" : "style",
+        currentId: cur || "",
+        onSelect: function (asset) {
+          if (!asset) return;
+          if (!guard(epoch, username)) return;
+          if (typeof asset === "string") asset = App.resourceMap.get(asset) || { id: asset };
+          var code = asset.code || asset.id || asset.style || asset.layout || "";
+          var label = { name: asset.name || code, id: code, kind: asset.kind || target, image: asset.image || asset.thumb || "" };
+          resourceCache[code] = label;
+          if (target === "layout") it.layout = code;
+          else { it.styles = [code]; }
+          model.requestId = uuid();
+          draw();
+        }
+      });
+    }
+
+    function validate() {
+      var errors = [];
+
+      if (model.kind === "work") {
+        var it = model.items[0] || {};
+        var titleEl = root.querySelector('[data-act="title"]');
+        var fileEl = root.querySelector('[data-act="file"]');
+        var promptEl = root.querySelector('[data-act="prompt"]');
+        var notesEl = root.querySelector('[data-act="notes"]');
+
+        var titleVal = (it.title || "").trim();
+        if (!titleVal) {
+          errors.push({ el: titleEl, act: "title", message: "请填写作品标题。" });
+        } else if (getLen(it.title) > 120) {
+          errors.push({ el: titleEl, act: "title", message: "最多 120 字，当前 " + getLen(it.title) + " 字。" });
+        }
+
+        if (!it.images || it.images.length === 0) {
+          errors.push({ el: fileEl, act: "file", message: "请至少上传一张图片。" });
+        }
+
+        var promptVal = (it.prompt || "").trim();
+        if (!promptVal) {
+          errors.push({ el: promptEl, act: "prompt", message: "请填写生图提示词。" });
+        } else if (getLen(it.prompt) > 20000) {
+          errors.push({ el: promptEl, act: "prompt", message: "最多 20000 字，当前 " + getLen(it.prompt) + " 字。" });
+        }
+
+        if (it.notes && getLen(it.notes) > 1200) {
+          errors.push({ el: notesEl, act: "notes", message: "最多 1200 字，当前 " + getLen(it.notes) + " 字。" });
+        }
+      } else {
+        if (!editId && model.items.length >= 2) {
+          var ftitleEl = root.querySelector('[data-act="ftitle"]');
+          var ftextEl = root.querySelector('[data-act="ftext"]');
+          if (model.title && getLen(model.title) > 120) {
+            errors.push({ el: ftitleEl, act: "ftitle", message: "最多 120 字，当前 " + getLen(model.title) + " 字。" });
+          }
+          if (model.text && getLen(model.text) > 1200) {
+            errors.push({ el: ftextEl, act: "ftext", message: "最多 1200 字，当前 " + getLen(model.text) + " 字。" });
+          }
+        }
+
+        model.items.forEach(function (it, idx) {
+          var fieldset = root.querySelector('.curation-item[data-idx="' + idx + '"]');
+          var nameEl = fieldset ? fieldset.querySelector('[data-act="name"]') : null;
+          var fileEl = fieldset ? fieldset.querySelector('[data-act="file"]') : null;
+          var defEl = fieldset ? fieldset.querySelector('[data-act="definition"]') : null;
+          var descEl = fieldset ? fieldset.querySelector('[data-act="description"]') : null;
+
+          var nameVal = (it.name || "").trim();
+          if (!nameVal) {
+            errors.push({ el: nameEl, act: "name", idx: idx, message: "请填写名称。" });
+          } else if (getLen(it.name) > 80) {
+            errors.push({ el: nameEl, act: "name", idx: idx, message: "最多 80 字，当前 " + getLen(it.name) + " 字。" });
+          }
+
+          if (!it.images || it.images.length === 0) {
+            errors.push({ el: fileEl, act: "file", idx: idx, message: "请至少上传一张图片。" });
+          }
+
+          var defVal = (it.definition || "").trim();
+          if (!defVal) {
+            errors.push({ el: defEl, act: "definition", idx: idx, message: "请填写定义。" });
+          } else if (getLen(it.definition) > 6000) {
+            errors.push({ el: defEl, act: "definition", idx: idx, message: "最多 6000 字，当前 " + getLen(it.definition) + " 字。" });
+          }
+
+          if (it.description && getLen(it.description) > 300) {
+            errors.push({ el: descEl, act: "description", idx: idx, message: "最多 300 字，当前 " + getLen(it.description) + " 字。" });
+          }
+        });
+      }
+
+      return errors;
     }
 
     function submit(btn, isEdit) {
       var errEl = root.querySelector('[data-err]');
       if (errEl) errEl.textContent = "";
-      if (!isEdit && !model.title.trim()) { if (errEl) errEl.textContent = "请填写论坛标题。"; return; }
-      if (!model.items.length) { if (errEl) errEl.textContent = "请至少添加一项投稿项。"; return; }
-      var items = model.items.map(function (it) {
-        var kind = it.kind || kindDefault;
-        var item = Object.assign({}, it, { kind: kind, name: it.name || "", title: it.title || "", images: (it.images || []).slice() });
-        if (kind === "work") {
-          item.description = it.description || "";
-          item.prompt = it.prompt || "";
-          if (it.subject) item.subject = it.subject;
-          item.ratio = it.ratio || "3:4";
-          if (it.styles && it.styles[0]) item.styles = [it.styles[0]];
-          if (it.layout) item.layout = it.layout;
-        } else {
-          item.description = it.description || "";
-          item.definition = it.definition || it.prompt || "";
-        }
-        return item;
+
+      root.querySelectorAll('.curation-field-err').forEach(function (s) { s.textContent = ""; });
+      root.querySelectorAll('[aria-invalid]').forEach(function (el) {
+        el.removeAttribute("aria-invalid");
+        el.removeAttribute("aria-describedby");
       });
-      var body = { title: model.title.trim(), text: model.text || "", requestId: model.requestId, items: items };
-      var url, method = "POST";
-      var isWork = items.length === 1 && String(items[0].kind || "").toLowerCase() === "work";
+
+      var errors = validate();
+      if (errors.length > 0) {
+        errors.forEach(function (err) {
+          var label = err.el ? err.el.closest("label") : null;
+          var errSpan = label ? label.querySelector('[data-err-for="' + err.act + '"]') : null;
+          if (errSpan) {
+            errSpan.textContent = err.message;
+            var errId = "curation-err-" + err.act + "-" + (err.idx || 0);
+            errSpan.id = errId;
+            if (err.el) {
+              err.el.setAttribute("aria-invalid", "true");
+              err.el.setAttribute("aria-describedby", errId);
+            }
+          }
+        });
+
+        if (errEl) errEl.textContent = "还有 " + errors.length + " 处需要修改。";
+
+        if (errors[0].el && typeof errors[0].el.focus === "function") {
+          errors[0].el.focus();
+        }
+        return;
+      }
+
+      var url, method = "POST", body;
+      var isWork = model.kind === "work";
 
       if (isEdit && editId) {
         url = "/api/curation/submissions/" + encodeURIComponent(editId) + "/revise";
-        var payloadItem = Object.assign({}, items[0]);
+        var currentItem = model.items[0] || {};
+        var payloadItem = Object.assign({}, model.rawPayload || {});
+        if (model.kind === "work") {
+          payloadItem.title = (currentItem.title || "").trim();
+          payloadItem.prompt = currentItem.prompt || "";
+          payloadItem.notes = currentItem.notes || "";
+          payloadItem.images = (currentItem.images || []).slice();
+          if (currentItem.styles) payloadItem.styles = currentItem.styles.slice();
+          if (currentItem.layout) payloadItem.layout = currentItem.layout;
+        } else {
+          payloadItem.kind = model.kind;
+          payloadItem.name = (currentItem.name || "").trim();
+          payloadItem.description = currentItem.description || "";
+          payloadItem.definition = currentItem.definition || "";
+          payloadItem.images = (currentItem.images || []).slice();
+        }
         if (payloadItem.prompt === "[包含资源专属指令，已隐藏]") payloadItem.prompt = "";
         if (payloadItem.subject === "[包含资源专属指令，已隐藏]") payloadItem.subject = "";
         if (payloadItem.definition === "[包含资源专属指令，已隐藏]") payloadItem.definition = "";
         body = { payload: payloadItem };
       } else if (isWork) {
-        // Works publish immediately (D-02): they must not enter the review queue.
-        var work = items[0];
+        var work = model.items[0] || {};
         url = "/api/works";
-        body = {
-          title: model.title.trim(),
-          prompt: work.prompt || "",
-          notes: model.text || "",
+        var workBody = {
+          title: work.title.trim(),
+          prompt: work.prompt,
+          notes: work.notes || "",
           images: (work.images || []).slice(),
-          styles: work.styles ? [work.styles[0]] : [],
-          layout: work.layout || "",
-          ratio: work.ratio || "3:4",
           requestId: model.requestId
         };
-        if (work.subject) body.subject = work.subject;
+        if (work.styles && work.styles[0]) workBody.styles = [work.styles[0]];
+        else if (work.styles && work.styles.length) workBody.styles = work.styles.slice();
+        if (work.layout) workBody.layout = work.layout;
+        if (work.ratio) workBody.ratio = work.ratio;
+        if (work.color) workBody.color = work.color;
+        if (work.tone) workBody.tone = work.tone;
+        if (work.mode) workBody.mode = work.mode;
+        if (work.mood) workBody.mood = work.mood;
+        if (work.subject) workBody.subject = work.subject;
+        body = workBody;
       } else {
         url = "/api/curation/submissions";
+        var isSingle = model.items.length === 1;
+        var subTitle = model.title ? model.title.trim() : "";
+        if (!subTitle) {
+          if (isSingle) {
+            subTitle = (model.items[0].name || "").trim();
+          } else {
+            var firstItemName = (model.items[0].name || "").trim();
+            subTitle = ("投稿：" + firstItemName + " 等 " + model.items.length + " 项").slice(0, 120);
+          }
+        }
+        var subText = isSingle ? (model.items[0].description || "") : (model.text || "");
+        var subItems = model.items.map(function (it) {
+          var itemObj = {
+            kind: it.kind,
+            name: (it.name || "").trim(),
+            description: it.description || "",
+            definition: it.definition || "",
+            images: (it.images || []).slice()
+          };
+          if (it.group != null) itemObj.group = it.group;
+          if (it.unlockCost != null) itemObj.unlockCost = it.unlockCost;
+          if (it.price != null) itemObj.price = it.price;
+          return itemObj;
+        });
+        body = {
+          title: subTitle,
+          text: subText,
+          requestId: model.requestId,
+          items: subItems
+        };
       }
 
       btn.disabled = true;
@@ -308,7 +709,6 @@
       api(url, { method: method, body: body }).then(function (res) {
         if (!guard(epoch, username)) return;
         if (isWork) {
-          // The work is already live; send the author to its detail page.
           try {
             location.href = res.topicId ? S.channelUrl("forum", { view: "topic", id: res.topicId }) : S.channelUrl("main", { view: "work", id: res.workId });
           } catch (e) {
@@ -337,37 +737,43 @@
       form.addEventListener("input", onInput);
       form.addEventListener("change", function (e) {
         var act = e.target.getAttribute("data-act");
-        if (act === "kind") onKindChange(e);
+        if (act === "sharekind") onKindChange(e);
         else if (act === "file") onFiles(e);
       });
       form.addEventListener("click", onClick);
     }
 
-    // Draw skeleton, then load draft (owner only) before final draw.
-    model.items = [{ kind: kindDefault, images: [] }];
     var preload = editId ? api("/api/curation/mine").then(function(res) {
       if (!guard(epoch, username)) return;
-      var found=(res.submissions || []).find(function(it){return it.id===editId;});
+      var found = (res.submissions || []).find(function(it) { return it.id === editId; });
       if (!found) throw new Error("投稿不存在");
-      model.items=normItems(found.payload); model.title=found.payload.title || found.payload.name || "";
-    }) : draftId ? api("/api/curation/drafts/" + encodeURIComponent(draftId), { method: "GET" }).then(function (res) {
+      var subKind = (found.payload && found.payload.kind) || found.kind || kindDefault;
+      model = shareModelFrom(found.payload, subKind);
+      model.rawPayload = found.payload;
+      kindDefault = subKind;
+    }) : draftId ? (function () {
+      var resolvedDraftId = (draftId.length < 32 && /^[0-9a-f]+$/i.test(draftId)) ? draftId.padEnd(32, "0") : draftId;
+      return api("/api/curation/drafts/" + encodeURIComponent(resolvedDraftId), { method: "GET" });
+    })().then(function (res) {
       if (!guard(epoch, username)) return;
       var p = res && res.payload; if (!p) return;
-      var its = normItems(p);
-      if (its.length) {
-        model.items = its.map(function (it) {
-          it.images = Array.isArray(it.images) ? it.images.slice() : (it.images ? [it.images] : []);
-          if (it.images.length) resourceCache["__draft__"] = true;
-          return it;
-        });
+      model = shareModelFrom(p, kindDefault);
+      model.rawPayload = p;
+    }).catch(function () {
+      if (guard(epoch, username)) {
+        var errEl = root.querySelector('[data-err]');
+        if (errEl) errEl.textContent = "草稿加载失败。";
       }
-      if (p.title) model.title = p.title;
-      if (p.text) model.text = p.text;
-    }).catch(function () { if (guard(epoch, username)) { var errEl = root.querySelector('[data-err]'); if (errEl) errEl.textContent = "草稿加载失败。"; } }) : Promise.resolve();
+    }) : Promise.resolve();
 
     draw();
-    preload.then(function () { if (guard(epoch, username)) draw(); }).catch(function(err) {
-      if (guard(epoch,username)) root.querySelector('[data-err]').textContent='加载投稿失败：'+err.message;
+    preload.then(function () {
+      if (guard(epoch, username)) draw();
+    }).catch(function(err) {
+      if (guard(epoch, username)) {
+        var errEl = root.querySelector('[data-err]');
+        if (errEl) errEl.textContent = '加载投稿失败：' + err.message;
+      }
     });
   }
 
@@ -734,7 +1140,7 @@
   /* ================= RENDER DISPATCH ================= */
   function render(root, tab) {
     if (!root) return;
-    var params = Object.fromEntries(new URLSearchParams(location.search));
+    var params = (tab && typeof tab === "object") ? tab : Object.fromEntries(new URLSearchParams(location.search));
     root.onclick=null;
     if (!App.state.loggedIn) {
       ++EPOCH;
@@ -753,6 +1159,7 @@
     render: render,
     topicPanelHtml: topicPanelHtml,
     bindTopicPanel: bindTopicPanel,
+    shareModelFrom: shareModelFrom,
     _epoch: function () { return EPOCH; }
   };
 })();
