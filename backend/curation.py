@@ -379,6 +379,8 @@ def sanitize_curation_payload_for_client(payload: Any, conn: Any = None) -> Any:
     if p.get("promptMasked"):
         if "subject" in p and isinstance(p["subject"], str) and p["subject"]:
             p["subject"] = "[包含资源专属指令，已隐藏]"
+        if "prompt" in p and isinstance(p["prompt"], str) and p["prompt"]:
+            p["prompt"] = "[包含资源专属指令，已隐藏]"
     if "recipe" in p and p["recipe"]:
         try:
             if check_obj_has_secret(p["recipe"], conn):
@@ -1058,7 +1060,15 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
         images = payload.get("images") or []
         styles = payload.get("styles") or []
         prompt_val = str(payload.get("prompt") or "")
-        sub_subject = _s(payload.get("subject"), 2000)
+        raw_subject = payload.get("subject")
+        if raw_subject is not None and len(str(raw_subject)) > 2000:
+            import logging
+            logging.getLogger("curation").error(
+                "Approved work payload subject exceeds 2000 characters: %d chars for sub %s",
+                len(str(raw_subject)), sub.get("id"),
+            )
+            raise ServiceError("主题内容过长（最多2000字）", status=400, code="subject_too_long")
+        sub_subject = str(raw_subject or "").strip()
         from .services import check_text_has_secret
         try:
             has_sec = check_text_has_secret(prompt_val, tx) or check_text_has_secret(sub_subject, tx)
@@ -1226,6 +1236,15 @@ def revise(db: Database, user: dict[str, Any], submission_id: str, body: dict[st
         kind = sub["kind"]
         item = dict(raw_payload)
         item["kind"] = kind
+        try:
+            prev_payload = _current_payload(tx, submission_id, int(sub["current_revision"]))
+        except Exception:
+            prev_payload = {}
+        # Protect against placeholder overwriting original secret-bearing prompt / subject / definition
+        for field in ("prompt", "subject", "definition"):
+            val = item.get(field)
+            if (val is None or val == "" or val == "[包含资源专属指令，已隐藏]") and field in prev_payload:
+                item[field] = prev_payload[field]
         normalised = _normalise_item(kind, item)
         _validate_references(tx,normalised)
         new_rev = int(sub["current_revision"]) + 1

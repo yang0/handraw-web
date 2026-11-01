@@ -582,16 +582,11 @@ def draft_recipe_from_work(db: Database, user: dict[str, Any], work_id: str) -> 
     unlocked_set = _unlocked(db, user)
     serialized = _serialize_work(work, {}, unlocked_set, user)
 
-    subject = str(work.get("subject") or "").strip()
-    if subject:
-        subject_hint = subject[:80]
-    elif not serialized.get("promptMasked"):
+    subject_hint = str(serialized.get("subject") or "").strip()[:80]
+    if not subject_hint and not serialized.get("promptMasked"):
         raw_prompt = str(serialized.get("prompt") or "").strip()
         sentences = [s.strip() for s in re.split(r"[。！？\n.!?]", raw_prompt) if s.strip()]
         subject_hint = sentences[0][:80] if sentences else ""
-    else:
-        # Prompt is masked for this user; no private prompt leak
-        subject_hint = ""
 
     styles_raw = work.get("styles_json") or "[]"
     style_ids = json.loads(styles_raw) if isinstance(styles_raw, str) else list(styles_raw)

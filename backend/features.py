@@ -178,8 +178,9 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
             req_prompt = body.get("prompt")
             if req_prompt and req_prompt != "[包含资源专属指令，已隐藏]":
                 payload["prompt"] = req_prompt
-            if "subject" in body:
-                payload["subject"] = body["subject"]
+            req_subject = body.get("subject")
+            if req_subject and req_subject != "[包含资源专属指令，已隐藏]":
+                payload["subject"] = req_subject
             if "title" in body:
                 payload["title"] = body["title"]
             if "notes" in body:

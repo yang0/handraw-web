@@ -279,7 +279,11 @@
 
       if (isEdit && editId) {
         url = "/api/curation/submissions/" + encodeURIComponent(editId) + "/revise";
-        body = { payload: items[0] };
+        var payloadItem = Object.assign({}, items[0]);
+        if (payloadItem.prompt === "[包含资源专属指令，已隐藏]") payloadItem.prompt = "";
+        if (payloadItem.subject === "[包含资源专属指令，已隐藏]") payloadItem.subject = "";
+        if (payloadItem.definition === "[包含资源专属指令，已隐藏]") payloadItem.definition = "";
+        body = { payload: payloadItem };
       } else if (isWork) {
         // Works publish immediately (D-02): they must not enter the review queue.
         var work = items[0];
