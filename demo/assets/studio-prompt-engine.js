@@ -848,23 +848,10 @@
     const rec = baseRec || resolveControlRecipe(graph, loopNode, catalog);
     const rMap = (catalog && catalog.resourceMap) || new Map();
 
-    const sampleVisuals = [
-      "/images/poster-demo-autumn-equinox.webp",
-      "/images/graphic-text-mode-demo.webp",
-      "/images/individual/FA/FA-003.webp",
-      "/images/individual/FB/FB-031.webp",
-      "/images/layouts/social-cards/SC-023.webp",
-      "/images/layouts/infographics/IG-005.webp",
-      "/images/individual/FA/FA-013.webp",
-      "/images/A_001-016.webp",
-      "/images/B_036-048.webp",
-      "/images/H_217-232.webp"
-    ];
-
     if (mode === "styles") {
       const styleIds = (Array.isArray(ld.styleIds) ? ld.styleIds : []).filter(Boolean).slice(0, maxIter);
       return styleIds.map((sid, idx) => {
-        const sRes = rMap.get(sid) || null;
+        const sRes = rMap.get(sid) || (catalog?.styles?.find((s) => s.id === sid)) || null;
         const sName = sRes ? sRes.name || sid : sid;
         return {
           index: idx,
@@ -880,7 +867,7 @@
                 .replace(/\{\{?item\}?\}|\{主题\}|\{文案\}|\{画风\}/gi, `#${sid} ${sName}`)
                 .replace(/\{\{?index\}?\}|\{序号\}/gi, String(idx + 1))
             : `手绘视觉创作（画风 #${sid} ${sName}）`,
-          sampleImg: sRes?.image || sampleVisuals[idx % sampleVisuals.length]
+          sampleImg: sRes?.image || ""
         };
       });
     }
@@ -888,7 +875,7 @@
     if (mode === "layouts") {
       const layoutIds = (Array.isArray(ld.layoutIds) ? ld.layoutIds : []).filter(Boolean).slice(0, maxIter);
       return layoutIds.map((lid, idx) => {
-        const lRes = rMap.get(lid) || null;
+        const lRes = rMap.get(lid) || (catalog?.layouts?.find((l) => l.id === lid)) || null;
         const lName = lRes ? lRes.name || lid : lid;
         return {
           index: idx,
@@ -904,7 +891,7 @@
                 .replace(/\{\{?item\}?\}|\{主题\}|\{文案\}|\{图型\}/gi, `${lid} ${lName}`)
                 .replace(/\{\{?index\}?\}|\{序号\}/gi, String(idx + 1))
             : `手绘版式创作（图型 ${lid} ${lName}）`,
-          sampleImg: lRes?.image || sampleVisuals[idx % sampleVisuals.length]
+          sampleImg: lRes?.image || ""
         };
       });
     }
@@ -931,7 +918,7 @@
           layout: "",
           assetItems: [ast],
           theme: mergedTheme,
-          sampleImg: ast.image || sampleVisuals[idx % sampleVisuals.length]
+          sampleImg: ast.image || ""
         };
       });
     }
@@ -943,7 +930,7 @@
         const rowTheme = typeof row === "string" ? row : (row && row.theme != null ? String(row.theme) : "");
         const rowLayout = (row && typeof row === "object" && row.layout) ? String(row.layout).trim() : "";
         const effLayout = rowLayout || rec.layoutId || "";
-        const lRes = effLayout ? rMap.get(effLayout) || null : null;
+        const lRes = effLayout ? (rMap.get(effLayout) || (catalog?.layouts?.find((l) => l.id === effLayout))) || null : null;
         let mergedTheme = rowTheme;
         if (rec.combinedText) {
           if (/\{\{?item\}?\}|\{主题\}|\{文案\}/i.test(rec.combinedText)) {
@@ -977,7 +964,7 @@
           assetItems: iterAssetItems,
           skipGlobalRefs: skipGlobal,
           theme: mergedTheme,
-          sampleImg: lRes?.image || sampleVisuals[idx % sampleVisuals.length]
+          sampleImg: lRes?.image || ""
         };
       });
     }
@@ -1014,6 +1001,10 @@
       }
     }
 
+    const effFixedLayout = rec.layoutId || "";
+    const fixedLayoutRes = effFixedLayout ? (rMap.get(effFixedLayout) || (catalog?.layouts?.find((l) => l.id === effFixedLayout))) || null : null;
+    const fixedSampleImg = fixedLayoutRes?.image || "";
+
     return lines.slice(0, maxIter).map((lineText, idx) => {
       let mergedTheme = lineText;
       if (!fromUpstreamSplit && rec.combinedText) {
@@ -1036,7 +1027,7 @@
         layout: "",
         assetItems: null,
         theme: mergedTheme,
-        sampleImg: sampleVisuals[idx % sampleVisuals.length]
+        sampleImg: fixedSampleImg
       };
     });
   }

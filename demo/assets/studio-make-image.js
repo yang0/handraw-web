@@ -355,7 +355,7 @@
                   id="make-image-subject"
                   class="make-image-textarea"
                   rows="2"
-                  placeholder="${subjectHint ? `原作主题：${esc(subjectHint)}（输入新主题换成你的创意）` : "输入你想创作的画面内容或主题，如：暖阳下的手绘小镇书店，门前开满鲜花…"}"
+                  placeholder="输入你想创作的画面内容或主题，例如：暖阳下的单车少女，在咖啡馆门口停留"
                   aria-label="创作主题"
                 >${esc(topicText)}</textarea>
               </div>
@@ -1128,8 +1128,14 @@
       sd.audience = draft.audience || "";
       sd.businessScene = draft.businessScene || "";
 
-      td.text = "";
-      td.subjectHint = draft.subjectHint || "";
+      let extractedTheme = String(draft.subjectHint || draft.subject || "").trim();
+      if (!extractedTheme && draft.prompt) {
+        const rawPrompt = String(draft.prompt).trim();
+        const sentences = rawPrompt.split(/[。！？\n.!?]/).map((s) => s.trim()).filter(Boolean);
+        if (sentences.length > 0) extractedTheme = sentences[0].slice(0, 80);
+      }
+      td.text = extractedTheme;
+      td.subjectHint = draft.subjectHint || extractedTheme || "";
 
       cd.ratio = draft.ratio || "3:4";
       cd.mode = draft.mode === "pure-image" ? "pure" : (draft.mode || "graphic-text");

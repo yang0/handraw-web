@@ -709,23 +709,48 @@
                       ` : iterations.map((iter, idx) => {
                         const itemResult = this.getItemResult(idx, displays, isBatchGallery);
                         const rowStatus = this.getRowStatus(idx, busy, currentStep, itemResult);
-                        const iterLayoutId = iter.layout || "";
+                        const iterLayoutId = iter.layout || (batchLayoutMode === "fixed" ? (sd.layout || "") : "");
                         const catalog = this.context?.catalog;
                         const rMap = (catalog && catalog.resourceMap) || new Map();
                         const layoutRes = iterLayoutId ? (rMap.get(iterLayoutId) || catalog?.layouts?.find((l) => l.id === iterLayoutId)) : null;
                         const layoutName = layoutRes ? (layoutRes.name_zh || layoutRes.name || iterLayoutId) : "";
+                        const layoutImg = layoutRes?.image || iter.sampleImg || "";
                         const zoomTitle = iterLayoutId && layoutName ? `${iterLayoutId} ${layoutName}` : (iterLayoutId || iter.shortLabel || iter.title || "图型预览");
+
+                        let thumbHtml = "";
+                        if (itemResult?.imageUrl) {
+                          const genTitle = iter.shortLabel || iter.title || "生成结果";
+                          thumbHtml = `
+                            <button type="button" class="batch-iter-thumb-btn is-generated" data-zoom-src="${esc(itemResult.imageUrl)}" data-zoom-title="${esc(genTitle)}" data-hover-src="${esc(itemResult.imageUrl)}" data-hover-code="" data-hover-name="${esc(genTitle)}" title="${esc(genTitle)}（点击放大查看）" aria-label="放大查看生成结果">
+                              <img data-hw-src="${esc(itemResult.imageUrl)}" class="batch-iter-thumb" alt="${esc(genTitle)}" loading="lazy" />
+                            </button>
+                          `;
+                        } else if (layoutImg) {
+                          const schematicTitle = `版式示意 · ${zoomTitle}`;
+                          thumbHtml = `
+                            <button type="button" class="batch-iter-thumb-btn is-schematic" data-zoom-src="${esc(layoutImg)}" data-zoom-title="${esc(schematicTitle)}" data-hover-src="${esc(layoutImg)}" data-hover-code="${esc(iterLayoutId || '')}" data-hover-name="${esc(layoutName || '')}" title="${esc(schematicTitle)}（点击放大查看）" aria-label="${esc(schematicTitle)}">
+                              <img data-hw-src="${esc(layoutImg)}" class="batch-iter-thumb" alt="${esc(schematicTitle)}" loading="lazy" />
+                              <span class="batch-iter-schematic-badge">版式示意</span>
+                            </button>
+                          `;
+                        } else {
+                          thumbHtml = `
+                            <div class="batch-iter-placeholder" title="待生成" aria-label="待生成" role="img">
+                              <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="2" y="2" width="16" height="16" rx="3" />
+                                <circle cx="7" cy="7" r="1.5" />
+                                <path d="M18 13l-4-4-7 7" />
+                              </svg>
+                            </div>
+                          `;
+                        }
 
                         return `
                           <tr class="batch-table-row ${rowStatus.className}">
                             <td class="batch-col-idx">#${idx + 1}</td>
                             <td class="batch-col-content">
                               <div class="batch-iter-cell">
-                                ${iter.sampleImg ? `
-                                  <button type="button" class="batch-iter-thumb-btn" data-zoom-src="${esc(iter.sampleImg)}" data-zoom-title="${esc(zoomTitle)}" data-hover-src="${esc(iter.sampleImg)}" data-hover-code="${esc(iterLayoutId || '')}" data-hover-name="${esc(layoutName || '')}" aria-label="放大查看${esc(zoomTitle)}">
-                                    <img data-hw-src="${esc(iter.sampleImg)}" class="batch-iter-thumb" alt="${esc(zoomTitle)}" loading="lazy" />
-                                  </button>
-                                ` : ""}
+                                ${thumbHtml}
                                 <button type="button" class="batch-iter-label-btn" data-iter-theme-idx="${idx}" title="点击编辑主题" aria-label="编辑第 ${idx + 1} 张主题">
                                   <span class="batch-iter-label" data-iter-theme-idx="${idx}">${esc(iter.shortLabel || iter.title || iter.theme)}</span>
                                 </button>

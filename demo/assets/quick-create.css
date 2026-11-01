@@ -534,6 +534,7 @@
   border-radius: 6px;
   line-height: 0;
   flex-shrink: 0;
+  position: relative;
   transition: transform 0.15s ease, opacity 0.15s ease;
 }
 .batch-iter-thumb-btn:hover {
@@ -543,6 +544,36 @@
 .batch-iter-thumb-btn:focus-visible {
   outline: 2px solid var(--vermilion, #d14b28);
   outline-offset: 2px;
+}
+.batch-iter-schematic-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  background: rgba(43, 38, 35, 0.78);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+  padding: 1.5px 3px;
+  border-radius: 3px;
+  pointer-events: none;
+  letter-spacing: -0.2px;
+}
+.batch-iter-placeholder {
+  width: 56px;
+  height: 42px;
+  box-sizing: border-box;
+  border: 1px dashed var(--border-soft, #e2dcd2);
+  background: var(--bg-canvas, #faf8f5);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--ink-muted, #948b81);
+  line-height: 0;
+}
+.batch-iter-placeholder svg {
+  opacity: 0.65;
 }
 .batch-iter-thumb { width:56px;height:42px;object-fit:cover;border-radius:6px;border:1px solid var(--line-soft);flex-shrink:0;background:var(--paper-inset);display:block; }
 .batch-iter-label { white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:380px; }
@@ -699,6 +730,8 @@
 
 @media(max-width:640px) {
   .batch-iter-thumb { width:48px;height:36px; }
+  .batch-iter-placeholder { width:48px;height:36px; }
+  .batch-iter-schematic-badge { font-size: 8px; padding: 1px 2px; }
 }
 
 /* ==================== Phase 3b-3: Article Preview / Editor Switch ==================== */

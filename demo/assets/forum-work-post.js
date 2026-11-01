@@ -74,64 +74,13 @@
     }
   }
 
-  function hasCodeInText(text, code) {
-    if (!text || !code) return false;
-    const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp("(?:^|[^A-Za-z0-9_-])#?" + escaped + "(?=[^A-Za-z0-9_-]|$)", "i");
-    return re.test(text);
-  }
-
   function formatWorkPrompt(work, topic) {
     if (!work || typeof work !== "object") return "";
-    const rawPrompt = typeof work.prompt === "string" ? work.prompt.trim() : "";
     const rawSubject = typeof work.subject === "string" ? work.subject.trim() : "";
+    const rawPrompt = typeof work.prompt === "string" ? work.prompt.trim() : "";
     let subjectText = rawSubject || rawPrompt;
     if (!subjectText) return "";
-
-    // Strip leading "主题：" or "主题:" if present
-    subjectText = subjectText.replace(/^主题[：:]\s*/, "");
-
-    const parts = [];
-
-    // 1. 画风编号 (work.styles 全部，融合作品为两个，保持顺序，忽略空与已出现的编号)
-    let rawStyles = [];
-    if (Array.isArray(work.styles)) {
-      rawStyles = work.styles;
-    } else if (typeof work.styles === "string" && work.styles.trim()) {
-      try {
-        const parsed = JSON.parse(work.styles);
-        if (Array.isArray(parsed)) rawStyles = parsed;
-        else rawStyles = [work.styles];
-      } catch (e) {
-        rawStyles = [work.styles];
-      }
-    }
-    if (!rawStyles.length && topic && Array.isArray(topic.styles)) {
-      rawStyles = topic.styles;
-    }
-
-    const seenStyles = new Set();
-    for (const item of rawStyles) {
-      const code = String(item || "").trim().replace(/^#/, "");
-      if (!code || seenStyles.has(code.toUpperCase())) continue;
-      seenStyles.add(code.toUpperCase());
-      if (!hasCodeInText(subjectText, code)) {
-        parts.push(code);
-      }
-    }
-
-    // 2. 图型编号 (work.layout，没有则省略)
-    let rawLayout = work.layout != null ? work.layout : (topic && topic.layout);
-    if (Array.isArray(rawLayout)) rawLayout = rawLayout[0];
-    const layoutCode = String(rawLayout || "").trim().replace(/^#/, "");
-    if (layoutCode && !hasCodeInText(subjectText, layoutCode)) {
-      parts.push(layoutCode);
-    }
-
-    // 3. 主题：+ 主题文字
-    parts.push("主题：" + subjectText);
-
-    return parts.join(", ");
+    return subjectText.replace(/^主题[：:]\s*/, "");
   }
 
   function fromTopic(topic, worksArray, resourceMap, topicUnlocked) {

@@ -11058,8 +11058,14 @@
     sd.moods = (Array.isArray(draft.moods) ? draft.moods : []).map(normalizeMoodLabel).filter(Boolean);
     sd.whitespace = draft.whitespace || "";
 
-    td.text = "";
-    td.subjectHint = draft.subjectHint || "";
+    let extractedTheme = String(draft.subjectHint || draft.subject || "").trim();
+    if (!extractedTheme && draft.prompt) {
+      const rawPrompt = String(draft.prompt).trim();
+      const sentences = rawPrompt.split(/[。！？\n.!?]/).map((s) => s.trim()).filter(Boolean);
+      if (sentences.length > 0) extractedTheme = sentences[0].slice(0, 80);
+    }
+    td.text = extractedTheme;
+    td.subjectHint = draft.subjectHint || extractedTheme || "";
 
     cd.ratio = draft.ratio || "3:4";
     cd.mode = draft.mode === "pure-image" ? "pure" : (draft.mode || "graphic-text");
@@ -12910,13 +12916,17 @@
     if (btnHistory) btnHistory.onclick = () => { _modeMoreOpen = false; openHistoryPage(); };
   }
 
+  let isRenderingQuickStart = false;
   function renderQuickStart() {
-    if (!DOM.quickStage) return;
-    const isQuick = CS.stageView === "quick";
-    const isBatch = CS.stageView === "batch";
-    DOM.quickStage.style.display = (isQuick || isBatch) ? "block" : "none";
-    renderCreationModeBar();
-    if (!isQuick && !isBatch) return;
+    if (isRenderingQuickStart) return;
+    isRenderingQuickStart = true;
+    try {
+      if (!DOM.quickStage) return;
+      const isQuick = CS.stageView === "quick";
+      const isBatch = CS.stageView === "batch";
+      DOM.quickStage.style.display = (isQuick || isBatch) ? "block" : "none";
+      renderCreationModeBar();
+      if (!isQuick && !isBatch) return;
 
     if (isBatch) {
       let bp = getBatchParts();
@@ -13192,6 +13202,9 @@
         anchor.download = "handraw-output.webp"; anchor.rel = "noopener"; anchor.click();
       }
     });
+    } finally {
+      isRenderingQuickStart = false;
+    }
   }
 
   function renderCanvasTemplateLibrary() {
