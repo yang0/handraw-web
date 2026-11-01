@@ -888,7 +888,620 @@
   }
 
   function renderAssetDetailPage(root) {
-    location.replace(channelUrl("main", {view:"asset",id:UI.activeAssetId,tab:UI.assetFocusComments ? "comments" : UI.assetSubTab === "topics" ? "topics" : ""}));
+    const item = App.resourceMap.get(UI.activeAssetId);
+    if (!item) {
+      root.innerHTML = `
+        <div class="hw-locked-gate-box" style="padding:48px 24px;">
+          <div style="font-size:32px;margin-bottom:8px;">🔎</div>
+          <h2>未找到对应的画风或图型编号：${esc(UI.activeAssetId || "未知")}</h2>
+          <p style="color:var(--ink-muted);margin-bottom:18px;">该编号可能尚未入库或已被归档，请返回目录浏览全部视觉资产。</p>
+          <button type="button" class="btn btn-primary" id="asset-missing-back-btn">← 返回画风库</button>
+        </div>
+      `;
+      root.querySelector("#asset-missing-back-btn").onclick = () => switchView("styles");
+      return;
+    }
+
+    const isStyle = item.kind === "style";
+    const parentCatalogView = isStyle ? "styles" : "layouts";
+    const parentCatalogLabel = isStyle ? "🎨 画风库" : "📐 图型库";
+    const pool = isStyle ? App.styles : App.layouts;
+    const curIdx = pool.findIndex((x) => x.id === item.id);
+    const prevAsset = curIdx > 0 ? pool[curIdx - 1] : null;
+    const nextAsset = curIdx >= 0 && curIdx < pool.length - 1 ? pool[curIdx + 1] : null;
+
+    const favBucket = isStyle ? "styles" : "layouts";
+    const liked = S.isLiked(item.kind, item.id);
+    const likeCnt = S.getLikeCount(item.kind, item);
+    const collected = S.isCollected(favBucket, item.id);
+    const favCnt = S.getFavoriteCount(item.kind, item);
+    const assetComments = S.getAssetComments(item.id);
+    const unlocked = S.isUnlocked(item.id, item);
+    const relatedWorks = S.getAssetWorks(item.id);
+    const relatedTopics = S.getAssetTopics(item.id);
+    const contributorProf = item.author ? S.getCreatorProfile(item.author) : null;
+    const cheered = S.isCheered(item.id);
+    const effectiveSubTab = UI.assetSubTab === "topics" ? "topics" : "works";
+    const totalAssetWorks = S.getAssetWorkCount(item.id);
+
+    const contributorEncourageHtml = contributorProf
+      ? `
+        <div class="hw-stamp-bar">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="hw-author-chip" id="asset-page-open-contributor">
+              <span class="hw-creator-avatar-sm ${esc(contributorProf.honor.sealClass)}">${esc(contributorProf.avatarChar)}</span>
+              <strong>@${esc(contributorProf.authorName)}</strong>
+              <span class="hw-honor-badge ${esc(contributorProf.honor.sealClass)}">${esc(contributorProf.honor.badge)}</span>
+              <span class="hw-boost-pill">${esc(contributorProf.honor.boostText)}</span>
+            </button>
+            <button type="button" class="btn btn-sm" id="asset-page-visit-profile-btn">🏠 访问贡献者个人主页 (${contributorProf.totalPublished}作) ↗</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <button type="button" class="hw-stamp-btn ${cheered ? "is-active" : ""}" id="drawer-btn-cheer-asset">
+              👏 感谢贡献 (${item.cheers || 16})
+            </button>
+            <button type="button" class="hw-stamp-btn ${S.isCheered(item.id, "超实用配方") ? "is-active" : ""}" data-asset-stamp="超实用配方">🎯 超实用配方 (${S.getStampCount(item, "超实用配方")})</button>
+            <button type="button" class="hw-stamp-btn ${S.isCheered(item.id, "审美在线") ? "is-active" : ""}" data-asset-stamp="审美在线">✨ 审美在线 (${S.getStampCount(item, "审美在线")})</button>
+            <button type="button" class="btn btn-sm btn-gold" id="drawer-btn-tip-asset" style="margin-left:auto;">🎁 赞赏 +2✦ 鼓励作者</button>
+          </div>
+        </div>
+      `
+      : `
+        <div class="hw-stamp-bar">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <span style="font-size:12px;font-weight:800;color:var(--ink-muted);margin-right:4px;">官方标准编号 · 质量印章：</span>
+            <button type="button" class="hw-stamp-btn ${cheered ? "is-active" : ""}" id="drawer-btn-cheer-asset">
+              👏 好用推荐 (${item.cheers || 16})
+            </button>
+            <button type="button" class="hw-stamp-btn ${S.isCheered(item.id, "超实用配方") ? "is-active" : ""}" data-asset-stamp="超实用配方">🎯 超实用配方 (${S.getStampCount(item, "超实用配方")})</button>
+            <button type="button" class="hw-stamp-btn ${S.isCheered(item.id, "审美在线") ? "is-active" : ""}" data-asset-stamp="审美在线">✨ 审美在线 (${S.getStampCount(item, "审美在线")})</button>
+          </div>
+        </div>
+      `;
+
+    let defSectionHtml = "";
+    if (item.sourceType === "exclusive") {
+      if (item.tier === "pro_credit" && !unlocked) {
+        defSectionHtml = `
+          <div style="background:var(--gold-wash);border:1px solid var(--gold-border);border-radius:12px;padding:14px 16px;">
+            <div style="font-weight:800;color:var(--gold);margin-bottom:6px;">💎 Pro 官网在线独占${isStyle ? "画风" : "图型"}（底层参数黑盒保护）</div>
+            <p style="margin:0 0 12px;font-size:13.2px;color:var(--ink-body);">解锁后永久获得在线创作工坊调用权限，云端生图自动注入全套高阶笔触/排版控制，不对外导出明文提示词。</p>
+            <button type="button" class="btn btn-primary btn-sm" id="drawer-btn-unlock-exclusive">
+              🔓 使用 ${item.unlockCost} 积分永久解锁在线使用权
+            </button>
+          </div>
+        `;
+      } else {
+        defSectionHtml = `
+          <div style="background:var(--paper-inset);border:1px solid var(--line-strong);border-radius:12px;padding:14px 16px;font-size:13.2px;">
+            <strong>🔒 官网在线独占黑盒保护</strong>：${
+              App.state.loggedIn
+                ? `<span style="color:var(--jade);font-weight:700;">✅ 你的账号已解锁在线使用权！</span>点击上方「去在线创作台使用」即可在云端生图时自动挂载底层特征词。`
+                : `登录账号即可在在线创作工坊免费调用该独占${isStyle ? "画风" : "图型"}！`
+            }
+          </div>
+        `;
+      }
+    } else if (item.unlockCost > 0 && !unlocked) {
+      defSectionHtml = `
+        <div style="background:var(--vermilion-wash);border:1px solid var(--vermilion-border);border-radius:12px;padding:14px 16px;">
+          <div style="font-weight:800;color:var(--vermilion);margin-bottom:6px;">✨ 社区共创付费${isStyle ? "画风" : "图型"}（${item.unlockCost} 积分，80% 归原作者）</div>
+          <button type="button" class="btn btn-primary btn-sm" id="drawer-btn-unlock-comm">
+            🔓 花费 ${item.unlockCost} 积分解锁定义词与在线调用
+          </button>
+        </div>
+      `;
+    } else {
+      defSectionHtml = `
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span style="font-size:12.8px;font-weight:800;color:var(--ink-muted);">📜 标准定义与视觉特征描述</span>
+            <button type="button" class="btn btn-sm" id="drawer-btn-copy-def">📋 复制定义词</button>
+          </div>
+          <div class="hw-prompt-box">${esc(item.definition || item.description)}</div>
+        </div>
+      `;
+    }
+
+    const inlineDrawerHtml =
+      UI.assetInlineDrawer === "share"
+        ? S.renderInlineSharePanelHtml(item.kind, item)
+        : UI.assetInlineDrawer === "report"
+        ? S.renderInlineReportPanelHtml("asset", item.id, `${item.id} ${item.name}`)
+        : "";
+
+    let subContentHtml = "";
+    if (effectiveSubTab === "works") {
+      if (relatedWorks.length === 0) {
+        subContentHtml = `
+          <div class="hw-locked-gate-box" style="border-color:var(--gold-border);background:var(--gold-wash);">
+            <div style="font-size:26px;margin-bottom:6px;">🌟</div>
+            <h3 style="margin:0 0 6px;font-size:16px;color:var(--gold);">当前暂无挂载此编号的实测成片</h3>
+            <p style="margin:0 0 14px;font-size:13px;color:var(--ink-body);">
+              前往社区论坛独立发帖页附加多图实测成片与调参心得，立得 <strong>+5✦ 积分</strong>！
+            </p>
+            <button type="button" class="btn btn-primary" id="drawer-btn-pioneer-share">
+              ✏️ 去论坛独立页发同款图文帖 (+5✦) ↗
+            </button>
+          </div>
+        `;
+      } else {
+        subContentHtml = `
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px;">
+            ${relatedWorks
+              .map(
+                (w) => `
+                  <article class="hw-card" style="margin:0;cursor:pointer;" data-drawer-open-work="${esc(w.id)}">
+                    <div class="hw-card-media">
+                      ${S.isFreshRelease(w) ? `<span class="hw-card-badge-tl badge-new-release">🆕 新发</span>` : w.price > 0 && !S.isUnlocked(w.id, w) ? `<span class="hw-card-badge-tl badge-paid">💎 ${w.price}积分</span>` : ""}
+                      <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" style="height:165px;object-fit:cover;" />
+                    </div>
+                    <div style="padding:10px 12px;">
+                      <div style="font-size:13.5px;font-weight:750;line-height:1.38;margin-bottom:5px;">${esc(w.title)}</div>
+                      <div style="font-size:12px;color:var(--ink-muted);">@${esc(w.authorName)} · 👍 ${S.getLikeCount("work", w)} · ♥ ${S.getFavoriteCount("work", w)} · 💬 ${(w.comments || []).length}</div>
+                    </div>
+                  </article>
+                `
+              )
+              .join("")}
+          </div>
+        `;
+      }
+    } else {
+      subContentHtml =
+        relatedTopics.length === 0
+          ? `<div style="padding:28px;text-align:center;color:var(--ink-muted);background:var(--paper-bg);border-radius:12px;">暂无关联论坛帖，去论坛独立发帖页分享你的使用心得立得 +5 积分！</div>`
+          : `<div style="display:grid;gap:10px;">
+              ${relatedTopics
+                .map(
+                  (t) => `
+                    <a class="smart-embed-card" href="${esc(channelUrl("forum", { view: "topic", id: t.id }))}" style="justify-content:space-between;text-decoration:none;">
+                      <div>
+                        <div style="font-size:11.8px;color:var(--vermilion);font-weight:800;">${esc(t.categoryLabel)} ${t.price > 0 ? `· 💎 ${t.price}积分解锁干货` : ""} ${t.bounty > 0 ? `· 💰 悬赏 ${t.bounty}积分` : ""}</div>
+                        <div style="font-weight:800;font-size:14.5px;margin:3px 0;color:var(--ink-strong);">${esc(t.title)}</div>
+                        <div style="font-size:12px;color:var(--ink-muted);">@${esc(t.authorName)} · 💬 ${(t.replies || []).length} 条回复 · 👁️ ${t.views || 0}</div>
+                      </div>
+                      <span class="btn btn-sm">阅读帖子详情 ↗</span>
+                    </a>
+                  `
+                )
+                .join("")}
+            </div>`;
+    }
+
+    root.innerHTML = `
+      <div class="hw-detail-page" id="standalone-asset-detail-page">
+        <nav class="hw-subpage-bar" aria-label="详情页返回与翻页导航">
+          <div class="hw-subpage-crumbs">
+            <button type="button" class="btn btn-sm" id="asset-btn-back">← 返回${esc(isStyle ? "画风库" : "图型库")}</button>
+            <span>/</span>
+            <button type="button" class="hw-pill" style="padding:2px 10px;font-size:12px;" id="asset-crumb-catalog">${esc(parentCatalogLabel)}</button>
+            <span>/</span>
+            <strong>#${esc(item.id)} ${esc(item.name)}</strong>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            ${
+              prevAsset
+                ? `<button type="button" class="btn btn-sm" data-nav-asset="${esc(prevAsset.id)}">◀ 上一款 (${esc(prevAsset.id)})</button>`
+                : ""
+            }
+            ${
+              nextAsset
+                ? `<button type="button" class="btn btn-sm" data-nav-asset="${esc(nextAsset.id)}">下一款 (${esc(nextAsset.id)}) ▶</button>`
+                : ""
+            }
+          </div>
+        </nav>
+
+        <section class="hw-detail-grid">
+          <div class="hw-detail-stage-wrap">
+            <div class="hw-detail-stage">
+              <img class="main-stage-img" src="${esc(item.image)}" alt="${esc(item.name)}" />
+              <div style="color:#d8cfc3;font-size:12.5px;">
+                标准视觉样张 · 编号 <strong>${esc(item.id)}</strong> ${item.legacy ? `(兼容旧版 #${esc(item.legacy)})` : ""} · 累计驱动 <strong>${totalAssetWorks}</strong> 件实测作品
+              </div>
+            </div>
+            ${contributorEncourageHtml}
+          </div>
+
+          <div class="hw-detail-meta-card">
+            ${
+              S.isAdmin && S.isAdmin()
+                ? `
+                  <div id="asset-admin-drawer" style="background:rgba(180,40,20,0.06);border:1px solid rgba(180,40,20,0.25);border-radius:10px;padding:9px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <div style="font-size:12.5px;color:var(--vermilion);font-weight:750;">
+                      👑 <strong>超管黑盒与资产管理</strong>：${esc(item.tier || "标准")} · ${item.sourceType === "exclusive" ? "🔒 云端独占" : "🌐 开放"}
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                      <button type="button" class="btn btn-sm btn-gold" id="asset-admin-edit-btn">✏️ 编辑资产与黑盒参数</button>
+                      ${item.sourceType === "community" ? `<button type="button" class="btn btn-sm" id="asset-admin-toggle-status-btn" style="color:var(--vermilion);">${item.status === "paused" ? "▶️ 恢复资产" : "⏸️ 下架审查"}</button>` : ""}
+                    </div>
+                  </div>
+                `
+                : S.canManageGlobal && S.canManageGlobal() && item.sourceType === "community"
+                ? `
+                  <div id="asset-operator-drawer" style="background:rgba(31,95,139,0.08);border:1px solid rgba(31,95,139,0.25);border-radius:10px;padding:9px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <div style="font-size:12.5px;color:#1f5f8b;font-weight:750;">
+                      🧭 <strong>运营审查</strong>：社区共创资产治理 (${item.status === "paused" ? "已下架" : "已上架"})
+                    </div>
+                    <button type="button" class="btn btn-sm" id="asset-admin-toggle-status-btn" style="color:var(--vermilion);">${item.status === "paused" ? "▶️ 恢复上架" : "⏸️ 下架审查"}</button>
+                  </div>
+                `
+                : ""
+            }
+            <div>
+              <p class="hw-editorial-eyebrow" style="margin-bottom:6px;">
+                ${isStyle ? "画风标本与实测配方详情" : "图型标本与版式结构详情"}
+              </p>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+                <span class="hw-recipe-pill ${!isStyle ? "is-layout" : ""}" style="font-size:12.5px;padding:3px 9px;">#${esc(item.id)}</span>
+                <span class="hw-card-group-tag" style="font-size:12px;padding:2px 8px;">${esc(item.group)}</span>
+                ${S.isFreshRelease(item) ? `<span class="hw-honor-badge honor-pioneer">🌱 72h 新发曝光扶持中</span>` : ""}
+                ${item.sourceType === "community" ? `<span class="hw-honor-badge honor-gold">✨ 社区共创资产</span>` : ""}
+              </div>
+              <h1 class="hw-detail-title">${esc(item.id)} · ${esc(item.name)}</h1>
+              <p style="margin:10px 0 0;font-size:14.5px;color:var(--ink-body);line-height:1.68;">${esc(item.description || "")}</p>
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-top:4px;">
+              <a class="btn btn-primary" href="${esc(channelUrl("studio", isStyle ? { style: item.id } : { layout: item.id }))}">
+                ✨ 用此${isStyle ? "画风" : "图型"}去无限画布创作 ↗
+              </a>
+              <button type="button" class="btn ${liked ? "btn-primary" : ""}" id="drawer-btn-like">
+                👍 ${liked ? "已赞" : "点赞"} (${likeCnt})
+              </button>
+              <button type="button" class="btn ${collected ? "btn-primary" : ""}" id="drawer-btn-collect">
+                ${collected ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
+              </button>
+              <button type="button" class="btn" id="drawer-btn-forum-compose">
+                📑 作为卡片分享到论坛 ↗
+              </button>
+              <button type="button" class="btn btn-gold" id="drawer-btn-share">
+                📤 分享赚积分
+              </button>
+              <button type="button" class="btn btn-sm" id="drawer-btn-report-asset" title="举报违规或标注不实资产">
+                🚩 举报
+              </button>
+            </div>
+
+            ${inlineDrawerHtml}
+
+            ${defSectionHtml}
+          </div>
+        </section>
+
+        <!-- FULL-WIDTH STANDALONE COMMENTS SECTION -->
+        <section class="hw-detail-section-card" id="asset-comments-box">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+            <div>
+              <h2 style="margin:0;font-size:19px;font-family:var(--font-serif);">
+                💬 ${isStyle ? "画风" : "图型"}实测评论与避坑心得 (${assetComments.length})
+              </h2>
+              <div style="font-size:12.5px;color:var(--ink-muted);margin-top:3px;">
+                交流 <code>#${esc(item.id)}</code> 的笔触表现、适用主题、文字留白控制与混搭建议
+              </div>
+            </div>
+          </div>
+
+          <div class="hw-comments-composer">
+            <textarea class="hw-textarea" rows="3" id="asset-comment-input" placeholder="写下你对 #${esc(item.id)} ${esc(item.name)} 的实测出图评价、提示词调参心得或搭配建议…"></textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+              <span style="font-size:12px;color:var(--ink-muted);">友善真实的实测反馈将帮助更多创作者少走弯路</span>
+              <button type="button" class="btn btn-primary" id="asset-comment-send">💬 发表评论</button>
+            </div>
+          </div>
+
+          <div class="hw-comments-list">
+            ${
+              assetComments.length === 0
+                ? `<div style="padding:28px;text-align:center;font-size:13.5px;color:var(--ink-muted);background:var(--paper-bg);border-radius:12px;">暂无评论，来写下第一条关于 <code>#${esc(item.id)}</code> 的出图质感评价或配比心得吧～</div>`
+                : assetComments
+                    .map((c, idx) => {
+                      const cUser = c.user || c.username || "";
+                      const cProf = cUser ? S.getCreatorProfile(cUser) : null;
+                      const avatarChar = cProf ? cProf.avatarChar : String(c.name || "绘").charAt(0).toUpperCase();
+                      return `
+                        <div class="hw-comment-item">
+                          <span class="hw-creator-avatar-md ${esc(cProf ? cProf.honor.sealClass : "")}" style="${cUser ? "cursor:pointer;" : ""}" ${cUser ? `data-open-creator="${esc(cUser)}"` : ""}>${esc(avatarChar)}</span>
+                          <div style="flex:1;min-width:0;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                <strong style="font-size:13.5px;${cUser ? "cursor:pointer;" : ""}" ${cUser ? `data-open-creator="${esc(cUser)}"` : ""}>@${esc(c.name)}</strong>
+                                ${cProf ? `<span class="hw-honor-badge ${esc(cProf.honor.sealClass)}" style="font-size:10px;padding:0 5px;">${esc(cProf.honor.shortBadge)}</span>` : ""}
+                                <span style="color:var(--ink-faint);font-size:11.8px;">${esc(c.time)}</span>
+                              </div>
+                              <div style="display:flex;gap:6px;align-items:center;">
+                                ${S.isStaff && S.isStaff() ? `<button type="button" class="btn btn-sm" data-hide-asset-comment="${esc(c.id || idx)}" style="font-size:11px;padding:1px 6px;color:var(--ink-muted);">🙈 隐藏</button>` : ""}
+                                ${(S.canDeleteComment ? S.canDeleteComment(c) : (App.state.loggedIn && (cUser === App.state.user.username || (S.isStaff && S.isStaff())))) ? `<button type="button" class="btn btn-sm" data-del-asset-comment="${esc(c.id || idx)}" style="font-size:11px;padding:1px 6px;color:var(--vermilion);">🗑️ 删除</button>` : ""}
+                                <span class="hw-comment-floor">#${idx + 1}楼</span>
+                              </div>
+                            </div>
+                            <div style="font-size:14px;color:var(--ink-body);line-height:1.62;">${esc(c.text)}</div>
+                          </div>
+                        </div>
+                      `;
+                    })
+                    .join("")
+            }
+          </div>
+        </section>
+
+        <!-- FULL-WIDTH RELATED COMMUNITY WORKS & FORUM TOPICS -->
+        <section class="hw-detail-section-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+            <div class="hw-segmented">
+              <button type="button" class="hw-seg-btn ${effectiveSubTab === "works" ? "is-active" : ""}" id="drawer-tab-works">
+                🖼️ 社区同款实测作品 (${totalAssetWorks})
+              </button>
+              <button type="button" class="hw-seg-btn ${effectiveSubTab === "topics" ? "is-active" : ""}" id="drawer-tab-topics">
+                📋 关联论坛讨论帖 (${relatedTopics.length})
+              </button>
+            </div>
+            <button type="button" class="btn btn-sm btn-primary" id="drawer-btn-add-work">
+              📑 作为卡片分享到论坛交流 (+5✦) ↗
+            </button>
+          </div>
+          ${subContentHtml}
+        </section>
+      </div>
+    `;
+
+    root.querySelector("#asset-btn-back").onclick = () => navigateBack(parentCatalogView);
+    root.querySelector("#asset-crumb-catalog").onclick = () => switchView(parentCatalogView);
+    root.querySelectorAll("[data-nav-asset]").forEach((btn) => {
+      btn.onclick = () => openAssetPage(btn.getAttribute("data-nav-asset"));
+    });
+
+    const openContrib = root.querySelector("#asset-page-open-contributor");
+    if (openContrib && contributorProf) {
+      openContrib.onclick = () => openProfilePage(contributorProf.username, "works");
+    }
+    const visitContribBtn = root.querySelector("#asset-page-visit-profile-btn");
+    if (visitContribBtn && contributorProf) {
+      visitContribBtn.onclick = () => openProfilePage(contributorProf.username, "works");
+    }
+
+    root.querySelectorAll("[data-open-creator]").forEach((el) => {
+      el.onclick = (e) => {
+        e.stopPropagation();
+        openProfilePage(el.getAttribute("data-open-creator"), "works");
+      };
+    });
+
+    const cheerAssetBtn = root.querySelector("#drawer-btn-cheer-asset");
+    if (cheerAssetBtn) {
+      cheerAssetBtn.onclick = () => S.toggleCheerItem("asset", item.id);
+    }
+    root.querySelectorAll("[data-asset-stamp]").forEach((sb) => {
+      sb.onclick = () => S.toggleCheerItem("asset", item.id, sb.getAttribute("data-asset-stamp"));
+    });
+    const tipAssetBtn = root.querySelector("#drawer-btn-tip-asset");
+    if (tipAssetBtn) {
+      tipAssetBtn.onclick = () => S.sendEncourageTip("asset", item.id, 2);
+    }
+
+    root.querySelector("#drawer-btn-like").onclick = () => {
+      S.toggleLike(item.kind, item.id, `${item.id} ${item.name}`);
+    };
+    root.querySelector("#drawer-btn-collect").onclick = () => {
+      S.toggleCollect(favBucket, item.id, `${item.id} ${item.name}`);
+    };
+    root.querySelector("#drawer-btn-forum-compose").onclick = () =>
+      S.goToForumCompose({
+        category: "assets",
+        style1: isStyle ? item.id : "",
+        layout: !isStyle ? item.id : "",
+        topicTitle: `围绕${isStyle ? "画风" : "图型"}《${item.name}》的创作实测分享`,
+        sharedCard: {
+          kind: isStyle ? "style" : "layout",
+          id: item.id,
+          title: item.name,
+          image: item.image,
+          authorName: item.authorName || "Handraw 官方",
+          desc: item.description || ""
+        }
+      });
+
+    root.querySelector("#drawer-btn-share").onclick = () => {
+      UI.assetInlineDrawer = UI.assetInlineDrawer === "share" ? "" : "share";
+      renderMain();
+    };
+    root.querySelector("#drawer-btn-report-asset").onclick = () => {
+      if (!App.state.loggedIn) {
+        openAuthPage("登录后即可参与社区内容自治举报反馈", () => {
+          UI.assetInlineDrawer = "report";
+          renderMain();
+        });
+        return;
+      }
+      UI.assetInlineDrawer = UI.assetInlineDrawer === "report" ? "" : "report";
+      renderMain();
+    };
+
+    if (UI.assetInlineDrawer === "share") {
+      S.bindInlineSharePanel(root, item.kind, item, () => {
+        UI.assetInlineDrawer = "";
+        renderMain();
+      });
+    } else if (UI.assetInlineDrawer === "report") {
+      S.bindInlineReportPanel(root, "asset", item.id, () => {
+        UI.assetInlineDrawer = "";
+        renderMain();
+      });
+    }
+
+    const cmtInput = root.querySelector("#asset-comment-input");
+    const cmtSend = root.querySelector("#asset-comment-send");
+    if (UI.assetFocusComments && cmtInput) {
+      UI.assetFocusComments = false;
+      setTimeout(() => {
+        const box = document.getElementById("asset-comments-box");
+        if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+        cmtInput.focus();
+      }, 40);
+    }
+    if (cmtSend) {
+      cmtSend.onclick = async () => {
+        const val = cmtInput.value.trim();
+        if (!val) {
+          toast("请输入评论内容");
+          return;
+        }
+        try {
+          const created = await S.submitAssetComment(item.id, item.kind, val);
+          if (created) renderMain();
+        } catch (err) {
+          toast(`评论失败：${err.message}`);
+        }
+      };
+    }
+
+    const copyDef = root.querySelector("#drawer-btn-copy-def");
+    if (copyDef) {
+      copyDef.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(item.definition || item.description || "");
+        } catch (_) {}
+        toast(`📋 已复制 ${item.id} 定义词`);
+      };
+    }
+
+    const unlockExcl = root.querySelector("#drawer-btn-unlock-exclusive");
+    if (unlockExcl) {
+      unlockExcl.onclick = () => {
+        if (S.unlockWithCredits(item.id, item.unlockCost, `${item.id} ${item.name}`, "", () => renderMain())) {
+          renderMain();
+        }
+      };
+    }
+
+    const unlockComm = root.querySelector("#drawer-btn-unlock-comm");
+    if (unlockComm) {
+      unlockComm.onclick = () => {
+        if (S.unlockWithCredits(item.id, item.unlockCost, `${item.id} ${item.name}`, item.authorName, () => renderMain())) {
+          renderMain();
+        }
+      };
+    }
+
+    root.querySelector("#drawer-tab-works").onclick = () => {
+      UI.assetSubTab = "works";
+      syncUrl(false);
+      renderMain();
+    };
+    root.querySelector("#drawer-tab-topics").onclick = () => {
+      UI.assetSubTab = "topics";
+      syncUrl(false);
+      renderMain();
+    };
+
+    const pioneerBtn = root.querySelector("#drawer-btn-pioneer-share");
+    if (pioneerBtn) {
+      pioneerBtn.onclick = () =>
+        S.goToForumCompose({
+          category: "assets",
+          style1: isStyle ? item.id : "",
+          layout: !isStyle ? item.id : "",
+          topicTitle: `首晒《${item.name}》实测图文与配方心得`,
+          sharedCard: {
+            kind: isStyle ? "style" : "layout",
+            id: item.id,
+            title: item.name,
+            image: item.image,
+            authorName: item.authorName || "Handraw 官方",
+            desc: item.description || ""
+          }
+        });
+    }
+
+    const addWorkBtn = root.querySelector("#drawer-btn-add-work");
+    if (addWorkBtn) {
+      addWorkBtn.onclick = () =>
+        S.goToForumCompose({
+          category: "assets",
+          style1: isStyle ? item.id : "",
+          layout: !isStyle ? item.id : "",
+          topicTitle: `围绕《${item.name}》实测成片对比分享`,
+          sharedCard: {
+            kind: isStyle ? "style" : "layout",
+            id: item.id,
+            title: item.name,
+            image: item.image,
+            authorName: item.authorName || "Handraw 官方",
+            desc: item.description || ""
+          }
+        });
+    }
+
+    root.querySelectorAll("[data-drawer-open-work]").forEach((card) => {
+      card.onclick = () => openWorkPage(card.getAttribute("data-drawer-open-work"));
+    });
+
+    // Asset In-Place Admin & Operator Handlers
+    const assetAdminEditBtn = root.querySelector("#asset-admin-edit-btn");
+    if (assetAdminEditBtn) {
+      assetAdminEditBtn.onclick = () => openFrontAssetEditModal(item.id);
+    }
+    const assetToggleBtn = root.querySelector("#asset-admin-toggle-status-btn");
+    if (assetToggleBtn) {
+      assetToggleBtn.onclick = async () => {
+        const nextStatus = item.status === "paused" ? "active" : "paused";
+        if (!confirm(`确定要将资产 #${item.id} 状态修改为 [${nextStatus}] 吗？`)) return;
+        try {
+          if (App.state.serverBacked) {
+            await S.apiJson(`/api/admin/assets/${encodeURIComponent(item.id)}`, {
+              method: "PATCH",
+              body: { status: nextStatus }
+            });
+          }
+          item.status = nextStatus;
+          toast(`✅ 资产状态已修改为 ${nextStatus}！`);
+          await S.refreshFromServer();
+          renderMain();
+        } catch (err) {
+          toast(`操作失败：${err.message}`);
+        }
+      };
+    }
+
+    // Asset comments delete & hide
+    root.querySelectorAll("[data-del-asset-comment]").forEach((btn) => {
+      btn.onclick = async () => {
+        const cid = btn.getAttribute("data-del-asset-comment");
+        if (!confirm("确定要删除此条资产评论吗？")) return;
+        try {
+          if (App.state.serverBacked) {
+            await S.apiJson(`/api/comments/moderate`, {
+              method: "POST",
+              body: { commentType: "asset_comment", id: cid, assetCode: item.id, action: "delete" }
+            });
+          }
+          toast("🗑️ 资产评论已删除！");
+          await S.refreshFromServer();
+          renderMain();
+        } catch (err) {
+          toast(`删除评论失败：${err.message}`);
+        }
+      };
+    });
+    root.querySelectorAll("[data-hide-asset-comment]").forEach((btn) => {
+      btn.onclick = async () => {
+        const cid = btn.getAttribute("data-hide-asset-comment");
+        try {
+          if (App.state.serverBacked) {
+            await S.apiJson(`/api/comments/moderate`, {
+              method: "POST",
+              body: { commentType: "asset_comment", id: cid, assetCode: item.id, action: "hide" }
+            });
+          }
+          toast("🙈 资产评论已隐藏！");
+          await S.refreshFromServer();
+          renderMain();
+        } catch (err) {
+          toast(`操作失败：${err.message}`);
+        }
+      };
+    });
   }
 
   function renderWorksSquare(root) {

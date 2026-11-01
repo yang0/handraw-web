@@ -114,6 +114,41 @@ def _handle_t_redirect(handler: Any, ref: str, qs: dict[str, list[str]] | None =
     user = handler._current_user(required=False)
     topic_id = _resolve_ref_to_topic_id(conn, ref, user)
     if not topic_id:
+        code = ""
+        kind = None
+        ref_clean = ref.strip()
+        ref_lower = ref_clean.lower()
+        if ref_lower.startswith("style-"):
+            cand = ref_clean[6:].strip().upper().lstrip("#")
+            if resolve_resource(conn, "style", cand):
+                code = cand
+                kind = "style"
+        elif ref_lower.startswith("layout-"):
+            cand = ref_clean[7:].strip().upper().lstrip("#")
+            if resolve_resource(conn, "layout", cand):
+                code = cand
+                kind = "layout"
+        else:
+            cand = ref_clean.upper().lstrip("#")
+            if resolve_resource(conn, "style", cand):
+                code = cand
+                kind = "style"
+            elif resolve_resource(conn, "layout", cand):
+                code = cand
+                kind = "layout"
+
+        if kind and code:
+            location = f"/?view=asset&id={code}"
+            if qs and qs.get("focus"):
+                focus_vals = qs.get("focus") or []
+                if focus_vals and focus_vals[0] == "comment":
+                    location += "&tab=comments"
+            handler.send_response(302)
+            handler.send_header("Location", location)
+            handler._cors_headers()
+            handler.end_headers()
+            return True
+
         handler.send_error(404, "Not found")
         return True
     location = f"/forum/?view=topic&id={topic_id}"

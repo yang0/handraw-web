@@ -323,6 +323,55 @@ class PostRoutesHTTPTests(unittest.TestCase):
         code, _ = self._request_raw_redirect("/t/nonexistent_ref_123456")
         self.assertEqual(code, 404)
 
+    def test_t_redirect_fallback_to_standalone_asset(self):
+        """When style/layout has no mapped topic, /t/{ref} 302s to /?view=asset&id=<CODE>."""
+        conn = self.db.get_conn()
+        saved = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT kind, target_id, topic_id, origin, created_at FROM curation_resource_topics WHERE UPPER(target_id) IN ('FA-001', 'SC-021')"
+            ).fetchall()
+        ]
+        try:
+            conn.execute("DELETE FROM curation_resource_topics WHERE UPPER(target_id) IN ('FA-001', 'SC-021')")
+            conn.commit()
+
+            # 1. Plain style code
+            code, loc = self._request_raw_redirect("/t/FA-001")
+            self.assertEqual(code, 302)
+            self.assertEqual(loc, "/?view=asset&id=FA-001")
+
+            # 2. Semantic prefix style-
+            code, loc = self._request_raw_redirect("/t/style-FA-001")
+            self.assertEqual(code, 302)
+            self.assertEqual(loc, "/?view=asset&id=FA-001")
+
+            # 3. Plain layout code
+            code, loc = self._request_raw_redirect("/t/SC-021")
+            self.assertEqual(code, 302)
+            self.assertEqual(loc, "/?view=asset&id=SC-021")
+
+            # 4. Semantic prefix layout-
+            code, loc = self._request_raw_redirect("/t/layout-SC-021")
+            self.assertEqual(code, 302)
+            self.assertEqual(loc, "/?view=asset&id=SC-021")
+
+            # 5. With focus=comment
+            code, loc = self._request_raw_redirect("/t/FA-001?focus=comment")
+            self.assertEqual(code, 302)
+            self.assertEqual(loc, "/?view=asset&id=FA-001&tab=comments")
+
+            # 6. Truly nonexistent resource -> 404
+            code, _ = self._request_raw_redirect("/t/nonexistent_ref_999999")
+            self.assertEqual(code, 404)
+        finally:
+            for r in saved:
+                conn.execute(
+                    "INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (r["kind"], r["target_id"], r["topic_id"], r["origin"], r["created_at"]),
+                )
+            conn.commit()
+
     def test_get_endpoints_do_not_write_database(self):
         """7. GET /api/boot and post GET endpoints do not write to database."""
         conn = self.db.get_conn()

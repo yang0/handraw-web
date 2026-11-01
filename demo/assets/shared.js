@@ -414,33 +414,32 @@
 
   function channelUrl(targetChannel, paramsObj) {
     // All public resource links have one canonical forum destination.
-    if (targetChannel === "main" && ["asset", "work"].includes(paramsObj?.view)) {
-      const { view, id, tab, focus, panel } = paramsObj;
+    if (targetChannel === "main" && paramsObj?.tab === "topics" && ["asset", "work"].includes(paramsObj?.view)) {
+      const { view, id, tab, panel } = paramsObj;
       const item = App.resourceMap?.get(String(id || "").toUpperCase());
-      if (tab === "topics") {
-        targetChannel = "forum";
-        paramsObj = { view: "related", kind: view === "work" ? "work" : item?.kind || "asset", id, tab: "topics" };
-        if (panel === 'report' || tab === 'report') paramsObj.panel = 'report';
-      } else {
-        const extra = {};
-        if (focus || tab === "comments") extra.focus = "comment";
-        if (panel === "report" || tab === "report") extra.panel = "report";
-        const qs = new URLSearchParams(extra).toString();
-        const suffix = qs ? `?${qs}` : "";
-        const ref = encodeURIComponent(id || "");
-        const host = window.location.hostname.toLowerCase();
-        const proto = window.location.protocol;
-        if (host.endsWith("handraw-style.com")) {
-          const rootDomain = "handraw-style.com";
-          const portPart = window.location.port ? `:${window.location.port}` : "";
-          return `${proto}//forum.${rootDomain}${portPart}/t/${ref}${suffix}`;
-        }
-        if (host.endsWith(".localhost")) {
-          const portPart = window.location.port ? `:${window.location.port}` : "";
-          return `${proto}//forum.localhost${portPart}/t/${ref}${suffix}`;
-        }
-        return `/t/${ref}${suffix}`;
+      targetChannel = "forum";
+      paramsObj = { view: "related", kind: view === "work" ? "work" : item?.kind || "asset", id, tab: "topics" };
+      if (panel === 'report' || tab === 'report') paramsObj.panel = 'report';
+    } else if (targetChannel === "main" && paramsObj?.view === "work") {
+      const { id, tab, focus, panel } = paramsObj;
+      const extra = {};
+      if (focus || tab === "comments") extra.focus = "comment";
+      if (panel === "report" || tab === "report") extra.panel = "report";
+      const qs = new URLSearchParams(extra).toString();
+      const suffix = qs ? `?${qs}` : "";
+      const ref = encodeURIComponent(id || "");
+      const host = window.location.hostname.toLowerCase();
+      const proto = window.location.protocol;
+      if (host.endsWith("handraw-style.com")) {
+        const rootDomain = "handraw-style.com";
+        const portPart = window.location.port ? `:${window.location.port}` : "";
+        return `${proto}//forum.${rootDomain}${portPart}/t/${ref}${suffix}`;
       }
+      if (host.endsWith(".localhost")) {
+        const portPart = window.location.port ? `:${window.location.port}` : "";
+        return `${proto}//forum.localhost${portPart}/t/${ref}${suffix}`;
+      }
+      return `/t/${ref}${suffix}`;
     }
     const host = window.location.hostname.toLowerCase();
     const proto = window.location.protocol;
