@@ -1904,8 +1904,8 @@
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
                 isSel ? "0 0 0 3px rgba(209,75,40,0.18)" : "0 2px 6px rgba(24,20,17,0.04)"
               };">
-                  <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
-                    <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
+                  <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+                    <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:contain;display:block;" />
                     ${
                       isSel
                         ? `<span style="position:absolute;right:6px;top:6px;padding:2px 7px;border-radius:999px;background:var(--vermilion);color:#fff;font-size:10.5px;font-weight:800;">✓ 已选</span>`
@@ -2343,8 +2343,8 @@
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
                 isSel ? "0 0 0 3px rgba(209,75,40,0.16)" : "0 2px 6px rgba(24,20,17,0.04)"
               };">
-                  <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
-                    <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
+                  <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+                    <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:contain;display:block;" />
                     <span style="position:absolute;right:6px;top:6px;padding:2px 6px;border-radius:5px;background:${
                       isSel ? "var(--vermilion)" : "rgba(255,252,247,0.92)"
                     };color:${isSel ? "#fff" : "#2b2520"};font-size:10px;font-weight:700;">
@@ -3246,8 +3246,8 @@
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
                 isSel ? "0 0 0 3px rgba(13,148,136,0.2)" : "0 2px 6px rgba(24,20,17,0.04)"
               };">
-                  <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
-                    <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
+                  <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+                    <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:contain;display:block;" />
                     ${
                       isSel
                         ? `<span style="position:absolute;right:6px;top:6px;padding:2px 8px;border-radius:999px;background:#0d9488;color:#fff;font-size:10.5px;font-weight:850;">循环 #${orderIdx + 1}</span>`
@@ -4368,6 +4368,28 @@
     const rec = E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
     const mode = cd.mode === "xhs-batch" ? "series" : cd.mode || "graphic-text";
 
+    function attachRecipeSnapshots(specsList) {
+      if (!Array.isArray(specsList)) return;
+      specsList.forEach((sp) => {
+        if (!sp.recipeSnapshot) {
+          const s1 = sp.style1 || rec.style1Id || "";
+          const s2 = rec.style2Id || "";
+          const lay = sp.layout || rec.layoutId || "";
+          const s1Res = s1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s1) || rec.style1Res) : rec.style1Res;
+          const s2Res = s2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s2) || rec.style2Res) : rec.style2Res;
+          const layRes = lay && Catalog?.resourceMap ? (Catalog.resourceMap.get(lay) || rec.layoutRes) : rec.layoutRes;
+          sp.recipeSnapshot = {
+            style1: s1,
+            style1Name: s1Res?.name || s1Res?.title || "",
+            style2: s2,
+            style2Name: s2Res?.name || s2Res?.title || "",
+            layout: lay,
+            layoutName: layRes?.name || layRes?.title || ""
+          };
+        }
+      });
+    }
+
     if (mode === "article-illust") {
       const mdText =
         rec.articleSource ||
@@ -4386,11 +4408,13 @@
           ? { ...s, theme: `${s.theme}（补充要求：${shortNote}）` }
           : s
       );
-      return {
+      const planRes = {
         kind: "article",
         markdown: mdText,
         specs: slots
       };
+      attachRecipeSnapshots(planRes.specs);
+      return planRes;
     }
 
     if (rec.loopNode) {
@@ -4428,19 +4452,21 @@
           });
         }
       }
-      return {
+      const loopPlan = {
         kind: "loop",
         loopNodeId: rec.loopNode.id,
         loopCount: loopIters.length,
         markdown: rec.combinedText || "",
         specs: loopSpecs
       };
+      attachRecipeSnapshots(loopPlan.specs);
+      return loopPlan;
     }
 
     // Direct Fission -> Output Control (if user connects 选题裂变 straight to 输出控制 without 循环批量)
     if (rec.fissionNode && Array.isArray(rec.fissionNode.data?.generatedItems) && rec.fissionNode.data.generatedItems.length > 0) {
       const fItems = rec.fissionNode.data.generatedItems.slice(0, 200);
-      return {
+      const fisPlan = {
         kind: "loop",
         loopNodeId: "",
         loopCount: fItems.length,
@@ -4460,13 +4486,15 @@
           sampleImg: ""
         }))
       };
+      attachRecipeSnapshots(fisPlan.specs);
+      return fisPlan;
     }
 
     if (mode === "series") {
       const count = Math.min(200, Math.max(1, Math.round(Number(cd.count) || 4)));
       const topic = rec.combinedText || "高效手绘视觉笔记创作方法论";
       const slides = E.buildSeriesSlidesSpec(topic, count, cd.ratio || "3:4");
-      return {
+      const serPlan = {
         kind: "series",
         markdown: topic,
         specs: slides.map((s) => ({
@@ -4474,6 +4502,8 @@
           layout: cd.mixLayouts !== false ? s.layout : rec.layoutId || ""
         }))
       };
+      attachRecipeSnapshots(serPlan.specs);
+      return serPlan;
     }
 
     const count = Math.min(200, Math.max(1, Math.round(Number(cd.count) || 1)));
@@ -4492,11 +4522,13 @@
         sampleImg: ""
       };
     });
-    return {
+    const defaultPlan = {
       kind: count > 1 ? "multi" : "single",
       markdown: rec.combinedText || "",
       specs
     };
+    attachRecipeSnapshots(defaultPlan.specs);
+    return defaultPlan;
   }
 
   function checkExclusiveGateForControl(ctrlNode) {
@@ -4588,7 +4620,8 @@
         prompt: task.prompt || entry.prompt || "",
         imageUrl: url,
         generationMode: "live",
-        demoMode: false
+        demoMode: false,
+        recipeSnapshot: task.recipeSnapshot || entry.recipeSnapshot || null
       }));
     }
     CS.generationHistory = history.slice(0, 40);
@@ -4710,7 +4743,8 @@
             ratio: spec.ratio || "3:4",
             theme: spec.theme || "",
             prompt: spec.prompt || "",
-            imageUrl: (images && images[0]) || ""
+            imageUrl: (images && images[0]) || "",
+            recipeSnapshot: spec.recipeSnapshot || null
           };
           targetNode.data.items = item.imageUrl ? [item] : [];
           targetNode.data.status = item.imageUrl ? "done" : "error";
@@ -4832,6 +4866,7 @@
       engine: isLiveGenerationEnabled() ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
       recipeSummary: summaryText,
+      recipeSnapshot: (items && items[0]?.recipeSnapshot) || null,
       prompt: isRecipe
         ? (ctrlNode.prompt || ctrlNode.subject || "")
         : isLoopBatch
@@ -4966,6 +5001,21 @@
       const uniquePool = [...new Set(fallbackPool)];
 
       let imgUrl = "";
+      const cardS1 = rec?.style1Id || target.art?.style1 || "";
+      const cardS2 = rec?.style2Id || "";
+      const cardLay = card.layoutId || rec?.layoutId || target.art?.layout || "";
+      const cardS1Res = cardS1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS1) || rec?.style1Res) : rec?.style1Res;
+      const cardS2Res = cardS2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS2) || rec?.style2Res) : rec?.style2Res;
+      const cardLayRes = cardLay && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardLay) || rec?.layoutRes) : rec?.layoutRes;
+      card.recipeSnapshot = {
+        style1: cardS1,
+        style1Name: cardS1Res?.name || cardS1Res?.title || "",
+        style2: cardS2,
+        style2Name: cardS2Res?.name || cardS2Res?.title || "",
+        layout: cardLay,
+        layoutName: cardLayRes?.name || cardLayRes?.title || ""
+      };
+
       if (useLiveApi) {
         const refImages = (rec?.assetItems || []).map((a) => a.image).filter(Boolean);
         const requestId = card.requestId = ensureStableRequestId(card.requestId, `article_${card.id || "card"}`);
@@ -4983,10 +5033,11 @@
           body: JSON.stringify({
             prompt: card.prompt || card.title || "手绘文章配图",
             ratio: card.ratio || (card.role === "cover" ? "2.35:1" : "4:3"),
-            style1: rec?.style1Id || target.art?.style1 || "",
-            style2: rec?.style2Id || "",
-            layout: card.layoutId || rec?.layoutId || target.art?.layout || "",
+            style1: cardS1,
+            style2: cardS2,
+            layout: cardLay,
             refImages,
+            recipeSnapshot: card.recipeSnapshot,
             requestId,
             clientRequestId: requestId,
             confirmCost: true
@@ -5374,7 +5425,8 @@
             anchorHeading: sp.anchorHeading || "",
             ratio: sp.ratio || "3:4",
             theme: sp.theme || "",
-            prompt: skillPrompt
+            prompt: skillPrompt,
+            recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
           };
         }
 
@@ -5394,6 +5446,7 @@
               style2: rec.style2Id || "",
               layout: sp.layout || rec.layoutId || "",
               refImages,
+              recipeSnapshot: sp.recipeSnapshot,
               requestId,
               clientRequestId: requestId,
               confirmCost: true
@@ -5423,7 +5476,8 @@
                   anchorHeading: sp.anchorHeading || "",
                   ratio: sp.ratio || "3:4",
                   theme: sp.theme || "",
-                  prompt: skillPrompt
+                  prompt: skillPrompt,
+                  recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
                 };
               }
               persistOpenTabs();
@@ -5467,7 +5521,8 @@
           ratio: sp.ratio || "3:4",
           theme: sp.theme || "",
           prompt: skillPrompt,
-          imageUrl: imgUrl
+          imageUrl: imgUrl,
+          recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
         };
 
         if (dn) {
@@ -6333,7 +6388,7 @@
                         typeof CS.historySelectedPreview[h.id] === "number" ? CS.historySelectedPreview[h.id] : -1;
                       const selImgItem =
                         selImgIdx >= 0 && (h.items || [])[selImgIdx] ? (h.items || [])[selImgIdx] : null;
-                      const cleanPromptOneLine = String(h.prompt || "").replace(/\s+/g, " ").trim();
+                      const cleanPromptOneLine = String(S.filterDisplayPrompt ? S.filterDisplayPrompt(h.prompt || "") : (h.prompt || "")).replace(/\s+/g, " ").trim();
 
                       return `
                         <article class="ic-hist-entry-card" data-hist-id="${esc(h.id)}">
@@ -6404,7 +6459,7 @@
                                     </button>
                                   </div>
                                 </div>
-                                ${promptExpanded ? `<div class="ic-hist-prompt-full">${esc(h.prompt || "")}</div>` : ""}
+                                ${promptExpanded ? `<div class="ic-hist-prompt-full">${esc(S.filterDisplayPrompt ? S.filterDisplayPrompt(h.prompt || "") : (h.prompt || ""))}</div>` : ""}
                               `
                               : ""
                           }
@@ -6577,8 +6632,9 @@
         const hid = btn.getAttribute("data-hist-copy-prompt");
         const h = (CS.generationHistory || []).find((item) => item.id === hid);
         if (!h || !h.prompt) return;
+        const textToCopy = S.filterDisplayPrompt ? S.filterDisplayPrompt(h.prompt) : h.prompt;
         try {
-          await navigator.clipboard.writeText(h.prompt);
+          await navigator.clipboard.writeText(textToCopy);
           toast("📋 已复制该条历史记录的完整提示词");
         } catch (_) {
           toast("已读取提示词");
@@ -8718,6 +8774,112 @@
     });
   }
 
+  function getNormalizedRecipeSnapshot(obj) {
+    if (!obj) return null;
+    const snap = obj.recipeSnapshot || obj;
+    const s1 = String(snap.style1 || "").trim().toUpperCase().replace(/^#/, "");
+    const s2 = String(snap.style2 || "").trim().toUpperCase().replace(/^#/, "");
+    const lay = String(snap.layout || "").trim().toUpperCase().replace(/^#/, "");
+    if (!s1 && !s2 && !lay) return null;
+    return {
+      style1: s1,
+      style1Name: snap.style1Name || (s1 && Catalog?.resourceMap?.get(s1)?.name) || "",
+      style2: s2,
+      style2Name: snap.style2Name || (s2 && Catalog?.resourceMap?.get(s2)?.name) || "",
+      layout: lay,
+      layoutName: snap.layoutName || (lay && Catalog?.resourceMap?.get(lay)?.name) || ""
+    };
+  }
+
+  function buildPublishTitleFromRecipe(snapshot) {
+    if (!snapshot) return "Handraw 画布创作";
+    const s1 = String(snapshot.style1 || "").trim().toUpperCase().replace(/^#/, "");
+    const s2 = String(snapshot.style2 || "").trim().toUpperCase().replace(/^#/, "");
+    const lay = String(snapshot.layout || "").trim().toUpperCase().replace(/^#/, "");
+
+    const s1Res = s1 && Catalog?.resourceMap ? Catalog.resourceMap.get(s1) : null;
+    const s2Res = s2 && Catalog?.resourceMap ? Catalog.resourceMap.get(s2) : null;
+    const layRes = lay && Catalog?.resourceMap ? Catalog.resourceMap.get(lay) : null;
+
+    const s1Name = String(snapshot.style1Name || s1Res?.name || s1Res?.title || "").trim();
+    const s2Name = String(snapshot.style2Name || s2Res?.name || s2Res?.title || "").trim();
+    const layName = String(snapshot.layoutName || layRes?.name || layRes?.title || "").trim();
+
+    // 3. 融合：编号A＋编号B · 融合晒图 (有图型再追加图型编号)
+    if (s1 && s2) {
+      if (lay) {
+        return `${s1}＋${s2}＋${lay} · 融合晒图`;
+      }
+      return `${s1}＋${s2} · 融合晒图`;
+    }
+
+    // 2 & 4. 默认格式：编号 名称 · 晒图 (有图型再追加图型编号)
+    if (s1 || s2) {
+      const code = s1 || s2;
+      const name = (s1 ? s1Name : s2Name);
+      const prefix = name ? `${code} ${name}` : code;
+      if (lay) {
+        return `${prefix}＋${lay} · 晒图`;
+      }
+      return `${prefix} · 晒图`;
+    }
+
+    // 5. 无画风：用图型编号及名称
+    if (lay) {
+      const prefix = layName ? `${lay} ${layName}` : lay;
+      return `${prefix} · 晒图`;
+    }
+
+    // 8. 缺快照回退
+    return "Handraw 画布创作";
+  }
+
+  function resolvePublishDefaultTitle(rawItems, dispNode, isPlan, isFromArticle) {
+    // 7. 用户手动填写的发布标题、文章标题保留
+    if (dispNode?.data?.titleSource === "manual" && dispNode.data?.title) {
+      return dispNode.data.title;
+    }
+    if (isPlan && dispNode?.data?.articleTitleSource === "manual" && dispNode.data?.articleTitle) {
+      return dispNode.data.articleTitle;
+    }
+
+    const itemsWithImg = (rawItems || []).filter((it) => it && it.imageUrl);
+    if (!itemsWithImg.length) {
+      if (isPlan && dispNode?.data?.articleTitleSource === "manual" && dispNode.data?.articleTitle) {
+        return dispNode.data.articleTitle;
+      }
+      return "Handraw 画布创作";
+    }
+
+    const recipes = itemsWithImg.map(getNormalizedRecipeSnapshot);
+    const validRecipes = recipes.filter(Boolean);
+
+    // 8. 旧结果缺快照时用 Handraw 画布创作，不要猜编号
+    if (!validRecipes.length) {
+      return "Handraw 画布创作";
+    }
+
+    // 6. 混合配方多图：多配方创作晒图
+    if (itemsWithImg.length > 1) {
+      const distinctKeys = new Set(
+        recipes.map((r) => (r ? `${r.style1}|${r.style2}|${r.layout}` : "__none__"))
+      );
+      if (distinctKeys.size > 1) {
+        return "多配方创作晒图";
+      }
+    }
+
+    return buildPublishTitleFromRecipe(validRecipes[0]);
+  }
+
+  if (typeof window !== "undefined") {
+    window.HandrawStudioPublish = {
+      getNormalizedRecipeSnapshot,
+      buildPublishTitleFromRecipe,
+      resolvePublishDefaultTitle
+    };
+  }
+
   function openPublishModalForDisplay(dispNode) {
     if (!dispNode) return;
     const isPlan = dispNode.type === "article_plan";
@@ -8761,19 +8923,25 @@
       }
     }
 
+    const defaultTitle = resolvePublishDefaultTitle(rawItems, dispNode, isPlan, isFromArticle);
+    const firstSnap = getNormalizedRecipeSnapshot(rawItems[0]);
+
     const sharePayload = {
       kind: "work",
       category: isFromArticle ? "experience" : "tuning",
-      title: (isPlan ? dispNode.data?.articleTitle : rawItems[0]?.title) || "Handraw 画布创作",
+      title: defaultTitle,
       topicTitle: isFromArticle
-        ? `【文章配图晒图】${rawItems[0]?.title || dispNode.data?.articleTitle || "专栏配图实测"}`
-        : `【画布创作晒图】${rawItems[0]?.title || "工作流实测"}`,
+        ? `【文章配图晒图】${defaultTitle}`
+        : `【画布创作晒图】${defaultTitle}`,
       topicBody: "我的创作实测分享",
       prompt,
       images: imgs,
       topicImages: imgs.slice(0, 4).map((u, i) => ({ url: u, tag: `P${i + 1}` })),
-      style1: rec?.style1Id || "",
-      layout: rec?.layoutId || "",
+      style1: (firstSnap ? firstSnap.style1 : rec?.style1Id) || "",
+      styles: firstSnap
+        ? [firstSnap.style1, firstSnap.style2].filter(Boolean)
+        : (rec ? [rec.style1Id, rec.style2Id].filter(Boolean) : []),
+      layout: (firstSnap ? firstSnap.layout : rec?.layoutId) || "",
       color: rec?.colorIds?.[0] || "C-15",
       tone: rec?.toneIds?.[0] || "T-01",
       ratio: rawItems[0]?.ratio || ctrl?.data?.ratio || "3:4",
@@ -12042,6 +12210,7 @@
     return {
       id: art.id,
       title: art.articleTitle || art.title || "",
+      titleSource: art.titleSource || (art.articleTitle ? "manual" : "auto"),
       markdown: art.markdown || "",
       cards: Array.isArray(art.cards) ? JSON.parse(JSON.stringify(art.cards)) : [],
       styleId: art.style1 || art.styleId || "FA-001",
@@ -12233,6 +12402,7 @@
     if (planNode) {
       planNode.data = planNode.data || {};
       planNode.data.articleTitle = builtArticleTitle;
+      planNode.data.articleTitleSource = draft?.titleSource || (builtArticleTitle ? "manual" : "auto");
       planNode.data.markdown = builtMarkdown;
       planNode.data.cards = matchedCards;
       planNode.data.updatedAt = "已生成方案";
@@ -12241,6 +12411,7 @@
     const art = target.art || null;
     if (art) {
       art.articleTitle = builtArticleTitle;
+      art.titleSource = draft?.titleSource || (builtArticleTitle ? "manual" : "auto");
       art.style1 = styleId || art.style1 || "FA-001";
       art.coverRatio = coverRatio || art.coverRatio || "2.35:1";
       art.inlineRatio = inlineRatio || art.inlineRatio || "4:3";
@@ -13465,7 +13636,10 @@
 
     const collectDraftFromInputs = (d) => {
       if (!d) return d;
-      if (titleInp) d.title = titleInp.value;
+      if (titleInp) {
+        d.title = titleInp.value;
+        if (titleInp.value.trim()) d.titleSource = "manual";
+      }
       d.markdown = readMarkdown();
       if (coverSel) d.coverRatio = coverSel.value;
       if (inlineSel) d.inlineRatio = inlineSel.value;
@@ -13555,6 +13729,7 @@
     if (titleInp) {
       titleInp.oninput = () => {
         draft.title = titleInp.value;
+        draft.titleSource = titleInp.value.trim() ? "manual" : "auto";
         if (titleCountEl) titleCountEl.textContent = `${titleInp.value.length}/64`;
         triggerDebouncedSync();
       };

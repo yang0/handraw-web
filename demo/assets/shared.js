@@ -3680,7 +3680,15 @@
       .join("")}</div>`;
   }
 
+  const KNOWN_SKILL_INSTRUCTION_RE = /【\s*如果主题直白包含画面元素那就按主题出图[，,]\s*文案由你来升华[，,]\s*但是不要直接描述画面[。.]\s*如果主题比较概念化[，,]\s*那么文案和主题尽量保持一致[，,]\s*如果文案较长由你提炼[，,]\s*由你先设计画面隐喻[（(]人类和非人类都行[）)]\s*再出图\s*[。.]\s*文字参与构图[，,]\s*图文一体\s*】/g;
+
+  function filterDisplayPrompt(text) {
+    if (!text || typeof text !== "string") return "";
+    return text.replace(KNOWN_SKILL_INSTRUCTION_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
   window.HANDRAW_SHARED = {
+    filterDisplayPrompt,
     App,
     STYLE_GROUPS,
     LAYOUT_GROUPS,

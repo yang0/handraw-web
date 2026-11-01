@@ -1398,7 +1398,7 @@ def build_sitemap_xml(db: Database, origin: str) -> bytes:
 
 
 def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[str, list[str]]) -> bytes:
-    from .services import get_work_client_prompt
+    from .services import get_work_client_prompt, filter_display_prompt
     base = origin.rstrip("/")
     conn = db.get_conn()
     view = (qs.get("view", ["discover"])[0] or "discover").strip()
@@ -1437,7 +1437,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         snippet_src = target_work["notes"] or (
             # Paid recipes must not appear in server-rendered HTML: crawlers and
             # anonymous visitors would read them without unlocking.
-            safe_p[:80] if int(target_work["price"] or 0) <= 0 else ""
+            filter_display_prompt(safe_p)[:80] if int(target_work["price"] or 0) <= 0 else ""
         )
         page_title = f"{target_work['title']} (@{target_work['author_name']}) 作品详情与评论 — Handraw 实测作品广场"
         meta_desc = f"由 @{target_work['author_name']} 分享的手绘实测作品《{target_work['title']}》" + (
@@ -1536,7 +1536,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         styles = json.loads(w["styles_json"] or "[]")
         tags = " · ".join([*styles, *([w["layout_code"]] if w["layout_code"] else [])]) or "自由手绘创作"
         safe_p, _ = get_work_client_prompt(w, is_admin_route=False)
-        summary_txt = w["notes"] or (safe_p[:80] if int(w["price"] or 0) <= 0 else "")
+        summary_txt = w["notes"] or (filter_display_prompt(safe_p)[:80] if int(w["price"] or 0) <= 0 else "")
         w_href = f"/?view=work&id={urllib.parse.quote(w['id'])}"
         ssr_cards.append(
             f'<article class="hw-seo-work-item">'

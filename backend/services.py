@@ -1089,6 +1089,23 @@ def _rebuild_recipe_dict(d: dict[str, Any], catalog_codes: dict[str, set[str]] |
     return out
 
 
+KNOWN_SKILL_INSTRUCTION_RE = re.compile(
+    r"【\s*如果主题直白包含画面元素那就按主题出图[，,]\s*文案由你来升华[，,]\s*但是不要直接描述画面[。.]\s*"
+    r"如果主题比较概念化[，,]\s*那么文案和主题尽量保持一致[，,]\s*"
+    r"如果文案较长由你提炼[，,]\s*由你先设计画面隐喻[（(]人类和非人类都行[）)]\s*再出图\s*[。.]\s*"
+    r"文字参与构图[，,]\s*图文一体\s*】"
+)
+
+
+def filter_display_prompt(text: str | None) -> str:
+    """Filter out known skill instruction blocks for presentation/copy/summary without mutating stored prompts."""
+    if not text:
+        return ""
+    cleaned = KNOWN_SKILL_INSTRUCTION_RE.sub("", str(text))
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def mask_recipe_data(data: Any, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
     """Rebuild masked recipe from typed fields only; drop all free-text fields and non-dict shapes (H1, J1-J3)."""
     if not isinstance(data, dict):
@@ -1565,7 +1582,7 @@ def _serialize_topic(
         "workId": row["work_id"] or None,
         "sharedCard": shared_card,
         "recipe": recipe,
-        "summary": row["summary"],
+        "summary": filter_display_prompt(row["summary"]),
         "lockedBody": (row["locked_body"] or "") if is_unlocked else "",
         "replies": replies_by_topic.get(tid, []),
     }
@@ -3707,6 +3724,18 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
                     it["promptMasked"] = True
         else:
             items = sanitize_items_json_for_client(raw_items, vis_prompt, was_masked)
+        snap = None
+        if r["system_append_json"]:
+            try:
+                s_data = json.loads(r["system_append_json"])
+                snap = s_data.get("recipeSnapshot")
+            except Exception:
+                pass
+        if snap:
+            for it in items:
+                if isinstance(it, dict) and "recipeSnapshot" not in it:
+                    it["recipeSnapshot"] = snap
+
         hist_entry = {
             "id": r["id"],
             "createdAt": format_short_time(r["created_at"]),
@@ -3724,6 +3753,8 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "requestId": r["request_id"] or "",
             "error": sanitize_client_error_msg(r["error_msg"], r["status"]),
         }
+        if snap:
+            hist_entry["recipeSnapshot"] = snap
         if was_masked:
             hist_entry["promptMasked"] = True
         hist.append(hist_entry)
@@ -3970,8 +4001,8 @@ def get_user_studio_task(
     conn = db.get_conn()
     if tid:
         row = conn.execute(
-            "SELECT * FROM studio_generations WHERE user_id = ? AND task_id = ? ORDER BY created_at DESC LIMIT 1",
-            (uid, tid),
+            "SELECT * FROM studio_generations WHERE user_id = ? AND (task_id = ? OR id = ?) ORDER BY created_at DESC LIMIT 1",
+            (uid, tid, tid),
         ).fetchone()
     else:
         row = conn.execute(
@@ -4003,6 +4034,13 @@ def get_user_studio_task(
     }
     if was_masked:
         ret["promptMasked"] = True
+    if row["system_append_json"]:
+        try:
+            s_data = json.loads(row["system_append_json"])
+            if s_data.get("recipeSnapshot"):
+                ret["recipeSnapshot"] = s_data["recipeSnapshot"]
+        except Exception:
+            pass
     return ret
 
 
@@ -4422,6 +4460,10 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
         prompt_ready = 0 if needs_compose else 1
         prompt_masked_init = 1 if client_prompt_has_secret else 0
 
+        snap = body.get("recipeSnapshot")
+        if not snap and (style1 or style2 or layout):
+            snap = {"style1": style1, "style2": style2, "layout": layout}
+
         tx.execute(
             """
             INSERT INTO studio_generations (
@@ -4440,7 +4482,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 initial_prompt if recipe_id else initial_prompt[:4000],
                 initial_visible_prompt if (initial_visible_prompt is None or recipe_id) else initial_visible_prompt[:4000],
                 prompt_masked_init,
-                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False}, ensure_ascii=False),
+                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False, "recipeSnapshot": snap}, ensure_ascii=False),
                 cost_type,
                 credits_spent,
                 request_id,
@@ -4548,7 +4590,14 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     skill_prompt_text,
                     final_vis_prompt,
                     final_masked,
-                    json.dumps({"systemAppend": system_append_list, "promptTrimmed": bool(prompt_trimmed)}, ensure_ascii=False),
+                    json.dumps(
+                        {
+                            "systemAppend": system_append_list,
+                            "promptTrimmed": bool(prompt_trimmed),
+                            "recipeSnapshot": snap,
+                        },
+                        ensure_ascii=False,
+                    ),
                     gen_id,
                 ),
             )

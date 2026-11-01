@@ -24,6 +24,9 @@
     if (!src) return '<div class="curation-thumb-ph" aria-hidden="true"></div>';
     return '<img class="curation-thumb" data-hw-src="' + esc(src) + '" alt="' + esc(alt || "") + '" loading="lazy">';
   }
+  function filterPrompt(str) {
+    return (S && typeof S.filterDisplayPrompt === "function") ? S.filterDisplayPrompt(str) : (str || "");
+  }
   function uuid() {
     try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -1116,7 +1119,7 @@
           return '<li>' + esc(v2.reviewer) + ' · ' + (v2.decision === "approve" ? "通过" : "退回") + (v2.reason ? '：' + esc(v2.reason) : '') + '</li>';
         }).join("");
         return '<div class="curation-ver"><b>v' + esc(v.revision) + '</b> <span class="curation-time">' + esc(v.createdAt || "") + '</span>' +
-          (votes ? '<ul class="curation-votes">' + votes + '</ul>' : '<p class="curation-muted">暂无审核意见</p>') + '<details><summary>查看此版本内容</summary><p class="curation-def">' + esc((v.payload || {}).definition || (v.payload || {}).prompt || '') + '</p></details></div>';
+          (votes ? '<ul class="curation-votes">' + votes + '</ul>' : '<p class="curation-muted">暂无审核意见</p>') + '<details><summary>查看此版本内容</summary><p class="curation-def">' + esc(filterPrompt((v.payload || {}).definition || (v.payload || {}).prompt || '')) + '</p></details></div>';
       }).join("");
       return '<article class="curation-card" data-sub="' + esc(s.id) + '">' +
         '<div class="curation-card-media">' + imgs + '</div>' +
@@ -1221,7 +1224,7 @@
           '<div class="curation-review-media">' + imgs + '</div>' +
           '<h2 class="curation-card-title">' + esc(it.title || it.name || p.title || "未命名") + '</h2>' +
           '<p class="curation-card-desc">' + esc(it.description || "") + '</p>' +
-          '<div class="curation-def"><b>' + (assignment.kind === "work" ? "做法 / 提示词" : "定义") + '</b><p>' + esc(it.prompt || it.definition || "") + '</p></div>' +
+          '<div class="curation-def"><b>' + (assignment.kind === "work" ? "做法 / 提示词" : "定义") + '</b><p>' + esc(filterPrompt(it.prompt || it.definition || "")) + '</p></div>' +
           (assignment.topicId ? '<p><a href="' + esc(S.channelUrl("forum", { view: "topic", id: assignment.topicId })) + '">查看原帖</a></p>' : '') +
           '<label class="curation-field">退回理由（退回必填）<textarea data-act="reason" rows="2" maxlength="500"></textarea></label>' +
           '<p class="curation-err" data-err aria-live="polite"></p>' +
@@ -1295,7 +1298,7 @@
         var material=a.payload || {};
         return '<li class="curation-appeal" data-sub="' + esc(a.submission_id) + '">' +
           '<div><b>' + esc(a.author_username) + '</b> · ' + esc({open:"待复核",resolved:"已处理"}[a.status] || a.status) + '</div>' +
-          '<h3>'+esc(material.name || material.title || '')+'</h3>' + (material.images || []).slice(0,3).map(function(u){return imgTag(u,'投稿预览');}).join('') + '<p class="curation-def">'+esc(material.definition || material.prompt || '')+'</p><p>原理由：' + esc(a.reason) + '</p>' +
+          '<h3>'+esc(material.name || material.title || '')+'</h3>' + (material.images || []).slice(0,3).map(function(u){return imgTag(u,'投稿预览');}).join('') + '<p class="curation-def">'+esc(filterPrompt(material.definition || material.prompt || ''))+'</p><p>原理由：' + esc(a.reason) + '</p>' +
           '<label class="curation-field">处理理由<textarea data-act="areason" rows="2" maxlength="500"></textarea></label>' +
           '<div class="curation-actions">' +
             '<button type="button" data-act="review" data-sub="' + esc(a.submission_id) + '" data-decision="approve">通过</button>' +

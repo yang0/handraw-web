@@ -80,7 +80,8 @@
     const rawPrompt = typeof work.prompt === "string" ? work.prompt.trim() : "";
     let subjectText = rawSubject || rawPrompt;
     if (!subjectText) return "";
-    return subjectText.replace(/^主题[：:]\s*/, "");
+    const clean = subjectText.replace(/^主题[：:]\s*/, "");
+    return S && typeof S.filterDisplayPrompt === "function" ? S.filterDisplayPrompt(clean) : clean;
   }
 
   function fromTopic(topic, worksArray, resourceMap, topicUnlocked) {
@@ -150,7 +151,8 @@
         prompt = formatWorkPrompt(work, topic);
       }
     } else if (!recipeLocked) {
-      prompt = recipePrompt || recipeTheme;
+      const rawRecipePrompt = recipePrompt || recipeTheme;
+      prompt = S && typeof S.filterDisplayPrompt === "function" ? S.filterDisplayPrompt(rawRecipePrompt) : rawRecipePrompt;
     }
     // 锁定/隐藏时不回退到 masked 前缀或伪造
     if (locked) prompt = "";
