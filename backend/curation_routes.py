@@ -16,7 +16,11 @@ def _media(handler,user,payload):
         raise ServiceError('图片必须以列表提交')
     clean=validate_publish_media(handler.db,user,payload)
     # Validation may discard foreign media. Do not publish a partially changed item silently.
-    if len(clean.get('images',[]))!=len(payload.get('images',[])) or (payload.get('image') and not clean.get('image')):
+    if (
+        len(clean.get('images',[]))!=len(payload.get('images',[]))
+        or (payload.get('image') and not clean.get('image'))
+        or (payload.get('cover') and not clean.get('cover'))
+    ):
         raise ServiceError('图片不存在或不属于当前账号',status=403)
     return clean
 
@@ -75,8 +79,10 @@ def handle_post(handler,path,body):
         result={'ok':True,'id':draft_id}
     elif path=='/api/curation/submissions':
         items=body.get('items')
-        if not isinstance(items,list) or not 1<=len(items)<=20:
-            raise ServiceError('请提交1～20项内容')
+        if not isinstance(items,list) or not items:
+            raise ServiceError('请至少提交一项内容',status=400,code='missing_items')
+        if len(items)!=1:
+            raise ServiceError('每次投稿只能提交一个画风或一个图型。',status=400,code='single_item_only')
         clean=dict(body,items=[_media(handler,user,i) for i in items])
         result=C.submit(db,user,clean)
         _grant(handler,user,result)

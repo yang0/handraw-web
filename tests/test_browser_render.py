@@ -40,9 +40,9 @@ except Exception:  # pragma: no cover
 class BrowserRenderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"})
-        cls._env.start()
         cls.temp = TemporaryDirectory()
+        cls._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test", "HANDRAW_PRIVATE_STORAGE": cls.temp.name})
+        cls._env.start()
         cls.db = server_module.init_database(Path(cls.temp.name) / "browser.db")
         author, _ = register_user(cls.db, "br_author", "password-a")
         cls.work = publish_user_work(
@@ -77,6 +77,16 @@ class BrowserRenderTests(unittest.TestCase):
         forum_moderator_action(cls.db, author, {"topicId": cls.deleted["topicId"], "action": "delete"})
         # A curation submission, so the logged-in "my submissions" tab has a
         # known item to render.
+        uploads = Path(cls.temp.name) / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+        img = Image.new("RGB", (200, 200), color=(255, 255, 255))
+        img.save(uploads / "cover_square.jpg")
+        with cls.db.transaction() as tx:
+            tx.execute(
+                "INSERT INTO user_uploads (id, user_id, cat, name_zh, image_url, file_path, bytes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("upl_br_cov", author["id"], "other", "cover_square.jpg", "/uploads/cover_square.jpg", str(uploads / "cover_square.jpg"), 100, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            )
         from backend import curation
 
         curation.submit(
@@ -86,7 +96,9 @@ class BrowserRenderTests(unittest.TestCase):
                 "title": "浏览器共创投稿",
                 "text": "介绍",
                 "items": [{
-                    "kind": "style", "name": CURATION_ITEM, "title": CURATION_ITEM, "images": [IMG],
+                    "kind": "style", "name": CURATION_ITEM, "title": CURATION_ITEM,
+                    "cover": "/uploads/cover_square.jpg",
+                    "images": [IMG],
                     "definition": "定义：纸纹墨线", "prompt": "提示：窗边一束花", "unlockCost": 5,
                 }],
             },

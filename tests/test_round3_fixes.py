@@ -6,9 +6,11 @@ demonstrated against the running service.
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from backend import curation as C
 from backend import server
@@ -66,17 +68,25 @@ class ForkCounterCannotBeGamedTests(unittest.TestCase):
 class MixedSubmissionBackdoorTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
+        self.env = patch.dict(os.environ, {"HANDRAW_PRIVATE_STORAGE": self.temp.name})
+        self.env.start()
         self.db = server.init_database(Path(self.temp.name) / "mixed.db")
         self.author, _ = register_user(self.db, "mx_author", "password-a")
+        uploads = Path(self.temp.name) / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+        img = Image.new("RGB", (200, 200), color=(255, 255, 255))
+        img.save(uploads / "test_cover.jpg")
+        self.cover_url = "/uploads/test_cover.jpg"
 
     def tearDown(self):
         self.db.close_thread_conn()
         self.db.get_conn().close()
         self.db.close()
+        self.env.stop()
         self.temp.cleanup()
 
-    @staticmethod
-    def _item(kind, **overrides):
+    def _item(self, kind, **overrides):
         item = {
             "kind": kind,
             "title": "标题",
@@ -86,6 +96,8 @@ class MixedSubmissionBackdoorTests(unittest.TestCase):
             "description": "说明",
             "definition": "定义",
         }
+        if kind in ("style", "layout"):
+            item["cover"] = overrides.get("cover") or getattr(self, "cover_url", "/uploads/test_cover.jpg")
         item.update(overrides)
         return item
 
@@ -100,8 +112,8 @@ class MixedSubmissionBackdoorTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "work_publish_moved")
 
     def test_catalogue_only_submission_is_still_allowed(self):
-        result = self._submit([self._item("style"), self._item("layout")])
-        self.assertEqual(len(result["submissions"]), 2)
+        result = self._submit([self._item("style")])
+        self.assertEqual(len(result["submissions"]), 1)
 
     def test_styles_are_not_silently_truncated(self):
         from backend.services import ServiceError

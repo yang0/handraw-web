@@ -55,11 +55,36 @@
     if (!payload) return [];
     if (Array.isArray(payload.items) && payload.items.length) return payload.items.slice();
     var one = {};
-    ["kind", "name", "title", "subject", "description", "notes", "definition", "prompt", "images", "styles", "layout", "ratio", "price", "unlockCost", "color", "tone", "mode", "mood"].forEach(function (k) {
+    ["kind", "name", "title", "subject", "description", "notes", "definition", "prompt", "cover", "image", "images", "styles", "layout", "ratio", "price", "unlockCost", "color", "tone", "mode", "mood"].forEach(function (k) {
       if (payload[k] != null) one[k] = payload[k];
     });
     if (one.kind) one.images = Array.isArray(one.images) ? one.images.slice() : (one.images ? [one.images] : []);
     return one.kind ? [one] : [];
+  }
+
+  function coverOf(p) {
+    if (!p || typeof p !== "object") return "";
+    var raw = p.cover || p.image;
+    if (raw && typeof raw === "string" && raw.trim()) return raw.trim();
+    if (Array.isArray(p.images) && p.images.length) {
+      var first = p.images[0];
+      if (first && typeof first === "string" && first.trim()) return first.trim();
+    }
+    return "";
+  }
+
+  function examplesOf(p) {
+    if (!p || typeof p !== "object") return [];
+    var cov = coverOf(p);
+    var arr = Array.isArray(p.images) ? p.images : [];
+    return arr.filter(function (u) {
+      return u && typeof u === "string" && u.trim() && u.trim() !== cov;
+    });
+  }
+
+  function isSquare(w, h) {
+    if (!w || !h) return false;
+    return Math.abs(w - h) <= Math.max(2, Math.round(0.01 * Math.max(w, h)));
   }
 
   /* ================= SHARE (page 1) ================= */
@@ -123,54 +148,29 @@
     }
 
     var matched = allItems.filter(function (x) { return x.kind === targetKind; });
-    var skippedCount = allItems.length - matched.length;
+    var it = matched[0] || (allItems.length > 0 ? allItems[0] : p);
+    var skippedCount = (matched.length > 1) ? (matched.length - 1) : (allItems.length > 1 ? allItems.length - 1 : 0);
 
-    var items = [];
-    if (matched.length > 0) {
-      items = matched.map(function (it) {
-        var itemObj = Object.assign({}, it, {
-          kind: targetKind,
-          name: it.name || it.title || "",
-          description: it.description || it.notes || "",
-          definition: it.definition || it.prompt || "",
-          images: Array.isArray(it.images) ? it.images.slice() : (it.images ? [it.images] : [])
-        });
-        return itemObj;
-      });
-    } else {
-      var candidateKind = p.kind;
-      if (candidateKind === targetKind || (!candidateKind && !p.items)) {
-        var name = p.name || p.title || "";
-        var desc = p.description || p.notes || "";
-        var def = p.definition || p.prompt || "";
-        var rawImgs = Array.isArray(p.images) ? p.images.slice() : (p.images ? [p.images] : []);
-        if (name || desc || def || rawImgs.length) {
-          var singleObj = Object.assign({}, p, {
-            kind: targetKind,
-            name: name,
-            description: desc,
-            definition: def,
-            images: rawImgs
-          });
-          items = [singleObj];
-        }
-      }
-      if (items.length === 0) {
-        items = [{
-          kind: targetKind,
-          name: "",
-          description: "",
-          definition: "",
-          images: []
-        }];
-      }
-    }
+    var c = coverOf(it);
+    var exs = examplesOf(it);
+    var name = it.name || it.title || "";
+    var desc = it.description || it.notes || "";
+    var def = it.definition || it.prompt || "";
+
+    var itemObj = Object.assign({}, it, {
+      kind: targetKind,
+      name: name,
+      description: desc,
+      definition: def,
+      cover: c,
+      images: exs
+    });
 
     return {
       kind: targetKind,
-      title: p.title || "",
-      text: p.text || "",
-      items: items,
+      title: itemObj.name,
+      text: itemObj.description,
+      items: [itemObj],
       skippedCount: skippedCount,
       rawPayload: p
     };
@@ -228,16 +228,7 @@
         '</div>'
       );
 
-      var setHtml = (!editId && model.kind !== "work" && model.items.length >= 2) ? (
-        '<div class="curation-set">' +
-          '<label class="curation-field">合集标题<span class="curation-field-err" data-err-for="ftitle"></span>' +
-            '<input data-act="ftitle" value="' + esc(model.title) + '" maxlength="120" placeholder="留空则用「投稿：首项名称 等 N 项」">' +
-          '</label>' +
-          '<label class="curation-field">合集说明<span class="curation-field-err" data-err-for="ftext"></span>' +
-            '<textarea data-act="ftext" rows="3" maxlength="1200" placeholder="这组资源的共同用途（可选）">' + esc(model.text) + '</textarea>' +
-          '</label>' +
-        '</div>'
-      ) : "";
+      var setHtml = "";
 
       var itemsHtml = "";
       if (model.kind === "work") {
@@ -255,8 +246,7 @@
         }
 
         itemsHtml = (
-          '<fieldset class="curation-item" data-idx="0">' +
-            '<legend>作品</legend>' +
+          '<div class="curation-item" data-idx="0">' +
             '<label class="curation-field">作品标题<span class="curation-field-err" data-err-for="title"></span>' +
               '<input data-act="title" data-idx="0" value="' + esc(it.title || "") + '" maxlength="120" placeholder="如：雨中街角面馆">' +
             '</label>' +
@@ -278,42 +268,56 @@
               '<div class="curation-pick-row"><span>画风</span><button type="button" data-act="pick" data-idx="0" data-target="style">选择画风</button><span class="curation-chips" data-chip="style" data-idx="0">' + stylesHtml + '</span></div>' +
               '<div class="curation-pick-row"><span>图型</span><button type="button" data-act="pick" data-idx="0" data-target="layout">选择图型</button><span class="curation-chips" data-chip="layout" data-idx="0">' + layoutHtml + '</span></div>' +
             '</div>' +
-          '</fieldset>'
+          '</div>'
         );
       } else {
-        itemsHtml = model.items.map(function (it, idx) {
-          var kLabel = KIND_LABEL[model.kind] || "资源";
-          var legendText = esc(kLabel) + " " + (idx + 1);
-          return (
-            '<fieldset class="curation-item" data-idx="' + idx + '">' +
-              '<legend>' + legendText + '</legend>' +
-              '<label class="curation-field">名称<span class="curation-field-err" data-err-for="name"></span>' +
-                '<input data-act="name" data-idx="' + idx + '" value="' + esc(it.name || "") + '" maxlength="80" placeholder="如：江南淡墨">' +
+        var it = model.items[0] || {};
+        var coverPreviewHtml = it.cover ? (
+          '<div class="curation-cover-preview"><figure class="curation-thumb-wrap">' +
+            imgTag(it.cover, "封面预览") +
+            '<button type="button" class="curation-x" data-act="delcover" data-idx="0" aria-label="删除封面">×</button>' +
+          '</figure></div>'
+        ) : "";
+
+        var coverHelpText = it.coverCropNote || "非正方形图片会自动居中裁剪";
+
+        var examplesThumbHtml = (it.images && it.images.length) ? (
+          '<div class="curation-imgs" data-imgs="0">' + it.images.map(function (src, i) {
+            return '<figure class="curation-thumb-wrap">' + imgTag(src, "预览") +
+              '<button type="button" class="curation-x" data-act="delimg" data-idx="0" data-i="' + i + '" aria-label="删除图片">×</button></figure>';
+          }).join("") + '</div>'
+        ) : '<div class="curation-imgs" data-imgs="0"></div>';
+
+        itemsHtml = (
+          '<div class="curation-item" data-idx="0">' +
+            '<label class="curation-field">名称<span class="curation-field-err" data-err-for="name"></span>' +
+              '<input data-act="name" data-idx="0" value="' + esc(it.name || "") + '" maxlength="80" placeholder="如：江南淡墨">' +
+            '</label>' +
+            '<div class="curation-cover">' +
+              '<label class="curation-field">封面（必填，正方形）<span class="curation-field-err" data-err-for="cover"></span>' +
+                '<input type="file" accept="image/*" data-act="cover" data-idx="0">' +
               '</label>' +
-              '<div class="curation-imgs" data-imgs="' + idx + '">' + (it.images || []).map(function (src, i) {
-                return '<figure class="curation-thumb-wrap">' + imgTag(src, "预览") +
-                  '<button type="button" class="curation-x" data-act="delimg" data-idx="' + idx + '" data-i="' + i + '" aria-label="删除图片">×</button></figure>';
-              }).join("") + '</div>' +
-              '<label class="curation-field">示例图（最多 9 张）<span class="curation-field-err" data-err-for="file"></span>' +
-                '<input type="file" accept="image/*" multiple data-act="file" data-idx="' + idx + '">' +
+              coverPreviewHtml +
+              '<p class="curation-help">' + esc(coverHelpText) + '</p>' +
+            '</div>' +
+            '<div class="curation-examples">' +
+              '<label class="curation-field">示例图（可选，0–9 张，比例不限）<span class="curation-field-err" data-err-for="file"></span>' +
+                '<input type="file" accept="image/*" multiple data-act="file" data-idx="0">' +
               '</label>' +
-              '<label class="curation-field">定义<span class="curation-field-err" data-err-for="definition"></span>' +
-                '<textarea data-act="definition" data-idx="' + idx + '" rows="4" maxlength="6000" placeholder="' +
-                  (model.kind === "style" ? "画风：笔触、用色、质感" : "图型：版式结构与元素位置") + '">' + esc(it.definition || "") + '</textarea>' +
-              '</label>' +
-              '<label class="curation-field">简介<span class="curation-field-err" data-err-for="description"></span>' +
-                '<textarea data-act="description" data-idx="' + idx + '" rows="2" maxlength="300" placeholder="一句话说明适合画什么（可选）">' + esc(it.description || "") + '</textarea>' +
-              '</label>' +
-              ((!editId && model.items.length >= 2) ?
-                '<button type="button" class="curation-x-item" data-act="delitem" data-idx="' + idx + '">删除此项</button>' : '') +
-            '</fieldset>'
-          );
-        }).join("");
+              examplesThumbHtml +
+            '</div>' +
+            '<label class="curation-field">定义<span class="curation-field-err" data-err-for="definition"></span>' +
+              '<textarea data-act="definition" data-idx="0" rows="4" maxlength="6000" placeholder="' +
+                (model.kind === "style" ? "画风：笔触、用色、质感" : "图型：版式结构与元素位置") + '">' + esc(it.definition || "") + '</textarea>' +
+            '</label>' +
+            '<label class="curation-field">简介<span class="curation-field-err" data-err-for="description"></span>' +
+              '<textarea data-act="description" data-idx="0" rows="2" maxlength="300" placeholder="一句话说明适合画什么（可选）">' + esc(it.description || "") + '</textarea>' +
+            '</label>' +
+          '</div>'
+        );
       }
 
-      var addBtnHtml = (!editId && model.kind !== "work") ? (
-        '<button type="button" class="curation-add" data-act="additem"' + (model.items.length >= 20 ? ' disabled' : '') + '>＋ 添加' + esc(KIND_LABEL[model.kind] || "") + '</button>'
-      ) : "";
+      var addBtnHtml = "";
 
       var submitText = editId ? "提交新版本" : (model.kind === "work" ? "发布作品" : "发布到论坛并申请收录");
 
@@ -345,17 +349,24 @@
     function onInput(e) {
       var t = e.target, act = t.getAttribute && t.getAttribute("data-act");
       if (!act) return;
-      if (act === "ftitle") model.title = t.value;
-      else if (act === "ftext") model.text = t.value;
-      else if (act === "title") {
+      if (act === "title") {
         if (model.items[0]) model.items[0].title = t.value;
       } else if (act === "prompt") {
         if (model.items[0]) model.items[0].prompt = t.value;
       } else if (act === "notes") {
         if (model.items[0]) model.items[0].notes = t.value;
-      } else if (act === "name" || act === "definition" || act === "description") {
-        var i = +t.getAttribute("data-idx"), it = model.items[i];
-        if (it) it[act] = t.value;
+      } else if (act === "name") {
+        if (model.items[0]) {
+          model.items[0].name = t.value;
+          model.title = t.value;
+        }
+      } else if (act === "definition") {
+        if (model.items[0]) model.items[0].definition = t.value;
+      } else if (act === "description") {
+        if (model.items[0]) {
+          model.items[0].description = t.value;
+          model.text = t.value;
+        }
       }
       model.requestId = uuid();
 
@@ -385,50 +396,189 @@
       if (newKind === model.kind) return;
 
       if (newKind === "work") {
-        if (model.items.length >= 2) {
-          if (!confirm("切换为作品只保留第一项，确定吗？")) {
-            var prevRadio = root.querySelector('input[name="share-kind"][value="' + model.kind + '"]');
-            if (prevRadio) prevRadio.checked = true;
-            return;
-          }
-        }
         var it = model.items[0] || {};
+        var imgs = [];
+        if (it.cover) imgs.push(it.cover);
+        if (it.images) imgs = imgs.concat(it.images);
         model.items = [{
           kind: "work",
           title: it.name || it.title || "",
           prompt: it.definition || it.prompt || "",
           notes: it.description || it.notes || "",
-          images: (it.images || []).slice(),
+          images: imgs,
           styles: it.styles || [],
           layout: it.layout || ""
         }];
         model.kind = "work";
+        model.title = "";
+        model.text = "";
       } else if (model.kind === "work") {
         var it = model.items[0] || {};
+        var c = (it.images && it.images[0]) || "";
+        var exs = (it.images && it.images.length > 1) ? it.images.slice(1) : [];
         model.items = [{
           kind: newKind,
           name: it.title || it.name || "",
           definition: it.prompt || it.definition || "",
           description: it.notes || it.description || "",
-          images: (it.images || []).slice()
+          cover: c,
+          images: exs
         }];
         model.kind = newKind;
+        model.title = model.items[0].name;
+        model.text = model.items[0].description;
       } else {
         model.kind = newKind;
-        model.items.forEach(function (it) {
-          it.kind = newKind;
-        });
+        if (model.items[0]) {
+          model.items[0].kind = newKind;
+        }
       }
 
       model.requestId = uuid();
       draw();
+      if (model.kind !== "work" && model.items[0] && model.items[0].cover) {
+        checkCoverSquare(model.items[0], function () {
+          if (!guard(epoch, username)) return;
+          var it = model.items[0];
+          if (it && it.coverSquare === false) {
+            var errSpan = root.querySelector('[data-err-for="cover"]');
+            if (errSpan) {
+              errSpan.textContent = "封面需要是正方形（当前 " + (it.coverDims || "") + "），请重新选择或使用自动裁剪。";
+            }
+          }
+        });
+      }
+    }
+
+    function checkCoverSquare(it, onDone) {
+      if (!it || !it.cover) {
+        it.coverSquare = undefined;
+        it.coverDims = "";
+        if (typeof onDone === "function") onDone();
+        return;
+      }
+      var Img = (typeof Image !== "undefined") ? Image : (window.Image || null);
+      if (!Img) {
+        if (typeof onDone === "function") onDone();
+        return;
+      }
+      var img = new Img();
+      img.onload = function () {
+        var w = img.naturalWidth || img.width || 0;
+        var h = img.naturalHeight || img.height || 0;
+        it.coverDims = w + "×" + h;
+        it.coverSquare = isSquare(w, h);
+        if (typeof onDone === "function") onDone();
+      };
+      img.onerror = function () {
+        it.coverSquare = undefined;
+        it.coverDims = "";
+        if (typeof onDone === "function") onDone();
+      };
+      img.src = it.cover;
+    }
+
+    function onCoverFile(e) {
+      var it = model.items[0];
+      var files = e.target.files; if (!it || !files || !files.length) return;
+      var file = files[0];
+      if (file.size > 15 * 1024 * 1024) {
+        var errSpan = root.querySelector('[data-err-for="cover"]');
+        if (errSpan) errSpan.textContent = "单张图片请小于15MB";
+        e.target.value = "";
+        return;
+      }
+
+      var btn = root.querySelector('[data-act="submit"]'); if (btn) btn.disabled = true;
+      var errSpan = root.querySelector('[data-err-for="cover"]');
+      if (errSpan) errSpan.textContent = "";
+
+      readFile(file).then(function (dataUrl) {
+        return new Promise(function (resolve, reject) {
+          var Img = (typeof Image !== "undefined") ? Image : (window.Image || null);
+          if (!Img) {
+            uploadDataUrl(dataUrl, file.name).then(function (url) {
+              it.coverCropNote = "";
+              it.coverSquare = undefined;
+              resolve(url);
+            }).catch(reject);
+            return;
+          }
+          var img = new Img();
+          img.onload = function () {
+            var w = img.naturalWidth || img.width || 0;
+            var h = img.naturalHeight || img.height || 0;
+            if (isSquare(w, h)) {
+              it.coverCropNote = "";
+              it.coverSquare = true;
+              it.coverDims = w + "×" + h;
+              uploadDataUrl(dataUrl, file.name).then(resolve).catch(reject);
+            } else {
+              try {
+                var s = Math.min(Math.min(w, h), 2048);
+                var canvas = document.createElement("canvas");
+                canvas.width = s;
+                canvas.height = s;
+                var ctx = canvas.getContext("2d");
+                if (ctx && typeof ctx.fillRect === "function") {
+                  ctx.fillStyle = "#ffffff";
+                  ctx.fillRect(0, 0, s, s);
+                  var cropSize = Math.min(w, h);
+                  var sx = Math.floor((w - cropSize) / 2);
+                  var sy = Math.floor((h - cropSize) / 2);
+                  if (typeof ctx.drawImage === "function") {
+                    ctx.drawImage(img, sx, sy, cropSize, cropSize, 0, 0, s, s);
+                  }
+                }
+                var croppedDataUrl = (typeof canvas.toDataURL === "function") ?
+                  canvas.toDataURL("image/jpeg", 0.92) : dataUrl;
+                it.coverCropNote = "已自动居中裁剪为正方形（原尺寸 " + w + "×" + h + "）";
+                it.coverSquare = true;
+                it.coverDims = s + "×" + s;
+                uploadDataUrl(croppedDataUrl, file.name).then(resolve).catch(reject);
+              } catch (err) {
+                it.coverCropNote = "";
+                uploadDataUrl(dataUrl, file.name).then(resolve).catch(reject);
+              }
+            }
+          };
+          img.onerror = function () {
+            reject(new Error("图片无法解析"));
+          };
+          img.src = dataUrl;
+        });
+      }).then(function (url) {
+        if (!guard(epoch, username)) return;
+        it.cover = url;
+        model.requestId = uuid();
+        draw();
+      }).catch(function (err) {
+        var coverErr = root.querySelector('[data-err-for="cover"]');
+        if (coverErr) coverErr.textContent = "封面上传失败：" + (err && err.message || "请重试");
+      }).then(function () {
+        if (btn) btn.disabled = false; e.target.value = "";
+      });
     }
 
     function onFiles(e) {
-      var idx = +e.target.getAttribute("data-idx"), it = model.items[idx];
+      var it = model.items[0];
       var files = e.target.files; if (!it || !files || !files.length) return;
-      if (files.length + (it.images || []).length > 9) { alert('每项最多9张图片'); return; }
-      if (Array.from(files).some(function(f){return f.size>15*1024*1024;})) { alert('单张图片请小于15MB'); return; }
+      var curImgs = it.images || [];
+      var totalCount = files.length + curImgs.length;
+      if (totalCount > 9) {
+        var errSpan = root.querySelector('[data-err-for="file"]');
+        if (errSpan) {
+          errSpan.textContent = (model.kind === "work" ? "作品图片最多 9 张，当前 " : "示例图最多 9 张，当前 ") + totalCount + " 张。";
+        }
+        e.target.value = "";
+        return;
+      }
+      if (Array.from(files).some(function(f){ return f.size > 15 * 1024 * 1024; })) {
+        var errSpan = root.querySelector('[data-err-for="file"]');
+        if (errSpan) errSpan.textContent = "单张图片请小于15MB";
+        e.target.value = "";
+        return;
+      }
 
       var label = e.target.closest("label");
       if (label) {
@@ -439,7 +589,6 @@
       }
 
       var btn = root.querySelector('[data-act="submit"]'); if (btn) btn.disabled = true;
-      var errEl = root.querySelector('[data-err]');
       var jobs = Array.prototype.map.call(files, function (f) {
         return readFile(f).then(function (d) { return uploadDataUrl(d, f.name); })
           .then(function (url) { return url; });
@@ -450,7 +599,8 @@
         model.requestId = uuid();
         draw();
       }).catch(function (err) {
-        if (errEl) errEl.textContent = "图片上传失败：" + (err && err.message || "请重试");
+        var fileErr = root.querySelector('[data-err-for="file"]');
+        if (fileErr) fileErr.textContent = "图片上传失败：" + (err && err.message || "请重试");
       }).then(function () {
         if (btn) btn.disabled = false; e.target.value = "";
       });
@@ -459,34 +609,24 @@
     function onClick(e) {
       var t = e.target.closest("[data-act]"); if (!t) return;
       var act = t.getAttribute("data-act");
-      var idx = +t.getAttribute("data-idx");
-      if (act === "additem") {
-        if (editId || model.kind === "work" || model.items.length >= 20) return;
-        model.items.push({ kind: model.kind, name: "", description: "", definition: "", images: [] });
-        model.requestId = uuid();
-        draw();
-        var lastFieldset = root.querySelector('.curation-item[data-idx="' + (model.items.length - 1) + '"]');
-        if (lastFieldset) {
-          if (typeof lastFieldset.scrollIntoView === "function") {
-            lastFieldset.scrollIntoView({ behavior: "smooth", block: "start" });
-          }
-          var nameInput = lastFieldset.querySelector('[data-act="name"]');
-          if (nameInput && typeof nameInput.focus === "function") {
-            nameInput.focus();
-          }
+      if (act === "delcover") {
+        var it = model.items[0];
+        if (it) {
+          it.cover = "";
+          it.coverSquare = undefined;
+          it.coverDims = "";
+          it.coverCropNote = "";
+          model.requestId = uuid();
+          draw();
         }
-      } else if (act === "delitem") {
-        if (model.items.length <= 1) return;
-        model.items.splice(idx, 1);
-        model.requestId = uuid();
-        draw();
       } else if (act === "delimg") {
-        var it = model.items[idx]; if (!it) return;
-        it.images.splice(+t.getAttribute("data-i"), 1);
+        var it = model.items[0]; if (!it) return;
+        var i = +t.getAttribute("data-i");
+        (it.images || []).splice(i, 1);
         model.requestId = uuid();
         draw();
       } else if (act === "pick") {
-        pickResource(idx, t.getAttribute("data-target"));
+        pickResource(0, t.getAttribute("data-target"));
       } else if (act === "submit") {
         submit(t, t.getAttribute("data-edit") === "1");
       }
@@ -533,6 +673,8 @@
 
         if (!it.images || it.images.length === 0) {
           errors.push({ el: fileEl, act: "file", message: "请至少上传一张图片。" });
+        } else if (it.images.length > 9) {
+          errors.push({ el: fileEl, act: "file", message: "作品图片最多 9 张，当前 " + it.images.length + " 张。" });
         }
 
         var promptVal = (it.prompt || "").trim();
@@ -546,46 +688,46 @@
           errors.push({ el: notesEl, act: "notes", message: "最多 1200 字，当前 " + getLen(it.notes) + " 字。" });
         }
       } else {
-        if (!editId && model.items.length >= 2) {
-          var ftitleEl = root.querySelector('[data-act="ftitle"]');
-          var ftextEl = root.querySelector('[data-act="ftext"]');
-          if (model.title && getLen(model.title) > 120) {
-            errors.push({ el: ftitleEl, act: "ftitle", message: "最多 120 字，当前 " + getLen(model.title) + " 字。" });
-          }
-          if (model.text && getLen(model.text) > 1200) {
-            errors.push({ el: ftextEl, act: "ftext", message: "最多 1200 字，当前 " + getLen(model.text) + " 字。" });
-          }
+        var it = model.items[0] || {};
+        var nameEl = root.querySelector('[data-act="name"]');
+        var coverEl = root.querySelector('[data-act="cover"]');
+        var fileEl = root.querySelector('[data-act="file"]');
+        var defEl = root.querySelector('[data-act="definition"]');
+        var descEl = root.querySelector('[data-act="description"]');
+
+        var nameVal = (it.name || "").trim();
+        if (!nameVal) {
+          errors.push({ el: nameEl, act: "name", idx: 0, message: "请填写名称。" });
+        } else if (getLen(it.name) > 80) {
+          errors.push({ el: nameEl, act: "name", idx: 0, message: "最多 80 字，当前 " + getLen(it.name) + " 字。" });
         }
 
-        model.items.forEach(function (it, idx) {
-          var fieldset = root.querySelector('.curation-item[data-idx="' + idx + '"]');
-          var nameEl = fieldset ? fieldset.querySelector('[data-act="name"]') : null;
-          var fileEl = fieldset ? fieldset.querySelector('[data-act="file"]') : null;
-          var defEl = fieldset ? fieldset.querySelector('[data-act="definition"]') : null;
-          var descEl = fieldset ? fieldset.querySelector('[data-act="description"]') : null;
+        var covVal = (it.cover || "").trim();
+        if (!covVal) {
+          errors.push({ el: coverEl, act: "cover", idx: 0, message: "请上传一张正方形封面图。" });
+        } else if (it.coverSquare === false) {
+          errors.push({
+            el: coverEl,
+            act: "cover",
+            idx: 0,
+            message: "封面需要是正方形（当前 " + (it.coverDims || "") + "），请重新选择或使用自动裁剪。"
+          });
+        }
 
-          var nameVal = (it.name || "").trim();
-          if (!nameVal) {
-            errors.push({ el: nameEl, act: "name", idx: idx, message: "请填写名称。" });
-          } else if (getLen(it.name) > 80) {
-            errors.push({ el: nameEl, act: "name", idx: idx, message: "最多 80 字，当前 " + getLen(it.name) + " 字。" });
-          }
+        if (it.images && it.images.length > 9) {
+          errors.push({ el: fileEl, act: "file", idx: 0, message: "示例图最多 9 张，当前 " + it.images.length + " 张。" });
+        }
 
-          if (!it.images || it.images.length === 0) {
-            errors.push({ el: fileEl, act: "file", idx: idx, message: "请至少上传一张图片。" });
-          }
+        var defVal = (it.definition || "").trim();
+        if (!defVal) {
+          errors.push({ el: defEl, act: "definition", idx: 0, message: "请填写定义。" });
+        } else if (getLen(it.definition) > 6000) {
+          errors.push({ el: defEl, act: "definition", idx: 0, message: "最多 6000 字，当前 " + getLen(it.definition) + " 字。" });
+        }
 
-          var defVal = (it.definition || "").trim();
-          if (!defVal) {
-            errors.push({ el: defEl, act: "definition", idx: idx, message: "请填写定义。" });
-          } else if (getLen(it.definition) > 6000) {
-            errors.push({ el: defEl, act: "definition", idx: idx, message: "最多 6000 字，当前 " + getLen(it.definition) + " 字。" });
-          }
-
-          if (it.description && getLen(it.description) > 300) {
-            errors.push({ el: descEl, act: "description", idx: idx, message: "最多 300 字，当前 " + getLen(it.description) + " 字。" });
-          }
-        });
+        if (it.description && getLen(it.description) > 300) {
+          errors.push({ el: descEl, act: "description", idx: 0, message: "最多 300 字，当前 " + getLen(it.description) + " 字。" });
+        }
       }
 
       return errors;
@@ -644,6 +786,7 @@
           payloadItem.name = (currentItem.name || "").trim();
           payloadItem.description = currentItem.description || "";
           payloadItem.definition = currentItem.definition || "";
+          payloadItem.cover = currentItem.cover || "";
           payloadItem.images = (currentItem.images || []).slice();
         }
         if (payloadItem.prompt === "[包含资源专属指令，已隐藏]") payloadItem.prompt = "";
@@ -672,35 +815,25 @@
         body = workBody;
       } else {
         url = "/api/curation/submissions";
-        var isSingle = model.items.length === 1;
-        var subTitle = model.title ? model.title.trim() : "";
-        if (!subTitle) {
-          if (isSingle) {
-            subTitle = (model.items[0].name || "").trim();
-          } else {
-            var firstItemName = (model.items[0].name || "").trim();
-            subTitle = ("投稿：" + firstItemName + " 等 " + model.items.length + " 项").slice(0, 120);
-          }
-        }
-        var subText = isSingle ? (model.items[0].description || "") : (model.text || "");
-        var subItems = model.items.map(function (it) {
-          var itemObj = {
-            kind: it.kind,
-            name: (it.name || "").trim(),
-            description: it.description || "",
-            definition: it.definition || "",
-            images: (it.images || []).slice()
-          };
-          if (it.group != null) itemObj.group = it.group;
-          if (it.unlockCost != null) itemObj.unlockCost = it.unlockCost;
-          if (it.price != null) itemObj.price = it.price;
-          return itemObj;
-        });
+        var it = model.items[0] || {};
+        var subTitle = (it.name || "").trim();
+        var subText = it.description || "";
+        var itemObj = {
+          kind: it.kind,
+          name: subTitle,
+          description: subText,
+          definition: it.definition || "",
+          cover: it.cover || "",
+          images: (it.images || []).slice()
+        };
+        if (it.group != null) itemObj.group = it.group;
+        if (it.unlockCost != null) itemObj.unlockCost = it.unlockCost;
+        if (it.price != null) itemObj.price = it.price;
         body = {
           title: subTitle,
           text: subText,
           requestId: model.requestId,
-          items: subItems
+          items: [itemObj]
         };
       }
 
@@ -738,6 +871,7 @@
       form.addEventListener("change", function (e) {
         var act = e.target.getAttribute("data-act");
         if (act === "sharekind") onKindChange(e);
+        else if (act === "cover") onCoverFile(e);
         else if (act === "file") onFiles(e);
       });
       form.addEventListener("click", onClick);
@@ -767,8 +901,35 @@
     }) : Promise.resolve();
 
     draw();
+    if (model.kind !== "work" && model.items[0] && model.items[0].cover) {
+      checkCoverSquare(model.items[0], function () {
+        if (!guard(epoch, username)) return;
+        var it = model.items[0];
+        if (it && it.coverSquare === false) {
+          var errSpan = root.querySelector('[data-err-for="cover"]');
+          if (errSpan) {
+            errSpan.textContent = "封面需要是正方形（当前 " + (it.coverDims || "") + "），请重新选择或使用自动裁剪。";
+          }
+        }
+      });
+    }
+
     preload.then(function () {
-      if (guard(epoch, username)) draw();
+      if (guard(epoch, username)) {
+        draw();
+        if (model.kind !== "work" && model.items[0] && model.items[0].cover) {
+          checkCoverSquare(model.items[0], function () {
+            if (!guard(epoch, username)) return;
+            var it = model.items[0];
+            if (it && it.coverSquare === false) {
+              var errSpan = root.querySelector('[data-err-for="cover"]');
+              if (errSpan) {
+                errSpan.textContent = "封面需要是正方形（当前 " + (it.coverDims || "") + "），请重新选择或使用自动裁剪。";
+              }
+            }
+          });
+        }
+      }
     }).catch(function(err) {
       if (guard(epoch, username)) {
         var errEl = root.querySelector('[data-err]');

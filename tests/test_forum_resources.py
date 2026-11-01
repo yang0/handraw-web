@@ -1,6 +1,7 @@
 """Resource/forum contract acceptance in a disposable, non-demo database."""
 import json
 import unittest
+import uuid
 from tests import test_v2_curation as fixtures
 from backend import curation as C, services as S, resource_discussions as D, forum_resources as R
 from backend.admin_services import admin_moderate_comment
@@ -21,8 +22,20 @@ class ForumResourceTests(unittest.TestCase):
             'title':work_item['title'],'prompt':work_item['prompt'],'images':work_item['images'],
             'styles':work_item.get('styles') or [],'layout':work_item.get('layout') or '','price':price})
         result=C.submit(self.db,self.author,{'title':'测试资源共用帖','text':'公开创作心得',
-            'items':[self.item('style',unlockCost=price),self.item('layout',unlockCost=price)]})
-        subs={s['kind']:s for s in result['submissions']}
+            'items':[self.item('style',unlockCost=price)]})
+        tid=result['topicId']
+        sid=uuid.uuid4().hex
+        target_id=C._stable_target_id('layout',None)
+        now_iso=C._now()
+        with self.db.transaction() as tx:
+            tx.execute("INSERT INTO curation_submissions (id,topic_id,owner_username,owner_user_id,kind,target_id,status,current_revision,request_id,created_at,updated_at) VALUES (?,?,?,?,?,?,'pending',1,'',?,?)",
+                       (sid,tid,self.author['username'],self.author['id'],'layout',target_id,now_iso,now_iso))
+            tx.execute("INSERT INTO curation_versions (id,submission_id,revision,payload_json,created_at) VALUES (?,?,1,?,?)",
+                       (uuid.uuid4().hex,sid,json.dumps(self.item('layout',unlockCost=price),ensure_ascii=False),now_iso))
+            tx.execute("INSERT INTO curation_resource_topics (kind,target_id,topic_id,origin,created_at) VALUES ('layout',?,?, 'submission', ?)",
+                       (target_id,tid,now_iso))
+        subs={'style':result['submissions'][0], 'layout':{'id':sid,'kind':'layout','targetId':target_id,'status':'pending','revision':1}}
+        result['submissions'].append(subs['layout'])
         subs['work']={'id':None,'kind':'work','targetId':published['workId'],
                       'topicId':published['topicId'],'status':'published'}
         return result,subs
