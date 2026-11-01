@@ -35,6 +35,10 @@ class StudioArticleParseTests(unittest.TestCase):
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
                 "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test",
+                # These tests assert the no-key fallback path, so they must not
+                # pick up a real ai-service.json sitting in the repo root.
+                "HANDRAW_AI_CONFIG": str(root / "absent-ai-service.json"),
+                "HANDRAW_IMAGE_CONFIG": str(root / "absent-image-service.json"),
             },
         )
         self.env.start()
