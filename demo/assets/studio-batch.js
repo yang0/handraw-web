@@ -294,6 +294,16 @@
       const ld = p.loop.data || {};
       const ad = p.asset?.data || {};
 
+      // M1: ctrl.data.count folded into batchCount if > 1, then reset to 1
+      if (p.ctrl?.data && Number(p.ctrl.data.count) > 1) {
+        const rawCtrlCount = Math.round(Number(p.ctrl.data.count));
+        const currentBatchCount = Math.max(1, Math.min(20, Number(ld.batchCount) || 6));
+        const foldedCount = Math.max(1, Math.min(20, currentBatchCount * rawCtrlCount));
+        p.loop.data.batchCount = foldedCount;
+        p.ctrl.data.count = 1;
+        this.planNotice = `已按每行一张折算，共 ${foldedCount} 张`;
+      }
+
       // Batch set planning state
       const isFusion = Boolean(sd.fusion);
       const style1Id = sd.style1 || "";
@@ -328,8 +338,8 @@
       const batchRows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
       const promptListText = typeof ld.promptListText === "string" ? ld.promptListText : "";
 
-      // Defect 2 fix: count is iterations.length * perIterCount (capped at 200)
-      const perIterCount = Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
+      // M1: Single truth - each iteration generates 1 image in batch set planning
+      const perIterCount = 1;
       const iterations = this.resolveIterations();
       const totalCount = Math.min(200, iterations.length * perIterCount);
 
@@ -748,6 +758,9 @@
       const markDirty = () => {
         if (self.actions?.markDirtyAndRender) {
           self.actions.markDirtyAndRender();
+        } else {
+          const S = global.HANDRAW_SHARED;
+          if (S?.toast) S.toast("当前操作不可用（缺少 action: markDirtyAndRender）");
         }
       };
 
@@ -791,7 +804,12 @@
           if (e.target.closest("[data-clear-kind]")) return;
           const kind = card.getAttribute("data-pick-kind");
           if (kind === "style1" || kind === "style2" || kind === "layout" || kind === "color") {
-            self.actions?.openAssetPicker?.({ kind, field: kind === "color" ? "colors" : kind });
+            if (self.actions?.openAssetPicker) {
+              self.actions.openAssetPicker({ kind, field: kind === "color" ? "colors" : kind });
+            } else {
+              const S = global.HANDRAW_SHARED;
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+            }
           }
         };
       });
@@ -819,12 +837,15 @@
         };
       }
 
-      // (b) Count input
+      // (b) Count input (M1: write batchCount and enforce ctrl.count = 1)
       const countInput = root.querySelector("#batch-count-input");
       if (countInput) {
         countInput.oninput = () => {
           const val = Math.max(1, Math.min(20, Number(countInput.value) || 6));
           loop.data.batchCount = val;
+          if (ctrl?.data) {
+            ctrl.data.count = 1;
+          }
         };
       }
 
@@ -873,7 +894,12 @@
       const btnPickFixedLayout = root.querySelector("#batch-btn-pick-fixed-layout");
       if (btnPickFixedLayout) {
         btnPickFixedLayout.onclick = () => {
-          self.actions?.openAssetPicker?.({ kind: "layout", field: "layout" });
+          if (self.actions?.openAssetPicker) {
+            self.actions.openAssetPicker({ kind: "layout", field: "layout" });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+          }
         };
       }
 
@@ -947,6 +973,15 @@
               self.planNotice = "未使用 AI 规划，已按模板生成";
             } else {
               self.planNotice = "";
+            }
+
+            if (data.defaultLayoutUsed && items.length > 0 && items[0].layout) {
+              const defLayout = items[0].layout;
+              if (skill?.data) {
+                skill.data.layout = defLayout;
+              }
+              const defaultMsg = `未选图型，已使用默认图型 ${defLayout}`;
+              self.planNotice = self.planNotice ? `${self.planNotice}（${defaultMsg}）` : defaultMsg;
             }
 
             markDirty();
@@ -1063,11 +1098,16 @@
         };
       }
 
-      // Tones picker button
+      // Tones picker button (B2: openAssetPicker with tone)
       const btnPickTones = root.querySelector("#batch-btn-pick-tones");
       if (btnPickTones) {
         btnPickTones.onclick = () => {
-          self.actions?.openMultiPicker?.("tones");
+          if (self.actions?.openAssetPicker) {
+            self.actions.openAssetPicker({ kind: "tone", field: "tones" });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+          }
         };
       }
       root.querySelectorAll("[data-remove-tone]").forEach((btn) => {
@@ -1080,11 +1120,16 @@
         };
       });
 
-      // Moods picker button
+      // Moods picker button (B2: openAssetPicker with mood)
       const btnPickMoods = root.querySelector("#batch-btn-pick-moods");
       if (btnPickMoods) {
         btnPickMoods.onclick = () => {
-          self.actions?.openMultiPicker?.("moods");
+          if (self.actions?.openAssetPicker) {
+            self.actions.openAssetPicker({ kind: "mood", field: "moods" });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openAssetPicker）");
+          }
         };
       }
       const moodsInput = root.querySelector("#batch-moods-input");
@@ -1143,12 +1188,17 @@
         };
       }
 
-      // 7. Preview Row Retries & Results
+      // 7. Preview Row Retries & Results (B2: openPublish / runSingleRow toast fallback)
       root.querySelectorAll("[data-retry-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-retry-idx"));
           if (!isNaN(idx)) {
-            self.actions?.runSingleRow?.(idx);
+            if (self.actions?.runSingleRow) {
+              self.actions.runSingleRow(idx);
+            } else {
+              const S = global.HANDRAW_SHARED;
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: runSingleRow）");
+            }
           }
         };
       });
@@ -1159,19 +1209,25 @@
           const displays = Array.isArray(self.context?.displays) ? self.context.displays : [];
           const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
           const itemResult = self.getItemResult(idx, displays, isBatchGallery);
-          if (itemResult) {
-            self.actions?.openPublishForBatchItem?.(itemResult, idx);
+          const S = global.HANDRAW_SHARED;
+          if (itemResult?.node) {
+            if (self.actions?.openPublish) {
+              self.actions.openPublish(itemResult.node);
+            } else {
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: openPublish）");
+            }
+          } else {
+            if (S?.toast) S.toast("该行还没有生成结果");
           }
         };
       });
 
-      // 8. Start Batch Generation Button (Defect 2 Fixed)
+      // 8. Start Batch Generation Button (M1: single confirmation via confirmPotentialGenerationCost)
       const btnStart = root.querySelector("#batch-btn-start");
       if (btnStart) {
         btnStart.onclick = async () => {
-          const perIterCount = Math.min(50, Math.max(1, Math.round(Number(ctrl.data.count) || 1)));
           const currentIters = self.resolveIterations();
-          const totalCount = Math.min(200, currentIters.length * perIterCount);
+          const totalCount = currentIters.length;
 
           if (totalCount === 0) {
             const S = global.HANDRAW_SHARED;
@@ -1179,18 +1235,12 @@
             return;
           }
 
-          // Secondary confirmation when totalCount > 20
-          if (totalCount > 20) {
-            const cost = self.calculateCost(totalCount);
-            const costDesc = cost.loggedIn
-              ? `预计消耗 ${cost.totalCost} 积分（其中免费额度 ${cost.freeCount} 张）`
-              : "预计批量出图超20张";
-            const confirmMsg = `本次将批量生成 ${totalCount} 张图片，${costDesc}。确认开始批量生成吗？`;
-            const ok = typeof window.confirm === "function" ? window.confirm(confirmMsg) : true;
-            if (!ok) return;
+          if (self.actions?.run) {
+            self.actions.run();
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: run）");
           }
-
-          self.actions?.run?.();
         };
       }
 
@@ -1198,7 +1248,12 @@
       const btnStop = root.querySelector("#batch-btn-stop");
       if (btnStop) {
         btnStop.onclick = () => {
-          self.actions?.cancel?.();
+          if (self.actions?.cancel) {
+            self.actions.cancel();
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: cancel）");
+          }
         };
       }
 
@@ -1231,19 +1286,23 @@
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-res-pub-idx"));
           const res = (self.context?.results || [])[idx];
+          const S = global.HANDRAW_SHARED;
           if (res?.node) {
-            self.actions?.openPublish?.(res.node);
+            if (self.actions?.openPublish) {
+              self.actions.openPublish(res.node);
+            } else {
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: openPublish）");
+            }
+          } else {
+            if (S?.toast) S.toast("该项还没有生成结果");
           }
         };
       });
     }
 
     updatePreviewAndCost(root) {
-      const p = this.getParts();
-      const cd = p?.ctrl?.data || {};
-      const perIterCount = Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
       const iterations = this.resolveIterations();
-      const totalCount = Math.min(200, iterations.length * perIterCount);
+      const totalCount = Math.min(200, iterations.length);
 
       const costWrap = root.querySelector(".batch-cost-wrap");
       if (costWrap) {
@@ -1410,6 +1469,8 @@
             // Defect 1 Fixed: self.actions?.markDirtyAndRender() correctly called
             if (self.actions?.markDirtyAndRender) {
               self.actions.markDirtyAndRender();
+            } else {
+              if (S?.toast) S.toast("当前操作不可用（缺少 action: markDirtyAndRender）");
             }
             if (S.toast) {
               S.toast(replace ? `已替换为 ${generatedItems.length} 条主题！` : `已追加 ${generatedItems.length} 条主题！`);

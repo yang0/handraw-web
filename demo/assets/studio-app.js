@@ -278,20 +278,23 @@
 
   function confirmSecondaryBatchCost(count) {
     if (count <= 20) return true;
+    const rawFree = Number(App.state && (App.state.freeQuotaRemaining ?? App.state.free_quota_remaining));
+    const free = Number.isFinite(rawFree) ? Math.max(0, Math.min(Number(count || 0), rawFree)) : 0;
     const billable = estimateBillableImages(count);
     const perImage = Math.max(0, Number(CS.serverCfg.creditPerImage || 0));
     const total = billable * perImage;
-    const free = Math.max(0, Number(CS.serverCfg.freeRemainingToday ?? CS.serverCfg.freeDailyQuota ?? 0));
-    const costDesc = App.state?.loggedIn
-      ? `预计消耗 ${total} 积分（其中免费额度 ${Math.min(count, free)} 张）`
-      : "预计批量出图超20张";
-    const confirmMsg = `本次将批量生成 ${count} 张图片，${costDesc}。确认开始批量生成吗？`;
+    const costPart = billable > 0
+      ? `预计消耗 ${total} 积分（其中免费额度 ${free} 张）`
+      : `将使用免费额度 ${count} 张（无积分消耗）`;
+    const confirmMsg = `本次将批量生成 ${count} 张图片，${costPart}。单次批量出图超过20张，任务与退款以服务端确认为准，确认继续？`;
     return typeof window.confirm === "function" ? window.confirm(confirmMsg) : true;
   }
 
   function confirmPotentialGenerationCost(count) {
+    if (count > 20) {
+      return confirmSecondaryBatchCost(count);
+    }
     if (!isLiveGenerationEnabled()) {
-      if (count > 20) return confirmSecondaryBatchCost(count);
       return true;
     }
     const billable = estimateBillableImages(count);
@@ -301,9 +304,6 @@
       const text = `本次预计消耗 ${billable} 张付费额度${perImage ? `，约 ${total} 积分` : ""}。任务与退款以服务端确认为准，是否继续？`;
       const ok = typeof window.confirm === "function" ? window.confirm(text) : true;
       if (!ok) return false;
-    }
-    if (count > 20) {
-      return confirmSecondaryBatchCost(count);
     }
     return true;
   }

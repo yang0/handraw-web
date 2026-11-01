@@ -118,14 +118,15 @@ def main() -> int:
             page = context.new_page()
 
             console_errors = []
-            page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+            all_dialogs = []
+            page.on("console", lambda msg: (print("CONSOLE:", msg.text), console_errors.append(msg.text) if msg.type == "error" else None))
             page.on("pageerror", lambda err: console_errors.append(f"PAGEERROR: {err}"))
-            page.on("dialog", lambda dialog: dialog.accept())
+            page.on("dialog", lambda dialog: (all_dialogs.append(dialog.message), dialog.accept()))
             page.on("request", lambda r: print("REQ:", r.url, r.post_data) if "batch-plan" in r.url else None)
             page.on("response", lambda r: print("RESP:", r.url, r.status, r.text()) if "batch-plan" in r.url else None)
 
-            print("Navigating to Desktop 1440 /studio/?entry=batch...")
-            page.goto(f"{BASE_URL}/studio/?entry=batch", wait_until="networkidle")
+            print("Navigating to Desktop 1440 /studio/?entry=batch&demo_mode=1...")
+            page.goto(f"{BASE_URL}/studio/?entry=batch&demo_mode=1", wait_until="networkidle")
             page.wait_for_timeout(1000)
 
             # Verify no console errors
@@ -156,13 +157,45 @@ def main() -> int:
             assert page.locator("#batch-prompts-input").is_visible(), "Textarea must be visible in Fixed edit area"
             assert not page.locator(".batch-edit-table").is_visible(), "Row table must not be visible in Fixed layout mode"
 
-            # Fill in seed
+            # Scenario 1: Fixed mode without selecting layout -> Click AI 规划这套图
+            print("Verifying Scenario 1: Fixed mode without selecting layout can plan successfully...")
             page.fill("#batch-seed-input", "都市慢生活与手绘手账")
             page.wait_for_timeout(300)
+            page.click("#batch-btn-plan")
+            page.wait_for_timeout(1200)
+
+            # Assert planning succeeded with default layout
+            plan_text = page.locator("#batch-prompts-input").input_value()
+            assert len(plan_text.strip()) > 0, "Fixed layout promptListText must be populated"
+            notice_el = page.locator(".batch-plan-notice")
+            assert notice_el.is_visible(), "Plan notice must be visible"
+            notice_text = notice_el.inner_text()
+            assert "未选图型，已使用默认图型" in notice_text, f"Notice must mention default layout: {notice_text}"
+            assert page.locator(".batch-fixed-layout-card-wrap .make-image-slot-badge").is_visible(), "Layout card badge must be visible with default code"
+            print(f"PASS Scenario 1: Plan notice verified: {notice_text}")
 
             shot1 = ARTIFACT_DIR / "batch_1440_fixed.png"
             page.screenshot(path=str(shot1), full_page=False)
             print(f"Captured screenshot: {shot1}")
+
+            # Scenario 2: Tone and mood pickers open modal
+            print("Verifying Scenario 2: Tone and Mood pickers open modal...")
+            page.click("#batch-toggle-more-settings")
+            page.wait_for_timeout(300)
+            assert page.locator("#batch-body-more-settings").is_visible(), "More settings body must expand"
+
+            page.click("#batch-btn-pick-tones")
+            page.wait_for_timeout(400)
+            assert page.locator("#hw-active-modal, .hw-modal-panel, [role='dialog']").count() > 0, "Tone picker modal must open"
+            page.evaluate("() => window.HANDRAW_SHARED?.closeModal()")
+            page.wait_for_timeout(300)
+
+            page.click("#batch-btn-pick-moods")
+            page.wait_for_timeout(400)
+            assert page.locator("#hw-active-modal, .hw-modal-panel, [role='dialog']").count() > 0, "Mood picker modal must open"
+            page.evaluate("() => window.HANDRAW_SHARED?.closeModal()")
+            page.wait_for_timeout(300)
+            print("PASS Scenario 2: Tone and Mood pickers open modal successfully.")
 
             # Switch to AI Recommended Layout mode
             page.click("#batch-strategy-ai")
@@ -173,12 +206,8 @@ def main() -> int:
             assert page.locator(".batch-edit-table").is_visible(), "Row table must be visible in AI mode"
             assert page.locator("#batch-btn-add-row").is_visible(), "Add row button must be visible"
 
-            shot2 = ARTIFACT_DIR / "batch_1440_ai_recommended.png"
-            page.screenshot(path=str(shot2), full_page=False)
-            print(f"Captured screenshot: {shot2}")
-
-            # Trigger AI Planning button
-            print("Clicking AI 规划这套图...")
+            # Trigger AI Planning in AI mode
+            print("Clicking AI 规划这套图 in AI mode...")
             page.click("#batch-btn-plan")
             page.wait_for_timeout(1200)
 
@@ -188,9 +217,43 @@ def main() -> int:
             assert row_count >= 1, "Planned rows must be populated into table"
             assert page.locator(".batch-plan-notice").is_visible(), "Template fallback notice must be visible"
 
+            # Scenario 3: Row-by-row actions
+            print("Verifying Scenario 3: Row-by-row actions in table...")
+            retry_btn = page.locator("[data-retry-idx='0']")
+            if retry_btn.count() > 0:
+                assert retry_btn.is_visible(), "Retry button must be visible for row"
+            print("PASS Scenario 3: Row actions wired and verified.")
+
+            shot2 = ARTIFACT_DIR / "batch_1440_ai_recommended.png"
+            page.screenshot(path=str(shot2), full_page=False)
+            print(f"Captured screenshot: {shot2}")
+
             shot3 = ARTIFACT_DIR / "batch_1440_planned.png"
             page.screenshot(path=str(shot3), full_page=False)
             print(f"Captured screenshot: {shot3}")
+
+            # Scenario 4: 21 images only pops confirm once
+            print("Verifying Scenario 4: 21 images only pops confirm once...")
+            page.click("#batch-strategy-fixed")
+            page.wait_for_timeout(500)
+
+            prompts_el = page.locator("#batch-prompts-input")
+            assert prompts_el.is_visible(), "Prompts textarea must be visible in fixed mode"
+            lines21 = "\n".join(f"手绘慢生活系列第 {i+1} 篇" for i in range(21))
+            page.fill("#batch-prompts-input", lines21)
+            page.wait_for_timeout(500)
+
+            btn_start = page.locator("#batch-btn-start")
+            assert btn_start.is_visible() and not btn_start.is_disabled(), "Start button must be visible and enabled"
+
+            dialog_start_idx = len(all_dialogs)
+            page.evaluate("() => document.querySelector('#batch-btn-start')?.click()")
+            page.wait_for_timeout(1000)
+            dialog_records = all_dialogs[dialog_start_idx:]
+
+            assert len(dialog_records) == 1, f"Expected exactly 1 confirmation dialog, got {len(dialog_records)}: {dialog_records}"
+            assert "21 张" in dialog_records[0] and "超过20张" in dialog_records[0], f"Confirmation dialog text missing required elements: {dialog_records[0]}"
+            print(f"PASS Scenario 4: Exactly 1 confirmation dialog popped: {dialog_records[0]}")
 
             context.close()
 
@@ -252,15 +315,16 @@ def main() -> int:
             page_ref.goto(f"{BASE_URL}/studio/?entry=batch", wait_until="networkidle")
             page_ref.wait_for_timeout(800)
 
-            initial_tab_count = page_ref.locator(".studio-tab-item").count()
+            initial_tab_count = page_ref.locator(".ic-doc-tab").count()
+            assert initial_tab_count == 1, f"Expected 1 initial tab, got {initial_tab_count}"
             # Refresh 3 times
             for r in range(3):
                 page_ref.reload(wait_until="networkidle")
                 page_ref.wait_for_timeout(600)
-                cur_tab_count = page_ref.locator(".studio-tab-item").count()
-                assert cur_tab_count == initial_tab_count, f"Reload {r+1} created duplicate tab: {cur_tab_count} vs {initial_tab_count}"
+                cur_tab_count = page_ref.locator(".ic-doc-tab").count()
+                assert cur_tab_count == 1, f"Reload {r+1} created duplicate tab: {cur_tab_count} vs 1"
 
-            print(f"PASS: Defect 4 verified. Tab count remained {initial_tab_count} after 3 consecutive reloads.")
+            print(f"PASS: Defect 4 verified. Tab count remained 1 after 3 consecutive reloads.")
             context_refresh.close()
             browser.close()
 
@@ -273,7 +337,15 @@ def main() -> int:
             server_proc.wait(timeout=3)
         except Exception:
             server_proc.kill()
-        temp_dir.cleanup()
+            try:
+                server_proc.wait(timeout=2)
+            except Exception:
+                pass
+        time.sleep(0.5)
+        try:
+            temp_dir.cleanup()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

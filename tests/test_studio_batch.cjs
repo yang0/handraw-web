@@ -566,14 +566,15 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 }
 
 // ==========================================
-// Defect 2 Fix Verification: Bottom Cost Text and Secondary Confirmation use Math.min(200, iters * perIterCount)
+// M1 Fix Verification: Single Truth for Image Count and ctrl.data.count reset
 // ==========================================
 {
-  // 3 themes with ctrl.data.count = 3 -> totalCount = 9
+  // Graph initially has ctrl.data.count = 3, batchCount = 6
   const graph = createTestBatchGraph({
     promptListText: "主题1\n主题2\n主题3",
     count: 3
   });
+  graph.nodes.find(n => n.type === "loop").data.batchCount = 6;
   const parts = {
     ctrl: graph.nodes.find(n => n.type === "output_control"),
     loop: graph.nodes.find(n => n.type === "loop"),
@@ -593,31 +594,34 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     siteSettings: { credit_cost_per_image: 2 }
   }, {});
 
+  // M1: ctrl.data.count reset to 1, folded into batchCount (6 * 3 = 18 <= 20)
+  assert.equal(parts.ctrl.data.count, 1, "ctrl.data.count must be reset to 1");
+  assert.equal(parts.loop.data.batchCount, 18, "batchCount must be folded to 18 (6 * 3)");
+  assert.ok(fakeHost.innerHTML.includes("已按每行一张折算，共 18 张"), "Must display conversion notice in plan notice");
+
   const parsed = parseHtml(fakeHost.innerHTML);
   const costWrap = parsed.querySelector(".batch-cost-wrap");
   assert.ok(costWrap, "Cost wrap must exist");
-  // 3 themes * 3 count = 9 total; 2 free + 7 paid * 2 = 14 credits
-  assert.ok(costWrap.innerHTML.includes("共 9 张"), "Must display 共 9 张 (3 * 3)");
-  assert.ok(costWrap.innerHTML.includes("免费 2 张 + 14 积分"), "Cost must reflect 9 images (2 free + 14 credits)");
+  // 3 themes * 1 count = 3 total; 2 free + 1 paid * 2 = 2 credits
+  assert.ok(costWrap.innerHTML.includes("共 3 张"), "Must display 共 3 张 (3 * 1)");
+  assert.ok(costWrap.innerHTML.includes("免费 2 张 + 2 积分"), "Cost must reflect 3 images (2 free + 2 credits)");
 
-  // 8 themes with count = 3 -> totalCount = 24 -> triggers >20 confirmation
-  const lines8 = Array.from({ length: 8 }, (_, i) => `主题 ${i + 1}`).join("\n");
-  parts.loop.data.promptListText = lines8;
-  parts.ctrl.data.count = 3;
+  // 21 themes -> totalCount = 21 (over 20)
+  const lines21 = Array.from({ length: 21 }, (_, i) => `主题 ${i + 1}`).join("\n");
+  parts.loop.data.promptListText = lines21;
 
-  const iters8 = HandrawBatchCreate.resolveIterations();
-  assert.equal(iters8.length, 8);
-  const perIterCount = Math.min(50, Math.max(1, Math.round(Number(parts.ctrl.data.count) || 1)));
-  const totalCount24 = Math.min(200, iters8.length * perIterCount);
-  assert.equal(totalCount24, 24, "Total count must be 24 (8 * 3)");
+  const iters21 = HandrawBatchCreate.resolveIterations();
+  assert.equal(iters21.length, 21);
+  const cost21 = HandrawBatchCreate.calculateCost(21);
+  assert.equal(cost21.totalCount, 21);
+  assert.equal(cost21.freeCount, 2);
+  assert.equal(cost21.paidCount, 19);
+  assert.equal(cost21.totalCost, 38);
 
-  const cost24 = HandrawBatchCreate.calculateCost(totalCount24);
-  assert.equal(cost24.totalCount, 24);
-  assert.equal(cost24.freeCount, 2);
-  assert.equal(cost24.paidCount, 22);
-  assert.equal(cost24.totalCost, 44);
+  // studio-batch.js must NOT have secondary confirm, single confirmation handled in confirmPotentialGenerationCost
+  assert.ok(!studioBatchSource.includes('window.confirm("本次将批量生成'), "studio-batch.js must NOT have duplicate window.confirm");
 
-  console.log("✓ Defect 2 Passed: Unified totalCount calculation across interface, cost, and confirmation");
+  console.log("✓ M1 Passed: Image count unified, ctrl.data.count folded to 1, duplicate confirmation removed");
 }
 
 // ==========================================
@@ -686,6 +690,46 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   console.log("✓ Requirement 7 Passed: Zero emoji in studio-batch.js verified");
 }
 
+// ==========================================
+// Requirement 8: Action Names Validation (B2 Fix Verification)
+// ==========================================
+{
+  const renderCallMatch = studioAppSource.match(/window\.HandrawBatchCreate\.render\([\s\S]*?,\s*\{[\s\S]*?\},\s*\{([\s\S]*?)\n\s*\}\s*\);/);
+  assert.ok(renderCallMatch, "HandrawBatchCreate.render call must be found in studio-app.js");
+  const actionsBlock = renderCallMatch[1];
+  const providedActionKeys = new Set();
+  for (const line of actionsBlock.split("\n")) {
+    const km = line.match(/^ {12}([a-zA-Z0-9_]+)(?:\s*:|\s*,)/);
+    if (km) providedActionKeys.add(km[1]);
+  }
+
+  assert.ok(providedActionKeys.size >= 8, `Expected at least 8 action keys, got ${providedActionKeys.size}`);
+  assert.ok(providedActionKeys.has("openAssetPicker"), "studio-app.js must provide openAssetPicker");
+  assert.ok(providedActionKeys.has("openPublish"), "studio-app.js must provide openPublish");
+  assert.ok(providedActionKeys.has("run"), "studio-app.js must provide run");
+  assert.ok(providedActionKeys.has("runSingleRow"), "studio-app.js must provide runSingleRow");
+  assert.ok(providedActionKeys.has("cancel"), "studio-app.js must provide cancel");
+
+  // Check all actions accessed in studio-batch.js
+  const usedActions = new Set();
+  for (const m of studioBatchSource.matchAll(/self\.actions(?:\?|\.)([a-zA-Z0-9_]+)/g)) {
+    usedActions.add(m[1]);
+  }
+
+  for (const actionName of usedActions) {
+    assert.ok(
+      providedActionKeys.has(actionName),
+      `studio-batch.js calls action '${actionName}' which is NOT provided by studio-app.js!`
+    );
+  }
+
+  // Ensure retired non-existent actions are completely gone
+  assert.ok(!studioBatchSource.includes("openMultiPicker"), "openMultiPicker must not be called in studio-batch.js");
+  assert.ok(!studioBatchSource.includes("openPublishForBatchItem"), "openPublishForBatchItem must not be called in studio-batch.js");
+
+  console.log(`✓ Requirement 8 Passed: Action names validated (${Array.from(usedActions).join(", ")}) against studio-app.js`);
+}
+
 console.log("\n==========================================");
-console.log("All 10 Studio Batch tests passed successfully!");
+console.log("All 11 Studio Batch tests passed successfully!");
 console.log("==========================================");
