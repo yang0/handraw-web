@@ -1426,61 +1426,115 @@
   const DEFAULT_STARTER_ARTICLE_MD =
     "# 为什么越忙的人，越需要「留白工作法」？\n\n当我们把日历上的每一个半小时都塞满会议和待办事项时，看似运转到了极致，实际上大脑已经失去了真正产生创造性连接的呼吸缝隙。\n\n## 一、塞满的日程表，正在杀死你的深度思考\n\n现代职场最大的幻觉，就是把「响应速度」当成了「产出质量」。像一台没有缓冲内存的服务器，任何一点突发消息都会触发全盘卡顿。\n\n## 二、像画水彩一样管理精力：留出 30% 不设限白纸\n\n法国插画家桑贝的画里总有大片温润的空白纸面。正是那 70% 没有画满的天空与广场，让画面里那个骑单车的小人瞬间拥有了自由的诗意。\n\n## 三、建立你的每日微停顿仪式：散步、手写与慢煮茶\n\n真正的恢复不是刷短视频填满碎片时间，而是离开屏幕：下楼走过两条梧桐街区、在纸质笔记本上画三个凌乱的思维圈。";
 
-  function parseArticleReadonlyBlocks(rawMd) {
-    const src = String(rawMd || "").trim() || DEFAULT_STARTER_ARTICLE_MD;
+  function parseArticleReadonlyBlocks(rawMd, options = {}) {
+    const withLines = Boolean(options && options.withLines);
+    const noStarter = Boolean(options && options.noStarter);
+
+    const hasText = String(rawMd || "").trim().length > 0;
+    if (!hasText && noStarter) {
+      return [];
+    }
+
+    const src = hasText ? String(rawMd || "") : DEFAULT_STARTER_ARTICLE_MD;
     const lines = src.split(/\r?\n/);
     const blocks = [];
     let paraBuf = [];
+    let paraStartLine = -1;
+    let paraEndLine = -1;
+
     let listBuf = [];
+    let listStartLine = -1;
+    let listEndLine = -1;
+
     let quoteBuf = [];
+    let quoteStartLine = -1;
+    let quoteEndLine = -1;
+
     let inCode = false;
     let codeBuf = [];
+    let codeStartLine = -1;
+    let codeEndLine = -1;
 
     const flushAll = () => {
       if (paraBuf.length) {
         const txt = paraBuf.join(" ").trim();
-        if (txt) blocks.push({ idx: blocks.length, kind: "p", text: txt, rawMd: paraBuf.join("\n") });
+        if (txt) {
+          const blk = { idx: blocks.length, kind: "p", text: txt, rawMd: paraBuf.join("\n") };
+          if (withLines) {
+            blk.startLine = paraStartLine;
+            blk.endLine = paraEndLine;
+          }
+          blocks.push(blk);
+        }
         paraBuf = [];
+        paraStartLine = -1;
+        paraEndLine = -1;
       }
       if (listBuf.length) {
-        blocks.push({
+        const blk = {
           idx: blocks.length,
           kind: "ul",
           items: listBuf.map((l) => l.replace(/^([-*+]|\d+\.)\s+/, "").trim()),
           text: listBuf.map((l) => l.replace(/^([-*+]|\d+\.)\s+/, "").trim()).join("；"),
           rawMd: listBuf.join("\n")
-        });
+        };
+        if (withLines) {
+          blk.startLine = listStartLine;
+          blk.endLine = listEndLine;
+        }
+        blocks.push(blk);
         listBuf = [];
+        listStartLine = -1;
+        listEndLine = -1;
       }
       if (quoteBuf.length) {
         const qt = quoteBuf.map((l) => l.replace(/^>\s?/, "").trim()).join(" ");
-        blocks.push({ idx: blocks.length, kind: "blockquote", text: qt, rawMd: quoteBuf.join("\n") });
+        const blk = { idx: blocks.length, kind: "blockquote", text: qt, rawMd: quoteBuf.join("\n") };
+        if (withLines) {
+          blk.startLine = quoteStartLine;
+          blk.endLine = quoteEndLine;
+        }
+        blocks.push(blk);
         quoteBuf = [];
+        quoteStartLine = -1;
+        quoteEndLine = -1;
       }
     };
 
-    for (const rawLine of lines) {
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      const rawLine = lines[lineIdx];
       const trimmed = rawLine.trim();
       if (/^```/.test(trimmed)) {
         if (!inCode) {
           flushAll();
           inCode = true;
           codeBuf = [rawLine];
+          codeStartLine = lineIdx;
+          codeEndLine = lineIdx;
         } else {
           codeBuf.push(rawLine);
-          blocks.push({
+          codeEndLine = lineIdx;
+          const blk = {
             idx: blocks.length,
             kind: "code",
             text: codeBuf.slice(1, -1).join("\n"),
             rawMd: codeBuf.join("\n")
-          });
+          };
+          if (withLines) {
+            blk.startLine = codeStartLine;
+            blk.endLine = codeEndLine;
+          }
+          blocks.push(blk);
           inCode = false;
           codeBuf = [];
+          codeStartLine = -1;
+          codeEndLine = -1;
         }
         continue;
       }
       if (inCode) {
         codeBuf.push(rawLine);
+        codeEndLine = lineIdx;
         continue;
       }
       if (!trimmed) {
@@ -1489,34 +1543,58 @@
       }
       if (/^#\s+/.test(trimmed)) {
         flushAll();
-        blocks.push({ idx: blocks.length, kind: "h1", text: trimmed.replace(/^#\s+/, "").trim(), rawMd: trimmed });
+        const blk = { idx: blocks.length, kind: "h1", text: trimmed.replace(/^#\s+/, "").trim(), rawMd: trimmed };
+        if (withLines) { blk.startLine = lineIdx; blk.endLine = lineIdx; }
+        blocks.push(blk);
       } else if (/^##\s+/.test(trimmed)) {
         flushAll();
-        blocks.push({ idx: blocks.length, kind: "h2", text: trimmed.replace(/^##\s+/, "").trim(), rawMd: trimmed });
+        const blk = { idx: blocks.length, kind: "h2", text: trimmed.replace(/^##\s+/, "").trim(), rawMd: trimmed };
+        if (withLines) { blk.startLine = lineIdx; blk.endLine = lineIdx; }
+        blocks.push(blk);
       } else if (/^###+\s+/.test(trimmed)) {
         flushAll();
-        blocks.push({ idx: blocks.length, kind: "h3", text: trimmed.replace(/^###+\s+/, "").trim(), rawMd: trimmed });
+        const blk = { idx: blocks.length, kind: "h3", text: trimmed.replace(/^###+\s+/, "").trim(), rawMd: trimmed };
+        if (withLines) { blk.startLine = lineIdx; blk.endLine = lineIdx; }
+        blocks.push(blk);
       } else if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
         flushAll();
-        blocks.push({ idx: blocks.length, kind: "hr", text: "", rawMd: trimmed });
+        const blk = { idx: blocks.length, kind: "hr", text: "", rawMd: trimmed };
+        if (withLines) { blk.startLine = lineIdx; blk.endLine = lineIdx; }
+        blocks.push(blk);
       } else if (/^>\s?/.test(trimmed)) {
         if (paraBuf.length || listBuf.length) flushAll();
+        if (quoteBuf.length === 0) quoteStartLine = lineIdx;
+        quoteEndLine = lineIdx;
         quoteBuf.push(trimmed);
       } else if (/^([-*+]|\d+\.)\s+/.test(trimmed)) {
         if (paraBuf.length || quoteBuf.length) flushAll();
+        if (listBuf.length === 0) listStartLine = lineIdx;
+        listEndLine = lineIdx;
         listBuf.push(trimmed);
       } else {
         if (listBuf.length || quoteBuf.length) flushAll();
+        if (paraBuf.length === 0) paraStartLine = lineIdx;
+        paraEndLine = lineIdx;
         paraBuf.push(trimmed);
       }
     }
     if (inCode && codeBuf.length) {
-      blocks.push({ idx: blocks.length, kind: "code", text: codeBuf.slice(1).join("\n"), rawMd: codeBuf.join("\n") });
+      const blk = { idx: blocks.length, kind: "code", text: codeBuf.slice(1).join("\n"), rawMd: codeBuf.join("\n") };
+      if (withLines) {
+        blk.startLine = codeStartLine;
+        blk.endLine = lines.length - 1;
+      }
+      blocks.push(blk);
     }
     flushAll();
 
-    if (!blocks.length) {
-      blocks.push({ idx: 0, kind: "h1", text: "未命名文章", rawMd: "# 未命名文章" });
+    if (!blocks.length && !noStarter) {
+      const blk = { idx: 0, kind: "h1", text: "未命名文章", rawMd: "# 未命名文章" };
+      if (withLines) {
+        blk.startLine = 0;
+        blk.endLine = 0;
+      }
+      blocks.push(blk);
     }
     return blocks;
   }
@@ -1723,6 +1801,156 @@
       blocks,
       cards
     };
+  }
+
+  function buildArticlePlanFromAi(resp, { ctrlNode, graph, catalog, coverRatio, inlineRatio } = {}) {
+    if (!resp || typeof resp !== "object") {
+      const empty = [];
+      empty.cards = empty;
+      return empty;
+    }
+    const cd = (ctrlNode && ctrlNode.data) || {};
+    const cRatio = coverRatio || cd.coverRatio || "2.35:1";
+    const iRatio = inlineRatio || cd.inlineRatio || "4:3";
+    const planSource = resp.source === "template" ? "template" : (resp.source || "model");
+    const articleType = String(resp.articleType || "").trim();
+
+    const sampleImgs = [
+      "/images/individual/FA/FA-003.webp",
+      "/images/individual/FA/FA-013.webp",
+      "/images/individual/FB/FB-031.webp",
+      "/images/poster-demo-autumn-equinox.webp",
+      "/images/graphic-text-mode-demo.webp"
+    ];
+
+    const cards = [];
+
+    // 1. Cover Card
+    if (resp.cover && typeof resp.cover === "object") {
+      const covSubject = String(resp.cover.subject || "").trim() || "文章主题封面";
+      const covPurpose = String(resp.cover.purpose || "").trim();
+      const covLayout = String(resp.cover.layout || resp.cover.layoutId || "").trim();
+      const covImageType = String(resp.cover.imageType || "").trim();
+
+      cards.push({
+        id: uid("pcard"),
+        role: "cover",
+        title: "文章封面",
+        ratio: cRatio,
+        afterBlockIdx: -1,
+        planSource,
+        subject: covSubject,
+        purpose: covPurpose,
+        layoutId: covLayout,
+        imageType: covImageType,
+        articleType,
+        prompt: assembleArticleCardFullPrompt(graph, ctrlNode, catalog, {
+          role: "cover",
+          ratio: cRatio,
+          subject: covSubject
+        }),
+        promptCustomized: false,
+        sampleImg: sampleImgs[0],
+        imageUrl: "",
+        status: "idle"
+      });
+    }
+
+    // 2. Inline Illustration Cards
+    const rawIllusts = Array.isArray(resp.illustrations) ? resp.illustrations : [];
+    rawIllusts.forEach((item, idx) => {
+      if (!item || typeof item !== "object") return;
+      const blkIdx = Number.isInteger(item.afterBlockIdx)
+        ? item.afterBlockIdx
+        : (parseInt(item.afterBlockIdx, 10) || 0);
+      const anchorText = String(item.anchorText || "").trim();
+      const cleanSubj = String(item.subject || "").trim() || "章节手绘叙事插画";
+      const cleanPurpose = String(item.purpose || "").trim();
+      const layoutId = String(item.layout || item.layoutId || "").trim();
+      const imageType = String(item.imageType || "").trim();
+      const cleanAnchor = anchorText.replace(/^#+\s*/, "").slice(0, 14);
+
+      cards.push({
+        id: uid("pcard"),
+        role: "inline",
+        title: `插图 ${idx + 1} · ${cleanAnchor || "正文插图"}`,
+        ratio: iRatio,
+        afterBlockIdx: blkIdx,
+        anchorText,
+        planSource,
+        subject: cleanSubj,
+        purpose: cleanPurpose,
+        layoutId,
+        imageType,
+        prompt: assembleArticleCardFullPrompt(graph, ctrlNode, catalog, {
+          role: "inline",
+          ratio: iRatio,
+          subject: cleanSubj
+        }),
+        promptCustomized: false,
+        sampleImg: sampleImgs[(idx + 1) % sampleImgs.length],
+        imageUrl: "",
+        status: "idle"
+      });
+    });
+
+    cards.cards = cards;
+    return cards;
+  }
+
+  function buildEditorSegments(markdown, cards) {
+    const md = String(markdown || "");
+    const blocks = parseArticleReadonlyBlocks(md, { withLines: true, noStarter: true });
+    const lines = md.split(/\r?\n/);
+
+    const cuts = [];
+    const inlineCards = (cards || []).filter((c) => c && c.role !== "cover");
+    inlineCards.forEach((c) => {
+      const idx = Number(c.afterBlockIdx);
+      if (Number.isInteger(idx) && idx >= 0 && idx < blocks.length - 1) {
+        if (!cuts.includes(idx)) cuts.push(idx);
+      }
+    });
+    cuts.sort((a, b) => a - b);
+
+    if (cuts.length === 0) {
+      return [
+        {
+          segIdx: 0,
+          text: md,
+          startLine: 0,
+          endLine: lines.length - 1,
+          afterBlockIdx: blocks.length > 0 ? blocks[blocks.length - 1].idx : -1
+        }
+      ];
+    }
+
+    const segments = [];
+    let prevEndLine = -1;
+    for (let i = 0; i < cuts.length; i++) {
+      const cutIdx = cuts[i];
+      const cutBlock = blocks.find((b) => b.idx === cutIdx);
+      const startLine = prevEndLine + 1;
+      const endLine = cutBlock && typeof cutBlock.endLine === "number" ? cutBlock.endLine : startLine;
+      segments.push({
+        segIdx: i,
+        text: lines.slice(startLine, endLine + 1).join("\n"),
+        startLine,
+        endLine,
+        afterBlockIdx: cutIdx
+      });
+      prevEndLine = endLine;
+    }
+    const lastStartLine = prevEndLine + 1;
+    segments.push({
+      segIdx: cuts.length,
+      text: lines.slice(lastStartLine).join("\n"),
+      startLine: lastStartLine,
+      endLine: lines.length - 1,
+      afterBlockIdx: blocks.length > 0 ? blocks[blocks.length - 1].idx : -1
+    });
+
+    return segments;
   }
 
   /* ======================== STARTER WORKFLOW BLUEPRINTS ======================== */
@@ -2189,6 +2417,8 @@
     parseArticleReadonlyBlocks,
     assembleArticleCardFullPrompt,
     buildArticlePlanData,
+    buildArticlePlanFromAi,
+    buildEditorSegments,
     createBlueprintGraph,
     autoArrangeGraph
   };
