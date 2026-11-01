@@ -438,6 +438,14 @@ ALTER TABLE works ADD COLUMN prompt_has_secret INTEGER DEFAULT NULL;
 ALTER TABLE forum_topics ADD COLUMN recipe_has_secret INTEGER DEFAULT NULL;
 """
 
+USER_LIBRARY_SHA256_EXCLUDE_FORUM_SQL = """
+DROP INDEX IF EXISTS idx_user_uploads_user_sha256_active;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_uploads_user_sha256_active
+    ON user_uploads(user_id, sha256)
+    WHERE deleted_at IS NULL AND sha256 IS NOT NULL AND sha256 <> ''
+      AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'));
+"""
+
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (40, "040_work_identity_columns", WORK_IDENTITY_SQL),
     (41, "041_social_target_indexes", SOCIAL_TARGET_INDEXES_SQL),
@@ -458,4 +466,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (62, "062_studio_import_jobs", STUDIO_IMPORT_JOBS_SQL),
     (63, "063_generation_visible_prompt_and_snapshot", GENERATION_VISIBLE_PROMPT_AND_SNAPSHOT_SQL),
     (64, "064_user_library_sync", USER_LIBRARY_SYNC_SQL),
+    (65, "065_user_library_sha256_exclude_forum", USER_LIBRARY_SHA256_EXCLUDE_FORUM_SQL),
 ]

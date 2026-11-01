@@ -452,30 +452,31 @@ def save_data_url_upload(
         ensure_user_uploads_synced(db, user_id)
 
         with db.transaction() as tx:
-            # Check deduplication against existing active assets
-            existing_dup = tx.execute(
-                """
-                SELECT * FROM user_uploads
-                WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND (cat IS NULL OR cat <> 'import')
-                LIMIT 1
-                """,
-                (user_id, sha256_hex),
-            ).fetchone()
-            if existing_dup is not None:
-                return {
-                    "id": existing_dup["id"],
-                    "url": existing_dup["image_url"],
-                    "cat": existing_dup["cat"],
-                    "nameZh": existing_dup["name_zh"],
-                    "descZh": existing_dup["desc_zh"],
-                    "image": existing_dup["image_url"],
-                    "isCustom": True,
-                    "deduped": True,
-                    "assetUid": existing_dup["asset_uid"],
-                }
+            # Check deduplication against existing active assets (library categories only)
+            if safe_cat in PUBLIC_CATS:
+                existing_dup = tx.execute(
+                    """
+                    SELECT * FROM user_uploads
+                    WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
+                    LIMIT 1
+                    """,
+                    (user_id, sha256_hex),
+                ).fetchone()
+                if existing_dup is not None:
+                    return {
+                        "id": existing_dup["id"],
+                        "url": existing_dup["image_url"],
+                        "cat": existing_dup["cat"],
+                        "nameZh": existing_dup["name_zh"],
+                        "descZh": existing_dup["desc_zh"],
+                        "image": existing_dup["image_url"],
+                        "isCustom": True,
+                        "deduped": True,
+                        "assetUid": existing_dup["asset_uid"],
+                    }
 
-            # Enforce unified quota (500 assets, 1 GB storage)
-            check_user_upload_quota(tx, user_id, len(raw_bytes), is_new_item=True)
+                # Enforce unified quota (500 assets, 1 GB storage) for library assets
+                check_user_upload_quota(tx, user_id, len(raw_bytes), is_new_item=True)
 
             uploads_dir = get_uploads_dir()
             uploads_dir.mkdir(parents=True, exist_ok=True)

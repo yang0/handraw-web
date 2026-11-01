@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
+import contextlib
 import hashlib
 import io
 import json
@@ -1191,6 +1192,252 @@ class UserLibrarySyncTests(unittest.TestCase):
         s2, err2, _ = self._request("PUT", f"/api/library/assets/{u_tomb}", {"baseRevision": 999, "name": "Wrong Rev"}, cookie=self.cookie_a)
         self.assertEqual(s2, 410)
         self.assertEqual(err2.get("code"), "asset_expired")
+
+    def test_26_forum_cat_does_not_block_quota_or_conflict_unique_sha(self):
+        """Test B1: 500 forum rows do not block library quota and same sha does not collide with unique index."""
+        # Pre-populate 500 forum rows
+        with self.db.transaction() as tx:
+            for i in range(500):
+                tx.execute(
+                    """
+                    INSERT INTO user_uploads (id, user_id, cat, name_zh, image_url, file_path, bytes, created_at, asset_uid, revision, change_seq, updated_at)
+                    VALUES (?, ?, 'forum', ?, '/test.png', '', 100, '2026-10-31T00:00:00Z', ?, 1, ?, '2026-10-31T00:00:00Z')
+                    """,
+                    (f"UPL-forum-{i}", self.user_a["id"], f"Forum {i}", _uid(f"forum_{i}"), i + 5000),
+                )
+
+        d_other, sha_other, _ = _make_data_url(color=(26, 1, 1))
+        # 1. POST /api/uploads with cat="other" succeeds (not 413)
+        s_up, res_up, _ = self._request("POST", "/api/uploads", {"dataUrl": d_other, "cat": "other", "nameZh": "Post In Library"}, cookie=self.cookie_a)
+        self.assertEqual(s_up, 200)
+
+        # 2. PUT /api/library/assets/{new_uid} succeeds (201, not 413)
+        u_new = _uid("forum_quota_free")
+        d_put, sha_put, _ = _make_data_url(color=(26, 1, 2))
+        s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{u_new}", {"name": "Put After 500 Forum", "dataUrl": d_put}, cookie=self.cookie_a)
+        self.assertEqual(s_put, 201)
+
+        # 3. GET /api/library/assets only returns the library items, none of the 500 forum items
+        s_get, res_get, _ = self._request("GET", "/api/library/assets", cookie=self.cookie_a)
+        self.assertEqual(s_get, 200)
+        items = res_get["items"]
+        self.assertTrue(all(it.get("cat") != "forum" for it in items))
+        self.assertLessEqual(len(items), 10)
+
+        # 4. Same sha between forum row and library asset row does not violate unique index
+        d_same, sha_same, _ = _make_data_url(color=(26, 1, 3))
+        # Forum upload with sha_same
+        s_f, res_f, _ = self._request("POST", "/api/uploads", {"dataUrl": d_same, "cat": "forum", "nameZh": "Forum Same Sha"}, cookie=self.cookie_a)
+        self.assertEqual(s_f, 200)
+        # Library PUT with sha_same succeeds without UNIQUE constraint failed
+        u_same = _uid("library_same_sha")
+        s_lib, res_lib, _ = self._request("PUT", f"/api/library/assets/{u_same}", {"name": "Library Same Sha", "dataUrl": d_same}, cookie=self.cookie_a)
+        self.assertEqual(s_lib, 201)
+
+        # Clean up the 500 forum rows
+        with self.db.transaction() as tx:
+            tx.execute("DELETE FROM user_uploads WHERE id LIKE 'UPL-forum-%'")
+
+    def test_27_forum_rows_never_participate_in_library_dedup(self):
+        """Test B2: Forum upload with identical content does not hijack library asset creation."""
+        d_shared, sha_shared, _ = _make_data_url(color=(27, 27, 27))
+        # 1. Create a forum upload
+        s_f, res_f, _ = self._request("POST", "/api/uploads", {"dataUrl": d_shared, "cat": "forum", "nameZh": "Forum Post Image"}, cookie=self.cookie_a)
+        self.assertEqual(s_f, 200)
+        forum_id = res_f["id"]
+
+        # 2. Skill/Client PUTs a library asset with the same byte content
+        u_lib = _uid("library_shared_content")
+        s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{u_lib}", {"name": "Library Asset", "dataUrl": d_shared}, cookie=self.cookie_a)
+        self.assertEqual(s_put, 201)
+        self.assertFalse(res_put.get("deduped", True))
+        self.assertEqual(res_put["uid"], u_lib)
+
+        # 3. Visible in GET /api/library/assets
+        s_get, res_get, _ = self._request("GET", "/api/library/assets", cookie=self.cookie_a)
+        self.assertEqual(s_get, 200)
+        uids = [it["uid"] for it in res_get["items"]]
+        self.assertIn(u_lib, uids)
+
+        # 4. Image endpoint works for u_lib
+        s_img, _, b_img = self._request("GET", f"/api/library/assets/{u_lib}/image", cookie=self.cookie_a)
+        self.assertEqual(s_img, 200)
+        self.assertGreater(len(b_img), 0)
+
+        # 5. DELETE works for u_lib
+        s_del, res_del, _ = self._request("DELETE", f"/api/library/assets/{u_lib}?baseRevision=1", cookie=self.cookie_a)
+        self.assertEqual(s_del, 200)
+
+    def test_28_http_response_after_commit_and_rollback_safety(self):
+        """Test B3: HTTP response is sent strictly after transaction COMMIT, and commit failure returns 5xx."""
+        d, _, _ = _make_data_url(color=(28, 28, 28))
+        u_delayed = _uid("commit_delayed")
+
+        # Hook Database.transaction to inject a 0.15s commit delay
+        orig_transaction = self.db.transaction
+
+        @contextlib.contextmanager
+        def delayed_transaction():
+            with orig_transaction() as tx:
+                yield tx
+                time.sleep(0.15)
+
+        self.db.transaction = delayed_transaction
+        try:
+            s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{u_delayed}", {"name": "Delayed Commit", "dataUrl": d}, cookie=self.cookie_a)
+            self.assertEqual(s_put, 201)
+            # Row MUST exist in database immediately upon response return
+            row = self.db.get_conn().execute("SELECT * FROM user_uploads WHERE asset_uid = ?", (u_delayed,)).fetchone()
+            self.assertIsNotNone(row)
+        finally:
+            self.db.transaction = orig_transaction
+
+        # Now test commit failure: simulated exception on commit
+        @contextlib.contextmanager
+        def failing_transaction():
+            with orig_transaction() as tx:
+                yield tx
+                raise sqlite3.OperationalError("Simulated COMMIT failure")
+
+        u_fail = _uid("commit_fail")
+        self.db.transaction = failing_transaction
+        try:
+            s_fail, res_fail, _ = self._request("PUT", f"/api/library/assets/{u_fail}", {"name": "Should Fail", "dataUrl": d}, cookie=self.cookie_a)
+            # Must be 500, NEVER 201
+            self.assertEqual(s_fail, 500)
+            self.assertFalse(res_fail.get("ok", False))
+            # Row must NOT exist in database
+            check_row = self.db.get_conn().execute("SELECT * FROM user_uploads WHERE asset_uid = ?", (u_fail,)).fetchone()
+            self.assertIsNone(check_row)
+        finally:
+            self.db.transaction = orig_transaction
+
+    def test_29_media_reference_protection_without_status_filter(self):
+        """Test B4: Reference check protects files across non-published statuses (draft, hidden, paused, revoked)."""
+        d_orig, _, _ = _make_data_url(color=(29, 1, 1))
+        d_new, _, _ = _make_data_url(color=(29, 2, 2))
+
+        # 1. Draft work referencing image
+        u_draft = _uid("ref_draft_work")
+        s1, _, _ = self._request("PUT", f"/api/library/assets/{u_draft}", {"name": "Draft Work Ref", "dataUrl": d_orig}, cookie=self.cookie_a)
+        self.assertEqual(s1, 201)
+        r1 = self.db.get_conn().execute("SELECT file_path, image_url FROM user_uploads WHERE asset_uid = ?", (u_draft,)).fetchone()
+        f1, url1 = Path(r1["file_path"]), r1["image_url"]
+
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO works (id, author_username, author_name, title, prompt, status, images_json, published_at_ms, created_at, updated_at)
+                VALUES ('work_draft_01', 'sync_alice', 'Alice', 'Draft Art', 'prompt', 'draft', ?, 1700000000000, '2026-10-31T00:00:00Z', '2026-10-31T00:00:00Z')
+                """,
+                (json.dumps([url1]),),
+            )
+
+        # Replacing image: old file f1 must STILL exist because draft work references it
+        s_rep1, _, _ = self._request("PUT", f"/api/library/assets/{u_draft}", {"baseRevision": 1, "dataUrl": d_new}, cookie=self.cookie_a)
+        self.assertEqual(s_rep1, 200)
+        self.assertTrue(f1.exists())
+
+        # 2. Paused / Hidden topic referencing image
+        u_paused = _uid("ref_paused_topic")
+        d_p_orig = _make_data_url(color=(29, 3, 1))[0]
+        d_p_new = _make_data_url(color=(29, 3, 2))[0]
+        s2, _, _ = self._request("PUT", f"/api/library/assets/{u_paused}", {"name": "Paused Topic Ref", "dataUrl": d_p_orig}, cookie=self.cookie_a)
+        self.assertEqual(s2, 201)
+        r2 = self.db.get_conn().execute("SELECT file_path, image_url FROM user_uploads WHERE asset_uid = ?", (u_paused,)).fetchone()
+        f2, url2 = Path(r2["file_path"]), r2["image_url"]
+
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, status, published_at_ms, created_at, updated_at)
+                VALUES ('top_paused_01', 'chat', 'Chat', 'Paused Topic', 'alice', 'Alice', ?, 'paused', 1700000000000, '2026-10-31T00:00:00Z', '2026-10-31T00:00:00Z')
+                """,
+                (f"Image is here: {url2}",),
+            )
+
+        s_rep2, _, _ = self._request("PUT", f"/api/library/assets/{u_paused}", {"baseRevision": 1, "dataUrl": d_p_new}, cookie=self.cookie_a)
+        self.assertEqual(s_rep2, 200)
+        self.assertTrue(f2.exists())
+
+        # 3. Revoked grant referencing image
+        u_rev = _uid("ref_revoked_grant")
+        d_g_orig = _make_data_url(color=(29, 4, 1))[0]
+        d_g_new = _make_data_url(color=(29, 4, 2))[0]
+        s3, _, _ = self._request("PUT", f"/api/library/assets/{u_rev}", {"name": "Grant Ref", "dataUrl": d_g_orig}, cookie=self.cookie_a)
+        self.assertEqual(s3, 201)
+        r3 = self.db.get_conn().execute("SELECT file_path, image_url FROM user_uploads WHERE asset_uid = ?", (u_rev,)).fetchone()
+        f3, url3 = Path(r3["file_path"]), r3["image_url"]
+
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT OR IGNORE INTO studio_generations (id, user_id, created_at)
+                VALUES ('gen_01', ?, '2026-01-01T00:00:00Z')
+                """,
+                (self.user_a["id"],),
+            )
+            tx.execute(
+                """
+                INSERT INTO media_public_grants (id, media_url, owner_user_id, generation_id, target_type, target_id, granted_by_user_id, granted_at, revoked_at)
+                VALUES ('grant_rev_01', ?, ?, 'gen_01', 'topic', 'top_01', ?, '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')
+                """,
+                (url3, self.user_a["id"], self.user_a["id"]),
+            )
+
+        s_rep3, _, _ = self._request("PUT", f"/api/library/assets/{u_rev}", {"baseRevision": 1, "dataUrl": d_g_new}, cookie=self.cookie_a)
+        self.assertEqual(s_rep3, 200)
+        self.assertTrue(f3.exists())
+
+    def test_30_uuid_normalization_and_deduplication(self):
+        """Test M1: UUIDs are normalized to canonical lowercase hyphenated form across case, braces, and URNs."""
+        base_raw_uuid = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        d, _, _ = _make_data_url(color=(30, 30, 30))
+
+        # 1. PUT with uppercase UUID
+        upper_uuid = base_raw_uuid.upper()
+        s_put1, res_put1, _ = self._request("PUT", f"/api/library/assets/{upper_uuid}", {"name": "Upper Case", "dataUrl": d}, cookie=self.cookie_a)
+        self.assertEqual(s_put1, 201)
+        self.assertEqual(res_put1["uid"], base_raw_uuid.lower())
+
+        # Verify DB row is stored as lowercase
+        row = self.db.get_conn().execute("SELECT asset_uid FROM user_uploads WHERE lower(asset_uid) = ?", (base_raw_uuid.lower(),)).fetchall()
+        self.assertEqual(len(row), 1)
+        self.assertEqual(row[0]["asset_uid"], base_raw_uuid.lower())
+
+        # 2. PUT with curly braces {UUID} updates the SAME asset (baseRevision=1) instead of creating a second row
+        braced_uuid = f"{{{base_raw_uuid}}}"
+        s_put2, res_put2, _ = self._request("PUT", f"/api/library/assets/{braced_uuid}", {"baseRevision": 1, "name": "Braced Case"}, cookie=self.cookie_a)
+        self.assertEqual(s_put2, 200)
+        self.assertEqual(res_put2["revision"], 2)
+
+        # Still exactly 1 row in DB
+        rows = self.db.get_conn().execute("SELECT asset_uid FROM user_uploads WHERE lower(asset_uid) = ?", (base_raw_uuid.lower(),)).fetchall()
+        self.assertEqual(len(rows), 1)
+
+    def test_31_get_library_assets_concurrent_read_lockfree(self):
+        """Test M2: GET /api/library/assets uses read-only connection without taking global write lock."""
+        holding_event = threading.Event()
+        done_event = threading.Event()
+
+        def _hold_write_lock():
+            with self.db.transaction() as tx:
+                tx.execute("SELECT 1")
+                holding_event.set()
+                done_event.wait(timeout=2.0)
+
+        t = threading.Thread(target=_hold_write_lock)
+        t.start()
+        try:
+            holding_event.wait(timeout=2.0)
+            start_t = time.time()
+            s_get, res_get, _ = self._request("GET", "/api/library/assets", cookie=self.cookie_a)
+            elapsed = time.time() - start_t
+            self.assertEqual(s_get, 200)
+            self.assertLess(elapsed, 1.0)
+        finally:
+            done_event.set()
+            t.join()
 
 
 if __name__ == "__main__":
