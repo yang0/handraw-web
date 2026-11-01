@@ -363,6 +363,7 @@
       const batchLayoutReq = ld.batchLayoutReq || "";
       const batchRows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
       const promptListText = typeof ld.promptListText === "string" ? ld.promptListText : "";
+      const globalAssetItems = Array.isArray(this.parts?.asset?.data?.items) ? this.parts.asset.data.items : [];
 
       // M1: Single truth - each iteration generates 1 image in batch set planning
       const perIterCount = 1;
@@ -459,10 +460,12 @@
                         <div class="make-image-slot-card is-inline batch-chip" data-pick-kind="layout">
                           <div class="make-image-slot-thumb-wrap">
                             ${layoutObj.image ? `<img data-hw-src="${esc(layoutObj.image)}" alt="${esc(layoutObj.name || layoutObj.id)}" loading="lazy" />` : ""}
-                            <span class="make-image-slot-badge">${esc(layoutObj.id)}</span>
                             <button type="button" class="make-image-slot-clear" data-clear-kind="layout" title="清除">×</button>
                           </div>
-                          <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
+                          <div class="make-image-slot-meta">
+                            <span class="make-image-slot-code">${esc(layoutObj.id)}</span>
+                            <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
+                          </div>
                         </div>
                       ` : `<span class="make-image-picker-hint">未选图型（将使用默认版式）</span>`}
                     </div>
@@ -487,21 +490,26 @@
                   <div class="batch-edit-area batch-ai-edit-area">
                     <div class="batch-field-head">
                       <span class="make-image-field-label">逐张主题与图型调整</span>
+                      <button type="button" class="btn btn-sm batch-fission-trigger" id="batch-btn-fission-ai">从母题裂变</button>
                     </div>
                     <div class="batch-table-wrap">
                       <table class="batch-edit-table">
                         <thead>
                           <tr>
-                            <th style="width:48px;">序号</th>
+                            <th style="width:44px;" class="batch-col-idx">序号</th>
                             <th>画面主题</th>
-                            <th style="width:220px;">图型版式</th>
-                            <th style="width:60px;text-align:center;">操作</th>
+                            <th style="width:190px;" class="batch-col-layout">图型版式</th>
+                            <th style="width:160px;" class="batch-col-refs">参考图</th>
+                            <th style="width:52px;text-align:center;">操作</th>
                           </tr>
                         </thead>
                         <tbody>
                           ${batchRows.length === 0 ? `
-                            <tr><td colspan="4" class="batch-table-empty">暂无主题，请点击「AI 规划这套图」或「＋ 添加一张」</td></tr>
-                          ` : batchRows.map((row, idx) => `
+                            <tr><td colspan="5" class="batch-table-empty">暂无主题，请点击「AI 规划这套图」或「＋ 添加一张」</td></tr>
+                          ` : batchRows.map((row, idx) => {
+                            const rowRefs = (row && Array.isArray(row.assetItems)) ? row.assetItems : [];
+                            const isSkipGlobal = Boolean(row && row.skipGlobalRefs);
+                            return `
                             <tr class="batch-edit-row" data-row-idx="${idx}">
                               <td class="batch-col-idx">#${idx + 1}</td>
                               <td>
@@ -510,11 +518,37 @@
                               <td class="batch-col-layout">
                                 ${this.renderRowLayoutButtonHtml(row, idx, sd.layout)}
                               </td>
+                              <td class="batch-col-refs">
+                                <div class="batch-row-refs-wrap">
+                                  <div class="batch-row-refs-desktop">
+                                    ${rowRefs.length === 0 ? `
+                                      <button type="button" class="btn btn-sm batch-btn-pick-row-refs" data-pick-row-refs-idx="${idx}">+ 选择</button>
+                                    ` : `
+                                      <div class="batch-row-refs-thumbs" data-pick-row-refs-idx="${idx}" role="button" tabindex="0" title="点击调整此条参考图（共 ${rowRefs.length} 张）">
+                                        ${rowRefs.slice(0, 3).map((ast, rIdx) => `
+                                          <img src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${rIdx + 1}`)}" class="batch-row-ref-thumb" loading="lazy" />
+                                        `).join("")}
+                                        ${rowRefs.length < 3 ? `<span class="batch-row-refs-plus-badge" title="继续添加">+</span>` : ""}
+                                      </div>
+                                    `}
+                                  </div>
+                                  <div class="batch-row-refs-mobile">
+                                    <button type="button" class="btn btn-sm batch-btn-row-refs-mobile" data-pick-row-refs-idx="${idx}">参考图：已选 ${rowRefs.length} 张</button>
+                                  </div>
+                                  <div class="batch-row-skip-global-wrap">
+                                    <label class="batch-row-skip-global-label" title="本条生成时不使用全局参考图">
+                                      <input type="checkbox" class="batch-row-skip-global-checkbox" data-row-skip-global="${idx}" ${isSkipGlobal ? "checked" : ""} />
+                                      <span>不用全局</span>
+                                    </label>
+                                    ${isSkipGlobal ? `<span class="batch-ref-skip-badge">仅本条</span>` : ""}
+                                  </div>
+                                </div>
+                              </td>
                               <td style="text-align:center;">
                                 <button type="button" class="btn btn-sm btn-ghost batch-row-del-btn" data-del-row-idx="${idx}" title="删除此张">删除</button>
                               </td>
                             </tr>
-                          `).join("")}
+                          `;}).join("")}
                         </tbody>
                       </table>
                     </div>
@@ -558,13 +592,35 @@
                             <div class="make-image-slot-card is-inline">
                               <div class="make-image-slot-thumb-wrap">
                                 ${tObj?.image ? `<img data-hw-src="${esc(tObj.image)}" alt="${esc(tObj.name || tid)}" loading="lazy" />` : ""}
-                                <span class="make-image-slot-badge">${esc(tid)}</span>
                                 <button type="button" class="make-image-slot-clear" data-remove-tone="${esc(tid)}" title="移除">×</button>
                               </div>
-                              <span class="make-image-slot-title">${esc(tObj?.name || tid)}</span>
+                              <div class="make-image-slot-meta">
+                                <span class="make-image-slot-code">${esc(tid)}</span>
+                                <span class="make-image-slot-title">${esc(tObj?.name || tid)}</span>
+                              </div>
                             </div>
                           `;
                         }).join("") : `<span class="make-image-picker-hint">未指定影调</span>`}
+                      </div>
+                    </div>
+
+                    <!-- Global References -->
+                    <div class="make-image-more-row" id="batch-more-row-refs">
+                      <span class="make-image-more-label">参考图</span>
+                      <button type="button" class="btn btn-sm" id="batch-btn-pick-global-refs">选择参考图</button>
+                      <div class="make-image-more-thumbs" id="batch-global-refs-thumbs">
+                        ${globalAssetItems.length ? globalAssetItems.map((ast, idx) => `
+                          <div class="make-image-slot-card is-inline">
+                            <div class="make-image-slot-thumb-wrap">
+                              ${ast.image ? `<img data-hw-src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}" loading="lazy" />` : ""}
+                              <button type="button" class="make-image-slot-clear" data-remove-global-ref="${idx}" title="移除">×</button>
+                            </div>
+                            <div class="make-image-slot-meta">
+                              <span class="make-image-slot-code">${esc(ast.id || `REF-${idx + 1}`)}</span>
+                              <span class="make-image-slot-title">${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}</span>
+                            </div>
+                          </div>
+                        `).join("") : `<span class="make-image-picker-hint">未指定，可点此添加（最多 4 张）</span>`}
                       </div>
                     </div>
 
@@ -1044,13 +1100,12 @@
         };
       }
 
-      // (h) Fission button in fixed edit area
-      const btnFission = root.querySelector("#batch-btn-fission");
-      if (btnFission) {
-        btnFission.onclick = () => {
+      // (h) Fission button in fixed and AI edit areas
+      root.querySelectorAll(".batch-fission-trigger, #batch-btn-fission, #batch-btn-fission-ai").forEach((btn) => {
+        btn.onclick = () => {
           self.openFissionModal(root, parts);
         };
-      }
+      });
 
       // (i) AI mode table events
       root.querySelectorAll(".batch-row-theme-input").forEach((inp) => {
@@ -1093,6 +1148,40 @@
         };
       });
 
+      root.querySelectorAll("[data-pick-row-refs-idx]").forEach((btn) => {
+        btn.onclick = () => {
+          const idx = Number(btn.getAttribute("data-pick-row-refs-idx"));
+          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
+          const currentRow = loop.data.batchRows[idx];
+          const curRefs = Array.isArray(currentRow.assetItems) ? currentRow.assetItems : [];
+
+          if (self.actions?.openReferencePicker) {
+            self.actions.openReferencePicker({
+              items: curRefs,
+              currentRefs: curRefs,
+              maxCount: 3,
+              title: `第 ${idx + 1} 张参考图（最多 3 张）`,
+              onConfirm: (selectedItems) => {
+                currentRow.assetItems = selectedItems;
+                markDirty();
+              }
+            });
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openReferencePicker）");
+          }
+        };
+      });
+
+      root.querySelectorAll("[data-row-skip-global]").forEach((chk) => {
+        chk.onchange = () => {
+          const idx = Number(chk.getAttribute("data-row-skip-global"));
+          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
+          loop.data.batchRows[idx].skipGlobalRefs = Boolean(chk.checked);
+          markDirty();
+        };
+      });
+
       root.querySelectorAll("[data-del-row-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-del-row-idx"));
@@ -1107,7 +1196,12 @@
       if (btnAddRow) {
         btnAddRow.onclick = () => {
           if (!Array.isArray(loop.data.batchRows)) loop.data.batchRows = [];
-          loop.data.batchRows.push({ theme: "", layout: skill.data.layout || "" });
+          loop.data.batchRows.push({
+            theme: "",
+            layout: skill.data.layout || "",
+            assetItems: [],
+            skipGlobalRefs: false
+          });
           markDirty();
         };
       }
@@ -1170,6 +1264,35 @@
           if (!tid) return;
           skill.data.tones = (skill.data.tones || []).filter((t) => t !== tid);
           markDirty();
+        };
+      });
+
+      // Global References Picker
+      const btnPickGlobalRefs = root.querySelector("#batch-btn-pick-global-refs");
+      if (btnPickGlobalRefs) {
+        btnPickGlobalRefs.onclick = () => {
+          if (self.actions?.openReferencePicker) {
+            self.actions.openReferencePicker();
+          } else {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("当前操作不可用（缺少 action: openReferencePicker）");
+          }
+        };
+      }
+
+      root.querySelectorAll("[data-remove-global-ref]").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const rIdx = Number(btn.getAttribute("data-remove-global-ref"));
+          const curAsset = parts.asset || bp?.asset;
+          if (curAsset && Array.isArray(curAsset.data?.items) && !isNaN(rIdx)) {
+            curAsset.data.items.splice(rIdx, 1);
+            if (self.actions?.ensureAssetItems) {
+              self.actions.ensureAssetItems(curAsset.data.items);
+            } else {
+              markDirty();
+            }
+          }
         };
       });
 
@@ -1398,6 +1521,8 @@
       const S = global.HANDRAW_SHARED;
       if (!S?.openModal) return;
 
+      const isAiMode = parts.loop.data.batchLayoutMode === "ai";
+
       const seedDefault = (parts.loop.data.batchSeed || parts.text?.data?.text || "").trim() ||
         (parts.loop.data.promptListText || "").split(/\r?\n/)[0]?.trim() ||
         "都市慢生活与手绘手账";
@@ -1446,8 +1571,8 @@
               <div id="fission-result-list" style="max-height:160px;overflow-y:auto;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:6px;padding:8px 12px;font-size:12px;line-height:1.6;display:flex;flex-direction:column;gap:4px;"></div>
 
               <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-                <button type="button" class="btn btn-sm" id="fission-append-btn">追加到列表</button>
-                <button type="button" class="btn btn-sm btn-primary" id="fission-replace-btn">替换列表</button>
+                <button type="button" class="btn btn-sm" id="fission-append-btn">${isAiMode ? "追加为新的逐张行" : "追加到列表"}</button>
+                <button type="button" class="btn btn-sm btn-primary" id="fission-replace-btn">${isAiMode ? "替换全部逐张行" : "替换列表"}</button>
               </div>
             </div>
           </div>
@@ -1525,16 +1650,60 @@
 
           const applyItems = (replace) => {
             if (!generatedItems.length) return;
-            const existing = (parts.loop.data.promptListText || "").trim();
-            if (replace || !existing) {
-              parts.loop.data.promptListText = generatedItems.join("\n");
-            } else {
-              parts.loop.data.promptListText = `${existing}\n${generatedItems.join("\n")}`;
+
+            if (replace) {
+              const hasExisting = isAiMode
+                ? Array.isArray(parts.loop.data.batchRows) && parts.loop.data.batchRows.length > 0
+                : Boolean((parts.loop.data.promptListText || "").trim());
+              if (hasExisting && typeof window.confirm === "function") {
+                const confirmMsg = isAiMode
+                  ? "替换将清空现有的逐张主题与图型设置，是否继续？"
+                  : "替换将清空现有的主题列表，是否继续？";
+                if (!window.confirm(confirmMsg)) return;
+              }
             }
 
-            if (parts.loop.data.batchLayoutMode === "ai") {
-              const lines = parts.loop.data.promptListText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-              parts.loop.data.batchRows = lines.map((l) => ({ theme: l, layout: parts.skill.data.layout || "" }));
+            if (isAiMode) {
+              let targetRows = [];
+              if (replace) {
+                targetRows = generatedItems.map((item) => ({
+                  theme: String(item).trim(),
+                  layout: "",
+                  assetItems: [],
+                  skipGlobalRefs: false
+                }));
+              } else {
+                const existingRows = Array.isArray(parts.loop.data.batchRows) ? parts.loop.data.batchRows : [];
+                const newRows = generatedItems.map((item) => ({
+                  theme: String(item).trim(),
+                  layout: "",
+                  assetItems: [],
+                  skipGlobalRefs: false
+                }));
+                targetRows = [...existingRows, ...newRows];
+              }
+              let truncated = false;
+              if (targetRows.length > 20) {
+                targetRows = targetRows.slice(0, 20);
+                truncated = true;
+              }
+              parts.loop.data.batchRows = targetRows;
+              parts.loop.data.promptListText = targetRows.map((r) => r.theme).filter(Boolean).join("\n");
+              if (truncated && S?.toast) {
+                S.toast("超出 20 张部分已截断");
+              }
+            } else {
+              const existingLines = (parts.loop.data.promptListText || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+              let combinedLines = replace ? [...generatedItems] : [...existingLines, ...generatedItems];
+              let truncated = false;
+              if (combinedLines.length > 20) {
+                combinedLines = combinedLines.slice(0, 20);
+                truncated = true;
+              }
+              parts.loop.data.promptListText = combinedLines.join("\n");
+              if (truncated && S?.toast) {
+                S.toast("超出 20 张部分已截断");
+              }
             }
 
             S.closeModal();
@@ -1544,8 +1713,11 @@
             } else {
               if (S?.toast) S.toast("当前操作不可用（缺少 action: markDirtyAndRender）");
             }
-            if (S.toast) {
-              S.toast(replace ? `已替换为 ${generatedItems.length} 条主题！` : `已追加 ${generatedItems.length} 条主题！`);
+            if (S?.toast) {
+              const actionLabel = replace ? "替换" : "追加";
+              const count = isAiMode ? parts.loop.data.batchRows.length : parts.loop.data.promptListText.split(/\r?\n/).filter(Boolean).length;
+              const targetDesc = isAiMode ? "逐张行" : "条主题";
+              S.toast(`已${actionLabel}为 ${count} ${targetDesc}！`);
             }
           };
 

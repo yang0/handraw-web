@@ -405,10 +405,12 @@
                             <div class="make-image-slot-card is-inline" data-tone-card="${esc(tid)}">
                               <div class="make-image-slot-thumb-wrap">
                                 <img src="${esc(tImg)}" alt="${esc(tName)}" />
-                                <span class="make-image-slot-badge">${esc(tid)}</span>
                                 <button type="button" class="make-image-slot-clear" data-del-tone="${esc(tid)}" title="移除影调">×</button>
                               </div>
-                              <span class="make-image-slot-title">${esc(tName)}</span>
+                              <div class="make-image-slot-meta">
+                                <span class="make-image-slot-code">${esc(tid)}</span>
+                                <span class="make-image-slot-title">${esc(tName)}</span>
+                              </div>
                             </div>
                           `;
                         }).join("")}
@@ -484,8 +486,11 @@
                             <div class="make-image-slot-card is-inline" data-ref-card="${idx}">
                               <div class="make-image-slot-thumb-wrap">
                                 <img src="${esc(imgUrl)}" alt="${esc(imgName)}" />
-                                <span class="make-image-slot-badge">P${idx + 1}</span>
                                 <button type="button" class="make-image-slot-clear" data-del-ref="${idx}" title="删除此参考图">×</button>
+                              </div>
+                              <div class="make-image-slot-meta">
+                                <span class="make-image-slot-code">P${idx + 1}</span>
+                                <span class="make-image-slot-title">${esc(imgName)}</span>
                               </div>
                             </div>
                           `;

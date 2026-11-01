@@ -1906,7 +1906,6 @@
               };">
                   <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
                     <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                    <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:700;">${esc(id)}</span>
                     ${
                       isSel
                         ? `<span style="position:absolute;right:6px;top:6px;padding:2px 7px;border-radius:999px;background:var(--vermilion);color:#fff;font-size:10.5px;font-weight:800;">✓ 已选</span>`
@@ -1915,7 +1914,8 @@
                           : ""
                     }
                   </div>
-                  <div style="padding:8px 10px;">
+                  <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px;">
+                    <div style="font-family:var(--font-mono, monospace);font-size:11px;font-weight:700;color:var(--ink-muted, #786f65);">${esc(id)}</div>
                     <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
                     <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(["style1", "style2", "layout"].includes(field) ? S.resourceGroupLabel(it.group, it.kind) : it.category || it.desc_zh || it.description || "点击选用")}</div>
                   </div>
@@ -1985,10 +1985,20 @@
   }
 
   // 2) Asset Picker Modal (我的图库 / 官方示例 / 本地上传 + 角色/道具/场景/其他分类)
-  function openAssetPickerModal(targetOrOptions) {
+  function openAssetPickerModal(targetOrOptions, options = {}) {
     let curItems = [];
     let isNode = false;
     let onCommitCallback = null;
+
+    const opts = (options && typeof options === "object") ? options : {};
+    const maxCount = Math.max(1, Number(opts.maxCount || targetOrOptions?.maxCount) || 6);
+    const modalTitle = opts.title || targetOrOptions?.title || "参考图与图参（我的图库 / 官方示例 / 本地上传）";
+
+    function getMaxCountToast() {
+      if (maxCount === 4) return "全局参考图最多 4 张";
+      if (maxCount === 3) return "单条参考图最多 3 张";
+      return `最多选用 ${maxCount} 张参考图`;
+    }
 
     if (targetOrOptions && targetOrOptions.type === "asset") {
       isNode = true;
@@ -1998,6 +2008,9 @@
         targetOrOptions.data.items = items;
         fullRenderCanvas();
         persistOpenTabs();
+        if (typeof opts.onConfirm === "function") {
+          opts.onConfirm(items);
+        }
         toast(
           items.length
             ? `✓ 已选用 ${items.length} 项图参：${items.map((x) => x.name || x.id).join("、")}`
@@ -2005,11 +2018,16 @@
         );
       };
     } else if (targetOrOptions && typeof targetOrOptions === "object") {
-      const rawRefs = Array.isArray(targetOrOptions.currentRefs)
-        ? targetOrOptions.currentRefs
-        : (Array.isArray(targetOrOptions.references) ? targetOrOptions.references : []);
+      const rawRefs = Array.isArray(targetOrOptions.items)
+        ? targetOrOptions.items
+        : (Array.isArray(targetOrOptions.currentRefs)
+          ? targetOrOptions.currentRefs
+          : (Array.isArray(targetOrOptions.references) ? targetOrOptions.references : []));
       const allItems = getAllAssetItems();
       curItems = rawRefs.map((r, idx) => {
+        if (r && typeof r === "object" && (r.id || r.image)) {
+          return { ...r };
+        }
         const url = typeof r === "string" ? r : (r.url || r.image || "");
         const matched = allItems.find((it) => it.image === url || it.id === r || it.id === r.id);
         if (matched) return { ...matched };
@@ -2023,6 +2041,8 @@
       onCommitCallback = (items) => {
         if (typeof targetOrOptions.onConfirm === "function") {
           targetOrOptions.onConfirm(items);
+        } else if (typeof opts.onConfirm === "function") {
+          opts.onConfirm(items);
         }
       };
     } else {
@@ -2037,7 +2057,7 @@
     let showNewCatForm = false;
 
     S.openModal({
-      title: "参考图与图参（我的图库 / 官方示例 / 本地上传）",
+      title: modalTitle,
       sizeClass: "modal-wide",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;min-height:540px;">
@@ -2081,7 +2101,7 @@
         };
 
         const syncConfirmText = () => {
-          confirmBtn.textContent = `✓ 确认选用 (${selectedMap.size} / 6)`;
+          confirmBtn.textContent = `✓ 确认选用 (${selectedMap.size} / ${maxCount})`;
         };
 
         topTabsEl.querySelectorAll("[data-top-tab]").forEach((btn) => {
@@ -2281,7 +2301,7 @@
                 };
                 CS.customUploads = [newItem, ...(CS.customUploads || []).filter((x) => x.id !== finalId)];
                 writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
-                if (selectedMap.size < 6) {
+                if (selectedMap.size < maxCount) {
                   selectedMap.set(newItem.id, newItem);
                 }
                 syncConfirmText();
@@ -2304,7 +2324,7 @@
             list = list.filter((it) => `${it.id} ${it.name_zh || it.name || ""} ${it.desc_zh || ""}`.toLowerCase().includes(searchQuery));
           }
 
-          countEl.textContent = `共 ${list.length} 项 · 已选 ${selectedMap.size} / 6`;
+          countEl.textContent = `共 ${list.length} 项 · 已选 ${selectedMap.size} / ${maxCount}`;
 
           if (!list.length) {
             gridEl.innerHTML = `<div style="grid-column:1/-1;padding:42px;text-align:center;color:var(--ink-muted);">暂无图参，可通过上方「本地上传」添加图片</div>`;
@@ -2325,7 +2345,6 @@
               };">
                   <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
                     <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                    <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:700;">${esc(id)}</span>
                     <span style="position:absolute;right:6px;top:6px;padding:2px 6px;border-radius:5px;background:${
                       isSel ? "var(--vermilion)" : "rgba(255,252,247,0.92)"
                     };color:${isSel ? "#fff" : "#2b2520"};font-size:10px;font-weight:700;">
@@ -2333,7 +2352,10 @@
                     </span>
                   </div>
                   <div style="padding:8px 10px;display:flex;flex-direction:column;gap:4px;flex:1;justify-content:space-between;">
-                    <div style="font-size:12.5px;font-weight:700;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
+                    <div>
+                      <div style="font-family:var(--font-mono, monospace);font-size:11px;font-weight:700;color:var(--ink-muted, #786f65);">${esc(id)}</div>
+                      <div style="font-size:12.5px;font-weight:700;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
+                    </div>
                     ${!it.builtin ? `
                       <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;" data-stop-card-click="1">
                         <button type="button" class="btn btn-sm" data-del-asset-id="${esc(id)}" style="padding:1px 6px;font-size:10.5px;color:#dc2626;">删除</button>
@@ -2379,8 +2401,8 @@
               if (selectedMap.has(id)) {
                 selectedMap.delete(id);
               } else {
-                if (selectedMap.size >= 6) {
-                  toast("最多选用 6 张参考图");
+                if (selectedMap.size >= maxCount) {
+                  toast(getMaxCountToast());
                   return;
                 }
                 selectedMap.set(id, itemObj);
@@ -3184,14 +3206,14 @@
               };">
                   <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;">
                     <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                    <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:700;">${esc(id)}</span>
                     ${
                       isSel
                         ? `<span style="position:absolute;right:6px;top:6px;padding:2px 8px;border-radius:999px;background:#0d9488;color:#fff;font-size:10.5px;font-weight:850;">循环 #${orderIdx + 1}</span>`
                         : ""
                     }
                   </div>
-                  <div style="padding:8px 10px;">
+                  <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px;">
+                    <div style="font-family:var(--font-mono, monospace);font-size:11px;font-weight:700;color:var(--ink-muted, #786f65);">${esc(id)}</div>
                     <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
                     <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(S.resourceGroupLabel(it.group, it.kind))}</div>
                   </div>
@@ -4356,7 +4378,7 @@
             anchorHeading: "",
             style1: iter.style1 || "",
             layout: iter.layout || rec.layoutId || "",
-            assetItems: iter.assetItems || null,
+            assetItems: Array.isArray(iter.assetItems) ? iter.assetItems : null,
             mode,
             ratio: cd.ratio || "3:4",
             theme: iter.theme,
@@ -12962,10 +12984,21 @@
               const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
               openSkillFieldPickerModal(bp.skill, targetField, { current, onPick, title });
             },
-            openReferencePicker: () => {
+            openReferencePicker: (opts = {}) => {
               if (!bp || busy) return;
               ensureBatchAssetNode();
-              openAssetPickerModal(bp.asset);
+              if (opts && typeof opts === "object" && typeof opts.onConfirm === "function") {
+                openAssetPickerModal(opts, {
+                  maxCount: opts.maxCount || 3,
+                  title: opts.title || "单条参考图（最多 3 张）"
+                });
+              } else {
+                openAssetPickerModal(bp.asset, {
+                  maxCount: 4,
+                  title: "全局参考图（最多 4 张）",
+                  ...opts
+                });
+              }
             },
             openLoopMultiPicker: (kind) => {
               if (!bp || busy) return;

@@ -149,40 +149,56 @@ function createTestBatchGraph(options = {}) {
 }
 
 function parseHtml(html) {
+  const nodePool = new Map();
+  function getNode(id, init) {
+    if (!nodePool.has(id)) {
+      nodePool.set(id, init());
+    }
+    return nodePool.get(id);
+  }
+
   return {
     html,
     querySelector(selector) {
       if (selector === "#batch-mode-single") {
-        return html.includes('id="batch-mode-single"') ? { id: "batch-mode-single", onclick: null } : null;
+        return html.includes('id="batch-mode-single"') ? getNode("batch-mode-single", () => ({ id: "batch-mode-single", onclick: null })) : null;
       }
       if (selector === "#batch-mode-fusion") {
-        return html.includes('id="batch-mode-fusion"') ? { id: "batch-mode-fusion", onclick: null } : null;
+        return html.includes('id="batch-mode-fusion"') ? getNode("batch-mode-fusion", () => ({ id: "batch-mode-fusion", onclick: null })) : null;
       }
       if (selector === "#batch-strategy-fixed") {
-        return html.includes('id="batch-strategy-fixed"') ? { id: "batch-strategy-fixed", onclick: null } : null;
+        return html.includes('id="batch-strategy-fixed"') ? getNode("batch-strategy-fixed", () => ({ id: "batch-strategy-fixed", onclick: null })) : null;
       }
       if (selector === "#batch-strategy-ai") {
-        return html.includes('id="batch-strategy-ai"') ? { id: "batch-strategy-ai", onclick: null } : null;
+        return html.includes('id="batch-strategy-ai"') ? getNode("batch-strategy-ai", () => ({ id: "batch-strategy-ai", onclick: null })) : null;
       }
       if (selector === "#batch-btn-plan") {
-        return html.includes('id="batch-btn-plan"') ? { id: "batch-btn-plan", onclick: null, disabled: html.includes('id="batch-btn-plan" disabled') } : null;
+        return html.includes('id="batch-btn-plan"') ? getNode("batch-btn-plan", () => ({ id: "batch-btn-plan", onclick: null, disabled: html.includes('id="batch-btn-plan" disabled') })) : null;
       }
       if (selector === "#batch-btn-pick-fixed-layout") {
-        return html.includes('id="batch-btn-pick-fixed-layout"') ? { id: "batch-btn-pick-fixed-layout", onclick: null } : null;
+        return html.includes('id="batch-btn-pick-fixed-layout"') ? getNode("batch-btn-pick-fixed-layout", () => ({ id: "batch-btn-pick-fixed-layout", onclick: null })) : null;
       }
       if (selector === "#batch-layout-req-input") {
         const m = html.match(/id="batch-layout-req-input"[^>]*value="([^"]*)"/);
-        return m ? { value: m[1], oninput: null } : (html.includes('id="batch-layout-req-input"') ? { value: "", oninput: null } : null);
+        return m ? getNode("batch-layout-req-input", () => ({ value: m[1], oninput: null })) : (html.includes('id="batch-layout-req-input"') ? getNode("batch-layout-req-input", () => ({ value: "", oninput: null })) : null);
       }
       if (selector === "#batch-prompts-input") {
         const m = html.match(/id="batch-prompts-input"[^>]*>([\s\S]*?)<\/textarea>/);
-        return m ? { value: m[1], oninput: null, onblur: null } : null;
+        return m ? getNode("batch-prompts-input", () => ({ value: m[1], oninput: null, onblur: null })) : null;
       }
       if (selector === "#batch-btn-start") {
-        return html.includes('id="batch-btn-start"') ? { id: "batch-btn-start", onclick: null, disabled: html.includes('id="batch-btn-start" disabled') } : null;
+        return html.includes('id="batch-btn-start"') ? getNode("batch-btn-start", () => ({ id: "batch-btn-start", onclick: null, disabled: html.includes('id="batch-btn-start" disabled') })) : null;
       }
-      if (selector === "#batch-btn-fission") {
-        return html.includes('id="batch-btn-fission"') ? { id: "batch-btn-fission", onclick: null } : null;
+      if (selector === "#batch-btn-fission" || selector === "#batch-btn-fission-ai") {
+        const id = selector.slice(1);
+        if (!html.includes(`id="${id}"`)) return null;
+        return getNode(id, () => {
+          const m = html.match(new RegExp(`id="${id}"[^>]*>([\\s\\S]*?)<\\/button>`));
+          return { id, textContent: m ? m[1] : "", onclick: null };
+        });
+      }
+      if (selector === "#batch-btn-pick-global-refs") {
+        return html.includes('id="batch-btn-pick-global-refs"') ? getNode("batch-btn-pick-global-refs", () => ({ id: "batch-btn-pick-global-refs", onclick: null })) : null;
       }
       if (selector === ".batch-plan-notice") {
         const m = html.match(/<span class="batch-plan-notice">([\s\S]*?)<\/span>/);
@@ -196,10 +212,20 @@ function parseHtml(html) {
         const m = html.match(/<h3 class="batch-preview-title">([\s\S]*?)<\/h3>/);
         return m ? { textContent: m[1] } : null;
       }
-      return null;
+      const all = this.querySelectorAll(selector);
+      return all[0] || null;
     },
     querySelectorAll(selector) {
       const results = [];
+      if (selector.includes("batch-fission-trigger") || selector.includes("batch-btn-fission")) {
+        if (html.includes('id="batch-btn-fission"')) {
+          results.push(this.querySelector("#batch-btn-fission"));
+        }
+        if (html.includes('id="batch-btn-fission-ai"')) {
+          results.push(this.querySelector("#batch-btn-fission-ai"));
+        }
+        return results;
+      }
       if (selector === "[data-set-mode]") {
         const regex = /data-set-mode="([^"]+)"/g;
         let match;
@@ -313,20 +339,23 @@ function parseHtml(html) {
 
 function createFakeDom() {
   const elements = new Map();
+  let parsed = null;
   return {
     _html: "",
     get innerHTML() { return this._html; },
     set innerHTML(val) {
       this._html = val;
       elements.clear();
+      parsed = parseHtml(this._html);
     },
     querySelector(sel) {
-      const all = this.querySelectorAll(sel);
-      return all[0] || null;
+      if (!parsed) parsed = parseHtml(this._html);
+      return parsed.querySelector(sel);
     },
     querySelectorAll(sel) {
+      if (!parsed) parsed = parseHtml(this._html);
       if (!elements.has(sel)) {
-        elements.set(sel, parseHtml(this._html).querySelectorAll(sel));
+        elements.set(sel, parsed.querySelectorAll(sel));
       }
       return elements.get(sel);
     },
@@ -883,6 +912,160 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   console.log("✓ Requirement 10 Passed: Batch iteration thumbnail has lightbox zoom button");
 }
 
+// ==========================================
+// Requirement 11: Global + Per-Row Reference Images (Additive, Cap, Dedupe, SkipGlobal)
+// ==========================================
+{
+  const refGlobal1 = { id: "AST-001", name: "主角立绘", image: "/uploads/char1.webp", cat: "character" };
+  const refGlobal2 = { id: "AST-002", name: "场景色调", image: "/uploads/scene1.webp", cat: "scene" };
+  const refRow1 = { id: "AST-003", name: "单条道具", image: "/uploads/prop1.webp", cat: "prop" };
+  const refRowDup = { id: "AST-002-dup", name: "场景色调", image: "/uploads/scene1.webp", cat: "scene" }; // Same image as refGlobal2
+
+  const graph = createTestBatchGraph({
+    batchLayoutMode: "ai",
+    layout: "SC-021",
+    assets: [refGlobal1, refGlobal2],
+    batchRows: [
+      { theme: "第1张：全局2张+单条1张不同", layout: "SC-001", assetItems: [refRow1], skipGlobalRefs: false },
+      { theme: "第2张：全局2张+单条1张重复", layout: "SC-001", assetItems: [refRowDup], skipGlobalRefs: false },
+      { theme: "第3张：不用全局+单条1张", layout: "SC-001", assetItems: [refRow1], skipGlobalRefs: true },
+      { theme: "第4张：不用全局+无单条参考图", layout: "SC-001", assetItems: [], skipGlobalRefs: true },
+      { theme: "第5张：无单条参考图+用全局", layout: "SC-001", assetItems: [], skipGlobalRefs: false }
+    ]
+  });
+
+  const ctrlNode = graph.nodes.find((n) => n.type === "output_control");
+  const loopNode = graph.nodes.find((n) => n.type === "loop");
+  const rec = Engine.resolveControlRecipe(graph, ctrlNode, sharedCatalog);
+  const iters = Engine.resolveLoopIterations(graph, loopNode, rec, sharedCatalog);
+
+  assert.equal(iters.length, 5);
+
+  // Case 1: Global 2 + Row 1 (different) -> merged length 3, global first
+  assert.equal(iters[0].assetItems.length, 3, "Case 1: Global 2 + Row 1 must merge to 3 items");
+  assert.equal(iters[0].assetItems[0].image, "/uploads/char1.webp", "Global ref 1 must be first");
+  assert.equal(iters[0].assetItems[1].image, "/uploads/scene1.webp", "Global ref 2 must be second");
+  assert.equal(iters[0].assetItems[2].image, "/uploads/prop1.webp", "Row ref must be third");
+
+  // Case 2: Global 2 + Row 1 (duplicate image) -> deduped to 2 items, only appear once
+  assert.equal(iters[1].assetItems.length, 2, "Case 2: Duplicate image must be deduped");
+  assert.equal(iters[1].assetItems[0].image, "/uploads/char1.webp");
+  assert.equal(iters[1].assetItems[1].image, "/uploads/scene1.webp");
+
+  // Case 3: skipGlobalRefs: true with row ref -> only row ref
+  assert.equal(iters[2].assetItems.length, 1, "Case 3: skipGlobalRefs must exclude global refs");
+  assert.equal(iters[2].assetItems[0].image, "/uploads/prop1.webp");
+
+  // Case 4: skipGlobalRefs: true with no row ref -> empty array []
+  assert.ok(Array.isArray(iters[3].assetItems), "Case 4: skipGlobalRefs with no row refs must be an array");
+  assert.equal(iters[3].assetItems.length, 0, "Case 4: must have length 0");
+
+  // Case 5: neither row ref nor skipGlobal -> assetItems: null (fallback to global rec.assetItems)
+  assert.equal(iters[4].assetItems, null, "Case 5: no row ref and not skipGlobal must have assetItems: null for byte-identical fallback");
+
+  // Merged cap 7 check
+  const manyRefs = Array.from({ length: 10 }, (_, i) => ({ id: `R-${i}`, image: `/u/${i}.webp` }));
+  const graphCap = createTestBatchGraph({
+    batchLayoutMode: "ai",
+    assets: manyRefs.slice(0, 4),
+    batchRows: [
+      { theme: "超限测试", layout: "", assetItems: manyRefs.slice(3, 9) } // 4 global + 6 row = 9 unique
+    ]
+  });
+  const recCap = Engine.resolveControlRecipe(graphCap, graphCap.nodes.find(n => n.type === "output_control"), sharedCatalog);
+  const itersCap = Engine.resolveLoopIterations(graphCap, graphCap.nodes.find(n => n.type === "loop"), recCap, sharedCatalog);
+  assert.equal(itersCap[0].assetItems.length, 7, "Merged references must be capped at MAX_MERGED_REFS = 7");
+
+  console.log("✓ Requirement 11 Passed: Global + Row reference images merging, deduplication, skipGlobal isolation, and cap 7 verified");
+}
+
+// ==========================================
+// Requirement 12: Fission in AI Recommended Layouts Mode
+// ==========================================
+{
+  const fakeHost = createFakeDom();
+  const graph = createTestBatchGraph({
+    batchLayoutMode: "ai",
+    batchRows: [
+      { theme: "原主题1", layout: "SC-001" },
+      { theme: "原主题2", layout: "SC-022" }
+    ]
+  });
+  const parts = {
+    ctrl: graph.nodes.find(n => n.type === "output_control"),
+    loop: graph.nodes.find(n => n.type === "loop"),
+    skill: graph.nodes.find(n => n.type === "skill_params"),
+    text: graph.nodes.find(n => n.type === "text_input"),
+    asset: graph.nodes.find(n => n.type === "asset")
+  };
+
+  let dirtyCalled = false;
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {
+    markDirtyAndRender: () => { dirtyCalled = true; }
+  });
+
+  // Verify fission button exists in AI mode
+  const btnFissionAi = fakeHost.querySelector("#batch-btn-fission-ai");
+  assert.ok(btnFissionAi, "AI recommended layouts mode must render #batch-btn-fission-ai button");
+  assert.equal(btnFissionAi.textContent.trim(), "从母题裂变");
+
+  // Verify openFissionModal in AI mode adapts button labels
+  let capturedModalHtml = "";
+  let capturedOnMount = null;
+  const mockShared = {
+    esc: (s) => String(s == null ? "" : s),
+    openModal: (cfg) => {
+      capturedModalHtml = cfg.html;
+      capturedOnMount = cfg.onMount;
+    },
+    closeModal: () => {},
+    toast: () => {}
+  };
+  sandbox.HANDRAW_SHARED = mockShared;
+
+  btnFissionAi.onclick();
+  assert.ok(capturedModalHtml.includes("追加为新的逐张行"), "Fission modal in AI mode must have '追加为新的逐张行' button");
+  assert.ok(capturedModalHtml.includes("替换全部逐张行"), "Fission modal in AI mode must have '替换全部逐张行' button");
+
+  console.log("✓ Requirement 12 Passed: AI mode fission button exists and modal button labels adapt");
+}
+
+// ==========================================
+// Requirement 13: Visual 2 (No badges or IDs overlaid on images)
+// ==========================================
+{
+  const fakeHost = createFakeDom();
+  const graph = createTestBatchGraph({
+    batchLayoutMode: "fixed",
+    layout: "SC-001",
+    tones: ["TN-001"],
+    assets: [{ id: "AST-001", name: "测试参考图", image: "/uploads/test.webp" }]
+  });
+  const parts = {
+    ctrl: graph.nodes.find(n => n.type === "output_control"),
+    loop: graph.nodes.find(n => n.type === "loop"),
+    skill: graph.nodes.find(n => n.type === "skill_params"),
+    text: graph.nodes.find(n => n.type === "text_input"),
+    asset: graph.nodes.find(n => n.type === "asset")
+  };
+
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {});
+
+  // 1. In batch HTML, check fixed layout slot card
+  const html = fakeHost.innerHTML;
+  assert.ok(!html.includes('class="make-image-slot-badge"'), "make-image-slot-badge must NOT exist in batch HTML");
+  assert.ok(html.includes("make-image-slot-code"), "make-image-slot-code must exist in slot meta");
+
+  // 2. In studioAppSource, check openSkillFieldPickerModal and openAssetPickerModal ic-picker-card
+  const freshStudioApp = fs.readFileSync("demo/assets/studio-app.js", "utf8");
+  assert.ok(
+    !freshStudioApp.includes('<span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:700;">${esc(id)}</span>'),
+    "ic-picker-card in studio-app.js must not overlay ID on image"
+  );
+
+  console.log("✓ Requirement 13 Passed: Visual 2 verified (no badges or IDs overlaid on images, moved to meta text)");
+}
+
 console.log("\n==========================================");
-console.log("All 12 Studio Batch tests passed successfully!");
+console.log("All 15 Studio Batch tests passed successfully!");
 console.log("==========================================");
