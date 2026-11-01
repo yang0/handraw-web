@@ -4943,7 +4943,7 @@
             ratio: card.ratio || (card.role === "cover" ? "2.35:1" : "4:3"),
             style1: rec?.style1Id || target.art?.style1 || "",
             style2: rec?.style2Id || "",
-            layout: rec?.layoutId || target.art?.layout || "",
+            layout: card.layoutId || rec?.layoutId || target.art?.layout || "",
             refImages,
             requestId,
             clientRequestId: requestId,
@@ -5016,6 +5016,7 @@
     } catch (err) {
       if (isStaleScope(runEpoch, runScope)) return false;
       card.status = "error";
+      card.errorText = String(err?.message || err || "").slice(0, 60);
       if (err.terminal) card.requestId = "";
       commitArticleTargetChanges(target, { bumpTime: false });
       if (!silent) toast(`⚠️ 配图生成失败：${err.message || err}`);
@@ -5659,7 +5660,8 @@
             anchorHeading: it.anchorHeading || "",
             theme: it.theme || "",
             prompt: it.prompt || "",
-            imageUrl: it.imageUrl || ""
+            imageUrl: it.imageUrl || "",
+            afterLine: typeof it.afterLine === "number" ? it.afterLine : undefined
           }))
         })
       });
@@ -5688,19 +5690,21 @@
     const readyCards = orderedCards.filter((c) => c.imageUrl);
     if (!readyCards.length) return null;
 
-    const blocks = E.parseArticleReadonlyBlocks(planNode.data.markdown || "");
+    const blocks = E.parseArticleReadonlyBlocks(planNode.data.markdown || "", { withLines: true, noStarter: true });
     return {
       kind: "article",
       title: planNode.data.articleTitle || "文章配图方案",
       markdown: planNode.data.markdown || "",
       items: readyCards.map((c) => {
+        const isCover = c.role === "cover";
         const anchorBlock =
           typeof c.afterBlockIdx === "number" && c.afterBlockIdx >= 0 && blocks[c.afterBlockIdx]
             ? blocks[c.afterBlockIdx]
             : null;
+        const afterLine = isCover ? -1 : (anchorBlock && typeof anchorBlock.endLine === "number" ? anchorBlock.endLine : -1);
         return {
           id: c.id,
-          role: c.role === "cover" ? "cover" : "inline",
+          role: isCover ? "cover" : "inline",
           title: c.title || "配图",
           anchorHeading:
             anchorBlock && (anchorBlock.kind === "h1" || anchorBlock.kind === "h2" || anchorBlock.kind === "h3")
@@ -5709,7 +5713,8 @@
           ratio: c.ratio || "4:3",
           theme: c.title || "",
           prompt: c.prompt || "",
-          imageUrl: c.imageUrl
+          imageUrl: c.imageUrl,
+          afterLine
         };
       })
     };
@@ -10065,16 +10070,17 @@
     return htmlParts.join("");
   }
 
-  function bindNotionPlanSheetInteractions(planNode) {
-    const sheetEl = DOM.previewStage && DOM.previewStage.querySelector("#pv-notion-article-sheet");
+  function bindNotionPlanSheetInteractions(planNode, rootEl = null) {
+    const sheetEl = rootEl || (DOM.previewStage && DOM.previewStage.querySelector("#pv-notion-article-sheet"));
     if (!sheetEl || !planNode) return;
+    const isEditorPage = !!sheetEl.closest("#art-editor-paper") || sheetEl.id === "art-editor-flow" || sheetEl.id === "art-editor-paper";
     const resolvedTarget = resolveArticleTarget(planNode);
     const targetRefId = resolvedTarget?.isActiveCanvas
       ? planNode.id
       : resolvedTarget?.art?.id || planNode.id;
 
     // 1. Click card -> open full prompt modal (excluding drag handle & action buttons)
-    sheetEl.querySelectorAll(".ic-plan-slot-card[data-plan-card-id]").forEach((cardEl) => {
+    sheetEl.querySelectorAll(".ic-plan-slot-card[data-plan-card-id], .ic-art-card[data-plan-card-id]").forEach((cardEl) => {
       cardEl.onclick = (e) => {
         if (
           e.target.closest("[data-plan-drag]") ||
@@ -10118,7 +10124,9 @@
         if (!cid) return;
         const t = resolveArticleTarget(planNode);
         if (t?.isActiveCanvas) pushUndo();
+        const deletedCard = (planNode.data.cards || []).find((c) => c.id === cid);
         planNode.data.cards = (planNode.data.cards || []).filter((c) => c.id !== cid);
+        if (t?.art) t.art.cards = planNode.data.cards;
         commitArticleTargetChanges(t, { bumpTime: true });
         renderFullPreviewStage();
         if (t?.isActiveCanvas) {
@@ -10126,7 +10134,9 @@
           renderMinimap();
         }
         renderWorkbenchBar();
-        toast("🗑️ 已删除配图卡片");
+        const delTitle = deletedCard?.role === "cover" ? "封面" : (deletedCard?.title || "配图卡片");
+        toast(`🗑️ 已删除${delTitle}`);
+        if (typeof speakArt === "function") speakArt(`已删除${delTitle}`);
       };
     });
 
@@ -10146,6 +10156,9 @@
         insertNewPlanCard(planNode, afterIdx, { openModal: true });
       };
     });
+
+    // Skip old drag for editor page (handled by new editor drag system)
+    if (isEditorPage) return;
 
     // 6. Notion-style Drag-and-Drop Reordering via ⋮⋮ handle
     sheetEl.querySelectorAll("[data-plan-drag]").forEach((handleEl) => {
@@ -11163,7 +11176,7 @@
       <aside class="ic-pv-outline">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px;">
           <span style="font-size:13px;font-weight:850;color:var(--ic-ink);">📚 历史文章</span>
-          <button type="button" class="btn btn-sm btn-primary" id="pv-sidebar-new-btn" style="padding:2px 8px;font-size:11.5px;font-weight:800;">＋ 新建</button>
+          <button type="button" class="btn btn-sm" id="pv-sidebar-new-btn" style="padding:2px 8px;font-size:11.5px;font-weight:800;">＋ 新建</button>
         </div>
 
         <div class="ic-hist-art-list" id="pv-hist-art-list">
@@ -11265,7 +11278,6 @@
       targetArt = {
         id: newId,
         articleTitle: title || "未命名文章",
-        author: draft.author || "",
         markdown: md,
         cards: [],
         status: "ready",
@@ -11284,8 +11296,10 @@
       CS.activeArticleId = newId;
     } else {
       targetArt.articleTitle = title || targetArt.articleTitle || "未命名文章";
-      targetArt.author = draft.author || "";
       targetArt.markdown = md;
+      if (Array.isArray(draft.cards)) {
+        targetArt.cards = draft.cards;
+      }
       targetArt.style1 = draft.styleId || targetArt.style1 || "FA-001";
       targetArt.coverRatio = draft.coverRatio || targetArt.coverRatio || "2.35:1";
       targetArt.inlineRatio = draft.inlineRatio || targetArt.inlineRatio || "4:3";
@@ -11447,7 +11461,6 @@
               id: artId,
               articleTitle: parsedTitle,
               markdown: parsedMd,
-              author: "",
               cards: cards,
               status: "ready",
               createdAtMs: now,
@@ -11468,7 +11481,6 @@
             CS.articleEditorDraft = {
               id: artId,
               title: parsedTitle,
-              author: "",
               markdown: parsedMd,
               styleId: "FA-001",
               coverRatio: "2.35:1",
@@ -11511,7 +11523,6 @@
         id: artId,
         articleTitle: "未命名文章",
         markdown: "",
-        author: "",
         cards: [],
         status: "ready",
         createdAtMs: now,
@@ -11533,7 +11544,6 @@
         id: artId,
         title: "",
         markdown: "",
-        author: "",
         styleId: "FA-001",
         coverRatio: "2.35:1",
         inlineRatio: "4:3"
@@ -11553,11 +11563,28 @@
     if (newCard) newCard.onclick = () => startNewEditor();
   }
 
-  function renderWeChatArticlePreviewHtml(draft, styleObj, isMobile = false) {
-    const rawMd = (draft.markdown || "").trim();
+  function parseCardRatioNumbers(ratioStr) {
+    const s = String(ratioStr || "").trim();
+    if (s === "2.35:1") return { rw: 2.35, rh: 1 };
+    if (s === "16:9") return { rw: 16, rh: 9 };
+    if (s === "4:3") return { rw: 4, rh: 3 };
+    if (s === "3:4") return { rw: 3, rh: 4 };
+    if (s === "1:1") return { rw: 1, rh: 1 };
+    const parts = s.split(":");
+    if (parts.length === 2) {
+      const w = parseFloat(parts[0]);
+      const h = parseFloat(parts[1]);
+      if (w > 0 && h > 0) return { rw: w, rh: h };
+    }
+    return { rw: 4, rh: 3 };
+  }
+
+  function renderWeChatArticlePreviewHtml(draft, styleObj, isMobile = false, options = {}) {
+    const rawMd = draft.markdown || "";
     const title = (draft.title || "").trim() || "未命名文章";
-    const author = (draft.author || "").trim() || "作者";
     const today = new Date().toISOString().slice(0, 10);
+    const targetCards = options.cards || resolveArticleTarget(draft.id)?.planNode?.data?.cards || draft.cards || [];
+    const cards = sortPlanCardsInDocOrder(targetCards);
 
     function renderInline(text) {
       if (!text) return "";
@@ -11592,7 +11619,7 @@
       return s;
     }
 
-    function parseMarkdownBlocks(md) {
+    function parseMarkdownBlocks(md, { skipTitleH1 = false } = {}) {
       if (!md) return `<div style="padding:48px 16px;text-align:center;color:var(--ic-muted,#999);">暂无正文内容，请切换到编写模式输入文字</div>`;
 
       const lines = md.split(/\r?\n/);
@@ -11681,8 +11708,8 @@
         if (hMatch) {
           const level = hMatch[1].length;
           const hText = hMatch[2];
-          // Skip first H1 if it duplicates the article title
-          if (level === 1 && out.length === 0 && hText.trim() === title.trim()) {
+          // Skip first H1 if requested or if it duplicates the article title
+          if (level === 1 && (skipTitleH1 || (out.length === 0 && hText.trim() === title.trim()))) {
             i++;
             continue;
           }
@@ -11795,7 +11822,84 @@
       return out.join("\n");
     }
 
-    const bodyHtml = parseMarkdownBlocks(rawMd);
+    function renderPreviewFigureHtml(card, role, inlineNo) {
+      const isCover = role === "cover";
+      const status = card.status || "idle";
+      const ratio = card.ratio || (isCover ? "2.35:1" : "4:3");
+      const { rw, rh } = parseCardRatioNumbers(ratio);
+      const roleLabel = isCover ? "封面" : `插图 ${inlineNo}`;
+      const statusLabel =
+        status === "done"
+          ? "已完成"
+          : status === "generating"
+            ? `${roleLabel} · 生成中`
+            : status === "error"
+              ? `${roleLabel} · 生成失败`
+              : `${roleLabel} · 待生成`;
+
+      if (card.imageUrl) {
+        return `
+          <figure class="ic-wechat-figure" data-card-id="${esc(card.id)}" data-role="${esc(role)}" style="margin:18px 0;width:100%;">
+            <img src="${esc(card.imageUrl)}" alt="${esc(card.title || roleLabel)}" loading="lazy" style="width:100%;border-radius:6px;display:block;" />
+          </figure>
+        `;
+      }
+
+      return `
+        <figure class="ic-wechat-figure is-pending" data-status="${esc(status)}" data-card-id="${esc(card.id)}" data-role="${esc(role)}" style="margin:18px 0;width:100%;aspect-ratio:calc(var(--r-w, ${rw})/var(--r-h, ${rh}));border:1.5px dashed var(--line-strong, #cbbfae);border-radius:6px;background:var(--paper-inset, #f3eee6);display:flex;flex-direction:column;align-items:center;justify-content:center;box-sizing:border-box;padding:12px;text-align:center;">
+          <div style="font-size:13px;font-weight:700;color:var(--ink-strong,#1f1b16);">${esc(statusLabel)}</div>
+          ${card.subject ? `<div style="font-size:12px;color:var(--ink-muted,#766d62);margin-top:4px;max-width:90%;">${esc(card.subject.slice(0, 40))}</div>` : ""}
+        </figure>
+      `;
+    }
+
+    let coverFigureHtml = "";
+    let bodyHtml = "";
+
+    if (!cards.length) {
+      bodyHtml = parseMarkdownBlocks(rawMd.trim());
+    } else {
+      const coverCard = cards.find((c) => c.role === "cover");
+      const inlineCards = cards.filter((c) => c.role !== "cover");
+      if (coverCard) {
+        coverFigureHtml = renderPreviewFigureHtml(coverCard, "cover", 0);
+      }
+
+      const blocks = E.parseArticleReadonlyBlocks(rawMd, { withLines: true, noStarter: true });
+      const lines = rawMd.split(/\r?\n/);
+      const firstH1Idx = blocks.find((b) => b.kind === "h1")?.idx ?? -1;
+      const maxBlockIdx = blocks.length > 0 ? blocks[blocks.length - 1].idx : 0;
+
+      const cardsByBlock = new Map();
+      const overflowCards = [];
+      inlineCards.forEach((c) => {
+        const rawIdx = typeof c.afterBlockIdx === "number" ? c.afterBlockIdx : 0;
+        if (blocks.length > 0 && rawIdx > maxBlockIdx) {
+          overflowCards.push(c);
+        } else {
+          if (!cardsByBlock.has(rawIdx)) cardsByBlock.set(rawIdx, []);
+          cardsByBlock.get(rawIdx).push(c);
+        }
+      });
+
+      const bodyParts = [];
+      blocks.forEach((b) => {
+        const blkText = lines.slice(b.startLine, b.endLine + 1).join("\n");
+        const blkHtml = parseMarkdownBlocks(blkText, { skipTitleH1: b.idx === firstH1Idx });
+        if (blkHtml) bodyParts.push(blkHtml);
+
+        const cardsHere = cardsByBlock.get(b.idx) || [];
+        cardsHere.forEach((c) => {
+          bodyParts.push(renderPreviewFigureHtml(c, "inline", inlineCards.indexOf(c) + 1));
+        });
+      });
+
+      overflowCards.forEach((c) => {
+        bodyParts.push(renderPreviewFigureHtml(c, "inline", inlineCards.indexOf(c) + 1));
+      });
+
+      bodyHtml = bodyParts.join("\n");
+    }
 
     return `
       <div class="ic-wechat-preview-wrap ${isMobile ? "is-mobile-vp" : "is-desktop-vp"}">
@@ -11815,13 +11919,14 @@
           ${esc(title)}
         </h1>
 
-        <!-- Author / Metadata Line -->
-        <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:#888;margin-bottom:18px;flex-wrap:wrap;">
-          <span style="font-weight:750;color:#333;">${esc(author)}</span>
+        <!-- Metadata Line -->
+        <div class="ic-wechat-preview-meta" style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:#888;margin-bottom:18px;flex-wrap:wrap;">
           <span style="color:#576b95;font-weight:750;">手绘风格社区</span>
           <span>${today}</span>
           <span style="background:#f2f2f2;color:#666;font-size:11px;padding:1px 6px;border-radius:3px;">原创</span>
         </div>
+
+        ${coverFigureHtml}
 
         <!-- Selected Style Banner Badge -->
         <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#f4f9f5;border-radius:8px;border:1px solid #d1ead7;margin-bottom:22px;">
@@ -11876,8 +11981,8 @@
     return {
       id: E.uid("art"),
       title: "",
-      author: "",
       markdown: "",
+      cards: [],
       styleId: "FA-001",
       coverRatio: "2.35:1",
       inlineRatio: "4:3",
@@ -11888,10 +11993,10 @@
   function draftFromArticle(art) {
     return {
       id: art.id,
-      title: art.articleTitle || "",
-      author: art.author || "",
+      title: art.articleTitle || art.title || "",
       markdown: art.markdown || "",
-      styleId: art.style1 || "FA-001",
+      cards: Array.isArray(art.cards) ? JSON.parse(JSON.stringify(art.cards)) : [],
+      styleId: art.style1 || art.styleId || "FA-001",
       coverRatio: art.coverRatio || "2.35:1",
       inlineRatio: art.inlineRatio || "4:3",
       isNewDraft: false
@@ -11960,7 +12065,7 @@
     return draft;
   }
 
-  function planUnifiedArticleDraft(draft) {
+  function planUnifiedArticleDraft(draft, { aiCards = null } = {}) {
     const {
       id: articleId = null,
       title = "",
@@ -11983,104 +12088,122 @@
     const md = (markdown || "").trim() ||
       (title ? `# ${title}\n\n在这里输入正文内容…` : E.DEFAULT_STARTER_ARTICLE_MD);
 
-    const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
-      withPresetAssets: false
-    });
+    let matchedCards;
+    let builtArticleTitle = title;
+    let builtMarkdown = md;
 
-    const tmpSkill = tmpGraph.nodes.find(
-      (n) => n.type === "skill_params" || n.type === "skill"
-    );
-    if (tmpSkill) {
-      tmpSkill.data = tmpSkill.data || {};
-      tmpSkill.data.style1 = styleId || "FA-001";
-      tmpSkill.data.layout = layoutId || "IG-001";
-    }
+    if (Array.isArray(aiCards)) {
+      matchedCards = aiCards;
+      builtArticleTitle = title || (draft.title || "");
+      builtMarkdown = draft.markdown || md;
+    } else {
+      const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
+        withPresetAssets: false
+      });
 
-    const tmpText = tmpGraph.nodes.find((n) => n.type === "text_input");
-    if (tmpText) {
-      tmpText.data = tmpText.data || {};
-      tmpText.data.text = md;
-      tmpText.data.value = md;
-      tmpText.data.markdown = md;
-    }
+      const tmpSkill = tmpGraph.nodes.find(
+        (n) => n.type === "skill_params" || n.type === "skill"
+      );
+      if (tmpSkill) {
+        tmpSkill.data = tmpSkill.data || {};
+        tmpSkill.data.style1 = styleId || "FA-001";
+        tmpSkill.data.layout = layoutId || "IG-001";
+      }
 
-    const tmpCtrl = tmpGraph.nodes.find(
-      (n) => n.type === "output_control" && n.data?.mode === "article-illust"
-    ) || tmpGraph.nodes.find((n) => n.type === "output_control");
-    if (tmpCtrl) {
-      tmpCtrl.data = tmpCtrl.data || {};
-      tmpCtrl.data.mode = "article-illust";
-      tmpCtrl.data.coverRatio = coverRatio || "2.35:1";
-      tmpCtrl.data.inlineRatio = inlineRatio || "4:3";
-      tmpCtrl.data.status = "ready";
-    }
+      const tmpText = tmpGraph.nodes.find((n) => n.type === "text_input");
+      if (tmpText) {
+        tmpText.data = tmpText.data || {};
+        tmpText.data.text = md;
+        tmpText.data.value = md;
+        tmpText.data.markdown = md;
+      }
 
-    const built = E.buildArticlePlanData(md, tmpCtrl, tmpGraph, Catalog);
-    if (title) built.articleTitle = title;
+      const tmpCtrl = tmpGraph.nodes.find(
+        (n) => n.type === "output_control" && n.data?.mode === "article-illust"
+      ) || tmpGraph.nodes.find((n) => n.type === "output_control");
+      if (tmpCtrl) {
+        tmpCtrl.data = tmpCtrl.data || {};
+        tmpCtrl.data.mode = "article-illust";
+        tmpCtrl.data.coverRatio = coverRatio || "2.35:1";
+        tmpCtrl.data.inlineRatio = inlineRatio || "4:3";
+        tmpCtrl.data.status = "ready";
+      }
 
-    const oldCards = Array.isArray(target.art?.cards) ? target.art.cards : [];
-    const newCards = Array.isArray(built.cards) ? built.cards : [];
-    const consumed = new Set();
+      const built = E.buildArticlePlanData(md, tmpCtrl, tmpGraph, Catalog);
+      if (title) built.articleTitle = title;
+      builtArticleTitle = built.articleTitle;
+      builtMarkdown = built.markdown;
 
-    const matchedCards = newCards.map((card, idx) => {
-      const role = card.role;
-      let hit = null;
+      const oldCards = Array.isArray(target.art?.cards) ? target.art.cards : [];
+      const newCards = Array.isArray(built.cards) ? built.cards : [];
+      const consumed = new Set();
 
-      if (role === "cover") {
-        hit = oldCards.find((o) => o.role === "cover" && !consumed.has(o));
-      } else {
-        const afterBlockIdx = card.afterBlockIdx;
-        const cardTitle = card.title;
-        hit = oldCards.find((o) => {
-          if (consumed.has(o)) return false;
-          if (o.role !== role) return false;
-          if (o.title !== cardTitle) return false;
-          if (afterBlockIdx != null && o.afterBlockIdx != null) {
-            return o.afterBlockIdx === afterBlockIdx;
+      matchedCards = newCards.map((card, idx) => {
+        const role = card.role;
+        let hit = null;
+
+        if (role === "cover") {
+          hit = oldCards.find((o) => o.role === "cover" && !consumed.has(o));
+        } else {
+          const afterBlockIdx = card.afterBlockIdx;
+          const cardTitle = card.title;
+          hit = oldCards.find((o) => {
+            if (consumed.has(o)) return false;
+            if (o.role !== role) return false;
+            if (o.title !== cardTitle) return false;
+            if (afterBlockIdx != null && o.afterBlockIdx != null) {
+              return o.afterBlockIdx === afterBlockIdx;
+            }
+            return true;
+          });
+          if (!hit) {
+            hit = oldCards.find((o) =>
+              !consumed.has(o) &&
+              o.role === role &&
+              o.title === cardTitle &&
+              o.section === card.section
+            );
           }
-          return true;
-        });
-        if (!hit) {
-          hit = oldCards.find((o) =>
-            !consumed.has(o) &&
-            o.role === role &&
-            o.title === cardTitle &&
-            o.section === card.section
-          );
         }
-      }
 
-      if (!hit) return card;
-      consumed.add(hit);
+        if (!hit) return card;
+        consumed.add(hit);
 
-      const merged = Object.assign({}, card);
-      if (hit.id != null) merged.id = hit.id;
-      if (hit.imageUrl != null) merged.imageUrl = hit.imageUrl;
-      if (hit.status != null) merged.status = hit.status;
-      if (hit.promptCustomized === true && hit.prompt != null) {
-        merged.promptCustomized = true;
-        merged.prompt = hit.prompt;
-      }
-      return merged;
-    });
+        const merged = Object.assign({}, card);
+        if (hit.id != null) merged.id = hit.id;
+        if (hit.imageUrl != null) merged.imageUrl = hit.imageUrl;
+        if (hit.status != null) merged.status = hit.status;
+        if (hit.promptCustomized === true && hit.prompt != null) {
+          merged.promptCustomized = true;
+          merged.prompt = hit.prompt;
+        }
+        return merged;
+      });
+    }
 
     const planNode = target.planNode;
     if (planNode) {
       planNode.data = planNode.data || {};
-      planNode.data.articleTitle = built.articleTitle;
-      planNode.data.markdown = built.markdown;
+      planNode.data.articleTitle = builtArticleTitle;
+      planNode.data.markdown = builtMarkdown;
       planNode.data.cards = matchedCards;
       planNode.data.updatedAt = "已生成方案";
     }
 
     const art = target.art || null;
     if (art) {
-      art.articleTitle = built.articleTitle;
+      art.articleTitle = builtArticleTitle;
       art.style1 = styleId || art.style1 || "FA-001";
       art.coverRatio = coverRatio || art.coverRatio || "2.35:1";
       art.inlineRatio = inlineRatio || art.inlineRatio || "4:3";
       art.cards = matchedCards;
-      art.markdown = built.markdown;
+      art.markdown = builtMarkdown;
+    }
+
+    if (draft) {
+      draft.title = builtArticleTitle;
+      draft.cards = matchedCards;
+      draft.markdown = builtMarkdown;
     }
 
     commitArticleTargetChanges(target, { bumpTime: true });
@@ -12182,7 +12305,7 @@
         <div class="ic-wechat-body">
           <div class="ic-wechat-scroll-area" style="align-items:center;">
             <div class="ic-article-preview-sheet">
-              ${renderWeChatArticlePreviewHtml(art, styleObj, false)}
+              ${renderWeChatArticlePreviewHtml(art, styleObj, false, { cards })}
             </div>
           </div>
         </div>
@@ -12214,27 +12337,632 @@
     });
   }
 
+  function speakArt(text) {
+    if (!text) return;
+    const el = DOM.previewStage && DOM.previewStage.querySelector("#art-live");
+    if (el) {
+      el.textContent = "";
+      setTimeout(() => {
+        el.textContent = text;
+      }, 50);
+    }
+  }
+
+  function renderArticleEditorCardHtml(card, inlineNo, anchorHtml, plainAnchor, options = {}) {
+    const role = card.role || "inline";
+    const isCover = role === "cover";
+    const status = card.status || "idle";
+    const isGenerating = Boolean(options.isGenerating);
+    const { rw, rh } = parseCardRatioNumbers(card.ratio || (isCover ? "2.35:1" : "4:3"));
+
+    let layoutName = "";
+    if (card.layoutId) {
+      const res = (options.catalog && options.catalog.resourceMap && options.catalog.resourceMap.get(card.layoutId)) || null;
+      layoutName = (res && res.name) || "";
+    }
+
+    const ratioText = card.ratio || (isCover ? "2.35:1" : "4:3");
+    let specMeta = ratioText;
+    if (card.layoutId) {
+      specMeta += ` · ${card.layoutId}${layoutName ? ' ' + layoutName : ''}`;
+    }
+
+    let statusText = "待生成";
+    let statusPrefix = "";
+    let genBtnText = "生成";
+    let genBtnAria = isCover ? "生成封面" : `生成插图 ${inlineNo}`;
+
+    if (status === "generating") {
+      statusText = "生成中";
+      statusPrefix = '<span class="art-spinner ic-art-spin-icon" style="margin-right:4px;"></span>';
+      genBtnText = "生成中…";
+      genBtnAria = isCover ? "封面生成中" : `插图 ${inlineNo} 生成中`;
+    } else if (status === "done") {
+      statusText = "已完成";
+      statusPrefix = "✓ ";
+      genBtnText = "重新生成";
+      genBtnAria = isCover ? "重新生成封面" : `重新生成插图 ${inlineNo}`;
+    } else if (status === "error") {
+      statusText = "生成失败";
+      statusPrefix = "! ";
+      genBtnText = "重试";
+      genBtnAria = isCover ? "重试封面" : `重试插图 ${inlineNo}`;
+    }
+
+    const cardPromptDesc = card.subject || (card.prompt ? String(card.prompt).slice(0, 60) : "未指定主题");
+
+    if (isCover) {
+      return `
+        <div
+          id="art-card-cover"
+          class="ic-art-card ${card.isNewEntrance ? 'is-entering' : ''}"
+          data-plan-card-id="${esc(card.id)}"
+          data-card-id="${esc(card.id)}"
+          data-role="cover"
+          data-status="${esc(status)}"
+          data-after-block="-1"
+          role="group"
+          aria-label="封面，${esc(statusText)}"
+        >
+          <div class="ic-art-card-head ic-art-head">
+            <div class="ic-art-head-left" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span class="ic-art-chip-role" data-role="cover">封面</span>
+              <span class="ic-art-chip-status" data-status="${esc(status)}">${statusPrefix}${esc(statusText)}</span>
+              <span class="ic-art-spec-meta">${esc(specMeta)}</span>
+            </div>
+            <div class="ic-art-actions">
+              <button
+                type="button"
+                class="btn btn-sm"
+                data-plan-gen-one="${esc(card.id)}"
+                aria-label="${esc(genBtnAria)}"
+                ${status === "generating" || isGenerating ? "disabled" : ""}
+              >${esc(genBtnText)}</button>
+              <button
+                type="button"
+                class="btn btn-sm ic-art-btn-prompt"
+                data-plan-edit="${esc(card.id)}"
+                aria-label="调整封面的提示词"
+              >调提示词</button>
+              <button
+                type="button"
+                class="ic-art-btn-del"
+                data-plan-del="${esc(card.id)}"
+                title="删除配图位"
+                aria-label="删除封面"
+              >🗑</button>
+            </div>
+          </div>
+
+          <div class="ic-art-cover-note" style="font-size:12px;color:var(--ink-muted,#766d62);">固定在文章开头</div>
+
+          <div class="ic-art-cover-box ${card.imageUrl ? 'has-image' : 'is-empty'}" style="--r-w:${rw};--r-h:${rh};">
+            ${
+              card.imageUrl
+                ? `
+              <img src="${esc(card.imageUrl)}" alt="${esc(card.title || '文章封面')}" loading="lazy" />
+              <button
+                type="button"
+                class="ic-mini-glass-btn"
+                data-plan-zoom="${esc(card.imageUrl)}"
+                data-plan-zoom-title="${esc(card.title || '文章封面')}"
+                aria-label="放大查看封面"
+                style="position:absolute;right:10px;top:10px;"
+              >🔍 放大</button>
+            `
+                : `<span class="ic-art-thumb-ratio" style="font-size:12px;color:var(--ink-faint,#9e9589);">${esc(ratioText)}</span>`
+            }
+          </div>
+
+          <div class="ic-art-subject">
+            <span class="ic-art-subject-prefix ic-art-subject-lbl">主题：</span>${esc(cardPromptDesc)}
+          </div>
+          ${
+            status === "error"
+              ? `<div class="ic-art-error-note" style="font-size:12px;color:var(--art-err-ink);line-height:1.5;">${esc(card.errorText || "生成没有成功，可以重试")}</div>`
+              : ""
+          }
+        </div>
+      `;
+    }
+
+    // Inline card
+    const anchorDesc = plainAnchor || "位于段落之后";
+    const isOrphan = Boolean(options.isOrphan);
+    const afterBlock = options.afterBlockIdxOverride != null ? options.afterBlockIdxOverride : (card.afterBlockIdx ?? 0);
+    return `
+      <div
+        class="ic-art-card ${card.isNewEntrance ? 'is-entering' : ''} ${isOrphan ? 'is-orphan' : ''}"
+        data-plan-card-id="${esc(card.id)}"
+        data-card-id="${esc(card.id)}"
+        data-role="inline"
+        data-status="${esc(status)}"
+        data-after-block="${afterBlock}"
+        role="group"
+        aria-label="插图 ${inlineNo}，${esc(statusText)}，${esc(anchorDesc)}"
+      >
+        <div class="ic-art-card-head ic-art-head" style="grid-area:head;">
+          <div class="ic-art-head-left" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <button
+              type="button"
+              class="ic-art-handle"
+              data-plan-drag="${esc(card.id)}"
+              aria-label="移动插图 ${inlineNo}，当前${esc(anchorDesc)}"
+              aria-describedby="art-handle-help"
+            >⋮⋮</button>
+            <span class="ic-art-chip-role" data-role="inline">插图 ${inlineNo}</span>
+            <span class="ic-art-chip-status" data-status="${esc(status)}">${statusPrefix}${esc(statusText)}</span>
+            <span class="ic-art-spec-meta">${esc(specMeta)}</span>
+          </div>
+          <div class="ic-art-actions">
+            <button
+              type="button"
+              class="btn btn-sm"
+              data-plan-gen-one="${esc(card.id)}"
+              aria-label="${esc(genBtnAria)}"
+              ${status === "generating" || isGenerating ? "disabled" : ""}
+            >${esc(genBtnText)}</button>
+            <button
+              type="button"
+              class="btn btn-sm ic-art-btn-prompt"
+              data-plan-edit="${esc(card.id)}"
+              aria-label="调整插图 ${inlineNo} 的提示词"
+            >调提示词</button>
+            <button
+              type="button"
+              class="ic-art-btn-del"
+              data-plan-del="${esc(card.id)}"
+              title="删除配图位"
+              aria-label="删除插图 ${inlineNo}"
+            >🗑</button>
+          </div>
+        </div>
+
+        <div class="ic-art-thumb ${card.imageUrl ? 'has-image' : 'is-empty'}" style="grid-area:thumb;--r-w:${rw};--r-h:${rh};">
+          ${
+            card.imageUrl
+              ? `
+            <img src="${esc(card.imageUrl)}" alt="${esc(card.title || '插图 ' + inlineNo)}" loading="lazy" />
+            <button
+              type="button"
+              class="ic-mini-glass-btn"
+              data-plan-zoom="${esc(card.imageUrl)}"
+              data-plan-zoom-title="${esc(card.title || '插图 ' + inlineNo)}"
+              aria-label="放大查看插图 ${inlineNo}"
+              style="position:absolute;right:6px;top:6px;"
+            >🔍 放大</button>
+          `
+              : `<span class="ic-art-thumb-ratio" style="font-size:12px;color:var(--ink-faint,#9e9589);">${esc(ratioText)}</span>`
+          }
+        </div>
+
+        <div class="ic-art-meta" style="grid-area:meta;">
+          <div class="ic-art-anchor">${anchorHtml}</div>
+          <div class="ic-art-subject">
+            <span class="ic-art-subject-prefix ic-art-subject-lbl">主题：</span>${esc(cardPromptDesc)}
+          </div>
+          ${
+            status === "error"
+              ? `<div class="ic-art-error-note" style="font-size:12px;color:var(--art-err-ink);line-height:1.5;">${esc(card.errorText || "生成没有成功，可以重试")}</div>`
+              : ""
+          }
+        </div>
+      </div>
+    `;
+  }
+
+  function openMoveCardPositionModal(planNode, card, inlineNo) {
+    if (!planNode || !card) return;
+    const blocks = E.parseArticleReadonlyBlocks(planNode.data?.markdown || "", { noStarter: true });
+    if (!blocks.length) {
+      toast("正文尚无段落，无法移动");
+      return;
+    }
+
+    const positions = blocks.map((b) => {
+      const tag =
+        b.kind === "h1"
+          ? "H1 标题后"
+          : b.kind === "h2"
+            ? "章节标题后"
+            : b.kind === "h3"
+              ? "小节标题后"
+              : b.kind === "blockquote"
+                ? "引用块后"
+                : "正文段落后";
+      const isCurrent = card.afterBlockIdx === b.idx;
+      return {
+        afterIdx: b.idx,
+        badge: tag,
+        desc: b.text.length > 48 ? `${b.text.slice(0, 48)}…` : b.text,
+        isCurrent
+      };
+    });
+
+    S.openModal({
+      title: `把插图 ${inlineNo} 移到…`,
+      sizeClass: "modal-medium",
+      html: `
+        <div id="art-move-modal" style="display:flex;flex-direction:column;gap:10px;">
+          <div style="font-size:12.5px;color:var(--ink-muted);">选择目标段落，插图将紧贴在该段落下方：</div>
+          <div style="display:flex;flex-direction:column;gap:6px;max-height:56vh;overflow-y:auto;padding-right:4px;">
+            ${positions
+              .map(
+                (p) => `
+                <button
+                  type="button"
+                  class="ic-context-item ${p.isCurrent ? 'is-active' : ''}"
+                  data-move-to-pos="${p.afterIdx}"
+                  ${p.isCurrent ? 'aria-current="true"' : ''}
+                  style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid ${p.isCurrent ? 'var(--line-strong)' : 'var(--line-soft)'};border-radius:10px;background:${p.isCurrent ? 'var(--paper-inset)' : '#fff'};text-align:left;"
+                >
+                  <span class="ic-node-badge ic-badge-output-disp" style="flex-shrink:0;">${esc(p.badge)}</span>
+                  <span style="font-size:13px;font-weight:750;color:var(--ink-main);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.desc)}</span>
+                  ${p.isCurrent ? '<span style="font-size:12px;font-weight:700;color:var(--ink-muted);flex-shrink:0;">当前位置</span>' : '<span style="font-size:12px;font-weight:850;color:var(--ink-strong);flex-shrink:0;">移到此处</span>'}
+                </button>
+              `
+              )
+              .join("")}
+          </div>
+        </div>
+      `,
+      onMount(root) {
+        const currentBtn = root.querySelector("[aria-current='true']");
+        if (currentBtn) {
+          setTimeout(() => currentBtn.focus(), 30);
+        }
+        root.querySelectorAll("[data-move-to-pos]").forEach((btn) => {
+          btn.onclick = () => {
+            const nextIdx = Number(btn.getAttribute("data-move-to-pos"));
+            S.closeModal();
+            if (nextIdx === card.afterBlockIdx) return;
+            card.afterBlockIdx = nextIdx;
+            planNode.data.cards = sortPlanCardsInDocOrder(planNode.data.cards || []);
+            const target = resolveArticleTarget(planNode);
+            if (target?.art) target.art.cards = planNode.data.cards;
+            if (CS.articleEditorDraft?.cards) CS.articleEditorDraft.cards = planNode.data.cards;
+            commitArticleTargetChanges(target, { bumpTime: true });
+            renderFullPreviewStage();
+            const newHandle = DOM.previewStage?.querySelector(`.ic-art-card[data-plan-card-id="${card.id}"] [data-plan-drag]`);
+            if (newHandle) newHandle.focus();
+            const targetBlock = blocks.find((b) => b.idx === nextIdx);
+            const blockPreview = targetBlock ? targetBlock.text.slice(0, 16) : `第 ${nextIdx + 1} 段`;
+            speakArt(`插图 ${inlineNo} 已移到「${blockPreview}」之后`);
+          };
+        });
+      }
+    });
+  }
+
+  function bindArticleEditorInteractions(planNode, flowEl) {
+    if (!planNode || !flowEl) return;
+    const target = resolveArticleTarget(planNode);
+    const cards = planNode.data?.cards || [];
+    const blocks = E.parseArticleReadonlyBlocks(planNode.data?.markdown || "", { noStarter: true });
+
+    // Handle keys and clicks on card handles
+    flowEl.querySelectorAll(".ic-art-handle[data-plan-drag]").forEach((handleEl) => {
+      const cid = handleEl.getAttribute("data-plan-drag");
+      const card = cards.find((c) => c.id === cid);
+      if (!card) return;
+
+      const inlineCards = cards.filter((c) => c.role !== "cover");
+      const inlineNo = inlineCards.indexOf(card) + 1;
+
+      // Click handle opens move modal
+      handleEl.onclick = (e) => {
+        e.stopPropagation();
+        openMoveCardPositionModal(planNode, card, inlineNo);
+      };
+
+      // Keyboard navigation
+      handleEl.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openMoveCardPositionModal(planNode, card, inlineNo);
+          return;
+        }
+
+        const maxIdx = blocks.length > 0 ? blocks.length - 1 : 0;
+        let newIdx = null;
+
+        if (e.shiftKey && e.key === "ArrowDown") {
+          e.preventDefault();
+          const nextHeading = blocks.find((b) => b.idx > card.afterBlockIdx && (b.kind === "h1" || b.kind === "h2" || b.kind === "h3"));
+          if (nextHeading) newIdx = nextHeading.idx;
+          else speakArt("已在文章末尾");
+        } else if (e.shiftKey && e.key === "ArrowUp") {
+          e.preventDefault();
+          const prevHeadings = blocks.filter((b) => b.idx < card.afterBlockIdx && (b.kind === "h1" || b.kind === "h2" || b.kind === "h3"));
+          if (prevHeadings.length) newIdx = prevHeadings[prevHeadings.length - 1].idx;
+          else speakArt("已在文章开头");
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          if (card.afterBlockIdx < maxIdx) newIdx = card.afterBlockIdx + 1;
+          else speakArt("已在文章末尾");
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          if (card.afterBlockIdx > 0) newIdx = card.afterBlockIdx - 1;
+          else speakArt("已在文章开头");
+        }
+
+        if (newIdx !== null && newIdx !== card.afterBlockIdx) {
+          card.afterBlockIdx = newIdx;
+          planNode.data.cards = sortPlanCardsInDocOrder(planNode.data.cards);
+          if (target?.art) target.art.cards = planNode.data.cards;
+          if (CS.articleEditorDraft?.cards) CS.articleEditorDraft.cards = planNode.data.cards;
+          commitArticleTargetChanges(target, { bumpTime: true });
+          renderFullPreviewStage();
+          const refocused = DOM.previewStage?.querySelector(`.ic-art-card[data-plan-card-id="${card.id}"] [data-plan-drag]`);
+          if (refocused) refocused.focus();
+          const targetBlock = blocks.find((b) => b.idx === newIdx);
+          const blockPreview = targetBlock ? targetBlock.text.slice(0, 16) : `第 ${newIdx + 1} 段`;
+          speakArt(`插图 ${inlineNo} 已移到「${blockPreview}」之后`);
+        }
+      };
+    });
+
+    // Notion-style Drag and Drop on Handles
+    flowEl.querySelectorAll(".ic-art-handle[data-plan-drag]").forEach((handleEl) => {
+      handleEl.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        const dragCardId = handleEl.getAttribute("data-plan-drag");
+        const dragCard = cards.find((c) => c.id === dragCardId);
+        const cardDom = flowEl.querySelector(`.ic-art-card[data-plan-card-id="${dragCardId}"]`);
+        if (!dragCard || !cardDom) return;
+
+        const scrollContainer = DOM.previewStage?.querySelector("#wechat-scroll-container");
+        const startX = e.clientX;
+        const startY = e.clientY;
+        let moved = false;
+        let ghostEl = null;
+        let dropLineEl = null;
+        let bestTarget = null;
+        let autoScrollTimer = null;
+
+        const inlineCards = cards.filter((c) => c.role !== "cover");
+        const inlineNo = inlineCards.indexOf(dragCard) + 1;
+
+        const cleanupDrag = () => {
+          window.removeEventListener("pointermove", onPointerMove);
+          window.removeEventListener("pointerup", onPointerUp);
+          window.removeEventListener("keydown", onKeyDown);
+          if (autoScrollTimer) clearInterval(autoScrollTimer);
+          flowEl.classList.remove("is-dragging");
+          if (cardDom) {
+            cardDom.style.opacity = "";
+            cardDom.style.borderStyle = "";
+          }
+          if (ghostEl && ghostEl.parentNode) ghostEl.parentNode.removeChild(ghostEl);
+          if (dropLineEl && dropLineEl.parentNode) dropLineEl.parentNode.removeChild(dropLineEl);
+        };
+
+        const onKeyDown = (ke) => {
+          if (ke.key === "Escape") {
+            ke.preventDefault();
+            cleanupDrag();
+          }
+        };
+
+        const computeCandidates = () => {
+          const cands = [];
+          const segEls = flowEl.querySelectorAll(".ic-art-seg");
+          segEls.forEach((segEl) => {
+            const sIdx = Number(segEl.getAttribute("data-seg-idx") || 0);
+            const ta = segEl.querySelector(".ic-art-seg-ta");
+            if (!ta) return;
+            const taRect = ta.getBoundingClientRect();
+            const segAfterBlock = Number(segEl.nextElementSibling?.getAttribute("data-gap-after") ?? sIdx);
+            cands.push({
+              afterBlockIdx: Math.max(0, segAfterBlock),
+              y: taRect.bottom,
+              text: ta.value.slice(0, 16)
+            });
+          });
+          flowEl.querySelectorAll(".ic-art-card[data-role='inline']").forEach((cEl) => {
+            const cid = cEl.getAttribute("data-plan-card-id");
+            if (cid === dragCardId) return;
+            const r = cEl.getBoundingClientRect();
+            const blk = Number(cEl.getAttribute("data-after-block") || 0);
+            cands.push({
+              afterBlockIdx: Math.max(0, blk),
+              y: r.bottom,
+              text: cEl.querySelector(".ic-art-subject")?.textContent?.slice(0, 16) || ""
+            });
+          });
+          return cands;
+        };
+
+        let dropCandidates = [];
+
+        const ensureDragVisuals = () => {
+          if (ghostEl) return;
+          flowEl.classList.add("is-dragging");
+          cardDom.style.opacity = "0.4";
+          cardDom.style.borderStyle = "dashed";
+
+          ghostEl = document.createElement("div");
+          ghostEl.className = "ic-notion-drag-ghost";
+          ghostEl.textContent = `⋮⋮ 移动插图 ${inlineNo}：${dragCard.title || "配图卡片"}`;
+          document.body.appendChild(ghostEl);
+
+          dropLineEl = document.createElement("div");
+          dropLineEl.className = "ic-art-drop-line";
+          dropLineEl.innerHTML = `<span class="ic-art-drop-label"></span>`;
+          flowEl.appendChild(dropLineEl);
+
+          dropCandidates = computeCandidates();
+        };
+
+        const onPointerMove = (ev) => {
+          if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+          if (!moved) {
+            moved = true;
+            ensureDragVisuals();
+          }
+
+          ghostEl.style.left = `${ev.clientX + 14}px`;
+          ghostEl.style.top = `${ev.clientY + 12}px`;
+
+          if (scrollContainer) {
+            const scRect = scrollContainer.getBoundingClientRect();
+            if (ev.clientY < scRect.top + 56) {
+              scrollContainer.scrollTop -= 14;
+            } else if (ev.clientY > scRect.bottom - 56) {
+              scrollContainer.scrollTop += 14;
+            }
+          }
+
+          let minDist = Infinity;
+          bestTarget = null;
+          dropCandidates.forEach((cand) => {
+            const dist = Math.abs(ev.clientY - cand.y);
+            if (dist < minDist) {
+              minDist = dist;
+              bestTarget = cand;
+            }
+          });
+
+          if (bestTarget && dropLineEl) {
+            const flowRect = flowEl.getBoundingClientRect();
+            dropLineEl.style.top = `${bestTarget.y - flowRect.top}px`;
+            const lbl = dropLineEl.querySelector(".ic-art-drop-label");
+            const targetBlock = blocks.find((b) => b.idx === bestTarget.afterBlockIdx);
+            const previewText = targetBlock ? targetBlock.text.slice(0, 16) : (bestTarget.text || "");
+            if (lbl) lbl.textContent = `放在「${previewText}」之后`;
+          }
+        };
+
+        const onPointerUp = () => {
+          const wasMoved = moved;
+          const targetCand = bestTarget;
+          cleanupDrag();
+
+          if (wasMoved && targetCand && targetCand.afterBlockIdx !== dragCard.afterBlockIdx) {
+            dragCard.afterBlockIdx = targetCand.afterBlockIdx;
+            planNode.data.cards = sortPlanCardsInDocOrder(planNode.data.cards);
+            if (target?.art) target.art.cards = planNode.data.cards;
+            if (CS.articleEditorDraft?.cards) CS.articleEditorDraft.cards = planNode.data.cards;
+            commitArticleTargetChanges(target, { bumpTime: true });
+            renderFullPreviewStage();
+            const refocused = DOM.previewStage?.querySelector(`.ic-art-card[data-plan-card-id="${dragCard.id}"] [data-plan-drag]`);
+            if (refocused) refocused.focus();
+            const targetBlock = blocks.find((b) => b.idx === targetCand.afterBlockIdx);
+            const previewText = targetBlock ? targetBlock.text.slice(0, 16) : (targetCand.text || "");
+            speakArt(`插图 ${inlineNo} 已移到「${previewText}」之后`);
+          }
+        };
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp);
+        window.addEventListener("keydown", onKeyDown);
+      });
+    });
+  }
+
+  function reanchorCardsFromSegments(target, segTexts) {
+    if (!target) return;
+    const cards = target.planNode?.data?.cards || target.art?.cards || [];
+    if (!cards.length || !segTexts || !segTexts.length) return;
+
+    const segBlockCounts = segTexts.map((txt) => {
+      return E.parseArticleReadonlyBlocks(txt || "", { noStarter: true }).length;
+    });
+
+    const flowEl = DOM.previewStage?.querySelector("#art-editor-flow");
+    if (!flowEl) return;
+
+    const segEls = Array.from(flowEl.querySelectorAll(".ic-art-seg"));
+    if (!segEls.length) return;
+
+    let cumulativeBlocks = 0;
+    segEls.forEach((segEl, sIdx) => {
+      const bCount = segBlockCounts[sIdx] || 0;
+      cumulativeBlocks += bCount;
+      const newAnchor = Math.max(0, cumulativeBlocks - 1);
+
+      let nextEl = segEl.nextElementSibling;
+      while (nextEl && !nextEl.classList.contains("ic-art-seg")) {
+        if (nextEl.classList.contains("ic-art-card") && nextEl.dataset.role !== "cover") {
+          const cid = nextEl.dataset.planCardId || nextEl.dataset.cardId;
+          const cardObj = cards.find((c) => c.id === cid);
+          if (cardObj) {
+            if (sIdx === segEls.length - 1) {
+              const totalBlocks = segBlockCounts.reduce((a, b) => a + b, 0);
+              const maxIdx = Math.max(0, totalBlocks - 1);
+              if (cardObj.afterBlockIdx >= maxIdx) {
+                cardObj.afterBlockIdx = maxIdx;
+                nextEl.dataset.afterBlock = String(maxIdx);
+              }
+            } else {
+              cardObj.afterBlockIdx = newAnchor;
+              nextEl.dataset.afterBlock = String(newAnchor);
+            }
+          }
+        }
+        nextEl = nextEl.nextElementSibling;
+      }
+    });
+
+    if (target.planNode && target.planNode.data) {
+      target.planNode.data.cards = cards;
+    }
+    if (target.art) {
+      target.art.cards = cards;
+    }
+    commitArticleTargetChanges(target, { bumpTime: false });
+  }
+
   function renderArticleEditorPage(sortedArticles) {
     const draft = CS.articleEditorDraft || {
       title: "",
       markdown: "",
       styleId: "FA-001",
       coverRatio: "2.35:1",
-      inlineRatio: "4:3",
-      author: ""
+      inlineRatio: "4:3"
     };
 
     const isPreview = false;
-    const previewOpen = CS.articlePreviewOpen !== false;
-    flushUnifiedArticleEditor();
+    clearUnifiedArticleEditorFlush();
     const target = resolveArticleTarget(draft.id);
-    const cards = target?.planNode?.data?.cards || [];
+    const cards = sortPlanCardsInDocOrder(draft?.cards || target?.planNode?.data?.cards || target?.art?.cards || []);
+    const blocks = E.parseArticleReadonlyBlocks(draft.markdown || "", { withLines: true, noStarter: true });
+    const segments = E.buildEditorSegments(draft.markdown || "", cards);
+
+    const hasCards = cards.length > 0;
     const hasImageUrl = cards.some((c) => c.imageUrl);
     const isGenerating = isArticleGenerating(target?.planNode?.data || {});
-    const canGenerate = cards.length > 0 && !isGenerating;
-    const hasBodyText = !!(draft.markdown || "").trim();
-    const canExport = hasImageUrl && hasBodyText && !isGenerating;
-    const canPublish = hasImageUrl && hasBodyText && !isGenerating;
+    const isPlanning = Boolean(CS.articleIsPlanning);
+    const hasBodyText = Boolean((draft.markdown || "").trim());
+    const idleOrErrorCount = cards.filter((c) => !c.status || c.status === "idle" || c.status === "error").length;
+    const allDone = hasCards && cards.every((c) => c.status === "done" && c.imageUrl);
+
+    const canGenerate = hasCards && !isGenerating && !isPlanning;
+    const canExport = hasImageUrl && hasBodyText && !isGenerating && !isPlanning;
+    const canPublish = hasImageUrl && hasBodyText && !isGenerating && !isPlanning;
+
+    // Spec 4.6 Vermilion Primary Button Rule
+    let isPrimaryPlan = false;
+    let isPrimaryBatch = false;
+    let isPrimaryPublish = false;
+    if (isPlanning || isGenerating) {
+      // none has btn-primary
+    } else if (!hasCards) {
+      isPrimaryPlan = true;
+    } else if (idleOrErrorCount > 0) {
+      isPrimaryBatch = true;
+    } else if (allDone) {
+      isPrimaryPublish = true;
+    }
+
+    const batchBtnText = hasCards && idleOrErrorCount > 0 ? `生成配图（${idleOrErrorCount} 张）` : "生成配图";
+    let planBtnHtml = "AI 规划配图";
+    if (isPlanning) {
+      planBtnHtml = '<span class="art-spinner ic-art-spin-icon" style="margin-right:4px;"></span>AI 规划中…';
+    } else if (hasCards) {
+      planBtnHtml = "重新规划";
+    }
+    const planDisabled = isGenerating || isPlanning;
 
     const styleObj = Catalog.resourceMap?.get(draft.styleId) || {
       id: draft.styleId || "FA-001",
@@ -12242,8 +12970,237 @@
       image: "/images/individual/FA/FA-001.webp"
     };
 
+    if (!draft._editorToken) {
+      draft._editorToken = E.uid("ed");
+    }
+    const editorToken = draft._editorToken;
+
+    // Construct #art-plan-summary HTML
+    let summaryHtml = "";
+    const showUndo = Boolean(CS.articlePlanUndoState && CS.articlePlanUndoState.expireAt > Date.now());
+    const undoButtonHtml = showUndo
+      ? '<button type="button" class="btn btn-sm" id="art-plan-undo" style="margin-left:auto;text-decoration:underline;background:none;border:none;cursor:pointer;color:var(--ink-strong,#1f1b16);font-weight:700;">撤销</button>'
+      : "";
+
+    if (isPlanning) {
+      summaryHtml = `
+        <div id="art-plan-summary" class="ic-art-summary-loading" role="status" tabindex="-1">
+          <span class="art-spinner ic-art-spin-icon" style="margin-right:4px;"></span>
+          <span>正在调用手绘 Skill 分析文章结构，约 10–30 秒…</span>
+          <button type="button" class="btn btn-sm" id="art-plan-cancel" style="margin-left:auto;">取消</button>
+        </div>
+      `;
+    } else if (CS.articlePlanError) {
+      const err = CS.articlePlanError;
+      summaryHtml = `
+        <div id="art-plan-summary" class="ic-art-summary-error" role="alert" tabindex="-1">
+          <span style="font-weight:700;margin-right:4px;">!</span>
+          <span>${esc(err.text)}</span>
+          <div style="margin-left:auto;display:flex;gap:8px;">
+            ${err.canRetry ? '<button type="button" class="btn btn-sm" id="art-plan-retry" style="text-decoration:underline;background:none;border:none;cursor:pointer;color:inherit;font-weight:700;">重试</button>' : ''}
+            ${err.canTemplate ? '<button type="button" class="btn btn-sm" id="art-plan-use-template" style="text-decoration:underline;background:none;border:none;cursor:pointer;color:inherit;font-weight:700;">用模板规划</button>' : ''}
+          </div>
+        </div>
+      `;
+    } else if (CS.articleDocReplacedNotice) {
+      summaryHtml = `
+        <div id="art-plan-summary" tabindex="-1">
+          <span style="color:var(--art-warn-ink);font-weight:700;margin-right:4px;">!</span>
+          <span>正文已替换，配图位置可能需要重新规划</span>
+          <button type="button" class="btn btn-sm" id="art-plan-replan-btn" style="margin-left:auto;text-decoration:underline;background:none;border:none;cursor:pointer;color:var(--ink-strong);font-weight:700;">重新规划</button>
+        </div>
+      `;
+    } else if (hasCards) {
+      const planSource = cards.find((c) => c.planSource)?.planSource || "";
+      const coverCard = cards.find((c) => c.role === "cover");
+      const coverCount = coverCard ? 1 : 0;
+      const inlineCount = cards.filter((c) => c.role !== "cover").length;
+      const articleType = coverCard?.articleType || "";
+      const articleTypeLabel = articleType === "narrative" ? "叙事类" : articleType === "knowledge" ? "知识类" : articleType;
+
+      const inlineText = inlineCount > 0 ? `插图 ${inlineCount}` : "暂无插图";
+      if (planSource === "template") {
+        summaryHtml = `
+          <div id="art-plan-summary" tabindex="-1">
+            <span class="ic-art-chip-source" style="margin-right:6px;">模板规划</span>
+            <span>${inlineCount > 0 ? 'AI 未参与，图位按章节标题分配，可拖动调整' : (coverCount > 0 ? `封面 ${coverCount} · ` : '') + '暂无插图'}</span>
+            <button type="button" id="art-plan-retry-ai" class="btn btn-sm" style="margin-left:${showUndo ? '8px' : 'auto'};text-decoration:underline;background:none;border:none;cursor:pointer;color:var(--ink-strong);font-weight:700;">再试一次 AI</button>
+            ${undoButtonHtml}
+          </div>
+        `;
+      } else if (planSource === "model") {
+        summaryHtml = `
+          <div id="art-plan-summary" tabindex="-1">
+            <span>AI 规划 · ${coverCount > 0 ? `封面 ${coverCount} · ` : ''}${inlineText}${articleTypeLabel ? ' · ' + articleTypeLabel : ''}</span>
+            ${undoButtonHtml}
+          </div>
+        `;
+      } else {
+        summaryHtml = `
+          <div id="art-plan-summary" tabindex="-1">
+            <span>${coverCount > 0 ? `封面 ${coverCount} · ` : ''}${inlineText}</span>
+            ${undoButtonHtml}
+          </div>
+        `;
+      }
+    }
+
+    // Construct #art-editor-flow HTML
+    const renderCardHtml = (card, inlineNo, anchorHtml, plainAnchor, extraOpts = {}) => {
+      return renderArticleEditorCardHtml(card, inlineNo, anchorHtml, plainAnchor, Object.assign({
+        isGenerating,
+        catalog: Catalog
+      }, extraOpts));
+    };
+
+    let flowParts = [];
+    const coverCard = cards.find((c) => c.role === "cover");
+    const inlineCards = cards.filter((c) => c.role !== "cover");
+
+    if (coverCard) {
+      flowParts.push(renderCardHtml(coverCard, 0, "", ""));
+    } else if (hasCards) {
+      flowParts.push(`
+        <div class="ic-art-gap is-visible" data-gap-after="-1">
+          <button type="button" class="ic-art-gap-btn ic-art-insert-btn" data-plan-insert-at="-1" aria-label="添加封面">＋ 添加封面</button>
+        </div>
+      `);
+    }
+
+    if (!hasCards) {
+      // Edge case A: Empty state
+      flowParts.push(`
+        <div class="ic-art-empty-hint">写完正文后点底部「AI 规划配图」，封面会放在文章开头，插图会放到对应段落之后。</div>
+        <div class="ic-art-seg" data-seg-idx="0">
+          <textarea
+            class="ic-art-seg-ta"
+            id="art-seg-ta-0"
+            data-seg-idx="0"
+            style="min-height:540px;"
+            aria-label="正文"
+            placeholder="# 文章主标题&#10;&#10;引言与核心导语，在此展开背景与核心论点…&#10;&#10;## 第一章：核心概念&#10;章节第一部分阐述…&#10;&#10;## 第二章：实战与落地&#10;章节第二部分内容…"
+          >${esc(draft.markdown || "")}</textarea>
+        </div>
+        <div class="ic-art-gap is-visible ic-art-end-gap" data-gap-after="${blocks.length > 0 ? blocks.length - 1 : 0}">
+          <button type="button" class="ic-art-gap-btn ic-art-insert-btn" data-plan-insert-at="${blocks.length > 0 ? blocks.length - 1 : 0}" aria-label="在文末添加插图">＋ 在文末添加插图</button>
+        </div>
+      `);
+    } else {
+      let inlineCounter = 0;
+      const totalSegs = segments.length;
+      const maxBlockIdx = blocks.length > 0 ? blocks.length - 1 : 0;
+      const cardsByCut = new Map();
+      const orphanCards = [];
+
+      inlineCards.forEach((c) => {
+        const rawIdx = typeof c.afterBlockIdx === "number" ? c.afterBlockIdx : 0;
+        if (blocks.length > 0 && rawIdx > maxBlockIdx) {
+          orphanCards.push(c);
+        } else {
+          if (!cardsByCut.has(rawIdx)) cardsByCut.set(rawIdx, []);
+          cardsByCut.get(rawIdx).push(c);
+        }
+      });
+
+      segments.forEach((seg, sIdx) => {
+        const segAriaLabel = totalSegs > 1 ? `正文第 ${sIdx + 1} 段，共 ${totalSegs} 段` : "正文";
+        const hasOddTicks = (seg.text.match(/```/g) || []).length % 2 === 1;
+
+        flowParts.push(`
+          <div class="ic-art-seg" data-seg-idx="${seg.segIdx}">
+            <textarea
+              class="ic-art-seg-ta"
+              id="art-seg-ta-${seg.segIdx}"
+              data-seg-idx="${seg.segIdx}"
+              aria-label="${esc(segAriaLabel)}"
+              placeholder="${seg.text ? '' : '这一段已清空。继续写，或删除下方的插图'}"
+            >${esc(seg.text)}</textarea>
+          </div>
+        `);
+
+        if (hasOddTicks) {
+          flowParts.push('<div class="ic-art-seg-warn">! 代码块未闭合，配图位置可能不准</div>');
+        }
+
+        if (sIdx < totalSegs - 1) {
+          const cardsHere = cardsByCut.get(seg.afterBlockIdx) || [];
+          if (cardsHere.length >= 3) {
+            flowParts.push(`<div class="ic-art-stack-warn">! 这里连续放了 ${cardsHere.length} 张插图，读者会连续看图，建议拖开</div>`);
+          }
+
+          cardsHere.forEach((c, cIdx) => {
+            inlineCounter += 1;
+            const b = blocks.find((blk) => blk.idx === c.afterBlockIdx);
+            const isHeading = b && (b.kind === "h2" || b.kind === "h3");
+            const prefix = isHeading ? "§ " : "";
+            const previewText = b ? b.text.slice(0, 24) : `第 ${c.afterBlockIdx + 1} 段`;
+            const plainAnchor = `位于「${previewText}」之后`;
+            let anchorHtml;
+            if (cIdx === 0) {
+              anchorHtml = `<span>${prefix}位于「${esc(previewText)}」之后</span>`;
+            } else {
+              anchorHtml = '<span>↳ 同一位置</span>';
+            }
+            flowParts.push(renderCardHtml(c, inlineCounter, anchorHtml, plainAnchor));
+          });
+
+          const b = blocks.find((blk) => blk.idx === seg.afterBlockIdx);
+          const gapLabel = b ? b.text.slice(0, 16) : `第 ${seg.afterBlockIdx + 1} 段`;
+          flowParts.push(`
+            <div class="ic-art-gap ic-art-gap-zone" data-gap-after="${seg.afterBlockIdx}">
+              <button type="button" class="ic-art-gap-btn ic-art-insert-btn" data-plan-insert-at="${seg.afterBlockIdx}" aria-label="在「${esc(gapLabel)}」之后添加插图">＋ 在此添加插图</button>
+            </div>
+          `);
+        } else {
+          // Last segment
+          const cardsHere = cardsByCut.get(seg.afterBlockIdx) || [];
+          if (cardsHere.length >= 3) {
+            flowParts.push(`<div class="ic-art-stack-warn">! 这里连续放了 ${cardsHere.length} 张插图，读者会连续看图，建议拖开</div>`);
+          }
+
+          cardsHere.forEach((c, cIdx) => {
+            inlineCounter += 1;
+            const b = blocks.find((blk) => blk.idx === c.afterBlockIdx);
+            const isHeading = b && (b.kind === "h2" || b.kind === "h3");
+            const prefix = isHeading ? "§ " : "";
+            const previewText = b ? b.text.slice(0, 24) : (blocks.length > 0 ? "文末" : "");
+            const plainAnchor = previewText ? `位于「${previewText}」之后` : "位于文末";
+            let anchorHtml;
+            if (cIdx === 0) {
+              anchorHtml = `<span>${prefix}${plainAnchor}</span>`;
+            } else {
+              anchorHtml = '<span>↳ 同一位置</span>';
+            }
+            flowParts.push(renderCardHtml(c, inlineCounter, anchorHtml, plainAnchor));
+          });
+
+          const tailBlockIdx = blocks.length > 0 ? blocks[blocks.length - 1].idx : 0;
+
+          // Orphan cards (Spec 3.6 D)
+          orphanCards.forEach((c) => {
+            inlineCounter += 1;
+            const plainAnchor = "原位置的段落已删除";
+            const anchorHtml = '<span class="ic-art-anchor is-orphan">! 原位置的段落已删除</span>';
+            flowParts.push(renderCardHtml(c, inlineCounter, anchorHtml, plainAnchor, {
+              isOrphan: true,
+              afterBlockIdxOverride: tailBlockIdx
+            }));
+          });
+
+          flowParts.push(`
+            <div class="ic-art-gap is-visible ic-art-end-gap" data-gap-after="${tailBlockIdx}">
+              <button type="button" class="ic-art-gap-btn ic-art-insert-btn" data-plan-insert-at="${tailBlockIdx}" aria-label="在文末添加插图">＋ 在文末添加插图</button>
+            </div>
+          `);
+        }
+      });
+    }
+
     DOM.previewStage.innerHTML = `
       <div class="ic-wechat-editor-root">
+        <div id="art-live" class="ic-sr-only" aria-live="polite"></div>
+        <div id="art-handle-help" class="ic-sr-only">方向键上下移动一个段落，Shift 加方向键移到上一个或下一个标题，回车选择位置</div>
+
         <!-- 1. FIXED TOP TOOLBAR (顶部固定工具栏) -->
         <header class="ic-wechat-topbar" id="wechat-topbar">
           <div style="display:flex;align-items:center;gap:10px;">
@@ -12257,41 +13214,26 @@
 
           <!-- Mode / Formatting Tools -->
           <div style="display:flex;align-items:center;gap:10px;">
-            ${
-              !isPreview
-                ? `
-              <div class="ic-wechat-tools-group">
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="h1" title="一级主标题">H1</button>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="h2" title="二级章节标题">H2</button>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="h3" title="三级小节标题">H3</button>
-                <div class="ic-wechat-tool-sep"></div>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="bold" title="加粗 (Ctrl+B)"><strong>B</strong></button>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="italic" title="斜体 (Ctrl+I)"><em>I</em></button>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="quote" title="重点引用">❝</button>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="hr" title="分割线">—</button>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="ul" title="无序列表">• 列表</button>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="ol" title="有序列表">1. 列表</button>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="code" title="代码块">&lt;/&gt;</button>
-                <div class="ic-wechat-tool-sep"></div>
-                <button type="button" class="ic-wechat-tool-btn" data-fmt="illust" title="在此插入AI插图位标记" style="color:var(--vermilion);font-weight:800;">
-                  插入配图位
-                </button>
-              </div>
-            `
-                : `
-              <div class="qc-mode-switch" role="group" style="padding:2px;background:var(--ic-surface,#f0f2f5);border-radius:6px;display:flex;gap:3px;">
-                <button type="button" class="btn btn-sm ${isMobileVp ? "btn-primary" : ""}" id="vp-btn-mobile" style="padding:3px 12px;font-size:12px;font-weight:800;">
-                  手机视口 (375px)
-                </button>
-                <button type="button" class="btn btn-sm ${!isMobileVp ? "btn-primary" : ""}" id="vp-btn-desktop" style="padding:3px 12px;font-size:12px;font-weight:800;">
-                  宽屏视口 (800px)
-                </button>
-              </div>
-            `
-            }
+            <div class="ic-wechat-tools-group">
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="h1" title="一级主标题">H1</button>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="h2" title="二级章节标题">H2</button>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="h3" title="三级小节标题">H3</button>
+              <div class="ic-wechat-tool-sep"></div>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="bold" title="加粗 (Ctrl+B)"><strong>B</strong></button>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="italic" title="斜体 (Ctrl+I)"><em>I</em></button>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="quote" title="重点引用">❝</button>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="hr" title="分割线">—</button>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="ul" title="无序列表">• 列表</button>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="ol" title="有序列表">1. 列表</button>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="code" title="代码块">&lt;/&gt;</button>
+              <div class="ic-wechat-tool-sep"></div>
+              <button type="button" class="ic-wechat-tool-btn" data-fmt="illust" title="在此插入配图位">
+                插入配图位
+              </button>
+            </div>
           </div>
 
-          <!-- Top-right: reader preview (its own page) & Document Upload -->
+          <!-- Top-right: reader preview & Document Upload -->
           <div style="display:flex;align-items:center;gap:10px;">
             <label class="btn btn-sm" style="cursor:pointer;padding:3px 10px;font-size:12px;font-weight:750;" title="上传文档重新由 AI 解析覆盖当前正文">
               导入/替换文档
@@ -12305,52 +13247,31 @@
           ${renderArticleSidebarHtml(sortedArticles, CS.activeArticleId)}
 
           <div class="ic-wechat-scroll-area" id="wechat-scroll-container">
-            ${
-              !isPreview
-                ? `
-              <article class="ic-wechat-paper">
-                <!-- Article Title -->
-                <div class="ic-wechat-title-box">
-                  <input
-                    type="text"
-                    class="ic-wechat-title-input"
-                    id="editor-title-inp"
-                    maxlength="64"
-                    value="${esc(draft.title || "")}"
-                    placeholder="请输入文章主标题（留空自动使用 Markdown 首行一级标题）"
-                  />
-                  <span class="ic-wechat-title-count" id="editor-title-count">${(draft.title || "").length}/64</span>
-                </div>
-
-                <!-- Author / Subtitle -->
+            <article class="ic-wechat-paper" id="art-editor-paper" data-editor-token="${editorToken}" ${isPlanning ? 'aria-busy="true"' : ''}>
+              <!-- Article Title -->
+              <div class="ic-wechat-title-box">
                 <input
                   type="text"
-                  class="ic-wechat-author-input"
-                  id="editor-author-inp"
-                  value="${esc(draft.author || "")}"
-                  placeholder="请输入作者（可选）"
+                  class="ic-wechat-title-input"
+                  id="editor-title-inp"
+                  maxlength="64"
+                  value="${esc(draft.title || "")}"
+                  placeholder="请输入文章主标题（留空自动使用 Markdown 首行一级标题）"
                 />
+                <span class="ic-wechat-title-count" id="editor-title-count">${(draft.title || "").length}/64</span>
+              </div>
 
-                <div class="ic-wechat-paper-divider"></div>
+              <div class="ic-wechat-paper-divider"></div>
 
-                <!-- Body Textarea -->
-                <textarea
-                  class="ic-wechat-textarea"
-                  id="editor-md-ta"
-                  placeholder="# 文章主标题&#10;&#10;引言与核心导语，在此展开背景与核心论点…&#10;&#10;## 第一章：核心概念&#10;章节第一部分阐述…&#10;&#10;## 第二章：实战与落地&#10;章节第二部分内容…"
-                >${esc(draft.markdown || "")}</textarea>
-              </article>
+              <!-- Summary / Status / Error bar -->
+              ${summaryHtml}
 
-              <section id="pv-notion-article-sheet">
-                ${renderUnifiedArticleCardsHtml(draft)}
-              </section>
-            `
-                : renderWeChatArticlePreviewHtml(draft, styleObj, false)
-            }
+              <!-- Editor Flow -->
+              <div id="art-editor-flow">
+                ${flowParts.join("\n")}
+              </div>
+            </article>
           </div>
-
-          <!-- The reader preview lives on its own page (?subview=preview); the
-               writing column keeps the whole width here. -->
         </div>
 
         <!-- 3. FIXED BOTTOM BAR (底部固定状态与主操作栏) -->
@@ -12371,7 +13292,7 @@
                     <span class="ic-wechat-style-id" id="editor-style-id">#${esc(styleObj.id)}</span>
                     <span class="ic-wechat-style-name" id="editor-style-name">${esc(styleObj.name || styleObj.id)}</span>
                   </div>
-                  <span style="font-size:10px;color:var(--vermilion);font-weight:800;margin-left:4px;">更换 ▾</span>
+                  <span style="font-size:10px;color:var(--ink-muted);font-weight:800;margin-left:4px;">更换 ▾</span>
                 </button>
               </div>
 
@@ -12401,12 +13322,28 @@
 
           <div class="ic-wechat-bottombar-right">
             <!-- Main Primary Action Button -->
-            <button type="button" class="btn btn-primary ic-wechat-btn-plan" id="editor-btn-plan" ${isGenerating ? "disabled" : ""}>
-              规划封面与插图
+            <button
+              type="button"
+              class="btn btn-sm ${isPrimaryPlan ? 'btn-primary' : ''} ic-wechat-btn-plan"
+              id="editor-btn-plan"
+              ${planDisabled ? "disabled" : ""}
+              ${isPlanning ? 'aria-busy="true"' : ''}
+            >
+              ${planBtnHtml}
             </button>
-            <button type="button" class="btn btn-sm" id="editor-btn-batch" ${canGenerate ? "" : "disabled"}>生成配图</button>
+            <button
+              type="button"
+              class="btn btn-sm ${isPrimaryBatch ? 'btn-primary' : ''}"
+              id="editor-btn-batch"
+              ${canGenerate ? "" : "disabled"}
+            >${esc(batchBtnText)}</button>
             <button type="button" class="btn btn-sm" id="editor-btn-export" ${canExport ? "" : "disabled"}>导出</button>
-            <button type="button" class="btn btn-sm" id="editor-btn-publish" ${canPublish ? "" : "disabled"}>发布</button>
+            <button
+              type="button"
+              class="btn btn-sm ${isPrimaryPublish ? 'btn-primary' : ''}"
+              id="editor-btn-publish"
+              ${canPublish ? "" : "disabled"}
+            >发布</button>
           </div>
         </footer>
       </div>
@@ -12414,14 +13351,11 @@
 
     bindArticleSidebar(DOM.previewStage, CS.activeArticleId);
 
-    const planSheet = DOM.previewStage.querySelector("#pv-notion-article-sheet");
-    if (planSheet && target?.planNode) bindNotionPlanSheetInteractions(target.planNode);
-
-    const updateInlineArticlePreview = () => {
-      // Kept as a no-op hook: several call sites refresh "the preview" after an
-      // edit, but the reader preview is now a separate page, so there is nothing
-      // to repaint in place.
-    };
+    const flowEl = DOM.previewStage.querySelector("#art-editor-flow");
+    if (flowEl && target?.planNode) {
+      bindArticleEditorInteractions(target.planNode, flowEl);
+      bindNotionPlanSheetInteractions(target.planNode, flowEl);
+    }
 
     const backBtn = DOM.previewStage.querySelector("#editor-btn-back");
     if (backBtn) {
@@ -12432,8 +13366,6 @@
 
     const titleInp = DOM.previewStage.querySelector("#editor-title-inp");
     const titleCountEl = DOM.previewStage.querySelector("#editor-title-count");
-    const authorInp = DOM.previewStage.querySelector("#editor-author-inp");
-    const mdTa = DOM.previewStage.querySelector("#editor-md-ta");
     const charCountEl = DOM.previewStage.querySelector("#editor-char-count");
     const coverSel = DOM.previewStage.querySelector("#editor-cover-ratio");
     const inlineSel = DOM.previewStage.querySelector("#editor-inline-ratio");
@@ -12445,10 +13377,29 @@
     const exportBtn = DOM.previewStage.querySelector("#editor-btn-export");
     const publishBtn = DOM.previewStage.querySelector("#editor-btn-publish");
 
+    const getSegTextareas = () => {
+      return Array.from(DOM.previewStage.querySelectorAll(".ic-art-seg-ta"));
+    };
+
+    const readMarkdown = () => {
+      const tas = getSegTextareas();
+      if (!tas.length) return draft.markdown || "";
+      return tas.map((ta) => ta.value).join("\n");
+    };
+
+    const adjustSegHeights = () => {
+      const tas = getSegTextareas();
+      const isSingle = tas.length <= 1;
+      tas.forEach((ta) => {
+        ta.style.height = "auto";
+        const minH = isSingle ? 540 : 48;
+        ta.style.height = Math.max(minH, ta.scrollHeight) + "px";
+      });
+    };
+
     const saveCurrentDraftFromInputs = () => {
       if (titleInp) draft.title = titleInp.value;
-      if (authorInp) draft.author = authorInp.value;
-      if (mdTa) draft.markdown = mdTa.value;
+      draft.markdown = readMarkdown();
       if (coverSel) draft.coverRatio = coverSel.value;
       if (inlineSel) draft.inlineRatio = inlineSel.value;
     };
@@ -12460,14 +13411,14 @@
     const isCurrentEditor = () => {
       if (!autosaveActive || autosaveScope !== currentCacheScopeKey()) return false;
       if (CS.articleEditorDraft !== draft) return false;
-      return DOM.previewStage.querySelector("#editor-md-ta") === mdTa;
+      const paper = DOM.previewStage.querySelector("#art-editor-paper");
+      return paper && paper.getAttribute("data-editor-token") === editorToken;
     };
 
     const collectDraftFromInputs = (d) => {
       if (!d) return d;
       if (titleInp) d.title = titleInp.value;
-      if (authorInp) d.author = authorInp.value;
-      if (mdTa) d.markdown = mdTa.value;
+      d.markdown = readMarkdown();
       if (coverSel) d.coverRatio = coverSel.value;
       if (inlineSel) d.inlineRatio = inlineSel.value;
       return d;
@@ -12503,7 +13454,7 @@
     };
 
     const hasEditorContent = () =>
-      !!((draft.title || "").trim() || (draft.markdown || "").trim() || (draft.author || "").trim());
+      Boolean((draft.title || "").trim() || (draft.markdown || "").trim());
 
     const triggerDebouncedSync = () => {
       if (!isCurrentEditor()) return;
@@ -12539,7 +13490,7 @@
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
 
-    // 预览 opens the reader preview page; 返回编辑 there brings the writer back.
+    // 预览 opens the reader preview page
     if (togglePreviewBtn) {
       togglePreviewBtn.onclick = () => {
         collectDraftFromInputs(draft);
@@ -12553,39 +13504,65 @@
       };
     }
 
-    // Dynamic auto-expansion of textarea height to prevent internal scrollbar
-    const adjustHeight = () => {
-      if (!mdTa) return;
-      mdTa.style.height = "auto";
-      mdTa.style.height = Math.max(540, mdTa.scrollHeight) + "px";
-    };
-
     if (titleInp) {
       titleInp.oninput = () => {
         draft.title = titleInp.value;
         if (titleCountEl) titleCountEl.textContent = `${titleInp.value.length}/64`;
-        updateInlineArticlePreview();
-        triggerDebouncedSync();
-      };
-    }
-    if (authorInp) {
-      authorInp.oninput = () => {
-        draft.author = authorInp.value;
-        updateInlineArticlePreview();
         triggerDebouncedSync();
       };
     }
 
-    if (mdTa) {
-      mdTa.oninput = () => {
-        draft.markdown = mdTa.value;
-        if (charCountEl) charCountEl.textContent = mdTa.value.length;
-        adjustHeight();
-        updateInlineArticlePreview();
+    // Segment textarea event handling
+    let lastFocusedSeg = null;
+    const segTas = getSegTextareas();
+    segTas.forEach((ta, idx) => {
+      if (segments[idx]) ta.value = segments[idx].text;
+      ta.onfocus = () => {
+        lastFocusedSeg = ta;
+      };
+      ta.oninput = () => {
+        draft.markdown = readMarkdown();
+        if (charCountEl) charCountEl.textContent = draft.markdown.length;
+        adjustSegHeights();
+        reanchorCardsFromSegments(target, getSegTextareas().map((t) => t.value));
         triggerDebouncedSync();
       };
-      setTimeout(adjustHeight, 50);
+      ta.onkeydown = (e) => {
+        if (e.key === "ArrowDown") {
+          const pos = ta.selectionStart;
+          const textAfter = ta.value.slice(pos);
+          if (!textAfter.includes("\n")) {
+            const nextTa = segTas[idx + 1];
+            if (nextTa) {
+              e.preventDefault();
+              nextTa.focus();
+              nextTa.setSelectionRange(0, 0);
+            }
+          }
+        } else if (e.key === "ArrowUp") {
+          const pos = ta.selectionStart;
+          const textBefore = ta.value.slice(0, pos);
+          if (!textBefore.includes("\n")) {
+            const prevTa = segTas[idx - 1];
+            if (prevTa) {
+              e.preventDefault();
+              prevTa.focus();
+              const endPos = prevTa.value.length;
+              prevTa.setSelectionRange(endPos, endPos);
+            }
+          }
+        } else if (e.key === "Backspace") {
+          // Guard against merging segments on Backspace at start
+          if (ta.selectionStart === 0 && ta.selectionEnd === 0 && idx > 0) {
+            // Keep segment boundary; do not silently merge
+          }
+        }
+      };
+    });
+    if (!lastFocusedSeg && segTas.length > 0) {
+      lastFocusedSeg = segTas[0];
     }
+    setTimeout(adjustSegHeights, 50);
 
     if (coverSel) {
       coverSel.onchange = () => {
@@ -12602,24 +13579,25 @@
 
     // Format toolbar button handlers
     const insertFormat = (prefix, suffix = "", defaultPlaceholder = "") => {
-      if (!mdTa) return;
-      const start = mdTa.selectionStart;
-      const end = mdTa.selectionEnd;
-      const val = mdTa.value;
+      const ta = lastFocusedSeg || getSegTextareas()[0];
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const val = ta.value;
       const selected = val.substring(start, end) || defaultPlaceholder;
       const replacement = prefix + selected + suffix;
       const newPos = start + prefix.length + selected.length;
-      mdTa.setRangeText(replacement, start, end, "select");
-      draft.markdown = mdTa.value;
-      if (charCountEl) charCountEl.textContent = mdTa.value.length;
-      adjustHeight();
-      mdTa.focus();
+      ta.setRangeText(replacement, start, end, "select");
+      draft.markdown = readMarkdown();
+      if (charCountEl) charCountEl.textContent = draft.markdown.length;
+      adjustSegHeights();
+      ta.focus();
       try {
-        mdTa.setSelectionRange(newPos, newPos);
+        ta.setSelectionRange(newPos, newPos);
       } catch (_) {}
+      reanchorCardsFromSegments(target, getSegTextareas().map((t) => t.value));
       saveCurrentDraftFromInputs();
       syncArticleEditorDraftToHistory(draft, { bumpTime: true });
-      updateInlineArticlePreview();
     };
 
     DOM.previewStage.querySelectorAll("[data-fmt]").forEach((btn) => {
@@ -12635,7 +13613,36 @@
         else if (fmt === "ul") insertFormat("\n- ", "\n", "列表要点");
         else if (fmt === "ol") insertFormat("\n1. ", "\n", "列表序号");
         else if (fmt === "code") insertFormat("\n```\n", "\n```\n", "代码或提纲");
-        else if (fmt === "illust") insertFormat("\n\n> 🖼️ 【插图位建议：", "】\n\n", "描述此处的插图画面与场景");
+        else if (fmt === "illust") {
+          // Spec 3.3: Insert plan card at cursor block position
+          const ta = lastFocusedSeg || getSegTextareas()[0];
+          let targetBlockIdx = 0;
+          if (ta) {
+            const currentTas = getSegTextareas();
+            const segIdx = currentTas.indexOf(ta);
+            let textBeforeCursor = "";
+            for (let i = 0; i < segIdx; i++) {
+              textBeforeCursor += currentTas[i].value + "\n";
+            }
+            textBeforeCursor += ta.value.slice(0, ta.selectionStart);
+            const blocksBefore = E.parseArticleReadonlyBlocks(textBeforeCursor, { noStarter: true });
+            targetBlockIdx = Math.max(0, blocksBefore.length - 1);
+          }
+          if (!target?.planNode) {
+            createNewArticlePlan({
+              title: draft.title,
+              markdown: draft.markdown,
+              styleId: draft.styleId,
+              coverRatio: draft.coverRatio,
+              inlineRatio: draft.inlineRatio,
+              articleId: draft.id
+            });
+          }
+          const updatedTarget = resolveArticleTarget(draft.id);
+          if (updatedTarget?.planNode) {
+            insertNewPlanCard(updatedTarget.planNode, targetBlockIdx, { openModal: true });
+          }
+        }
       };
     });
 
@@ -12658,7 +13665,6 @@
             }
             if (idEl) idEl.textContent = `#${id}`;
             if (nameEl) nameEl.textContent = res?.name || id;
-            updateInlineArticlePreview();
           }
         });
       };
@@ -12693,13 +13699,24 @@
             const okMarkdown = res && typeof res.markdown === "string" ? res.markdown : savedSnapshot.markdown;
             draft.title = okTitle;
             draft.markdown = okMarkdown;
-            if (titleInp) titleInp.value = draft.title || "";
-            if (mdTa) mdTa.value = draft.markdown || "";
-            if (titleCountEl) titleCountEl.textContent = `${(draft.title || "").length}/64`;
-            if (charCountEl) charCountEl.textContent = (draft.markdown || "").length;
-            adjustHeight();
+
+            // Clamp existing cards to new blocks range
+            const newBlocks = E.parseArticleReadonlyBlocks(okMarkdown, { noStarter: true });
+            const maxIdx = Math.max(0, newBlocks.length - 1);
+            const currentCards = target?.planNode?.data?.cards || target?.art?.cards || [];
+            currentCards.forEach((c) => {
+              if (c.role !== "cover" && typeof c.afterBlockIdx === "number" && c.afterBlockIdx > maxIdx) {
+                c.afterBlockIdx = maxIdx;
+              }
+            });
+            if (target?.planNode) target.planNode.data.cards = currentCards;
+            if (target?.art) target.art.cards = currentCards;
+            commitArticleTargetChanges(target, { bumpTime: true });
+
+            CS.articleDocReplacedNotice = true;
             commitSync({ bumpTime: true, markSaved: true });
-            updateInlineArticlePreview();
+            renderFullPreviewStage();
+
             let succMsg = res.aiUsed ? "已用 AI 整理为 Markdown" : "AI 不可用，已按原文导入，标题需要手动调整";
             if (res.truncated) succMsg += "（正文过长，已截断）";
             toast(succMsg);
@@ -12707,8 +13724,7 @@
             if (isCurrentEditor()) {
               draft.title = savedSnapshot.title;
               draft.markdown = savedSnapshot.markdown;
-              if (titleInp) titleInp.value = draft.title || "";
-              if (mdTa) mdTa.value = draft.markdown || "";
+              renderFullPreviewStage();
             }
             if (err.status === 401 || err.code === "login_required") {
               toast("请先登录后再导入文档");
@@ -12729,34 +13745,354 @@
 
     updateSavedState(hasEditorContent() ? "saved" : "empty");
 
+    // Local template plan fallback
+    const applyLocalTemplatePlan = () => {
+      CS.articlePlanError = null;
+      CS.articleDocReplacedNotice = false;
+      const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
+        withPresetAssets: false
+      });
+      const tmpCtrl = tmpGraph.nodes.find(
+        (n) => n.type === "output_control" && n.data?.mode === "article-illust"
+      ) || tmpGraph.nodes.find((n) => n.type === "output_control");
+      if (tmpCtrl) {
+        tmpCtrl.data = tmpCtrl.data || {};
+        tmpCtrl.data.coverRatio = draft.coverRatio || "2.35:1";
+        tmpCtrl.data.inlineRatio = draft.inlineRatio || "4:3";
+      }
+      const built = E.buildArticlePlanData(draft.markdown || "", tmpCtrl, tmpGraph, Catalog);
+      const templateCards = (built.cards || []).map((c) =>
+        Object.assign({}, c, { planSource: "template" })
+      );
+      const oldCardsBackup = JSON.parse(
+        JSON.stringify(target?.planNode?.data?.cards || target?.art?.cards || [])
+      );
+      CS.articlePlanUndoState = {
+        cards: oldCardsBackup,
+        expireAt: Date.now() + 10000
+      };
+      setTimeout(() => {
+        if (CS.articlePlanUndoState && Date.now() >= CS.articlePlanUndoState.expireAt) {
+          CS.articlePlanUndoState = null;
+          const undoEl = DOM.previewStage?.querySelector("#art-plan-undo");
+          if (undoEl) undoEl.remove();
+        }
+      }, 10000);
+
+      planUnifiedArticleDraft(draft, { aiCards: templateCards });
+      renderFullPreviewStage();
+      const inlineCount = templateCards.filter((c) => c.role !== "cover").length;
+      toast(`AI 暂不可用，已按章节模板规划 ${inlineCount} 张插图`);
+      speakArt(`AI 暂不可用，已按章节模板规划 ${inlineCount} 张插图`);
+    };
+
+    // Plan button execution flow
+    const executePlan = async () => {
+      CS.articlePlanError = null;
+      CS.articleDocReplacedNotice = false;
+      CS.articleIsPlanning = true;
+      const reqArticleId = draft.id;
+      const controller = new AbortController();
+      CS.articlePlanAbortController = controller;
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 45000);
+
+      // In-place loading state (spec 2.3) without tearing down current editor instance
+      const paper = DOM.previewStage?.querySelector("#art-editor-paper");
+      if (paper) paper.setAttribute("aria-busy", "true");
+      getSegTextareas().forEach((t) => (t.readOnly = true));
+      DOM.previewStage?.querySelectorAll(".ic-art-card").forEach((c) => {
+        c.style.opacity = ".5";
+        c.style.pointerEvents = "none";
+      });
+      if (planBtn) {
+        planBtn.disabled = true;
+        planBtn.setAttribute("aria-busy", "true");
+        planBtn.innerHTML = '<span class="art-spinner ic-art-spin-icon" style="margin-right:4px;"></span>AI 规划中…';
+      }
+
+      let summaryContainer = DOM.previewStage?.querySelector("#art-plan-summary");
+      if (!summaryContainer) {
+        summaryContainer = document.createElement("div");
+        summaryContainer.id = "art-plan-summary";
+        const divider = DOM.previewStage?.querySelector(".ic-wechat-paper-divider");
+        if (divider && divider.nextSibling) {
+          divider.parentNode.insertBefore(summaryContainer, divider.nextSibling);
+        } else if (paper) {
+          paper.appendChild(summaryContainer);
+        }
+      }
+      summaryContainer.className = "ic-art-summary-loading";
+      summaryContainer.setAttribute("role", "status");
+      summaryContainer.setAttribute("tabindex", "-1");
+      summaryContainer.innerHTML = `
+        <span class="art-spinner ic-art-spin-icon" style="margin-right:4px;"></span>
+        <span>正在调用手绘 Skill 分析文章结构，约 10–30 秒…</span>
+        <button type="button" class="btn btn-sm" id="art-plan-cancel" style="margin-left:auto;">取消</button>
+      `;
+      const cancelBtn = summaryContainer.querySelector("#art-plan-cancel");
+      if (cancelBtn) {
+        cancelBtn.onclick = () => {
+          CS.articlePlanUserCancelled = true;
+          controller.abort();
+        };
+      }
+
+      try {
+        const rawBlocks = E.parseArticleReadonlyBlocks(draft.markdown || "", { withLines: true, noStarter: true });
+        const reqBlocks = rawBlocks.slice(0, 200).map((b) => ({
+          idx: b.idx,
+          kind: b.kind,
+          text: String(b.text || "").slice(0, 300)
+        }));
+        const charCount = String(draft.markdown || "").length;
+
+        const resp = await fetch("/api/studio/article-plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            articleId: draft.id || CS.activeArticleId || "",
+            title: draft.title || "",
+            blocks: reqBlocks,
+            charCount,
+            styleId: draft.styleId || "FA-001",
+            coverRatio: draft.coverRatio || "2.35:1",
+            inlineRatio: draft.inlineRatio || "4:3",
+            includeCover: true
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (CS.activeArticleId !== reqArticleId || !isCurrentEditor()) {
+          return;
+        }
+
+        if (!resp.ok) {
+          const errBody = await resp.json().catch(() => ({}));
+          const errCode = errBody?.code || errBody?.error || "";
+          const errMsg = errBody?.error || resp.statusText || "";
+
+          if (resp.status === 401 || errCode === "login_required") {
+            CS.articlePlanError = {
+              text: "登录后才能使用 AI 规划",
+              canRetry: false,
+              canTemplate: false
+            };
+            renderFullPreviewStage();
+            if (typeof S.openLoginModal === "function") {
+              S.openLoginModal("登录后才能使用 AI 规划");
+            }
+            return;
+          }
+          if (resp.status === 429) {
+            CS.articlePlanError = {
+              text: errMsg || "今日 AI 规划次数已达上限（30 次），请明天再试",
+              canRetry: false,
+              canTemplate: false
+            };
+            renderFullPreviewStage();
+            return;
+          }
+          if (resp.status === 403 && (errCode === "token_disallowed" || errCode === "token_scope_denied")) {
+            CS.articlePlanError = {
+              text: "当前登录方式不支持 AI 规划，请在网页登录",
+              canRetry: false,
+              canTemplate: false
+            };
+            renderFullPreviewStage();
+            return;
+          }
+
+          CS.articlePlanError = {
+            text: `规划失败：${errMsg || resp.status}，正文和配图位都没有改动`,
+            canRetry: true,
+            canTemplate: true
+          };
+          renderFullPreviewStage();
+          return;
+        }
+
+        const data = await resp.json();
+
+        const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
+          withPresetAssets: false
+        });
+        const tmpCtrl = tmpGraph.nodes.find(
+          (n) => n.type === "output_control" && n.data?.mode === "article-illust"
+        ) || tmpGraph.nodes.find((n) => n.type === "output_control");
+        if (tmpCtrl) {
+          tmpCtrl.data = tmpCtrl.data || {};
+          tmpCtrl.data.coverRatio = draft.coverRatio || "2.35:1";
+          tmpCtrl.data.inlineRatio = draft.inlineRatio || "4:3";
+        }
+
+        const aiCards = E.buildArticlePlanFromAi(data, {
+          ctrlNode: tmpCtrl,
+          graph: tmpGraph,
+          catalog: Catalog,
+          coverRatio: draft.coverRatio || "2.35:1",
+          inlineRatio: draft.inlineRatio || "4:3"
+        });
+
+        const oldCardsBackup = JSON.parse(
+          JSON.stringify(draft.cards || target?.planNode?.data?.cards || target?.art?.cards || [])
+        );
+        CS.articlePlanUndoState = {
+          cards: oldCardsBackup,
+          expireAt: Date.now() + 10000
+        };
+        setTimeout(() => {
+          if (CS.articlePlanUndoState && Date.now() >= CS.articlePlanUndoState.expireAt) {
+            CS.articlePlanUndoState = null;
+            const undoEl = DOM.previewStage?.querySelector("#art-plan-undo");
+            if (undoEl) undoEl.remove();
+          }
+        }, 10000);
+
+        // Mark entrance animation for newly planned cards
+        aiCards.forEach((c) => {
+          c.isNewEntrance = true;
+        });
+
+        draft.cards = aiCards;
+        planUnifiedArticleDraft(draft, { aiCards });
+
+        const coverCards = aiCards.filter((c) => c.role === "cover");
+        const inlines = aiCards.filter((c) => c.role !== "cover");
+        if (data.source === "model") {
+          const coverPart = coverCards.length ? `${coverCards.length} 张封面 + ` : "";
+          toast(`已规划 ${coverPart}${inlines.length} 张插图`);
+          speakArt(`已规划 ${coverPart}${inlines.length} 张插图`);
+        } else {
+          toast(`AI 暂不可用，已按章节模板规划 ${inlines.length} 张插图`);
+          speakArt(`AI 暂不可用，已按章节模板规划 ${inlines.length} 张插图`);
+        }
+
+        CS.articleIsPlanning = false;
+        renderFullPreviewStage();
+        const summaryEl = DOM.previewStage?.querySelector("#art-plan-summary");
+        if (summaryEl) summaryEl.focus();
+      } catch (err) {
+        clearTimeout(timeoutId);
+        if (CS.activeArticleId !== reqArticleId || !isCurrentEditor()) return;
+        if (err.name === "AbortError" || controller.signal.aborted) {
+          if (CS.articlePlanUserCancelled) {
+            CS.articlePlanUserCancelled = false;
+            toast("已取消规划");
+            speakArt("已取消规划");
+          } else {
+            CS.articlePlanError = {
+              text: "规划超时，正文和配图位都没有改动",
+              canRetry: true,
+              canTemplate: true
+            };
+          }
+        } else {
+          CS.articlePlanError = {
+            text: `规划失败：${err.message || err}，正文和配图位都没有改动`,
+            canRetry: true,
+            canTemplate: true
+          };
+        }
+        renderFullPreviewStage();
+      } finally {
+        CS.articleIsPlanning = false;
+        CS.articlePlanAbortController = null;
+      }
+    };
+
     if (planBtn) {
       planBtn.onclick = () => {
+        if (isArticleGenerating(target?.planNode?.data || {})) return;
         saveCurrentDraftFromInputs();
         const title = (draft.title || "").trim();
         const md = (draft.markdown || "").trim();
-        const cr = draft.coverRatio || "2.35:1";
-        const ir = draft.inlineRatio || "4:3";
         if (!title && !md) {
           toast("请输入文章标题或正文内容");
           return;
         }
-        syncArticleEditorDraftToHistory(draft, { bumpTime: true });
-        createNewArticlePlan({
-          articleId: draft.id || null,
-          title,
-          markdown: md,
-          coverRatio: cr,
-          inlineRatio: ir,
-          styleId: draft.styleId || "FA-001"
-        });
-        CS.articleSubView = "editor";
-        const url = new URL(window.location.href);
-        url.searchParams.set("entry", "article");
-        if (draft.id) url.searchParams.set("articleId", draft.id);
-        url.searchParams.set("subview", "editor");
-        window.history.replaceState(null, "", url.pathname + url.search);
+
+        const existingCards = draft?.cards || target?.planNode?.data?.cards || target?.art?.cards || [];
+        const nImages = existingCards.filter((c) => c.imageUrl).length;
+        const mPrompts = existingCards.filter((c) => c.promptCustomized).length;
+
+        if (nImages > 0 || mPrompts > 0) {
+          let clause = "";
+          if (nImages > 0 && mPrompts > 0) {
+            clause = `当前有 ${nImages} 张已生成配图、${mPrompts} 张调过提示词。重新规划后它们会从文章中移除。`;
+          } else if (nImages > 0) {
+            clause = `当前有 ${nImages} 张已生成配图。重新规划后它们会从文章中移除。`;
+          } else {
+            clause = `当前有 ${mPrompts} 张调过提示词。重新规划后它们会从文章中移除。`;
+          }
+
+          S.openModal({
+            title: "重新规划会替换现有配图位",
+            sizeClass: "modal-small ic-modal",
+            html: `
+              <div style="font-size:14px;line-height:1.6;color:var(--ink-body);padding:8px 0 16px;">
+                ${esc(clause)}
+              </div>
+              <div class="ic-modal-actions" style="display:flex;justify-content:flex-end;gap:10px;">
+                <button type="button" class="btn btn-sm" id="art-overwrite-cancel">取消</button>
+                <button type="button" class="btn btn-sm btn-primary" id="art-overwrite-confirm">确定替换</button>
+              </div>
+            `,
+            onMount(root) {
+              const cancelBtn = root.querySelector("#art-overwrite-cancel");
+              cancelBtn?.focus();
+              cancelBtn.onclick = () => S.closeModal();
+              root.querySelector("#art-overwrite-confirm").onclick = () => {
+                S.closeModal();
+                executePlan();
+              };
+            }
+          });
+          return;
+        }
+
+        executePlan();
+      };
+    }
+
+    // Bind summary action buttons
+    const retryBtn = DOM.previewStage.querySelector("#art-plan-retry");
+    if (retryBtn) retryBtn.onclick = () => executePlan();
+
+    const useTemplateBtn = DOM.previewStage.querySelector("#art-plan-use-template");
+    if (useTemplateBtn) useTemplateBtn.onclick = () => applyLocalTemplatePlan();
+
+    const retryAiBtn = DOM.previewStage.querySelector("#art-plan-retry-ai");
+    if (retryAiBtn) retryAiBtn.onclick = () => executePlan();
+
+    const replanNoticeBtn = DOM.previewStage.querySelector("#art-plan-replan-btn");
+    if (replanNoticeBtn) replanNoticeBtn.onclick = () => planBtn?.click();
+
+    const cancelPlanBtn = DOM.previewStage.querySelector("#art-plan-cancel");
+    if (cancelPlanBtn) {
+      cancelPlanBtn.onclick = () => {
+        if (CS.articlePlanAbortController) {
+          CS.articlePlanUserCancelled = true;
+          CS.articlePlanAbortController.abort();
+        }
+      };
+    }
+
+    const undoBtn = DOM.previewStage.querySelector("#art-plan-undo");
+    if (undoBtn) {
+      undoBtn.onclick = () => {
+        if (!CS.articlePlanUndoState) return;
+        const restored = JSON.parse(JSON.stringify(CS.articlePlanUndoState.cards || []));
+        CS.articlePlanUndoState = null;
+        if (target?.planNode) target.planNode.data.cards = restored;
+        if (target?.art) target.art.cards = restored;
+        draft.cards = restored;
+        commitArticleTargetChanges(target, { bumpTime: true });
         renderFullPreviewStage();
-        toast("🎉 已成功规划文章封面与章节插图！");
+        toast("已恢复原来的配图位");
+        speakArt("已恢复原来的配图位");
       };
     }
 
@@ -13846,6 +15182,14 @@
   window.HANDRAW_STUDIO.getBatchParts = getBatchParts;
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   if (window.__HANDRAW_TESTING__ === true) {
+    window.CS = CS;
+    Object.defineProperty(CS, "activeArticleDraft", {
+      get() { return CS.articleEditorDraft; },
+      set(v) { CS.articleEditorDraft = v; },
+      configurable: true
+    });
+    window.renderArticleEditorPage = renderArticleEditorPage;
+    window.renderFullPreviewStage = renderFullPreviewStage;
     window.HANDRAW_STUDIO_TESTING = {
       readScopedCache: (key, fallback = null) => readJsonStorage(key, fallback),
       writeScopedCache: (key, value) => writeJsonStorage(key, value),

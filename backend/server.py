@@ -1121,6 +1121,7 @@ def build_export_zip_package(
                     "anchorHeading": str(it.get("anchorHeading") or ""),
                     "prompt": str(it.get("prompt") or ""),
                     "theme": str(it.get("theme") or ""),
+                    "afterLine": it.get("afterLine") if isinstance(it.get("afterLine"), int) else None,
                     "relPath": f"./{rel_img_path}",
                     "zipPath": rel_img_path,
                 }
@@ -1129,46 +1130,94 @@ def build_export_zip_package(
         if kind == "article":
             cover_entry = next((e for e in resolved_entries if e["role"] == "cover"), None)
             inline_entries = [e for e in resolved_entries if e is not cover_entry]
-            inline_idx = 0
-
+            has_after_line = any(e.get("afterLine") is not None for e in resolved_entries)
             lines = raw_md.splitlines() if raw_md else [f"# {pack_title}", "", "## 一、核心章节", "正文内容……"]
             md_out: list[str] = []
             html_body: list[str] = []
             cover_inserted = False
 
-            for ln in lines:
-                stripped = ln.strip()
-                if re.match(r"^#\s+", stripped):
-                    h1_txt = re.sub(r"^#\s+", "", stripped)
-                    md_out.append(ln)
-                    html_body.append(f"<h1>{html.escape(h1_txt)}</h1>")
-                    if cover_entry and not cover_inserted:
-                        md_out.extend(["", f"![{cover_entry['title']}]({cover_entry['relPath']})", ""])
-                        html_body.append(f'<figure><img src="{html.escape(cover_entry["relPath"])}" alt="{html.escape(cover_entry["title"])}" /></figure>')
-                        cover_inserted = True
-                elif re.match(r"^#{2,3}\s+", stripped):
-                    h2_txt = re.sub(r"^#{2,3}\s+", "", stripped)
-                    md_out.append(ln)
-                    html_body.append(f"<h2>{html.escape(h2_txt)}</h2>")
-                    if inline_idx < len(inline_entries):
-                        ie = inline_entries[inline_idx]
-                        inline_idx += 1
-                        md_out.extend(["", f"![{ie['title']}]({ie['relPath']})", ""])
-                        html_body.append(f'<figure><img src="{html.escape(ie["relPath"])}" alt="{html.escape(ie["title"])}" /></figure>')
-                else:
-                    md_out.append(ln)
-                    if stripped:
-                        html_body.append(f"<p>{html.escape(stripped)}</p>")
+            if has_after_line:
+                inlines_by_line: dict[int, list[dict[str, Any]]] = {}
+                overflow_inlines: list[dict[str, Any]] = []
+                for ie in inline_entries:
+                    al = ie.get("afterLine")
+                    if isinstance(al, int) and 0 <= al < len(lines):
+                        inlines_by_line.setdefault(al, []).append(ie)
+                    else:
+                        overflow_inlines.append(ie)
 
-            if cover_entry and not cover_inserted:
-                md_out.insert(0, f"![{cover_entry['title']}]({cover_entry['relPath']})\n")
-                html_body.insert(0, f'<figure><img src="{html.escape(cover_entry["relPath"])}" alt="{html.escape(cover_entry["title"])}" /></figure>')
+                has_h1 = any(re.match(r"^#\s+", ln.strip()) for ln in lines)
+                if cover_entry and not has_h1:
+                    md_out.extend([f"![{cover_entry['title']}]({cover_entry['relPath']})", ""])
+                    html_body.append(f'<figure><img src="{html.escape(cover_entry["relPath"])}" alt="{html.escape(cover_entry["title"])}" /></figure>')
+                    cover_inserted = True
 
-            while inline_idx < len(inline_entries):
-                ie = inline_entries[inline_idx]
-                inline_idx += 1
-                md_out.extend(["", f"![{ie['title']}]({ie['relPath']})"])
-                html_body.append(f'<figure><img src="{html.escape(ie["relPath"])}" alt="{html.escape(ie["title"])}" /></figure>')
+                for line_idx, ln in enumerate(lines):
+                    stripped = ln.strip()
+                    if re.match(r"^#\s+", stripped):
+                        h1_txt = re.sub(r"^#\s+", "", stripped)
+                        md_out.append(ln)
+                        html_body.append(f"<h1>{html.escape(h1_txt)}</h1>")
+                        if cover_entry and not cover_inserted:
+                            md_out.extend(["", f"![{cover_entry['title']}]({cover_entry['relPath']})", ""])
+                            html_body.append(f'<figure><img src="{html.escape(cover_entry["relPath"])}" alt="{html.escape(cover_entry["title"])}" /></figure>')
+                            cover_inserted = True
+                    elif re.match(r"^#{2,3}\s+", stripped):
+                        h2_txt = re.sub(r"^#{2,3}\s+", "", stripped)
+                        md_out.append(ln)
+                        html_body.append(f"<h2>{html.escape(h2_txt)}</h2>")
+                    else:
+                        md_out.append(ln)
+                        if stripped:
+                            html_body.append(f"<p>{html.escape(stripped)}</p>")
+
+                    if line_idx in inlines_by_line:
+                        for ie in inlines_by_line[line_idx]:
+                            md_out.extend(["", f"![{ie['title']}]({ie['relPath']})", ""])
+                            html_body.append(f'<figure><img src="{html.escape(ie["relPath"])}" alt="{html.escape(ie["title"])}" /></figure>')
+
+                if cover_entry and not cover_inserted:
+                    md_out.insert(0, f"![{cover_entry['title']}]({cover_entry['relPath']})\n")
+                    html_body.insert(0, f'<figure><img src="{html.escape(cover_entry["relPath"])}" alt="{html.escape(cover_entry["title"])}" /></figure>')
+
+                for ie in overflow_inlines:
+                    md_out.extend(["", f"![{ie['title']}]({ie['relPath']})"])
+                    html_body.append(f'<figure><img src="{html.escape(ie["relPath"])}" alt="{html.escape(ie["title"])}" /></figure>')
+            else:
+                inline_idx = 0
+                for ln in lines:
+                    stripped = ln.strip()
+                    if re.match(r"^#\s+", stripped):
+                        h1_txt = re.sub(r"^#\s+", "", stripped)
+                        md_out.append(ln)
+                        html_body.append(f"<h1>{html.escape(h1_txt)}</h1>")
+                        if cover_entry and not cover_inserted:
+                            md_out.extend(["", f"![{cover_entry['title']}]({cover_entry['relPath']})", ""])
+                            html_body.append(f'<figure><img src="{html.escape(cover_entry["relPath"])}" alt="{html.escape(cover_entry["title"])}" /></figure>')
+                            cover_inserted = True
+                    elif re.match(r"^#{2,3}\s+", stripped):
+                        h2_txt = re.sub(r"^#{2,3}\s+", "", stripped)
+                        md_out.append(ln)
+                        html_body.append(f"<h2>{html.escape(h2_txt)}</h2>")
+                        if inline_idx < len(inline_entries):
+                            ie = inline_entries[inline_idx]
+                            inline_idx += 1
+                            md_out.extend(["", f"![{ie['title']}]({ie['relPath']})", ""])
+                            html_body.append(f'<figure><img src="{html.escape(ie["relPath"])}" alt="{html.escape(ie["title"])}" /></figure>')
+                    else:
+                        md_out.append(ln)
+                        if stripped:
+                            html_body.append(f"<p>{html.escape(stripped)}</p>")
+
+                if cover_entry and not cover_inserted:
+                    md_out.insert(0, f"![{cover_entry['title']}]({cover_entry['relPath']})\n")
+                    html_body.insert(0, f'<figure><img src="{html.escape(cover_entry["relPath"])}" alt="{html.escape(cover_entry["title"])}" /></figure>')
+
+                while inline_idx < len(inline_entries):
+                    ie = inline_entries[inline_idx]
+                    inline_idx += 1
+                    md_out.extend(["", f"![{ie['title']}]({ie['relPath']})"])
+                    html_body.append(f'<figure><img src="{html.escape(ie["relPath"])}" alt="{html.escape(ie["title"])}" /></figure>')
 
             zf.writestr("article.md", "\n".join(md_out).strip() + "\n")
             preview_doc = f"""<!doctype html>
@@ -2790,6 +2839,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/studio/batch-plan":
             from .batch_plan_routes import handle_batch_plan_post
             if handle_batch_plan_post(self, req_path, body):
+                return
+
+        if req_path == "/api/studio/article-plan":
+            from .article_plan_routes import handle_article_plan_post
+            if handle_article_plan_post(self, req_path, body):
                 return
 
         if req_path == "/api/studio/history":
