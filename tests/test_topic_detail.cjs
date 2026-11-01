@@ -26,10 +26,38 @@ class MockElement {
       }
     };
     this.style = {};
-    this.value = attrs.value || "";
+    if (attrs.style) {
+      attrs.style.split(";").forEach((pair) => {
+        const idx = pair.indexOf(":");
+        if (idx !== -1) {
+          const prop = pair.slice(0, idx).trim();
+          const val = pair.slice(idx + 1).trim();
+          if (prop) {
+            const camel = prop.replace(/-([a-z])/g, (_, g) => g.toUpperCase());
+            this.style[camel] = val;
+            this.style[prop] = val;
+          }
+        }
+      });
+    }
+    this._value = attrs.value !== undefined ? String(attrs.value) : undefined;
     this.disabled = attrs.disabled !== undefined;
     this.id = attrs.id || "";
     this._textContent = null;
+  }
+
+  get value() {
+    if (this._value !== undefined) return this._value;
+    if (this.tagName === "SELECT") {
+      const opts = this.querySelectorAll("option");
+      const sel = opts.find((o) => o.attrs && o.attrs.selected !== undefined) || opts[0];
+      return sel ? (sel.attrs.value !== undefined ? sel.attrs.value : sel.textContent) : "";
+    }
+    return this.attrs.value || "";
+  }
+
+  set value(v) {
+    this._value = String(v);
   }
 
   get textContent() {
@@ -59,6 +87,29 @@ class MockElement {
 
   get firstElementChild() {
     return this.children.find((c) => typeof c !== "string") || null;
+  }
+
+  get childNodes() {
+    return this.children;
+  }
+
+  cloneNode(deep = true) {
+    const clone = new MockElement(this.tagName, { ...this.attrs });
+    clone.style = { ...this.style };
+    clone._value = this._value;
+    clone._textContent = this._textContent;
+    if (deep) {
+      for (const child of this.children) {
+        if (typeof child === "string") {
+          clone.children.push(child);
+        } else if (child && typeof child.cloneNode === "function") {
+          const childClone = child.cloneNode(true);
+          childClone.parent = clone;
+          clone.children.push(childClone);
+        }
+      }
+    }
+    return clone;
   }
 
   getAttribute(name) {
@@ -124,6 +175,29 @@ class MockElement {
     if (this.parent) this.parent.removeChild(this);
   }
 
+  replaceWith(...nodes) {
+    if (!this.parent) return;
+    const idx = this.parent.children.indexOf(this);
+    if (idx < 0) return;
+    this.parent.children.splice(idx, 1);
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (typeof n !== "string") n.parent = this.parent;
+      this.parent.children.splice(idx + i, 0, n);
+    }
+  }
+
+  after(...nodes) {
+    if (!this.parent) return;
+    const idx = this.parent.children.indexOf(this);
+    if (idx < 0) return;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (typeof n !== "string") n.parent = this.parent;
+      this.parent.children.splice(idx + 1 + i, 0, n);
+    }
+  }
+
   insertAdjacentElement(position, el) {
     if (position === "afterbegin") {
       this.prepend(el);
@@ -167,6 +241,9 @@ class MockElement {
   }
   focus() {
     this._focused = true;
+  }
+  select() {
+    this._selected = true;
   }
   closest(sel) {
     let curr = this;
@@ -237,6 +314,18 @@ function matchesSelector(el, sel) {
   if (sel.includes(",")) {
     return sel.split(",").some((part) => matchesSelector(el, part.trim()));
   }
+  if (sel.includes(" ")) {
+    const parts = sel.split(/\s+/);
+    if (parts.length === 2) {
+      if (!matchesSelector(el, parts[1])) return false;
+      let p = el.parent;
+      while (p) {
+        if (matchesSelector(p, parts[0])) return true;
+        p = p.parent;
+      }
+      return false;
+    }
+  }
   if (sel.startsWith("#")) {
     return el.id === sel.slice(1);
   }
@@ -255,18 +344,6 @@ function matchesSelector(el, sel) {
     if (op === "*=") return attrVal.includes(val);
     if (op === "^=") return attrVal.startsWith(val);
     if (op === "$=") return attrVal.endsWith(val);
-  }
-  if (sel.includes(" ")) {
-    const parts = sel.split(/\s+/);
-    if (parts.length === 2) {
-      if (!matchesSelector(el, parts[1])) return false;
-      let p = el.parent;
-      while (p) {
-        if (matchesSelector(p, parts[0])) return true;
-        p = p.parent;
-      }
-      return false;
-    }
   }
   return el.tagName.toLowerCase() === sel.toLowerCase();
 }
@@ -339,7 +416,16 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     return { ok: true, status: 200, json: async () => ({}) };
   };
 
+  const storageMap = new Map();
+  const localStorageObj = {
+    getItem(k) { return storageMap.has(k) ? storageMap.get(k) : null; },
+    setItem(k, v) { storageMap.set(k, String(v)); },
+    removeItem(k) { storageMap.delete(k); },
+    clear() { storageMap.clear(); }
+  };
+
   const windowObj = {
+    localStorage: localStorageObj,
     location: {
       protocol: "http:",
       hostname: "127.0.0.1",
@@ -364,6 +450,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
       }
     },
     scrollTo() {},
+    getSelection: () => null,
     _lastCopied: null,
     matchMedia: (query) => ({
       matches: query.includes("prefers-reduced-motion: reduce") && Boolean(windowObj._reducedMotion),
@@ -374,6 +461,11 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
 
   const documentObj = {
     getElementById(id) {
+      if (documentObj.body && documentObj.body.id === id) return documentObj.body;
+      const inBody = documentObj.body ? documentObj.body.querySelector("#" + id) : null;
+      if (inBody) return inBody;
+      const inForum = forumRoot ? forumRoot.querySelector("#" + id) : null;
+      if (inForum) return inForum;
       if (!docElements[id]) docElements[id] = new MockElement("DIV", { id });
       return docElements[id];
     },
@@ -390,6 +482,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
   const context = {
     window: windowObj,
     document: documentObj,
+    localStorage: localStorageObj,
     navigator: windowObj.navigator,
     FormData: typeof FormData !== "undefined" ? FormData : class FormData {},
     URLSearchParams,
@@ -2443,7 +2536,194 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     console.log("Scenario 18 passed: Decoupled social sequence per action, interleaving resilience, and selective calibration verified.");
   }
 
-  console.log("\nALL 18 SCENARIOS IN test_topic_detail.cjs PASSED SUCCESSFULLY!");
+  /* ==========================================================================
+   * Scenario 19: Paid reading detail rendering, custom price 15✦, locked gate & unlocked view
+   * ========================================================================== */
+  {
+    const paidTopic = {
+      id: "t_paid_custom",
+      title: "15✦ 付费阅读专栏测试帖",
+      author: "author_bob",
+      authorName: "Bob",
+      price: 15,
+      summary: "<p>这里是免费试读内容预览。</p>",
+      body: '<p>这里是免费试读内容预览。</p><div class="hw-paywall-divider"><div class="hw-paywall-divider-pill"><span class="hw-paywall-pill-text">此处以下为 15✦ 专属核心交付章节</span></div></div><p>这里是收费核心章节内容。</p>',
+      lockedBody: '<p>这里是免费试读内容预览。</p><div class="hw-paywall-divider"><div class="hw-paywall-divider-pill"><span class="hw-paywall-pill-text">此处以下为 15✦ 专属核心交付章节</span></div></div><p>这里是收费核心章节内容。</p>',
+      likes: 3,
+      favorites: 1,
+      replies: []
+    };
+
+    const apiHandlers = new Map();
+    apiHandlers.set(/\/api\/posts\/t_paid_custom\/replies/, async () => ({
+      ok: true, status: 200, json: async () => ({ ok: true, items: [], nextCursor: null })
+    }));
+    apiHandlers.set("/api/posts/t_paid_custom", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        topic: { ...paidTopic, lockedBody: "" }, // Unlocked is false for server
+        mount: { kind: "discussion" },
+        viewer: { liked: false, favorited: false }
+      })
+    }));
+
+    const h = createHarness({
+      locationSearch: "?view=topic&id=t_paid_custom",
+      apiHandlers,
+      currentUser: { id: "u_reader", username: "reader_alice", name: "Alice", role: "user" }
+    });
+    h.loadForumApp();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const root = h.forumRoot;
+    // Check gate box for 15✦
+    const gateBox = root.querySelector(".hw-locked-gate-box");
+    assert.ok(gateBox, "Locked gate box must be present for unpurchased 15✦ post");
+    assert.ok(gateBox.textContent.includes("15✦ 付费专属核心章节"), "Gate box title must display 15✦");
+    assert.ok(gateBox.textContent.includes("支付 15✦ 积分"), "Gate box description must display 15✦");
+    const unlockBtn = root.querySelector("#topic-btn-unlock");
+    assert.ok(unlockBtn, "Unlock button must exist");
+    assert.ok(unlockBtn.textContent.includes("15✦"), "Unlock button text must display 15✦");
+    assert.ok(!root.innerHTML.includes("这里是收费核心章节内容"), "Locked view must not show paid body");
+
+    // Unlocked scenario: author or user with settled unlock
+    const apiHandlersUnlocked = new Map();
+    apiHandlersUnlocked.set(/\/api\/posts\/t_paid_custom\/replies/, async () => ({
+      ok: true, status: 200, json: async () => ({ ok: true, items: [], nextCursor: null })
+    }));
+    apiHandlersUnlocked.set("/api/posts/t_paid_custom", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        topic: paidTopic,
+        mount: { kind: "discussion" },
+        viewer: { liked: false, favorited: false }
+      })
+    }));
+
+    const hUnlocked = createHarness({
+      locationSearch: "?view=topic&id=t_paid_custom",
+      apiHandlers: apiHandlersUnlocked,
+      currentUser: { id: "u_bob", username: "author_bob", name: "Bob", role: "user" }
+    });
+    hUnlocked.loadForumApp();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const rootUnl = hUnlocked.forumRoot;
+    assert.ok(!rootUnl.querySelector(".hw-locked-gate-box"), "Gate box must not be present when unlocked");
+    assert.ok(rootUnl.innerHTML.includes("这里是收费核心章节内容"), "Unlocked view must render paid body");
+    assert.ok(rootUnl.innerHTML.includes("已解锁 15✦ 专栏核心交付章节"), "Unlocked view must render 15✦ unlocked pill");
+
+    console.log("Scenario 19 passed: Paid reading detail rendering, custom price 15✦, locked gate & unlocked view verified.");
+  }
+
+  /* ==========================================================================
+   * Scenario 20: Forum Compose Paid Reading: Entrance, Custom Price 15✦, Draft, Validation
+   * ========================================================================== */
+  {
+    let submitCalled = false;
+    let submittedBody = null;
+    const apiHandlersCompose = new Map();
+    apiHandlersCompose.set("/api/forum/topics", async (_url, opts) => {
+      submitCalled = true;
+      submittedBody = opts && opts.body ? JSON.parse(opts.body) : {};
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, topic: { id: "top_new_15" } })
+      };
+    });
+
+    const h = createHarness({
+      locationSearch: "?view=compose",
+      apiHandlers: apiHandlersCompose,
+      currentUser: { id: "u_author", username: "author_alice", name: "Alice", role: "user" }
+    });
+    h.loadForumApp();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const root = h.forumRoot;
+    const paywallBtn = root.querySelector("#tb-insert-paywall");
+    assert.ok(paywallBtn, "tb-insert-paywall button must exist");
+    assert.equal(paywallBtn.style.display || "", "", "tb-insert-paywall button must be always visible");
+    assert.ok(paywallBtn.textContent.includes("插入付费阅读"), "Button label must be '插入付费阅读'");
+
+    const modeDropdown = root.querySelector("#compose-mode-dropdown");
+    assert.ok(modeDropdown, "Mode dropdown must exist");
+    assert.equal(modeDropdown.value, "free", "Initial mode must be free");
+
+    const priceBox = root.querySelector("#compose-paid-price-box");
+    assert.ok(priceBox, "compose-paid-price-box must exist");
+    assert.equal(priceBox.style.display, "none", "Price box initially hidden in free mode");
+
+    // Click tb-insert-paywall: simulates modal set price 15 and confirm
+    const editor = root.querySelector("#compose-rich-editor");
+    editor.innerHTML = "<p>前序公开免费试读章节</p>";
+    paywallBtn.onclick();
+
+    // Verify modal appeared
+    const modalRoot = h.document.getElementById("hw-active-modal");
+    assert.ok(modalRoot, "Paywall price modal should open");
+    const modalPriceInput = modalRoot.querySelector("#paywall-modal-price");
+    assert.ok(modalPriceInput, "Modal price input exists");
+    modalPriceInput.value = "15";
+
+    const modalConfirmBtn = modalRoot.querySelector("#paywall-modal-confirm");
+    assert.ok(modalConfirmBtn, "Modal confirm button exists");
+    modalConfirmBtn.onclick();
+
+    // Verify after insertion
+    assert.equal(modeDropdown.value, "paid", "Mode dropdown should switch to paid");
+    assert.equal(priceBox.style.display, "flex", "Price box should be visible");
+    const priceInput = root.querySelector("#compose-paid-price");
+    assert.equal(priceInput.value, "15", "Price input should be 15");
+
+    const divider = editor.querySelector(".hw-paywall-divider");
+    assert.ok(divider, "Paywall divider must be inserted in editor");
+    assert.ok(divider.textContent.includes("15✦"), "Divider pill text must state 15✦");
+
+    // Test quick preset click (e.g. 50✦)
+    const preset50 = root.querySelector('.hw-price-presets [data-preset-price="50"]');
+    assert.ok(preset50, "Preset 50 button exists");
+    preset50.onclick();
+    assert.equal(priceInput.value, "50", "Price input updated to 50");
+    assert.ok(divider.textContent.includes("50✦"), "Divider pill text updated to 50✦");
+
+    // Reset back to 15 for further tests
+    priceInput.value = "15";
+    priceInput.oninput();
+    assert.ok(divider.textContent.includes("15✦"), "Divider pill text returned to 15✦");
+
+    // Test validation: Missing paid body after divider
+    root.querySelector("#compose-title-input").value = "实测付费专栏文章标题";
+    const submitBtn = root.querySelector("#compose-submit-btn");
+
+    // Divider has no content after it -> should be blocked!
+    await submitBtn.onclick();
+    assert.equal(submitCalled, false, "Submit must be blocked when divider has no content after it");
+    assert.ok(h.toasts.some((t) => t.includes("缺少收费正文")), "Should toast error about missing paid body");
+
+    // Add paid body after divider
+    const paidParagraph = h.document.createElement("P");
+    paidParagraph.textContent = "此处为分界线之后深度交付的付费实战核心干货与控制词参数。";
+    divider.after(paidParagraph);
+
+    // Now submit should succeed!
+    submitBtn.onclick();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(submitCalled, true, "Submit should succeed when divider and paid body are both present");
+    assert.equal(submittedBody.price, 15, "Submitted price must be 15");
+    assert.ok(submittedBody.summary.includes("前序公开免费试读章节"), "Submitted summary contains free preview");
+    assert.ok(!submittedBody.summary.includes("此处为分界线之后深度交付"), "Submitted summary must NOT contain paid body");
+    assert.ok(submittedBody.lockedBody.includes("此处为分界线之后深度交付"), "Submitted lockedBody contains paid content");
+
+    console.log("Scenario 20 passed: Forum Compose Paid Reading (Entrance, Custom Price 15✦, Draft, Validation) verified.");
+  }
+
+  console.log("\nALL 20 SCENARIOS IN test_topic_detail.cjs PASSED SUCCESSFULLY!");
 })().catch((err) => {
   console.error("Test failed with error:", err);
   process.exit(1);

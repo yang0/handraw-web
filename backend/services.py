@@ -3115,8 +3115,37 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
         cat = "experience"
 
     title = str(body.get("title") or "最新创作调参交流帖").strip()[:140]
-    raw_body = str(body.get("body") or body.get("summary") or "附上我的实战配置与思考，欢迎交流！").strip()[:60000]
-    price = max(0, min(100, int(body.get("price") or 0)))
+    raw_body = str(body.get("body") or body.get("bodyHtml") or body.get("lockedBody") or body.get("summary") or "附上我的实战配置与思考，欢迎交流！").strip()[:60000]
+    price_val = body.get("price")
+    if price_val is not None and str(price_val).strip() != "":
+        try:
+            raw_price = int(price_val)
+        except (ValueError, TypeError):
+            raise ServiceError("帖子价格必须为有效整数", status=400)
+        if raw_price < 0 or raw_price > 100:
+            raise ServiceError("帖子价格范围须为 0–100 积分", status=400)
+        price = raw_price
+    else:
+        price = 0
+
+    if price > 0:
+        if "hw-paywall-divider" not in raw_body:
+            raise ServiceError("付费帖子缺少付费分界线", status=400)
+        divider_match = re.search(
+            r"<div[^>]*class=[\"'][^\"']*hw-paywall-divider[^\"']*[\"'][^>]*>.*?</div>\s*</div>|<(?:div|hr)[^>]*class=[\"'][^\"']*hw-paywall-divider[^\"']*[\"'][^>]*>(?:.*?</div>)?|<[^>]*hw-paywall-divider[^>]*>",
+            raw_body,
+            flags=re.DOTALL,
+        )
+        if divider_match:
+            after_part = raw_body[divider_match.end():]
+        else:
+            parts = raw_body.split("hw-paywall-divider", 1)
+            after_part = parts[1] if len(parts) > 1 else ""
+        after_text = re.sub(r"<[^>]+>", " ", after_part).strip()
+        has_media = any(tag in after_part for tag in ("<img", "hw-intext-media", "hw-intext-card"))
+        if len(after_text) < 4 and not has_media:
+            raise ServiceError("付费分界线下方缺少收费正文", status=400)
+
     bounty = max(0, min(200, int(body.get("bounty") or 0)))
     shared_card = body.get("sharedCard")
     styles = [str(s).strip().upper().lstrip("#") for s in (body.get("styles") or []) if str(s).strip()][:3]
@@ -3225,7 +3254,7 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
             ),
         )
 
-    return {"ok": True, "topicId": tid, "topic": {"id": tid}, "credits": new_bal, "bounty": bounty}
+    return {"ok": True, "topicId": tid, "topic": {"id": tid, "price": price}, "credits": new_bal, "bounty": bounty}
 
 
 def publish_forum_reply_post(
@@ -4056,7 +4085,7 @@ def consume_daily_usage(db: Database, user_id: int | str, scope: str, limit: int
     today = local_today_str()
     with db.transaction() as tx:
         row = tx.execute(
-            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND usage_date = ?",
+            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND (usage_date = ? OR usage_date = CURRENT_DATE)",
             (uid, clean_scope, today),
         ).fetchone()
         current = int(row["count"]) if row else 0

@@ -276,6 +276,13 @@
             '</div>' +
             '<label class="curation-field">作品定价（积分）<span class="curation-field-err" data-err-for="price"></span>' +
               '<input type="number" min="0" max="100" step="1" data-act="price" data-idx="0" value="' + esc(it.price != null ? it.price : 0) + '" placeholder="0–100 整数，0 为免费">' +
+              '<div class="curation-price-presets" style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">' +
+                '<button type="button" class="hw-price-chip" data-set-price="0">免费</button>' +
+                '<button type="button" class="hw-price-chip" data-set-price="10">10✦</button>' +
+                '<button type="button" class="hw-price-chip" data-set-price="20">20✦</button>' +
+                '<button type="button" class="hw-price-chip" data-set-price="50">50✦</button>' +
+                '<button type="button" class="hw-price-chip" data-set-price="80">80✦</button>' +
+              '</div>' +
             '</label>' +
             ((it.price != null && it.price > 0) ? (
               '<p class="curation-help" data-help-for="price">' +
@@ -335,6 +342,13 @@
             '</label>' +
             '<label class="curation-field">解锁积分<span class="curation-field-err" data-err-for="unlockCost"></span>' +
               '<input type="number" min="0" max="50" step="1" data-act="unlockCost" data-idx="0" value="' + esc(it.unlockCost != null ? it.unlockCost : 0) + '" placeholder="0–50 整数，0 为免费">' +
+              '<div class="curation-price-presets" style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">' +
+                '<button type="button" class="hw-price-chip" data-set-cost="0">免费</button>' +
+                '<button type="button" class="hw-price-chip" data-set-cost="5">5✦</button>' +
+                '<button type="button" class="hw-price-chip" data-set-cost="10">10✦</button>' +
+                '<button type="button" class="hw-price-chip" data-set-cost="20">20✦</button>' +
+                '<button type="button" class="hw-price-chip" data-set-cost="50">50✦</button>' +
+              '</div>' +
             '</label>' +
             ((it.unlockCost != null && it.unlockCost > 0) ? (
               '<p class="curation-help" data-help-for="unlockCost">' +
@@ -979,7 +993,31 @@
           if (it && it.unlockCost != null) e.target.value = it.unlockCost;
         }
       });
-      form.addEventListener("click", onClick);
+      form.addEventListener("click", function (e) {
+        var btnPrice = e.target.closest("[data-set-price]");
+        if (btnPrice) {
+          e.preventDefault();
+          var pVal = parseInt(btnPrice.getAttribute("data-set-price"), 10);
+          var pInput = root.querySelector('input[data-act="price"]');
+          if (pInput) {
+            pInput.value = pVal;
+            pInput.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          return;
+        }
+        var btnCost = e.target.closest("[data-set-cost]");
+        if (btnCost) {
+          e.preventDefault();
+          var cVal = parseInt(btnCost.getAttribute("data-set-cost"), 10);
+          var cInput = root.querySelector('input[data-act="unlockCost"]');
+          if (cInput) {
+            cInput.value = cVal;
+            cInput.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          return;
+        }
+        onClick(e);
+      });
     }
 
     var preload = editId ? api("/api/curation/mine").then(function(res) {

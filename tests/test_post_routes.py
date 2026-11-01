@@ -944,6 +944,180 @@ class PostRoutesHTTPTests(unittest.TestCase):
         self.assertNotIn("Comic storyboard", defn)
         self.assertIn("漫画分镜", defn)
 
+    def test_forum_paid_reading_flow(self):
+        """Test forum paid reading post: price validation, divider validation, isolation, unlocking and royalty."""
+        author_token = self._login("pr_author", "pass-author")
+        buyer_token = self._login("pr_buyer", "pass-buyer")
+
+        # 1. Price validation errors
+        # Negative price
+        status, payload = self._request(
+            "POST",
+            "/api/forum/topics",
+            {
+                "title": "非法负数价格帖子测试",
+                "category": "experience",
+                "publishMode": "paid",
+                "price": -5,
+                "bodyHtml": "<p>免费前序</p><div class=\"hw-paywall-divider\"></div><p>付费内容</p>",
+            },
+            token=author_token,
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("0–100", payload.get("error", ""))
+
+        # Price > 100
+        status, payload = self._request(
+            "POST",
+            "/api/forum/topics",
+            {
+                "title": "非法超限价格帖子测试",
+                "category": "experience",
+                "publishMode": "paid",
+                "price": 105,
+                "bodyHtml": "<p>免费前序</p><div class=\"hw-paywall-divider\"></div><p>付费内容</p>",
+            },
+            token=author_token,
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("0–100", payload.get("error", ""))
+
+        # Non-integer price string
+        status, payload = self._request(
+            "POST",
+            "/api/forum/topics",
+            {
+                "title": "非法非整数价格测试",
+                "category": "experience",
+                "publishMode": "paid",
+                "price": "not_a_number",
+                "bodyHtml": "<p>免费前序</p><div class=\"hw-paywall-divider\"></div><p>付费内容</p>",
+            },
+            token=author_token,
+        )
+        self.assertEqual(status, 400)
+
+        # 2. Missing paywall divider validation
+        status, payload = self._request(
+            "POST",
+            "/api/forum/topics",
+            {
+                "title": "缺少分界线的付费帖",
+                "category": "experience",
+                "publishMode": "paid",
+                "price": 15,
+                "bodyHtml": "<p>这里全是正文，但是完全没有插入分界线！</p>",
+            },
+            token=author_token,
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("付费分界线", payload.get("error", ""))
+
+        # 3. Missing paid content after divider validation
+        status, payload = self._request(
+            "POST",
+            "/api/forum/topics",
+            {
+                "title": "分界线后无内容的付费帖",
+                "category": "experience",
+                "publishMode": "paid",
+                "price": 15,
+                "bodyHtml": "<p>前序免费公开内容</p><div class=\"hw-paywall-divider\"><span>分界线</span></div>",
+            },
+            token=author_token,
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("收费正文", payload.get("error", ""))
+
+        # 4. Valid paid post with custom price 15
+        paid_body = (
+            "<p>前序公开试读章节与背景介绍</p>"
+            "<div class=\"hw-paywall-divider\" data-paywall-price=\"15\">"
+            "<div class=\"hw-paywall-divider-pill\"><span class=\"hw-paywall-pill-text\">此处以下为 15✦ 专属核心交付章节</span></div>"
+            "</div>"
+            "<p>付费解锁后的绝密独家交付正文内容，深入讲解了提示词调优和模型微调秘籍。</p>"
+        )
+        status, payload = self._request(
+            "POST",
+            "/api/forum/topics",
+            {
+                "title": "15✦ 独家手绘风提示词工程进阶指南",
+                "category": "experience",
+                "publishMode": "paid",
+                "price": 15,
+                "summary": "<p>前序公开试读章节与背景介绍</p>",
+                "bodyHtml": paid_body,
+                "lockedBody": paid_body,
+            },
+            token=author_token,
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertTrue(payload.get("ok"))
+        topic = payload.get("topic") or {}
+        topic_id = topic.get("id")
+        self.assertTrue(topic_id)
+        self.assertEqual(topic.get("price"), 15)
+
+        # 5. Anonymous view: cannot see lockedBody or paid content
+        status, anon_payload = self._request("GET", f"/api/posts/{topic_id}")
+        self.assertEqual(status, 200)
+        anon_topic = anon_payload.get("topic") or {}
+        self.assertEqual(anon_topic.get("price"), 15)
+        self.assertEqual(anon_topic.get("lockedBody"), "")
+        self.assertIn("前序公开试读", anon_topic.get("summary", ""))
+        self.assertNotIn("绝密独家交付正文内容", anon_topic.get("summary", ""))
+
+        # 6. Author view: author reads for free, full lockedBody visible
+        status, author_payload = self._request("GET", f"/api/posts/{topic_id}", token=author_token)
+        self.assertEqual(status, 200)
+        author_topic = author_payload.get("topic") or {}
+        self.assertIn("绝密独家交付正文内容", author_topic.get("lockedBody", ""))
+
+        # 7. Buyer unlocks: balance deduction & author 80% revenue split
+        conn = self.db.get_conn()
+        buyer_uid = int(self.buyer["id"])
+        author_uid = int(self.author["id"])
+        buyer_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (buyer_uid,)).fetchone()["balance"])
+        author_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (author_uid,)).fetchone()["balance"])
+
+        # Buyer views before unlock -> locked
+        status, buyer_pre_payload = self._request("GET", f"/api/posts/{topic_id}", token=buyer_token)
+        self.assertEqual((buyer_pre_payload.get("topic") or {}).get("lockedBody"), "")
+
+        # Buyer unlocks topic
+        status, unlock_res = self._request(
+            "POST",
+            "/api/unlocks",
+            {"targetType": "topic", "targetId": topic_id},
+            token=buyer_token,
+        )
+        self.assertEqual(status, 200, unlock_res)
+        self.assertTrue(unlock_res.get("ok"))
+        self.assertFalse(unlock_res.get("alreadyUnlocked", False))
+
+        # Check wallet balances: buyer deducted 15, author credited 12 (80% of 15)
+        buyer_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (buyer_uid,)).fetchone()["balance"])
+        author_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (author_uid,)).fetchone()["balance"])
+        self.assertEqual(buyer_bal_after, buyer_bal_before - 15)
+        self.assertEqual(author_bal_after, author_bal_before + 12)
+
+        # Buyer views after unlock -> unlocked, lockedBody visible
+        status, buyer_post_payload = self._request("GET", f"/api/posts/{topic_id}", token=buyer_token)
+        buyer_topic = buyer_post_payload.get("topic") or {}
+        self.assertIn("绝密独家交付正文内容", buyer_topic.get("lockedBody", ""))
+
+        # 8. Duplicate unlock is idempotent: no double deduction
+        status, dup_unlock_res = self._request(
+            "POST",
+            "/api/unlocks",
+            {"targetType": "topic", "targetId": topic_id},
+            token=buyer_token,
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(dup_unlock_res.get("alreadyUnlocked"))
+        buyer_bal_dup = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (buyer_uid,)).fetchone()["balance"])
+        self.assertEqual(buyer_bal_dup, buyer_bal_after)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3124,6 +3124,56 @@ img[data-hw-src].hw-img-failed {
   border-color: var(--gold) !important;
 }
 
+/* Paid Reading Controls */
+.hw-paid-price-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--gold-wash);
+  padding: 4px 10px;
+  border: 1px solid var(--gold-border);
+  border-radius: 8px;
+}
+
+.hw-price-chip {
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 750;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-bg);
+  color: var(--ink-body);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+}
+
+.hw-price-chip:hover {
+  border-color: var(--gold);
+}
+
+.hw-price-chip.is-active {
+  background: var(--gold);
+  color: #fff;
+  border-color: var(--gold);
+  box-shadow: 0 1px 3px rgba(180, 83, 9, 0.25);
+}
+
+.hw-price-chip-free {
+  background: #f1f5f9;
+  color: var(--ink-muted);
+}
+
+.hw-paywall-summary {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 6px 12px;
+  background: var(--paper-wash);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
 /* Inline In-Text Card */
 .hw-intext-card {
   margin: 18px 0;

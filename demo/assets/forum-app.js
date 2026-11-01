@@ -71,13 +71,14 @@
     `;
   }
 
-  function buildPaywallDividerHtml() {
+  function buildPaywallDividerHtml(price = 10) {
+    const effPrice = Math.max(1, Math.min(100, Number(price) || 10));
     return `
-      <div class="hw-paywall-divider" contenteditable="false" draggable="true" title="按住可拖拽调整付费截断位置">
+      <div class="hw-paywall-divider" contenteditable="false" draggable="true" data-paywall-price="${effPrice}" title="按住可拖拽调整付费截断位置">
         <div class="hw-paywall-divider-line"></div>
         <div class="hw-paywall-divider-pill">
           <span class="hw-paywall-pill-icon">🔒</span>
-          <span class="hw-paywall-pill-text">此处以下为 10✦ 专属核心交付章节</span>
+          <span class="hw-paywall-pill-text">此处以下为 ${effPrice}✦ 专属核心交付章节</span>
           <button type="button" class="hw-intext-del-btn" title="移除付费截断线">✕</button>
         </div>
         <div class="hw-paywall-divider-line"></div>
@@ -109,6 +110,17 @@
       }
     }
 
+    let publishMode = overrides.publishMode || "free";
+    if (publishMode !== "paid" && publishMode !== "bounty_10" && publishMode !== "bounty_20") {
+      publishMode = "free";
+    }
+    let price = overrides.price !== undefined ? Number(overrides.price) : 0;
+    if (publishMode === "paid") {
+      if (isNaN(price) || price <= 0) price = 10;
+    } else {
+      if (isNaN(price) || price < 0) price = 0;
+    }
+
     return {
       category: cat,
       title: String(overrides.title || ""),
@@ -126,7 +138,8 @@
       sharedCard: sharedCard,
       style1: String(overrides.style1 || overrides.style || "").trim().toUpperCase().replace(/^#/, ""),
       layout: String(overrides.layout || "").trim().toUpperCase().replace(/^#/, ""),
-      publishMode: overrides.publishMode || "free", // 'free' | 'bounty_10' | 'bounty_20' | 'paid_10'
+      publishMode: publishMode, // 'free' | 'paid' | 'bounty_10' | 'bounty_20'
+      price: price,
       lockedBody: String(overrides.lockedBody || ""),
       submitting: false
     };
@@ -174,7 +187,9 @@
     try{
       const saved=JSON.parse(localStorage.getItem(draftKey())||"null");
       if(saved && !FUI.composeDraft.title && !FUI.composeDraft.bodyHtml){
-        saved.bodyHtml=window.HandrawAccountTools.safeHtml(saved.bodyHtml);
+        if (window.HandrawAccountTools && typeof window.HandrawAccountTools.safeHtml === "function") {
+          saved.bodyHtml = window.HandrawAccountTools.safeHtml(saved.bodyHtml);
+        }
         FUI.composeDraft=createEmptyDraft(saved);
       }
     }catch(_){ /* An invalid local draft must not prevent opening the forum. */ }
@@ -597,7 +612,7 @@
         if (unlocked) {
           const pill = document.createElement("div");
           pill.style.cssText = "margin:26px 0 18px;display:flex;align-items:center;gap:10px;";
-          pill.innerHTML = '<div style="flex:1;height:1px;background:var(--gold-border);"></div><span style="font-size:12px;font-weight:800;color:var(--gold);background:var(--gold-wash);padding:4px 14px;border-radius:999px;">🔓 已解锁 10✦ 专栏核心交付章节</span><div style="flex:1;height:1px;background:var(--gold-border);"></div>';
+          pill.innerHTML = `<div style="flex:1;height:1px;background:var(--gold-border);"></div><span style="font-size:12px;font-weight:800;color:var(--gold);background:var(--gold-wash);padding:4px 14px;border-radius:999px;">🔓 已解锁 ${topic.price || 10}✦ 专栏核心交付章节</span><div style="flex:1;height:1px;background:var(--gold-border);"></div>`;
           pw.replaceWith(pill);
         } else {
           pw.remove();
@@ -843,9 +858,18 @@
     const titleEl = root.querySelector("#compose-title-input");
     const editorEl = root.querySelector("#compose-rich-editor");
     const modeEl = root.querySelector("#compose-mode-dropdown");
+    const priceEl = root.querySelector("#compose-paid-price");
     if (titleEl) FUI.composeDraft.title = titleEl.value;
     if (editorEl) FUI.composeDraft.bodyHtml = editorEl.innerHTML;
-    if (modeEl) FUI.composeDraft.publishMode = modeEl.value;
+    if (modeEl) {
+      FUI.composeDraft.publishMode = modeEl.value;
+    }
+    if (priceEl && FUI.composeDraft.publishMode === "paid") {
+      const val = parseInt(priceEl.value, 10);
+      if (!isNaN(val)) {
+        FUI.composeDraft.price = Math.max(1, Math.min(100, val));
+      }
+    }
     saveComposeDraft();
   }
 
@@ -922,8 +946,8 @@
               <button type="button" class="hw-tool-btn hw-tool-btn-highlight" id="tb-insert-work" title="在光标处插入作品卡片">
                 <span>🖼️ 插入作品</span>
               </button>
-              <button type="button" class="hw-tool-btn hw-tool-btn-gold" id="tb-insert-paywall" title="在光标处插入付费截断点（此线以下需付费解锁）" style="${d.publishMode === "paid_10" ? "" : "display:none;"}">
-                <span>🔒 插入付费点</span>
+              <button type="button" class="hw-tool-btn hw-tool-btn-gold" id="tb-insert-paywall" title="在光标处插入付费截断线（此线以下需付费解锁）">
+                <span>🔒 插入付费阅读</span>
               </button>
             </div>
 
@@ -943,6 +967,7 @@
 
         <!-- Bottom Post Action Footer (below editor text canvas) -->
         <footer class="hw-compose-footer" id="compose-action-footer">
+          <div id="compose-paywall-summary" class="hw-paywall-summary" style="display:${d.publishMode === "paid" ? "block" : "none"};width:100%;margin-bottom:8px;padding:6px 12px;background:var(--paper-wash);border-radius:8px;font-size:12.5px;"></div>
           <span id="compose-draft-status" role="status">草稿会自动保存到此浏览器</span>
           <div class="hw-compose-footer-left">
             <span style="font-size:12.5px;color:var(--ink-muted);line-height:1.6;">
@@ -950,11 +975,24 @@
             </span>
           </div>
           <div class="hw-compose-footer-right" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div class="hw-paid-price-ctrl" id="compose-paid-price-box" style="display:${d.publishMode === "paid" ? "flex" : "none"};align-items:center;gap:6px;background:var(--gold-wash);padding:4px 10px;border:1px solid var(--gold-border);border-radius:8px;">
+              <span style="font-size:13px;font-weight:750;color:var(--gold-text, #92400e);white-space:nowrap;">阅读定价：</span>
+              <input type="number" id="compose-paid-price" class="hw-input" min="1" max="100" step="1" value="${d.price || 10}" style="width:58px;padding:3px 6px;font-size:13px;font-weight:750;text-align:center;border-radius:6px;" />
+              <span style="font-size:13px;font-weight:750;color:var(--gold-text, #92400e);">✦</span>
+              <div class="hw-price-presets" id="compose-price-presets" style="display:flex;align-items:center;gap:4px;">
+                ${[5, 10, 20, 50].map((preset) => `
+                  <button type="button" class="hw-price-chip ${(d.price || 10) === preset ? "is-active" : ""}" data-preset-price="${preset}">
+                    ${preset}✦
+                  </button>
+                `).join("")}
+              </div>
+              <button type="button" class="hw-price-chip hw-price-chip-free" id="compose-btn-switch-free" title="切换为公开免费帖">免费</button>
+            </div>
             <div style="display:flex;align-items:center;gap:6px;">
               <label for="compose-mode-dropdown" style="font-size:13px;font-weight:750;color:var(--ink-body);white-space:nowrap;">发帖模式：</label>
               <select class="hw-select" id="compose-mode-dropdown" style="padding:6px 10px;font-size:13px;height:36px;border-radius:8px;">
                 <option value="free" ${d.publishMode === "free" ? "selected" : ""}>✨ 公开免费（发布立得 +5✦）</option>
-                <option value="paid_10" ${d.publishMode === "paid_10" ? "selected" : ""}>💎 10✦ 付费阅读专栏</option>
+                <option value="paid" ${d.publishMode === "paid" ? "selected" : ""}>💎 付费阅读专栏</option>
                 <option value="bounty_10" ${d.publishMode === "bounty_10" ? "selected" : ""}>💰 托管 10✦ 悬赏求调优</option>
                 <option value="bounty_20" ${d.publishMode === "bounty_20" ? "selected" : ""}>💰 托管 20✦ 悬赏求调优</option>
               </select>
@@ -973,6 +1011,7 @@
     const fileInput = root.querySelector("#compose-hidden-file");
 
     function saveEditorSelection() {
+      if (typeof window === "undefined" || typeof window.getSelection !== "function") return;
       const sel = window.getSelection();
       if (sel && sel.rangeCount > 0) {
         const r = sel.getRangeAt(0);
@@ -985,17 +1024,19 @@
     function restoreEditorSelection() {
       if (!editorEl) return;
       editorEl.focus();
-      if (savedRange) {
+      if (savedRange && typeof window !== "undefined" && typeof window.getSelection === "function") {
         const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(savedRange);
+        if (sel && typeof sel.removeAllRanges === "function" && typeof sel.addRange === "function") {
+          sel.removeAllRanges();
+          sel.addRange(savedRange);
+        }
       }
     }
 
     function insertHtmlAtCaret(html) {
       if (!editorEl) return;
       editorEl.focus();
-      const sel = window.getSelection();
+      const sel = (typeof window !== "undefined" && typeof window.getSelection === "function") ? window.getSelection() : null;
       let range = null;
       if (sel && sel.rangeCount > 0) {
         const r = sel.getRangeAt(0);
@@ -1016,7 +1057,7 @@
           lastNode = frag.appendChild(node);
         }
         range.insertNode(frag);
-        if (lastNode) {
+        if (lastNode && sel) {
           range = range.cloneRange();
           range.setStartAfter(lastNode);
           range.collapse(true);
@@ -1030,7 +1071,10 @@
     }
 
     ["mouseup", "keyup", "input", "blur"].forEach((evt) => {
-      editorEl.addEventListener(evt, saveEditorSelection);
+      editorEl.addEventListener(evt, () => {
+        saveEditorSelection();
+        updatePaywallSummary();
+      });
     });
 
     root.querySelector("#compose-back-btn").onclick = () => {
@@ -1055,38 +1099,249 @@
       };
     });
 
+    function updateDividerTextInEditor(price) {
+      if (!editorEl) return;
+      const divider = editorEl.querySelector(".hw-paywall-divider");
+      if (divider) {
+        divider.setAttribute("data-paywall-price", price);
+        const textEl = divider.querySelector(".hw-paywall-pill-text");
+        if (textEl) {
+          textEl.textContent = `此处以下为 ${price}✦ 专属核心交付章节`;
+        }
+      }
+    }
+
+    function setDraftPrice(newPrice) {
+      const eff = Math.max(1, Math.min(100, parseInt(newPrice, 10) || 10));
+      d.price = eff;
+      const inputEl = root.querySelector("#compose-paid-price");
+      if (inputEl) inputEl.value = eff;
+      root.querySelectorAll(".hw-price-presets [data-preset-price]").forEach((btn) => {
+        btn.classList.toggle("is-active", Number(btn.getAttribute("data-preset-price")) === eff);
+      });
+      updateDividerTextInEditor(eff);
+      updatePaywallSummary();
+      saveComposeDraft();
+    }
+
+    function updatePaywallSummary() {
+      const box = root.querySelector("#compose-paywall-summary");
+      if (!box) return;
+      const isPaid = d.publishMode === "paid";
+      if (!isPaid) {
+        box.style.display = "none";
+        return;
+      }
+      box.style.display = "block";
+      const divider = editorEl ? editorEl.querySelector(".hw-paywall-divider") : null;
+      const curPrice = d.price || 10;
+      if (!divider) {
+        box.innerHTML = `<span style="color:#b45309;font-weight:700;">⚠️ 已设为付费专栏（${curPrice}✦），但正文中尚未插入付费分界线！请点击工具栏【🔒 插入付费阅读】。</span>`;
+        return;
+      }
+      let beforeText = "", afterText = "";
+      let found = false;
+      if (editorEl) {
+        Array.from(editorEl.childNodes || editorEl.children || []).forEach((n) => {
+          if (n === divider || (n.contains && n.contains(divider))) {
+            found = true;
+            return;
+          }
+          const txt = (n.innerText || n.textContent || "").trim();
+          if (!found) beforeText += txt;
+          else afterText += txt;
+        });
+      }
+      const hasAfterMedia = divider.parentElement && divider.parentElement.querySelectorAll(".hw-intext-media, .hw-intext-card, img").length > 0;
+      if (!afterText && !hasAfterMedia) {
+        box.innerHTML = `<span style="color:#b45309;font-weight:700;">⚠️ 付费分界线下方尚未填写收费正文！请在分界线后输入付费内容。</span>`;
+      } else {
+        box.innerHTML = `<span style="color:var(--jade);font-weight:750;">🔒 收费设定：<strong>${curPrice}✦</strong> · 试读约 <strong>${beforeText.length}</strong> 字 · 收费核心章节约 <strong>${afterText.length}</strong> 字（80% 收益归作者）</span>`;
+      }
+    }
+
+    function openPaywallModal(onConfirm) {
+      if (!S.openModal) {
+        if (onConfirm) onConfirm(d.price || 10);
+        return;
+      }
+      const curPrice = d.price || 10;
+      S.openModal({
+        title: "插入付费阅读",
+        html: `
+          <div style="padding:10px 4px;font-size:14px;color:var(--ink-body);">
+            <p style="margin:0 0 16px;line-height:1.6;color:var(--ink-muted);">
+              在光标处插入付费截断分界线。<strong>分界线以上为公开免费试读</strong>，<strong>分界线以下为付费解锁的核心内容</strong>。
+            </p>
+            <div style="margin-bottom:18px;">
+              <label for="paywall-modal-price" style="display:block;font-size:13px;font-weight:800;margin-bottom:8px;color:var(--ink-body);">设置付费阅读价格（✦ 积分）：</label>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <input type="number" id="paywall-modal-price" class="hw-input" min="1" max="100" step="1" value="${curPrice}" style="width:80px;padding:6px 10px;font-size:15px;font-weight:800;text-align:center;border-radius:8px;" />
+                <span style="font-size:15px;font-weight:800;color:var(--gold);">✦</span>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  ${[5, 10, 20, 50].map((p) => `
+                    <button type="button" class="hw-price-chip ${curPrice === p ? "is-active" : ""}" data-modal-preset="${p}">
+                      ${p}✦
+                    </button>
+                  `).join("")}
+                </div>
+              </div>
+              <div style="font-size:12px;color:var(--ink-muted);margin-top:8px;">
+                • 价格范围 1–100✦（默认 10✦）<br>
+                • 80% 积分收益实时结算给作者账户<br>
+                • 作者本人随时免费查看与编辑
+              </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px;">
+              <button type="button" class="btn" id="paywall-modal-cancel">取消</button>
+              <button type="button" class="btn btn-primary" id="paywall-modal-confirm" style="font-weight:800;">
+                插入收费分界线
+              </button>
+            </div>
+          </div>
+        `,
+        onMount() {
+          const modalRoot = document.getElementById("hw-active-modal");
+          if (!modalRoot) return;
+          const modalInput = modalRoot.querySelector("#paywall-modal-price");
+          modalRoot.querySelectorAll("[data-modal-preset]").forEach((btn) => {
+            btn.onclick = () => {
+              const val = Number(btn.getAttribute("data-modal-preset"));
+              if (modalInput) modalInput.value = val;
+              modalRoot.querySelectorAll("[data-modal-preset]").forEach((b) => b.classList.remove("is-active"));
+              btn.classList.add("is-active");
+            };
+          });
+          if (modalInput) {
+            modalInput.oninput = () => {
+              const v = Number(modalInput.value);
+              modalRoot.querySelectorAll("[data-modal-preset]").forEach((b) => {
+                b.classList.toggle("is-active", Number(b.getAttribute("data-modal-preset")) === v);
+              });
+            };
+            if (typeof modalInput.focus === "function") modalInput.focus();
+            if (typeof modalInput.select === "function") modalInput.select();
+          }
+          const cancelBtn = modalRoot.querySelector("#paywall-modal-cancel");
+          if (cancelBtn) cancelBtn.onclick = S.closeModal;
+          const confirmBtn = modalRoot.querySelector("#paywall-modal-confirm");
+          if (confirmBtn) {
+            confirmBtn.onclick = () => {
+              const chosen = modalInput ? parseInt(modalInput.value, 10) : curPrice;
+              const eff = Math.max(1, Math.min(100, isNaN(chosen) ? 10 : chosen));
+              S.closeModal();
+              if (onConfirm) onConfirm(eff);
+            };
+          }
+        }
+      });
+    }
+
     const modeDropdown = root.querySelector("#compose-mode-dropdown");
     const paywallBtn = root.querySelector("#tb-insert-paywall");
     modeDropdown.onchange = () => {
       d.publishMode = modeDropdown.value;
+      const priceBox = root.querySelector("#compose-paid-price-box");
       if (d.publishMode.startsWith("bounty_")) {
         d.category = "tuning";
+        d.price = 0;
+        if (priceBox) priceBox.style.display = "none";
         root.querySelectorAll("[data-compose-cat]").forEach((b) => {
           b.classList.toggle("is-active", b.getAttribute("data-compose-cat") === "tuning");
         });
-      }
-      if (d.publishMode === "paid_10") {
-        if (paywallBtn) paywallBtn.style.display = "inline-flex";
-        toast("💡 已开启付费专栏模式！请在编辑器中点击【🔒 插入付费点】划定试读截断线。");
+        const existing = editorEl.querySelector(".hw-paywall-divider");
+        if (existing) existing.remove();
+      } else if (d.publishMode === "paid") {
+        if (!d.price || d.price <= 0) d.price = 10;
+        if (priceBox) priceBox.style.display = "flex";
+        setDraftPrice(d.price);
+        const existing = editorEl.querySelector(".hw-paywall-divider");
+        if (!existing) {
+          saveEditorSelection();
+          restoreEditorSelection();
+          insertHtmlAtCaret(buildPaywallDividerHtml(d.price));
+          toast("💡 已开启付费专栏模式！已在光标处插入付费截断线，可在下方调整价格。");
+        }
       } else {
-        if (paywallBtn) paywallBtn.style.display = "none";
-        const existingDivider = editorEl.querySelector(".hw-paywall-divider");
-        if (existingDivider) existingDivider.remove();
+        // free
+        d.price = 0;
+        if (priceBox) priceBox.style.display = "none";
+        const existing = editorEl.querySelector(".hw-paywall-divider");
+        if (existing) existing.remove();
+        toast("✨ 已切换为公开免费帖");
       }
+      updatePaywallSummary();
+      saveComposeDraft();
     };
 
     if (paywallBtn) {
       paywallBtn.onclick = () => {
         saveEditorSelection();
-        const existing = editorEl.querySelector(".hw-paywall-divider");
-        if (existing) {
-          existing.remove();
-        }
-        restoreEditorSelection();
-        insertHtmlAtCaret(buildPaywallDividerHtml());
-        toast("🔒 已在当前光标位置插入付费截断线（此线以下内容需付费解锁）！");
+        openPaywallModal((price) => {
+          d.publishMode = "paid";
+          d.price = price;
+          const modeEl = root.querySelector("#compose-mode-dropdown");
+          if (modeEl) modeEl.value = "paid";
+          const priceBox = root.querySelector("#compose-paid-price-box");
+          if (priceBox) priceBox.style.display = "flex";
+          const priceInput = root.querySelector("#compose-paid-price");
+          if (priceInput) priceInput.value = price;
+          root.querySelectorAll(".hw-price-presets [data-preset-price]").forEach((btn) => {
+            btn.classList.toggle("is-active", Number(btn.getAttribute("data-preset-price")) === price);
+          });
+
+          const existing = editorEl.querySelector(".hw-paywall-divider");
+          if (existing) existing.remove();
+          restoreEditorSelection();
+          insertHtmlAtCaret(buildPaywallDividerHtml(price));
+          updatePaywallSummary();
+          saveComposeDraft();
+          toast(`🔒 已插入付费阅读分界线（定价 ${price}✦）！此线以下内容需付费解锁。`);
+        });
       };
     }
+
+    const pInput = root.querySelector("#compose-paid-price");
+    if (pInput) {
+      pInput.oninput = () => {
+        const v = parseInt(pInput.value, 10);
+        if (!isNaN(v)) {
+          setDraftPrice(v);
+        }
+      };
+      pInput.onchange = () => {
+        const v = parseInt(pInput.value, 10);
+        const eff = Math.max(1, Math.min(100, isNaN(v) ? 10 : v));
+        pInput.value = eff;
+        setDraftPrice(eff);
+      };
+    }
+
+    root.querySelectorAll(".hw-price-presets [data-preset-price]").forEach((btn) => {
+      btn.onclick = () => {
+        const v = Number(btn.getAttribute("data-preset-price"));
+        setDraftPrice(v);
+      };
+    });
+
+    const freeBtn = root.querySelector("#compose-btn-switch-free");
+    if (freeBtn) {
+      freeBtn.onclick = () => {
+        d.publishMode = "free";
+        d.price = 0;
+        const modeEl = root.querySelector("#compose-mode-dropdown");
+        if (modeEl) modeEl.value = "free";
+        const priceBox = root.querySelector("#compose-paid-price-box");
+        if (priceBox) priceBox.style.display = "none";
+        const existing = editorEl.querySelector(".hw-paywall-divider");
+        if (existing) existing.remove();
+        updatePaywallSummary();
+        saveComposeDraft();
+        toast("✨ 已切换为公开免费帖");
+      };
+    }
+
+    updatePaywallSummary();
 
     root.querySelectorAll("[data-cmd]").forEach((btn) => {
       btn.onclick = (e) => {
@@ -1379,15 +1634,23 @@
       }
 
       const bounty = d.publishMode === "bounty_10" ? 10 : d.publishMode === "bounty_20" ? 20 : 0;
-      const price = d.publishMode === "paid_10" ? 10 : 0;
+      const isPaidMode = d.publishMode === "paid";
+      const price = isPaidMode ? (Number(d.price) || 10) : 0;
 
       let summaryHtml = cleanHtml;
       let lockedHtml = cleanHtml;
 
       if (price > 0) {
+        if (isNaN(price) || price < 1 || price > 100 || !Number.isInteger(price)) {
+          toast("付费阅读价格必须为 1–100✦ 之间的整数");
+          const pEl = root.querySelector("#compose-paid-price");
+          if (pEl) pEl.focus();
+          return;
+        }
+
         const dividerInClone = clone.querySelector(".hw-paywall-divider");
         if (!dividerInClone) {
-          toast("您已开启付费专栏模式，请先点击上方工具栏【🔒 插入付费点】以划定付费线！");
+          toast("您已开启付费专栏模式，正文中缺少付费分界线！请点击工具栏【🔒 插入付费阅读】以划定付费线。");
           if (paywallBtn) {
             paywallBtn.focus();
           }
@@ -1395,16 +1658,32 @@
         }
 
         const beforeWrap = document.createElement("div");
+        const afterWrap = document.createElement("div");
         let foundDivider = false;
         Array.from(clone.childNodes).forEach((child) => {
           if (child === dividerInClone || (child.contains && child.contains(dividerInClone))) {
             foundDivider = true;
             return;
           }
+          const clonePiece = (child && typeof child.cloneNode === "function")
+            ? child.cloneNode(true)
+            : ((typeof document !== "undefined" && typeof document.createTextNode === "function")
+                ? document.createTextNode(typeof child === "string" ? child : (child.textContent || ""))
+                : child);
           if (!foundDivider) {
-            beforeWrap.appendChild(child.cloneNode(true));
+            beforeWrap.appendChild(clonePiece);
+          } else {
+            afterWrap.appendChild(clonePiece);
           }
         });
+
+        const afterText = stripHtmlToSnippet(afterWrap.innerHTML, 9999).trim();
+        const hasAfterMedia = afterWrap.querySelectorAll("img, .hw-intext-media, .hw-intext-card").length > 0;
+        if (afterText.length < 4 && !hasAfterMedia) {
+          toast("付费分界线下方缺少收费正文，请在分界线后输入付费内容后再发布！");
+          editorEl.focus();
+          return;
+        }
 
         summaryHtml = beforeWrap.innerHTML.trim() || cleanHtml;
         lockedHtml = cleanHtml;
@@ -2076,13 +2355,13 @@
           : `
             <div class="hw-locked-gate-box" style="padding:28px 24px;margin-top:20px;text-align:center;">
               <div style="font-weight:850;font-size:17px;color:var(--gold);margin-bottom:8px;">
-                🔒 此处以下为 10✦ 付费专属核心章节
+                🔒 此处以下为 ${topic.price || 10}✦ 付费专属核心章节
               </div>
               <p style="margin:0 0 16px;font-size:13px;color:var(--ink-muted);">
-                支付 10✦ 积分解锁后续全文（包含核心生图控制词与防翻车交付细节，80% 收益实时转入作者 @${esc(topic.authorName)} 账户）
+                支付 ${topic.price || 10}✦ 积分解锁后续全文（包含核心生图控制词与防翻车交付细节，80% 收益实时转入作者 @${esc(topic.authorName)} 账户）
               </p>
               <button type="button" class="btn btn-primary" id="topic-btn-unlock" style="padding:10px 28px;font-size:14.5px;font-weight:800;border-radius:10px;">
-                🔓 立即使用 10✦ 积分解锁全文
+                🔓 立即使用 ${topic.price || 10}✦ 积分解锁全文
               </button>
             </div>
           `
