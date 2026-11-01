@@ -1772,6 +1772,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # 3. 'library' scope: personal library read endpoints and collection toggle
         if "library" in scopes:
             if method == "GET":
+                if req_path.startswith("/api/resources/"):
+                    return
                 if req_path in ("/studio/api/library", "/api/skill/library", "/api/library/assets"):
                     return
                 if re.fullmatch(r"^/(?:studio/api|api/skill)/assets/[^/]+/content$", req_path):
@@ -1948,6 +1950,20 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         if req_path == "/api/health":
             self._send_json({"ok": True, "version": "2.0.0", "db": True})
+            return
+
+        # Single Resource Detail (/api/resources/<code>)
+        if req_path.startswith("/api/resources/"):
+            code = unquote(req_path[len("/api/resources/"):].strip())
+            from . import resource_registry
+            user = self._current_user(required=False)
+            res = resource_registry.resolve(self.db.get_conn(), code, viewer=user, purpose="view")
+            if not res:
+                self._send_json({"ok": False, "error": f"资源不存在：{code}", "code": "resource_not_found"}, status=404)
+                return
+            client_dict = resource_registry.to_client_dict(res)
+            resp = {"ok": True, "resource": client_dict, **client_dict}
+            self._send_json(resp)
             return
 
         # Core Boot & Public Counts

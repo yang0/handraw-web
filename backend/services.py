@@ -20,6 +20,7 @@ logger = logging.getLogger("backend.services")
 from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
 from .db import Database, local_today_str, utc_now_iso
 from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
+from .runtime_policy import sanitize_media_url
 from .security import (
     generate_api_key,
     generate_session_token,
@@ -748,12 +749,26 @@ def check_text_has_secret(
     text: str,
     conn: sqlite3.Connection | None = None,
     preloaded: tuple[str, list[str], set[str]] | None = None,
+    extra_secrets: list[str] | None = None,
 ) -> bool:
     """Return True if text contains any whole secret or any 20-character window of one.
     Raises SecretsScanError if querying catalog secrets fails (fail-closed, G1).
     """
     if not text or not isinstance(text, str):
         return False
+    if extra_secrets:
+        for es in extra_secrets:
+            if not es or not isinstance(es, str):
+                continue
+            es_clean = es.strip()
+            if not es_clean:
+                continue
+            if es_clean in text:
+                return True
+            if len(es_clean) >= 20:
+                for i in range(len(es_clean) - 19):
+                    if es_clean[i : i + 20] in text:
+                        return True
     if preloaded is not None:
         vhash, secrets, windows = preloaded
     else:
@@ -1751,6 +1766,110 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         else:
             official_overrides.append(ser)
 
+    my_resources: list[dict[str, Any]] = []
+    pending_resources: list[dict[str, Any]] = []
+    if current_user:
+        uid = int(current_user["id"])
+        my_sub_rows = conn.execute(
+            """
+            SELECT s.target_id, s.kind, s.owner_username, s.status, v.payload_json
+            FROM curation_submissions s
+            JOIN curation_versions v ON v.submission_id = s.id AND v.revision = s.current_revision
+            WHERE s.owner_user_id = ? AND s.status IN ('pending', 'changes_requested') AND s.kind IN ('style', 'layout')
+            ORDER BY s.updated_at DESC
+            """,
+            (uid,),
+        ).fetchall()
+        for sr in my_sub_rows:
+            try:
+                p = json.loads(sr["payload_json"] or "{}")
+            except Exception:
+                p = {}
+            cover = p.get("cover") or p.get("image") or ""
+            imgs = p.get("images") or []
+            if not cover and imgs:
+                f = imgs[0]
+                cover = f.get("url", "") if isinstance(f, dict) else str(f or "")
+            my_resources.append({
+                "id": sr["target_id"],
+                "code": sr["target_id"],
+                "name": p.get("name") or sr["target_id"],
+                "kind": sr["kind"],
+                "sourceType": "pending",
+                "source": "pending",
+                "status": sr["status"],
+                "image": sanitize_media_url(cover),
+                "cover": sanitize_media_url(cover),
+                "description": p.get("description") or "",
+                "definition": p.get("definition") or "",
+                "unlockCost": 0,
+                "author": sr["owner_username"],
+                "authorName": current_user.get("display_name") or sr["owner_username"],
+                "isMine": True,
+                "canUse": True,
+                "access": {
+                    "canRead": True,
+                    "canUse": True,
+                    "hiddenBy": None,
+                },
+            })
+
+        fav_codes = set(collections.get("styles", [])) | set(collections.get("layouts", []))
+        my_codes = {r["code"] for r in my_resources}
+        published_codes = {r["code"] for r in cat_rows}
+        other_pending_codes = list(fav_codes - my_codes - published_codes)
+        if other_pending_codes:
+            placeholders = ",".join("?" for _ in other_pending_codes)
+            other_sub_rows = conn.execute(
+                f"""
+                SELECT s.target_id, s.kind, s.owner_username, s.status, v.payload_json
+                FROM curation_submissions s
+                JOIN curation_versions v ON v.submission_id = s.id AND v.revision = s.current_revision
+                WHERE (s.target_id IN ({placeholders}) OR UPPER(s.target_id) IN ({placeholders}))
+                  AND s.status IN ('pending', 'changes_requested') AND s.kind IN ('style', 'layout')
+                ORDER BY s.updated_at DESC
+                """,
+                (*other_pending_codes, *other_pending_codes),
+            ).fetchall()
+            seen_other = set()
+            for sr in other_sub_rows:
+                tid = sr["target_id"]
+                if tid in seen_other:
+                    continue
+                seen_other.add(tid)
+                try:
+                    p = json.loads(sr["payload_json"] or "{}")
+                except Exception:
+                    p = {}
+                cover = p.get("cover") or p.get("image") or ""
+                imgs = p.get("images") or []
+                if not cover and imgs:
+                    f = imgs[0]
+                    cover = f.get("url", "") if isinstance(f, dict) else str(f or "")
+                pending_resources.append({
+                    "id": tid,
+                    "code": tid,
+                    "name": p.get("name") or tid,
+                    "kind": sr["kind"],
+                    "sourceType": "pending",
+                    "source": "pending",
+                    "status": sr["status"],
+                    "image": sanitize_media_url(cover),
+                    "cover": sanitize_media_url(cover),
+                    "description": p.get("description") or "",
+                    "definition": None,
+                    "unlockCost": 0,
+                    "author": sr["owner_username"],
+                    "authorName": sr["owner_username"],
+                    "isMine": False,
+                    "canUse": True,
+                    "access": {
+                        "canRead": False,
+                        "canUse": True,
+                        "hiddenBy": "pending",
+                    },
+                })
+
     # Forum topics & replies (publicly visible, paid lockedBody masked unless unlocked!)
     replies_by_topic: dict[str, list[dict[str, Any]]] = {}
     reply_filter, reply_ids = _seed_filter("id", "forum_replies")
@@ -2028,6 +2147,8 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         "exclusiveResources": exclusive_resources,
         "communityResources": community_resources,
         "officialOverrides": official_overrides,
+        "myResources": my_resources,
+        "pendingResources": pending_resources,
         "officialPresets": official_presets,
         "assetCounts": asset_counts,
         "assetComments": asset_comments,
@@ -2139,6 +2260,14 @@ def toggle_user_collection(db: Database, user: dict[str, Any], bucket: str, targ
     uid = int(user["id"])
     now = utc_now_iso()
 
+    resource_entry = None
+    if bucket in ("styles", "layouts"):
+        from . import resource_registry
+        resource_entry = resource_registry.resolve(db.get_conn(), tid, viewer=user, purpose="collect")
+        if not resource_entry:
+            raise ServiceError("未找到目标内容", status=404)
+        tid = resource_entry["code"]
+
     # Favouriting a work's discussion topic means favouriting the work, so the
     # square and the forum cannot report different favourite counts.
     if bucket == "topics":
@@ -2164,6 +2293,8 @@ def toggle_user_collection(db: Database, user: dict[str, Any], bucket: str, targ
             elif bucket == "topics":
                 tx.execute("UPDATE forum_topics SET favorites = MAX(0, favorites - 1) WHERE id = ?", (tid,))
         else:
+            if bucket in ("styles", "layouts") and resource_entry and not resource_entry.get("canCollect"):
+                raise ServiceError("该资源暂不支持收藏", status=403)
             tx.execute(
                 "INSERT INTO collections (user_id, bucket, target_id, created_at) VALUES (?, ?, ?, ?)",
                 (uid, bucket, tid, now),
@@ -2602,21 +2733,24 @@ def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, targ
             target = tx.execute("SELECT id, title, author_name, cheers, stamp_counts_json FROM works WHERE id = ?", (tid,)).fetchone()
         else:
             clean_code = tid.strip().upper().lstrip("#")
+            from . import resource_registry
+            cat_res = resource_registry.resolve(tx, clean_code, viewer=user, purpose="stamp")
+            if not cat_res:
+                raise ServiceError("未找到目标内容", status=404)
+            if not cat_res.get("canStamp", True):
+                raise ServiceError("该资源暂不支持盖章", status=403)
+            tid = cat_res["code"]
             target = tx.execute("SELECT code AS id, name AS title, author_name, cheers, stamp_counts_json FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (tid, clean_code)).fetchone()
             if not target:
-                from .resource_discussions import resolve_resource
-                cat_res = resolve_resource(tx, "style", clean_code) or resolve_resource(tx, "layout", clean_code)
-                if cat_res:
-                    is_official_asset = True
-                    tid = clean_code
-                    c_row = tx.execute("SELECT COUNT(*) AS cnt FROM interactions WHERE target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ''", (clean_code, clean_code)).fetchone()
-                    target = {
-                        "id": clean_code,
-                        "title": cat_res.get("name") or clean_code,
-                        "author_name": cat_res.get("author_name") or "官方资源",
-                        "cheers": int(c_row["cnt"] if c_row else 0),
-                        "stamp_counts_json": "{}",
-                    }
+                is_official_asset = True
+                c_row = tx.execute("SELECT COUNT(*) AS cnt FROM interactions WHERE target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ''", (clean_code, clean_code)).fetchone()
+                target = {
+                    "id": clean_code,
+                    "title": cat_res.get("name") or clean_code,
+                    "author_name": cat_res.get("author_name") or cat_res.get("author") or "官方资源",
+                    "cheers": int(c_row["cnt"] if c_row else 0),
+                    "stamp_counts_json": "{}",
+                }
 
         if not target:
             raise ServiceError("未找到目标内容", status=404)
@@ -2708,12 +2842,17 @@ def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, tar
             target = dict(row) if row else None
         elif target_type == "asset":
             clean_code = str(target_id or "").strip().upper().lstrip("#")
-            row = tx.execute("SELECT code AS id, name AS title, author_username, author_name, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (target_id, clean_code)).fetchone()
+            from . import resource_registry
+            cat_res = resource_registry.resolve(tx, clean_code, viewer=user, purpose="tip")
+            if not cat_res:
+                raise ServiceError("目标不存在", status=404)
+            if cat_res.get("source") == "pending" or cat_res.get("status") in ("pending", "changes_requested"):
+                raise ServiceError("未收录资源不接受赞赏", status=400)
+            clean_code = cat_res["code"]
+            row = tx.execute("SELECT code AS id, name AS title, author_username, author_name, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (clean_code, clean_code)).fetchone()
             target = dict(row) if row else None
             if not target:
-                from .resource_discussions import resolve_resource
-                cat_res = resolve_resource(tx, "style", clean_code) or resolve_resource(tx, "layout", clean_code)
-                if cat_res:
+                if cat_res.get("source") in ("official", "override", "exclusive"):
                     is_official = True
                     target = {
                         "id": clean_code,
@@ -4148,31 +4287,37 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 # erroring out of a normal "iterate on my own work" flow.
                 fork_target = ""
 
-        # 1. Verify unlock status and fetch DB blackbox secrets.
+        # 1. Verify unlock status and fetch DB blackbox secrets / pending definitions.
         system_append_list: list[dict[str, str]] = []
+        injected_definitions: list[str] = []
         for code in (style1, style2, layout):
             if not code:
                 continue
-            arow = tx.execute("SELECT * FROM catalog_assets WHERE code = ? AND status = 'published'", (code,)).fetchone()
-            if not arow:
-                if tx.execute("SELECT 1 FROM curation_submissions WHERE target_id=? AND kind IN ('style','layout')",(code,)).fetchone():
-                    raise ServiceError('该资源尚未收录或已下架，暂不能用于生成',status=403,code='asset_not_collected')
+            from . import resource_registry
+            res = resource_registry.resolve(tx, code, viewer=user, purpose="generate")
+            if not res:
                 continue
-            cost = int(arow["unlock_cost"] or 0)
-            if cost > 0 and arow["author_username"] != uname and not is_staff:
-                ul = tx.execute(
-                    "SELECT 1 FROM unlocks WHERE user_id = ? AND target_type = 'asset' AND target_id = ? AND status = 'settled'",
-                    (uid, code),
-                ).fetchone()
-                if not ul:
-                    raise ServiceError(f"尚未解锁付费编号 {code}《{arow['name']}》，请先解锁后再调用", status=403, code="asset_locked")
-            secret = (arow["secret_blackbox_prompt"] or "").strip()
-            if secret:
-                # Give the model the style's written guidance, not an internal
-                # catalogue code: "【云端黑盒注入 FA-001】" leaked implementation
-                # vocabulary into the picture and read as noise.
-                injected_notes.append(secret)
-                system_append_list.append({"type": "asset_instructions", "code": code})
+            if not res.get("canUse"):
+                hidden_by = (res.get("access") or {}).get("hiddenBy")
+                if hidden_by == "withdrawn":
+                    raise ServiceError("该资源已下架，暂不能用于生成", status=403, code="asset_withdrawn")
+                elif hidden_by == "locked":
+                    raise ServiceError(f"尚未解锁付费编号 {code}《{res['name']}》，请先解锁后再调用", status=403, code="asset_locked")
+                else:
+                    raise ServiceError("该资源暂不能用于生成", status=403, code="asset_unavailable")
+
+            inject = (res.get("access") or {}).get("inject")
+            if inject == "blackbox":
+                secret = (res.get("secret_blackbox_prompt") or "").strip()
+                if secret:
+                    injected_notes.append(secret)
+                    system_append_list.append({"type": "asset_instructions", "code": code})
+            elif inject == "definition":
+                raw_def = (res.get("_raw_definition") or "").strip()
+                if raw_def:
+                    injected_notes.append(raw_def)
+                    system_append_list.append({"type": "asset_instructions", "code": code})
+                    injected_definitions.append(raw_def)
 
         # Length check before charging (X6)
         if recipe_id:
@@ -4209,11 +4354,11 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             )
             free_remaining = 0
 
-        # Check if client-supplied prompt contains blackbox secrets (G9, H6)
+        # Check if client-supplied prompt contains blackbox secrets or injected definitions (G9, H6, §1a-2)
         client_scan_failed = False
         client_prompt_has_secret = False
         try:
-            if raw_prompt and check_text_has_secret(raw_prompt, tx):
+            if raw_prompt and check_text_has_secret(raw_prompt, tx, extra_secrets=injected_definitions):
                 client_prompt_has_secret = True
         except Exception:
             client_scan_failed = True
@@ -4347,7 +4492,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 final_masked = 1
             elif skill_visible_prompt_text:
                 try:
-                    if check_text_has_secret(skill_visible_prompt_text, tx):
+                    if check_text_has_secret(skill_visible_prompt_text, tx, extra_secrets=injected_definitions):
                         final_vis_prompt = ""
                         final_masked = 1
                     else:
@@ -4644,6 +4789,30 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
                     }
                 )
 
+    # Also expose collected pending submission resources
+    handled_codes = {r["ref"] for r in collected} | {r["ref"] for r in owned} | {r["ref"] for r in official}
+    remaining_favs = fav_codes - handled_codes
+    if remaining_favs:
+        from . import resource_registry
+        for fcode in sorted(remaining_favs):
+            res = resource_registry.resolve(conn, fcode, viewer=user, purpose="view")
+            if res and res.get("source") == "pending":
+                collected.append(
+                    {
+                        "id": f"asset:{res['code']}",
+                        "ref": res["code"],
+                        "title": res["name"],
+                        "name": res["name"],
+                        "kind": res["kind"],
+                        "version": "1.0.0",
+                        "collected": True,
+                        "unlocked": False,
+                        "source": "pending",
+                        "author": {"username": res.get("owner", {}).get("username", ""), "name": res.get("owner", {}).get("name", "")},
+                        "content_url": None,
+                    }
+                )
+
     return {"collected": collected, "owned": owned, "official": official}
 
 
@@ -4652,46 +4821,41 @@ def build_skill_asset_content(db: Database, user: dict[str, Any], code: str) -> 
     if not is_demo_mode() and clean_code in seed_ids("assets"):
         raise ServiceError(f"未找到资源编号：{clean_code}", status=404, code="seed_content_hidden")
     conn = db.get_conn()
-    uid = int(user["id"])
+    from . import resource_registry
+    res = resource_registry.resolve(conn, clean_code, viewer=user, purpose="view")
+    if not res:
+        raise ServiceError(f"未找到资源编号：{clean_code}", status=404)
 
-    row = conn.execute("SELECT * FROM catalog_assets WHERE code = ? AND status = 'published'", (clean_code,)).fetchone()
-    if row:
-        if row["source_type"] == "exclusive":
-            raise ServiceError("官网在线独占黑盒资产仅支持云端调用，不支持导出明文定义", status=403)
-        cost = int(row["unlock_cost"] or 0)
-        if cost > 0 and row["author_username"] != user["username"] and user.get("role") not in ("admin", "reviewer"):
-            ul = conn.execute(
-                "SELECT 1 FROM unlocks WHERE user_id = ? AND target_type = 'asset' AND target_id = ? AND status = 'settled'",
-                (uid, clean_code),
-            ).fetchone()
-            if not ul:
-                raise ServiceError("该共创资产尚未解锁", status=403)
-        resource = {
-            "kind": row["kind"],
-            "name": f"{clean_code} {row['name']}",
-            "prompt_zh": row["definition"] or row["description"],
-            "prompt_en": row["prompt_en"] or f"Handraw {row['kind']} {clean_code}: {row['name']}",
-            "license": "Handraw Community Co-Creation License 1.0",
-            "version": "1.0.0",
-            "author": {"username": row["author_username"], "name": row["author_name"]},
-        }
-    else:
-        cat_file = CONTENT_DIR / "catalog.json"
-        found = None
-        if cat_file.is_file():
-            for it in json.loads(cat_file.read_text(encoding="utf-8")).get("resources", []):
-                if str(it.get("id")).upper() == clean_code and it.get("kind") in ("style", "layout"):
-                    found = it
-                    break
-        if not found:
-            raise ServiceError(f"未找到资源编号：{clean_code}", status=404)
-        resource = {
-            "kind": found["kind"],
-            "name": f"{clean_code} {found.get('name', clean_code)}",
-            "prompt_zh": found.get("definition") or found.get("description") or clean_code,
-            "prompt_en": f"Handraw official {found['kind']} {clean_code}: {found.get('name', clean_code)}",
-            "license": "Handraw Official Reference License 1.0",
-            "version": "1.0.0",
+    hidden_by = (res.get("access") or {}).get("hiddenBy")
+    if hidden_by == "blackbox":
+        raise ServiceError("官网在线独占黑盒资产仅支持云端调用，不支持导出明文定义", status=403)
+    elif hidden_by == "locked":
+        raise ServiceError("该共创资产尚未解锁", status=403)
+    elif hidden_by == "pending":
+        raise ServiceError("该资源尚未收录，暂不支持导出明文定义", status=403)
+    elif hidden_by == "withdrawn":
+        raise ServiceError("该资源已下架", status=403)
+
+    if not (res.get("access") or {}).get("canRead"):
+        raise ServiceError("暂无权查看此资源定义", status=403)
+
+    license_name = (
+        "Handraw Community Co-Creation License 1.0"
+        if res.get("source") in ("community", "pending")
+        else "Handraw Official Reference License 1.0"
+    )
+    resource: dict[str, Any] = {
+        "kind": res["kind"],
+        "name": f"{clean_code} {res['name']}",
+        "prompt_zh": res["definition"] or res.get("description") or clean_code,
+        "prompt_en": f"Handraw {res['kind']} {clean_code}: {res['name']}",
+        "license": license_name,
+        "version": "1.0.0",
+    }
+    if res.get("author"):
+        resource["author"] = {
+            "username": res.get("author"),
+            "name": res.get("authorName") or res.get("author"),
         }
 
     canonical = json.dumps(resource, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
