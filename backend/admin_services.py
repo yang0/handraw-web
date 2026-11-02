@@ -2953,6 +2953,9 @@ def admin_update_settings(
             else:
                 merged[k] = v
 
+        if sec == "economy":
+            merged["topic_publish_credits"] = 0
+
         tx.execute(
             """
             INSERT INTO site_settings (key, value_json, updated_by, updated_at)

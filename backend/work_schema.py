@@ -729,9 +729,34 @@ def deduplicate_generation_history(conn: sqlite3.Connection, user_id: int | None
     return count_deleted
 
 
+ZERO_TOPIC_PUBLISH_CREDITS_SQL = """
+-- Migration 075: zero out topic_publish_credits in site_settings
+UPDATE site_settings
+SET value_json = json_set(value_json, '$.topic_publish_credits', 0)
+WHERE key = 'economy';
+"""
+
+
+def zero_topic_publish_credits_hook(conn: sqlite3.Connection) -> None:
+    """Ensure site_settings.economy has topic_publish_credits set to 0 idempotently."""
+    row = conn.execute("SELECT value_json FROM site_settings WHERE key = 'economy'").fetchone()
+    if row and row["value_json"]:
+        try:
+            data = json.loads(row["value_json"])
+            if isinstance(data, dict) and data.get("topic_publish_credits") != 0:
+                data["topic_publish_credits"] = 0
+                conn.execute(
+                    "UPDATE site_settings SET value_json = ? WHERE key = 'economy'",
+                    (json.dumps(data, ensure_ascii=False),),
+                )
+        except Exception:
+            pass
+
+
 WORK_POST_MIGRATION_HOOKS: dict[int, Any] = {
     66: normalize_historical_asset_uids,
     69: deduplicate_generation_history,
+    75: zero_topic_publish_credits_hook,
 }
 
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
@@ -761,4 +786,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (69, "069_deduplicate_generation_history", DEDUPLICATE_GENERATION_HISTORY_SQL),
     (73, "073_reset_works_price_to_zero", RESET_WORKS_PRICE_SQL),
     (74, "074_generation_social_and_fork", GENERATION_SOCIAL_SQL),
+    (75, "075_zero_topic_publish_credits", ZERO_TOPIC_PUBLISH_CREDITS_SQL),
 ]

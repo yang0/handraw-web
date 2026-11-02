@@ -48,7 +48,7 @@ DEFAULT_SITE_SETTINGS: dict[str, object] = {
         "pioneer_work_threshold": 3,
         "asset_publish_credits": 15,
         "honor_upgrade_credits": 10,
-        "topic_publish_credits": 5,
+        "topic_publish_credits": 0,
         "reply_publish_credits": 2,
         "reply_daily_cap": 5,
         "invite_inviter_credits": 15,
