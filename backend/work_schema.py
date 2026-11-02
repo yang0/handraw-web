@@ -459,6 +459,10 @@ USER_LIBRARY_NORMALIZE_ASSET_UID_SQL = """
 SELECT 1;
 """
 
+GENERATION_SUBJECT_COLUMN_SQL = """
+ALTER TABLE studio_generations ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+"""
+
 
 def normalize_historical_asset_uids(conn: sqlite3.Connection) -> None:
     """Normalize user_uploads asset_uid values to canonical lowercase 8-4-4-4-12 UUID format.
@@ -564,4 +568,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (64, "064_user_library_sync", USER_LIBRARY_SYNC_SQL),
     (65, "065_user_library_sha256_exclude_forum", USER_LIBRARY_SHA256_EXCLUDE_FORUM_SQL),
     (66, "066_user_library_normalize_asset_uid", USER_LIBRARY_NORMALIZE_ASSET_UID_SQL),
+    (67, "067_generation_subject_column", GENERATION_SUBJECT_COLUMN_SQL),
 ]

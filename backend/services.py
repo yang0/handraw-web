@@ -3660,6 +3660,122 @@ def sanitize_client_error_msg(error_msg: Any, status: Any = None) -> str:
     return "云端生成失败，请稍后重试"
 
 
+def serialize_public_generation_history(
+    row: sqlite3.Row | dict[str, Any],
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    row_keys = row.keys() if hasattr(row, "keys") else row
+    raw_id = str(row["id"])
+    author = str(row["username"] or "") if "username" in row_keys else ""
+    created_at = str(row["created_at"]) if "created_at" in row_keys else ""
+
+    raw_items_str = row["items_json"] if "items_json" in row_keys else "[]"
+    try:
+        raw_items = json.loads(raw_items_str or "[]")
+    except Exception:
+        raw_items = []
+    images: list[str] = []
+    for it in (raw_items if isinstance(raw_items, list) else []):
+        if isinstance(it, str) and it.strip():
+            images.append(it.strip())
+        elif isinstance(it, dict) and it.get("imageUrl"):
+            images.append(str(it["imageUrl"]).strip())
+
+    topic = ""
+    if "subject" in row_keys and row["subject"]:
+        topic = str(row["subject"]).strip()
+    elif "recipe_id" in row_keys and row["recipe_id"] and conn:
+        try:
+            rcp = conn.execute("SELECT subject FROM studio_recipes WHERE id = ?", (row["recipe_id"],)).fetchone()
+            if rcp and rcp["subject"]:
+                topic = str(rcp["subject"]).strip()
+        except Exception:
+            pass
+    if not topic:
+        topic = "手绘创作"
+
+    raw_tab = str(row["tab_title"] or "") if "tab_title" in row_keys else ""
+    ratio = raw_tab if re.match(r"^\d+:\d+$", raw_tab) else "3:4"
+    mode = str(row["mode"] or "graphic-text") if "mode" in row_keys else "graphic-text"
+
+    styles = []
+    layouts = []
+    codes = []
+    if "recipe_summary" in row_keys and row["recipe_summary"]:
+        codes.extend([c.strip().upper().lstrip("#") for c in str(row["recipe_summary"]).split() if c.strip()])
+    if "system_append_json" in row_keys and row["system_append_json"]:
+        try:
+            s_data = json.loads(row["system_append_json"])
+            for it in s_data.get("systemAppend", []):
+                c = str(it.get("code") or "").strip().upper().lstrip("#")
+                if c and c not in codes:
+                    codes.append(c)
+        except Exception:
+            pass
+
+    from . import resource_registry
+    seen_codes = set()
+    for c in codes:
+        if c in seen_codes:
+            continue
+        seen_codes.add(c)
+        name = c
+        kind = "style"
+        if conn:
+            res_meta = resource_registry.resolve(conn, c, viewer=None, purpose="view")
+            if res_meta:
+                name = res_meta.get("name") or c
+                kind = res_meta.get("kind") or "style"
+        else:
+            cat = resource_registry.static_catalog().get(c)
+            if cat:
+                name = cat.get("name") or c
+                kind = cat.get("kind") or "style"
+        entry = {"code": c, "name": name}
+        if kind == "layout" or c.startswith(("SC-", "IG-", "SB-", "IP-", "EC-", "LAY-", "USR-L")):
+            layouts.append(entry)
+        else:
+            styles.append(entry)
+
+    return {
+        "id": raw_id,
+        "author": author,
+        "createdAt": format_short_time(created_at) if created_at else "",
+        "created_at": created_at,
+        "images": images,
+        "topic": topic,
+        "title": topic,
+        "ratio": ratio,
+        "mode": mode,
+        "styles": styles,
+        "layouts": layouts,
+        "imageCount": len(images),
+    }
+
+
+def get_public_generation_history(
+    db: Database,
+    history_id: str = "",
+    *,
+    limit: int = 40,
+) -> dict[str, Any] | list[dict[str, Any]] | None:
+    conn = db.get_conn()
+    if history_id:
+        row = conn.execute(
+            "SELECT * FROM studio_generations WHERE id = ? AND COALESCE(deleted_at, '') = ''",
+            (history_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return serialize_public_generation_history(row, conn)
+    history_filter, history_ids = _seed_filter("id", "generations")
+    rows = conn.execute(
+        f"SELECT * FROM studio_generations WHERE COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT ?",
+        (*history_ids, max(1, min(100, limit))),
+    ).fetchall()
+    return [serialize_public_generation_history(r, conn) for r in rows]
+
+
 def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
     conn = db.get_conn()
     presets = [
@@ -3715,15 +3831,55 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
         f"SELECT * FROM studio_generations WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT 40",
         (uid, *history_ids),
     ).fetchall():
+        r_keys = r.keys() if hasattr(r, "keys") else r
         vis_prompt, was_masked = get_generation_visible_prompt(r)
+
+        # Check if generation used paid resources: if so, never return full prompt to client
+        is_paid = False
+        if ("cost_type" in r_keys and r["cost_type"] == "credits") or ("credits_spent" in r_keys and int(r["credits_spent"] or 0) > 0):
+            is_paid = True
+        else:
+            codes_to_check = set()
+            if "recipe_summary" in r_keys and r["recipe_summary"]:
+                for c in str(r["recipe_summary"]).split():
+                    c_clean = c.strip().upper().lstrip("#")
+                    if c_clean:
+                        codes_to_check.add(c_clean)
+            if "system_append_json" in r_keys and r["system_append_json"]:
+                try:
+                    s_data = json.loads(r["system_append_json"])
+                    for item in s_data.get("systemAppend", []):
+                        c_clean = str(item.get("code") or "").strip().upper().lstrip("#")
+                        if c_clean:
+                            codes_to_check.add(c_clean)
+                except Exception:
+                    pass
+            for c_clean in codes_to_check:
+                ca = conn.execute("SELECT unlock_cost, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (c_clean, c_clean)).fetchone()
+                if ca and (int(ca["unlock_cost"] or 0) > 0 or ca["source_type"] == "exclusive"):
+                    is_paid = True
+                    break
+
+        if is_paid:
+            vis_prompt = ""
+            was_masked = True
+
         raw_items = json.loads(r["items_json"] or "[]")
         if raw_items and isinstance(raw_items[0], str):
-            items = [{"id": f"{r['id']}_{idx}", "title": r["tab_title"] or "生成项", "imageUrl": u, "prompt": vis_prompt} for idx, u in enumerate(raw_items)]
-            if was_masked:
-                for it in items:
-                    it["promptMasked"] = True
+            items = [{"id": f"{r['id']}_{idx}", "title": r["tab_title"] or "生成项", "imageUrl": u} for idx, u in enumerate(raw_items)]
         else:
-            items = sanitize_items_json_for_client(raw_items, vis_prompt, was_masked)
+            items = []
+            for idx, it in enumerate(raw_items if isinstance(raw_items, list) else []):
+                if isinstance(it, dict):
+                    items.append({
+                        "id": it.get("id") or f"{r['id']}_{idx}",
+                        "title": it.get("title") or r["tab_title"] or "生成项",
+                        "imageUrl": it.get("imageUrl") or "",
+                        "ratio": it.get("ratio") or "3:4",
+                    })
+                elif isinstance(it, str):
+                    items.append({"id": f"{r['id']}_{idx}", "title": r["tab_title"] or "生成项", "imageUrl": it, "ratio": "3:4"})
+
         snap = None
         if r["system_append_json"]:
             try:
@@ -3731,15 +3887,22 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
                 snap = s_data.get("recipeSnapshot")
             except Exception:
                 pass
-        if snap:
-            for it in items:
-                if isinstance(it, dict) and "recipeSnapshot" not in it:
-                    it["recipeSnapshot"] = snap
+
+        user_topic = ""
+        if "subject" in r_keys and r["subject"]:
+            user_topic = str(r["subject"]).strip()
+        elif "recipe_id" in r_keys and r["recipe_id"]:
+            rcp = conn.execute("SELECT subject FROM studio_recipes WHERE id = ?", (r["recipe_id"],)).fetchone()
+            if rcp and rcp["subject"]:
+                user_topic = str(rcp["subject"]).strip()
+        if not user_topic:
+            user_topic = "手绘创作"
 
         hist_entry = {
             "id": r["id"],
             "createdAt": format_short_time(r["created_at"]),
-            "tabTitle": r["tab_title"],
+            "tabTitle": r["tab_title"] or user_topic,
+            "topic": user_topic,
             "mode": r["mode"],
             "modeLabel": r["mode_label"],
             "kind": r["kind"],
@@ -3752,6 +3915,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "taskId": r["task_id"] or "",
             "requestId": r["request_id"] or "",
             "error": sanitize_client_error_msg(r["error_msg"], r["status"]),
+            "recipeId": r["recipe_id"] if "recipe_id" in r_keys else "",
         }
         if snap:
             hist_entry["recipeSnapshot"] = snap
@@ -3768,7 +3932,6 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
                 "createdAt": r["created_at"],
                 "mode": r["mode"],
                 "kind": r["kind"],
-                "prompt": vis_prompt,
                 "reservationDate": r["reservation_date"] or "",
             }
             if was_masked:
@@ -4091,6 +4254,32 @@ def _cloud_generation_result(
     max_free = max(0, int(settings.get("economy", {}).get("daily_free_quota", 3)))
     used = int(wallet["free_quota_used"]) if (wallet and wallet["free_quota_date"] == today) else 0
     vis_prompt, was_masked = get_generation_visible_prompt(row)
+    row_keys = row.keys() if hasattr(row, "keys") else row
+    is_paid = ("cost_type" in row_keys and row["cost_type"] == "credits") or ("credits_spent" in row_keys and int(row["credits_spent"] or 0) > 0)
+    if not is_paid:
+        codes_to_check = set()
+        if "recipe_summary" in row_keys and row["recipe_summary"]:
+            for c in str(row["recipe_summary"]).split():
+                c_clean = c.strip().upper().lstrip("#")
+                if c_clean:
+                    codes_to_check.add(c_clean)
+        if "system_append_json" in row_keys and row["system_append_json"]:
+            try:
+                s_data = json.loads(row["system_append_json"])
+                for item in s_data.get("systemAppend", []):
+                    c_clean = str(item.get("code") or "").strip().upper().lstrip("#")
+                    if c_clean:
+                        codes_to_check.add(c_clean)
+            except Exception:
+                pass
+        for c_clean in codes_to_check:
+            ca = conn.execute("SELECT unlock_cost, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (c_clean, c_clean)).fetchone()
+            if ca and (int(ca["unlock_cost"] or 0) > 0 or ca["source_type"] == "exclusive"):
+                is_paid = True
+                break
+    if is_paid:
+        vis_prompt = ""
+        was_masked = True
     res = {
         "genId": row["id"],
         "requestId": row["request_id"] or "",
@@ -4123,7 +4312,7 @@ def consume_daily_usage(db: Database, user_id: int | str, scope: str, limit: int
     today = local_today_str()
     with db.transaction() as tx:
         row = tx.execute(
-            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND (usage_date = ? OR usage_date = CURRENT_DATE)",
+            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND usage_date = ?",
             (uid, clean_scope, today),
         ).fetchone()
         current = int(row["count"]) if row else 0
@@ -4265,10 +4454,85 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             body["prompt"] = str(r_row["subject"] or "").strip()
             body.pop("promptFromSkill", None)
 
+    history_id = str(body.get("historyId") or body.get("generationId") or "").strip()
+    if history_id and not recipe_id:
+        h_row = db.get_conn().execute(
+            "SELECT * FROM studio_generations WHERE id = ? AND user_id = ? AND COALESCE(deleted_at, '') = ''",
+            (history_id, uid),
+        ).fetchone()
+        if not h_row:
+            raise ServiceError("历史生成记录不存在或无权访问", status=404, code="history_not_found")
+        h_keys = h_row.keys() if hasattr(h_row, "keys") else h_row
+        if not body.get("prompt") and "subject" in h_keys and h_row["subject"]:
+            body["prompt"] = str(h_row["subject"])
+        if not body.get("style1") or not body.get("layout"):
+            h_snap = None
+            if "system_append_json" in h_keys and h_row["system_append_json"]:
+                try:
+                    s_data = json.loads(h_row["system_append_json"])
+                    h_snap = s_data.get("recipeSnapshot")
+                except Exception:
+                    pass
+            if isinstance(h_snap, dict):
+                if not body.get("style1") and h_snap.get("style1"):
+                    body["style1"] = str(h_snap["style1"])
+                if not body.get("style2") and h_snap.get("style2"):
+                    body["style2"] = str(h_snap["style2"])
+                if not body.get("layout") and h_snap.get("layout"):
+                    body["layout"] = str(h_snap["layout"])
+            if not body.get("style1") or not body.get("layout"):
+                summary_codes = [c.strip().upper().lstrip("#") for c in str(h_row["recipe_summary"] or "").split() if c.strip()]
+                for sc in summary_codes:
+                    if sc.startswith(("SC-", "IG-", "SB-", "IP-", "EC-", "LAY-", "USR-L")):
+                        if not body.get("layout"):
+                            body["layout"] = sc
+                    else:
+                        if not body.get("style1"):
+                            body["style1"] = sc
+                        elif not body.get("style2") and sc != body.get("style1"):
+                            body["style2"] = sc
+        if not body.get("ratio") and "tab_title" in h_keys and h_row["tab_title"] and re.match(r"^\d+:\d+$", str(h_row["tab_title"])):
+            body["ratio"] = h_row["tab_title"]
+        if not body.get("mode") and "mode" in h_keys and h_row["mode"]:
+            body["mode"] = h_row["mode"]
+
     raw_prompt = str(body.get("prompt") or "").strip()
-    style1 = str(body.get("style1") or "").strip().upper()
-    style2 = str(body.get("style2") or "").strip().upper()
-    layout = str(body.get("layout") or "").strip().upper()
+    style1 = str(body.get("style1") or "").strip().upper().lstrip("#")
+    style2 = str(body.get("style2") or "").strip().upper().lstrip("#")
+    layout = str(body.get("layout") or "").strip().upper().lstrip("#")
+
+    # If codes were embedded in raw_prompt:
+    if not style1:
+        m_s = re.search(r"(?:【画风】|画风|Style|角色风格)[：:\s]*#?([A-Za-z0-9_-]+)", raw_prompt)
+        if m_s:
+            style1 = m_s.group(1).strip().upper().lstrip("#")
+    if not style2:
+        m_s2 = re.search(r"(?:【场景风格】|场景风格|Scene Style)[：:\s]*#?([A-Za-z0-9_-]+)", raw_prompt)
+        if m_s2:
+            style2 = m_s2.group(1).strip().upper().lstrip("#")
+    if not layout:
+        m_l = re.search(r"(?:【图型】|图型|Layout)[：:\s]*#?([A-Za-z0-9_-]+)", raw_prompt)
+        if m_l:
+            layout = m_l.group(1).strip().upper().lstrip("#")
+
+    user_subject = str(body.get("subject") or body.get("topic") or body.get("theme") or "").strip()
+    if not user_subject:
+        m_subj = re.search(r"【(?:核心画面与文案主题|文章标题或导语|主题)】[：:\s]*([^\n]+)", raw_prompt)
+        if m_subj:
+            user_subject = m_subj.group(1).strip()
+        else:
+            m_subj2 = re.search(r"(?:^|，|；|\n)主题[：:\s]*([^，；\n|]+)", raw_prompt)
+            if m_subj2:
+                user_subject = m_subj2.group(1).strip()
+            else:
+                m_subj3 = re.search(r"\[Subject & Copy\]:[ \t]*([^\n]+)", raw_prompt)
+                if m_subj3:
+                    user_subject = m_subj3.group(1).strip()
+    if not user_subject:
+        if raw_prompt and not re.search(r"#\s*[A-Z0-9_-]+", raw_prompt) and "【" not in raw_prompt:
+            user_subject = raw_prompt.strip()
+        else:
+            user_subject = "手绘创作"
     request_id = str(body.get("requestId") or body.get("clientRequestId") or "").strip()
     if len(request_id) > 128:
         raise ServiceError("requestId 过长", status=400, code="invalid_request_id")
@@ -4357,6 +4621,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
         # 1. Verify unlock status and fetch DB blackbox secrets / pending definitions.
         system_append_list: list[dict[str, str]] = []
         injected_definitions: list[str] = []
+        is_paid_resource = False
         for code in (style1, style2, layout):
             if not code:
                 continue
@@ -4372,6 +4637,10 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     raise ServiceError(f"尚未解锁付费编号 {code}《{res['name']}》，请先解锁后再调用", status=403, code="asset_locked")
                 else:
                     raise ServiceError("该资源暂不能用于生成", status=403, code="asset_unavailable")
+
+            ca = tx.execute("SELECT unlock_cost, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (code, code)).fetchone()
+            if (ca and (int(ca["unlock_cost"] or 0) > 0 or ca["source_type"] == "exclusive")) or int(res.get("unlock_cost") or 0) > 0 or res.get("source_type") == "exclusive":
+                is_paid_resource = True
 
             inject = (res.get("access") or {}).get("inject")
             if inject == "blackbox":
@@ -4420,6 +4689,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 ref_id=gen_id,
             )
             free_remaining = 0
+            is_paid_resource = True
 
         # Check if client-supplied prompt contains blackbox secrets or injected definitions (G9, H6, §1a-2)
         client_scan_failed = False
@@ -4432,13 +4702,23 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
 
         # Initial prompt without skill (written in Transaction A)
         if recipe_id:
+            initial_visible_prompt = raw_prompt
+        else:
+            cleaned_visible = raw_prompt
+            initial_visible_prompt = cleaned_visible if from_skill else (
+                f"立即生成图片：\n{cleaned_visible}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
+            )
+        if client_scan_failed:
+            initial_visible_prompt = None
+            prompt_masked_init = 0
+        elif client_prompt_has_secret:
+            initial_visible_prompt = ""
+            prompt_masked_init = 1
+        else:
+            prompt_masked_init = 0
+
+        if recipe_id:
             initial_prompt = build_recipe_gateway_prompt(raw_prompt, injected_notes)
-            if client_scan_failed:
-                initial_visible_prompt = None
-            elif client_prompt_has_secret:
-                initial_visible_prompt = ""
-            else:
-                initial_visible_prompt = raw_prompt
         else:
             cleaned = raw_prompt
             if injected_notes:
@@ -4446,19 +4726,9 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             initial_prompt = cleaned if from_skill else (
                 f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
             )
-            if client_scan_failed:
-                initial_visible_prompt = None
-            elif client_prompt_has_secret:
-                initial_visible_prompt = ""
-            else:
-                cleaned_visible = raw_prompt
-                initial_visible_prompt = cleaned_visible if from_skill else (
-                    f"立即生成图片：\n{cleaned_visible}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
-                )
 
         needs_compose = (not from_skill) and bool(style1 or style2 or layout)
         prompt_ready = 0 if needs_compose else 1
-        prompt_masked_init = 1 if client_prompt_has_secret else 0
 
         snap = body.get("recipeSnapshot")
         if not snap and (style1 or style2 or layout):
@@ -4470,8 +4740,8 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
                 prompt, visible_prompt, prompt_masked, system_append_json, markdown, items_json, engine, cost_type, credits_spent, task_id,
                 status, error_msg, request_id, reservation_date, created_at, fork_work_id,
-                prompt_ready, recipe_id
-            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?)
+                prompt_ready, recipe_id, subject
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 gen_id,
@@ -4491,6 +4761,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 fork_target,
                 prompt_ready,
                 recipe_id,
+                user_subject,
             ),
         )
         if cost_type == "free_quota":

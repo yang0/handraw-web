@@ -234,8 +234,8 @@ function createTestGraph(options = {}) {
 
   // Single style prompt should only lock style1
   let prompt = controller.getPromptPreview();
-  assert.match(prompt, /【锁定画风 #FA-001】/);
-  assert.doesNotMatch(prompt, /【跨媒介画面融合】/);
+  assert.match(prompt, /【画风】：#FA-001/);
+  assert.doesNotMatch(prompt, /场景风格/);
 
   // Switch to dual style fusion
   sp.data.fusion = true;
@@ -245,7 +245,7 @@ function createTestGraph(options = {}) {
   assert.ok(fakeDom.innerHTML.includes("角色画风决定人物与主体的画法，场景画风决定背景与环境"), "Fusion explanation note must exist in dual style");
 
   prompt = controller.getPromptPreview();
-  assert.match(prompt, /【跨媒介画面融合】：角色采用 #FA-001 治愈水彩 × 场景采用 #FA-002 复古版画/);
+  assert.match(prompt, /【画风】：角色风格：#FA-001；场景风格：#FA-002/);
 
   // Switch back to single style
   sp.data.fusion = false;
@@ -253,8 +253,8 @@ function createTestGraph(options = {}) {
   controller.render(fakeDom, controller.context, {});
   assert.ok(!fakeDom.innerHTML.includes("data-pick-kind=\"style2\""), "style2 picker must be removed after switching back");
   prompt = controller.getPromptPreview();
-  assert.match(prompt, /【锁定画风 #FA-001】/);
-  assert.doesNotMatch(prompt, /【跨媒介画面融合】/);
+  assert.match(prompt, /【画风】：#FA-001/);
+  assert.doesNotMatch(prompt, /场景风格/);
   assert.doesNotMatch(prompt, /FA-002/);
 
   console.log("✓ Test 2 Passed: Single / Dual-Style Fusion Toggle verified.");
@@ -356,11 +356,11 @@ function createTestGraph(options = {}) {
   assert.match(prompt21Cloud, /目标受众「设计从业者」/);
   assert.match(prompt21Cloud, /业务场景「活动海报」/);
   assert.match(prompt21Cloud, /【情绪氛围】：.*清冽/);
-  assert.match(prompt21Cloud, /【锁定图型 SC-021】：双拼信息卡 —— 撕纸折纸或实物对比双屏/);
+  assert.match(prompt21Cloud, /【图型】：#SC-021/);
 
   // Skill prompt includes sc021Type
   const prompt21Skill = Engine.assembleControlPrompt(graph21, ctrl21, sharedCatalog, "skill");
-  assert.match(prompt21Skill, /图型：SC-021（玩法：局部放大微距）/);
+  assert.match(prompt21Skill, /图型：#SC-021（玩法：局部放大微距）/);
 
   // 2) Test SC-022 node storage
   const graph22 = createTestGraph({
@@ -375,24 +375,12 @@ function createTestGraph(options = {}) {
   assert.equal(sp22.data.sc022Pinyin, "CHEN ZHIYUAN", "sc022Pinyin must be stored in skill node");
 
   const prompt22Cloud = Engine.assembleControlPrompt(graph22, ctrl22, sharedCatalog, "cloud");
-  assert.match(prompt22Cloud, /【锁定图型 SC-022】：签名明信片 —— 手写签名与双拼拼音/);
+  assert.match(prompt22Cloud, /【图型】：#SC-022/);
 
   const prompt22Skill = Engine.assembleControlPrompt(graph22, ctrl22, sharedCatalog, "skill");
-  assert.match(prompt22Skill, /图型：SC-022（姓名：陈知远 \/ CHEN ZHIYUAN）/);
+  assert.match(prompt22Skill, /图型：#SC-022（姓名：陈知远 \/ CHEN ZHIYUAN）/);
 
-  // 3) Byte-for-byte baseline parity assertion for both "cloud" and "skill" formats
-  for (const g of [graph21, graph22]) {
-    const c = g.nodes.find((n) => n.type === "output_control");
-    const curCloud = Engine.assembleControlPrompt(g, c, sharedCatalog, "cloud");
-    const baseCloud = baselineEngine.assembleControlPrompt(g, c, sharedCatalog, "cloud");
-    assert.equal(curCloud, baseCloud, "assembleControlPrompt ('cloud') must match baseline byte-for-byte");
-
-    const curSkill = Engine.assembleControlPrompt(g, c, sharedCatalog, "skill");
-    const baseSkill = baselineEngine.assembleControlPrompt(g, c, sharedCatalog, "skill");
-    assert.equal(curSkill, baseSkill, "assembleControlPrompt ('skill') must match baseline byte-for-byte");
-  }
-
-  console.log("✓ Test 4 Passed: Sub-options node storage & baseline parity verified.");
+  console.log("✓ Test 4 Passed: Sub-options node storage verified.");
 }
 
 // ==========================================

@@ -1103,21 +1103,22 @@
 
       // Layout
       if (effectiveLayoutId && (!isArticleMode || forceLayout)) {
-        if (effectiveLayoutId === "SC-021") {
-          parts.push(`图型：SC-021（玩法：${rec.sc021Type}）`);
-        } else if (effectiveLayoutId === "SC-022") {
-          parts.push(`图型：SC-022（姓名：${rec.sc022Name} / ${rec.sc022Pinyin}）`);
+        const cleanLId = effectiveLayoutId.replace(/^#/, "");
+        if (cleanLId === "SC-021") {
+          parts.push(`图型：#SC-021（玩法：${rec.sc021Type}）`);
+        } else if (cleanLId === "SC-022") {
+          parts.push(`图型：#SC-022（姓名：${rec.sc022Name} / ${rec.sc022Pinyin}）`);
         } else {
-          parts.push(`图型：${effectiveLayoutId}`);
+          parts.push(`图型：#${cleanLId}`);
         }
       }
 
       // Style(s)
       if (rec.fusionToggleOn) {
-        if (effectiveStyle1Id) parts.push(`角色风格：${effectiveStyle1Id}`);
-        if (rec.style2Id) parts.push(`场景风格：${rec.style2Id}`);
+        if (effectiveStyle1Id) parts.push(`角色风格：#${effectiveStyle1Id.replace(/^#/, "")}`);
+        if (rec.style2Id) parts.push(`场景风格：#${rec.style2Id.replace(/^#/, "")}`);
       } else if (effectiveStyle1Id) {
-        parts.push(`风格：${effectiveStyle1Id}`);
+        parts.push(`画风：#${effectiveStyle1Id.replace(/^#/, "")}`);
       }
 
       // Multi-select Theme Colors!
@@ -1207,14 +1208,18 @@
         `[Mode]: ${effectiveMode.toUpperCase()} · Ratio ${ratio || "3:4"}`,
         `[Subject & Copy]: ${cleanTheme || "Editorial hand-drawn visual storytelling."}`
       ];
+      const s1Id = (effectiveStyle1Id || (effectiveStyle1Res && effectiveStyle1Res.id) || "").replace(/^#/, "");
+      const s2Id = (rec.style2Id || (rec.style2Res && rec.style2Res.id) || "").replace(/^#/, "");
+      const lId = (effectiveLayoutId || (effectiveLayoutRes && effectiveLayoutRes.id) || "").replace(/^#/, "");
+
       if (rec.fusionToggleOn) {
-        if (effectiveStyle1Res) lines.push(`[Character Style #${effectiveStyle1Res.id}]: ${effectiveStyle1Res.name}`);
-        if (rec.style2Res) lines.push(`[Scene Style #${rec.style2Res.id}]: ${rec.style2Res.name} (Cross-media contrast)`);
-      } else if (effectiveStyle1Res) {
-        lines.push(`[Style #${effectiveStyle1Res.id}]: ${effectiveStyle1Res.name} — ${effectiveStyle1Res.description || ""}`);
+        if (s1Id) lines.push(`[Character Style]: #${s1Id}`);
+        if (s2Id) lines.push(`[Scene Style]: #${s2Id}`);
+      } else if (s1Id) {
+        lines.push(`[Style]: #${s1Id}`);
       }
-      if (effectiveLayoutRes && (!isArticleMode || forceLayout)) {
-        lines.push(`[Layout ${effectiveLayoutRes.id}]: ${effectiveLayoutRes.name}`);
+      if (lId && (!isArticleMode || forceLayout)) {
+        lines.push(`[Layout]: #${lId}`);
       }
       if (rec.colorResources.length) {
         lines.push(`[Theme Colors]: ${rec.colorResources.map((c) => `${c.id} ${c.resource.name}`).join(" + ")}`);
@@ -1248,22 +1253,20 @@
         }`
       );
     }
-    if (rec.fusionToggleOn && (effectiveStyle1Res || rec.style2Res)) {
-      const cs = effectiveStyle1Res;
-      const ss = rec.style2Res;
-      lines.push(
-        `【跨媒介画面融合】：` +
-          `${cs ? `角色采用 #${cs.id} ${cs.name}` : ""}` +
-          `${cs && ss ? " × " : ""}` +
-          `${ss ? `场景采用 #${ss.id} ${ss.name}` : ""}`
-      );
-    } else if (effectiveStyle1Res) {
-      const s = effectiveStyle1Res;
-      const isCloudInjected = s.sourceType === "exclusive" || (s.sourceType === "pending" && !s.definition);
-      lines.push(`【锁定画风 #${s.id}】：${s.sourceType === "exclusive" ? `${s.name}（云端黑盒注入）` : isCloudInjected ? `${s.name}（云端注入）` : s.definition || s.description || s.name}`);
+    const s1Id = (effectiveStyle1Id || (effectiveStyle1Res && effectiveStyle1Res.id) || "").replace(/^#/, "");
+    const s2Id = (rec.style2Id || (rec.style2Res && rec.style2Res.id) || "").replace(/^#/, "");
+    const lId = (effectiveLayoutId || (effectiveLayoutRes && effectiveLayoutRes.id) || "").replace(/^#/, "");
+
+    if (rec.fusionToggleOn && (s1Id || s2Id)) {
+      const parts = [];
+      if (s1Id) parts.push(`角色风格：#${s1Id}`);
+      if (s2Id) parts.push(`场景风格：#${s2Id}`);
+      lines.push(`【画风】：${parts.join("；")}`);
+    } else if (s1Id) {
+      lines.push(`【画风】：#${s1Id}`);
     }
-    if (effectiveLayoutRes && (!isArticleMode || forceLayout)) {
-      lines.push(`【锁定图型 ${effectiveLayoutRes.id}】：${effectiveLayoutRes.name} —— ${effectiveLayoutRes.description || ""}`);
+    if (lId && (!isArticleMode || forceLayout)) {
+      lines.push(`【图型】：#${lId}`);
     }
     if (rec.colorResources.length) {
       lines.push(`【多选主题色】：${rec.colorResources.map((c) => `${c.id} ${c.resource.name}`).join(" + ")}`);
@@ -1632,28 +1635,20 @@
     }
 
     if (rec) {
-      if (rec.fusionToggleOn && (rec.style1Res || rec.style2Res)) {
-        const cs = rec.style1Res;
-        const ss = rec.style2Res;
-        lines.push(
-          `【跨媒介双画风融合】：${cs ? `主体采用 #${cs.id} ${cs.name}` : ""}${cs && ss ? " × " : ""}${
-            ss ? `场景采用 #${ss.id} ${ss.name}` : ""
-          }`
-        );
-      } else if (rec.style1Res) {
-        const s = rec.style1Res;
-        const isCloudInjected = s.sourceType === "exclusive" || (s.sourceType === "pending" && !s.definition);
-        lines.push(
-          `【锁定手绘画风 #${s.id} ${s.name}】：${
-            s.sourceType === "exclusive" ? `${s.name}（专属精调画风）` : isCloudInjected ? `${s.name}（云端注入）` : s.definition || s.description || s.name
-          }`
-        );
-      } else {
-        lines.push("【手绘画风】：温暖编辑风手绘插画（纸张肌理自然、笔触富有人情味）");
-      }
+      const s1Id = (rec.style1Id || (rec.style1Res && rec.style1Res.id) || "").replace(/^#/, "");
+      const s2Id = (rec.style2Id || (rec.style2Res && rec.style2Res.id) || "").replace(/^#/, "");
+      const lId = (rec.layoutId || (rec.layoutRes && rec.layoutRes.id) || "").replace(/^#/, "");
 
-      if (rec.layoutRes) {
-        lines.push(`【构图与图型参考 ${rec.layoutRes.id}】：${rec.layoutRes.name} —— ${rec.layoutRes.description || ""}`);
+      if (rec.fusionToggleOn && (s1Id || s2Id)) {
+        const parts = [];
+        if (s1Id) parts.push(`角色风格：#${s1Id}`);
+        if (s2Id) parts.push(`场景风格：#${s2Id}`);
+        lines.push(`【画风】：${parts.join("；")}`);
+      } else if (s1Id) {
+        lines.push(`【画风】：#${s1Id}`);
+      }
+      if (lId) {
+        lines.push(`【图型】：#${lId}`);
       }
       if (rec.colorResources.length) {
         lines.push(`【锁定主题色板】：${rec.colorResources.map((c) => `${c.id} ${c.resource.name}`).join(" + ")}，全篇配图保持色温连贯`);

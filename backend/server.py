@@ -118,6 +118,7 @@ from .services import (
     delete_user_studio_workflow,
     forum_moderator_action,
     get_site_settings,
+    get_public_generation_history,
     get_studio_workspace,
     get_user_studio_task,
     get_wallet_quota_state,
@@ -902,7 +903,13 @@ def load_localized_json(filename: str) -> bytes:
     raw = src.read_text(encoding="utf-8")
     raw = raw.replace("https://img.handraw-style.com/images/", "/images/")
     raw = raw.replace("https://static.handraw-style.com/", "/")
-    data = raw.encode("utf-8")
+    if filename == "catalog.json":
+        data_obj = json.loads(raw)
+        for r in data_obj.get("resources", []):
+            r.pop("definition", None)
+        data = json.dumps(data_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    else:
+        data = raw.encode("utf-8")
     _STATIC_JSON_CACHE[filename] = data
     return data
 
@@ -2018,6 +2025,29 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/studio/workspace":
             user = self._current_user(required=False)
             self._send_json(get_studio_workspace(self.db, user))
+            return
+
+        if req_path == "/api/studio/history" or req_path.startswith("/api/studio/history/"):
+            hid = ""
+            if req_path.startswith("/api/studio/history/"):
+                hid = req_path[len("/api/studio/history/"):].strip()
+            if not hid:
+                hid = q1("id") or ""
+            if hid:
+                entry = get_public_generation_history(self.db, history_id=hid)
+                if not entry:
+                    self._send_json({"ok": False, "error": "历史记录不存在"}, status=404)
+                    return
+                self._send_json({"ok": True, "history": entry})
+                return
+            lim = 40
+            try:
+                if q1("limit"):
+                    lim = int(q1("limit"))
+            except Exception:
+                pass
+            rows = get_public_generation_history(self.db, limit=lim)
+            self._send_json({"ok": True, "history": rows})
             return
 
         if req_path.startswith("/api/studio/recipes"):
