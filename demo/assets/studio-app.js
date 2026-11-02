@@ -4902,6 +4902,7 @@
     const requestId = task.requestId || task.clientRequestId || "";
     const history = Array.isArray(CS.generationHistory) ? CS.generationHistory : [];
     let entry = history.find((item) => (id && item.id === id) || (requestId && item.requestId === requestId));
+    const taskSubject = task.subject || task.recipeSnapshot?.subject || "";
     if (!entry && !errorMessage) {
       entry = {
         id: id || E.uid("hist"),
@@ -4909,6 +4910,7 @@
         createdAt: new Date().toISOString(),
         timeShort: "",
         tabTitle: task.tabTitle || "云端生图",
+        subject: taskSubject,
         ctrlId: "",
         dispId: "",
         mode: task.mode || "generation",
@@ -4923,6 +4925,7 @@
     if (!entry) return;
     entry.id = id || entry.id;
     entry.requestId = requestId || entry.requestId || "";
+    if (taskSubject && !entry.subject) entry.subject = taskSubject;
     entry.taskId = "";
     entry.status = errorMessage ? "error" : "success";
     entry.engine = "live";
@@ -4934,6 +4937,7 @@
         genId: id || "",
         requestId,
         title: task.tabTitle || `云端成图 ${idx + 1}`,
+        subject: taskSubject || "",
         ratio: task.ratio || "3:4",
         prompt: task.prompt || entry.prompt || "",
         imageUrl: url,
@@ -5224,6 +5228,10 @@
         role: it.role || "image",
         anchorHeading: it.anchorHeading || "",
         theme: it.theme || "",
+        subject: it.subject || it.recipeSnapshot?.subject || rawEntry.subject || "",
+        articleTitle: it.articleTitle || rawEntry.articleTitle || "",
+        isCustomTitle: Boolean(it.isCustomTitle || it.titleSource === "manual"),
+        titleSource: it.titleSource || (it.isCustomTitle ? "manual" : "auto"),
         failed: Boolean(it.failed),
         error: it.error || ""
       };
@@ -5270,6 +5278,11 @@
       mode: rawEntry.mode || "graphic-text",
       modeLabel: rawEntry.modeLabel || (isBatch ? `批量生成 · ${items.length} 张` : "生成"),
       tabTitle: rawEntry.tabTitle || "当前工作流",
+      subject: rawEntry.subject || (items.length > 0 ? (items[0].subject || items[0].recipeSnapshot?.subject) : "") || "",
+      articleTitle: rawEntry.articleTitle || rawEntry.planNode?.data?.articleTitle || "",
+      title: rawEntry.title || "",
+      isCustomTitle: Boolean(rawEntry.isCustomTitle || rawEntry.titleSource === "manual"),
+      titleSource: rawEntry.titleSource || (rawEntry.isCustomTitle ? "manual" : "auto"),
       recipeSummary: summary,
       prompt: typeof rawEntry.prompt === "string" ? rawEntry.prompt : "",
       createdAt: rawEntry.createdAt || rawEntry.created_at || new Date().toISOString(),
@@ -5334,6 +5347,11 @@
           tabTitle: existing.tabTitle && existing.tabTitle !== "当前工作流" && existing.tabTitle !== "生成历史"
             ? existing.tabTitle
             : (normalized.tabTitle || existing.tabTitle),
+          subject: existing.subject || normalized.subject || "",
+          articleTitle: existing.articleTitle || normalized.articleTitle || "",
+          title: (existing.isCustomTitle || existing.titleSource === "manual") ? existing.title : (normalized.title || existing.title || ""),
+          isCustomTitle: Boolean(existing.isCustomTitle || normalized.isCustomTitle),
+          titleSource: existing.titleSource || normalized.titleSource || "",
           recipeSummary: existing.recipeSummary || normalized.recipeSummary || "",
           prompt: existing.prompt || normalized.prompt || "",
           markdown: existing.markdown || normalized.markdown || "",
@@ -5351,7 +5369,12 @@
           id: isExistingServer ? existing.id : normalized.id,
           engine: isExistingServer ? existing.engine : normalized.engine,
           status: isExistingServer ? existing.status : normalized.status,
-          requestId: existing.requestId || normalized.requestId || ""
+          requestId: existing.requestId || normalized.requestId || "",
+          subject: normalized.subject || existing.subject || "",
+          articleTitle: normalized.articleTitle || existing.articleTitle || "",
+          title: (existing.isCustomTitle || existing.titleSource === "manual") ? existing.title : (normalized.title || existing.title || ""),
+          isCustomTitle: Boolean(existing.isCustomTitle || normalized.isCustomTitle),
+          titleSource: existing.titleSource || normalized.titleSource || ""
         };
       }
       list[existIdx] = merged;
@@ -5431,12 +5454,42 @@
 
     const entryId = (!isBatch && firstGenId) ? firstGenId : (isBatch ? E.uid("hist_batch") : E.uid("hist"));
 
+    const cleanSubject =
+      (items && items[0]?.subject) ||
+      (items && items[0]?.recipeSnapshot?.subject) ||
+      (isRecipe
+        ? (ctrlNode.subject || "")
+        : (rec?.userNoteText || rec?.combinedText || ctrlNode.data?.inlineTheme || ctrlNode.data?.subject || "")) ||
+      "";
+
+    const resolvedItems = JSON.parse(JSON.stringify(items || [])).map((it) => {
+      const itSubj = it.subject || it.recipeSnapshot?.subject || cleanSubject || "";
+      return {
+        ...it,
+        subject: itSubj,
+        ...(it.recipeSnapshot
+          ? {
+              recipeSnapshot: {
+                ...it.recipeSnapshot,
+                subject: it.recipeSnapshot.subject || itSubj
+              }
+            }
+          : {})
+      };
+    });
+
+    const isManualTitle = Boolean(ctrlNode?.data?.titleSource === "manual" && ctrlNode.data?.title);
+
     const entry = {
       id: entryId,
       requestId: firstReqId,
       createdAt: dateFull,
       timeShort,
       tabTitle: isRecipe ? "做图配方" : (curTab ? curTab.title : "当前工作流"),
+      subject: cleanSubject,
+      title: isManualTitle ? ctrlNode.data.title : "",
+      isCustomTitle: isManualTitle,
+      titleSource: isManualTitle ? "manual" : "auto",
       ctrlId: isRecipe ? "" : ctrlNode.id,
       recipeId: recipeId || "",
       dispId: "",
@@ -5448,14 +5501,24 @@
       engine: isLive ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
       recipeSummary: summaryText,
-      recipeSnapshot: (items && items[0]?.recipeSnapshot) || null,
+      recipeSnapshot: (items && items[0]?.recipeSnapshot)
+        ? {
+            ...items[0].recipeSnapshot,
+            subject: items[0].recipeSnapshot.subject || cleanSubject
+          }
+        : (rec ? {
+            style1: rec.style1Id || "",
+            style2: rec.style2Id || "",
+            layout: rec.layoutId || "",
+            subject: cleanSubject
+          } : null),
       prompt: isRecipe
         ? (ctrlNode.prompt || ctrlNode.subject || "")
         : isLoopBatch
           ? items.map((it, idx) => `【第 ${idx + 1} 轮】${it.prompt || it.theme || ""}`).join("\n\n")
           : E.assembleControlPrompt(CS.graph, ctrlNode, Catalog, "skill"),
       markdown: markdown || "",
-      items: JSON.parse(JSON.stringify(items)),
+      items: resolvedItems,
       ...(CS.forkGenerationSource?.generationId ? {
         forkGenerationId: CS.forkGenerationSource.generationId,
         forkItemId: CS.forkGenerationSource.itemId || ""
@@ -5506,12 +5569,24 @@
     const hasLiveCards = readyCards.some((c) => c && (c.generationMode === "live" || c.engine === "live"));
     const isLive = isLiveGenerationEnabled() || hasLiveCards;
 
+    const articleTitle = String(planNode.data?.articleTitle || "").trim();
+    const isManualTitle = Boolean(
+      planNode.data?.articleTitleSource === "manual" ||
+      planNode.data?.titleSource === "manual"
+    );
+    const artSubject = articleTitle || (readyCards[0]?.subject) || (readyCards[0]?.recipeSnapshot?.subject) || "";
+
     const entry = {
       id: planNode.data.generationId || E.uid("hist_art"),
       requestId: planNode.data.requestId || "",
       createdAt: dateFull,
       timeShort,
       tabTitle: curTab ? curTab.title : "文章配图方案",
+      subject: artSubject,
+      articleTitle: articleTitle,
+      title: isManualTitle ? articleTitle : "",
+      isCustomTitle: isManualTitle,
+      titleSource: isManualTitle ? "manual" : "auto",
       ctrlId: ctrlNode ? ctrlNode.id : "",
       dispId: planNode.id,
       mode: "article-illust",
@@ -5528,6 +5603,8 @@
         requestId: c.requestId || "",
         role: c.role || "inline",
         title: c.title || "配图",
+        subject: c.subject || artSubject,
+        articleTitle: articleTitle,
         ratio: c.ratio || "4:3",
         prompt: c.prompt || "",
         imageUrl: c.imageUrl
@@ -6868,6 +6945,7 @@
         id: "hist_seed_01",
         hoursAgo: 1.5,
         tabTitle: "图文与海报创作",
+        subject: "秋分茶会主题手绘海报",
         mode: "poster",
         modeLabel: "视觉海报 · 1 张",
         kind: "single",
@@ -6878,6 +6956,7 @@
           {
             id: "hi_01_1",
             title: "秋分茶会主题手绘海报",
+            subject: "秋分茶会主题手绘海报",
             ratio: "3:4",
             prompt: "秋分傍晚清朗山居茶席，东方宣纸水彩手绘海报，留白呼吸感构图。",
             imageUrl: "/images/poster-demo-autumn-equinox.webp"
@@ -6888,6 +6967,7 @@
         id: "hist_seed_02",
         hoursAgo: 4.2,
         tabTitle: "套图创作",
+        subject: "职场效率反常识图解卡",
         mode: "series",
         modeLabel: "系列套图 · 4 张",
         kind: "series",
@@ -6905,6 +6985,8 @@
         id: "hist_seed_03",
         hoursAgo: 7.5,
         tabTitle: "文章自动配图",
+        articleTitle: "视觉笔记为什么能让人一眼记住核心逻辑？",
+        subject: "视觉笔记为什么能让人一眼记住核心逻辑？",
         mode: "article-illust",
         modeLabel: "文章配图 · 3 张",
         kind: "article",
@@ -6921,6 +7003,7 @@
         id: "hist_seed_04",
         hoursAgo: 12.8,
         tabTitle: "图文与海报创作",
+        subject: "手绘科普图鉴",
         mode: "graphic-text",
         modeLabel: "图文创作 · 2 张",
         kind: "multi",
@@ -6936,6 +7019,7 @@
         id: "hist_seed_05",
         hoursAgo: 19.4,
         tabTitle: "双画风融合",
+        subject: "跨界续绘双拼插画",
         mode: "illustration",
         modeLabel: "纯绘插画 · 1 张",
         kind: "single",
@@ -6950,6 +7034,7 @@
         id: "hist_seed_06",
         hoursAgo: 27.0,
         tabTitle: "图文与海报创作",
+        subject: "创作者灵感四格分镜",
         mode: "storyboard",
         modeLabel: "分镜漫画 · 1 张",
         kind: "single",
@@ -6964,6 +7049,7 @@
         id: "hist_seed_07",
         hoursAgo: 35.5,
         tabTitle: "角色资产设定",
+        subject: "黑猫侍者 IP 设定卡",
         mode: "ip-design",
         modeLabel: "IP角色设定 · 1 张",
         kind: "single",
@@ -6978,6 +7064,8 @@
         id: "hist_seed_08",
         hoursAgo: 46.2,
         tabTitle: "文章自动配图",
+        articleTitle: "手账感排版指南：网格、胶带与手写批注的分寸感",
+        subject: "手账感排版指南：网格、胶带与手写批注的分寸感",
         mode: "article-illust",
         modeLabel: "文章配图 · 2 张",
         kind: "article",
@@ -6998,6 +7086,8 @@
         createdAt: t.createdAt,
         timeShort: t.timeShort,
         tabTitle: s.tabTitle,
+        subject: s.subject || "",
+        articleTitle: s.articleTitle || "",
         ctrlId: "",
         dispId: "",
         mode: s.mode,
@@ -7008,7 +7098,11 @@
         recipeSummary: s.recipeSummary,
         prompt: s.prompt,
         markdown: s.markdown,
-        items: s.items
+        items: (s.items || []).map((it) => ({
+          ...it,
+          subject: it.subject || s.subject || "",
+          articleTitle: it.articleTitle || s.articleTitle || ""
+        }))
       };
     });
   }
@@ -7138,6 +7232,53 @@
     );
   }
 
+  function resolveShareTitle(h, item = null, options = {}) {
+    // 1. 用户明确编辑的作品标题
+    if (options && options.customTitle) {
+      const ct = String(options.customTitle).trim();
+      if (ct) return ct;
+    }
+    if (options && (options.isCustomTitle || options.titleSource === "manual") && options.title) {
+      const ot = String(options.title).trim();
+      if (ot) return ot;
+    }
+    const chosenItem = item || (h && Array.isArray(h.items) && h.items[0]) || null;
+    if (chosenItem && (chosenItem.isCustomTitle || chosenItem.titleSource === "manual") && chosenItem.title) {
+      const itTitle = String(chosenItem.title).trim();
+      if (itTitle) return itTitle;
+    }
+    if (h && (h.isCustomTitle || h.titleSource === "manual") && h.title) {
+      const ht = String(h.title).trim();
+      if (ht) return ht;
+    }
+
+    // 2. 所选图片生成时的 subject
+    const itemSubj = String(chosenItem?.subject || "").trim();
+    if (itemSubj) return itemSubj;
+    const entrySubj = String(h?.subject || "").trim();
+    if (entrySubj) return entrySubj;
+
+    // 3. 配方快照的 subject
+    const itemRecipeSubj = String(chosenItem?.recipeSnapshot?.subject || "").trim();
+    if (itemRecipeSubj) return itemRecipeSubj;
+    const entryRecipeSubj = String(h?.recipeSnapshot?.subject || "").trim();
+    if (entryRecipeSubj) return entryRecipeSubj;
+
+    // 4. 文章标题
+    const artTitle = String(
+      h?.articleTitle ||
+      chosenItem?.articleTitle ||
+      options?.articleTitle ||
+      h?.planNode?.data?.articleTitle ||
+      (h?.markdown ? (String(h.markdown).match(/^#\s+(.+)$/m)?.[1] || "") : "") ||
+      ""
+    ).trim();
+    if (artTitle) return artTitle;
+
+    // 5. 「未命名作品」，允许分享前编辑
+    return "未命名作品";
+  }
+
   function shareHistoryEntryWork(entryId) {
     ensureGenerationHistoryInitialized();
     const h = (CS.generationHistory || []).find((item) => item.id === entryId);
@@ -7146,15 +7287,21 @@
     if (!imgs.length) return;
     const styleMatch = String(h.recipeSummary || "").match(/#(F[A-Z]-\d{3})/);
     const layoutMatch = String(h.recipeSummary || "").match(/#((?:SC|IG|SB|IP|EC)-\d{3})/);
+    const item = h.items[0];
+    const shareTitle = resolveShareTitle(h, item);
     S.goToForumCompose({
       category: "tuning",
-      title: `${h.tabTitle || "画布生成作品"} · ${h.items[0]?.title || ""}`.replace(/\s*·\s*$/, ""),
+      title: shareTitle,
+      subject: item?.subject || h.subject || "",
       image: imgs[0],
       images: imgs,
-      prompt: h.prompt || h.items[0]?.prompt || "",
+      prompt: h.prompt || item?.prompt || "",
       style1: styleMatch ? styleMatch[1] : "",
       layout: layoutMatch ? layoutMatch[1] : "",
-      mode: h.mode || "graphic-text"
+      mode: h.mode || "graphic-text",
+      generationId: h.id,
+      itemId: item?.id || "",
+      workId: h.workId || item?.workId || ""
     });
   }
 
@@ -7200,8 +7347,8 @@
         return false;
       }
       if (q) {
-        const hay = `${h.tabTitle || ""} ${h.modeLabel || ""} ${h.recipeSummary || ""} ${h.prompt || ""} ${(h.items || [])
-          .map((it) => it.title || "")
+        const hay = `${h.subject || ""} ${h.title || ""} ${h.tabTitle || ""} ${h.modeLabel || ""} ${h.recipeSummary || ""} ${h.prompt || ""} ${(h.items || [])
+          .map((it) => `${it.title || ""} ${it.subject || ""}`)
           .join(" ")}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
@@ -7278,7 +7425,7 @@
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;">
                               <span class="ic-node-badge ${h.kind === "loop" ? "ic-badge-loop" : "ic-badge-output-ctrl"}">${esc(h.modeLabel || "生成记录")}</span>
                               ${h.demoMode || h.engine === "demo" ? '<span class="ic-node-badge" style="background:#fff4d6;color:#8a5a00;border:1px solid #e8c46a;">🧪 演示样图</span>' : ""}
-                              <strong style="font-size:14.5px;font-weight:850;color:var(--ic-ink);">${esc(h.tabTitle || "画布工作流")}</strong>
+                              <strong style="font-size:14.5px;font-weight:850;color:var(--ic-ink);">${esc(h.subject || h.title || h.tabTitle || "画布工作流")}</strong>
                               <span style="font-size:12px;color:var(--ic-muted);font-family:var(--font-mono);">${esc(h.createdAt || "")}</span>
                               <span style="font-size:12px;color:var(--ic-muted);">· ${esc(h.recipeSummary || "自由生图")}</span>
                             </div>
@@ -9792,8 +9939,10 @@
       getNormalizedRecipeSnapshot,
       buildPublishTitleFromRecipe,
       resolvePublishDefaultTitle,
-      formatSubjectTitle
+      formatSubjectTitle,
+      resolveShareTitle
     };
+    window.resolveShareTitle = resolveShareTitle;
   }
 
   function openPublishModalForDisplay(dispNode) {
@@ -16383,6 +16532,18 @@
   window.HANDRAW_STUDIO.openImageLightbox = openImageLightbox;
   window.HANDRAW_STUDIO.getBatchParts = getBatchParts;
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
+  window.HANDRAW_STUDIO.resolveShareTitle = resolveShareTitle;
+  window.HANDRAW_STUDIO.shareHistoryEntryWork = shareHistoryEntryWork;
+  window.HANDRAW_STUDIO.openHistoryStage = () => {
+    CS.stageView = "history";
+    renderHistoryStage();
+  };
+  window.HANDRAW_STUDIO.getHistory = () => CS.generationHistory;
+  window.HANDRAW_STUDIO.setHistory = (list) => {
+    CS.generationHistory = list;
+    writeJsonStorage(HISTORY_STORAGE_KEY, list);
+    if (CS.stageView === "history") renderHistoryStage();
+  };
   if (window.__HANDRAW_TESTING__ === true) {
     window.CS = CS;
     Object.defineProperty(CS, "activeArticleDraft", {
@@ -16421,6 +16582,7 @@
       resumePendingCloudTasks,
       upsertHistoryEntry,
       normalizeHistoryEntry,
+      resolveShareTitle,
       formatParamValue,
       formatParamList
     };

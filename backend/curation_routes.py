@@ -62,6 +62,17 @@ def handle_post(handler,path,body):
         payload=body.get('payload',body)
         if not isinstance(payload,dict):
             raise ServiceError('草稿格式错误')
+        from .runtime_policy import sanitize_plain_text
+        if 'title' in payload and payload['title'] is not None:
+            raw_title = sanitize_plain_text(payload['title'], max_chars=140).strip()
+            if len(raw_title) > 120:
+                raise ServiceError('草稿标题过长（最多 120 字）', status=400, code='title_too_long')
+            payload['title'] = raw_title
+        if 'subject' in payload and payload['subject'] is not None:
+            raw_subj = sanitize_plain_text(payload['subject'], max_chars=140).strip()
+            if len(raw_subj) > 120:
+                raise ServiceError('草稿主题过长（最多 120 字）', status=400, code='subject_too_long')
+            payload['subject'] = raw_subj
         items=payload.get('items')
         if items is not None:
             if not isinstance(items,list) or len(items)>20:

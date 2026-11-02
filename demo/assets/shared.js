@@ -3803,7 +3803,12 @@
         title,
         body,
         format,
-        images: rawImgs
+        images: rawImgs,
+        subject: prefill.subject || "",
+        generationId: prefill.generationId || "",
+        itemId: prefill.itemId || "",
+        isCustomTitle: Boolean(prefill.isCustomTitle || prefill.titleSource === "manual"),
+        titleSource: prefill.titleSource || (prefill.isCustomTitle ? "manual" : "auto")
       });
       return;
     }
@@ -3840,6 +3845,10 @@
     if (body) params.body = body.slice(0, 900);
     if (format) params.format = format;
     if (cleanImgs.length) params.imgs = JSON.stringify(cleanImgs);
+    if (prefill.subject) params.subject = String(prefill.subject).slice(0, 120);
+    if (prefill.generationId) params.generationId = String(prefill.generationId);
+    if (prefill.itemId) params.itemId = String(prefill.itemId);
+    if (prefill.isCustomTitle || prefill.titleSource === "manual") params.customTitle = "1";
 
     window.location.href = channelUrl("forum", params);
   }
@@ -3854,6 +3863,9 @@
     try {
       const payload = Object.assign({}, prefill, {kind, styles: prefill.styles || (prefill.style1 ? [prefill.style1] : [])});
       if (prefill.subject != null) payload.subject = String(prefill.subject);
+      if (prefill.workId) payload.workId = String(prefill.workId);
+      if (prefill.generationId) payload.generationId = String(prefill.generationId);
+      if (prefill.itemId) payload.itemId = String(prefill.itemId);
       const saved = await apiJson("/api/curation/drafts", {method:"POST", body:{payload}});
       if (App.state.user.username !== user) return;
       window.location.href = channelUrl("forum", {view:"curation", tab:"share",kind,draft:saved.id});

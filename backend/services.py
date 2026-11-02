@@ -4228,6 +4228,14 @@ def serialize_public_generation_history(
         except Exception:
             pass
     if not topic:
+        for it in (raw_items if isinstance(raw_items, list) else []):
+            if isinstance(it, dict) and it.get("subject"):
+                topic = str(it["subject"]).strip()
+                break
+            if isinstance(it, dict) and isinstance(it.get("recipeSnapshot"), dict) and it["recipeSnapshot"].get("subject"):
+                topic = str(it["recipeSnapshot"]["subject"]).strip()
+                break
+    if not topic:
         topic = "手绘创作"
 
     raw_tab = str(row["tab_title"] or "") if "tab_title" in row_keys else ""
@@ -4357,6 +4365,7 @@ def serialize_public_generation_history(
         "images": images,
         "topic": topic,
         "title": topic,
+        "subject": topic,
         "ratio": ratio,
         "mode": mode,
         "styles": styles,
@@ -5158,6 +5167,18 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
         )
         fork_gen_id = str(entry.get("forkGenerationId") or entry.get("fork_generation_id") or "").strip()
         fork_item_id = str(entry.get("forkItemId") or entry.get("fork_item_id") or "").strip()
+        clean_subj = str(entry.get("subject") or "").strip()[:140]
+        if not clean_subj:
+            items_list = entry.get("items") or []
+            if isinstance(items_list, list) and items_list:
+                first_item = items_list[0]
+                if isinstance(first_item, dict):
+                    clean_subj = str(
+                        first_item.get("subject")
+                        or (first_item.get("recipeSnapshot") or {}).get("subject")
+                        or ""
+                    ).strip()[:140]
+
         if fork_gen_id:
             target_gen = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (fork_gen_id,)).fetchone()
             if not target_gen or not check_generation_social_accessible(target_gen, viewer=user, allow_own=True):
@@ -5177,11 +5198,12 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 UPDATE studio_generations
                 SET tab_title = ?, mode = ?, mode_label = ?, kind = ?, recipe_summary = ?,
                     prompt = ?, visible_prompt = ?, prompt_masked = ?, markdown = ?, items_json = ?, deleted_at = '',
+                    subject = CASE WHEN ? != '' THEN ? ELSE subject END,
                     fork_generation_id = CASE WHEN ? != '' THEN ? ELSE fork_generation_id END,
                     fork_item_id = CASE WHEN ? != '' THEN ? ELSE fork_item_id END
                 WHERE id = ? AND user_id = ?
                 """,
-                (*values, fork_gen_id, fork_gen_id, fork_item_id, fork_item_id, target_id, uid),
+                (*values, clean_subj, clean_subj, fork_gen_id, fork_gen_id, fork_item_id, fork_item_id, target_id, uid),
             )
             return {"ok": True, "id": target_id}
         else:
@@ -5190,10 +5212,10 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 INSERT INTO studio_generations (
                     id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
                     prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type, credits_spent, status, created_at, request_id,
-                    fork_generation_id, fork_item_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?)
+                    subject, fork_generation_id, fork_item_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?, ?)
                 """,
-                (hid, uid, user["username"], *values, now_iso, req_id, fork_gen_id, fork_item_id),
+                (hid, uid, user["username"], *values, now_iso, req_id, clean_subj, fork_gen_id, fork_item_id),
             )
             return {"ok": True, "id": hid}
 

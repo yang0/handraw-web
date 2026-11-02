@@ -138,6 +138,12 @@
       sharedCard: sharedCard,
       style1: String(overrides.style1 || overrides.style || "").trim().toUpperCase().replace(/^#/, ""),
       layout: String(overrides.layout || "").trim().toUpperCase().replace(/^#/, ""),
+      workId: String(overrides.workId || overrides.work || ""),
+      subject: String(overrides.subject || ""),
+      generationId: String(overrides.generationId || ""),
+      itemId: String(overrides.itemId || ""),
+      isCustomTitle: Boolean(overrides.isCustomTitle || overrides.titleSource === "manual"),
+      titleSource: overrides.titleSource || (overrides.isCustomTitle ? "manual" : "auto"),
       publishMode: publishMode, // 'free' | 'paid' | 'bounty_10' | 'bounty_20'
       price: price,
       lockedBody: String(overrides.lockedBody || ""),
@@ -185,11 +191,19 @@
     draftAccount=account;
     try{
       const saved=JSON.parse(localStorage.getItem(draftKey())||"null");
-      if(saved && !FUI.composeDraft.title && !FUI.composeDraft.bodyHtml){
-        if (window.HandrawAccountTools && typeof window.HandrawAccountTools.safeHtml === "function") {
-          saved.bodyHtml = window.HandrawAccountTools.safeHtml(saved.bodyHtml);
+      if(saved){
+        if (!FUI.composeDraft.title && !FUI.composeDraft.bodyHtml) {
+          if (window.HandrawAccountTools && typeof window.HandrawAccountTools.safeHtml === "function") {
+            saved.bodyHtml = window.HandrawAccountTools.safeHtml(saved.bodyHtml);
+          }
+          FUI.composeDraft=createEmptyDraft(saved);
+        } else if ((saved.isCustomTitle || saved.titleSource === "manual") && saved.title) {
+          if (!FUI.composeDraft.isCustomTitle && FUI.composeDraft.titleSource !== "manual") {
+            FUI.composeDraft.title = saved.title;
+            FUI.composeDraft.isCustomTitle = true;
+            FUI.composeDraft.titleSource = "manual";
+          }
         }
-        FUI.composeDraft=createEmptyDraft(saved);
       }
     }catch(_){ /* An invalid local draft must not prevent opening the forum. */ }
   }
@@ -311,14 +325,36 @@
         }
       }
       const cat = p.get("category");
+      let savedDraft = null;
+      try {
+        savedDraft = JSON.parse(localStorage.getItem(draftKey()) || "null");
+      } catch (_) {}
+
+      let targetTitle = p.get("title") || "";
+      let isManualTitle = p.get("customTitle") === "1";
+      if (savedDraft && (savedDraft.isCustomTitle || savedDraft.titleSource === "manual") && savedDraft.title) {
+        const queryGenId = p.get("generationId") || "";
+        if (!queryGenId || queryGenId === savedDraft.generationId) {
+          targetTitle = savedDraft.title;
+          isManualTitle = true;
+        }
+      }
+
       FUI.view = "compose";
       FUI.composeDraft = createEmptyDraft({
         category: cat && cat !== "all" ? cat : sharedCard?.kind === "work" ? "tuning" : sharedCard ? "assets" : "experience",
         sharedCard,
         style1: sharedCard?.kind === "style" ? sharedCard.id : p.get("style") || "",
         layout: sharedCard?.kind === "layout" ? sharedCard.id : p.get("layout") || "",
-        title: p.get("title") || "",
-        body: p.get("body") || "",
+        title: targetTitle,
+        isCustomTitle: isManualTitle,
+        titleSource: isManualTitle ? "manual" : "auto",
+        body: p.get("body") || (savedDraft?.body || ""),
+        bodyHtml: savedDraft?.bodyHtml || "",
+        workId: p.get("work") || savedDraft?.workId || "",
+        subject: p.get("subject") || savedDraft?.subject || "",
+        generationId: p.get("generationId") || savedDraft?.generationId || "",
+        itemId: p.get("itemId") || savedDraft?.itemId || "",
         images: parsedImgs
       });
       return;
@@ -425,10 +461,28 @@
         : "experience";
     const changed = FUI.view !== "compose";
     FUI.view = "compose";
-    FUI.composeDraft = createEmptyDraft({
+
+    let savedDraft = null;
+    try {
+      savedDraft = JSON.parse(localStorage.getItem(draftKey()) || "null");
+    } catch (_) {}
+
+    const draftData = {
       ...prefill,
       category: defaultCat
-    });
+    };
+
+    if (savedDraft && (savedDraft.isCustomTitle || savedDraft.titleSource === "manual") && savedDraft.title) {
+      if (!prefill.isCustomTitle && prefill.titleSource !== "manual") {
+        if (!prefill.generationId || prefill.generationId === savedDraft.generationId) {
+          draftData.title = savedDraft.title;
+          draftData.isCustomTitle = true;
+          draftData.titleSource = "manual";
+        }
+      }
+    }
+
+    FUI.composeDraft = createEmptyDraft(draftData);
     syncForumUrl(pushHistory && changed);
     window.scrollTo({ top: 0, behavior: "smooth" });
     renderForum();
@@ -859,7 +913,13 @@
     const editorEl = root.querySelector("#compose-rich-editor");
     const modeEl = root.querySelector("#compose-mode-dropdown");
     const priceEl = root.querySelector("#compose-paid-price");
-    if (titleEl) FUI.composeDraft.title = titleEl.value;
+    if (titleEl) {
+      FUI.composeDraft.title = titleEl.value;
+      if (titleEl.value.trim()) {
+        FUI.composeDraft.isCustomTitle = true;
+        FUI.composeDraft.titleSource = "manual";
+      }
+    }
     if (editorEl) FUI.composeDraft.bodyHtml = editorEl.innerHTML;
     if (modeEl) {
       FUI.composeDraft.publishMode = modeEl.value;
@@ -1588,11 +1648,17 @@
     const titleInputEl = root.querySelector("#compose-title-input");
     if (titleInputEl) {
       titleInputEl.addEventListener("input", () => {
+        FUI.composeDraft.title = titleInputEl.value;
+        if (titleInputEl.value.trim()) {
+          FUI.composeDraft.isCustomTitle = true;
+          FUI.composeDraft.titleSource = "manual";
+        }
         const errEl = root.querySelector("#compose-title-err");
         if (errEl) {
           errEl.textContent = "";
           errEl.style.display = "none";
         }
+        saveComposeDraft();
       });
     }
 
@@ -1752,6 +1818,7 @@
         if (!effStyles.length && primaryCard?.kind === "style") effStyles.push(primaryCard.id);
         if (!effLayout && primaryCard?.kind === "layout") effLayout = primaryCard.id;
         if (!effWorkId && primaryCard?.kind === "work") effWorkId = primaryCard.id;
+        if (!effWorkId && d.workId) effWorkId = d.workId;
 
         const effImages = extractedImages.length > 0 ? extractedImages : d.images;
 
