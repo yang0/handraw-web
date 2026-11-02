@@ -194,7 +194,7 @@ class SecurityHTTPTests(unittest.TestCase):
         status, _, raw = self.request(
             "POST",
             "/api/works",
-            {"title": "明确授权的作品", "prompt": "公开测试", "images": [upload_url]},
+            {"title": "明确授权的作品", "notes": "明确授权作品的创作说明心得记录", "prompt": "公开测试", "images": [upload_url]},
             {"Origin": "http://trusted.test", "Cookie": owner_cookie},
         )
         self.assertEqual(status, 200, raw)

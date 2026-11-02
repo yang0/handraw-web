@@ -3687,8 +3687,50 @@
     return text.replace(KNOWN_SKILL_INSTRUCTION_RE, "").replace(/\n{3,}/g, "\n\n").trim();
   }
 
+  const PLACEHOLDER_TOPIC_TITLES = [
+    "图文模式",
+    "纯图模式",
+    "纯图",
+    "生成结果",
+    "当前工作流",
+    "未命名",
+    "无标题",
+    "默认草稿",
+    "画布创作",
+    "云端生图",
+    "生图结果",
+    "图片展示",
+    "作品展示"
+  ];
+
+  function validateTopicTitle(title) {
+    const raw = String(title || "").trim();
+    const nonWs = raw.replace(/\s+/g, "");
+    if (nonWs.length < 4) {
+      return "帖子标题至少需要 4 个非空白字符";
+    }
+
+    const strippedPlaceholder = raw.replace(/[\s\-_+|｜·#/\\#()（）\[\]【】\d+＋]+/g, "");
+    for (let i = 0; i < PLACEHOLDER_TOPIC_TITLES.length; i++) {
+      const p = PLACEHOLDER_TOPIC_TITLES[i];
+      if (raw === p || nonWs === p || strippedPlaceholder === p) {
+        return "标题不能使用默认占位词，请填写具体的主题或说明";
+      }
+    }
+
+    const residual = raw.replace(/(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+/gi, "");
+    const residualMeaningful = residual.replace(/[\s\-_+|｜·#/\\#()（）\[\]【】\d+＋]+/g, "");
+    if (!residualMeaningful) {
+      return "标题不能仅由编号组成，请添加具体的主题或说明";
+    }
+
+    return "";
+  }
+
   window.HANDRAW_SHARED = {
     filterDisplayPrompt,
+    PLACEHOLDER_TOPIC_TITLES,
+    validateTopicTitle,
     App,
     STYLE_GROUPS,
     LAYOUT_GROUPS,

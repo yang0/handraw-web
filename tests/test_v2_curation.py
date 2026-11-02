@@ -44,7 +44,7 @@ class CurationTests(unittest.TestCase):
         self.db.close();self.env.stop();self.tmp.cleanup()
 
     def item(self,kind='style',**overrides):
-        base = {'kind':kind,'name':'纸上微光','title':'纸上微光作品','images':['/images/FA-001.webp'],'definition':'秘密定义：自然纸纹和墨线','prompt':'秘密提示：窗边一束花','unlockCost':5}
+        base = {'kind':kind,'name':'纸上微光','title':'纸上微光作品','notes':'纸上微光作品创作说明心得记录','images':['/images/FA-001.webp'],'definition':'秘密定义：自然纸纹和墨线','prompt':'秘密提示：窗边一束花','unlockCost':5}
         if kind in ('style', 'layout'):
             base['cover'] = getattr(self, 'cover_url', '/uploads/cover_square.jpg')
         return dict(base, **overrides)

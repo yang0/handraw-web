@@ -80,21 +80,43 @@ global.Catalog = {
 
 // Extract and test getNormalizedRecipeSnapshot, buildPublishTitleFromRecipe, resolvePublishDefaultTitle
 // We simulate the exact implementation:
+function getGraphemeSegments(str) {
+  if (!str) return [];
+  if (typeof Intl !== "undefined" && Intl.Segmenter) {
+    const seg = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    return Array.from(seg.segment(str), (s) => s.segment);
+  }
+  return Array.from(str);
+}
+
+function formatSubjectTitle(rawSubject) {
+  if (!rawSubject) return "";
+  const clean = String(rawSubject).trim().replace(/\s+/g, " ");
+  if (!clean) return "";
+  const chars = getGraphemeSegments(clean);
+  if (chars.length > 40) {
+    return chars.slice(0, 39).join("") + "…";
+  }
+  return clean;
+}
+
 function getNormalizedRecipeSnapshot(rawItem) {
   if (!rawItem) return null;
   const s = rawItem.recipeSnapshot || rawItem.recipe || null;
   if (!s || typeof s !== "object") return null;
-  const s1 = s.style1 || s.style1Id || "";
-  const s2 = s.style2 || s.style2Id || "";
-  const lay = s.layout || s.layoutId || "";
-  if (!s1 && !s2 && !lay) return null;
+  const s1 = String(s.style1 || s.style1Id || "").trim().toUpperCase().replace(/^#/, "");
+  const s2 = String(s.style2 || s.style2Id || "").trim().toUpperCase().replace(/^#/, "");
+  const lay = String(s.layout || s.layoutId || "").trim().toUpperCase().replace(/^#/, "");
+  const subj = String(s.subject != null ? s.subject : (rawItem.subject != null ? rawItem.subject : "")).trim();
+  if (!s1 && !s2 && !lay && !subj) return null;
   return {
     style1: s1,
     style1Name: s.style1Name || "",
     style2: s2,
     style2Name: s.style2Name || "",
     layout: lay,
-    layoutName: s.layoutName || ""
+    layoutName: s.layoutName || "",
+    subject: subj
   };
 }
 
@@ -125,24 +147,37 @@ function buildPublishTitleFromRecipe(snapshot) {
 }
 
 function resolvePublishDefaultTitle(rawItems, dispNode, isPlan, isFromArticle) {
+  // 1. 用户手动填写的发布标题、文章标题保留
   if (dispNode?.data?.titleSource === "manual" && dispNode.data?.title) {
-    return dispNode.data.title;
+    return String(dispNode.data.title).slice(0, 120);
   }
   if (isPlan && dispNode?.data?.articleTitleSource === "manual" && dispNode.data?.articleTitle) {
-    return dispNode.data.articleTitle;
+    return String(dispNode.data.articleTitle).slice(0, 120);
   }
   const itemsWithImg = (rawItems || []).filter((it) => it && it.imageUrl);
   if (!itemsWithImg.length) {
     if (isPlan && dispNode?.data?.articleTitleSource === "manual" && dispNode.data?.articleTitle) {
-      return dispNode.data.articleTitle;
+      return String(dispNode.data.articleTitle).slice(0, 120);
     }
     return "Handraw 画布创作";
   }
   const recipes = itemsWithImg.map((it) => getNormalizedRecipeSnapshot(it));
   const validRecipes = recipes.filter(Boolean);
+
+  // 2. 该图生成时保存的用户主题（subject）——最高优先的自动来源
+  const firstSubject = (validRecipes[0] && validRecipes[0].subject) ||
+                       (rawItems[0] && (rawItems[0].subject || rawItems[0].recipeSnapshot?.subject)) || "";
+  if (firstSubject) {
+    const formatted = formatSubjectTitle(firstSubject);
+    if (formatted) {
+      return formatted;
+    }
+  }
+
+  // 4. 旧结果缺快照时用 Handraw 画布创作，不要猜编号
   if (!validRecipes.length) {
     if (isPlan && dispNode?.data?.articleTitle) {
-      return dispNode.data.articleTitle;
+      return String(dispNode.data.articleTitle).slice(0, 120);
     }
     return "Handraw 画布创作";
   }
@@ -225,6 +260,50 @@ const titleLegacy = resolvePublishDefaultTitle([
   { imageUrl: "https://example.com/old.jpg" }
 ], { data: {} }, false, false);
 assert.strictEqual(titleLegacy, "Handraw 画布创作", "Legacy image without snapshot must fallback to Handraw 画布创作");
+
+// Case 10: Subject priority over recipe snapshot
+const titleSubject = resolvePublishDefaultTitle([
+  { imageUrl: "https://example.com/sub.jpg", recipeSnapshot: { style1: "FA-001", style1Name: "赛博水墨", subject: "雨天便利店" } }
+], { data: {} }, false, false);
+assert.strictEqual(titleSubject, "雨天便利店", "Subject at generation time must take precedence over recipe snapshot");
+
+// Case 11: Whitespace collapsing and trimming
+const titleWs = resolvePublishDefaultTitle([
+  { imageUrl: "https://example.com/ws.jpg", recipeSnapshot: { style1: "FA-001", subject: "  雨天 \n\t  便利店 \n " } }
+], { data: {} }, false, false);
+assert.strictEqual(titleWs, "雨天 便利店", "Whitespace must be collapsed to single space and trimmed");
+
+// Case 12: 40 visible characters truncation with trailing '…'
+const longSubj = "这是一个非常非常非常非常非常非常非常非常非常非常非常非常非常长的创作主题用来测试截断是否正确";
+const titleTrunc = resolvePublishDefaultTitle([
+  { imageUrl: "https://example.com/long.jpg", recipeSnapshot: { style1: "FA-001", subject: longSubj } }
+], { data: {} }, false, false);
+const truncChars = getGraphemeSegments(titleTrunc);
+assert.strictEqual(truncChars.length, 40, "Truncated title must be exactly 40 visible characters");
+assert.ok(titleTrunc.endsWith("…"), "Truncated title must end with …");
+assert.strictEqual(titleTrunc, longSubj.slice(0, 39) + "…", "Hard truncation of first 39 chars + …");
+
+// Case 13: Composite emoji preserved intact without breaking
+const emojiSubj = "这是一个带组合表情的测试主题一二三四五六七八九十一二三四五六👨‍👩‍👧后面还有很多很多很多很多的描述文字";
+const titleEmoji = resolvePublishDefaultTitle([
+  { imageUrl: "https://example.com/emoji.jpg", recipeSnapshot: { style1: "FA-001", subject: emojiSubj } }
+], { data: {} }, false, false);
+const emojiChars = getGraphemeSegments(titleEmoji);
+assert.strictEqual(emojiChars.length, 40, "Title with composite emoji must be 40 visible characters");
+assert.ok(titleEmoji.includes("👨‍👩‍👧"), "Composite emoji must remain intact");
+assert.ok(titleEmoji.endsWith("…"), "Must end with …");
+
+// Case 14: Manual title not overwritten even if subject exists
+const titleManualWithSubj = resolvePublishDefaultTitle([
+  { imageUrl: "https://example.com/m.jpg", recipeSnapshot: { style1: "FA-001", subject: "原图生成主题" } }
+], { data: { title: "手动修改的高优先级标题", titleSource: "manual" } }, false, false);
+assert.strictEqual(titleManualWithSubj, "手动修改的高优先级标题", "Manual title must not be overwritten by subject");
+
+// Case 15: Subject < 4 chars keeps suggestion
+const titleShort = resolvePublishDefaultTitle([
+  { imageUrl: "https://example.com/short.jpg", recipeSnapshot: { style1: "FA-001", subject: "猫" } }
+], { data: {} }, false, false);
+assert.strictEqual(titleShort, "猫", "Short subject <4 chars must be preserved as suggestion without auto-padding");
 
 console.log("✓ Studio publish title generation verified.");
 

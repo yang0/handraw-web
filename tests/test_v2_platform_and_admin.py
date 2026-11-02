@@ -332,6 +332,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 "styles": ["FA-001"],
                 "layout": "SC-001",
                 "price": 10,
+                "notes": "这是用于测试的完整创作说明，详细记录测试过程",
                 "prompt": "机密高阶手绘提示词内容_888",
             },
         )
@@ -378,6 +379,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 "images": ["/images/individual/FA/FA-013.webp"],
                 "styles": ["FA-013"],
                 "layout": "SC-001",
+                "notes": "荒地开垦首晒测试创作说明实测心得记录",
                 "prompt": "荒地首晒提示词",
             },
         )
@@ -520,6 +522,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 "title": "审核员自己的作品测试自审拦截",
                 "images": ["/images/poster-demo-autumn-equinox.webp"],
                 "styles": ["FA-001"],
+                "notes": "审核员测试自审拦截的创作说明心得",
                 "prompt": "审核员作品提示词",
             },
         )
@@ -873,6 +876,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 "title": "普通创作者待删除作品测试",
                 "images": ["/images/poster-demo-autumn-equinox.webp"],
                 "styles": ["FA-001"],
+                "notes": "普通创作者待删除作品测试的完整创作说明",
                 "prompt": "待删除作品提示词",
             },
         )

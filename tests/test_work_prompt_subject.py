@@ -193,6 +193,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "subject": "独立主题内容",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FA-001"],
+                "notes": "这是初始干净作品的创作说明心得记录",
             },
         )
         wid = pub["workId"]
@@ -209,6 +210,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "prompt": "提示词全文2",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FA-001"],
+                "notes": "这是初始干净作品的创作说明心得记录",
             },
         )
         with self.db.transaction() as tx:
@@ -316,6 +318,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "subject": f"主题文字中包含 {self.secret} 专属黑盒指令",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FX-SECRET-SUBJ"],
+                "notes": "测试作品含秘密主题的创作说明心得记录",
                 "price": 0,
             },
             cookie=self.cookie_user,
@@ -390,6 +393,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "subject": "干净主题",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FA-001"],
+                "notes": "这是初始干净作品的创作说明心得记录",
             },
             cookie=self.cookie_user,
         )
@@ -463,6 +467,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "subject": f"主题附带绝密指令 {self.secret} 特征",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FX-SECRET-SUBJ"],
+                "notes": "测试作品含秘密主题的创作说明心得记录",
                 "price": 0,
             },
             cookie=self.cookie_user,
@@ -496,6 +501,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "subject": "付费作品的主题内容文字",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FA-001"],
+                "notes": "这是初始干净作品的创作说明心得记录",
                 "price": 10,
             },
             cookie=self.cookie_user,
@@ -545,6 +551,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "subject": "雨中街角面馆，热气腾腾的一碗汤面",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FA-001"],
+                "notes": "这是初始干净作品的创作说明心得记录",
                 "price": 0,
             },
             cookie=self.cookie_user,
@@ -722,6 +729,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "subject": "正常主题",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FA-001"],
+                "notes": "这是初始干净作品的创作说明心得记录",
                 "price": 0,
             },
         )
@@ -763,6 +771,7 @@ class WorkPromptSubjectTests(unittest.TestCase):
                 "subject": "原始绝密主题",
                 "images": ["/images/individual/FA/FA-001.webp"],
                 "styles": ["FA-001"],
+                "notes": "这是初始干净作品的创作说明心得记录",
                 "price": 0,
             },
         )

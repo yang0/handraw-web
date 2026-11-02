@@ -146,7 +146,7 @@
     if(nav && nav.querySelector("[data-account-tools-nav]")?.dataset.accountKey!==navKey){
       nav.querySelector("[data-account-tools-nav]")?.remove();
       const group=document.createElement("span");group.dataset.accountToolsNav="1";group.dataset.accountKey=navKey;group.className="hw-account-quicklinks";
-      group.innerHTML=`<a href="https://github.com/yang0/handraw-style" target="_blank" rel="noopener noreferrer">GitHub ↗</a><a href="${esc(mainUrl("guide"))}">使用指南</a>${S.App.state?.loggedIn?`<a href="${esc(mainUrl("notifications"))}">消息</a>`:""}`;
+      group.innerHTML=`<a href="https://github.com/yang0/handraw-style" target="_blank" rel="noopener noreferrer">GitHub ↗</a>${S.App.state?.loggedIn?`<a href="${esc(mainUrl("notifications"))}">消息</a>`:""}`;
       nav.append(group);
     }
     const login=document.querySelector("#login-demo-password");

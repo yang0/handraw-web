@@ -120,15 +120,14 @@ def main():
             assert target == "_blank", f"Expected target _blank, got {target}"
             assert "noopener" in (rel or ""), f"Expected rel to contain noopener, got {rel}"
 
-            # Verify it is to the left of 使用指南
-            is_before_guide = page.evaluate("""() => {
+            # Verify 使用指南 is removed and only GitHub ↗ (and 消息 when logged in) exist
+            nav_links_text = page.evaluate("""() => {
                 const links = Array.from(document.querySelectorAll('.hw-account-quicklinks a'));
-                const ghIdx = links.findIndex(a => a.textContent.includes('GitHub'));
-                const guideIdx = links.findIndex(a => a.textContent.includes('使用指南'));
-                return ghIdx !== -1 && guideIdx !== -1 && ghIdx < guideIdx;
+                return links.map(a => a.textContent.trim());
             }""")
-            assert is_before_guide, "GitHub link must be to the left of 使用指南"
-            print("Desktop check passed: GitHub link is left of 使用指南, attrs verified.")
+            assert not any("使用指南" in text for text in nav_links_text), f"Nav quicklinks must not contain 使用指南: {nav_links_text}"
+            assert any("GitHub" in text for text in nav_links_text), f"Nav quicklinks must contain GitHub: {nav_links_text}"
+            print(f"Desktop check passed: quicklinks contain {nav_links_text}, 使用指南 absent, attrs verified.")
 
             page.screenshot(path=str(SCREENSHOT_DIR / "github-nav-desktop-1440.png"))
             print("[OK] Saved desktop screenshot: C:/tmp/github-nav-desktop-1440.png")

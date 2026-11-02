@@ -3120,6 +3120,44 @@ def publish_user_community_asset(db, user, body):
 
 
 
+PLACEHOLDER_TOPIC_TITLES = {
+    "图文模式",
+    "纯图模式",
+    "纯图",
+    "生成结果",
+    "当前工作流",
+    "未命名",
+    "无标题",
+    "默认草稿",
+    "画布创作",
+    "云端生图",
+    "生图结果",
+    "图片展示",
+    "作品展示",
+}
+
+RESOURCE_CODE_PATTERN = re.compile(r"(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+", re.IGNORECASE)
+PUNCTUATION_AND_CONNECTORS = re.compile(r"[\s\-_+|｜·#/\\#()（）\[\]【】\d+＋]+", re.IGNORECASE)
+
+
+def validate_topic_title(title: Any) -> str:
+    raw = str(title or "").strip()
+    non_ws = re.sub(r"\s+", "", raw)
+    if len(non_ws) < 4:
+        raise ServiceError("帖子标题至少需要 4 个非空白字符", status=400, code="title_too_short")
+
+    stripped_placeholder = PUNCTUATION_AND_CONNECTORS.sub("", raw)
+    if raw in PLACEHOLDER_TOPIC_TITLES or non_ws in PLACEHOLDER_TOPIC_TITLES or stripped_placeholder in PLACEHOLDER_TOPIC_TITLES:
+        raise ServiceError("标题不能使用默认占位词，请填写具体的主题或说明", status=400, code="title_placeholder_disallowed")
+
+    residual = RESOURCE_CODE_PATTERN.sub("", raw)
+    residual_meaningful = PUNCTUATION_AND_CONNECTORS.sub("", residual)
+    if not residual_meaningful:
+        raise ServiceError("标题不能仅由编号组成，请添加具体的主题或说明", status=400, code="title_only_resource_code")
+
+    return raw
+
+
 def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
     cat = str(body.get("category") or "experience")
     cat_map = {
@@ -3131,7 +3169,7 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
     if cat not in cat_map:
         cat = "experience"
 
-    title = str(body.get("title") or "最新创作调参交流帖").strip()[:140]
+    title = validate_topic_title(body.get("title"))[:140]
     raw_body = str(body.get("body") or body.get("bodyHtml") or body.get("lockedBody") or body.get("summary") or "附上我的实战配置与思考，欢迎交流！").strip()[:60000]
     price_val = body.get("price")
     if price_val is not None and str(price_val).strip() != "":
@@ -4123,7 +4161,7 @@ def consume_daily_usage(db: Database, user_id: int | str, scope: str, limit: int
     today = local_today_str()
     with db.transaction() as tx:
         row = tx.execute(
-            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND (usage_date = ? OR usage_date = CURRENT_DATE)",
+            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND usage_date = ?",
             (uid, clean_scope, today),
         ).fetchone()
         current = int(row["count"]) if row else 0

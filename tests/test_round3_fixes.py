@@ -26,7 +26,7 @@ class ForkCounterCannotBeGamedTests(unittest.TestCase):
         self.db = server.init_database(Path(self.temp.name) / "forkgame.db")
         self.author, _ = register_user(self.db, "fg_author", "password-a")
         self.parent = publish_user_work(
-            self.db, self.author, {"title": "父作品", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
+            self.db, self.author, {"title": "父作品测试发布", "notes": "父作品测试发布的创作说明内容", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
         )
 
     def tearDown(self):
@@ -51,7 +51,8 @@ class ForkCounterCannotBeGamedTests(unittest.TestCase):
                 self.db,
                 user,
                 {
-                    "title": f"傀儡作品{index}",
+                    "title": f"傀儡作品测试{index}",
+                    "notes": "傀儡作品分叉测试创作说明内容",
                     "prompt": "p",
                     "images": [IMG],
                     "styles": ["FA-013"],
@@ -93,7 +94,7 @@ class MixedSubmissionBackdoorTests(unittest.TestCase):
             "name": "名称",
             "images": [IMG],
             "prompt": "提示词",
-            "description": "说明",
+            "description": "适合写意山水插画说明内容",
             "definition": "定义",
         }
         if kind in ("style", "layout"):
@@ -147,6 +148,7 @@ class PaidPromptNeverRenderedTests(unittest.TestCase):
             self.author,
             {
                 "title": "付费SSR作品",
+                "notes": "这是付费SSR作品的创作说明实测心得记录",
                 "prompt": "TOPSECRET-RECIPE-abcdefghijklmnopqrstuvwxyz",
                 "images": [IMG],
                 "styles": ["FA-013"],
@@ -177,7 +179,7 @@ class VisibilityPropagationTests(unittest.TestCase):
         self.db = server.init_database(Path(self.temp.name) / "vis2.db")
         self.author, _ = register_user(self.db, "vp_author", "password-a")
         self.work = publish_user_work(
-            self.db, self.author, {"title": "举报作品", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
+            self.db, self.author, {"title": "举报作品测试", "notes": "举报作品测试创作说明心得", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
         )
 
     def tearDown(self):

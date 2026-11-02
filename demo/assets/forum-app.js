@@ -913,11 +913,13 @@
             type="text"
             id="compose-title-input"
             class="hw-compose-title"
-            placeholder="输入帖子标题…"
+            placeholder="例如：雨天便利店｜水彩画风尝试"
             value="${esc(d.title)}"
             maxlength="120"
             autocomplete="off"
           />
+          <p class="hw-compose-help" style="margin:4px 0 10px;font-size:12.5px;color:var(--ink-muted);">示例：雨天便利店｜水彩画风尝试（至少 4 字，勿用纯编号或「图文模式」等占位词）</p>
+          <div id="compose-title-err" style="color:var(--vermilion);font-size:12.5px;font-weight:700;display:none;margin:-4px 0 10px;"></div>
 
           <!-- Rich Text Formatting & Insertion Toolbar -->
           <div class="hw-editor-toolbar" id="compose-editor-toolbar">
@@ -1583,6 +1585,17 @@
       };
     }
 
+    const titleInputEl = root.querySelector("#compose-title-input");
+    if (titleInputEl) {
+      titleInputEl.addEventListener("input", () => {
+        const errEl = root.querySelector("#compose-title-err");
+        if (errEl) {
+          errEl.textContent = "";
+          errEl.style.display = "none";
+        }
+      });
+    }
+
     root.querySelector("#compose-submit-btn").onclick = async () => {
       syncDraftInputsFromDom(root);
       if (!App.state.loggedIn) {
@@ -1590,11 +1603,39 @@
         return;
       }
       const title = (d.title || "").trim();
-      if (title.length < 4) {
-        toast("帖子标题至少输入 4 个字");
+      const titleErr = (typeof S !== "undefined" && S.validateTopicTitle ? S.validateTopicTitle(title) : null) || (function (t) {
+        const raw = String(t || "").trim();
+        const nonWs = raw.replace(/\s+/g, "");
+        if (nonWs.length < 4) return "帖子标题至少输入 4 个字";
+        const PLACEHOLDERS = ["图文模式", "纯图模式", "纯图", "生成结果", "当前工作流", "未命名", "无标题", "默认草稿", "画布创作", "云端生图", "生图结果", "图片展示", "作品展示"];
+        const strippedPlaceholder = raw.replace(/[\s\-_+|｜·#/\\#()（）\[\]【】\d+＋]+/g, "");
+        for (let i = 0; i < PLACEHOLDERS.length; i++) {
+          const p = PLACEHOLDERS[i];
+          if (raw === p || nonWs === p || strippedPlaceholder === p) {
+            return "标题不能使用默认占位词，请填写具体的主题或说明";
+          }
+        }
+        const residual = raw.replace(/(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+/gi, "");
+        const residualMeaningful = residual.replace(/[\s\-_+|｜·#/\\#()（）\[\]【】\d+＋]+/g, "");
+        if (!residualMeaningful) {
+          return "标题不能仅由编号组成，请添加具体的主题或说明";
+        }
+        return "";
+      })(title);
+
+      const titleErrEl = root.querySelector("#compose-title-err");
+      if (titleErr) {
+        if (titleErrEl) {
+          titleErrEl.textContent = titleErr;
+          titleErrEl.style.display = "block";
+        }
         const el = root.querySelector("#compose-title-input");
         if (el) el.focus();
         return;
+      }
+      if (titleErrEl) {
+        titleErrEl.textContent = "";
+        titleErrEl.style.display = "none";
       }
 
       // Extract in-text media figures
@@ -3888,11 +3929,11 @@
           <p class="hw-editorial-sub">在这里晒图交流作品，分享可复用的<strong>画风、图型与提示词</strong>；遇到问题也可以<strong>发帖求助</strong>，和大家一起探讨。</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-primary" id="forum-btn-new-visual">分享投稿</button>
+          <button type="button" class="btn btn-primary" id="forum-btn-new-visual">作品|画风|图型投稿</button>
           <a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"mine"}))}">我的投稿</a>
           <a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"review"}))}">参与审核</a>
           ${isSuperAdmin ? `<a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"admin"}))}">审核资格管理</a>` : ""}
-          <button type="button" class="btn" id="forum-btn-new-text">📝 发纯文讨论帖</button>
+          <button type="button" class="btn" id="forum-btn-new-text">📝 发论坛讨论贴</button>
         </div>
       </section>
 
