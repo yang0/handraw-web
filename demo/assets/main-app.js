@@ -1113,7 +1113,7 @@
       );
       const marginStyle = (item.extraMargin && item.extraMargin > 0) ? `margin-top:${item.extraMargin}px;` : "";
       return `
-        <article class="hw-wb-card" data-wb-work="${esc(id)}" data-wb-card-key="${esc(itemKey)}" style="${marginStyle}">
+        <article class="hw-wb-card" data-wb-work="${esc(id)}" data-wb-card-key="${esc(itemKey)}" data-wb-author="${esc(item.author || item.authorUsername || w.author || w.author_username || "")}" style="${marginStyle}">
           <a class="hw-wb-media" href="${esc(href)}" data-wb-open="${esc(id)}" data-wb-img-idx="${imgIdx}" aria-label="打开作品：${esc(w.title || "未命名作品")}" style="aspect-ratio:${ar};">
             <img data-hw-src="${esc(imageUrl)}" alt="${esc(w.title || "作品图片")}" loading="lazy" />
             ${totalImgs > 1 ? `<span class="hw-wb-img-badge">图 ${imgIdx + 1}/${totalImgs}</span>` : ""}

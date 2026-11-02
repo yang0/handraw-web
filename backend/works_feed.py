@@ -27,7 +27,11 @@ _SESSION_TTL_SECONDS = 1800.0  # 30 minutes
 
 def _clean_expired_sessions() -> None:
     now = time.time()
-    expired = [sid for sid, (_, ts) in _FEED_POPULAR_SESSIONS.items() if now - ts > _SESSION_TTL_SECONDS]
+    expired = [
+        sid
+        for sid, val in _FEED_POPULAR_SESSIONS.items()
+        if len(val) >= 2 and (now - val[1]) > _SESSION_TTL_SECONDS
+    ]
     for sid in expired:
         _FEED_POPULAR_SESSIONS.pop(sid, None)
 
@@ -265,6 +269,30 @@ def get_works_feed(
             }
         )
 
+    # Also read comments from forum_replies via curation_resource_topics
+    reply_filter, reply_ids = _seed_filter("fr.id", "forum_replies")
+    for fr in conn.execute(
+        f"""
+        SELECT crt.target_id AS work_id, fr.id, fr.author_username, fr.author_name, fr.text, fr.time_label, fr.created_at
+        FROM forum_replies fr
+        JOIN curation_resource_topics crt ON crt.topic_id = fr.topic_id AND crt.kind = 'work'
+        WHERE fr.status = 'published' AND {reply_filter}
+        ORDER BY fr.created_at ASC, fr.id ASC
+        """,
+        reply_ids,
+    ).fetchall():
+        work_list = comments_by_work.setdefault(fr["work_id"], [])
+        if not any(c["id"] == fr["id"] for c in work_list):
+            work_list.append(
+                {
+                    "id": fr["id"],
+                    "user": fr["author_username"],
+                    "name": fr["author_name"],
+                    "text": fr["text"],
+                    "time": fr["time_label"] or fr["created_at"],
+                }
+            )
+
     unlocked_set = _get_unlocked_set(conn, current_user)
 
     # User like & collection target sets for fast lookup
@@ -296,9 +324,44 @@ def get_works_feed(
             offset = 0
 
         # Retrieve or initialize frozen session
-        if session_id in _FEED_POPULAR_SESSIONS:
-            ordered_ids, _ = _FEED_POPULAR_SESSIONS[session_id]
-        else:
+        cur_uid = current_user["id"] if current_user else None
+        cur_filter = (fmt, access, asset, author, q)
+
+        if offset > 0 and session_id not in _FEED_POPULAR_SESSIONS:
+            return {
+                "ok": True,
+                "items": [],
+                "nextCursor": None,
+                "hasMore": False,
+                "total": 0,
+                "counts": counts,
+                "sessionId": session_id,
+                "sessionExpired": True,
+                "needsRefresh": True,
+            }
+
+        sess_data = _FEED_POPULAR_SESSIONS.get(session_id)
+        if sess_data:
+            ordered_ids = sess_data[0]
+            if len(sess_data) >= 4:
+                _, _, sess_uid, sess_filter = sess_data
+                if sess_uid != cur_uid or sess_filter != cur_filter:
+                    if offset > 0:
+                        return {
+                            "ok": True,
+                            "items": [],
+                            "nextCursor": None,
+                            "hasMore": False,
+                            "total": 0,
+                            "counts": counts,
+                            "sessionId": session_id,
+                            "sessionExpired": True,
+                            "needsRefresh": True,
+                        }
+                    else:
+                        sess_data = None
+
+        if not sess_data:
             pop_sql = f"""
                 SELECT id
                 FROM works
@@ -307,7 +370,7 @@ def get_works_feed(
             """
             id_rows = conn.execute(pop_sql, filter_params).fetchall()
             ordered_ids = [r["id"] for r in id_rows]
-            _FEED_POPULAR_SESSIONS[session_id] = (ordered_ids, time.time())
+            _FEED_POPULAR_SESSIONS[session_id] = (ordered_ids, time.time(), cur_uid, cur_filter)
 
         total_session_items = len(ordered_ids)
         page_ids = ordered_ids[offset : offset + limit]
@@ -434,6 +497,27 @@ def get_work_by_id(
             (wid, *comment_ids),
         ).fetchall()
     ]
+    reply_filter, reply_ids = _seed_filter("fr.id", "forum_replies")
+    for fr in conn.execute(
+        f"""
+        SELECT fr.id, fr.author_username, fr.author_name, fr.text, fr.time_label, fr.created_at
+        FROM forum_replies fr
+        JOIN curation_resource_topics crt ON crt.topic_id = fr.topic_id AND crt.kind = 'work'
+        WHERE crt.target_id = ? AND fr.status = 'published' AND {reply_filter}
+        ORDER BY fr.created_at ASC, fr.id ASC
+        """,
+        (wid, *reply_ids),
+    ).fetchall():
+        if not any(c["id"] == fr["id"] for c in comments):
+            comments.append(
+                {
+                    "id": fr["id"],
+                    "user": fr["author_username"],
+                    "name": fr["author_name"],
+                    "text": fr["text"],
+                    "time": fr["time_label"] or fr["created_at"],
+                }
+            )
 
     w_dict = _serialize_work(row, {wid: comments}, unlocked_set, current_user)
     if current_user:

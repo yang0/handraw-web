@@ -2506,6 +2506,11 @@ def toggle_user_collection(
             bucket = "works"
             tid = str(primary["target_id"])
 
+    if bucket == "works":
+        w_chk = db.get_conn().execute("SELECT id, status FROM works WHERE id = ?", (tid,)).fetchone()
+        if not w_chk or str(w_chk["status"]) != "published":
+            raise ServiceError("作品不存在或已下架", status=404)
+
     if bucket == "generations":
         g_row = db.get_conn().execute(
             "SELECT * FROM studio_generations WHERE id = ?", (tid,)
@@ -2923,9 +2928,9 @@ def toggle_user_like(
 
     with db.transaction() as tx:
         if norm_type == "work":
-            w_row = tx.execute("SELECT id, title, author_name, likes FROM works WHERE id = ?", (tid,)).fetchone()
-            if not w_row:
-                raise ServiceError("作品不存在", status=404)
+            w_row = tx.execute("SELECT id, title, author_name, likes, status FROM works WHERE id = ?", (tid,)).fetchone()
+            if not w_row or str(w_row["status"]) != "published":
+                raise ServiceError("作品不存在或已下架", status=404)
             title_lbl = w_row["title"]
         elif norm_type == "topic":
             t_row = tx.execute("SELECT id, title, author_name, likes FROM forum_topics WHERE id = ?", (tid,)).fetchone()
@@ -3782,6 +3787,32 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
 
         if not work_id:
             work_id = str(body.get("workId") or "").strip()[:64]
+
+        if work_id:
+            existing_mapping = tx.execute(
+                "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
+                (work_id,),
+            ).fetchone()
+            if not existing_mapping:
+                existing_topic = tx.execute(
+                    "SELECT id FROM forum_topics WHERE work_id = ?",
+                    (work_id,),
+                ).fetchone()
+                if existing_topic:
+                    existing_mapping = {"topic_id": existing_topic["id"]}
+                    tx.execute(
+                        "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
+                        (work_id, existing_topic["id"], now_iso),
+                    )
+
+            if existing_mapping:
+                tid = str(existing_mapping["topic_id"])
+                tx.execute(
+                    "UPDATE forum_topics SET summary = ?, title = CASE WHEN ? != '' THEN ? ELSE title END, updated_at = ? WHERE id = ? AND author_username = ?",
+                    (summary, title, title, now_iso, tid, user["username"]),
+                )
+                return {"ok": True, "topicId": tid, "topic": {"id": tid, "price": price}, "credits": new_bal, "bounty": bounty, "reused": True}
+
         recipe_str = json.dumps(recipe, ensure_ascii=False) if recipe else ""
         try:
             recipe_has_sec = 1 if (recipe and check_obj_has_secret(recipe, tx)) else 0
@@ -3819,6 +3850,20 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
                 now_iso,
             ),
         )
+
+        if work_id:
+            try:
+                tx.execute(
+                    "INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
+                    (work_id, tid, now_iso),
+                )
+            except sqlite3.IntegrityError:
+                mapped = tx.execute(
+                    "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
+                    (work_id,),
+                ).fetchone()
+                if mapped:
+                    tid = str(mapped["topic_id"])
 
     return {"ok": True, "topicId": tid, "topic": {"id": tid, "price": price}, "credits": new_bal, "bounty": bounty}
 
@@ -4936,6 +4981,20 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "error": sanitize_client_error_msg(r["error_msg"], r["status"]),
             "recipeId": r["recipe_id"] if "recipe_id" in r_keys else "",
         }
+        try:
+            mapped_rows = conn.execute(
+                "SELECT item_key, work_id FROM generation_works WHERE generation_id = ?",
+                (r["id"],),
+            ).fetchall()
+            if mapped_rows:
+                key_to_wid = {mr["item_key"]: mr["work_id"] for mr in mapped_rows}
+                for it in items:
+                    it_k = it.get("id") or f"img_{hashlib.sha256((it.get('imageUrl') or '').encode('utf-8')).hexdigest()[:16]}"
+                    if it_k in key_to_wid:
+                        it["workId"] = key_to_wid[it_k]
+                hist_entry["workId"] = mapped_rows[0]["work_id"]
+        except Exception:
+            pass
         if snap:
             hist_entry["recipeSnapshot"] = snap
         if was_masked:
@@ -5205,6 +5264,11 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 """,
                 (*values, clean_subj, clean_subj, fork_gen_id, fork_gen_id, fork_item_id, fork_item_id, target_id, uid),
             )
+            try:
+                from .generation_works import project_generation_to_works
+                project_generation_to_works(tx, target_id)
+            except Exception as e:
+                logger.warning("Project generation %s to works failed: %s", target_id, e)
             return {"ok": True, "id": target_id}
         else:
             tx.execute(
@@ -5217,6 +5281,11 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 """,
                 (hid, uid, user["username"], *values, now_iso, req_id, clean_subj, fork_gen_id, fork_item_id),
             )
+            try:
+                from .generation_works import project_generation_to_works
+                project_generation_to_works(tx, hid)
+            except Exception as e:
+                logger.warning("Project generation %s to works failed: %s", hid, e)
             return {"ok": True, "id": hid}
 
 
@@ -5241,6 +5310,11 @@ def delete_user_studio_history(db: Database, user: dict[str, Any], history_id: s
         if row["deleted_at"]:
             return {"ok": True, "id": hid, "deleted": False}
         tx.execute("UPDATE studio_generations SET deleted_at = ? WHERE id = ? AND user_id = ?", (utc_now_iso(), hid, uid))
+        try:
+            from .generation_works import sync_generation_visibility
+            sync_generation_visibility(tx, hid, "private", is_deleted=True)
+        except Exception as e:
+            logger.warning("Sync generation %s delete to works failed: %s", hid, e)
     return {"ok": True, "id": hid, "deleted": True}
 
 
@@ -5254,6 +5328,7 @@ def delete_all_user_studio_history(db: Database, user: dict[str, Any]) -> dict[s
     uid = int(user["id"])
     now_iso = utc_now_iso()
     with db.transaction() as tx:
+        gen_ids = [r[0] for r in tx.execute("SELECT id FROM studio_generations WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND status NOT IN ('queued', 'running')", (uid,)).fetchall()]
         cur = tx.execute(
             """
             UPDATE studio_generations
@@ -5263,6 +5338,13 @@ def delete_all_user_studio_history(db: Database, user: dict[str, Any]) -> dict[s
             """,
             (now_iso, uid),
         )
+        deleted = int(cur.rowcount or 0)
+        try:
+            from .generation_works import sync_generation_visibility
+            for gid in gen_ids:
+                sync_generation_visibility(tx, str(gid), "private", is_deleted=True)
+        except Exception as e:
+            logger.warning("Sync all generations delete for user %s failed: %s", uid, e)
         deleted = int(cur.rowcount or 0)
     return {"ok": True, "deleted": deleted}
 
@@ -6142,6 +6224,11 @@ def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_url
                             utc_now_iso(),
                         ),
                     )
+            try:
+                from .generation_works import project_generation_to_works
+                project_generation_to_works(tx, gen_id)
+            except Exception as e:
+                logger.warning("Project live generation %s to works failed: %s", gen_id, e)
         else:
             tx.execute("UPDATE studio_generations SET task_id = ? WHERE id = ? AND status NOT IN ('refunded', 'success')", (task_id, gen_id))
 

@@ -32,6 +32,7 @@ WHITELIST_FIELDS = {
     "images",
     "topic",
     "title",
+    "subject",
     "ratio",
     "mode",
     "styles",

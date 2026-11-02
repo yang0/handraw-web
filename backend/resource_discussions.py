@@ -210,17 +210,77 @@ def comment(db,user,kind,target_id,text):
         resource=resolve_resource(tx,kind,target)
         if not resource:
             raise S.ServiceError('资源不存在或尚未收录',status=404)
-        tid=ensure_topic(tx,kind,target,resource)
+
+        if kind == 'work':
+            # Check if topic already exists for this work
+            mapping = tx.execute(
+                "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
+                (target,),
+            ).fetchone()
+            if not mapping:
+                existing_topic = tx.execute("SELECT id FROM forum_topics WHERE work_id = ?", (target,)).fetchone()
+                if existing_topic:
+                    tid = str(existing_topic["id"])
+                    tx.execute(
+                        "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
+                        (target, tid, S.utc_now_iso()),
+                    )
+                else:
+                    tid = None
+            else:
+                tid = str(mapping["topic_id"])
+
+            if not tid:
+                # Work has NO topic yet!
+                # Check commenter: "别人的首条有效评论触发同一讨论帖创建；作者自己评论不触发"
+                author_uname = str(resource.get("author_username") or "").strip().lower()
+                commenter_uname = str(user.get("username") or "").strip().lower()
+                if commenter_uname == author_uname:
+                    raise S.ServiceError("作品尚未发布讨论帖，作者可先晒图至论坛", status=400)
+
+                # First valid comment by someone else -> trigger topic creation atomically
+                tid = ensure_topic(tx, kind, target, resource)
+        else:
+            tid = ensure_topic(tx, kind, target, resource)
+
         topic=tx.execute('SELECT status FROM forum_topics WHERE id=?',(tid,)).fetchone()
         if not topic or topic['status']!='published':
             raise S.ServiceError('讨论已暂停',status=409)
-    result=S.publish_forum_reply_post(db,user,tid,clean,direct=True)
-    result['topicId']=tid
-    result['replyId']=result.get('replyId')
-    result['assetCode']=target if kind!='work' else None
-    result['assetKind']=kind
-    result['comment']={'id':result['replyId'],'user':user['username'],'name':user['display_name'],'text':clean,'time':'刚刚'}
-    return result
+
+        # Atomically commit reply in the same transaction
+        rid = f"rep_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
+        now_iso = S.utc_now_iso()
+        tx.execute(
+            """
+            INSERT INTO forum_replies (
+                id, topic_id, author_username, author_name, text, mounted_style, mounted_layout,
+                likes, accepted, status, time_label, created_at
+            ) VALUES (?, ?, ?, ?, ?, '', '', 0, 0, 'published', '刚刚', ?)
+            """,
+            (rid, tid, user["username"], user["display_name"], clean, now_iso),
+        )
+
+        uid = int(user["id"])
+        bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        if bal_row:
+            cur_bal = int(bal_row["balance"])
+        else:
+            tx.execute(
+                "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
+                (uid, now_iso),
+            )
+            cur_bal = 0
+
+    return {
+        "ok": True,
+        "topicId": tid,
+        "replyId": rid,
+        "rewarded": 0,
+        "credits": cur_bal,
+        "assetCode": target if kind != 'work' else None,
+        "assetKind": kind,
+        "comment": {"id": rid, "user": user["username"], "name": user["display_name"], "text": clean, "time": "刚刚"},
+    }
 
 
 def _activity(conn,replies,fallback):

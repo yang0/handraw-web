@@ -127,11 +127,14 @@
       const imgs = imagesFor(w);
       if (!imgs.length) continue;
       const resCodes = normalizeResourceCodes(w);
+      const author = String(w.author || w.author_username || w.authorName || w.user || "").trim();
       imgs.forEach((imgUrl, imgIdx) => {
         const ar = parseAspectRatio(w, imgIdx);
         candidates.push({
           itemKey: `${w.id}_${imgIdx}`,
           workId: String(w.id),
+          author: author,
+          authorUsername: author,
           imgIndex: imgIdx,
           totalImages: imgs.length,
           imageUrl: imgUrl,
@@ -176,7 +179,10 @@
       return imgHeight + bodyHeight;
     }
 
-    function isConflict(candidate, targetTop, targetHeight) {
+    const distinctAuthorsInQueue = new Set(queue.map(c => c.author).filter(Boolean));
+    const hasMultipleAuthors = distinctAuthorsInQueue.size > 1;
+
+    function isResourceConflict(candidate, targetTop, targetHeight) {
       if (!candidate.resourceCodes || candidate.resourceCodes.size === 0) return false;
       for (const p of placed) {
         if (!p.resourceCodes || p.resourceCodes.size === 0) continue;
@@ -193,6 +199,49 @@
       return false;
     }
 
+    function isAuthorConflict(candidate, targetTop, targetHeight, col) {
+      if (!hasMultipleAuthors || !candidate.author) return false;
+      const coVisible = placed.filter(p => {
+        const pBottom = p.top + p.height;
+        const cBottom = targetTop + targetHeight;
+        return targetTop < pBottom + viewportHeight && p.top < cBottom + viewportHeight;
+      });
+      if (coVisible.length === 0) return false;
+
+      // If all visible cards in current window belong to candidate's author
+      const sameAuthorCount = coVisible.filter(p => p.author === candidate.author).length;
+      if (sameAuthorCount === coVisible.length) {
+        return true;
+      }
+      // If >= 3 visible cards and author occupies >= 66%
+      if (coVisible.length >= 3 && sameAuthorCount / coVisible.length >= 0.66) {
+        return true;
+      }
+      // Column sequential check
+      const colItems = placed.filter(p => p.col === col);
+      if (colItems.length > 0) {
+        const lastInCol = colItems[colItems.length - 1];
+        if (lastInCol.author === candidate.author && (targetTop - (lastInCol.top + lastInCol.height)) < viewportHeight * 0.5) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // A softer rule for pass 2: the author may repeat, but not past two thirds
+    // of what is on screen at once.
+    function isAuthorDominant(candidate, targetTop, targetHeight) {
+      if (!hasMultipleAuthors || !candidate.author) return false;
+      const coVisible = placed.filter((p) => {
+        const pBottom = p.top + p.height;
+        const cBottom = targetTop + targetHeight;
+        return targetTop < pBottom + viewportHeight && p.top < cBottom + viewportHeight;
+      });
+      if (coVisible.length < 3) return false;
+      const same = coVisible.filter((p) => p.author === candidate.author).length;
+      return same / coVisible.length >= 0.66;
+    }
+
     let progress = true;
     while (queue.length > 0 && progress) {
       let minCol = 0;
@@ -205,12 +254,41 @@
       }
 
       let foundIdx = -1;
+
+      // Pass 1: Strict - No resource conflict AND no author conflict
       for (let i = 0; i < queue.length; i++) {
         const cand = queue[i];
         const h = calcCardHeight(cand.aspectRatio);
-        if (!isConflict(cand, minH, h)) {
+        if (!isResourceConflict(cand, minH, h) && !isAuthorConflict(cand, minH, h, minCol)) {
           foundIdx = i;
           break;
+        }
+      }
+
+      // Pass 2: relax the author rule, but never let one author take the whole
+      // screen. A queue dominated by a single author (24 of 67 in practice) has
+      // no candidate that passes pass 1, so relaxing straight to "any author"
+      // reproduced exactly the wall we were trying to avoid.
+      if (foundIdx < 0) {
+        for (let i = 0; i < queue.length; i++) {
+          const cand = queue[i];
+          const h = calcCardHeight(cand.aspectRatio);
+          if (isResourceConflict(cand, minH, h)) continue;
+          if (isAuthorDominant(cand, minH, h)) continue;
+          foundIdx = i;
+          break;
+        }
+      }
+
+      // Pass 3: only when even that is impossible, ignore the author entirely.
+      if (foundIdx < 0) {
+        for (let i = 0; i < queue.length; i++) {
+          const cand = queue[i];
+          const h = calcCardHeight(cand.aspectRatio);
+          if (!isResourceConflict(cand, minH, h)) {
+            foundIdx = i;
+            break;
+          }
         }
       }
 
@@ -228,7 +306,8 @@
         newlyPlaced.push(itemRecord);
         colHeights[minCol] = minH + h + gap;
       } else {
-        // Find candidate with smallest safe top
+        // Fallback when all remaining candidates have resource conflicts:
+        // Only enforce viewport whitespace separation if candidates share style/layout resource codes
         let bestIdx = -1;
         let minSafeTop = Infinity;
         for (let i = 0; i < queue.length; i++) {
