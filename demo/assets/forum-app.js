@@ -148,7 +148,6 @@
   const FUI = {
     view: "list", // 'list' | 'compose' | 'topic' | 'moderators' | 'auth'
     category: "all", // 'all' | 'tuning' | 'experience' | 'assets' | 'tools'
-    format: "all", // 'all' | 'visual' | 'text'
     sort: "hot", // 'hot' | 'newest' | 'featured' | 'bounty' | 'paid'
     query: "",
     filterAsset: "",
@@ -226,9 +225,7 @@
     if (p.get("category") && ["all", "tuning", "experience", "assets", "tools"].includes(p.get("category"))) {
       FUI.category = p.get("category");
     }
-    if (p.get("format") && ["all", "visual", "text"].includes(p.get("format"))) {
-      FUI.format = p.get("format");
-    }
+    // Legacy URL param 'format' (visual/text) is ignored; format filter is deprecated.
 
     if (["resource", "related"].includes(view)) { FUI.view=view; return; }
     if (view === "curation") { FUI.view="curation"; return; }
@@ -2471,7 +2468,7 @@
                 ${
                   workPost ? `<span class="forum-format-badge is-visual">作品分享</span>` : isResourceKind ? `<span class="forum-format-badge">${mount.kind === "style" ? "🎨 画风推荐" : "📐 图型推荐"}</span>` : imgs.length > 0
                     ? `<span class="forum-format-badge is-visual">🖼️ ${imgs.length} 图分享帖</span>`
-                    : `<span class="forum-format-badge">📝 纯文讨论帖</span>`
+                    : ""
                 }
                 ${
                   topic.bounty > 0
@@ -3675,7 +3672,7 @@
           ${
             imgCount > 0
               ? `<span class="forum-format-badge is-visual">🖼️ ${imgCount > 1 ? `${imgCount} 图分享` : "图文分享"}</span>`
-              : `<span class="forum-format-badge">📝 纯文讨论</span>`
+              : ""
           }
           ${
             t.price > 0
@@ -3876,8 +3873,6 @@
     }
 
     const allTopics = App.state.topics || [];
-    const visualCount = allTopics.filter((t) => (t.images || []).length > 0).length;
-    const textOnlyCount = allTopics.length - visualCount;
 
     const cats = [
       { key: "all", label: "📋 全部社区讨论", count: allTopics.length },
@@ -3894,10 +3889,7 @@
 
     const q = FUI.query.trim().toLowerCase();
     const filtered = allTopics.filter((t) => {
-      const hasImgs = (t.images || []).length > 0;
       if (FUI.category !== "all" && t.category !== FUI.category) return false;
-      if (FUI.format === "visual" && !hasImgs) return false;
-      if (FUI.format === "text" && hasImgs) return false;
       if (FUI.sort === "featured" && !t.featured) return false;
       if (FUI.sort === "bounty" && !(t.bounty > 0 && !t.solved)) return false;
       if (FUI.sort === "paid" && !(t.price > 0)) return false;
@@ -4016,12 +4008,6 @@
                 <button type="button" class="hw-seg-btn ${FUI.sort === "bounty" ? "is-active" : ""}" data-fsort="bounty">💰 悬赏待结</button>
                 <button type="button" class="hw-seg-btn ${FUI.sort === "paid" ? "is-active" : ""}" data-fsort="paid">💎 实战干货</button>
               </div>
-
-              <div class="hw-segmented" title="筛选图文帖或纯文字帖">
-                <button type="button" class="hw-seg-btn ${FUI.format === "all" ? "is-active" : ""}" data-fformat="all">全部 (${allTopics.length})</button>
-                <button type="button" class="hw-seg-btn ${FUI.format === "visual" ? "is-active" : ""}" data-fformat="visual">🖼️ 图文 (${visualCount})</button>
-                <button type="button" class="hw-seg-btn ${FUI.format === "text" ? "is-active" : ""}" data-fformat="text">📝 纯文 (${textOnlyCount})</button>
-              </div>
             </div>
 
             <input type="search" class="hw-input" id="forum-search-input" value="${esc(FUI.query)}" placeholder="搜索帖子 / 编号 / 报价 / 避坑词…" style="min-width:210px;" />
@@ -4115,12 +4101,6 @@
     root.querySelectorAll("[data-fsort]").forEach((b) => {
       b.onclick = () => {
         FUI.sort = b.getAttribute("data-fsort");
-        renderForum();
-      };
-    });
-    root.querySelectorAll("[data-fformat]").forEach((b) => {
-      b.onclick = () => {
-        FUI.format = b.getAttribute("data-fformat");
         renderForum();
       };
     });
