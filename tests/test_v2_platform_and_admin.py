@@ -169,15 +169,12 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         self.assertGreaterEqual(len(month_only_works), 5, "Should have works in 8~30d monthly cohort")
         self.assertGreaterEqual(len(older_works), 5, "Should have historical works >30d for All-Time Hall of Fame")
 
-        # Paid works keep full prompt masked for anonymous guests while free works expose full info
-        paid_works = [w for w in boot["works"] if int(w.get("price") or 0) > 0]
-        free_works = [w for w in boot["works"] if int(w.get("price") or 0) == 0]
-        self.assertTrue(len(paid_works) > 0 and all(w["promptMasked"] for w in paid_works))
-        self.assertTrue(len(free_works) > 0 and all(not w["promptMasked"] for w in free_works))
+        # Works are all free (Issue #29): price is 0 and prompt is not masked by pricing
+        self.assertTrue(all(int(w.get("price") or 0) == 0 for w in boot["works"]))
+        self.assertTrue(all(not w.get("promptMasked") for w in boot["works"]))
 
         raw_boot = json.dumps(boot, ensure_ascii=False)
         self.assertNotIn("secret_blackbox_prompt", raw_boot)
-        self.assertNotIn("纯正东方手绘节气", raw_boot)
 
         # Verify SEO endpoints: robots.txt, sitemap.xml, and SSR HTML metadata + JSON-LD + work cards
         with urllib.request.urlopen(f"{self.base_url}/robots.txt", timeout=5) as r_rob:
@@ -322,8 +319,8 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         _, yang_b1 = admin.request("GET", "/api/boot")
         self.assertEqual(yang_b1["credits"], yang_b0["credits"] + 4)
 
-        # 4) Paid Work Unlock (80% split) + Admin Refund & Royalty Clawback
-        _, pub_w = admin.request(
+        # 4) Works cannot be priced or unlocked (Issue #29); Forum Paid Reading (80% split) + Admin Refund & Royalty Clawback
+        code_w_bad, res_w_bad = admin.request(
             "POST",
             "/api/works",
             {
@@ -336,12 +333,58 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 "prompt": "机密高阶手绘提示词内容_888",
             },
         )
+        self.assertEqual(code_w_bad, 400)
+        self.assertEqual(res_w_bad.get("code"), "work_price_not_allowed")
+
+        _, pub_w = admin.request(
+            "POST",
+            "/api/works",
+            {
+                "title": "开源精调配方测试图",
+                "images": ["/images/poster-demo-autumn-equinox.webp"],
+                "styles": ["FA-001"],
+                "layout": "SC-001",
+                "price": 0,
+                "notes": "这是用于测试的完整创作说明，详细记录测试过程",
+                "prompt": "开源高阶手绘提示词内容_888",
+            },
+        )
         self.collect(pub_w)
-        paid_wid = pub_w["workId"]
+        free_wid = pub_w["workId"]
+
+        # Su attempts to unlock work -> rejected with 400 and does NOT deduct credits
+        _, su_pre_work_ul = su.request("GET", "/api/boot")
+        code_work_ul, _ = su.request("POST", "/api/unlocks", {"targetId": free_wid, "targetType": "work"})
+        self.assertEqual(code_work_ul, 400)
+        _, su_post_work_ul = su.request("GET", "/api/boot")
+        self.assertEqual(su_post_work_ul["credits"], su_pre_work_ul["credits"])
+
+        # Paid forum topic unlock (80% split)
+        paid_body = (
+            "<p>前序公开试读章节</p>"
+            "<div class=\"hw-paywall-divider\" data-paywall-price=\"10\">"
+            "<div class=\"hw-paywall-divider-pill\"><span class=\"hw-paywall-pill-text\">此处以下为 10✦ 专属核心章节</span></div>"
+            "</div>"
+            "<p>机密高阶手绘提示词内容_888</p>"
+        )
+        code_tp, tp_res = admin.request(
+            "POST",
+            "/api/forum/topics",
+            {
+                "title": "付费经验分享测试帖",
+                "category": "experience",
+                "publishMode": "paid",
+                "price": 10,
+                "bodyHtml": paid_body,
+            },
+        )
+        self.assertEqual(code_tp, 200)
+        paid_topic_id = tp_res["topic"]["id"]
+
         _, yang_before_sale = admin.request("GET", "/api/boot")
         _, su_before_buy = su.request("GET", "/api/boot")
 
-        code_ul, ul_res = su.request("POST", "/api/unlocks", {"targetId": paid_wid})
+        code_ul, ul_res = su.request("POST", "/api/unlocks", {"targetId": paid_topic_id})
         self.assertEqual(code_ul, 200, ul_res)
         self.assertIn("机密高阶手绘提示词内容_888", ul_res["unlockedContent"])
         self.assertEqual(ul_res["credits"], su_before_buy["credits"] - 10)
@@ -350,7 +393,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
 
         # Admin refunds unlock order -> buyer gets +10, author gets -8 clawback
         _, ul_list = admin.request("GET", "/api/admin/unlocks?status=settled")
-        order = next(x for x in ul_list["items"] if x["targetId"] == paid_wid)
+        order = next(x for x in ul_list["items"] if x["targetId"] == paid_topic_id)
         code_ref, _ = admin.request("POST", f"/api/admin/unlocks/{order['id']}/refund", {"reason": "测试订单全额退单与分成追回"})
         self.assertEqual(code_ref, 200)
 
@@ -358,7 +401,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         _, yang_after_refund = admin.request("GET", "/api/boot")
         self.assertEqual(su_after_refund["credits"], su_before_buy["credits"])
         self.assertEqual(yang_after_refund["credits"], yang_before_sale["credits"])
-        self.assertNotIn(paid_wid, su_after_refund["unlockedIds"])
+        self.assertNotIn(paid_topic_id, su_after_refund["unlockedIds"])
 
     def test_05_pioneer_first_share_and_honor_tier_upgrade(self) -> None:
         fresh = self.client()

@@ -911,8 +911,6 @@
       const collected = S.isCollected("works", id);
       const favCnt = S.getFavoriteCount("work", w);
       const cmtCnt = (w.comments || []).length;
-      const unlocked = S.isUnlocked(id, w);
-      const priced = (Number(w.price) || 0) > 0;
       const canModerate = Boolean(S.canModerateWork && S.canModerateWork(w));
       const canDelete = Boolean(
         (S.canDeleteWork && S.canDeleteWork(w)) ||
@@ -923,7 +921,6 @@
           <a class="hw-wb-media" href="${esc(href)}" data-wb-open="${esc(id)}" aria-label="打开作品：${esc(w.title || "未命名作品")}">
             <img data-hw-src="${esc(images[0])}" alt="${esc(w.title || "作品图片")}" loading="lazy" />
             ${images.length > 1 ? `<span class="hw-wb-media-count">${images.length} 张</span>` : ""}
-            ${priced ? `<span class="hw-wb-price">${unlocked ? "已解锁做法" : `${Number(w.price)} 积分做法`}</span>` : ""}
           </a>
           <div class="hw-wb-body">
             <h3 class="hw-wb-title"><a href="${esc(href)}" data-wb-open="${esc(id)}">${esc(w.title || "未命名作品")}</a></h3>
@@ -972,7 +969,6 @@
           <button type="button" class="hw-wb-chip" data-wb-picker="layout">选择图型</button>
         </div>
         <div class="hw-wb-options">
-          <label>做法<select id="hw-wb-access"><option value="all" ${filters.access === "all" ? "selected" : ""}>全部做法</option><option value="free" ${filters.access === "free" ? "selected" : ""}>免费做法</option><option value="paid" ${filters.access === "paid" ? "selected" : ""}>积分解锁</option></select></label>
           <label>排序<select id="hw-wb-sort"><option value="newest" ${filters.sort === "newest" ? "selected" : ""}>最新发布</option><option value="favorites" ${filters.sort === "favorites" ? "selected" : ""}>最多收藏</option><option value="cheers" ${filters.sort === "cheers" ? "selected" : ""}>最多鼓励</option></select></label>
           ${hasFilters ? `<button type="button" class="hw-wb-reset" id="hw-wb-reset">清除筛选</button>` : ""}
         </div></div>
@@ -1002,7 +998,8 @@
     root.querySelectorAll("[data-wb-format]").forEach((el) => {
       el.onclick = () => change(() => { UI.workFormat = el.getAttribute("data-wb-format"); });
     });
-    root.querySelector("#hw-wb-access").onchange = e => change(() => { UI.workAccess=e.target.value; });
+    const wbAccess = root.querySelector("#hw-wb-access");
+    if (wbAccess) wbAccess.onchange = e => change(() => { UI.workAccess = e.target.value; });
     root.querySelector("#hw-wb-sort").onchange = e => change(() => { UI.workSort=e.target.value; });
     root.querySelectorAll("#hw-wb-reset, #hw-wb-reset-empty").forEach((el) => { el.onclick = clearFilters; });
 
@@ -1622,7 +1619,6 @@
                 <article class="hw-card" data-prof-work="${esc(w.id)}" style="cursor:pointer;">
                   <div class="hw-card-media">
                     <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" loading="lazy" />
-                    ${w.price > 0 ? `<span class="hw-card-badge-tl badge-exclusive-pro">💎 ${w.price}✦</span>` : ""}
                   </div>
                   <div class="hw-card-body">
                     <h3 class="hw-card-title">${esc(w.title)}</h3>

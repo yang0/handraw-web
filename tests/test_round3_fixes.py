@@ -128,7 +128,8 @@ class MixedSubmissionBackdoorTests(unittest.TestCase):
 
         with self.assertRaises(ServiceError) as ctx:
             self._submit([self._item("work", price=100000)])
-        self.assertEqual(ctx.exception.code, "price_out_of_range")
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.code, "work_price_not_allowed")
 
     def test_non_finite_price_is_rejected(self):
         from backend.services import ServiceError
@@ -143,18 +144,6 @@ class PaidPromptNeverRenderedTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.db = server.init_database(Path(self.temp.name) / "ssr.db")
         self.author, _ = register_user(self.db, "ssr_author", "password-a")
-        self.work = publish_user_work(
-            self.db,
-            self.author,
-            {
-                "title": "付费SSR作品",
-                "notes": "这是付费SSR作品的创作说明实测心得记录",
-                "prompt": "TOPSECRET-RECIPE-abcdefghijklmnopqrstuvwxyz",
-                "images": [IMG],
-                "styles": ["FA-013"],
-                "price": 10,
-            },
-        )
 
     def tearDown(self):
         self.db.close_thread_conn()
@@ -162,13 +151,41 @@ class PaidPromptNeverRenderedTests(unittest.TestCase):
         self.db.close()
         self.temp.cleanup()
 
-    def test_boot_payload_has_no_prompt(self):
+    def test_work_pricing_rejected_on_publish(self):
+        from backend.services import ServiceError
+        with self.assertRaises(ServiceError) as ctx:
+            publish_user_work(
+                self.db,
+                self.author,
+                {
+                    "title": "付费SSR作品",
+                    "notes": "这是付费SSR作品的创作说明实测心得记录",
+                    "prompt": "TOPSECRET-RECIPE-abcdefghijklmnopqrstuvwxyz",
+                    "images": [IMG],
+                    "styles": ["FA-013"],
+                    "price": 10,
+                },
+            )
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.code, "work_price_not_allowed")
+
+    def test_free_work_prompt_visible_in_boot(self):
+        work = publish_user_work(
+            self.db,
+            self.author,
+            {
+                "title": "免费作品",
+                "notes": "这是免费作品的创作说明实测心得记录",
+                "prompt": "PUBLIC-RECIPE-abcdefghijklmnopqrstuvwxyz",
+                "images": [IMG],
+                "styles": ["FA-013"],
+            },
+        )
         boot = build_boot_payload(self.db, None)
-        work = next(w for w in boot["works"] if w["id"] == self.work["workId"])
-        self.assertEqual(work["prompt"], "")
+        item = next(w for w in boot["works"] if w["id"] == work["workId"])
+        self.assertEqual(item["prompt"], "PUBLIC-RECIPE-abcdefghijklmnopqrstuvwxyz")
 
     def test_ssr_html_has_no_prompt_fragment(self):
-        # Both SSR paths must omit the recipe entirely for a paid work.
         source = Path("backend/server.py").read_text(encoding="utf-8")
         self.assertNotIn('[:34]', source, "no truncation-based teaser may remain")
 

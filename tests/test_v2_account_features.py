@@ -74,9 +74,13 @@ class AccountFeaturesTests(unittest.TestCase):
     def test_only_author_can_edit_work_without_changing_price_or_rewards(self):
         work=self.db.get_conn().execute("SELECT * FROM works WHERE author_username=? LIMIT 1",(self.a["username"],)).fetchone()
         balance=self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id=?",(self.a["id"],)).fetchone()[0]
-        features.edit_owned_content(self.db,self.a,"works",work["id"],{"title":"作者修改后的作品标题","prompt":"实际完整的创作提示词","price":9999})
+        with self.assertRaises(ServiceError) as ctx:
+            features.edit_owned_content(self.db,self.a,"works",work["id"],{"title":"作者修改后的作品标题","prompt":"实际完整的创作提示词","price":9999})
+        self.assertEqual(400, ctx.exception.status)
+        self.assertEqual("work_price_not_allowed", ctx.exception.code)
+        features.edit_owned_content(self.db,self.a,"works",work["id"],{"title":"作者修改后的作品标题","prompt":"实际完整的创作提示词"})
         changed=self.db.get_conn().execute("SELECT * FROM works WHERE id=?",(work["id"],)).fetchone()
-        self.assertEqual(changed["price"],work["price"])
+        self.assertEqual(changed["price"],0)
         self.assertEqual(changed["title"],"作者修改后的作品标题")
         self.assertEqual(balance,self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id=?",(self.a["id"],)).fetchone()[0])
         with self.assertRaises(ServiceError) as denied:features.edit_owned_content(self.db,self.b,"works",work["id"],{"title":"越权修改作品标题"})

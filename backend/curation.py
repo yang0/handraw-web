@@ -248,14 +248,17 @@ def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = Fal
     # submission, so the review queue would publish a work with mutated fields.
     if len(styles) > 2:
         raise ServiceError("一件作品最多关联两个画风", status=400, code="too_many_styles")
-    try:
-        if isinstance(item.get("price"), float) and item.get("price") != item.get("price"):
-            raise ValueError("NaN price")
-        price = int(item.get("price") or 0)
-    except (TypeError, ValueError, OverflowError):
-        raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
-    if price < 0 or price > 100:
-        raise ServiceError("作品定价需在 0 到 100 积分之间", status=400, code="price_out_of_range")
+    raw_price = item.get("price")
+    if raw_price not in (None, ""):
+        try:
+            if isinstance(raw_price, float) and (raw_price != raw_price or raw_price in (float("inf"), float("-inf"))):
+                raise ValueError("non-finite price")
+            parsed_price = int(raw_price)
+        except (TypeError, ValueError, OverflowError):
+            raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
+        if parsed_price != 0:
+            raise ServiceError("作品不支持收费定价", status=400, code="work_price_not_allowed")
+    price = 0
     return {
         "kind": "work",
         "title": title,
@@ -1139,6 +1142,15 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
             prompt_has_sec = 1 if has_sec else 0
         except Exception:
             prompt_has_sec = None
+        raw_price = payload.get("price")
+        if raw_price not in (None, ""):
+            try:
+                if isinstance(raw_price, float) and (raw_price != raw_price or raw_price in (float("inf"), float("-inf"))):
+                    raise ValueError("non-finite price")
+                if int(raw_price) != 0:
+                    raise ServiceError("作品不支持收费定价", status=400, code="work_price_not_allowed")
+            except (TypeError, ValueError, OverflowError):
+                raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
         existing_work = tx.execute(
             "SELECT id FROM works WHERE id = ?",
             (target_id,),
@@ -1151,7 +1163,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     layout_code, color_code, tone_code, ratio, mode, mood, price, prompt, prompt_has_secret, notes, subject,
                     status, featured, is_new_release, pioneer_rewarded, cheers, likes, favorites, forks,
                     published_at_ms, created_label, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0, ?, '刚刚', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'published', 0, 1, 0, 0, 0, 0, 0, ?, '刚刚', ?, ?)
                 """,
                 (
                     target_id,
@@ -1166,7 +1178,6 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     payload.get("ratio") or "3:4",
                     payload.get("mode") or "graphic-text",
                     payload.get("mood") or "治愈",
-                    int(payload.get("price") or 0),
                     prompt_val,
                     prompt_has_sec,
                     payload.get("notes") or "",
@@ -1182,7 +1193,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                 UPDATE works SET
                     author_username = ?, author_name = ?, title = ?, images_json = ?, styles_json = ?,
                     layout_code = ?, color_code = ?, tone_code = ?, ratio = ?, mode = ?, mood = ?,
-                    price = ?, prompt = ?, prompt_has_secret = ?, notes = ?, subject = ?, status = 'published', updated_at = ?
+                    price = 0, prompt = ?, prompt_has_secret = ?, notes = ?, subject = ?, status = 'published', updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -1197,7 +1208,6 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
                     payload.get("ratio") or "3:4",
                     payload.get("mode") or "graphic-text",
                     payload.get("mood") or "治愈",
-                    int(payload.get("price") or 0),
                     prompt_val,
                     prompt_has_sec,
                     payload.get("notes") or "",
@@ -1636,16 +1646,19 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
     # Price must be an integer credit amount; reject garbage instead of letting
     # int() raise and turn a validation error into a 500.
     raw_price = body.get("price")
-    try:
-        # ``int()`` accepts float('inf') and raises OverflowError on it, which
-        # used to escape as a 500.  Reject non-finite numbers explicitly.
-        if isinstance(raw_price, float) and (raw_price != raw_price or raw_price in (float("inf"), float("-inf"))):
-            raise ValueError("non-finite price")
-        price = int(raw_price) if raw_price not in (None, "") else 0
-    except (TypeError, ValueError, OverflowError):
-        raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
-    if price < 0 or price > 100:
-        raise ServiceError("作品定价需在 0 到 100 积分之间", status=400, code="price_out_of_range")
+    if raw_price not in (None, ""):
+        try:
+            # ``int()`` accepts float('inf') and raises OverflowError on it, which
+            # used to escape as a 500.  Reject non-finite numbers explicitly.
+            if isinstance(raw_price, float) and (raw_price != raw_price or raw_price in (float("inf"), float("-inf"))):
+                raise ValueError("non-finite price")
+            price = int(raw_price)
+        except (TypeError, ValueError, OverflowError):
+            raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
+        if price != 0:
+            raise ServiceError("作品不支持收费定价", status=400, code="work_price_not_allowed")
+    else:
+        price = 0
 
     now_iso = _now()
     now_ms = _now_ms()

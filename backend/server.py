@@ -1444,11 +1444,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         recipe_tags = " / ".join([*styles_list, *([target_work["layout_code"]] if target_work["layout_code"] else [])])
         from .services import get_work_client_prompt
         safe_p, _ = get_work_client_prompt(target_work, is_admin_route=False)
-        snippet_src = target_work["notes"] or (
-            # Paid recipes must not appear in server-rendered HTML: crawlers and
-            # anonymous visitors would read them without unlocking.
-            filter_display_prompt(safe_p)[:80] if int(target_work["price"] or 0) <= 0 else ""
-        )
+        snippet_src = target_work["notes"] or filter_display_prompt(safe_p)[:80]
         page_title = f"{target_work['title']} (@{target_work['author_name']}) 作品详情与评论 — Handraw 晒作品广场"
         meta_desc = f"由 @{target_work['author_name']} 分享的手绘晒作品《{target_work['title']}》" + (
             f"（配方：{recipe_tags}）" if recipe_tags else ""
@@ -1546,7 +1542,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         styles = json.loads(w["styles_json"] or "[]")
         tags = " · ".join([*styles, *([w["layout_code"]] if w["layout_code"] else [])]) or "自由手绘创作"
         safe_p, _ = get_work_client_prompt(w, is_admin_route=False)
-        summary_txt = w["notes"] or (filter_display_prompt(safe_p)[:80] if int(w["price"] or 0) <= 0 else "")
+        summary_txt = w["notes"] or filter_display_prompt(safe_p)[:80]
         w_href = f"/?view=work&id={urllib.parse.quote(w['id'])}"
         ssr_cards.append(
             f'<article class="hw-seo-work-item">'

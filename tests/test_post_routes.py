@@ -18,6 +18,7 @@ from backend import server as server_module
 from backend.config import SESSION_COOKIE_NAME
 from backend.server import create_channel_server
 from backend.services import (
+    ServiceError,
     publish_user_work,
     register_user,
     toggle_user_collection,
@@ -65,11 +66,23 @@ class PostRoutesHTTPTests(unittest.TestCase):
         cls.work_id = pub_work["workId"]
         cls.work_topic_id = pub_work["topicId"]
 
-        # Publish a paid work
+        # Publish work with price > 0 must be rejected
+        try:
+            publish_user_work(
+                cls.db,
+                cls.author,
+                {"title": "收费作品", "prompt": "绝密付费提示词", "images": [IMG], "styles": ["FA-013"], "price": 10},
+            )
+            raise AssertionError("Setting work price must be rejected with 400")
+        except ServiceError as e:
+            assert e.status == 400
+            assert e.code == "work_price_not_allowed"
+
+        # Publish a free work (formerly paid work in legacy tests)
         pub_paid = publish_user_work(
             cls.db,
             cls.author,
-            {"title": "付费作品", "prompt": "绝密付费提示词", "images": [IMG], "styles": ["FA-013"], "price": 10},
+            {"title": "作品2", "prompt": "绝密付费提示词", "images": [IMG], "styles": ["FA-013"], "price": 0},
         )
         cls.paid_work_id = pub_paid["workId"]
         cls.paid_topic_id = pub_paid["topicId"]
@@ -202,26 +215,24 @@ class PostRoutesHTTPTests(unittest.TestCase):
         self.assertTrue(data_logged["viewer"]["liked"])
         self.assertTrue(data_logged["viewer"]["favorited"])
 
-        # 3. Paid work: locked content must not leak
-        # Anonymous / unpurchased viewer: prompt is empty
+        # 3. Work is free: prompt is immediately visible anonymously and for logged in user; unlock returns 400
+        # Anonymous viewer: prompt is visible
         status, data_paid_anon = self._request("GET", f"/api/posts/{self.paid_topic_id}")
         self.assertEqual(status, 200)
-        self.assertEqual(data_paid_anon["mount"]["work"]["prompt"], "", "Paid prompt must not leak")
+        self.assertEqual(data_paid_anon["mount"]["work"]["prompt"], "绝密付费提示词")
 
         buyer_token = self._login("pr_buyer", "pass-buyer")
         status, data_paid_unlocked = self._request(
             "GET", f"/api/posts/{self.paid_topic_id}", token=buyer_token
         )
         self.assertEqual(status, 200)
-        self.assertEqual(data_paid_unlocked["mount"]["work"]["prompt"], "", "Unpurchased prompt must not leak")
+        self.assertEqual(data_paid_unlocked["mount"]["work"]["prompt"], "绝密付费提示词")
 
-        # Unlock paid work by buyer
-        unlock_paid_item(self.db, self.buyer, "work", self.paid_work_id)
-        status, data_purchased = self._request(
-            "GET", f"/api/posts/{self.paid_topic_id}", token=buyer_token
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(data_purchased["mount"]["work"]["prompt"], "绝密付费提示词")
+        # Unlock work by buyer is rejected with 400 without deducting credits
+        with self.assertRaises(ServiceError) as cm:
+            unlock_paid_item(self.db, self.buyer, "work", self.paid_work_id)
+        self.assertEqual(cm.exception.status, 400)
+        self.assertEqual(cm.exception.code, "work_not_unlockable")
 
         # 4. Style topic detail
         status, data_style = self._request("GET", f"/api/posts/{self.fb041_topic_id}")
@@ -467,14 +478,15 @@ class PostRoutesHTTPTests(unittest.TestCase):
 
         author_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (self.author["id"],)).fetchone()["balance"])
 
-        # 1. Author unlocks their own paid work (price = 10)
-        res_work = unlock_paid_item(self.db, self.author, "work", self.paid_work_id)
-        self.assertTrue(res_work.get("ok"))
-        self.assertTrue(res_work.get("alreadyUnlocked"), "Author should be recognized as already unlocked for their own work")
+        # 1. Author attempts to unlock work -> rejected with 400 without changing balance
+        with self.assertRaises(ServiceError) as cm:
+            unlock_paid_item(self.db, self.author, "work", self.paid_work_id)
+        self.assertEqual(cm.exception.status, 400)
+        self.assertEqual(cm.exception.code, "work_not_unlockable")
 
         # Balance remains unchanged
         author_bal_mid = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (self.author["id"],)).fetchone()["balance"])
-        self.assertEqual(author_bal_mid, author_bal_before, "Author must not be charged points for their own paid work")
+        self.assertEqual(author_bal_mid, author_bal_before, "Author balance must not change on work unlock request")
 
         # 2. Author unlocks their own paid style asset (unlock_cost = 25)
         res_asset = unlock_paid_item(self.db, self.author, "asset", "PAID-STYLE-AUTH")

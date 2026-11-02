@@ -60,7 +60,13 @@ class PublishValidationTests(unittest.TestCase):
 
         with self.assertRaises(ServiceError) as ctx:
             self._publish(price=100000)
-        self.assertEqual(ctx.exception.code, "price_out_of_range")
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.code, "work_price_not_allowed")
+
+        with self.assertRaises(ServiceError) as ctx2:
+            self._publish(price=10)
+        self.assertEqual(ctx2.exception.status, 400)
+        self.assertEqual(ctx2.exception.code, "work_price_not_allowed")
 
     def test_two_styles_is_allowed(self):
         result = self._publish(styles=["FA-013", "FB-001"])

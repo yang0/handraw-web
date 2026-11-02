@@ -68,7 +68,7 @@ context.App.state.works=[{...works[1],id:'quoted"<',title:'<script>alert(1)</scr
 context.renderWorksSquare(root);
 assert.doesNotMatch(root.innerHTML,/<script>| onerror="bad/);
 assert.match(root.innerHTML,/&lt;script&gt;/);
-assert.match(root.innerHTML,/9 积分做法/);
+assert.doesNotMatch(root.innerHTML,/hw-wb-price|积分做法|已解锁做法/);
 assert.doesNotMatch(root.innerHTML,/private-paid-only/);
 
 context.window.location={search:'?view=works&format=multi&access=paid&sort=favorites&q=卡片&filterAsset=SC-001&author=writer',pathname:'/'};

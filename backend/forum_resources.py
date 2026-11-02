@@ -229,20 +229,16 @@ def _asset_resource(row: dict[str, Any], unlocked: set[str], user) -> dict[str, 
 
 def _work_resource(row: dict[str, Any], unlocked: set[str], user) -> dict[str, Any]:
     ser = S._serialize_work(row, {}, unlocked, user)
-    price = int(row["price"] or 0)
-    is_staff = bool(user and user.get("role") in _STAFF)
-    is_author = bool(user and user.get("username") == row["author_username"])
-    is_unlocked = price <= 0 or row["id"] in unlocked or is_staff or is_author
     return {
         "id": ser["id"], "kind": "work", "title": ser["title"], "name": ser["title"],
         "notes": ser["notes"], "description": ser["notes"],
-        "prompt": ser["prompt"] if is_unlocked else "",
+        "prompt": ser["prompt"],
         "subject": ser.get("subject", ""),
         "image": _image_of(ser["images"]), "images": [_local_image(_image_of([i])) for i in ser["images"]],
         "author": ser["author"], "authorName": ser["authorName"],
-        "sourceType": "community", "tier": "paid" if price > 0 else "free",
-        "price": price, "unlockCost": price,
-        "unlocked": is_unlocked, "canUse": is_unlocked, "reproducible": bool(str(row["prompt"] or "").strip()),
+        "sourceType": "community", "tier": "free",
+        "price": 0, "unlockCost": 0,
+        "unlocked": True, "canUse": True, "reproducible": bool(str(row["prompt"] or "").strip()),
         "promptMasked": bool(ser.get("promptMasked")),
         "status": row["status"], "publishedAtMs": int(row["published_at_ms"] or 0),
         "styles": ser["styles"], "layout": ser["layout"],
