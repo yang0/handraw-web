@@ -1910,7 +1910,7 @@
       openLoginModal("登录后即可查看与管理你的个人主页");
       return;
     }
-    const cleanTab = ptab || "works";
+    const cleanTab = ptab === "assets" ? "styles" : ptab || "works";
     if (App.channel === "main" && typeof window.HANDRAW_MAIN_OPEN_PROFILE === "function") {
       window.HANDRAW_MAIN_OPEN_PROFILE(targetUser, cleanTab);
       return;
@@ -2218,8 +2218,8 @@
                       <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "profile", user: curUser.username }))}" id="hw-dropdown-profile">
                         <span>🏠</span> <span>我的个人主页</span>
                       </a>
-                      <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "collections" }))}" data-main-view="collections" id="hw-dropdown-collections">
-                        <span>♥</span> <span>我的云端收藏 (${totalFavs})</span>
+                      <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "profile", user: curUser.username, ptab: "collections" }))}" id="hw-dropdown-collections">
+                        <span>♥</span> <span>收藏夹 (${totalFavs})</span>
                       </a>
                       <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "wallet" }))}" data-main-view="wallet" id="hw-dropdown-wallet">
                         <span>✦</span> <span>积分中心与创作密钥</span>
@@ -2376,6 +2376,21 @@
       dropdownProfile.onclick = (e) => {
         e.preventDefault();
         goToCreatorProfile(curUser.username, "works");
+      };
+    }
+
+    const dropdownCollections = document.getElementById("hw-dropdown-collections");
+    if (dropdownCollections) {
+      dropdownCollections.onclick = (e) => {
+        e.preventDefault();
+        if (menu) {
+          menu.classList.remove("is-open");
+          if (avatarBtn) {
+            avatarBtn.classList.remove("is-active");
+            avatarBtn.setAttribute("aria-expanded", "false");
+          }
+        }
+        goToCreatorProfile(curUser.username, "collections");
       };
     }
 
