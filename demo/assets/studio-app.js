@@ -4881,8 +4881,14 @@
       summaryText = buildRecipeSummaryText(rec, ctrlNode);
     }
 
+    const hasLiveItems = Array.isArray(items) && items.some((it) => it && (it.generationMode === "live" || it.engine === "live"));
+    const isLive = isLiveGenerationEnabled() || hasLiveItems;
+    const firstGenId = (Array.isArray(items) && items.find((it) => it && it.genId)?.genId) || "";
+    const firstReqId = (Array.isArray(items) && items.find((it) => it && it.requestId)?.requestId) || "";
+
     const entry = {
-      id: E.uid("hist"),
+      id: firstGenId || E.uid("hist"),
+      requestId: firstReqId,
       createdAt: dateFull,
       timeShort,
       tabTitle: isRecipe ? "做图配方" : (curTab ? curTab.title : "当前工作流"),
@@ -4909,7 +4915,9 @@
 
     CS.generationHistory = [entry, ...(CS.generationHistory || [])].slice(0, 40);
     writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
-    studioApiPost("/api/studio/history", entry);
+    if (!isLive) {
+      studioApiPost("/api/studio/history", entry);
+    }
     if (CS.stageView === "history") renderHistoryStage();
   }
 
@@ -4934,6 +4942,9 @@
     const now = new Date();
     const timeShort = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const dateFull = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${timeShort}`;
+
+    const hasLiveCards = readyCards.some((c) => c && (c.generationMode === "live" || c.engine === "live"));
+    const isLive = isLiveGenerationEnabled() || hasLiveCards;
 
     const entry = {
       id: E.uid("hist"),
@@ -4962,7 +4973,9 @@
 
     CS.generationHistory = [entry, ...(CS.generationHistory || [])].slice(0, 40);
     writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
-    studioApiPost("/api/studio/history", entry);
+    if (!isLive) {
+      studioApiPost("/api/studio/history", entry);
+    }
     if (CS.stageView === "history") renderHistoryStage();
   }
 

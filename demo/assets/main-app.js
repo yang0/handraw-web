@@ -1532,6 +1532,26 @@
     const layouts = Array.isArray(genItem.layouts) ? genItem.layouts : [];
     const modeLabel = genItem.mode === "free" ? "自由创作" : "预设配方";
 
+    const formatResourceItems = (list) => {
+      if (!Array.isArray(list)) return "";
+      return list
+        .map((it) => {
+          if (!it) return "";
+          if (typeof it === "string") return it.trim();
+          const code = (it.code || "").trim();
+          const name = (it.name || "").trim();
+          if (code && name && code !== name) {
+            return `${code}（${name}）`;
+          }
+          return code || name || "";
+        })
+        .filter(Boolean)
+        .join("、");
+    };
+
+    const styleStr = formatResourceItems(styles);
+    const layoutStr = formatResourceItems(layouts);
+
     S.openModal({
       title: esc(title),
       html: `
@@ -1554,8 +1574,8 @@
               <span><strong>创作模式：</strong>${esc(modeLabel)}</span>
               <span><strong>成图数量：</strong>${count} 张</span>
             </div>
-            ${styles.length ? `<div><strong>画风：</strong>${esc(styles.join("、"))}</div>` : ""}
-            ${layouts.length ? `<div><strong>图型：</strong>${esc(layouts.join("、"))}</div>` : ""}
+            ${styleStr ? `<div><strong>画风：</strong>${esc(styleStr)}</div>` : ""}
+            ${layoutStr ? `<div><strong>图型：</strong>${esc(layoutStr)}</div>` : ""}
           </div>
         </div>
       `
@@ -1639,7 +1659,21 @@
           const img0 = (g.images && g.images[0]) || "/images/poster-demo-autumn-equinox.webp";
           const count = g.imageCount || (g.images ? g.images.length : 1);
           const title = g.topic || g.title || "手绘风生成作品";
-          const subTags = [...(g.styles || []), ...(g.layouts || [])].slice(0, 2).join(" · ") || (g.mode === "free" ? "自由创作" : "配方");
+
+          const rawItems = [...(g.styles || []), ...(g.layouts || [])];
+          const validCodes = [];
+          const seenCodes = new Set();
+          for (const it of rawItems) {
+            const rawCode = (typeof it === "string" ? it : it && it.code ? it.code : "").trim().toUpperCase().replace(/^#/, "");
+            if (/^(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+$/.test(rawCode) && !seenCodes.has(rawCode)) {
+              seenCodes.add(rawCode);
+              validCodes.push(rawCode);
+              if (validCodes.length >= 2) break;
+            }
+          }
+          const codeBadgeText = validCodes.join(" · ");
+          const dateText = esc(g.createdAt || g.created_at || "近期");
+
           return `
             <article class="hw-card" data-prof-gen="${esc(g.id)}" style="cursor:pointer;">
               <div class="hw-card-media">
@@ -1648,9 +1682,13 @@
               </div>
               <div class="hw-card-body">
                 <h3 class="hw-card-title">${esc(title)}</h3>
-                <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;align-items:center;">
-                  <span>${esc(g.createdAt || g.created_at || "近期")}</span>
-                  <span>${esc(subTags)}</span>
+                ${codeBadgeText ? `
+                  <div style="font-size:12px;color:var(--brand-vermilion,#e15b3c);font-weight:600;margin-bottom:4px;">
+                    <span>${esc(codeBadgeText)}</span>
+                  </div>
+                ` : ""}
+                <div style="font-size:12px;color:var(--ink-muted);">
+                  <span>${dateText}</span>
                 </div>
               </div>
             </article>

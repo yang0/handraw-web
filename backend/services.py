@@ -21,6 +21,7 @@ from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
 from .db import Database, local_today_str, utc_now_iso
 from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
 from .runtime_policy import sanitize_media_url
+from .work_schema import deduplicate_generation_history
 from .security import (
     generate_api_key,
     generate_session_token,
@@ -3883,23 +3884,70 @@ def serialize_public_generation_history(
     ratio = raw_tab if re.match(r"^\d+:\d+$", raw_tab) else "3:4"
     mode = str(row["mode"] or "graphic-text") if "mode" in row_keys else "graphic-text"
 
-    styles = []
-    layouts = []
-    codes = []
-    if "recipe_summary" in row_keys and row["recipe_summary"]:
-        codes.extend([c.strip().upper().lstrip("#") for c in str(row["recipe_summary"]).split() if c.strip()])
+    CODE_RE = re.compile(r"^(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+$")
+
+    codes: list[str] = []
+
+    # Priority 1: Trusted server snapshot in system_append_json
     if "system_append_json" in row_keys and row["system_append_json"]:
         try:
             s_data = json.loads(row["system_append_json"])
-            for it in s_data.get("systemAppend", []):
-                c = str(it.get("code") or "").strip().upper().lstrip("#")
-                if c and c not in codes:
-                    codes.append(c)
+            if isinstance(s_data, dict):
+                sys_app = s_data.get("systemAppend") or s_data.get("system_append") or []
+                if isinstance(sys_app, list):
+                    for it in sys_app:
+                        if isinstance(it, dict):
+                            raw_c = str(it.get("code") or "").strip().upper().lstrip("#")
+                            if CODE_RE.match(raw_c) and raw_c not in codes:
+                                codes.append(raw_c)
+                snap = s_data.get("recipeSnapshot")
+                if isinstance(snap, dict):
+                    for k in ("style1", "style2", "layout"):
+                        raw_c = str(snap.get(k) or "").strip().upper().lstrip("#")
+                        if CODE_RE.match(raw_c) and raw_c not in codes:
+                            codes.append(raw_c)
+            elif isinstance(s_data, list):
+                for it in s_data:
+                    if isinstance(it, dict):
+                        raw_c = str(it.get("code") or "").strip().upper().lstrip("#")
+                        if CODE_RE.match(raw_c) and raw_c not in codes:
+                            codes.append(raw_c)
         except Exception:
             pass
 
+    # Priority 2: Linked recipe record if codes still empty
+    if not codes and "recipe_id" in row_keys and row["recipe_id"] and conn:
+        try:
+            rcp = conn.execute("SELECT style_ids, layout_id FROM studio_recipes WHERE id = ?", (row["recipe_id"],)).fetchone()
+            if rcp:
+                try:
+                    s_ids = json.loads(rcp["style_ids"] or "[]")
+                    if isinstance(s_ids, list):
+                        for s in s_ids:
+                            raw_c = str(s).strip().upper().lstrip("#")
+                            if CODE_RE.match(raw_c) and raw_c not in codes:
+                                codes.append(raw_c)
+                except Exception:
+                    pass
+                lay_c = str(rcp["layout_id"] or "").strip().upper().lstrip("#")
+                if CODE_RE.match(lay_c) and lay_c not in codes:
+                    codes.append(lay_c)
+        except Exception:
+            pass
+
+    # Priority 3: Clean tokens from recipe_summary (only exact CODE_RE matches, NO eval or fuzzy guessing)
+    if not codes and "recipe_summary" in row_keys and row["recipe_summary"]:
+        raw_summary = str(row["recipe_summary"]).strip()
+        tokens = re.split(r"[\s/·,]+", raw_summary)
+        for t in tokens:
+            raw_c = t.strip().upper().lstrip("#")
+            if CODE_RE.match(raw_c) and raw_c not in codes:
+                codes.append(raw_c)
+
     from . import resource_registry
-    seen_codes = set()
+    styles: list[dict[str, str]] = []
+    layouts: list[dict[str, str]] = []
+    seen_codes: set[str] = set()
     for c in codes:
         if c in seen_codes:
             continue
@@ -3909,14 +3957,14 @@ def serialize_public_generation_history(
         if conn:
             res_meta = resource_registry.resolve(conn, c, viewer=None, purpose="view")
             if res_meta:
-                name = res_meta.get("name") or c
-                kind = res_meta.get("kind") or "style"
+                name = str(res_meta.get("name") or c).strip()
+                kind = str(res_meta.get("kind") or "style").strip()
         else:
             cat = resource_registry.static_catalog().get(c)
             if cat:
-                name = cat.get("name") or c
-                kind = cat.get("kind") or "style"
-        entry = {"code": c, "name": name}
+                name = str(cat.get("name") or c).strip()
+                kind = str(cat.get("kind") or "style").strip()
+        entry = {"code": c, "name": name or c}
         if kind == "layout" or c.startswith(("SC-", "IG-", "SB-", "IP-", "EC-", "LAY-", "USR-L")):
             layouts.append(entry)
         else:
@@ -3944,6 +3992,8 @@ def get_public_generation_history(
     *,
     limit: int = 40,
 ) -> dict[str, Any] | list[dict[str, Any]] | None:
+    with db.transaction() as tx:
+        deduplicate_generation_history(tx)
     conn = db.get_conn()
     if history_id:
         row = conn.execute(
@@ -3977,6 +4027,10 @@ def get_user_public_generations(
         raise ServiceError("创作者不存在", status=404, code="user_not_found")
     uid = int(u_row["id"])
 
+    with db.transaction() as tx:
+        deduplicate_generation_history(tx, user_id=uid)
+
+    conn = db.get_conn()
     safe_limit = max(1, min(60, int(limit)))
 
     cursor_created_at = None
@@ -4069,6 +4123,10 @@ def get_user_public_generation_by_id(
         raise ServiceError("创作者不存在", status=404, code="user_not_found")
     uid = int(u_row["id"])
 
+    with db.transaction() as tx:
+        deduplicate_generation_history(tx, user_id=uid)
+
+    conn = db.get_conn()
     gen_id = str(generation_id or "").strip()
     row = conn.execute(
         """
@@ -4358,13 +4416,51 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
 def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
     if "visibility" in entry:
         raise ServiceError("当前暂不支持设置可见性", status=400, code="visibility_not_allowed")
+
+    CODE_RE = re.compile(r"^(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+$")
+
+    for field_name in ("styles", "layouts"):
+        if field_name in entry and entry[field_name] is not None:
+            field_val = entry[field_name]
+            if not isinstance(field_val, list):
+                raise ServiceError(f"{field_name} 必须是列表", status=400, code="invalid_resource_shape")
+            for item in field_val:
+                if isinstance(item, dict):
+                    code_val = str(item.get("code") or "").strip().upper().lstrip("#")
+                    if not CODE_RE.match(code_val):
+                        raise ServiceError(f"无效的资源编号: {code_val}", status=400, code="invalid_resource_code")
+                elif isinstance(item, str):
+                    code_val = item.strip().upper().lstrip("#")
+                    if not CODE_RE.match(code_val):
+                        raise ServiceError(f"无效的资源编号: {code_val}", status=400, code="invalid_resource_code")
+                else:
+                    raise ServiceError(f"{field_name} 项格式不正确", status=400, code="invalid_resource_shape")
+
+    if "recipeSnapshot" in entry and entry["recipeSnapshot"] is not None:
+        snap = entry["recipeSnapshot"]
+        if not isinstance(snap, dict):
+            raise ServiceError("recipeSnapshot 必须是对象", status=400, code="invalid_resource_shape")
+        for k in ("style1", "style2", "layout"):
+            if snap.get(k):
+                c = str(snap[k]).strip().upper().lstrip("#")
+                if not CODE_RE.match(c):
+                    raise ServiceError(f"无效的资源编号: {c}", status=400, code="invalid_resource_code")
+
     uid = int(user["id"])
     hid = str(entry.get("id") or f"hist_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}").strip()[:160]
     if not hid:
         raise ServiceError("历史记录编号不能为空", status=400, code="history_id_required")
+    req_id = str(entry.get("requestId") or entry.get("request_id") or "").strip()
     now_iso = utc_now_iso()
     with db.transaction() as tx:
-        existing = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (hid,)).fetchone()
+        existing = None
+        if req_id:
+            existing = tx.execute(
+                "SELECT * FROM studio_generations WHERE user_id = ? AND request_id = ? AND request_id != '' ORDER BY created_at DESC LIMIT 1",
+                (uid, req_id),
+            ).fetchone()
+        if not existing and hid:
+            existing = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (hid,)).fetchone()
         if existing and int(existing["user_id"] or 0) != uid:
             raise ServiceError("该历史记录编号属于其他账号，不能覆盖", status=409, code="history_conflict")
 
@@ -4397,7 +4493,8 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
             json.dumps(entry.get("items") or [], ensure_ascii=False),
         )
         if existing:
-            # A browser save may use the same id as a real cloud generation.
+            target_id = existing["id"]
+            # A browser save may use the same id or request_id as a real cloud generation.
             # Only update user-editable presentation fields; never replace
             # ownership, engine, cost, task, status, or accounting columns.
             tx.execute(
@@ -4407,19 +4504,20 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                     prompt = ?, visible_prompt = ?, prompt_masked = ?, markdown = ?, items_json = ?, deleted_at = ''
                 WHERE id = ? AND user_id = ?
                 """,
-                (*values, hid, uid),
+                (*values, target_id, uid),
             )
+            return {"ok": True, "id": target_id}
         else:
             tx.execute(
                 """
                 INSERT INTO studio_generations (
                     id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
-                    prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type, credits_spent, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?)
+                    prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type, credits_spent, status, created_at, request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?)
                 """,
-                (hid, uid, user["username"], *values, now_iso),
+                (hid, uid, user["username"], *values, now_iso, req_id),
             )
-    return {"ok": True, "id": hid}
+            return {"ok": True, "id": hid}
 
 
 def delete_user_studio_history(db: Database, user: dict[str, Any], history_id: str) -> dict[str, Any]:
