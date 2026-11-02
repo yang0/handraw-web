@@ -3625,7 +3625,7 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
 
     with db.transaction() as tx:
         settings = get_site_settings(tx)
-        topic_reward = int(settings.get("economy", {}).get("topic_publish_credits", 5))
+        topic_reward = int(settings.get("economy", {}).get("topic_publish_credits", 0))
 
         if bounty > 0:
             new_bal, _ = apply_wallet_delta(
@@ -3641,16 +3641,27 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
             bounty_status = "open"
         else:
             bounty_status = "none"
-            new_bal, _ = apply_wallet_delta(
-                tx,
-                uid,
-                topic_reward,
-                "publish_topic",
-                f"发布社区交流帖《{title[:22]}》激励",
-                event_key=f"pub_topic_{tid}",
-                ref_type="topic",
-                ref_id=tid,
-            )
+            if topic_reward > 0:
+                new_bal, _ = apply_wallet_delta(
+                    tx,
+                    uid,
+                    topic_reward,
+                    "publish_topic",
+                    f"发布社区交流帖《{title[:22]}》激励",
+                    event_key=f"pub_topic_{tid}",
+                    ref_type="topic",
+                    ref_id=tid,
+                )
+            else:
+                row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+                if row:
+                    new_bal = int(row["balance"])
+                else:
+                    tx.execute(
+                        "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
+                        (uid, now_iso),
+                    )
+                    new_bal = 0
 
         if not work_id:
             work_id = str(body.get("workId") or "").strip()[:64]

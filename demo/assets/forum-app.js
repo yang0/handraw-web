@@ -970,7 +970,7 @@
           <span id="compose-draft-status" role="status">草稿会自动保存到此浏览器</span>
           <div class="hw-compose-footer-left">
             <span style="font-size:12.5px;color:var(--ink-muted);line-height:1.6;">
-              ✨ 论坛交流发帖立得 <strong>+5✦</strong> 社区积分 · 支持在编辑器内<strong>拖拽卡片与配图</strong>调整段落顺序 · 支持剪贴板图片<strong>直接粘贴 (Ctrl+V)</strong>
+              支持在编辑器内<strong>拖拽卡片与配图</strong>调整段落顺序 · 支持剪贴板图片<strong>直接粘贴 (Ctrl+V)</strong>
             </span>
           </div>
           <div class="hw-compose-footer-right" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -990,7 +990,7 @@
             <div style="display:flex;align-items:center;gap:6px;">
               <label for="compose-mode-dropdown" style="font-size:13px;font-weight:750;color:var(--ink-body);white-space:nowrap;">发帖模式：</label>
               <select class="hw-select" id="compose-mode-dropdown" style="padding:6px 10px;font-size:13px;height:36px;border-radius:8px;">
-                <option value="free" ${d.publishMode === "free" ? "selected" : ""}>✨ 公开免费（发布立得 +5✦）</option>
+                <option value="free" ${d.publishMode === "free" ? "selected" : ""}>✨ 公开免费</option>
                 <option value="paid" ${d.publishMode === "paid" ? "selected" : ""}>💎 付费阅读专栏</option>
                 <option value="bounty_10" ${d.publishMode === "bounty_10" ? "selected" : ""}>💰 托管 10✦ 悬赏求调优</option>
                 <option value="bounty_20" ${d.publishMode === "bounty_20" ? "selected" : ""}>💰 托管 20✦ 悬赏求调优</option>
@@ -1775,7 +1775,7 @@
           toast(
             bounty > 0
               ? `🎉 悬赏帖已发布（已托管 ${bounty}✦ 悬赏积分）！`
-              : `🎉 论坛帖发布成功！${res.rewarded > 0 ? `获得 +${res.rewarded}✦ 社区发帖积分` : ""}`
+              : `🎉 论坛帖发布成功！`
           );
         } else {
           createdTopicId = "top_" + Date.now();
@@ -1803,9 +1803,8 @@
             views: 1,
             replies: []
           });
-          S.addLedger(`发布论坛交流帖《${title.slice(0, 14)}…》`, +5);
           await S.saveState();
-          toast("🎉 论坛帖发布成功！获得 +5✦ 积分");
+          toast("🎉 论坛帖发布成功！");
         }
         FUI.category = d.category;
         clearTimeout(draftSaveTimer);

@@ -123,7 +123,7 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 | 功能 | 做什么 | 谁能用 | 关键限制 | 状态 |
 |---|---|---|---|---|
 | 帖子列表与详情 `?view=topic&id=` | 帖子正文、楼层回复 | 所有人 | 回复分页 `GET /api/posts/<id>/replies?cursor=&limit=20` | 已实现 |
-| 发帖 / 回复 | 正文经 `sanitize_html`；回复可挂载画风、图型 | 登录用户 | 发帖 +5、回复 +2 积分，回复奖励每日上限 5 次 | 已实现 |
+| 发帖 / 回复 | 正文经 `sanitize_html`；回复可挂载画风、图型 | 登录用户 | 发帖无奖励（取消发帖得积分）、回复 +2 积分，回复奖励每日上限 5 次 | 已实现 |
 | 付费帖 | `price` > 0 时 `locked_body` 解锁后可见 | 登录用户 | 发帖时截断到 0–100；后台编辑截断到 0–200 | 已实现 |
 | 悬赏 | 发帖人采纳回复 `/accept-bounty` | 发帖人；运营可仲裁 | 悬赏 0–200 | 已实现 |
 | 置顶 / 加精 / 移版 / 隐藏 | `/api/forum/moderate` | 版主（限所辖版块）、运营、管理员 | 管理员自加精受 `moderation.allow_self_review_for_admin` 控制 | 已实现 |
@@ -229,7 +229,7 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 | `pioneer_bonus_credits` / `pioneer_work_threshold` | 10 / 3 | 先锋奖励及门槛 |
 | `asset_publish_credits` | 15 | 画风、图型被收录 |
 | `honor_upgrade_credits` | 10 | 荣誉升级 |
-| `topic_publish_credits` | 5 | 发帖 |
+| `topic_publish_credits` | 0 | 发帖（已取消普通发帖积分奖励） |
 | `reply_publish_credits` / `reply_daily_cap` | 2 / 5 | 回复奖励及每日次数 |
 | `invite_inviter_credits` / `invite_invitee_credits` | 15 / 10 | 邀请双方 |
 | `first_collect_credits` / `first_cheer_credits` | 2 / 2 | 首次收藏、首次鼓励 |
