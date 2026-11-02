@@ -15087,15 +15087,16 @@
     const canvas = CS.stageView === "canvas";
     const article = CS.stageView === "preview" || CS.stageView === "article";
     const history = CS.stageView === "history";
+    const moreActive = canvas || article;
     const historyCount = (CS.generationHistory || []).length;
     DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作任务">
       <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
       <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
-      <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
       <div class="qc-mode-more" id="studio-mode-more-wrap">
-        <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-more-btn" aria-haspopup="true" aria-expanded="${_modeMoreOpen}">更多 ▾</button>
+        <button type="button" class="btn btn-sm${moreActive ? " btn-primary is-active" : ""}" id="studio-mode-more-btn" aria-haspopup="true" aria-expanded="${_modeMoreOpen}">更多 ▾</button>
         <div class="qc-more-menu" id="studio-mode-more-menu" ${_modeMoreOpen ? "" : "hidden"}>
-          <button type="button" class="qc-more-menu-item" id="studio-mode-canvas">高级画布</button>
+          <button type="button" class="qc-more-menu-item${canvas ? " is-active" : ""}" id="studio-mode-canvas">高级画布</button>
+          <button type="button" class="qc-more-menu-item${article ? " is-active" : ""}" id="studio-mode-article">文章配图</button>
         </div>
       </div>
     </div><button type="button" class="btn btn-sm qc-mode-history" id="studio-mode-history" title="查看生图历史记录">生图历史</button>`;
@@ -15104,8 +15105,6 @@
     if (btnQuick) btnQuick.onclick = () => { _modeMoreOpen = false; switchCreationStage("quick"); };
     const btnBatch = DOM.entryBar.querySelector("#studio-mode-batch");
     if (btnBatch) btnBatch.onclick = () => { _modeMoreOpen = false; switchCreationStage("batch"); };
-    const btnArticle = DOM.entryBar.querySelector("#studio-mode-article");
-    if (btnArticle) btnArticle.onclick = () => { _modeMoreOpen = false; switchCreationStage("article"); };
     const btnMore = DOM.entryBar.querySelector("#studio-mode-more-btn");
     const menuMore = DOM.entryBar.querySelector("#studio-mode-more-menu");
     if (btnMore && menuMore) {
@@ -15123,9 +15122,26 @@
         switchCreationStage("canvas");
       };
     }
+    const btnArticle = DOM.entryBar.querySelector("#studio-mode-article");
+    if (btnArticle) {
+      btnArticle.onclick = () => {
+        _modeMoreOpen = false;
+        switchCreationStage("article");
+      };
+    }
     const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
     if (btnHistory) btnHistory.onclick = () => { _modeMoreOpen = false; openHistoryPage(); };
   }
+
+  document.addEventListener("click", (e) => {
+    if (_modeMoreOpen && !e.target.closest("#studio-mode-more-wrap")) {
+      _modeMoreOpen = false;
+      const menuMore = DOM.entryBar?.querySelector("#studio-mode-more-menu");
+      const btnMore = DOM.entryBar?.querySelector("#studio-mode-more-btn");
+      if (menuMore) menuMore.hidden = true;
+      if (btnMore) btnMore.setAttribute("aria-expanded", "false");
+    }
+  });
 
   let isRenderingQuickStart = false;
   function renderQuickStart() {

@@ -87,6 +87,7 @@
 .qc-more-menu[hidden] { display:none !important; }
 .qc-more-menu-item { display:block;width:100%;text-align:left;padding:8px 14px;background:transparent;border:0;font:inherit;font-size:13px;color:var(--ink-body);cursor:pointer; }
 .qc-more-menu-item:hover,.qc-more-menu-item:focus-visible { background:var(--paper-inset);color:var(--vermilion);outline:none; }
+.qc-more-menu-item.is-active { font-weight:700;color:var(--vermilion);background:var(--paper-inset); }
 
 @media(max-width:768px) {
   .qc-mode-more { display:none !important; }
