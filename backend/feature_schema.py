@@ -89,4 +89,27 @@ FEATURE_MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_ledgers_tips_lookup ON ledgers(kind, ref_type, ref_id);
     """
     ),
+    (76, "076_tip_requests_and_rate_limits", """
+    CREATE TABLE IF NOT EXISTS tip_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        request_id TEXT,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tip_requests_user_request
+        ON tip_requests(user_id, request_id)
+        WHERE request_id IS NOT NULL AND request_id != '';
+
+    CREATE INDEX IF NOT EXISTS idx_tip_requests_user_target_time
+        ON tip_requests(user_id, target_type, target_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_tip_requests_user_time
+        ON tip_requests(user_id, created_at);
+    """
+    ),
 ]

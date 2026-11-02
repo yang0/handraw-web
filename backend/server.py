@@ -2677,13 +2677,14 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         if req_path == "/api/interactions/tip":
             user = self._current_user(required=True)
+            raw_amount = body.get("amount") if "amount" in body else None
             self._send_json(
                 send_encourage_tip(
                     self.db,
                     user,  # type: ignore[arg-type]
                     target_type=str(body.get("targetType") or "work"),
                     target_id=str(body.get("targetId") or body.get("id") or ""),
-                    amount=int(body.get("amount") or 2),
+                    amount=raw_amount,
                     request_id=str(body.get("requestId") or body.get("request_id") or "").strip() or None,
                 )
             )

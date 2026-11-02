@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -2877,8 +2877,9 @@ def send_encourage_tip(
     user: dict[str, Any],
     target_type: str,
     target_id: str,
-    amount: int = 2,
+    amount: Any = 2,
     request_id: str | None = None,
+    created_at: str | None = None,
 ) -> dict[str, Any]:
     raw_type = str(target_type or "").strip().lower()
     tid = str(target_id or "").strip()
@@ -2889,22 +2890,21 @@ def send_encourage_tip(
     if user.get("status") not in (None, "", "active"):
         raise ServiceError("账号状态异常，无法进行赞赏", status=403)
 
+    if amount is None:
+        amt = 2
+    elif isinstance(amount, bool) or not isinstance(amount, int):
+        raise ServiceError("赞赏金额必须为 1–50✦ 整数", status=400, code="invalid_tip_amount")
+    elif amount < 1 or amount > 50:
+        raise ServiceError("赞赏金额必须在 1–50✦ 之间", status=400, code="invalid_tip_amount")
+    else:
+        amt = int(amount)
+
     now = utc_now_iso()
+    now_ts = str(created_at or "").strip() or now
     clean_req_id = str(request_id or "").strip() or None
 
     with db.transaction() as tx:
-        # Idempotency check with request_id
-        if clean_req_id:
-            dup = tx.execute(
-                "SELECT id FROM ledgers WHERE user_id = ? AND event_key = ?",
-                (uid, f"tip_out_{clean_req_id}"),
-            ).fetchone()
-            if dup:
-                bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-                cur_bal = int(bal_row["balance"]) if bal_row else 0
-                return {"ok": True, "credits": cur_bal, "amount": int(amount or 2), "duplicate": True}
-
-        # Resolve binding if target is topic (Rule 5: "正式绑定作品/资源的帖子只显示对应的「作品赞赏/资源赞赏」...")
+        # Resolve binding if target is topic
         if raw_type == "topic":
             mapping = tx.execute(
                 "SELECT kind, target_id FROM curation_resource_topics WHERE topic_id = ?",
@@ -2917,15 +2917,54 @@ def send_encourage_tip(
                 elif mapping["kind"] in ("style", "layout"):
                     raw_type = "asset"
                     tid = str(mapping["target_id"])
+            else:
+                t_chk = tx.execute("SELECT work_id FROM forum_topics WHERE id = ?", (tid,)).fetchone()
+                if t_chk and t_chk["work_id"]:
+                    raw_type = "work"
+                    tid = str(t_chk["work_id"])
+        elif raw_type == "asset":
+            clean_code = str(tid or "").strip().upper().lstrip("#")
+            tid = clean_code
+
+        # Idempotency check with request_id (prior to rate limits)
+        if clean_req_id:
+            prev_req = tx.execute(
+                "SELECT target_type, target_id, amount FROM tip_requests WHERE user_id = ? AND request_id = ?",
+                (uid, clean_req_id),
+            ).fetchone()
+            if not prev_req:
+                dup_ledger = tx.execute(
+                    "SELECT ref_type, ref_id, delta FROM ledgers WHERE user_id = ? AND event_key = ?",
+                    (uid, f"tip_out_{clean_req_id}"),
+                ).fetchone()
+                if dup_ledger:
+                    prev_req = {
+                        "target_type": dup_ledger["ref_type"],
+                        "target_id": dup_ledger["ref_id"],
+                        "amount": abs(int(dup_ledger["delta"])),
+                    }
+            if prev_req:
+                p_type = str(prev_req["target_type"]).strip().lower()
+                p_id = str(prev_req["target_id"]).strip()
+                p_amt = int(prev_req["amount"])
+                if p_type == raw_type and p_id == tid and p_amt == amt:
+                    bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+                    cur_bal = int(bal_row["balance"]) if bal_row else 0
+                    return {
+                        "ok": True,
+                        "credits": cur_bal,
+                        "amount": amt,
+                        "duplicate": True,
+                        "targetType": raw_type,
+                        "targetId": tid,
+                    }
+                else:
+                    raise ServiceError("请求参数与原请求不一致", status=409, code="tip_conflict")
 
         is_official = False
         target = None
 
         if raw_type == "topic":
-            if int(amount or 0) != 2:
-                raise ServiceError("帖子赞赏金额固定为 2✦", status=400, code="invalid_tip_amount")
-            amt = 2
-
             t_row = tx.execute("SELECT id, title, author_username, author_name, price, status FROM forum_topics WHERE id = ?", (tid,)).fetchone()
             if not t_row or t_row["status"] != "published":
                 raise ServiceError("帖子不存在或不可访问", status=404)
@@ -2949,7 +2988,6 @@ def send_encourage_tip(
             }
 
         elif raw_type == "work":
-            amt = max(1, min(50, int(amount or 2)))
             w_row = tx.execute("SELECT id, title, author_username, author_name, status FROM works WHERE id = ?", (tid,)).fetchone()
             if not w_row or w_row["status"] != "published":
                 raise ServiceError("作品不存在或不可访问", status=404)
@@ -2965,10 +3003,8 @@ def send_encourage_tip(
             target = dict(w_row)
 
         elif raw_type == "asset":
-            amt = max(1, min(50, int(amount or 2)))
-            clean_code = str(tid or "").strip().upper().lstrip("#")
             from . import resource_registry
-            cat_res = resource_registry.resolve(tx, clean_code, viewer=user, purpose="tip")
+            cat_res = resource_registry.resolve(tx, tid, viewer=user, purpose="tip")
             if not cat_res:
                 raise ServiceError("目标不存在", status=404)
             if cat_res.get("source") == "pending" or cat_res.get("status") in ("pending", "changes_requested"):
@@ -3001,6 +3037,26 @@ def send_encourage_tip(
             raise ServiceError("目标不存在", status=404)
 
         tid = target["id"]
+
+        # Persistent server-side rate limits
+        now_dt = datetime.fromisoformat(now_ts.replace("Z", "+00:00"))
+        sixty_sec_ago = (now_dt - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # 1. Same actual target within 60s
+        cnt_target = tx.execute(
+            "SELECT COUNT(*) FROM tip_requests WHERE user_id = ? AND target_type = ? AND target_id = ? AND created_at >= ?",
+            (uid, raw_type, tid, sixty_sec_ago),
+        ).fetchone()[0]
+        if cnt_target > 0:
+            raise ServiceError("对同一目标的赞赏过于频繁，每 60 秒最多一次", status=429, code="rate_limited")
+
+        # 2. Total across all targets within 60s (max 5 per minute)
+        cnt_total = tx.execute(
+            "SELECT COUNT(*) FROM tip_requests WHERE user_id = ? AND created_at >= ?",
+            (uid, sixty_sec_ago),
+        ).fetchone()[0]
+        if cnt_total >= 5:
+            raise ServiceError("赞赏过于频繁，每分钟最多赞赏 5 次", status=429, code="rate_limited")
 
         if is_official:
             settings = get_site_settings(tx)
@@ -3102,7 +3158,7 @@ def send_encourage_tip(
         if not already_liked:
             tx.execute(
                 "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-                (uid, itype, tid, now),
+                (uid, itype, tid, now_ts),
             )
             if raw_type == "work":
                 tx.execute("UPDATE works SET likes = likes + 1 WHERE id = ?", (tid,))
@@ -3112,7 +3168,16 @@ def send_encourage_tip(
         # Also maintain generic interaction record for cheers
         tx.execute(
             "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-            (uid, raw_type, tid, now),
+            (uid, raw_type, tid, now_ts),
+        )
+
+        # Record in tip_requests table for idempotency and persistent rate limiting
+        tx.execute(
+            """
+            INSERT INTO tip_requests (user_id, request_id, target_type, target_id, amount, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (uid, clean_req_id, raw_type, tid, amt, now_ts),
         )
 
         return {"ok": True, "credits": new_bal, "amount": amt, "targetType": raw_type, "targetId": tid}
