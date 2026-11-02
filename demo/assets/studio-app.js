@@ -2056,6 +2056,10 @@
 
     let topTab = App.state.loggedIn ? "my" : "official"; // "my" | "official" | "upload"
     let activeCategory = "ALL";
+    let uploadCategory = "other";
+    let uploadCategoryUserModified = false;
+    let isUploading = false;
+    let newlyUploadedAssetId = null;
     let searchQuery = "";
     let showNewCatForm = false;
 
@@ -2109,11 +2113,22 @@
 
         topTabsEl.querySelectorAll("[data-top-tab]").forEach((btn) => {
           btn.onclick = () => {
-            topTab = btn.getAttribute("data-top-tab");
+            const nextTab = btn.getAttribute("data-top-tab");
+            if (nextTab === topTab) return;
+            topTab = nextTab;
             topTabsEl.querySelectorAll("[data-top-tab]").forEach((b) => {
               b.classList.toggle("is-active", b === btn);
             });
-            activeCategory = "ALL";
+            if (topTab === "upload") {
+              if (!uploadCategoryUserModified) {
+                const validCats = getAssetCategoryList();
+                if (activeCategory !== "ALL" && validCats.some((c) => c.key === activeCategory)) {
+                  uploadCategory = activeCategory;
+                } else {
+                  uploadCategory = "other";
+                }
+              }
+            }
             renderView();
           };
         });
@@ -2237,6 +2252,8 @@
               CS.customAssetCats = [...(CS.customAssetCats || []), { key: newKey, icon: "", label: raw }];
               writeJsonStorage(CUSTOM_ASSET_CATS_KEY, CS.customAssetCats);
               activeCategory = newKey;
+              uploadCategory = newKey;
+              uploadCategoryUserModified = true;
               showNewCatForm = false;
               renderCategoryPills();
               renderGrid();
@@ -2251,23 +2268,77 @@
 
         function renderUploadSection() {
           const cats = getAssetCategoryList();
+          if (!cats.some((c) => c.key === uploadCategory)) {
+            uploadCategory = "other";
+          }
+
           uploadBar.innerHTML = `
             <div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
               <div style="font-size:13px;font-weight:700;">本地图片上传并存入你的图库：</div>
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                <input type="text" class="hw-input" id="ing-upload-name" placeholder="图参名称（如：主角设计稿）" style="width:220px;padding:6px 10px;font-size:12.5px;" />
-                <span style="font-size:12px;color:var(--ink-muted);">归入分类：</span>
-                <select class="hw-input" id="ing-upload-cat" style="width:auto;padding:6px 10px;font-size:12.5px;">
-                  ${cats.map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join("")}
-                </select>
-                <label class="btn btn-sm btn-primary" style="cursor:pointer;margin-left:auto;">
-                  ＋ 选择本地图片上传
-                  <input type="file" id="ing-upload-file" accept="image/*" hidden />
+                <input type="text" class="hw-input" id="ing-upload-name" placeholder="图参名称（如：主角设计稿）" style="width:220px;padding:6px 10px;font-size:12.5px;" ${isUploading ? "disabled" : ""} />
+                <label class="btn btn-sm btn-primary" id="ing-upload-file-btn" style="cursor:pointer;margin-left:auto;${isUploading ? "opacity:0.6;pointer-events:none;" : ""}">
+                  ${isUploading ? "正在上传..." : "＋ 选择本地图片上传"}
+                  <input type="file" id="ing-upload-file" accept="image/*" hidden ${isUploading ? "disabled" : ""} />
                 </label>
               </div>
+
+              <fieldset id="ing-upload-cat-fieldset" style="border:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;" ${isUploading ? "disabled" : ""}>
+                <legend style="font-size:12px;color:var(--ink-muted);font-weight:700;padding:0;margin-bottom:2px;">归入分类：</legend>
+                <div class="ing-upload-cat-pills" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                  ${cats.map((c) => {
+                    const isChecked = uploadCategory === c.key;
+                    return `
+                      <label class="hw-pill ing-cat-pill ${isChecked ? "is-active" : ""} ${isUploading ? "is-disabled" : ""}" style="cursor:pointer;user-select:none;padding:4px 10px;font-size:12px;">
+                        <input
+                          type="radio"
+                          name="ing-upload-cat-radio"
+                          value="${esc(c.key)}"
+                          ${isChecked ? "checked" : ""}
+                          class="hw-cat-radio ic-sr-only"
+                          ${isUploading ? "disabled" : ""}
+                        />
+                        <span>${esc(c.label)}</span>
+                      </label>
+                    `;
+                  }).join("")}
+                </div>
+              </fieldset>
+
               <div style="font-size:11.5px;color:var(--ink-muted);">上传后图片将存入你的个人图库，可重复用于做图与画布创作。</div>
             </div>
           `;
+
+          const syncUploadCatPills = () => {
+            uploadBar.querySelectorAll(".ing-cat-pill").forEach((pill) => {
+              const r = pill.querySelector("input[name='ing-upload-cat-radio']");
+              const active = Boolean(r && r.value === uploadCategory);
+              if (r) r.checked = active;
+              pill.classList.toggle("is-active", active);
+            });
+          };
+
+          uploadBar.querySelectorAll(".ing-cat-pill").forEach((pill) => {
+            const radio = pill.querySelector("input[name='ing-upload-cat-radio']");
+            if (!radio) return;
+            radio.onchange = () => {
+              if (isUploading) return;
+              if (radio.checked) {
+                uploadCategory = radio.value;
+                uploadCategoryUserModified = true;
+                syncUploadCatPills();
+              }
+            };
+            pill.onclick = (e) => {
+              if (isUploading) return;
+              if (e.target !== radio) {
+                radio.checked = true;
+              }
+              uploadCategory = radio.value;
+              uploadCategoryUserModified = true;
+              syncUploadCatPills();
+            };
+          });
 
           const fileInp = uploadBar.querySelector("#ing-upload-file");
           if (fileInp) {
@@ -2275,45 +2346,110 @@
               const f = ev.target.files && ev.target.files[0];
               if (!f) return;
               const customName = (uploadBar.querySelector("#ing-upload-name")?.value || "").trim() || f.name.replace(/\.[^.]+$/, "");
-              const chosenCat = uploadBar.querySelector("#ing-upload-cat")?.value || "other";
+              const chosenCat = uploadBar.querySelector("input[name='ing-upload-cat-radio']:checked")?.value || uploadCategory || "other";
               const catMeta = getAssetCatMeta(chosenCat);
+
+              isUploading = true;
+              const catFieldset = uploadBar.querySelector("#ing-upload-cat-fieldset");
+              if (catFieldset) catFieldset.disabled = true;
+              uploadBar.querySelectorAll("input[name='ing-upload-cat-radio']").forEach((r) => { r.disabled = true; });
+              uploadBar.querySelectorAll(".ing-cat-pill").forEach((p) => { p.classList.add("is-disabled"); });
+              const nameInp = uploadBar.querySelector("#ing-upload-name");
+              if (nameInp) nameInp.disabled = true;
+              if (fileInp) fileInp.disabled = true;
+              const fileBtn = uploadBar.querySelector("#ing-upload-file-btn");
+              if (fileBtn) {
+                fileBtn.classList.add("is-disabled");
+                fileBtn.style.opacity = "0.6";
+                fileBtn.style.pointerEvents = "none";
+              }
+
+              const resetUploadingState = () => {
+                isUploading = false;
+                if (catFieldset) catFieldset.disabled = false;
+                uploadBar.querySelectorAll("input[name='ing-upload-cat-radio']").forEach((r) => { r.disabled = false; });
+                uploadBar.querySelectorAll(".ing-cat-pill").forEach((p) => { p.classList.remove("is-disabled"); });
+                if (nameInp) nameInp.disabled = false;
+                if (fileInp) {
+                  fileInp.disabled = false;
+                  fileInp.value = "";
+                }
+                if (fileBtn) {
+                  fileBtn.classList.remove("is-disabled");
+                  fileBtn.style.opacity = "";
+                  fileBtn.style.pointerEvents = "";
+                }
+              };
+
               const reader = new FileReader();
+              reader.onerror = () => {
+                resetUploadingState();
+                toast("读取图片失败，请重试");
+              };
               reader.onload = async () => {
-                const rawDataUrl = String(reader.result || "");
-                let finalId = "USR-" + String((CS.customUploads?.length || 0) + 1).padStart(2, "0");
-                let finalImg = rawDataUrl;
-                const uploaded = await studioApiPost("/api/studio/uploads", {
-                  dataUrl: rawDataUrl,
-                  nameZh: customName,
-                  descZh: `${catMeta.label} · 本地上传图参`,
-                  cat: chosenCat
-                });
-                if (uploaded && uploaded.ok && uploaded.image) {
-                  finalId = uploaded.id || finalId;
-                  finalImg = uploaded.image;
+                try {
+                  const rawDataUrl = String(reader.result || "");
+                  let finalId = "USR-" + String((CS.customUploads?.length || 0) + 1).padStart(2, "0");
+                  let finalImg = rawDataUrl;
+                  const uploaded = await studioApiPost("/api/studio/uploads", {
+                    dataUrl: rawDataUrl,
+                    nameZh: customName,
+                    descZh: `${catMeta.label} · 本地上传图参`,
+                    cat: chosenCat
+                  });
+                  if (uploaded && uploaded.ok && uploaded.image) {
+                    finalId = uploaded.id || finalId;
+                    finalImg = uploaded.image;
+                  }
+                  const newItem = {
+                    id: finalId,
+                    name: customName,
+                    desc: `${catMeta.label} · 本地上传图参`,
+                    cat: chosenCat,
+                    image: finalImg,
+                    dataUrl: finalImg,
+                    custom: true,
+                    builtin: false
+                  };
+                  CS.customUploads = [newItem, ...(CS.customUploads || []).filter((x) => x.id !== finalId)];
+                  writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
+                  if (selectedMap.size < maxCount) {
+                    selectedMap.set(newItem.id, newItem);
+                  }
+                  syncConfirmText();
+                  toast(`已上传《${customName}》并加入图参！`);
+
+                  isUploading = false;
+                  newlyUploadedAssetId = finalId;
+                  topTab = "my";
+                  activeCategory = chosenCat;
+                  topTabsEl.querySelectorAll("[data-top-tab]").forEach((b) => {
+                    b.classList.toggle("is-active", b.getAttribute("data-top-tab") === "my");
+                  });
+                  renderView();
+
+                  setTimeout(() => {
+                    if (newlyUploadedAssetId) {
+                      const card = gridEl.querySelector(`[data-pick-id="${newlyUploadedAssetId}"]`);
+                      if (card) {
+                        card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+                        card.style.transition = "transform 0.25s ease, box-shadow 0.25s ease";
+                        card.style.transform = "scale(1.02)";
+                        card.style.boxShadow = "0 0 0 4px var(--vermilion), 0 6px 16px rgba(209,75,40,0.25)";
+                        setTimeout(() => {
+                          if (card) {
+                            card.style.transform = "";
+                            card.style.boxShadow = "";
+                          }
+                        }, 2200);
+                      }
+                    }
+                  }, 60);
+                } catch (err) {
+                  console.error("Upload failed:", err);
+                  resetUploadingState();
+                  toast("上传失败，已保留分类选择");
                 }
-                const newItem = {
-                  id: finalId,
-                  name: customName,
-                  desc: `${catMeta.label} · 本地上传图参`,
-                  cat: chosenCat,
-                  image: finalImg,
-                  dataUrl: finalImg,
-                  custom: true,
-                  builtin: false
-                };
-                CS.customUploads = [newItem, ...(CS.customUploads || []).filter((x) => x.id !== finalId)];
-                writeJsonStorage(UPLOAD_STORAGE_KEY, CS.customUploads);
-                if (selectedMap.size < maxCount) {
-                  selectedMap.set(newItem.id, newItem);
-                }
-                syncConfirmText();
-                toast(`已上传《${customName}》并加入图参！`);
-                topTab = "my";
-                topTabsEl.querySelectorAll("[data-top-tab]").forEach((b) => {
-                  b.classList.toggle("is-active", b.getAttribute("data-top-tab") === "my");
-                });
-                renderView();
               };
               reader.readAsDataURL(f);
             };
@@ -2339,12 +2475,15 @@
               const id = it.id;
               const title = it.name_zh || it.name || id;
               const isSel = selectedMap.has(id);
+              const isNewlyUploaded = id === newlyUploadedAssetId;
               const catMeta = getAssetCatMeta(it.cat || "other");
               return `
-                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" style="border:1.5px solid ${
+                <div class="ic-picker-card ${isSel ? "is-selected" : ""} ${isNewlyUploaded ? "is-newly-uploaded" : ""}" data-pick-id="${esc(id)}" style="border:1.5px solid ${
                 isSel ? "var(--vermilion)" : "var(--line-soft)"
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
-                isSel ? "0 0 0 3px rgba(209,75,40,0.16)" : "0 2px 6px rgba(24,20,17,0.04)"
+                isNewlyUploaded
+                  ? "0 0 0 4px var(--vermilion), 0 6px 16px rgba(209,75,40,0.25)"
+                  : (isSel ? "0 0 0 3px rgba(209,75,40,0.16)" : "0 2px 6px rgba(24,20,17,0.04)")
               };">
                   <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;display:flex;align-items:center;justify-content:center;">
                     <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:contain;display:block;" />
@@ -2420,6 +2559,13 @@
               commitSelection();
             };
           });
+
+          if (newlyUploadedAssetId) {
+            const newlyCard = gridEl.querySelector(`[data-pick-id="${newlyUploadedAssetId}"]`);
+            if (newlyCard) {
+              newlyCard.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            }
+          }
         }
 
         renderView();

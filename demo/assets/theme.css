@@ -578,10 +578,42 @@ button {
   color: var(--vermilion);
 }
 
-.hw-pill.is-active {
+.hw-pill.is-active,
+.hw-pill:has(input[type="radio"]:checked) {
   background: var(--vermilion);
   border-color: var(--vermilion);
   color: #fff;
+}
+
+.hw-pill:has(input[type="radio"]:focus-visible) {
+  outline: 2px solid var(--vermilion);
+  outline-offset: 2px;
+}
+
+@supports not selector(:has(*)) {
+  .hw-pill:focus-within {
+    outline: 2px solid var(--vermilion);
+    outline-offset: 2px;
+  }
+}
+
+.hw-pill.is-disabled,
+.hw-pill:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.hw-cat-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .hw-pill-count {
