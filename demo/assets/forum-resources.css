@@ -137,7 +137,7 @@
 .hrp-viewall { font-size: 13px; color: var(--hrp-verm); font-weight: 600; }
 
 /* card grid */
-.hrp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 16px; }
+.hrp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 16px; align-items: start; }
 .hrp-card {
   display: flex; flex-direction: column; background: var(--hrp-paper);
   border: 1px solid var(--hrp-line); border-radius: var(--hrp-radius); overflow: hidden;
@@ -145,7 +145,8 @@
 }
 .hrp-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(38, 33, 27, 0.1); }
 .hrp-card-media { position: relative; aspect-ratio: 4 / 3; overflow: hidden; background: var(--hrp-paper); }
-.hrp-card-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.hrp-card[data-res-kind="work"] .hrp-card-media { aspect-ratio: auto; }
+.hrp-card-img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .hrp-card-badge {
   position: absolute; top: 8px; left: 8px; font-size: 11px; font-weight: 700;
   color: #fff; background: rgba(38, 33, 27, 0.72); padding: 2px 8px; border-radius: 999px;

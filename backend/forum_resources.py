@@ -335,8 +335,27 @@ def _sql_page(conn,table,where,args,q,sort,offset,limit,kind):
     popularity = work_popular_sql(alias) if table == 'works' else topic_popular_sql(alias)
     order = popularity if normalize_sort(sort) == 'popular' else f'{alias}.published_at_ms'
     columns=f'{alias}.id,{alias}.title,{alias}.author_name,{alias}.images_json'
+    if table == 'works':
+        columns += f',{alias}.ratio'
     rows=conn.execute(f'SELECT {columns} FROM {table} {alias} WHERE {where} ORDER BY {order} DESC,{alias}.id ASC LIMIT ? OFFSET ?',args+[limit,offset]).fetchall()
-    return [{'id':r['id'],'kind':kind,'name':r['title'],'image':_image_of(_loads(r['images_json'],[])),'authorName':r['author_name']} for r in rows],count
+    out_items = []
+    for r in rows:
+        imgs = _loads(r['images_json'], [])
+        item = {
+            'id': r['id'],
+            'kind': kind,
+            'name': r['title'],
+            'title': r['title'],
+            'image': _image_of(imgs),
+            'authorName': r['author_name'],
+        }
+        if table == 'works':
+            item['images'] = [_image_of([i]) for i in imgs if _image_of([i])] if isinstance(imgs, list) else []
+            item['ratio'] = r['ratio'] if 'ratio' in r.keys() else '3:4'
+            from .works_feed import enrich_dimensions
+            enrich_dimensions(item)
+        out_items.append(item)
+    return out_items, count
 
 
 def _asset_card(conn,kind,code,usage):

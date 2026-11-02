@@ -157,6 +157,8 @@ summary:focus-visible {
 }
 .hrp-sib-img { height: auto; aspect-ratio: 1 / 1; object-fit: contain; background: var(--frame-mat); }
 .hrp-card-media { aspect-ratio: 1 / 1; background: var(--frame-mat); }
+.hrp-card[data-res-kind="work"] .hrp-card-media,
+.topic-related-work-media { aspect-ratio: auto; }
 .hrp-card-img { object-fit: contain; }
 .hw-new-card-media:hover img,
 .hw-card:hover .hw-new-card-media img { transform: none; }

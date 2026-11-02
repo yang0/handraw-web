@@ -111,10 +111,25 @@
     return S.apiJson(path, { method: "GET" });
   }
 
-  function mediaHtml(src, alt, cls) {
+  function formatCardRatio(item) {
+    if (!item) return "3/4";
+    if (typeof item.aspectRatio === "number" && !isNaN(item.aspectRatio) && item.aspectRatio > 0) {
+      return Number(item.aspectRatio.toFixed(4));
+    }
+    if (typeof item.aspectRatio === "string" && item.aspectRatio.trim()) {
+      return item.aspectRatio.trim().replace(":", "/");
+    }
+    if (item.ratio && typeof item.ratio === "string") {
+      return item.ratio.trim().replace(":", "/");
+    }
+    return "3/4";
+  }
+
+  function mediaHtml(src, alt, cls, ar) {
     const u = safeUrl(src);
     if (!u) return `<div class="${cls ? cls + "-empty" : "hrp-empty-media"} hrp-media-empty" role="img" aria-label="${esc(alt || "暂无图片")}"></div>`;
-    return `<img data-hw-src="${esc(u)}" alt="${esc(alt || "")}" loading="lazy" decoding="async" class="${cls || ""}" />`;
+    const ratioAttr = ar ? ` data-hw-ratio="${esc(String(ar))}"` : "";
+    return `<img data-hw-src="${esc(u)}"${ratioAttr} alt="${esc(alt || "")}" loading="lazy" decoding="async" class="${cls || ""}" onload="if(this.naturalWidth&&this.naturalHeight&&this.parentElement){this.parentElement.style.aspectRatio=(this.naturalWidth/this.naturalHeight).toFixed(4);}" />`;
   }
 
   function scan(root) {
@@ -227,10 +242,16 @@
     const author = item.authorName ? `<span class="hrp-card-author">@${esc(item.authorName)}</span>` : "";
     const usage = (k === "style" || k === "layout") && item.usageCount != null
       ? `<span class="hrp-card-meta">${Number(item.usageCount) || 0} 次使用</span>` : "";
+    const isWork = k === "work";
+    const firstImg = (item.images && item.images.length)
+      ? (typeof item.images[0] === 'string' ? item.images[0] : (item.images[0].url || item.images[0].src || ""))
+      : (item.image || "");
+    const ar = formatCardRatio(item);
+    const mediaStyle = isWork || item.aspectRatio ? `style="aspect-ratio:${ar};"` : "";
     return `
       <a class="hrp-card" href="${esc(cardHref(item))}" data-res-kind="${esc(k)}" data-res-id="${esc(item.id)}">
-        <div class="hrp-card-media">
-          ${mediaHtml(item.image, name, "hrp-card-img")}
+        <div class="hrp-card-media" ${mediaStyle}>
+          ${mediaHtml(firstImg, name, "hrp-card-img", ar)}
           <span class="hrp-card-badge">${esc(kindLabel)}</span>
         </div>
         <div class="hrp-card-body">

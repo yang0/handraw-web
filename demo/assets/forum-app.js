@@ -3317,18 +3317,25 @@
               return;
             }
             worksContainer.innerHTML = `
-              <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:12px;min-width:0;max-width:100%;">
-                ${items.slice(0, 8).map((w) => `
+              <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:12px;align-items:start;min-width:0;max-width:100%;">
+                ${items.slice(0, 8).map((w) => {
+                  const firstImg = (w.images && w.images.length)
+                    ? (typeof w.images[0] === 'string' ? w.images[0] : (w.images[0].url || w.images[0].src || ""))
+                    : (w.image || "");
+                  // The frame follows the picture itself. The ratio the feed reports is
+                  // the layout's, not the file's, so trusting it letterboxed the image.
+                  const ar = "";
+                  return `
                   <a href="${esc(S.channelUrl("main", { view: "work", id: w.id }))}" style="text-decoration:none;color:inherit;display:block;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:8px;overflow:hidden;min-width:0;max-width:100%;">
-                    <div style="aspect-ratio:1;background:var(--paper-deep);overflow:hidden;">
-                      <img src="${esc(w.image || (w.images && w.images[0]) || "")}" alt="${esc(w.title || "")}" style="width:100%;height:100%;object-fit:cover;" />
+                    <div class="topic-related-work-media" style="${ar}background:var(--paper-deep);overflow:hidden;position:relative;">
+                      <img src="${esc(firstImg)}" alt="${esc(w.title || "")}" style="width:100%;height:auto;display:block;object-fit:contain;" loading="lazy" />
                     </div>
                     <div style="padding:6px 8px;min-width:0;">
                       <div style="font-size:12px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:anywhere;">${esc(w.title || "作品")}</div>
                       <div style="font-size:11px;color:var(--ink-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@${esc(w.authorName || w.author || "")}</div>
                     </div>
                   </a>
-                `).join("")}
+                `;}).join("")}
               </div>
             `;
           })
