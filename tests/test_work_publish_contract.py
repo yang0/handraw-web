@@ -6,6 +6,7 @@ browser payload cannot silently break the Skill's publishing path.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -45,10 +46,14 @@ class EntryContractTests(unittest.TestCase):
         cls.db.close()
         cls.temp.cleanup()
 
-    def _request(self, path, body=None, token=None):
-        headers = {"Origin": "http://trusted.test"}
+    def _request(self, path, body=None, token=None, api_key=None, omit_origin=False):
+        headers = {}
+        if not omit_origin:
+            headers["Origin"] = "http://trusted.test"
         if token:
             headers["Cookie"] = f"{SESSION_COOKIE_NAME}={token}"
+        if api_key:
+            headers["Api-Key"] = api_key
         data = json.dumps(body).encode() if body is not None else None
         if data is not None:
             headers["Content-Type"] = "application/json"
@@ -58,6 +63,21 @@ class EntryContractTests(unittest.TestCase):
                 return response.status, json.load(response)
         except urllib.error.HTTPError as error:
             return error.code, json.load(error)
+
+    def _create_api_token(self, scopes: list[str]) -> str:
+        user_row = self.db.get_conn().execute("SELECT id FROM users WHERE username = 'skill_user'").fetchone()
+        raw_token = f"hwt_test_{hashlib.sha256(os.urandom(16)).hexdigest()}"
+        tok_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        tok_id = f"tok_{os.urandom(8).hex()}"
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO api_tokens (id, user_id, name, scopes, token_hash, created_at, last_used_at, revoked_at)
+                VALUES (?, ?, 'SkillToken', ?, ?, '2026-10-31T00:00:00Z', '', '')
+                """,
+                (tok_id, user_row["id"], json.dumps(scopes), tok_hash),
+            )
+        return raw_token
 
     def _login(self):
         if self.token:
@@ -184,6 +204,40 @@ class EntryContractTests(unittest.TestCase):
             )
         self.assertEqual(status, 400, payload)
         self.assertEqual(payload.get("code"), "too_many_images")
+
+    def test_entry_publishes_with_api_key_only_no_cookie_no_origin(self):
+        api_token = self._create_api_token(["publish"])
+        status, result = self._request(
+            "/api/entries",
+            {"entry": self._entry("skill-req-apikey-ok")},
+            api_key=api_token,
+            omit_origin=True,
+        )
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["kind"], "work")
+        self.assertTrue(result["id"])
+        self.assertEqual(result["status"], "published")
+        self.assertIn(result["id"], result["url"])
+
+    def test_entry_rejects_api_key_without_publish_scope(self):
+        lib_token = self._create_api_token(["library"])
+        status, payload = self._request(
+            "/api/entries",
+            {"entry": self._entry("skill-req-lib-denied")},
+            api_key=lib_token,
+            omit_origin=True,
+        )
+        self.assertEqual(status, 403, payload)
+        self.assertEqual(payload.get("code"), "token_scope_denied")
+
+    def test_entry_rejects_invalid_api_key_no_fallback(self):
+        status, payload = self._request(
+            "/api/entries",
+            {"entry": self._entry("skill-req-invalid")},
+            api_key="hwt_nonexistent_token",
+            omit_origin=True,
+        )
+        self.assertEqual(status, 401, payload)
 
 
 if __name__ == "__main__":

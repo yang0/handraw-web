@@ -297,28 +297,47 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
     conn = db.get_conn()
     now_ts = int(time.time())
 
-    # 1. Bearer token or X-Handraw-Token
+    # 1. Bearer token, X-Handraw-Token, or Api-Key
     has_auth_hdr = _has_header_ci(headers, "Authorization")
     has_x_hdr = _has_header_ci(headers, "X-Handraw-Token")
+    has_api_key_hdr = _has_header_ci(headers, "Api-Key")
 
-    # If ANY Authorization or X-Handraw-Token header is provided (regardless of casing,
+    # If ANY Authorization, X-Handraw-Token, or Api-Key header is provided (regardless of casing,
     # empty value, scheme, or format), ONLY token auth is evaluated.
-    # Invalid/malformed/revoked/unknown tokens MUST return None immediately without
-    # ever falling back to Session Cookie.
-    if has_auth_hdr or has_x_hdr:
-        token = ""
+    # Invalid/malformed/revoked/unknown tokens or conflicting headers MUST return None immediately
+    # without ever falling back to Session Cookie.
+    if has_auth_hdr or has_x_hdr or has_api_key_hdr:
+        extracted: dict[str, str | None] = {}
+
         if has_auth_hdr:
             raw_auth = _header_ci_val(headers, "Authorization").strip()
             if raw_auth.lower().startswith("bearer "):
-                token = raw_auth[7:].strip()
+                extracted["auth"] = raw_auth[7:].strip()
             else:
                 # Non-Bearer scheme (e.g. Basic), empty string, or malformed Authorization header
-                return None
-        elif has_x_hdr:
-            token = _header_ci_val(headers, "X-Handraw-Token").strip()
+                extracted["auth"] = None
 
-        if not token:
+        if has_x_hdr:
+            extracted["x"] = _header_ci_val(headers, "X-Handraw-Token").strip()
+
+        if has_api_key_hdr:
+            raw_api = _header_ci_val(headers, "Api-Key").strip()
+            if raw_api.lower().startswith("bearer "):
+                extracted["api_key"] = raw_api[7:].strip()
+            else:
+                extracted["api_key"] = raw_api
+
+        # If any provided header is malformed (None) or empty:
+        # Invalid credential provided; reject immediately without fallback to cookie.
+        if None in extracted.values() or "" in extracted.values():
             return None
+
+        # Conflicting credentials check: all present credential headers must specify the exact same token
+        valid_tokens = [tok for tok in extracted.values() if tok is not None and tok != ""]
+        if len(set(valid_tokens)) != 1:
+            return None
+
+        token = valid_tokens[0]
 
         # Deprecated legacy keys are strictly rejected
         if token.startswith("hwk_"):
@@ -333,6 +352,12 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
             ).fetchone()
             if not tok_row:
                 return None
+            if "expires_at" in tok_row.keys() and tok_row["expires_at"]:
+                exp_val = tok_row["expires_at"]
+                if isinstance(exp_val, (int, float)) and exp_val <= now_ts:
+                    return None
+                elif isinstance(exp_val, str) and exp_val and exp_val <= utc_now_iso():
+                    return None
             u = conn.execute(
                 "SELECT * FROM users WHERE id = ? AND status = 'active'",
                 (tok_row["user_id"],),
@@ -369,7 +394,11 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
             user_dict["_token_scopes"] = scopes
             return user_dict
 
-        # Bearer session token (e.g. session token passed via Authorization header)
+        # If Api-Key was provided, only hwt_ personal access tokens are accepted
+        if has_api_key_hdr:
+            return None
+
+        # Bearer session token (e.g. session token passed via Authorization or X-Handraw-Token header)
         row = conn.execute(
             """
             SELECT u.*
@@ -387,7 +416,7 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
         result["_token_scopes"] = ["*"]
         return result
 
-    # 2. Session Cookie (only evaluated when NO Authorization or X-Handraw-Token header is present)
+    # 2. Session Cookie (only evaluated when NO Authorization, X-Handraw-Token, or Api-Key header is present)
     cookie_str = _header_ci_val(headers, "Cookie")
     cookies = parse_cookie_header(cookie_str)
     sess_token = (cookies.get(SESSION_COOKIE_NAME) or "").strip()
