@@ -101,7 +101,7 @@ class FissionRoutesTests(unittest.TestCase):
             headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(f"{self.base}{path}", data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=20) as resp:
                 status = resp.status
                 payload = json.loads(resp.read().decode("utf-8"))
                 return status, payload

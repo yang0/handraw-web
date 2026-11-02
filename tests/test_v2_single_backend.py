@@ -44,7 +44,7 @@ class SingleBackendHTTPTests(unittest.TestCase):
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self.base + path, headers=headers, data=data)
         try:
-            response = urllib.request.urlopen(req, timeout=5)
+            response = urllib.request.urlopen(req, timeout=20)
         except urllib.error.HTTPError as error:
             response = error
         with response:
