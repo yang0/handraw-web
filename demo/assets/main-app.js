@@ -1066,9 +1066,40 @@
       ? `<button type="button" class="hw-wb-tab ${filters.format === key ? "is-active" : ""}" data-wb-format="${esc(key)}" aria-pressed="${filters.format === key}">${esc(label)} <span class="hw-wb-tab-count">${count}</span></button>`
       : "";
 
-    const cards = visible.map((w) => {
-      const images = B.imagesFor(w);
+    const colCount = (B.getColumnCount && typeof window !== "undefined")
+      ? B.getColumnCount(window.innerWidth)
+      : 4;
+    const viewportHeight = (typeof window !== "undefined" && window.innerHeight) || 800;
+
+    const candidates = B.unpackWorkCandidates ? B.unpackWorkCandidates(visible) : visible.map((w) => ({
+      itemKey: `${w.id}_0`,
+      workId: String(w.id),
+      imgIndex: 0,
+      totalImages: 1,
+      imageUrl: (B.imagesFor(w)[0] || ""),
+      aspectRatio: 0.75,
+      work: w,
+      resourceCodes: B.normalizeResourceCodes ? B.normalizeResourceCodes(w) : new Set(),
+      styles: Array.isArray(w.styles) ? w.styles : [],
+      layout: w.layout || ""
+    }));
+
+    const layoutResult = (B.layoutWorksMasonry)
+      ? B.layoutWorksMasonry(candidates, { colCount, viewportHeight })
+      : { placed: candidates.map((c, i) => ({ ...c, col: i % colCount, top: 0, height: 300, extraMargin: 0 })), remainingQueue: [] };
+
+    UI._worksMasonryPlaced = layoutResult.placed;
+    UI._worksMasonryQueue = layoutResult.remainingQueue;
+    UI._worksMasonryColCount = colCount;
+
+    const renderCardHtml = (item) => {
+      const w = item.work || item;
       const id = String(w.id);
+      const itemKey = item.itemKey || `${id}_0`;
+      const imgIdx = item.imgIndex != null ? item.imgIndex : 0;
+      const totalImgs = item.totalImages || 1;
+      const imageUrl = item.imageUrl || (B.imagesFor(w)[0] || "");
+      const ar = item.aspectRatio || (B.parseAspectRatio ? B.parseAspectRatio(w, imgIdx) : 0.75);
       const href = channelUrl("main", { view: "work", id });
       const liked = Boolean(S.isLiked && S.isLiked("work", id));
       const likeCnt = (S.getLikeCount && S.getLikeCount("work", w)) ?? Number(w.likes || 0);
@@ -1080,14 +1111,15 @@
         (S.canDeleteWork && S.canDeleteWork(w)) ||
         (App.state.loggedIn && App.state.user && w.author === App.state.user.username)
       );
+      const marginStyle = (item.extraMargin && item.extraMargin > 0) ? `margin-top:${item.extraMargin}px;` : "";
       return `
-        <article class="hw-wb-card" data-wb-work="${esc(id)}">
-          <a class="hw-wb-media" href="${esc(href)}" data-wb-open="${esc(id)}" aria-label="打开作品：${esc(w.title || "未命名作品")}">
-            <img data-hw-src="${esc(images[0])}" alt="${esc(w.title || "作品图片")}" loading="lazy" />
-            ${images.length > 1 ? `<span class="hw-wb-media-count">${images.length} 张</span>` : ""}
+        <article class="hw-wb-card" data-wb-work="${esc(id)}" data-wb-card-key="${esc(itemKey)}" style="${marginStyle}">
+          <a class="hw-wb-media" href="${esc(href)}" data-wb-open="${esc(id)}" data-wb-img-idx="${imgIdx}" aria-label="打开作品：${esc(w.title || "未命名作品")}" style="aspect-ratio:${ar};">
+            <img data-hw-src="${esc(imageUrl)}" alt="${esc(w.title || "作品图片")}" loading="lazy" />
+            ${totalImgs > 1 ? `<span class="hw-wb-img-badge">图 ${imgIdx + 1}/${totalImgs}</span>` : ""}
           </a>
           <div class="hw-wb-body">
-            <h3 class="hw-wb-title"><a href="${esc(href)}" data-wb-open="${esc(id)}">${esc(w.title || "未命名作品")}</a></h3>
+            <h3 class="hw-wb-title"><a href="${esc(href)}" data-wb-open="${esc(id)}" data-wb-img-idx="${imgIdx}">${esc(w.title || "未命名作品")}</a></h3>
             <div class="hw-wb-meta">
               <button type="button" class="hw-wb-author" data-wb-author="${esc(w.author || "")}">${esc(w.authorName || w.author || "社区作者")}</button>
             </div>
@@ -1100,7 +1132,14 @@
             </div>
           </div>
         </article>`;
+    };
+
+    const masonryColsHtml = Array.from({ length: colCount }, (_, c) => {
+      const colItems = layoutResult.placed.filter(p => p.col === c);
+      return `<div class="hw-wb-col" data-col-index="${c}">${colItems.map(renderCardHtml).join("")}</div>`;
     }).join("");
+
+    const masonryHtml = `<div class="hw-wb-masonry hw-wb-grid" id="hw-wb-masonry" data-columns="${colCount}">${masonryColsHtml}</div>`;
 
     const totalCount = (UI.worksFeed && UI.worksFeed.key === filterKey && typeof UI.worksFeed.total === "number")
       ? UI.worksFeed.total
@@ -1117,7 +1156,7 @@
     const gridHtml = (UI.worksFeed && UI.worksFeed.key === filterKey && UI.worksFeed.loading && !visible.length)
       ? `<div style="text-align:center;padding:48px 20px;color:var(--ink-muted);font-size:14px;">⏳ 正在加载公开作品...</div>`
       : visible.length
-        ? `<div class="hw-wb-grid">${cards}</div>`
+        ? masonryHtml
         : emptyHtml;
 
     root.innerHTML = `
@@ -1219,6 +1258,55 @@
       search.oninput = queueSearch;
     }
 
+    function bindCardElementEvents(card) {
+      const wid = card.getAttribute("data-wb-work");
+      const imgIdx = Number(card.querySelector("[data-wb-img-idx]")?.getAttribute("data-wb-img-idx")) || 0;
+      const w = (UI.worksFeed?.items || allWorks).find((x) => String(x.id) === wid);
+
+      card.querySelectorAll("[data-wb-open]").forEach((a) => {
+        a.addEventListener("click", (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault();
+          const idx = Number(a.getAttribute("data-wb-img-idx")) || imgIdx;
+          openWorkLightbox(wid, idx, false);
+        });
+      });
+      card.querySelectorAll("[data-wb-comment]").forEach((button) => {
+        button.onclick = () => openWorkLightbox(wid, imgIdx, true);
+      });
+      card.querySelectorAll("[data-wb-author]").forEach((button) => {
+        button.onclick = () => S.goToCreatorProfile(button.getAttribute("data-wb-author"));
+      });
+      card.querySelectorAll("[data-wb-like]").forEach((b) => {
+        b.onclick = () => {
+          if (w) S.toggleLike("work", w.id, w.title);
+        };
+      });
+      card.querySelectorAll("[data-wb-fav]").forEach((b) => {
+        b.onclick = () => {
+          if (w) S.toggleCollect("works", w.id, w.title);
+        };
+      });
+      card.querySelectorAll("[data-wb-mod]").forEach((b) => {
+        b.onclick = async () => {
+          const action = b.getAttribute("data-wb-mod");
+          if (action === "delete" && !confirm("确定删除这件作品？此操作不可撤销。")) return;
+          b.disabled = true;
+          try {
+            const res = await S.apiJson(`/api/works/${encodeURIComponent(b.getAttribute("data-wb-id"))}/moderate`, { method: "POST", body: { action } });
+            if (!res.ok) throw new Error(res.error || "操作失败");
+            UI.worksFeed = null;
+            await S.refreshFromServer();
+            toast(action === "delete" ? "作品已删除" : "作品状态已更新");
+            renderMain();
+          } catch (err) { toast("操作失败：" + (err.message || err)); }
+          finally { if (b.isConnected) b.disabled = false; }
+        };
+      });
+    }
+
+    root.querySelectorAll(".hw-wb-card").forEach(bindCardElementEvents);
+
     root.querySelectorAll("[data-wb-open]").forEach((a) => {
       a.addEventListener("click", (e) => {
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -1295,6 +1383,51 @@
                   if (idx >= 0) App.state.works[idx] = w;
                   else App.state.works.push(w);
                 });
+
+                // Incremental append: do NOT destroy existing cards!
+                const masonryEl = root.querySelector("#hw-wb-masonry");
+                const colEls = masonryEl ? Array.from(masonryEl.querySelectorAll(".hw-wb-col")) : [];
+                if (masonryEl && colEls.length === colCount && B.unpackWorkCandidates && B.layoutWorksMasonry) {
+                  const newCandidates = B.unpackWorkCandidates(newItems);
+                  const layoutRes = B.layoutWorksMasonry(newCandidates, {
+                    colCount,
+                    viewportHeight,
+                    existingPlaced: UI._worksMasonryPlaced || [],
+                    remainingQueue: UI._worksMasonryQueue || []
+                  });
+                  UI._worksMasonryPlaced = layoutRes.placed;
+                  UI._worksMasonryQueue = layoutRes.remainingQueue;
+
+                  layoutRes.newlyPlaced.forEach((item) => {
+                    const colEl = colEls[item.col];
+                    if (colEl) {
+                      const tempWrap = document.createElement("div");
+                      tempWrap.innerHTML = renderCardHtml(item);
+                      const cardEl = tempWrap.firstElementChild;
+                      if (cardEl) {
+                        colEl.appendChild(cardEl);
+                        bindCardElementEvents(cardEl);
+                      }
+                    }
+                  });
+
+                  if (typeof S.applyImageLazyLoading === "function") {
+                    S.applyImageLazyLoading(masonryEl);
+                  }
+
+                  const countEl = root.querySelector(".hw-wb-count");
+                  if (countEl) countEl.textContent = `共 ${UI.worksFeed.total || UI.worksFeed.items.length} 件`;
+
+                  if (UI.worksFeed.hasMore && UI.worksFeed.nextCursor) {
+                    more.disabled = false;
+                    more.textContent = "加载更多";
+                  } else {
+                    const moreWrap = root.querySelector(".hw-wb-more");
+                    if (moreWrap) moreWrap.remove();
+                  }
+                  return;
+                }
+
                 renderMain();
               }
             })
@@ -1315,6 +1448,117 @@
         const nextCard = Array.from(root.querySelectorAll("[data-wb-work]")).find((el) => el.getAttribute("data-wb-work") === nextId);
         nextCard?.querySelector("a")?.focus({ preventScroll: true });
       };
+    }
+
+    function reLayoutMasonry(newCols, preferredAnchor) {
+      const masonryEl = document.getElementById("hw-wb-masonry");
+      if (!masonryEl || !B.layoutWorksMasonry) return;
+
+      const cards = Array.from(masonryEl.querySelectorAll(".hw-wb-card"));
+      let anchorKey = preferredAnchor?.key || null;
+      let anchorOffset = preferredAnchor?.offset ?? 0;
+      if (!anchorKey) {
+        for (const card of cards) {
+          const rect = card.getBoundingClientRect();
+          if (rect.bottom > 0 && rect.top >= 0) {
+            anchorKey = card.getAttribute("data-wb-card-key") || card.getAttribute("data-wb-work");
+            anchorOffset = rect.top;
+            break;
+          }
+        }
+      }
+
+      const cardNodes = new Map();
+      cards.forEach(c => {
+        const k = c.getAttribute("data-wb-card-key") || c.getAttribute("data-wb-work");
+        if (k) cardNodes.set(k, c);
+      });
+
+      const itemsToPlace = UI._worksMasonryPlaced || [];
+      if (!itemsToPlace.length) return;
+
+      const viewportHeight = (typeof window !== "undefined" && window.innerHeight) || 800;
+      const layoutRes = B.layoutWorksMasonry(itemsToPlace, {
+        colCount: newCols,
+        viewportHeight,
+        existingPlaced: [],
+        remainingQueue: UI._worksMasonryQueue || []
+      });
+
+      UI._worksMasonryPlaced = layoutRes.placed;
+      UI._worksMasonryQueue = layoutRes.remainingQueue;
+      UI._worksMasonryColCount = newCols;
+
+      const newColEls = Array.from({ length: newCols }, (_, c) => {
+        const colDiv = document.createElement("div");
+        colDiv.className = "hw-wb-col";
+        colDiv.setAttribute("data-col-index", String(c));
+        return colDiv;
+      });
+
+      layoutRes.placed.forEach(item => {
+        const cardEl = cardNodes.get(item.itemKey) || cardNodes.get(item.workId);
+        if (cardEl) {
+          if (item.extraMargin > 0) {
+            cardEl.style.marginTop = `${item.extraMargin}px`;
+          } else {
+            cardEl.style.marginTop = "";
+          }
+          newColEls[item.col].appendChild(cardEl);
+        }
+      });
+
+      masonryEl.setAttribute("data-columns", String(newCols));
+      masonryEl.replaceChildren(...newColEls);
+
+      if (anchorKey) {
+        const targetCard = cardNodes.get(anchorKey);
+        if (targetCard) {
+          const curRect = targetCard.getBoundingClientRect();
+          window.scrollBy(0, curRect.top - anchorOffset);
+        }
+      }
+    }
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function" && !window._hwWorksResizeBound) {
+      window._hwWorksResizeBound = true;
+      let resizeTimer = null;
+      let lastW = window.innerWidth;
+      let pendingAnchor = null;
+      window.addEventListener("resize", () => {
+        if (App.view !== "works") return;
+        const curW = window.innerWidth;
+        if (Math.abs(curW - lastW) < 25) return;
+        if (!pendingAnchor) {
+          const masonryEl = document.getElementById("hw-wb-masonry");
+          if (masonryEl) {
+            const cards = Array.from(masonryEl.querySelectorAll(".hw-wb-card"));
+            for (const card of cards) {
+              const rect = card.getBoundingClientRect();
+              if (rect.bottom > 0 && rect.top >= 0) {
+                pendingAnchor = {
+                  key: card.getAttribute("data-wb-card-key") || card.getAttribute("data-wb-work"),
+                  offset: rect.top
+                };
+                break;
+              }
+            }
+          }
+        }
+        lastW = curW;
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          if (App.view !== "works") return;
+          const masonryEl = document.getElementById("hw-wb-masonry");
+          if (!masonryEl || !B.getColumnCount) return;
+          const newCols = B.getColumnCount(curW);
+          const curCols = Number(masonryEl.getAttribute("data-columns")) || 4;
+          const anchor = pendingAnchor;
+          pendingAnchor = null;
+          if (newCols === curCols) return;
+          reLayoutMasonry(newCols, anchor);
+        }, 100);
+      });
     }
   }
 
