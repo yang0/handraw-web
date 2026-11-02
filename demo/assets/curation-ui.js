@@ -606,22 +606,8 @@
       img.src = it.cover;
     }
 
-    function onCoverFile(e) {
-      var it = model.items[0];
-      var files = e.target.files; if (!it || !files || !files.length) return;
-      var file = files[0];
-      if (file.size > 15 * 1024 * 1024) {
-        var errSpan = root.querySelector('[data-err-for="cover"]');
-        if (errSpan) errSpan.textContent = "单张图片请小于15MB";
-        e.target.value = "";
-        return;
-      }
-
-      var btn = root.querySelector('[data-act="submit"]'); if (btn) btn.disabled = true;
-      var errSpan = root.querySelector('[data-err-for="cover"]');
-      if (errSpan) errSpan.textContent = "";
-
-      readFile(file).then(function (dataUrl) {
+    function processCoverUpload(file, it) {
+      return readFile(file).then(function (dataUrl) {
         return new Promise(function (resolve, reject) {
           var Img = (typeof Image !== "undefined") ? Image : (window.Image || null);
           if (!Img) {
@@ -675,63 +661,286 @@
           };
           img.src = dataUrl;
         });
-      }).then(function (url) {
-        if (!guard(epoch, username)) return;
-        it.cover = url;
-        model.requestId = uuid();
-        draw();
-      }).catch(function (err) {
-        var coverErr = root.querySelector('[data-err-for="cover"]');
-        if (coverErr) coverErr.textContent = "封面上传失败：" + (err && err.message || "请重试");
-      }).then(function () {
-        if (btn) btn.disabled = false; e.target.value = "";
       });
     }
 
-    function onFiles(e) {
-      var it = model.items[0];
-      var files = e.target.files; if (!it || !files || !files.length) return;
-      var curImgs = it.images || [];
-      var totalCount = files.length + curImgs.length;
-      if (totalCount > 9) {
-        var errSpan = root.querySelector('[data-err-for="file"]');
-        if (errSpan) {
-          errSpan.textContent = (model.kind === "work" ? "作品图片最多 9 张，当前 " : "示例图最多 9 张，当前 ") + totalCount + " 张。";
+    var isUploading = false;
+
+    function uploadFiles(files, idx, targetType) {
+      var it = model.items[idx || 0];
+      var fileList = Array.from(files || []);
+      if (!it || !fileList.length) return;
+
+      var isWork = model.kind === "work";
+      if (isWork) {
+        targetType = "file";
+      }
+
+      var coverFile = null;
+      var sampleFiles = [];
+
+      if (targetType === "cover") {
+        if (fileList.length > 1) {
+          var coverErrSpan = root.querySelector('[data-err-for="cover"]');
+          if (coverErrSpan) coverErrSpan.textContent = "封面只能上传 1 张图片，当前包含 " + fileList.length + " 张。";
+          var cIn = root.querySelector('input[data-act="cover"]');
+          if (cIn) cIn.value = "";
+          return;
         }
-        e.target.value = "";
-        return;
+        coverFile = fileList[0];
+      } else if (targetType === "file") {
+        sampleFiles = fileList;
+      } else {
+        // "auto" mode for style / layout
+        if (!it.cover) {
+          coverFile = fileList[0];
+          sampleFiles = fileList.slice(1);
+        } else {
+          sampleFiles = fileList;
+        }
       }
-      if (Array.from(files).some(function(f){ return f.size > 15 * 1024 * 1024; })) {
-        var errSpan = root.querySelector('[data-err-for="file"]');
-        if (errSpan) errSpan.textContent = "单张图片请小于15MB";
-        e.target.value = "";
+
+      // Validations:
+      if (coverFile && coverFile.size > 15 * 1024 * 1024) {
+        var cErr = root.querySelector('[data-err-for="cover"]');
+        if (cErr) cErr.textContent = "单张图片请小于15MB";
+        var cIn2 = root.querySelector('input[data-act="cover"]');
+        if (cIn2) cIn2.value = "";
         return;
       }
 
-      var label = e.target.closest("label");
-      if (label) {
-        var errSpan = label.querySelector('[data-err-for="file"]');
-        if (errSpan) errSpan.textContent = "";
-        e.target.removeAttribute("aria-invalid");
-        e.target.removeAttribute("aria-describedby");
+      if (sampleFiles.length > 0) {
+        var curImgs = it.images || [];
+        var totalCount = sampleFiles.length + curImgs.length;
+        if (totalCount > 9) {
+          var fErr = root.querySelector('[data-err-for="file"]');
+          if (fErr) {
+            fErr.textContent = (isWork ? "作品图片最多 9 张，当前 " : "示例图最多 9 张，当前 ") + totalCount + " 张。";
+          }
+          var fIn = root.querySelector('input[data-act="file"]');
+          if (fIn) fIn.value = "";
+          return;
+        }
+        if (sampleFiles.some(function (f) { return f.size > 15 * 1024 * 1024; })) {
+          var fErr2 = root.querySelector('[data-err-for="file"]');
+          if (fErr2) fErr2.textContent = "单张图片请小于15MB";
+          var fIn2 = root.querySelector('input[data-act="file"]');
+          if (fIn2) fIn2.value = "";
+          return;
+        }
       }
 
-      var btn = root.querySelector('[data-act="submit"]'); if (btn) btn.disabled = true;
-      var jobs = Array.prototype.map.call(files, function (f) {
-        return readFile(f).then(function (d) { return uploadDataUrl(d, f.name); })
-          .then(function (url) { return url; });
-      });
-      Promise.all(jobs).then(function (urls) {
+      // Clear errors
+      if (coverFile) {
+        var cErrClear = root.querySelector('[data-err-for="cover"]');
+        if (cErrClear) cErrClear.textContent = "";
+      }
+      if (sampleFiles.length > 0) {
+        var fErrClear = root.querySelector('[data-err-for="file"]');
+        if (fErrClear) fErrClear.textContent = "";
+        var fInputEl = root.querySelector('input[data-act="file"]');
+        if (fInputEl) {
+          fInputEl.removeAttribute("aria-invalid");
+          fInputEl.removeAttribute("aria-describedby");
+        }
+      }
+      var mainErr = root.querySelector('[data-err]');
+      if (mainErr) mainErr.textContent = "";
+
+      var btn = root.querySelector('[data-act="submit"]');
+      if (btn) btn.disabled = true;
+      isUploading = true;
+
+      var tasks = [];
+      if (coverFile) {
+        tasks.push(
+          processCoverUpload(coverFile, it).then(function (url) {
+            return { type: "cover", url: url };
+          })
+        );
+      }
+      if (sampleFiles.length > 0) {
+        var jobs = sampleFiles.map(function (f) {
+          return readFile(f).then(function (d) {
+            return uploadDataUrl(d, f.name);
+          });
+        });
+        tasks.push(
+          Promise.all(jobs).then(function (urls) {
+            return { type: "file", urls: urls, count: sampleFiles.length };
+          })
+        );
+      }
+
+      Promise.all(tasks).then(function (results) {
         if (!guard(epoch, username)) return;
-        urls.forEach(function (u) { if (u) { it.images = it.images || []; it.images.push(u); } });
+        var hasCoverResult = false;
+        var addedCount = 0;
+        results.forEach(function (res) {
+          if (res.type === "cover" && res.url) {
+            it.cover = res.url;
+            hasCoverResult = true;
+          } else if (res.type === "file" && res.urls) {
+            it.images = it.images || [];
+            res.urls.forEach(function (u) {
+              if (u) {
+                it.images.push(u);
+                addedCount++;
+              }
+            });
+          }
+        });
         model.requestId = uuid();
         draw();
+
+        var msg = "";
+        if (hasCoverResult && addedCount > 0) {
+          msg = "已设置封面 / 已加入 " + addedCount + " 张示例图";
+        } else if (hasCoverResult) {
+          msg = "已设置封面";
+        } else if (addedCount > 0) {
+          msg = isWork
+            ? ("已加入 " + addedCount + " 张作品图")
+            : ("已加入 " + addedCount + " 张示例图");
+        }
+        if (msg && S && typeof S.toast === "function") {
+          S.toast(msg);
+        }
       }).catch(function (err) {
-        var fileErr = root.querySelector('[data-err-for="file"]');
-        if (fileErr) fileErr.textContent = "图片上传失败：" + (err && err.message || "请重试");
+        if (coverFile) {
+          var coverErr = root.querySelector('[data-err-for="cover"]');
+          if (coverErr) coverErr.textContent = "封面上传失败：" + ((err && err.message) || "请重试");
+        }
+        if (sampleFiles.length > 0) {
+          var fileErr = root.querySelector('[data-err-for="file"]');
+          if (fileErr) fileErr.textContent = "图片上传失败：" + ((err && err.message) || "请重试");
+        }
       }).then(function () {
-        if (btn) btn.disabled = false; e.target.value = "";
+        isUploading = false;
+        var submitBtn = root.querySelector('[data-act="submit"]');
+        if (submitBtn) submitBtn.disabled = false;
+        var coverIn = root.querySelector('input[data-act="cover"]');
+        if (coverIn) coverIn.value = "";
+        var fileIn = root.querySelector('input[data-act="file"]');
+        if (fileIn) fileIn.value = "";
       });
+    }
+
+    function onCoverFile(e) {
+      var idx = parseInt(e.target.getAttribute("data-idx"), 10) || 0;
+      uploadFiles(e.target.files, idx, "cover");
+    }
+
+    function onFiles(e) {
+      var idx = parseInt(e.target.getAttribute("data-idx"), 10) || 0;
+      uploadFiles(e.target.files, idx, "file");
+    }
+
+    function onPaste(e) {
+      var cd = e.clipboardData || window.clipboardData;
+      if (!cd) return;
+
+      var targetEl = e.target || document.activeElement;
+
+      function isTextInput(el) {
+        if (!el) return false;
+        var tag = (el.tagName || "").toUpperCase();
+        if (tag === "TEXTAREA") return true;
+        if (tag === "INPUT") {
+          var t = (el.type || "").toLowerCase();
+          return t === "text" || t === "search" || t === "url" || t === "tel" || t === "password" || t === "number" || !t;
+        }
+        if (el.isContentEditable) return true;
+        return false;
+      }
+
+      var text = "";
+      try {
+        text = (typeof cd.getData === "function") ? cd.getData("text/plain") : "";
+      } catch (ex) {}
+
+      var hasText = typeof text === "string" && text.length > 0;
+
+      if (isTextInput(targetEl) && hasText) {
+        return;
+      }
+
+      var imageFiles = [];
+      if (cd.items && cd.items.length) {
+        for (var i = 0; i < cd.items.length; i++) {
+          var item = cd.items[i];
+          if (item && item.kind === "file") {
+            var itemType = (item.type || "").toLowerCase();
+            if (itemType.indexOf("image/") === 0) {
+              var f = typeof item.getAsFile === "function" ? item.getAsFile() : null;
+              if (f) imageFiles.push(f);
+            }
+          }
+        }
+      }
+      if (!imageFiles.length && cd.files && cd.files.length) {
+        for (var j = 0; j < cd.files.length; j++) {
+          var file = cd.files[j];
+          var fType = (file.type || "").toLowerCase();
+          if (fType.indexOf("image/") === 0 || (!fType && file.name && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(file.name))) {
+            imageFiles.push(file);
+          }
+        }
+      }
+
+      if (!imageFiles.length) {
+        var html = "";
+        try {
+          html = (typeof cd.getData === "function") ? cd.getData("text/html") : "";
+        } catch (ex) {}
+        var hasHtml = typeof html === "string" && html.trim().length > 0;
+        var isLink = typeof text === "string" && /^https?:\/\//i.test(text.trim());
+
+        if ((hasHtml || isLink) && !isTextInput(targetEl)) {
+          if (typeof e.preventDefault === "function") e.preventDefault();
+          var tipMsg = "剪贴板仅包含链接，请改用选择文件";
+          var errEl = root.querySelector('[data-err]');
+          if (errEl) errEl.textContent = tipMsg;
+          if (S && typeof S.toast === "function") S.toast(tipMsg);
+        }
+        return;
+      }
+
+      if (typeof e.preventDefault === "function") e.preventDefault();
+
+      var cardIdx = 0;
+      var itemEl = targetEl && targetEl.closest ? targetEl.closest(".curation-item") : null;
+      if (itemEl && itemEl.getAttribute("data-idx")) {
+        cardIdx = parseInt(itemEl.getAttribute("data-idx"), 10) || 0;
+      }
+
+      var targetType = "auto";
+      if (model.kind === "work") {
+        targetType = "file";
+      } else {
+        var isCover = false;
+        if (targetEl && targetEl.closest) {
+          if (targetEl.closest(".curation-cover") || (targetEl.getAttribute && targetEl.getAttribute("data-act") === "cover")) {
+            isCover = true;
+          }
+        }
+        var isExamples = false;
+        if (targetEl && targetEl.closest) {
+          if (targetEl.closest(".curation-examples") || (targetEl.getAttribute && targetEl.getAttribute("data-act") === "file")) {
+            isExamples = true;
+          }
+        }
+
+        if (isCover) {
+          targetType = "cover";
+        } else if (isExamples) {
+          targetType = "file";
+        } else {
+          targetType = "auto";
+        }
+      }
+
+      uploadFiles(imageFiles, cardIdx, targetType);
     }
 
     function onClick(e) {
@@ -887,6 +1096,7 @@
     }
 
     function submit(btn, isEdit) {
+      if (isUploading) return;
       var errEl = root.querySelector('[data-err]');
       if (errEl) errEl.textContent = "";
 
@@ -1029,6 +1239,7 @@
     function bindShare() {
       var form = root.querySelector(".curation-form"); if (!form) return;
       form.addEventListener("input", onInput);
+      form.addEventListener("paste", onPaste);
       form.addEventListener("change", function (e) {
         var act = e.target.getAttribute("data-act");
         if (act === "sharekind") onKindChange(e);

@@ -384,6 +384,7 @@ function createHarness() {
   let confirmResult = true;
   let lastConfirmMsg = "";
   const apiCalls = [];
+  const toastCalls = [];
 
   const fakeApiJson = async (url, opts = {}) => {
     apiCalls.push({ url, opts, method: opts.method || "GET", body: opts.body });
@@ -495,6 +496,7 @@ function createHarness() {
       HANDRAW_SHARED: {
         esc: (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
         apiJson: fakeApiJson,
+        toast: (msg) => { toastCalls.push(msg); },
         channelUrl: (ch, opts) => "/" + ch + (opts ? "?" + new URLSearchParams(opts).toString() : ""),
         App: {
           state: {
@@ -525,6 +527,7 @@ function createHarness() {
     root,
     doc,
     apiCalls,
+    toastCalls,
     sandbox,
     setConfirmResult(r) { confirmResult = r; },
     getLastConfirmMsg() { return lastConfirmMsg; },
@@ -1144,8 +1147,282 @@ async function runAllTests() {
     console.log("✓ Test 14 Passed: Preserved values and clamping across kind switches verified.");
   }
 
+  // ==========================================
+  // TEST 15: 粘贴多张进作品
+  // ==========================================
+  {
+    console.log("\n--- Test 15: 粘贴多张进作品 ---");
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "work" });
+
+    const form = harness.root.querySelector(".curation-form");
+    assert.ok(form, "Curation form exists");
+
+    // Paste 2 image files on form
+    const twoFiles = [
+      { name: "work1.png", size: 1024 },
+      { name: "work2.png", size: 2048 }
+    ];
+    let defaultPrevented = false;
+    form.dispatchEvent({
+      type: "paste",
+      target: form,
+      preventDefault: () => { defaultPrevented = true; },
+      clipboardData: {
+        files: twoFiles,
+        items: twoFiles.map((f) => ({ kind: "file", type: "image/png", getAsFile: () => f })),
+        getData: () => ""
+      }
+    });
+
+    assert.equal(defaultPrevented, true, "Paste with images prevents default");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const uploads = harness.apiCalls.filter((c) => c.url === "/api/uploads");
+    assert.equal(uploads.length, 2, "Uploaded both images via api");
+
+    const thumbs = harness.root.querySelectorAll(".curation-imgs .curation-thumb");
+    assert.equal(thumbs.length, 2, "Rendered 2 thumbnails in work images");
+
+    const submitBtn = harness.root.querySelector('[data-act="submit"]');
+    assert.equal(submitBtn.disabled, false, "Submit button re-enabled after upload");
+
+    const lastToast = harness.toastCalls[harness.toastCalls.length - 1];
+    assert.ok(lastToast && lastToast.includes("已加入 2 张"), "Toast contains '已加入 2 张'");
+
+    // Verify limit 9 enforcement on paste
+    const eightFiles = Array.from({ length: 8 }, (_, i) => ({ name: `more_${i}.png`, size: 1024 }));
+    form.dispatchEvent({
+      type: "paste",
+      target: form,
+      clipboardData: {
+        files: eightFiles,
+        items: eightFiles.map((f) => ({ kind: "file", type: "image/png", getAsFile: () => f })),
+        getData: () => ""
+      }
+    });
+    const fileErr = harness.root.querySelector('[data-err-for="file"]');
+    assert.ok(fileErr && fileErr.textContent.includes("作品图片最多 9 张，当前 10 张。"), "Cap 9 enforced on paste without silent drop");
+
+    console.log("✓ Test 15 Passed: Paste multiple images into work form and cap validation verified.");
+  }
+
+  // ==========================================
+  // TEST 16: 粘贴进封面
+  // ==========================================
+  {
+    console.log("\n--- Test 16: 粘贴进封面 ---");
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "style" });
+
+    MockImage.defaultWidth = 1200;
+    MockImage.defaultHeight = 900;
+
+    const coverInput = harness.root.querySelector('.curation-cover input[data-act="cover"]');
+    assert.ok(coverInput, "Cover input exists");
+
+    const coverFile = { name: "custom_cover.png", size: 3000 };
+    coverInput.dispatchEvent({
+      type: "paste",
+      target: coverInput,
+      preventDefault: () => {},
+      clipboardData: {
+        files: [coverFile],
+        items: [{ kind: "file", type: "image/png", getAsFile: () => coverFile }],
+        getData: () => ""
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const coverUpload = harness.apiCalls.find((c) => c.url === "/api/uploads");
+    assert.ok(coverUpload, "Upload triggered for cover paste");
+    assert.equal(coverUpload.body.dataUrl, "data:image/jpeg;base64,mockcropped", "Non-square cover auto-cropped");
+
+    const preview = harness.root.querySelector(".curation-cover-preview");
+    assert.ok(preview, "Cover preview rendered");
+
+    const helpEl = harness.root.querySelector(".curation-cover .curation-help");
+    assert.ok(helpEl && helpEl.textContent.includes("已自动居中裁剪"), "Auto crop help text updated");
+
+    const lastToast = harness.toastCalls[harness.toastCalls.length - 1];
+    assert.equal(lastToast, "已设置封面", "Toast indicates cover set");
+
+    // Multiple files pasted directly into cover input -> error
+    coverInput.dispatchEvent({
+      type: "paste",
+      target: coverInput,
+      clipboardData: {
+        files: [{ name: "c1.png", size: 100 }, { name: "c2.png", size: 100 }],
+        items: [
+          { kind: "file", type: "image/png", getAsFile: () => ({ name: "c1.png", size: 100 }) },
+          { kind: "file", type: "image/png", getAsFile: () => ({ name: "c2.png", size: 100 }) }
+        ],
+        getData: () => ""
+      }
+    });
+    const coverErr = harness.root.querySelector('[data-err-for="cover"]');
+    assert.ok(coverErr && coverErr.textContent.includes("封面只能上传 1 张图片"), "Cover rejects multiple files with explicit prompt");
+
+    console.log("✓ Test 16 Passed: Paste into cover with auto-crop and single-file enforcement verified.");
+  }
+
+  // ==========================================
+  // TEST 17: 封面为空时粘贴多张与封面已有时追加示例图
+  // ==========================================
+  {
+    console.log("\n--- Test 17: 封面为空时粘贴多张与封面已有时追加示例图 ---");
+    MockImage.defaultWidth = 800;
+    MockImage.defaultHeight = 800;
+
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "style" });
+
+    const form = harness.root.querySelector(".curation-form");
+
+    // 17.1: Cover empty -> paste 2 images -> 1st cover, 2nd sample image
+    const twoFiles = [{ name: "imgA.png", size: 1024 }, { name: "imgB.png", size: 1024 }];
+    form.dispatchEvent({
+      type: "paste",
+      target: form,
+      clipboardData: {
+        files: twoFiles,
+        items: twoFiles.map((f) => ({ kind: "file", type: "image/png", getAsFile: () => f })),
+        getData: () => ""
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    assert.ok(harness.root.querySelector(".curation-cover-preview"), "1st image became cover");
+    const exampleThumbs1 = harness.root.querySelectorAll(".curation-examples .curation-imgs .curation-thumb");
+    assert.equal(exampleThumbs1.length, 1, "2nd image became sample image");
+
+    const toast1 = harness.toastCalls[harness.toastCalls.length - 1];
+    assert.ok(toast1 && toast1.includes("已设置封面") && toast1.includes("已加入 1 张示例图"), "Toast shows both cover set and 1 example added");
+
+    const coverBefore = harness.root.querySelector(".curation-cover-preview img").getAttribute("data-hw-src");
+
+    // 17.2: Cover exists -> paste 2 more images -> cover unchanged, all appended to sample images
+    const twoMore = [{ name: "imgC.png", size: 1024 }, { name: "imgD.png", size: 1024 }];
+    form.dispatchEvent({
+      type: "paste",
+      target: form,
+      clipboardData: {
+        files: twoMore,
+        items: twoMore.map((f) => ({ kind: "file", type: "image/png", getAsFile: () => f })),
+        getData: () => ""
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    const coverAfter = harness.root.querySelector(".curation-cover-preview img").getAttribute("data-hw-src");
+    assert.equal(coverAfter, coverBefore, "Existing cover was not overwritten");
+
+    const exampleThumbs2 = harness.root.querySelectorAll(".curation-examples .curation-imgs .curation-thumb");
+    assert.equal(exampleThumbs2.length, 3, "2 more images appended to sample images (total 3)");
+
+    const toast2 = harness.toastCalls[harness.toastCalls.length - 1];
+    assert.equal(toast2, "已加入 2 张示例图", "Toast shows only example images added");
+
+    console.log("✓ Test 17 Passed: Cover-empty auto routing and cover-preserved append verified.");
+  }
+
+  // ==========================================
+  // TEST 18: 文字粘贴不受影响
+  // ==========================================
+  {
+    console.log("\n--- Test 18: 文字粘贴不受影响 ---");
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "work" });
+
+    const titleInput = harness.root.querySelector('input[data-act="title"]');
+    assert.ok(titleInput, "Title input exists");
+
+    let titleDefaultPrevented = false;
+    titleInput.dispatchEvent({
+      type: "paste",
+      target: titleInput,
+      preventDefault: () => { titleDefaultPrevented = true; },
+      clipboardData: {
+        files: [{ name: "screenshot.png", size: 1024 }],
+        getData: (type) => (type === "text/plain" ? "春日阳光手绘集" : "")
+      }
+    });
+
+    assert.equal(titleDefaultPrevented, false, "Pasting text into title input does not prevent default");
+    assert.equal(harness.apiCalls.filter((c) => c.url === "/api/uploads").length, 0, "No upload fired when text is present in text input");
+
+    // Textarea prompt check
+    const promptArea = harness.root.querySelector('textarea[data-act="prompt"]');
+    let promptPrevented = false;
+    promptArea.dispatchEvent({
+      type: "paste",
+      target: promptArea,
+      preventDefault: () => { promptPrevented = true; },
+      clipboardData: {
+        files: [],
+        getData: (type) => (type === "text/plain" ? "masterpiece watercolor painting" : "")
+      }
+    });
+    assert.equal(promptPrevented, false, "Pasting text into prompt textarea does not prevent default");
+    assert.equal(harness.apiCalls.filter((c) => c.url === "/api/uploads").length, 0, "No upload fired for prompt textarea text paste");
+
+    console.log("✓ Test 18 Passed: Native text paste preserved in text inputs without triggering upload.");
+  }
+
+  // ==========================================
+  // TEST 19: 只有 HTML / 链接时提示
+  // ==========================================
+  {
+    console.log("\n--- Test 19: 只有 HTML / 链接时提示 ---");
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "style" });
+
+    const form = harness.root.querySelector(".curation-form");
+
+    // 19.1: HTML snippet in clipboard
+    let htmlPrevented = false;
+    form.dispatchEvent({
+      type: "paste",
+      target: form,
+      preventDefault: () => { htmlPrevented = true; },
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type) => (type === "text/html" ? '<img src="https://example.com/banner.jpg">' : "")
+      }
+    });
+
+    assert.equal(htmlPrevented, true, "HTML snippet paste outside text input is intercepted");
+    assert.equal(harness.apiCalls.filter((c) => c.url === "/api/uploads").length, 0, "No upload fired for HTML-only paste");
+
+    const errEl = harness.root.querySelector("[data-err]");
+    assert.ok(errEl && errEl.textContent.includes("改用选择文件"), "Prompted to use file selection when only HTML is pasted");
+
+    // 19.2: URL link in clipboard outside text input
+    let linkPrevented = false;
+    form.dispatchEvent({
+      type: "paste",
+      target: form,
+      preventDefault: () => { linkPrevented = true; },
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type) => (type === "text/plain" ? "https://example.com/art.png" : "")
+      }
+    });
+
+    assert.equal(linkPrevented, true, "URL link paste outside text input is intercepted");
+    const toast = harness.toastCalls[harness.toastCalls.length - 1];
+    assert.ok(toast && toast.includes("改用选择文件"), "Toast prompts to use file selection for web links");
+
+    console.log("✓ Test 19 Passed: Tip to use file selection displayed when only HTML or link is pasted.");
+  }
+
   console.log("\n=======================================================");
-  console.log("ALL 14 CURATION SHARE FORM TESTS PASSED SUCCESSFULLY!");
+  console.log("ALL 19 CURATION SHARE FORM TESTS PASSED SUCCESSFULLY!");
   console.log("=======================================================\n");
 }
 
