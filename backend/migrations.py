@@ -540,3 +540,11 @@ except ImportError:  # pragma: no cover - compatibility for staged rollouts
     WORK_MIGRATIONS = []
 
 MIGRATIONS.extend(WORK_MIGRATIONS)
+
+# Direct Messages (migration block 070+).
+try:
+    from .messaging import DM_MIGRATIONS
+except ImportError:  # pragma: no cover - compatibility for staged rollouts
+    DM_MIGRATIONS = []
+
+MIGRATIONS.extend(DM_MIGRATIONS)

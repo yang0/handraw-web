@@ -1833,6 +1833,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 qs = parse_qs(parsed.query, keep_blank_values=True)
                 if handle_library_delete(self, req_path, qs):
                     return
+            try:
+                from .messaging import handle_dm_delete
+            except ImportError:  # pragma: no cover
+                handle_dm_delete = None
+            if handle_dm_delete and handle_dm_delete(self, req_path, parse_qs(parsed.query, keep_blank_values=True)):
+                return
             self._send_json({"ok": False, "error": "Not found"}, status=404)
         except ServiceError as se:
             self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
@@ -1914,6 +1920,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if curation_get and curation_get(self, req_path, qs):
             return
         if self._feature_get(req_path, qs):
+            return
+
+        try:
+            from .messaging import handle_dm_get
+        except ImportError:  # pragma: no cover
+            handle_dm_get = None
+        if handle_dm_get and handle_dm_get(self, req_path, qs):
             return
 
         try:
@@ -2451,6 +2464,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if curation_post and curation_post(self, req_path, body):
             return
         if self._feature_post(req_path, body):
+            return
+
+        try:
+            from .messaging import handle_dm_post
+        except ImportError:  # pragma: no cover
+            handle_dm_post = None
+        if handle_dm_post and handle_dm_post(self, req_path, body):
             return
 
         try:

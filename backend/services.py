@@ -3555,7 +3555,7 @@ def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict
 
 def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
     target_type = str(body.get("targetType") or "work")
-    if target_type not in ("work", "topic", "asset", "reply", "comment"):
+    if target_type not in ("work", "topic", "asset", "reply", "comment", "dm_message"):
         raise ServiceError("不支持的举报目标类型")
     target_id = str(body.get("targetId") or "").strip()
     reason = str(body.get("reason") or "内容疑似违规或标注不实").strip()[:120]
@@ -3583,6 +3583,9 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
             r = tx.execute("SELECT name FROM catalog_assets WHERE code = ?", (target_id,)).fetchone()
             if r:
                 target_title = f"{target_id} {r['name']}"
+        elif target_type == "dm_message":
+            from .messaging import handle_dm_report_target
+            target_title, detail = handle_dm_report_target(tx, uid, target_id, detail)
 
         # One open report per account per target.  Counting rows let a single
         # account pause any content by reporting it `threshold` times.
@@ -4123,7 +4126,7 @@ def consume_daily_usage(db: Database, user_id: int | str, scope: str, limit: int
     today = local_today_str()
     with db.transaction() as tx:
         row = tx.execute(
-            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND (usage_date = ? OR usage_date = CURRENT_DATE)",
+            "SELECT count FROM daily_usage WHERE user_id = ? AND scope = ? AND usage_date = ?",
             (uid, clean_scope, today),
         ).fetchone()
         current = int(row["count"]) if row else 0

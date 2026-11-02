@@ -1990,6 +1990,8 @@ def _lookup_target_author(tx: sqlite3.Connection, target_type: str, target_id: s
         row = tx.execute("SELECT author_username FROM work_comments WHERE id = ?", (target_id,)).fetchone()
     elif target_type == "reply":
         row = tx.execute("SELECT author_username FROM forum_replies WHERE id = ?", (target_id,)).fetchone()
+    elif target_type == "dm_message":
+        row = tx.execute("SELECT u.username AS author_username FROM dm_messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?", (target_id,)).fetchone()
     else:
         row = None
     return str(row["author_username"] or "") if row else ""
