@@ -848,6 +848,10 @@
     } else if (bucket === "topics") {
       const t = (App.state.topics || []).find((x) => x.id === id);
       if (t) t.favorites = Math.max(0, Number(t.favorites || 0) + delta);
+    } else if (bucket === "generations") {
+      if (typeof id === "object" && id) {
+        id.favorites = Math.max(0, Number(id.favorites || 0) + delta);
+      }
     } else if (bucket === "styles" || bucket === "layouts") {
       const code = String(id || "").trim().toUpperCase().replace(/^#/, "");
       App.state.assetLiveFavorites = App.state.assetLiveFavorites || {};
@@ -858,7 +862,7 @@
       notifyAll();
       apiJson("/api/collections/toggle", {
         method: "POST",
-        body: { bucket, id, title: titleLabel || id }
+        body: { bucket, id, title: titleLabel || id, action: wasRemoving ? "unset" : "set" }
       })
         .then((res) => {
           App.state.credits = res.credits;
@@ -899,7 +903,7 @@
 
   function _normalizeSocialTarget(targetType, idOrItem) {
     const rawType = String(targetType || "work").trim().toLowerCase().replace(/^like_/, "");
-    const cleanType = ["work", "topic", "style", "layout"].includes(rawType) ? rawType : "work";
+    const cleanType = ["work", "topic", "style", "layout", "generation"].includes(rawType) ? rawType : "work";
     const rawId = typeof idOrItem === "object" && idOrItem ? idOrItem.id : idOrItem;
     const cleanId =
       cleanType === "style" || cleanType === "layout"
@@ -909,8 +913,10 @@
   }
 
   function isLiked(targetType, idOrItem) {
-    const { key } = _normalizeSocialTarget(targetType, idOrItem);
-    return Boolean(App.state && Array.isArray(App.state.likedIds) && App.state.likedIds.includes(key));
+    const { cleanType, cleanId, key } = _normalizeSocialTarget(targetType, idOrItem);
+    if (!App.state || !Array.isArray(App.state.likedIds)) return false;
+    const shortKey = `${cleanType}:${cleanId}`;
+    return App.state.likedIds.includes(key) || App.state.likedIds.includes(shortKey) || App.state.likedIds.includes(cleanId);
   }
 
   function getLikeCount(targetType, itemOrId) {
@@ -928,6 +934,10 @@
           ? itemOrId
           : ((App.state && App.state.topics) || []).find((x) => x.id === cleanId);
       return Math.max(0, Number((t && t.likes) || 0));
+    }
+    if (cleanType === "generation") {
+      const g = typeof itemOrId === "object" && itemOrId ? itemOrId : null;
+      return Math.max(0, Number((g && g.likes) || 0));
     }
     if (!cleanId) return 0;
     const seed = App.state && App.state.assetSeedMetrics && App.state.assetSeedMetrics[cleanId];
@@ -952,6 +962,10 @@
           : ((App.state && App.state.topics) || []).find((x) => x.id === cleanId);
       return Math.max(0, Number((t && t.favorites) || 0));
     }
+    if (cleanType === "generation" || cleanType === "generations") {
+      const g = typeof itemOrId === "object" && itemOrId ? itemOrId : null;
+      return Math.max(0, Number((g && g.favorites) || 0));
+    }
     if (!cleanId) return 0;
     const seed = App.state && App.state.assetSeedMetrics && App.state.assetSeedMetrics[cleanId];
     const baseFavs = seed && seed.favorites != null ? Number(seed.favorites) : _defaultAssetBaseline(cleanId).favorites;
@@ -961,18 +975,25 @@
 
   function toggleLike(targetType, idOrItem, labelText) {
     if (!App.state || !App.state.loggedIn) {
-      openLoginModal("登录后即可为喜欢的画风、图型、作品或帖子点赞！");
+      openLoginModal("登录后即可为喜欢的画风、图型、作品、帖子或生图历史点赞！");
       return false;
     }
     const { cleanType, cleanId, key } = _normalizeSocialTarget(targetType, idOrItem);
     if (!cleanId) return false;
 
     App.state.likedIds = Array.isArray(App.state.likedIds) ? App.state.likedIds : [];
-    const idx = App.state.likedIds.indexOf(key);
+    const shortKey = `${cleanType}:${cleanId}`;
+    const idx = App.state.likedIds.indexOf(key) >= 0 ? App.state.likedIds.indexOf(key) : App.state.likedIds.indexOf(shortKey);
     const removing = idx >= 0;
     const delta = removing ? -1 : 1;
-    if (removing) App.state.likedIds.splice(idx, 1);
-    else App.state.likedIds.push(key);
+    if (removing) {
+      App.state.likedIds.splice(idx, 1);
+      const idx2 = App.state.likedIds.indexOf(shortKey);
+      if (idx2 >= 0) App.state.likedIds.splice(idx2, 1);
+    } else {
+      App.state.likedIds.push(key);
+      App.state.likedIds.push(shortKey);
+    }
 
     if (cleanType === "work") {
       const w = (App.state.works || []).find((x) => x.id === cleanId);
@@ -980,6 +1001,11 @@
     } else if (cleanType === "topic") {
       const t = (App.state.topics || []).find((x) => x.id === cleanId);
       if (t) t.likes = Math.max(0, Number(t.likes || 0) + delta);
+    } else if (cleanType === "generation") {
+      if (typeof idOrItem === "object" && idOrItem) {
+        idOrItem.likes = Math.max(0, Number(idOrItem.likes || 0) + delta);
+        idOrItem.liked = !removing;
+      }
     } else {
       App.state.assetLiveLikes = App.state.assetLiveLikes || {};
       App.state.assetLiveLikes[cleanId] = Math.max(0, Number(App.state.assetLiveLikes[cleanId] || 0) + delta);
@@ -989,7 +1015,7 @@
       notifyAll();
       apiJson("/api/interactions/like", {
         method: "POST",
-        body: { targetType: cleanType, id: cleanId }
+        body: { targetType: cleanType, id: cleanId, action: removing ? "unset" : "set" }
       })
         .then((res) => {
           toast(res.liked ? `👍 已点赞「${labelText || cleanId}」` : `已取消点赞「${labelText || cleanId}」`);
@@ -2137,7 +2163,8 @@
       ((s.collections && s.collections.styles) || []).length +
       ((s.collections && s.collections.layouts) || []).length +
       ((s.collections && s.collections.works) || []).length +
-      ((s.collections && s.collections.topics) || []).length;
+      ((s.collections && s.collections.topics) || []).length +
+      ((s.collections && s.collections.generations) || []).length;
 
     const worksNavCount = s.loggedIn ? (s.works || []).length : Number(s.totalWorksCount || (s.works || []).length || 0);
     const activeView = App.channel === "main" ? App.view : App.channel;

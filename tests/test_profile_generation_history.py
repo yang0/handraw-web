@@ -37,6 +37,11 @@ WHITELIST_FIELDS = {
     "styles",
     "layouts",
     "imageCount",
+    "likes",
+    "favorites",
+    "liked",
+    "favorited",
+    "fork",
 }
 
 FORBIDDEN_FIELDS = {

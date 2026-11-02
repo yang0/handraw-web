@@ -471,6 +471,12 @@ CREATE INDEX IF NOT EXISTS idx_studio_gen_user_vis_created ON studio_generations
 CREATE INDEX IF NOT EXISTS idx_studio_gen_created_id ON studio_generations(created_at DESC, id DESC);
 """
 
+GENERATION_SOCIAL_SQL = """
+ALTER TABLE studio_generations ADD COLUMN fork_generation_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE studio_generations ADD COLUMN fork_item_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_studio_gen_fork_gen ON studio_generations(fork_generation_id);
+"""
+
 
 def normalize_historical_asset_uids(conn: sqlite3.Connection) -> None:
     """Normalize user_uploads asset_uid values to canonical lowercase 8-4-4-4-12 UUID format.
@@ -754,4 +760,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (68, "068_generation_visibility_and_index", GENERATION_VISIBILITY_AND_INDEX_SQL),
     (69, "069_deduplicate_generation_history", DEDUPLICATE_GENERATION_HISTORY_SQL),
     (73, "073_reset_works_price_to_zero", RESET_WORKS_PRICE_SQL),
+    (74, "074_generation_social_and_fork", GENERATION_SOCIAL_SQL),
 ]

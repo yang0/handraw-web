@@ -121,6 +121,8 @@ from .services import (
     get_public_generation_history,
     get_user_public_generations,
     get_user_public_generation_by_id,
+    get_user_collected_generations,
+    fork_generation_recipe,
     get_studio_workspace,
     get_user_studio_task,
     get_wallet_quota_state,
@@ -1603,8 +1605,15 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # The isolated demo fixture uses urllib clients without browser
         # provenance.  It is explicitly opted in and never weakens production
         # cookie writes.
-        if not allowed and reason == "missing_origin" and self._demo_enabled():
-            return
+        if not allowed and self._demo_enabled():
+            if reason == "missing_origin":
+                return
+            srv_port = getattr(self.server, "server_port", None)
+            origin = self.headers.get("Origin") or self.headers.get("Referer") or ""
+            if origin:
+                parsed = urlparse(origin)
+                if parsed.hostname in ("localhost", "127.0.0.1", "[::1]") and (srv_port is None or parsed.port == srv_port):
+                    return
         if not allowed:
             raise ServiceError("写请求来源未通过校验", status=403, code=f"csrf_{reason}")
 
@@ -1785,7 +1794,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if method == "GET":
                 if req_path.startswith("/api/resources/"):
                     return
-                if req_path in ("/studio/api/library", "/api/skill/library", "/api/library/assets"):
+                if req_path in ("/studio/api/library", "/api/skill/library", "/api/library/assets", "/api/collections/generations"):
                     return
                 if re.fullmatch(r"^/(?:studio/api|api/skill)/assets/[^/]+/content$", req_path):
                     return
@@ -2088,6 +2097,17 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     data = get_user_public_generation_by_id(self.db, uname, gen_id, viewer=user)
                     self._send_json(data)
                     return
+
+        if req_path == "/api/collections/generations":
+            user = self._current_user(required=True)
+            lim = 60
+            try:
+                if q1("limit"):
+                    lim = int(q1("limit"))
+            except Exception:
+                pass
+            self._send_json(get_user_collected_generations(self.db, user, limit=lim))
+            return
 
         if req_path.startswith("/api/studio/recipes"):
             from .recipe_routes import handle_recipe_get
@@ -2647,6 +2667,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     bucket=str(body.get("bucket") or ""),
                     target_id=str(body.get("id") or body.get("targetId") or ""),
                     title_label=str(body.get("title") or ""),
+                    action=str(body.get("action") or "").strip().lower() or None,
                 )
             )
             return
@@ -2672,6 +2693,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     user,  # type: ignore[arg-type]
                     target_type=str(body.get("targetType") or "work"),
                     target_id=str(body.get("targetId") or body.get("id") or ""),
+                    action=str(body.get("action") or "").strip().lower() or None,
                 )
             )
             return
@@ -2991,6 +3013,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/studio/history":
             user = self._current_user(required=True)
             self._send_json(record_user_studio_history(self.db, user, body))  # type: ignore[arg-type]
+            return
+
+        m_fork_gen = re.match(r"^/api/studio/generations/([^/]+)/fork$", req_path)
+        if m_fork_gen:
+            user = self._current_user(required=True)
+            gen_id = m_fork_gen.group(1).strip()
+            self._send_json(fork_generation_recipe(self.db, user, gen_id, body))
             return
 
         if req_path == "/api/studio/generate":
