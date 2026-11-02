@@ -196,7 +196,7 @@
         urlChanged = true;
       }
       const isMe = Boolean(App.state && App.state.loggedIn && App.state.user && App.state.user.username && App.state.user.username === UI.profileUser);
-      if (App.state && !isMe && ["collections", "account"].includes(reqTab)) {
+      if (App.state && !isMe && ["collections", "account", "articles"].includes(reqTab)) {
         reqTab = "works";
         urlChanged = true;
       }
@@ -211,7 +211,7 @@
           window.history.replaceState({ view: "profile" }, "", `${window.location.pathname}?${nextP.toString()}`);
         } catch (_) {}
       }
-      UI.profileTab = ["works", "generations", "styles", "layouts", "topics", "collections", "account"].includes(reqTab) ? reqTab : "works";
+      UI.profileTab = ["works", "generations", "styles", "layouts", "topics", "articles", "collections", "account"].includes(reqTab) ? reqTab : "works";
       return {};
     }
 
@@ -373,6 +373,21 @@
     S.goToWorkPage(workId, focusComment);
   }
 
+  function formatArticleUpdated(ms) {
+    const t = Number(ms) || 0;
+    if (!t) return "刚刚";
+    const diff = Date.now() - t;
+    if (diff < 60 * 1000) return "刚刚";
+    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)} 分钟前`;
+    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)} 小时前`;
+    if (diff < 30 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)} 天前`;
+    try {
+      return new Date(t).toLocaleDateString("zh-CN");
+    } catch (_) {
+      return "较早";
+    }
+  }
+
   function openProfilePage(username, ptab = "works") {
     S.closeModal();
     const targetUser = String(username || (App.state && App.state.user && App.state.user.username) || "").trim();
@@ -383,10 +398,10 @@
     if (["styles", "layouts", "works"].includes(App.view)) {
       UI.lastPrimaryView = App.view;
     }
-    let cleanTab = ["works", "generations", "styles", "layouts", "topics", "collections", "account"].includes(ptab) ? ptab : "works";
+    let cleanTab = ["works", "generations", "styles", "layouts", "topics", "articles", "collections", "account"].includes(ptab) ? ptab : "works";
     if (ptab === "assets") cleanTab = "styles";
     const isMe = Boolean(App.state && App.state.loggedIn && App.state.user && App.state.user.username && App.state.user.username === targetUser);
-    if (!isMe && ["collections", "account"].includes(cleanTab)) {
+    if (!isMe && ["collections", "account", "articles"].includes(cleanTab)) {
       cleanTab = "works";
     }
     const isEntering = App.view !== "profile" || UI.profileUser !== targetUser || UI.profileTab !== cleanTab;
@@ -1880,7 +1895,7 @@
 
     const prof = S.getCreatorProfile(targetUser);
     const isMe = Boolean(App.state.loggedIn && App.state.user && App.state.user.username === prof.username);
-    if (!isMe && ["collections", "account"].includes(UI.profileTab)) {
+    if (!isMe && ["collections", "account", "articles"].includes(UI.profileTab)) {
       UI.profileTab = "works";
       syncUrl(false);
     }
@@ -2085,6 +2100,51 @@
             暂未发布论坛实战帖。
             ${isMe ? `<div style="margin-top:12px;"><button type="button" class="btn btn-primary" id="prof-empty-compose-btn">✏️ 去发布第一篇图文论坛帖</button></div>` : ""}
           </div>`;
+    } else if (UI.profileTab === "articles" && isMe) {
+      // The article desk's own list, private to its author.
+      if (UI._profileArticlesFor !== prof.username) {
+        UI._profileArticlesFor = prof.username;
+        UI.profileArticles = null;
+        if (typeof S.apiJson === "function") {
+          S.apiJson("/api/studio/articles")
+            .then((res) => {
+              UI.profileArticles = (res && res.items) || [];
+              if (App.view === "profile" && UI.profileTab === "articles") renderMain();
+            })
+            .catch(() => {
+              UI.profileArticles = [];
+              if (App.view === "profile" && UI.profileTab === "articles") renderMain();
+            });
+        }
+      }
+      const arts = UI.profileArticles;
+      if (arts === null) {
+        tabBodyHtml = `<div style="padding:40px;text-align:center;color:var(--ink-muted);">正在加载文章…</div>`;
+      } else if (!arts.length) {
+        tabBodyHtml = `
+          <div style="padding:48px 24px;text-align:center;color:var(--ink-muted);">
+            还没有写过文章。
+            <div style="margin-top:12px;"><button type="button" class="btn btn-primary" id="prof-empty-article-btn">✏️ 去创作台写第一篇</button></div>
+          </div>`;
+      } else {
+        tabBodyHtml = `<div style="display:grid;gap:12px;">
+          ${arts
+            .map(
+              (a) => `
+                <article class="forum-topic-card" data-prof-article="${esc(a.id)}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+                  <div style="flex:1;min-width:240px;">
+                    <h3 style="margin:0 0 6px;font-size:16px;">${esc(a.articleTitle || "未命名文章")}</h3>
+                    <div style="font-size:12.5px;color:var(--ink-muted);">
+                      更新于 ${esc(formatArticleUpdated(a.updatedAtMs))} · 已生成 ${Number(a.runCount) || 0} 张配图
+                    </div>
+                  </div>
+                  <span class="btn btn-sm btn-primary">继续编辑 ↗</span>
+                </article>
+              `
+            )
+            .join("")}
+        </div>`;
+      }
     } else if (UI.profileTab === "collections" && isMe) {
       const cols = App.state.collections || { styles: [], layouts: [], works: [], topics: [], generations: [] };
       if (!["styles", "layouts", "works", "topics", "generations"].includes(UI.favTab)) {
@@ -2438,6 +2498,7 @@
           ${
             isMe
               ? `
+                <button type="button" class="hw-pill ${UI.profileTab === "articles" ? "is-active" : ""}" data-ptab="articles" role="tab" aria-selected="${UI.profileTab === "articles"}">📝 文章 (${(UI.profileArticles || []).length})</button>
                 <button type="button" class="hw-pill ${UI.profileTab === "collections" ? "is-active" : ""}" data-ptab="collections" role="tab" aria-selected="${UI.profileTab === "collections"}">♥ 收藏夹</button>
                 <button type="button" class="hw-pill ${UI.profileTab === "account" ? "is-active" : ""}" data-ptab="account" role="tab" aria-selected="${UI.profileTab === "account"}">⚙️ 账号资料与安全设置</button>
               `
@@ -2490,6 +2551,18 @@
     root.querySelectorAll("[data-prof-asset]").forEach((el) => {
       el.onclick = () => openAssetPage(el.getAttribute("data-prof-asset"));
     });
+    root.querySelectorAll("[data-prof-article]").forEach((el) => {
+      el.onclick = () => {
+        const aid = el.getAttribute("data-prof-article");
+        window.location.href = channelUrl("studio", { entry: "article", articleId: aid, subview: "editor" });
+      };
+    });
+    const emptyArticleBtn = root.querySelector("#prof-empty-article-btn");
+    if (emptyArticleBtn) {
+      emptyArticleBtn.onclick = () => {
+        window.location.href = channelUrl("studio", { entry: "article" });
+      };
+    }
     root.querySelectorAll("[data-prof-topic]").forEach((el) => {
       el.onclick = () => S.goToTopicPage(el.getAttribute("data-prof-topic"));
     });
@@ -2852,7 +2925,7 @@
         UI.profileTab = "styles";
         urlChanged = true;
       }
-      if (!isMe && ["collections", "account"].includes(UI.profileTab)) {
+      if (!isMe && ["collections", "account", "articles"].includes(UI.profileTab)) {
         UI.profileTab = "works";
         urlChanged = true;
       }

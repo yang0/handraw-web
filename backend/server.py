@@ -145,6 +145,7 @@ from .services import (
     save_user_studio_workflow,
     send_encourage_tip,
     submit_abuse_report,
+    list_user_studio_articles,
     sync_user_studio_articles,
     toggle_user_cheer,
     toggle_user_collection,
@@ -2071,6 +2072,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/studio/workspace":
             user = self._current_user(required=False)
             self._send_json(get_studio_workspace(self.db, user))
+            return
+
+        if req_path == "/api/studio/articles":
+            user = self._current_user(required=True)
+            self._send_json(list_user_studio_articles(self.db, user))  # type: ignore[arg-type]
             return
 
         if req_path == "/api/studio/history" or req_path.startswith("/api/studio/history/"):

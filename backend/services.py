@@ -5043,6 +5043,38 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
     return {"ok": True}
 
 
+def list_user_studio_articles(db: Database, user: dict[str, Any]) -> dict[str, Any]:
+    """The caller's own articles, and only ever their own.
+
+    The rows are private working notes, so the user id in the session decides
+    what comes back -- there is no path that reads someone else's list.
+    """
+    uid = int(user["id"])
+    conn = db.get_conn()
+    rows = conn.execute(
+        """
+        SELECT id, article_title, status, run_count, created_at_ms, updated_at_ms
+        FROM studio_articles
+        WHERE user_id = ?
+        ORDER BY updated_at_ms DESC, id ASC
+        LIMIT 200
+        """,
+        (uid,),
+    ).fetchall()
+    items = [
+        {
+            "id": r["id"],
+            "articleTitle": r["article_title"],
+            "status": r["status"],
+            "runCount": int(r["run_count"] or 0),
+            "createdAtMs": int(r["created_at_ms"] or 0),
+            "updatedAtMs": int(r["updated_at_ms"] or 0),
+        }
+        for r in rows
+    ]
+    return {"ok": True, "items": items, "total": len(items)}
+
+
 def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
     if "visibility" in entry:
         raise ServiceError("当前暂不支持设置可见性", status=400, code="visibility_not_allowed")

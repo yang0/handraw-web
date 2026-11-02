@@ -12117,8 +12117,14 @@
     }
     const allBtn = container.querySelector("#pv-view-all-articles");
     if (allBtn) {
+      // The list lives on the author's own profile now; the editor keeps its sidebar.
       allBtn.onclick = () => {
-        openMyArticlesPage({ subView: "all-list" });
+        const who = (typeof S !== "undefined" && S.App && S.App.state && S.App.state.user && S.App.state.user.username) || "";
+        if (who && typeof S.channelUrl === "function") {
+          window.location.href = S.channelUrl("main", { view: "profile", user: who, ptab: "articles" });
+        } else {
+          openMyArticlesPage({ subView: "all-list" });
+        }
       };
     }
     container.querySelectorAll("[data-hist-art-id]").forEach((rowEl) => {
