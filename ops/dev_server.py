@@ -816,6 +816,17 @@ class HandrawDevHandler(BaseHTTPRequestHandler):
         if path.startswith("/studio/assets/"):
             filename = path.replace("/studio/assets/", "")
             if filename in ["catalog.json", "studio-options.json"]:
+                if filename == "catalog.json":
+                    cat_obj = json.loads((CONTENT_DIR / filename).read_text(encoding="utf-8"))
+                    for r in cat_obj.get("resources", []):
+                        r.pop("definition", None)
+                    clean_bytes = json.dumps(cat_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(clean_bytes)))
+                    self.end_headers()
+                    self.wfile.write(clean_bytes)
+                    return
                 return self.send_file_response(CONTENT_DIR / filename, "application/json")
             return self.send_file_response(PUBLIC_DIR / filename)
 

@@ -1,5 +1,6 @@
 """Build public navigation and gallery overlays without changing the static checkout."""
 import argparse
+import json
 import re
 import shutil
 from pathlib import Path
@@ -14,7 +15,10 @@ def build(plugin: Path, target: Path, static_root: Path):
     gallery.mkdir(parents=True, exist_ok=True)
     for name in ('portal.js', 'market.js', 'forum-experience.js', 'market.css', 'portal.css', 'navigation.css', 'image-loader.js', 'discover.js', 'composer-bridge.js', 'gallery-refinement.js', 'gallery-refinement.css', 'studio.js', 'studio.css', 'composer-core.js'):
         shutil.copyfile(plugin / 'public' / name, assets / name)
-    shutil.copyfile(plugin / 'content/catalog.json', assets / 'catalog.json')
+    cat_data = json.loads((plugin / 'content/catalog.json').read_text(encoding='utf-8'))
+    for r in cat_data.get('resources', []):
+        r.pop('definition', None)
+    (assets / 'catalog.json').write_text(json.dumps(cat_data, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     shutil.copyfile(plugin / 'content/studio-options.json', assets / 'studio-options.json')
     revision = (plugin / 'REVISION').read_text().strip()
     navigation = (plugin / 'public/navigation.html').read_text(encoding='utf-8')
