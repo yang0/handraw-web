@@ -341,8 +341,14 @@
     }
     const dTab = document.querySelector("#hw-msg-tab-dm .hw-unread-badge");
     if (dTab) {
-      dTab.style.display = unreadState.direct > 0 ? "inline-flex" : "none";
-      dTab.textContent = unreadState.direct > 99 ? "99+" : String(unreadState.direct);
+      const dmAndBcTotal = (unreadState.direct || 0) + (unreadState.broadcasts || 0);
+      dTab.style.display = dmAndBcTotal > 0 ? "inline-flex" : "none";
+      dTab.textContent = dmAndBcTotal > 99 ? "99+" : String(dmAndBcTotal);
+    }
+    const pinnedBcBadge = document.querySelector('.hw-dm-broadcast-pinned .hw-unread-badge');
+    if (pinnedBcBadge) {
+      pinnedBcBadge.style.display = unreadState.broadcasts > 0 ? "inline-flex" : "none";
+      pinnedBcBadge.textContent = unreadState.broadcasts > 99 ? "99+" : String(unreadState.broadcasts);
     }
   }
 
@@ -655,15 +661,34 @@
   async function loadConversationList(container, autoSelectUser) {
     const listEl = container.querySelector("#hw-dm-conv-list");
     try {
-      const res = await apiJson("/api/dm/conversations");
+      const [res, bcRes] = await Promise.all([
+        apiJson("/api/dm/conversations").catch(() => ({ conversations: [] })),
+        apiJson("/api/message-broadcasts?limit=1").catch(() => ({ broadcasts: [] }))
+      ]);
       conversationCache = (res && res.conversations) || [];
-
-      if (conversationCache.length === 0 && !autoSelectUser) {
-        listEl.innerHTML = `<p style="padding:32px 16px;text-align:center;color:var(--ink-muted);font-size:13px;">暂无私信往来。<br>点击上方“新建对话”与创作者发起沟通吧！</p>`;
-        return;
+      const latestBc = (bcRes && bcRes.broadcasts && bcRes.broadcasts[0]) || null;
+      let latestBcTitle = "官方系统公告与服务通知";
+      if (latestBc) {
+        latestBcTitle = latestBc.isWithdrawn ? "【公告已撤回】" + latestBc.title : latestBc.title;
       }
 
-      listEl.innerHTML = conversationCache.map(c => `
+      const pinnedHtml = `
+        <div class="hw-dm-conv-item hw-dm-broadcast-pinned ${activeConversationId === "broadcasts" ? "is-active" : ""}" data-conv-id="broadcasts" style="border-left: 3px solid var(--vermilion, #b74227); background: rgba(183, 66, 39, 0.03);">
+          <div class="hw-creator-avatar-sm" style="width:36px;height:36px;font-size:16px;flex-shrink:0;background:var(--paper-soft);display:flex;align-items:center;justify-content:center;border-radius:999px;">📢</div>
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <strong style="font-size:13.5px;color:var(--vermilion, #b74227);">管理员公告</strong>
+              <small style="font-size:10.5px;color:var(--ink-muted);background:rgba(183,66,39,0.08);padding:1px 5px;border-radius:4px;font-weight:700;">官方</small>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
+              <span style="font-size:12px;color:var(--ink-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;">${esc(latestBcTitle)}</span>
+              ${unreadState.broadcasts > 0 ? `<span class="hw-unread-badge">${unreadState.broadcasts > 99 ? "99+" : unreadState.broadcasts}</span>` : ""}
+            </div>
+          </div>
+        </div>
+      `;
+
+      const dmsHtml = conversationCache.map(c => `
         <div class="hw-dm-conv-item ${activeConversationId === c.id ? "is-active" : ""}" data-conv-id="${c.id}">
           <div class="hw-creator-avatar-sm seal-novice" style="width:36px;height:36px;font-size:14px;flex-shrink:0;">${esc((c.peer.displayName || c.peer.username || "创")[0])}</div>
           <div style="flex:1;min-width:0;">
@@ -679,26 +704,266 @@
         </div>
       `).join("");
 
+      listEl.innerHTML = pinnedHtml + dmsHtml;
+
       listEl.querySelectorAll(".hw-dm-conv-item").forEach(item => {
         item.onclick = () => {
-          const cid = Number(item.dataset.convId);
-          openConversation(container, cid);
+          if (item.dataset.convId === "broadcasts") {
+            openBroadcastConversation(container);
+          } else {
+            const cid = Number(item.dataset.convId);
+            openConversation(container, cid);
+          }
         };
       });
 
-      // Handle autoSelectUser parameter
-      if (autoSelectUser) {
+      // Handle autoSelectUser parameter or broadcasts
+      if (autoSelectUser === "broadcasts") {
+        openBroadcastConversation(container);
+      } else if (autoSelectUser) {
         const found = conversationCache.find(c => c.peer.username.toLowerCase() === autoSelectUser.toLowerCase());
         if (found) {
           openConversation(container, found.id);
         } else {
-          // Prepare direct message draft for new recipient
           prepareNewConversationWithUser(container, autoSelectUser);
         }
       }
     } catch (e) {
       listEl.innerHTML = `<p style="padding:20px;text-align:center;color:var(--vermilion);font-size:13px;">加载私信列表失败：${esc(e.message)}</p>`;
     }
+  }
+
+  // Open & render Admin Broadcasts (Read-only, non-replyable)
+  async function openBroadcastConversation(container) {
+    activeConversationId = "broadcasts";
+    stopConvPolling();
+    const sidebar = container.querySelector("#hw-dm-sidebar");
+    const chatPane = container.querySelector("#hw-dm-chat-pane");
+
+    sidebar.classList.add("is-chat-active");
+    chatPane.classList.add("is-chat-active");
+
+    container.querySelectorAll(".hw-dm-conv-item").forEach(el => {
+      el.classList.toggle("is-active", el.dataset.convId === "broadcasts");
+    });
+
+    const curUser = getApp()?.state?.user;
+    const isAdmin = curUser?.role === "admin";
+
+    chatPane.innerHTML = `
+      <div class="hw-dm-chat-header">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button type="button" class="btn btn-sm" id="hw-dm-back-btn" style="padding:4px 8px;font-size:12px;">← 返回</button>
+          <div class="hw-creator-avatar-sm" style="width:32px;height:32px;font-size:14px;background:var(--paper-soft);display:flex;align-items:center;justify-content:center;border-radius:999px;">📢</div>
+          <div>
+            <strong style="font-size:14px;color:var(--ink-strong);">管理员公告</strong>
+            <span style="font-size:11.5px;color:var(--ink-muted);margin-left:4px;">(官方系统公告 · 只读)</span>
+          </div>
+        </div>
+        <div>
+          ${isAdmin ? `<button type="button" class="btn btn-sm btn-primary" id="hw-bc-publish-btn" style="font-size:12px;">📢 发布群发公告</button>` : ""}
+        </div>
+      </div>
+      <div class="hw-dm-messages-area" id="hw-dm-messages-area">
+        <p style="padding:40px;text-align:center;color:var(--ink-muted);">正在加载公告…</p>
+      </div>
+      <div class="hw-dm-footer" id="hw-dm-footer" style="padding:14px 16px;text-align:center;color:var(--ink-muted);font-size:13px;background:var(--paper-bg);border-top:1px solid var(--line-soft);">
+        <span style="margin-right:6px;">📢</span>官方系统公告由管理员发布，仅供阅读，不支持回复。
+      </div>
+    `;
+
+    chatPane.querySelector("#hw-dm-back-btn").onclick = () => {
+      sidebar.classList.remove("is-chat-active");
+      chatPane.classList.remove("is-chat-active");
+      activeConversationId = null;
+    };
+
+    if (isAdmin) {
+      const pubBtn = chatPane.querySelector("#hw-bc-publish-btn");
+      if (pubBtn) pubBtn.onclick = () => openAdminBroadcastModal(container);
+    }
+
+    try {
+      const res = await apiJson("/api/message-broadcasts");
+      const area = chatPane.querySelector("#hw-dm-messages-area");
+      const broadcasts = (res && res.broadcasts) || [];
+
+      if (broadcasts.length === 0) {
+        area.innerHTML = `<p style="padding:40px;text-align:center;color:var(--ink-muted);font-size:13.5px;">暂无管理员公告。</p>`;
+        return;
+      }
+
+      const list = [...broadcasts].reverse();
+      area.innerHTML = list.map(b => `
+        <div class="hw-bc-card ${b.isWithdrawn ? "is-withdrawn" : ""}" data-bc-id="${b.id}" style="padding:16px;border-radius:10px;background:${b.isWithdrawn ? 'rgba(0,0,0,0.03)' : '#fffdf9'};border:1px solid ${b.isWithdrawn ? 'var(--line-soft)' : 'rgba(183,66,39,0.2)'};margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+            <div>
+              <strong style="font-size:15px;color:${b.isWithdrawn ? 'var(--ink-muted)' : 'var(--ink-strong)'};">📌 ${esc(b.title)}</strong>
+              <div style="font-size:11.5px;color:var(--ink-muted);margin-top:2px;">
+                ${b.isWithdrawn ? `【公告已撤回】发布于 ${formatMessageTime(b.publishedAt)}` : `发布于 ${formatMessageTime(b.publishedAt)}`}
+              </div>
+            </div>
+            ${isAdmin && !b.isWithdrawn ? `<button type="button" class="btn btn-sm btn-bc-withdraw" data-bc-id="${b.id}" style="padding:2px 8px;font-size:11px;color:var(--vermilion);">撤回公告</button>` : ""}
+          </div>
+          ${b.isWithdrawn ? `
+            <div style="font-size:13px;color:var(--ink-muted);font-style:italic;">【公告已撤回】正文已被管理员撤回</div>
+          ` : `
+            <div style="font-size:14px;color:var(--ink-strong);line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(b.body)}</div>
+          `}
+        </div>
+      `).join("");
+
+      area.scrollTop = area.scrollHeight;
+
+      // Wire withdraw buttons
+      if (isAdmin) {
+        area.querySelectorAll(".btn-bc-withdraw").forEach(btn => {
+          btn.onclick = async () => {
+            const bcId = btn.dataset.bcId;
+            if (!confirm("确定要撤回该公告吗？撤回后所有用户正文将被隐藏，未读数将被移除。")) return;
+            try {
+              await apiJson(`/api/admin/message-broadcasts/${bcId}/withdraw`, { method: "POST" });
+              openBroadcastConversation(container);
+            } catch (err) {
+              alert("撤回失败：" + (err.message || "请稍后重试"));
+            }
+          };
+        });
+      }
+
+      // Mark unread broadcasts as read
+      let markedAny = false;
+      for (const b of broadcasts) {
+        if (!b.isRead && !b.isWithdrawn) {
+          await apiJson(`/api/message-broadcasts/${b.id}/read`, { method: "POST" }).catch(() => {});
+          markedAny = true;
+        }
+      }
+      if (markedAny) {
+        const pinnedBadge = container.querySelector('.hw-dm-broadcast-pinned .hw-unread-badge');
+        if (pinnedBadge) pinnedBadge.style.display = "none";
+        fetchUnreadCounts();
+      }
+    } catch (err) {
+      chatPane.querySelector("#hw-dm-messages-area").innerHTML = `<p style="padding:40px;text-align:center;color:var(--vermilion);">加载公告失败：${esc(err.message)}</p>`;
+    }
+  }
+
+  // Admin Broadcast Publish Modal ("先预览再二次确认")
+  function openAdminBroadcastModal(container) {
+    let modalBackdrop = document.getElementById("hw-bc-modal");
+    if (modalBackdrop) modalBackdrop.remove();
+
+    modalBackdrop = document.createElement("div");
+    modalBackdrop.id = "hw-bc-modal";
+    modalBackdrop.style.cssText = `
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+      display: flex; align-items: center; justify-content: center; z-index: 10000;
+      padding: 16px;
+    `;
+
+    function renderStep1() {
+      modalBackdrop.innerHTML = `
+        <div style="background: #fffdf9; border-radius: 12px; width: 100%; max-width: 540px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); border: 1px solid var(--line-soft);">
+          <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="margin:0; font-size: 17px; color: var(--ink-strong);">📢 发布全员群发公告</h3>
+            <button type="button" class="btn btn-sm" id="hw-bc-close-btn" style="border:none; font-size:16px;">✕</button>
+          </div>
+          <div style="margin-bottom: 14px;">
+            <label style="display:block; font-size: 13px; font-weight:700; margin-bottom: 6px; color: var(--ink-strong);">公告标题 (4–80 字)</label>
+            <input class="hw-input" id="hw-bc-title-input" placeholder="请输入公告标题…" style="width:100%; box-sizing:border-box; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line-soft);" maxlength="80" />
+          </div>
+          <div style="margin-bottom: 16px;">
+            <label style="display:block; font-size: 13px; font-weight:700; margin-bottom: 6px; color: var(--ink-strong);">公告正文 (1–5000 字，纯文本)</label>
+            <textarea class="hw-dm-textarea" id="hw-bc-body-input" rows="5" placeholder="请输入公告正文内容…" style="width:100%; box-sizing:border-box;" maxlength="5000"></textarea>
+          </div>
+          <div style="display:flex; justify-content: flex-end; gap: 8px;">
+            <button type="button" class="btn" id="hw-bc-cancel-btn">取消</button>
+            <button type="button" class="btn btn-primary" id="hw-bc-preview-btn">预览公告 (先预览)</button>
+          </div>
+        </div>
+      `;
+
+      modalBackdrop.querySelector("#hw-bc-close-btn").onclick = () => modalBackdrop.remove();
+      modalBackdrop.querySelector("#hw-bc-cancel-btn").onclick = () => modalBackdrop.remove();
+      modalBackdrop.querySelector("#hw-bc-preview-btn").onclick = () => {
+        const title = modalBackdrop.querySelector("#hw-bc-title-input").value.trim();
+        const body = modalBackdrop.querySelector("#hw-bc-body-input").value.trim();
+
+        if (title.length < 4 || title.length > 80) {
+          alert("公告标题长度须在 4–80 个字之间");
+          return;
+        }
+        if (body.length < 1 || body.length > 5000) {
+          alert("公告正文长度须在 1–5000 个字之间");
+          return;
+        }
+        if (/<[a-zA-Z\/][^>]*>/.test(body)) {
+          alert("公告正文暂不支持 HTML 内容");
+          return;
+        }
+
+        renderStep2(title, body);
+      };
+    }
+
+    function renderStep2(title, body) {
+      modalBackdrop.innerHTML = `
+        <div style="background: #fffdf9; border-radius: 12px; width: 100%; max-width: 540px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); border: 1px solid var(--line-soft);">
+          <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+            <h3 style="margin:0; font-size: 17px; color: var(--ink-strong);">👁️ 公告效果预览</h3>
+            <button type="button" class="btn btn-sm" id="hw-bc-close-btn" style="border:none; font-size:16px;">✕</button>
+          </div>
+
+          <div style="background: var(--paper-bg); border: 1px solid rgba(183,66,39,0.25); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+            <strong style="font-size: 15px; color: var(--ink-strong); display:block; margin-bottom: 6px;">📌 ${esc(title)}</strong>
+            <div style="font-size: 13.5px; color: var(--ink-strong); line-height: 1.5; white-space: pre-wrap; word-break: break-word;">${esc(body)}</div>
+          </div>
+
+          <div style="padding: 10px 12px; background: rgba(183,66,39,0.08); border-radius: 6px; font-size: 12px; color: var(--vermilion, #b74227); line-height: 1.4; margin-bottom: 18px;">
+            ⚠️ <strong>发送确认提示</strong>：本公告将向全站所有已注册用户发送，每位用户未读数 +1。发布后内容不可修改，仅可撤回。之后新注册的用户将不会收到此公告。
+          </div>
+
+          <div style="display:flex; justify-content: flex-end; gap: 8px;">
+            <button type="button" class="btn" id="hw-bc-back-edit-btn">返回修改</button>
+            <button type="button" class="btn btn-primary" id="hw-bc-confirm-send-btn">向全部现有用户发送</button>
+          </div>
+        </div>
+      `;
+
+      modalBackdrop.querySelector("#hw-bc-close-btn").onclick = () => modalBackdrop.remove();
+      modalBackdrop.querySelector("#hw-bc-back-edit-btn").onclick = () => {
+        renderStep1();
+        modalBackdrop.querySelector("#hw-bc-title-input").value = title;
+        modalBackdrop.querySelector("#hw-bc-body-input").value = body;
+      };
+
+      const sendBtn = modalBackdrop.querySelector("#hw-bc-confirm-send-btn");
+      sendBtn.onclick = async () => {
+        sendBtn.disabled = true;
+        sendBtn.textContent = "发送中…";
+        try {
+          const reqId = "bc_req_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+          const res = await apiJson("/api/admin/message-broadcasts", {
+            method: "POST",
+            body: { title, body, requestId: reqId }
+          });
+          if (res && res.ok) {
+            alert("公告发布成功！");
+            modalBackdrop.remove();
+            openBroadcastConversation(container);
+            fetchUnreadCounts();
+          }
+        } catch (err) {
+          alert("发布失败：" + (err.message || "请稍后再试"));
+          sendBtn.disabled = false;
+          sendBtn.textContent = "向全部现有用户发送";
+        }
+      };
+    }
+
+    renderStep1();
+    document.body.append(modalBackdrop);
   }
 
   // Open & render a specific conversation
@@ -1105,5 +1370,7 @@
     getUnreadState: () => unreadState,
     renderMessageCenter,
     openConversation,
+    openBroadcastConversation,
+    openAdminBroadcastModal,
   };
 })();

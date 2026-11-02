@@ -98,8 +98,37 @@ CREATE TABLE IF NOT EXISTS dm_contact_history (
 CREATE INDEX IF NOT EXISTS idx_dm_contact_hist_date ON dm_contact_history(sender_id, first_contact_date);
 """
 
+BROADCAST_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS message_broadcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    audience_cutoff TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    withdrawn_at TEXT,
+    FOREIGN KEY (sender_id) REFERENCES users(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_broadcasts_request_id ON message_broadcasts(request_id);
+CREATE INDEX IF NOT EXISTS idx_broadcasts_published ON message_broadcasts(published_at DESC);
+
+CREATE TABLE IF NOT EXISTS message_broadcast_reads (
+    broadcast_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    read_at TEXT NOT NULL,
+    PRIMARY KEY (broadcast_id, user_id),
+    FOREIGN KEY (broadcast_id) REFERENCES message_broadcasts(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_broadcast_reads_user ON message_broadcast_reads(user_id);
+"""
+
 DM_MIGRATIONS: list[tuple[int, str, str]] = [
     (70, "070_direct_messages", DM_SCHEMA_SQL),
+    (71, "071_message_broadcasts", BROADCAST_SCHEMA_SQL),
 ]
 
 
@@ -609,11 +638,249 @@ def unblock_user(db: Database, user: dict[str, Any], target_raw: str) -> dict[st
     return {"ok": True, "unblocked": True, "userId": target_id, "username": target_user["username"]}
 
 
+def _require_admin_user(user: dict[str, Any] | None) -> dict[str, Any]:
+    cur_user = _require_active_user(user)
+    if cur_user.get("role") != "admin":
+        raise _service_error("仅超级管理员有权发送或管理群发公告", status=403, code="admin_required")
+    return cur_user
+
+
+def send_message_broadcast(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    admin_user = _require_admin_user(user)
+    admin_id = int(admin_user["id"])
+    conn = db.get_conn()
+
+    raw_title = str(body.get("title") or "").strip()
+    raw_body = str(body.get("body") or "").strip()
+    raw_req_id = str(body.get("requestId") or body.get("request_id") or "").strip()
+
+    if len(raw_title) < 4 or len(raw_title) > 80:
+        raise _service_error("公告标题长度需在 4–80 个字符之间", status=400, code="invalid_title_length")
+
+    if len(raw_body) < 1 or len(raw_body) > 5000:
+        raise _service_error("公告正文长度需在 1–5000 个字符之间", status=400, code="invalid_body_length")
+
+    if "<" in raw_body and re.search(r"<\s*/?[a-zA-Z][^>]*>", raw_body):
+        raise _service_error("公告正文暂不支持 HTML 内容", status=400, code="html_not_allowed")
+
+    if not raw_req_id:
+        raise _service_error("缺少请求幂等标识 request_id", status=400, code="missing_request_id")
+
+    # 1. Idempotency check: duplicate request_id returns existing broadcast
+    existing = conn.execute("SELECT * FROM message_broadcasts WHERE request_id = ?", (raw_req_id,)).fetchone()
+    if existing:
+        return {
+            "ok": True,
+            "broadcast": {
+                "id": int(existing["id"]),
+                "senderId": int(existing["sender_id"]),
+                "title": existing["title"],
+                "body": existing["body"],
+                "publishedAt": str(existing["published_at"]),
+                "audienceCutoff": str(existing["audience_cutoff"]),
+                "isWithdrawn": bool(existing["withdrawn_at"]),
+                "withdrawnAt": str(existing["withdrawn_at"]) if existing["withdrawn_at"] else None,
+            },
+            "replayed": True,
+        }
+
+    # 2. Rate limit: 1 time / minute, 5 times / day
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    one_min_ago = (now_dt - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    today_str = now_dt.strftime("%Y-%m-%d")
+
+    cnt_min = conn.execute(
+        "SELECT COUNT(*) FROM message_broadcasts WHERE sender_id = ? AND REPLACE(published_at, ' ', 'T') >= ?",
+        (admin_id, one_min_ago),
+    ).fetchone()[0]
+    if cnt_min >= 1:
+        raise _service_error("群发公告发送过于频繁，每分钟最多发送 1 次", status=429, code="rate_limited_minute")
+
+    cnt_day = conn.execute(
+        "SELECT COUNT(*) FROM message_broadcasts WHERE sender_id = ? AND SUBSTR(published_at, 1, 10) = ?",
+        (admin_id, today_str),
+    ).fetchone()[0]
+    if cnt_day >= 5:
+        raise _service_error("今日群发公告已达上限（5次/天），请明日再试", status=429, code="rate_limited_day")
+
+    # 3. Insert ONE row into message_broadcasts. Zero fan-out.
+    audience_cutoff = now_iso
+    with db.transaction() as tx:
+        tx.execute(
+            """
+            INSERT INTO message_broadcasts (sender_id, title, body, audience_cutoff, request_id, published_at, withdrawn_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (admin_id, raw_title, raw_body, audience_cutoff, raw_req_id, now_iso),
+        )
+        bc_id = int(tx.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+    return {
+        "ok": True,
+        "broadcast": {
+            "id": bc_id,
+            "senderId": admin_id,
+            "title": raw_title,
+            "body": raw_body,
+            "publishedAt": now_iso,
+            "audienceCutoff": audience_cutoff,
+            "isWithdrawn": False,
+            "withdrawnAt": None,
+        },
+        "replayed": False,
+    }
+
+
+def withdraw_message_broadcast(db: Database, user: dict[str, Any], broadcast_id: int) -> dict[str, Any]:
+    admin_user = _require_admin_user(user)
+    conn = db.get_conn()
+
+    bc = conn.execute("SELECT * FROM message_broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
+    if not bc:
+        raise _service_error("公告不存在", status=404, code="broadcast_not_found")
+
+    now_iso = utc_now_iso()
+    with db.transaction() as tx:
+        tx.execute(
+            "UPDATE message_broadcasts SET withdrawn_at = ? WHERE id = ? AND withdrawn_at IS NULL",
+            (now_iso, broadcast_id),
+        )
+        # Record admin audit log
+        try:
+            from .services import record_audit_log
+            record_audit_log(
+                tx,
+                actor=admin_user,
+                action="withdraw_broadcast",
+                target_type="message_broadcast",
+                target_id=str(broadcast_id),
+                reason="管理员撤回群发公告",
+                details={"broadcastId": broadcast_id, "title": bc["title"]},
+            )
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "broadcastId": broadcast_id,
+        "withdrawnAt": now_iso,
+    }
+
+
+def list_message_broadcasts(db: Database, user: dict[str, Any], qs: dict[str, list[str]]) -> dict[str, Any]:
+    cur_user = _require_active_user(user)
+    uid = int(cur_user["id"])
+    is_admin = cur_user.get("role") == "admin"
+    u_created_at = str(cur_user.get("created_at") or "")
+    conn = db.get_conn()
+
+    limit_val = 30
+    if "limit" in qs:
+        try:
+            limit_val = max(1, min(100, int(qs["limit"][0])))
+        except (ValueError, TypeError):
+            pass
+
+    before_raw = (qs.get("before") or [""])[0].strip()
+    before_id = 0
+    if before_raw:
+        try:
+            before_id = int(before_raw)
+        except ValueError:
+            pass
+
+    where_clauses: list[str] = []
+    params: list[Any] = []
+
+    if not is_admin:
+        where_clauses.append("(COALESCE(?, '') = '' OR REPLACE(?, ' ', 'T') <= REPLACE(b.audience_cutoff, ' ', 'T'))")
+        params.extend([u_created_at, u_created_at])
+
+    if before_id > 0:
+        where_clauses.append("b.id < ?")
+        params.append(before_id)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    query = f"""
+        SELECT b.*, r.read_at AS user_read_at
+        FROM message_broadcasts b
+        LEFT JOIN message_broadcast_reads r ON r.broadcast_id = b.id AND r.user_id = ?
+        {where_sql}
+        ORDER BY b.id DESC
+        LIMIT ?
+    """
+    exec_params = [uid] + params + [limit_val + 1]
+    rows = conn.execute(query, exec_params).fetchall()
+    has_more = len(rows) > limit_val
+    visible_rows = rows[:limit_val]
+
+    broadcasts = []
+    for r in visible_rows:
+        is_withdrawn = bool(r["withdrawn_at"])
+        is_read = bool(r["user_read_at"])
+        broadcasts.append({
+            "id": int(r["id"]),
+            "senderId": int(r["sender_id"]),
+            "title": str(r["title"]),
+            "body": "" if (is_withdrawn and not is_admin) else str(r["body"]),
+            "publishedAt": str(r["published_at"]),
+            "audienceCutoff": str(r["audience_cutoff"]),
+            "isWithdrawn": is_withdrawn,
+            "withdrawnAt": str(r["withdrawn_at"]) if is_withdrawn else None,
+            "isRead": is_read,
+            "readAt": str(r["user_read_at"]) if is_read else None,
+        })
+
+    next_before = visible_rows[-1]["id"] if (has_more and visible_rows) else None
+
+    return {
+        "ok": True,
+        "broadcasts": broadcasts,
+        "nextBefore": next_before,
+    }
+
+
+def mark_message_broadcast_read(db: Database, user: dict[str, Any], broadcast_id: int) -> dict[str, Any]:
+    cur_user = _require_active_user(user)
+    uid = int(cur_user["id"])
+    u_created_at = str(cur_user.get("created_at") or "")
+    conn = db.get_conn()
+
+    bc = conn.execute("SELECT * FROM message_broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
+    if not bc:
+        raise _service_error("公告不存在", status=404, code="broadcast_not_found")
+
+    if u_created_at and bc["audience_cutoff"]:
+        norm_u = u_created_at.replace(" ", "T")
+        norm_c = str(bc["audience_cutoff"]).replace(" ", "T")
+        if norm_u > norm_c:
+            raise _service_error("无权查看该公告", status=403, code="audience_cutoff_exceeded")
+
+    now_iso = utc_now_iso()
+    with db.transaction() as tx:
+        tx.execute(
+            """
+            INSERT OR IGNORE INTO message_broadcast_reads (broadcast_id, user_id, read_at)
+            VALUES (?, ?, ?)
+            """,
+            (broadcast_id, uid, now_iso),
+        )
+
+    return {
+        "ok": True,
+        "broadcastId": broadcast_id,
+        "readAt": now_iso,
+    }
+
+
 def get_messages_unread_summary(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
     if not user:
         return {"ok": True, "notifications": 0, "direct": 0, "broadcasts": 0, "total": 0}
 
     uid = int(user["id"])
+    u_created_at = str(user.get("created_at") or "")
     conn = db.get_conn()
 
     # Unread notifications
@@ -633,9 +900,30 @@ def get_messages_unread_summary(db: Database, user: dict[str, Any] | None) -> di
         (uid, uid),
     ).fetchone()[0]
 
-    # Broadcasts: reserved for Phase B, constant 0
-    broadcasts_count = 0
+    # Unread broadcasts: active (not withdrawn) broadcasts within user's cutoff not read by user
+    row_b = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM message_broadcasts b
+        WHERE b.withdrawn_at IS NULL
+          AND (COALESCE(?, '') = '' OR REPLACE(?, ' ', 'T') <= REPLACE(b.audience_cutoff, ' ', 'T'))
+          AND b.id NOT IN (
+              SELECT r.broadcast_id FROM message_broadcast_reads r WHERE r.user_id = ?
+          )
+        """,
+        (u_created_at, u_created_at, uid),
+    ).fetchone()
+    broadcasts_count = int(row_b[0]) if row_b else 0
+
     total = int(n_count) + int(dm_count) + broadcasts_count
+
+    return {
+        "ok": True,
+        "notifications": int(n_count),
+        "direct": int(dm_count),
+        "broadcasts": broadcasts_count,
+        "total": total,
+    }
 
     return {
         "ok": True,
@@ -681,6 +969,11 @@ def handle_dm_get(handler: Any, req_path: str, qs: dict[str, list[str]]) -> bool
         handler._send_json(list_dm_messages(handler.db, user, conv_id, qs))
         return True
 
+    if req_path == "/api/message-broadcasts":
+        user = handler._current_user(required=True)
+        handler._send_json(list_message_broadcasts(handler.db, user, qs))
+        return True
+
     return False
 
 
@@ -700,6 +993,25 @@ def handle_dm_post(handler: Any, req_path: str, body: dict[str, Any]) -> bool:
     if req_path == "/api/dm/blocks":
         user = handler._current_user(required=True)
         handler._send_json(block_user(handler.db, user, body))
+        return True
+
+    if req_path == "/api/admin/message-broadcasts":
+        user = handler._current_user(required=True)
+        handler._send_json(send_message_broadcast(handler.db, user, body), status=200)
+        return True
+
+    m_bc_withdraw = re.fullmatch(r"^/api/admin/message-broadcasts/(\d+)/withdraw$", req_path)
+    if m_bc_withdraw:
+        user = handler._current_user(required=True)
+        bc_id = int(m_bc_withdraw.group(1))
+        handler._send_json(withdraw_message_broadcast(handler.db, user, bc_id))
+        return True
+
+    m_bc_read = re.fullmatch(r"^/api/message-broadcasts/(\d+)/read$", req_path)
+    if m_bc_read:
+        user = handler._current_user(required=True)
+        bc_id = int(m_bc_read.group(1))
+        handler._send_json(mark_message_broadcast_read(handler.db, user, bc_id))
         return True
 
     return False
