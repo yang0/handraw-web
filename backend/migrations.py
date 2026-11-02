@@ -548,3 +548,6 @@ except ImportError:  # pragma: no cover - compatibility for staged rollouts
     DM_MIGRATIONS = []
 
 MIGRATIONS.extend(DM_MIGRATIONS)
+
+# Ensure migrations execute in strictly ascending numerical order
+MIGRATIONS.sort(key=lambda m: m[0])

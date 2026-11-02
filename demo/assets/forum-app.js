@@ -1909,7 +1909,8 @@
     const { count: curFavs } = _getTopicFavoriteState(tData);
     const mKind = tData.mount?.kind;
     const curForks = mKind === "work" ? Number(tData.mount?.work?.forks || 0) : 0;
-    el.textContent = `点赞 ${curLikes} · 收藏 ${curFavs}${mKind === "work" ? ` · 做同款 ${curForks}` : ""}`;
+    const curTips = Number(mKind === "work" ? (tData.mount?.work?.tips || tData.topic?.tips || 0) : (tData.topic?.tips || 0));
+    el.textContent = `点赞 ${curLikes} · 收藏 ${curFavs}${curTips > 0 ? ` · 获赞赏 ${curTips}✦` : ""}${mKind === "work" ? ` · 做同款 ${curForks}` : ""}`;
   }
 
   function _updateTopicLikeBtnUI() {
@@ -2428,9 +2429,19 @@
 
     const likeInFlight = _socialInFlight.has(`${topic.id}:like`);
     const collectInFlight = _socialInFlight.has(`${topic.id}:collect`);
-    const countsDisplay = `点赞 ${likeCnt} · 收藏 ${favCnt}${mount.kind === "work" ? ` · 做同款 ${forks}` : ""}`;
+    const curTips = Number(mount.kind === "work" ? (mount.work?.tips || topic.tips || 0) : (topic.tips || 0));
+    const countsDisplay = `点赞 ${likeCnt} · 收藏 ${favCnt}${curTips > 0 ? ` · 获赞赏 ${curTips}✦` : ""}${mount.kind === "work" ? ` · 做同款 ${forks}` : ""}`;
     const isResourceKind = mount.kind === "style" || mount.kind === "layout";
     const pairedTitle = mount.kind === "style" ? "常搭配的图型" : "常搭配的画风";
+
+    const isTopicFree = Number(topic.price || 0) === 0;
+    const workAuthor = mount.work ? (mount.work.author || mount.work.author_username || "") : "";
+    const isWorkAuthor = Boolean(App.state?.loggedIn && App.state?.user && workAuthor && App.state.user.username === workAuthor);
+    const canTipTop = (
+      mount.kind === "work"
+        ? Boolean(!isWorkAuthor && mount.work)
+        : (mount.kind === "discussion" && isTopicFree && !isTopicAuthor)
+    );
 
     const totalRepliesCount = _activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length;
 
@@ -2498,6 +2509,7 @@
                   <button type="button" class="btn btn-sm ${favorited ? "btn-primary" : ""}" id="topic-page-collect" ${collectInFlight ? 'disabled aria-busy="true"' : ""}>
                     ${favorited ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
                   </button>
+                  ${canTipTop ? `<button type="button" class="btn btn-sm btn-gold" id="topic-page-tip" title="赞赏作者 2✦">🎁 赞赏 2✦</button>` : ""}
                   <button type="button" class="btn btn-sm" id="topic-page-scroll-reply">
                     💬 回复 (${totalRepliesCount})
                   </button>
@@ -2737,6 +2749,47 @@
     const isStyleMount = mount.kind === "style";
     const isLayoutMount = mount.kind === "layout";
     const isAssetMount = isStyleMount || isLayoutMount;
+
+    const topTipBtn = root.querySelector("#topic-page-tip");
+    if (topTipBtn) {
+      topTipBtn.onclick = () => {
+        if (!App.state?.loggedIn) {
+          openForumAuthPage("登录后即可赞赏支持！");
+          return;
+        }
+        const isWork = mount.kind === "work";
+        const targetType = isWork ? "work" : "topic";
+        const targetId = isWork ? (mount.work?.id || topic.workId) : topic.id;
+        const author = (isWork ? (mount.work?.authorName || mount.work?.author) : (topic.authorName || topic.author)) || "创作者";
+
+        if (!confirm(`赞赏 2✦ 给 @${author}，确定赞赏吗？`)) return;
+        topTipBtn.disabled = true;
+        const reqId = `tip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        S.apiJson("/api/interactions/tip", {
+          method: "POST",
+          body: { targetType, targetId, amount: 2, requestId: reqId }
+        }).then((res) => {
+          if (res && res.credits != null && App.state?.user) {
+            App.state.user.credits = res.credits;
+          }
+          toast(`🎁 赞赏成功！已向 @${author} 送出 2✦ 积分`);
+          topic.tips = (topic.tips || 0) + 2;
+          if (mount.work) {
+            mount.work.tips = (mount.work.tips || 0) + 2;
+          }
+          const curLike = _getTopicLikeState(_activeTopicDetail.topicData);
+          if (!curLike.liked) {
+            _setTopicLikeState(_activeTopicDetail.topicData, true, curLike.count + 1);
+            _updateTopicLikeBtnUI();
+          }
+          _updateTopicCountsUI();
+        }).catch((err) => {
+          toast(`赞赏失败：${(err && err.message) || err}`);
+        }).finally(() => {
+          topTipBtn.disabled = false;
+        });
+      };
+    }
 
     const likeBtn = root.querySelector("#topic-page-like");
     if (likeBtn) {
@@ -3224,9 +3277,10 @@
             : `赞赏 2✦ 支持官方模型与资源运营（入账官方运营账户），不会解锁任何内容。确定赞赏吗？`;
           if (!confirm(confirmMsg)) return;
           tipBtn.disabled = true;
+          const reqId = `tip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
           S.apiJson("/api/interactions/tip", {
             method: "POST",
-            body: { targetType: "asset", targetId: mount.resource.code, amount: 2 }
+            body: { targetType: "asset", targetId: mount.resource.code, amount: 2, requestId: reqId }
           }).then((res) => {
             if (res && res.credits != null && App.state?.user) {
               App.state.user.credits = res.credits;
@@ -3236,6 +3290,12 @@
               : `🎁 赞赏成功！感谢对官方资源的支持，已送出 2✦ 积分`;
             toast(successMsg);
             mount.resource.tips = (mount.resource.tips || 0) + 2;
+            const curLike = _getTopicLikeState(_activeTopicDetail.topicData);
+            if (!curLike.liked) {
+              _setTopicLikeState(_activeTopicDetail.topicData, true, curLike.count + 1);
+              _updateTopicLikeBtnUI();
+            }
+            _updateTopicCountsUI();
           }).catch((err) => {
             toast(`赞赏失败：${(err && err.message) || err}`);
           }).finally(() => {
@@ -3784,6 +3844,7 @@
               ${collected ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
             </button>
             <span>💬 ${(t.replies || []).length} 回复</span>
+            ${Number(t.tips || 0) > 0 ? `<span>🎁 获赞赏 ${t.tips}✦</span>` : ""}
             ${
               canMod
                 ? `

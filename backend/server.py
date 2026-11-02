@@ -2660,6 +2660,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     target_type=str(body.get("targetType") or "work"),
                     target_id=str(body.get("targetId") or body.get("id") or ""),
                     amount=int(body.get("amount") or 2),
+                    request_id=str(body.get("requestId") or body.get("request_id") or "").strip() or None,
                 )
             )
             return

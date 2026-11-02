@@ -1545,6 +1545,7 @@ def _serialize_topic(
     unlocked_set: set[str],
     current_user: dict[str, Any] | None,
     conn: sqlite3.Connection | None = None,
+    tips_by_topic: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     tid = row["id"]
     price = int(row["price"] or 0)
@@ -1556,6 +1557,19 @@ def _serialize_topic(
     shared_card = None
     if isinstance(recipe, dict) and "sharedCard" in recipe:
         shared_card = recipe["sharedCard"]
+
+    tips = 0
+    if tips_by_topic is not None:
+        tips = int(tips_by_topic.get(tid, 0))
+    elif conn is not None:
+        try:
+            row_tip = conn.execute(
+                "SELECT COALESCE(SUM(delta), 0) AS total FROM ledgers WHERE kind = 'tip_in' AND ref_type = 'topic' AND ref_id = ?",
+                (tid,),
+            ).fetchone()
+            tips = int(row_tip["total"]) if row_tip else 0
+        except Exception:
+            tips = 0
 
     return {
         "id": tid,
@@ -1571,6 +1585,7 @@ def _serialize_topic(
         "views": int(row["views"]),
         "likes": int(row["likes"]),
         "favorites": int(row["favorites"]),
+        "tips": tips,
         "price": price,
         "bounty": int(row["bounty"]),
         "bountyStatus": row["bounty_status"],
@@ -1917,7 +1932,16 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} AND {topic_vis_filter} ORDER BY pinned DESC, published_at_ms DESC",
         (*topic_ids, *reply_seed_ids),
     ).fetchall()
-    topics_out = [_serialize_topic(r, replies_by_topic, unlocked_set, current_user, conn=conn) for r in topic_rows]
+    try:
+        tips_by_topic = {
+            str(r["ref_id"]): int(r["total"] or 0)
+            for r in conn.execute(
+                "SELECT ref_id, COALESCE(SUM(delta), 0) AS total FROM ledgers WHERE kind = 'tip_in' AND ref_type = 'topic' GROUP BY ref_id"
+            ).fetchall()
+        }
+    except Exception:
+        tips_by_topic = {}
+    topics_out = [_serialize_topic(r, replies_by_topic, unlocked_set, current_user, conn=conn, tips_by_topic=tips_by_topic) for r in topic_rows]
 
     # A work's discussion topic reports the work's counters.  Without this the
     # same piece shows one number in the square (works.likes) and another in the
@@ -1930,16 +1954,17 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     }
     if work_primary_topic:
         work_counters = {
-            str(r["id"]): (int(r["likes"] or 0), int(r["favorites"] or 0))
-            for r in conn.execute("SELECT id, likes, favorites FROM works").fetchall()
+            str(r["id"]): (int(r["likes"] or 0), int(r["favorites"] or 0), int(r["tips"] or 0))
+            for r in conn.execute("SELECT id, likes, favorites, tips FROM works").fetchall()
         }
         for topic in topics_out:
             work_id = work_primary_topic.get(topic["id"])
             if not work_id:
                 continue
-            likes, favorites = work_counters.get(work_id, (0, 0))
+            likes, favorites, w_tips = work_counters.get(work_id, (0, 0, 0))
             topic["likes"] = likes
             topic["favorites"] = favorites
+            topic["tips"] = w_tips
             topic["workId"] = work_id
 
     # PUBLIC SEO-FRIENDLY WORKS SQUARE:
@@ -2846,19 +2871,101 @@ def get_official_tip_payee(settings: dict[str, Any]) -> str:
     return str(val or "").strip()
 
 
-def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, target_id: str, amount: int = 2) -> dict[str, Any]:
-    amt = max(1, min(50, int(amount or 2)))
+def send_encourage_tip(
+    db: Database,
+    user: dict[str, Any],
+    target_type: str,
+    target_id: str,
+    amount: int = 2,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    raw_type = str(target_type or "").strip().lower()
+    tid = str(target_id or "").strip()
+    if not tid:
+        raise ServiceError("缺少赞赏目标 ID")
+
     uid = int(user["id"])
+    if user.get("status") not in (None, "", "active"):
+        raise ServiceError("账号状态异常，无法进行赞赏", status=403)
+
     now = utc_now_iso()
+    clean_req_id = str(request_id or "").strip() or None
 
     with db.transaction() as tx:
+        # Idempotency check with request_id
+        if clean_req_id:
+            dup = tx.execute(
+                "SELECT id FROM ledgers WHERE user_id = ? AND event_key = ?",
+                (uid, f"tip_out_{clean_req_id}"),
+            ).fetchone()
+            if dup:
+                bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+                cur_bal = int(bal_row["balance"]) if bal_row else 0
+                return {"ok": True, "credits": cur_bal, "amount": int(amount or 2), "duplicate": True}
+
+        # Resolve binding if target is topic (Rule 5: "正式绑定作品/资源的帖子只显示对应的「作品赞赏/资源赞赏」...")
+        if raw_type == "topic":
+            mapping = tx.execute(
+                "SELECT kind, target_id FROM curation_resource_topics WHERE topic_id = ?",
+                (tid,),
+            ).fetchone()
+            if mapping:
+                if mapping["kind"] == "work":
+                    raw_type = "work"
+                    tid = str(mapping["target_id"])
+                elif mapping["kind"] in ("style", "layout"):
+                    raw_type = "asset"
+                    tid = str(mapping["target_id"])
+
         is_official = False
         target = None
-        if target_type == "work":
-            row = tx.execute("SELECT id, title, author_username, author_name FROM works WHERE id = ?", (target_id,)).fetchone()
-            target = dict(row) if row else None
-        elif target_type == "asset":
-            clean_code = str(target_id or "").strip().upper().lstrip("#")
+
+        if raw_type == "topic":
+            if int(amount or 0) != 2:
+                raise ServiceError("帖子赞赏金额固定为 2✦", status=400, code="invalid_tip_amount")
+            amt = 2
+
+            t_row = tx.execute("SELECT id, title, author_username, author_name, price, status FROM forum_topics WHERE id = ?", (tid,)).fetchone()
+            if not t_row or t_row["status"] != "published":
+                raise ServiceError("帖子不存在或不可访问", status=404)
+
+            tf, tp = _seed_filter("id", "topics")
+            t_valid = tx.execute(f"SELECT 1 FROM forum_topics WHERE id = ? AND {tf}", (tid, *tp)).fetchone()
+            if not t_valid:
+                raise ServiceError("帖子不存在或不可访问", status=404)
+
+            if int(t_row["price"] or 0) > 0:
+                raise ServiceError("付费帖不支持赞赏", status=400, code="paid_topic_no_tip")
+
+            if t_row["author_username"] == user["username"]:
+                raise ServiceError("不能给自己赞赏积分哦", status=400, code="self_tip_not_allowed")
+
+            target = {
+                "id": tid,
+                "title": t_row["title"],
+                "author_username": t_row["author_username"],
+                "author_name": t_row["author_name"],
+            }
+
+        elif raw_type == "work":
+            amt = max(1, min(50, int(amount or 2)))
+            w_row = tx.execute("SELECT id, title, author_username, author_name, status FROM works WHERE id = ?", (tid,)).fetchone()
+            if not w_row or w_row["status"] != "published":
+                raise ServiceError("作品不存在或不可访问", status=404)
+
+            wf, wp = _seed_filter("id", "works")
+            w_valid = tx.execute(f"SELECT 1 FROM works WHERE id = ? AND {wf}", (tid, *wp)).fetchone()
+            if not w_valid:
+                raise ServiceError("作品不存在或不可访问", status=404)
+
+            if w_row["author_username"] == user["username"]:
+                raise ServiceError("不能给自己赞赏积分哦", status=400, code="self_tip_not_allowed")
+
+            target = dict(w_row)
+
+        elif raw_type == "asset":
+            amt = max(1, min(50, int(amount or 2)))
+            clean_code = str(tid or "").strip().upper().lstrip("#")
             from . import resource_registry
             cat_res = resource_registry.resolve(tx, clean_code, viewer=user, purpose="tip")
             if not cat_res:
@@ -2866,6 +2973,7 @@ def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, tar
             if cat_res.get("source") == "pending" or cat_res.get("status") in ("pending", "changes_requested"):
                 raise ServiceError("未收录资源不接受赞赏", status=400)
             clean_code = cat_res["code"]
+            tid = clean_code
             row = tx.execute("SELECT code AS id, name AS title, author_username, author_name, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (clean_code, clean_code)).fetchone()
             target = dict(row) if row else None
             if not target:
@@ -2882,6 +2990,9 @@ def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, tar
                     raise ServiceError("目标不存在", status=404)
             elif target.get("source_type") in ("official", "exclusive") or not target.get("author_username"):
                 is_official = True
+            else:
+                if target["author_username"] == user["username"]:
+                    raise ServiceError("不能给自己赞赏积分哦", status=400, code="self_tip_not_allowed")
         else:
             raise ServiceError("不支持的赞赏类型")
 
@@ -2907,70 +3018,103 @@ def send_encourage_tip(db: Database, user: dict[str, Any], target_type: str, tar
             if payee_uid == uid:
                 raise ServiceError("不能赞赏自己管理的官方资源", status=400)
 
-            new_bal, _ = apply_wallet_delta(
+            event_key_out = f"tip_out_{clean_req_id}" if clean_req_id else None
+            new_bal, applied = apply_wallet_delta(
                 tx,
                 uid,
                 -amt,
                 "tip_official_out",
                 f"🎁 赞赏官方资源《{target['title']}》（{tid}）",
-                ref_type=target_type,
+                event_key=event_key_out,
+                ref_type=raw_type,
                 ref_id=tid,
             )
+            if not applied:
+                return {"ok": True, "credits": new_bal, "amount": amt, "duplicate": True}
 
+            event_key_in = f"tip_in_{clean_req_id}" if clean_req_id else None
             apply_wallet_delta(
                 tx,
                 payee_uid,
                 amt,
                 "tip_official_in",
                 f"🎁 收到 @{user['display_name']} 对官方资源《{target['title']}》（{tid}）的赞赏",
-                ref_type=target_type,
+                event_key=event_key_in,
+                ref_type=raw_type,
                 ref_id=tid,
             )
 
             tx.execute("UPDATE catalog_assets SET cheers = cheers + 3, tips = tips + ? WHERE code = ? OR UPPER(code) = ?", (amt, tid, tid))
+        else:
+            # Community target (work, topic, or asset)
+            if target["author_username"] == user["username"]:
+                raise ServiceError("不能给自己赞赏积分哦", status=400, code="self_tip_not_allowed")
 
-            tx.execute(
-                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-                (uid, target_type, tid, now),
+            event_key_out = f"tip_out_{clean_req_id}" if clean_req_id else None
+            new_bal, applied = apply_wallet_delta(
+                tx,
+                uid,
+                -amt,
+                "tip_out",
+                f"🎁 赞赏鼓励 @{target['author_name']} 的《{target['title']}》（100% 直达作者）",
+                event_key=event_key_out,
+                ref_type=raw_type,
+                ref_id=tid,
             )
-            return {"ok": True, "credits": new_bal, "amount": amt}
+            if not applied:
+                return {"ok": True, "credits": new_bal, "amount": amt, "duplicate": True}
 
-        # Community resources
-        if target["author_username"] == user["username"]:
-            raise ServiceError("不能给自己赞赏积分哦", status=400)
+            author_row = tx.execute("SELECT id FROM users WHERE username = ?", (target["author_username"],)).fetchone()
+            if not author_row:
+                raise ServiceError("作者账号不存在或已注销", status=404)
 
-        new_bal, _ = apply_wallet_delta(
-            tx,
-            uid,
-            -amt,
-            "tip_out",
-            f"🎁 赞赏鼓励 @{target['author_name']} 的《{target['title']}》（100% 直达作者）",
-            ref_type=target_type,
-            ref_id=tid,
-        )
-
-        author_row = tx.execute("SELECT id FROM users WHERE username = ?", (target["author_username"],)).fetchone()
-        if author_row:
+            event_key_in = f"tip_in_{clean_req_id}" if clean_req_id else None
             apply_wallet_delta(
                 tx,
                 int(author_row["id"]),
                 amt,
                 "tip_in",
                 f"🎁 收到 @{user['display_name']} 对《{target['title']}》的赞赏鼓励",
-                ref_type=target_type,
+                event_key=event_key_in,
+                ref_type=raw_type,
                 ref_id=tid,
             )
 
-        if target_type == "work":
-            tx.execute("UPDATE works SET cheers = cheers + 3, tips = tips + ? WHERE id = ?", (amt, tid))
-        else:
-            tx.execute("UPDATE catalog_assets SET cheers = cheers + 3, tips = tips + ? WHERE code = ?", (amt, tid))
+            if raw_type == "work":
+                tx.execute("UPDATE works SET cheers = cheers + 3, tips = tips + ? WHERE id = ?", (amt, tid))
+            elif raw_type == "asset":
+                tx.execute("UPDATE catalog_assets SET cheers = cheers + 3, tips = tips + ? WHERE code = ? OR UPPER(code) = ?", (amt, tid, tid))
 
+        # Attached like (Rule 4: "赞赏附带一次点赞；已经点赞过不重复加，之后再次赞赏也不重复加赞")
+        if raw_type == "work":
+            itype = "like_work"
+        elif raw_type == "topic":
+            itype = "like_topic"
+        else:
+            norm_asset = _infer_asset_kind(tid)
+            itype = f"like_{norm_asset}"
+
+        already_liked = tx.execute(
+            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ''",
+            (uid, itype, tid),
+        ).fetchone()
+        if not already_liked:
+            tx.execute(
+                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
+                (uid, itype, tid, now),
+            )
+            if raw_type == "work":
+                tx.execute("UPDATE works SET likes = likes + 1 WHERE id = ?", (tid,))
+            elif raw_type == "topic":
+                tx.execute("UPDATE forum_topics SET likes = likes + 1 WHERE id = ?", (tid,))
+
+        # Also maintain generic interaction record for cheers
         tx.execute(
             "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-            (uid, target_type, tid, now),
+            (uid, raw_type, tid, now),
         )
-    return {"ok": True, "credits": new_bal, "amount": amt}
+
+        return {"ok": True, "credits": new_bal, "amount": amt, "targetType": raw_type, "targetId": tid}
 
 
 def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, target_id: str) -> dict[str, Any]:

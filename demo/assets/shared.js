@@ -1871,12 +1871,14 @@
       targetObj.tips = (targetObj.tips || 0) + amount;
       notifyAll();
 
+      const reqId = `tip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       apiJson("/api/interactions/tip", {
         method: "POST",
         body: {
-          targetType: targetType === "work" ? "work" : "asset",
+          targetType: targetType === "work" ? "work" : targetType === "topic" ? "topic" : "asset",
           targetId: id,
-          amount
+          amount,
+          requestId: reqId
         }
       })
         .then((res) => {

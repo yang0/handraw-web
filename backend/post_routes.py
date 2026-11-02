@@ -284,7 +284,7 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
     unlocked_set = forum_resources._unlocked(handler.db, user)
 
     # Reuse services._serialize_topic for canonical topic serialization
-    topic_dict = S._serialize_topic(t_row, {}, unlocked_set, user)
+    topic_dict = S._serialize_topic(t_row, {}, unlocked_set, user, conn=conn)
     topic_dict["status"] = t_row["status"]
     if "status_source" in t_row.keys():
         topic_dict["status_source"] = t_row["status_source"]
@@ -312,6 +312,7 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
         }
         topic_dict["likes"] = w_likes
         topic_dict["favorites"] = w_favorites
+        topic_dict["tips"] = int(w_row["tips"] or 0)
         topic_dict["workId"] = m_target
     elif mapping["kind"] in ("style", "layout"):
         m_kind = str(mapping["kind"])

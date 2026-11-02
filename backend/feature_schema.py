@@ -60,10 +60,10 @@ FEATURE_MIGRATIONS = [
             strftime('%Y-%m-%dT%H:%M:%SZ','now'));
     END;
     CREATE TRIGGER IF NOT EXISTS notify_wallet_income AFTER INSERT ON ledgers
-    WHEN NEW.delta > 0 AND NEW.kind IN ('unlock_income','tip_income','bounty_reward','studio_refund','refund')
+    WHEN NEW.delta > 0 AND NEW.kind IN ('unlock_income','tip_income','bounty_reward','studio_refund','refund','tip_in','tip_official_in')
     BEGIN
         INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at)
-        VALUES(NEW.user_id,'wallet',NEW.reason,'wallet','',NEW.created_at);
+        VALUES(NEW.user_id,'wallet',NEW.reason,CASE WHEN NEW.ref_type != '' THEN NEW.ref_type ELSE 'wallet' END,NEW.ref_id,NEW.created_at);
     END;
     CREATE TRIGGER IF NOT EXISTS notify_generation_failure AFTER UPDATE OF status ON studio_generations
     WHEN NEW.status IN ('refunded','failed') AND NEW.status != OLD.status
@@ -75,6 +75,18 @@ FEATURE_MIGRATIONS = [
         SELECT id,'system','有生图任务失败，需要检查网关与退款记录','generation',NEW.id,
             strftime('%Y-%m-%dT%H:%M:%SZ','now') FROM users WHERE role='admin' AND status='active';
     END;
+    """
+    ),
+    (72, "072_tip_notifications_and_indexes", """
+    DROP TRIGGER IF EXISTS notify_wallet_income;
+    CREATE TRIGGER notify_wallet_income AFTER INSERT ON ledgers
+    WHEN NEW.delta > 0 AND NEW.kind IN ('unlock_income','tip_income','bounty_reward','studio_refund','refund','tip_in','tip_official_in')
+    BEGIN
+        INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at)
+        VALUES(NEW.user_id,'wallet',NEW.reason,CASE WHEN NEW.ref_type != '' THEN NEW.ref_type ELSE 'wallet' END,NEW.ref_id,NEW.created_at);
+    END;
+
+    CREATE INDEX IF NOT EXISTS idx_ledgers_tips_lookup ON ledgers(kind, ref_type, ref_id);
     """
     ),
 ]
