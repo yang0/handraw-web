@@ -323,15 +323,15 @@
               return '<figure class="curation-thumb-wrap">' + imgTag(src, "预览") +
                 '<button type="button" class="curation-x" data-act="delimg" data-idx="0" data-i="' + i + '" aria-label="删除图片">×</button></figure>';
             }).join("") + '</div>' +
-            '<label class="curation-field">' +
+            '<div class="curation-field">' +
               '<span class="curation-field-label">作品图片<span class="curation-field-err" data-err-for="file"></span></span>' +
               '<div class="curation-dropzone" data-dropzone="work" data-target="file" data-idx="0" tabindex="0" role="region" aria-label="作品图片上传区">' +
-                '<input type="file" accept="image/*" multiple data-act="file" data-idx="0" class="curation-file-input" aria-label="上传作品图片">' +
+                '<input type="file" accept="image/*" multiple data-act="file" data-idx="0" class="curation-file-input" tabindex="-1" aria-hidden="true">' +
                 '<div class="curation-dropzone-body">' +
                   '<div class="curation-dropzone-icon" aria-hidden="true">' +
                     '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg>' +
                   '</div>' +
-                  '<span class="curation-dropzone-btn">选择图片</span>' +
+                  '<button type="button" class="curation-dropzone-btn" data-act="browse" data-target="file" data-idx="0">选择图片</button>' +
                   '<p class="curation-dropzone-desc">' +
                     '<span class="curation-dropzone-desc-desk">选择、拖入或粘贴图片，最多 9 张</span>' +
                     '<span class="curation-dropzone-desc-mob">点击选择图片，最多 9 张</span>' +
@@ -339,7 +339,7 @@
                   '<div class="curation-dropzone-target" aria-live="polite" hidden></div>' +
                 '</div>' +
               '</div>' +
-            '</label>' +
+            '</div>' +
             '<label class="curation-field">生图提示词<span class="curation-field-err" data-err-for="prompt"></span>' +
               '<textarea data-act="prompt" data-idx="0" rows="5" maxlength="20000" placeholder="粘贴实际发给模型的完整提示词">' + esc(it.prompt || "") + '</textarea>' +
             '</label>' +
@@ -378,15 +378,15 @@
               '<input data-act="name" data-idx="0" value="' + esc(it.name || "") + '" maxlength="80" placeholder="如：江南淡墨">' +
             '</label>' +
             '<div class="curation-cover">' +
-              '<label class="curation-field">' +
+              '<div class="curation-field">' +
                 '<span class="curation-field-label">封面图 · 必填<span class="curation-field-err" data-err-for="cover"></span></span>' +
                 '<div class="curation-dropzone" data-dropzone="cover" data-target="cover" data-idx="0" tabindex="0" role="region" aria-label="封面上传区">' +
-                  '<input type="file" accept="image/*" data-act="cover" data-idx="0" class="curation-file-input" aria-label="上传封面图">' +
+                  '<input type="file" accept="image/*" data-act="cover" data-idx="0" class="curation-file-input" tabindex="-1" aria-hidden="true">' +
                   '<div class="curation-dropzone-body">' +
                     '<div class="curation-dropzone-icon" aria-hidden="true">' +
                       '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg>' +
                     '</div>' +
-                    '<span class="curation-dropzone-btn">选择图片</span>' +
+                    '<button type="button" class="curation-dropzone-btn" data-act="browse" data-target="cover" data-idx="0">选择图片</button>' +
                     '<p class="curation-dropzone-desc">' +
                       '<span class="curation-dropzone-desc-desk">选择、拖入或粘贴图片；自动居中裁为正方形</span>' +
                       '<span class="curation-dropzone-desc-mob">点击选择图片；自动居中裁为正方形</span>' +
@@ -394,20 +394,20 @@
                     '<div class="curation-dropzone-target" aria-live="polite" hidden></div>' +
                   '</div>' +
                 '</div>' +
-              '</label>' +
+              '</div>' +
               coverPreviewHtml +
               '<p class="curation-help">' + esc(coverHelpText) + '</p>' +
             '</div>' +
             '<div class="curation-examples">' +
-              '<label class="curation-field">' +
+              '<div class="curation-field">' +
                 '<span class="curation-field-label">示例图 · 可选，0–9 张<span class="curation-field-err" data-err-for="file"></span></span>' +
                 '<div class="curation-dropzone" data-dropzone="examples" data-target="file" data-idx="0" tabindex="0" role="region" aria-label="示例图上传区">' +
-                  '<input type="file" accept="image/*" multiple data-act="file" data-idx="0" class="curation-file-input" aria-label="上传示例图">' +
+                  '<input type="file" accept="image/*" multiple data-act="file" data-idx="0" class="curation-file-input" tabindex="-1" aria-hidden="true">' +
                   '<div class="curation-dropzone-body">' +
                     '<div class="curation-dropzone-icon" aria-hidden="true">' +
                       '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg>' +
                     '</div>' +
-                    '<span class="curation-dropzone-btn">选择图片</span>' +
+                    '<button type="button" class="curation-dropzone-btn" data-act="browse" data-target="file" data-idx="0">选择图片</button>' +
                     '<p class="curation-dropzone-desc">' +
                       '<span class="curation-dropzone-desc-desk">选择、拖入或粘贴图片，比例不限</span>' +
                       '<span class="curation-dropzone-desc-mob">点击选择图片，比例不限</span>' +
@@ -415,7 +415,7 @@
                     '<div class="curation-dropzone-target" aria-live="polite" hidden></div>' +
                   '</div>' +
                 '</div>' +
-              '</label>' +
+              '</div>' +
               examplesThumbHtml +
             '</div>' +
             '<label class="curation-field">定义<span class="curation-field-err" data-err-for="definition"></span>' +
@@ -523,7 +523,7 @@
       }
       model.requestId = uuid();
 
-      var label = t.closest("label");
+      var label = t.closest(".curation-field") || t.closest("label");
       if (label) {
         var errSpan = label.querySelector('[data-err-for="' + act + '"]');
         if (errSpan) errSpan.textContent = "";
@@ -1136,7 +1136,7 @@
       var errors = validate();
       if (errors.length > 0) {
         errors.forEach(function (err) {
-          var label = err.el ? err.el.closest("label") : null;
+          var label = err.el ? (err.el.closest(".curation-field") || err.el.closest("label")) : null;
           var errSpan = label ? label.querySelector('[data-err-for="' + err.act + '"]') : null;
           if (errSpan) {
             errSpan.textContent = err.message;
@@ -1267,10 +1267,27 @@
           setActiveTarget(tType);
         }
 
-        dz.addEventListener("click", onActivate);
+        dz.addEventListener("click", function (e) {
+          if (e.target && e.target.closest && e.target.closest(".curation-dropzone-btn")) {
+            return;
+          }
+          onActivate();
+        });
         dz.addEventListener("focusin", onActivate);
 
+        var btn = dz.querySelector(".curation-dropzone-btn");
         var input = dz.querySelector("input[type=file]");
+
+        if (btn) {
+          btn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            onActivate();
+            if (input && typeof input.click === "function") {
+              input.click();
+            }
+          });
+        }
+
         if (input) {
           input.addEventListener("focus", onActivate);
           input.addEventListener("click", onActivate);

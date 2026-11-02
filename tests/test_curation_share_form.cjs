@@ -1422,26 +1422,51 @@ async function runAllTests() {
     const exFieldLabel = harness.root.querySelector(".curation-examples .curation-field-label");
     assert.ok(exFieldLabel && exFieldLabel.textContent.includes("示例图 · 可选，0–9 张"), "Examples field title matches '示例图 · 可选，0–9 张'");
 
-    // 20.2: 隐藏原生控件但保留 input
+    // 20.2: 隐藏原生控件但保留 input，退出 Tab 序，改用真正 button
     const coverInput = coverDz.querySelector('input[type="file"][data-act="cover"]');
     assert.ok(coverInput, "Cover has real input[type=file]");
     assert.ok(coverInput.classList.contains("curation-file-input"), "Cover input has curation-file-input class");
+    assert.equal(coverInput.getAttribute("tabindex"), "-1", "Cover input has tabindex='-1'");
+    assert.equal(coverBtn.tagName.toLowerCase(), "button", "Cover btn is a real <button>");
+    assert.equal(coverBtn.getAttribute("type"), "button", "Cover btn type is button");
+
     const exInput = examplesDz.querySelector('input[type="file"][data-act="file"]');
     assert.ok(exInput && exInput.getAttribute("multiple") !== null, "Examples has real input[type=file][multiple]");
+    assert.equal(exInput.getAttribute("tabindex"), "-1", "Examples input has tabindex='-1'");
+    assert.equal(exBtn.tagName.toLowerCase(), "button", "Examples btn is a real <button>");
+    assert.equal(exBtn.getAttribute("type"), "button", "Examples btn type is button");
 
-    // 20.3: 点击/聚焦高亮当前粘贴目标与快捷键提示
+    // 20.3: 点空白区只激活目标不触发文件框；点按钮才触发；选定目标不因点按钮而丢失
+    let coverInputClickCount = 0;
+    coverInput.click = () => { coverInputClickCount++; };
+
     coverDz.click();
+    assert.equal(coverInputClickCount, 0, "Clicking blank cover dropzone does NOT trigger input.click()");
     assert.ok(coverDz.classList.contains("curation-dropzone-active"), "Cover dropzone becomes active on click");
     assert.ok(!examplesDz.classList.contains("curation-dropzone-active"), "Examples dropzone is not active when cover is clicked");
     const coverTargetEl = coverDz.querySelector(".curation-dropzone-target");
     assert.ok(coverTargetEl && coverTargetEl.textContent.includes("当前粘贴到：封面"), "Cover target indicates '当前粘贴到：封面'");
     assert.ok(coverTargetEl && coverTargetEl.textContent.includes("Ctrl+V"), "Cover target includes desktop shortcut hint");
 
+    coverBtn.click();
+    assert.equal(coverInputClickCount, 1, "Clicking '选择图片' button triggers input.click()");
+    assert.ok(coverDz.classList.contains("curation-dropzone-active"), "Cover dropzone remains active after clicking button");
+    assert.ok(coverTargetEl && coverTargetEl.textContent.includes("当前粘贴到：封面"), "Cover target preserved when clicking button");
+
+    let exInputClickCount = 0;
+    exInput.click = () => { exInputClickCount++; };
+
     examplesDz.click();
+    assert.equal(exInputClickCount, 0, "Clicking blank examples dropzone does NOT trigger input.click()");
     assert.ok(examplesDz.classList.contains("curation-dropzone-active"), "Examples dropzone becomes active on click");
     assert.ok(!coverDz.classList.contains("curation-dropzone-active"), "Cover dropzone deactivated when examples is clicked");
     const exTargetEl = examplesDz.querySelector(".curation-dropzone-target");
     assert.ok(exTargetEl && exTargetEl.textContent.includes("当前粘贴到：示例图"), "Examples target indicates '当前粘贴到：示例图'");
+
+    exBtn.click();
+    assert.equal(exInputClickCount, 1, "Clicking examples '选择图片' button triggers input.click()");
+    assert.ok(examplesDz.classList.contains("curation-dropzone-active"), "Examples dropzone remains active after clicking button");
+    assert.ok(exTargetEl && exTargetEl.textContent.includes("当前粘贴到：示例图"), "Examples target preserved when clicking button");
 
     // 20.4: 明确选中封面才允许替换已有封面
     coverDz.click();
@@ -1512,19 +1537,32 @@ async function runAllTests() {
     const lastUpload = harness.apiCalls[harness.apiCalls.length - 1];
     assert.ok(lastUpload && lastUpload.url === "/api/uploads", "Drop triggered uploadFiles");
 
-    // 20.6: 作品模式下的虚线上传区
+    // 20.6: 作品模式下的虚线上传区与独立按钮触发
     const harnessWork = createHarness();
     harnessWork.Curation.render(harnessWork.root, { kind: "work" });
     const workDz = harnessWork.root.querySelector('.curation-dropzone[data-dropzone="work"]');
     assert.ok(workDz, "Work form has [data-dropzone=work]");
     const workBtn = workDz.querySelector(".curation-dropzone-btn");
     assert.equal(workBtn ? workBtn.textContent : "", "选择图片", "Work has '选择图片' button");
+    assert.equal(workBtn.tagName.toLowerCase(), "button", "Work btn is a real <button>");
+    assert.equal(workBtn.getAttribute("type"), "button", "Work btn type is button");
+    const workInput = workDz.querySelector('input[type="file"][data-act="file"]');
+    assert.equal(workInput.getAttribute("tabindex"), "-1", "Work input has tabindex='-1'");
     const workDeskDesc = workDz.querySelector(".curation-dropzone-desc-desk");
     assert.ok(workDeskDesc && workDeskDesc.textContent.includes("最多 9 张"), "Work desktop desc matches '最多 9 张'");
+
+    let workInputClickCount = 0;
+    workInput.click = () => { workInputClickCount++; };
     workDz.click();
+    assert.equal(workInputClickCount, 0, "Clicking work dropzone blank area does NOT trigger input.click()");
     assert.ok(workDz.classList.contains("curation-dropzone-active"), "Work dropzone becomes active on click");
     const workTargetEl = workDz.querySelector(".curation-dropzone-target");
     assert.ok(workTargetEl && workTargetEl.textContent.includes("当前粘贴到：作品图片"), "Work target indicates '当前粘贴到：作品图片'");
+
+    workBtn.click();
+    assert.equal(workInputClickCount, 1, "Clicking work '选择图片' button triggers input.click()");
+    assert.ok(workDz.classList.contains("curation-dropzone-active"), "Work dropzone remains active after clicking button");
+    assert.ok(workTargetEl && workTargetEl.textContent.includes("当前粘贴到：作品图片"), "Work target preserved when clicking button");
 
     console.log("✓ Test 20 Passed: Dashed dropzones, discoverability, active targets, and drag-and-drop verified.");
   }
