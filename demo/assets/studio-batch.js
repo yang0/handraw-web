@@ -797,6 +797,7 @@
                 </div>
 
                 <div class="batch-btn-wrap">
+                  ${busy ? `<span class="batch-busy-hint">任务处理中，暂不能清空或再次生成</span>` : ""}
                   <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
                   ${busy ? `
                     <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止"}</button>
@@ -1962,15 +1963,32 @@
       const btnReset = root.querySelector("#batch-btn-reset");
       if (btnReset) {
         btnReset.onclick = () => {
-          if (self.context?.busy) return;
+          const currentBusy = typeof self.actions?.isBusy === "function"
+            ? self.actions.isBusy()
+            : Boolean(self.context?.busy || self.progressState?.busy);
+          if (currentBusy) {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("任务处理中，暂不能清空或再次生成");
+            return;
+          }
           const ok = typeof window.confirm === "function"
-            ? window.confirm("清空后当前表单的所有设置都会恢复默认，已生成的图片不受影响。确定清空吗？")
+            ? window.confirm("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？")
             : true;
           if (!ok) return;
+
+          if (typeof self.actions?.isBusy === "function" && self.actions.isBusy()) {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("任务处理中，暂不能清空或再次生成");
+            return;
+          }
 
           ctrl.data.mode = "graphic-text";
           ctrl.data.ratio = "3:4";
           ctrl.data.count = 1;
+          ctrl.data.status = "idle";
+          delete ctrl.data.error;
+          delete ctrl.data.activeBatchId;
+          ctrl.data.elapsedSec = 0;
 
           skill.data.fusion = false;
           skill.data.style1 = "";
@@ -1999,6 +2017,9 @@
           loop.data.batchLayoutReq = "";
           loop.data.batchRows = [];
           loop.data.promptListText = "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集";
+          loop.data.status = "idle";
+          loop.data.currentStep = 0;
+          delete loop.data.activeBatchId;
 
           const curAsset = parts.asset || bp?.asset;
           if (curAsset?.data) {
@@ -2008,6 +2029,38 @@
             self.actions.ensureAssetItems([]);
           }
 
+          if (typeof self.actions?.clearWorkspaceResults === "function") {
+            self.actions.clearWorkspaceResults(ctrl.id);
+          } else {
+            const graph = self.context?.graph;
+            if (graph && Array.isArray(graph.edges) && Array.isArray(graph.nodes)) {
+              const outEdges = graph.edges.filter((e) => e.from === ctrl.id);
+              const outIds = new Set(outEdges.map((e) => e.to));
+              graph.nodes.forEach((n) => {
+                if (outIds.has(n.id) && n.type === "output_display") {
+                  n.data.items = [];
+                  n.data.status = "idle";
+                  delete n.data.error;
+                  delete n.data.pendingTaskId;
+                  delete n.data.pendingRequestId;
+                  delete n.data.activeBatchId;
+                  delete n.data.selectedIdx;
+                  delete n.data.previewIdx;
+                  delete n.data.downloadUrl;
+                  n.data.pendingRequestIds = {};
+                  n.data.pendingSpec = {};
+                  n.data.elapsedSec = 0;
+                  if (n.data.kind === "batch_gallery") n.data.page = 1;
+                }
+              });
+            }
+          }
+
+          if (Array.isArray(self.context?.results)) {
+            self.context.results = [];
+          }
+          self.progressState = null;
+          self.lastSummary = "";
           self.planNotice = "";
           markDirty();
         };
@@ -2017,9 +2070,12 @@
       const btnStart = root.querySelector("#batch-btn-start");
       if (btnStart) {
         btnStart.onclick = async () => {
-          if (self.context?.busy || self.progressState?.busy) {
+          const currentBusy = typeof self.actions?.isBusy === "function"
+            ? self.actions.isBusy()
+            : Boolean(self.context?.busy || self.progressState?.busy);
+          if (currentBusy) {
             const S = global.HANDRAW_SHARED;
-            if (S?.toast) S.toast("已有任务正在生成中，请等待完成或停止后再开始新批次");
+            if (S?.toast) S.toast("任务处理中，暂不能清空或再次生成");
             return;
           }
           const currentIters = self.resolveIterations();

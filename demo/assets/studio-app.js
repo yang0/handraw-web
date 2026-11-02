@@ -3652,6 +3652,34 @@
     });
   }
 
+  function clearControlWorkspaceResults(ctrlId) {
+    const ctrl = getNodeById(ctrlId);
+    if (!ctrl) return;
+    ctrl.data.status = "idle";
+    delete ctrl.data.error;
+    delete ctrl.data.activeBatchId;
+    ctrl.data.elapsedSec = 0;
+
+    const displays = getDownstreamDisplayNodes(ctrl.id);
+    for (const dn of displays) {
+      dn.data.items = [];
+      dn.data.status = "idle";
+      delete dn.data.error;
+      delete dn.data.pendingTaskId;
+      delete dn.data.pendingRequestId;
+      delete dn.data.activeBatchId;
+      delete dn.data.selectedIdx;
+      delete dn.data.previewIdx;
+      delete dn.data.downloadUrl;
+      dn.data.pendingRequestIds = {};
+      dn.data.pendingSpec = {};
+      dn.data.elapsedSec = 0;
+      if (dn.data.kind === "batch_gallery") {
+        dn.data.page = 1;
+      }
+    }
+  }
+
   function removeOrphanedDisplayNode(dispNode, parentId = null) {
     if (!dispNode || dispNode.type !== "output_display") return;
     const hasDownstreamChain = CS.graph.edges.some((e) => e.from === dispNode.id);
@@ -15032,9 +15060,16 @@
         bp = getBatchParts(tab?.graph || CS.graph);
       }
       if (window.HandrawBatchCreate && bp) {
-        const busy = Boolean(
-          bp && (bp.ctrl.data.status === "generating" || bp.loop.data.status === "running" || (quickBusy?.id === bp.ctrl.id && quickBusy.scope === activeCacheScope))
-        );
+        const isBatchCurrentBusy = () => {
+          if (!bp) return false;
+          if (bp.ctrl.data.status === "generating" || bp.loop.data.status === "running") return true;
+          if (quickBusy?.id === bp.ctrl.id && quickBusy.scope === activeCacheScope) return true;
+          const downstream = getDownstreamDisplayNodes(bp.ctrl.id);
+          if (downstream.some((d) => d.data?.status === "generating" || d.data?.pendingTaskId || d.data?.pendingRequestId)) return true;
+          if (Array.isArray(CS.pendingTasks) && CS.pendingTasks.some((t) => t.ctrlId === bp.ctrl.id || t.tabId === CS.activeTabId)) return true;
+          return false;
+        };
+        const busy = isBatchCurrentBusy();
         const displays = bp ? getDownstreamDisplayNodes(bp.ctrl.id) : [];
         const results = displays.flatMap((dn) =>
           (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
@@ -15084,15 +15119,24 @@
             statusText: busy ? "正在批量生成中…" : ""
           },
           {
+            isBusy: isBatchCurrentBusy,
+            clearWorkspaceResults: (ctrlId) => {
+              clearControlWorkspaceResults(ctrlId || bp.ctrl.id);
+              if (bp.loop) {
+                bp.loop.data.status = "idle";
+                bp.loop.data.currentStep = 0;
+                delete bp.loop.data.activeBatchId;
+              }
+            },
             markDirtyAndRender,
             ensureAssetItems: (items) => ensureBatchAssetNode(items),
             openAssetPicker: ({ kind, field, current, onPick, title } = {}) => {
-              if (!bp || busy) return;
+              if (!bp || isBatchCurrentBusy()) return;
               const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
               openSkillFieldPickerModal(bp.skill, targetField, { current, onPick, title });
             },
             openReferencePicker: (opts = {}) => {
-              if (!bp || busy) return;
+              if (!bp || isBatchCurrentBusy()) return;
               ensureBatchAssetNode();
               if (opts && typeof opts === "object" && typeof opts.onConfirm === "function") {
                 openAssetPickerModal(opts, {
@@ -15108,7 +15152,7 @@
               }
             },
             openLoopMultiPicker: (kind) => {
-              if (!bp || busy) return;
+              if (!bp || isBatchCurrentBusy()) return;
               openLoopMultiPickerModal(bp.loop, kind);
             },
             openImageLightbox: (url, title) => {
@@ -15118,7 +15162,7 @@
               openPublishModalForDisplay(node);
             },
             run: async () => {
-              if (!bp || busy) return;
+              if (!bp || isBatchCurrentBusy()) return;
               const scope = activeCacheScope;
               quickBusy = { id: bp.ctrl.id, scope };
               renderQuickStart();
@@ -15130,7 +15174,7 @@
               }
             },
             runSingleRow: async (rowIndex) => {
-              if (!bp || busy) return;
+              if (!bp || isBatchCurrentBusy()) return;
               const scope = activeCacheScope;
               quickBusy = { id: bp.ctrl.id, scope };
               renderQuickStart();
@@ -15157,7 +15201,16 @@
     }
 
     if (window.HandrawMakeImage) {
-      const busy = Boolean(p && (p.ctrl.data.status === "generating" || (quickBusy?.id === p.ctrl.id && quickBusy.scope === activeCacheScope)));
+      const isCurrentBusy = () => {
+        if (!p) return false;
+        if (p.ctrl.data.status === "generating") return true;
+        if (quickBusy?.id === p.ctrl.id && quickBusy.scope === activeCacheScope) return true;
+        const displays = getDownstreamDisplayNodes(p.ctrl.id);
+        if (displays.some((d) => d.data?.status === "generating" || d.data?.pendingTaskId || d.data?.pendingRequestId)) return true;
+        if (Array.isArray(CS.pendingTasks) && CS.pendingTasks.some((t) => t.ctrlId === p.ctrl.id || t.tabId === CS.activeTabId)) return true;
+        return false;
+      };
+      const busy = isCurrentBusy();
       const displays = p ? getDownstreamDisplayNodes(p.ctrl.id) : [];
       const results = displays.flatMap((dn) => (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
         id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn
@@ -15209,15 +15262,18 @@
         busy,
         statusText
       }, {
+        isBusy: isCurrentBusy,
+        clearWorkspaceResults: (ctrlId) => clearControlWorkspaceResults(ctrlId || p.ctrl.id),
         markDirtyAndRender,
         persistDraft,
         ensureAssetItems: (items) => ensureAssetNode(items),
         openAssetPicker: ({ kind, field, currentId, onSelect }) => {
-          if (!p || busy) return;
+          if (!p || isCurrentBusy()) return;
           const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
           openSkillFieldPickerModal(p.skill, targetField);
         },
         openReferencePicker: ({ currentRefs, onConfirm }) => {
+          if (!p || isCurrentBusy()) return;
           openAssetPickerModal({
             currentRefs,
             onConfirm: (selectedItems) => {
@@ -15229,7 +15285,7 @@
           openPublishModalForDisplay(node);
         },
         run: async () => {
-          if (!p || busy) return;
+          if (!p || isCurrentBusy()) return;
           const topic = String(p.text.data.text || "").trim();
           if (!topic) {
             toast("请先填写创作主题");
@@ -15952,6 +16008,7 @@
   }
 
   window.HANDRAW_STUDIO = window.HANDRAW_STUDIO || {};
+  window.HANDRAW_STUDIO.clearControlWorkspaceResults = clearControlWorkspaceResults;
   window.HANDRAW_STUDIO.cancelActiveBatchGeneration = cancelActiveBatchGeneration;
   window.HANDRAW_STUDIO.getCacheScope = () => activeCacheScope;
   window.HANDRAW_STUDIO.getEngineMode = () => CS.engineMode;

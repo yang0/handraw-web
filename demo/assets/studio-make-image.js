@@ -310,7 +310,7 @@
 
       const currentPrompt = this.getPromptPreview();
       const results = Array.isArray(this.context?.results) ? this.context.results : [];
-      const busy = Boolean(this.context?.busy);
+      const busy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
       const statusText = this.context?.statusText || "";
 
       this.hostElement.innerHTML = `
@@ -544,6 +544,7 @@
                   ${this.renderCostHtml()}
                 </div>
                 <div class="make-image-btn-wrap">
+                  ${busy ? `<span class="make-image-busy-hint">任务处理中，暂不能清空或再次生成</span>` : ""}
                   <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
                   <button type="button" class="btn btn-primary make-image-btn-run" id="make-image-btn-run" ${busy ? "disabled" : ""}>
                     ${busy ? "正在生成中…" : "开始生成 (1张)"}
@@ -940,15 +941,28 @@
       const resetBtn = root.querySelector("#make-image-btn-reset");
       if (resetBtn) {
         resetBtn.onclick = () => {
-          if (busy) return;
+          const currentBusy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
+          if (currentBusy) {
+            global.HANDRAW_SHARED?.toast?.("任务处理中，暂不能清空或再次生成");
+            return;
+          }
           const ok = typeof window.confirm === "function"
-            ? window.confirm("清空后当前表单的所有设置都会恢复默认，已生成的图片不受影响。确定清空吗？")
+            ? window.confirm("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？")
             : true;
           if (!ok) return;
+
+          if (typeof this.actions?.isBusy === "function" && this.actions.isBusy()) {
+            global.HANDRAW_SHARED?.toast?.("任务处理中，暂不能清空或再次生成");
+            return;
+          }
 
           cd.mode = "graphic-text";
           cd.ratio = "3:4";
           cd.count = 1;
+          cd.status = "idle";
+          delete cd.error;
+          delete cd.activeBatchId;
+          cd.elapsedSec = 0;
 
           sd.fusion = false;
           sd.style1 = "";
@@ -970,8 +984,44 @@
           td.subjectHint = "";
 
           if (ad) ad.items = [];
+          if (p.asset) p.asset.data.items = [];
           if (this.actions?.ensureAssetItems) {
             this.actions.ensureAssetItems([]);
+          }
+
+          // Clear downstream display nodes of this control node
+          if (typeof this.actions?.clearWorkspaceResults === "function") {
+            this.actions.clearWorkspaceResults(p.ctrl.id);
+          } else {
+            const graph = this.getGraph();
+            if (graph && Array.isArray(graph.edges) && Array.isArray(graph.nodes)) {
+              const outEdges = graph.edges.filter((e) => e.from === p.ctrl.id);
+              const outIds = new Set(outEdges.map((e) => e.to));
+              graph.nodes.forEach((n) => {
+                if (outIds.has(n.id) && n.type === "output_display") {
+                  n.data.items = [];
+                  n.data.status = "idle";
+                  delete n.data.error;
+                  delete n.data.pendingTaskId;
+                  delete n.data.pendingRequestId;
+                  delete n.data.activeBatchId;
+                  delete n.data.selectedIdx;
+                  delete n.data.previewIdx;
+                  delete n.data.downloadUrl;
+                  n.data.pendingRequestIds = {};
+                  n.data.pendingSpec = {};
+                  n.data.elapsedSec = 0;
+                  if (n.data.kind === "batch_gallery") n.data.page = 1;
+                }
+              });
+            }
+          }
+
+          if (Array.isArray(this.context?.results)) {
+            this.context.results = [];
+          }
+          if (this.context) {
+            this.context.statusText = "";
           }
 
           this.actions?.markDirtyAndRender();
@@ -982,6 +1032,11 @@
       const runBtn = root.querySelector("#make-image-btn-run");
       if (runBtn) {
         runBtn.onclick = () => {
+          const currentBusy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
+          if (currentBusy) {
+            global.HANDRAW_SHARED?.toast?.("任务处理中，暂不能清空或再次生成");
+            return;
+          }
           this.actions?.run();
         };
       }
