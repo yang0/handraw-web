@@ -189,7 +189,17 @@
     CS.customUploads = readJsonStorage(UPLOAD_STORAGE_KEY, []);
     CS.customAssetCats = readJsonStorage(CUSTOM_ASSET_CATS_KEY, []);
     CS.savedWorkflows = readJsonStorage(SAVED_WORKFLOWS_KEY, null);
-    CS.generationHistory = readJsonStorage(HISTORY_STORAGE_KEY, null);
+    const rawHist = readJsonStorage(HISTORY_STORAGE_KEY, null);
+    if (Array.isArray(rawHist)) {
+      let normalizedHist = [];
+      for (const item of rawHist) {
+        normalizedHist = upsertHistoryEntry(normalizedHist, item, { isServer: false });
+      }
+      CS.generationHistory = normalizedHist;
+      writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
+    } else {
+      CS.generationHistory = null;
+    }
     CS.myArticles = readJsonStorage(MY_ARTICLES_STORAGE_KEY, null);
     CS.recentAudiences = (readJsonStorage(RECENT_AUDIENCE_KEY, []) || [])
       .filter((x) => typeof x === "string" && x.trim())
@@ -670,13 +680,12 @@
         }
 
         if (Array.isArray(ws.history) && ws.history.length) {
-          const curHist = Array.isArray(CS.generationHistory) ? CS.generationHistory : [];
-          const seenIds = new Set(curHist.map((h) => h.id));
-          const serverExtra = ws.history.filter((h) => h && h.id && !seenIds.has(h.id));
-          if (serverExtra.length) {
-            CS.generationHistory = [...curHist, ...serverExtra].slice(0, 40);
-            writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
+          let curHist = Array.isArray(CS.generationHistory) ? CS.generationHistory : [];
+          for (const sRow of ws.history) {
+            curHist = upsertHistoryEntry(curHist, sRow, { isServer: true });
           }
+          CS.generationHistory = curHist;
+          writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
         }
       } else if (Array.isArray(CS.officialPresetMeta)) {
         // Refresh official preset overrides even for guests
@@ -4896,6 +4905,7 @@
     if (!entry && !errorMessage) {
       entry = {
         id: id || E.uid("hist"),
+        requestId: requestId,
         createdAt: new Date().toISOString(),
         timeShort: "",
         tabTitle: task.tabTitle || "云端生图",
@@ -4909,17 +4919,20 @@
         markdown: "",
         items: []
       };
-      history.unshift(entry);
     }
     if (!entry) return;
+    entry.id = id || entry.id;
     entry.requestId = requestId || entry.requestId || "";
     entry.taskId = "";
     entry.status = errorMessage ? "error" : "success";
     entry.engine = "live";
+    entry.demoMode = false;
     entry.error = errorMessage || "";
     if (!errorMessage) {
       entry.items = images.map((url, idx) => ({
         id: `${entry.id}_${idx}`,
+        genId: id || "",
+        requestId,
         title: task.tabTitle || `云端成图 ${idx + 1}`,
         ratio: task.ratio || "3:4",
         prompt: task.prompt || entry.prompt || "",
@@ -4929,7 +4942,7 @@
         recipeSnapshot: task.recipeSnapshot || entry.recipeSnapshot || null
       }));
     }
-    CS.generationHistory = history.slice(0, 40);
+    CS.generationHistory = upsertHistoryEntry(history, entry, { isServer: false });
     writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
   }
 
@@ -5143,6 +5156,212 @@
     if (resumeController) _generationControllers.delete(resumeController);
   }
 
+  function formatParamValue(val) {
+    if (val === null || val === undefined) return "";
+    if (typeof val === "string") return val.trim();
+    if (typeof val === "number" || typeof val === "boolean") return String(val);
+    if (typeof val === "object") {
+      const c = typeof val.code === "string" && val.code.trim() ? val.code.trim() : "";
+      if (c) return c;
+      const id = typeof val.id === "string" && val.id.trim() ? val.id.trim() : "";
+      if (id) return id;
+      const name = typeof val.name === "string" && val.name.trim() ? val.name.trim() : "";
+      if (name) return name;
+      const label = typeof val.label === "string" && val.label.trim() ? val.label.trim() : "";
+      if (label) return label;
+      const title = typeof val.title === "string" && val.title.trim() ? val.title.trim() : "";
+      if (title) return title;
+      const value = typeof val.value === "string" && val.value.trim() ? val.value.trim() : "";
+      if (value) return value;
+      return "";
+    }
+    return "";
+  }
+
+  function formatParamList(val, joiner = ",") {
+    if (!val) return "";
+    const arr = Array.isArray(val) ? val : [val];
+    const cleaned = arr.map(formatParamValue).filter(Boolean);
+    return cleaned.join(joiner);
+  }
+
+  function normalizeHistoryEntry(rawEntry) {
+    if (!rawEntry || typeof rawEntry !== "object") return null;
+
+    const rawItems = Array.isArray(rawEntry.items)
+      ? rawEntry.items
+      : (Array.isArray(rawEntry.images) ? rawEntry.images : []);
+
+    const items = rawItems.map((it, idx) => {
+      if (!it || typeof it !== "object") {
+        const u = typeof it === "string" ? it.trim() : "";
+        return {
+          id: `${rawEntry.id || "item"}_${idx}`,
+          genId: (rawEntry.id && String(rawEntry.id).startsWith("gen_")) ? rawEntry.id : "",
+          requestId: rawEntry.requestId || rawEntry.request_id || "",
+          imageUrl: u,
+          ratio: rawEntry.ratio || "3:4",
+          title: `成图 #${idx + 1}`,
+          prompt: rawEntry.prompt || "",
+          generationMode: rawEntry.engine === "live" ? "live" : "demo",
+          demoMode: rawEntry.engine !== "live"
+        };
+      }
+      const itGenId = it.genId || (it.id && String(it.id).startsWith("gen_") ? it.id : "");
+      return {
+        id: it.id || `${rawEntry.id || "item"}_${idx}`,
+        genId: itGenId,
+        requestId: it.requestId || rawEntry.requestId || rawEntry.request_id || "",
+        taskId: it.taskId || "",
+        title: it.title || `成图 #${idx + 1}`,
+        ratio: it.ratio || rawEntry.ratio || "3:4",
+        prompt: it.prompt || rawEntry.prompt || "",
+        imageUrl: it.imageUrl || it.url || "",
+        generationMode: it.generationMode || (rawEntry.engine === "live" ? "live" : "demo"),
+        demoMode: typeof it.demoMode === "boolean" ? it.demoMode : rawEntry.engine !== "live",
+        recipeSnapshot: it.recipeSnapshot || null,
+        slotKey: it.slotKey || String(idx),
+        role: it.role || "image",
+        anchorHeading: it.anchorHeading || "",
+        theme: it.theme || "",
+        failed: Boolean(it.failed),
+        error: it.error || ""
+      };
+    });
+
+    const isBatch = Boolean(
+      rawEntry.kind === "loop" ||
+      rawEntry.kind === "multi" ||
+      rawEntry.kind === "series" ||
+      items.length > 1
+    );
+
+    let id = String(rawEntry.id || "").trim();
+    let requestId = String(rawEntry.requestId || rawEntry.request_id || "").trim();
+
+    if (!isBatch && items.length === 1) {
+      if (items[0].genId && (!id || id.startsWith("hist_"))) {
+        id = items[0].genId;
+      }
+      if (!requestId && items[0].requestId) {
+        requestId = items[0].requestId;
+      }
+    } else if (isBatch) {
+      if (!id || (items.length > 1 && items[0]?.genId && id === items[0].genId)) {
+        id = E.uid("hist_batch");
+      }
+    }
+
+    if (!id) {
+      id = E.uid("hist");
+    }
+
+    let summary = String(rawEntry.recipeSummary || rawEntry.recipe_summary || "")
+      .replace(/\[object Object\]/g, "")
+      .replace(/\s*·\s*·\s*/g, " · ")
+      .replace(/^·\s*|\s*·$/g, "")
+      .trim();
+
+    return {
+      ...rawEntry,
+      id,
+      requestId,
+      kind: isBatch ? (rawEntry.kind || "multi") : (rawEntry.kind || "single"),
+      mode: rawEntry.mode || "graphic-text",
+      modeLabel: rawEntry.modeLabel || (isBatch ? `批量生成 · ${items.length} 张` : "生成"),
+      tabTitle: rawEntry.tabTitle || "当前工作流",
+      recipeSummary: summary,
+      prompt: typeof rawEntry.prompt === "string" ? rawEntry.prompt : "",
+      createdAt: rawEntry.createdAt || rawEntry.created_at || new Date().toISOString(),
+      timeShort: rawEntry.timeShort || "",
+      engine: rawEntry.engine || (items.some((it) => it.generationMode === "live") ? "live" : "demo"),
+      demoMode: typeof rawEntry.demoMode === "boolean" ? rawEntry.demoMode : rawEntry.engine !== "live",
+      items,
+      status: rawEntry.status || "success"
+    };
+  }
+
+  function findMatchingHistoryIndex(list, entry) {
+    if (!entry) return -1;
+    const entryId = String(entry.id || "").trim();
+    const entryReqId = String(entry.requestId || "").trim();
+
+    if (entryId) {
+      const idx = list.findIndex((h) => h && String(h.id).trim() === entryId);
+      if (idx >= 0) return idx;
+    }
+
+    if (entryReqId) {
+      const idx = list.findIndex((h) => h && String(h.requestId || "").trim() === entryReqId);
+      if (idx >= 0) return idx;
+    }
+
+    if (entryId && entryId.startsWith("gen_")) {
+      const idx = list.findIndex((h) => {
+        if (!h || !Array.isArray(h.items) || h.items.length !== 1) return false;
+        return h.items[0]?.genId === entryId;
+      });
+      if (idx >= 0) return idx;
+    }
+
+    if (Array.isArray(entry.items) && entry.items.length === 1 && entry.items[0].genId) {
+      const gId = entry.items[0].genId;
+      const idx = list.findIndex((h) => {
+        if (!h || !Array.isArray(h.items) || h.items.length !== 1) return false;
+        return h.id === gId || h.items[0]?.genId === gId;
+      });
+      if (idx >= 0) return idx;
+    }
+
+    return -1;
+  }
+
+  function upsertHistoryEntry(targetList, incomingEntry, { isServer = false } = {}) {
+    const list = Array.isArray(targetList) ? [...targetList] : [];
+    const normalized = normalizeHistoryEntry(incomingEntry);
+    if (!normalized) return list;
+
+    const existIdx = findMatchingHistoryIndex(list, normalized);
+
+    if (existIdx >= 0) {
+      const existing = list[existIdx];
+      let merged;
+      if (isServer) {
+        merged = {
+          ...normalized,
+          id: normalized.id,
+          requestId: normalized.requestId || existing.requestId || "",
+          tabTitle: existing.tabTitle && existing.tabTitle !== "当前工作流" && existing.tabTitle !== "生成历史"
+            ? existing.tabTitle
+            : (normalized.tabTitle || existing.tabTitle),
+          recipeSummary: existing.recipeSummary || normalized.recipeSummary || "",
+          prompt: existing.prompt || normalized.prompt || "",
+          markdown: existing.markdown || normalized.markdown || "",
+          ctrlId: existing.ctrlId || normalized.ctrlId || "",
+          dispId: existing.dispId || normalized.dispId || "",
+          recipeId: existing.recipeId || normalized.recipeId || "",
+          recipeSnapshot: existing.recipeSnapshot || normalized.recipeSnapshot || null,
+          items: (Array.isArray(normalized.items) && normalized.items.length) ? normalized.items : existing.items
+        };
+      } else {
+        const isExistingServer = existing.engine === "live" || !String(existing.id).startsWith("hist_");
+        merged = {
+          ...existing,
+          ...normalized,
+          id: isExistingServer ? existing.id : normalized.id,
+          engine: isExistingServer ? existing.engine : normalized.engine,
+          status: isExistingServer ? existing.status : normalized.status,
+          requestId: existing.requestId || normalized.requestId || ""
+        };
+      }
+      list[existIdx] = merged;
+    } else {
+      list.unshift(normalized);
+    }
+
+    return list.slice(0, 40);
+  }
+
   function buildRecipeSummaryText(rec, ctrlNode) {
     const parts = [];
     if (rec.loopNode) {
@@ -5150,17 +5369,24 @@
       const iters = E.resolveLoopIterations(CS.graph, rec.loopNode, rec, Catalog);
       parts.push(`循环:${lm ? lm.label : "批量"}×${iters.length}轮`);
     }
+    const s1 = formatParamValue(rec.style1Id);
+    const s2 = formatParamValue(rec.style2Id);
     if (rec.fusionToggleOn) {
-      parts.push(`融合:${rec.style1Id || "未选"}×${rec.style2Id || "未选"}`);
-    } else if (rec.style1Id) {
-      parts.push(`画风:${rec.style1Id}`);
+      parts.push(`融合:${s1 || "未选"}×${s2 || "未选"}`);
+    } else if (s1) {
+      parts.push(`画风:${s1}`);
     }
-    if (rec.layoutId) parts.push(`图型:${rec.layoutId}`);
-    if (rec.colorIds.length) parts.push(`主题色:${rec.colorIds.join(",")}`);
-    if (rec.toneIds.length) parts.push(`影调:${rec.toneIds.join(",")}`);
-    if (rec.allMoods.length) parts.push(`情绪:${rec.allMoods.join(",")}`);
-    if (rec.assetItems.length) parts.push(`图参×${rec.assetItems.length}`);
-    if (!parts.length) parts.push(`默认自由发挥 · ${ctrlNode.data.ratio || "3:4"}`);
+    const lay = formatParamValue(rec.layoutId);
+    if (lay) parts.push(`图型:${lay}`);
+    const cols = formatParamList(rec.colorIds, ",");
+    if (cols) parts.push(`主题色:${cols}`);
+    const tones = formatParamList(rec.toneIds, ",");
+    if (tones) parts.push(`影调:${tones}`);
+    const moods = formatParamList(rec.allMoods, ",");
+    if (moods) parts.push(`情绪:${moods}`);
+    const assetsCount = Array.isArray(rec.assetItems) ? rec.assetItems.length : 0;
+    if (assetsCount) parts.push(`图参×${assetsCount}`);
+    if (!parts.length) parts.push(`默认自由发挥 · ${ctrlNode?.data?.ratio || "3:4"}`);
     return parts.join(" · ");
   }
 
@@ -5181,15 +5407,16 @@
     let summaryText = "";
     if (isRecipe) {
       const parts = [];
-      const sIds = ctrlNode.styleIds || ctrlNode.style_ids || [];
-      if (sIds.length) parts.push(`画风:${sIds.join("+")}`);
-      if (ctrlNode.layoutId || ctrlNode.layout_id) parts.push(`图型:${ctrlNode.layoutId || ctrlNode.layout_id}`);
-      const cIds = ctrlNode.colors || [];
-      if (cIds.length) parts.push(`主题色:${cIds.join(",")}`);
-      const tIds = ctrlNode.tones || [];
-      if (tIds.length) parts.push(`影调:${tIds.join(",")}`);
-      const mIds = ctrlNode.moods || [];
-      if (mIds.length) parts.push(`情绪:${mIds.join(",")}`);
+      const sIds = formatParamList(ctrlNode.styleIds || ctrlNode.style_ids, "+");
+      if (sIds) parts.push(`画风:${sIds}`);
+      const lay = formatParamValue(ctrlNode.layoutId || ctrlNode.layout_id);
+      if (lay) parts.push(`图型:${lay}`);
+      const cols = formatParamList(ctrlNode.colors, ",");
+      if (cols) parts.push(`主题色:${cols}`);
+      const tones = formatParamList(ctrlNode.tones, ",");
+      if (tones) parts.push(`影调:${tones}`);
+      const moods = formatParamList(ctrlNode.moods, ",");
+      if (moods) parts.push(`情绪:${moods}`);
       if (!parts.length) parts.push(`做图配方 · ${ctrlNode.ratio || "3:4"}`);
       summaryText = parts.join(" · ");
     } else {
@@ -5198,11 +5425,14 @@
 
     const hasLiveItems = Array.isArray(items) && items.some((it) => it && (it.generationMode === "live" || it.engine === "live"));
     const isLive = isLiveGenerationEnabled() || hasLiveItems;
+    const isBatch = Boolean(isLoopBatch || items.length > 1 || kind === "multi" || kind === "series");
     const firstGenId = (Array.isArray(items) && items.find((it) => it && it.genId)?.genId) || "";
     const firstReqId = (Array.isArray(items) && items.find((it) => it && it.requestId)?.requestId) || "";
 
+    const entryId = (!isBatch && firstGenId) ? firstGenId : (isBatch ? E.uid("hist_batch") : E.uid("hist"));
+
     const entry = {
-      id: firstGenId || E.uid("hist"),
+      id: entryId,
       requestId: firstReqId,
       createdAt: dateFull,
       timeShort,
@@ -5215,7 +5445,7 @@
         isLoopBatch ? `循环批量 · ${items.length} 张` : `${modeMeta ? modeMeta.label : "生成"} · ${items.length} 张`
       }`,
       kind: kind || (items.length > 1 ? "multi" : "single"),
-      engine: isLiveGenerationEnabled() ? "live" : "demo",
+      engine: isLive ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
       recipeSummary: summaryText,
       recipeSnapshot: (items && items[0]?.recipeSnapshot) || null,
@@ -5232,10 +5462,21 @@
       } : {})
     };
 
-    CS.generationHistory = [entry, ...(CS.generationHistory || [])].slice(0, 40);
+    CS.generationHistory = upsertHistoryEntry(CS.generationHistory, entry, { isServer: false });
     writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
     if (!isLive) {
-      studioApiPost("/api/studio/history", entry);
+      studioApiPost("/api/studio/history", entry).then((res) => {
+        if (res && res.ok && res.id && res.id !== entry.id) {
+          entry.id = res.id;
+          const idx = (CS.generationHistory || []).findIndex(
+            (h) => h.id === entry.id || (entry.requestId && h.requestId === entry.requestId)
+          );
+          if (idx >= 0) {
+            CS.generationHistory[idx].id = res.id;
+            writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
+          }
+        }
+      }).catch(() => {});
     }
     if (CS.stageView === "history") renderHistoryStage();
   }
@@ -5266,7 +5507,8 @@
     const isLive = isLiveGenerationEnabled() || hasLiveCards;
 
     const entry = {
-      id: E.uid("hist"),
+      id: planNode.data.generationId || E.uid("hist_art"),
+      requestId: planNode.data.requestId || "",
       createdAt: dateFull,
       timeShort,
       tabTitle: curTab ? curTab.title : "文章配图方案",
@@ -5275,13 +5517,15 @@
       mode: "article-illust",
       modeLabel: `${isDemoGenerationEnabled() ? "🧪 演示样图 · " : ""}文章配图 · ${readyCards.length} 张`,
       kind: "article",
-      engine: isLiveGenerationEnabled() ? "live" : "demo",
+      engine: isLive ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
       recipeSummary: rec && ctrlNode ? buildRecipeSummaryText(rec, ctrlNode) : `文章配图方案 · ${readyCards.length} 张`,
-      prompt: readyCards.map((c) => c.prompt).join("\n\n---\n\n"),
+      prompt: readyCards.map((c) => c.prompt).filter(Boolean).join("\n\n---\n\n"),
       markdown: planNode.data.markdown || "",
-      items: readyCards.map((c) => ({
-        id: c.id,
+      items: readyCards.map((c, idx) => ({
+        id: c.id || `card_${idx}`,
+        genId: c.genId || "",
+        requestId: c.requestId || "",
         role: c.role || "inline",
         title: c.title || "配图",
         ratio: c.ratio || "4:3",
@@ -5290,10 +5534,21 @@
       }))
     };
 
-    CS.generationHistory = [entry, ...(CS.generationHistory || [])].slice(0, 40);
+    CS.generationHistory = upsertHistoryEntry(CS.generationHistory, entry, { isServer: false });
     writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
     if (!isLive) {
-      studioApiPost("/api/studio/history", entry);
+      studioApiPost("/api/studio/history", entry).then((res) => {
+        if (res && res.ok && res.id && res.id !== entry.id) {
+          entry.id = res.id;
+          const idx = (CS.generationHistory || []).findIndex(
+            (h) => h.id === entry.id || (entry.requestId && h.requestId === entry.requestId)
+          );
+          if (idx >= 0) {
+            CS.generationHistory[idx].id = res.id;
+            writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
+          }
+        }
+      }).catch(() => {});
     }
     if (CS.stageView === "history") renderHistoryStage();
   }
@@ -5416,6 +5671,9 @@
         if (typeof data.freeQuotaRemaining === "number") App.state.freeQuotaRemaining = data.freeQuotaRemaining;
         if (S.renderChrome) S.renderChrome();
         const activeReqId = data.requestId || requestId;
+        const activeGenId = data.genId || "";
+        card.genId = activeGenId;
+        card.requestId = activeReqId;
         if (data.imageUrl) {
           imgUrl = data.imageUrl;
         } else if (Array.isArray(data.images) && data.images.length) {
@@ -5840,6 +6098,7 @@
         const skillPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "skill", sp);
         let imgUrl = "";
         let activeReqId = "";
+        let activeGenId = "";
         let itemFailed = false;
         let itemErrorMsg = "";
         let itemIsTerminal = false;
@@ -5911,6 +6170,7 @@
             if (typeof data.freeQuotaRemaining === "number") App.state.freeQuotaRemaining = data.freeQuotaRemaining;
             if (S.renderChrome) S.renderChrome();
             activeReqId = data.requestId || requestId;
+            activeGenId = data.genId || "";
             if (data.imageUrl) {
               imgUrl = data.imageUrl;
             } else if (Array.isArray(data.images) && data.images.length) {
@@ -5980,8 +6240,9 @@
           failedCount = failedSlots.size;
           const failedItem = {
             id: E.uid("outit_fail"),
+            genId: activeGenId || "",
             batchId,
-            requestId,
+            requestId: activeReqId || requestId,
             slotKey: currentSlotKey,
             title: sp.title || `图片 #${i + 1}`,
             theme: sp.theme || "",
@@ -6044,8 +6305,9 @@
         }
         const builtItem = {
           id: E.uid("outit"),
+          genId: activeGenId || "",
           batchId,
-          requestId,
+          requestId: activeReqId || requestId,
           taskId: "",
           generationMode: useLiveApi ? "live" : "demo",
           demoMode: !useLiveApi,
@@ -16151,7 +16413,11 @@
       generateSinglePlanCard,
       runOutputControlNode,
       pollCloudTask,
-      resumePendingCloudTasks
+      resumePendingCloudTasks,
+      upsertHistoryEntry,
+      normalizeHistoryEntry,
+      formatParamValue,
+      formatParamList
     };
   }
 

@@ -650,7 +650,7 @@ def deduplicate_generation_history(conn: sqlite3.Connection, user_id: int | None
         # 2. Deduplicate by identical complete image set for same user
         cand_rows = conn.execute(
             f"""
-            SELECT id, user_id, engine, subject, recipe_summary, items_json, created_at
+            SELECT id, user_id, engine, subject, recipe_summary, items_json, created_at, request_id
             FROM studio_generations
             WHERE COALESCE(deleted_at, '') = ''
               AND status = 'success'
@@ -694,6 +694,12 @@ def deduplicate_generation_history(conn: sqlite3.Connection, user_id: int | None
                 updates = []
                 update_vals = []
                 for client_row in client_rows:
+                    # Never merge distinct requests with different non-empty request IDs
+                    client_req = str(client_row["request_id"] or "").strip()
+                    primary_req = str(primary["request_id"] or "").strip()
+                    if client_req and primary_req and client_req != primary_req:
+                        continue
+
                     if not primary["subject"] and client_row["subject"]:
                         updates.append("subject = ?")
                         update_vals.append(client_row["subject"])
@@ -711,13 +717,6 @@ def deduplicate_generation_history(conn: sqlite3.Connection, user_id: int | None
                         f"UPDATE studio_generations SET {', '.join(updates)} WHERE id = ?",
                         tuple(update_vals),
                     )
-            elif len(rows_with_same_images) > 1 and not server_rows:
-                for dup in rows_with_same_images[1:]:
-                    conn.execute(
-                        "UPDATE studio_generations SET deleted_at = ? WHERE id = ? AND COALESCE(deleted_at, '') = ''",
-                        (now_iso, dup["id"]),
-                    )
-                    count_deleted += 1
 
         if not in_tx:
             conn.execute("COMMIT;")

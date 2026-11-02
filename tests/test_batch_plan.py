@@ -248,15 +248,16 @@ class BatchPlanRoutesTests(unittest.TestCase):
 
     def test_05_daily_quota_limit(self) -> None:
         """5. Daily quota limit 50 requests/day per user triggers 429."""
+        from backend.db import local_today_str
         # Exhaust 50 requests via direct DB manipulation
         with self.db.transaction() as tx:
             tx.execute(
                 """
                 INSERT INTO daily_usage (user_id, scope, usage_date, count)
-                VALUES (?, 'batch_plan', CURRENT_DATE, 50)
+                VALUES (?, 'batch_plan', ?, 50)
                 ON CONFLICT(user_id, scope, usage_date) DO UPDATE SET count = 50
                 """,
-                (self.user["id"],),
+                (self.user["id"], local_today_str()),
             )
 
         st, res = self._req(

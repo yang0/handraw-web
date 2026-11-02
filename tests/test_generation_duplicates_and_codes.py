@@ -368,6 +368,95 @@ class GenerationDuplicatesAndCodesTests(unittest.TestCase):
             for l in g["layouts"]:
                 self.assertTrue(CODE_RE.match(l["code"]))
 
+    def test_different_requests_with_same_images_are_never_merged(self) -> None:
+        """Two distinct requests with different non-empty request_ids but same images must NOT be merged."""
+        uid = int(self.user_su["id"])
+        now = utc_now_iso()
+        img_urls = ["/generated/same_output.png"]
+
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO studio_generations (
+                    id, user_id, username, request_id, subject, items_json, engine, status, visibility, created_at
+                ) VALUES ('gen_req_A', ?, 'su_editorial', 'req_alpha', '第一次请求', ?, 'live', 'success', 'public', ?)
+                """,
+                (uid, json.dumps(img_urls), now),
+            )
+            tx.execute(
+                """
+                INSERT INTO studio_generations (
+                    id, user_id, username, request_id, subject, items_json, engine, status, visibility, created_at
+                ) VALUES ('hist_req_B', ?, 'su_editorial', 'req_beta', '第二次请求', ?, 'sample', 'success', 'public', ?)
+                """,
+                (uid, json.dumps([{"imageUrl": img_urls[0]}]), now),
+            )
+
+        with self.db.transaction() as tx:
+            del_cnt = deduplicate_generation_history(tx, user_id=uid)
+
+        self.assertEqual(del_cnt, 0, "Distinct requests with different request_ids must not be merged")
+
+        conn = self.db.get_conn()
+        active = conn.execute(
+            "SELECT id FROM studio_generations WHERE user_id = ? AND id IN ('gen_req_A', 'hist_req_B') AND COALESCE(deleted_at, '') = ''",
+            (uid,),
+        ).fetchall()
+        self.assertEqual(len(active), 2, "Both records must remain active")
+
+    def test_sample_generations_with_same_images_are_never_merged(self) -> None:
+        """Multiple sample/demo generations by the same user with identical images must remain distinct."""
+        uid = int(self.user_momo["id"])
+        now = utc_now_iso()
+        img_urls = ["/generated/fallback_sample.png"]
+
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO studio_generations (
+                    id, user_id, username, subject, items_json, engine, status, visibility, created_at
+                ) VALUES ('hist_sample_1', ?, 'momo_design', '样本1', ?, 'sample', 'success', 'public', ?)
+                """,
+                (uid, json.dumps([{"imageUrl": img_urls[0]}]), now),
+            )
+            tx.execute(
+                """
+                INSERT INTO studio_generations (
+                    id, user_id, username, subject, items_json, engine, status, visibility, created_at
+                ) VALUES ('hist_sample_2', ?, 'momo_design', '样本2', ?, 'sample', 'success', 'public', ?)
+                """,
+                (uid, json.dumps([{"imageUrl": img_urls[0]}]), now),
+            )
+
+        with self.db.transaction() as tx:
+            del_cnt = deduplicate_generation_history(tx, user_id=uid)
+
+        self.assertEqual(del_cnt, 0, "Two separate sample generations must not be merged")
+
+        conn = self.db.get_conn()
+        active = conn.execute(
+            "SELECT id FROM studio_generations WHERE user_id = ? AND id IN ('hist_sample_1', 'hist_sample_2') AND COALESCE(deleted_at, '') = ''",
+            (uid,),
+        ).fetchall()
+        self.assertEqual(len(active), 2)
+
+    def test_deduplication_never_touches_wallets_or_credits(self) -> None:
+        """Deduplication only marks duplicate history deleted_at and leaves wallets, credits, quotas untouched."""
+        uid = int(self.user_su["id"])
+        conn = self.db.get_conn()
+        wallet_before = conn.execute("SELECT balance, free_quota_used FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        ledgers_before = conn.execute("SELECT COUNT(*) FROM ledgers WHERE user_id = ?", (uid,)).fetchone()[0]
+
+        with self.db.transaction() as tx:
+            deduplicate_generation_history(tx)
+
+        wallet_after = conn.execute("SELECT balance, free_quota_used FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        ledgers_after = conn.execute("SELECT COUNT(*) FROM ledgers WHERE user_id = ?", (uid,)).fetchone()[0]
+        if wallet_before and wallet_after:
+            self.assertEqual(wallet_before["balance"], wallet_after["balance"])
+            self.assertEqual(wallet_before["free_quota_used"], wallet_after["free_quota_used"])
+        self.assertEqual(ledgers_before, ledgers_after)
+
 
 if __name__ == "__main__":
     unittest.main()
