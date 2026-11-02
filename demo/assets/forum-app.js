@@ -34,7 +34,7 @@
     return `
       <figure class="hw-intext-media" contenteditable="false" draggable="true" data-media-url="${esc(url)}" title="按住可拖拽调整段落位置">
         <div class="hw-intext-media-wrap">
-          <img src="${esc(url)}" alt="${esc(tag || '实测配图')}" loading="lazy" />
+          <img src="${esc(url)}" alt="${esc(tag || '实测配图')}" class="hw-editor-body-img" loading="lazy" onerror="this.classList.add('hw-img-broken')" />
           <button type="button" class="hw-intext-del-btn" title="删除配图">✕</button>
         </div>
         <figcaption contenteditable="true" placeholder="点击添加配图说明或对比说明…">${esc(tag || "")}</figcaption>
@@ -566,9 +566,15 @@
     S.openModal({
       title: "🖼️ 查看高清配图",
       html: `
-        <div style="text-align:center;padding:10px 4px;">
-          <img src="${esc(src)}" alt="${esc(caption)}" style="max-width:100%;max-height:76vh;object-fit:contain;border-radius:10px;box-shadow:var(--shadow-card);" />
-          ${caption ? `<div style="font-size:13.5px;color:var(--ink-body);margin-top:12px;line-height:1.5;">${esc(caption)}</div>` : ""}
+        <div class="hw-modal-lightbox-container">
+          <a href="${esc(src)}" target="_blank" rel="noopener noreferrer" title="点击查看原图" style="display:block;max-width:100%;">
+            <img class="hw-modal-lightbox-img" src="${esc(src)}" alt="${esc(caption)}" />
+          </a>
+          ${caption ? `<div style="font-size:13.5px;color:var(--ink-body);margin-top:12px;line-height:1.5;text-align:center;">${esc(caption)}</div>` : ""}
+          <div style="display:flex;gap:10px;align-items:center;margin-top:10px;justify-content:center;flex-wrap:wrap;">
+            <a class="btn btn-sm btn-primary" href="${esc(src)}" download="handraw-image.webp">⬇️ 下载原图</a>
+            <a class="btn btn-sm" href="${esc(src)}" target="_blank" rel="noopener noreferrer">↗️ 查看原图</a>
+          </div>
         </div>
       `
     });

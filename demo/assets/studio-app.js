@@ -3304,12 +3304,12 @@
                 style="padding:6px;border-radius:10px;cursor:pointer;display:flex;flex-direction:column;gap:5px;border:1px solid var(--line-soft);background:#fff;"
                 title="点击放大查看第 ${idx + 1} 张：${esc(it.title || "")}"
               >
-                <div style="position:relative;aspect-ratio:3/4;border-radius:7px;overflow:hidden;background:#f4efe6;">
-                  <img data-hw-src="${esc(it.imageUrl)}" alt="${esc(it.title || "")}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                  <span style="position:absolute;left:5px;top:5px;padding:1px 6px;border-radius:5px;background:rgba(20,17,15,0.74);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:800;">
+                <div class="hw-picker-card-media">
+                  <img data-hw-src="${esc(it.imageUrl)}" alt="${esc(it.title || "")}" loading="lazy" />
+                  <span style="position:absolute;left:5px;top:5px;padding:1px 6px;border-radius:5px;background:rgba(20,17,15,0.74);color:#fff;font-size:10px;font-family:var(--font-mono);font-weight:800;z-index:2;">
                     #${String(idx + 1).padStart(2, "0")}
                   </span>
-                  ${it.demoMode ? '<span style="position:absolute;right:5px;top:5px;padding:2px 5px;border-radius:5px;background:#fff0bf;color:#7a4d00;font-size:10px;font-weight:900;">演示</span>' : ""}
+                  ${it.demoMode ? '<span style="position:absolute;right:5px;top:5px;padding:2px 5px;border-radius:5px;background:#fff0bf;color:#7a4d00;font-size:10px;font-weight:900;z-index:2;">演示</span>' : ""}
                 </div>
                 <div style="font-size:11.5px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                   ${esc(it.title || `成图 #${idx + 1}`)}
@@ -6840,9 +6840,14 @@
       title: `🔍 ${title}`,
       sizeClass: "modal-medium",
       html: `
-        <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-          <img src="${esc(url)}" alt="${esc(title)}" style="max-height:74vh;max-width:100%;border-radius:12px;border:1px solid var(--line-soft);" />
-          <a class="btn btn-sm btn-primary" href="${esc(url)}" download="handraw-output.webp">⬇️ 下载高清原图</a>
+        <div class="hw-modal-lightbox-container" style="gap:12px;">
+          <a href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="点击查看原图" style="display:block;max-width:100%;">
+            <img src="${esc(url)}" class="hw-modal-lightbox-img" alt="${esc(title)}" />
+          </a>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;">
+            <a class="btn btn-sm btn-primary" href="${esc(url)}" download="handraw-output.webp">⬇️ 下载高清原图</a>
+            <a class="btn btn-sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer">↗️ 查看原图</a>
+          </div>
         </div>
       `
     });
@@ -12983,8 +12988,8 @@
 
       if (card.imageUrl) {
         return `
-          <figure class="ic-wechat-figure" data-card-id="${esc(card.id)}" data-role="${esc(role)}" style="margin:18px 0;width:100%;">
-            <img src="${esc(card.imageUrl)}" alt="${esc(card.title || roleLabel)}" loading="lazy" style="width:100%;border-radius:6px;display:block;" />
+          <figure class="ic-wechat-figure" data-card-id="${esc(card.id)}" data-role="${esc(role)}" style="margin:18px 0;width:100%;text-align:center;">
+            <img src="${esc(card.imageUrl)}" alt="${esc(card.title || roleLabel)}" class="hw-editor-body-img" loading="lazy" style="border-radius:6px;" />
           </figure>
         `;
       }

@@ -3447,10 +3447,13 @@ body.ic-studio-body .hw-topbar {
 }
 
 .ic-plan-slot-img-box img {
-  width: 100%;
+  width: auto;
+  max-width: 100%;
+  height: auto;
   max-height: 216px;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
+  margin: 0 auto;
 }
 
 /* Notion Drop Indicator Line & Ghost */

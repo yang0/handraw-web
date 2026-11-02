@@ -872,6 +872,68 @@ button {
   display: block;
 }
 
+/* ==================== 3 SEMANTIC IMAGE UTILITY CLASSES (#44) ==================== */
+
+/* 1. Card selection preview: .hw-picker-card-media (defined above) */
+
+/* 2. Rich editor body image: natural aspect ratio without distortion or cropping */
+.hw-editor-body-img,
+.hw-rich-editor img,
+.hw-intext-media-wrap img,
+.forum-article-body img,
+.forum-article-body .hw-intext-media-wrap img,
+.ic-wechat-figure img {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+}
+
+/* Broken image placeholder fallback */
+.hw-editor-body-img.hw-img-broken,
+.hw-intext-media-wrap img.hw-img-broken,
+.hw-rich-editor img.hw-img-broken,
+.forum-article-body img.hw-img-broken {
+  min-width: 140px;
+  min-height: 80px;
+  background-color: var(--paper-inset, #f3ede3);
+  background-image: radial-gradient(circle at center, rgba(183, 66, 39, 0.12) 0%, transparent 70%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line-strong, #cbbfae);
+  border-radius: 6px;
+}
+
+/* 3. Modal large image preview / Lightbox: max height constraint + contain + scrollable */
+.hw-modal-lightbox-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 8px 4px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.hw-modal-lightbox-img {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-card);
+  cursor: zoom-in;
+  margin: 0 auto;
+}
+
 /* Image streaming states.
  *
  * Cards must never flash an empty box or a browser broken-image glyph while a
@@ -3169,8 +3231,9 @@ img[data-hw-src].hw-img-failed {
 
 .hw-intext-media-wrap img {
   display: block;
+  width: auto;
   max-width: 100%;
-  max-height: 520px;
+  height: auto;
   object-fit: contain;
   margin: 0 auto;
 }
