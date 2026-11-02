@@ -153,8 +153,6 @@
       var mode = it.mode || p.mode || "";
       var mood = it.mood || p.mood || "";
       var subject = it.subject || p.subject || "";
-      var rawPrice = it.price != null ? it.price : (p.price != null ? p.price : 0);
-      var price = Math.max(0, Math.min(100, parseInt(rawPrice, 10) || 0));
 
       var workItem = {
         kind: "work",
@@ -163,8 +161,7 @@
         notes: notes,
         images: images,
         styles: styles,
-        layout: layout,
-        price: price
+        layout: layout
       };
       if (ratio) workItem.ratio = ratio;
       if (color) workItem.color = color;
@@ -309,27 +306,6 @@
               '<div class="curation-pick-row"><span>画风</span><button type="button" data-act="pick" data-idx="0" data-target="style">选择画风</button><span class="curation-chips" data-chip="style" data-idx="0">' + stylesHtml + '</span></div>' +
               '<div class="curation-pick-row"><span>图型</span><button type="button" data-act="pick" data-idx="0" data-target="layout">选择图型</button><span class="curation-chips" data-chip="layout" data-idx="0">' + layoutHtml + '</span></div>' +
             '</div>' +
-            '<label class="curation-field">作品定价（积分）<span class="curation-field-err" data-err-for="price"></span>' +
-              '<input type="number" min="0" max="100" step="1" data-act="price" data-idx="0" value="' + esc(it.price != null ? it.price : 0) + '" placeholder="0–100 整数，0 为免费">' +
-              '<div class="curation-price-presets" style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">' +
-                '<button type="button" class="hw-price-chip" data-set-price="0">免费</button>' +
-                '<button type="button" class="hw-price-chip" data-set-price="10">10✦</button>' +
-                '<button type="button" class="hw-price-chip" data-set-price="20">20✦</button>' +
-                '<button type="button" class="hw-price-chip" data-set-price="50">50✦</button>' +
-                '<button type="button" class="hw-price-chip" data-set-price="80">80✦</button>' +
-              '</div>' +
-            '</label>' +
-            ((it.price != null && it.price > 0) ? (
-              '<p class="curation-help" data-help-for="price">' +
-                '<strong>设置为付费作品后：</strong><br>' +
-                '• 读者需支付 <strong>' + esc(it.price) + '</strong> 积分才能查看提示词与做法（做同款）<br>' +
-                '• 提示词与配方不会向未解锁用户公开（仅展示图片与标题）<br>' +
-                '• 你按比例获得分成（80% 积分实时分账原作者）<br>' +
-                '• 你自己查看与做同款不扣积分' +
-              '</p>'
-            ) : (
-              '<p class="curation-help" data-help-for="price">0 为免费公开作品。读者可免费查看提示词并做同款；设为 1–100 积分则需解锁后查看，你自己使用不扣积分。</p>'
-            )) +
           '</div>'
         );
       } else {
@@ -451,25 +427,6 @@
           model.items[0].description = t.value;
           model.text = t.value;
         }
-      } else if (act === "price") {
-        var rawPrice = t.value.trim();
-        var numPrice = rawPrice === "" ? 0 : parseInt(rawPrice, 10);
-        if (isNaN(numPrice)) numPrice = 0;
-        else if (numPrice < 0) numPrice = 0;
-        else if (numPrice > 100) numPrice = 100;
-        if (model.items[0]) model.items[0].price = numPrice;
-        var pHelp = root.querySelector('[data-help-for="price"]');
-        if (pHelp) {
-          pHelp.innerHTML = numPrice > 0 ? (
-            '<strong>设置为付费作品后：</strong><br>' +
-            '• 读者需支付 <strong>' + esc(numPrice) + '</strong> 积分才能查看提示词与做法（做同款）<br>' +
-            '• 提示词与配方不会向未解锁用户公开（仅展示图片与标题）<br>' +
-            '• 你按比例获得分成（80% 积分实时分账原作者）<br>' +
-            '• 你自己查看与做同款不扣积分'
-          ) : (
-            '0 为免费公开作品。读者可免费查看提示词并做同款；设为 1–100 积分则需解锁后查看，你自己使用不扣积分。'
-          );
-        }
       } else if (act === "unlockCost") {
         var rawCost = t.value.trim();
         var numCost = rawCost === "" ? 0 : parseInt(rawCost, 10);
@@ -522,8 +479,6 @@
         var imgs = [];
         if (it.cover) imgs.push(it.cover);
         if (it.images) imgs = imgs.concat(it.images);
-        var rawPrice = it.price != null ? it.price : (it.unlockCost != null ? it.unlockCost : 0);
-        var price = Math.max(0, Math.min(100, parseInt(rawPrice, 10) || 0));
         model.items = [{
           kind: "work",
           title: it.name || it.title || "",
@@ -531,8 +486,7 @@
           notes: it.description || it.notes || "",
           images: imgs,
           styles: it.styles || [],
-          layout: it.layout || "",
-          price: price
+          layout: it.layout || ""
         }];
         model.kind = "work";
         model.title = "";
@@ -541,7 +495,7 @@
         var it = model.items[0] || {};
         var c = (it.images && it.images[0]) || "";
         var exs = (it.images && it.images.length > 1) ? it.images.slice(1) : [];
-        var rawCost = it.unlockCost != null ? it.unlockCost : (it.price != null ? it.price : 0);
+        var rawCost = it.unlockCost != null ? it.unlockCost : 0;
         var unlockCost = Math.max(0, Math.min(50, parseInt(rawCost, 10) || 0));
         model.items = [{
           kind: newKind,
@@ -822,12 +776,6 @@
         } else if (getLen(it.notes) > 1200) {
           errors.push({ el: notesEl, act: "notes", message: "最多 1200 字，当前 " + getLen(it.notes) + " 字。" });
         }
-
-        var priceEl = root.querySelector('[data-act="price"]');
-        var priceVal = parseInt(it.price, 10);
-        if (isNaN(priceVal) || priceVal < 0 || priceVal > 100) {
-          errors.push({ el: priceEl, act: "price", message: "作品定价需在 0 到 100 积分之间。" });
-        }
       } else {
         var it = model.items[0] || {};
         var nameEl = root.querySelector('[data-act="name"]');
@@ -928,15 +876,13 @@
         var currentItem = model.items[0] || {};
         var payloadItem = Object.assign({}, model.rawPayload || {});
         if (model.kind === "work") {
+          delete payloadItem.price;
           payloadItem.title = (currentItem.title || "").trim();
           payloadItem.prompt = currentItem.prompt || "";
           payloadItem.notes = currentItem.notes || "";
           payloadItem.images = (currentItem.images || []).slice();
           if (currentItem.styles) payloadItem.styles = currentItem.styles.slice();
           if (currentItem.layout) payloadItem.layout = currentItem.layout;
-          if (currentItem.price != null) {
-            payloadItem.price = Math.max(0, Math.min(100, parseInt(currentItem.price, 10) || 0));
-          }
         } else {
           payloadItem.kind = model.kind;
           payloadItem.name = (currentItem.name || "").trim();
@@ -971,9 +917,6 @@
         if (work.mode) workBody.mode = work.mode;
         if (work.mood) workBody.mood = work.mood;
         if (work.subject) workBody.subject = work.subject;
-        if (work.price != null) {
-          workBody.price = Math.max(0, Math.min(100, parseInt(work.price, 10) || 0));
-        }
         body = workBody;
       } else {
         url = "/api/curation/submissions";
@@ -1034,26 +977,12 @@
         if (act === "sharekind") onKindChange(e);
         else if (act === "cover") onCoverFile(e);
         else if (act === "file") onFiles(e);
-        else if (act === "price") {
-          var it = model.items[0];
-          if (it && it.price != null) e.target.value = it.price;
-        } else if (act === "unlockCost") {
+        else if (act === "unlockCost") {
           var it = model.items[0];
           if (it && it.unlockCost != null) e.target.value = it.unlockCost;
         }
       });
       form.addEventListener("click", function (e) {
-        var btnPrice = e.target.closest("[data-set-price]");
-        if (btnPrice) {
-          e.preventDefault();
-          var pVal = parseInt(btnPrice.getAttribute("data-set-price"), 10);
-          var pInput = root.querySelector('input[data-act="price"]');
-          if (pInput) {
-            pInput.value = pVal;
-            pInput.dispatchEvent(new Event("input", { bubbles: true }));
-          }
-          return;
-        }
         var btnCost = e.target.closest("[data-set-cost]");
         if (btnCost) {
           e.preventDefault();

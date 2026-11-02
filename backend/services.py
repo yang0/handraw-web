@@ -1478,10 +1478,7 @@ def _serialize_work(
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     wid = row["id"]
-    price = int(row["price"] or 0)
-    is_staff = bool(current_user and current_user.get("role") in ("admin", "operator", "reviewer"))
-    is_author = bool(current_user and current_user.get("username") == row["author_username"])
-    is_unlocked = price <= 0 or (wid in unlocked_set) or is_author or is_staff
+    price = 0
 
     full_prompt, was_masked = get_work_client_prompt(row, is_admin_route=False)
     try:
@@ -1489,13 +1486,10 @@ def _serialize_work(
     except (KeyError, IndexError):
         raw_subject = ""
 
-    if is_unlocked and not was_masked:
+    if not was_masked:
         safe_prompt = full_prompt
         safe_subject = raw_subject
     else:
-        # No preview.  A 34-character teaser leaks the opening of a paid recipe,
-        # and paid works now go live instantly (D-02), so the exposure window is
-        # no longer limited by review.
         safe_prompt = ""
         safe_subject = ""
 
@@ -1533,7 +1527,7 @@ def _serialize_work(
         "stampCounts": stamps,
         "prompt": safe_prompt,
         "subject": safe_subject,
-        "promptMasked": bool((not is_unlocked) or was_masked),
+        "promptMasked": bool(was_masked),
         "reproducible": bool(str(row["prompt"] or "").strip()),
         "notes": row["notes"] or "",
         "comments": comments_by_work.get(wid, []),
@@ -3122,8 +3116,15 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
     tid = (target_id or "").strip()
     uid = int(user["id"])
     now = utc_now_iso()
+    raw_type = (target_type or "").strip().lower()
+
+    if raw_type == "work":
+        raise ServiceError("作品无需付费解锁", status=400, code="work_not_unlockable")
 
     with db.transaction() as tx:
+        if not raw_type and tx.execute("SELECT 1 FROM works WHERE id = ?", (tid,)).fetchone():
+            raise ServiceError("作品无需付费解锁", status=400, code="work_not_unlockable")
+
         settings = get_site_settings(tx)
         share_ratio = float(settings.get("economy", {}).get("author_share_ratio", 0.80))
 
@@ -3136,18 +3137,10 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
         unlocked_content = ""
         was_masked = False
 
-        w_row = tx.execute("SELECT * FROM works WHERE id = ?", (tid,)).fetchone()
-        t_row = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (tid,)).fetchone() if not w_row else None
-        a_row = tx.execute("SELECT * FROM catalog_assets WHERE code = ?", (tid.upper(),)).fetchone() if not (w_row or t_row) else None
+        t_row = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (tid,)).fetchone()
+        a_row = tx.execute("SELECT * FROM catalog_assets WHERE code = ?", (tid.upper(),)).fetchone() if not t_row else None
 
-        if w_row:
-            resolved_type = "work"
-            cost = int(w_row["price"] or 0)
-            title = w_row["title"]
-            author_uname = w_row["author_username"]
-            author_name = w_row["author_name"]
-            unlocked_content, was_masked = get_work_client_prompt(w_row, is_admin_route=False)
-        elif t_row:
+        if t_row:
             resolved_type = "topic"
             cost = int(t_row["price"] or 0)
             title = t_row["title"]

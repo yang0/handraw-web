@@ -556,6 +556,13 @@ SELECT 1;
 """
 
 
+RESET_WORKS_PRICE_SQL = """
+-- Migration 073: reset works price to zero
+-- works.price column is retired. Zero out existing non-zero values idempotently.
+UPDATE works SET price = 0 WHERE price != 0;
+"""
+
+
 def deduplicate_generation_history(conn: sqlite3.Connection, user_id: int | None = None) -> int:
     """Clean duplicate studio_generations records idempotently.
 
@@ -746,4 +753,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (67, "067_generation_subject_column", GENERATION_SUBJECT_COLUMN_SQL),
     (68, "068_generation_visibility_and_index", GENERATION_VISIBILITY_AND_INDEX_SQL),
     (69, "069_deduplicate_generation_history", DEDUPLICATE_GENERATION_HISTORY_SQL),
+    (73, "073_reset_works_price_to_zero", RESET_WORKS_PRICE_SQL),
 ]

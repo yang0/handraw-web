@@ -879,10 +879,18 @@ def admin_moderate_work(
             )
         elif act == "edit":
             title = str(payload.get("title") if payload.get("title") is not None else w["title"]).strip()
-            try:
-                price = max(0, min(200, int(payload.get("price") if payload.get("price") is not None else w["price"])))
-            except (TypeError, ValueError, OverflowError):
-                raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
+            if "price" in payload:
+                raw_price = payload.get("price")
+                if raw_price not in (None, ""):
+                    try:
+                        if isinstance(raw_price, float) and (raw_price != raw_price or raw_price in (float("inf"), float("-inf"))):
+                            raise ValueError("non-finite price")
+                        parsed_price = int(raw_price)
+                    except (TypeError, ValueError, OverflowError):
+                        raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
+                    if parsed_price != 0:
+                        raise ServiceError("作品不支持收费定价", status=400, code="work_price_not_allowed")
+            price = 0
             raw_styles = payload.get("styles")
             if isinstance(raw_styles, str):
                 styles = [s.strip().upper() for s in re.split(r"[,，\s]+", raw_styles) if s.strip()]

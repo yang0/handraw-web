@@ -14,13 +14,11 @@ class ForumResourceTests(unittest.TestCase):
     ballot=fixtures.CurationTests.ballot
 
     def batch(self,price=0):
-        # Works publish immediately and never enter review (D-02), so the work
-        # is created through the publish path first; the submission carries only
-        # catalogue items.  Mixing a work into a submission is rejected.
-        work_item=self.item('work',price=price)
+        # Works publish immediately and are always free (Issue #29)
+        work_item=self.item('work',price=0)
         published=S.publish_user_work(self.db,self.author,{
             'title':work_item['title'],'prompt':work_item['prompt'],'images':work_item['images'],
-            'styles':work_item.get('styles') or [],'layout':work_item.get('layout') or '','price':price})
+            'styles':work_item.get('styles') or [],'layout':work_item.get('layout') or '','price':0})
         result=C.submit(self.db,self.author,{'title':'测试资源共用帖','text':'公开创作心得',
             'items':[self.item('style',unlockCost=price)]})
         tid=result['topicId']
@@ -84,7 +82,9 @@ class ForumResourceTests(unittest.TestCase):
 
     def test_paid_permissions_and_blackbox_never_leak(self):
         _,subs=self.batch(5);self.approve_all()
-        for kind,sub in subs.items():
+        # Catalog assets (style, layout) require unlock
+        for kind in ('style','layout'):
+            sub=subs[kind]
             target=sub['targetId']
             for user in (None,self.users['outsider']):
                 detail=R.resource_detail(self.db,user,kind,target)
@@ -94,6 +94,17 @@ class ForumResourceTests(unittest.TestCase):
             self.assertTrue(R.resource_detail(self.db,self.admin,kind,target)['resource']['unlocked'])
             S.unlock_paid_item(self.db,self.users['outsider'],'',target)
             self.assertTrue(R.resource_detail(self.db,self.users['outsider'],kind,target)['resource']['canUse'])
+
+        # Works are open and free; unlock request raises 400
+        w_target = subs['work']['targetId']
+        w_detail = R.resource_detail(self.db, self.users['outsider'], 'work', w_target)
+        self.assertTrue(w_detail['resource']['unlocked'])
+        self.assertTrue(w_detail['resource']['canUse'])
+        with self.assertRaises(S.ServiceError) as cm:
+            S.unlock_paid_item(self.db, self.users['outsider'], 'work', w_target)
+        self.assertEqual(cm.exception.status, 400)
+        self.assertEqual(cm.exception.code, 'work_not_unlockable')
+
         style=subs['style']['targetId']
         with self.db.transaction() as tx:
             tx.execute("UPDATE catalog_assets SET source_type='exclusive',secret_blackbox_prompt='PRIVATE_BLACKBOX' WHERE code=?",(style,))

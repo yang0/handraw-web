@@ -185,6 +185,8 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
                 payload["title"] = body["title"]
             if "notes" in body:
                 payload["notes"] = body["notes"]
+            if "price" in body:
+                payload["price"] = body["price"]
             return revise(db,user,sub['id'],{'payload':payload})
     title = str(body.get("title",row["title"])).strip()
     if not 4 <= len(title) <= 140:
@@ -192,6 +194,17 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
     now = utc_now_iso()
     with db.transaction() as tx:
         if kind == "works":
+            if "price" in body:
+                raw_price = body.get("price")
+                if raw_price not in (None, ""):
+                    try:
+                        if isinstance(raw_price, float) and (raw_price != raw_price or raw_price in (float("inf"), float("-inf"))):
+                            raise ValueError("non-finite price")
+                        parsed_price = int(raw_price)
+                    except (TypeError, ValueError, OverflowError):
+                        raise ServiceError("作品定价必须是整数", status=400, code="invalid_price")
+                    if parsed_price != 0:
+                        raise ServiceError("作品不支持收费定价", status=400, code="work_price_not_allowed")
             cur_work = tx.execute("SELECT prompt, prompt_has_secret, subject FROM works WHERE id=?", (item_id,)).fetchone()
             cur_prompt = str(cur_work["prompt"] or "") if cur_work else ""
             cur_has_sec = cur_work["prompt_has_secret"] if cur_work else 0

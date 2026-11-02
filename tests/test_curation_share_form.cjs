@@ -978,47 +978,21 @@ async function runAllTests() {
   }
 
   // ==========================================
-  // TEST 12: 作品定价输入、范围夹取 (0–100) 与提交
+  // TEST 12: 作品无定价控件与提交不传 price
   // ==========================================
   {
-    console.log("\n--- Test 12: 作品定价输入、范围夹取 (0–100) 与提交 ---");
+    console.log("\n--- Test 12: 作品无定价控件与提交不传 price ---");
     const harness = createHarness();
     harness.Curation.render(harness.root, { kind: "work" });
 
     const priceInput = harness.root.querySelector('[data-act="price"]');
-    assert.ok(priceInput, "Should have input[data-act=price]");
-    assert.equal(priceInput.value, "0", "Initial price should be 0");
+    assert.equal(priceInput, null, "Work form must not have input[data-act=price]");
 
-    let helpEl = harness.root.querySelector('[data-help-for="price"]');
-    assert.ok(helpEl && helpEl.textContent.includes("0 为免费公开作品"), "Default 0 work help text verified");
+    const helpEl = harness.root.querySelector('[data-help-for="price"]');
+    assert.equal(helpEl, null, "Work form must not have price help text");
 
-    // Input 80 (must NOT be clamped to 50!)
-    priceInput.value = "80";
-    priceInput.dispatchEvent({ type: "input", target: priceInput });
-
-    helpEl = harness.root.querySelector('[data-help-for="price"]');
-    assert.ok(helpEl, "Help element exists when price > 0");
-    const helpText = helpEl.textContent;
-    assert.ok(helpText.includes("查看提示词与做法（做同款）"), "Help text explains prompt/fork unlock requirement");
-    assert.ok(helpText.includes("提示词与配方不会向未解锁用户公开"), "Help text explains prompt secrecy");
-    assert.ok(helpText.includes("80% 积分实时分账原作者"), "Help text explains creator 80% revenue share");
-    assert.ok(helpText.includes("你自己查看与做同款不扣积分"), "Help text explicitly notes author exemption");
-
-    // Boundary test: input 120 -> clamped to 100
-    priceInput.value = "120";
-    priceInput.dispatchEvent({ type: "input", target: priceInput });
-    priceInput.dispatchEvent({ type: "change", target: priceInput });
-    assert.equal(priceInput.value, "100", "120 clamped to 100");
-
-    // Boundary test: input -10 -> clamped to 0
-    priceInput.value = "-10";
-    priceInput.dispatchEvent({ type: "input", target: priceInput });
-    priceInput.dispatchEvent({ type: "change", target: priceInput });
-    assert.equal(priceInput.value, "0", "-10 clamped to 0");
-
-    // Set to 80 for submission
-    priceInput.value = "80";
-    priceInput.dispatchEvent({ type: "input", target: priceInput });
+    const chipEl = harness.root.querySelector('[data-set-price]');
+    assert.equal(chipEl, null, "Work form must not have price preset chips");
 
     // Fill work fields
     const titleInput = harness.root.querySelector('[data-act="title"]');
@@ -1046,16 +1020,16 @@ async function runAllTests() {
 
     const workCall = harness.apiCalls.find((c) => c.url === "/api/works" && c.body.title === "绝密配方水彩画");
     assert.ok(workCall, "Submitted to /api/works");
-    assert.equal(workCall.body.price, 80, "Work payload includes price: 80 (not clamped to 50)");
+    assert.equal(workCall.body.price, undefined, "Work payload does not include price");
 
-    console.log("✓ Test 12 Passed: Work price (0-100 clamping, 80 not clamped to 50, helper copy, submit payload) verified.");
+    console.log("✓ Test 12 Passed: Work pricing UI removed and clean work submit verified.");
   }
 
   // ==========================================
-  // TEST 13: 编辑重提回填 unlockCost 与 price
+  // TEST 13: 编辑重提回填 unlockCost 与作品无 price
   // ==========================================
   {
-    console.log("\n--- Test 13: 编辑重提回填 unlockCost 与 price ---");
+    console.log("\n--- Test 13: 编辑重提回填 unlockCost 与作品无 price ---");
     // 13.1 Style editId: "edit_sub_01" (unlockCost = 20)
     const harness1 = createHarness();
     harness1.Curation.render(harness1.root, { editId: "edit_sub_01" });
@@ -1075,15 +1049,14 @@ async function runAllTests() {
     assert.ok(reviseCall1, "Revise API called for edit_sub_01");
     assert.equal(reviseCall1.body.payload.unlockCost, 20, "unlockCost: 20 preserved in revise payload");
 
-    // 13.2 Work editId: "edit_sub_work" (price = 65)
+    // 13.2 Work editId: "edit_sub_work"
     const harness2 = createHarness();
     harness2.Curation.render(harness2.root, { editId: "edit_sub_work" });
 
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const priceInput = harness2.root.querySelector('[data-act="price"]');
-    assert.ok(priceInput, "price input present in work edit mode");
-    assert.equal(priceInput.value, "65", "price回填原值 65");
+    assert.equal(priceInput, null, "price input absent in work edit mode");
 
     const submitBtn2 = harness2.root.querySelector('[data-act="submit"]');
     submitBtn2.click();
@@ -1092,9 +1065,9 @@ async function runAllTests() {
 
     const reviseCall2 = harness2.apiCalls.find((c) => c.url.includes("edit_sub_work/revise"));
     assert.ok(reviseCall2, "Revise API called for edit_sub_work");
-    assert.equal(reviseCall2.body.payload.price, 65, "price: 65 preserved in work revise payload");
+    assert.equal(reviseCall2.body.payload.price, undefined, "price omitted from work revise payload");
 
-    console.log("✓ Test 13 Passed: Revise backfill and re-submission for unlockCost and price verified.");
+    console.log("✓ Test 13 Passed: Revise backfill for unlockCost verified and work edit has no price.");
   }
 
   // ==========================================
@@ -1103,19 +1076,12 @@ async function runAllTests() {
   {
     console.log("\n--- Test 14: 往返切换保留与上限夹取 ---");
     const harness = createHarness();
-    harness.Curation.render(harness.root, { kind: "work" });
-
-    const priceInput = harness.root.querySelector('[data-act="price"]');
-    priceInput.value = "35";
-    priceInput.dispatchEvent({ type: "input", target: priceInput });
-
-    // Switch work -> style
-    const styleRadio = harness.root.querySelector('input[data-act="sharekind"][value="style"]');
-    styleRadio.click();
-    styleRadio.dispatchEvent({ type: "change", target: styleRadio });
+    harness.Curation.render(harness.root, { kind: "style" });
 
     const costInput = harness.root.querySelector('[data-act="unlockCost"]');
-    assert.equal(costInput.value, "35", "Price 35 preserved as unlockCost 35");
+    assert.ok(costInput, "Style form has unlockCost input");
+    costInput.value = "35";
+    costInput.dispatchEvent({ type: "input", target: costInput });
 
     // Switch style -> layout
     const layoutRadio = harness.root.querySelector('input[data-act="sharekind"][value="layout"]');
@@ -1129,17 +1095,21 @@ async function runAllTests() {
     workRadio.click();
     workRadio.dispatchEvent({ type: "change", target: workRadio });
 
-    assert.equal(harness.root.querySelector('[data-act="price"]').value, "35", "unlockCost 35 preserved as price 35");
+    assert.equal(harness.root.querySelector('[data-act="price"]'), null, "Work form has no price input");
 
-    // Set price to 80, then switch to style -> clamped to 50
-    const priceInput2 = harness.root.querySelector('[data-act="price"]');
-    priceInput2.value = "80";
-    priceInput2.dispatchEvent({ type: "input", target: priceInput2 });
-
+    // Switch work -> style: unlockCost input is present
+    const styleRadio = harness.root.querySelector('input[data-act="sharekind"][value="style"]');
     styleRadio.click();
     styleRadio.dispatchEvent({ type: "change", target: styleRadio });
 
-    assert.equal(harness.root.querySelector('[data-act="unlockCost"]').value, "50", "Price 80 clamped to unlockCost 50 when switched to style");
+    const costInput2 = harness.root.querySelector('[data-act="unlockCost"]');
+    assert.ok(costInput2, "Style form restored with unlockCost input");
+
+    // Boundary test: input 80 -> clamped to 50
+    costInput2.value = "80";
+    costInput2.dispatchEvent({ type: "input", target: costInput2 });
+    costInput2.dispatchEvent({ type: "change", target: costInput2 });
+    assert.equal(costInput2.value, "50", "Cost 80 clamped to unlockCost 50");
 
     console.log("✓ Test 14 Passed: Preserved values and clamping across kind switches verified.");
   }

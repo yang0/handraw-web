@@ -743,17 +743,33 @@ class StudioRecipesTests(unittest.TestCase):
         self.assertIn(secret_text, bob_grow["prompt"], "Gateway / generation row prompt must contain injected blackbox guidance")
 
     def test_x2_from_work_does_not_leak_paid_prompt(self) -> None:
-        """X2: from-work must not leak paid work prompt sentences to unpurchased users."""
+        """X2: Work pricing rejected; from-work extracts prompt sentence for free works, hides masked prompts."""
         paid_secret_sentence = "PAID_SECRET_PROMPT_SENTENCE_ONE"
         full_paid_prompt = f"{paid_secret_sentence}。第二句补充细节文字内容。第三句结尾。"
 
-        # Bob creates a paid work with price=25 and NO subject
+        # Bob attempts to create a paid work with price=25 -> rejected with 400
+        with self.assertRaises(ServiceError) as cm:
+            publish_work_direct(
+                self.db,
+                self.user_b,
+                {
+                    "title": "尝试设价作品",
+                    "price": 25,
+                    "prompt": full_paid_prompt,
+                    "images": ["/uploads/bob_sample.webp"],
+                    "styles": ["FA-001"],
+                },
+            )
+        self.assertEqual(cm.exception.status, 400)
+        self.assertEqual(cm.exception.code, "work_price_not_allowed")
+
+        # Bob creates a free work without subject
         res_work = publish_work_direct(
             self.db,
             self.user_b,
             {
-                "title": "付费作品无主题",
-                "price": 25,
+                "title": "公开作品无主题",
+                "price": 0,
                 "prompt": full_paid_prompt,
                 "images": ["/uploads/bob_sample.webp"],
                 "styles": ["FA-001"],
@@ -761,29 +777,23 @@ class StudioRecipesTests(unittest.TestCase):
         )
         work_id = res_work["workId"]
 
-        # 1. Unpurchased user (Alice) views draft: prompt is masked, so subjectHint must be ""
+        # 1. Other user (Alice) views draft: free work exposes subjectHint from prompt first sentence
         st_alice, r_alice = self._req("GET", f"/api/studio/recipes/from-work/{work_id}", cookie=self.cookie_a)
         self.assertEqual(st_alice, 200)
-        self.assertEqual(r_alice["draft"]["subjectHint"], "", "Unpurchased user must NOT see private prompt sentence")
+        self.assertEqual(r_alice["draft"]["subjectHint"], paid_secret_sentence)
         self.assertEqual(r_alice["draft"]["subject"], "")
 
-        # 2. Purchased user: Alice unlocks the work
-        with self.db.transaction() as tx:
-            tx.execute(
-                """
-                INSERT INTO unlocks (user_id, target_type, target_id, cost, status, created_at)
-                VALUES (?, 'work', ?, 25, 'settled', '2026-10-31T00:00:00Z')
-                """,
-                (self.user_a["id"], work_id),
-            )
-        st_alice_unlocked, r_alice_unlocked = self._req("GET", f"/api/studio/recipes/from-work/{work_id}", cookie=self.cookie_a)
-        self.assertEqual(st_alice_unlocked, 200)
-        self.assertEqual(r_alice_unlocked["draft"]["subjectHint"], paid_secret_sentence)
-
-        # 3. Author (Bob) views draft: can see first sentence
+        # 2. Author (Bob) views draft: can see first sentence
         st_bob, r_bob = self._req("GET", f"/api/studio/recipes/from-work/{work_id}", cookie=self.cookie_b)
         self.assertEqual(st_bob, 200)
         self.assertEqual(r_bob["draft"]["subjectHint"], paid_secret_sentence)
+
+        # 3. Secret-bearing work hides subjectHint from unprivileged users
+        with self.db.transaction() as tx:
+            tx.execute("UPDATE works SET prompt_has_secret = 1 WHERE id = ?", (work_id,))
+        st_alice_masked, r_alice_masked = self._req("GET", f"/api/studio/recipes/from-work/{work_id}", cookie=self.cookie_a)
+        self.assertEqual(st_alice_masked, 200)
+        self.assertEqual(r_alice_masked["draft"]["subjectHint"], "", "Masked work prompt must NOT leak into subjectHint")
 
     def test_x3_prompt_preview_and_compose_kwargs(self) -> None:
         """X3: compose_prompt optional kwargs byte-for-byte baseline lock and preview propagation."""

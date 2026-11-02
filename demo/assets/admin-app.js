@@ -817,7 +817,7 @@
                     <div style="font-size:12px;color:var(--adm-ink-muted);">@${esc(w.authorUsername)}</div>
                   </td>
                   <td>
-                    <div>${w.price > 0 ? `<strong style="color:var(--adm-vermilion);">${w.price}✦ 锁配方</strong>` : `<span style="color:var(--adm-jade);">开源免费</span>`}</div>
+                    <div><span style="color:var(--adm-jade);">开源免费</span></div>
                     <div style="font-size:12px;color:var(--adm-ink-muted);">👍 ${w.likes ?? w.cheers} · 💬 ${w.commentsCount} · 🎁 ${w.tips}✦</div>
                   </td>
                   <td><span class="adm-badge ${esc(w.status)}">${esc(w.status)}</span></td>
@@ -2055,10 +2055,7 @@
         <div class="adm-field"><label>画风编号（逗号分隔）</label><input class="adm-input" id="mw-styles" value="${esc((work.styles || []).join(", "))}" /></div>
         <div class="adm-field"><label>图型编号</label><input class="adm-input" id="mw-layout" value="${esc(work.layout || "")}" /></div>
       </div>
-      <div class="adm-form-grid">
-        <div class="adm-field"><label>配方解锁定价 (✦，0 为免费开源)</label><input class="adm-input" type="number" id="mw-price" value="${work.price}" min="0" max="200" /></div>
-        <div class="adm-field"><label>情绪氛围标签</label><input class="adm-input" id="mw-mood" value="${esc(work.mood || "")}" /></div>
-      </div>
+      <div class="adm-field"><label>情绪氛围标签</label><input class="adm-input" id="mw-mood" value="${esc(work.mood || "")}" /></div>
       <div class="adm-field"><label>完整生图 Prompt</label><textarea class="adm-textarea" id="mw-prompt">${esc(work.prompt)}</textarea></div>
       <div class="adm-field"><label>审核修订原因</label><input class="adm-input" id="mw-reason" value="运营校准作品编号与元数据" /></div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
@@ -2076,7 +2073,6 @@
             title: document.getElementById("mw-title").value,
             styles: document.getElementById("mw-styles").value,
             layout: document.getElementById("mw-layout").value,
-            price: parseInt(document.getElementById("mw-price").value || "0", 10),
             mood: document.getElementById("mw-mood").value,
             prompt: document.getElementById("mw-prompt").value,
             reason: document.getElementById("mw-reason").value,

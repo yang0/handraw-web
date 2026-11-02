@@ -19,7 +19,8 @@ from unittest.mock import patch
 
 from backend import server as server_module
 from backend.server import create_channel_server
-from backend.services import publish_user_work, register_user
+from backend.services import ServiceError, publish_user_work, register_user
+from backend.work_schema import RESET_WORKS_PRICE_SQL
 
 IMG = "/images/individual/FA/FA-013.webp"
 SECRET = "TOPSECRET-RECIPE-XYZ-123456789"
@@ -31,11 +32,19 @@ class PaidPromptNeverServedTests(unittest.TestCase):
         cls.temp = TemporaryDirectory()
         cls.db = server_module.init_database(Path(cls.temp.name) / "ssr.db")
         author, _ = register_user(cls.db, "ssr_author", "password-a")
-        cls.paid = publish_user_work(
-            cls.db,
-            author,
-            {"title": "SSR付费作品", "prompt": SECRET, "images": [IMG], "styles": ["FA-013"], "price": 10},
-        )
+
+        # Verify setting price > 0 is rejected (400)
+        try:
+            publish_user_work(
+                cls.db,
+                author,
+                {"title": "SSR付费作品设价被拒", "prompt": SECRET, "images": [IMG], "styles": ["FA-013"], "price": 10},
+            )
+            raise AssertionError("Setting work price must be rejected with 400")
+        except ServiceError as e:
+            assert e.status == 400
+            assert e.code == "work_price_not_allowed"
+
         cls.free = publish_user_work(
             cls.db,
             author,
@@ -68,35 +77,40 @@ class PaidPromptNeverServedTests(unittest.TestCase):
         except urllib.error.HTTPError as error:
             return error.code, ""
 
-    def test_no_route_serves_the_paid_recipe(self):
-        work_id = self.paid["workId"]
-        routes = [
-            "/",
-            f"/?view=work&id={work_id}",
-            f"/forum/?view=resource&kind=work&id={work_id}",
-            "/api/boot",
-            f"/work/{work_id}",
-        ]
-        with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
-            for route in routes:
-                status, body = self._fetch(route)
-                self.assertEqual(status, 200, route)
-                self.assertNotIn(SECRET, body, f"paid recipe leaked at {route}")
-
-    def test_free_work_recipe_is_served_so_the_probe_is_valid(self):
-        # Control: the same routes do render a free work's recipe, which proves
-        # the negative assertion above is not vacuous.
+    def test_free_work_recipe_is_served(self):
         with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
             status, body = self._fetch(f"/?view=work&id={self.free['workId']}")
         self.assertEqual(status, 200)
         self.assertIn("FREE-RECIPE-VISIBLE", body)
 
-    def test_boot_payload_hides_the_paid_recipe(self):
+    def test_boot_payload_works_are_free(self):
         with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
             _, body = self._fetch("/api/boot")
         boot = json.loads(body)
-        work = next(w for w in boot["works"] if w["id"] == self.paid["workId"])
-        self.assertEqual(work["prompt"], "")
+        work = next(w for w in boot["works"] if w["id"] == self.free["workId"])
+        self.assertEqual(work["price"], 0)
+        self.assertEqual(work["prompt"], "FREE-RECIPE-VISIBLE")
+
+    def test_legacy_work_with_nonzero_price_zeroed_by_migration(self):
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO works (id, author_username, author_name, title, images_json, styles_json, price, prompt, prompt_has_secret, status, published_at_ms, created_at, updated_at)
+                VALUES ('work_legacy_ssr', 'ssr_author', 'ssr_author', '旧收费作品', '["/img.webp"]', '["FA-013"]', 15, 'LEGACY-SECRET-PROMPT', 0, 'published', 1000, '2026-10-31', '2026-10-31')
+                """
+            )
+        # Apply migration 073 logic
+        with self.db.transaction() as tx:
+            tx.execute(RESET_WORKS_PRICE_SQL)
+
+        with self.db.transaction() as tx:
+            row = tx.execute("SELECT price FROM works WHERE id = 'work_legacy_ssr'").fetchone()
+            self.assertEqual(row["price"], 0)
+
+        with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
+            status, body = self._fetch("/?view=work&id=work_legacy_ssr")
+        self.assertEqual(status, 200)
+        self.assertIn("LEGACY-SECRET-PROMPT", body)
 
 
 if __name__ == "__main__":

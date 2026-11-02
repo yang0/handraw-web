@@ -443,13 +443,12 @@ class Phase3sBlackboxTests(unittest.TestCase):
                 (secret,),
             )
 
-        # Alice publishes a paid work containing secret
+        # Alice publishes a work containing secret
         st_w_pub, r_w_pub = self._req(
             "POST",
             "/api/works",
             {
                 "title": "出口测试作品",
-                "price": 10,
                 "styles": ["FX-EXIT"],
                 "images": ["/images/poster-demo-autumn-equinox.webp"],
                 "notes": "这是实测笔记摘要记录详情",
@@ -524,16 +523,15 @@ class Phase3sBlackboxTests(unittest.TestCase):
         self.assertEqual(item_op["prompt"], "")
         self.assertTrue(item_op.get("promptMasked"))
 
-        # Test POST /api/unlocks by Bob on the work
+        # Test POST /api/unlocks by Bob on the work -> rejected with 400
         st_unl, r_unl = self._req(
             "POST",
             "/api/unlocks",
             {"targetType": "work", "targetId": work_exit_id},
             cookie=self.cookie_b,
         )
-        self.assertEqual(st_unl, 200)
-        self.assertEqual(r_unl["unlockedContent"], "")
-        self.assertTrue(r_unl.get("promptMasked"))
+        self.assertEqual(st_unl, 400)
+        self.assertEqual(r_unl.get("code"), "work_not_unlockable")
 
     def test_fail_closed_and_cache_behavior(self) -> None:
         """5. Clearing a secret doesn't unmask previously flagged rows; user text is never mangled."""

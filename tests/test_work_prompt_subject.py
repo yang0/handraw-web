@@ -160,27 +160,16 @@ class WorkPromptSubjectTests(unittest.TestCase):
         self.assertEqual(ser["prompt"], "手绘风插画，雨中街角面馆")
         self.assertEqual(ser["subject"], "雨中街角面馆，热气腾腾的一碗汤面")
 
-        # 2. Paid work (price = 5), serialized for stranger (locked)
+        # 2. Legacy work (even if DB had price = 5) is open and unpriced; prompt & subject visible
         with self.db.transaction() as tx:
             tx.execute("UPDATE works SET price = 5 WHERE id = ?", (wid,))
             row = tx.execute("SELECT * FROM works WHERE id = ?", (wid,)).fetchone()
 
-        ser_locked = S._serialize_work(row, {}, set(), None)
-        self.assertTrue(ser_locked["promptMasked"])
-        self.assertEqual(ser_locked["prompt"], "")
-        self.assertEqual(ser_locked["subject"], "", "subject must be empty when work is locked")
-
-        # Unlocked for author
-        ser_author = S._serialize_work(row, {}, set(), self.user)
-        self.assertFalse(ser_author["promptMasked"])
-        self.assertEqual(ser_author["prompt"], "手绘风插画，雨中街角面馆")
-        self.assertEqual(ser_author["subject"], "雨中街角面馆，热气腾腾的一碗汤面")
-
-        # Unlocked via unlocked_set
-        ser_unlocked = S._serialize_work(row, {}, {wid}, None)
-        self.assertFalse(ser_unlocked["promptMasked"])
-        self.assertEqual(ser_unlocked["prompt"], "手绘风插画，雨中街角面馆")
-        self.assertEqual(ser_unlocked["subject"], "雨中街角面馆，热气腾腾的一碗汤面")
+        ser_legacy = S._serialize_work(row, {}, set(), None)
+        self.assertFalse(ser_legacy["promptMasked"])
+        self.assertEqual(ser_legacy["price"], 0)
+        self.assertEqual(ser_legacy["prompt"], "手绘风插画，雨中街角面馆")
+        self.assertEqual(ser_legacy["subject"], "雨中街角面馆，热气腾腾的一碗汤面")
 
     def test_publish_work_direct_subject_validation_and_persistence(self):
         # Successful publish with subject
@@ -491,12 +480,12 @@ class WorkPromptSubjectTests(unittest.TestCase):
         self.assertNotIn(self.secret, txt_stranger)
         self.assertNotIn(self.secret[:20], txt_stranger)
 
-        # 2. Paid work (locked for stranger)
-        st_paid, r_paid = self._req(
+        # 2. Work pricing rejected (400)
+        st_bad_price, r_bad_price = self._req(
             "POST",
             "/api/works",
             {
-                "title": "付费作品未解锁",
+                "title": "付费作品设价被拒",
                 "prompt": "付费提示词",
                 "subject": "付费作品的主题内容文字",
                 "images": ["/images/individual/FA/FA-001.webp"],
@@ -506,40 +495,8 @@ class WorkPromptSubjectTests(unittest.TestCase):
             },
             cookie=self.cookie_user,
         )
-        self.assertEqual(st_paid, 200)
-        wid_paid = r_paid["workId"]
-
-        # Stranger calls from-work -> locked, subjectHint must be empty
-        st_stranger_paid, r_stranger_paid = self._req(
-            "GET",
-            f"/api/studio/recipes/from-work/{wid_paid}",
-            cookie=self.cookie_stranger,
-        )
-        self.assertEqual(st_stranger_paid, 200)
-        self.assertEqual(r_stranger_paid["draft"]["subjectHint"], "", "subjectHint must be empty for locked paid work")
-
-        # Author calls from-work -> author unlocked, returns subjectHint
-        st_author_paid, r_author_paid = self._req(
-            "GET",
-            f"/api/studio/recipes/from-work/{wid_paid}",
-            cookie=self.cookie_user,
-        )
-        self.assertEqual(st_author_paid, 200)
-        self.assertEqual(r_author_paid["draft"]["subjectHint"], "付费作品的主题内容文字")
-
-        # 4. Stranger unlocks paid work -> returns subjectHint
-        with self.db.transaction() as tx:
-            tx.execute(
-                "INSERT INTO unlocks (user_id, target_type, target_id, cost, status, created_at) VALUES (?, 'work', ?, 10, 'settled', ?)",
-                (self.stranger["id"], wid_paid, S.utc_now_iso()),
-            )
-        st_stranger_unlocked, r_stranger_unlocked = self._req(
-            "GET",
-            f"/api/studio/recipes/from-work/{wid_paid}",
-            cookie=self.cookie_stranger,
-        )
-        self.assertEqual(st_stranger_unlocked, 200)
-        self.assertEqual(r_stranger_unlocked["draft"]["subjectHint"], "付费作品的主题内容文字")
+        self.assertEqual(st_bad_price, 400)
+        self.assertEqual(r_bad_price.get("code"), "work_price_not_allowed")
 
         # 3. Clean free work -> returns subjectHint up to 80 chars
         st_clean, r_clean = self._req(
