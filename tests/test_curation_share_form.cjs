@@ -1391,8 +1391,146 @@ async function runAllTests() {
     console.log("✓ Test 19 Passed: Tip to use file selection displayed when only HTML or link is pasted.");
   }
 
+  // ==========================================
+  // TEST 20: 虚线上传区形态、可发现性、粘贴高亮与拖放集成
+  // ==========================================
+  {
+    console.log("\n--- Test 20: 虚线上传区形态、可发现性、粘贴高亮与拖放集成 ---");
+    MockImage.defaultWidth = 800;
+    MockImage.defaultHeight = 800;
+
+    const harness = createHarness();
+    harness.Curation.render(harness.root, { kind: "style" });
+
+    // 20.1: 虚线上传区结构与中文文案
+    const coverDz = harness.root.querySelector('.curation-cover .curation-dropzone');
+    const examplesDz = harness.root.querySelector('.curation-examples .curation-dropzone');
+    assert.ok(coverDz, "Cover has .curation-dropzone");
+    assert.ok(examplesDz, "Examples has .curation-dropzone");
+
+    const coverBtn = coverDz.querySelector(".curation-dropzone-btn");
+    assert.equal(coverBtn ? coverBtn.textContent : "", "选择图片", "Cover has '选择图片' button");
+    const coverDeskDesc = coverDz.querySelector(".curation-dropzone-desc-desk");
+    assert.ok(coverDeskDesc && coverDeskDesc.textContent.includes("选择、拖入或粘贴图片；自动居中裁为正方形"), "Cover desktop desc matches spec");
+    const coverFieldLabel = harness.root.querySelector(".curation-cover .curation-field-label");
+    assert.ok(coverFieldLabel && coverFieldLabel.textContent.includes("封面图 · 必填"), "Cover field title matches '封面图 · 必填'");
+
+    const exBtn = examplesDz.querySelector(".curation-dropzone-btn");
+    assert.equal(exBtn ? exBtn.textContent : "", "选择图片", "Examples has '选择图片' button");
+    const exDeskDesc = examplesDz.querySelector(".curation-dropzone-desc-desk");
+    assert.ok(exDeskDesc && exDeskDesc.textContent.includes("选择、拖入或粘贴图片，比例不限"), "Examples desktop desc matches spec");
+    const exFieldLabel = harness.root.querySelector(".curation-examples .curation-field-label");
+    assert.ok(exFieldLabel && exFieldLabel.textContent.includes("示例图 · 可选，0–9 张"), "Examples field title matches '示例图 · 可选，0–9 张'");
+
+    // 20.2: 隐藏原生控件但保留 input
+    const coverInput = coverDz.querySelector('input[type="file"][data-act="cover"]');
+    assert.ok(coverInput, "Cover has real input[type=file]");
+    assert.ok(coverInput.classList.contains("curation-file-input"), "Cover input has curation-file-input class");
+    const exInput = examplesDz.querySelector('input[type="file"][data-act="file"]');
+    assert.ok(exInput && exInput.getAttribute("multiple") !== null, "Examples has real input[type=file][multiple]");
+
+    // 20.3: 点击/聚焦高亮当前粘贴目标与快捷键提示
+    coverDz.click();
+    assert.ok(coverDz.classList.contains("curation-dropzone-active"), "Cover dropzone becomes active on click");
+    assert.ok(!examplesDz.classList.contains("curation-dropzone-active"), "Examples dropzone is not active when cover is clicked");
+    const coverTargetEl = coverDz.querySelector(".curation-dropzone-target");
+    assert.ok(coverTargetEl && coverTargetEl.textContent.includes("当前粘贴到：封面"), "Cover target indicates '当前粘贴到：封面'");
+    assert.ok(coverTargetEl && coverTargetEl.textContent.includes("Ctrl+V"), "Cover target includes desktop shortcut hint");
+
+    examplesDz.click();
+    assert.ok(examplesDz.classList.contains("curation-dropzone-active"), "Examples dropzone becomes active on click");
+    assert.ok(!coverDz.classList.contains("curation-dropzone-active"), "Cover dropzone deactivated when examples is clicked");
+    const exTargetEl = examplesDz.querySelector(".curation-dropzone-target");
+    assert.ok(exTargetEl && exTargetEl.textContent.includes("当前粘贴到：示例图"), "Examples target indicates '当前粘贴到：示例图'");
+
+    // 20.4: 明确选中封面才允许替换已有封面
+    coverDz.click();
+    const coverFile1 = { name: "cov1.png", size: 1000 };
+    harness.root.querySelector(".curation-form").dispatchEvent({
+      type: "paste",
+      target: harness.root.querySelector(".curation-form"),
+      clipboardData: {
+        files: [coverFile1],
+        items: [{ kind: "file", type: "image/png", getAsFile: () => coverFile1 }],
+        getData: () => ""
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const cover1Src = harness.root.querySelector(".curation-cover-preview img").getAttribute("data-hw-src");
+    assert.ok(cover1Src, "Cover 1 uploaded");
+
+    // Switch active target to examples: paste should NOT replace cover
+    examplesDz.click();
+    const exFile1 = { name: "ex1.png", size: 1000 };
+    harness.root.querySelector(".curation-form").dispatchEvent({
+      type: "paste",
+      target: harness.root.querySelector(".curation-form"),
+      clipboardData: {
+        files: [exFile1],
+        items: [{ kind: "file", type: "image/png", getAsFile: () => exFile1 }],
+        getData: () => ""
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const coverAfterExPaste = harness.root.querySelector(".curation-cover-preview img").getAttribute("data-hw-src");
+    assert.equal(coverAfterExPaste, cover1Src, "Cover unchanged when pasting with examples active");
+    const exCount1 = harness.root.querySelectorAll(".curation-examples .curation-imgs .curation-thumb").length;
+    assert.equal(exCount1, 1, "Pasted image joined examples");
+
+    // Explicitly select coverDz again: paste SHOULD replace cover
+    coverDz.click();
+    const coverFile2 = { name: "cov2.png", size: 1000 };
+    harness.root.querySelector(".curation-form").dispatchEvent({
+      type: "paste",
+      target: harness.root.querySelector(".curation-form"),
+      clipboardData: {
+        files: [coverFile2],
+        items: [{ kind: "file", type: "image/png", getAsFile: () => coverFile2 }],
+        getData: () => ""
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const cover2Src = harness.root.querySelector(".curation-cover-preview img").getAttribute("data-hw-src");
+    assert.notEqual(cover2Src, cover1Src, "Explicitly selected cover area replaced existing cover");
+
+    // 20.5: 拖放集成（dragenter / dragleave / drop）
+    coverDz.dispatchEvent({ type: "dragenter" });
+    assert.ok(coverDz.classList.contains("curation-dropzone-dragover"), "dragenter adds curation-dropzone-dragover");
+    coverDz.dispatchEvent({ type: "dragleave", relatedTarget: null });
+    assert.ok(!coverDz.classList.contains("curation-dropzone-dragover"), "dragleave removes curation-dropzone-dragover");
+
+    // Drop on cover
+    const dropCoverFile = { name: "drop_cover.png", size: 1200 };
+    coverDz.dispatchEvent({
+      type: "drop",
+      dataTransfer: {
+        files: [dropCoverFile]
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(!coverDz.classList.contains("curation-dropzone-dragover"), "drop clears dragover class");
+    const lastUpload = harness.apiCalls[harness.apiCalls.length - 1];
+    assert.ok(lastUpload && lastUpload.url === "/api/uploads", "Drop triggered uploadFiles");
+
+    // 20.6: 作品模式下的虚线上传区
+    const harnessWork = createHarness();
+    harnessWork.Curation.render(harnessWork.root, { kind: "work" });
+    const workDz = harnessWork.root.querySelector('.curation-dropzone[data-dropzone="work"]');
+    assert.ok(workDz, "Work form has [data-dropzone=work]");
+    const workBtn = workDz.querySelector(".curation-dropzone-btn");
+    assert.equal(workBtn ? workBtn.textContent : "", "选择图片", "Work has '选择图片' button");
+    const workDeskDesc = workDz.querySelector(".curation-dropzone-desc-desk");
+    assert.ok(workDeskDesc && workDeskDesc.textContent.includes("最多 9 张"), "Work desktop desc matches '最多 9 张'");
+    workDz.click();
+    assert.ok(workDz.classList.contains("curation-dropzone-active"), "Work dropzone becomes active on click");
+    const workTargetEl = workDz.querySelector(".curation-dropzone-target");
+    assert.ok(workTargetEl && workTargetEl.textContent.includes("当前粘贴到：作品图片"), "Work target indicates '当前粘贴到：作品图片'");
+
+    console.log("✓ Test 20 Passed: Dashed dropzones, discoverability, active targets, and drag-and-drop verified.");
+  }
+
   console.log("\n=======================================================");
-  console.log("ALL 19 CURATION SHARE FORM TESTS PASSED SUCCESSFULLY!");
+  console.log("ALL 20 CURATION SHARE FORM TESTS PASSED SUCCESSFULLY!");
   console.log("=======================================================\n");
 }
 

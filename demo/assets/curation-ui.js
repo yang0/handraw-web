@@ -221,6 +221,38 @@
     var model = shareModelFrom(null, kindDefault);
     model.requestId = uuid();
     var resourceCache = {};
+    var activeTarget = null;
+
+    function updateActiveDropzoneUI() {
+      var isWork = model.kind === "work";
+      var dzs = root.querySelectorAll(".curation-dropzone");
+      dzs.forEach(function (dz) {
+        var tType = dz.getAttribute("data-target");
+        var isActive = Boolean(activeTarget && (activeTarget === tType || (isWork && tType === "file")));
+        if (isActive) {
+          dz.classList.add("curation-dropzone-active");
+        } else {
+          dz.classList.remove("curation-dropzone-active");
+        }
+        var targetEl = dz.querySelector(".curation-dropzone-target");
+        if (targetEl) {
+          if (isActive) {
+            var label = tType === "cover" ? "封面" : (isWork ? "作品图片" : "示例图");
+            targetEl.innerHTML = '<span class="curation-dropzone-target-text">当前粘贴到：' + label + '</span>' +
+              '<span class="curation-dropzone-shortcut">（按 Ctrl+V / ⌘V 粘贴）</span>';
+            targetEl.removeAttribute("hidden");
+          } else {
+            targetEl.innerHTML = "";
+            targetEl.setAttribute("hidden", "hidden");
+          }
+        }
+      });
+    }
+
+    function setActiveTarget(t) {
+      activeTarget = t;
+      updateActiveDropzoneUI();
+    }
 
     function resourceLabel(code, kind) {
       if (!code) return "";
@@ -291,8 +323,22 @@
               return '<figure class="curation-thumb-wrap">' + imgTag(src, "预览") +
                 '<button type="button" class="curation-x" data-act="delimg" data-idx="0" data-i="' + i + '" aria-label="删除图片">×</button></figure>';
             }).join("") + '</div>' +
-            '<label class="curation-field">作品图片（最多 9 张）<span class="curation-field-err" data-err-for="file"></span>' +
-              '<input type="file" accept="image/*" multiple data-act="file" data-idx="0">' +
+            '<label class="curation-field">' +
+              '<span class="curation-field-label">作品图片<span class="curation-field-err" data-err-for="file"></span></span>' +
+              '<div class="curation-dropzone" data-dropzone="work" data-target="file" data-idx="0" tabindex="0" role="region" aria-label="作品图片上传区">' +
+                '<input type="file" accept="image/*" multiple data-act="file" data-idx="0" class="curation-file-input" aria-label="上传作品图片">' +
+                '<div class="curation-dropzone-body">' +
+                  '<div class="curation-dropzone-icon" aria-hidden="true">' +
+                    '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg>' +
+                  '</div>' +
+                  '<span class="curation-dropzone-btn">选择图片</span>' +
+                  '<p class="curation-dropzone-desc">' +
+                    '<span class="curation-dropzone-desc-desk">选择、拖入或粘贴图片，最多 9 张</span>' +
+                    '<span class="curation-dropzone-desc-mob">点击选择图片，最多 9 张</span>' +
+                  '</p>' +
+                  '<div class="curation-dropzone-target" aria-live="polite" hidden></div>' +
+                '</div>' +
+              '</div>' +
             '</label>' +
             '<label class="curation-field">生图提示词<span class="curation-field-err" data-err-for="prompt"></span>' +
               '<textarea data-act="prompt" data-idx="0" rows="5" maxlength="20000" placeholder="粘贴实际发给模型的完整提示词">' + esc(it.prompt || "") + '</textarea>' +
@@ -332,15 +378,43 @@
               '<input data-act="name" data-idx="0" value="' + esc(it.name || "") + '" maxlength="80" placeholder="如：江南淡墨">' +
             '</label>' +
             '<div class="curation-cover">' +
-              '<label class="curation-field">封面（必填，正方形）<span class="curation-field-err" data-err-for="cover"></span>' +
-                '<input type="file" accept="image/*" data-act="cover" data-idx="0">' +
+              '<label class="curation-field">' +
+                '<span class="curation-field-label">封面图 · 必填<span class="curation-field-err" data-err-for="cover"></span></span>' +
+                '<div class="curation-dropzone" data-dropzone="cover" data-target="cover" data-idx="0" tabindex="0" role="region" aria-label="封面上传区">' +
+                  '<input type="file" accept="image/*" data-act="cover" data-idx="0" class="curation-file-input" aria-label="上传封面图">' +
+                  '<div class="curation-dropzone-body">' +
+                    '<div class="curation-dropzone-icon" aria-hidden="true">' +
+                      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg>' +
+                    '</div>' +
+                    '<span class="curation-dropzone-btn">选择图片</span>' +
+                    '<p class="curation-dropzone-desc">' +
+                      '<span class="curation-dropzone-desc-desk">选择、拖入或粘贴图片；自动居中裁为正方形</span>' +
+                      '<span class="curation-dropzone-desc-mob">点击选择图片；自动居中裁为正方形</span>' +
+                    '</p>' +
+                    '<div class="curation-dropzone-target" aria-live="polite" hidden></div>' +
+                  '</div>' +
+                '</div>' +
               '</label>' +
               coverPreviewHtml +
               '<p class="curation-help">' + esc(coverHelpText) + '</p>' +
             '</div>' +
             '<div class="curation-examples">' +
-              '<label class="curation-field">示例图（可选，0–9 张，比例不限）<span class="curation-field-err" data-err-for="file"></span>' +
-                '<input type="file" accept="image/*" multiple data-act="file" data-idx="0">' +
+              '<label class="curation-field">' +
+                '<span class="curation-field-label">示例图 · 可选，0–9 张<span class="curation-field-err" data-err-for="file"></span></span>' +
+                '<div class="curation-dropzone" data-dropzone="examples" data-target="file" data-idx="0" tabindex="0" role="region" aria-label="示例图上传区">' +
+                  '<input type="file" accept="image/*" multiple data-act="file" data-idx="0" class="curation-file-input" aria-label="上传示例图">' +
+                  '<div class="curation-dropzone-body">' +
+                    '<div class="curation-dropzone-icon" aria-hidden="true">' +
+                      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" ry="3"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg>' +
+                    '</div>' +
+                    '<span class="curation-dropzone-btn">选择图片</span>' +
+                    '<p class="curation-dropzone-desc">' +
+                      '<span class="curation-dropzone-desc-desk">选择、拖入或粘贴图片，比例不限</span>' +
+                      '<span class="curation-dropzone-desc-mob">点击选择图片，比例不限</span>' +
+                    '</p>' +
+                    '<div class="curation-dropzone-target" aria-live="polite" hidden></div>' +
+                  '</div>' +
+                '</div>' +
               '</label>' +
               examplesThumbHtml +
             '</div>' +
@@ -473,6 +547,7 @@
     function onKindChange(e) {
       var newKind = e.target.value;
       if (newKind === model.kind) return;
+      activeTarget = null;
 
       if (newKind === "work") {
         var it = model.items[0] || {};
@@ -874,13 +949,13 @@
       } else {
         var isCover = false;
         if (targetEl && targetEl.closest) {
-          if (targetEl.closest(".curation-cover") || (targetEl.getAttribute && targetEl.getAttribute("data-act") === "cover")) {
+          if (targetEl.closest(".curation-cover") || targetEl.closest('[data-dropzone="cover"]') || (targetEl.getAttribute && targetEl.getAttribute("data-act") === "cover")) {
             isCover = true;
           }
         }
         var isExamples = false;
         if (targetEl && targetEl.closest) {
-          if (targetEl.closest(".curation-examples") || (targetEl.getAttribute && targetEl.getAttribute("data-act") === "file")) {
+          if (targetEl.closest(".curation-examples") || targetEl.closest('[data-dropzone="examples"]') || (targetEl.getAttribute && targetEl.getAttribute("data-act") === "file")) {
             isExamples = true;
           }
         }
@@ -888,6 +963,10 @@
         if (isCover) {
           targetType = "cover";
         } else if (isExamples) {
+          targetType = "file";
+        } else if (activeTarget === "cover") {
+          targetType = "cover";
+        } else if (activeTarget === "file") {
           targetType = "file";
         } else {
           targetType = "auto";
@@ -1179,8 +1258,88 @@
       });
     }
 
+    function bindDropzones() {
+      var dzs = root.querySelectorAll(".curation-dropzone");
+      dzs.forEach(function (dz) {
+        var tType = dz.getAttribute("data-target") || "file";
+
+        function onActivate() {
+          setActiveTarget(tType);
+        }
+
+        dz.addEventListener("click", onActivate);
+        dz.addEventListener("focusin", onActivate);
+
+        var input = dz.querySelector("input[type=file]");
+        if (input) {
+          input.addEventListener("focus", onActivate);
+          input.addEventListener("click", onActivate);
+        }
+
+        dz.addEventListener("dragenter", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          dz.classList.add("curation-dropzone-dragover");
+        });
+        dz.addEventListener("dragover", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer) {
+            try { e.dataTransfer.dropEffect = "copy"; } catch (err) {}
+          }
+          dz.classList.add("curation-dropzone-dragover");
+        });
+        dz.addEventListener("dragleave", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.relatedTarget && typeof dz.contains === "function" && dz.contains(e.relatedTarget)) {
+            return;
+          }
+          dz.classList.remove("curation-dropzone-dragover");
+        });
+        dz.addEventListener("drop", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          dz.classList.remove("curation-dropzone-dragover");
+          setActiveTarget(tType);
+
+          var dt = e.dataTransfer;
+          if (!dt) return;
+
+          var rawFiles = [];
+          if (dt.files && dt.files.length) {
+            rawFiles = Array.from(dt.files);
+          } else if (dt.items && dt.items.length) {
+            for (var i = 0; i < dt.items.length; i++) {
+              var itm = dt.items[i];
+              if (itm && itm.kind === "file") {
+                var f = typeof itm.getAsFile === "function" ? itm.getAsFile() : null;
+                if (f) rawFiles.push(f);
+              }
+            }
+          }
+
+          var imageFiles = rawFiles.filter(function (file) {
+            var fType = (file.type || "").toLowerCase();
+            return fType.indexOf("image/") === 0 || (!fType && file.name && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(file.name));
+          });
+
+          if (!imageFiles.length) {
+            return;
+          }
+
+          var idx = parseInt(dz.getAttribute("data-idx"), 10) || 0;
+          uploadFiles(imageFiles, idx, tType);
+        });
+      });
+    }
+
     function bindShare() {
       var form = root.querySelector(".curation-form"); if (!form) return;
+      bindDropzones();
+      updateActiveDropzoneUI();
+      form.addEventListener("dragover", function (e) { e.preventDefault(); });
+      form.addEventListener("drop", function (e) { e.preventDefault(); });
       form.addEventListener("input", onInput);
       form.addEventListener("paste", onPaste);
       form.addEventListener("change", function (e) {
