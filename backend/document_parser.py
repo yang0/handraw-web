@@ -316,10 +316,34 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
         return fallback_parse_article(clean_raw, filename, fallback_reason="timeout_or_error", truncated=truncated)
 
 
+def _strip_duplicate_heading(markdown: str, title: str) -> str:
+    """Drop a leading H1 that merely repeats the title already shown above it.
+
+    The structuring prompt asks for the heading inside the markdown, but the
+    editor renders the title in its own field, so keeping both showed it twice.
+    """
+    lines = str(markdown or "").split("\n")
+    idx = 0
+    while idx < len(lines) and not lines[idx].strip():
+        idx += 1
+    if idx >= len(lines):
+        return markdown
+    first = lines[idx].strip()
+    if not first.startswith("# ") or first.startswith("## "):
+        return markdown
+    if first[2:].strip() != str(title or "").strip():
+        return markdown
+    rest = lines[idx + 1:]
+    while rest and not rest[0].strip():
+        rest.pop(0)
+    return "\n".join(rest)
+
+
 def parse_article_file(file_bytes: bytes, filename: str = "") -> Dict[str, Any]:
     """Complete entrypoint: extract document text and run AI structuring."""
     raw_text = extract_text_from_file(file_bytes, filename)
     result = ai_parse_article(raw_text, filename)
+    result["markdown"] = _strip_duplicate_heading(result.get("markdown", ""), result.get("title", ""))
     result["fileName"] = filename
     result["rawLength"] = len(raw_text)
     return result

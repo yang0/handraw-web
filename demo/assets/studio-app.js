@@ -10078,11 +10078,12 @@
 
     pop.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 4px 6px;border-bottom:1px solid var(--ic-border);">
-        <span style="font-size:12px;font-weight:850;">全部已打开工作流 (${CS.tabs.length})</span>
+        <span style="font-size:12px;font-weight:850;">全部已打开工作流 (${CS.tabs.filter((t) => !isArticleTab(t)).length})</span>
         <button type="button" class="btn btn-sm btn-primary" id="atp-new-blank" style="padding:2px 8px;font-size:11px;">＋ 新建空白页</button>
       </div>
       <div class="ic-all-tabs-list">
         ${CS.tabs
+          .filter((t) => !isArticleTab(t))
           .map((t, idx) => {
             const nCnt = t.graph?.nodes?.length || 0;
             const cleanTitle = String(t.title || "未命名").replace(/^[\p{Extended_Pictographic}\uFE0F\s]+/u, "") || "未命名";
@@ -10158,6 +10159,7 @@
         <button type="button" class="ic-tab-nav-btn" id="tb-scroll-left" title="向左滚动标签栏" style="display:none;">‹</button>
         <div class="ic-tabs-track" id="ic-tabs-track">
           ${CS.tabs
+            .filter((t) => !isArticleTab(t))
             .map((t) => {
               const isAct = CS.stageView === "canvas" && t.id === CS.activeTabId;
               const isRenaming = CS.renamingTabId === t.id;
@@ -10181,7 +10183,7 @@
         <button type="button" class="ic-tab-nav-btn" id="tb-scroll-right" title="向右滚动标签栏" style="display:none;">›</button>
         <div class="ic-tabs-pinned">
           <button type="button" class="ic-tab-action-pill" id="tb-new-wf" title="新建工作流标签页">＋ 新建 ▾</button>
-          <button type="button" class="ic-tab-action-pill" id="tb-all-tabs" title="展开全部已打开标签页列表">已打开 ${CS.tabs.length} ▾</button>
+          <button type="button" class="ic-tab-action-pill" id="tb-all-tabs" title="展开全部已打开标签页列表">已打开 ${CS.tabs.filter((t) => !isArticleTab(t)).length} ▾</button>
           <button type="button" class="ic-tab-action-pill ${CS.stageView === "workflows" ? "is-active" : ""}" id="tb-open-wflib" title="查看我保存的工作流">工作流</button>
         </div>
       </div>
@@ -14312,9 +14314,11 @@
       else if (state === "empty") el.textContent = "未填写";
     };
 
-    const commitSync = ({ bumpTime = true, markSaved = true } = {}) => {
+    const commitSync = ({ bumpTime = true, markSaved = true, collect = true } = {}) => {
       if (!isCurrentEditor()) return false;
-      collectDraftFromInputs(draft);
+      // A caller that just wrote the draft itself must not have it read back from
+      // inputs that have not been re-rendered yet -- an import would be erased.
+      if (collect) collectDraftFromInputs(draft);
       const saved = syncArticleEditorDraftToHistory(draft, { bumpTime });
       if (markSaved) {
         if (saved && draft.id) {
@@ -14595,7 +14599,8 @@
             commitArticleTargetChanges(target, { bumpTime: true });
 
             CS.articleDocReplacedNotice = true;
-            commitSync({ bumpTime: true, markSaved: true });
+            renderFullPreviewStage();
+            commitSync({ bumpTime: true, markSaved: true, collect: false });
             renderFullPreviewStage();
 
             let succMsg = res.aiUsed ? "已用 AI 整理为 Markdown" : "AI 不可用，已按原文导入，标题需要手动调整";
