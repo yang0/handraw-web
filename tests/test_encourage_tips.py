@@ -196,7 +196,7 @@ class TestEncourageTips(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "self_tip_not_allowed")
 
     def test_05_inaccessible_target_and_invalid_amount(self):
-        """5. Inaccessible targets return 404; non-2 amount for topics returns 400."""
+        """5. Inaccessible targets return 404; out-of-range, non-integer, or invalid types return 400."""
         # Non-existent target
         with self.assertRaises(ServiceError) as ctx:
             send_encourage_tip(self.db, self.u_tipper, "topic", "t_non_existent", amount=2)
@@ -207,11 +207,13 @@ class TestEncourageTips(unittest.TestCase):
             send_encourage_tip(self.db, self.u_tipper, "topic", "t_draft_01", amount=2)
         self.assertEqual(ctx.exception.status, 404)
 
-        # Invalid amount for topic (must be 2)
-        with self.assertRaises(ServiceError) as ctx:
-            send_encourage_tip(self.db, self.u_tipper, "topic", "t_free_01", amount=5)
-        self.assertEqual(ctx.exception.status, 400)
-        self.assertEqual(ctx.exception.code, "invalid_tip_amount")
+        # Invalid amounts: out of range (0, 51, -1) and non-integers (2.5, "5", True)
+        for invalid_amt in (0, 51, -1, 2.5, "5", True):
+            with self.subTest(amount=invalid_amt):
+                with self.assertRaises(ServiceError) as ctx:
+                    send_encourage_tip(self.db, self.u_tipper, "topic", "t_free_01", amount=invalid_amt)
+                self.assertEqual(ctx.exception.status, 400)
+                self.assertEqual(ctx.exception.code, "invalid_tip_amount")
 
     def test_06_idempotent_request_id(self):
         """6. Repeated request with identical request_id only settles once."""
@@ -277,7 +279,8 @@ class TestEncourageTips(unittest.TestCase):
         # Should NOT increment because already liked!
         self.assertEqual(likes_after_tip, 4)
 
-        # Step 3: User tips again with different request_id
+        # Step 3: Advance past 60s rate limit window and tip again with different request_id
+        conn.execute("UPDATE tip_requests SET created_at = '2026-11-01T00:00:00Z' WHERE user_id = ?", (self.u_tipper["id"],))
         send_encourage_tip(self.db, self.u_tipper, "topic", "t_free_01", amount=2, request_id="tip_step3")
         likes_after_tip2 = int(conn.execute("SELECT likes FROM forum_topics WHERE id = 't_free_01'").fetchone()["likes"])
         self.assertEqual(likes_after_tip2, 4)
@@ -295,6 +298,179 @@ class TestEncourageTips(unittest.TestCase):
 
         work_tips_after = int(conn.execute("SELECT tips FROM works WHERE id = 'w_test_01'").fetchone()["tips"])
         self.assertEqual(work_tips_after - work_tips_before, 2)
+
+    def test_10_custom_and_preset_amounts_all_targets(self):
+        """10. Presets (2, 5, 10, 20✦) and custom amounts (1, 42, 50✦) settle correctly across targets."""
+        conn = self.db.get_conn()
+        tipper = dict(self.u_tipper)
+        author = dict(self.u_author)
+
+        # Free topic with preset 10✦
+        conn.execute("UPDATE tip_requests SET created_at = '2026-11-01T00:00:00Z'")
+        t_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+        a_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (author["id"],)).fetchone()["balance"])
+        res_t = send_encourage_tip(self.db, tipper, "topic", "t_free_01", amount=10)
+        self.assertTrue(res_t["ok"])
+        self.assertEqual(res_t["amount"], 10)
+        t_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+        a_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (author["id"],)).fetchone()["balance"])
+        self.assertEqual(t_bal_before - t_bal_after, 10)
+        self.assertEqual(a_bal_after - a_bal_before, 10)
+
+        # Work with boundary custom 50✦
+        conn.execute("UPDATE tip_requests SET created_at = '2026-11-01T00:00:00Z'")
+        w_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+        w_res = send_encourage_tip(self.db, tipper, "work", "w_test_01", amount=50)
+        self.assertTrue(w_res["ok"])
+        self.assertEqual(w_res["amount"], 50)
+        w_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+        self.assertEqual(w_bal_before - w_bal_after, 50)
+
+    def test_11_insufficient_balance_does_not_deduct(self):
+        """11. Tipping when balance is insufficient fails without deducting credits or logging rate limit."""
+        u_poor, _ = register_user(self.db, "poor_user", "Pass123!Safe")
+        conn = self.db.get_conn()
+        # Set balance strictly to 5 credits (new users receive welcome credits by default)
+        conn.execute("UPDATE wallets SET balance = 5 WHERE user_id = ?", (u_poor["id"],))
+        conn.commit()
+
+        with self.assertRaises(ServiceError) as ctx:
+            send_encourage_tip(self.db, u_poor, "topic", "t_free_01", amount=10)
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.code, "insufficient_credits")
+
+        # Balance remains unchanged at 5
+        bal = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (u_poor["id"],)).fetchone()["balance"])
+        self.assertEqual(bal, 5)
+
+        # No record in tip_requests
+        reqs = conn.execute("SELECT COUNT(*) FROM tip_requests WHERE user_id = ?", (u_poor["id"],)).fetchone()[0]
+        self.assertEqual(reqs, 0)
+
+    def test_12_rate_limit_same_target_60s(self):
+        """12. Second tip to same actual target within 60s is rejected with 429 and does not deduct."""
+        conn = self.db.get_conn()
+        tipper = dict(self.u_tipper)
+
+        # First tip succeeds
+        res1 = send_encourage_tip(self.db, tipper, "topic", "t_free_01", amount=2)
+        self.assertTrue(res1["ok"])
+
+        bal_after_first = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+
+        # Second tip within 60s to same topic is rejected
+        with self.assertRaises(ServiceError) as ctx:
+            send_encourage_tip(self.db, tipper, "topic", "t_free_01", amount=5)
+        self.assertEqual(ctx.exception.status, 429)
+        self.assertEqual(ctx.exception.code, "rate_limited")
+
+        # Rejected attempt does NOT deduct balance
+        bal_after_rej = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+        self.assertEqual(bal_after_first, bal_after_rej)
+
+    def test_13_rate_limit_max_5_per_minute(self):
+        """13. Sixth tip across all targets within 60s is rejected with 429."""
+        conn = self.db.get_conn()
+        tipper = dict(self.u_tipper)
+        now_iso = "2026-11-02T00:00:00Z"
+
+        # Create 6 distinct topics
+        with self.db.transaction() as tx:
+            for i in range(1, 7):
+                tx.execute(
+                    """
+                    INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, price, status, likes, favorites, published_at_ms, images_json, styles_json, summary, created_at, updated_at)
+                    VALUES (?, 'tuning', '技术调优', ?, 'author_user', '作者名', 0, 'published', 0, 0, 1700000000000, '[]', '[]', '摘要', ?, ?)
+                    """,
+                    (f"t_quota_{i}", f"配额测试帖{i}", now_iso, now_iso),
+                )
+
+        # Tips 1 to 5 to different targets succeed
+        for i in range(1, 6):
+            res = send_encourage_tip(self.db, tipper, "topic", f"t_quota_{i}", amount=2)
+            self.assertTrue(res["ok"])
+
+        bal_after_five = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+
+        # 6th tip within the same minute is rejected
+        with self.assertRaises(ServiceError) as ctx:
+            send_encourage_tip(self.db, tipper, "topic", "t_quota_6", amount=2)
+        self.assertEqual(ctx.exception.status, 429)
+        self.assertEqual(ctx.exception.code, "rate_limited")
+
+        # Balance did not decrease
+        bal_after_sixth = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+        self.assertEqual(bal_after_five, bal_after_sixth)
+
+    def test_14_bound_topic_cannot_bypass_rate_limit(self):
+        """14. Tipping bound topic resolves to underlying work and shares the 60s target rate limit."""
+        conn = self.db.get_conn()
+        tipper = dict(self.u_tipper)
+
+        # 1. Tip bound topic t_work_mapped_01 (resolves to w_test_01)
+        res1 = send_encourage_tip(self.db, tipper, "topic", "t_work_mapped_01", amount=2)
+        self.assertTrue(res1["ok"])
+        self.assertEqual(res1["targetType"], "work")
+        self.assertEqual(res1["targetId"], "w_test_01")
+
+        # 2. Immediately try to tip w_test_01 directly within 60s -> rejected!
+        with self.assertRaises(ServiceError) as ctx:
+            send_encourage_tip(self.db, tipper, "work", "w_test_01", amount=5)
+        self.assertEqual(ctx.exception.status, 429)
+        self.assertEqual(ctx.exception.code, "rate_limited")
+
+        # 3. Advance time past 60s, tip w_test_01 directly -> succeeds
+        conn.execute("UPDATE tip_requests SET created_at = '2026-11-01T00:00:00Z' WHERE user_id = ?", (tipper["id"],))
+        res2 = send_encourage_tip(self.db, tipper, "work", "w_test_01", amount=5)
+        self.assertTrue(res2["ok"])
+
+        # 4. Immediately try to tip t_work_mapped_01 within 60s -> rejected!
+        with self.assertRaises(ServiceError) as ctx:
+            send_encourage_tip(self.db, tipper, "topic", "t_work_mapped_01", amount=2)
+        self.assertEqual(ctx.exception.status, 429)
+        self.assertEqual(ctx.exception.code, "rate_limited")
+
+    def test_15_idempotency_conflict_changed_amount_or_target(self):
+        """15. Replaying same requestId with changed amount or changed target returns 409 conflict."""
+        conn = self.db.get_conn()
+        tipper = dict(self.u_tipper)
+        req_id = "req_conflict_check_888"
+
+        # First attempt with amount=5 on t_free_01 -> succeeds
+        res = send_encourage_tip(self.db, tipper, "topic", "t_free_01", amount=5, request_id=req_id)
+        self.assertTrue(res["ok"])
+
+        bal_after_first = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+
+        # Changed amount (5 -> 10) with same requestId -> 409
+        with self.assertRaises(ServiceError) as ctx:
+            send_encourage_tip(self.db, tipper, "topic", "t_free_01", amount=10, request_id=req_id)
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertEqual(ctx.exception.code, "tip_conflict")
+
+        # Changed target (t_free_01 -> w_test_01) with same requestId -> 409
+        with self.assertRaises(ServiceError) as ctx:
+            send_encourage_tip(self.db, tipper, "work", "w_test_01", amount=5, request_id=req_id)
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertEqual(ctx.exception.code, "tip_conflict")
+
+        # Balance not deducted on 409
+        bal_after_conflicts = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (tipper["id"],)).fetchone()["balance"])
+        self.assertEqual(bal_after_first, bal_after_conflicts)
+
+    def test_16_idempotent_replay_prior_to_rate_limit(self):
+        """16. Idempotent replay with identical parameters succeeds even within 60s without rate limit."""
+        tipper = dict(self.u_tipper)
+        req_id = "req_replay_no_ratelimit"
+
+        res1 = send_encourage_tip(self.db, tipper, "topic", "t_free_01", amount=5, request_id=req_id)
+        self.assertTrue(res1["ok"])
+        self.assertFalse(res1.get("duplicate", False))
+
+        # Replay immediately within 60s with exact same requestId and params
+        res2 = send_encourage_tip(self.db, tipper, "topic", "t_free_01", amount=5, request_id=req_id)
+        self.assertTrue(res2["ok"])
+        self.assertTrue(res2.get("duplicate"))
 
 
 if __name__ == "__main__":

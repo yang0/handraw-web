@@ -2245,15 +2245,244 @@
     return true;
   }
 
-  function sendEncourageTip(targetType, id, amount = 2) {
+  function openTipModal({
+    targetType,
+    targetId,
+    title,
+    authorName,
+    authorUsername,
+    isOfficial = false,
+    onSuccess
+  } = {}) {
     if (!App.state.loggedIn) {
-      openLoginModal("登录后可使用积分为喜爱的创作者赞赏加油（新用户注册立赠 20 积分）！");
-      return false;
+      if (App.channel === "forum" && typeof window.HANDRAW_FORUM_OPEN_AUTH === "function") {
+        window.HANDRAW_FORUM_OPEN_AUTH("登录后即可赞赏支持！");
+      } else {
+        openLoginModal("登录后可使用积分为喜爱的创作者赞赏加油（新用户注册立赠 20 积分）！");
+      }
+      return;
     }
+
+    if (!isOfficial && authorUsername && App.state.user && authorUsername === App.state.user.username) {
+      toast("不能给自己赞赏积分哦～");
+      return;
+    }
+
+    const tTitle = title || targetId || "精选内容";
+    const authorLabel = authorName || authorUsername || "创作者";
+    const payeeDisplay = isOfficial
+      ? "官方运营账户（支持模型与资源维护）"
+      : `@${esc(authorLabel)}（100% 直达作者）`;
+    const curCredits = Number(App.state.credits != null ? App.state.credits : (App.state.user?.credits || 0));
+
+    let selectedAmount = 2;
+
+    const modalHtml = `
+      <div class="hw-tip-modal-body">
+        <div class="hw-tip-info-card">
+          <div class="hw-tip-info-item">
+            <span class="hw-tip-info-label">赞赏目标</span>
+            <span class="hw-tip-info-value" id="hw-tip-target-display" title="${esc(tTitle)}">《${esc(tTitle)}》</span>
+          </div>
+          <div class="hw-tip-info-item">
+            <span class="hw-tip-info-label">收款方</span>
+            <span class="hw-tip-info-value" id="hw-tip-payee-display">${payeeDisplay}</span>
+          </div>
+          <div class="hw-tip-info-item">
+            <span class="hw-tip-info-label">当前余额</span>
+            <span class="hw-tip-info-value" id="hw-tip-balance-display">${curCredits}✦</span>
+          </div>
+        </div>
+
+        <div>
+          <div class="hw-tip-section-title">选择赞赏额度</div>
+          <div class="hw-tip-tier-grid" id="hw-tip-tiers">
+            <button type="button" class="hw-tip-tier-btn is-active" data-tip-amount="2">2✦</button>
+            <button type="button" class="hw-tip-tier-btn" data-tip-amount="5">5✦</button>
+            <button type="button" class="hw-tip-tier-btn" data-tip-amount="10">10✦</button>
+            <button type="button" class="hw-tip-tier-btn" data-tip-amount="20">20✦</button>
+          </div>
+        </div>
+
+        <div class="hw-tip-custom-row">
+          <label for="hw-tip-custom-input" class="hw-tip-section-title" style="margin-bottom:0;">自定义额度</label>
+          <div class="hw-tip-input-wrap">
+            <input type="number" id="hw-tip-custom-input" min="1" max="50" step="1" placeholder="1–50✦ 整数" value="2" />
+            <span class="hw-tip-input-unit">✦</span>
+          </div>
+          <div class="hw-tip-input-hint" id="hw-tip-input-hint" style="font-size:12px;color:var(--ink-muted);margin-top:2px;">
+            ${isOfficial ? "可选 1–50✦ 整数，赞赏将入账官方运营账户" : "可选 1–50✦ 整数，100% 直达作者"}
+          </div>
+        </div>
+
+        <div class="hw-tip-summary-row">
+          <span class="hw-tip-summary-label">本次金额</span>
+          <span class="hw-tip-summary-val" id="hw-tip-amount-display">2✦</span>
+        </div>
+
+        <button type="button" class="btn btn-primary hw-tip-confirm-btn" id="hw-tip-confirm-btn">
+          确认赞赏 2✦
+        </button>
+      </div>
+    `;
+
+    openModal({
+      title: "🎁 赞赏支持",
+      sizeClass: "hw-tip-modal",
+      html: modalHtml,
+      onMount(modalRoot) {
+        const tierBtns = modalRoot.querySelectorAll(".hw-tip-tier-btn");
+        const customInput = modalRoot.querySelector("#hw-tip-custom-input");
+        const amountDisplay = modalRoot.querySelector("#hw-tip-amount-display");
+        const confirmBtn = modalRoot.querySelector("#hw-tip-confirm-btn");
+        const hintEl = modalRoot.querySelector("#hw-tip-input-hint");
+
+        function updateSelected(amt, fromInput = false) {
+          selectedAmount = amt;
+          if (!fromInput && customInput) {
+            customInput.value = amt;
+          }
+          if (amountDisplay) {
+            amountDisplay.textContent = `${amt}✦`;
+          }
+          if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = `确认赞赏 ${amt}✦`;
+          }
+          if (hintEl) {
+            hintEl.textContent = isOfficial ? "可选 1–50✦ 整数，赞赏将入账官方运营账户" : "可选 1–50✦ 整数，100% 直达作者";
+            hintEl.style.color = "var(--ink-muted)";
+          }
+          tierBtns.forEach((btn) => {
+            const bAmt = Number(btn.getAttribute("data-tip-amount"));
+            if (bAmt === amt) {
+              btn.classList.add("is-active");
+            } else {
+              btn.classList.remove("is-active");
+            }
+          });
+        }
+
+        tierBtns.forEach((btn) => {
+          btn.onclick = () => {
+            const val = Number(btn.getAttribute("data-tip-amount"));
+            updateSelected(val, false);
+          };
+        });
+
+        if (customInput) {
+          customInput.oninput = () => {
+            const raw = customInput.value.trim();
+            if (!raw) {
+              if (confirmBtn) confirmBtn.disabled = true;
+              if (amountDisplay) amountDisplay.textContent = "-✦";
+              if (hintEl) {
+                hintEl.textContent = "请输入 1–50✦ 之间的整数";
+                hintEl.style.color = "var(--vermilion, #cf4627)";
+              }
+              tierBtns.forEach((b) => b.classList.remove("is-active"));
+              return;
+            }
+            const num = Number(raw);
+            if (!Number.isInteger(num) || num < 1 || num > 50) {
+              if (confirmBtn) confirmBtn.disabled = true;
+              if (amountDisplay) amountDisplay.textContent = `${raw}✦`;
+              if (hintEl) {
+                hintEl.textContent = "赞赏金额必须为 1–50✦ 之间的整数";
+                hintEl.style.color = "var(--vermilion, #cf4627)";
+              }
+              tierBtns.forEach((b) => b.classList.remove("is-active"));
+              return;
+            }
+            updateSelected(num, true);
+          };
+        }
+
+        if (confirmBtn) {
+          confirmBtn.onclick = () => {
+            if (!Number.isInteger(selectedAmount) || selectedAmount < 1 || selectedAmount > 50) {
+              toast("赞赏金额必须为 1–50✦ 整数");
+              return;
+            }
+            const latestCredits = Number(App.state.credits != null ? App.state.credits : (App.state.user?.credits || 0));
+            if (latestCredits < selectedAmount) {
+              toast(`当前积分不足（需 ${selectedAmount}✦，可用 ${latestCredits}✦），先去签到或晒图赚积分吧！`);
+              return;
+            }
+
+            confirmBtn.disabled = true;
+            confirmBtn.setAttribute("aria-busy", "true");
+            confirmBtn.textContent = "赞赏处理中...";
+
+            const reqId = `tip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            apiJson("/api/interactions/tip", {
+              method: "POST",
+              body: {
+                targetType: targetType === "work" ? "work" : targetType === "topic" ? "topic" : "asset",
+                targetId,
+                amount: selectedAmount,
+                requestId: reqId
+              }
+            })
+              .then((res) => {
+                if (res && res.credits != null) {
+                  App.state.credits = res.credits;
+                  if (App.state.user) App.state.user.credits = res.credits;
+                }
+                const succMsg = isOfficial
+                  ? `🎁 赞赏成功！感谢对官方资源的支持，已送出 ${selectedAmount}✦ 积分`
+                  : `🎁 赞赏成功！已向 @${authorLabel} 送出 ${selectedAmount}✦ 积分（100% 直达作者）`;
+                toast(succMsg);
+                closeModal();
+                if (typeof onSuccess === "function") {
+                  onSuccess({ amount: selectedAmount, res });
+                }
+              })
+              .catch((err) => {
+                const errMsg = (err && err.message) || String(err);
+                toast(`赞赏失败：${errMsg}`);
+                confirmBtn.disabled = false;
+                confirmBtn.removeAttribute("aria-busy");
+                confirmBtn.textContent = `确认赞赏 ${selectedAmount}✦`;
+              });
+          };
+        }
+      }
+    });
+  }
+
+  function sendEncourageTip(targetType, id, amount = null) {
     let targetObj =
       targetType === "work"
         ? (App.state.works || []).find((w) => w.id === id)
         : (App.state.communityResources || []).find((r) => r.id === id) || App.resourceMap.get(id);
+
+    if (amount == null) {
+      const isOfficial = targetObj ? (targetObj.sourceType === "official" || !targetObj.author) : false;
+      openTipModal({
+        targetType,
+        targetId: id,
+        title: targetObj ? (targetObj.title || targetObj.name || id) : id,
+        authorName: targetObj ? (targetObj.authorName || targetObj.author || "") : "",
+        authorUsername: targetObj ? (targetObj.author || targetObj.author_username || "") : "",
+        isOfficial,
+        onSuccess: ({ amount: tippedAmt }) => {
+          if (targetObj) {
+            targetObj.tips = (targetObj.tips || 0) + tippedAmt;
+            targetObj.cheers = (targetObj.cheers || 0) + 3;
+          }
+          if (typeof refreshFromServer === "function") {
+            refreshFromServer();
+          }
+        }
+      });
+      return true;
+    }
+
+    if (!App.state.loggedIn) {
+      openLoginModal("登录后可使用积分为喜爱的创作者赞赏加油（新用户注册立赠 20 积分）！");
+      return false;
+    }
     if (!targetObj) return false;
     if (targetObj.author && App.state.user && targetObj.author === App.state.user.username) {
       toast("不能给自己赞赏积分哦～");
@@ -4170,6 +4399,7 @@
     isCheered,
     toggleCheerItem,
     sendEncourageTip,
+    openTipModal,
     goToCreatorProfile,
     goToAccountPage,
     goToAssetPage,

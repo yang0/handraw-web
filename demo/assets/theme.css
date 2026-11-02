@@ -3509,6 +3509,165 @@ img[data-hw-src].hw-img-failed {
   .hw-account-page h1 { font-size: 26px; }
 }
 
+/* Unified Tip Amount Selection Panel (Issue #38) */
+.hw-modal-panel.hw-tip-modal {
+  width: min(92vw, 440px);
+}
+
+.hw-tip-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 0 0;
+}
+
+.hw-tip-info-card {
+  background: var(--paper-warm, #fdfbf7);
+  border: 1px solid var(--line-soft, #ebe5df);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hw-tip-info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.hw-tip-info-label {
+  color: var(--ink-muted, #7c7267);
+  flex-shrink: 0;
+}
+
+.hw-tip-info-value {
+  color: var(--ink-strong, #2b2520);
+  font-weight: 600;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hw-tip-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-strong, #2b2520);
+  margin-bottom: 6px;
+}
+
+.hw-tip-tier-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.hw-tip-tier-btn {
+  padding: 10px 4px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--line-soft, #ebe5df);
+  background: #fff;
+  color: var(--ink-strong, #2b2520);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.hw-tip-tier-btn:hover {
+  border-color: var(--vermilion, #cf4627);
+  color: var(--vermilion, #cf4627);
+}
+
+.hw-tip-tier-btn.is-active {
+  border-color: var(--vermilion, #cf4627);
+  background: var(--vermilion-wash, #fdf2ef);
+  color: var(--vermilion, #cf4627);
+  font-weight: 800;
+}
+
+.hw-tip-custom-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hw-tip-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.hw-tip-input-wrap input {
+  width: 100%;
+  padding: 9px 30px 9px 12px;
+  font-size: 14px;
+  border: 1px solid var(--line-soft, #ebe5df);
+  border-radius: 8px;
+  background: #fff;
+  outline: none;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.hw-tip-input-wrap input:focus {
+  border-color: var(--vermilion, #cf4627);
+}
+
+.hw-tip-input-unit {
+  position: absolute;
+  right: 12px;
+  color: var(--ink-muted, #7c7267);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.hw-tip-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 4px;
+  font-size: 13.5px;
+}
+
+.hw-tip-summary-label {
+  color: var(--ink-muted, #7c7267);
+}
+
+.hw-tip-summary-val {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--vermilion, #cf4627);
+}
+
+.hw-tip-confirm-btn {
+  width: 100%;
+  padding: 11px;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 8px;
+  margin-top: 4px;
+}
+
+@media (max-width: 480px) {
+  .hw-modal-panel.hw-tip-modal {
+    width: 94vw;
+  }
+  .hw-tip-tier-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  .hw-tip-tier-btn {
+    padding: 8px 2px;
+    font-size: 13.5px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

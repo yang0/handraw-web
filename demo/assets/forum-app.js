@@ -2078,8 +2078,8 @@
       ? Boolean(res.author && (!App.state?.loggedIn || !App.state?.user || App.state.user.username !== res.author))
       : true);
     const tipBtnLabel = isCommunity
-      ? `🎁 赞赏 2✦ 给 @${esc(res.authorName || res.author)}`
-      : `🎁 赞赏 2✦`;
+      ? `🎁 赞赏给 @${esc(res.authorName || res.author)}`
+      : `🎁 赞赏支持`;
 
     return `
       <style>
@@ -2508,7 +2508,7 @@
                   <button type="button" class="btn btn-sm ${favorited ? "btn-primary" : ""}" id="topic-page-collect" ${collectInFlight ? 'disabled aria-busy="true"' : ""}>
                     ${favorited ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
                   </button>
-                  ${canTipTop ? `<button type="button" class="btn btn-sm btn-gold" id="topic-page-tip" title="赞赏作者 2✦">🎁 赞赏 2✦</button>` : ""}
+                  ${canTipTop ? `<button type="button" class="btn btn-sm btn-gold" id="topic-page-tip" title="赞赏支持">🎁 赞赏</button>` : ""}
                   <button type="button" class="btn btn-sm" id="topic-page-scroll-reply">
                     💬 回复 (${totalRepliesCount})
                   </button>
@@ -2760,32 +2760,37 @@
         const targetType = isWork ? "work" : "topic";
         const targetId = isWork ? (mount.work?.id || topic.workId) : topic.id;
         const author = (isWork ? (mount.work?.authorName || mount.work?.author) : (topic.authorName || topic.author)) || "创作者";
+        const authorUsername = isWork ? (mount.work?.author || mount.work?.author_username) : (topic.authorUsername || topic.author);
+        const title = isWork ? (mount.work?.title || topic.title) : topic.title;
 
-        if (!confirm(`赞赏 2✦ 给 @${author}，确定赞赏吗？`)) return;
-        topTipBtn.disabled = true;
-        const reqId = `tip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        S.apiJson("/api/interactions/tip", {
-          method: "POST",
-          body: { targetType, targetId, amount: 2, requestId: reqId }
-        }).then((res) => {
-          if (res && res.credits != null && App.state?.user) {
-            App.state.user.credits = res.credits;
+        if (authorUsername && App.state?.user && authorUsername === App.state.user.username) {
+          toast("不能给自己赞赏积分哦～");
+          return;
+        }
+
+        S.openTipModal({
+          targetType,
+          targetId,
+          title,
+          authorName: author,
+          authorUsername,
+          isOfficial: false,
+          onSuccess: ({ amount, res }) => {
+            if (res && res.credits != null) {
+              if (App.state?.user) App.state.user.credits = res.credits;
+              App.state.credits = res.credits;
+            }
+            topic.tips = (topic.tips || 0) + amount;
+            if (mount.work) {
+              mount.work.tips = (mount.work.tips || 0) + amount;
+            }
+            const curLike = _getTopicLikeState(_activeTopicDetail.topicData);
+            if (!curLike.liked) {
+              _setTopicLikeState(_activeTopicDetail.topicData, true, curLike.count + 1);
+              _updateTopicLikeBtnUI();
+            }
+            _updateTopicCountsUI();
           }
-          toast(`🎁 赞赏成功！已向 @${author} 送出 2✦ 积分`);
-          topic.tips = (topic.tips || 0) + 2;
-          if (mount.work) {
-            mount.work.tips = (mount.work.tips || 0) + 2;
-          }
-          const curLike = _getTopicLikeState(_activeTopicDetail.topicData);
-          if (!curLike.liked) {
-            _setTopicLikeState(_activeTopicDetail.topicData, true, curLike.count + 1);
-            _updateTopicLikeBtnUI();
-          }
-          _updateTopicCountsUI();
-        }).catch((err) => {
-          toast(`赞赏失败：${(err && err.message) || err}`);
-        }).finally(() => {
-          topTipBtn.disabled = false;
         });
       };
     }
@@ -3269,36 +3274,38 @@
             openForumAuthPage("登录后即可赞赏支持！");
             return;
           }
-          const isCommunityRes = mount.resource.sourceType === "community";
+          const isCommunityRes = mount.resource.sourceType === "community" && Boolean(mount.resource.author || mount.resource.authorUsername);
           const author = mount.resource.authorName || mount.resource.author || "创作者";
-          const confirmMsg = isCommunityRes
-            ? `赞赏 2✦ 给 @${author}，不会解锁任何内容。确定赞赏吗？`
-            : `赞赏 2✦ 支持官方模型与资源运营（入账官方运营账户），不会解锁任何内容。确定赞赏吗？`;
-          if (!confirm(confirmMsg)) return;
-          tipBtn.disabled = true;
-          const reqId = `tip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          S.apiJson("/api/interactions/tip", {
-            method: "POST",
-            body: { targetType: "asset", targetId: mount.resource.code, amount: 2, requestId: reqId }
-          }).then((res) => {
-            if (res && res.credits != null && App.state?.user) {
-              App.state.user.credits = res.credits;
+          const authorUsername = mount.resource.author || mount.resource.authorUsername || "";
+          const isOfficial = !isCommunityRes;
+          const targetId = mount.resource.code || mount.resource.id;
+          const title = mount.resource.name || mount.resource.title || targetId;
+
+          if (!isOfficial && authorUsername && App.state?.user && authorUsername === App.state.user.username) {
+            toast("不能给自己赞赏积分哦～");
+            return;
+          }
+
+          S.openTipModal({
+            targetType: "asset",
+            targetId,
+            title,
+            authorName: author,
+            authorUsername,
+            isOfficial,
+            onSuccess: ({ amount, res }) => {
+              if (res && res.credits != null) {
+                if (App.state?.user) App.state.user.credits = res.credits;
+                App.state.credits = res.credits;
+              }
+              mount.resource.tips = (mount.resource.tips || 0) + amount;
+              const curLike = _getTopicLikeState(_activeTopicDetail.topicData);
+              if (!curLike.liked) {
+                _setTopicLikeState(_activeTopicDetail.topicData, true, curLike.count + 1);
+                _updateTopicLikeBtnUI();
+              }
+              _updateTopicCountsUI();
             }
-            const successMsg = isCommunityRes
-              ? `🎁 赞赏成功！已向 @${author} 送出 2✦ 积分`
-              : `🎁 赞赏成功！感谢对官方资源的支持，已送出 2✦ 积分`;
-            toast(successMsg);
-            mount.resource.tips = (mount.resource.tips || 0) + 2;
-            const curLike = _getTopicLikeState(_activeTopicDetail.topicData);
-            if (!curLike.liked) {
-              _setTopicLikeState(_activeTopicDetail.topicData, true, curLike.count + 1);
-              _updateTopicLikeBtnUI();
-            }
-            _updateTopicCountsUI();
-          }).catch((err) => {
-            toast(`赞赏失败：${(err && err.message) || err}`);
-          }).finally(() => {
-            tipBtn.disabled = false;
           });
         };
       }
