@@ -1,0 +1,361 @@
+"""
+Integration tests for Phase 1B: Creator Profile Generation History and Global Rename.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+from pathlib import Path
+from unittest.mock import patch
+
+from backend.server import HandrawRequestHandler, init_database
+from backend.services import (
+    ServiceError,
+    get_user_public_generations,
+    get_user_public_generation_by_id,
+    record_user_studio_history,
+    prepare_cloud_generation,
+    register_user,
+)
+
+WHITELIST_FIELDS = {
+    "id",
+    "author",
+    "createdAt",
+    "created_at",
+    "images",
+    "topic",
+    "title",
+    "ratio",
+    "mode",
+    "styles",
+    "layouts",
+    "imageCount",
+}
+
+FORBIDDEN_FIELDS = {
+    "prompt",
+    "raw_prompt",
+    "definition",
+    "system_append_json",
+    "systemAppend",
+    "recipeSnapshot",
+    "workflow",
+    "taskId",
+    "error",
+    "wallet",
+    "credits",
+    "costType",
+}
+
+
+class ProfileGenerationHistoryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self.temp_dir.name)
+        self.db_path = root / "history_p1b_test.db"
+        img_cfg = root / "image-service.json"
+        img_cfg.write_text(json.dumps({"key": "mock-test-key", "url": "http://127.0.0.1:9999"}))
+        self.env = patch.dict(
+            os.environ,
+            {
+                "HANDRAW_DB_PATH": str(self.db_path),
+                "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
+                "HANDRAW_GENERATED_DIR": str(root / "generated"),
+                "HANDRAW_DEMO_MODE": "1",
+                "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test",
+                "HANDRAW_AI_CONFIG": str(root / "absent-ai-service.json"),
+                "HANDRAW_IMAGE_CONFIG": str(img_cfg),
+            },
+        )
+        self.env.start()
+        self.db = init_database(self.db_path)
+
+        self.creator_alice, _ = register_user(self.db, "alice", "SecretPass123!")
+        self.creator_bob, _ = register_user(self.db, "bob", "SecretPass123!")
+
+        from http.server import ThreadingHTTPServer
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
+        self.server.channel_role = "main"
+        self.server.db = self.db
+        self.server.allow_demo_routes = True
+        self.server_port = self.server.server_address[1]
+        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.server_thread.start()
+
+    def tearDown(self) -> None:
+        try:
+            self.server.shutdown()
+            self.server.server_close()
+            self.server_thread.join(timeout=5)
+            self.db.close_thread_conn()
+            self.db.close()
+            self.env.stop()
+            self.temp_dir.cleanup()
+        except Exception:
+            pass
+
+    def _insert_generation(
+        self,
+        user_id: int,
+        gen_id: str,
+        topic: str = "手绘猫咪",
+        status: str = "success",
+        visibility: str = "public",
+        engine: str = "recraft",
+        created_at: str = "2026-11-01T10:00:00Z",
+        deleted_at: str = "",
+        images: list[str] | None = None,
+        styles: list[str] | None = None,
+        layouts: list[str] | None = None,
+        prompt: str = "A detailed prompt with secrets",
+    ):
+        if images is None:
+            images = ["https://example.com/cat1.webp"]
+        items = [{"imageUrl": u} for u in images]
+        tags = []
+        for s in (styles or ["FA-001"]):
+            tags.append(f"#{s}" if not s.startswith("#") else s)
+        for l in (layouts or []):
+            tags.append(f"#{l}" if not l.startswith("#") else l)
+        recipe_summary = " / ".join(tags)
+
+        u_row = self.db.get_conn().execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        uname = u_row["username"] if u_row else "test_user"
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO studio_generations (
+                    id, user_id, username, subject, tab_title, mode, mode_label, recipe_summary,
+                    status, visibility, engine, created_at, deleted_at,
+                    items_json, prompt, prompt_ready
+                ) VALUES (?, ?, ?, ?, '1:1', 'preset', '预设', ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    gen_id,
+                    user_id,
+                    uname,
+                    topic,
+                    recipe_summary,
+                    status,
+                    visibility,
+                    engine,
+                    created_at,
+                    deleted_at,
+                    json.dumps(items),
+                    prompt,
+                ),
+            )
+
+    def test_schema_visibility_and_index(self):
+        conn = self.db.get_conn()
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(studio_generations)").fetchall()]
+        self.assertIn("visibility", columns)
+
+        indexes = [row[1] for row in conn.execute("PRAGMA index_list(studio_generations)").fetchall()]
+        self.assertIn("idx_studio_gen_user_vis_created", indexes)
+
+    def test_get_user_public_generations_anonymous_whitelist(self):
+        self._insert_generation(
+            self.creator_alice["id"],
+            "gen_alice_1",
+            topic="水彩风景",
+            created_at="2026-11-01T10:00:00Z",
+            images=["https://example.com/img1.webp", "https://example.com/img2.webp"],
+            styles=["FB-002"],
+        )
+
+        url = f"http://127.0.0.1:{self.server_port}/api/users/alice/generations"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode("utf-8"))
+
+        self.assertTrue(data.get("ok"))
+        generations = data.get("generations", [])
+        self.assertEqual(len(generations), 1)
+
+        item = generations[0]
+        self.assertEqual(item["id"], "gen_alice_1")
+        self.assertEqual(item["author"], "alice")
+        self.assertEqual(item["topic"], "水彩风景")
+        self.assertEqual(item["imageCount"], 2)
+        self.assertEqual(len(item["images"]), 2)
+
+        # Ensure no forbidden fields leak
+        for forbidden in FORBIDDEN_FIELDS:
+            self.assertNotIn(forbidden, item, f"Forbidden field '{forbidden}' leaked in generation item")
+
+        # Ensure all fields are whitelisted
+        for k in item.keys():
+            self.assertIn(k, WHITELIST_FIELDS, f"Non-whitelisted field '{k}' found in generation item")
+
+    def test_get_user_public_generations_filter_conditions(self):
+        # 1. Success, public -> should be included
+        self._insert_generation(self.creator_alice["id"], "gen_ok", status="success", visibility="public")
+        # 2. Failed -> excluded
+        self._insert_generation(self.creator_alice["id"], "gen_fail", status="failed", visibility="public")
+        # 3. Demo engine -> excluded
+        self._insert_generation(self.creator_alice["id"], "gen_demo", status="success", engine="demo")
+        # 4. Deleted -> excluded
+        self._insert_generation(
+            self.creator_alice["id"], "gen_del", status="success", deleted_at="2026-11-01T12:00:00Z"
+        )
+        # 5. Private -> excluded
+        self._insert_generation(self.creator_alice["id"], "gen_priv", status="success", visibility="private")
+        # 6. Empty images -> excluded
+        self._insert_generation(self.creator_alice["id"], "gen_noimg", status="success", images=[])
+
+        url = f"http://127.0.0.1:{self.server_port}/api/users/alice/generations"
+        with urllib.request.urlopen(url) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        generations = data.get("generations", [])
+        ids = [g["id"] for g in generations]
+        self.assertEqual(ids, ["gen_ok"])
+
+    def test_cursor_pagination_and_sorting(self):
+        # Insert 15 generations with distinct timestamps
+        for i in range(15):
+            ts = f"2026-11-01T{10 + i:02d}:00:00Z"
+            self._insert_generation(
+                self.creator_bob["id"],
+                f"gen_bob_{i:02d}",
+                topic=f"作品{i:02d}",
+                created_at=ts,
+            )
+
+        # Page 1: limit 6 -> should get gen_bob_14 down to gen_bob_09 (reverse chronological)
+        url1 = f"http://127.0.0.1:{self.server_port}/api/users/bob/generations?limit=6"
+        with urllib.request.urlopen(url1) as resp:
+            data1 = json.loads(resp.read().decode("utf-8"))
+
+        self.assertEqual(len(data1["generations"]), 6)
+        self.assertTrue(data1["hasMore"])
+        self.assertEqual(data1["generations"][0]["id"], "gen_bob_14")
+        self.assertEqual(data1["generations"][-1]["id"], "gen_bob_09")
+        cursor1 = data1["nextCursor"]
+        self.assertTrue(cursor1)
+
+        # Page 2: with cursor
+        url2 = f"http://127.0.0.1:{self.server_port}/api/users/bob/generations?limit=6&cursor={cursor1}"
+        with urllib.request.urlopen(url2) as resp:
+            data2 = json.loads(resp.read().decode("utf-8"))
+
+        self.assertEqual(len(data2["generations"]), 6)
+        self.assertTrue(data2["hasMore"])
+        self.assertEqual(data2["generations"][0]["id"], "gen_bob_08")
+        self.assertEqual(data2["generations"][-1]["id"], "gen_bob_03")
+
+        # Page 3: with cursor
+        cursor2 = data2["nextCursor"]
+        url3 = f"http://127.0.0.1:{self.server_port}/api/users/bob/generations?limit=6&cursor={cursor2}"
+        with urllib.request.urlopen(url3) as resp:
+            data3 = json.loads(resp.read().decode("utf-8"))
+
+        self.assertEqual(len(data3["generations"]), 3)
+        self.assertFalse(data3["hasMore"])
+        self.assertEqual(data3["generations"][0]["id"], "gen_bob_02")
+        self.assertEqual(data3["generations"][-1]["id"], "gen_bob_00")
+
+    def test_get_user_public_generation_by_id(self):
+        self._insert_generation(
+            self.creator_alice["id"],
+            "gen_alice_detail",
+            topic="特写古风插画",
+            created_at="2026-11-01T15:00:00Z",
+            images=["https://example.com/detail.webp"],
+            styles=["FA-001", "FB-002"],
+        )
+
+        url = f"http://127.0.0.1:{self.server_port}/api/users/alice/generations/gen_alice_detail"
+        with urllib.request.urlopen(url) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode("utf-8"))
+
+        self.assertTrue(data.get("ok"))
+        g = data.get("generation", {})
+        self.assertEqual(g["id"], "gen_alice_detail")
+        self.assertEqual(g["author"], "alice")
+        self.assertEqual(g["topic"], "特写古风插画")
+        for forbidden in FORBIDDEN_FIELDS:
+            self.assertNotIn(forbidden, g)
+
+        # 404 for wrong user or non-existent
+        url_wrong_user = f"http://127.0.0.1:{self.server_port}/api/users/bob/generations/gen_alice_detail"
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(url_wrong_user)
+        self.assertEqual(ctx.exception.code, 404)
+
+    def test_reject_client_visibility_setting(self):
+        # 1. In record_user_studio_history
+        with self.assertRaises(ServiceError) as ctx:
+            record_user_studio_history(
+                self.db,
+                self.creator_alice,
+                {"id": "gen_test_vis", "visibility": "private", "status": "success"},
+            )
+        self.assertEqual(ctx.exception.code, "visibility_not_allowed")
+
+        with self.assertRaises(ServiceError) as ctx:
+            record_user_studio_history(
+                self.db,
+                self.creator_alice,
+                {"id": "gen_test_vis2", "visibility": "public", "status": "success"},
+            )
+        self.assertEqual(ctx.exception.code, "visibility_not_allowed")
+
+        # 2. In prepare_cloud_generation
+        with self.assertRaises(ServiceError) as ctx:
+            prepare_cloud_generation(
+                self.db,
+                self.creator_alice,
+                {"visibility": "private", "topic": "test", "items": [{"imageUrl": "https://example.com/1.png"}]},
+            )
+        self.assertEqual(ctx.exception.code, "visibility_not_allowed")
+
+    def test_global_rename_no_lingering_shice_zuopin(self):
+        root = Path(__file__).resolve().parent.parent
+        files_to_check = [
+            root / "backend" / "server.py",
+            root / "backend" / "curation.py",
+            root / "demo" / "assets" / "shared.js",
+            root / "demo" / "assets" / "main-app.js",
+            root / "demo" / "assets" / "forum-app.js",
+            root / "demo" / "assets" / "studio-app.js",
+        ]
+        for f in files_to_check:
+            self.assertTrue(f.exists(), f"File {f} does not exist")
+            content = f.read_text(encoding="utf-8")
+            self.assertNotIn("实测作品", content, f"Found lingering '实测作品' in {f.name}")
+
+    def test_legacy_history_route_and_notification_redirects(self):
+        root = Path(__file__).resolve().parent.parent
+
+        # 1. Verify studio-app.js redirects ?view=history to profile generations tab
+        studio_app = (root / "demo" / "assets" / "studio-app.js").read_text(encoding="utf-8")
+        self.assertIn('viewParam === "history"', studio_app)
+        self.assertIn('ptab: "generations"', studio_app)
+        self.assertIn("window.location.replace", studio_app)
+
+        # 2. Verify account-tools.js notification link updated
+        account_tools = (root / "demo" / "assets" / "account-tools.js").read_text(encoding="utf-8")
+        self.assertIn('item.target_type==="generation"', account_tools)
+        self.assertIn('ptab: "generations"', account_tools)
+        self.assertNotIn('{view:"history"}', account_tools)
+
+        # 3. Verify messaging.js notification link updated
+        messaging = (root / "demo" / "assets" / "messaging.js").read_text(encoding="utf-8")
+        self.assertIn('n.target_type === "generation"', messaging)
+        self.assertIn('ptab: "generations"', messaging)
+
+
+if __name__ == "__main__":
+    unittest.main()

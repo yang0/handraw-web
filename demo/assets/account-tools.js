@@ -47,7 +47,10 @@
   }
   function targetUrl(item) {
     if(item.kind==="system")return S.channelUrl("admin",{module:"gateway"});
-    if(item.target_type==="generation")return S.channelUrl("studio",{view:"history"});
+    if(item.target_type==="generation"){
+      const u = S.App.state?.user?.username || "";
+      return S.channelUrl("main", u ? { view: "profile", user: u, ptab: "generations" } : { view: "auth" });
+    }
     if (item.target_type === "topic") return S.channelUrl("forum", { view:"topic",id:item.target_id });
     if (item.target_type === "work") return mainUrl("work",{id:item.target_id});
     if (item.target_type === "asset" || item.target_type === "style" || item.target_type === "layout") return mainUrl("asset",{id:item.target_id});

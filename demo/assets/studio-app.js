@@ -14,7 +14,7 @@
 (function () {
   const S = window.HANDRAW_SHARED;
   const E = window.HANDRAW_CANVAS_ENGINE;
-  const { App, esc, toast } = S;
+  const { App, esc, toast, channelUrl } = S;
 
   const UPLOAD_STORAGE_KEY = "handraw_canvas_uploads_v3";
   const CUSTOM_ASSET_CATS_KEY = "handraw_custom_asset_cats_v3";
@@ -2669,8 +2669,12 @@
     } else if (viewParam === "my-articles") {
       openMyArticlesPage({ renderNow: false });
     } else if (viewParam === "history") {
-      CS.stageView = "history";
-      CS.historyPage = Math.max(1, Number(params.get("page")) || 1);
+      const curUser = (App.state && App.state.loggedIn && App.state.user && App.state.user.username) ? App.state.user.username : "";
+      const targetUrl = (curUser && curUser !== "guest")
+        ? channelUrl("main", { view: "profile", user: curUser, ptab: "generations" })
+        : channelUrl("main", { view: "auth", redirect: channelUrl("main", { view: "profile", user: "", ptab: "generations" }) });
+      window.location.replace(targetUrl);
+      return;
     } else if (viewParam === "workflows") {
       CS.stageView = "workflows";
     }
@@ -6161,20 +6165,13 @@
     writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
   }
 
-  function openHistoryPage({ page, renderNow = true } = {}) {
+  function openHistoryPage() {
     flushUnifiedArticleEditor();
-    ensureGenerationHistoryInitialized();
-    CS.stageView = "history";
-    if (typeof page === "number" && page >= 1) {
-      CS.historyPage = Math.floor(page);
-    } else if (!CS.historyPage || CS.historyPage < 1) {
-      CS.historyPage = 1;
-    }
-    try {
-      window.history.replaceState(null, "", `?view=history&page=${CS.historyPage}`);
-    } catch (_) {}
-    if (renderNow) {
-      renderTopAndBottomDocks();
+    const curUser = (App.state && App.state.loggedIn && App.state.user && App.state.user.username) ? App.state.user.username : "";
+    if (curUser && curUser !== "guest") {
+      window.location.href = channelUrl("main", { view: "profile", user: curUser, ptab: "generations" });
+    } else {
+      window.location.href = channelUrl("main", { view: "auth", redirect: channelUrl("main", { view: "profile", user: "", ptab: "generations" }) });
     }
   }
 
@@ -14511,7 +14508,7 @@
           <button type="button" class="qc-more-menu-item" id="studio-mode-canvas">高级画布</button>
         </div>
       </div>
-    </div><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看历次生图历史记录">生图历史 (${historyCount})</button>`;
+    </div><button type="button" class="btn btn-sm qc-mode-history" id="studio-mode-history" title="查看生图历史记录">生图历史</button>`;
 
     const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
     if (btnQuick) btnQuick.onclick = () => { _modeMoreOpen = false; switchCreationStage("quick"); };
