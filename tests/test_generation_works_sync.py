@@ -102,6 +102,47 @@ class TestGenerationWorksSync(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM generation_works WHERE generation_id = ?", (gen_id,)).fetchone()[0], 2)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM works WHERE origin = 'generation'").fetchone()[0], 2)
 
+    def test_a_shared_picture_is_not_projected_twice(self):
+        """A picture shared before the projection existed is adopted, not copied.
+
+        This is the reported bug: generate a picture, share it (which creates a
+        work), and the projection then created a second work for the same file,
+        so the square showed that picture twice.
+        """
+        conn = self.db.get_conn()
+        uname = self.user_author["username"]
+        image = "/generated/shared_once.png"
+
+        conn.execute(
+            """
+            INSERT INTO works (id, author_username, author_name, title, prompt, images_json,
+                               status, origin, published_at_ms, created_at, updated_at)
+            VALUES ('work_shared', ?, ?, '开始工作了', 'p', ?, 'published', 'web', 1000, '刚刚', '刚刚')
+            """,
+            (uname, uname, json.dumps([image])),
+        )
+        conn.execute(
+            """
+            INSERT INTO studio_generations (
+                id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
+                prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type,
+                credits_spent, status, created_at, request_id, subject, visibility
+            ) VALUES ('gen_shared', ?, ?, '图文模式', 'graphic-text', '图文创作', 'single', '画风 #FA-001',
+                      'p', 'p', 0, '', ?, 'live', 'free', 0, 'success', '2026-10-01T10:00:00Z', 'req_s', '', 'public')
+            """,
+            (self.user_author["id"], uname, json.dumps([{"id": "it_s", "imageUrl": image}])),
+        )
+        conn.commit()
+
+        project_generation_to_works(conn, "gen_shared")
+        conn.commit()
+
+        rows = conn.execute(
+            "SELECT id FROM works WHERE status='published' AND images_json LIKE ?", (f"%{image}%",)
+        ).fetchall()
+        self.assertEqual(len(rows), 1, f"one picture must be one work, got {[r['id'] for r in rows]}")
+        self.assertEqual(rows[0]["id"], "work_shared", "the existing work is adopted, not replaced")
+
     def test_invisibility_of_failed_private_and_deleted_results(self):
         """失败、无图、私密、软删除结果公开接口均不可见；直接访问和互动入口同样检查权限"""
         conn = self.db.get_conn()

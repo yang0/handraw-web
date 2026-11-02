@@ -138,6 +138,35 @@ def resolve_work_title(
     return "未命名作品"
 
 
+def _find_work_by_image(conn: sqlite3.Connection, image_url: str, author_username: str) -> str:
+    """Return an existing work that already carries this picture, if any.
+
+    Matching on the picture rather than on the generation is deliberate: the
+    same file reaches works by two routes -- published from the writing desk and
+    projected from history -- and only one of them may exist.
+    """
+    if not image_url:
+        return ""
+    rows = conn.execute(
+        """
+        SELECT id, images_json FROM works
+        WHERE author_username = ? AND COALESCE(images_json, '') <> ''
+        ORDER BY published_at_ms ASC
+        """,
+        (author_username,),
+    ).fetchall()
+    for r in rows:
+        try:
+            images = json.loads(r["images_json"] or "[]")
+        except Exception:
+            continue
+        for im in images:
+            url = im if isinstance(im, str) else (im.get("url") if isinstance(im, dict) else "")
+            if url and url == image_url:
+                return str(r["id"])
+    return ""
+
+
 def project_generation_to_works(
     conn: sqlite3.Connection,
     generation_id_or_row: str | sqlite3.Row | dict[str, Any],
@@ -251,6 +280,18 @@ def project_generation_to_works(
                     from .services import set_work_visibility
                     set_work_visibility(conn, existing_wid, "published", utc_now_iso(), automated=True)
             projected_work_ids.append(existing_wid)
+            continue
+
+        # The picture may already be a work because its author shared it before
+        # this projection existed. Adopting that row keeps one picture one work;
+        # creating another is exactly how a shared generation showed up twice.
+        adopted = _find_work_by_image(conn, image_url, author_username)
+        if adopted:
+            conn.execute(
+                "INSERT OR IGNORE INTO generation_works (generation_id, item_key, work_id, created_at) VALUES (?, ?, ?, ?)",
+                (gen_id, item_key, adopted, utc_now_iso()),
+            )
+            projected_work_ids.append(adopted)
             continue
 
         # Create new work row
