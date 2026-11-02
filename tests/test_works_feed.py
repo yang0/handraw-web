@@ -290,30 +290,48 @@ def test_filters_and_facets(test_db: Database):
     assert {it["id"] for it in ids_res["items"]} == {"w_f1", "w_f3"}
 
 
-def test_publish_user_work_empty_prompt_and_reproducible_flag(test_db: Database):
+def test_publish_user_work_rejects_empty_prompt(test_db: Database):
+    """A work always carries a prompt; blank or whitespace-only is refused.
+
+    The plaza used to hide prompt-less rows in the query, which made a missing
+    prompt look like a display problem. The rule belongs at the write path.
+    """
     author, _ = register_user(test_db, "author_creator", "password-pwd")
 
-    # Publish work without prompt
+    for blank in ("", "   ", "\n\t "):
+        with pytest.raises(Exception) as excinfo:
+            publish_user_work(
+                test_db,
+                author,
+                {
+                    "title": "无配方画作",
+                    "prompt": blank,
+                    "images": ["/images/individual/FA/FA-013.webp"],
+                },
+            )
+        assert "提示词" in str(excinfo.value)
+
+    # Nothing was written for any of the refused attempts.
+    conn = test_db.get_conn()
+    assert conn.execute("SELECT COUNT(*) FROM works WHERE title = ?", ("无配方画作",)).fetchone()[0] == 0
+
+
+def test_publish_user_work_with_prompt_is_in_feed(test_db: Database):
+    author, _ = register_user(test_db, "author_creator2", "password-pwd")
     res = publish_user_work(
         test_db,
         author,
         {
-            "title": "自由无配方画作",
-            "prompt": "",
+            "title": "有配方的画作",
+            "prompt": "#FA-013 画风：自由小鸟",
             "images": ["/images/individual/FA/FA-013.webp"],
         },
     )
     assert res.get("ok") is True
-    wid = res.get("workId")
-    assert wid is not None
-
-    # Check work in feed
-    detail = get_work_by_id(test_db, wid, current_user=author)
+    detail = get_work_by_id(test_db, res["workId"], current_user=author)
     assert detail is not None
-    assert detail["title"] == "自由无配方画作"
-    assert detail["prompt"] == ""
-    # Empty prompt -> reproducible should be False
-    assert detail["reproducible"] is False
+    assert detail["title"] == "有配方的画作"
+    assert detail["prompt"]
 
 
 def test_dimensions_enrichment(test_db: Database):

@@ -172,7 +172,13 @@ class ForumResourceTests(unittest.TestCase):
         for offset,limit in [(-1,1),(0,0),('oops',3)]:
             with self.assertRaises(S.ServiceError): R.resource_comments(self.db,None,'style','FA-001',offset,limit)
 
-    def test_image_without_reproduction_prompt_is_a_public_work(self):
+    def test_work_with_blank_prompt_stays_readable_but_not_reproducible(self):
+        """A row whose prompt was blanked after publishing still resolves.
+
+        Publishing refuses a blank prompt, so this row can only exist if it was
+        blanked later. It keeps its discussion and picture but offers no
+        reproduction, rather than disappearing from every surface.
+        """
         _,subs=self.batch();self.approve_all()
         wid=subs['work']['targetId'];style=subs['style']['targetId']
         with self.db.transaction() as tx:

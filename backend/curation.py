@@ -229,6 +229,10 @@ def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = Fal
     # work
     title = _s(item.get("title") or item.get("name"), 120)
     prompt = _s(item.get("prompt") or item.get("definition") or "", MAX_PAYLOAD_TEXT)
+    if not prompt:
+        raise ServiceError("作品提示词不能为空", status=400, code="missing_prompt")
+    if not prompt.strip():
+        raise ServiceError("发布作品需要填写提示词", status=400, code="prompt_required")
     if not title:
         raise ServiceError("作品标题不能为空", status=400, code="missing_title")
     raw_subject = item.get("subject")
@@ -1623,6 +1627,8 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
     # checked for blankness); the Skill promises the user's words survive intact.
     if len(prompt) > 20000:
         raise ServiceError("提示词过长", status=400, code="prompt_too_long")
+    if not prompt.strip():
+        raise ServiceError("发布作品需要填写提示词", status=400, code="prompt_required")
 
     raw_images = body.get("images") or ([body["image"]] if body.get("image") else [])
     if isinstance(raw_images, (list, tuple)) and len(raw_images) > 9:
