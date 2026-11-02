@@ -390,7 +390,54 @@
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function safeHref(u) {
+    if (!u || typeof u !== "string") return "";
+    const s = u.trim();
+    if (/[\x00-\x1f\x7f]/.test(s)) return "";
+    if (/^[/\\]{2,}|^\/\\/.test(s)) return "";
+    if (/^(?:https?:\/\/|mailto:)/i.test(s)) return s;
+    if (/^(\/(?![/\\])|#)/.test(s)) return s;
+    return "";
+  }
+
+  function safeMediaUrl(u, opts = {}) {
+    if (!u || typeof u !== "string") return "";
+    const s = u.trim();
+    if (/[\x00-\x1f\x7f]/.test(s)) return "";
+    if (/^[/\\]{2,}|^\/\\/.test(s)) return "";
+    if (opts.allowData && /^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(s)) {
+      return s;
+    }
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^\/(?![/\\])/.test(s)) return s;
+    return "";
+  }
+
+  function stripHtmlToSnippet(html, maxLen = 140) {
+    if (!html) return "";
+    const raw = String(html);
+    let text = "";
+    if (typeof DOMParser !== "undefined") {
+      try {
+        const doc = new DOMParser().parseFromString(raw, "text/html");
+        const bad = doc.querySelectorAll("script, style, svg, math, iframe, object, embed, .hw-intext-del-btn, .btn, figcaption, .hw-honor-badge");
+        bad.forEach((el) => el.remove());
+        text = (doc.body.textContent || "").replace(/\s+/g, " ").trim();
+      } catch (_) {
+        text = "";
+      }
+    }
+    if (!text && raw) {
+      let s = raw.replace(/<\s*(script|style|iframe|object|embed|svg|math)[^>]*>[\s\S]*?(?:<\s*\/\s*\1\s*>|$)/gi, "");
+      s = s.replace(/<\/?[a-zA-Z][^>]*>/g, " ");
+      s = s.replace(/<[a-zA-Z][^<]*$/g, " ");
+      text = s.replace(/\s+/g, " ").trim();
+    }
+    return text.length > maxLen ? text.slice(0, maxLen) + "…" : text;
   }
 
   function toast(message) {
@@ -4344,6 +4391,9 @@
     CREATOR_HONOR_TIERS,
     RANK_PERIODS,
     esc,
+    safeHref,
+    safeMediaUrl,
+    stripHtmlToSnippet,
     resourceLabel,
     resourceSearchText,
     resourceMatchesGroup,

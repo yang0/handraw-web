@@ -220,8 +220,8 @@ def sanitize_media_url(value: str, *, allow_data: bool = False) -> str:
         except ValueError:
             return ""
         return clean
-    # ``/starter/`` serves the illustrations that ship with this repository.
-    if clean.startswith(("/images/", "/uploads/", "/generated/", "/starter/")):
+    # Disallow protocol-relative // or backslash tricks /\ or \\
+    if clean.startswith("/") and not clean.startswith(("//", "/\\")) and "\\" not in clean:
         return clean
     parsed = urlparse(clean)
     if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
@@ -238,6 +238,8 @@ _ALLOWED_HTML_TAGS = frozenset(
 )
 _VOID_HTML_TAGS = frozenset({"br", "img"})
 _DROP_CONTENT_TAGS = frozenset({"script", "style", "iframe", "object", "embed", "template", "svg", "math"})
+# Their tags go, but the words inside them are the author's and stay.
+_UNWRAP_TAGS = frozenset({"form", "noscript", "button", "select", "textarea", "label", "fieldset", "legend", "option"})
 _SAFE_ATTRS = frozenset({"alt", "class", "height", "id", "loading", "rel", "src", "target", "title", "width"})
 
 
@@ -246,6 +248,7 @@ class _SafeHTMLParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self._drop_depth = 0
+        self._open_tags: list[str] = []
 
     def _attrs(self, tag: str, attrs: list[tuple[str, str | None]]) -> str:
         output: list[str] = []
@@ -294,8 +297,19 @@ class _SafeHTMLParser(HTMLParser):
         if tag in _DROP_CONTENT_TAGS:
             self._drop_depth = 1
             return
+        if tag in _UNWRAP_TAGS:
+            return
         if tag in _ALLOWED_HTML_TAGS:
-            self.parts.append(f"<{tag}{self._attrs(tag, attrs)}>")
+            attrs_str = self._attrs(tag, attrs)
+            if tag == "a" and ' href="' not in attrs_str:
+                # Omit <a> wrapper if href was unsafe/missing
+                return
+            if tag == "img" and ' src="' not in attrs_str:
+                # Omit <img> tag if src was unsafe/missing
+                return
+            self.parts.append(f"<{tag}{attrs_str}>")
+            if tag not in _VOID_HTML_TAGS:
+                self._open_tags.append(tag)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
@@ -305,12 +319,22 @@ class _SafeHTMLParser(HTMLParser):
         if self._drop_depth:
             self._drop_depth -= 1
             return
+        if tag in _UNWRAP_TAGS:
+            return
         if tag in _ALLOWED_HTML_TAGS and tag not in _VOID_HTML_TAGS:
-            self.parts.append(f"</{tag}>")
+            if tag in self._open_tags:
+                self._open_tags.remove(tag)
+                self.parts.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
         if not self._drop_depth:
             self.parts.append(html.escape(data, quote=False))
+
+    def close(self) -> None:
+        super().close()
+        while self._open_tags:
+            t = self._open_tags.pop()
+            self.parts.append(f"</{t}>")
 
 
 def sanitize_rich_html(value: str, *, max_chars: int = 60000) -> str:
@@ -329,15 +353,45 @@ def sanitize_rich_html(value: str, *, max_chars: int = 60000) -> str:
 sanitize_html = sanitize_rich_html
 
 
+def sanitize_plain_text(value: Any, *, max_chars: int = 3000) -> str:
+    """Sanitize user plain-text input: remove executable markup/tags, control characters, and normalize."""
+    if value is None:
+        return ""
+    raw = str(value)
+    if not raw:
+        return ""
+    # 1. Strip null bytes and non-printable control chars (preserving \n, \r, \t)
+    clean = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", raw)
+    # 2. Drop dangerous blocks and their contents (script, style, iframe, object, embed, svg, math, form)
+    clean = re.sub(
+        r"<\s*(script|style|iframe|object|embed|svg|math|form|template|noscript)[^>]*>[\s\S]*?(?:<\s*/\s*\1\s*>|$)",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    # 3. Strip real HTML tags. The name must be followed by `>`, or by attributes
+    #    and then `>`, so ordinary prose like "a<b 且 c>d" keeps its brackets.
+    clean = re.sub(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>", "", clean)
+    # 4. Strip a trailing unclosed tag such as `<img src=x` (attributes present).
+    clean = re.sub(r"<\s*/?[a-zA-Z][a-zA-Z0-9]*\s[^<>]*$", "", clean)
+    clean = clean.strip()
+    return clean[:max_chars]
+
+
 def sanitize_submission_body(body: Mapping[str, object]) -> dict[str, object]:
     out = dict(body)
     rich_fields = {
         "body", "bodyHtml", "body_html", "contentHtml", "content_html", "lockedBody",
         "lockedBodyHtml", "summary", "summaryHtml", "description", "descriptionHtml",
     }
+    plain_fields = {"title", "name", "notes", "bio", "displayName", "text"}
     for key in rich_fields:
         value = out.get(key)
-        if isinstance(value, str) and "<" in value:
+        if isinstance(value, str):
             out[key] = sanitize_rich_html(value)
+    for key in plain_fields:
+        value = out.get(key)
+        if isinstance(value, str):
+            out[key] = sanitize_plain_text(value)
     return out
 

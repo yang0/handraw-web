@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from .config import CONTENT_DIR
 from . import services as S
-from .runtime_policy import sanitize_html, sanitize_media_url
+from .runtime_policy import sanitize_html, sanitize_media_url, sanitize_plain_text
 
 
 @lru_cache(maxsize=1)
@@ -203,7 +203,7 @@ def ensure_topic(tx,kind,target,resource,initial_origin: str = 'submission'):
 
 def comment(db,user,kind,target_id,text):
     target=str(target_id).strip().upper().lstrip('#') if kind!='work' else str(target_id).strip()
-    clean=sanitize_html(str(text or '').strip())[:800]
+    clean=sanitize_plain_text(str(text or '').strip(), max_chars=800)
     if not clean:
         raise S.ServiceError('请输入评论内容')
     with db.transaction() as tx:

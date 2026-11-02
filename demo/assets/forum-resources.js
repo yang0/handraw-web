@@ -72,13 +72,15 @@
   }
 
   function stripHtml(v) {
+    if (S.stripHtmlToSnippet) return S.stripHtmlToSnippet(v, 99999);
     const s = String(v == null ? "" : v);
     if (!s) return "";
-    if (!/[<>&]/.test(s)) return s;
     try {
-      return new DOMParser().parseFromString(s, "text/html").body.textContent || "";
+      const doc = new DOMParser().parseFromString(s, "text/html");
+      doc.querySelectorAll("script, style, svg, math, iframe").forEach(el => el.remove());
+      return doc.body.textContent || "";
     } catch (_e) {
-      return s;
+      return s.replace(/<[^>]*>/g, "");
     }
   }
 

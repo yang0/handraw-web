@@ -521,15 +521,12 @@
   }
 
   function stripHtmlToSnippet(html, maxLen = 140) {
+    if (S.stripHtmlToSnippet) return S.stripHtmlToSnippet(html, maxLen);
     if (!html) return "";
-    if (!/[<>]/.test(html)) {
-      const trimmed = String(html).replace(/\s+/g, " ").trim();
-      return trimmed.length > maxLen ? trimmed.slice(0, maxLen) + "…" : trimmed;
-    }
-    const tmp = document.createElement("div");
-    tmp.innerHTML = html;
-    tmp.querySelectorAll(".hw-intext-del-btn, .btn, figcaption, .hw-honor-badge").forEach((el) => el.remove());
-    const text = (tmp.textContent || tmp.innerText || "").replace(/\s+/g, " ").trim();
+    let s = String(html).replace(/<\s*(script|style|iframe|object|embed|svg|math)[^>]*>[\s\S]*?(?:<\s*\/\s*\1\s*>|$)/gi, "");
+    s = s.replace(/<\/?[a-zA-Z][^>]*>/g, " ");
+    s = s.replace(/<[a-zA-Z][^<]*$/g, " ");
+    const text = s.replace(/\s+/g, " ").trim();
     return text.length > maxLen ? text.slice(0, maxLen) + "…" : text;
   }
 

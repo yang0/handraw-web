@@ -2840,7 +2840,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(result)
             return
 
-        if req_path == "/api/forum/topics":
+        if req_path in ("/api/forum/topics", "/api/topics"):
             user = self._current_user(required=True)
             clean_body = _persist_inline_images_in_body(self.db, user, body)
             result = publish_forum_topic_post(self.db, user, clean_body)  # type: ignore[arg-type]
@@ -2848,7 +2848,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(result)
             return
 
-        m_topic_reply = re.match(r"^/api/forum/topics/([^/]+)/replies$", req_path)
+        m_topic_reply = re.match(r"^/api/(?:forum/topics|posts)/([^/]+)/replies$", req_path)
         if m_topic_reply:
             user = self._current_user(required=True)
             self._send_json(

@@ -593,7 +593,7 @@ def _handle_replies(handler: Any, topic_id: str, qs: dict[str, list[str]]) -> bo
             "topicId": r["topic_id"],
             "author": r["author_username"],
             "authorName": r["author_name"],
-            "text": r["text"],
+            "text": S.sanitize_plain_text(r["text"] or ""),
             "mountedStyle": r["mounted_style"] or "",
             "mountedLayout": r["mounted_layout"] or "",
             "likes": int(r["likes"] or 0),

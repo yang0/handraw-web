@@ -160,8 +160,9 @@ def _event(tx: Any, submission_id: str, actor: str, event_type: str, detail: dic
 # ---------------------------------------------------------------------------
 
 def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = False) -> dict[str, Any]:
+    from .runtime_policy import sanitize_plain_text
     if kind in ("style", "layout"):
-        name = _s(item.get("name") or item.get("title"), 80)
+        name = sanitize_plain_text(_s(item.get("name") or item.get("title"), 80), max_chars=80)
         definition = _s(item.get("definition") or item.get("prompt"), MAX_PAYLOAD_TEXT)
         label = "画风" if kind == "style" else "图型"
         if not name:
@@ -200,7 +201,7 @@ def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = Fal
             if len(examples) > 9:
                 raise ServiceError(f"示例图最多 9 张，当前 {len(examples)} 张。", status=400, code="too_many_images")
             # Description max length check
-            desc_val = _s(item.get("description") or item.get("notes"), 300).strip()
+            desc_val = sanitize_plain_text(_s(item.get("description") or item.get("notes"), 300), max_chars=300).strip()
             if len(desc_val) > 300:
                 raise ServiceError(f"{label}简介最多 300 字", status=400, code="description_too_long")
         else:
@@ -212,12 +213,12 @@ def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = Fal
                 c = imgs[0] if imgs else ""
                 examples = imgs[1:] if len(imgs) > 1 else []
 
-        group_name = _s(item.get("group"), 80)
+        group_name = sanitize_plain_text(_s(item.get("group"), 80), max_chars=80)
         res = dict(item)
         res.update({
             "kind": kind,
             "name": name,
-            "description": _s(item.get("description") or item.get("notes"), 300),
+            "description": sanitize_plain_text(_s(item.get("description") or item.get("notes"), 300), max_chars=300),
             "definition": definition,
             "group": group_name,
             "unlockCost": cost,
@@ -227,7 +228,7 @@ def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = Fal
         })
         return res
     # work
-    title = _s(item.get("title") or item.get("name"), 120)
+    title = sanitize_plain_text(_s(item.get("title") or item.get("name"), 120), max_chars=120)
     prompt = _s(item.get("prompt") or item.get("definition") or "", MAX_PAYLOAD_TEXT)
     if not prompt:
         raise ServiceError("作品提示词不能为空", status=400, code="missing_prompt")
@@ -477,10 +478,10 @@ def submit(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str
         )
 
     it0 = items[0]
-    default_title = _s(it0.get("name") or it0.get("title"), 140) or "社区投稿征集"
+    from .runtime_policy import sanitize_html, sanitize_plain_text
+    default_title = sanitize_plain_text(_s(it0.get("name") or it0.get("title"), 140) or "社区投稿征集", max_chars=140)
     default_text = _s(it0.get("description") or it0.get("notes"), 60000) or "以下为本帖投稿内容，等待社区审核收录。"
-    title = _s(body.get("title"), 140) or default_title
-    from .runtime_policy import sanitize_html
+    title = sanitize_plain_text(_s(body.get("title"), 140), max_chars=140) or default_title
     text = sanitize_html(_s(body.get("text") or body.get("summary"), 60000)) or default_text
     now_iso = _now()
     now_ms = _now_ms()
@@ -1617,11 +1618,12 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
     username = _username(user)
     uid = _user_id(user)
     request_id = _s(body.get("requestId"), 80)
-    raw_title = _s(body.get("title"), 140).strip()
+    from .runtime_policy import sanitize_plain_text
+    raw_title = sanitize_plain_text(_s(body.get("title"), 140), max_chars=140).strip()
     if not raw_title:
         raise ServiceError("发布作品需要填写标题", status=400, code="title_required")
     title = raw_title
-    raw_notes = _s(body.get("notes"), 20000).strip()
+    raw_notes = sanitize_plain_text(_s(body.get("notes"), 20000), max_chars=20000).strip()
     prompt = str(body.get("prompt") or "")
     # The prompt is stored verbatim (only the length is bounded and the value
     # checked for blankness); the Skill promises the user's words survive intact.

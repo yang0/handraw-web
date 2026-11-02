@@ -20,7 +20,7 @@ logger = logging.getLogger("backend.services")
 from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
 from .db import Database, local_today_str, utc_now_iso
 from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
-from .runtime_policy import sanitize_media_url
+from .runtime_policy import sanitize_media_url, sanitize_plain_text, sanitize_rich_html
 from .work_schema import deduplicate_generation_history
 from .security import (
     generate_api_key,
@@ -470,7 +470,8 @@ def register_user(
         raise ServiceError("登录密码长度至少 6 位")
 
     clean_email = (email or f"{uname}@handraw-style.com").strip().lower()
-    dname = (display_name or uname).strip()[:40]
+    clean_dname = sanitize_plain_text(display_name, max_chars=40)
+    dname = clean_dname if clean_dname else uname
     ref_code = (invite_code or "").strip()
     now_iso = utc_now_iso()
 
@@ -621,11 +622,13 @@ def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) 
         if not row:
             raise ServiceError("账号不存在", status=404)
 
-        dname = str(body.get("displayName") if body.get("displayName") is not None else row["display_name"]).strip()[:40]
+        dname_raw = body.get("displayName") if body.get("displayName") is not None else row["display_name"]
+        dname = sanitize_plain_text(dname_raw, max_chars=40)
         if not dname:
             raise ServiceError("显示昵称不能为空")
         email = str(body.get("email") if body.get("email") is not None else (row["email"] or "")).strip().lower()[:120]
-        bio = str(body.get("bio") if body.get("bio") is not None else (row["bio"] or "")).strip()[:300]
+        bio_raw = body.get("bio") if body.get("bio") is not None else (row["bio"] or "")
+        bio = sanitize_plain_text(bio_raw, max_chars=300)
 
         if email and email != (row["email"] or "").lower():
             dup = tx.execute("SELECT id FROM users WHERE LOWER(email) = ? AND id != ?", (email, uid)).fetchone()
@@ -3618,7 +3621,7 @@ PUNCTUATION_AND_CONNECTORS = re.compile(r"[\s\-_+|｜·#/\\#()（）\[\]【】\d
 
 
 def validate_topic_title(title: Any) -> str:
-    raw = str(title or "").strip()
+    raw = sanitize_plain_text(title, max_chars=140)
     non_ws = re.sub(r"\s+", "", raw)
     if len(non_ws) < 4:
         raise ServiceError("帖子标题至少需要 4 个非空白字符", status=400, code="title_too_short")
@@ -3648,6 +3651,7 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
 
     title = validate_topic_title(body.get("title"))[:140]
     raw_body = str(body.get("body") or body.get("bodyHtml") or body.get("lockedBody") or body.get("summary") or "附上我的实战配置与思考，欢迎交流！").strip()[:60000]
+    clean_body = sanitize_rich_html(raw_body, max_chars=60000)
     price_val = body.get("price")
     if price_val is not None and str(price_val).strip() != "":
         try:
@@ -3661,17 +3665,17 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
         price = 0
 
     if price > 0:
-        if "hw-paywall-divider" not in raw_body:
+        if "hw-paywall-divider" not in raw_body and "hw-paywall-divider" not in clean_body:
             raise ServiceError("付费帖子缺少付费分界线", status=400)
         divider_match = re.search(
             r"<div[^>]*class=[\"'][^\"']*hw-paywall-divider[^\"']*[\"'][^>]*>.*?</div>\s*</div>|<(?:div|hr)[^>]*class=[\"'][^\"']*hw-paywall-divider[^\"']*[\"'][^>]*>(?:.*?</div>)?|<[^>]*hw-paywall-divider[^>]*>",
-            raw_body,
+            clean_body if "hw-paywall-divider" in clean_body else raw_body,
             flags=re.DOTALL,
         )
         if divider_match:
-            after_part = raw_body[divider_match.end():]
+            after_part = (clean_body if "hw-paywall-divider" in clean_body else raw_body)[divider_match.end():]
         else:
-            parts = raw_body.split("hw-paywall-divider", 1)
+            parts = (clean_body if "hw-paywall-divider" in clean_body else raw_body).split("hw-paywall-divider", 1)
             after_part = parts[1] if len(parts) > 1 else ""
         after_text = re.sub(r"<[^>]+>", " ", after_part).strip()
         has_media = any(tag in after_part for tag in ("<img", "hw-intext-media", "hw-intext-card"))
@@ -3694,7 +3698,23 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
         elif card_kind == "layout" and card_id and not layout_code:
             layout_code = card_id.upper().lstrip("#")
 
-    images = body.get("images") or []
+    raw_images = body.get("images") or []
+    sanitized_images: list[Any] = []
+    for item in raw_images:
+        if isinstance(item, str):
+            safe_u = sanitize_media_url(item, allow_data=True)
+            if safe_u:
+                sanitized_images.append(safe_u)
+        elif isinstance(item, dict):
+            raw_u = item.get("url")
+            safe_u = sanitize_media_url(str(raw_u or ""), allow_data=True) if raw_u else ""
+            if safe_u:
+                entry = dict(item)
+                entry["url"] = safe_u
+                if "tag" in entry:
+                    entry["tag"] = sanitize_plain_text(entry.get("tag"), max_chars=100)
+                sanitized_images.append(entry)
+    images = sanitized_images
     recipe = body.get("recipe")
     if isinstance(shared_card, dict):
         if not recipe or not isinstance(recipe, dict):
@@ -3709,13 +3729,14 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
 
     incoming_summary = str(body.get("summary") or "").strip()
     if incoming_summary:
-        summary = incoming_summary[:60000]
-    elif price > 0 and len(raw_body) > 60:
-        clean_text = re.sub(r"<[^>]+>", " ", raw_body).strip()
+        summary = sanitize_rich_html(incoming_summary, max_chars=60000)
+    elif price > 0 and len(clean_body) > 60:
+        clean_text = re.sub(r"<[^>]+>", " ", clean_body).strip()
         summary = (clean_text[:120] if len(clean_text) > 120 else clean_text) + "……（以下为核心实战干货，需付费解锁查看）"
     else:
-        summary = raw_body
-    locked_body = (str(body.get("lockedBody") or raw_body)).strip()[:60000] if price > 0 else ""
+        summary = clean_body
+    locked_raw = (str(body.get("lockedBody") or raw_body)).strip()[:60000] if price > 0 else ""
+    locked_body = sanitize_rich_html(locked_raw, max_chars=60000) if locked_raw else ""
 
     with db.transaction() as tx:
         settings = get_site_settings(tx)
@@ -3814,9 +3835,11 @@ def publish_forum_reply_post(
         source=find_topic_source(db,topic_id)
         if source and source['origin']!='submission':
             return comment(db,user,source['kind'],source['target_id'],text)
-    clean = (text or "").strip()[:3000]
+    clean = sanitize_plain_text(text, max_chars=3000)
     if not clean:
         raise ServiceError("请输入回复内容")
+    clean_style = re.sub(r"[^A-Za-z0-9_-]", "", str(mounted_style or "").strip())[:32]
+    clean_layout = re.sub(r"[^A-Za-z0-9_-]", "", str(mounted_layout or "").strip())[:32]
     uid = int(user["id"])
     now_iso = utc_now_iso()
     rid = f"rep_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
@@ -3839,8 +3862,8 @@ def publish_forum_reply_post(
                 user["username"],
                 user["display_name"],
                 clean,
-                (mounted_style or "").strip().upper().lstrip("#"),
-                (mounted_layout or "").strip().upper().lstrip("#"),
+                clean_style.upper().lstrip("#"),
+                clean_layout.upper().lstrip("#"),
                 now_iso,
             ),
         )
