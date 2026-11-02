@@ -607,7 +607,9 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     assert.ok(root.innerHTML.includes("fwp"), "Topic body must contain fwp work section");
     const countsEl = root.querySelector("#topic-counts");
     assert.ok(countsEl, "Topic counts element must exist");
-    assert.equal(countsEl.textContent, "点赞 25 · 收藏 10 · 做同款 14", "Counts must include '做同款 14'");
+    assert.equal(countsEl.textContent, " · 做同款 14", "Counts must include '做同款 14'");
+    assert.match(root.querySelector("#topic-page-like").textContent, /25/);
+    assert.match(root.querySelector("#topic-page-collect").textContent, /10/);
 
     const forkLink = root.querySelector(".fwp-fork");
     assert.ok(forkLink, "Work section must contain fork link");
@@ -820,13 +822,13 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     const countsEl = h.forumRoot.querySelector("#topic-counts");
     assert.ok(likeBtn, "#topic-page-like button must exist");
     assert.equal(likeBtn.textContent.trim(), "👍 点赞 (10)");
-    assert.equal(countsEl.textContent, "点赞 10 · 收藏 5");
+    assert.equal(countsEl.textContent, "");
 
     // 1. Success case: click like -> immediately updates
     likeBtn.onclick();
     // Synchronous optimistic check
     assert.equal(likeBtn.textContent.trim(), "👍 已赞 (11)", "Optimistic UI: like button updates immediately");
-    assert.equal(countsEl.textContent, "点赞 11 · 收藏 5", "Optimistic UI: counts text updates immediately");
+    assert.equal(countsEl.textContent, "", "Optimistic UI: counts text updates immediately");
 
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(h.getRefreshFromServerCount(), 0, "refreshFromServer must NOT be called on like");
@@ -841,7 +843,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     // Wait for API to reject and rollback
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(likeBtn.textContent.trim(), "👍 已赞 (11)", "On API failure, like count must rollback");
-    assert.equal(countsEl.textContent, "点赞 11 · 收藏 5", "On API failure, counts must rollback");
+    assert.equal(countsEl.textContent, "", "On API failure, counts must rollback");
     assert.equal(h.getRefreshFromServerCount(), 0, "refreshFromServer must still NOT be called");
     assert.ok(h.toasts.some((m) => m.includes("点赞失败")), "Toast must show failure message");
     console.log("Scenario 5 passed: Optimistic like update, rollback on failure, no refreshFromServer.");
@@ -1244,7 +1246,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
       await new Promise((resolve) => setTimeout(resolve, 80));
 
       // Verify initial counts read from mount.resource for style/layout, or mount.work for work (U1)
-      const expectedInitialCounts = kind === "work" ? "点赞 5 · 收藏 2 · 做同款 0" : "点赞 23 · 收藏 1";
+      const expectedInitialCounts = kind === "work" ? " · 做同款 0" : "";
       assert.equal(h.forumRoot.querySelector("#topic-counts").textContent, expectedInitialCounts, `Initial counts for ${kind} must read from mount.${kind === "work" ? "work" : "resource"}`);
 
       // Click like
@@ -1255,8 +1257,9 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
       assert.equal(lastLikePayload.targetType, expectTargetType, `Like targetType for ${kind} must be ${expectTargetType}`);
       assert.equal(lastLikePayload.id, kind === "work" ? "t_work" : code, `Like id for ${kind} must match target`);
       // Asset mount uses local +/- 1 (23 + 1 = 24) instead of fake server res.likes (6)
-      const expectedAfterLikeCounts = kind === "work" ? "点赞 6 · 收藏 2 · 做同款 0" : "点赞 24 · 收藏 1";
+      const expectedAfterLikeCounts = kind === "work" ? " · 做同款 0" : "";
       assert.equal(h.forumRoot.querySelector("#topic-counts").textContent, expectedAfterLikeCounts, `Counts after like for ${kind} must reflect local +/- 1`);
+      assert.match(likeBtn.textContent, kind === "work" ? /已赞 \(6\)/ : /已赞 \(24\)/);
 
       // Click collect
       const favBtn = h.forumRoot.querySelector("#topic-page-collect");
@@ -1265,8 +1268,9 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
 
       assert.equal(lastCollectPayload.bucket, expectBucket, `Collect bucket for ${kind} must be ${expectBucket}`);
       assert.equal(lastCollectPayload.targetId, kind === "work" ? "t_work" : code, `Collect targetId for ${kind} must match target`);
-      const expectedAfterFavCounts = kind === "work" ? "点赞 6 · 收藏 3 · 做同款 0" : "点赞 24 · 收藏 2";
+      const expectedAfterFavCounts = kind === "work" ? " · 做同款 0" : "";
       assert.equal(h.forumRoot.querySelector("#topic-counts").textContent, expectedAfterFavCounts, `Counts after collect for ${kind} must reflect local +/- 1`);
+      assert.match(favBtn.textContent, kind === "work" ? /已收藏 \(3\)/ : /已收藏 \(2\)/);
     };
 
     // 10a: Style FB-041 -> like: style/FB-041, collect: styles/FB-041
@@ -1318,7 +1322,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     favBtn.onclick();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 357 · 收藏 311");
+    assert.equal(root.querySelector("#topic-counts").textContent, "");
     assert.match(likeBtn.textContent, /已赞 \(357\)/);
     assert.match(favBtn.textContent, /已收藏 \(311\)/);
 
@@ -1329,7 +1333,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     // Verify state does NOT revert to 356/310
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 357 · 收藏 311", "Counts must remain 357/311 after modal re-render");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "Counts must remain clean after modal re-render");
     assert.match(root.querySelector("#topic-page-like").textContent, /已赞 \(357\)/, "Like button must remain in liked state");
     assert.match(root.querySelector("#topic-page-collect").textContent, /已收藏 \(311\)/, "Favorite button must remain in favorited state");
 
@@ -1696,7 +1700,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(likeBtn.disabled, false, "Like button must be re-enabled after success");
     assert.equal(likeBtn.getAttribute("aria-busy"), null, "aria-busy must be removed after success");
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 101 · 收藏 50");
+    assert.equal(root.querySelector("#topic-counts").textContent, "");
 
     // --- 2. LIKE: failure recovery ---
     likeBtn.onclick(); // Click again to unlike
@@ -1708,7 +1712,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(likeBtn.disabled, false, "Like button must be re-enabled after failure");
     assert.equal(likeBtn.getAttribute("aria-busy"), null, "aria-busy must be removed after failure");
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 101 · 收藏 50", "Counts must roll back on failure");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "Counts must roll back on failure");
 
     // --- 3. LIKE: Stale response protection on topic navigation ---
     likeBtn.onclick(); // Click to like while on t_y1_a
@@ -1718,13 +1722,13 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     // Switch to t_y1_b before response arrives
     h.window.HANDRAW_FORUM_OPEN_TOPIC("t_y1_b", 0);
     await new Promise((resolve) => setTimeout(resolve, 80));
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250", "New topic t_y1_b must load its own counts");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "New topic t_y1_b must load its own counts");
 
     // Now resolve the old request from t_y1_a
     resolveLike(false, 100);
     await new Promise((resolve) => setTimeout(resolve, 40));
     // Verify t_y1_b was NOT overwritten by t_y1_a's response
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250", "Old response must NOT overwrite new topic counts");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "Old response must NOT overwrite new topic counts");
 
     // --- 4. COLLECT: switch back to t_y1_a and test collect ---
     h.window.HANDRAW_FORUM_OPEN_TOPIC("t_y1_a", 0);
@@ -1746,7 +1750,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(favBtn2.disabled, false, "Collect button must be re-enabled after success");
     assert.equal(favBtn2.getAttribute("aria-busy"), null, "aria-busy must be removed from collect button");
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 51");
+    assert.equal(root.querySelector("#topic-counts").textContent, "");
 
     // --- 5. COLLECT: failure recovery ---
     favBtn2.onclick(); // Click to un-collect
@@ -1757,7 +1761,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(favBtn2.disabled, false, "Collect button must be re-enabled after error");
     assert.equal(favBtn2.getAttribute("aria-busy"), null);
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 51", "Favorites must roll back on error");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "Favorites must roll back on error");
 
     // --- 6. COLLECT: Stale response protection on topic navigation ---
     favBtn2.onclick();
@@ -1767,12 +1771,12 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     // Switch to t_y1_b before collect response arrives
     h.window.HANDRAW_FORUM_OPEN_TOPIC("t_y1_b", 0);
     await new Promise((resolve) => setTimeout(resolve, 80));
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250");
+    assert.equal(root.querySelector("#topic-counts").textContent, "");
 
     // Resolve old collect request
     resolveCollect(false);
     await new Promise((resolve) => setTimeout(resolve, 40));
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250", "Old collect response must NOT overwrite new topic counts");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "Old collect response must NOT overwrite new topic counts");
 
     console.log("Scenario 15 passed: Serialized like & collect requests, in-flight debouncing, and navigation stale protection verified.");
   }
@@ -1836,7 +1840,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 80));
 
     const root = h.forumRoot;
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 50");
+    assert.equal(root.querySelector("#topic-counts").textContent, "");
 
     // ==========================================
     // 1. LIKE TESTS: (a), (b), (c)
@@ -1849,7 +1853,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     assert.equal(likeCallsCount, 1, "(a) First like click must initiate request");
     assert.equal(likeBtnA1.disabled, true);
     assert.equal(likeBtnA1.getAttribute("aria-busy"), "true");
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 101 · 收藏 50", "Optimistic like count applied");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "Optimistic like count applied");
 
     // Trigger re-render by opening share panel
     root.querySelector("#topic-page-share").onclick();
@@ -1867,7 +1871,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(likeBtnA_drawer.disabled, false, "(a) Like button must be re-enabled after response settles");
     assert.equal(likeBtnA_drawer.getAttribute("aria-busy"), null, "(a) aria-busy removed after response settles");
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 101 · 收藏 50", "(a) Counts match server response");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "(a) Counts match server response");
 
     // Close share drawer
     root.querySelector("#topic-page-share").onclick();
@@ -1881,7 +1885,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     // Switch to topic B while request is in-flight
     h.window.HANDRAW_FORUM_OPEN_TOPIC("t_y2_b", 0);
     await new Promise((resolve) => setTimeout(resolve, 80));
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250", "Switched to B");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "Switched to B");
 
     // Return to topic A before old response settles (generates new gen)
     const prevPostCallsA = postCallsA;
@@ -1896,7 +1900,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(likeBtnA_newGen.disabled, false, "(b) Button A re-enabled after settlement");
     assert.ok(postCallsA > prevPostCallsA + 1, "(b) Old response from previous gen triggered GET /api/posts/t_y2_a calibration without applying blind delta");
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 50", "(b) Counts calibrated from server");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "(b) Counts calibrated from server");
 
     // --- (c) Like in-flight on A -> switch to B -> settle old response while on B -> B counts NOT modified ---
     const likeBtnA3 = root.querySelector("#topic-page-like");
@@ -1906,12 +1910,12 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
 
     h.window.HANDRAW_FORUM_OPEN_TOPIC("t_y2_b", 0);
     await new Promise((resolve) => setTimeout(resolve, 80));
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250");
+    assert.equal(root.querySelector("#topic-counts").textContent, "");
 
     // Settle old response while on B
     resolveLike(true, 101);
     await new Promise((resolve) => setTimeout(resolve, 40));
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250", "(c) Topic B counts must NOT be modified by stale A like response");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "(c) Topic B counts must NOT be modified by stale A like response");
 
     // ==========================================
     // 2. COLLECT TESTS: (a), (b), (c)
@@ -1927,7 +1931,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     assert.equal(collectCallsCount, 1, "(a) First collect click must initiate request");
     assert.equal(favBtnA1.disabled, true);
     assert.equal(favBtnA1.getAttribute("aria-busy"), "true");
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 51", "Optimistic collect count applied");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "Optimistic collect count applied");
 
     // Re-render via share drawer
     root.querySelector("#topic-page-share").onclick();
@@ -1943,7 +1947,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(favBtnA_drawer.disabled, false, "(a) Collect button must be re-enabled after response settles");
     assert.equal(favBtnA_drawer.getAttribute("aria-busy"), null);
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 51", "(a) Collect count matches server");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "(a) Collect count matches server");
 
     // Close drawer
     root.querySelector("#topic-page-share").onclick();
@@ -1968,7 +1972,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(favBtnA_newGen.disabled, false, "(b) Collect button A re-enabled after settlement");
     assert.ok(postCallsA > prevPostCallsA2 + 1, "(b) Old response from previous gen triggered GET /api/posts/t_y2_a calibration without applying blind delta");
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 50", "(b) Counts calibrated from server");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "(b) Counts calibrated from server");
 
     // --- (c) Collect in-flight on A -> switch to B -> settle old response while on B -> B counts NOT modified ---
     const favBtnA3 = root.querySelector("#topic-page-collect");
@@ -1978,11 +1982,11 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
 
     h.window.HANDRAW_FORUM_OPEN_TOPIC("t_y2_b", 0);
     await new Promise((resolve) => setTimeout(resolve, 80));
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250");
+    assert.equal(root.querySelector("#topic-counts").textContent, "");
 
     resolveCollect(true);
     await new Promise((resolve) => setTimeout(resolve, 40));
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 500 · 收藏 250", "(c) Topic B counts must NOT be modified by stale A collect response");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "(c) Topic B counts must NOT be modified by stale A collect response");
 
     console.log("Scenario 16 passed: Module-level in-flight lock across re-renders, topic switching and generation tracking verified.");
   }
@@ -2100,7 +2104,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // (b) Verify 999 was NOT written back because seq changed!
-    assert.notEqual(root.querySelector("#topic-counts").textContent, "点赞 999 · 收藏 50", "(b) Stale calibration GET must NOT write back when seq has changed");
+    assert.notEqual(root.querySelector("#topic-page-like").textContent, "👍 已赞 (999)", "(b) Stale calibration GET must NOT write back when seq has changed");
     assert.equal(calibLikeBtn.disabled, false, "Button re-enabled after calibration settles");
     assert.equal(calibLikeBtn.getAttribute("aria-busy"), null);
 
@@ -2140,7 +2144,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 105 · 收藏 50", "(c) Social fields updated from calibration");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "(c) Social fields updated from calibration");
     const likeBtnAfterCalib = root.querySelector("#topic-page-like");
     assert.equal(likeBtnAfterCalib.disabled, false);
     assert.ok(likeBtnAfterCalib.textContent.includes("已赞 (105)"), "(c) Like button displays updated calibrated count");
@@ -2209,7 +2213,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    assert.notEqual(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 888", "(b) Stale collect calibration must NOT write back when seq changed");
+    assert.notEqual(root.querySelector("#topic-page-collect").textContent, "♥ 已收藏 (888)", "(b) Stale collect calibration must NOT write back when seq changed");
     assert.equal(calibFavBtn.disabled, false);
     assert.equal(calibFavBtn.getAttribute("aria-busy"), null);
 
@@ -2243,7 +2247,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    assert.equal(root.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 55", "(c) Collect count updated via calibration");
+    assert.equal(root.querySelector("#topic-counts").textContent, "", "(c) Collect count updated via calibration");
     const favBtnAfterCalib = root.querySelector("#topic-page-collect");
     assert.equal(favBtnAfterCalib.disabled, false);
     assert.ok(favBtnAfterCalib.textContent.includes("已收藏 (55)"));
@@ -2367,14 +2371,14 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 80));
     const root1 = h1.forumRoot;
 
-    assert.equal(root1.querySelector("#topic-counts").textContent, "点赞 10 · 收藏 5");
+    assert.equal(root1.querySelector("#topic-counts").textContent, "");
     const likeBtn1 = root1.querySelector("#topic-page-like");
     const favBtn1 = root1.querySelector("#topic-page-collect");
 
     // Click like (delayed)
     likeBtn1.onclick();
     assert.equal(likeBtn1.disabled, true);
-    assert.equal(root1.querySelector("#topic-counts").textContent, "点赞 11 · 收藏 5");
+    assert.equal(root1.querySelector("#topic-counts").textContent, "");
 
     // Click collect (success)
     favBtn1.onclick();
@@ -2382,7 +2386,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(favBtn1.disabled, false);
     assert.ok(favBtn1.classList.contains("btn-primary"));
-    assert.equal(root1.querySelector("#topic-counts").textContent, "点赞 11 · 收藏 6");
+    assert.equal(root1.querySelector("#topic-counts").textContent, "");
 
     // Like returns 500 error
     rejectLikePost(new Error("Like failed 500"));
@@ -2394,7 +2398,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     assert.ok(likeBtn1.textContent.includes("点赞 (10)"));
     assert.ok(favBtn1.classList.contains("btn-primary"));
     assert.ok(favBtn1.textContent.includes("已收藏 (6)"));
-    assert.equal(root1.querySelector("#topic-counts").textContent, "点赞 10 · 收藏 6", "Case 1: SC-021 like failed rolled back, collect success preserved");
+    assert.equal(root1.querySelector("#topic-counts").textContent, "", "Case 1: SC-021 like failed rolled back, collect success preserved");
 
     // --- Case 2: Like failure + Collect success on Discussion Topic (t_y4_disc_1) ---
     const h2 = createHarness({ locationSearch: "?view=topic&id=t_y4_disc_1", apiHandlers });
@@ -2402,7 +2406,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 80));
     const root2 = h2.forumRoot;
 
-    assert.equal(root2.querySelector("#topic-counts").textContent, "点赞 50 · 收藏 20");
+    assert.equal(root2.querySelector("#topic-counts").textContent, "");
     const likeBtn2 = root2.querySelector("#topic-page-like");
     const favBtn2 = root2.querySelector("#topic-page-collect");
 
@@ -2410,7 +2414,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     favBtn2.onclick(); // collect succeeds
     resolveCollectPost(true, 21);
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(root2.querySelector("#topic-counts").textContent, "点赞 51 · 收藏 21");
+    assert.equal(root2.querySelector("#topic-counts").textContent, "");
 
     rejectLikePost(new Error("Like 500"));
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -2419,7 +2423,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     assert.ok(likeBtn2.textContent.includes("点赞 (50)"));
     assert.ok(favBtn2.classList.contains("btn-primary"));
     assert.ok(favBtn2.textContent.includes("已收藏 (21)"));
-    assert.equal(root2.querySelector("#topic-counts").textContent, "点赞 50 · 收藏 21", "Case 2: Discussion like failed rolled back, collect success preserved");
+    assert.equal(root2.querySelector("#topic-counts").textContent, "", "Case 2: Discussion like failed rolled back, collect success preserved");
 
     // --- Case 3: Collect failure + Like success on Resource Topic (FB-041) ---
     const h3 = createHarness({ locationSearch: "?view=topic&id=FB-041", apiHandlers });
@@ -2427,20 +2431,20 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 80));
     const root3 = h3.forumRoot;
 
-    assert.equal(root3.querySelector("#topic-counts").textContent, "点赞 15 · 收藏 8");
+    assert.equal(root3.querySelector("#topic-counts").textContent, "");
     const likeBtn3 = root3.querySelector("#topic-page-like");
     const favBtn3 = root3.querySelector("#topic-page-collect");
 
     favBtn3.onclick(); // collect delayed
     assert.equal(favBtn3.disabled, true);
-    assert.equal(root3.querySelector("#topic-counts").textContent, "点赞 15 · 收藏 9");
+    assert.equal(root3.querySelector("#topic-counts").textContent, "");
 
     likeBtn3.onclick(); // like succeeds
     resolveLikePost(true, 16);
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(likeBtn3.disabled, false);
     assert.ok(likeBtn3.classList.contains("btn-primary"));
-    assert.equal(root3.querySelector("#topic-counts").textContent, "点赞 16 · 9".includes("16") ? root3.querySelector("#topic-counts").textContent : "");
+    assert.ok(likeBtn3.textContent.includes("16"));
 
     rejectCollectPost(new Error("Collect failed 500"));
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -2450,7 +2454,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     assert.ok(favBtn3.textContent.includes("收藏 (8)"));
     assert.ok(likeBtn3.classList.contains("btn-primary"));
     assert.ok(likeBtn3.textContent.includes("已赞 (16)"));
-    assert.equal(root3.querySelector("#topic-counts").textContent, "点赞 16 · 收藏 8", "Case 3: FB-041 collect failed rolled back, like success preserved");
+    assert.equal(root3.querySelector("#topic-counts").textContent, "", "Case 3: FB-041 collect failed rolled back, like success preserved");
 
     // --- Case 4: Collect failure + Like success on Discussion Topic (t_y4_disc_2) ---
     const h4 = createHarness({ locationSearch: "?view=topic&id=t_y4_disc_2", apiHandlers });
@@ -2458,7 +2462,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 80));
     const root4 = h4.forumRoot;
 
-    assert.equal(root4.querySelector("#topic-counts").textContent, "点赞 40 · 收藏 30");
+    assert.equal(root4.querySelector("#topic-counts").textContent, "");
     const likeBtn4 = root4.querySelector("#topic-page-like");
     const favBtn4 = root4.querySelector("#topic-page-collect");
 
@@ -2474,7 +2478,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     assert.ok(favBtn4.textContent.includes("收藏 (30)"));
     assert.ok(likeBtn4.classList.contains("btn-primary"));
     assert.ok(likeBtn4.textContent.includes("已赞 (41)"));
-    assert.equal(root4.querySelector("#topic-counts").textContent, "点赞 41 · 收藏 30", "Case 4: Discussion collect failed rolled back, like success preserved");
+    assert.equal(root4.querySelector("#topic-counts").textContent, "", "Case 4: Discussion collect failed rolled back, like success preserved");
 
     // --- Case 5: Like calibration GET in-flight while Collect succeeds -> calibration does NOT overwrite Collect ---
     const h5 = createHarness({ locationSearch: "?view=topic&id=t_y4_calib", apiHandlers });
@@ -2482,7 +2486,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     await new Promise((resolve) => setTimeout(resolve, 80));
     const root5 = h5.forumRoot;
 
-    assert.equal(root5.querySelector("#topic-counts").textContent, "点赞 100 · 收藏 50");
+    assert.equal(root5.querySelector("#topic-counts").textContent, "");
     const likeBtn5 = root5.querySelector("#topic-page-like");
     likeBtn5.onclick(); // like in-flight
 
@@ -2531,7 +2535,7 @@ function createHarness({ locationSearch = "?view=topic&id=t_default", apiHandler
     assert.ok(calibLikeBtn.textContent.includes("已赞 (101)"));
     assert.ok(favBtn5.classList.contains("btn-primary"), "Collect state must remain primary");
     assert.ok(favBtn5.textContent.includes("已收藏 (51)"), "Collect count 51 must NOT be overwritten by calibration");
-    assert.equal(root5.querySelector("#topic-counts").textContent, "点赞 101 · 收藏 51", "Counts reflect calibrated likes (101) and active collect (51)");
+    assert.equal(root5.querySelector("#topic-counts").textContent, "", "Counts reflect calibrated likes (101) and active collect (51)");
 
     console.log("Scenario 18 passed: Decoupled social sequence per action, interleaving resilience, and selective calibration verified.");
   }

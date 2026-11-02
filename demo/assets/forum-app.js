@@ -1904,12 +1904,13 @@
     const el = document.querySelector("#topic-counts");
     if (!el || !_activeTopicDetail?.topicData) return;
     const tData = _activeTopicDetail.topicData;
-    const { count: curLikes } = _getTopicLikeState(tData);
-    const { count: curFavs } = _getTopicFavoriteState(tData);
     const mKind = tData.mount?.kind;
     const curForks = mKind === "work" ? Number(tData.mount?.work?.forks || 0) : 0;
-    const curTips = Number(mKind === "work" ? (tData.mount?.work?.tips || tData.topic?.tips || 0) : (tData.topic?.tips || 0));
-    el.textContent = `点赞 ${curLikes} · 收藏 ${curFavs}${curTips > 0 ? ` · 获赞赏 ${curTips}✦` : ""}${mKind === "work" ? ` · 做同款 ${curForks}` : ""}`;
+    const curTips = Number(mKind === "work" ? (tData.mount?.work?.tips != null ? tData.mount.work.tips : tData.topic?.tips || 0) : (tData.topic?.tips || 0));
+    const parts = [];
+    if (curTips > 0) parts.push(`获赞赏 ${curTips}✦`);
+    if (mKind === "work") parts.push(`做同款 ${curForks}`);
+    el.textContent = parts.length ? ` · ${parts.join(" · ")}` : "";
   }
 
   function _updateTopicLikeBtnUI() {
@@ -2113,17 +2114,7 @@
           color: #8a5a00;
           font-weight: 700;
         }
-        .topic-resource-stamps .topic-stamp-tip-btn {
-          margin-left: auto;
-        }
-        @media (max-width: 480px) {
-          .topic-resource-stamps .topic-stamp-tip-btn {
-            margin-left: 0;
-            width: 100%;
-            text-align: center;
-            margin-top: 6px;
-          }
-        }
+
       </style>
       <div class="topic-resource-mount" style="min-width:0;max-width:100%;">
         <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;margin-bottom:20px;">
@@ -2162,11 +2153,6 @@
           <button type="button" class="hw-stamp-btn ${stampedAesthetic ? "is-active" : ""}" id="topic-stamp-aesthetic" data-stamp-label="审美在线">
             ✨ 审美在线 (${aestheticCount})
           </button>
-          ${canTip ? `
-            <button type="button" class="btn btn-sm btn-gold topic-stamp-tip-btn" id="topic-stamp-tip-btn">
-              ${tipBtnLabel}
-            </button>
-          ` : ""}
         </div>
 
         <div style="margin-top:16px;">
@@ -2428,8 +2414,11 @@
 
     const likeInFlight = _socialInFlight.has(`${topic.id}:like`);
     const collectInFlight = _socialInFlight.has(`${topic.id}:collect`);
-    const curTips = Number(mount.kind === "work" ? (mount.work?.tips || topic.tips || 0) : (topic.tips || 0));
-    const countsDisplay = `点赞 ${likeCnt} · 收藏 ${favCnt}${curTips > 0 ? ` · 获赞赏 ${curTips}✦` : ""}${mount.kind === "work" ? ` · 做同款 ${forks}` : ""}`;
+    const curTips = Number(mount.kind === "work" ? (mount.work?.tips != null ? mount.work.tips : topic.tips || 0) : (topic.tips || 0));
+    const statsParts = [];
+    if (curTips > 0) statsParts.push(`获赞赏 ${curTips}✦`);
+    if (mount.kind === "work") statsParts.push(`做同款 ${forks}`);
+    const countsDisplay = statsParts.length ? ` · ${statsParts.join(" · ")}` : "";
     const isResourceKind = mount.kind === "style" || mount.kind === "layout";
     const pairedTitle = mount.kind === "style" ? "常搭配的图型" : "常搭配的画风";
 
@@ -2439,7 +2428,7 @@
     const canTipTop = (
       mount.kind === "work"
         ? Boolean(!isWorkAuthor && mount.work)
-        : (mount.kind === "discussion" && isTopicFree && !isTopicAuthor)
+        : !isTopicAuthor
     );
 
     const totalRepliesCount = _activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length;
@@ -2497,25 +2486,25 @@
                     <strong style="color:var(--ink-strong);">@${esc(topic.authorName || "创作者")}</strong>
                   </button>
                   ${renderModBadgeHtml(topic.author, topic.category)}
-                  <span>· 发布于 ${esc(topic.createdAt || "刚刚")} · </span>
+                  <span>· 发布于 ${esc(topic.createdAt || "刚刚")}</span>
                   <span class="topic-counts" id="topic-counts">${esc(countsDisplay)}</span>
                 </div>
 
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <div class="topic-action-bar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                   <button type="button" class="btn btn-sm ${liked ? "btn-primary" : ""}" id="topic-page-like" ${likeInFlight ? 'disabled aria-busy="true"' : ""}>
                     👍 ${liked ? "已赞" : "点赞"} (${likeCnt})
                   </button>
                   <button type="button" class="btn btn-sm ${favorited ? "btn-primary" : ""}" id="topic-page-collect" ${collectInFlight ? 'disabled aria-busy="true"' : ""}>
                     ${favorited ? "♥ 已收藏" : "♡ 收藏"} (${favCnt})
                   </button>
-                  ${canTipTop ? `<button type="button" class="btn btn-sm btn-gold" id="topic-page-tip" title="赞赏支持">🎁 赞赏</button>` : ""}
                   <button type="button" class="btn btn-sm" id="topic-page-scroll-reply">
-                    💬 回复 (${totalRepliesCount})
+                    💬 评论 (${totalRepliesCount})
                   </button>
+                  ${canTipTop ? `<button type="button" class="btn btn-sm btn-gold" id="topic-page-tip" title="赞赏支持">🎁 赞赏</button>` : ""}
+                  <button type="button" class="btn btn-sm ${FUI.topicInlineDrawer === "share" ? "btn-primary" : ""}" id="topic-page-share">📋 复制分享口令</button>
                   <button type="button" class="btn btn-sm" id="topic-page-quote-reply" title="引用主帖正文进行回复">
                     ❝ 引用回复
                   </button>
-                  <button type="button" class="btn btn-sm btn-gold ${FUI.topicInlineDrawer === "share" ? "btn-primary" : ""}" id="topic-page-share">📤 分享帖子链接</button>
                   <button type="button" class="btn btn-sm ${FUI.topicInlineDrawer === "report" ? "btn-primary" : ""}" id="topic-page-report" title="举报违规或虚假内容">🚩 举报</button>
                   ${isTopicAuthor && !canModerateThisBoard ? `<button type="button" class="btn btn-sm" id="topic-page-author-delete" style="color:var(--vermilion);" title="删除我发布的这篇帖子">🗑️ 删除帖子</button>` : ""}
                 </div>
@@ -3066,9 +3055,21 @@
       };
     }
 
-    root.querySelector("#topic-page-share").onclick = () => {
-      FUI.topicInlineDrawer = FUI.topicInlineDrawer === "share" ? "" : "share";
+    root.querySelector("#topic-page-share").onclick = async () => {
+      const willOpen = FUI.topicInlineDrawer !== "share";
+      FUI.topicInlineDrawer = willOpen ? "share" : "";
       renderForum();
+      if (willOpen && navigator?.clipboard?.writeText) {
+        const code = (topic && topic.id) || "";
+        const title = (topic && (topic.title || `${topic.id} ${topic.name || ""}`)) || "Handraw 精选";
+        const invCode = (App.state && App.state.user && App.state.user.inviteCode) || "handraw";
+        const shareUrl = `https://handraw-style.com/t/${encodeURIComponent(code)}?ref=${encodeURIComponent(invCode)}`;
+        const shareCopy = `在 Handraw 论坛看到一篇精彩实战帖《${title}》，来聊聊你的创作心得 👉 ${shareUrl}`;
+        try {
+          await navigator.clipboard.writeText(shareCopy);
+          toast("📋 分享口令已复制到剪贴板！");
+        } catch (_) {}
+      }
     };
     root.querySelector("#topic-page-report").onclick = () => {
       if (!App.state?.loggedIn) {
@@ -3267,48 +3268,7 @@
         };
       }
 
-      const tipBtn = root.querySelector("#topic-stamp-tip-btn");
-      if (tipBtn && mount.resource) {
-        tipBtn.onclick = () => {
-          if (!App.state?.loggedIn) {
-            openForumAuthPage("登录后即可赞赏支持！");
-            return;
-          }
-          const isCommunityRes = mount.resource.sourceType === "community" && Boolean(mount.resource.author || mount.resource.authorUsername);
-          const author = mount.resource.authorName || mount.resource.author || "创作者";
-          const authorUsername = mount.resource.author || mount.resource.authorUsername || "";
-          const isOfficial = !isCommunityRes;
-          const targetId = mount.resource.code || mount.resource.id;
-          const title = mount.resource.name || mount.resource.title || targetId;
 
-          if (!isOfficial && authorUsername && App.state?.user && authorUsername === App.state.user.username) {
-            toast("不能给自己赞赏积分哦～");
-            return;
-          }
-
-          S.openTipModal({
-            targetType: "asset",
-            targetId,
-            title,
-            authorName: author,
-            authorUsername,
-            isOfficial,
-            onSuccess: ({ amount, res }) => {
-              if (res && res.credits != null) {
-                if (App.state?.user) App.state.user.credits = res.credits;
-                App.state.credits = res.credits;
-              }
-              mount.resource.tips = (mount.resource.tips || 0) + amount;
-              const curLike = _getTopicLikeState(_activeTopicDetail.topicData);
-              if (!curLike.liked) {
-                _setTopicLikeState(_activeTopicDetail.topicData, true, curLike.count + 1);
-                _updateTopicLikeBtnUI();
-              }
-              _updateTopicCountsUI();
-            }
-          });
-        };
-      }
 
       const copyDefBtn = root.querySelector("#resource-copy-def-btn");
       if (copyDefBtn && mount.resource?.definition) {
@@ -3591,7 +3551,7 @@
             }
             const scrollRepBtn = root.querySelector("#topic-page-scroll-reply");
             if (scrollRepBtn) {
-              scrollRepBtn.textContent = `💬 回复 (${_activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length})`;
+              scrollRepBtn.textContent = `💬 评论 (${_activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length})`;
             }
           })
           .catch((err) => {
@@ -3682,7 +3642,7 @@
         }
         const scrollRepBtn = root.querySelector("#topic-page-scroll-reply");
         if (scrollRepBtn) {
-          scrollRepBtn.textContent = `💬 回复 (${_activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length})`;
+          scrollRepBtn.textContent = `💬 评论 (${_activeTopicDetail.replies.length + _activeTopicDetail.pendingReplies.length})`;
         }
 
         if (repInp) repInp.value = "";
