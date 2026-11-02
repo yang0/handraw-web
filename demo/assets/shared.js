@@ -822,76 +822,395 @@
     });
   }
 
+  const _socialInFlight = new Set();
+
+  function syncTopbarCollectionsBadge() {
+    const s = App.state;
+    if (!s) return;
+    const totalFavs =
+      ((s.collections && s.collections.styles) || []).length +
+      ((s.collections && s.collections.layouts) || []).length +
+      ((s.collections && s.collections.works) || []).length +
+      ((s.collections && s.collections.topics) || []).length +
+      ((s.collections && s.collections.generations) || []).length;
+    const el = document.getElementById("hw-dropdown-collections");
+    if (el) {
+      const span = el.querySelector("span:last-child");
+      if (span) span.textContent = `我的云端收藏 (${totalFavs})`;
+    }
+  }
+
+  function syncWalletCredits(credits) {
+    if (credits == null || !App.state) return;
+    App.state.credits = Number(credits);
+    const dropWallet = document.querySelector(".hw-dropdown-wallet strong");
+    if (dropWallet) dropWallet.textContent = `${App.state.credits} ✦`;
+    const profWalBtn = document.querySelector("#prof-go-wallet-btn");
+    if (profWalBtn) profWalBtn.textContent = `✦ 积分钱包 (${App.state.credits}✦)`;
+  }
+
+  function updateSocialDom(detail) {
+    if (!detail || typeof document === "undefined") return;
+    const { action, targetType, targetId, liked, likes, collected, favorites, credits, inFlight } = detail;
+    const cleanId = String(targetId || "").trim();
+    if (!cleanId) return;
+
+    if (credits != null) {
+      syncWalletCredits(credits);
+    }
+
+    // 1. Update Like elements
+    if (action === "like" || liked !== undefined || likes !== undefined) {
+      const likeSelectors = [
+        `[data-social-action="like"][data-social-id="${cleanId}"]`,
+        `[data-wb-like="${cleanId}"]`,
+        `[data-like-asset="${cleanId}"]`,
+        `[data-like-topic="${cleanId}"]`,
+      ];
+      const likeButtons = Array.from(document.querySelectorAll(likeSelectors.join(",")));
+      const topicPageLike = document.getElementById("topic-page-like");
+      if (topicPageLike && targetType === "topic" && !likeButtons.includes(topicPageLike)) {
+        likeButtons.push(topicPageLike);
+      }
+      likeButtons.forEach((btn) => {
+        if (liked !== undefined) {
+          btn.classList.toggle("btn-primary", !!liked);
+          btn.classList.toggle("is-active", !!liked);
+          btn.setAttribute("aria-pressed", liked ? "true" : "false");
+          const ariaLabel = btn.getAttribute("aria-label");
+          if (ariaLabel && likes !== undefined) {
+            btn.setAttribute("aria-label", `${liked ? "取消点赞" : "点赞"} ${likes}`);
+          }
+        }
+        if (btn.hasAttribute("data-like-topic") || btn.id === "topic-page-like") {
+          const isL = liked !== undefined ? liked : btn.classList.contains("btn-primary");
+          const c = likes !== undefined ? likes : (btn.textContent.match(/\d+/) || [0])[0];
+          btn.textContent = `👍 ${isL ? "已赞" : "点赞"} (${c})`;
+        } else if (likes !== undefined) {
+          const cntEl = btn.querySelector(".hw-social-count");
+          if (cntEl) {
+            cntEl.textContent = String(likes);
+          } else {
+            const textNodes = Array.from(btn.childNodes).filter((n) => n.nodeType === 3);
+            if (textNodes.length) {
+              const last = textNodes[textNodes.length - 1];
+              last.nodeValue = last.nodeValue.replace(/\d+/, String(likes));
+            }
+          }
+        }
+        if (inFlight !== undefined) {
+          btn.disabled = inFlight;
+          btn.classList.toggle("is-pending", inFlight);
+          if (inFlight) btn.setAttribute("aria-busy", "true");
+          else btn.removeAttribute("aria-busy");
+        }
+      });
+
+      const genModalLikeBtn = document.getElementById("gen-modal-like-btn");
+      if (genModalLikeBtn && targetType === "generation") {
+        if (liked !== undefined) {
+          genModalLikeBtn.classList.toggle("btn-primary", !!liked);
+          genModalLikeBtn.classList.toggle("is-active", !!liked);
+          const txt = document.getElementById("gen-modal-like-text");
+          if (txt) txt.textContent = liked ? "已点赞" : "点赞";
+        }
+        if (likes !== undefined) {
+          const cnt = document.getElementById("gen-modal-like-count");
+          if (cnt) cnt.textContent = String(likes);
+        }
+        if (inFlight !== undefined) genModalLikeBtn.disabled = inFlight;
+      }
+    }
+
+    // 2. Update Collect elements
+    if (action === "collect" || collected !== undefined || favorites !== undefined) {
+      const collectSelectors = [
+        `[data-social-action="collect"][data-social-id="${cleanId}"]`,
+        `[data-wb-fav="${cleanId}"]`,
+        `[data-fav-asset="${cleanId}"]`,
+        `[data-fav-topic="${cleanId}"]`,
+      ];
+      const collectButtons = Array.from(document.querySelectorAll(collectSelectors.join(",")));
+      const topicPageCollect = document.getElementById("topic-page-collect");
+      if (topicPageCollect && targetType === "topic" && !collectButtons.includes(topicPageCollect)) {
+        collectButtons.push(topicPageCollect);
+      }
+      collectButtons.forEach((btn) => {
+        const isIconOnly = btn.classList.contains("hw-card-fav-btn") || btn.getAttribute("data-social-role") === "icon-only";
+        if (isIconOnly) {
+          if (collected !== undefined) {
+            btn.classList.toggle("is-collected", !!collected);
+            btn.textContent = collected ? "♥" : "♡";
+          }
+        } else {
+          if (collected !== undefined) {
+            btn.classList.toggle("btn-primary", !!collected);
+            btn.classList.toggle("is-active", !!collected);
+            btn.setAttribute("aria-pressed", collected ? "true" : "false");
+            const iconEl = btn.querySelector(".hw-fav-icon");
+            if (iconEl) iconEl.textContent = collected ? "♥" : "♡";
+            const ariaLabel = btn.getAttribute("aria-label");
+            if (ariaLabel && favorites !== undefined) {
+              btn.setAttribute("aria-label", `${collected ? "取消收藏" : "收藏"} ${favorites}`);
+            }
+          }
+          if (btn.hasAttribute("data-fav-topic") || btn.id === "topic-page-collect") {
+            const isC = collected !== undefined ? collected : btn.classList.contains("btn-primary");
+            const c = favorites !== undefined ? favorites : (btn.textContent.match(/\d+/) || [0])[0];
+            btn.textContent = `⭐️ ${isC ? "已收藏" : "收藏"} (${c})`;
+          } else if (favorites !== undefined) {
+            const cntEl = btn.querySelector(".hw-social-count");
+            if (cntEl) {
+              cntEl.textContent = String(favorites);
+            } else {
+              const textNodes = Array.from(btn.childNodes).filter((n) => n.nodeType === 3);
+              if (textNodes.length) {
+                const last = textNodes[textNodes.length - 1];
+                last.nodeValue = last.nodeValue.replace(/\d+/, String(favorites));
+              }
+            }
+          }
+        }
+        if (inFlight !== undefined) {
+          btn.disabled = inFlight;
+          btn.classList.toggle("is-pending", inFlight);
+          if (inFlight) btn.setAttribute("aria-busy", "true");
+          else btn.removeAttribute("aria-busy");
+        }
+      });
+
+      const genModalFavBtn = document.getElementById("gen-modal-fav-btn");
+      if (genModalFavBtn && targetType === "generation") {
+        if (collected !== undefined) {
+          genModalFavBtn.classList.toggle("btn-primary", !!collected);
+          genModalFavBtn.classList.toggle("is-active", !!collected);
+          const txt = document.getElementById("gen-modal-fav-text");
+          if (txt) txt.textContent = collected ? "已收藏" : "收藏";
+        }
+        if (favorites !== undefined) {
+          const cnt = document.getElementById("gen-modal-fav-count");
+          if (cnt) cnt.textContent = String(favorites);
+        }
+        if (inFlight !== undefined) genModalFavBtn.disabled = inFlight;
+      }
+
+      const topicCountsEl = document.getElementById("topic-counts");
+      if (topicCountsEl && targetType === "topic") {
+        const curL = likes !== undefined ? likes : (topicCountsEl.textContent.match(/点赞\s*(\d+)/) || [0, 0])[1];
+        const curF = favorites !== undefined ? favorites : (topicCountsEl.textContent.match(/收藏\s*(\d+)/) || [0, 0])[1];
+        topicCountsEl.textContent = `点赞 ${curL} · 收藏 ${curF}`;
+      }
+
+      if (collected === false && App.channel === "main" && App.view === "collections") {
+        const cardSelectors = [
+          `article[data-fav-item="${cleanId}"]`,
+          `div[data-fav-item="${cleanId}"]`,
+          `article[data-asset-card="${cleanId}"]`,
+          `article[data-wb-work="${cleanId}"]`,
+        ];
+        let card = null;
+        for (const sel of cardSelectors) {
+          try {
+            card = document.querySelector(sel);
+            if (card) break;
+          } catch (_e) {}
+        }
+        if (!card) {
+          const unfavBtn = document.querySelector(`[data-unfav="${cleanId}"], [data-unfav-gen="${cleanId}"]`);
+          if (unfavBtn) card = unfavBtn.closest(".hw-card, .forum-topic-card");
+        }
+        if (card) {
+          const parentGrid = card.parentElement;
+          card.remove();
+          const ftab = (typeof UI !== "undefined" && UI.favTab) || detail.bucket;
+          const tabBtn = document.querySelector(`[data-ftab="${ftab}"]`);
+          if (tabBtn && App.state && App.state.collections) {
+            const list = App.state.collections[ftab] || [];
+            const labels = {
+              styles: "🎨 画风",
+              layouts: "📐 图型",
+              works: "🖼️ 作品与提示词",
+              topics: "💬 实战帖",
+              generations: "⚡ 生图历史"
+            };
+            if (labels[ftab]) {
+              tabBtn.textContent = `${labels[ftab]} (${list.length})`;
+            }
+          }
+          if (parentGrid && parentGrid.querySelectorAll(".hw-card, .forum-topic-card").length === 0) {
+            const emptyMsgs = {
+              styles: "暂未收藏该类资产，去库里点亮 ♡ 吧！",
+              layouts: "暂未收藏该类资产，去库里点亮 ♡ 吧！",
+              works: "暂未收藏晒作品",
+              topics: "暂未收藏论坛好帖",
+              generations: "暂无生图历史收藏"
+            };
+            const ftab = (typeof UI !== "undefined" && UI.favTab) || "styles";
+            parentGrid.innerHTML = `<div style="padding:40px;text-align:center;color:var(--ink-muted);">${emptyMsgs[ftab] || "暂无收藏内容"}</div>`;
+          }
+        }
+      }
+    }
+  }
+
+  function dispatchSocialUpdate(detail) {
+    updateSocialDom(detail);
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      try {
+        window.dispatchEvent(new CustomEvent("hw:social-updated", { detail: { ...detail, _fromUpdateSocialDom: true } }));
+      } catch (_e) {}
+    }
+  }
+
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("hw:social-updated", (e) => {
+      if (e && e.detail && !e.detail._fromUpdateSocialDom) {
+        updateSocialDom(e.detail);
+      }
+    });
+  }
+
   function isCollected(bucket, id) {
     const list = (App.state && App.state.collections && App.state.collections[bucket]) || [];
-    return list.includes(id);
+    if (list.includes(id)) return true;
+    const sId = String(id || "").trim();
+    if (list.includes(sId)) return true;
+    if (bucket === "styles" || bucket === "layouts") {
+      const up = sId.toUpperCase().replace(/^#/, "");
+      return list.includes(up) || list.some((x) => String(x).toUpperCase().replace(/^#/, "") === up);
+    }
+    return list.some((x) => String(x) === sId);
   }
 
   function toggleCollect(bucket, id, titleLabel) {
-    if (!App.state.loggedIn) {
+    if (!App.state || !App.state.loggedIn) {
       openLoginModal("登录后即可永久云端同步收藏夹（画风 / 图型 / 作品 / 帖子），并与创作台打通一键调用！");
       return false;
     }
+    const rawId = typeof id === "object" && id ? id.id : id;
+    const cleanId = (bucket === "styles" || bucket === "layouts")
+      ? String(rawId || "").trim().toUpperCase().replace(/^#/, "")
+      : String(rawId || "").trim();
+    if (!cleanId) return false;
+
+    const cleanType = bucket === "styles" ? "style" : (bucket === "layouts" ? "layout" : (bucket === "works" ? "work" : (bucket === "topics" ? "topic" : "generation")));
+    const lockKey = `collect:${bucket}:${cleanId}`;
+    if (_socialInFlight.has(lockKey)) return false;
+    _socialInFlight.add(lockKey);
+
     const arr = App.state.collections[bucket] || (App.state.collections[bucket] = []);
-    const idx = arr.indexOf(id);
+    const idx = arr.indexOf(cleanId) >= 0 ? arr.indexOf(cleanId) : (rawId ? arr.indexOf(rawId) : -1);
     const wasRemoving = idx >= 0;
+    const newCollected = !wasRemoving;
     const delta = wasRemoving ? -1 : 1;
+    const prevCount = getFavoriteCount(cleanType, id);
+    const newCount = Math.max(0, prevCount + delta);
+
     if (wasRemoving) {
       arr.splice(idx, 1);
+      const idx2 = arr.indexOf(rawId);
+      if (idx2 >= 0) arr.splice(idx2, 1);
     } else {
-      arr.unshift(id);
+      arr.unshift(cleanId);
     }
 
     if (bucket === "works") {
-      const w = (App.state.works || []).find((x) => x.id === id);
-      if (w) w.favorites = Math.max(0, Number(w.favorites || 0) + delta);
+      const w = (App.state.works || []).find((x) => String(x.id) === String(cleanId));
+      if (w) w.favorites = newCount;
     } else if (bucket === "topics") {
-      const t = (App.state.topics || []).find((x) => x.id === id);
-      if (t) t.favorites = Math.max(0, Number(t.favorites || 0) + delta);
+      const t = (App.state.topics || []).find((x) => String(x.id) === String(cleanId));
+      if (t) t.favorites = newCount;
     } else if (bucket === "generations") {
       if (typeof id === "object" && id) {
-        id.favorites = Math.max(0, Number(id.favorites || 0) + delta);
+        id.favorites = newCount;
+        id.favorited = newCollected;
       }
     } else if (bucket === "styles" || bucket === "layouts") {
-      const code = String(id || "").trim().toUpperCase().replace(/^#/, "");
       App.state.assetLiveFavorites = App.state.assetLiveFavorites || {};
-      App.state.assetLiveFavorites[code] = Math.max(0, Number(App.state.assetLiveFavorites[code] || 0) + delta);
+      App.state.assetLiveFavorites[cleanId] = Math.max(0, Number(App.state.assetLiveFavorites[cleanId] || 0) + delta);
     }
 
+    syncTopbarCollectionsBadge();
+    dispatchSocialUpdate({ action: "collect", targetType: cleanType, targetId: cleanId, bucket, collected: newCollected, favorites: newCount, inFlight: true });
+
     if (App.state.serverBacked) {
-      notifyAll();
       apiJson("/api/collections/toggle", {
         method: "POST",
-        body: { bucket, id, title: titleLabel || id, action: wasRemoving ? "unset" : "set" }
+        body: { bucket, id: cleanId, title: titleLabel || cleanId, action: newCollected ? "set" : "unset" }
       })
         .then((res) => {
-          App.state.credits = res.credits;
-          if (!res.collected) {
-            toast(`已从收藏夹移除：${titleLabel || id}`);
-          } else if (res.rewarded > 0) {
-            toast(`♥ 已收藏「${titleLabel || id}」！触发首次云端收藏活跃激励 +${res.rewarded} 积分`);
-          } else {
-            toast(`♥ 已收藏「${titleLabel || id}」，可在创作台与收藏夹随时调用`);
+          _socialInFlight.delete(lockKey);
+          const serverFavorites = res.favorites != null ? res.favorites : newCount;
+          const serverCollected = res.collected != null ? res.collected : newCollected;
+
+          if (bucket === "works") {
+            const w = (App.state.works || []).find((x) => String(x.id) === String(cleanId));
+            if (w) w.favorites = serverFavorites;
+          } else if (bucket === "topics") {
+            const t = (App.state.topics || []).find((x) => String(x.id) === String(cleanId));
+            if (t) t.favorites = serverFavorites;
+          } else if (bucket === "generations") {
+            if (typeof id === "object" && id) {
+              id.favorites = serverFavorites;
+              id.favorited = serverCollected;
+            }
           }
-          refreshFromServer();
+
+          if (res.credits != null) syncWalletCredits(res.credits);
+          syncTopbarCollectionsBadge();
+
+          if (!serverCollected) {
+            toast(`已从收藏夹移除：${titleLabel || cleanId}`);
+          } else if (res.rewarded > 0) {
+            toast(`♥ 已收藏「${titleLabel || cleanId}」！触发首次云端收藏活跃激励 +${res.rewarded} 积分`);
+          } else {
+            toast(`♥ 已收藏「${titleLabel || cleanId}」，可在创作台与收藏夹随时调用`);
+          }
+
+          dispatchSocialUpdate({ action: "collect", targetType: cleanType, targetId: cleanId, bucket, collected: serverCollected, favorites: serverFavorites, credits: res.credits, inFlight: false });
         })
         .catch((err) => {
+          _socialInFlight.delete(lockKey);
+          if (wasRemoving) {
+            arr.unshift(cleanId);
+          } else {
+            const curIdx = arr.indexOf(cleanId);
+            if (curIdx >= 0) arr.splice(curIdx, 1);
+          }
+          if (bucket === "works") {
+            const w = (App.state.works || []).find((x) => String(x.id) === String(cleanId));
+            if (w) w.favorites = prevCount;
+          } else if (bucket === "topics") {
+            const t = (App.state.topics || []).find((x) => String(x.id) === String(cleanId));
+            if (t) t.favorites = prevCount;
+          } else if (bucket === "generations") {
+            if (typeof id === "object" && id) {
+              id.favorites = prevCount;
+              id.favorited = wasRemoving;
+            }
+          } else if (bucket === "styles" || bucket === "layouts") {
+            App.state.assetLiveFavorites = App.state.assetLiveFavorites || {};
+            App.state.assetLiveFavorites[cleanId] = Math.max(0, Number(App.state.assetLiveFavorites[cleanId] || 0) - delta);
+          }
+          syncTopbarCollectionsBadge();
           toast(`收藏操作失败：${err.message}`);
-          refreshFromServer();
+          dispatchSocialUpdate({ action: "collect", targetType: cleanType, targetId: cleanId, bucket, collected: wasRemoving, favorites: prevCount, inFlight: false });
         });
       return true;
     }
 
-    if (wasRemoving) {
-      toast(`已从收藏夹移除：${titleLabel || id}`);
+    _socialInFlight.delete(lockKey);
+    if (!newCollected) {
+      toast(`已从收藏夹移除：${titleLabel || cleanId}`);
     } else if (!App.state._firstCollectRewarded) {
       App.state._firstCollectRewarded = true;
-      addLedger(`首次使用云端收藏夹激励（${titleLabel || id}）`, +2);
-      toast(`♥ 已收藏「${titleLabel || id}」！触发活跃激励 +2 积分`);
+      addLedger(`首次使用云端收藏夹激励（${titleLabel || cleanId}）`, +2);
+      toast(`♥ 已收藏「${titleLabel || cleanId}」！触发活跃激励 +2 积分`);
     } else {
-      toast(`♥ 已收藏「${titleLabel || id}」，可在创作台与收藏夹随时调用`);
+      toast(`♥ 已收藏「${titleLabel || cleanId}」，可在创作台与收藏夹随时调用`);
     }
     saveState();
+    dispatchSocialUpdate({ action: "collect", targetType: cleanType, targetId: cleanId, bucket, collected: newCollected, favorites: newCount, inFlight: false });
     return true;
   }
 
@@ -981,55 +1300,111 @@
     const { cleanType, cleanId, key } = _normalizeSocialTarget(targetType, idOrItem);
     if (!cleanId) return false;
 
+    if (cleanType === "generation" && typeof idOrItem === "object" && idOrItem && idOrItem.author && App.state.user && idOrItem.author === App.state.user.username) {
+      toast("不能为自己的生图历史点赞");
+      return false;
+    }
+
+    const lockKey = `like:${cleanType}:${cleanId}`;
+    if (_socialInFlight.has(lockKey)) return false;
+    _socialInFlight.add(lockKey);
+
+    const prevLiked = isLiked(cleanType, idOrItem);
+    const prevCount = getLikeCount(cleanType, idOrItem);
+    const newLiked = !prevLiked;
+    const delta = newLiked ? 1 : -1;
+    const newCount = Math.max(0, prevCount + delta);
+
+    // Apply memory update
     App.state.likedIds = Array.isArray(App.state.likedIds) ? App.state.likedIds : [];
     const shortKey = `${cleanType}:${cleanId}`;
-    const idx = App.state.likedIds.indexOf(key) >= 0 ? App.state.likedIds.indexOf(key) : App.state.likedIds.indexOf(shortKey);
-    const removing = idx >= 0;
-    const delta = removing ? -1 : 1;
-    if (removing) {
-      App.state.likedIds.splice(idx, 1);
-      const idx2 = App.state.likedIds.indexOf(shortKey);
-      if (idx2 >= 0) App.state.likedIds.splice(idx2, 1);
+    if (!newLiked) {
+      App.state.likedIds = App.state.likedIds.filter((x) => x !== key && x !== shortKey && x !== cleanId);
     } else {
-      App.state.likedIds.push(key);
-      App.state.likedIds.push(shortKey);
+      if (!App.state.likedIds.includes(key)) App.state.likedIds.push(key);
+      if (!App.state.likedIds.includes(shortKey)) App.state.likedIds.push(shortKey);
     }
 
     if (cleanType === "work") {
-      const w = (App.state.works || []).find((x) => x.id === cleanId);
-      if (w) w.likes = Math.max(0, Number(w.likes || 0) + delta);
+      const w = (App.state.works || []).find((x) => String(x.id) === String(cleanId));
+      if (w) w.likes = newCount;
     } else if (cleanType === "topic") {
-      const t = (App.state.topics || []).find((x) => x.id === cleanId);
-      if (t) t.likes = Math.max(0, Number(t.likes || 0) + delta);
+      const t = (App.state.topics || []).find((x) => String(x.id) === String(cleanId));
+      if (t) t.likes = newCount;
     } else if (cleanType === "generation") {
       if (typeof idOrItem === "object" && idOrItem) {
-        idOrItem.likes = Math.max(0, Number(idOrItem.likes || 0) + delta);
-        idOrItem.liked = !removing;
+        idOrItem.likes = newCount;
+        idOrItem.liked = newLiked;
       }
     } else {
       App.state.assetLiveLikes = App.state.assetLiveLikes || {};
       App.state.assetLiveLikes[cleanId] = Math.max(0, Number(App.state.assetLiveLikes[cleanId] || 0) + delta);
     }
 
+    dispatchSocialUpdate({ action: "like", targetType: cleanType, targetId: cleanId, liked: newLiked, likes: newCount, inFlight: true });
+
     if (App.state.serverBacked) {
-      notifyAll();
       apiJson("/api/interactions/like", {
         method: "POST",
-        body: { targetType: cleanType, id: cleanId, action: removing ? "unset" : "set" }
+        body: { targetType: cleanType, id: cleanId, action: newLiked ? "set" : "unset" }
       })
         .then((res) => {
-          toast(res.liked ? `👍 已点赞「${labelText || cleanId}」` : `已取消点赞「${labelText || cleanId}」`);
-          refreshFromServer();
+          _socialInFlight.delete(lockKey);
+          const serverLikes = res.likes != null ? res.likes : newCount;
+          const serverLiked = res.liked != null ? res.liked : newLiked;
+          if (cleanType === "work") {
+            const w = (App.state.works || []).find((x) => String(x.id) === String(cleanId));
+            if (w) w.likes = serverLikes;
+          } else if (cleanType === "topic") {
+            const t = (App.state.topics || []).find((x) => String(x.id) === String(cleanId));
+            if (t) t.likes = serverLikes;
+          } else if (cleanType === "generation") {
+            if (typeof idOrItem === "object" && idOrItem) {
+              idOrItem.likes = serverLikes;
+              idOrItem.liked = serverLiked;
+            }
+          }
+          if (res.credits != null) syncWalletCredits(res.credits);
+          if (res.rewarded > 0) {
+            toast(`👍 已点赞「${labelText || cleanId}」！触发首次点赞激励 +${res.rewarded} 积分`);
+          } else {
+            toast(serverLiked ? `👍 已点赞「${labelText || cleanId}」` : `已取消点赞「${labelText || cleanId}」`);
+          }
+          dispatchSocialUpdate({ action: "like", targetType: cleanType, targetId: cleanId, liked: serverLiked, likes: serverLikes, credits: res.credits, inFlight: false });
         })
         .catch((err) => {
+          _socialInFlight.delete(lockKey);
+          if (prevLiked) {
+            if (!App.state.likedIds.includes(key)) App.state.likedIds.push(key);
+            if (!App.state.likedIds.includes(shortKey)) App.state.likedIds.push(shortKey);
+          } else {
+            App.state.likedIds = App.state.likedIds.filter((x) => x !== key && x !== shortKey && x !== cleanId);
+          }
+          if (cleanType === "work") {
+            const w = (App.state.works || []).find((x) => String(x.id) === String(cleanId));
+            if (w) w.likes = prevCount;
+          } else if (cleanType === "topic") {
+            const t = (App.state.topics || []).find((x) => String(x.id) === String(cleanId));
+            if (t) t.likes = prevCount;
+          } else if (cleanType === "generation") {
+            if (typeof idOrItem === "object" && idOrItem) {
+              idOrItem.likes = prevCount;
+              idOrItem.liked = prevLiked;
+            }
+          } else {
+            App.state.assetLiveLikes = App.state.assetLiveLikes || {};
+            App.state.assetLiveLikes[cleanId] = Math.max(0, Number(App.state.assetLiveLikes[cleanId] || 0) - delta);
+          }
           toast(`点赞失败：${err.message}`);
-          refreshFromServer();
+          dispatchSocialUpdate({ action: "like", targetType: cleanType, targetId: cleanId, liked: prevLiked, likes: prevCount, inFlight: false });
         });
       return true;
     }
 
+    _socialInFlight.delete(lockKey);
     saveState();
-    toast(removing ? `已取消点赞「${labelText || cleanId}」` : `👍 已点赞「${labelText || cleanId}」`);
+    dispatchSocialUpdate({ action: "like", targetType: cleanType, targetId: cleanId, liked: newLiked, likes: newCount, inFlight: false });
+    toast(!newLiked ? `已取消点赞「${labelText || cleanId}」` : `👍 已点赞「${labelText || cleanId}」`);
     return true;
   }
 
@@ -3749,6 +4124,10 @@
     getLikeCount,
     getFavoriteCount,
     toggleLike,
+    updateSocialDom,
+    dispatchSocialUpdate,
+    syncTopbarCollectionsBadge,
+    syncWalletCredits,
     getAssetComments,
     submitAssetComment,
     getBoardModerators,

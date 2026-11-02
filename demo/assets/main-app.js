@@ -710,7 +710,7 @@
             <article class="hw-card ${isFresh ? "is-fresh-highlight" : ""}" data-asset-card="${esc(item.id)}">
               <div class="hw-card-media" data-open-asset="${esc(item.id)}">
                 ${topBadge}
-                <button type="button" class="hw-card-fav-btn ${collected ? "is-collected" : ""}" data-fav-asset="${esc(item.id)}" title="收藏此${isStyle ? "画风" : "图型"}">
+                <button type="button" class="hw-card-fav-btn ${collected ? "is-collected" : ""}" data-fav-asset="${esc(item.id)}" data-social-action="collect" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" data-social-role="icon-only" title="收藏此${isStyle ? "画风" : "图型"}">
                   ${collected ? "♥" : "♡"}
                 </button>
                 <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" loading="lazy" />
@@ -727,15 +727,15 @@
                 ${
                   UI.density !== "compact"
                     ? `
-                      <div style="display:flex;align-items:center;justify-content:space-between;gap:5px;margin-top:8px;padding-top:7px;border-top:1px dashed var(--line-soft);">
-                        <button type="button" class="btn btn-sm ${liked ? "btn-primary" : ""}" style="padding:2px 7px;font-size:11px;" data-like-asset="${esc(item.id)}" title="点赞此${isStyle ? "画风" : "图型"}">
-                          👍 ${likeCnt}
+                      <div class="hw-card-actions" style="display:flex;align-items:center;justify-content:space-between;gap:5px;margin-top:8px;padding-top:7px;border-top:1px dashed var(--line-soft);">
+                        <button type="button" class="btn btn-sm hw-action-btn ${liked ? "btn-primary is-active" : ""}" data-like-asset="${esc(item.id)}" data-social-action="like" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" title="点赞此${isStyle ? "画风" : "图型"}">
+                          👍 <span class="hw-social-count">${likeCnt}</span>
                         </button>
-                        <button type="button" class="btn btn-sm ${collected ? "btn-primary" : ""}" style="padding:2px 7px;font-size:11px;" data-fav-asset="${esc(item.id)}" title="收藏此${isStyle ? "画风" : "图型"}">
-                          ${collected ? "♥" : "♡"} ${favCnt}
+                        <button type="button" class="btn btn-sm hw-action-btn ${collected ? "btn-primary is-active" : ""}" data-fav-asset="${esc(item.id)}" data-social-action="collect" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" title="收藏此${isStyle ? "画风" : "图型"}">
+                          <span class="hw-fav-icon">${collected ? "♥" : "♡"}</span> <span class="hw-social-count">${favCnt}</span>
                         </button>
-                        <button type="button" class="btn btn-sm" style="padding:2px 7px;font-size:11px;" data-comment-asset="${esc(item.id)}" title="查看与发表评论">
-                          💬 ${commentCnt}
+                        <button type="button" class="btn btn-sm hw-action-btn" data-comment-asset="${esc(item.id)}" title="查看与发表评论">
+                          💬 <span class="hw-social-count">${commentCnt}</span>
                         </button>
                       </div>
                       <div class="hw-card-footer">
@@ -910,8 +910,10 @@
       const images = B.imagesFor(w);
       const id = String(w.id);
       const href = channelUrl("main", { view: "work", id });
-      const collected = S.isCollected("works", id);
-      const favCnt = S.getFavoriteCount("work", w);
+      const liked = Boolean(S.isLiked && S.isLiked("work", id));
+      const likeCnt = (S.getLikeCount && S.getLikeCount("work", w)) ?? Number(w.likes || 0);
+      const collected = Boolean(S.isCollected && S.isCollected("works", id));
+      const favCnt = (S.getFavoriteCount && S.getFavoriteCount("work", w)) ?? Number(w.favorites || 0);
       const cmtCnt = (w.comments || []).length;
       const canModerate = Boolean(S.canModerateWork && S.canModerateWork(w));
       const canDelete = Boolean(
@@ -930,10 +932,11 @@
               <button type="button" class="hw-wb-author" data-wb-author="${esc(w.author || "")}">${esc(w.authorName || w.author || "社区作者")}</button>
             </div>
             <div class="hw-wb-actions">
-              <button type="button" class="hw-wb-action ${collected ? "is-active" : ""}" data-wb-fav="${esc(id)}" aria-label="${collected ? "取消收藏" : "收藏"} ${favCnt}" aria-pressed="${collected}">${collected ? "♥" : "♡"} ${favCnt}</button>
-              <button type="button" class="hw-wb-action" data-wb-comment="${esc(id)}" aria-label="评论 ${cmtCnt}">💬 ${cmtCnt}</button>
-              ${canModerate ? `<button type="button" class="hw-wb-action" data-wb-mod="${w.featured ? "unfeature" : "feature"}" data-wb-id="${esc(id)}">${w.featured ? "取消精选" : "精选"}</button>` : ""}
-              ${canDelete ? `<button type="button" class="hw-wb-action is-danger" data-wb-mod="delete" data-wb-id="${esc(id)}">删除</button>` : ""}
+              <button type="button" class="btn btn-sm hw-action-btn ${liked ? "btn-primary is-active" : ""}" data-wb-like="${esc(id)}" data-social-action="like" data-social-type="work" data-social-id="${esc(id)}" aria-label="${liked ? "取消点赞" : "点赞"} ${likeCnt}" aria-pressed="${liked}" title="点赞此作品">👍 <span class="hw-social-count">${likeCnt}</span></button>
+              <button type="button" class="btn btn-sm hw-action-btn ${collected ? "btn-primary is-active" : ""}" data-wb-fav="${esc(id)}" data-social-action="collect" data-social-type="work" data-social-id="${esc(id)}" aria-label="${collected ? "取消收藏" : "收藏"} ${favCnt}" aria-pressed="${collected}" title="收藏此作品"><span class="hw-fav-icon">${collected ? "♥" : "♡"}</span> <span class="hw-social-count">${favCnt}</span></button>
+              <button type="button" class="btn btn-sm hw-action-btn" data-wb-comment="${esc(id)}" aria-label="评论 ${cmtCnt}" title="查看评论">💬 <span class="hw-social-count">${cmtCnt}</span></button>
+              ${canModerate ? `<button type="button" class="btn btn-sm hw-action-btn" data-wb-mod="${w.featured ? "unfeature" : "feature"}" data-wb-id="${esc(id)}">${w.featured ? "取消精选" : "精选"}</button>` : ""}
+              ${canDelete ? `<button type="button" class="btn btn-sm hw-action-btn is-danger" data-wb-mod="delete" data-wb-id="${esc(id)}">删除</button>` : ""}
             </div>
           </div>
         </article>`;
@@ -1054,6 +1057,12 @@
     });
     root.querySelectorAll("[data-wb-author]").forEach(button => {
       button.onclick = () => S.goToCreatorProfile(button.getAttribute("data-wb-author"));
+    });
+    root.querySelectorAll("[data-wb-like]").forEach((b) => {
+      b.onclick = () => {
+        const w = allWorks.find((x) => String(x.id) === b.getAttribute("data-wb-like"));
+        if (w) S.toggleLike("work", w.id, w.title);
+      };
     });
     root.querySelectorAll("[data-wb-fav]").forEach((b) => {
       b.onclick = () => {
@@ -2317,7 +2326,7 @@
               const isPending = !isWithdrawn && (item.status === "pending" || item.status === "changes_requested" || item.sourceType === "pending" || item.access?.hiddenBy === "pending");
               if (isWithdrawn) {
                 return `
-                  <article class="hw-card hw-card-withdrawn" style="opacity:0.75;filter:grayscale(0.85);background:var(--paper-soft, #f4efe6);">
+                  <article class="hw-card hw-card-withdrawn" data-fav-item="${esc(item.id)}" style="opacity:0.75;filter:grayscale(0.85);background:var(--paper-soft, #f4efe6);">
                     <div class="hw-card-media" style="cursor:default;">
                       <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" />
                     </div>
@@ -2333,7 +2342,7 @@
                 `;
               }
               return `
-                <article class="hw-card">
+                <article class="hw-card" data-fav-item="${esc(item.id)}">
                   <div class="hw-card-media" data-fav-open-asset="${esc(item.id)}">
                     <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" />
                   </div>
@@ -2360,7 +2369,7 @@
         ? S.renderMasonry(
             items.map(
               (w) => `
-                <article class="hw-card">
+                <article class="hw-card" data-fav-item="${esc(w.id)}">
                   <div class="hw-card-media" data-fav-open-work="${esc(w.id)}">
                     <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" />
                   </div>
@@ -2405,7 +2414,7 @@
             const title = g.topic || g.title || "手绘风生成作品";
             const dateText = esc(g.createdAt || g.created_at || "近期");
             return `
-              <article class="hw-card" data-col-gen="${esc(g.id)}">
+              <article class="hw-card" data-col-gen="${esc(g.id)}" data-fav-item="${esc(g.id)}">
                 <div class="hw-card-media" data-open-col-gen="${esc(g.id)}" style="cursor:pointer;">
                   <img data-hw-src="${esc(img0)}" alt="${esc(title)}" />
                 </div>
@@ -2433,7 +2442,7 @@
             ${items
               .map(
                 (t) => `
-                  <div class="forum-topic-card" style="display:flex;justify-content:space-between;align-items:center;gap:14px;">
+                  <div class="forum-topic-card" data-fav-item="${esc(t.id)}" style="display:flex;justify-content:space-between;align-items:center;gap:14px;">
                     <div>
                       <span class="hw-card-code">${esc(t.categoryLabel)}</span>
                       <h3 style="margin:4px 0;font-size:15.5px;">${esc(t.title)}</h3>
@@ -2493,11 +2502,10 @@
     root.querySelectorAll("[data-unfav-gen]").forEach((b) => {
       b.onclick = () => {
         const gid = b.getAttribute("data-unfav-gen");
-        S.toggleCollect("generations", gid);
         if (UI._collectedGenerations) {
           UI._collectedGenerations = UI._collectedGenerations.filter((x) => x.id !== gid);
         }
-        renderMain();
+        S.toggleCollect("generations", gid);
       };
     });
     root.querySelectorAll("[data-unfav]").forEach((b) => {

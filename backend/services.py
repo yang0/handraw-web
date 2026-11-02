@@ -2563,15 +2563,44 @@ def toggle_user_collection(
         else:
             collected = bool(existing)
 
-        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
-        res_payload = {"ok": True, "collected": collected, "rewarded": rewarded, "credits": bal}
-        if bucket == "generations":
+        if bucket == "works":
+            norm_type = "work"
+            new_favorites = int(tx.execute("SELECT favorites FROM works WHERE id = ?", (tid,)).fetchone()["favorites"])
+        elif bucket == "topics":
+            norm_type = "topic"
+            new_favorites = int(tx.execute("SELECT favorites FROM forum_topics WHERE id = ?", (tid,)).fetchone()["favorites"])
+        elif bucket == "generations":
+            norm_type = "generation"
             fav_cnt = tx.execute(
                 "SELECT COUNT(*) FROM collections WHERE bucket = 'generations' AND target_id = ?",
                 (tid,),
             ).fetchone()[0]
-            res_payload["favorites"] = int(fav_cnt)
-    return res_payload
+            new_favorites = int(fav_cnt)
+        else:
+            norm_type = _infer_asset_kind(tid, fallback=("layout" if bucket == "layouts" else "style"))
+            if is_demo_mode():
+                seed_row = tx.execute("SELECT base_favorites FROM asset_social_seeds WHERE asset_code = ?", (tid,)).fetchone()
+                base_fav = int(seed_row["base_favorites"]) if seed_row else _default_asset_social_baseline(tid)[1]
+            else:
+                base_fav = 0
+            live_fav = int(
+                tx.execute(
+                    "SELECT COUNT(*) FROM collections WHERE bucket IN ('styles', 'layouts') AND target_id = ?",
+                    (tid,),
+                ).fetchone()[0]
+            )
+            new_favorites = base_fav + live_fav
+
+        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
+        return {
+            "ok": True,
+            "targetType": norm_type,
+            "targetId": tid,
+            "collected": collected,
+            "favorites": new_favorites,
+            "rewarded": rewarded,
+            "credits": bal,
+        }
 
 
 # Authority ranks for visibility decisions.  A decision may only be reversed by

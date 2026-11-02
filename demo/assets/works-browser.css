@@ -87,7 +87,7 @@
   .hw-works-browser .hw-wb-chip,
   .hw-works-browser .hw-wb-tab,
   .hw-works-browser .hw-wb-search { min-height:44px; }
-  .hw-works-browser .hw-wb-action,.hw-works-browser .hw-wb-author,.hw-works-browser .hw-wb-reset { min-height:44px; }
+  .hw-works-browser .hw-wb-action,.hw-works-browser .hw-wb-actions .btn,.hw-works-browser .hw-wb-author,.hw-works-browser .hw-wb-reset { min-height:44px; }
 }
 @media (max-width:340px) { .hw-works-browser .hw-wb-grid { grid-template-columns:minmax(0,1fr); } }
 @media (prefers-reduced-motion:reduce) {
