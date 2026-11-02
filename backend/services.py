@@ -3818,7 +3818,6 @@ def publish_forum_reply_post(
     if not clean:
         raise ServiceError("请输入回复内容")
     uid = int(user["id"])
-    today = local_today_str()
     now_iso = utc_now_iso()
     rid = f"rep_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
 
@@ -3826,11 +3825,6 @@ def publish_forum_reply_post(
         tp = tx.execute("SELECT id, title FROM forum_topics WHERE id = ? AND status = 'published'", (topic_id,)).fetchone()
         if not tp:
             raise ServiceError("帖子不存在或已下架", status=404)
-
-        settings = get_site_settings(tx)
-        econ = settings.get("economy", {})
-        reply_reward = int(econ.get("reply_publish_credits", 2))
-        daily_cap = int(econ.get("reply_daily_cap", 5))
 
         tx.execute(
             """
@@ -3851,29 +3845,17 @@ def publish_forum_reply_post(
             ),
         )
 
-        today_rewarded_cnt = int(
-            tx.execute(
-                "SELECT COUNT(*) FROM ledgers WHERE user_id = ? AND kind = 'publish_reply' AND created_at LIKE ?",
-                (uid, f"{today}%"),
-            ).fetchone()[0]
-        )
-        rewarded = 0
-        if reply_reward > 0 and today_rewarded_cnt < daily_cap:
-            new_bal, _ = apply_wallet_delta(
-                tx,
-                uid,
-                reply_reward,
-                "publish_reply",
-                f"参与帖子《{tp['title'][:18]}…》深度回复激励",
-                event_key=f"pub_reply_{rid}",
-                ref_type="reply",
-                ref_id=rid,
-            )
-            rewarded = reply_reward
+        bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        if bal_row:
+            cur_bal = int(bal_row["balance"])
         else:
-            new_bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
+            tx.execute(
+                "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
+                (uid, now_iso),
+            )
+            cur_bal = 0
 
-    return {"ok": True, "replyId": rid, "rewarded": rewarded, "credits": new_bal}
+    return {"ok": True, "replyId": rid, "rewarded": 0, "credits": cur_bal}
 
 
 def accept_forum_bounty_reply(db: Database, user: dict[str, Any], topic_id: str, reply_id: str) -> dict[str, Any]:

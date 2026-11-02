@@ -3,7 +3,7 @@
 Verifies:
 1. Normal topic publish produces NO publish_topic ledger entry; wallet balance remains unchanged.
 2. Bounty topic (bounty > 0) still escrows credits via bounty_escrow ledger entry, deducting balance.
-3. Reply reward is untouched: +2 credits per reply, respecting reply_daily_cap (5).
+3. Reply produces NO publish_reply ledger entry; wallet balance remains unchanged (Issue #51).
 4. Migration 075 idempotently sets site_settings.economy.topic_publish_credits to 0 on existing databases.
 5. Admin settings update for economy enforces topic_publish_credits == 0.
 """
@@ -112,8 +112,8 @@ class NoTopicRewardTests(unittest.TestCase):
         self.assertEqual(topic["bounty_status"], "open")
         self.assertEqual(topic["bounty"], bounty)
 
-    def test_03_reply_reward_still_granted_up_to_daily_cap(self):
-        """3. Reply rewards (+2 credits) are untouched and respect the daily cap of 5."""
+    def test_03_reply_produces_no_rewards(self):
+        """3. Reply produces no credit reward and no publish_reply ledger entry (Issue #51)."""
         # Create a topic to reply to
         res_topic = publish_forum_topic_post(
             self.db,
@@ -132,10 +132,9 @@ class NoTopicRewardTests(unittest.TestCase):
         conn.execute("UPDATE wallets SET balance = 10 WHERE user_id = ?", (replier["id"],))
         conn.commit()
 
-        # Send 5 replies: each should grant +2 credits
-        expected_balance = 10
+        # Send replies: all should grant 0 credits, balance unchanged
+        initial_balance = 10
         for i in range(1, 6):
-            expected_balance += 2
             res = publish_forum_reply_post(
                 self.db,
                 replier,
@@ -144,27 +143,15 @@ class NoTopicRewardTests(unittest.TestCase):
                 direct=True,
             )
             self.assertTrue(res["ok"])
-            self.assertEqual(res["rewarded"], 2)
-            self.assertEqual(res["credits"], expected_balance)
+            self.assertEqual(res["rewarded"], 0)
+            self.assertEqual(res["credits"], initial_balance)
 
-        # 6th reply on the same day: cap reached, 0 reward
-        res6 = publish_forum_reply_post(
-            self.db,
-            replier,
-            topic_id,
-            "第 6 条测试回复，今日奖励已达上限",
-            direct=True,
-        )
-        self.assertTrue(res6["ok"])
-        self.assertEqual(res6["rewarded"], 0)
-        self.assertEqual(res6["credits"], expected_balance)
-
-        # Verify ledger count is exactly 5
+        # Verify ledger count is exactly 0
         ledger_count = conn.execute(
             "SELECT COUNT(*) FROM ledgers WHERE user_id = ? AND kind = 'publish_reply'",
             (replier["id"],),
         ).fetchone()[0]
-        self.assertEqual(ledger_count, 5)
+        self.assertEqual(ledger_count, 0)
 
     def test_04_migration_075_idempotent_zeroes_existing_settings(self):
         """4. Migration 075 sets topic_publish_credits to 0 in site_settings.economy idempotently."""

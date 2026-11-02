@@ -706,7 +706,7 @@
         </div>
         <div class="hw-detail-section-card" style="padding:26px 28px;">
           <h1 style="margin:0 0 6px;font-size:22px;font-family:var(--font-serif);">登录 Handraw 创作者论坛</h1>
-          <p style="margin:0 0 16px;font-size:13px;color:var(--ink-muted);">登录后即可发布图文交流帖、回复赢取互助与悬赏积分，并同步全站收藏夹。</p>
+          <p style="margin:0 0 16px;font-size:13px;color:var(--ink-muted);">登录后即可发布图文交流帖、参与互助赢取悬赏积分，并同步全站收藏夹。</p>
           <div id="forum-auth-mount"></div>
         </div>
       </div>
