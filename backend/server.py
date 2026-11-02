@@ -2005,6 +2005,26 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(build_boot_payload(self.db, user))
             return
 
+        # Public Works Feed & Detail
+        if req_path in ("/api/works/feed", "/api/works/feed/", "/api/works", "/api/works/"):
+            from .works_feed import get_works_feed
+            user = self._current_user(required=False)
+            feed_params = {k: v[0] if len(v) == 1 else v for k, v in qs.items()}
+            self._send_json(get_works_feed(self.db, feed_params, current_user=user))
+            return
+
+        m_work_detail = re.match(r"^/api/works/([^/]+)/?$", req_path)
+        if m_work_detail:
+            from .works_feed import get_work_by_id
+            wid = m_work_detail.group(1)
+            if wid not in ("feed",):
+                user = self._current_user(required=False)
+                work = get_work_by_id(self.db, wid, current_user=user)
+                if not work:
+                    raise ServiceError("作品不存在或未公开", status=404, code="work_not_found")
+                self._send_json({"ok": True, "work": work})
+                return
+
         if req_path == "/api/public/asset-counts":
             counts, total_works, total_cheers, creators = compute_public_asset_counts_and_creators(self.db.get_conn())
             self._send_json(

@@ -880,20 +880,78 @@
   function renderWorksSquare(root) {
     const B = window.HandrawWorksBrowser;
     const allWorks = App.state.works || [];
-    const counts = B.countFormats(allWorks);
     const filters = {
       format: UI.workFormat || "all",
       access: UI.workAccess || "all",
       query: UI.workQuery || "",
       asset: UI.workFilterAsset || "",
       author: UI.workFilterAuthor || "",
-      sort: UI.workSort === "newest" || UI.workSort === "favorites" || UI.workSort === "cheers"
+      sort: UI.workSort === "newest" || UI.workSort === "popular" || UI.workSort === "favorites" || UI.workSort === "cheers"
         ? UI.workSort : "newest"
     };
+
+    const filterKey = `${filters.format}|${filters.access}|${filters.sort}|${filters.asset}|${filters.author}|${filters.query}`;
+
+    if (typeof S.apiJson === "function" && (!UI.worksFeed || UI.worksFeed.key !== filterKey)) {
+      const prevCounts = UI.worksFeed?.counts || B.countFormats(allWorks);
+      UI.worksFeed = {
+        key: filterKey,
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+        counts: prevCounts,
+        total: 0,
+        loading: true,
+        loadingMore: false,
+        error: null,
+      };
+
+      const params = new URLSearchParams();
+      params.set("limit", "24");
+      if (filters.format && filters.format !== "all") params.set("format", filters.format);
+      if (filters.access && filters.access !== "all") params.set("access", filters.access);
+      if (filters.sort) params.set("sort", filters.sort);
+      if (filters.asset) params.set("asset", filters.asset);
+      if (filters.author) params.set("author", filters.author);
+      if (filters.query) params.set("q", filters.query);
+
+      S.apiJson(`/api/works/feed?${params.toString()}`)
+        .then((res) => {
+          if (UI.worksFeed && UI.worksFeed.key === filterKey) {
+            UI.worksFeed.loading = false;
+            if (res && res.ok) {
+              UI.worksFeed.items = res.items || [];
+              UI.worksFeed.counts = res.counts || prevCounts;
+              UI.worksFeed.total = typeof res.total === "number" ? res.total : (res.items || []).length;
+              UI.worksFeed.nextCursor = res.nextCursor || null;
+              UI.worksFeed.hasMore = Boolean(res.hasMore);
+              (res.items || []).forEach((w) => {
+                const idx = App.state.works.findIndex((x) => String(x.id) === String(w.id));
+                if (idx >= 0) App.state.works[idx] = w;
+                else App.state.works.push(w);
+              });
+            } else {
+              UI.worksFeed.error = res?.error || "加载作品失败";
+            }
+            if (App.view === "works") renderMain();
+          }
+        })
+        .catch((err) => {
+          if (UI.worksFeed && UI.worksFeed.key === filterKey) {
+            UI.worksFeed.loading = false;
+            UI.worksFeed.error = err.message || "加载作品失败";
+            if (App.view === "works") renderMain();
+          }
+        });
+    }
+
+    const counts = (UI.worksFeed && UI.worksFeed.counts) || B.countFormats(allWorks);
     if (!counts[filters.format]) filters.format = UI.workFormat = "all";
     const filtered = B.select(allWorks, filters, App.resourceMap, S);
     const shownCount = Math.max(24, Number(UI.workShownCount) || 24);
-    const visible = filtered.slice(0, shownCount);
+    const visible = (UI.worksFeed && UI.worksFeed.key === filterKey && (UI.worksFeed.items.length || !UI.worksFeed.loading))
+      ? UI.worksFeed.items
+      : filtered.slice(0, shownCount);
     const hasFilters = Boolean(
       filters.format !== "all" || filters.access !== "all" ||
       String(filters.query).trim() || filters.asset || filters.author
@@ -942,16 +1000,30 @@
         </article>`;
     }).join("");
 
+    const totalCount = (UI.worksFeed && UI.worksFeed.key === filterKey && typeof UI.worksFeed.total === "number")
+      ? UI.worksFeed.total
+      : filtered.length;
+
+    const hasMore = (UI.worksFeed && UI.worksFeed.key === filterKey && typeof S.apiJson === "function")
+      ? Boolean(UI.worksFeed.hasMore)
+      : (visible.length < filtered.length);
+
     const emptyHtml = !counts.all
-      ? `<div class="hw-wb-empty"><h2>还没有已收录作品</h2><p>分享的作品通过收录后，会展示在这里。</p><a class="btn btn-sm" href="${esc(channelUrl("forum"))}">先逛逛社区 →</a></div>`
+      ? `<div class="hw-wb-empty"><h2>还没有已收录作品</h2><p>作品发布后，会展示在这里。</p><a class="btn btn-sm" href="${esc(channelUrl("forum"))}">先逛逛社区 →</a></div>`
       : `<div class="hw-wb-empty"><p>没有符合当前条件的作品。</p><button type="button" class="btn btn-sm" id="hw-wb-reset-empty">重置筛选</button></div>`;
+
+    const gridHtml = (UI.worksFeed && UI.worksFeed.key === filterKey && UI.worksFeed.loading && !visible.length)
+      ? `<div style="text-align:center;padding:48px 20px;color:var(--ink-muted);font-size:14px;">⏳ 正在加载公开作品...</div>`
+      : visible.length
+        ? `<div class="hw-wb-grid">${cards}</div>`
+        : emptyHtml;
 
     root.innerHTML = `
       <section class="hw-works-browser">
         <header class="hw-wb-head">
           <div>
             <h1 class="hw-wb-title-head">作品与做法</h1>
-            <p class="hw-wb-sub">浏览社区已收录作品，按画风、图型或关键词查找。</p>
+            <p class="hw-wb-sub">浏览社区公开作品，按画风、图型或关键词查找。</p>
           </div>
           <div class="hw-wb-head-actions">
             <button type="button" class="btn btn-primary btn-sm" id="hw-wb-share">分享作品</button>
@@ -982,9 +1054,9 @@
           ${filters.author ? `<button type="button" class="hw-wb-chip is-active" id="hw-wb-author" aria-label="清除作者筛选">作者：${esc(author?.authorName || filters.author)} <span aria-hidden="true">×</span></button>` : ""}
         </div>
 
-        <div class="hw-wb-count" aria-live="polite">共 ${filtered.length} 件</div>
-        ${visible.length ? `<div class="hw-wb-grid">${cards}</div>` : emptyHtml}
-        ${visible.length < filtered.length ? `<div class="hw-wb-more"><button type="button" class="btn btn-sm" id="hw-wb-more">加载更多</button></div>` : ""}
+        <div class="hw-wb-count" aria-live="polite">共 ${totalCount} 件</div>
+        ${gridHtml}
+        ${hasMore ? `<div class="hw-wb-more"><button type="button" class="btn btn-sm" id="hw-wb-more" ${UI.worksFeed?.loadingMore ? "disabled" : ""}>${UI.worksFeed?.loadingMore ? "加载中..." : "加载更多"}</button></div>` : ""}
       </section>`;
 
     const rerender = () => { if (typeof syncUrl === "function") syncUrl(); renderMain(); };
@@ -1060,13 +1132,15 @@
     });
     root.querySelectorAll("[data-wb-like]").forEach((b) => {
       b.onclick = () => {
-        const w = allWorks.find((x) => String(x.id) === b.getAttribute("data-wb-like"));
+        const wid = b.getAttribute("data-wb-like");
+        const w = (UI.worksFeed?.items || allWorks).find((x) => String(x.id) === wid);
         if (w) S.toggleLike("work", w.id, w.title);
       };
     });
     root.querySelectorAll("[data-wb-fav]").forEach((b) => {
       b.onclick = () => {
-        const w = allWorks.find((x) => String(x.id) === b.getAttribute("data-wb-fav"));
+        const wid = b.getAttribute("data-wb-fav");
+        const w = (UI.worksFeed?.items || allWorks).find((x) => String(x.id) === wid);
         if (w) S.toggleCollect("works", w.id, w.title);
       };
     });
@@ -1078,6 +1152,7 @@
         try {
           const res = await S.apiJson(`/api/works/${encodeURIComponent(b.getAttribute("data-wb-id"))}/moderate`, { method: "POST", body: { action } });
           if (!res.ok) throw new Error(res.error || "操作失败");
+          UI.worksFeed = null;
           await S.refreshFromServer();
           toast(action === "delete" ? "作品已删除" : "作品状态已更新");
           renderMain();
@@ -1087,13 +1162,58 @@
     });
 
     const more = root.querySelector("#hw-wb-more");
-    if (more) more.onclick = () => {
-      const nextId=filtered[shownCount]?.id;
-      UI.workShownCount=shownCount+24;
-      renderMain();
-      const nextCard=Array.from(root.querySelectorAll("[data-wb-work]")).find(el=>el.getAttribute("data-wb-work")===nextId);
-      nextCard?.querySelector("a")?.focus({preventScroll:true});
-    };
+    if (more) {
+      more.onclick = () => {
+        if (UI.worksFeed && UI.worksFeed.key === filterKey && typeof S.apiJson === "function") {
+          if (UI.worksFeed.loadingMore || !UI.worksFeed.hasMore || !UI.worksFeed.nextCursor) return;
+          UI.worksFeed.loadingMore = true;
+          more.disabled = true;
+          more.textContent = "加载中...";
+
+          const params = new URLSearchParams();
+          params.set("limit", "24");
+          if (filters.format && filters.format !== "all") params.set("format", filters.format);
+          if (filters.access && filters.access !== "all") params.set("access", filters.access);
+          if (filters.sort) params.set("sort", filters.sort);
+          if (filters.asset) params.set("asset", filters.asset);
+          if (filters.author) params.set("author", filters.author);
+          if (filters.query) params.set("q", filters.query);
+          params.set("cursor", UI.worksFeed.nextCursor);
+
+          S.apiJson(`/api/works/feed?${params.toString()}`)
+            .then((res) => {
+              UI.worksFeed.loadingMore = false;
+              if (res && res.ok && UI.worksFeed.key === filterKey) {
+                const newItems = res.items || [];
+                UI.worksFeed.items.push(...newItems);
+                UI.worksFeed.nextCursor = res.nextCursor || null;
+                UI.worksFeed.hasMore = Boolean(res.hasMore);
+                newItems.forEach((w) => {
+                  const idx = App.state.works.findIndex((x) => String(x.id) === String(w.id));
+                  if (idx >= 0) App.state.works[idx] = w;
+                  else App.state.works.push(w);
+                });
+                renderMain();
+              }
+            })
+            .catch((err) => {
+              UI.worksFeed.loadingMore = false;
+              if (typeof toast === "function") toast("加载失败：" + (err.message || err));
+              if (more.isConnected) {
+                more.disabled = false;
+                more.textContent = "加载更多";
+              }
+            });
+          return;
+        }
+
+        const nextId = filtered[shownCount]?.id;
+        UI.workShownCount = shownCount + 24;
+        renderMain();
+        const nextCard = Array.from(root.querySelectorAll("[data-wb-work]")).find((el) => el.getAttribute("data-wb-work") === nextId);
+        nextCard?.querySelector("a")?.focus({ preventScroll: true });
+      };
+    }
   }
 
   /* ======================== 2.5 STANDALONE HONOR & POPULARITY RANKINGS HALL (?view=rankings) ======================== */
@@ -1695,6 +1815,23 @@
 
     let tabBodyHtml = "";
     if (UI.profileTab === "works") {
+      if (typeof S.apiJson === "function" && UI._loadedProfileWorkUser !== prof.username) {
+        UI._loadedProfileWorkUser = prof.username;
+        S.apiJson(`/api/works/feed?author=${encodeURIComponent(prof.username)}&limit=100`)
+          .then((res) => {
+            if (res && res.items && res.items.length) {
+              res.items.forEach((item) => {
+                const idx = App.state.works.findIndex((w) => String(w.id) === String(item.id));
+                if (idx >= 0) App.state.works[idx] = item;
+                else App.state.works.push(item);
+              });
+              if (App.view === "profile" && UI.profileUser === prof.username && UI.profileTab === "works") {
+                renderMain();
+              }
+            }
+          })
+          .catch(() => {});
+      }
       tabBodyHtml = prof.works.length
         ? S.renderMasonry(
             prof.works.map(
@@ -1849,6 +1986,27 @@
             UI._fetchingColGen = false;
             renderMain();
           });
+      }
+      if (UI.favTab === "works") {
+        const missing = (cols.works || []).filter((id) => !App.state.works.some((w) => String(w.id) === String(id)));
+        if (missing.length && typeof S.apiJson === "function" && !UI._fetchingProfColWorks) {
+          UI._fetchingProfColWorks = true;
+          S.apiJson(`/api/works/feed?ids=${encodeURIComponent(missing.join(","))}`)
+            .then((res) => {
+              if (res && res.items && res.items.length) {
+                res.items.forEach((item) => {
+                  if (!App.state.works.some((w) => String(w.id) === String(item.id))) {
+                    App.state.works.push(item);
+                  }
+                });
+                if (App.view === "profile" && UI.profileTab === "collections") renderMain();
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              UI._fetchingProfColWorks = false;
+            });
+        }
       }
       const subItems =
         UI.favTab === "styles" || UI.favTab === "layouts"
@@ -2364,6 +2522,25 @@
           )
         : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏该类资产，去库里点亮 ♡ 吧！</div>`;
     } else if (UI.favTab === "works") {
+      const missing = (cols.works || []).filter((id) => !App.state.works.some((w) => String(w.id) === String(id)));
+      if (missing.length && typeof S.apiJson === "function" && !UI._fetchingColWorks) {
+        UI._fetchingColWorks = true;
+        S.apiJson(`/api/works/feed?ids=${encodeURIComponent(missing.join(","))}`)
+          .then((res) => {
+            if (res && res.items && res.items.length) {
+              res.items.forEach((item) => {
+                if (!App.state.works.some((w) => String(w.id) === String(item.id))) {
+                  App.state.works.push(item);
+                }
+              });
+              if (App.view === "collections") renderMain();
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            UI._fetchingColWorks = false;
+          });
+      }
       const items = (cols.works || []).map((id) => App.state.works.find((w) => w.id === id)).filter(Boolean);
       bodyHtml = items.length
         ? S.renderMasonry(

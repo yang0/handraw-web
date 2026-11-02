@@ -172,15 +172,17 @@ class ForumResourceTests(unittest.TestCase):
         for offset,limit in [(-1,1),(0,0),('oops',3)]:
             with self.assertRaises(S.ServiceError): R.resource_comments(self.db,None,'style','FA-001',offset,limit)
 
-    def test_image_without_reproduction_prompt_is_not_a_public_work(self):
+    def test_image_without_reproduction_prompt_is_a_public_work(self):
         _,subs=self.batch();self.approve_all()
         wid=subs['work']['targetId'];style=subs['style']['targetId']
         with self.db.transaction() as tx:
             tx.execute('UPDATE works SET prompt=?,styles_json=? WHERE id=?',('   ',json.dumps([style]),wid))
-        self.assertNotIn(wid,[w['id'] for w in S.build_boot_payload(self.db,None)['works']])
-        self.assertIsNone(D.resolve_resource(self.db.get_conn(),'work',wid))
-        with self.assertRaises(S.ServiceError): R.resource_detail(self.db,None,'work',wid)
-        self.assertEqual(R.related_items(self.db,None,'style',style,'works')['total'],0)
+        self.assertIn(wid,[w['id'] for w in S.build_boot_payload(self.db,None)['works']])
+        self.assertIsNotNone(D.resolve_resource(self.db.get_conn(),'work',wid))
+        detail = R.resource_detail(self.db,None,'work',wid)
+        self.assertEqual(detail['resource']['id'], wid)
+        self.assertFalse(detail['resource']['reproducible'])
+        self.assertEqual(R.related_items(self.db,None,'style',style,'works')['total'],1)
 
     def test_http_read_auth_origin_and_error_status(self):
         import os,threading,urllib.request,urllib.error

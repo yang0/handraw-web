@@ -262,7 +262,7 @@ def _count_user_published_items(conn: sqlite3.Connection, username: str) -> int:
     asset_filter, asset_ids = _seed_filter("code", "assets")
     w_cnt = int(
         conn.execute(
-            f"SELECT COUNT(*) FROM works WHERE author_username = ? AND status = 'published' AND TRIM(prompt) <> '' AND {work_filter}",
+            f"SELECT COUNT(*) FROM works WHERE author_username = ? AND status = 'published' AND images_json IS NOT NULL AND TRIM(images_json) NOT IN ('', '[]', 'null') AND json_valid(images_json) = 1 AND {work_filter}",
             (username, *work_ids),
         ).fetchone()[0]
     )
@@ -1675,7 +1675,7 @@ def compute_public_asset_counts_and_creators(conn: sqlite3.Connection) -> tuple[
             rec["hasFresh"] = True
 
     work_rows = conn.execute(
-        f"SELECT author_username, author_name, styles_json, layout_code, cheers, likes, favorites, forks, is_new_release, published_at_ms FROM works WHERE status = 'published' AND TRIM(prompt) <> '' AND {work_filter}",
+        f"SELECT author_username, author_name, styles_json, layout_code, cheers, likes, favorites, forks, is_new_release, published_at_ms FROM works WHERE status = 'published' AND images_json IS NOT NULL AND TRIM(images_json) NOT IN ('', '[]', 'null') AND json_valid(images_json) = 1 AND {work_filter}",
         work_ids,
     ).fetchall()
     total_works = len(work_rows)
@@ -2050,7 +2050,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         )
     work_filter, work_ids = _seed_filter("id", "works")
     work_rows = conn.execute(
-        f"SELECT * FROM works WHERE status = 'published' AND TRIM(prompt) <> '' AND {work_filter} ORDER BY featured DESC, published_at_ms DESC",
+        f"SELECT * FROM works WHERE status = 'published' AND images_json IS NOT NULL AND TRIM(images_json) NOT IN ('', '[]', 'null') AND json_valid(images_json) = 1 AND {work_filter} ORDER BY featured DESC, published_at_ms DESC",
         work_ids,
     ).fetchall()
     works_out: list[dict[str, Any]] = [_serialize_work(w, comments_by_work, unlocked_set, current_user, conn=conn) for w in work_rows]

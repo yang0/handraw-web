@@ -32,7 +32,7 @@ def find_topic_source(db, topic_id):
 def resolve_resource(conn,kind,target,viewer=None,include_pending=False):
     if kind=='work':
         row=conn.execute("SELECT * FROM works WHERE id=? AND status='published'",(target,)).fetchone()
-        return dict(row) if row and str(row['prompt'] or '').strip() and (S.is_demo_mode() or target not in S.seed_ids('works')) else None
+        return dict(row) if row and (S.is_demo_mode() or target not in S.seed_ids('works')) else None
     if kind not in ('style','layout'):
         return None
     from . import resource_registry

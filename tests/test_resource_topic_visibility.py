@@ -373,7 +373,7 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
         self.assertNotIn("", usernames, "Empty username must not be counted in creators")
 
     def test_09_works_visibility_rules(self):
-        """9. Work discussion topics: published works with prompt are visible; no-prompt or unpublished hidden."""
+        """9. Work discussion topics: published works (with or without prompt) are visible; unpublished hidden."""
         conn = self.db.get_conn()
         now = services.utc_now_iso()
         now_ms = int(time.time() * 1000)
@@ -400,6 +400,22 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
             """,
             (now_ms, now, now),
         )
+        # Work 3: Unpublished (draft)
+        conn.execute(
+            """
+            INSERT INTO works (
+                id, author_username, author_name, title, prompt, styles_json,
+                layout_code, images_json, status, published_at_ms, created_at, updated_at
+            ) VALUES ('w_draft', 'vis_author', '作者', '草稿作品', 'draft prompt', '["FA-001"]',
+                     '', '["/img/w3.png"]', 'draft', ?, ?, ?)
+            """,
+            (now_ms, now, now),
+        )
+        # Ensure a topic mapping exists for w_draft to test suppression
+        tid_draft = resource_discussions.ensure_topic(
+            conn, 'work', 'w_draft',
+            {'title': '草稿作品', 'images_json': '["/img/w3.png"]'}
+        )
         conn.commit()
 
         # Run ensure_resource_topics
@@ -415,7 +431,8 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
         self.assertIsNotNone(row1)
         self.assertIsNotNone(row2)
         self.assertIn(row1["topic_id"], boot_tids, "Published work with prompt must be visible in boot")
-        self.assertNotIn(row2["topic_id"], boot_tids, "Work without prompt must be hidden from boot topics")
+        self.assertIn(row2["topic_id"], boot_tids, "Published work without prompt is also visible in boot topics")
+        self.assertNotIn(tid_draft, boot_tids, "Unpublished work topic must be hidden from boot topics")
 
     def test_10_production_mode_community_asset(self):
         """10. In non-demo production mode (HANDRAW_DEMO_MODE=0), community asset is visible with 0 replies."""
