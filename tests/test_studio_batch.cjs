@@ -1356,7 +1356,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   let confirmPrompt = "";
   sandbox.window.confirm = (msg) => { confirmPrompt = msg; return false; };
   btnReset.onclick();
-  assert.ok(confirmPrompt.includes("清空后当前表单的所有设置都会恢复默认"), "Confirm message must match specification");
+  assert.ok(confirmPrompt.includes("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？"), "Confirm message must match specification");
   assert.equal(parts.loop.data.batchLayoutMode, "ai", "Mode should remain AI on cancel");
   assert.equal(dirtyCalled, false, "markDirty must not be called on cancel");
 
@@ -1408,7 +1408,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   // 3. Verify Make-Image source contains #make-image-btn-reset
   const makeImageSource = fs.readFileSync("demo/assets/studio-make-image.js", "utf8");
   assert.ok(makeImageSource.includes('id="make-image-btn-reset"'), "studio-make-image.js must render #make-image-btn-reset");
-  assert.ok(makeImageSource.includes("清空后当前表单的所有设置都会恢复默认"), "studio-make-image.js must check confirmation");
+  assert.ok(makeImageSource.includes("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？"), "studio-make-image.js must check confirmation");
 
   console.log("✓ Requirement 18 Passed: Form Reset (清空表单) in Batch and Make-Image verified");
 }
