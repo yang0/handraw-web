@@ -753,10 +753,42 @@ def zero_topic_publish_credits_hook(conn: sqlite3.Connection) -> None:
             pass
 
 
+ZERO_REPLY_PUBLISH_CREDITS_SQL = """
+-- Migration 077: zero out reply_publish_credits and reply_daily_cap in site_settings
+UPDATE site_settings
+SET value_json = json_set(json_set(value_json, '$.reply_publish_credits', 0), '$.reply_daily_cap', 0)
+WHERE key = 'economy';
+"""
+
+
+def zero_reply_publish_credits_hook(conn: sqlite3.Connection) -> None:
+    """Ensure site_settings.economy has reply_publish_credits and reply_daily_cap set to 0 idempotently."""
+    row = conn.execute("SELECT value_json FROM site_settings WHERE key = 'economy'").fetchone()
+    if row and row["value_json"]:
+        try:
+            data = json.loads(row["value_json"])
+            if isinstance(data, dict):
+                changed = False
+                if data.get("reply_publish_credits") != 0:
+                    data["reply_publish_credits"] = 0
+                    changed = True
+                if data.get("reply_daily_cap") != 0:
+                    data["reply_daily_cap"] = 0
+                    changed = True
+                if changed:
+                    conn.execute(
+                        "UPDATE site_settings SET value_json = ? WHERE key = 'economy'",
+                        (json.dumps(data, ensure_ascii=False),),
+                    )
+        except Exception:
+            pass
+
+
 WORK_POST_MIGRATION_HOOKS: dict[int, Any] = {
     66: normalize_historical_asset_uids,
     69: deduplicate_generation_history,
     75: zero_topic_publish_credits_hook,
+    77: zero_reply_publish_credits_hook,
 }
 
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
@@ -787,4 +819,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (73, "073_reset_works_price_to_zero", RESET_WORKS_PRICE_SQL),
     (74, "074_generation_social_and_fork", GENERATION_SOCIAL_SQL),
     (75, "075_zero_topic_publish_credits", ZERO_TOPIC_PUBLISH_CREDITS_SQL),
+    (77, "077_zero_reply_publish_credits", ZERO_REPLY_PUBLISH_CREDITS_SQL),
 ]

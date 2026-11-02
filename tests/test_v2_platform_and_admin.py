@@ -481,7 +481,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         tid = t_res["topicId"]
         self.assertEqual(t_res["credits"], su_b0["credits"] - 15)
 
-        # Responder replies (+2) and gets accepted (+15)
+        # Responder replies (0 reward, Issue #51) and gets accepted (+15)
         code_r, r_res = lin.request("POST", f"/api/forum/topics/{tid}/replies", {"text": "建议挂载 FA-003 + 留白 high，亲测超稳！"})
         self.assertEqual(code_r, 200, r_res)
         rid = r_res["replyId"]
@@ -489,7 +489,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         code_acc, _ = su.request("POST", f"/api/forum/topics/{tid}/accept-bounty", {"replyId": rid})
         self.assertEqual(code_acc, 200)
         _, lin_b1 = lin.request("GET", "/api/boot")
-        self.assertEqual(lin_b1["credits"], lin_b0["credits"] + 2 + 15)
+        self.assertEqual(lin_b1["credits"], lin_b0["credits"] + 15)
 
         # 2) Second bounty topic -> Admin arbitrates refund_bounty
         _, su_b2 = su.request("GET", "/api/boot")

@@ -2955,6 +2955,8 @@ def admin_update_settings(
 
         if sec == "economy":
             merged["topic_publish_credits"] = 0
+            merged["reply_publish_credits"] = 0
+            merged["reply_daily_cap"] = 0
 
         tx.execute(
             """
