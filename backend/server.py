@@ -1774,9 +1774,14 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if method == "GET" and req_path == "/api/auth/me":
             return
 
-        # 2. 'publish' scope: POST /api/uploads, POST /api/studio/uploads
+        # 2. 'publish' scope: POST /api/uploads, POST /api/studio/uploads, POST /api/entries, POST /api/works
         if "publish" in scopes:
-            if method == "POST" and req_path in ("/api/uploads", "/api/studio/uploads"):
+            if method == "POST" and req_path in (
+                "/api/uploads",
+                "/api/studio/uploads",
+                "/api/entries",
+                "/api/works",
+            ):
                 return
 
         # 3. 'library' scope: personal library read endpoints and collection toggle

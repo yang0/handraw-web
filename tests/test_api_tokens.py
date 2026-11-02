@@ -129,9 +129,8 @@ class ApiTokensTests(unittest.TestCase):
         denied_endpoints = [
             ("GET", "/api/boot", None),
             ("GET", "/api/studio/workspace", None),
-            ("POST", "/api/entries", {"title": "test"}),
             ("GET", "/api/works", None),
-            ("POST", "/api/works", {"title": "test"}),
+            ("DELETE", "/api/works/FA-001", None),
             ("GET", "/api/auth/profile", None),
             ("POST", "/api/auth/profile", {"bio": "new bio"}),
             ("POST", "/api/wallet/checkin", {}),
@@ -175,6 +174,15 @@ class ApiTokensTests(unittest.TestCase):
 
         # /api/uploads NOT allowed with library token -> 403
         status, _, raw = self.request("POST", "/api/uploads", body={"data": "test"}, headers={"Authorization": f"Bearer {lib_tok}"})
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(raw).get("code"), "token_scope_denied")
+
+        # /api/entries and /api/works NOT allowed with library token -> 403
+        status, _, raw = self.request("POST", "/api/entries", body={"entry": {}}, headers={"Authorization": f"Bearer {lib_tok}"})
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(raw).get("code"), "token_scope_denied")
+
+        status, _, raw = self.request("POST", "/api/works", body={"title": "test"}, headers={"Authorization": f"Bearer {lib_tok}"})
         self.assertEqual(status, 403)
         self.assertEqual(json.loads(raw).get("code"), "token_scope_denied")
 
@@ -328,6 +336,33 @@ class ApiTokensTests(unittest.TestCase):
                         self.assertEqual(status_boot, 403)
                         self.assertEqual(json.loads(raw_boot).get("code"), "token_scope_denied")
 
+        # P1 matrix for Api-Key header variants
+        api_key_header_names = ["Api-Key", "api-key", "API-KEY", "aPi-kEy"]
+        api_key_cases = [
+            ("invalid", "hwt_invalid_nonexistent_token", "unauthenticated"),
+            ("valid_restricted", pub_tok, "restricted_token"),
+            ("valid_restricted_bearer", f"Bearer {pub_tok}", "restricted_token"),
+            ("empty_string", "", "unauthenticated"),
+        ]
+
+        for hdr_name in api_key_header_names:
+            for case_label, hdr_val, expected_outcome in api_key_cases:
+                with self.subTest(hdr=hdr_name, case=case_label):
+                    headers = {hdr_name: hdr_val, "Cookie": valid_cookie}
+                    if expected_outcome == "unauthenticated":
+                        status, _, raw = self.request("GET", "/api/auth/me", headers=headers)
+                        self.assertEqual(status, 401, f"{hdr_name}: {hdr_val} should be 401, got {status}")
+                        status_boot, _, raw_boot = self.request("GET", "/api/boot", headers=headers)
+                        self.assertEqual(status_boot, 200)
+                        self.assertFalse(json.loads(raw_boot).get("loggedIn", False))
+                    elif expected_outcome == "restricted_token":
+                        status, _, raw = self.request("GET", "/api/auth/me", headers=headers)
+                        self.assertEqual(status, 200)
+                        self.assertEqual(json.loads(raw).get("authKind"), "token")
+                        status_boot, _, raw_boot = self.request("GET", "/api/boot", headers=headers)
+                        self.assertEqual(status_boot, 403)
+                        self.assertEqual(json.loads(raw_boot).get("code"), "token_scope_denied")
+
     def test_10_p8_personal_library_client_rejects_legacy_key(self) -> None:
         import sys
         addon_scripts = str(Path(__file__).resolve().parent.parent / "skill-addon" / "scripts")
@@ -346,3 +381,185 @@ class ApiTokensTests(unittest.TestCase):
             with self.assertRaises(ValueError) as cm:
                 client.fetch("/studio/api/library")
             self.assertIn("同步密钥已停用，请运行 login 重新绑定设备", str(cm.exception))
+
+    def test_11_multi_header_conflict_rejection(self) -> None:
+        tok1 = self._create_token(self.user["id"], ["publish"], name="Tok1")
+        tok2 = self._create_token(self.user["id"], ["publish"], name="Tok2")
+
+        # 1. Authorization and Api-Key with conflicting tokens -> 401
+        status, _, raw = self.request(
+            "GET",
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {tok1}", "Api-Key": tok2},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw).get("code"), "login_required")
+
+        # 2. Authorization and X-Handraw-Token with conflicting tokens -> 401
+        status, _, raw = self.request(
+            "GET",
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {tok1}", "X-Handraw-Token": tok2},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw).get("code"), "login_required")
+
+        # 3. X-Handraw-Token and Api-Key with conflicting tokens -> 401
+        status, _, raw = self.request(
+            "GET",
+            "/api/auth/me",
+            headers={"X-Handraw-Token": tok1, "Api-Key": tok2},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw).get("code"), "login_required")
+
+        # 4. Malformed Authorization (Basic) + valid Api-Key -> 401
+        status, _, raw = self.request(
+            "GET",
+            "/api/auth/me",
+            headers={"Authorization": "Basic dXNlcjpwYXNz", "Api-Key": tok1},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw).get("code"), "login_required")
+
+        # 5. Empty Authorization + valid Api-Key -> 401
+        status, _, raw = self.request(
+            "GET",
+            "/api/auth/me",
+            headers={"Authorization": "Bearer ", "Api-Key": tok1},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw).get("code"), "login_required")
+
+        # 6. Valid Authorization + empty Api-Key -> 401
+        status, _, raw = self.request(
+            "GET",
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {tok1}", "Api-Key": ""},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(raw).get("code"), "login_required")
+
+        # 7. Agreeing headers (Authorization + Api-Key with identical token) -> 200
+        status, _, raw = self.request(
+            "GET",
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {tok1}", "Api-Key": tok1},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw).get("authKind"), "token")
+
+        # 8. Agreeing headers (Authorization + X-Handraw-Token with identical token) -> 200
+        status, _, raw = self.request(
+            "GET",
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {tok1}", "X-Handraw-Token": tok1},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw).get("authKind"), "token")
+
+    def test_12_api_key_publish_endpoints_and_scope_enforcement(self) -> None:
+        pub_tok = self._create_token(self.user["id"], ["publish"])
+        lib_tok = self._create_token(self.user["id"], ["library"])
+
+        # 1. Publish work via POST /api/works with Api-Key only (no cookie, no origin) -> 200
+        work_body = {
+            "title": "API Key 发布的测试作品",
+            "prompt": "一只可爱的橘猫在太阳下打滚",
+            "notes": "这是详细的创作说明用于通过字数校验",
+            "images": ["/images/individual/FA/FA-013.webp"],
+        }
+        status, _, raw = self.request(
+            "POST",
+            "/api/works",
+            body=work_body,
+            headers={"Api-Key": pub_tok},
+        )
+        self.assertEqual(status, 200, f"POST /api/works should succeed: {raw.decode('utf-8', 'ignore')}")
+        data = json.loads(raw)
+        self.assertTrue(data.get("ok"))
+        self.assertTrue(data.get("workId"))
+
+        # 2. Publish entry via POST /api/entries with Api-Key only -> 200
+        entry_body = {
+            "entry": {
+                "title": "Skill 条目作品",
+                "prompt": "水墨山水画提示词正文",
+                "originalRequest": "画一幅远山近水图画风FA013",
+                "images": ["/images/individual/FA/FA-013.webp"],
+                "styleIds": ["FA-013"],
+                "layoutId": "SC-001",
+                "requestId": "skill-req-apikey-1",
+            }
+        }
+        status, _, raw = self.request(
+            "POST",
+            "/api/entries",
+            body=entry_body,
+            headers={"Api-Key": pub_tok},
+        )
+        self.assertEqual(status, 200, f"POST /api/entries should succeed: {raw.decode('utf-8', 'ignore')}")
+        data = json.loads(raw)
+        self.assertTrue(data.get("ok"))
+        self.assertEqual(data.get("kind"), "work")
+        self.assertTrue(data.get("id"))
+
+        # 3. Content validation cannot be bypassed: POST /api/works without notes -> 400
+        invalid_work = {
+            "title": "无创作说明作品",
+            "prompt": "提示词",
+            "notes": "",
+        }
+        status, _, raw = self.request(
+            "POST",
+            "/api/works",
+            body=invalid_work,
+            headers={"Api-Key": pub_tok},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(raw).get("code"), "notes_required")
+
+        # 4. Token without publish scope (library token) -> 403 on POST /api/works and POST /api/entries
+        status, _, raw = self.request(
+            "POST",
+            "/api/works",
+            body=work_body,
+            headers={"Api-Key": lib_tok},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(raw).get("code"), "token_scope_denied")
+
+        status, _, raw = self.request(
+            "POST",
+            "/api/entries",
+            body=entry_body,
+            headers={"Api-Key": lib_tok},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(raw).get("code"), "token_scope_denied")
+
+        # 5. Non-publish methods / admin routes are rejected with 403
+        status, _, raw = self.request(
+            "GET",
+            "/api/works",
+            headers={"Api-Key": pub_tok},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(raw).get("code"), "token_scope_denied")
+
+        status, _, raw = self.request(
+            "DELETE",
+            "/api/works/some-id",
+            headers={"Api-Key": pub_tok},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(raw).get("code"), "token_scope_denied")
+
+        # 6. Invalid token returns 401
+        status, _, raw = self.request(
+            "POST",
+            "/api/entries",
+            body=entry_body,
+            headers={"Api-Key": "hwt_nonexistent_token"},
+        )
+        self.assertEqual(status, 401)
