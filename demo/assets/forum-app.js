@@ -46,7 +46,7 @@
   function buildIntextCardHtml(card) {
     const isWork = card.kind === "work";
     const isLayout = card.kind === "layout";
-    const badgeLabel = isWork ? "🖼️ 附带实测作品" : isLayout ? "📐 附带图型" : "🎨 附带画风";
+    const badgeLabel = isWork ? "🖼️ 附带作品" : isLayout ? "📐 附带图型" : "🎨 附带画风";
     const badgeClass = isWork ? "badge-work" : isLayout ? "badge-layout" : "badge-style";
     return `
       <div class="hw-intext-card" contenteditable="false" draggable="true"
@@ -96,7 +96,7 @@
 
     if (sharedCard && !bodyHtml.includes("hw-intext-card")) {
       const cardBlock = buildIntextCardHtml(sharedCard);
-      const prefix = `<p>分享一件我很喜欢的高品质${sharedCard.kind === "work" ? "实测作品" : sharedCard.kind === "layout" ? "图型" : "画风"}：</p>`;
+      const prefix = `<p>分享一件我很喜欢的高品质${sharedCard.kind === "work" ? "作品" : sharedCard.kind === "layout" ? "图型" : "画风"}：</p>`;
       bodyHtml = prefix + cardBlock + (bodyHtml ? `<p>${esc(bodyHtml)}</p>` : `<p><br></p>`);
     }
 
@@ -536,7 +536,7 @@
   function buildSmartCardHtml(card) {
     const isWork = card.kind === "work";
     const isLayout = card.kind === "layout";
-    const badgeLabel = isWork ? "🖼️ 附带实测作品卡片" : isLayout ? "📐 附带图型卡片" : "🎨 附带画风卡片";
+    const badgeLabel = isWork ? "🖼️ 附带作品卡片" : isLayout ? "📐 附带图型卡片" : "🎨 附带画风卡片";
     const badgeClass = isWork ? "honor-pioneer" : "honor-gold";
     const detailUrl = isWork
       ? channelUrl("main", { view: "work", id: card.id })

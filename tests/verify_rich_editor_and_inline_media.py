@@ -89,7 +89,7 @@ def run_verification():
         print(">>> 7. Inserting a Work Card inline...")
         editor.click()
         page.keyboard.press("PageDown")
-        page.keyboard.type("最后附带本次创作的终稿实测作品卡片，欢迎大家复刻交流：")
+        page.keyboard.type("最后附带本次创作的终稿作品卡片，欢迎大家复刻交流：")
         page.keyboard.press("Enter")
 
         page.click("#tb-insert-work")

@@ -1210,7 +1210,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
         reward_kind = "publish_work"
         reward = int(econ.get("work_publish_credits", 5)) + (int(econ.get('pioneer_bonus_credits',10)) if pioneer else 0)
         event_key = f"pub_work_{target_id}"
-        reason = f"收录实测作品《{payload.get('title') or ''}》"
+        reason = f"收录晒作品《{payload.get('title') or ''}》"
         published = {"kind": "work", "workId": target_id}
         ref_type = "work"
         ref_id = target_id
@@ -1869,7 +1869,7 @@ def _reward_direct_work(
         owner_uid,
         reward,
         "publish_work",
-        f"发布实测作品《{title}》",
+        f"发布晒作品《{title}》",
         event_key=f"pub_work_{work_id}",
         ref_type="work",
         ref_id=work_id,

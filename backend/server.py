@@ -119,6 +119,8 @@ from .services import (
     forum_moderator_action,
     get_site_settings,
     get_public_generation_history,
+    get_user_public_generations,
+    get_user_public_generation_by_id,
     get_studio_workspace,
     get_user_studio_task,
     get_wallet_quota_state,
@@ -1424,7 +1426,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         work_rows = [w for w in work_rows if not _is_demo_seed_record(w["id"])]
     total_works = len(work_rows)
 
-    page_title = f"Handraw 手绘风社区 2.0 — 375+ 画风库 · 174+ 图型库 · {total_works} 件实测作品广场"
+    page_title = f"Handraw 手绘风社区 2.0 — 375+ 画风库 · 174+ 图型库 · {total_works} 件晒作品广场"
     meta_desc = (
         f"Handraw 手绘风视觉创作社区，开放浏览 375+ 手绘画风、174+ 结构化版式图型与 {total_works} 件真实生图作品及提示词配方，"
         "支持在线无限画布一键复刻同款。"
@@ -1447,8 +1449,8 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
             # anonymous visitors would read them without unlocking.
             filter_display_prompt(safe_p)[:80] if int(target_work["price"] or 0) <= 0 else ""
         )
-        page_title = f"{target_work['title']} (@{target_work['author_name']}) 作品详情与评论 — Handraw 实测作品广场"
-        meta_desc = f"由 @{target_work['author_name']} 分享的手绘实测作品《{target_work['title']}》" + (
+        page_title = f"{target_work['title']} (@{target_work['author_name']}) 作品详情与评论 — Handraw 晒作品广场"
+        meta_desc = f"由 @{target_work['author_name']} 分享的手绘晒作品《{target_work['title']}》" + (
             f"（配方：{recipe_tags}）" if recipe_tags else ""
         ) + f"：{snippet_src[:110]}"
         canonical_url = f"{base}/?view=work&id={urllib.parse.quote(target_work['id'])}"
@@ -1484,7 +1486,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
             page_title = "AI 视觉创作与实测分享 — 手绘风创作社区"
             meta_desc = "看看大家做出了什么，也把你的做法留下来。浏览画风、图型和公开作品，找到适合这次创作的方法。"
         elif view == "works":
-            page_title = f"实测作品广场（{total_works} 件手绘生图作品与提示词配方）— Handraw 手绘风社区"
+            page_title = f"晒作品广场（{total_works} 件手绘生图作品与提示词配方）— Handraw 手绘风社区"
             meta_desc = f"匿名免登录公开浏览 {total_works} 件社区创作者真实手绘生图作品、画风图型搭配方案与实测提示词，支持一键带入无限画布复刻。"
         elif view == "layouts":
             page_title = "174+ 结构化版式与信息图图型库 — Handraw 手绘风社区"
@@ -1557,15 +1559,15 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
 
     ssr_section = (
         '<div style="padding:36px 0 18px;text-align:center;color:var(--ink-muted);">'
-        "正在加载 Handraw 画风库、图型库与公开实测作品广场…</div>\n"
-        '<section class="hw-seo-ssr-directory" style="max-width:1100px;margin:0 auto;padding:12px 16px;" aria-label="公开实测作品索引">'
+        "正在加载 Handraw 画风库、图型库与公开晒作品广场…</div>\n"
+        '<section class="hw-seo-ssr-directory" style="max-width:1100px;margin:0 auto;padding:12px 16px;" aria-label="公开晒作品索引">'
         f"<h1>{html.escape(page_title)}</h1>"
         f"<p>{html.escape(meta_desc)}</p>"
         '<nav aria-label="站点公开频道">'
         '<a href="/?view=discover">发现作品与做法</a> · '
         '<a href="/?view=styles">手绘画风库</a> · '
         '<a href="/?view=layouts">结构化图型库</a> · '
-        '<a href="/?view=works">实测作品广场</a> · '
+        '<a href="/?view=works">晒作品广场</a> · '
         '<a href="/?view=rankings">创作者与作品荣誉榜</a>'
         "</nav>"
         f'<div class="hw-seo-works-list">{"".join(ssr_cards)}</div>'
@@ -2063,6 +2065,28 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             rows = get_public_generation_history(self.db, limit=lim)
             self._send_json({"ok": True, "history": rows})
             return
+
+        if req_path.startswith("/api/users/"):
+            parts = [p for p in req_path.split("/") if p]
+            if len(parts) >= 4 and parts[0] == "api" and parts[1] == "users" and parts[3] == "generations":
+                uname = unquote(parts[2]).strip()
+                user = self._current_user(required=False)
+                if len(parts) == 4:
+                    cur = q1("cursor") or ""
+                    lim = 24
+                    try:
+                        if q1("limit"):
+                            lim = int(q1("limit"))
+                    except (ValueError, TypeError):
+                        lim = 24
+                    data = get_user_public_generations(self.db, uname, cursor=cur, limit=lim, viewer=user)
+                    self._send_json(data)
+                    return
+                elif len(parts) == 5:
+                    gen_id = unquote(parts[4]).strip()
+                    data = get_user_public_generation_by_id(self.db, uname, gen_id, viewer=user)
+                    self._send_json(data)
+                    return
 
         if req_path.startswith("/api/studio/recipes"):
             from .recipe_routes import handle_recipe_get

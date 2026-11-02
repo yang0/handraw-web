@@ -3961,6 +3961,141 @@ def get_public_generation_history(
     return [serialize_public_generation_history(r, conn) for r in rows]
 
 
+def get_user_public_generations(
+    db: Database,
+    username: str,
+    *,
+    cursor: str = "",
+    limit: int = 24,
+    viewer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Retrieve public generation history for a creator with stable cursor pagination."""
+    conn = db.get_conn()
+    u_clean = str(username or "").strip()
+    u_row = conn.execute("SELECT id, username FROM users WHERE username = ?", (u_clean,)).fetchone()
+    if not u_row:
+        raise ServiceError("创作者不存在", status=404, code="user_not_found")
+    uid = int(u_row["id"])
+
+    safe_limit = max(1, min(60, int(limit)))
+
+    cursor_created_at = None
+    cursor_id = None
+    if cursor:
+        cur_str = str(cursor).strip()
+        try:
+            import base64
+            decoded = base64.urlsafe_b64decode(cur_str.encode("ascii")).decode("utf-8")
+            parts = decoded.split("|", 1)
+            if len(parts) == 2:
+                cursor_created_at, cursor_id = parts
+        except Exception:
+            parts = cur_str.split("|", 1)
+            if len(parts) == 2:
+                cursor_created_at, cursor_id = parts
+
+    params: list[Any] = [uid]
+    cursor_clause = ""
+    if cursor_created_at and cursor_id:
+        cursor_clause = " AND (created_at < ? OR (created_at = ? AND id < ?))"
+        params.extend([cursor_created_at, cursor_created_at, cursor_id])
+
+    params.append(safe_limit + 1)
+
+    sql = f"""
+        SELECT * FROM studio_generations
+        WHERE user_id = ?
+          AND status = 'success'
+          AND COALESCE(deleted_at, '') = ''
+          AND engine != 'demo'
+          AND visibility = 'public'
+          AND (items_json IS NOT NULL AND items_json != '' AND items_json != '[]')
+          {cursor_clause}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+    """
+    rows = conn.execute(sql, tuple(params)).fetchall()
+
+    has_more = len(rows) > safe_limit
+    result_rows = rows[:safe_limit]
+
+    items: list[dict[str, Any]] = []
+    for r in result_rows:
+        serialized = serialize_public_generation_history(r, conn)
+        if serialized.get("images"):
+            items.append(serialized)
+
+    next_cursor = None
+    if has_more and result_rows:
+        last = result_rows[-1]
+        import base64
+        next_cursor = base64.urlsafe_b64encode(f"{last['created_at']}|{last['id']}".encode("utf-8")).decode("ascii")
+
+    total_row = conn.execute(
+        """
+        SELECT COUNT(1) FROM studio_generations
+        WHERE user_id = ?
+          AND status = 'success'
+          AND COALESCE(deleted_at, '') = ''
+          AND engine != 'demo'
+          AND visibility = 'public'
+          AND (items_json IS NOT NULL AND items_json != '' AND items_json != '[]')
+        """,
+        (uid,),
+    ).fetchone()
+    total_count = int(total_row[0]) if total_row else len(items)
+
+    return {
+        "ok": True,
+        "generations": items,
+        "nextCursor": next_cursor,
+        "hasMore": bool(has_more),
+        "total": total_count,
+    }
+
+
+def get_user_public_generation_by_id(
+    db: Database,
+    username: str,
+    generation_id: str,
+    *,
+    viewer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Retrieve a single public generation item for a creator by id."""
+    conn = db.get_conn()
+    u_clean = str(username or "").strip()
+    u_row = conn.execute("SELECT id, username FROM users WHERE username = ?", (u_clean,)).fetchone()
+    if not u_row:
+        raise ServiceError("创作者不存在", status=404, code="user_not_found")
+    uid = int(u_row["id"])
+
+    gen_id = str(generation_id or "").strip()
+    row = conn.execute(
+        """
+        SELECT * FROM studio_generations
+        WHERE id = ?
+          AND user_id = ?
+          AND status = 'success'
+          AND COALESCE(deleted_at, '') = ''
+          AND engine != 'demo'
+          AND visibility = 'public'
+        """,
+        (gen_id, uid),
+    ).fetchone()
+
+    if not row:
+        raise ServiceError("生图记录不存在或不可见", status=404, code="not_found")
+
+    serialized = serialize_public_generation_history(row, conn)
+    if not serialized.get("images"):
+        raise ServiceError("生图记录不存在或无结果图片", status=404, code="not_found")
+
+    return {
+        "ok": True,
+        "generation": serialized,
+    }
+
+
 def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
     conn = db.get_conn()
     presets = [
@@ -4221,6 +4356,8 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
 
 
 def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    if "visibility" in entry:
+        raise ServiceError("当前暂不支持设置可见性", status=400, code="visibility_not_allowed")
     uid = int(user["id"])
     hid = str(entry.get("id") or f"hist_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}").strip()[:160]
     if not hid:
@@ -4592,6 +4729,8 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
     """
     if not user:
         raise ServiceError("调用云端真实大模型生图请先登录账号", status=401, code="login_required")
+    if "visibility" in body:
+        raise ServiceError("当前暂不支持设置可见性", status=400, code="visibility_not_allowed")
 
     uid = int(user["id"])
     uname = user["username"]
@@ -4925,8 +5064,8 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
                 prompt, visible_prompt, prompt_masked, system_append_json, markdown, items_json, engine, cost_type, credits_spent, task_id,
                 status, error_msg, request_id, reservation_date, created_at, fork_work_id,
-                prompt_ready, recipe_id, subject
-            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?)
+                prompt_ready, recipe_id, subject, visibility
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?, 'public')
             """,
             (
                 gen_id,

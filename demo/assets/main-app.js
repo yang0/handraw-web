@@ -35,7 +35,13 @@
     workInlineDrawer: "", // '' | 'share' | 'report'
     workFocusComment: false,
     profileUser: "",
-    profileTab: "works", // 'works' | 'assets' | 'topics' | 'collections' | 'account'
+    profileTab: "works", // 'works' | 'generations' | 'assets' | 'topics' | 'collections' | 'account'
+    profGenerations: null,
+    profGenUser: "",
+    profGenLoading: false,
+    profGenCursor: "",
+    profGenHasMore: false,
+    profGenTotal: null,
     authReason: "",
     authOnSuccess: null,
     authReturnSnapshot: null,
@@ -148,7 +154,7 @@
       App.view = "profile";
       UI.profileUser = (p.get("user") || "").trim();
       const reqTab = view === "account" ? "account" : p.get("ptab") || "works";
-      UI.profileTab = ["works", "assets", "topics", "collections", "account"].includes(reqTab) ? reqTab : "works";
+      UI.profileTab = ["works", "generations", "assets", "topics", "collections", "account"].includes(reqTab) ? reqTab : "works";
       return {};
     }
 
@@ -219,7 +225,7 @@
       document.title = `${prof ? `@${prof.authorName} 的个人主页` : "个人主页与账号中心"} — Handraw 手绘风社区`;
       return;
     }
-    document.title = titles[App.view] || "Handraw 手绘风社区 2.0 — 画风库 · 图型库 · 实测作品广场";
+    document.title = titles[App.view] || "Handraw 手绘风社区 2.0 — 画风库 · 图型库 · 晒作品广场";
   }
 
   function syncUrl(pushHistory = false) {
@@ -308,7 +314,7 @@
     if (["styles", "layouts", "works"].includes(App.view)) {
       UI.lastPrimaryView = App.view;
     }
-    const cleanTab = ["works", "assets", "topics", "collections", "account"].includes(ptab) ? ptab : "works";
+    const cleanTab = ["works", "generations", "assets", "topics", "collections", "account"].includes(ptab) ? ptab : "works";
     const isEntering = App.view !== "profile" || UI.profileUser !== targetUser || UI.profileTab !== cleanTab;
     App.view = "profile";
     UI.profileUser = targetUser;
@@ -638,7 +644,7 @@
           <div class="hw-controls-left">
             <input type="search" class="hw-input" id="catalog-search" style="width:248px;" value="${esc(UI.assetQuery)}" placeholder="过滤编号（如 ${isStyle ? "FA-001 / USR-S05 / FX-001" : "SC-021 / USR-L04 / LX-001"}）或作者…" />
             <select class="hw-select" id="catalog-sort">
-              <option value="recommended" ${UI.assetSort === "recommended" ? "selected" : ""}>🔥 热门（被实测作品采用最多）</option>
+              <option value="recommended" ${UI.assetSort === "recommended" ? "selected" : ""}>🔥 热门（被晒作品采用最多）</option>
               <option value="newest" ${UI.assetSort === "newest" ? "selected" : ""}>🌱 最新入库优先</option>
               <option value="exclusive" ${UI.assetSort === "exclusive" ? "selected" : ""}>🔒 官网在线独占置顶</option>
               <option value="code" ${UI.assetSort === "code" ? "selected" : ""}>🔢 按编号字母顺序</option>
@@ -1186,7 +1192,7 @@
                         <span class="hw-boost-pill">${esc(c.honor.boostText)}</span>
                       </div>
                       <div style="font-size:12px;color:var(--ink-muted);margin-top:2px;">
-                        ${esc(pMeta.shortPrefix)}画风 ${pStylesCnt} · 图型 ${pLayoutsCnt} · 实测作品 ${pWorksCnt}${
+                        ${esc(pMeta.shortPrefix)}画风 ${pStylesCnt} · 图型 ${pLayoutsCnt} · 晒作品 ${pWorksCnt}${
                           !isAllTime ? `（历史共 ${c.totalPublished} 项）` : ""
                         }
                       </div>
@@ -1304,7 +1310,7 @@
 
       tabBodyHtml = `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
-          <span style="font-size:12.8px;font-weight:750;color:var(--ink-body);">📊 按「${esc(pMeta.fullLabel)}」内的同款实测作品驱动数与新共创热度排定</span>
+          <span style="font-size:12.8px;font-weight:750;color:var(--ink-body);">📊 按「${esc(pMeta.fullLabel)}」内的同款晒作品驱动数与新共创热度排定</span>
           <span style="font-size:12.5px;color:var(--ink-muted);">${esc(pMeta.desc)}</span>
         </div>
         <div class="hw-rank-list-card">
@@ -1315,7 +1321,7 @@
               const prof = a.author ? statsMap.get(a.author) : null;
               const cheered = S.isCheered(a.id);
               const driveDesc = isAllTime
-                ? `累计驱动 <strong>${entry.totalWorkCnt}</strong> 件实测作品`
+                ? `累计驱动 <strong>${entry.totalWorkCnt}</strong> 件晒作品`
                 : `${esc(pMeta.shortPrefix)}驱动 <strong>${entry.periodWorkCnt}</strong> 件新作 · 历史累计 ${entry.totalWorkCnt} 件`;
               return `
                 <div class="hw-rank-table-row">
@@ -1485,6 +1491,77 @@
     location.replace(channelUrl("main", {view:"work",id:UI.activeWorkId,...(UI.workFocusComment ? {focus:"comment"} : {})}));
   }
 
+  async function loadUserGenerations(username, cursor = "", append = false) {
+    if (UI.profGenLoading) return;
+    UI.profGenLoading = true;
+    try {
+      const q = new URLSearchParams();
+      if (cursor) q.set("cursor", cursor);
+      q.set("limit", "24");
+      const res = await S.apiJson(`/api/users/${encodeURIComponent(username)}/generations?${q.toString()}`);
+      if (res && res.ok) {
+        const list = Array.isArray(res.generations) ? res.generations : [];
+        if (append && Array.isArray(UI.profGenerations)) {
+          UI.profGenerations = [...UI.profGenerations, ...list];
+        } else {
+          UI.profGenerations = list;
+        }
+        UI.profGenCursor = res.nextCursor || "";
+        UI.profGenHasMore = !!res.hasMore;
+        UI.profGenTotal = typeof res.total === "number" ? res.total : UI.profGenerations.length;
+      } else {
+        if (!append) UI.profGenerations = [];
+        UI.profGenHasMore = false;
+      }
+    } catch (err) {
+      console.warn("Failed to load user generations:", err);
+      if (!append) UI.profGenerations = [];
+      UI.profGenHasMore = false;
+    } finally {
+      UI.profGenLoading = false;
+      renderMain();
+    }
+  }
+
+  function openGenerationDetailModal(genItem) {
+    if (!genItem) return;
+    const images = Array.isArray(genItem.images) && genItem.images.length ? genItem.images : [];
+    const count = genItem.imageCount || images.length;
+    const title = genItem.topic || genItem.title || "生图历史记录详情";
+    const styles = Array.isArray(genItem.styles) ? genItem.styles : [];
+    const layouts = Array.isArray(genItem.layouts) ? genItem.layouts : [];
+    const modeLabel = genItem.mode === "free" ? "自由创作" : "预设配方";
+
+    S.openModal({
+      title: esc(title),
+      html: `
+        <div class="hw-gen-detail-modal" style="display:flex;flex-direction:column;gap:16px;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;max-height:58vh;overflow-y:auto;padding:4px;">
+            ${images.map((img) => `
+              <div style="border-radius:8px;overflow:hidden;background:var(--paper-soft);border:1px solid var(--line-soft);text-align:center;">
+                <img src="${esc(img)}" alt="${esc(title)}" style="max-width:100%;max-height:460px;object-fit:contain;display:block;margin:0 auto;" />
+              </div>
+            `).join("")}
+          </div>
+          <div style="background:var(--paper-soft);border:1px solid var(--line-soft);border-radius:8px;padding:12px 14px;font-size:12.8px;display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <span><strong>作者：</strong>@${esc(genItem.author)}</span>
+              <span><strong>生成时间：</strong>${esc(genItem.createdAt || genItem.created_at || "近期")}</span>
+            </div>
+            ${genItem.topic ? `<div><strong>主题：</strong>${esc(genItem.topic)}</div>` : ""}
+            <div style="display:flex;gap:16px;flex-wrap:wrap;">
+              ${genItem.ratio ? `<span><strong>画幅比例：</strong>${esc(genItem.ratio)}</span>` : ""}
+              <span><strong>创作模式：</strong>${esc(modeLabel)}</span>
+              <span><strong>成图数量：</strong>${count} 张</span>
+            </div>
+            ${styles.length ? `<div><strong>画风：</strong>${esc(styles.join("、"))}</div>` : ""}
+            ${layouts.length ? `<div><strong>图型：</strong>${esc(layouts.join("、"))}</div>` : ""}
+          </div>
+        </div>
+      `
+    });
+  }
+
   function renderCreatorProfilePage(root) {
     const fallbackUser = App.state.loggedIn && App.state.user ? App.state.user.username : "";
     const targetUser = (UI.profileUser || fallbackUser || "").trim();
@@ -1514,7 +1591,7 @@
     const bioText =
       (isMe && curUser.bio) ||
       prof.bio ||
-      `${prof.honor.desc} · 已在社区累计贡献 ${prof.works.length} 件实测作品与 ${prof.styles.length + prof.layouts.length} 项画风/图型资产。`;
+      `${prof.honor.desc} · 已在社区累计贡献 ${prof.works.length} 件晒作品与 ${prof.styles.length + prof.layouts.length} 项画风/图型资产。`;
 
     let tabBodyHtml = "";
     if (UI.profileTab === "works") {
@@ -1540,8 +1617,50 @@
             "standard"
           )
         : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">
-            暂未发布实测作品。${isMe ? `去 <a href="${esc(channelUrl("studio"))}" style="color:var(--vermilion);font-weight:800;">无限画布创作台 ↗</a> 生成并晒出第一幅作品吧！` : ""}
+            暂未发布晒作品。${isMe ? `去 <a href="${esc(channelUrl("studio"))}" style="color:var(--vermilion);font-weight:800;">无限画布创作台 ↗</a> 生成并晒出第一幅作品吧！` : ""}
           </div>`;
+    } else if (UI.profileTab === "generations") {
+      if (UI.profGenUser !== prof.username) {
+        UI.profGenerations = null;
+        UI.profGenUser = prof.username;
+        UI.profGenCursor = "";
+        UI.profGenHasMore = false;
+        UI.profGenTotal = null;
+      }
+      if (UI.profGenerations === null && !UI.profGenLoading) {
+        loadUserGenerations(prof.username);
+        tabBodyHtml = `<div style="text-align:center;padding:48px 20px;color:var(--ink-muted);">🕒 正在加载生图历史…</div>`;
+      } else if (UI.profGenLoading && UI.profGenerations === null) {
+        tabBodyHtml = `<div style="text-align:center;padding:48px 20px;color:var(--ink-muted);">🕒 正在加载生图历史…</div>`;
+      } else if (UI.profGenerations && UI.profGenerations.length === 0) {
+        tabBodyHtml = `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂无公开的生图历史。</div>`;
+      } else if (UI.profGenerations && UI.profGenerations.length > 0) {
+        const cards = UI.profGenerations.map((g) => {
+          const img0 = (g.images && g.images[0]) || "/images/poster-demo-autumn-equinox.webp";
+          const count = g.imageCount || (g.images ? g.images.length : 1);
+          const title = g.topic || g.title || "手绘风生成作品";
+          const subTags = [...(g.styles || []), ...(g.layouts || [])].slice(0, 2).join(" · ") || (g.mode === "free" ? "自由创作" : "配方");
+          return `
+            <article class="hw-card" data-prof-gen="${esc(g.id)}" style="cursor:pointer;">
+              <div class="hw-card-media">
+                <img data-hw-src="${esc(img0)}" alt="${esc(title)}" loading="lazy" />
+                ${count > 1 ? `<span class="hw-card-badge-tl" style="background:rgba(20,20,20,0.75);color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;">🖼️ ${count} 张</span>` : ""}
+              </div>
+              <div class="hw-card-body">
+                <h3 class="hw-card-title">${esc(title)}</h3>
+                <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;align-items:center;">
+                  <span>${esc(g.createdAt || g.created_at || "近期")}</span>
+                  <span>${esc(subTags)}</span>
+                </div>
+              </div>
+            </article>
+          `;
+        });
+        const moreBtn = UI.profGenHasMore
+          ? `<div style="text-align:center;padding:24px 0;"><button type="button" class="btn btn-primary" id="prof-gen-loadmore-btn" ${UI.profGenLoading ? "disabled" : ""}>${UI.profGenLoading ? "加载中…" : "加载更多历史记录"}</button></div>`
+          : "";
+        tabBodyHtml = S.renderMasonry(cards, "standard") + moreBtn;
+      }
     } else if (UI.profileTab === "assets") {
       const assets = [...prof.styles, ...prof.layouts];
       tabBodyHtml = assets.length
@@ -1789,7 +1908,8 @@
 
         <!-- Standalone Profile Section Tabs -->
         <div class="hw-pills-row">
-          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works">🖼️ 实测作品 (${prof.works.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works">🖼️ 晒作品 (${prof.works.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "generations" ? "is-active" : ""}" data-ptab="generations">🕒 生图历史${UI.profGenTotal != null && UI.profGenUser === prof.username ? ` (${UI.profGenTotal})` : ""}</button>
           <button type="button" class="hw-pill ${UI.profileTab === "assets" ? "is-active" : ""}" data-ptab="assets">🎨 共创画风与图型 (${prof.styles.length + prof.layouts.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics">💬 发布的论坛帖 (${prof.topics.length})</button>
           ${
@@ -1842,6 +1962,23 @@
     root.querySelectorAll("[data-prof-topic]").forEach((el) => {
       el.onclick = () => S.goToTopicPage(el.getAttribute("data-prof-topic"));
     });
+    root.querySelectorAll("[data-prof-gen]").forEach((el) => {
+      el.onclick = () => {
+        const gid = el.getAttribute("data-prof-gen");
+        const found = (UI.profGenerations || []).find((x) => x.id === gid);
+        if (found) {
+          openGenerationDetailModal(found);
+        }
+      };
+    });
+    const loadMoreGenBtn = root.querySelector("#prof-gen-loadmore-btn");
+    if (loadMoreGenBtn) {
+      loadMoreGenBtn.onclick = () => {
+        if (UI.profGenCursor && prof && prof.username) {
+          loadUserGenerations(prof.username, UI.profGenCursor, true);
+        }
+      };
+    }
     root.querySelectorAll("[data-prof-ftab]").forEach((btn) => {
       btn.onclick = () => {
         UI.favTab = btn.getAttribute("data-prof-ftab");
@@ -2092,7 +2229,7 @@
             ),
             "standard"
           )
-        : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏实测作品</div>`;
+        : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏晒作品</div>`;
     } else {
       const items = (cols.topics || []).map((id) => App.state.topics.find((t) => t.id === id)).filter(Boolean);
       bodyHtml = items.length
@@ -2203,7 +2340,7 @@
 
         <div class="studio-step-card" style="margin:0;">
           <div style="font-weight:800;margin-bottom:6px;">🌟 荒地开垦首晒奖 (+15 积分)</div>
-          <p style="font-size:12.8px;color:var(--ink-muted);margin:0 0 12px;">给实测作品少于 3 个的冷门宝藏画风/图型发实战帖，双倍加奖且入驻新发曝光席！</p>
+          <p style="font-size:12.8px;color:var(--ink-muted);margin:0 0 12px;">给晒作品少于 3 个的冷门宝藏画风/图型发实战帖，双倍加奖且入驻新发曝光席！</p>
           <button type="button" class="btn btn-sm btn-primary" id="wallet-btn-pioneer">去发实战帖拿 +15 积分</button>
         </div>
 

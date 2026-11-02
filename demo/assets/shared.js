@@ -337,7 +337,7 @@
     { key: "NEW_RELEASE", label: "🌱 新发扶持" },
     { key: "COMMUNITY", label: "✨ 社区共创" },
     { key: "EXCLUSIVE", label: "🔒 在线独占" },
-    { key: "HAS_WORKS", label: "🔥 有实测作品" },
+    { key: "HAS_WORKS", label: "🔥 有晒作品" },
     { key: "FA", label: "FA 社论幽默" },
     { key: "FB", label: "FB 绘本水彩" },
     { key: "FC", label: "FC 现代几何" },
@@ -354,7 +354,7 @@
     { key: "NEW_RELEASE", label: "🌱 新发扶持" },
     { key: "COMMUNITY", label: "✨ 社区共创" },
     { key: "EXCLUSIVE", label: "🔒 在线独占" },
-    { key: "HAS_WORKS", label: "🔥 有实测作品" },
+    { key: "HAS_WORKS", label: "🔥 有晒作品" },
     { key: "social-card", label: "SC 小红书社媒卡" },
     { key: "infographic", label: "IG 知识信息图" },
     { key: "comic-storyboard", label: "SB 漫画分镜" },
@@ -1363,7 +1363,7 @@
       fullLabel: "🗓️ 月榜 · 近30天",
       shortPrefix: "本月",
       days: 30,
-      desc: "统计近 30 天持续活跃创作者与高人气实测作品"
+      desc: "统计近 30 天持续活跃创作者与高人气晒作品"
     },
     {
       key: "all",
@@ -2532,7 +2532,7 @@
                 body: { identifier, password }
               });
               if (res.boot) applyBootState(res.boot);
-              toast(`✅ 欢迎回来 @${res.boot?.user?.name || identifier}！全部实测作品与提示词已解锁`);
+              toast(`✅ 欢迎回来 @${res.boot?.user?.name || identifier}！全部晒作品与提示词已解锁`);
               if (onSuccess) onSuccess();
             } catch (err) {
               toast(`登录失败：${err.message}`);
@@ -2626,7 +2626,7 @@
 
   /* ======================== 2. INLINE NON-MODAL SHARE & REPORT DRAWERS ======================== */
   function renderInlineSharePanelHtml(itemType, item) {
-    const typeNames = { style: "画风", layout: "图型", work: "实测作品", topic: "实战帖" };
+    const typeNames = { style: "画风", layout: "图型", work: "晒作品", topic: "实战帖" };
     const tName = typeNames[itemType] || "内容";
     const code = (item && item.id) || "";
     const title = (item && (item.title || `${item.id} ${item.name || ""}`)) || "Handraw 精选";
@@ -2636,7 +2636,7 @@
     const shareUrl = `https://handraw-style.com/?target=${encodeURIComponent(code)}&ref=${encodeURIComponent(invCode)}`;
     const shareCopy =
       workCount !== null
-        ? `推荐一个超稳的手绘画风/图型【${title}】！社区里已经有 ${workCount} 个实测作品和现成提示词配方，点链接登录就能直接抄作业 👉 ${shareUrl}`
+        ? `推荐一个超稳的手绘画风/图型【${title}】！社区里已经有 ${workCount} 个晒作品和现成提示词配方，点链接登录就能直接抄作业 👉 ${shareUrl}`
         : `在 Handraw 手绘风社区挖到宝了：《${title}》，附完整画风+图型配方，一键就能在创作台复刻同款 👉 ${shareUrl}`;
 
     return `
@@ -2947,7 +2947,7 @@
             <div class="hw-segmented" id="card-picker-tabs">
               <button type="button" class="hw-seg-btn ${currentKind === "style" ? "is-active" : ""}" data-card-kind="style">🎨 画风卡片 (${(App.styles || []).length})</button>
               <button type="button" class="hw-seg-btn ${currentKind === "layout" ? "is-active" : ""}" data-card-kind="layout">📐 图型卡片 (${(App.layouts || []).length})</button>
-              <button type="button" class="hw-seg-btn ${currentKind === "work" ? "is-active" : ""}" data-card-kind="work">🖼️ 实测作品卡片 (${(App.state.works || []).length})</button>
+              <button type="button" class="hw-seg-btn ${currentKind === "work" ? "is-active" : ""}" data-card-kind="work">🖼️ 作品卡片 (${(App.state.works || []).length})</button>
             </div>
             <input class="hw-input" id="card-picker-search" style="min-width:220px;font-size:12.5px;" placeholder="按名称 / 关键词搜索…" />
           </div>

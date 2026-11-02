@@ -624,6 +624,10 @@
   }
 
   function targetUrl(n) {
+    if (n.target_type === "generation") {
+      const u = (App.state && App.state.user && App.state.user.username) || "";
+      return channelUrl("main", u ? { view: "profile", user: u, ptab: "generations" } : { view: "auth" });
+    }
     if (n.target_type === "work") return channelUrl("main", { view: "work", id: n.target_id });
     if (n.target_type === "topic") return channelUrl("forum", { view: "topic", id: n.target_id });
     if (n.target_type === "asset") return channelUrl("main", { view: "asset", id: n.target_id });
