@@ -2633,9 +2633,14 @@
     const img = (item && ((item.images && item.images[0]) || item.image)) || "/images/poster-demo-autumn-equinox.webp";
     const workCount = item && (itemType === "style" || itemType === "layout") ? getAssetWorkCount(item.id) : null;
     const invCode = (App.state && App.state.user && App.state.user.inviteCode) || "handraw";
-    const shareUrl = `https://handraw-style.com/?target=${encodeURIComponent(code)}&ref=${encodeURIComponent(invCode)}`;
+    const shareUrl =
+      itemType === "topic"
+        ? `https://handraw-style.com/t/${encodeURIComponent(code)}?ref=${encodeURIComponent(invCode)}`
+        : `https://handraw-style.com/?target=${encodeURIComponent(code)}&ref=${encodeURIComponent(invCode)}`;
     const shareCopy =
-      workCount !== null
+      itemType === "topic"
+        ? `在 Handraw 论坛看到一篇精彩实战帖《${title}》，来聊聊你的创作心得 👉 ${shareUrl}`
+        : workCount !== null
         ? `推荐一个超稳的手绘画风/图型【${title}】！社区里已经有 ${workCount} 个晒作品和现成提示词配方，点链接登录就能直接抄作业 👉 ${shareUrl}`
         : `在 Handraw 手绘风社区挖到宝了：《${title}》，附完整画风+图型配方，一键就能在创作台复刻同款 👉 ${shareUrl}`;
 
@@ -2647,14 +2652,15 @@
         </div>
         <div style="display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:start;">
           <div style="background:#fff;border:1px solid var(--line-soft);border-radius:8px;padding:6px;text-align:center;">
-            <img src="${esc(img)}" alt="" style="width:100%;height:96px;object-fit:cover;border-radius:6px;display:block;margin-bottom:4px;" />
+            <div class="hw-share-thumb-wrap">
+              <img src="${esc(img)}" alt="" />
+            </div>
             <div style="font-size:11px;color:var(--ink-muted);">邀请码：<strong>${esc(invCode)}</strong></div>
           </div>
           <div style="display:flex;flex-direction:column;gap:8px;">
             <textarea class="hw-textarea" rows="3" data-share-copy-textarea="1" readonly style="font-size:12.5px;">${esc(shareCopy)}</textarea>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm btn-primary" data-btn-share-card-forum="1">📑 作为卡片分享到论坛 ↗</button>
-              <button type="button" class="btn btn-sm" data-btn-copy-share="1">📋 复制分享口令</button>
+            <div class="hw-inline-share-actions">
+              <button type="button" class="btn btn-sm btn-primary hw-btn-copy-share" data-btn-copy-share="1">📋 复制分享口令</button>
             </div>
           </div>
         </div>
@@ -2665,57 +2671,9 @@
   function bindInlineSharePanel(root, itemType, item, onClose) {
     const panel = root.querySelector("[data-inline-share-panel]");
     if (!panel) return;
-    const invCode = (App.state && App.state.user && App.state.user.inviteCode) || "handraw";
-    const title = (item && (item.title || `${item.id} ${item.name || ""}`)) || "Handraw 精选";
 
     const closeBtn = panel.querySelector("[data-close-inline-share]");
     if (closeBtn && onClose) closeBtn.onclick = onClose;
-
-    const shareCardForumBtn = panel.querySelector("[data-btn-share-card-forum]");
-    if (shareCardForumBtn) {
-      shareCardForumBtn.onclick = () => {
-        if (onClose) onClose();
-        let card = null;
-        let cat = "assets";
-        if (itemType === "work" || (item && item.images && !item.kind)) {
-          cat = "tuning";
-          card = {
-            kind: "work",
-            id: item.id,
-            title: item.title,
-            image: (item.images && item.images[0]) || "",
-            authorName: item.authorName || item.author || "",
-            desc: item.notes || item.prompt || ""
-          };
-        } else if (itemType === "layout" || item.kind === "layout") {
-          cat = "assets";
-          card = {
-            kind: "layout",
-            id: item.id,
-            title: item.name,
-            image: item.image,
-            authorName: item.authorName || "Handraw 官方",
-            desc: item.description || ""
-          };
-        } else {
-          cat = "assets";
-          card = {
-            kind: "style",
-            id: item.id,
-            title: item.name,
-            image: item.image,
-            authorName: item.authorName || "Handraw 官方",
-            desc: item.description || ""
-          };
-        }
-        goToForumCompose({
-          category: cat,
-          topicTitle: `围绕${card.kind === "work" ? "作品" : card.kind === "layout" ? "图型" : "画风"}《${card.title}》的创作实测分享`,
-          sharedCard: card,
-          images: itemType === "work" ? item.images || [] : []
-        });
-      };
-    }
 
     const copyBtn = panel.querySelector("[data-btn-copy-share]");
     if (copyBtn) {
@@ -2894,9 +2852,9 @@
                   : "";
               return `
                 <div class="hw-card" data-pick-id="${esc(item.id)}" style="margin:0;cursor:pointer;${selected ? "border:2px solid var(--vermilion);" : ""}">
-                  <div class="hw-card-media">
+                  <div class="hw-picker-card-media">
                     ${badge}
-                    <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" loading="lazy" style="height:125px;object-fit:cover;" />
+                    <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" loading="lazy" />
                     ${wCount > 0 ? `<span class="hw-card-workcount">${wCount} 作品</span>` : ""}
                   </div>
                   <div style="padding:8px 10px;">
@@ -2984,9 +2942,9 @@
               const badge = isWork ? "🖼️ 作品" : currentKind === "layout" ? "📐 图型" : "🎨 画风";
               return `
                 <div class="hw-card" data-pick-card-id="${esc(it.id)}" style="cursor:pointer;padding:8px;border:1px solid var(--line-soft);transition:transform 0.15s,box-shadow 0.15s;">
-                  <div style="position:relative;border-radius:6px;overflow:hidden;height:120px;background:var(--paper-inset);margin-bottom:6px;">
-                    <img data-hw-src="${esc(img)}" alt="${esc(title)}" style="width:100%;height:100%;object-fit:cover;" loading="lazy" />
-                    <span style="position:absolute;top:5px;left:5px;font-size:10px;font-weight:800;background:rgba(20,17,15,0.7);color:#fff;padding:1px 6px;border-radius:4px;">${badge}</span>
+                  <div class="hw-picker-card-media" style="margin-bottom:6px;">
+                    <img data-hw-src="${esc(img)}" alt="${esc(title)}" loading="lazy" />
+                    <span style="position:absolute;top:5px;left:5px;font-size:10px;font-weight:800;background:rgba(20,17,15,0.7);color:#fff;padding:1px 6px;border-radius:4px;z-index:2;">${badge}</span>
                   </div>
                   <div style="font-weight:800;font-size:13px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px;">
                     ${esc(title)}
