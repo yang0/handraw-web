@@ -296,6 +296,9 @@
       if (!this.hostElement) return;
 
       const p = this.getParts();
+      if (p?.ctrl?.data?.activeBatchId) {
+        this.activeBatchId = p.ctrl.data.activeBatchId;
+      }
       if (!p) {
         this.hostElement.innerHTML = `
           <div class="make-image-container">
@@ -849,17 +852,22 @@
       if (!displays || !displays.length) return null;
       if (isBatchGallery) {
         const gal = displays.find((d) => d.data?.kind === "batch_gallery") || displays[0];
-        return gal?.data?.items?.[rowIndex] || null;
+        const it = gal?.data?.items?.[rowIndex] || null;
+        if (this.activeBatchId && it?.batchId && it.batchId !== this.activeBatchId) return null;
+        return it;
       }
       const dn = displays[rowIndex];
-      return dn?.data?.items?.[0] || null;
+      const it = dn?.data?.items?.[0] || null;
+      if (this.activeBatchId && it?.batchId && it.batchId !== this.activeBatchId) return null;
+      return it;
     }
 
     getRowStatus(rowIndex, busy, currentStep, itemResult, activeIndex = null) {
-      if (itemResult?.imageUrl) {
+      const isStale = Boolean(this.activeBatchId && itemResult?.batchId && itemResult.batchId !== this.activeBatchId);
+      if (!isStale && itemResult?.imageUrl) {
         return { key: "done", label: "完成", className: "is-done" };
       }
-      if (itemResult?.failed || (itemResult && !itemResult.imageUrl && itemResult.error)) {
+      if (!isStale && (itemResult?.failed || (itemResult && !itemResult.imageUrl && itemResult.error))) {
         return { key: "failed", label: "失败", className: "is-failed" };
       }
       if (busy) {
@@ -926,6 +934,117 @@
       }
     }
 
+    resetBatchProgress({ totalCount = 0, batchId = null, singleSlotIndex = null } = {}) {
+      if (batchId) this.activeBatchId = batchId;
+      const host = this.hostElement;
+      if (singleSlotIndex !== null) {
+        if (this.context && Array.isArray(this.context.results)) {
+          this.context.results = this.context.results.filter((r) => r.index !== singleSlotIndex);
+        }
+        if (host) {
+          const row = host.querySelector(`tr[data-batch-row="${singleSlotIndex}"]`);
+          if (row) {
+            row.className = "batch-table-row is-generating";
+            const badge = row.querySelector(".batch-status-badge");
+            if (badge) {
+              badge.className = "batch-status-badge is-generating";
+              badge.textContent = "生成中";
+            }
+            const action = row.querySelector(".batch-col-action");
+            if (action) {
+              action.innerHTML = '<span class="batch-action-idle">-</span>';
+            }
+            const cell = row.querySelector(".batch-iter-cell");
+            if (cell) {
+              const thumb = cell.querySelector(".batch-iter-thumb-btn");
+              if (thumb) {
+                const ph = document.createElement("div");
+                ph.className = "batch-iter-placeholder";
+                ph.title = "待生成";
+                ph.setAttribute("aria-label", "待生成");
+                ph.setAttribute("role", "img");
+                ph.innerHTML = '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="16" height="16" rx="3" /><circle cx="7" cy="7" r="1.5" /><path d="M18 13l-4-4-7 7" /></svg>';
+                if (typeof thumb.replaceWith === "function") thumb.replaceWith(ph);
+                else if (thumb.parentNode) thumb.parentNode.replaceChild(ph, thumb);
+              }
+            }
+          }
+          const card = host.querySelector(`[data-result-idx="${singleSlotIndex}"]`);
+          if (card && typeof card.remove === "function") card.remove();
+          const headTitle = host.querySelector(".batch-results-section .make-image-results-head h2");
+          if (headTitle && this.context?.results) {
+            headTitle.textContent = `批量生成结果 (${this.context.results.length})`;
+          }
+        }
+        return;
+      }
+
+      if (!this.context) this.context = {};
+      this.context.results = [];
+      this.progressState = { completedCount: 0, failedCount: 0, totalCount, activeIndex: 0, busy: true, isStopping: false };
+
+      if (!host) return;
+
+      const resultsSec = host.querySelector(".batch-results-section");
+      if (resultsSec && typeof resultsSec.remove === "function") {
+        resultsSec.remove();
+      }
+
+      const count = Number(totalCount) || 0;
+      for (let rIdx = 0; rIdx < count; rIdx++) {
+        const row = host.querySelector(`tr[data-batch-row="${rIdx}"]`);
+        if (!row) continue;
+        const isFirst = rIdx === 0;
+        row.className = `batch-table-row ${isFirst ? "is-generating" : "is-waiting"}`;
+        const badge = row.querySelector(".batch-status-badge");
+        if (badge) {
+          badge.className = `batch-status-badge ${isFirst ? "is-generating" : "is-waiting"}`;
+          badge.textContent = isFirst ? "生成中" : "等待";
+        }
+        const action = row.querySelector(".batch-col-action");
+        if (action) {
+          action.innerHTML = '<span class="batch-action-idle">-</span>';
+        }
+        const cell = row.querySelector(".batch-iter-cell");
+        if (cell) {
+          const thumb = cell.querySelector(".batch-iter-thumb-btn");
+          if (thumb) {
+            const ph = document.createElement("div");
+            ph.className = "batch-iter-placeholder";
+            ph.title = "待生成";
+            ph.setAttribute("aria-label", "待生成");
+            ph.setAttribute("role", "img");
+            ph.innerHTML = '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="16" height="16" rx="3" /><circle cx="7" cy="7" r="1.5" /><path d="M18 13l-4-4-7 7" /></svg>';
+            if (typeof thumb.replaceWith === "function") thumb.replaceWith(ph);
+            else if (thumb.parentNode) thumb.parentNode.replaceChild(ph, thumb);
+          }
+        }
+      }
+
+      const costWrap = host.querySelector(".batch-cost-wrap");
+      if (costWrap) {
+        const sumEl = costWrap.querySelector(".batch-summary-status");
+        if (sumEl && typeof sumEl.remove === "function") sumEl.remove();
+        let busyEl = costWrap.querySelector(".batch-busy-status");
+        if (!busyEl) {
+          busyEl = document.createElement("span");
+          busyEl.className = "batch-busy-status";
+          costWrap.appendChild(busyEl);
+        }
+        busyEl.textContent = this.formatProgressStatus({ completedCount: 0, totalCount, activeIndex: 0, failedCount: 0, isStopping: false });
+      }
+
+      const btnReset = host.querySelector("#batch-btn-reset");
+      if (btnReset) btnReset.disabled = true;
+      const btnStop = host.querySelector("#batch-btn-stop");
+      if (btnStop) {
+        btnStop.disabled = false;
+        btnStop.textContent = "停止";
+      }
+      const btnStart = host.querySelector("#batch-btn-start");
+      if (btnStart) btnStart.disabled = true;
+    }
+
     updateProgress({
       updatedIndex = null,
       itemResult = null,
@@ -935,8 +1054,16 @@
       activeIndex = null,
       busy = false,
       isStopping = false,
-      summaryText = null
+      summaryText = null,
+      batchId = null
     } = {}) {
+      const incomingBatchId = batchId || itemResult?.batchId;
+      if (incomingBatchId) {
+        if (this.activeBatchId && incomingBatchId !== this.activeBatchId) {
+          return;
+        }
+        this.activeBatchId = incomingBatchId;
+      }
       this.progressState = { completedCount, failedCount, totalCount, activeIndex, busy, isStopping };
       const host = this.hostElement;
       if (!host) return;
@@ -971,6 +1098,8 @@
 
       // 2. Buttons handling
       if (busy) {
+        const btnStart = host.querySelector("#batch-btn-start");
+        if (btnStart) btnStart.disabled = true;
         const btnReset = host.querySelector("#batch-btn-reset");
         if (btnReset) btnReset.disabled = true;
         if (isStopping) {
@@ -981,6 +1110,8 @@
           }
         }
       } else {
+        const btnStart = host.querySelector("#batch-btn-start");
+        if (btnStart) btnStart.disabled = totalCount === 0;
         const btnReset = host.querySelector("#batch-btn-reset");
         if (btnReset) btnReset.disabled = false;
         const btnStop = host.querySelector("#batch-btn-stop");
@@ -1103,6 +1234,7 @@
     appendResultCard(res, index) {
       const host = this.hostElement;
       if (!host || !res || !res.imageUrl) return;
+      if (this.activeBatchId && res.batchId && res.batchId !== this.activeBatchId) return;
 
       if (!this.context) this.context = {};
       if (!Array.isArray(this.context.results)) {
@@ -1117,7 +1249,8 @@
         title: res.title || `批量图片 #${index + 1}`,
         node: res.node,
         item: res,
-        index
+        index,
+        batchId: res.batchId || this.activeBatchId
       };
       if (existingContextIdx >= 0) {
         this.context.results[existingContextIdx] = resultObj;
@@ -1884,6 +2017,11 @@
       const btnStart = root.querySelector("#batch-btn-start");
       if (btnStart) {
         btnStart.onclick = async () => {
+          if (self.context?.busy || self.progressState?.busy) {
+            const S = global.HANDRAW_SHARED;
+            if (S?.toast) S.toast("已有任务正在生成中，请等待完成或停止后再开始新批次");
+            return;
+          }
           const currentIters = self.resolveIterations();
           const totalCount = currentIters.length;
 
