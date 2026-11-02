@@ -3668,7 +3668,7 @@
 
   const BATCH_GALLERY_THRESHOLD = 6;
 
-  function syncControlDisplayNodes(ctrlNode, count, { markGenerating = false, onlyDispNodeId = null } = {}) {
+  function syncControlDisplayNodes(ctrlNode, count, { markGenerating = false, onlyDispNodeId = null, onlyItemIdx = null, batchId = null } = {}) {
     if (!ctrlNode || ctrlNode.type !== "output_control") return { nodes: [], createdCount: 0, isBatchGallery: false };
     const safeCount = Math.max(1, Math.min(200, Math.round(Number(count) || 1)));
     const existing = getDownstreamDisplayNodes(ctrlNode.id);
@@ -3676,7 +3676,7 @@
 
     // Smart Single-Node Batch Gallery: when generating > 6 images (e.g. 12, 50, 100+),
     // converge into 1 paginated "🗂️ 批量图集" node instead of exploding the canvas into 100 nodes!
-    if (safeCount > BATCH_GALLERY_THRESHOLD && !onlyDispNodeId) {
+    if (safeCount > BATCH_GALLERY_THRESHOLD || (existing[0] && existing[0].data?.kind === "batch_gallery" && !onlyDispNodeId && onlyItemIdx === null)) {
       let galNode = existing[0] || null;
       let createdCount = 0;
       const spawnY = snapVal(Math.max(48, ctrlNode.y - 24));
@@ -3711,7 +3711,19 @@
       if (markGenerating) {
         galNode.data.status = "generating";
         galNode.data.elapsedSec = 0;
-        galNode.data.items = [];
+        if (batchId) galNode.data.activeBatchId = batchId;
+        if (onlyDispNodeId || onlyItemIdx !== null) {
+          if (Array.isArray(galNode.data.items) && onlyItemIdx !== null && onlyItemIdx < galNode.data.items.length) {
+            galNode.data.items[onlyItemIdx] = null;
+          }
+        } else {
+          galNode.data.items = [];
+          delete galNode.data.error;
+          delete galNode.data.pendingTaskId;
+          delete galNode.data.pendingRequestId;
+          galNode.data.pendingRequestIds = {};
+          galNode.data.pendingSpec = {};
+        }
       }
 
       if (existing.length > 1) {
@@ -3761,9 +3773,20 @@
         ensureEdge(ctrlNode.id, disp.id);
       }
 
-      if (markGenerating && (!onlyDispNodeId || disp.id === onlyDispNodeId)) {
+      const shouldMarkThis = markGenerating && (
+        (!onlyDispNodeId && onlyItemIdx === null) ||
+        (onlyDispNodeId && disp.id === onlyDispNodeId) ||
+        (onlyItemIdx !== null && onlyItemIdx === i)
+      );
+
+      if (shouldMarkThis) {
         disp.data.status = "generating";
         disp.data.elapsedSec = 0;
+        disp.data.items = [];
+        delete disp.data.error;
+        delete disp.data.pendingTaskId;
+        delete disp.data.pendingRequestId;
+        if (batchId) disp.data.activeBatchId = batchId;
       }
       activeNodes.push(disp);
     }
@@ -4909,8 +4932,23 @@
           const currentGraph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
           const targetNode = currentGraph?.nodes?.find((n) => n.id === nodeId) || initialNode;
           const spec = targetNode.data?.pendingSpec?.[requestId] || (taskId ? targetNode.data?.pendingSpec?.[taskId] : null) || initialNode.data?.pendingSpec?.[requestId] || {};
+
+          // Verify batch identity: stale batch responses must not overwrite a newer batch
+          if (targetNode.data?.activeBatchId && spec.batchId && targetNode.data.activeBatchId !== spec.batchId) {
+            delete targetNode.data.pendingTaskId;
+            delete targetNode.data.pendingRequestId;
+            if (targetNode.data.pendingRequestIds) delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
+            if (targetNode.data.pendingSpec) {
+              delete targetNode.data.pendingSpec[requestId];
+              if (taskId) delete targetNode.data.pendingSpec[taskId];
+            }
+            persistOpenTabs();
+            return;
+          }
+
           const item = {
             id: E.uid("outit"),
+            batchId: spec.batchId || targetNode.data?.activeBatchId || "",
             requestId,
             taskId: "",
             generationMode: "live",
@@ -4926,8 +4964,21 @@
             imageUrl: (images && images[0]) || "",
             recipeSnapshot: spec.recipeSnapshot || null
           };
-          targetNode.data.items = item.imageUrl ? [item] : [];
-          targetNode.data.status = item.imageUrl ? "done" : "error";
+          if (targetNode.data.kind === "batch_gallery") {
+            if (!Array.isArray(targetNode.data.items)) targetNode.data.items = [];
+            const existIdx = targetNode.data.items.findIndex(
+              (it) => it && ((it.slotKey && it.slotKey === (spec.slotKey || requestId)) || (it.requestId && it.requestId === requestId))
+            );
+            if (existIdx >= 0) {
+              targetNode.data.items[existIdx] = item;
+            } else {
+              targetNode.data.items.push(item);
+            }
+            targetNode.data.status = item.imageUrl ? "done" : "error";
+          } else {
+            targetNode.data.items = item.imageUrl ? [item] : [];
+            targetNode.data.status = item.imageUrl ? "done" : "error";
+          }
           delete targetNode.data.pendingTaskId;
           delete targetNode.data.pendingRequestId;
           if (targetNode.data.pendingRequestIds) delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
@@ -4948,11 +4999,23 @@
           if (resumeEpoch !== cacheScopeEpoch || resumeScope !== activeCacheScope) return;
           const currentGraph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
           const targetNode = currentGraph?.nodes?.find((n) => n.id === nodeId) || initialNode;
+          const spec = targetNode.data?.pendingSpec?.[requestId] || (taskId ? targetNode.data?.pendingSpec?.[taskId] : null) || initialNode.data?.pendingSpec?.[requestId] || {};
+
+          if (targetNode.data?.activeBatchId && spec.batchId && targetNode.data.activeBatchId !== spec.batchId) {
+            delete targetNode.data.pendingTaskId;
+            delete targetNode.data.pendingRequestId;
+            if (targetNode.data.pendingRequestIds) delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
+            if (targetNode.data.pendingSpec) {
+              delete targetNode.data.pendingSpec[requestId];
+              if (taskId) delete targetNode.data.pendingSpec[taskId];
+            }
+            persistOpenTabs();
+            return;
+          }
           targetNode.data.status = "error";
           targetNode.data.error = err.message || String(err);
           delete targetNode.data.pendingTaskId;
           delete targetNode.data.pendingRequestId;
-          const spec = targetNode.data?.pendingSpec?.[requestId] || (taskId ? targetNode.data?.pendingSpec?.[taskId] : null) || initialNode.data?.pendingSpec?.[requestId] || {};
           if (err.terminal) {
             if (targetNode.data.pendingRequestIds) {
               delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
@@ -5432,7 +5495,12 @@
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const ctrl = getNodeById(ctrlId);
-    if (!ctrl || ctrl.type !== "output_control" || ctrl.data.status === "generating") return false;
+    if (!ctrl || ctrl.type !== "output_control" || ctrl.data.status === "generating") {
+      if (ctrl && ctrl.data.status === "generating" && !silent) {
+        toast("已有任务正在生成中，请等待完成或停止后再开始新批次");
+      }
+      return false;
+    }
 
     if (!checkExclusiveGateForControl(ctrl)) return false;
 
@@ -5490,6 +5558,11 @@
     }
 
     const activeLoopNode = plan.kind === "loop" ? getNodeById(plan.loopNodeId) : null;
+    if (activeLoopNode && activeLoopNode.data.status === "running") {
+      if (!silent) toast("已有批量任务正在运行中，请等待完成或停止后再开始新批次");
+      return false;
+    }
+
     const existingBefore = getDownstreamDisplayNodes(ctrl.id);
     let resolvedOnlyIdx = onlyItemIdx;
     let resolvedOnlyDispId = onlyDispNodeId;
@@ -5503,17 +5576,47 @@
 
     if (!confirmPotentialGenerationCost(resolvedOnlyIdx === null ? plan.specs.length : 1)) return false;
 
+    const batchId = (resolvedOnlyIdx !== null && ctrl.data.activeBatchId) ? ctrl.data.activeBatchId : makeStableRequestId("batch");
+    ctrl.data.activeBatchId = batchId;
+
     const { nodes: dispNodes, createdCount, isBatchGallery } = syncControlDisplayNodes(ctrl, plan.specs.length, {
       markGenerating: true,
-      onlyDispNodeId: resolvedOnlyDispId
+      onlyDispNodeId: resolvedOnlyDispId,
+      onlyItemIdx: resolvedOnlyIdx,
+      batchId
     });
 
     ctrl.data.status = "generating";
     ctrl.data.elapsedSec = 0;
+    ctrl.data.runCount = (ctrl.data.runCount || 0) + 1;
+    const currentRunCount = ctrl.data.runCount;
+    for (const dn of dispNodes) {
+      if (resolvedOnlyIdx === null || dn.id === resolvedOnlyDispId) {
+        dn.data.activeBatchId = batchId;
+      }
+    }
     if (activeLoopNode && resolvedOnlyIdx === null) {
       activeLoopNode.data.status = "running";
-      activeLoopNode.data.currentStep = 1;
+      activeLoopNode.data.currentStep = 0;
       activeLoopNode.data.totalSteps = plan.specs.length;
+    }
+
+    if (window.HandrawBatchCreate && plan.specs.length > 0) {
+      if (typeof window.HandrawBatchCreate.resetBatchProgress === "function") {
+        window.HandrawBatchCreate.resetBatchProgress({
+          totalCount: plan.specs.length,
+          batchId,
+          singleSlotIndex: resolvedOnlyIdx
+        });
+      }
+      window.HandrawBatchCreate.updateProgress({
+        completedCount: 0,
+        failedCount: 0,
+        totalCount: plan.specs.length,
+        activeIndex: resolvedOnlyIdx !== null ? resolvedOnlyIdx : 0,
+        busy: true,
+        batchId
+      });
     }
 
     fullRenderCanvas();
@@ -5574,6 +5677,8 @@
 
       const nowStr = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       const allItems = [];
+      const completedSlots = new Set();
+      const failedSlots = new Set();
       let completedCount = 0;
       let failedCount = 0;
 
@@ -5582,16 +5687,6 @@
         activeLoopNode.data.totalSteps = plan.specs.length;
         activeLoopNode.data.completedCount = 0;
         activeLoopNode.data.failedCount = 0;
-      }
-
-      if (window.HandrawBatchCreate && plan.specs.length > 0 && resolvedOnlyIdx === null) {
-        window.HandrawBatchCreate.updateProgress({
-          completedCount: 0,
-          failedCount: 0,
-          totalCount: plan.specs.length,
-          activeIndex: 0,
-          busy: true
-        });
       }
 
       for (let i = 0; i < plan.specs.length; i++) {
@@ -5603,7 +5698,10 @@
 
         if (resolvedOnlyIdx !== null && i !== resolvedOnlyIdx && prevItem) {
           allItems.push(prevItem);
-          if (prevItem.imageUrl) completedCount++;
+          if (prevItem.imageUrl) {
+            completedSlots.add(sp.slotKey || String(i));
+            completedCount = completedSlots.size;
+          }
           continue;
         }
 
@@ -5627,11 +5725,11 @@
             failedCount,
             totalCount: plan.specs.length,
             activeIndex: i,
-            busy: true
+            busy: true,
+            batchId
           });
         }
 
-        const nextRunCount = (dn?.data?.runCount || 0) + 1;
         const skillPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "skill", sp);
         let imgUrl = "";
         let activeReqId = "";
@@ -5640,17 +5738,24 @@
         let itemIsTerminal = false;
         let isGlobalError = false;
 
-        const requestId =
-          (dn && dn.data && dn.data.pendingRequestIds && dn.data.pendingRequestIds[sp.slotKey || String(i)]) ||
-          ensureStableRequestId("", `output_${sp.slotKey || i}`);
-        currentSlotKey = sp.slotKey || String(i);
+        const slotKey = sp.slotKey || String(i);
+        currentSlotKey = slotKey;
+        let requestId = dn && dn.data && dn.data.pendingRequestIds && dn.data.pendingRequestIds[slotKey];
+        if (!requestId) {
+          requestId = makeStableRequestId(`out_${batchId}_${slotKey}`);
+          if (dn) {
+            dn.data.pendingRequestIds = dn.data.pendingRequestIds || {};
+            dn.data.pendingRequestIds[slotKey] = requestId;
+          }
+        }
         currentReqId = requestId;
         if (dn) {
           dn.data.pendingRequestIds = dn.data.pendingRequestIds || {};
-          dn.data.pendingRequestIds[sp.slotKey || String(i)] = requestId;
+          dn.data.pendingRequestIds[slotKey] = requestId;
           dn.data.pendingSpec = dn.data.pendingSpec || {};
           dn.data.pendingSpec[requestId] = {
-            slotKey: sp.slotKey,
+            batchId,
+            slotKey,
             role: sp.role || "image",
             title: sp.title || `图片 #${i + 1}`,
             anchorHeading: sp.anchorHeading || "",
@@ -5706,7 +5811,8 @@
                 dn.data.pendingSpec = dn.data.pendingSpec || {};
                 if (!dn.data.pendingSpec[activeReqId]) {
                   dn.data.pendingSpec[activeReqId] = dn.data.pendingSpec[requestId] || {
-                    slotKey: sp.slotKey,
+                    batchId,
+                    slotKey,
                     role: sp.role || "image",
                     title: sp.title || `图片 #${i + 1}`,
                     anchorHeading: sp.anchorHeading || "",
@@ -5734,12 +5840,12 @@
             const stepDelay = plan.specs.length > 25 ? 10 : plan.specs.length > 6 ? 35 : plan.specs.length > 1 ? 110 : 240;
             await new Promise((r) => setTimeout(r, stepDelay));
             if (isStaleScope(runEpoch, runScope)) return false;
-            if (sp.sampleImg && nextRunCount === 1 && resolvedOnlyIdx === null && plan.specs.length <= 6) {
+            if (sp.sampleImg && currentRunCount === 1 && resolvedOnlyIdx === null && plan.specs.length <= 6) {
               imgUrl = sp.sampleImg;
             } else {
               const iterPool = [sp.sampleImg, ...uniquePool].filter(Boolean);
               const dedupIterPool = [...new Set(iterPool)];
-              imgUrl = dedupIterPool[(i + nextRunCount - 1) % dedupIterPool.length] || "/images/poster-demo-autumn-equinox.webp";
+              imgUrl = dedupIterPool[(i + currentRunCount - 1) % dedupIterPool.length] || "/images/poster-demo-autumn-equinox.webp";
             }
           }
         } catch (itemErr) {
@@ -5755,12 +5861,17 @@
           }
         }
 
+        if (isStaleScope(runEpoch, runScope) || batchRun.cancelled) return false;
+        if (ctrl.data.activeBatchId && ctrl.data.activeBatchId !== batchId) return false;
+
         if (itemFailed) {
-          failedCount++;
+          failedSlots.add(currentSlotKey);
+          failedCount = failedSlots.size;
           const failedItem = {
             id: E.uid("outit_fail"),
+            batchId,
             requestId,
-            slotKey: sp.slotKey || String(i),
+            slotKey: currentSlotKey,
             title: sp.title || `图片 #${i + 1}`,
             theme: sp.theme || "",
             failed: true,
@@ -5771,7 +5882,7 @@
             delete dn.data.pendingTaskId;
             delete dn.data.pendingRequestId;
             if (itemIsTerminal) {
-              if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[sp.slotKey || String(i)];
+              if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[currentSlotKey];
               if (dn.data.pendingSpec) {
                 delete dn.data.pendingSpec[requestId];
                 if (activeReqId) delete dn.data.pendingSpec[activeReqId];
@@ -5780,7 +5891,7 @@
             if (isBatchGallery) {
               if (!Array.isArray(dn.data.items)) dn.data.items = [];
               const existIdx = dn.data.items.findIndex(
-                (it) => it && ((it.slotKey && it.slotKey === sp.slotKey) || (it.requestId && it.requestId === requestId))
+                (it) => it && ((it.slotKey && it.slotKey === currentSlotKey) || (it.requestId && it.requestId === requestId))
               );
               if (existIdx >= 0) {
                 dn.data.items[existIdx] = failedItem;
@@ -5791,6 +5902,8 @@
               }
             } else {
               dn.data.status = "error";
+              dn.data.error = itemErrorMsg;
+              dn.data.items = [failedItem];
             }
           }
           markActiveTabDirty();
@@ -5803,7 +5916,8 @@
               failedCount,
               totalCount: plan.specs.length,
               activeIndex: (!isGlobalError && i + 1 < plan.specs.length && !batchRun.cancelled) ? i + 1 : null,
-              busy: !isGlobalError && !batchRun.cancelled && i + 1 < plan.specs.length
+              busy: !isGlobalError && !batchRun.cancelled && i + 1 < plan.specs.length,
+              batchId
             });
           }
           if (isGlobalError) {
@@ -5813,14 +5927,18 @@
           continue;
         }
 
-        completedCount++;
+        if (!completedSlots.has(currentSlotKey)) {
+          completedSlots.add(currentSlotKey);
+          completedCount = completedSlots.size;
+        }
         const builtItem = {
           id: E.uid("outit"),
+          batchId,
           requestId,
           taskId: "",
           generationMode: useLiveApi ? "live" : "demo",
           demoMode: !useLiveApi,
-          slotKey: sp.slotKey,
+          slotKey: currentSlotKey,
           role: sp.role || "image",
           title: sp.title || `图片 #${i + 1}`,
           anchorHeading: sp.anchorHeading || "",
@@ -5836,7 +5954,7 @@
         if (dn) {
           delete dn.data.pendingTaskId;
           delete dn.data.pendingRequestId;
-          if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[sp.slotKey || String(i)];
+          if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[currentSlotKey];
           if (dn.data.pendingSpec) {
             delete dn.data.pendingSpec[requestId];
             if (activeReqId) delete dn.data.pendingSpec[activeReqId];
@@ -5844,7 +5962,7 @@
           if (isBatchGallery) {
             if (!Array.isArray(dn.data.items)) dn.data.items = [];
             const existIdx = dn.data.items.findIndex(
-              (it) => it && ((it.slotKey && it.slotKey === sp.slotKey) || (it.requestId && it.requestId === requestId))
+              (it) => it && ((it.slotKey && it.slotKey === currentSlotKey) || (it.requestId && it.requestId === requestId))
             );
             if (existIdx >= 0) {
               dn.data.items[existIdx] = builtItem;
@@ -5855,8 +5973,8 @@
             }
             dn.data.markdown = plan.markdown || "";
             dn.data.updatedAt = nowStr;
-            if (i === plan.specs.length - 1 || completedCount === plan.specs.length) {
-              dn.data.runCount = nextRunCount;
+            dn.data.runCount = currentRunCount;
+            if (completedCount === plan.specs.length && failedCount === 0) {
               dn.data.status = "done";
               dn.data.page = 1;
             }
@@ -5864,14 +5982,14 @@
             dn.data.items = [builtItem];
             dn.data.markdown = plan.markdown || "";
             dn.data.updatedAt = nowStr;
-            dn.data.runCount = nextRunCount;
+            dn.data.runCount = currentRunCount;
             dn.data.status = "done";
             dn.data.activeIdx = 0;
           }
         }
 
         const existAllIdx = allItems.findIndex(
-          (it) => it && ((it.slotKey && it.slotKey === sp.slotKey) || (it.requestId && it.requestId === requestId))
+          (it) => it && ((it.slotKey && it.slotKey === currentSlotKey) || (it.requestId && it.requestId === requestId))
         );
         if (existAllIdx >= 0) {
           allItems[existAllIdx] = builtItem;
@@ -5890,7 +6008,8 @@
             failedCount,
             totalCount: plan.specs.length,
             activeIndex: (i + 1 < plan.specs.length && !batchRun.cancelled) ? i + 1 : null,
-            busy: true
+            busy: true,
+            batchId
           });
         }
       }
@@ -5918,23 +6037,33 @@
             totalCount: plan.specs.length,
             activeIndex: null,
             busy: false,
-            isStopping: false
+            isStopping: false,
+            batchId
           });
         }
         if (!silent) toast(`已取消尚未提交的批量任务；已完成的 ${completedCount} 张图片已保留。`);
         return allItems.length > 0;
       }
 
-      ctrl.data.status = failedCount > 0 && completedCount === 0 ? "error" : "done";
-      for (const dn of dispNodes) {
+      const allSucceeded = completedCount === plan.specs.length && failedCount === 0;
+      ctrl.data.status = allSucceeded ? "done" : "error";
+      for (let idx = 0; idx < dispNodes.length; idx++) {
+        const dn = dispNodes[idx];
         if (isBatchGallery) {
-          dn.data.status = Array.isArray(dn.data.items) && dn.data.items.some((it) => it && it.imageUrl) ? "done" : (failedCount > 0 ? "error" : "idle");
-        } else if (dn.data.status === "generating") {
-          dn.data.status = dn.data.items?.some((it) => it && it.imageUrl) ? "done" : (failedCount > 0 ? "error" : "idle");
+          dn.data.status = allSucceeded ? "done" : (completedCount > 0 ? "done" : "error");
+        } else {
+          const curItem = dn.data.items?.[0];
+          if (curItem?.imageUrl) {
+            dn.data.status = "done";
+          } else if (curItem?.failed || failedSlots.has(plan.specs[idx]?.slotKey || String(idx))) {
+            dn.data.status = "error";
+          } else {
+            dn.data.status = "idle";
+          }
         }
       }
       if (activeLoopNode && resolvedOnlyIdx === null) {
-        activeLoopNode.data.status = ctrl.data.status;
+        activeLoopNode.data.status = allSucceeded ? "done" : (completedCount > 0 ? "idle" : "error");
         activeLoopNode.data.currentStep = completedCount;
         activeLoopNode.data.totalSteps = plan.specs.length;
       }
@@ -5951,23 +6080,26 @@
           totalCount: plan.specs.length,
           activeIndex: null,
           busy: false,
-          isStopping: false
+          isStopping: false,
+          batchId
         });
       }
 
       if (!silent) {
-        if (failedCount > 0) {
-          toast(`批量出图结束：已完成 ${completedCount} / ${plan.specs.length} 张 · 失败 ${failedCount} 张`);
-        } else if (isBatchGallery) {
-          toast(`🎉 批量出图完成！全部 ${allItems.length} 张图片已自动收纳进右侧 1 个「批量图集」节点`);
-        } else if (plan.kind === "loop" && resolvedOnlyIdx === null) {
-          toast(`🔁 循环批量完成！共出图 ${dispNodes.length} 张并自动连接「图片显示」节点`);
+        if (allSucceeded) {
+          if (isBatchGallery) {
+            toast(`🎉 批量出图完成！全部 ${allItems.length} 张图片已自动收纳进右侧 1 个「批量图集」节点`);
+          } else if (plan.kind === "loop" && resolvedOnlyIdx === null) {
+            toast(`🔁 循环批量完成！共出图 ${dispNodes.length} 张并自动连接「图片显示」节点`);
+          } else {
+            toast(`🎉 批量出图完成！已生成 ${completedCount} 张图片`);
+          }
         } else {
-          toast(
-            createdCount > 0
-              ? `✨ 已自动连接 ${dispNodes.length} 个「图片显示」节点！`
-              : `🔄 已更新右侧 ${resolvedOnlyIdx !== null ? "1" : dispNodes.length} 个「图片显示」节点`
-          );
+          const unexecuted = Math.max(0, plan.specs.length - completedCount - failedCount);
+          const parts = [`已完成 ${completedCount} / ${plan.specs.length} 张`];
+          if (failedCount > 0) parts.push(`失败 ${failedCount} 张`);
+          if (unexecuted > 0) parts.push(`未执行 ${unexecuted} 张`);
+          toast(`批量出图未全部完成：${parts.join(" · ")}`, "error");
         }
       }
       return completedCount > 0;
