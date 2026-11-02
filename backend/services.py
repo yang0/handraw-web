@@ -1696,7 +1696,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     asset_counts, total_works_count, total_cheers_count, public_creators = compute_public_asset_counts_and_creators(conn)
 
     unlocked_set: set[str] = set()
-    collections: dict[str, list[str]] = {"styles": [], "layouts": [], "works": [], "topics": []}
+    collections: dict[str, list[str]] = {"styles": [], "layouts": [], "works": [], "topics": [], "generations": []}
     cheered_ids: list[str] = []
     liked_ids: list[str] = []
     ledger_list: list[dict[str, Any]] = []
@@ -1717,8 +1717,28 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         collection_topic_filter, collection_topic_ids = _seed_filter("target_id", "topics")
 
         for r in conn.execute(
-            f"SELECT bucket, target_id FROM collections WHERE user_id = ? AND ((bucket IN ('styles', 'layouts') AND {collection_filter}) OR (bucket = 'works' AND {collection_work_filter}) OR (bucket = 'topics' AND {collection_topic_filter})) ORDER BY rowid DESC",
-            (uid, *collection_ids, *collection_work_ids, *collection_topic_ids),
+            f"""
+            SELECT c.bucket, c.target_id
+            FROM collections c
+            LEFT JOIN studio_generations g ON (c.bucket = 'generations' AND g.id = c.target_id)
+            WHERE c.user_id = ?
+              AND (
+                (c.bucket IN ('styles', 'layouts') AND {collection_filter})
+                OR (c.bucket = 'works' AND {collection_work_filter})
+                OR (c.bucket = 'topics' AND {collection_topic_filter})
+                OR (
+                    c.bucket = 'generations'
+                    AND g.id IS NOT NULL
+                    AND g.status = 'success'
+                    AND COALESCE(g.deleted_at, '') = ''
+                    AND g.engine != 'demo'
+                    AND (g.user_id = ? OR g.visibility = 'public')
+                    AND (g.items_json IS NOT NULL AND g.items_json != '' AND g.items_json != '[]')
+                )
+              )
+            ORDER BY c.rowid DESC
+            """,
+            (uid, *collection_ids, *collection_work_ids, *collection_topic_ids, uid),
         ).fetchall():
             b = r["bucket"]
             if b in collections:
@@ -1757,8 +1777,27 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         interaction_work_filter, interaction_work_ids = _seed_filter("target_id", "works")
         interaction_topic_filter, interaction_topic_ids = _seed_filter("target_id", "topics")
         for r in conn.execute(
-            f"SELECT target_type, target_id, stamp_label FROM interactions WHERE user_id = ? AND ((target_type IN ('like_style', 'like_layout') AND {interaction_asset_filter}) OR (target_type IN ('like_work', 'like_topic') AND ({interaction_work_filter} OR {interaction_topic_filter})) OR target_type NOT IN ('like_style', 'like_layout', 'like_work', 'like_topic'))",
-            (uid, *interaction_asset_ids, *interaction_work_ids, *interaction_topic_ids),
+            f"""
+            SELECT i.target_type, i.target_id, i.stamp_label
+            FROM interactions i
+            LEFT JOIN studio_generations g ON (i.target_type = 'like_generation' AND g.id = i.target_id)
+            WHERE i.user_id = ?
+              AND (
+                (i.target_type IN ('like_style', 'like_layout') AND {interaction_asset_filter})
+                OR (i.target_type IN ('like_work', 'like_topic') AND ({interaction_work_filter} OR {interaction_topic_filter}))
+                OR (
+                    i.target_type = 'like_generation'
+                    AND g.id IS NOT NULL
+                    AND g.status = 'success'
+                    AND COALESCE(g.deleted_at, '') = ''
+                    AND g.engine != 'demo'
+                    AND (g.user_id = ? OR g.visibility = 'public')
+                    AND (g.items_json IS NOT NULL AND g.items_json != '' AND g.items_json != '[]')
+                )
+                OR i.target_type NOT IN ('like_style', 'like_layout', 'like_work', 'like_topic', 'like_generation')
+              )
+            """,
+            (uid, *interaction_asset_ids, *interaction_work_ids, *interaction_topic_ids, uid),
         ).fetchall():
             ttype = str(r["target_type"] or "")
             if ttype.startswith("like_"):
@@ -2294,14 +2333,133 @@ def topup_credits_for_user(db: Database, user: dict[str, Any], amount: int) -> d
     return {"ok": True, "added": amt, "credits": new_bal}
 
 
-def toggle_user_collection(db: Database, user: dict[str, Any], bucket: str, target_id: str, title_label: str = "") -> dict[str, Any]:
-    if bucket not in ("styles", "layouts", "works", "topics"):
+def _extract_images_from_items_json(items_json_str: Any) -> list[str]:
+    if not items_json_str:
+        return []
+    try:
+        raw = json.loads(items_json_str) if isinstance(items_json_str, str) else items_json_str
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    images = []
+    for it in raw:
+        if isinstance(it, str) and it.strip():
+            images.append(it.strip())
+        elif isinstance(it, dict) and it.get("imageUrl") and str(it["imageUrl"]).strip():
+            images.append(str(it["imageUrl"]).strip())
+    return images
+
+
+def check_generation_social_accessible(
+    row: sqlite3.Row | dict[str, Any] | None,
+    viewer: dict[str, Any] | None = None,
+    *,
+    allow_own: bool = False,
+) -> bool:
+    """Shared permission & visibility check across list, detail, and social interaction endpoints.
+
+    Others can only access generations that are:
+    1. status == 'success'
+    2. COALESCE(deleted_at, '') == '' (not deleted)
+    3. engine != 'demo'
+    4. visibility == 'public' (or viewer is the author when allow_own is True)
+    5. Has valid, non-empty images
+    """
+    if not row:
+        return False
+    row_keys = row.keys() if hasattr(row, "keys") else row
+    status = str(row["status"] or "") if "status" in row_keys else ""
+    if status != "success":
+        return False
+    deleted_at = row["deleted_at"] if "deleted_at" in row_keys else None
+    if deleted_at:
+        return False
+    engine = str(row["engine"] or "") if "engine" in row_keys else ""
+    if engine == "demo":
+        return False
+
+    vuid = int(viewer["id"]) if viewer and viewer.get("id") is not None else None
+    row_uid = int(row["user_id"]) if "user_id" in row_keys and row["user_id"] is not None else None
+    is_owner = (vuid is not None and row_uid is not None and vuid == row_uid)
+
+    vis = str(row["visibility"] or "") if "visibility" in row_keys else "public"
+    if not (vis == "public" or (allow_own and is_owner)):
+        return False
+
+    raw_items = row["items_json"] if "items_json" in row_keys else "[]"
+    imgs = _extract_images_from_items_json(raw_items)
+    if not imgs:
+        return False
+
+    return True
+
+
+def attach_generation_social_counts(
+    conn: sqlite3.Connection,
+    items: list[dict[str, Any]],
+    viewer: dict[str, Any] | None = None,
+) -> None:
+    if not items:
+        return
+    gen_ids = [str(it["id"]).strip() for it in items if it.get("id")]
+    if not gen_ids:
+        return
+    ph = ",".join("?" for _ in gen_ids)
+
+    likes_map: dict[str, int] = {}
+    for r in conn.execute(
+        f"SELECT target_id, COUNT(*) AS cnt FROM interactions WHERE target_type = 'like_generation' AND target_id IN ({ph}) GROUP BY target_id",
+        gen_ids,
+    ).fetchall():
+        likes_map[str(r["target_id"])] = int(r["cnt"])
+
+    favs_map: dict[str, int] = {}
+    for r in conn.execute(
+        f"SELECT target_id, COUNT(*) AS cnt FROM collections WHERE bucket = 'generations' AND target_id IN ({ph}) GROUP BY target_id",
+        gen_ids,
+    ).fetchall():
+        favs_map[str(r["target_id"])] = int(r["cnt"])
+
+    viewer_likes: set[str] = set()
+    viewer_favs: set[str] = set()
+    if viewer and viewer.get("id"):
+        vuid = int(viewer["id"])
+        for r in conn.execute(
+            f"SELECT target_id FROM interactions WHERE user_id = ? AND target_type = 'like_generation' AND target_id IN ({ph})",
+            (vuid, *gen_ids),
+        ).fetchall():
+            viewer_likes.add(str(r["target_id"]))
+        for r in conn.execute(
+            f"SELECT target_id FROM collections WHERE user_id = ? AND bucket = 'generations' AND target_id IN ({ph})",
+            (vuid, *gen_ids),
+        ).fetchall():
+            viewer_favs.add(str(r["target_id"]))
+
+    for it in items:
+        gid = str(it.get("id") or "").strip()
+        it["likes"] = likes_map.get(gid, 0)
+        it["favorites"] = favs_map.get(gid, 0)
+        it["liked"] = gid in viewer_likes if viewer else False
+        it["favorited"] = gid in viewer_favs if viewer else False
+
+
+def toggle_user_collection(
+    db: Database,
+    user: dict[str, Any],
+    bucket: str,
+    target_id: str,
+    title_label: str = "",
+    action: str | None = None,
+) -> dict[str, Any]:
+    if bucket not in ("styles", "layouts", "works", "topics", "generations"):
         raise ServiceError("收藏夹分类无效")
     tid = (target_id or "").strip()
     if not tid:
         raise ServiceError("缺少收藏目标 ID")
     uid = int(user["id"])
     now = utc_now_iso()
+    act = (action or "").strip().lower()
 
     resource_entry = None
     if bucket in ("styles", "layouts"):
@@ -2322,20 +2480,35 @@ def toggle_user_collection(db: Database, user: dict[str, Any], bucket: str, targ
             bucket = "works"
             tid = str(primary["target_id"])
 
+    if bucket == "generations":
+        g_row = db.get_conn().execute(
+            "SELECT * FROM studio_generations WHERE id = ?", (tid,)
+        ).fetchone()
+        if not check_generation_social_accessible(g_row, viewer=user, allow_own=True):
+            raise ServiceError("生图记录不存在或不可见", status=404, code="not_found")
+
     with db.transaction() as tx:
         existing = tx.execute(
             "SELECT 1 FROM collections WHERE user_id = ? AND bucket = ? AND target_id = ?",
             (uid, bucket, tid),
         ).fetchone()
+
+        if act in ("unset", "uncollect", "remove"):
+            should_collect = False
+        elif act in ("set", "collect", "add"):
+            should_collect = True
+        else:
+            should_collect = not bool(existing)
+
         rewarded = 0
-        if existing:
+        if existing and not should_collect:
             tx.execute("DELETE FROM collections WHERE user_id = ? AND bucket = ? AND target_id = ?", (uid, bucket, tid))
             collected = False
             if bucket == "works":
                 tx.execute("UPDATE works SET favorites = MAX(0, favorites - 1) WHERE id = ?", (tid,))
             elif bucket == "topics":
                 tx.execute("UPDATE forum_topics SET favorites = MAX(0, favorites - 1) WHERE id = ?", (tid,))
-        else:
+        elif not existing and should_collect:
             if bucket in ("styles", "layouts") and resource_entry and not resource_entry.get("canCollect"):
                 raise ServiceError("该资源暂不支持收藏", status=403)
             tx.execute(
@@ -2348,24 +2521,34 @@ def toggle_user_collection(db: Database, user: dict[str, Any], bucket: str, targ
             elif bucket == "topics":
                 tx.execute("UPDATE forum_topics SET favorites = favorites + 1 WHERE id = ?", (tid,))
 
-            u_row = tx.execute("SELECT first_collect_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
-            if u_row and not int(u_row["first_collect_rewarded"]):
-                settings = get_site_settings(tx)
-                bonus = int(settings.get("economy", {}).get("first_collect_credits", 2))
-                tx.execute("UPDATE users SET first_collect_rewarded = 1 WHERE id = ?", (uid,))
-                if bonus > 0:
-                    apply_wallet_delta(
-                        tx,
-                        uid,
-                        bonus,
-                        "first_collect",
-                        f"首次使用云端收藏夹激励（{title_label or tid}）",
-                        event_key=f"first_collect_{uid}",
-                    )
-                    rewarded = bonus
+            if bucket != "generations":
+                u_row = tx.execute("SELECT first_collect_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
+                if u_row and not int(u_row["first_collect_rewarded"]):
+                    settings = get_site_settings(tx)
+                    bonus = int(settings.get("economy", {}).get("first_collect_credits", 2))
+                    tx.execute("UPDATE users SET first_collect_rewarded = 1 WHERE id = ?", (uid,))
+                    if bonus > 0:
+                        apply_wallet_delta(
+                            tx,
+                            uid,
+                            bonus,
+                            "first_collect",
+                            f"首次使用云端收藏夹激励（{title_label or tid}）",
+                            event_key=f"first_collect_{uid}",
+                        )
+                        rewarded = bonus
+        else:
+            collected = bool(existing)
 
         bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
-    return {"ok": True, "collected": collected, "rewarded": rewarded, "credits": bal}
+        res_payload = {"ok": True, "collected": collected, "rewarded": rewarded, "credits": bal}
+        if bucket == "generations":
+            fav_cnt = tx.execute(
+                "SELECT COUNT(*) FROM collections WHERE bucket = 'generations' AND target_id = ?",
+                (tid,),
+            ).fetchone()[0]
+            res_payload["favorites"] = int(fav_cnt)
+    return res_payload
 
 
 # Authority ranks for visibility decisions.  A decision may only be reversed by
@@ -2642,8 +2825,14 @@ def set_comment_visibility(tx, table: str, comment_id: str, status: str, actor_r
     return True
 
 
-def toggle_user_like(db: Database, user: dict[str, Any], target_type: str, target_id: str) -> dict[str, Any]:
-    """Toggle 👍 Like on any Style, Layout, Work, or Forum Topic."""
+def toggle_user_like(
+    db: Database,
+    user: dict[str, Any],
+    target_type: str,
+    target_id: str,
+    action: str | None = None,
+) -> dict[str, Any]:
+    """Toggle 👍 Like on any Style, Layout, Work, Forum Topic, or Generation."""
     raw_type = (target_type or "").strip().lower()
     tid = (target_id or "").strip()
     if not tid:
@@ -2654,11 +2843,14 @@ def toggle_user_like(db: Database, user: dict[str, Any], target_type: str, targe
         norm_type = _infer_asset_kind(tid, fallback=("layout" if raw_type == "layout" else "style"))
     elif raw_type in ("work", "topic"):
         norm_type = raw_type
+    elif raw_type in ("generation", "like_generation"):
+        norm_type = "generation"
     else:
         raise ServiceError("不支持的点赞目标类型")
 
     uid = int(user["id"])
     now = utc_now_iso()
+    act = (action or "").strip().lower()
     itype = f"like_{norm_type}"
 
     # A work's discussion topic is a view of the work, not a second object.
@@ -2685,6 +2877,13 @@ def toggle_user_like(db: Database, user: dict[str, Any], target_type: str, targe
             if not t_row:
                 raise ServiceError("帖子不存在", status=404)
             title_lbl = t_row["title"]
+        elif norm_type == "generation":
+            g_row = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (tid,)).fetchone()
+            if not check_generation_social_accessible(g_row, viewer=user, allow_own=False):
+                raise ServiceError("生图记录不存在或不可见", status=404, code="not_found")
+            if int(g_row["user_id"] or 0) == uid:
+                raise ServiceError("不能为自己的生图历史点赞", status=403, code="self_like_forbidden")
+            title_lbl = g_row["subject"] or tid
         else:
             title_lbl = tid
 
@@ -2693,8 +2892,15 @@ def toggle_user_like(db: Database, user: dict[str, Any], target_type: str, targe
             (uid, itype, tid),
         ).fetchone()
 
+        if act in ("unset", "unlike", "remove"):
+            should_like = False
+        elif act in ("set", "like", "add"):
+            should_like = True
+        else:
+            should_like = not bool(existing)
+
         rewarded = 0
-        if existing:
+        if existing and not should_like:
             tx.execute(
                 "DELETE FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ''",
                 (uid, itype, tid),
@@ -2704,7 +2910,7 @@ def toggle_user_like(db: Database, user: dict[str, Any], target_type: str, targe
                 tx.execute("UPDATE works SET likes = MAX(0, likes - 1) WHERE id = ?", (tid,))
             elif norm_type == "topic":
                 tx.execute("UPDATE forum_topics SET likes = MAX(0, likes - 1) WHERE id = ?", (tid,))
-        else:
+        elif not existing and should_like:
             tx.execute(
                 "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
                 (uid, itype, tid, now),
@@ -2715,26 +2921,36 @@ def toggle_user_like(db: Database, user: dict[str, Any], target_type: str, targe
             elif norm_type == "topic":
                 tx.execute("UPDATE forum_topics SET likes = likes + 1 WHERE id = ?", (tid,))
 
-            u_row = tx.execute("SELECT first_cheer_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
-            if u_row and not int(u_row["first_cheer_rewarded"]):
-                settings = get_site_settings(tx)
-                bonus = int(settings.get("economy", {}).get("first_cheer_credits", 2))
-                tx.execute("UPDATE users SET first_cheer_rewarded = 1 WHERE id = ?", (uid,))
-                if bonus > 0:
-                    apply_wallet_delta(
-                        tx,
-                        uid,
-                        bonus,
-                        "first_cheer",
-                        f"友善社区互动：首次点赞《{title_lbl[:20]}》",
-                        event_key=f"first_cheer_{uid}",
-                    )
-                    rewarded = bonus
+            if norm_type != "generation":
+                u_row = tx.execute("SELECT first_cheer_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
+                if u_row and not int(u_row["first_cheer_rewarded"]):
+                    settings = get_site_settings(tx)
+                    bonus = int(settings.get("economy", {}).get("first_cheer_credits", 2))
+                    tx.execute("UPDATE users SET first_cheer_rewarded = 1 WHERE id = ?", (uid,))
+                    if bonus > 0:
+                        apply_wallet_delta(
+                            tx,
+                            uid,
+                            bonus,
+                            "first_cheer",
+                            f"友善社区互动：首次点赞《{title_lbl[:20]}》",
+                            event_key=f"first_cheer_{uid}",
+                        )
+                        rewarded = bonus
+        else:
+            liked = bool(existing)
 
         if norm_type == "work":
             new_likes = int(tx.execute("SELECT likes FROM works WHERE id = ?", (tid,)).fetchone()["likes"])
         elif norm_type == "topic":
             new_likes = int(tx.execute("SELECT likes FROM forum_topics WHERE id = ?", (tid,)).fetchone()["likes"])
+        elif norm_type == "generation":
+            new_likes = int(
+                tx.execute(
+                    "SELECT COUNT(*) FROM interactions WHERE target_type = 'like_generation' AND target_id = ?",
+                    (tid,),
+                ).fetchone()[0]
+            )
         else:
             if is_demo_mode():
                 seed_row = tx.execute("SELECT base_likes FROM asset_social_seeds WHERE asset_code = ?", (tid,)).fetchone()
@@ -3970,6 +4186,35 @@ def serialize_public_generation_history(
         else:
             styles.append(entry)
 
+    fork_src = None
+    if "fork_generation_id" in row_keys and row["fork_generation_id"]:
+        fid = str(row["fork_generation_id"]).strip()
+        if fid:
+            if conn:
+                s_row = conn.execute(
+                    "SELECT id, user_id, username, visibility, status, deleted_at, engine FROM studio_generations WHERE id = ?",
+                    (fid,),
+                ).fetchone()
+                if (
+                    s_row
+                    and str(s_row["status"] or "") == "success"
+                    and not s_row["deleted_at"]
+                    and str(s_row["engine"] or "") != "demo"
+                    and str(s_row["visibility"] or "") == "public"
+                ):
+                    u_row = conn.execute("SELECT display_name FROM users WHERE username = ?", (s_row["username"],)).fetchone()
+                    fork_src = {
+                        "generationId": s_row["id"],
+                        "itemId": str(row["fork_item_id"]) if "fork_item_id" in row_keys else "",
+                        "author": s_row["username"],
+                        "authorName": u_row["display_name"] if (u_row and u_row["display_name"]) else s_row["username"],
+                        "visible": True,
+                    }
+                else:
+                    fork_src = {"visible": False}
+            else:
+                fork_src = {"visible": False}
+
     return {
         "id": raw_id,
         "author": author,
@@ -3983,6 +4228,7 @@ def serialize_public_generation_history(
         "styles": styles,
         "layouts": layouts,
         "imageCount": len(images),
+        "fork": fork_src,
     }
 
 
@@ -4002,13 +4248,17 @@ def get_public_generation_history(
         ).fetchone()
         if not row:
             return None
-        return serialize_public_generation_history(row, conn)
+        res = serialize_public_generation_history(row, conn)
+        attach_generation_social_counts(conn, [res], viewer=None)
+        return res
     history_filter, history_ids = _seed_filter("id", "generations")
     rows = conn.execute(
         f"SELECT * FROM studio_generations WHERE COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT ?",
         (*history_ids, max(1, min(100, limit))),
     ).fetchall()
-    return [serialize_public_generation_history(r, conn) for r in rows]
+    items = [serialize_public_generation_history(r, conn) for r in rows]
+    attach_generation_social_counts(conn, items, viewer=None)
+    return items
 
 
 def get_user_public_generations(
@@ -4079,6 +4329,8 @@ def get_user_public_generations(
         if serialized.get("images"):
             items.append(serialized)
 
+    attach_generation_social_counts(conn, items, viewer=viewer)
+
     next_cursor = None
     if has_more and result_rows:
         last = result_rows[-1]
@@ -4133,24 +4385,270 @@ def get_user_public_generation_by_id(
         SELECT * FROM studio_generations
         WHERE id = ?
           AND user_id = ?
-          AND status = 'success'
-          AND COALESCE(deleted_at, '') = ''
-          AND engine != 'demo'
-          AND visibility = 'public'
         """,
         (gen_id, uid),
     ).fetchone()
 
-    if not row:
+    is_owner = bool(viewer and int(viewer.get("id") or 0) == uid)
+    if not check_generation_social_accessible(row, viewer=viewer, allow_own=is_owner):
         raise ServiceError("生图记录不存在或不可见", status=404, code="not_found")
 
     serialized = serialize_public_generation_history(row, conn)
     if not serialized.get("images"):
         raise ServiceError("生图记录不存在或无结果图片", status=404, code="not_found")
 
+    attach_generation_social_counts(conn, [serialized], viewer=viewer)
+
     return {
         "ok": True,
         "generation": serialized,
+    }
+
+
+def get_user_collected_generations(
+    db: Database,
+    user: dict[str, Any],
+    limit: int = 60,
+) -> dict[str, Any]:
+    uid = int(user["id"])
+    conn = db.get_conn()
+    safe_limit = max(1, min(100, int(limit)))
+
+    rows = conn.execute(
+        """
+        SELECT g.*
+        FROM collections c
+        JOIN studio_generations g ON g.id = c.target_id
+        WHERE c.user_id = ?
+          AND c.bucket = 'generations'
+          AND g.status = 'success'
+          AND COALESCE(g.deleted_at, '') = ''
+          AND g.engine != 'demo'
+          AND (g.user_id = ? OR g.visibility = 'public')
+          AND (g.items_json IS NOT NULL AND g.items_json != '' AND g.items_json != '[]')
+        ORDER BY c.created_at DESC
+        LIMIT ?
+        """,
+        (uid, uid, safe_limit),
+    ).fetchall()
+
+    items = []
+    for r in rows:
+        ser = serialize_public_generation_history(r, conn)
+        if ser.get("images"):
+            items.append(ser)
+
+    attach_generation_social_counts(conn, items, viewer=user)
+    return {"ok": True, "generations": items}
+
+
+def fork_generation_recipe(
+    db: Database,
+    user: dict[str, Any],
+    generation_id: str,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Prepare a studio draft from an existing visible generation record without charging or generating."""
+    conn = db.get_conn()
+    uid = int(user["id"])
+    gen_id = str(generation_id or "").strip()
+    body = body or {}
+
+    row = conn.execute(
+        "SELECT * FROM studio_generations WHERE id = ?",
+        (gen_id,),
+    ).fetchone()
+
+    if not check_generation_social_accessible(row, viewer=user, allow_own=True):
+        raise ServiceError("生图记录不存在或不可见", status=404, code="not_found")
+
+    raw_items_str = row["items_json"] if "items_json" in row.keys() else "[]"
+    try:
+        raw_items = json.loads(raw_items_str or "[]")
+    except Exception:
+        raw_items = []
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ServiceError("生图记录不存在或无结果图片", status=404, code="not_found")
+
+    req_item_id = str(body.get("itemId") or body.get("item_id") or "").strip()
+    chosen_item = None
+    chosen_item_id = ""
+
+    if req_item_id:
+        for idx, it in enumerate(raw_items):
+            cur_id = it.get("id") if isinstance(it, dict) else f"{gen_id}_{idx}"
+            cur_url = it.get("imageUrl") if isinstance(it, dict) else it
+            if cur_id == req_item_id or cur_url == req_item_id:
+                chosen_item = it
+                chosen_item_id = str(cur_id)
+                break
+        if chosen_item is None:
+            raise ServiceError("未找到指定的图片条目，无法复刻", status=400, code="item_not_found")
+    else:
+        chosen_item = raw_items[0]
+        chosen_item_id = chosen_item.get("id") if isinstance(chosen_item, dict) else f"{gen_id}_0"
+
+    CODE_RE = re.compile(r"^(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+$")
+
+    style_ids: list[str] = []
+    layout_id = ""
+    colors: list[str] = []
+    tones: list[str] = []
+    moods: list[str] = []
+    whitespace = ""
+    ratio = "3:4"
+    mode = str(row["mode"] or "graphic-text") if "mode" in row.keys() else "graphic-text"
+    raw_tab = str(row["tab_title"] or "") if "tab_title" in row.keys() else ""
+    if re.match(r"^\d+:\d+$", raw_tab):
+        ratio = raw_tab
+
+    # 1. Check chosen_item if it carries its own recipe (e.g. batch item)
+    if isinstance(chosen_item, dict):
+        if chosen_item.get("ratio"):
+            ratio = str(chosen_item["ratio"])
+        if chosen_item.get("mode"):
+            mode = str(chosen_item["mode"])
+        if chosen_item.get("styleIds") and isinstance(chosen_item["styleIds"], list):
+            for s in chosen_item["styleIds"]:
+                c = str(s).strip().upper().lstrip("#")
+                if CODE_RE.match(c) and c not in style_ids:
+                    style_ids.append(c)
+        if chosen_item.get("layoutId"):
+            c = str(chosen_item["layoutId"]).strip().upper().lstrip("#")
+            if CODE_RE.match(c):
+                layout_id = c
+        if chosen_item.get("recipeSnapshot") and isinstance(chosen_item["recipeSnapshot"], dict):
+            snap = chosen_item["recipeSnapshot"]
+            for k in ("style1", "style2"):
+                c = str(snap.get(k) or "").strip().upper().lstrip("#")
+                if CODE_RE.match(c) and c not in style_ids:
+                    style_ids.append(c)
+            if not layout_id and snap.get("layout"):
+                c = str(snap["layout"]).strip().upper().lstrip("#")
+                if CODE_RE.match(c):
+                    layout_id = c
+
+    # 2. Check row's system_append_json
+    if not style_ids and not layout_id and "system_append_json" in row.keys() and row["system_append_json"]:
+        try:
+            s_data = json.loads(row["system_append_json"])
+            if isinstance(s_data, dict):
+                snap = s_data.get("recipeSnapshot")
+                if isinstance(snap, dict):
+                    for k in ("style1", "style2"):
+                        c = str(snap.get(k) or "").strip().upper().lstrip("#")
+                        if CODE_RE.match(c) and c not in style_ids:
+                            style_ids.append(c)
+                    if snap.get("layout"):
+                        c = str(snap["layout"]).strip().upper().lstrip("#")
+                        if CODE_RE.match(c):
+                            layout_id = c
+                sys_app = s_data.get("systemAppend") or s_data.get("system_append") or []
+                if isinstance(sys_app, list):
+                    for it in sys_app:
+                        if isinstance(it, dict):
+                            c = str(it.get("code") or "").strip().upper().lstrip("#")
+                            if CODE_RE.match(c):
+                                if c.startswith(("SC-", "IG-", "SB-", "IP-", "EC-", "LAY-", "USR-L")):
+                                    if not layout_id:
+                                        layout_id = c
+                                elif c not in style_ids:
+                                    style_ids.append(c)
+        except Exception:
+            pass
+
+    # 3. Check row's recipe_id
+    if (not style_ids or not layout_id) and "recipe_id" in row.keys() and row["recipe_id"]:
+        try:
+            rcp = conn.execute("SELECT * FROM studio_recipes WHERE id = ?", (row["recipe_id"],)).fetchone()
+            if rcp:
+                try:
+                    s_list = json.loads(rcp["style_ids"] or "[]")
+                    for s in s_list:
+                        c = str(s).strip().upper().lstrip("#")
+                        if CODE_RE.match(c) and c not in style_ids:
+                            style_ids.append(c)
+                except Exception:
+                    pass
+                if not layout_id and rcp["layout_id"]:
+                    c = str(rcp["layout_id"]).strip().upper().lstrip("#")
+                    if CODE_RE.match(c):
+                        layout_id = c
+                if rcp["colors"]:
+                    try:
+                        colors = json.loads(rcp["colors"] or "[]")
+                    except Exception:
+                        pass
+                if rcp["tones"]:
+                    try:
+                        tones = json.loads(rcp["tones"] or "[]")
+                    except Exception:
+                        pass
+                if rcp["moods"]:
+                    try:
+                        moods = json.loads(rcp["moods"] or "[]")
+                    except Exception:
+                        pass
+                if rcp["whitespace"]:
+                    whitespace = str(rcp["whitespace"])
+                if rcp["ratio"]:
+                    ratio = str(rcp["ratio"])
+                if rcp["mode"]:
+                    mode = str(rcp["mode"])
+        except Exception:
+            pass
+
+    # 4. Check row's recipe_summary
+    if not style_ids and not layout_id and "recipe_summary" in row.keys() and row["recipe_summary"]:
+        tokens = re.split(r"[\s/·,]+", str(row["recipe_summary"]).strip())
+        for t in tokens:
+            c = t.strip().upper().lstrip("#")
+            if CODE_RE.match(c):
+                if c.startswith(("SC-", "IG-", "SB-", "IP-", "EC-", "LAY-", "USR-L")):
+                    if not layout_id:
+                        layout_id = c
+                elif c not in style_ids:
+                    style_ids.append(c)
+
+    # 5. Must be reliably restorable
+    if not style_ids and not layout_id:
+        raise ServiceError("该记录缺少可复刻的配方参数，无法可靠还原", status=400, code="cannot_fork")
+
+    # Subject extraction
+    user_subject = ""
+    if "subject" in row.keys() and row["subject"]:
+        user_subject = str(row["subject"]).strip()
+    if not user_subject:
+        user_subject = "手绘创作"
+
+    u_author = conn.execute("SELECT display_name FROM users WHERE username = ?", (row["username"],)).fetchone()
+    author_name = (u_author["display_name"] if (u_author and u_author["display_name"]) else row["username"])
+
+    return {
+        "ok": True,
+        "draft": {
+            "kind": "single",
+            "styleIds": style_ids,
+            "layoutId": layout_id,
+            "colors": colors,
+            "tones": tones,
+            "moods": moods,
+            "whitespace": whitespace,
+            "ratio": ratio,
+            "mode": mode,
+            "subject": user_subject,
+            "subjectHint": user_subject,
+            "references": [],
+            "prompt": "",
+            "promptCustomized": False,
+            "promptStale": False,
+        },
+        "source": {
+            "generationId": row["id"],
+            "itemId": chosen_item_id,
+            "author": row["username"],
+            "authorName": author_name,
+        },
     }
 
 
@@ -4492,6 +4990,17 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
             str(entry.get("markdown") or ""),
             json.dumps(entry.get("items") or [], ensure_ascii=False),
         )
+        fork_gen_id = str(entry.get("forkGenerationId") or entry.get("fork_generation_id") or "").strip()
+        fork_item_id = str(entry.get("forkItemId") or entry.get("fork_item_id") or "").strip()
+        if fork_gen_id:
+            target_gen = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (fork_gen_id,)).fetchone()
+            if not target_gen or not check_generation_social_accessible(target_gen, viewer=user, allow_own=True):
+                fork_gen_id = ""
+                fork_item_id = ""
+            elif int(target_gen["user_id"]) == uid:
+                fork_gen_id = ""
+                fork_item_id = ""
+
         if existing:
             target_id = existing["id"]
             # A browser save may use the same id or request_id as a real cloud generation.
@@ -4501,10 +5010,12 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 """
                 UPDATE studio_generations
                 SET tab_title = ?, mode = ?, mode_label = ?, kind = ?, recipe_summary = ?,
-                    prompt = ?, visible_prompt = ?, prompt_masked = ?, markdown = ?, items_json = ?, deleted_at = ''
+                    prompt = ?, visible_prompt = ?, prompt_masked = ?, markdown = ?, items_json = ?, deleted_at = '',
+                    fork_generation_id = CASE WHEN ? != '' THEN ? ELSE fork_generation_id END,
+                    fork_item_id = CASE WHEN ? != '' THEN ? ELSE fork_item_id END
                 WHERE id = ? AND user_id = ?
                 """,
-                (*values, target_id, uid),
+                (*values, fork_gen_id, fork_gen_id, fork_item_id, fork_item_id, target_id, uid),
             )
             return {"ok": True, "id": target_id}
         else:
@@ -4512,10 +5023,11 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 """
                 INSERT INTO studio_generations (
                     id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
-                    prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type, credits_spent, status, created_at, request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?)
+                    prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type, credits_spent, status, created_at, request_id,
+                    fork_generation_id, fork_item_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?)
                 """,
-                (hid, uid, user["username"], *values, now_iso, req_id),
+                (hid, uid, user["username"], *values, now_iso, req_id, fork_gen_id, fork_item_id),
             )
             return {"ok": True, "id": hid}
 
@@ -4717,6 +5229,10 @@ def _cloud_generation_result(
     }
     if was_masked:
         res["promptMasked"] = True
+    if "fork_generation_id" in row_keys and row["fork_generation_id"]:
+        res["forkGenerationId"] = str(row["fork_generation_id"])
+    if "fork_item_id" in row_keys and row["fork_item_id"]:
+        res["forkItemId"] = str(row["fork_item_id"])
     return res
 
 
@@ -5040,6 +5556,19 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 # erroring out of a normal "iterate on my own work" flow.
                 fork_target = ""
 
+        fork_gen_target = str(body.get("forkGenerationId") or body.get("fork_generation_id") or "").strip()
+        fork_item_target = str(body.get("forkItemId") or body.get("fork_item_id") or "").strip()
+        if fork_gen_target:
+            target_gen = tx.execute(
+                "SELECT * FROM studio_generations WHERE id = ?",
+                (fork_gen_target,),
+            ).fetchone()
+            if not target_gen or not check_generation_social_accessible(target_gen, viewer=user, allow_own=True):
+                raise ServiceError("复刻来源生图记录不存在或已不可访问", status=404, code="fork_source_not_found")
+            if int(target_gen["user_id"]) == uid:
+                fork_gen_target = ""
+                fork_item_target = ""
+
         # 1. Verify unlock status and fetch DB blackbox secrets / pending definitions.
         system_append_list: list[dict[str, str]] = []
         injected_definitions: list[str] = []
@@ -5162,8 +5691,9 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
                 prompt, visible_prompt, prompt_masked, system_append_json, markdown, items_json, engine, cost_type, credits_spent, task_id,
                 status, error_msg, request_id, reservation_date, created_at, fork_work_id,
-                prompt_ready, recipe_id, subject, visibility
-            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?, 'public')
+                prompt_ready, recipe_id, subject, visibility,
+                fork_generation_id, fork_item_id
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?, 'public', ?, ?)
             """,
             (
                 gen_id,
@@ -5184,6 +5714,8 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 prompt_ready,
                 recipe_id,
                 user_subject,
+                fork_gen_target,
+                fork_item_target,
             ),
         )
         if cost_type == "free_quota":

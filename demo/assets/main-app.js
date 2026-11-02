@@ -28,7 +28,9 @@
     lastPrimaryView: "discover", // parent channel to return to from secondary/detail pages
     creatorRankMode: "prolific", // 'prolific' | 'cheers' | 'rising'
     workRankMode: "composite", // 'composite' | 'cheers' | 'rising' | 'forks'
-    favTab: "styles", // 'styles' | 'layouts' | 'works' | 'topics'
+    favTab: "styles", // 'styles' | 'layouts' | 'works' | 'topics' | 'generations'
+    _collectedGenerations: null,
+    _fetchingColGen: false,
     // Standalone Detail & Profile Page States
     activeWorkId: "",
     activeWorkImgIdx: 0,
@@ -1552,6 +1554,22 @@
     const styleStr = formatResourceItems(styles);
     const layoutStr = formatResourceItems(layouts);
 
+    const isMe = Boolean(App.state.loggedIn && App.state.user && App.state.user.username === genItem.author);
+    let isLikedState = S.isLiked("generation", genItem.id) || Boolean(genItem.liked);
+    let isCollectedState = (App.state.collections?.generations || []).includes(genItem.id) || Boolean(genItem.favorited);
+    let likeCount = Number(genItem.likes || 0);
+    let favCount = Number(genItem.favorites || 0);
+
+    let forkBanner = "";
+    if (genItem.fork && genItem.fork.visible) {
+      const srcAuthor = genItem.fork.authorName || genItem.fork.author || "原作者";
+      forkBanner = `
+        <div style="background:var(--paper-soft);border:1px dashed var(--brand-vermilion,#e15b3c);border-radius:8px;padding:8px 12px;font-size:12.5px;color:var(--brand-vermilion,#e15b3c);display:flex;align-items:center;gap:6px;">
+          <span>⚡ 配方来自 <strong>@${esc(srcAuthor)}</strong></span>
+        </div>
+      `;
+    }
+
     S.openModal({
       title: esc(title),
       html: `
@@ -1563,6 +1581,7 @@
               </div>
             `).join("")}
           </div>
+          ${forkBanner}
           <div style="background:var(--paper-soft);border:1px solid var(--line-soft);border-radius:8px;padding:12px 14px;font-size:12.8px;display:flex;flex-direction:column;gap:8px;">
             <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
               <span><strong>作者：</strong>@${esc(genItem.author)}</span>
@@ -1577,8 +1596,63 @@
             ${styleStr ? `<div><strong>画风：</strong>${esc(styleStr)}</div>` : ""}
             ${layoutStr ? `<div><strong>图型：</strong>${esc(layoutStr)}</div>` : ""}
           </div>
+          <div class="hw-modal-actions" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding-top:10px;border-top:1px solid var(--line-soft);">
+            <div style="display:flex;gap:10px;align-items:center;">
+              <button type="button" class="btn btn-sm ${isLikedState ? "btn-primary is-active" : ""}" id="gen-modal-like-btn" ${isMe ? 'disabled title="不能给自己的历史点赞"' : ""}>
+                👍 <span id="gen-modal-like-text">${isLikedState ? "已点赞" : "点赞"}</span> (<span id="gen-modal-like-count">${likeCount}</span>)
+              </button>
+              <button type="button" class="btn btn-sm ${isCollectedState ? "btn-primary is-active" : ""}" id="gen-modal-fav-btn">
+                ⭐️ <span id="gen-modal-fav-text">${isCollectedState ? "已收藏" : "收藏"}</span> (<span id="gen-modal-fav-count">${favCount}</span>)
+              </button>
+            </div>
+            <div>
+              <a class="btn btn-sm btn-primary" id="gen-modal-fork-btn" href="${esc(channelUrl("studio", { forkGen: genItem.id, entry: "quick" }))}">
+                ⚡ 用这个配方复刻 ↗
+              </a>
+            </div>
+          </div>
         </div>
-      `
+      `,
+      onMount: (root) => {
+        const likeBtn = root.querySelector("#gen-modal-like-btn");
+        const favBtn = root.querySelector("#gen-modal-fav-btn");
+        if (likeBtn && !isMe) {
+          likeBtn.onclick = () => {
+            if (!App.state?.loggedIn) {
+              S.openLoginModal("登录后即可点赞生图历史！");
+              return;
+            }
+            S.toggleLike("generation", genItem, title);
+            isLikedState = !isLikedState;
+            likeCount = Math.max(0, likeCount + (isLikedState ? 1 : -1));
+            genItem.likes = likeCount;
+            genItem.liked = isLikedState;
+            likeBtn.className = `btn btn-sm ${isLikedState ? "btn-primary is-active" : ""}`;
+            const txt = root.querySelector("#gen-modal-like-text");
+            if (txt) txt.textContent = isLikedState ? "已点赞" : "点赞";
+            const cnt = root.querySelector("#gen-modal-like-count");
+            if (cnt) cnt.textContent = likeCount;
+          };
+        }
+        if (favBtn) {
+          favBtn.onclick = () => {
+            if (!App.state?.loggedIn) {
+              S.openLoginModal("登录后即可收藏生图历史！");
+              return;
+            }
+            S.toggleCollect("generations", genItem.id, title);
+            isCollectedState = !isCollectedState;
+            favCount = Math.max(0, favCount + (isCollectedState ? 1 : -1));
+            genItem.favorites = favCount;
+            genItem.favorited = isCollectedState;
+            favBtn.className = `btn btn-sm ${isCollectedState ? "btn-primary is-active" : ""}`;
+            const txt = root.querySelector("#gen-modal-fav-text");
+            if (txt) txt.textContent = isCollectedState ? "已收藏" : "收藏";
+            const cnt = root.querySelector("#gen-modal-fav-count");
+            if (cnt) cnt.textContent = favCount;
+          };
+        }
+      }
     });
   }
 
@@ -1687,8 +1761,9 @@
                     <span>${esc(codeBadgeText)}</span>
                   </div>
                 ` : ""}
-                <div style="font-size:12px;color:var(--ink-muted);">
+                <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;align-items:center;">
                   <span>${dateText}</span>
+                  <span>👍 ${g.likes || 0} · ⭐️ ${g.favorites || 0}</span>
                 </div>
               </div>
             </article>
@@ -1754,12 +1829,29 @@
             ${isMe ? `<div style="margin-top:12px;"><button type="button" class="btn btn-primary" id="prof-empty-compose-btn">✏️ 去发布第一篇图文论坛帖</button></div>` : ""}
           </div>`;
     } else if (UI.profileTab === "collections" && isMe) {
-      const cols = App.state.collections || { styles: [], layouts: [], works: [], topics: [] };
+      const cols = App.state.collections || { styles: [], layouts: [], works: [], topics: [], generations: [] };
+      if (UI.favTab === "generations" && UI._collectedGenerations === null && !UI._fetchingColGen) {
+        UI._fetchingColGen = true;
+        fetch("/api/collections/generations", { credentials: "include" })
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            UI._collectedGenerations = (data && data.generations) || [];
+          })
+          .catch(() => {
+            UI._collectedGenerations = [];
+          })
+          .finally(() => {
+            UI._fetchingColGen = false;
+            renderMain();
+          });
+      }
       const subItems =
         UI.favTab === "styles" || UI.favTab === "layouts"
           ? (cols[UI.favTab] || []).map((id) => App.resourceMap.get(id)).filter(Boolean)
           : UI.favTab === "works"
           ? (cols.works || []).map((id) => (App.state.works || []).find((w) => w.id === id)).filter(Boolean)
+          : UI.favTab === "generations"
+          ? (UI._collectedGenerations || [])
           : (cols.topics || []).map((id) => (App.state.topics || []).find((t) => t.id === id)).filter(Boolean);
 
       tabBodyHtml = `
@@ -1769,6 +1861,7 @@
             <button type="button" class="hw-pill ${UI.favTab === "layouts" ? "is-active" : ""}" data-prof-ftab="layouts">📐 收藏图型 (${(cols.layouts || []).length})</button>
             <button type="button" class="hw-pill ${UI.favTab === "works" ? "is-active" : ""}" data-prof-ftab="works">🖼️ 收藏作品 (${(cols.works || []).length})</button>
             <button type="button" class="hw-pill ${UI.favTab === "topics" ? "is-active" : ""}" data-prof-ftab="topics">💬 收藏帖子 (${(cols.topics || []).length})</button>
+            <button type="button" class="hw-pill ${UI.favTab === "generations" ? "is-active" : ""}" data-prof-ftab="generations">⚡ 收藏生图 (${(cols.generations || []).length})</button>
           </div>
           ${
             !subItems.length
@@ -1789,6 +1882,26 @@
                     )
                     .join("")}
                 </div>`
+              : UI.favTab === "generations"
+              ? S.renderMasonry(
+                  subItems.map((g) => {
+                    const img0 = (g.images && g.images[0]) || "/images/poster-demo-autumn-equinox.webp";
+                    const title = g.topic || g.title || "手绘风生成作品";
+                    return `
+                      <article class="hw-card" data-prof-gen="${esc(g.id)}" style="cursor:pointer;">
+                        <div class="hw-card-media"><img data-hw-src="${esc(img0)}" alt="${esc(title)}" /></div>
+                        <div class="hw-card-body">
+                          <h3 class="hw-card-title">${esc(title)}</h3>
+                          <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;">
+                            <span>@${esc(g.author)}</span>
+                            <span>👍 ${g.likes || 0} · ⭐️ ${g.favorites || 0}</span>
+                          </div>
+                        </div>
+                      </article>
+                    `;
+                  }),
+                  "standard"
+                )
               : S.renderMasonry(
                   subItems.map((it) =>
                     UI.favTab === "works"
@@ -2268,6 +2381,55 @@
             "standard"
           )
         : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏晒作品</div>`;
+    } else if (UI.favTab === "generations") {
+      if (UI._collectedGenerations === null && !UI._fetchingColGen) {
+        UI._fetchingColGen = true;
+        fetch("/api/collections/generations", { credentials: "include" })
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            UI._collectedGenerations = (data && data.generations) || [];
+          })
+          .catch(() => {
+            UI._collectedGenerations = [];
+          })
+          .finally(() => {
+            UI._fetchingColGen = false;
+            renderMain();
+          });
+      }
+      const genItems = UI._collectedGenerations || [];
+      if (UI._fetchingColGen && !UI._collectedGenerations) {
+        bodyHtml = `<div style="padding:40px;text-align:center;color:var(--ink-muted);">🕒 正在加载收藏的生图历史…</div>`;
+      } else if (!genItems.length) {
+        bodyHtml = `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏生图历史，去创作者主页点亮 ⭐️ 吧！</div>`;
+      } else {
+        bodyHtml = S.renderMasonry(
+          genItems.map((g) => {
+            const img0 = (g.images && g.images[0]) || "/images/poster-demo-autumn-equinox.webp";
+            const title = g.topic || g.title || "手绘风生成作品";
+            const dateText = esc(g.createdAt || g.created_at || "近期");
+            return `
+              <article class="hw-card" data-col-gen="${esc(g.id)}">
+                <div class="hw-card-media" data-open-col-gen="${esc(g.id)}" style="cursor:pointer;">
+                  <img data-hw-src="${esc(img0)}" alt="${esc(title)}" />
+                </div>
+                <div class="hw-card-body">
+                  <h3 class="hw-card-title" data-open-col-gen="${esc(g.id)}" style="cursor:pointer;">${esc(title)}</h3>
+                  <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;margin-bottom:8px;">
+                    <span>@${esc(g.author)} · ${dateText}</span>
+                    <span>👍 ${g.likes || 0} · ⭐️ ${g.favorites || 0}</span>
+                  </div>
+                  <div class="hw-card-footer">
+                    <button type="button" class="btn btn-sm" data-unfav-gen="${esc(g.id)}">移除</button>
+                    <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", { forkGen: g.id, entry: "quick" }))}">复刻配方 ↗</a>
+                  </div>
+                </div>
+              </article>
+            `;
+          }),
+          "standard"
+        );
+      }
     } else {
       const items = (cols.topics || []).map((id) => App.state.topics.find((t) => t.id === id)).filter(Boolean);
       bodyHtml = items.length
@@ -2296,7 +2458,7 @@
     root.innerHTML = `
       <section class="hw-editorial-strip">
         <div>
-          <p class="hw-editorial-eyebrow">个人云端资产 · 四合一云端收藏夹</p>
+          <p class="hw-editorial-eyebrow">个人云端资产 · 五合一云端收藏夹</p>
           <h1 class="hw-editorial-title">${esc(App.state.user.name)} 的创作资产库</h1>
           <p class="hw-editorial-sub">收藏的画风与图型已实时同步至 <code>studio.handraw-style.com</code> 选卡器置顶分组。</p>
         </div>
@@ -2307,6 +2469,7 @@
         <button type="button" class="hw-pill ${UI.favTab === "layouts" ? "is-active" : ""}" data-ftab="layouts">📐 图型 (${(cols.layouts || []).length})</button>
         <button type="button" class="hw-pill ${UI.favTab === "works" ? "is-active" : ""}" data-ftab="works">🖼️ 作品与提示词 (${(cols.works || []).length})</button>
         <button type="button" class="hw-pill ${UI.favTab === "topics" ? "is-active" : ""}" data-ftab="topics">💬 实战帖 (${(cols.topics || []).length})</button>
+        <button type="button" class="hw-pill ${UI.favTab === "generations" ? "is-active" : ""}" data-ftab="generations">⚡ 生图历史 (${(cols.generations || []).length})</button>
       </div>
 
       ${bodyHtml}
@@ -2323,6 +2486,23 @@
     });
     root.querySelectorAll("[data-fav-open-work]").forEach((el) => {
       el.onclick = () => openWorkPage(el.getAttribute("data-fav-open-work"));
+    });
+    root.querySelectorAll("[data-open-col-gen]").forEach((el) => {
+      el.onclick = () => {
+        const gid = el.getAttribute("data-open-col-gen");
+        const found = (UI._collectedGenerations || []).find((x) => x.id === gid);
+        if (found) openGenerationDetailModal(found);
+      };
+    });
+    root.querySelectorAll("[data-unfav-gen]").forEach((b) => {
+      b.onclick = () => {
+        const gid = b.getAttribute("data-unfav-gen");
+        S.toggleCollect("generations", gid);
+        if (UI._collectedGenerations) {
+          UI._collectedGenerations = UI._collectedGenerations.filter((x) => x.id !== gid);
+        }
+        renderMain();
+      };
     });
     root.querySelectorAll("[data-unfav]").forEach((b) => {
       b.onclick = () => {

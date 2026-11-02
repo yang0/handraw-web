@@ -2464,6 +2464,8 @@
     const tabParam = params.get("tab");
     const forkId = params.get("fork");
     const forkTopicId = params.get("forkTopic");
+    const forkGenId = params.get("forkGen") || params.get("forkGeneration");
+    const forkItemId = params.get("forkItem") || "";
     const styleParam = params.get("style");
     const layoutParam = params.get("layout");
 
@@ -2562,6 +2564,79 @@
         }
       };
       executeFork();
+    } else if (forkGenId) {
+      CS.stageView = "quick";
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("forkGen");
+      cleanUrl.searchParams.delete("forkGeneration");
+      cleanUrl.searchParams.delete("forkItem");
+      cleanUrl.searchParams.set("entry", "quick");
+      window.history.replaceState(null, "", cleanUrl.pathname + cleanUrl.search);
+
+      const executeForkGen = async () => {
+        const applyDraftData = (data) => {
+          if (data && data.draft) {
+            const draft = data.draft;
+            if (data.source) {
+              draft.source = data.source;
+              CS.forkGenerationSource = data.source;
+            }
+            applyForkDraftToQuickNodes(draft);
+            if (CS.stageView === "quick") {
+              renderQuickStart();
+            }
+          }
+        };
+
+        if (!App.state?.loggedIn) {
+          window.__pendingForkGenId = forkGenId;
+          window.__pendingForkItemId = forkItemId;
+          S.openLoginModal("复刻配方请先登录账号", () => {
+            if (App.state?.loggedIn && window.__pendingForkGenId) {
+              const fgid = window.__pendingForkGenId;
+              const fitem = window.__pendingForkItemId;
+              window.__pendingForkGenId = null;
+              window.__pendingForkItemId = null;
+              fetch(`/api/studio/generations/${encodeURIComponent(fgid)}/fork`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ itemId: fitem }),
+                credentials: "include"
+              })
+                .then((r) => {
+                  if (r.status === 404 || !r.ok) {
+                    toast("该生图记录不可复刻或已下架");
+                    return null;
+                  }
+                  return r.json();
+                })
+                .then((data) => {
+                  if (data) applyDraftData(data);
+                })
+                .catch(() => toast("该生图记录不可复刻"));
+            }
+          });
+          return;
+        }
+
+        try {
+          const resp = await fetch(`/api/studio/generations/${encodeURIComponent(forkGenId)}/fork`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ itemId: forkItemId }),
+            credentials: "include"
+          });
+          if (resp.status === 404 || !resp.ok) {
+            toast("该生图记录不可复刻或已下架");
+            return;
+          }
+          const data = await resp.json();
+          if (data) applyDraftData(data);
+        } catch (_) {
+          toast("该生图记录不可复刻");
+        }
+      };
+      executeForkGen();
     } else if (forkTopicId) {
       const t = (App.state.topics || []).find((x) => x.id === forkTopicId);
       if (t && t.recipe) {
@@ -4913,7 +4988,11 @@
           ? items.map((it, idx) => `【第 ${idx + 1} 轮】${it.prompt || it.theme || ""}`).join("\n\n")
           : E.assembleControlPrompt(CS.graph, ctrlNode, Catalog, "skill"),
       markdown: markdown || "",
-      items: JSON.parse(JSON.stringify(items))
+      items: JSON.parse(JSON.stringify(items)),
+      ...(CS.forkGenerationSource?.generationId ? {
+        forkGenerationId: CS.forkGenerationSource.generationId,
+        forkItemId: CS.forkGenerationSource.itemId || ""
+      } : {})
     };
 
     CS.generationHistory = [entry, ...(CS.generationHistory || [])].slice(0, 40);
@@ -5535,7 +5614,11 @@
                 recipeSnapshot: sp.recipeSnapshot,
                 requestId,
                 clientRequestId: requestId,
-                confirmCost: true
+                confirmCost: true,
+                ...(CS.forkGenerationSource?.generationId ? {
+                  forkGenerationId: CS.forkGenerationSource.generationId,
+                  forkItemId: CS.forkGenerationSource.itemId || ""
+                } : {})
               })
             });
             const data = await resp.json();
@@ -11531,6 +11614,9 @@
 
   function applyForkDraftToQuickNodes(draft) {
     if (!draft) return;
+    if (draft.source) {
+      CS.forkGenerationSource = draft.source;
+    }
     ensureQuickTab();
     const p = getQuickParts();
     if (!p) return;
@@ -14929,7 +15015,8 @@
         catalog: Catalog,
         results,
         busy,
-        statusText
+        statusText,
+        forkSource: CS.forkGenerationSource
       }, {
         markDirtyAndRender,
         persistDraft,

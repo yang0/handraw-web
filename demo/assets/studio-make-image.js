@@ -312,6 +312,7 @@
       const results = Array.isArray(this.context?.results) ? this.context.results : [];
       const busy = Boolean(this.context?.busy);
       const statusText = this.context?.statusText || "";
+      const forkSource = this.context?.forkSource || this.forkSource || null;
 
       this.hostElement.innerHTML = `
         <div class="make-image-container">
@@ -321,6 +322,12 @@
               <p class="make-image-lede">选择画风、图型与主题色，填写创作主题，快速生成高画质手绘图。</p>
             </div>
           </div>
+          ${forkSource ? `
+            <div class="make-image-fork-banner" style="background:var(--paper-soft,#f4efe6);border:1px solid var(--brand-vermilion,#e15b3c);border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:13px;display:flex;justify-content:space-between;align-items:center;">
+              <span>⚡ <strong>配方来自 @${esc(forkSource.authorName || forkSource.author)}</strong></span>
+              <span style="font-size:12px;color:var(--ink-muted);">参数已预填，确认生成后才结算</span>
+            </div>
+          ` : ""}
 
           <form class="make-image-form" novalidate onsubmit="return false;">
             <div class="make-image-main-grid">
@@ -1157,8 +1164,20 @@
       });
     }
 
+    setForkSource(source) {
+      this.forkSource = source;
+      if (this.actions?.markDirtyAndRender) {
+        this.actions.markDirtyAndRender();
+      } else if (this.hostElement) {
+        this.render();
+      }
+    }
+
     applyForkDraft(draft) {
       if (!draft) return;
+      if (draft.source) {
+        this.forkSource = draft.source;
+      }
       const p = this.getParts();
       if (!p) return;
       const sd = p.skill.data;
@@ -1210,6 +1229,9 @@
     DEFAULT_MOODS,
     render(host, context, actions) {
       return defaultInstance.render(host, context, actions);
+    },
+    setForkSource(source) {
+      return defaultInstance.setForkSource(source);
     },
     applyForkDraft(draft) {
       return defaultInstance.applyForkDraft(draft);
