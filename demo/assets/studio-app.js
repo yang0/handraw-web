@@ -4370,6 +4370,7 @@
 
     function attachRecipeSnapshots(specsList) {
       if (!Array.isArray(specsList)) return;
+      const rawUserSubject = String(rec.combinedText || rec.userNoteText || "").trim();
       specsList.forEach((sp) => {
         if (!sp.recipeSnapshot) {
           const s1 = sp.style1 || rec.style1Id || "";
@@ -4378,14 +4379,39 @@
           const s1Res = s1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s1) || rec.style1Res) : rec.style1Res;
           const s2Res = s2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s2) || rec.style2Res) : rec.style2Res;
           const layRes = lay && Catalog?.resourceMap ? (Catalog.resourceMap.get(lay) || rec.layoutRes) : rec.layoutRes;
+          let spSubj = "";
+          if (sp.subject) {
+            spSubj = String(sp.subject).trim();
+          } else if (rawUserSubject) {
+            spSubj = rawUserSubject;
+          } else if (sp.theme && sp.theme !== "温暖手绘编辑风插画创作") {
+            spSubj = String(sp.theme).trim();
+          }
           sp.recipeSnapshot = {
             style1: s1,
             style1Name: s1Res?.name || s1Res?.title || "",
             style2: s2,
             style2Name: s2Res?.name || s2Res?.title || "",
             layout: lay,
-            layoutName: layRes?.name || layRes?.title || ""
+            layoutName: layRes?.name || layRes?.title || "",
+            subject: spSubj
           };
+          if (!sp.subject && spSubj) {
+            sp.subject = spSubj;
+          }
+        } else if (!sp.recipeSnapshot.subject) {
+          let spSubj = "";
+          if (sp.subject) {
+            spSubj = String(sp.subject).trim();
+          } else if (rawUserSubject) {
+            spSubj = rawUserSubject;
+          } else if (sp.theme && sp.theme !== "温暖手绘编辑风插画创作") {
+            spSubj = String(sp.theme).trim();
+          }
+          if (spSubj) {
+            sp.recipeSnapshot.subject = spSubj;
+            if (!sp.subject) sp.subject = spSubj;
+          }
         }
       });
     }
@@ -4742,6 +4768,7 @@
             anchorHeading: spec.anchorHeading || "",
             ratio: spec.ratio || "3:4",
             theme: spec.theme || "",
+            subject: spec.subject || spec.recipeSnapshot?.subject || "",
             prompt: spec.prompt || "",
             imageUrl: (images && images[0]) || "",
             recipeSnapshot: spec.recipeSnapshot || null
@@ -5007,13 +5034,16 @@
       const cardS1Res = cardS1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS1) || rec?.style1Res) : rec?.style1Res;
       const cardS2Res = cardS2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS2) || rec?.style2Res) : rec?.style2Res;
       const cardLayRes = cardLay && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardLay) || rec?.layoutRes) : rec?.layoutRes;
+      const cardSubj = String(card.subject || card.theme || card.title || rec?.combinedText || "").trim();
+      card.subject = cardSubj;
       card.recipeSnapshot = {
         style1: cardS1,
         style1Name: cardS1Res?.name || cardS1Res?.title || "",
         style2: cardS2,
         style2Name: cardS2Res?.name || cardS2Res?.title || "",
         layout: cardLay,
-        layoutName: cardLayRes?.name || cardLayRes?.title || ""
+        layoutName: cardLayRes?.name || cardLayRes?.title || "",
+        subject: cardSubj
       };
 
       if (useLiveApi) {
@@ -5520,6 +5550,7 @@
           anchorHeading: sp.anchorHeading || "",
           ratio: sp.ratio || "3:4",
           theme: sp.theme || "",
+          subject: sp.subject || sp.recipeSnapshot?.subject || "",
           prompt: skillPrompt,
           imageUrl: imgUrl,
           recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
@@ -8774,20 +8805,42 @@
     });
   }
 
+  function getGraphemeSegments(str) {
+    if (!str) return [];
+    if (typeof Intl !== "undefined" && Intl.Segmenter) {
+      const seg = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+      return Array.from(seg.segment(str), (s) => s.segment);
+    }
+    return Array.from(str);
+  }
+
+  function formatSubjectTitle(rawSubject) {
+    if (!rawSubject) return "";
+    const clean = String(rawSubject).trim().replace(/\s+/g, " ");
+    if (!clean) return "";
+    const chars = getGraphemeSegments(clean);
+    if (chars.length > 40) {
+      return chars.slice(0, 39).join("") + "…";
+    }
+    return clean;
+  }
+
   function getNormalizedRecipeSnapshot(obj) {
     if (!obj) return null;
     const snap = obj.recipeSnapshot || obj;
     const s1 = String(snap.style1 || "").trim().toUpperCase().replace(/^#/, "");
     const s2 = String(snap.style2 || "").trim().toUpperCase().replace(/^#/, "");
     const lay = String(snap.layout || "").trim().toUpperCase().replace(/^#/, "");
-    if (!s1 && !s2 && !lay) return null;
+    const subj = String(snap.subject != null ? snap.subject : (obj.subject != null ? obj.subject : "")).trim();
+    if (!s1 && !s2 && !lay && !subj) return null;
     return {
       style1: s1,
       style1Name: snap.style1Name || (s1 && Catalog?.resourceMap?.get(s1)?.name) || "",
       style2: s2,
       style2Name: snap.style2Name || (s2 && Catalog?.resourceMap?.get(s2)?.name) || "",
       layout: lay,
-      layoutName: snap.layoutName || (lay && Catalog?.resourceMap?.get(lay)?.name) || ""
+      layoutName: snap.layoutName || (lay && Catalog?.resourceMap?.get(lay)?.name) || "",
+      subject: subj
     };
   }
 
@@ -8835,18 +8888,18 @@
   }
 
   function resolvePublishDefaultTitle(rawItems, dispNode, isPlan, isFromArticle) {
-    // 7. 用户手动填写的发布标题、文章标题保留
+    // 1. 用户手动填写的发布标题、文章标题保留（手动标题上限 120）
     if (dispNode?.data?.titleSource === "manual" && dispNode.data?.title) {
-      return dispNode.data.title;
+      return String(dispNode.data.title).slice(0, 120);
     }
     if (isPlan && dispNode?.data?.articleTitleSource === "manual" && dispNode.data?.articleTitle) {
-      return dispNode.data.articleTitle;
+      return String(dispNode.data.articleTitle).slice(0, 120);
     }
 
     const itemsWithImg = (rawItems || []).filter((it) => it && it.imageUrl);
     if (!itemsWithImg.length) {
       if (isPlan && dispNode?.data?.articleTitleSource === "manual" && dispNode.data?.articleTitle) {
-        return dispNode.data.articleTitle;
+        return String(dispNode.data.articleTitle).slice(0, 120);
       }
       return "Handraw 画布创作";
     }
@@ -8854,12 +8907,22 @@
     const recipes = itemsWithImg.map(getNormalizedRecipeSnapshot);
     const validRecipes = recipes.filter(Boolean);
 
-    // 8. 旧结果缺快照时用 Handraw 画布创作，不要猜编号
+    // 2. 该图生成时保存的用户主题（subject）——最高优先的自动来源
+    const firstSubject = (validRecipes[0] && validRecipes[0].subject) ||
+                         (rawItems[0] && (rawItems[0].subject || rawItems[0].recipeSnapshot?.subject)) || "";
+    if (firstSubject) {
+      const formatted = formatSubjectTitle(firstSubject);
+      if (formatted) {
+        return formatted;
+      }
+    }
+
+    // 4. 旧结果缺快照时用 Handraw 画布创作，不要猜编号
     if (!validRecipes.length) {
       return "Handraw 画布创作";
     }
 
-    // 6. 混合配方多图：多配方创作晒图
+    // 混合配方多图：多配方创作晒图
     if (itemsWithImg.length > 1) {
       const distinctKeys = new Set(
         recipes.map((r) => (r ? `${r.style1}|${r.style2}|${r.layout}` : "__none__"))
@@ -8869,6 +8932,7 @@
       }
     }
 
+    // 3. 配方快照标题（编号 名称 · 晒图）
     return buildPublishTitleFromRecipe(validRecipes[0]);
   }
 
@@ -8876,7 +8940,8 @@
     window.HandrawStudioPublish = {
       getNormalizedRecipeSnapshot,
       buildPublishTitleFromRecipe,
-      resolvePublishDefaultTitle
+      resolvePublishDefaultTitle,
+      formatSubjectTitle
     };
   }
 
@@ -8909,22 +8974,28 @@
 
     const isFromArticle = isPlan || upParent?.type === "article_plan" || dispNode.data?.mode === "article-illust";
 
+    const firstSnap = getNormalizedRecipeSnapshot(rawItems[0]);
     let subject = "";
-    const qParts = getQuickParts(CS.graph);
-    if (qParts?.text?.data?.text) {
-      subject = String(qParts.text.data.text).trim();
-    } else if (ctrl) {
-      const upTextEdge = CS.graph.edges.find((e) => e.to === ctrl.id && getNodeById(e.from)?.type === "text_input");
-      if (upTextEdge) {
-        const upTextNode = getNodeById(upTextEdge.from);
-        if (upTextNode?.data?.text) {
-          subject = String(upTextNode.data.text).trim();
+    if (firstSnap && firstSnap.subject) {
+      subject = firstSnap.subject;
+    } else if (rawItems[0]?.subject || rawItems[0]?.recipeSnapshot?.subject) {
+      subject = rawItems[0].subject || rawItems[0].recipeSnapshot.subject;
+    } else {
+      const qParts = getQuickParts(CS.graph);
+      if (qParts?.text?.data?.text) {
+        subject = String(qParts.text.data.text).trim();
+      } else if (ctrl) {
+        const upTextEdge = CS.graph.edges.find((e) => e.to === ctrl.id && getNodeById(e.from)?.type === "text_input");
+        if (upTextEdge) {
+          const upTextNode = getNodeById(upTextEdge.from);
+          if (upTextNode?.data?.text) {
+            subject = String(upTextNode.data.text).trim();
+          }
         }
       }
     }
 
     const defaultTitle = resolvePublishDefaultTitle(rawItems, dispNode, isPlan, isFromArticle);
-    const firstSnap = getNormalizedRecipeSnapshot(rawItems[0]);
 
     const sharePayload = {
       kind: "work",

@@ -658,7 +658,7 @@ async function runAllTests() {
   }
 
   // ==========================================
-  // TEST 5: 同草稿提交到 /api/works
+  // TEST 5: 同草稿提交到 /api/works（引导完善标题与创作说明）
   // ==========================================
   {
     console.log("\n--- Test 5: 同草稿提交到 /api/works ---");
@@ -668,20 +668,38 @@ async function runAllTests() {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const submitBtn = harness.root.querySelector('[data-act="submit"]');
+    // Draft with placeholder title "图文模式" and empty notes is blocked inline
     submitBtn.click();
-
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const workCall = harness.apiCalls.find((c) => c.url === "/api/works");
-    assert.ok(workCall, "Submitted to /api/works");
-    assert.equal(workCall.body.title, "图文模式", "Title submitted matches draft");
-    assert.equal(workCall.body.notes, "", "Notes submitted is clean/empty");
+    let workCall = harness.apiCalls.find((c) => c.url === "/api/works");
+    assert.strictEqual(workCall, undefined, "Initial submission blocked due to placeholder title and empty notes");
+    const titleErr = harness.root.querySelector('[data-err-for="title"]');
+    assert.ok(titleErr && titleErr.textContent.includes("占位词"), "Title error flagged for placeholder title");
+    const notesErr = harness.root.querySelector('[data-err-for="notes"]');
+    assert.ok(notesErr && notesErr.textContent.includes("创作说明"), "Notes error flagged for empty notes");
+
+    // Fill valid title and notes
+    const titleInput = harness.root.querySelector('[data-act="title"]');
+    titleInput.value = "雨天便利店｜水彩画风尝试";
+    titleInput.dispatchEvent({ type: "input", target: titleInput });
+    const notesTextarea = harness.root.querySelector('[data-act="notes"]');
+    notesTextarea.value = "这是关于街角便利店水彩风格的创作说明实测心得记录";
+    notesTextarea.dispatchEvent({ type: "input", target: notesTextarea });
+
+    submitBtn.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    workCall = harness.apiCalls.find((c) => c.url === "/api/works");
+    assert.ok(workCall, "Submitted to /api/works after valid inputs");
+    assert.equal(workCall.body.title, "雨天便利店｜水彩画风尝试", "Title submitted matches validated input");
+    assert.equal(workCall.body.notes, "这是关于街角便利店水彩风格的创作说明实测心得记录", "Notes submitted matches validated input");
     assert.equal(workCall.body.mode, "graphic-text", "Extra key mode preserved");
     assert.equal(workCall.body.mood, "治愈", "Extra key mood preserved");
     assert.equal(workCall.body.color, "C-15", "Extra key color preserved");
     assert.equal(workCall.body.tone, "T-01", "Extra key tone preserved");
 
-    console.log("✓ Test 5 Passed: Draft 825e80af work submission payload and extra fields preserved.");
+    console.log("✓ Test 5 Passed: Draft 825e80af guidance validation and work submission verified.");
   }
 
   // ==========================================
@@ -937,6 +955,10 @@ async function runAllTests() {
     defInput.value = "矿物颜料青绿山水风格";
     defInput.dispatchEvent({ type: "input", target: defInput });
 
+    const descInput = harness.root.querySelector('[data-act="description"]');
+    descInput.value = "适合传统东方青绿山水创作";
+    descInput.dispatchEvent({ type: "input", target: descInput });
+
     const coverInput = harness.root.querySelector('.curation-cover input[data-act="cover"]');
     coverInput.files = [{ name: "cover.png", type: "image/png" }];
     coverInput.dispatchEvent({ type: "change", target: coverInput });
@@ -1006,6 +1028,10 @@ async function runAllTests() {
     const promptInput = harness.root.querySelector('[data-act="prompt"]');
     promptInput.value = "super secret masterpiece prompt";
     promptInput.dispatchEvent({ type: "input", target: promptInput });
+
+    const notesInput = harness.root.querySelector('[data-act="notes"]');
+    notesInput.value = "这是关于绝密配方水彩画的创作说明实测心得记录";
+    notesInput.dispatchEvent({ type: "input", target: notesInput });
 
     const fileInput = harness.root.querySelector('input[data-act="file"]');
     fileInput.files = [{ name: "work.png", type: "image/png" }];

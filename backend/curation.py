@@ -10,13 +10,14 @@ ServiceError comes from :mod:`backend.services`.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from typing import Any
 
 from .db import Database
 from .media_dims import image_size, is_square
-from .services import ServiceError, apply_wallet_delta, get_site_settings, utc_now_iso
+from .services import ServiceError, apply_wallet_delta, get_site_settings, utc_now_iso, validate_topic_title
 
 KINDS: tuple[str, ...] = ("style", "layout", "work")
 SUB_STATUSES = ("pending", "approved", "changes_requested", "withdrawn")
@@ -198,6 +199,10 @@ def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = Fal
             examples = [u for u in _clean_images(item.get("images")) if u != c]
             if len(examples) > 9:
                 raise ServiceError(f"示例图最多 9 张，当前 {len(examples)} 张。", status=400, code="too_many_images")
+            # Description max length check
+            desc_val = _s(item.get("description") or item.get("notes"), 300).strip()
+            if len(desc_val) > 300:
+                raise ServiceError(f"{label}简介最多 300 字", status=400, code="description_too_long")
         else:
             if cover_cand:
                 c = cover_cand[0]
@@ -1600,9 +1605,11 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
     username = _username(user)
     uid = _user_id(user)
     request_id = _s(body.get("requestId"), 80)
-    title = _s(body.get("title"), 140).strip()
-    if not title:
+    raw_title = _s(body.get("title"), 140).strip()
+    if not raw_title:
         raise ServiceError("发布作品需要填写标题", status=400, code="title_required")
+    title = raw_title
+    raw_notes = _s(body.get("notes"), 20000).strip()
     prompt = str(body.get("prompt") or "")
     # The prompt is stored verbatim (only the length is bounded and the value
     # checked for blankness); the Skill promises the user's words survive intact.
@@ -1745,7 +1752,9 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
         if forked_from:
             _record_fork(tx, forked_from, uid, body.get("generationId") or "", now_iso)
 
-        topic_id = _ensure_work_topic(tx, work_id, username, display, title, images, styles, layout, now_iso, now_ms)
+        topic_id = _ensure_work_topic(
+            tx, work_id, username, display, title, images, styles, layout, now_iso, now_ms, summary=raw_notes
+        )
         tx.execute(
             "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
             (work_id, topic_id, now_iso),
@@ -1900,7 +1909,19 @@ def _reward_direct_work(
     }
 
 
-def _ensure_work_topic(tx, work_id, username, display, title, images, styles, layout, now_iso, now_ms) -> str:
+def _ensure_work_topic(
+    tx,
+    work_id: str,
+    username: str,
+    display: str,
+    title: str,
+    images: list[str],
+    styles: list[str],
+    layout: str,
+    now_iso: str,
+    now_ms: int,
+    summary: str = "",
+) -> str:
     row = tx.execute(
         "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
         (work_id,),
@@ -1928,7 +1949,7 @@ def _ensure_work_topic(tx, work_id, username, display, title, images, styles, la
             json.dumps(styles, ensure_ascii=False),
             layout,
             work_id,
-            "",
+            summary,
             now_ms,
             now_iso,
             now_iso,

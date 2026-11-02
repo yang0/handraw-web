@@ -131,6 +131,7 @@ from .services import (
     publish_forum_topic_post,
     publish_user_community_asset,
     publish_user_work,
+    validate_topic_title,
     record_user_studio_history,
     redeem_code_for_user,
     refund_failed_cloud_generation,
@@ -2674,6 +2675,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/works":
             user = self._current_user(required=True)
             clean_body = _persist_inline_images_in_body(self.db, user, body)
+            validate_topic_title(clean_body.get("title"))
+            raw_notes = str(clean_body.get("notes") or "").strip()
+            notes_non_ws = re.sub(r"\s+", "", raw_notes)
+            if not notes_non_ws:
+                raise ServiceError("发布作品需要填写创作说明", status=400, code="notes_required")
+            if len(notes_non_ws) < 8:
+                raise ServiceError("作品创作说明至少需要 8 个字", status=400, code="notes_too_short")
             result = publish_user_work(self.db, user, clean_body)  # type: ignore[arg-type]
             _grant_published_media(self.db, user, clean_body, target_type="topic", target_id=str(result.get("topicId") or ""))
             self._send_json(result)

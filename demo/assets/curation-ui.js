@@ -93,6 +93,36 @@
   /* ================= SHARE (page 1) ================= */
   var CANNED_BODIES = ["我的创作实测分享"];
 
+  var PLACEHOLDER_TOPIC_TITLES = [
+    "图文模式", "纯图模式", "纯图", "生成结果", "当前工作流",
+    "未命名", "无标题", "默认草稿", "画布创作", "云端生图",
+    "生图结果", "图片展示", "作品展示"
+  ];
+
+  function validateTopicTitle(title) {
+    if (typeof S !== "undefined" && typeof S.validateTopicTitle === "function") {
+      return S.validateTopicTitle(title);
+    }
+    var raw = String(title || "").trim();
+    var nonWs = raw.replace(/\s+/g, "");
+    if (nonWs.length < 4) {
+      return "帖子标题至少需要 4 个非空白字符";
+    }
+    var strippedPlaceholder = raw.replace(/[\s\-_+|｜·#/\\#()（）\[\]【】\d+＋]+/g, "");
+    for (var i = 0; i < PLACEHOLDER_TOPIC_TITLES.length; i++) {
+      var p = PLACEHOLDER_TOPIC_TITLES[i];
+      if (raw === p || nonWs === p || strippedPlaceholder === p) {
+        return "标题不能使用默认占位词，请填写具体的主题或说明";
+      }
+    }
+    var residual = raw.replace(/(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+/gi, "");
+    var residualMeaningful = residual.replace(/[\s\-_+|｜·#/\\#()（）\[\]【】\d+＋]+/g, "");
+    if (!residualMeaningful) {
+      return "标题不能仅由编号组成，请添加具体的主题或说明";
+    }
+    return "";
+  }
+
   function stripTag(str) {
     if (!str || typeof str !== "string") return "";
     return str.replace(/^【[^】]*】\s*/, "").trim();
@@ -257,8 +287,9 @@
         itemsHtml = (
           '<div class="curation-item" data-idx="0">' +
             '<label class="curation-field">作品标题<span class="curation-field-err" data-err-for="title"></span>' +
-              '<input data-act="title" data-idx="0" value="' + esc(it.title || "") + '" maxlength="120" placeholder="如：雨中街角面馆">' +
+              '<input data-act="title" data-idx="0" value="' + esc(it.title || "") + '" maxlength="120" placeholder="例如：雨天便利店｜水彩画风尝试">' +
             '</label>' +
+            '<p class="curation-help">示例：雨天便利店｜水彩画风尝试（至少 4 字，勿用纯编号或「图文模式」等占位词）。</p>' +
             '<div class="curation-imgs" data-imgs="0">' + (it.images || []).map(function (src, i) {
               return '<figure class="curation-thumb-wrap">' + imgTag(src, "预览") +
                 '<button type="button" class="curation-x" data-act="delimg" data-idx="0" data-i="' + i + '" aria-label="删除图片">×</button></figure>';
@@ -270,9 +301,10 @@
               '<textarea data-act="prompt" data-idx="0" rows="5" maxlength="20000" placeholder="粘贴实际发给模型的完整提示词">' + esc(it.prompt || "") + '</textarea>' +
             '</label>' +
             '<p class="curation-help">读者看到并复制的就是这段原文。</p>' +
-            '<label class="curation-field">作者点评<span class="curation-field-err" data-err-for="notes"></span>' +
-              '<textarea data-act="notes" data-idx="0" rows="3" maxlength="1200" placeholder="说说做法、取舍或踩过的坑（可选）">' + esc(it.notes || "") + '</textarea>' +
+            '<label class="curation-field">创作说明（必填）<span class="curation-field-err" data-err-for="notes"></span>' +
+              '<textarea data-act="notes" data-idx="0" rows="3" maxlength="1200" placeholder="例如：画了什么？尝试了什么？效果如何？（至少 8 字）">' + esc(it.notes || "") + '</textarea>' +
             '</label>' +
+            '<p class="curation-help">示例：画了什么？尝试了什么？效果如何？将作为帖子正文展示。</p>' +
             '<div class="curation-pick">' +
               '<div class="curation-pick-row"><span>画风</span><button type="button" data-act="pick" data-idx="0" data-target="style">选择画风</button><span class="curation-chips" data-chip="style" data-idx="0">' + stylesHtml + '</span></div>' +
               '<div class="curation-pick-row"><span>图型</span><button type="button" data-act="pick" data-idx="0" data-target="layout">选择图型</button><span class="curation-chips" data-chip="layout" data-idx="0">' + layoutHtml + '</span></div>' +
@@ -340,9 +372,10 @@
               '<textarea data-act="definition" data-idx="0" rows="4" maxlength="6000" placeholder="' +
                 (model.kind === "style" ? "画风：笔触、用色、质感" : "图型：版式结构与元素位置") + '">' + esc(it.definition || "") + '</textarea>' +
             '</label>' +
-            '<label class="curation-field">简介<span class="curation-field-err" data-err-for="description"></span>' +
-              '<textarea data-act="description" data-idx="0" rows="2" maxlength="300" placeholder="一句话说明适合画什么（可选）">' + esc(it.description || "") + '</textarea>' +
+            '<label class="curation-field">简介（必填）<span class="curation-field-err" data-err-for="description"></span>' +
+              '<textarea data-act="description" data-idx="0" rows="2" maxlength="300" placeholder="例如：适合画什么？有什么特点？（至少 8 字）">' + esc(it.description || "") + '</textarea>' +
             '</label>' +
+            '<p class="curation-help">示例：适合画什么？有什么特点？将作为资源帖公开介绍。</p>' +
             '<label class="curation-field">解锁积分<span class="curation-field-err" data-err-for="unlockCost"></span>' +
               '<input type="number" min="0" max="50" step="1" data-act="unlockCost" data-idx="0" value="' + esc(it.unlockCost != null ? it.unlockCost : 0) + '" placeholder="0–50 整数，0 为免费">' +
               '<div class="curation-price-presets" style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">' +
@@ -760,8 +793,9 @@
         var notesEl = root.querySelector('[data-act="notes"]');
 
         var titleVal = (it.title || "").trim();
-        if (!titleVal) {
-          errors.push({ el: titleEl, act: "title", message: "请填写作品标题。" });
+        var titleErr = validateTopicTitle(titleVal);
+        if (titleErr) {
+          errors.push({ el: titleEl, act: "title", message: titleErr });
         } else if (getLen(it.title) > 120) {
           errors.push({ el: titleEl, act: "title", message: "最多 120 字，当前 " + getLen(it.title) + " 字。" });
         }
@@ -779,7 +813,13 @@
           errors.push({ el: promptEl, act: "prompt", message: "最多 20000 字，当前 " + getLen(it.prompt) + " 字。" });
         }
 
-        if (it.notes && getLen(it.notes) > 1200) {
+        var notesVal = (it.notes || "").trim();
+        var notesNonWs = notesVal.replace(/\s+/g, "");
+        if (!notesNonWs) {
+          errors.push({ el: notesEl, act: "notes", message: "请填写作品创作说明（至少 8 字）。" });
+        } else if (notesNonWs.length < 8) {
+          errors.push({ el: notesEl, act: "notes", message: "创作说明至少需要 8 个字，当前 " + notesNonWs.length + " 字。" });
+        } else if (getLen(it.notes) > 1200) {
           errors.push({ el: notesEl, act: "notes", message: "最多 1200 字，当前 " + getLen(it.notes) + " 字。" });
         }
 
@@ -827,7 +867,13 @@
           errors.push({ el: defEl, act: "definition", idx: 0, message: "最多 6000 字，当前 " + getLen(it.definition) + " 字。" });
         }
 
-        if (it.description && getLen(it.description) > 300) {
+        var descVal = (it.description || "").trim();
+        var descNonWs = descVal.replace(/\s+/g, "");
+        if (!descNonWs) {
+          errors.push({ el: descEl, act: "description", idx: 0, message: "请填写简介（至少 8 字）。" });
+        } else if (descNonWs.length < 8) {
+          errors.push({ el: descEl, act: "description", idx: 0, message: "简介至少需要 8 个字，当前 " + descNonWs.length + " 字。" });
+        } else if (getLen(it.description) > 300) {
           errors.push({ el: descEl, act: "description", idx: 0, message: "最多 300 字，当前 " + getLen(it.description) + " 字。" });
         }
 

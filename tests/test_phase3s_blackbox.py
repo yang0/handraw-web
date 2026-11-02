@@ -290,6 +290,7 @@ class Phase3sBlackboxTests(unittest.TestCase):
                 "prompt": f"我的公开提示词\n\n{self.paid_secret}\n\n{self.free_secret}",
                 "images": ["/images/poster-demo-autumn-equinox.webp"],
                 "styles": ["FX-P3S-PAID"],
+                "notes": "这是用于黑盒测试作品发布的创作说明记录",
                 "price": 0,
             },
             cookie=self.cookie_a,
@@ -451,7 +452,7 @@ class Phase3sBlackboxTests(unittest.TestCase):
                 "price": 10,
                 "styles": ["FX-EXIT"],
                 "images": ["/images/poster-demo-autumn-equinox.webp"],
-                "notes": "实测笔记摘要",
+                "notes": "这是实测笔记摘要记录详情",
                 "prompt": f"作品提示词附带秘密：{secret}",
             },
             cookie=self.cookie_a,
@@ -584,6 +585,7 @@ class Phase3sBlackboxTests(unittest.TestCase):
                 "title": "投石机与猫作品",
                 "prompt": user_text,
                 "images": ["/images/cat.webp"],
+                "notes": "投石机与猫作品的完整创作说明记录",
                 "price": 0,
             },
             cookie=self.cookie_a,
@@ -865,7 +867,7 @@ class Phase3sBlackboxTests(unittest.TestCase):
             st, res = self._req(
                 "POST",
                 "/api/works",
-                {"title": "扫库失败作品", "prompt": "公开用户提示词", "images": ["/images/poster-demo-autumn-equinox.webp"], "price": 0},
+                {"title": "扫库失败作品", "notes": "扫库失败作品的完整创作说明记录", "prompt": "公开用户提示词", "images": ["/images/poster-demo-autumn-equinox.webp"], "price": 0},
                 cookie=self.cookie_a,
             )
             self.assertEqual(st, 200)

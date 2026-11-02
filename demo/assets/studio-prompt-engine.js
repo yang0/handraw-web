@@ -1149,8 +1149,6 @@
       // Audience & Business Scene
       if (rec.audience) {
         parts.push(`受众：${rec.audience}`);
-      } else if (effectiveMode === "poster") {
-        parts.push("受众：【可指定受众群体】");
       }
 
       if (rec.businessScene) {
@@ -1160,8 +1158,6 @@
         if (ratio === "5:2" || ratio === "16:9") autoScene = "X文章封面";
         else if (ratio === "3:4") autoScene = "小红书封面";
         parts.push(`业务场景：${autoScene}`);
-      } else if (effectiveMode === "poster") {
-        parts.push("海报投放渠道：【可指定业务场景】");
       }
 
       // Fallback hint if style or color left open

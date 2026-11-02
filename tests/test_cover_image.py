@@ -133,6 +133,7 @@ class CoverImageTests(unittest.TestCase):
                 "kind": "style",
                 "name": "容差内封面画风",
                 "definition": "测试定义",
+                "description": "容差内封面测试画风简介说明",
                 "cover": tol_url,
                 "images": ["/images/FA-001.webp"],
             }]
@@ -199,6 +200,7 @@ class CoverImageTests(unittest.TestCase):
                 "kind": "style",
                 "name": "可收录画风",
                 "definition": "定义内容",
+                "description": "可收录画风测试简介说明内容",
                 "cover": sq,
                 "images": ["/images/FA-001.webp", "/images/FA-002.webp"],
             }]
@@ -286,7 +288,7 @@ class CoverImageTests(unittest.TestCase):
 
         # Replace with square cover -> revise succeeds (status 200)
         rev_res = C.revise(self.db, self.author, sid, {
-            "payload": {"name": "新版", "definition": "旧定", "cover": sq, "images": []}
+            "payload": {"name": "新版", "definition": "旧定", "description": "新版修订画风测试简介说明", "cover": sq, "images": []}
         })
         self.assertTrue(rev_res["ok"])
         self.assertEqual(rev_res["revision"], 2)

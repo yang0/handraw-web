@@ -83,6 +83,14 @@ def handle_post(handler,path,body):
             raise ServiceError('请至少提交一项内容',status=400,code='missing_items')
         if len(items)!=1:
             raise ServiceError('每次投稿只能提交一个画风或一个图型。',status=400,code='single_item_only')
+        it0 = items[0] if isinstance(items[0], dict) else {}
+        label = "画风" if it0.get("kind") == "style" else "图型"
+        desc_val = str(it0.get("description") or it0.get("notes") or body.get("text") or "").strip()[:300]
+        desc_non_ws = re.sub(r"\s+", "", desc_val)
+        if not desc_non_ws:
+            raise ServiceError(f"请填写{label}简介", status=400, code="missing_description")
+        if len(desc_non_ws) < 8:
+            raise ServiceError(f"{label}简介至少需要 8 个字", status=400, code="description_too_short")
         clean=dict(body,items=[_media(handler,user,i) for i in items])
         result=C.submit(db,user,clean)
         _grant(handler,user,result)
