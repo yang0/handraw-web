@@ -180,9 +180,33 @@ def apply(
         tid = ensure_topic(conn, kind, target_id, res, initial_origin="submission")
         created_topic_ids.append(tid)
 
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for kind, target_id, res in needed_works:
-        tid = ensure_topic(conn, kind, target_id, res, initial_origin="submission")
+        tid = ensure_topic(conn, kind, target_id, res, initial_origin="submission", listed_at_ms=None)
+        try:
+            conn.execute(
+                """
+                INSERT INTO audit_logs (
+                    actor_id, actor_username, actor_role, action, target_type, target_id,
+                    reason, details_json, created_at
+                ) VALUES (NULL, 'system', 'system', 'work.prebuild_unlisted_topic', 'topic', ?, ?, ?, ?)
+                """,
+                (
+                    tid,
+                    f"Prebuilt unlisted topic {tid} for work {target_id}",
+                    json.dumps({"work_id": target_id, "topic_id": tid}, ensure_ascii=False),
+                    now_iso,
+                ),
+            )
+        except Exception:
+            pass
         created_topic_ids.append(tid)
+
+    try:
+        from backend.generation_works import backfill_work_topics
+        backfill_work_topics(conn)
+    except Exception:
+        pass
 
     conn.commit()
     return len(created_topic_ids), created_topic_ids

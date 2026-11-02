@@ -1671,12 +1671,14 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
         # Idempotent replay.
         if request_id:
             dup = tx.execute(
-                "SELECT id FROM works WHERE author_username = ? AND request_id = ?",
+                "SELECT * FROM works WHERE author_username = ? AND request_id = ?",
                 (username, request_id),
             ).fetchone()
             if dup:
                 wid = str(dup["id"])
-                return _work_receipt(tx, wid, deduplicated=True)
+                from .resource_discussions import ensure_topic
+                topic_id = ensure_topic(tx, "work", wid, dict(dup), initial_origin="submission")
+                return _work_receipt(tx, wid, topic_id=topic_id, deduplicated=True)
 
         owner_row = tx.execute(
             "SELECT id, display_name, honor_override FROM users WHERE username = ? COLLATE NOCASE",
@@ -1939,40 +1941,22 @@ def _ensure_work_topic(
     now_ms: int,
     summary: str = "",
 ) -> str:
-    row = tx.execute(
-        "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
-        (work_id,),
-    ).fetchone()
-    if row:
-        return str(row["topic_id"])
-    topic_id = f"topic_{now_ms}_{uuid.uuid4().hex[:4]}"
-    tx.execute(
-        """
-        INSERT INTO forum_topics (
-            id, category, category_label, pinned, featured, title, author_username, author_name,
-            views, likes, favorites, price, bounty, bounty_status, solved, accepted_reply_id,
-            images_json, styles_json, layout_code, work_id, recipe_json, recipe_has_secret, summary, locked_body,
-            status, published_at_ms, created_label, created_at, updated_at
-        ) VALUES (?, ?, '🎨 晒作品', 0, 0, ?, ?, ?, 0, 0, 0, 0, 0, 'none', 0, '',
-                  ?, ?, ?, ?, '', 0, ?, '', 'published', ?, '刚刚', ?, ?)
-        """,
-        (
-            topic_id,
-            SHOWCASE_CATEGORY,
-            title,
-            username,
-            display,
-            json.dumps(images, ensure_ascii=False),
-            json.dumps(styles, ensure_ascii=False),
-            layout,
-            work_id,
-            summary,
-            now_ms,
-            now_iso,
-            now_iso,
-        ),
-    )
-    return topic_id
+    from .resource_discussions import ensure_topic
+    res_dict = {
+        "id": work_id,
+        "author_username": username,
+        "author_name": display,
+        "title": title,
+        "name": title,
+        "images_json": json.dumps(images, ensure_ascii=False),
+        "styles_json": json.dumps(styles, ensure_ascii=False),
+        "layout_code": layout,
+        "status": "published",
+        "description": summary,
+        "notes": summary,
+        "summary": summary,
+    }
+    return ensure_topic(tx, "work", work_id, res_dict, initial_origin="submission")
 
 
 def _work_receipt(

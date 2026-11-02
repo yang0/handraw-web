@@ -88,28 +88,29 @@ def _pending_submission_resource(conn, kind, target_norm, viewer=None):
 
 
 
-def ensure_topic(tx,kind,target,resource,initial_origin: str = 'submission'):
+def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission', listed_at_ms: int | None = None):
     if kind in ('style', 'layout', 'asset'):
         target = str(target or '').strip().upper().lstrip('#')
     else:
         target = str(target or '').strip()
 
+    now = S.utc_now_iso()
+
+    # 1. Check existing curation mapping
     if kind in ('style', 'layout', 'asset'):
         row = tx.execute('SELECT topic_id, origin FROM curation_resource_topics WHERE kind=? AND UPPER(target_id)=?', (kind, target)).fetchone()
     else:
         row = tx.execute('SELECT topic_id, origin FROM curation_resource_topics WHERE kind=? AND target_id=?', (kind, target)).fetchone()
     if row:
-        return row['topic_id']
+        return str(row['topic_id'])
 
-    now = S.utc_now_iso()
-
-    # Reuse existing topic if already created for this work (in any status)
+    # 2. For works, check if a topic already exists for this work_id (in any status)
     if kind == 'work':
         existing = tx.execute('SELECT id, status, status_source, status_actor_role FROM forum_topics WHERE work_id=?', (target,)).fetchone()
         if existing:
             tid = str(existing['id'])
             tx.execute(
-                'INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
+                'INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
                 (kind, target, tid, initial_origin, now),
             )
             return tid
@@ -137,7 +138,7 @@ def ensure_topic(tx,kind,target,resource,initial_origin: str = 'submission'):
         author_username = str(resource.get('author_username') or '')
         author_name = str(resource.get('author_name') or '作品作者')
         title = resource.get('title') or name
-        summary = ''
+        summary = str(resource.get('notes') or resource.get('summary') or '')
         w_st = str(resource.get('status') or 'published')
         if w_st != 'published':
             t_status = w_st
@@ -155,50 +156,140 @@ def ensure_topic(tx,kind,target,resource,initial_origin: str = 'submission'):
         title = f'{name} · {label}讨论'
         summary = f'围绕这项{label}交流使用心得。'
 
-    tx.execute(
-        """
-        INSERT INTO forum_topics (
-            id, category, category_label, title, author_username, author_name, summary,
-            images_json, styles_json, layout_code, work_id,
-            status, status_source, status_reason, status_actor_role,
-            published_at_ms, created_label, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '刚刚', ?, ?)
-        """,
-        (
-            tid,
-            category,
-            category_label,
-            title,
-            author_username,
-            author_name,
-            summary,
-            json.dumps(images, ensure_ascii=False),
-            json.dumps([target] if kind == 'style' else []),
-            target if kind == 'layout' else '',
-            target if kind == 'work' else '',
-            t_status,
-            t_source,
-            t_reason,
-            t_actor,
-            int(time.time() * 1000),
-            now,
-            now,
-        ),
-    )
+    pub_ms = int(time.time() * 1000)
+    topic_listed = listed_at_ms if listed_at_ms is not None else (pub_ms if kind != 'work' else None)
+
+    # 3. Insert topic and mapping wrapped in a SAVEPOINT to cleanly resolve concurrent collisions
+    sp_name = f"sp_ensure_{uuid.uuid4().hex[:8]}"
+    tx.execute(f"SAVEPOINT {sp_name}")
     try:
+        tx.execute(
+            """
+            INSERT INTO forum_topics (
+                id, category, category_label, title, author_username, author_name, summary,
+                images_json, styles_json, layout_code, work_id,
+                status, status_source, status_reason, status_actor_role,
+                published_at_ms, created_label, created_at, updated_at, listed_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '刚刚', ?, ?, ?)
+            """,
+            (
+                tid,
+                category,
+                category_label,
+                title,
+                author_username,
+                author_name,
+                summary,
+                json.dumps(images, ensure_ascii=False),
+                json.dumps([target] if kind == 'style' else []),
+                target if kind == 'layout' else '',
+                target if kind == 'work' else '',
+                t_status,
+                t_source,
+                t_reason,
+                t_actor,
+                pub_ms,
+                now,
+                now,
+                topic_listed,
+            ),
+        )
         tx.execute(
             'INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
             (kind, target, tid, initial_origin, now),
         )
+        tx.execute(f"RELEASE SAVEPOINT {sp_name}")
+        return tid
     except sqlite3.IntegrityError:
+        tx.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
+        tx.execute(f"RELEASE SAVEPOINT {sp_name}")
+
+        # Another transaction created the topic or mapping concurrently: fetch and return it
+        if kind == 'work':
+            existing = tx.execute('SELECT id FROM forum_topics WHERE work_id=?', (target,)).fetchone()
+            if existing:
+                tid = str(existing['id'])
+                tx.execute(
+                    'INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
+                    (kind, target, tid, initial_origin, now),
+                )
+                return tid
+
         if kind in ('style', 'layout', 'asset'):
             row = tx.execute('SELECT topic_id FROM curation_resource_topics WHERE kind=? AND UPPER(target_id)=?', (kind, target)).fetchone()
         else:
             row = tx.execute('SELECT topic_id FROM curation_resource_topics WHERE kind=? AND target_id=?', (kind, target)).fetchone()
         if row:
-            return row['topic_id']
+            return str(row['topic_id'])
         raise
-    return tid
+
+
+def record_atomic_reply_and_listing(
+    tx: sqlite3.Connection,
+    topic_id: str,
+    user: dict[str, Any],
+    clean_text: str,
+    mounted_style: str = "",
+    mounted_layout: str = "",
+) -> tuple[str, int]:
+    """Execute reply creation and first-time listing atomically within an existing transaction."""
+    topic = tx.execute("SELECT id, status, work_id, listed_at_ms FROM forum_topics WHERE id = ?", (topic_id,)).fetchone()
+    if not topic or topic["status"] != "published":
+        raise S.ServiceError("讨论已暂停", status=409)
+
+    # If linked to a work, verify the work status is also published
+    linked_wid = str(topic["work_id"] or "").strip()
+    if not linked_wid:
+        m = tx.execute("SELECT target_id FROM curation_resource_topics WHERE kind = 'work' AND topic_id = ?", (topic_id,)).fetchone()
+        if m:
+            linked_wid = str(m["target_id"]).strip()
+
+    if linked_wid:
+        w_cur = tx.execute("SELECT status FROM works WHERE id = ?", (linked_wid,)).fetchone()
+        if w_cur and str(w_cur["status"]) != "published":
+            raise S.ServiceError("讨论已暂停", status=409)
+
+    now_iso = S.utc_now_iso()
+    now_ms = int(time.time() * 1000)
+    rid = f"rep_{now_ms}_{uuid.uuid4().hex[:4]}"
+
+    tx.execute(
+        """
+        INSERT INTO forum_replies (
+            id, topic_id, author_username, author_name, text, mounted_style, mounted_layout,
+            likes, accepted, status, time_label, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'published', '刚刚', ?)
+        """,
+        (
+            rid,
+            topic_id,
+            user["username"],
+            user["display_name"],
+            clean_text,
+            mounted_style,
+            mounted_layout,
+            now_iso,
+        ),
+    )
+
+    # First-time listing: only sets listed_at_ms when currently NULL, never refreshes if already set
+    tx.execute(
+        "UPDATE forum_topics SET listed_at_ms = ?, updated_at = ? WHERE id = ? AND listed_at_ms IS NULL",
+        (now_ms, now_iso, topic_id),
+    )
+
+    uid = int(user["id"])
+    bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+    if bal_row:
+        cur_bal = int(bal_row["balance"])
+    else:
+        tx.execute(
+            "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
+            (uid, now_iso),
+        )
+        cur_bal = 0
+
+    return rid, cur_bal
 
 
 def comment(db,user,kind,target_id,text):
@@ -231,45 +322,18 @@ def comment(db,user,kind,target_id,text):
                 tid = str(mapping["topic_id"])
 
             if not tid:
-                # Work has NO topic yet!
-                # Check commenter: "别人的首条有效评论触发同一讨论帖创建；作者自己评论不触发"
-                author_uname = str(resource.get("author_username") or "").strip().lower()
-                commenter_uname = str(user.get("username") or "").strip().lower()
-                if commenter_uname == author_uname:
-                    raise S.ServiceError("作品尚未发布讨论帖，作者可先晒图至论坛", status=400)
-
-                # First valid comment by someone else -> trigger topic creation atomically
+                # Work has NO topic yet (fallback for historical missing topics):
+                # Ensure topic is created atomically (both author and others can comment)
                 tid = ensure_topic(tx, kind, target, resource)
         else:
             tid = ensure_topic(tx, kind, target, resource)
 
-        topic=tx.execute('SELECT status FROM forum_topics WHERE id=?',(tid,)).fetchone()
-        if not topic or topic['status']!='published':
-            raise S.ServiceError('讨论已暂停',status=409)
-
-        # Atomically commit reply in the same transaction
-        rid = f"rep_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
-        now_iso = S.utc_now_iso()
-        tx.execute(
-            """
-            INSERT INTO forum_replies (
-                id, topic_id, author_username, author_name, text, mounted_style, mounted_layout,
-                likes, accepted, status, time_label, created_at
-            ) VALUES (?, ?, ?, ?, ?, '', '', 0, 0, 'published', '刚刚', ?)
-            """,
-            (rid, tid, user["username"], user["display_name"], clean, now_iso),
+        rid, cur_bal = record_atomic_reply_and_listing(
+            tx,
+            tid,
+            user,
+            clean,
         )
-
-        uid = int(user["id"])
-        bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-        if bal_row:
-            cur_bal = int(bal_row["balance"])
-        else:
-            tx.execute(
-                "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
-                (uid, now_iso),
-            )
-            cur_bal = 0
 
     return {
         "ok": True,
@@ -317,6 +381,7 @@ def topic_visibility_sql(reply_filter: str = "1=1", admin: bool = False) -> str:
     Official style/layout topics are hidden from the topic list unless they have >= OFFICIAL_TOPIC_MIN_REPLIES.
     When admin=False (public boot & stats), replies must have status='published' and satisfy reply_filter.
     When admin=True (admin views & stats), replies of any status satisfying reply_filter count.
+    Work-associated topics must have listed_at_ms IS NOT NULL to appear in the topic list.
     """
     official_sql = official_topic_ids_sql()
     rf = reply_filter if reply_filter and reply_filter.strip() else "1=1"
@@ -330,7 +395,16 @@ def topic_visibility_sql(reply_filter: str = "1=1", admin: bool = False) -> str:
             f"(SELECT COUNT(*) FROM forum_replies r "
             f"WHERE r.topic_id = forum_topics.id AND r.status = 'published' AND {rf}) >= {OFFICIAL_TOPIC_MIN_REPLIES}"
         )
-    return f"(id NOT IN ({official_sql}) OR {reply_cond})"
+    work_cond = (
+        "("
+        "  ("
+        "    (forum_topics.work_id IS NULL OR forum_topics.work_id = '') "
+        "    AND NOT EXISTS (SELECT 1 FROM curation_resource_topics crt_w WHERE crt_w.kind = 'work' AND crt_w.topic_id = forum_topics.id)"
+        "  ) "
+        "  OR forum_topics.listed_at_ms IS NOT NULL"
+        ")"
+    )
+    return f"((id NOT IN ({official_sql}) OR {reply_cond}) AND {work_cond})"
 
 
 def apply_boot(db, payload, current_user):
@@ -348,13 +422,25 @@ def apply_boot(db, payload, current_user):
         norm_target = target.upper().lstrip('#') if kind in ('style', 'layout') else target
         topic = topics.get(tid)
         if not topic:
+            if kind == 'work':
+                reply_cnt_row = conn.execute(
+                    "SELECT COUNT(*) AS c FROM forum_replies WHERE topic_id = ? AND status = 'published'",
+                    (tid,),
+                ).fetchone()
+                reply_cnt = int(reply_cnt_row["c"]) if reply_cnt_row else 0
+                payload['discussions'][norm_target] = {'topicId': tid, 'count': reply_cnt, 'origin': origin}
             continue
         replies = topic.get('replies', [])
-        raw = resolve_resource(conn, kind, norm_target)
+        # A work is not a catalogue resource: resolve_resource() only knows
+        # styles, layouts and assets, so asking it about a work always answers
+        # None and the topic was then dropped from the list. Works carry their
+        # own row and their own topic, so they need no such check.
         if kind == 'work':
             if target in works:
                 works[target]['comments'] = replies
+            raw = works.get(target) or {'id': target}
         else:
+            raw = resolve_resource(conn, kind, norm_target)
             assets[norm_target] = replies
         if not raw:
             is_pending_submission = (

@@ -341,17 +341,17 @@ class TestGenerationWorksSync(unittest.TestCase):
         )
         conn.commit()
 
-        # 1. Author comments on own work with no topic -> rejected! Topic NOT created!
-        with self.assertRaises(ServiceError) as ctx_author:
-            comment(self.db, self.user_author, "work", wid, "作者自己写心得")
-        self.assertEqual(ctx_author.exception.status, 400)
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM forum_topics WHERE work_id = ?", (wid,)).fetchone()[0], 0)
+        # 1. Author comments on own work with no topic -> succeeds! Atomically creates topic and lists it
+        res_author = comment(self.db, self.user_author, "work", wid, "作者自己写心得")
+        self.assertTrue(res_author["ok"])
+        tid = res_author["topicId"]
+        self.assertTrue(tid.startswith("topic_"))
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM forum_topics WHERE work_id = ?", (wid,)).fetchone()[0], 1)
 
-        # 2. Non-author comments -> atomically creates topic and reply!
+        # 2. Non-author comments -> attaches to same topic
         res_reader = comment(self.db, self.user_reader, "work", wid, "好美的画面！")
         self.assertTrue(res_reader["ok"])
-        tid = res_reader["topicId"]
-        self.assertTrue(tid.startswith("topic_"))
+        self.assertEqual(res_reader["topicId"], tid)
 
         # Verify topic exists in forum_topics and curation_resource_topics
         t_row = conn.execute("SELECT * FROM forum_topics WHERE id = ?", (tid,)).fetchone()
@@ -389,7 +389,7 @@ class TestGenerationWorksSync(unittest.TestCase):
 
         # Exactly 22 replies total (1 reader + 1 author + 20 concurrent)
         rep_count = conn.execute("SELECT COUNT(*) FROM forum_replies WHERE topic_id = ?", (tid,)).fetchone()[0]
-        self.assertEqual(rep_count, 22)
+        self.assertEqual(rep_count, 23)
 
 
 if __name__ == "__main__":

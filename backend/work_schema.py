@@ -813,12 +813,196 @@ def backfill_generation_works_hook(conn: sqlite3.Connection) -> None:
         logger.warning("Generation works backfill hook failed: %s", e)
 
 
+FORUM_TOPICS_LISTED_AT_SQL = """
+ALTER TABLE forum_topics ADD COLUMN listed_at_ms INTEGER DEFAULT NULL;
+"""
+
+
+def audit_and_deduplicate_work_topics(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Audit and deduplicate duplicate work_id associations in forum_topics idempotently.
+
+    For each work_id referenced by multiple topics in forum_topics:
+      1. Inspects all candidate topics for that work_id.
+      2. Chooses the primary topic based on:
+         - Whether it is mapped in curation_resource_topics for kind='work' and target_id=work_id
+         - Reply count in forum_replies
+         - Likes count
+         - Earliest created_at and id
+      3. Keeps the primary topic attached to work_id.
+      4. Clears work_id on duplicate topics (work_id = ''), preserving the topic,
+         its replies, author, counters, and images (no loss of historical user data).
+      5. Records audit events in audit_logs and returns a detailed manifest.
+    """
+    from datetime import datetime, timezone
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    manifest: list[dict[str, Any]] = []
+
+    in_tx = getattr(conn, "in_transaction", False)
+    if not in_tx:
+        conn.execute("BEGIN IMMEDIATE;")
+
+    try:
+        dup_rows = conn.execute(
+            """
+            SELECT work_id, COUNT(*) AS cnt
+            FROM forum_topics
+            WHERE work_id IS NOT NULL AND work_id <> ''
+            GROUP BY work_id
+            HAVING cnt > 1
+            """
+        ).fetchall()
+
+        for d_row in dup_rows:
+            wid = str(d_row["work_id"]).strip()
+            candidates = conn.execute(
+                """
+                SELECT t.id, t.title, t.author_username, t.likes, t.created_at,
+                       COALESCE((SELECT COUNT(*) FROM forum_replies r WHERE r.topic_id = t.id), 0) AS reply_count,
+                       EXISTS(
+                           SELECT 1 FROM curation_resource_topics m
+                           WHERE m.kind = 'work' AND m.target_id = ? AND m.topic_id = t.id
+                       ) AS is_mapped
+                FROM forum_topics t
+                WHERE t.work_id = ?
+                ORDER BY is_mapped DESC, reply_count DESC, t.likes DESC, t.created_at ASC, t.id ASC
+                """,
+                (wid, wid),
+            ).fetchall()
+
+            if len(candidates) <= 1:
+                continue
+
+            primary = candidates[0]
+            duplicates = candidates[1:]
+
+            for dup in duplicates:
+                conn.execute("UPDATE forum_topics SET work_id = '' WHERE id = ?", (dup["id"],))
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO audit_logs (
+                            actor_id, actor_username, actor_role, action, target_type, target_id,
+                            reason, details_json, created_at
+                        ) VALUES (NULL, 'system', 'system', 'topic.deduplicate_work_id', 'topic', ?, ?, ?, ?)
+                        """,
+                        (
+                            str(primary["id"]),
+                            f"Deduplicated work_id {wid}: kept primary topic {primary['id']}, unlinked duplicate {dup['id']}",
+                            json.dumps(
+                                {
+                                    "work_id": wid,
+                                    "primary_topic_id": str(primary["id"]),
+                                    "unlinked_topic_id": str(dup["id"]),
+                                    "unlinked_title": str(dup["title"] or ""),
+                                    "unlinked_author": str(dup["author_username"] or ""),
+                                    "unlinked_reply_count": int(dup["reply_count"] or 0),
+                                },
+                                ensure_ascii=False,
+                            ),
+                            now_iso,
+                        ),
+                    )
+                except Exception as log_err:
+                    logger.warning("Failed to record audit_log for deduplication: %s", log_err)
+
+            item = {
+                "work_id": wid,
+                "primary_topic_id": str(primary["id"]),
+                "primary_reply_count": int(primary["reply_count"] or 0),
+                "unlinked_topic_ids": [str(d["id"]) for d in duplicates],
+                "duplicates": [
+                    {
+                        "id": str(d["id"]),
+                        "title": str(d["title"] or ""),
+                        "author": str(d["author_username"] or ""),
+                        "reply_count": int(d["reply_count"] or 0),
+                    }
+                    for d in duplicates
+                ],
+            }
+            manifest.append(item)
+            logger.info(
+                "Deduplicated work_id %s: kept primary topic %s (%d replies), unlinked %d duplicate topic(s): %s",
+                wid,
+                primary["id"],
+                primary["reply_count"],
+                len(duplicates),
+                [d["id"] for d in duplicates],
+            )
+
+        if not in_tx:
+            conn.execute("COMMIT;")
+    except Exception:
+        if not in_tx and getattr(conn, "in_transaction", False):
+            conn.execute("ROLLBACK;")
+        raise
+
+    return manifest
+
+
+FORUM_TOPICS_WORK_UNIQUE_SQL = """
+-- Defensive deduplication in case migration was executed without python hooks
+UPDATE forum_topics
+SET work_id = ''
+WHERE work_id IS NOT NULL AND work_id <> ''
+  AND id NOT IN (
+      SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                     PARTITION BY work_id
+                     ORDER BY
+                         CASE WHEN EXISTS (
+                             SELECT 1 FROM curation_resource_topics
+                             WHERE kind = 'work' AND target_id = forum_topics.work_id AND topic_id = forum_topics.id
+                         ) THEN 0 ELSE 1 END ASC,
+                         (SELECT COUNT(*) FROM forum_replies WHERE topic_id = forum_topics.id) DESC,
+                         likes DESC,
+                         created_at ASC,
+                         id ASC
+                 ) as rn
+          FROM forum_topics
+          WHERE work_id IS NOT NULL AND work_id <> ''
+      ) ranked
+      WHERE ranked.rn = 1
+  );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_topics_work_id
+    ON forum_topics(work_id) WHERE work_id <> '' AND work_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_forum_topics_pinned_listed
+    ON forum_topics(pinned, listed_at_ms, id);
+"""
+
+
+FORUM_TOPICS_BACKFILL_SQL = """
+-- Backfill listed_at_ms for existing published topics from pre-one-topic-per-work era
+UPDATE forum_topics
+SET listed_at_ms = CASE
+    WHEN published_at_ms IS NOT NULL AND published_at_ms > 0 THEN published_at_ms
+    WHEN created_at IS NOT NULL AND created_at <> '' THEN CAST(strftime('%s', created_at) AS INTEGER) * 1000
+    ELSE CAST(strftime('%s', 'now') AS INTEGER) * 1000
+END
+WHERE status = 'published' AND listed_at_ms IS NULL;
+"""
+
+
+def backfill_work_topics_hook(conn: sqlite3.Connection) -> None:
+    """Backfill missing topics for all published works across generations, web, and legacy."""
+    try:
+        from .generation_works import backfill_work_topics
+        backfill_work_topics(conn)
+    except Exception as e:
+        logger.warning("Work topics backfill hook failed: %s", e)
+
+
 WORK_POST_MIGRATION_HOOKS: dict[int, Any] = {
     66: normalize_historical_asset_uids,
     69: deduplicate_generation_history,
     75: zero_topic_publish_credits_hook,
     77: zero_reply_publish_credits_hook,
     79: backfill_generation_works_hook,
+    80: audit_and_deduplicate_work_topics,
+    82: backfill_work_topics_hook,
 }
 
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
@@ -852,4 +1036,7 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (77, "077_zero_reply_publish_credits", ZERO_REPLY_PUBLISH_CREDITS_SQL),
     (78, "078_popular_index_v3", POPULAR_INDEX_V3_SQL),
     (79, "079_generation_works_mapping", GENERATION_WORKS_MAPPING_SQL),
+    (80, "080_forum_topics_listed_at_ms", FORUM_TOPICS_LISTED_AT_SQL),
+    (81, "081_forum_topics_work_unique", FORUM_TOPICS_WORK_UNIQUE_SQL),
+    (82, "082_work_topics_backfill", FORUM_TOPICS_BACKFILL_SQL),
 ]

@@ -1995,7 +1995,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     reply_seed_filter, reply_seed_ids = _seed_filter("r.id", "forum_replies")
     topic_vis_filter = topic_visibility_sql(reply_filter=reply_seed_filter, admin=False)
     topic_rows = conn.execute(
-        f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} AND {topic_vis_filter} ORDER BY pinned DESC, published_at_ms DESC",
+        f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} AND {topic_vis_filter} ORDER BY pinned DESC, COALESCE(listed_at_ms, published_at_ms) DESC, id DESC",
         (*topic_ids, *reply_seed_ids),
     ).fetchall()
     try:
@@ -3808,8 +3808,8 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
             if existing_mapping:
                 tid = str(existing_mapping["topic_id"])
                 tx.execute(
-                    "UPDATE forum_topics SET summary = ?, title = CASE WHEN ? != '' THEN ? ELSE title END, updated_at = ? WHERE id = ? AND author_username = ?",
-                    (summary, title, title, now_iso, tid, user["username"]),
+                    "UPDATE forum_topics SET summary = ?, title = CASE WHEN ? != '' THEN ? ELSE title END, listed_at_ms = COALESCE(listed_at_ms, ?), updated_at = ? WHERE id = ? AND author_username = ?",
+                    (summary, title, title, now_ms, now_iso, tid, user["username"]),
                 )
                 return {"ok": True, "topicId": tid, "topic": {"id": tid, "price": price}, "credits": new_bal, "bounty": bounty, "reused": True}
 
@@ -3824,8 +3824,8 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
                 id, category, category_label, pinned, featured, title, author_username, author_name,
                 views, likes, favorites, price, bounty, bounty_status, solved, accepted_reply_id,
                 images_json, styles_json, layout_code, work_id, recipe_json, recipe_has_secret, summary, locked_body,
-                status, published_at_ms, created_label, created_at, updated_at
-            ) VALUES (?, ?, ?, 0, 0, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, '刚刚', ?, ?)
+                status, published_at_ms, created_label, created_at, updated_at, listed_at_ms
+            ) VALUES (?, ?, ?, 0, 0, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, '刚刚', ?, ?, ?)
             """,
             (
                 tid,
@@ -3848,6 +3848,7 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
                 now_ms,
                 now_iso,
                 now_iso,
+                now_ms,
             ),
         )
 
@@ -3877,7 +3878,7 @@ def publish_forum_reply_post(
     mounted_layout: str = "",
     direct: bool = False,
 ) -> dict[str, Any]:
-    from .resource_discussions import find_topic_source, comment
+    from .resource_discussions import find_topic_source, comment, record_atomic_reply_and_listing, ensure_topic
     if not direct:
         source=find_topic_source(db,topic_id)
         if source and source['origin']!='submission':
@@ -3885,45 +3886,33 @@ def publish_forum_reply_post(
     clean = sanitize_plain_text(text, max_chars=3000)
     if not clean:
         raise ServiceError("请输入回复内容")
-    clean_style = re.sub(r"[^A-Za-z0-9_-]", "", str(mounted_style or "").strip())[:32]
-    clean_layout = re.sub(r"[^A-Za-z0-9_-]", "", str(mounted_layout or "").strip())[:32]
-    uid = int(user["id"])
-    now_iso = utc_now_iso()
-    rid = f"rep_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
+    clean_style = re.sub(r"[^A-Za-z0-9_-]", "", str(mounted_style or "").strip())[:32].upper().lstrip("#")
+    clean_layout = re.sub(r"[^A-Za-z0-9_-]", "", str(mounted_layout or "").strip())[:32].upper().lstrip("#")
 
     with db.transaction() as tx:
         tp = tx.execute("SELECT id, title FROM forum_topics WHERE id = ? AND status = 'published'", (topic_id,)).fetchone()
         if not tp:
-            raise ServiceError("帖子不存在或已下架", status=404)
+            # Fallback for historical missing topic addressed by work_id
+            m_row = tx.execute("SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?", (topic_id,)).fetchone()
+            if m_row:
+                topic_id = str(m_row["topic_id"])
+                tp = tx.execute("SELECT id, title FROM forum_topics WHERE id = ? AND status = 'published'", (topic_id,)).fetchone()
+            else:
+                w_row = tx.execute("SELECT * FROM works WHERE id = ? AND status = 'published'", (topic_id,)).fetchone()
+                if w_row:
+                    topic_id = ensure_topic(tx, "work", topic_id, dict(w_row), initial_origin="submission")
+                    tp = tx.execute("SELECT id, title FROM forum_topics WHERE id = ? AND status = 'published'", (topic_id,)).fetchone()
+            if not tp:
+                raise ServiceError("帖子不存在或已下架", status=404)
 
-        tx.execute(
-            """
-            INSERT INTO forum_replies (
-                id, topic_id, author_username, author_name, text, mounted_style, mounted_layout,
-                likes, accepted, status, time_label, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'published', '刚刚', ?)
-            """,
-            (
-                rid,
-                topic_id,
-                user["username"],
-                user["display_name"],
-                clean,
-                clean_style.upper().lstrip("#"),
-                clean_layout.upper().lstrip("#"),
-                now_iso,
-            ),
+        rid, cur_bal = record_atomic_reply_and_listing(
+            tx,
+            topic_id,
+            user,
+            clean,
+            mounted_style=clean_style,
+            mounted_layout=clean_layout,
         )
-
-        bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-        if bal_row:
-            cur_bal = int(bal_row["balance"])
-        else:
-            tx.execute(
-                "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
-                (uid, now_iso),
-            )
-            cur_bal = 0
 
     return {"ok": True, "replyId": rid, "rewarded": 0, "credits": cur_bal}
 

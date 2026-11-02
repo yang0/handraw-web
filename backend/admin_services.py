@@ -209,7 +209,7 @@ def admin_get_moderator_console(db: Database, user: dict[str, Any] | None, board
     f_vis = topic_visibility_sql(reply_filter="1=1", admin=True)
     topic_seed_filter, topic_seed_params = _seed_filter("id", "topics")
     topic_rows = conn.execute(
-        f"SELECT * FROM forum_topics WHERE category IN ({placeholders}) AND {f_vis} AND {topic_seed_filter} ORDER BY pinned DESC, published_at_ms DESC",
+        f"SELECT * FROM forum_topics WHERE category IN ({placeholders}) AND {f_vis} AND {topic_seed_filter} ORDER BY pinned DESC, COALESCE(listed_at_ms, published_at_ms) DESC, id DESC",
         (*active_cats, *topic_seed_params),
     ).fetchall()
     topic_map = {r["id"]: r for r in topic_rows}
@@ -1585,7 +1585,7 @@ def admin_list_topics(
         like = f"%{q}%"
         sql += " AND (id LIKE ? OR title LIKE ? OR author_username LIKE ? OR summary LIKE ?)"
         params.extend([like, like, like, like])
-    sql += " ORDER BY pinned DESC, published_at_ms DESC"
+    sql += " ORDER BY pinned DESC, COALESCE(listed_at_ms, published_at_ms) DESC, id DESC"
 
     reply_seed_filter, reply_seed_params = _seed_filter("id", "forum_replies")
     reply_topic_filter, reply_topic_params = _seed_filter("topic_id", "topics")
