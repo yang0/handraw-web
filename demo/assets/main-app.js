@@ -1,6 +1,6 @@
 /* Main Channel Interactive App (handraw-style.com / localhost:3080)
  * Views (100% Standalone Pages — Zero Content/Profile Modals):
- * styles | layouts | works | rankings | collections | wallet | asset | work | profile | auth | skill
+ * styles | layouts | works | rankings | wallet | asset | work | profile | auth | skill
  */
 (function () {
   const S = window.HANDRAW_SHARED;
@@ -37,7 +37,7 @@
     workInlineDrawer: "", // '' | 'share' | 'report'
     workFocusComment: false,
     profileUser: "",
-    profileTab: "works", // 'works' | 'generations' | 'assets' | 'topics' | 'collections' | 'account'
+    profileTab: "works", // 'works' | 'generations' | 'styles' | 'layouts' | 'topics' | 'collections' | 'account'
     profGenerations: null,
     profGenUser: "",
     profGenLoading: false,
@@ -151,12 +151,67 @@
       }
     }
 
+    // Standalone Collections view (?view=collections) is retired -> replace navigation to profile collections
+    if (view === "collections") {
+      const curU = (App.state && App.state.user && App.state.user.username && App.state.user.username !== "guest") ? App.state.user.username : "";
+      if (App.state && App.state.loggedIn && curU) {
+        App.view = "profile";
+        UI.profileUser = curU;
+        UI.profileTab = "collections";
+        try {
+          const nextP = new URLSearchParams();
+          nextP.set("view", "profile");
+          nextP.set("user", curU);
+          nextP.set("ptab", "collections");
+          window.history.replaceState({ view: "profile" }, "", `${window.location.pathname}?${nextP.toString()}`);
+        } catch (_) {}
+        return {};
+      } else if (App.state && !App.state.loggedIn) {
+        openAuthPage("登录后查看与同步你的云端收藏夹", () => {
+          if (App.state && App.state.user && App.state.user.username) {
+            openProfilePage(App.state.user.username, "collections");
+          }
+        });
+        try {
+          const nextP = new URLSearchParams();
+          nextP.set("view", "auth");
+          window.history.replaceState({ view: "auth" }, "", `${window.location.pathname}?${nextP.toString()}`);
+        } catch (_) {}
+        return {};
+      } else {
+        // App.state not ready yet (booting), defer resolution to post-boot
+        App.view = "collections";
+        return {};
+      }
+    }
+
     // Standalone Personal Homepage & Account Center (?view=profile&user=... or ?view=account)
     if (view === "profile" || view === "account") {
       App.view = "profile";
       UI.profileUser = (p.get("user") || "").trim();
-      const reqTab = view === "account" ? "account" : p.get("ptab") || "works";
-      UI.profileTab = ["works", "generations", "assets", "topics", "collections", "account"].includes(reqTab) ? reqTab : "works";
+      let reqTab = view === "account" ? "account" : p.get("ptab") || "works";
+      let urlChanged = false;
+      if (reqTab === "assets") {
+        reqTab = "styles";
+        urlChanged = true;
+      }
+      const isMe = Boolean(App.state && App.state.loggedIn && App.state.user && App.state.user.username && App.state.user.username === UI.profileUser);
+      if (App.state && !isMe && ["collections", "account"].includes(reqTab)) {
+        reqTab = "works";
+        urlChanged = true;
+      }
+      if (urlChanged) {
+        try {
+          const nextP = new URLSearchParams(p);
+          if (reqTab === "works") {
+            nextP.delete("ptab");
+          } else {
+            nextP.set("ptab", reqTab);
+          }
+          window.history.replaceState({ view: "profile" }, "", `${window.location.pathname}?${nextP.toString()}`);
+        } catch (_) {}
+      }
+      UI.profileTab = ["works", "generations", "styles", "layouts", "topics", "collections", "account"].includes(reqTab) ? reqTab : "works";
       return {};
     }
 
@@ -168,7 +223,7 @@
       return {};
     }
 
-    if (["discover", "styles", "layouts", "works", "rankings", "collections", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic", "device", "devices"].includes(view)) {
+    if (["discover", "styles", "layouts", "works", "rankings", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic", "device", "devices"].includes(view)) {
       App.view = view;
     } else {
       App.view = !view && p.get("q") ? "styles" : "discover";
@@ -209,7 +264,6 @@
       layouts: `${App.layouts?.length || 0} 款图型与版式库 — 手绘风创作社区`,
       works: `作品与做法（${wc} 件社区作品）— 手绘风创作社区`,
       rankings: "创作者荣誉榜单与作品风云榜 — 手绘风创作社区",
-      collections: "我的四合一云端收藏夹 — 手绘风创作社区",
       wallet: "统一积分钱包与资产中心 — 手绘风创作社区",
       auth: "登录 / 注册统一通行证 — 手绘风创作社区",
       skill: "开源画廊与官网在线创作联动 — 手绘风创作社区"
@@ -276,6 +330,19 @@
 
   function switchView(nextView, extra = {}) {
     S.closeModal();
+    if (nextView === "collections") {
+      const curU = (App.state && App.state.user && App.state.user.username && App.state.user.username !== "guest") ? App.state.user.username : "";
+      if (App.state && App.state.loggedIn && curU) {
+        openProfilePage(curU, "collections");
+      } else {
+        openAuthPage("登录后查看与同步你的云端收藏夹", () => {
+          if (App.state && App.state.user && App.state.user.username) {
+            openProfilePage(App.state.user.username, "collections");
+          }
+        });
+      }
+      return;
+    }
     if (["styles", "layouts", "works"].includes(App.view) && nextView !== App.view) {
       UI.lastPrimaryView = App.view;
     } else if (["styles", "layouts", "works"].includes(nextView)) {
@@ -308,7 +375,7 @@
 
   function openProfilePage(username, ptab = "works") {
     S.closeModal();
-    const targetUser = String(username || (App.state.user && App.state.user.username) || "").trim();
+    const targetUser = String(username || (App.state && App.state.user && App.state.user.username) || "").trim();
     if (!targetUser || targetUser === "guest") {
       openAuthPage("登录后即可查看与管理你的个人主页");
       return;
@@ -316,7 +383,12 @@
     if (["styles", "layouts", "works"].includes(App.view)) {
       UI.lastPrimaryView = App.view;
     }
-    const cleanTab = ["works", "generations", "assets", "topics", "collections", "account"].includes(ptab) ? ptab : "works";
+    let cleanTab = ["works", "generations", "styles", "layouts", "topics", "collections", "account"].includes(ptab) ? ptab : "works";
+    if (ptab === "assets") cleanTab = "styles";
+    const isMe = Boolean(App.state && App.state.loggedIn && App.state.user && App.state.user.username && App.state.user.username === targetUser);
+    if (!isMe && ["collections", "account"].includes(cleanTab)) {
+      cleanTab = "works";
+    }
     const isEntering = App.view !== "profile" || UI.profileUser !== targetUser || UI.profileTab !== cleanTab;
     App.view = "profile";
     UI.profileUser = targetUser;
@@ -409,7 +481,22 @@
     else if (App.view === "layouts") renderAssetCatalog(root, "layout");
     else if (App.view === "works") renderWorksSquare(root);
     else if (App.view === "rankings") renderRankingsHall(root);
-    else if (App.view === "collections") renderCollectionsCenter(root);
+    else if (App.view === "collections") {
+      const curU = (App.state && App.state.user && App.state.user.username && App.state.user.username !== "guest") ? App.state.user.username : "";
+      if (App.state && App.state.loggedIn && curU) {
+        openProfilePage(curU, "collections");
+        syncUrl(false);
+      } else {
+        openAuthPage("登录后查看与同步你的云端收藏夹", () => {
+          if (App.state && App.state.user && App.state.user.username) {
+            openProfilePage(App.state.user.username, "collections");
+            syncUrl(false);
+          }
+        });
+        syncUrl(false);
+      }
+      return;
+    }
     else if (App.view === "wallet") renderWalletCenter(root);
     else if (App.view === "work") renderWorkDetailPage(root);
     else if (App.view === "profile") renderCreatorProfilePage(root);
@@ -1795,6 +1882,11 @@
     const isMe = Boolean(App.state.loggedIn && App.state.user && App.state.user.username === prof.username);
     if (!isMe && ["collections", "account"].includes(UI.profileTab)) {
       UI.profileTab = "works";
+      syncUrl(false);
+    }
+    if (UI.profileTab === "assets") {
+      UI.profileTab = "styles";
+      syncUrl(false);
     }
 
     const modBadges = S.getUserModeratorBadges(prof.username);
@@ -1916,15 +2008,14 @@
           : "";
         tabBodyHtml = S.renderMasonry(cards, "standard") + moreBtn;
       }
-    } else if (UI.profileTab === "assets") {
-      const assets = [...prof.styles, ...prof.layouts];
-      tabBodyHtml = assets.length
+    } else if (UI.profileTab === "styles") {
+      tabBodyHtml = prof.styles.length
         ? S.renderMasonry(
-            assets.map(
+            prof.styles.map(
               (it) => `
                 <article class="hw-card" data-prof-asset="${esc(it.id)}" style="cursor:pointer;">
                   <div class="hw-card-media">
-                    <span class="hw-card-badge-tl badge-community">✨ 共创${it.kind === "layout" ? "图型" : "画风"}</span>
+                    <span class="hw-card-badge-tl badge-community">✨ 共创画风</span>
                     <img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" loading="lazy" />
                   </div>
                   <div class="hw-card-body">
@@ -1940,7 +2031,31 @@
             ),
             "standard"
           )
-        : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂未发布共创画风或图型资产。</div>`;
+        : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂未发布共创画风资产。</div>`;
+    } else if (UI.profileTab === "layouts") {
+      tabBodyHtml = prof.layouts.length
+        ? S.renderMasonry(
+            prof.layouts.map(
+              (it) => `
+                <article class="hw-card" data-prof-asset="${esc(it.id)}" style="cursor:pointer;">
+                  <div class="hw-card-media">
+                    <span class="hw-card-badge-tl badge-community">✨ 共创图型</span>
+                    <img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" loading="lazy" />
+                  </div>
+                  <div class="hw-card-body">
+                    <div class="hw-card-code">${esc(it.id)}</div>
+                    <h3 class="hw-card-title">${esc(it.name)}</h3>
+                    <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;">
+                      <span>🖼️ ${S.getAssetWorkCount(it.id)} 件同款作品</span>
+                      <span>💬 ${S.getAssetComments(it.id).length} 条评论</span>
+                    </div>
+                  </div>
+                </article>
+              `
+            ),
+            "standard"
+          )
+        : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂未发布共创图型资产。</div>`;
     } else if (UI.profileTab === "topics") {
       tabBodyHtml = prof.topics.length
         ? `<div style="display:grid;gap:12px;">
@@ -1972,6 +2087,11 @@
           </div>`;
     } else if (UI.profileTab === "collections" && isMe) {
       const cols = App.state.collections || { styles: [], layouts: [], works: [], topics: [], generations: [] };
+      if (!["styles", "layouts", "works", "topics", "generations"].includes(UI.favTab)) {
+        UI.favTab = "styles";
+      }
+
+      const ids = cols[UI.favTab] || [];
       if (UI.favTab === "generations" && UI._collectedGenerations === null && !UI._fetchingColGen) {
         UI._fetchingColGen = true;
         fetch("/api/collections/generations", { credentials: "include" })
@@ -1988,15 +2108,16 @@
           });
       }
       if (UI.favTab === "works") {
-        const missing = (cols.works || []).filter((id) => !App.state.works.some((w) => String(w.id) === String(id)));
+        // boot no longer carries every work, so a kept work may be missing here.
+        const missing = (cols.works || []).filter((id) => !(App.state.works || []).some((w) => String(w.id) === String(id)));
         if (missing.length && typeof S.apiJson === "function" && !UI._fetchingProfColWorks) {
           UI._fetchingProfColWorks = true;
           S.apiJson(`/api/works/feed?ids=${encodeURIComponent(missing.join(","))}`)
             .then((res) => {
               if (res && res.items && res.items.length) {
                 res.items.forEach((item) => {
-                  if (!App.state.works.some((w) => String(w.id) === String(item.id))) {
-                    App.state.works.push(item);
+                  if (!(App.state.works || []).some((w) => String(w.id) === String(item.id))) {
+                    (App.state.works = App.state.works || []).push(item);
                   }
                 });
                 if (App.view === "profile" && UI.profileTab === "collections") renderMain();
@@ -2008,92 +2129,179 @@
             });
         }
       }
-      const subItems =
-        UI.favTab === "styles" || UI.favTab === "layouts"
-          ? (cols[UI.favTab] || []).map((id) => App.resourceMap.get(id)).filter(Boolean)
-          : UI.favTab === "works"
-          ? (cols.works || []).map((id) => (App.state.works || []).find((w) => w.id === id)).filter(Boolean)
-          : UI.favTab === "generations"
-          ? (UI._collectedGenerations || [])
-          : (cols.topics || []).map((id) => (App.state.topics || []).find((t) => t.id === id)).filter(Boolean);
+      if (UI.favTab === "styles" || UI.favTab === "layouts") {
+        const missingIds = ids.filter((id) => !App.resourceMap.has(id));
+        if (missingIds.length && !UI._fetchingFavs) {
+          UI._fetchingFavs = true;
+          Promise.all(
+            missingIds.map((mid) =>
+              fetch(`/api/resources/${encodeURIComponent(mid)}`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                  const res = data?.resource || data;
+                  if (res && res.code) {
+                    const it = {
+                      id: res.code,
+                      code: res.code,
+                      name: res.name || res.code,
+                      originalName: res.name || res.code,
+                      kind: res.kind,
+                      sourceType: res.sourceType || res.source || "pending",
+                      status: res.status,
+                      image: res.image || res.cover || "",
+                      cover: res.image || res.cover || "",
+                      description: res.description || "",
+                      definition: res.definition || null,
+                      access: res.access || {},
+                      canUse: res.canUse !== false,
+                    };
+                    App.resourceMap.set(it.id, it);
+                  }
+                })
+                .catch(() => null)
+            )
+          ).finally(() => {
+            UI._fetchingFavs = false;
+            renderMain();
+          });
+        }
+      }
+
+      let innerContentHtml = "";
+      if (UI.favTab === "styles" || UI.favTab === "layouts") {
+        const items = ids.map((id) => App.resourceMap.get(id)).filter(Boolean);
+        innerContentHtml = items.length
+          ? S.renderMasonry(
+              items.map((item) => {
+                const isWithdrawn = item.status === "withdrawn" || item.status === "hidden" || item.access?.hiddenBy === "withdrawn";
+                const isPending = !isWithdrawn && (item.status === "pending" || item.status === "changes_requested" || item.sourceType === "pending" || item.access?.hiddenBy === "pending");
+                if (isWithdrawn) {
+                  return `
+                    <article class="hw-card hw-card-withdrawn" style="opacity:0.75;filter:grayscale(0.85);background:var(--paper-soft, #f4efe6);">
+                      <div class="hw-card-media" style="cursor:default;">
+                        <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" />
+                      </div>
+                      <div class="hw-card-body">
+                        <div class="hw-card-code" style="color:var(--ink-muted);">${esc(item.id)} <span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--line-soft, #e5e5e5);color:var(--ink-muted);">已下架</span></div>
+                        <h3 class="hw-card-title">${esc(item.name)}</h3>
+                        <div class="hw-card-footer">
+                          <button type="button" class="btn btn-sm" data-unfav="${esc(item.id)}">取消收藏</button>
+                          <button type="button" class="btn btn-sm" disabled style="opacity:0.5;cursor:not-allowed;">不可使用</button>
+                        </div>
+                      </div>
+                    </article>
+                  `;
+                }
+                return `
+                  <article class="hw-card">
+                    <div class="hw-card-media" data-fav-open-asset="${esc(item.id)}" style="cursor:pointer;">
+                      <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" />
+                    </div>
+                    <div class="hw-card-body">
+                      <div class="hw-card-code">
+                        ${esc(item.id)}
+                        ${isPending ? `<span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--gold-soft, #fef3c7);color:var(--gold-strong, #92400e);font-weight:700;">投稿中</span>` : ""}
+                      </div>
+                      <h3 class="hw-card-title" data-fav-open-asset="${esc(item.id)}" style="cursor:pointer;">${esc(item.name)}</h3>
+                      <div class="hw-card-footer">
+                        <button type="button" class="btn btn-sm" data-unfav="${esc(item.id)}">移除</button>
+                        <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", item.kind === "style" ? { style: item.id } : { layout: item.id }))}">去创作 ↗</a>
+                      </div>
+                    </div>
+                  </article>
+                `;
+              }),
+              "standard"
+            )
+          : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏该类资产，去库里点亮 ♡ 吧！</div>`;
+      } else if (UI.favTab === "works") {
+        const items = (cols.works || []).map((id) => (App.state.works || []).find((w) => w.id === id)).filter(Boolean);
+        innerContentHtml = items.length
+          ? S.renderMasonry(
+              items.map(
+                (w) => `
+                  <article class="hw-card">
+                    <div class="hw-card-media" data-fav-open-work="${esc(w.id)}" style="cursor:pointer;">
+                      <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" />
+                    </div>
+                    <div class="hw-card-body">
+                      <h3 class="hw-card-title" data-fav-open-work="${esc(w.id)}" style="cursor:pointer;">${esc(w.title)}</h3>
+                      <div class="hw-card-footer">
+                        <button type="button" class="btn btn-sm" data-unfav="${esc(w.id)}">移除</button>
+                        <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", { fork: w.id }))}">做同款 ↗</a>
+                      </div>
+                    </div>
+                  </article>
+                `
+              ),
+              "standard"
+            )
+          : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏晒作品</div>`;
+      } else if (UI.favTab === "generations") {
+        const items = UI._collectedGenerations || [];
+        innerContentHtml = items.length
+          ? S.renderMasonry(
+              items.map((g) => {
+                const img0 = (g.images && g.images[0]) || "/images/poster-demo-autumn-equinox.webp";
+                const gTitle = g.topic || g.title || "手绘风生成作品";
+                return `
+                  <article class="hw-card" data-prof-gen="${esc(g.id)}" style="cursor:pointer;">
+                    <div class="hw-card-media"><img data-hw-src="${esc(img0)}" alt="${esc(gTitle)}" /></div>
+                    <div class="hw-card-body">
+                      <h3 class="hw-card-title">${esc(gTitle)}</h3>
+                      <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;">
+                        <span>@${esc(g.author)}</span>
+                        <span>👍 ${g.likes || 0} · ⭐️ ${g.favorites || 0}</span>
+                      </div>
+                    </div>
+                  </article>
+                `;
+              }),
+              "standard"
+            )
+          : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏生图历史</div>`;
+      } else {
+        const items = (cols.topics || []).map((id) => (App.state.topics || []).find((t) => t.id === id)).filter(Boolean);
+        innerContentHtml = items.length
+          ? `<div style="display:grid;gap:10px;">
+              ${items
+                .map(
+                  (t) => `
+                    <div class="forum-topic-card" style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+                      <div>
+                        <span class="hw-card-code">${esc(t.categoryLabel)}</span>
+                        <h3 style="margin:4px 0;font-size:15.5px;">${esc(t.title)}</h3>
+                        <div style="font-size:12.5px;color:var(--ink-muted);">@${esc(t.authorName)}</div>
+                      </div>
+                      <div style="display:flex;gap:8px;align-items:center;">
+                        <button type="button" class="btn btn-sm" data-unfav="${esc(t.id)}">取消收藏</button>
+                        <a class="btn btn-sm btn-primary" href="${esc(channelUrl("forum", { view: "topic", id: t.id }))}">阅读帖子 ↗</a>
+                      </div>
+                    </div>
+                  `
+                )
+                .join("")}
+            </div>`
+          : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏论坛好帖</div>`;
+      }
 
       tabBodyHtml = `
         <div class="hw-detail-section-card">
-          <div class="hw-pills-row" style="margin-bottom:16px;">
-            <button type="button" class="hw-pill ${UI.favTab === "styles" ? "is-active" : ""}" data-prof-ftab="styles">🎨 收藏画风 (${(cols.styles || []).length})</button>
-            <button type="button" class="hw-pill ${UI.favTab === "layouts" ? "is-active" : ""}" data-prof-ftab="layouts">📐 收藏图型 (${(cols.layouts || []).length})</button>
-            <button type="button" class="hw-pill ${UI.favTab === "works" ? "is-active" : ""}" data-prof-ftab="works">🖼️ 收藏作品 (${(cols.works || []).length})</button>
-            <button type="button" class="hw-pill ${UI.favTab === "topics" ? "is-active" : ""}" data-prof-ftab="topics">💬 收藏帖子 (${(cols.topics || []).length})</button>
-            <button type="button" class="hw-pill ${UI.favTab === "generations" ? "is-active" : ""}" data-prof-ftab="generations">⚡ 收藏生图 (${(cols.generations || []).length})</button>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+            <div class="hw-pills-row" style="margin:0;">
+              <button type="button" class="hw-pill ${UI.favTab === "styles" ? "is-active" : ""}" data-prof-ftab="styles">🎨 收藏画风 (${(cols.styles || []).length})</button>
+              <button type="button" class="hw-pill ${UI.favTab === "layouts" ? "is-active" : ""}" data-prof-ftab="layouts">📐 收藏图型 (${(cols.layouts || []).length})</button>
+              <button type="button" class="hw-pill ${UI.favTab === "works" ? "is-active" : ""}" data-prof-ftab="works">🖼️ 收藏作品 (${(cols.works || []).length})</button>
+              <button type="button" class="hw-pill ${UI.favTab === "generations" ? "is-active" : ""}" data-prof-ftab="generations">⚡ 收藏生图 (${(cols.generations || []).length})</button>
+              <button type="button" class="hw-pill ${UI.favTab === "topics" ? "is-active" : ""}" data-prof-ftab="topics">💬 收藏帖子 (${(cols.topics || []).length})</button>
+            </div>
+            ${
+              (cols[UI.favTab] || []).length > 0
+                ? `<button type="button" class="btn btn-sm" id="prof-col-batch-unfav-btn" style="font-size:12px;">🗑️ 清空此分类收藏</button>`
+                : ""
+            }
           </div>
-          ${
-            !subItems.length
-              ? `<div style="padding:32px;text-align:center;color:var(--ink-muted);">该分类下暂无收藏项</div>`
-              : UI.favTab === "topics"
-              ? `<div style="display:grid;gap:10px;">
-                  ${subItems
-                    .map(
-                      (t) => `
-                        <div class="forum-topic-card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
-                          <div>
-                            <span class="hw-card-code">${esc(t.categoryLabel)}</span>
-                            <h3 style="margin:4px 0;font-size:15px;">${esc(t.title)}</h3>
-                          </div>
-                          <button type="button" class="btn btn-sm btn-primary" data-prof-topic="${esc(t.id)}">阅读帖子 ↗</button>
-                        </div>
-                      `
-                    )
-                    .join("")}
-                </div>`
-              : UI.favTab === "generations"
-              ? S.renderMasonry(
-                  subItems.map((g) => {
-                    const img0 = (g.images && g.images[0]) || "/images/poster-demo-autumn-equinox.webp";
-                    const title = g.topic || g.title || "手绘风生成作品";
-                    return `
-                      <article class="hw-card" data-prof-gen="${esc(g.id)}" style="cursor:pointer;">
-                        <div class="hw-card-media"><img data-hw-src="${esc(img0)}" alt="${esc(title)}" /></div>
-                        <div class="hw-card-body">
-                          <h3 class="hw-card-title">${esc(title)}</h3>
-                          <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;">
-                            <span>@${esc(g.author)}</span>
-                            <span>👍 ${g.likes || 0} · ⭐️ ${g.favorites || 0}</span>
-                          </div>
-                        </div>
-                      </article>
-                    `;
-                  }),
-                  "standard"
-                )
-              : S.renderMasonry(
-                  subItems.map((it) =>
-                    UI.favTab === "works"
-                      ? `
-                        <article class="hw-card" data-prof-work="${esc(it.id)}" style="cursor:pointer;">
-                          <div class="hw-card-media"><img data-hw-src="${esc(it.images[0])}" alt="${esc(it.title)}" /></div>
-                          <div class="hw-card-body"><h3 class="hw-card-title">${esc(it.title)}</h3></div>
-                        </article>
-                      `
-                      : (() => {
-                          const isWithdrawn = it.status === "withdrawn" || it.status === "hidden" || it.access?.hiddenBy === "withdrawn";
-                          const isPending = !isWithdrawn && (it.status === "pending" || it.status === "changes_requested" || it.sourceType === "pending" || it.access?.hiddenBy === "pending");
-                          return `
-                            <article class="hw-card ${isWithdrawn ? "hw-card-withdrawn" : ""}" data-prof-asset="${esc(it.id)}" style="cursor:pointer;${isWithdrawn ? "opacity:0.75;filter:grayscale(0.85);background:var(--paper-soft, #f4efe6);" : ""}">
-                              <div class="hw-card-media"><img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" /></div>
-                              <div class="hw-card-body">
-                                <div class="hw-card-code">
-                                  ${esc(it.id)}
-                                  ${isWithdrawn ? `<span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--line-soft, #e5e5e5);color:var(--ink-muted);">已下架</span>` : isPending ? `<span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--gold-soft, #fef3c7);color:var(--gold-strong, #92400e);font-weight:700;">投稿中</span>` : ""}
-                                </div>
-                                <h3 class="hw-card-title">${esc(it.name)}</h3>
-                              </div>
-                            </article>
-                          `;
-                        })()
-                  ),
-                  "standard"
-                )
-          }
+          ${innerContentHtml}
         </div>
       `;
     } else if (UI.profileTab === "account" && isMe) {
@@ -2221,16 +2429,17 @@
         </section>
 
         <!-- Standalone Profile Section Tabs -->
-        <div class="hw-pills-row">
-          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works">🖼️ 晒作品 (${prof.works.length})</button>
-          <button type="button" class="hw-pill ${UI.profileTab === "generations" ? "is-active" : ""}" data-ptab="generations">🕒 生图历史${UI.profGenTotal != null && UI.profGenUser === prof.username ? ` (${UI.profGenTotal})` : ""}</button>
-          <button type="button" class="hw-pill ${UI.profileTab === "assets" ? "is-active" : ""}" data-ptab="assets">🎨 共创画风与图型 (${prof.styles.length + prof.layouts.length})</button>
-          <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics">💬 发布的论坛帖 (${prof.topics.length})</button>
+        <div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
+          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 晒作品 (${prof.works.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "generations" ? "is-active" : ""}" data-ptab="generations" role="tab" aria-selected="${UI.profileTab === "generations"}">🕒 生图历史${UI.profGenTotal != null && UI.profGenUser === prof.username ? ` (${UI.profGenTotal})` : ""}</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "styles" ? "is-active" : ""}" data-ptab="styles" role="tab" aria-selected="${UI.profileTab === "styles"}">🎨 画风 (${prof.styles.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "layouts" ? "is-active" : ""}" data-ptab="layouts" role="tab" aria-selected="${UI.profileTab === "layouts"}">📐 图型 (${prof.layouts.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 论坛帖 (${prof.topics.length})</button>
           ${
             isMe
               ? `
-                <button type="button" class="hw-pill ${UI.profileTab === "collections" ? "is-active" : ""}" data-ptab="collections">♥ 我的收藏夹</button>
-                <button type="button" class="hw-pill ${UI.profileTab === "account" ? "is-active" : ""}" data-ptab="account">⚙️ 账号资料与安全设置</button>
+                <button type="button" class="hw-pill ${UI.profileTab === "collections" ? "is-active" : ""}" data-ptab="collections" role="tab" aria-selected="${UI.profileTab === "collections"}">♥ 收藏夹</button>
+                <button type="button" class="hw-pill ${UI.profileTab === "account" ? "is-active" : ""}" data-ptab="account" role="tab" aria-selected="${UI.profileTab === "account"}">⚙️ 账号资料与安全设置</button>
               `
               : ""
           }
@@ -2241,6 +2450,14 @@
         </div>
       </div>
     `;
+
+    const activeTabPill = root.querySelector(".hw-profile-tabs .hw-pill.is-active");
+    if (activeTabPill) {
+      const prefersReducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      try {
+        activeTabPill.scrollIntoView({ inline: "nearest", block: "nearest", behavior: prefersReducedMotion ? "auto" : "smooth" });
+      } catch (_) {}
+    }
 
     root.querySelector("#prof-back-btn").onclick = () => navigateBack(UI.lastPrimaryView || "styles");
     root.querySelector("#prof-rankings-btn").onclick = () => switchView("rankings", { rankTab: "creators" });
@@ -2299,6 +2516,33 @@
         renderMain();
       };
     });
+
+    root.querySelectorAll("[data-fav-open-asset]").forEach((el) => {
+      el.onclick = () => openAssetPage(el.getAttribute("data-fav-open-asset"));
+    });
+    root.querySelectorAll("[data-fav-open-work]").forEach((el) => {
+      el.onclick = () => openWorkPage(el.getAttribute("data-fav-open-work"));
+    });
+    root.querySelectorAll("[data-unfav]").forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const id = b.getAttribute("data-unfav");
+        S.toggleCollect(UI.favTab, id, id);
+        renderMain();
+      };
+    });
+    const batchUnfavBtn = root.querySelector("#prof-col-batch-unfav-btn");
+    if (batchUnfavBtn) {
+      batchUnfavBtn.onclick = () => {
+        const list = [...(App.state?.collections?.[UI.favTab] || [])];
+        if (!list.length) return;
+        if (!window.confirm(`确定要移除当前分类下的全部 ${list.length} 个收藏项吗？`)) return;
+        list.forEach((id) => {
+          S.toggleCollect(UI.favTab, id, id);
+        });
+        renderMain();
+      };
+    }
 
     if (UI.profileTab === "account" && isMe) {
       S.bindAccountSettingsForm(root, () => renderMain());
@@ -2421,278 +2665,7 @@
     });
   }
 
-  /* ======================== 3. 4-IN-1 COLLECTIONS CENTER ======================== */
-  function renderCollectionsCenter(root) {
-    if (!App.state.loggedIn) {
-      root.innerHTML = `
-        <div class="hw-locked-gate-box" style="padding:48px 24px;">
-          <div class="hw-locked-icon">♥</div>
-          <h2>登录后同步你的跨端四合一收藏夹（画风 · 图型 · 作品 · 帖子）</h2>
-          <p style="color:var(--ink-muted);margin-bottom:18px;">在主站收藏的任何画风与图型，都会自动出现在 <code>studio.</code> 在线创作台的置顶快捷栏中！</p>
-          <button type="button" class="btn btn-primary" id="fav-login-btn">🔑 立即登录查看收藏夹</button>
-        </div>
-      `;
-      root.querySelector("#fav-login-btn").onclick = () => S.openLoginModal();
-      return;
-    }
-
-    const cols = App.state.collections;
-    let bodyHtml = "";
-
-    if (UI.favTab === "styles" || UI.favTab === "layouts") {
-      const ids = cols[UI.favTab] || [];
-      const missingIds = ids.filter((id) => !App.resourceMap.has(id));
-      if (missingIds.length && !UI._fetchingFavs) {
-        UI._fetchingFavs = true;
-        Promise.all(
-          missingIds.map((mid) =>
-            fetch(`/api/resources/${encodeURIComponent(mid)}`)
-              .then((r) => (r.ok ? r.json() : null))
-              .then((data) => {
-                const res = data?.resource || data;
-                if (res && res.code) {
-                  const it = {
-                    id: res.code,
-                    code: res.code,
-                    name: res.name || res.code,
-                    originalName: res.name || res.code,
-                    kind: res.kind,
-                    sourceType: res.sourceType || res.source || "pending",
-                    status: res.status,
-                    image: res.image || res.cover || "",
-                    cover: res.image || res.cover || "",
-                    description: res.description || "",
-                    definition: res.definition || null,
-                    access: res.access || {},
-                    canUse: res.canUse !== false,
-                  };
-                  App.resourceMap.set(it.id, it);
-                }
-              })
-              .catch(() => null)
-          )
-        ).finally(() => {
-          UI._fetchingFavs = false;
-          renderMain();
-        });
-      }
-      const items = ids.map((id) => App.resourceMap.get(id)).filter(Boolean);
-      bodyHtml = items.length
-        ? S.renderMasonry(
-            items.map((item) => {
-              const isWithdrawn = item.status === "withdrawn" || item.status === "hidden" || item.access?.hiddenBy === "withdrawn";
-              const isPending = !isWithdrawn && (item.status === "pending" || item.status === "changes_requested" || item.sourceType === "pending" || item.access?.hiddenBy === "pending");
-              if (isWithdrawn) {
-                return `
-                  <article class="hw-card hw-card-withdrawn" data-fav-item="${esc(item.id)}" style="opacity:0.75;filter:grayscale(0.85);background:var(--paper-soft, #f4efe6);">
-                    <div class="hw-card-media" style="cursor:default;">
-                      <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" />
-                    </div>
-                    <div class="hw-card-body">
-                      <div class="hw-card-code" style="color:var(--ink-muted);">${esc(item.id)} <span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--line-soft, #e5e5e5);color:var(--ink-muted);">已下架</span></div>
-                      <h3 class="hw-card-title">${esc(item.name)}</h3>
-                      <div class="hw-card-footer">
-                        <button type="button" class="btn btn-sm" data-unfav="${esc(item.id)}">取消收藏</button>
-                        <button type="button" class="btn btn-sm" disabled style="opacity:0.5;cursor:not-allowed;">不可使用</button>
-                      </div>
-                    </div>
-                  </article>
-                `;
-              }
-              return `
-                <article class="hw-card" data-fav-item="${esc(item.id)}">
-                  <div class="hw-card-media" data-fav-open-asset="${esc(item.id)}">
-                    <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" />
-                  </div>
-                  <div class="hw-card-body">
-                    <div class="hw-card-code">
-                      ${esc(item.id)}
-                      ${isPending ? `<span class="badge" style="margin-left:4px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--gold-soft, #fef3c7);color:var(--gold-strong, #92400e);font-weight:700;">投稿中</span>` : ""}
-                    </div>
-                    <h3 class="hw-card-title" data-fav-open-asset="${esc(item.id)}">${esc(item.name)}</h3>
-                    <div class="hw-card-footer">
-                      <button type="button" class="btn btn-sm" data-unfav="${esc(item.id)}">移除</button>
-                      <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", item.kind === "style" ? { style: item.id } : { layout: item.id }))}">去创作 ↗</a>
-                    </div>
-                  </div>
-                </article>
-              `;
-            }),
-            "standard"
-          )
-        : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏该类资产，去库里点亮 ♡ 吧！</div>`;
-    } else if (UI.favTab === "works") {
-      const missing = (cols.works || []).filter((id) => !App.state.works.some((w) => String(w.id) === String(id)));
-      if (missing.length && typeof S.apiJson === "function" && !UI._fetchingColWorks) {
-        UI._fetchingColWorks = true;
-        S.apiJson(`/api/works/feed?ids=${encodeURIComponent(missing.join(","))}`)
-          .then((res) => {
-            if (res && res.items && res.items.length) {
-              res.items.forEach((item) => {
-                if (!App.state.works.some((w) => String(w.id) === String(item.id))) {
-                  App.state.works.push(item);
-                }
-              });
-              if (App.view === "collections") renderMain();
-            }
-          })
-          .catch(() => {})
-          .finally(() => {
-            UI._fetchingColWorks = false;
-          });
-      }
-      const items = (cols.works || []).map((id) => App.state.works.find((w) => w.id === id)).filter(Boolean);
-      bodyHtml = items.length
-        ? S.renderMasonry(
-            items.map(
-              (w) => `
-                <article class="hw-card" data-fav-item="${esc(w.id)}">
-                  <div class="hw-card-media" data-fav-open-work="${esc(w.id)}">
-                    <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" />
-                  </div>
-                  <div class="hw-card-body">
-                    <h3 class="hw-card-title" data-fav-open-work="${esc(w.id)}">${esc(w.title)}</h3>
-                    <div class="hw-card-footer">
-                      <button type="button" class="btn btn-sm" data-unfav="${esc(w.id)}">移除</button>
-                      <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", { fork: w.id }))}">做同款 ↗</a>
-                    </div>
-                  </div>
-                </article>
-              `
-            ),
-            "standard"
-          )
-        : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏晒作品</div>`;
-    } else if (UI.favTab === "generations") {
-      if (UI._collectedGenerations === null && !UI._fetchingColGen) {
-        UI._fetchingColGen = true;
-        fetch("/api/collections/generations", { credentials: "include" })
-          .then((r) => r.ok ? r.json() : null)
-          .then((data) => {
-            UI._collectedGenerations = (data && data.generations) || [];
-          })
-          .catch(() => {
-            UI._collectedGenerations = [];
-          })
-          .finally(() => {
-            UI._fetchingColGen = false;
-            renderMain();
-          });
-      }
-      const genItems = UI._collectedGenerations || [];
-      if (UI._fetchingColGen && !UI._collectedGenerations) {
-        bodyHtml = `<div style="padding:40px;text-align:center;color:var(--ink-muted);">🕒 正在加载收藏的生图历史…</div>`;
-      } else if (!genItems.length) {
-        bodyHtml = `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏生图历史，去创作者主页点亮 ⭐️ 吧！</div>`;
-      } else {
-        bodyHtml = S.renderMasonry(
-          genItems.map((g) => {
-            const img0 = (g.images && g.images[0]) || "/images/poster-demo-autumn-equinox.webp";
-            const title = g.topic || g.title || "手绘风生成作品";
-            const dateText = esc(g.createdAt || g.created_at || "近期");
-            return `
-              <article class="hw-card" data-col-gen="${esc(g.id)}" data-fav-item="${esc(g.id)}">
-                <div class="hw-card-media" data-open-col-gen="${esc(g.id)}" style="cursor:pointer;">
-                  <img data-hw-src="${esc(img0)}" alt="${esc(title)}" />
-                </div>
-                <div class="hw-card-body">
-                  <h3 class="hw-card-title" data-open-col-gen="${esc(g.id)}" style="cursor:pointer;">${esc(title)}</h3>
-                  <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;margin-bottom:8px;">
-                    <span>@${esc(g.author)} · ${dateText}</span>
-                    <span>👍 ${g.likes || 0} · ⭐️ ${g.favorites || 0}</span>
-                  </div>
-                  <div class="hw-card-footer">
-                    <button type="button" class="btn btn-sm" data-unfav-gen="${esc(g.id)}">移除</button>
-                    <a class="btn btn-sm btn-primary" href="${esc(channelUrl("studio", { forkGen: g.id, entry: "quick" }))}">复刻配方 ↗</a>
-                  </div>
-                </div>
-              </article>
-            `;
-          }),
-          "standard"
-        );
-      }
-    } else {
-      const items = (cols.topics || []).map((id) => App.state.topics.find((t) => t.id === id)).filter(Boolean);
-      bodyHtml = items.length
-        ? `<div style="display:grid;gap:10px;">
-            ${items
-              .map(
-                (t) => `
-                  <div class="forum-topic-card" data-fav-item="${esc(t.id)}" style="display:flex;justify-content:space-between;align-items:center;gap:14px;">
-                    <div>
-                      <span class="hw-card-code">${esc(t.categoryLabel)}</span>
-                      <h3 style="margin:4px 0;font-size:15.5px;">${esc(t.title)}</h3>
-                      <div style="font-size:12.5px;color:var(--ink-muted);">@${esc(t.authorName)}</div>
-                    </div>
-                    <div style="display:flex;gap:8px;">
-                      <button type="button" class="btn btn-sm" data-unfav="${esc(t.id)}">取消收藏</button>
-                      <a class="btn btn-sm btn-primary" href="${esc(channelUrl("forum", { view: "topic", id: t.id }))}">阅读帖子 ↗</a>
-                    </div>
-                  </div>
-                `
-              )
-              .join("")}
-          </div>`
-        : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏论坛好帖</div>`;
-    }
-
-    root.innerHTML = `
-      <section class="hw-editorial-strip">
-        <div>
-          <p class="hw-editorial-eyebrow">个人云端资产 · 五合一云端收藏夹</p>
-          <h1 class="hw-editorial-title">${esc(App.state.user.name)} 的创作资产库</h1>
-          <p class="hw-editorial-sub">收藏的画风与图型已实时同步至 <code>studio.handraw-style.com</code> 选卡器置顶分组。</p>
-        </div>
-      </section>
-
-      <div class="hw-pills-row" style="margin-bottom:18px;">
-        <button type="button" class="hw-pill ${UI.favTab === "styles" ? "is-active" : ""}" data-ftab="styles">🎨 画风 (${(cols.styles || []).length})</button>
-        <button type="button" class="hw-pill ${UI.favTab === "layouts" ? "is-active" : ""}" data-ftab="layouts">📐 图型 (${(cols.layouts || []).length})</button>
-        <button type="button" class="hw-pill ${UI.favTab === "works" ? "is-active" : ""}" data-ftab="works">🖼️ 作品与提示词 (${(cols.works || []).length})</button>
-        <button type="button" class="hw-pill ${UI.favTab === "topics" ? "is-active" : ""}" data-ftab="topics">💬 实战帖 (${(cols.topics || []).length})</button>
-        <button type="button" class="hw-pill ${UI.favTab === "generations" ? "is-active" : ""}" data-ftab="generations">⚡ 生图历史 (${(cols.generations || []).length})</button>
-      </div>
-
-      ${bodyHtml}
-    `;
-
-    root.querySelectorAll("[data-ftab]").forEach((b) => {
-      b.onclick = () => {
-        UI.favTab = b.getAttribute("data-ftab");
-        renderMain();
-      };
-    });
-    root.querySelectorAll("[data-fav-open-asset]").forEach((el) => {
-      el.onclick = () => openAssetPage(el.getAttribute("data-fav-open-asset"));
-    });
-    root.querySelectorAll("[data-fav-open-work]").forEach((el) => {
-      el.onclick = () => openWorkPage(el.getAttribute("data-fav-open-work"));
-    });
-    root.querySelectorAll("[data-open-col-gen]").forEach((el) => {
-      el.onclick = () => {
-        const gid = el.getAttribute("data-open-col-gen");
-        const found = (UI._collectedGenerations || []).find((x) => x.id === gid);
-        if (found) openGenerationDetailModal(found);
-      };
-    });
-    root.querySelectorAll("[data-unfav-gen]").forEach((b) => {
-      b.onclick = () => {
-        const gid = b.getAttribute("data-unfav-gen");
-        if (UI._collectedGenerations) {
-          UI._collectedGenerations = UI._collectedGenerations.filter((x) => x.id !== gid);
-        }
-        S.toggleCollect("generations", gid);
-      };
-    });
-    root.querySelectorAll("[data-unfav]").forEach((b) => {
-      b.onclick = () => {
-        S.toggleCollect(UI.favTab, b.getAttribute("data-unfav"), b.getAttribute("data-unfav"));
-      };
-    });
-  }
-
-  /* ======================== 4. CREDITS WALLET & FLYWHEEL CENTER ======================== */
+  /* ======================== 3. CREDITS WALLET & FLYWHEEL CENTER ======================== */
   function renderWalletCenter(root) {
     if (!App.state.loggedIn) {
       openAuthPage("登录后即可查看积分钱包、签到领额度与管理已授权设备", () => switchView("wallet"));
@@ -2857,6 +2830,36 @@
   /* ======================== BOOTSTRAP ======================== */
   parseInitialUrl();
   S.initApp("main", renderMain).then(() => {
+    if (App.view === "collections") {
+      const curU = (App.state && App.state.user && App.state.user.username && App.state.user.username !== "guest") ? App.state.user.username : "";
+      if (App.state && App.state.loggedIn && curU) {
+        openProfilePage(curU, "collections");
+        syncUrl(false);
+      } else {
+        openAuthPage("登录后查看与同步你的云端收藏夹", () => {
+          if (App.state && App.state.user && App.state.user.username) {
+            openProfilePage(App.state.user.username, "collections");
+            syncUrl(false);
+          }
+        });
+        syncUrl(false);
+      }
+    } else if (App.view === "profile") {
+      const curU = (App.state && App.state.user && App.state.user.username && App.state.user.username !== "guest") ? App.state.user.username : "";
+      const isMe = Boolean(App.state && App.state.loggedIn && curU && curU === UI.profileUser);
+      let urlChanged = false;
+      if (UI.profileTab === "assets") {
+        UI.profileTab = "styles";
+        urlChanged = true;
+      }
+      if (!isMe && ["collections", "account"].includes(UI.profileTab)) {
+        UI.profileTab = "works";
+        urlChanged = true;
+      }
+      if (urlChanged) {
+        syncUrl(false);
+      }
+    }
     updateSeoTitle();
     renderMain();
   }).catch((error) => {

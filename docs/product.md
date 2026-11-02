@@ -47,7 +47,7 @@ Handraw 是手绘风格的图片创作社区。主线流程：
 | 作品广场 `?view=works` | 已发布作品的信息流 | 所有人 | 排序只有 `newest` / `popular`（`backend/ranking.py`） | 已实现 |
 | 榜单 `?view=rankings` | 作品、创作者、资源排行 | 所有人 | 浏览数不参与排序 | 已实现 |
 | 作品详情 `?view=work` | 多图、配方、解锁付费提示词、复刻入口 | 所有人；付费提示词需解锁 | 含资源专属指令的提示词对外返回空串 | 已实现 |
-| 收藏 `?view=collections` | 按 `styles` / `layouts` / `works` / `topics` 四类收藏 | 登录用户 | — | 已实现 |
+| 收藏 `?view=profile&ptab=collections` | 按 `styles` / `layouts` / `works` / `topics` 四类收藏，整合于个人主页收藏夹 | 登录用户（仅本人） | 旧链接 `?view=collections` 自动跳转 | 已实现 |
 | 钱包 `?view=wallet` | 余额、签到、兑换码、流水（最近 60 条） | 登录用户 | 现金充值关闭，见 §5 | 部分实现 |
 | 个人主页 `?view=profile` | 作者作品与荣誉 | 所有人 | — | 已实现 |
 | Skill 绑定 `?view=device` | 设备码授权页 | 登录用户 | 设备码 10 分钟过期 | 已实现 |
