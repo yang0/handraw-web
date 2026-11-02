@@ -254,6 +254,12 @@ CREATE INDEX IF NOT EXISTS idx_works_popular_v2
 DROP INDEX IF EXISTS idx_works_popular;
 """
 
+POPULAR_INDEX_V3_SQL = """
+CREATE INDEX IF NOT EXISTS idx_works_popular_v3
+    ON works(status, (likes + 2 * favorites + forks) DESC, published_at_ms DESC);
+DROP INDEX IF EXISTS idx_works_popular_v2;
+"""
+
 # Thread visibility had one source value, 'moderator', for two different facts:
 # "a human hid this thread" and "this thread mirrors its work, which a human
 # hid".  Publishing the work could not tell them apart, so it republished
@@ -819,4 +825,5 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (74, "074_generation_social_and_fork", GENERATION_SOCIAL_SQL),
     (75, "075_zero_topic_publish_credits", ZERO_TOPIC_PUBLISH_CREDITS_SQL),
     (77, "077_zero_reply_publish_credits", ZERO_REPLY_PUBLISH_CREDITS_SQL),
+    (78, "078_popular_index_v3", POPULAR_INDEX_V3_SQL),
 ]

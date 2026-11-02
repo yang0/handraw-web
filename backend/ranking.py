@@ -15,14 +15,14 @@ from __future__ import annotations
 
 from typing import Any
 
-# Works: likes + cheers + 2*favorites + 1*forks.
+# Works: likes + 2*favorites + 1*forks.
 #
 # Forks were weighted 3x because they represent real reuse, but the counter is
 # reachable by spending free generation quota, so it is not trustworthy enough
 # to dominate the ranking.  Weight 1 keeps the signal without giving a farmable
 # metric three times the pull of a like.
 # Kept as a SQL expression so an ORDER BY can use the expression index.
-WORK_POPULAR_EXPR = "(likes + cheers + 2 * favorites + forks)"
+WORK_POPULAR_EXPR = "(likes + 2 * favorites + forks)"
 
 
 def work_popular_sql(alias: str = "") -> str:
@@ -31,7 +31,7 @@ def work_popular_sql(alias: str = "") -> str:
         return WORK_POPULAR_EXPR
     prefix = f"{alias}."
     return (
-        f"({prefix}likes + {prefix}cheers + 2 * {prefix}favorites + {prefix}forks)"
+        f"({prefix}likes + 2 * {prefix}favorites + {prefix}forks)"
     )
 
 
@@ -56,7 +56,6 @@ def work_popular_score(row: Any) -> int:
     """Popularity of a work row (sqlite3.Row or dict)."""
     return (
         int(_get(row, "likes") or 0)
-        + int(_get(row, "cheers") or 0)
         + 2 * int(_get(row, "favorites") or 0)
         + int(_get(row, "forks") or 0)
     )

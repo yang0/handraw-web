@@ -16,7 +16,7 @@ assert.ok(SHARED&&typeof SHARED.popularScore==='function','shared.js must export
 const popularScore=SHARED.popularScore;
 const S={compareByRecency:(a,b)=>(b.publishedAtMs||0)-(a.publishedAtMs||0),popularScore};
 const works=[
-  {id:'single',title:'春天植物',notes:'公开笔记',author:'writer',authorName:'小林',images:['/one.webp'],styles:['FA-001'],price:0,publishedAtMs:100,favorites:2,cheers:8},
+  {id:'single',title:'春天植物',notes:'公开笔记',author:'writer',authorName:'小林',images:['/one.webp'],styles:['FA-001'],price:0,publishedAtMs:100,favorites:3,cheers:8},
   {id:'multi',title:'旅行记录',author:'writer',images:['/a.webp','/b.webp'],layout:'SC-001',price:9,prompt:'private-paid-only',publishedAtMs:200,favorites:2,cheers:3},
   {id:'freeform',title:'随手画',author:'other',images:[{url:'/c.webp'}],publishedAtMs:300,favorites:0,cheers:0},
   {id:'no-image',title:'不能显示为作品',images:[]}
@@ -34,7 +34,7 @@ assert.deepEqual(select({query:'sc-001'}),['multi']);
 assert.deepEqual(select({query:'小林'}),['single']);
 assert.deepEqual(select({query:'private-paid-only'}),[],'Search cannot expose paid prompt text');
 // Legacy "favorites"/"cheers" both collapse onto the one popularity formula:
-// single = 2*2+8 = 12, multi = 2*2+3 = 7, freeform = 0.
+// single = 2*3 = 6, multi = 2*2 = 4, freeform = 0 (cheers is retired from popularity).
 assert.deepEqual(select({sort:'favorites'}),['single','multi','freeform'],'Legacy favorites maps to popular');
 assert.deepEqual(select({sort:'cheers'}),['single','multi','freeform'],'Legacy cheers maps to popular');
 assert.deepEqual(select({sort:'popular'}),['single','multi','freeform']);

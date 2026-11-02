@@ -3038,6 +3038,8 @@ def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, targ
         raise ServiceError("不支持的鼓励对象类型")
     tid = (target_id or "").strip()
     stamp = (stamp_label or "").strip()[:20]
+    if stamp:
+        raise ServiceError("印章功能已下线", status=400, code="stamp_retired")
     uid = int(user["id"])
     now = utc_now_iso()
 

@@ -295,10 +295,11 @@ class ResourceRegistryTests(unittest.TestCase):
             self.assertEqual(data["access"]["hiddenBy"], "withdrawn")
 
     def test_06_pending_resource_stamp_and_tip(self) -> None:
-        """6. Pending resource: stamp returns 200, tip returns 400 (未收录资源不接受赞赏)."""
-        cheer_res = toggle_user_cheer(self.db, self.visitor, "asset", self.pending_code, stamp_label="超实用配方")
-        self.assertTrue(cheer_res["ok"])
-        self.assertTrue(cheer_res["cheered"])
+        """6. Pending resource: retired stamp returns 400, tip returns 400 (未收录资源不接受赞赏)."""
+        with self.assertRaises(ServiceError) as ctx:
+            toggle_user_cheer(self.db, self.visitor, "asset", self.pending_code, stamp_label="超实用配方")
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.code, "stamp_retired")
 
         with self.assertRaises(ServiceError) as ctx:
             send_encourage_tip(self.db, self.visitor, "asset", self.pending_code, amount=2)
@@ -312,10 +313,11 @@ class ResourceRegistryTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status, 404)
 
     def test_08_official_fb028_stamp_returns_200(self) -> None:
-        """8. Official FB-028 stamp returns 200 (fixes issue #19)."""
-        cheer_res = toggle_user_cheer(self.db, self.visitor, "asset", "FB-028", stamp_label="超实用配方")
-        self.assertTrue(cheer_res["ok"])
-        self.assertTrue(cheer_res["cheered"])
+        """8. Official FB-028 stamp is retired and returns 400."""
+        with self.assertRaises(ServiceError) as ctx:
+            toggle_user_cheer(self.db, self.visitor, "asset", "FB-028", stamp_label="超实用配方")
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.code, "stamp_retired")
 
 
 if __name__ == "__main__":

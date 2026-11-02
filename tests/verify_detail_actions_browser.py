@@ -132,6 +132,14 @@ def run_browser_verification():
             stamp_tip_btn = page.locator("#topic-stamp-tip-btn")
             assert stamp_tip_btn.count() == 0, "Stamps section must not contain duplicate tip button"
 
+            # Check stamps are retired (Issue #52)
+            assert page.locator("#topic-stamp-recipe").count() == 0, "Resource detail must NOT contain #topic-stamp-recipe"
+            assert page.locator("#topic-stamp-aesthetic").count() == 0, "Resource detail must NOT contain #topic-stamp-aesthetic"
+            assert page.locator(".topic-resource-stamps").count() == 0, "Resource detail must NOT contain .topic-resource-stamps"
+            style_body_text = page.locator("body").inner_text()
+            assert "超实用配方" not in style_body_text, "'超实用配方' must not appear in resource detail"
+            assert "审美在线" not in style_body_text, "'审美在线' must not appear in resource detail"
+
             # Check creative semantic button is present
             use_btn = page.locator("#topic-resource-use-btn")
             assert use_btn.is_visible(), "Style resource must render '去创作' button"
@@ -152,6 +160,14 @@ def run_browser_verification():
             assert "收藏" not in work_counts, "Duplicate '收藏' must not appear in work #topic-counts"
             assert "获赞赏 40✦" in work_counts, "Work detail must display '获赞赏 40✦'"
             assert "做同款 12" in work_counts, "Work detail must display '做同款 12'"
+
+            # Check stamps are retired in work detail
+            assert page.locator("#topic-stamp-recipe").count() == 0, "Work detail must NOT contain #topic-stamp-recipe"
+            assert page.locator("#topic-stamp-aesthetic").count() == 0, "Work detail must NOT contain #topic-stamp-aesthetic"
+            assert page.locator(".topic-resource-stamps").count() == 0, "Work detail must NOT contain .topic-resource-stamps"
+            work_body_text = page.locator("body").inner_text()
+            assert "超实用配方" not in work_body_text, "'超实用配方' must not appear in work detail"
+            assert "审美在线" not in work_body_text, "'审美在线' must not appear in work detail"
 
             # Work should have '做同款' action
             body_html = page.locator("#topic-article-body").inner_html()
@@ -208,6 +224,14 @@ def run_browser_verification():
             }""")
             print(f"Mobile layout dimensions: {overflow_res}")
             assert not overflow_res["hasHorizontalOverflow"], f"Horizontal overflow detected on mobile: {overflow_res}"
+
+            # Check stamps are retired in mobile view
+            assert page.locator("#topic-stamp-recipe").count() == 0, "Mobile view must NOT contain #topic-stamp-recipe"
+            assert page.locator("#topic-stamp-aesthetic").count() == 0, "Mobile view must NOT contain #topic-stamp-aesthetic"
+            assert page.locator(".topic-resource-stamps").count() == 0, "Mobile view must NOT contain .topic-resource-stamps"
+            mobile_body_text = page.locator("body").inner_text()
+            assert "超实用配方" not in mobile_body_text, "'超实用配方' must not appear in mobile view"
+            assert "审美在线" not in mobile_body_text, "'审美在线' must not appear in mobile view"
 
             page.screenshot(path=str(SCREENSHOT_MOBILE), full_page=False)
             print(f"Saved mobile screenshot: {SCREENSHOT_MOBILE}")

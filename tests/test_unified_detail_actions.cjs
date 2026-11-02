@@ -518,10 +518,10 @@ async function runTests() {
     assert.equal(tipBtn.textContent.trim(), "🎁 赞赏");
     assert.equal(shareBtn.textContent.trim(), "📋 复制分享口令");
 
-    // 3. No duplicate tip button in stamps
+    // 3. Stamps section and buttons retired (Issue #52)
     assert.equal(root.querySelectorAll("#topic-stamp-tip-btn").length, 0, "Resource stamps must NOT contain duplicate tip button");
-    assert.ok(root.querySelector("#topic-stamp-recipe"), "Stamps section must retain 超实用配方");
-    assert.ok(root.querySelector("#topic-stamp-aesthetic"), "Stamps section must retain 审美在线");
+    assert.equal(root.querySelectorAll("#topic-stamp-recipe").length, 0, "Stamps section must NOT contain 超实用配方");
+    assert.equal(root.querySelectorAll("#topic-stamp-aesthetic").length, 0, "Stamps section must NOT contain 审美在线");
 
     // 4. Style action button is "去创作" / "使用此画风"
     const useBtn = root.querySelector("#topic-resource-use-btn");

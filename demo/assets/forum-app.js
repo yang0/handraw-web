@@ -2066,11 +2066,6 @@
     const isExclusive = res.sourceType === "exclusive";
     const isPending = Boolean(res.pending || res.status === "pending" || res.sourceType === "pending");
 
-    const viewerStamps = res.viewerStamps || _activeTopicDetail?.topicData?.viewer?.stamps || [];
-    const stampedRecipe = viewerStamps.includes("超实用配方");
-    const stampedAesthetic = viewerStamps.includes("审美在线");
-    const recipeCount = (res.stampCounts && res.stampCounts["超实用配方"]) || 0;
-    const aestheticCount = (res.stampCounts && res.stampCounts["审美在线"]) || 0;
     const isCommunity = res.sourceType === "community" && !isPending;
     const canTip = !isPending && (isCommunity
       ? Boolean(res.author && (!App.state?.loggedIn || !App.state?.user || App.state.user.username !== res.author))
@@ -2080,39 +2075,6 @@
       : `🎁 赞赏支持`;
 
     return `
-      <style>
-        .topic-resource-stamps {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          margin-top: 14px;
-          margin-bottom: 14px;
-          flex-wrap: wrap;
-        }
-        .topic-resource-stamps .hw-stamp-btn {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 6px 12px;
-          border-radius: 999px;
-          border: 1px solid var(--line-soft);
-          background: var(--paper-card);
-          font-size: 13px;
-          cursor: pointer;
-          color: var(--ink-base);
-          transition: all 0.15s ease;
-        }
-        .topic-resource-stamps .hw-stamp-btn:hover {
-          border-color: var(--gold);
-        }
-        .topic-resource-stamps .hw-stamp-btn.is-active {
-          background: #fbf5e8;
-          border-color: var(--gold);
-          color: #8a5a00;
-          font-weight: 700;
-        }
-
-      </style>
       <div class="topic-resource-mount" style="min-width:0;max-width:100%;">
         <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;margin-bottom:20px;">
           ${res.image ? `
@@ -2141,15 +2103,6 @@
               <a class="btn btn-primary" id="topic-resource-use-btn" href="${esc(res.useUrl)}" style="font-weight:750;">${esc(useBtnText)} ↗</a>
             </div>
           </div>
-        </div>
-
-        <div class="topic-resource-stamps">
-          <button type="button" class="hw-stamp-btn ${stampedRecipe ? "is-active" : ""}" id="topic-stamp-recipe" data-stamp-label="超实用配方">
-            🎯 超实用配方 (${recipeCount})
-          </button>
-          <button type="button" class="hw-stamp-btn ${stampedAesthetic ? "is-active" : ""}" id="topic-stamp-aesthetic" data-stamp-label="审美在线">
-            ✨ 审美在线 (${aestheticCount})
-          </button>
         </div>
 
         <div style="margin-top:16px;">
@@ -3206,54 +3159,6 @@
 
     // Resource Mount - copy button & related works & paired resources
     if (mount.kind === "style" || mount.kind === "layout") {
-      const bindStampBtn = (btnId, stampLabel) => {
-        const btn = root.querySelector(btnId);
-        if (!btn || !mount.resource) return;
-        btn.onclick = () => {
-          if (!App.state?.loggedIn) {
-            openForumAuthPage("登录后即可盖印章！");
-            return;
-          }
-          const viewerStamps = mount.resource.viewerStamps || _activeTopicDetail?.topicData?.viewer?.stamps || [];
-          if (viewerStamps.includes(stampLabel) || btn.classList.contains("is-active")) {
-            toast("已盖过此印章");
-            return;
-          }
-          viewerStamps.push(stampLabel);
-          mount.resource.viewerStamps = viewerStamps;
-          if (_activeTopicDetail?.topicData?.viewer) {
-            _activeTopicDetail.topicData.viewer.stamps = viewerStamps;
-          }
-          if (!mount.resource.stampCounts) mount.resource.stampCounts = {};
-          const curCount = (mount.resource.stampCounts[stampLabel] || 0) + 1;
-          mount.resource.stampCounts[stampLabel] = curCount;
-          btn.classList.add("is-active");
-          btn.innerHTML = `${stampLabel === "超实用配方" ? "🎯 超实用配方" : "✨ 审美在线"} (${curCount})`;
-
-          S.apiJson("/api/interactions/cheer", {
-            method: "POST",
-            body: { targetType: "asset", targetId: mount.resource.code, stampLabel: stampLabel, stamp: stampLabel }
-          }).then((res) => {
-            if (res && res.firstCheerReward) {
-              toast(`🎯 盖章成功！首次盖章获得 ${res.firstCheerReward}✦ 积分奖励`);
-              if (App.state?.user) App.state.user.credits = (App.state.user.credits || 0) + res.firstCheerReward;
-            } else {
-              toast("🎯 盖章成功！");
-            }
-          }).catch((err) => {
-            const idx = viewerStamps.indexOf(stampLabel);
-            if (idx >= 0) viewerStamps.splice(idx, 1);
-            mount.resource.stampCounts[stampLabel] = Math.max(0, curCount - 1);
-            btn.classList.remove("is-active");
-            btn.innerHTML = `${stampLabel === "超实用配方" ? "🎯 超实用配方" : "✨ 审美在线"} (${mount.resource.stampCounts[stampLabel]})`;
-            toast(`盖章失败：${(err && err.message) || err}`);
-          });
-        };
-      };
-
-      bindStampBtn("#topic-stamp-recipe", "超实用配方");
-      bindStampBtn("#topic-stamp-aesthetic", "审美在线");
-
       const useBtn = root.querySelector("#topic-resource-use-btn");
       if (useBtn) {
         useBtn.onclick = (e) => {
@@ -3327,7 +3232,7 @@
                   const ar = "";
                   return `
                   <a href="${esc(S.channelUrl("main", { view: "work", id: w.id }))}" style="text-decoration:none;color:inherit;display:block;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:8px;overflow:hidden;min-width:0;max-width:100%;">
-                    <div class="topic-related-work-media" style="${ar}background:var(--paper-deep);overflow:hidden;position:relative;">
+                    <div class="topic-related-work-media" style="${ar ? `aspect-ratio:${ar};` : ""}background:var(--paper-deep);overflow:hidden;position:relative;">
                       <img src="${esc(firstImg)}" alt="${esc(w.title || "")}" style="width:100%;height:auto;display:block;object-fit:contain;" loading="lazy" />
                     </div>
                     <div style="padding:6px 8px;min-width:0;">

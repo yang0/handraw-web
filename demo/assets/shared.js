@@ -2079,7 +2079,6 @@
       // can be moved by spending free generation quota.
       return (
         Number(item.likes || 0) +
-        Number(item.cheers || 0) +
         2 * Number(item.favorites || 0) +
         Number(item.forks || 0)
       );
@@ -2145,11 +2144,11 @@
           const prof = a.author ? statsMap.get(a.author) : null;
           const boost = prof ? prof.honor.boost : 1.0;
           const commBonus = a.sourceType === "community" ? 42 : a.sourceType === "exclusive" ? 55 : 0;
-          rankScore = Math.round((totalWorkCnt * 36 + Number(a.cheers || 0) * 1.1 + commBonus) * boost);
+          rankScore = Math.round((totalWorkCnt * 36 + commBonus) * boost);
         } else {
           rankScore =
             pWorkCnt * 52 +
-            (isPeriodCoCreated ? 70 + Number(a.cheers || 0) * 1.2 : 0) +
+            (isPeriodCoCreated ? 70 : 0) +
             (isFreshRelease(a) ? 45 : 0);
         }
         return {
