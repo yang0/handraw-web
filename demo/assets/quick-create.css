@@ -596,6 +596,7 @@
 .batch-cost-wrap { display:flex;flex-direction:column;gap:3px; }
 .batch-cost-text { font-size:13px;font-weight:700;color:var(--ink-main); }
 .batch-busy-status { font-size:12px;color:var(--vermilion);font-weight:600; }
+.batch-summary-status { font-size:12px;color:var(--ink-muted);font-weight:600; }
 .batch-btn-wrap { display:flex;align-items:center;gap:8px; }
 .batch-stop-btn { min-height:40px;padding:8px 18px;border:1px solid var(--line-strong);background:var(--paper-inset);color:var(--ink-body);font-weight:600;cursor:pointer; }
 .batch-stop-btn:hover { border-color:var(--vermilion);color:var(--vermilion); }

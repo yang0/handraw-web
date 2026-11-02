@@ -129,6 +129,8 @@
       this.moreSettingsOpen = false;
       this.planNotice = "";
       this.isPlanning = false;
+      this.progressState = null;
+      this.lastSummary = "";
     }
 
     getParts() {
@@ -368,7 +370,10 @@
       const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
       let currentStep = ld.currentStep || 0;
       let totalSteps = ld.totalSteps || totalCount;
-      if (busy && currentStep === 0) currentStep = 1;
+      let completedCount = typeof ld.completedCount === "number" ? ld.completedCount : 0;
+      let failedCount = typeof ld.failedCount === "number" ? ld.failedCount : 0;
+      let isStopping = Boolean(ld.isStopping);
+      let activeIndex = typeof ld.activeIndex === "number" ? ld.activeIndex : (currentStep > 0 ? currentStep - 1 : (busy ? 0 : null));
 
       this.hostElement.innerHTML = `
         <div class="make-image-container batch-container">
@@ -708,7 +713,7 @@
                         </tr>
                       ` : iterations.map((iter, idx) => {
                         const itemResult = this.getItemResult(idx, displays, isBatchGallery);
-                        const rowStatus = this.getRowStatus(idx, busy, currentStep, itemResult);
+                        const rowStatus = this.getRowStatus(idx, busy, currentStep, itemResult, activeIndex);
                         const iterLayoutId = iter.layout || (batchLayoutMode === "fixed" ? (sd.layout || "") : "");
                         const catalog = this.context?.catalog;
                         const rMap = (catalog && catalog.resourceMap) || new Map();
@@ -746,7 +751,7 @@
                         }
 
                         return `
-                          <tr class="batch-table-row ${rowStatus.className}">
+                          <tr class="batch-table-row ${rowStatus.className}" data-batch-row="${idx}">
                             <td class="batch-col-idx">#${idx + 1}</td>
                             <td class="batch-col-content">
                               <div class="batch-iter-cell">
@@ -785,13 +790,13 @@
               <div class="batch-action-bar">
                 <div class="batch-cost-wrap">
                   ${this.renderCostHtml(totalCount)}
-                  ${busy ? `<span class="batch-busy-status">正在生成第 ${currentStep} / ${totalSteps} 张...</span>` : ""}
+                  ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
                 </div>
 
                 <div class="batch-btn-wrap">
                   <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
                   ${busy ? `
-                    <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop">停止</button>
+                    <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止"}</button>
                   ` : `
                     <button type="button" class="make-image-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>开始批量生成</button>
                   `}
@@ -850,27 +855,360 @@
       return dn?.data?.items?.[0] || null;
     }
 
-    getRowStatus(rowIndex, busy, currentStep, itemResult) {
+    getRowStatus(rowIndex, busy, currentStep, itemResult, activeIndex = null) {
+      if (itemResult?.imageUrl) {
+        return { key: "done", label: "完成", className: "is-done" };
+      }
+      if (itemResult?.failed || (itemResult && !itemResult.imageUrl && itemResult.error)) {
+        return { key: "failed", label: "失败", className: "is-failed" };
+      }
       if (busy) {
-        if (currentStep === rowIndex + 1) {
+        const isCurrentActive = activeIndex !== null
+          ? activeIndex === rowIndex
+          : (currentStep === rowIndex + 1 || (currentStep === 0 && rowIndex === 0));
+        if (isCurrentActive) {
           return { key: "generating", label: "生成中", className: "is-generating" };
-        }
-        if (currentStep > rowIndex + 1) {
-          if (itemResult?.imageUrl) {
-            return { key: "done", label: "完成", className: "is-done" };
-          }
-          return { key: "failed", label: "失败", className: "is-failed" };
         }
         return { key: "waiting", label: "等待", className: "is-waiting" };
       }
 
-      if (itemResult?.imageUrl) {
-        return { key: "done", label: "完成", className: "is-done" };
-      }
-      if (itemResult && !itemResult.imageUrl) {
-        return { key: "failed", label: "失败", className: "is-failed" };
-      }
       return { key: "waiting", label: "等待", className: "is-waiting" };
+    }
+
+    formatProgressStatus({ completedCount = 0, totalCount = 0, activeIndex = null, failedCount = 0, isStopping = false } = {}) {
+      if (isStopping) {
+        let msg = `正在停止…（已完成 ${completedCount} / ${totalCount} 张`;
+        if (failedCount > 0) msg += ` · 失败 ${failedCount} 张`;
+        msg += `）`;
+        return msg;
+      }
+      let txt = `已完成 ${completedCount} / ${totalCount} 张`;
+      if (activeIndex !== null && activeIndex >= 0 && activeIndex < totalCount) {
+        txt += ` · 正在生成第 ${activeIndex + 1} 张…`;
+      }
+      if (failedCount > 0) {
+        txt += ` · 失败 ${failedCount} 张`;
+      }
+      return txt;
+    }
+
+    formatSummaryStatus({ completedCount = 0, failedCount = 0, totalCount = 0 } = {}) {
+      const unexecuted = Math.max(0, totalCount - completedCount - failedCount);
+      if (completedCount === totalCount && failedCount === 0 && unexecuted === 0) {
+        return `全部完成（${totalCount} / ${totalCount} 张）`;
+      }
+      const parts = [`已完成 ${completedCount} / ${totalCount} 张`];
+      if (failedCount > 0) parts.push(`失败 ${failedCount} 张`);
+      if (unexecuted > 0) parts.push(`未执行 ${unexecuted} 张`);
+      return parts.join(" · ");
+    }
+
+    setStopping() {
+      const host = this.hostElement;
+      if (!host) return;
+      const btnStop = host.querySelector("#batch-btn-stop");
+      if (btnStop) {
+        btnStop.disabled = true;
+        btnStop.textContent = "正在停止…";
+      }
+      if (this.progressState) {
+        this.progressState.isStopping = true;
+        const costWrap = host.querySelector(".batch-cost-wrap");
+        if (costWrap) {
+          let busyEl = costWrap.querySelector(".batch-busy-status");
+          if (!busyEl) {
+            busyEl = document.createElement("span");
+            busyEl.className = "batch-busy-status";
+            costWrap.appendChild(busyEl);
+          }
+          busyEl.textContent = this.formatProgressStatus(this.progressState);
+        }
+      }
+    }
+
+    updateProgress({
+      updatedIndex = null,
+      itemResult = null,
+      completedCount = 0,
+      failedCount = 0,
+      totalCount = 0,
+      activeIndex = null,
+      busy = false,
+      isStopping = false,
+      summaryText = null
+    } = {}) {
+      this.progressState = { completedCount, failedCount, totalCount, activeIndex, busy, isStopping };
+      const host = this.hostElement;
+      if (!host) return;
+
+      // 1. Update Cost Wrap status
+      const costWrap = host.querySelector(".batch-cost-wrap");
+      if (costWrap) {
+        if (busy) {
+          const sumEl = costWrap.querySelector(".batch-summary-status");
+          if (sumEl && typeof sumEl.remove === "function") sumEl.remove();
+          let busyEl = costWrap.querySelector(".batch-busy-status");
+          if (!busyEl) {
+            busyEl = document.createElement("span");
+            busyEl.className = "batch-busy-status";
+            costWrap.appendChild(busyEl);
+          }
+          busyEl.textContent = this.formatProgressStatus({ completedCount, totalCount, activeIndex, failedCount, isStopping });
+        } else {
+          const busyEl = costWrap.querySelector(".batch-busy-status");
+          if (busyEl && typeof busyEl.remove === "function") busyEl.remove();
+          let sumEl = costWrap.querySelector(".batch-summary-status");
+          if (!sumEl) {
+            sumEl = document.createElement("span");
+            sumEl.className = "batch-summary-status";
+            costWrap.appendChild(sumEl);
+          }
+          const finalSummary = summaryText || this.formatSummaryStatus({ completedCount, failedCount, totalCount });
+          sumEl.textContent = finalSummary;
+          this.lastSummary = finalSummary;
+        }
+      }
+
+      // 2. Buttons handling
+      if (busy) {
+        const btnReset = host.querySelector("#batch-btn-reset");
+        if (btnReset) btnReset.disabled = true;
+        if (isStopping) {
+          const btnStop = host.querySelector("#batch-btn-stop");
+          if (btnStop) {
+            btnStop.disabled = true;
+            btnStop.textContent = "正在停止…";
+          }
+        }
+      } else {
+        const btnReset = host.querySelector("#batch-btn-reset");
+        if (btnReset) btnReset.disabled = false;
+        const btnStop = host.querySelector("#batch-btn-stop");
+        if (btnStop) {
+          btnStop.disabled = false;
+          btnStop.textContent = "停止";
+        }
+      }
+
+      // 3. Update specific completed or failed row
+      if (updatedIndex !== null && updatedIndex !== undefined) {
+        const row = host.querySelector(`tr[data-batch-row="${updatedIndex}"]`);
+        if (row) {
+          const hasImage = Boolean(itemResult?.imageUrl);
+          const hasFailed = Boolean(itemResult?.failed || (itemResult && !itemResult.imageUrl && itemResult.error));
+          if (hasImage) {
+            row.className = "batch-table-row is-done";
+          } else if (hasFailed) {
+            row.className = "batch-table-row is-failed";
+          }
+
+          const statusBadge = row.querySelector(".batch-status-badge");
+          if (statusBadge) {
+            if (hasImage) {
+              statusBadge.className = "batch-status-badge is-done";
+              statusBadge.textContent = "完成";
+            } else if (hasFailed) {
+              statusBadge.className = "batch-status-badge is-failed";
+              statusBadge.textContent = "失败";
+            }
+          }
+
+          if (hasImage) {
+            const cell = row.querySelector(".batch-iter-cell");
+            const existingThumb = cell?.querySelector(".batch-iter-thumb-btn, .batch-iter-placeholder");
+            if (existingThumb) {
+              const genTitle = itemResult.title || `生成结果 #${updatedIndex + 1}`;
+              const newBtn = document.createElement("button");
+              newBtn.type = "button";
+              newBtn.className = "batch-iter-thumb-btn is-generated";
+              newBtn.dataset.zoomSrc = itemResult.imageUrl;
+              newBtn.dataset.zoomTitle = genTitle;
+              newBtn.dataset.hoverSrc = itemResult.imageUrl;
+              newBtn.dataset.hoverCode = "";
+              newBtn.dataset.hoverName = genTitle;
+              newBtn.title = `${genTitle}（点击放大查看）`;
+              newBtn.setAttribute("aria-label", "放大查看生成结果");
+              newBtn.innerHTML = `<img data-hw-src="${esc(itemResult.imageUrl)}" class="batch-iter-thumb" alt="${esc(genTitle)}" loading="lazy" />`;
+              newBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (this.actions?.openImageLightbox) {
+                  this.actions.openImageLightbox(itemResult.imageUrl, genTitle);
+                }
+              };
+              if (typeof existingThumb.replaceWith === "function") {
+                existingThumb.replaceWith(newBtn);
+              } else if (existingThumb.parentNode) {
+                existingThumb.parentNode.replaceChild(newBtn, existingThumb);
+              }
+              if (global.HANDRAW_SHARED?.triggerImageLoaders) {
+                global.HANDRAW_SHARED.triggerImageLoaders(newBtn);
+              }
+            }
+          }
+
+          const actionCell = row.querySelector(".batch-col-action");
+          if (actionCell) {
+            if (hasImage) {
+              actionCell.innerHTML = `
+                <div class="batch-row-actions">
+                  <a href="${esc(itemResult.imageUrl)}" download="batch-${updatedIndex + 1}.webp" class="btn btn-sm batch-btn-dl" title="下载此图">下载</a>
+                  <button type="button" class="btn btn-sm batch-btn-publish" data-publish-idx="${updatedIndex}" title="发布晒图">晒图</button>
+                </div>
+              `;
+              const btnPub = actionCell.querySelector("[data-publish-idx]");
+              if (btnPub) {
+                btnPub.onclick = () => {
+                  if (this.actions?.openPublish) {
+                    this.actions.openPublish(itemResult.node || { data: { items: [itemResult] } });
+                  }
+                };
+              }
+            } else if (hasFailed) {
+              actionCell.innerHTML = `<button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${updatedIndex}">重试</button>`;
+              const btnRetry = actionCell.querySelector("[data-retry-idx]");
+              if (btnRetry) {
+                btnRetry.onclick = () => {
+                  if (this.actions?.runSingleRow) {
+                    this.actions.runSingleRow(updatedIndex);
+                  }
+                };
+              }
+            }
+          }
+        }
+
+        if (itemResult?.imageUrl) {
+          this.appendResultCard(itemResult, updatedIndex);
+        }
+      }
+
+      // 4. Update currently generating row
+      if (activeIndex !== null && activeIndex >= 0 && busy) {
+        const activeRow = host.querySelector(`tr[data-batch-row="${activeIndex}"]`);
+        if (activeRow && !activeRow.classList.contains("is-done")) {
+          activeRow.className = "batch-table-row is-generating";
+          const badge = activeRow.querySelector(".batch-status-badge");
+          if (badge) {
+            badge.className = "batch-status-badge is-generating";
+            badge.textContent = "生成中";
+          }
+          const action = activeRow.querySelector(".batch-col-action");
+          if (action) {
+            action.innerHTML = `<span class="batch-action-idle">-</span>`;
+          }
+        }
+      }
+    }
+
+    appendResultCard(res, index) {
+      const host = this.hostElement;
+      if (!host || !res || !res.imageUrl) return;
+
+      if (!this.context) this.context = {};
+      if (!Array.isArray(this.context.results)) {
+        this.context.results = [];
+      }
+      const existingContextIdx = this.context.results.findIndex(
+        (r) => r.index === index || (r.id && r.id === `${res.node?.id || "node"}:${index}`)
+      );
+      const resultObj = {
+        id: `${res.node?.id || "node"}:${index}`,
+        imageUrl: res.imageUrl,
+        title: res.title || `批量图片 #${index + 1}`,
+        node: res.node,
+        item: res,
+        index
+      };
+      if (existingContextIdx >= 0) {
+        this.context.results[existingContextIdx] = resultObj;
+      } else {
+        this.context.results.push(resultObj);
+      }
+
+      let resultsSec = host.querySelector(".batch-results-section");
+      if (!resultsSec) {
+        const container = host.querySelector(".batch-container") || host;
+        resultsSec = document.createElement("div");
+        resultsSec.className = "make-image-results-section batch-results-section";
+        resultsSec.innerHTML = `
+          <div class="make-image-results-head">
+            <h2>批量生成结果 (1)</h2>
+            <button type="button" class="btn btn-sm" id="batch-btn-download-all">全部下载</button>
+          </div>
+          <div class="make-image-results-grid"></div>
+        `;
+        container.appendChild(resultsSec);
+        const btnDlAll = resultsSec.querySelector("#batch-btn-download-all");
+        if (btnDlAll) {
+          btnDlAll.onclick = async () => {
+            const results = this.context?.results || [];
+            if (!results.length) return;
+            btnDlAll.disabled = true;
+            btnDlAll.textContent = "正在下载…";
+            for (let i = 0; i < results.length; i++) {
+              const r = results[i];
+              if (!r?.imageUrl) continue;
+              const a = document.createElement("a");
+              a.href = r.imageUrl;
+              a.download = `handraw-batch-${i + 1}.webp`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              await new Promise((resolve) => setTimeout(resolve, 350));
+            }
+            btnDlAll.disabled = false;
+            btnDlAll.textContent = "全部下载";
+          };
+        }
+      }
+
+      const headTitle = resultsSec.querySelector(".make-image-results-head h2");
+      if (headTitle) {
+        headTitle.textContent = `批量生成结果 (${this.context.results.length})`;
+      }
+
+      const grid = resultsSec.querySelector(".make-image-results-grid");
+      if (!grid) return;
+
+      let card = grid.querySelector(`[data-result-idx="${index}"]`);
+      const cardTitle = res.title || `图片 #${index + 1}`;
+      if (card) {
+        const img = card.querySelector("img");
+        if (img) {
+          img.setAttribute("data-hw-src", res.imageUrl);
+          img.src = res.imageUrl;
+        }
+        const a = card.querySelector("a.btn");
+        if (a) a.href = res.imageUrl;
+      } else {
+        const fig = document.createElement("figure");
+        fig.className = "make-image-result-card";
+        fig.setAttribute("data-result-idx", String(index));
+        fig.innerHTML = `
+          <div class="make-image-result-frame">
+            <img data-hw-src="${esc(res.imageUrl)}" alt="${esc(cardTitle)}" loading="lazy" />
+          </div>
+          <figcaption class="make-image-result-caption">
+            <strong class="make-image-result-title" title="${esc(cardTitle)}">${esc(cardTitle)}</strong>
+            <div class="make-image-result-actions">
+              <a href="${esc(res.imageUrl)}" download="handraw-batch-${index + 1}.webp" class="btn btn-sm">下载图片</a>
+              <button type="button" class="btn btn-sm btn-publish" data-res-pub-idx="${index}">晒图分享</button>
+            </div>
+          </figcaption>
+        `;
+        grid.appendChild(fig);
+        const pubBtn = fig.querySelector(`[data-res-pub-idx="${index}"]`);
+        if (pubBtn) {
+          pubBtn.onclick = () => {
+            if (this.actions?.openPublish) {
+              this.actions.openPublish(res.node || { data: { items: [res] } });
+            }
+          };
+        }
+        if (global.HANDRAW_SHARED?.triggerImageLoaders) {
+          global.HANDRAW_SHARED.triggerImageLoaders(fig);
+        }
+      }
     }
 
     bindEvents(root, parts, iterations) {
@@ -1568,6 +1906,7 @@
       const btnStop = root.querySelector("#batch-btn-stop");
       if (btnStop) {
         btnStop.onclick = () => {
+          self.setStopping();
           if (self.actions?.cancel) {
             self.actions.cancel();
           } else {

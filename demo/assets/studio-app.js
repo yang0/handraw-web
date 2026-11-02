@@ -312,7 +312,10 @@
     if (!_activeBatchRun) return false;
     _activeBatchRun.cancelled = true;
     CS.activeBatchRun = _activeBatchRun;
-    toast("已取消尚未提交的批量任务；已提交的云端任务会继续完成。");
+    if (window.HandrawBatchCreate && typeof window.HandrawBatchCreate.setStopping === "function") {
+      window.HandrawBatchCreate.setStopping();
+    }
+    toast("正在停止批量生成；已提交的当前任务会继续完成。");
     return true;
   }
 
@@ -5425,6 +5428,25 @@
 
       const nowStr = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       const allItems = [];
+      let completedCount = 0;
+      let failedCount = 0;
+
+      if (activeLoopNode && resolvedOnlyIdx === null) {
+        activeLoopNode.data.currentStep = 0;
+        activeLoopNode.data.totalSteps = plan.specs.length;
+        activeLoopNode.data.completedCount = 0;
+        activeLoopNode.data.failedCount = 0;
+      }
+
+      if (window.HandrawBatchCreate && plan.specs.length > 0 && resolvedOnlyIdx === null) {
+        window.HandrawBatchCreate.updateProgress({
+          completedCount: 0,
+          failedCount: 0,
+          totalCount: plan.specs.length,
+          activeIndex: 0,
+          busy: true
+        });
+      }
 
       for (let i = 0; i < plan.specs.length; i++) {
         if (isStaleScope(runEpoch, runScope)) return false;
@@ -5435,26 +5457,42 @@
 
         if (resolvedOnlyIdx !== null && i !== resolvedOnlyIdx && prevItem) {
           allItems.push(prevItem);
+          if (prevItem.imageUrl) completedCount++;
           continue;
         }
 
         if (activeLoopNode && resolvedOnlyIdx === null) {
-          activeLoopNode.data.currentStep = i + 1;
+          activeLoopNode.data.currentStep = completedCount;
           activeLoopNode.data.totalSteps = plan.specs.length;
+          activeLoopNode.data.completedCount = completedCount;
+          activeLoopNode.data.failedCount = failedCount;
           const progTxt = DOM.world && DOM.world.querySelector(`[data-loop-prog-text="${activeLoopNode.id}"]`);
           const progBar = DOM.world && DOM.world.querySelector(`[data-loop-prog-bar="${activeLoopNode.id}"]`);
-          if (progTxt) progTxt.textContent = `⏳ 循环第 ${i + 1} / ${plan.specs.length} 轮：${sp.title || ""}`;
-          if (progBar) progBar.style.width = `${Math.round(((i + 0.5) / Math.max(1, plan.specs.length)) * 100)}%`;
+          if (progTxt) progTxt.textContent = `⏳ 已完成 ${completedCount} / ${plan.specs.length} 张 · 正在生成：${sp.title || ""}`;
+          if (progBar) progBar.style.width = `${Math.round(((completedCount + 0.5) / Math.max(1, plan.specs.length)) * 100)}%`;
         }
         if (isBatchGallery && dn) {
           const galProgEl = DOM.world && DOM.world.querySelector(`[data-gal-prog-for="${dn.id}"]`);
-          if (galProgEl) galProgEl.textContent = `⏳ 正在批量出图 ${i + 1} / ${plan.specs.length} 张…`;
+          if (galProgEl) galProgEl.textContent = `⏳ 正在批量出图：已完成 ${completedCount} / ${plan.specs.length} 张…`;
+        }
+        if (window.HandrawBatchCreate) {
+          window.HandrawBatchCreate.updateProgress({
+            completedCount,
+            failedCount,
+            totalCount: plan.specs.length,
+            activeIndex: i,
+            busy: true
+          });
         }
 
         const nextRunCount = (dn?.data?.runCount || 0) + 1;
         const skillPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "skill", sp);
         let imgUrl = "";
         let activeReqId = "";
+        let itemFailed = false;
+        let itemErrorMsg = "";
+        let itemIsTerminal = false;
+        let isGlobalError = false;
 
         const requestId =
           (dn && dn.data && dn.data.pendingRequestIds && dn.data.pendingRequestIds[sp.slotKey || String(i)]) ||
@@ -5477,84 +5515,159 @@
           };
         }
 
-        if (useLiveApi) {
-          const cloudPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "cloud", sp);
-          const effectiveAssets = Array.isArray(sp.assetItems) ? sp.assetItems : rec.assetItems;
-          const refImages = effectiveAssets.map((a) => a.image).filter(Boolean);
-          const resp = await fetch("/api/studio/generate", {
-            method: "POST",
-            credentials: "include",
-            signal: controller ? controller.signal : undefined,
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              prompt: cloudPrompt,
-              ratio: sp.ratio || "3:4",
-              style1: sp.style1 || rec.style1Id || "",
-              style2: rec.style2Id || "",
-              layout: sp.layout || rec.layoutId || "",
-              refImages,
-              recipeSnapshot: sp.recipeSnapshot,
-              requestId,
-              clientRequestId: requestId,
-              confirmCost: true
-            })
-          });
-          const data = await resp.json();
-          if (isStaleScope(runEpoch, runScope)) return false;
-          if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-          if (typeof data.credits === "number") App.state.credits = data.credits;
-          if (typeof data.freeQuotaRemaining === "number") App.state.freeQuotaRemaining = data.freeQuotaRemaining;
-          if (S.renderChrome) S.renderChrome();
-          activeReqId = data.requestId || requestId;
-          if (data.imageUrl) {
-            imgUrl = data.imageUrl;
-          } else if (Array.isArray(data.images) && data.images.length) {
-            imgUrl = data.images[0];
-          } else if (data.taskId || activeReqId) {
-            if (dn) {
-              if (data.taskId) dn.data.pendingTaskId = data.taskId;
-              dn.data.pendingRequestId = activeReqId;
-              dn.data.pendingSpec = dn.data.pendingSpec || {};
-              if (!dn.data.pendingSpec[activeReqId]) {
-                dn.data.pendingSpec[activeReqId] = dn.data.pendingSpec[requestId] || {
-                  slotKey: sp.slotKey,
-                  role: sp.role || "image",
-                  title: sp.title || `图片 #${i + 1}`,
-                  anchorHeading: sp.anchorHeading || "",
-                  ratio: sp.ratio || "3:4",
-                  theme: sp.theme || "",
-                  prompt: skillPrompt,
-                  recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
-                };
-              }
-              persistOpenTabs();
-            }
-            const imgs = await pollCloudTask(data.taskId || "", {
-              requestId: activeReqId,
-              signal: controller ? controller.signal : undefined
+        try {
+          if (useLiveApi) {
+            const cloudPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "cloud", sp);
+            const effectiveAssets = Array.isArray(sp.assetItems) ? sp.assetItems : rec.assetItems;
+            const refImages = effectiveAssets.map((a) => a.image).filter(Boolean);
+            const resp = await fetch("/api/studio/generate", {
+              method: "POST",
+              credentials: "include",
+              signal: controller ? controller.signal : undefined,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                prompt: cloudPrompt,
+                ratio: sp.ratio || "3:4",
+                style1: sp.style1 || rec.style1Id || "",
+                style2: rec.style2Id || "",
+                layout: sp.layout || rec.layoutId || "",
+                refImages,
+                recipeSnapshot: sp.recipeSnapshot,
+                requestId,
+                clientRequestId: requestId,
+                confirmCost: true
+              })
             });
+            const data = await resp.json();
             if (isStaleScope(runEpoch, runScope)) return false;
-            imgUrl = (imgs && imgs[0]) || "";
+            if (!resp.ok || !data.ok) {
+              const err = new Error(data.error || `HTTP ${resp.status}`);
+              err.status = resp.status;
+              throw err;
+            }
+            if (typeof data.credits === "number") App.state.credits = data.credits;
+            if (typeof data.freeQuotaRemaining === "number") App.state.freeQuotaRemaining = data.freeQuotaRemaining;
+            if (S.renderChrome) S.renderChrome();
+            activeReqId = data.requestId || requestId;
+            if (data.imageUrl) {
+              imgUrl = data.imageUrl;
+            } else if (Array.isArray(data.images) && data.images.length) {
+              imgUrl = data.images[0];
+            } else if (data.taskId || activeReqId) {
+              if (dn) {
+                if (data.taskId) dn.data.pendingTaskId = data.taskId;
+                dn.data.pendingRequestId = activeReqId;
+                dn.data.pendingSpec = dn.data.pendingSpec || {};
+                if (!dn.data.pendingSpec[activeReqId]) {
+                  dn.data.pendingSpec[activeReqId] = dn.data.pendingSpec[requestId] || {
+                    slotKey: sp.slotKey,
+                    role: sp.role || "image",
+                    title: sp.title || `图片 #${i + 1}`,
+                    anchorHeading: sp.anchorHeading || "",
+                    ratio: sp.ratio || "3:4",
+                    theme: sp.theme || "",
+                    prompt: skillPrompt,
+                    recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
+                  };
+                }
+                persistOpenTabs();
+              }
+              const imgs = await pollCloudTask(data.taskId || "", {
+                requestId: activeReqId,
+                signal: controller ? controller.signal : undefined
+              });
+              if (isStaleScope(runEpoch, runScope)) return false;
+              imgUrl = (imgs && imgs[0]) || "";
+            } else {
+              throw new Error("云端未返回任务编号或图片");
+            }
+            if (!imgUrl) {
+              throw new Error("云端没有返回图片");
+            }
           } else {
-            throw new Error("云端未返回任务编号或图片");
+            const stepDelay = plan.specs.length > 25 ? 10 : plan.specs.length > 6 ? 35 : plan.specs.length > 1 ? 110 : 240;
+            await new Promise((r) => setTimeout(r, stepDelay));
+            if (isStaleScope(runEpoch, runScope)) return false;
+            if (sp.sampleImg && nextRunCount === 1 && resolvedOnlyIdx === null && plan.specs.length <= 6) {
+              imgUrl = sp.sampleImg;
+            } else {
+              const iterPool = [sp.sampleImg, ...uniquePool].filter(Boolean);
+              const dedupIterPool = [...new Set(iterPool)];
+              imgUrl = dedupIterPool[(i + nextRunCount - 1) % dedupIterPool.length] || "/images/poster-demo-autumn-equinox.webp";
+            }
           }
-          if (!imgUrl) {
-            throw new Error("云端没有返回图片");
-          }
-        } else {
-          const stepDelay = plan.specs.length > 25 ? 10 : plan.specs.length > 6 ? 35 : plan.specs.length > 1 ? 110 : 240;
-          await new Promise((r) => setTimeout(r, stepDelay));
+        } catch (itemErr) {
           if (isStaleScope(runEpoch, runScope)) return false;
-          if (sp.sampleImg && nextRunCount === 1 && resolvedOnlyIdx === null && plan.specs.length <= 6) {
-            imgUrl = sp.sampleImg;
-          } else {
-            const iterPool = [sp.sampleImg, ...uniquePool].filter(Boolean);
-            const dedupIterPool = [...new Set(iterPool)];
-            imgUrl = dedupIterPool[(i + nextRunCount - 1) % dedupIterPool.length] || "/images/poster-demo-autumn-equinox.webp";
+          if (batchRun.cancelled) break;
+          itemFailed = true;
+          itemErrorMsg = itemErr?.message || "生成失败";
+          itemIsTerminal = Boolean(itemErr?.terminal);
+          const st = itemErr?.status;
+          if (st === 401 || st === 402 || st === 403 || st === 429 ||
+              /401|402|403|429|登录|login|unauthorized|余额|积分|配额|quota|credit|insufficient|forbidden|concurrency|并发/i.test(itemErrorMsg)) {
+            isGlobalError = true;
           }
         }
 
-        if (batchRun.cancelled) break;
+        if (itemFailed) {
+          failedCount++;
+          const failedItem = {
+            id: E.uid("outit_fail"),
+            requestId,
+            slotKey: sp.slotKey || String(i),
+            title: sp.title || `图片 #${i + 1}`,
+            theme: sp.theme || "",
+            failed: true,
+            error: itemErrorMsg,
+            nodeId: dn?.id
+          };
+          if (dn) {
+            delete dn.data.pendingTaskId;
+            delete dn.data.pendingRequestId;
+            if (itemIsTerminal) {
+              if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[sp.slotKey || String(i)];
+              if (dn.data.pendingSpec) {
+                delete dn.data.pendingSpec[requestId];
+                if (activeReqId) delete dn.data.pendingSpec[activeReqId];
+              }
+            }
+            if (isBatchGallery) {
+              if (!Array.isArray(dn.data.items)) dn.data.items = [];
+              const existIdx = dn.data.items.findIndex(
+                (it) => it && ((it.slotKey && it.slotKey === sp.slotKey) || (it.requestId && it.requestId === requestId))
+              );
+              if (existIdx >= 0) {
+                dn.data.items[existIdx] = failedItem;
+              } else if (dn.data.items.length <= i) {
+                dn.data.items[i] = failedItem;
+              } else {
+                dn.data.items.push(failedItem);
+              }
+            } else {
+              dn.data.status = "error";
+            }
+          }
+          markActiveTabDirty();
+          persistOpenTabs();
+          if (window.HandrawBatchCreate) {
+            window.HandrawBatchCreate.updateProgress({
+              updatedIndex: i,
+              itemResult: failedItem,
+              completedCount,
+              failedCount,
+              totalCount: plan.specs.length,
+              activeIndex: (!isGlobalError && i + 1 < plan.specs.length && !batchRun.cancelled) ? i + 1 : null,
+              busy: !isGlobalError && !batchRun.cancelled && i + 1 < plan.specs.length
+            });
+          }
+          if (isGlobalError) {
+            if (!silent) toast(`批量生成中断：${itemErrorMsg}`, "error");
+            break;
+          }
+          continue;
+        }
+
+        completedCount++;
         const builtItem = {
           id: E.uid("outit"),
           requestId,
@@ -5570,6 +5683,7 @@
           subject: sp.subject || sp.recipeSnapshot?.subject || "",
           prompt: skillPrompt,
           imageUrl: imgUrl,
+          nodeId: dn?.id,
           recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
         };
 
@@ -5581,15 +5695,21 @@
             delete dn.data.pendingSpec[requestId];
             if (activeReqId) delete dn.data.pendingSpec[activeReqId];
           }
-        }
-
-        if (dn) {
           if (isBatchGallery) {
             if (!Array.isArray(dn.data.items)) dn.data.items = [];
-            dn.data.items.push(builtItem);
+            const existIdx = dn.data.items.findIndex(
+              (it) => it && ((it.slotKey && it.slotKey === sp.slotKey) || (it.requestId && it.requestId === requestId))
+            );
+            if (existIdx >= 0) {
+              dn.data.items[existIdx] = builtItem;
+            } else if (dn.data.items.length <= i) {
+              dn.data.items[i] = builtItem;
+            } else {
+              dn.data.items.push(builtItem);
+            }
             dn.data.markdown = plan.markdown || "";
             dn.data.updatedAt = nowStr;
-            if (i === plan.specs.length - 1) {
+            if (i === plan.specs.length - 1 || completedCount === plan.specs.length) {
               dn.data.runCount = nextRunCount;
               dn.data.status = "done";
               dn.data.page = 1;
@@ -5603,7 +5723,30 @@
             dn.data.activeIdx = 0;
           }
         }
-        allItems.push(builtItem);
+
+        const existAllIdx = allItems.findIndex(
+          (it) => it && ((it.slotKey && it.slotKey === sp.slotKey) || (it.requestId && it.requestId === requestId))
+        );
+        if (existAllIdx >= 0) {
+          allItems[existAllIdx] = builtItem;
+        } else {
+          allItems.push(builtItem);
+        }
+
+        markActiveTabDirty();
+        persistOpenTabs();
+
+        if (window.HandrawBatchCreate) {
+          window.HandrawBatchCreate.updateProgress({
+            updatedIndex: i,
+            itemResult: builtItem,
+            completedCount,
+            failedCount,
+            totalCount: plan.specs.length,
+            activeIndex: (i + 1 < plan.specs.length && !batchRun.cancelled) ? i + 1 : null,
+            busy: true
+          });
+        }
       }
 
       if (batchRun.cancelled) {
@@ -5612,22 +5755,64 @@
           if (isBatchGallery) dn.data.status = Array.isArray(dn.data.items) && dn.data.items.length ? "done" : "idle";
           else if (dn.data.status === "generating") dn.data.status = Array.isArray(dn.data.items) && dn.data.items.length ? "done" : "idle";
         }
-        if (!silent) toast("已取消尚未提交的批量任务；已提交的任务保持现状。");
+        if (activeLoopNode && resolvedOnlyIdx === null) {
+          activeLoopNode.data.status = "idle";
+          activeLoopNode.data.currentStep = completedCount;
+          activeLoopNode.data.totalSteps = plan.specs.length;
+        }
+        if (allItems.length > 0) {
+          recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown);
+        }
+        markActiveTabDirty();
+        persistOpenTabs();
+        if (window.HandrawBatchCreate) {
+          window.HandrawBatchCreate.updateProgress({
+            completedCount,
+            failedCount,
+            totalCount: plan.specs.length,
+            activeIndex: null,
+            busy: false,
+            isStopping: false
+          });
+        }
+        if (!silent) toast(`已取消尚未提交的批量任务；已完成的 ${completedCount} 张图片已保留。`);
         return allItems.length > 0;
       }
 
-      ctrl.data.status = "done";
+      ctrl.data.status = failedCount > 0 && completedCount === 0 ? "error" : "done";
+      for (const dn of dispNodes) {
+        if (isBatchGallery) {
+          dn.data.status = Array.isArray(dn.data.items) && dn.data.items.some((it) => it && it.imageUrl) ? "done" : (failedCount > 0 ? "error" : "idle");
+        } else if (dn.data.status === "generating") {
+          dn.data.status = dn.data.items?.some((it) => it && it.imageUrl) ? "done" : (failedCount > 0 ? "error" : "idle");
+        }
+      }
       if (activeLoopNode && resolvedOnlyIdx === null) {
-        activeLoopNode.data.status = "done";
-        activeLoopNode.data.currentStep = plan.specs.length;
+        activeLoopNode.data.status = ctrl.data.status;
+        activeLoopNode.data.currentStep = completedCount;
         activeLoopNode.data.totalSteps = plan.specs.length;
       }
-      recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown);
+      if (allItems.length > 0) {
+        recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown);
+      }
       markActiveTabDirty();
       persistOpenTabs();
 
+      if (window.HandrawBatchCreate) {
+        window.HandrawBatchCreate.updateProgress({
+          completedCount,
+          failedCount,
+          totalCount: plan.specs.length,
+          activeIndex: null,
+          busy: false,
+          isStopping: false
+        });
+      }
+
       if (!silent) {
-        if (isBatchGallery) {
+        if (failedCount > 0) {
+          toast(`批量出图结束：已完成 ${completedCount} / ${plan.specs.length} 张 · 失败 ${failedCount} 张`);
+        } else if (isBatchGallery) {
           toast(`🎉 批量出图完成！全部 ${allItems.length} 张图片已自动收纳进右侧 1 个「批量图集」节点`);
         } else if (plan.kind === "loop" && resolvedOnlyIdx === null) {
           toast(`🔁 循环批量完成！共出图 ${dispNodes.length} 张并自动连接「图片显示」节点`);
@@ -5639,7 +5824,7 @@
           );
         }
       }
-      return true;
+      return completedCount > 0;
     } catch (err) {
       if (isStaleScope(runEpoch, runScope)) return false;
       ctrl.data.status = "error";
