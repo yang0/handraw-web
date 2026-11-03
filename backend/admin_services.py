@@ -363,7 +363,7 @@ def _assert_not_self_review(
         return
     if actor.get("role") in ("operator", "reviewer"):
         raise ServiceError("风控限制：运营审查员禁止自审本人发布的内容（如加精、置顶、自审自推），请转交其他审查员或超级管理员处理", status=403, code="self_review_forbidden")
-    allow_admin_self = bool(settings.get("moderation", {}).get("allow_self_review_for_admin", True))
+    allow_admin_self = bool(settings.get("moderation", {}).get("allow_self_review_for_admin", False))
     if not allow_admin_self:
         raise ServiceError("当前运营安全策略已关闭管理员自审，请由其他管理员处理或先在运营配置开启允许管理员自审", status=403, code="self_review_forbidden")
 

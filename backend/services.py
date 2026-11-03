@@ -3966,7 +3966,7 @@ def accept_forum_bounty_reply(db: Database, user: dict[str, Any], topic_id: str,
         tp = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (topic_id,)).fetchone()
         if not tp:
             raise ServiceError("帖子不存在", status=404)
-        is_staff = user.get("role") in ("admin", "reviewer")
+        is_staff = user.get("role") in ("admin", "operator", "reviewer")
         if tp["author_username"] != user["username"] and not is_staff:
             raise ServiceError("仅发帖楼主或管理员可采纳悬赏答案", status=403)
         if int(tp["bounty"] or 0) <= 0 or tp["bounty_status"] != "open" or int(tp["solved"]):
@@ -5671,7 +5671,6 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
 
     uid = int(user["id"])
     uname = user["username"]
-    is_staff = user.get("role") in ("admin", "reviewer")
 
     recipe_id = str(body.get("recipeId") or "").strip()
     r_colors: list[str] = []
