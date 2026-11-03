@@ -53,6 +53,21 @@ function Start-Handraw {
         return
     }
     $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $checkScript = @'
+missing = []
+for mod, pkg in [('docx', 'python-docx'), ('fitz', 'PyMuPDF'), ('PIL', 'Pillow')]:
+    try:
+        __import__(mod)
+    except Exception:
+        missing.append(pkg)
+if missing:
+    print(', '.join(missing))
+'@
+    $missingLibs = & $python -c $checkScript 2>$null
+    if ($missingLibs -and -not [string]::IsNullOrWhiteSpace($missingLibs)) {
+        Write-Host "提示：缺少依赖库 $($missingLibs.Trim())，导入 .docx / .pdf 或图片处理可能会受影响。"
+        Write-Host "请运行命令安装依赖：python -m pip install -r requirements.txt"
+    }
     $logDirectory = Join-Path $projectRoot '.local\logs'
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
     $outputLog = Join-Path $logDirectory "service-$Port.out.log"
