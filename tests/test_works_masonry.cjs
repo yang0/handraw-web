@@ -56,10 +56,13 @@ test("Requirement 2: 视口内画风/图型无交集 (Diversity in Viewport)", (
   // w5 has FA-003 (different)
   const works = [
     { id: "w1", images: ["/1.png"], styles: ["FA-001"], layout: "SC-001", ratio: "1:1" },
-    { id: "w2", images: ["/2.png"], styles: ["FA-001"], ratio: "1:1" }, // conflicts with w1 on FA-001
-    { id: "w3", images: ["/3.png"], layout: "SC-001", ratio: "1:1" },   // conflicts with w1 on SC-001
     { id: "w4", images: ["/4.png"], styles: ["FA-002"], ratio: "1:1" },
     { id: "w5", images: ["/5.png"], styles: ["FA-003"], ratio: "1:1" },
+    { id: "w6", images: ["/6.png"], styles: ["FA-004"], ratio: "1:1" },
+    { id: "w7", images: ["/7.png"], styles: ["FA-005"], ratio: "1:1" },
+    { id: "w8", images: ["/8.png"], styles: ["FA-006"], ratio: "1:1" },
+    { id: "w2", images: ["/2.png"], styles: ["FA-001"], ratio: "1:1" }, // conflicts with w1 on FA-001
+    { id: "w3", images: ["/3.png"], layout: "SC-001", ratio: "1:1" },   // conflicts with w1 on SC-001
   ];
 
   const candidates = B.unpackWorkCandidates(works);
@@ -72,7 +75,7 @@ test("Requirement 2: 视口内画风/图型无交集 (Diversity in Viewport)", (
     gap: 10
   });
 
-  assert.equal(res.placed.length, 5);
+  assert.equal(res.placed.length, 8);
 
   // Check that for ANY two placed items A and B that share style or layout,
   // they NEVER overlap in any viewport of height V_H!
@@ -106,6 +109,12 @@ test("Requirement 3: 融合作品占全部编号 (Dual-Style Fusion Occupies All
     { id: "w_single1", images: ["/s1.png"], styles: ["FA-001"], ratio: "1:1" },
     { id: "w_single2", images: ["/s2.png"], styles: ["FA-002"], ratio: "1:1" },
     { id: "w_single3", images: ["/s3.png"], styles: ["FA-003"], ratio: "1:1" },
+    { id: "w_other1", images: ["/o1.png"], styles: ["FA-004"], ratio: "1:1" },
+    { id: "w_other2", images: ["/o2.png"], styles: ["FA-005"], ratio: "1:1" },
+    { id: "w_other3", images: ["/o3.png"], styles: ["FA-006"], ratio: "1:1" },
+    { id: "w_other4", images: ["/o4.png"], styles: ["FA-007"], ratio: "1:1" },
+    { id: "w_other5", images: ["/o5.png"], styles: ["FA-008"], ratio: "1:1" },
+    { id: "w_other6", images: ["/o6.png"], styles: ["FA-009"], ratio: "1:1" },
   ];
 
   const fusionRes = B.normalizeResourceCodes(works[0]);
@@ -166,7 +175,7 @@ test("Requirement 4: 无画风/无图型作品不参与避让，可填空 (Freef
   assert.equal(pFree.top, 0, "w_freeform top is 0");
 });
 
-test("Requirement 5: 候选不足时留白不重复 (Whitespace Separation on Depletion)", () => {
+test("Requirement 5: 候选不足时不留白，全部卡片都被放置且 extraMargin 为 0", () => {
   // Suppose all 3 works have FA-001! No other styles exist!
   const works = [
     { id: "w1", images: ["/1.png"], styles: ["FA-001"], ratio: "1:1" },
@@ -186,16 +195,55 @@ test("Requirement 5: 候选不足时留白不重复 (Whitespace Separation on De
 
   // All 3 works MUST be placed (never dropped!)
   assert.equal(res.placed.length, 3, "All works must be placed, none permanently dropped");
+  assert.equal(res.remainingQueue.length, 0, "Queue must be empty");
 
-  // Every single one must be separated by >= V_H from any prior FA-001
-  const w1 = res.placed[0];
-  const w2 = res.placed[1];
-  const w3 = res.placed[2];
+  for (const item of res.placed) {
+    assert.equal(item.extraMargin, 0, "extraMargin must be strictly 0");
+  }
 
-  assert.ok(w2.top >= w1.top + w1.height + V_H, `w2 top (${w2.top}) must be >= w1 bottom + V_H (${w1.top + w1.height + V_H})`);
-  assert.ok(w3.top >= w2.top + w2.height + V_H, `w3 top (${w3.top}) must be >= w2 bottom + V_H (${w2.top + w2.height + V_H})`);
-  assert.ok(w2.extraMargin > 0, "w2 should have positive extraMargin (blank space)");
-  assert.ok(w3.extraMargin > 0, "w3 should have positive extraMargin (blank space)");
+  assert.equal(res.placed[0].col, 0);
+  assert.equal(res.placed[0].top, 0);
+  assert.equal(res.placed[1].col, 1);
+  assert.equal(res.placed[1].top, 0);
+  assert.equal(res.placed[2].col, 0);
+  assert.equal(res.placed[2].top, 310);
+});
+
+test("Requirement 7: 10 件全部共用同一图型时，全部放置、无下推", () => {
+  const works = Array.from({ length: 10 }, (_, i) => ({
+    id: `work_${i + 1}`,
+    images: [`/${i + 1}.png`],
+    layout: "SC-021",
+    ratio: "1:1"
+  }));
+
+  const candidates = B.unpackWorkCandidates(works);
+  const V_H = 800;
+  const res = B.layoutWorksMasonry(candidates, {
+    colCount: 4,
+    colWidth: 250,
+    viewportHeight: V_H,
+    bodyHeight: 100,
+    gap: 16
+  });
+
+  assert.equal(res.placed.length, 10, "All 10 works must be placed");
+  assert.equal(res.remainingQueue.length, 0, "Remaining queue must be empty");
+
+  for (const item of res.placed) {
+    assert.equal(item.extraMargin, 0, "extraMargin must be strictly 0");
+  }
+
+  // 4 columns, card height = 250/1.0 + 100 = 350. Next row at 350 + 16 = 366.
+  for (let i = 0; i < 4; i++) {
+    assert.equal(res.placed[i].top, 0, `Card ${i + 1} must be at top 0`);
+  }
+  for (let i = 4; i < 8; i++) {
+    assert.equal(res.placed[i].top, 366, `Card ${i + 1} must be at top 366`);
+  }
+  for (let i = 8; i < 10; i++) {
+    assert.equal(res.placed[i].top, 732, `Card ${i + 1} must be at top 732`);
+  }
 });
 
 test("Requirement 6: 窗口变化重排 (Window Resize Redistribution)", () => {

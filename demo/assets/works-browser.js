@@ -120,24 +120,14 @@
       const d = work.imageDimensions[idx];
       if (d.aspectRatio && Number(d.aspectRatio) > 0) return Number(d.aspectRatio);
       if (d.width && d.height && Number(d.height) > 0) return Number(d.width) / Number(d.height);
+    } else if (work && work.imageDimensions && !Array.isArray(work.imageDimensions)) {
+      const d = work.imageDimensions;
+      if (d.aspectRatio && Number(d.aspectRatio) > 0) return Number(d.aspectRatio);
+      if (d.width && d.height && Number(d.height) > 0) return Number(d.width) / Number(d.height);
     }
-    if (idx === 0 && work && work.aspectRatio && Number(work.aspectRatio) > 0) {
-      return Number(work.aspectRatio);
-    }
-    if (idx === 0 && work && work.coverWidth && work.coverHeight && Number(work.coverHeight) > 0) {
-      return Number(work.coverWidth) / Number(work.coverHeight);
-    }
-    if (work && work.ratio) {
-      const r = String(work.ratio).trim();
-      if (r === "1:1") return 1.0;
-      if (r === "3:4") return 0.75;
-      if (r === "4:3") return 4 / 3;
-      if (r === "16:9") return 16 / 9;
-      if (r === "9:16") return 9 / 16;
-      if (r === "2:3") return 2 / 3;
-      if (r === "3:2") return 1.5;
-    }
-    return 0.75;
+    // Do not use work.ratio (e.g. "3:4") to infer image box aspect-ratio.
+    // When dimensions are missing, placeholder is 1:1.
+    return 1.0;
   }
 
   function getColumnCount(containerWidth) {
@@ -272,8 +262,7 @@
       return same / coVisible.length >= 0.66;
     }
 
-    let progress = true;
-    while (queue.length > 0 && progress) {
+    while (queue.length > 0) {
       let minCol = 0;
       let minH = colHeights[0];
       for (let c = 1; c < colCount; c++) {
@@ -337,41 +326,48 @@
         colHeights[minCol] = minH + h + gap;
       } else {
         // Fallback when all remaining candidates have resource conflicts:
-        // Only enforce viewport whitespace separation if candidates share style/layout resource codes
-        let bestIdx = -1;
-        let minSafeTop = Infinity;
+        // Do not push down with whitespace separation. Directly place at minH of shortest column,
+        // picking the candidate with maximum vertical distance from already placed cards sharing the same code.
+        let bestIdx = 0;
+        let maxDist = -Infinity;
         for (let i = 0; i < queue.length; i++) {
           const cand = queue[i];
-          let safeTop = minH;
+          const h = calcCardHeight(cand.aspectRatio);
+          let minDistToConflict = Infinity;
           for (const p of placed) {
             if (hasResourceConflict(cand.resourceCodes, p.resourceCodes)) {
-              const reqTop = p.top + p.height + viewportHeight;
-              if (reqTop > safeTop) safeTop = reqTop;
+              let d;
+              if (minH >= p.top + p.height) {
+                d = minH - (p.top + p.height);
+              } else if (p.top >= minH + h) {
+                d = p.top - (minH + h);
+              } else {
+                const overlap = Math.min(minH + h, p.top + p.height) - Math.max(minH, p.top);
+                d = -overlap;
+              }
+              if (d < minDistToConflict) {
+                minDistToConflict = d;
+              }
             }
           }
-          if (safeTop < minSafeTop) {
-            minSafeTop = safeTop;
+          if (minDistToConflict > maxDist) {
+            maxDist = minDistToConflict;
             bestIdx = i;
           }
         }
 
-        if (bestIdx >= 0 && minSafeTop < Infinity) {
-          const cand = queue.splice(bestIdx, 1)[0];
-          const h = calcCardHeight(cand.aspectRatio);
-          const extraMargin = minSafeTop - minH;
-          const itemRecord = {
-            ...cand,
-            col: minCol,
-            top: minSafeTop,
-            height: h,
-            extraMargin: extraMargin
-          };
-          placed.push(itemRecord);
-          newlyPlaced.push(itemRecord);
-          colHeights[minCol] = minSafeTop + h + gap;
-        } else {
-          progress = false;
-        }
+        const cand = queue.splice(bestIdx, 1)[0];
+        const h = calcCardHeight(cand.aspectRatio);
+        const itemRecord = {
+          ...cand,
+          col: minCol,
+          top: minH,
+          height: h,
+          extraMargin: 0
+        };
+        placed.push(itemRecord);
+        newlyPlaced.push(itemRecord);
+        colHeights[minCol] = minH + h + gap;
       }
     }
 
