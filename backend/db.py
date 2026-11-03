@@ -1,6 +1,7 @@
 """Thread-safe SQLite WAL database manager with additive migrations and ACID transactions."""
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 import threading
@@ -12,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from .config import get_db_path
 from .migrations import MIGRATIONS, POST_MIGRATION_HOOKS
+
+logger = logging.getLogger("handraw.db")
 
 
 def utc_now_iso() -> str:
@@ -113,7 +116,36 @@ class Database:
                 int(row["version"])
                 for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
             }
+            hooks_table_existed = bool(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migration_hooks'"
+                ).fetchone()
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migration_hooks (
+                    version INTEGER PRIMARY KEY,
+                    completed_at TEXT NOT NULL
+                );
+                """
+            )
             now = utc_now_iso()
+            if not hooks_table_existed and existing:
+                baseline_versions = sorted(v for v in existing if v in POST_MIGRATION_HOOKS)
+                conn.execute("BEGIN IMMEDIATE;")
+                try:
+                    for v in baseline_versions:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO schema_migration_hooks (version, completed_at) VALUES (?, ?)",
+                            (v, now),
+                        )
+                    conn.execute("COMMIT;")
+                    logger.info("Baselined legacy schema_migration_hooks for versions: %s", baseline_versions)
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK;")
+                    raise
+
             for version, name, ddl in MIGRATIONS:
                 if version in existing:
                     continue
@@ -143,9 +175,33 @@ class Database:
                     if conn.in_transaction:
                         conn.execute("ROLLBACK;")
                     raise
-                if version in POST_MIGRATION_HOOKS:
-                    POST_MIGRATION_HOOKS[version](conn)
                 applied_names.append(name)
+
+            completed_hooks = {
+                int(row["version"])
+                for row in conn.execute("SELECT version FROM schema_migration_hooks").fetchall()
+            }
+            all_applied_versions = {
+                int(row["version"])
+                for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
+            }
+            pending_hook_versions = sorted(
+                v for v in all_applied_versions
+                if v in POST_MIGRATION_HOOKS and v not in completed_hooks
+            )
+            for v in pending_hook_versions:
+                conn.execute("BEGIN IMMEDIATE;")
+                try:
+                    POST_MIGRATION_HOOKS[v](conn)
+                    conn.execute(
+                        "INSERT INTO schema_migration_hooks (version, completed_at) VALUES (?, ?)",
+                        (v, utc_now_iso()),
+                    )
+                    conn.execute("COMMIT;")
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK;")
+                    raise
         return applied_names
 
 
