@@ -25,7 +25,7 @@ assert.equal(paid.locked,true);assert.equal(paid.prompt,'');assert.equal(paid.ca
 assert.doesNotMatch(W.render(paid),/真正的生图提示词|forkTopic|data-fwp-copy/);
 const work={id:'work-one',title:'真实作品',images:['/work.webp','/second.webp'],prompt:'实际作品提示词',promptMasked:false,styles:['FA-001'],layout:'IG-001',mode:'poster'};
 const actual=W.fromTopic({...topic,workId:work.id},[work],resources,true);
-assert.equal(actual.prompt,'实际作品提示词');assert.match(actual.forkUrl,/entry=canvas&fork=work-one/,'unsupported form modes retain their actual canvas configuration');
+assert.equal(actual.prompt,'实际作品提示词');assert.match(actual.forkUrl,/entry=quick&fork=work-one/,'a picture made on a form forks back into that form, not the canvas');
 assert.equal(actual.images.length,2);
 const masked=W.fromTopic({...topic,workId:work.id},[{...work,prompt:'PRIVATE_MASKED_PREFIX',promptMasked:true,price:5}],resources,true);
 assert.equal(masked.prompt,'');assert.equal(masked.canFork,false);assert.doesNotMatch(W.render(masked),/PRIVATE_MASKED_PREFIX/);

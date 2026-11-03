@@ -561,6 +561,7 @@
   });
 
   function normalizeTopicImages(t) {
+    if (S.normalizeTopicImages) return S.normalizeTopicImages(t);
     return (t.images || []).map((im) =>
       typeof im === "string" ? { url: im, tag: "" } : { url: im.url, tag: im.tag || "" }
     );

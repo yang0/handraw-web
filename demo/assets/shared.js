@@ -440,6 +440,33 @@
     return text.length > maxLen ? text.slice(0, maxLen) + "…" : text;
   }
 
+  function normalizeTopicImages(t) {
+    if (!t) return [];
+    let list = t.images;
+    if ((!list || !list.length) && t.images_json) {
+      try {
+        list = typeof t.images_json === "string" ? JSON.parse(t.images_json) : t.images_json;
+      } catch (_) {
+        list = [];
+      }
+    }
+    if ((!list || !list.length) && t.workId) {
+      const works = (App && App.state && App.state.works) || (typeof window !== "undefined" && window.App && window.App.state && window.App.state.works);
+      if (Array.isArray(works)) {
+        const w = works.find((x) => x && x.id === t.workId);
+        if (w && Array.isArray(w.images) && w.images.length) {
+          list = w.images;
+        }
+      }
+    }
+    if (!Array.isArray(list)) list = [];
+    return list
+      .map((im) =>
+        typeof im === "string" ? { url: im, tag: "" } : { url: (im && im.url) || "", tag: (im && im.tag) || "" }
+      )
+      .filter((im) => Boolean(im.url));
+  }
+
   function toast(message) {
     let stack = document.getElementById("hw-toast-stack");
     if (!stack) {
@@ -4480,6 +4507,7 @@
     safeHref,
     safeMediaUrl,
     stripHtmlToSnippet,
+    normalizeTopicImages,
     resourceLabel,
     resourceSearchText,
     resourceMatchesGroup,
