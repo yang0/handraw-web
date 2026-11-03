@@ -51,6 +51,10 @@ def generate_session_token() -> str:
     return "hws_" + secrets.token_urlsafe(32)
 
 
+def hash_session_token(token: str) -> str:
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
 def generate_api_key() -> str:
     return "hwk_" + secrets.token_urlsafe(28)
 

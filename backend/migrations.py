@@ -517,6 +517,17 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_studio_articles_deleted ON studio_articles(user_id, deleted_at, updated_at_ms DESC);
         """,
     ),
+    (
+        84,
+        "084_clear_legacy_plaintext_sessions",
+        """
+        -- Migration 084: clear legacy plaintext sessions.
+        -- Sessions are now stored by sha256 hash.
+        -- This migration only deletes existing session data without altering the schema.
+        -- If code is rolled back to an older version, users are logged out once, with zero data loss.
+        DELETE FROM sessions;
+        """,
+    ),
 ]
 
 # Feature work can add independent additive migrations without creating a

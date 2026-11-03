@@ -26,6 +26,7 @@ from .security import (
     generate_api_key,
     generate_session_token,
     hash_password,
+    hash_session_token,
     parse_cookie_header,
     verify_password,
 )
@@ -399,6 +400,7 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
             return None
 
         # Bearer session token (e.g. session token passed via Authorization or X-Handraw-Token header)
+        tok_hash = hash_session_token(token)
         row = conn.execute(
             """
             SELECT u.*
@@ -406,7 +408,7 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at > ?
             """,
-            (token, now_ts),
+            (tok_hash, now_ts),
         ).fetchone()
         if not row or row["status"] != "active":
             return None
@@ -423,6 +425,7 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
     if not sess_token:
         return None
 
+    sess_hash = hash_session_token(sess_token)
     row = conn.execute(
         """
         SELECT u.*
@@ -430,7 +433,7 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
         JOIN users u ON u.id = s.user_id
         WHERE s.token = ? AND s.expires_at > ?
         """,
-        (sess_token, now_ts),
+        (sess_hash, now_ts),
     ).fetchone()
     if not row or row["status"] != "active":
         return None
@@ -443,11 +446,12 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
 
 def create_session_for_user(tx: sqlite3.Connection, user_id: int, user_agent: str = "", ip_addr: str = "") -> str:
     token = generate_session_token()
+    token_hash = hash_session_token(token)
     now_iso = utc_now_iso()
     exp = int(time.time()) + SESSION_TTL_SECONDS
     tx.execute(
         "INSERT INTO sessions (token, user_id, user_agent, ip_addr, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (token, user_id, (user_agent or "")[:200], (ip_addr or "")[:64], exp, now_iso),
+        (token_hash, user_id, (user_agent or "")[:200], (ip_addr or "")[:64], exp, now_iso),
     )
     tx.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (now_iso, user_id))
     return token
@@ -596,8 +600,9 @@ def login_user(
 def logout_session(db: Database, token: str) -> None:
     if not token:
         return
+    token_hash = hash_session_token(token)
     with db.transaction() as tx:
-        tx.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        tx.execute("DELETE FROM sessions WHERE token = ?", (token_hash,))
 
 
 def sandbox_switch_account(db: Database, target_username: str, user_agent: str = "", ip_addr: str = "") -> tuple[dict[str, Any] | None, str]:
