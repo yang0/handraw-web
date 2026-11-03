@@ -223,6 +223,19 @@
     syncDraftInputsFromDom(document.querySelector("#forum-app-root"));event.preventDefault();event.returnValue="";
   });
 
+  function getValidCategories() {
+    const rawBoards = (App.state && Array.isArray(App.state.forumBoards) && App.state.forumBoards.length)
+      ? App.state.forumBoards
+      : ["all", "showcase", ...BOARD_DEFS.map((b) => b.key)];
+    const keys = rawBoards
+      .map((b) => (typeof b === "object" && b ? (b.key || b.id) : b))
+      .filter(Boolean);
+    if (!keys.includes("all")) {
+      keys.unshift("all");
+    }
+    return Array.from(new Set(keys));
+  }
+
   function parseInitialForumUrl() {
     const tPathMatch = window.location.pathname.match(/^\/t\/(.+)$/);
     if (tPathMatch) {
@@ -236,7 +249,7 @@
     const legacyTopic = (p.get("topic") || "").trim();
 
     if (p.get("asset")) FUI.filterAsset = p.get("asset").toUpperCase();
-    if (p.get("category") && ["all", "tuning", "experience", "assets", "tools"].includes(p.get("category"))) {
+    if (p.get("category") && getValidCategories().includes(p.get("category"))) {
       FUI.category = p.get("category");
     }
     // Legacy URL param 'format' (visual/text) is ignored; format filter is deprecated.
@@ -3898,6 +3911,7 @@
 
     const cats = [
       { key: "all", label: "📋 全部社区讨论", count: allTopics.length },
+      { key: "showcase", label: "🎨 晒作品", count: allTopics.filter((t) => t.category === "showcase").length },
       ...BOARD_DEFS.map((b) => ({
         key: b.key,
         label: b.label,

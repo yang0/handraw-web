@@ -2616,6 +2616,43 @@
     return { blueprint: isDual ? "fusion" : "single", nodes, edges, selectedIds: [] };
   }
 
+  function routeArticleEntryFromUrl(params, { renderNow = true } = {}) {
+    flushUnifiedArticleEditor();
+    syncAllTabsArticlesIntoStore();
+    ensureArticleWorkspace();
+    CS.stageView = "preview";
+    if (DOM.previewStage) DOM.previewStage.style.display = "flex";
+    const aidParam = params.get("articleId");
+    const subviewParam = params.get("subview");
+    const targetAid = aidParam || CS.activeArticleId;
+    const targetArt = targetAid ? (CS.myArticles || []).find((a) => a.id === targetAid) : null;
+
+    // The editor and the reader preview are separate pages now: the editor
+    // keeps the writing column at full width, and 预览 opens ?subview=preview,
+    // which can jump back with ?subview=editor.
+    if (subviewParam === "preview") {
+      const activeDraft = (CS.articleEditorDraft && (!targetAid || CS.articleEditorDraft.id === targetAid))
+        ? CS.articleEditorDraft
+        : null;
+      renderArticlePreviewPage(targetArt ? targetArt.id : (aidParam || CS.activeArticleId || null), activeDraft);
+    } else if (targetArt) {
+      openUnifiedArticleEditor(targetArt.id, { renderNow });
+    } else if (aidParam) {
+      openUnifiedArticleEditor(null, { createNew: true, renderNow });
+    } else {
+      openUnifiedArticleEditor(CS.activeArticleId || null, { renderNow });
+    }
+  }
+
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("popstate", () => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("entry") === "article") {
+        routeArticleEntryFromUrl(params, { renderNow: true });
+      }
+    });
+  }
+
   async function hydrateTabsAndUrlParams() {
     ensureDefaultSavedWorkflows();
     CS.resourceEntryWarning = "";
@@ -2923,26 +2960,7 @@
         ensureBatchTab();
         CS.stageView = "batch";
       } else if (entryParam === "article") {
-        syncAllTabsArticlesIntoStore();
-        ensureArticleWorkspace();
-        CS.stageView = "preview";
-        const aidParam = params.get("articleId");
-        const subviewParam = params.get("subview");
-        const targetAid = aidParam || CS.activeArticleId;
-        const targetArt = targetAid ? (CS.myArticles || []).find((a) => a.id === targetAid) : null;
-
-        // The editor and the reader preview are separate pages now: the editor
-        // keeps the writing column at full width, and 预览 opens ?subview=preview,
-        // which can jump back with ?subview=editor.
-        if (subviewParam === "preview") {
-          renderArticlePreviewPage(targetArt ? targetArt.id : CS.activeArticleId || null);
-        } else if (targetArt) {
-          openUnifiedArticleEditor(targetArt.id, { renderNow: false });
-        } else if (aidParam) {
-          openUnifiedArticleEditor(null, { createNew: true, renderNow: false });
-        } else {
-          openUnifiedArticleEditor(CS.activeArticleId || null, { renderNow: false });
-        }
+        routeArticleEntryFromUrl(params, { renderNow: false });
       } else {
         if (!forkId && !forkTopicId && styleParam === null && layoutParam === null) ensureQuickTab();
         CS.stageView = "quick";
@@ -12633,6 +12651,7 @@
       draft.isNewDraft = false;
       targetArt = {
         id: newId,
+        title: title || "未命名文章",
         articleTitle: title || "未命名文章",
         markdown: md,
         cards: [],
@@ -12651,7 +12670,8 @@
       CS.myArticles.unshift(targetArt);
       CS.activeArticleId = newId;
     } else {
-      targetArt.articleTitle = title || targetArt.articleTitle || "未命名文章";
+      targetArt.title = title || targetArt.title || targetArt.articleTitle || "未命名文章";
+      targetArt.articleTitle = title || targetArt.articleTitle || targetArt.title || "未命名文章";
       targetArt.markdown = md;
       if (Array.isArray(draft.cards)) {
         targetArt.cards = draft.cards;
@@ -12937,7 +12957,7 @@
 
   function renderWeChatArticlePreviewHtml(draft, styleObj, isMobile = false, options = {}) {
     const rawMd = draft.markdown || "";
-    const title = (draft.title || "").trim() || "未命名文章";
+    const title = (draft.title || draft.articleTitle || "").trim() || "未命名文章";
     const today = new Date().toISOString().slice(0, 10);
     const targetCards = options.cards || resolveArticleTarget(draft.id)?.planNode?.data?.cards || draft.cards || [];
     const cards = sortPlanCardsInDocOrder(targetCards);
