@@ -36,6 +36,9 @@ from .admin_services import (
     admin_assign_forum_moderator,
     admin_create_redeem_code,
     admin_create_user,
+    admin_create_official_asset,
+    admin_update_official_asset,
+    admin_delete_official_asset,
     admin_delete_catalog_asset,
     admin_delete_user,
     admin_get_dashboard,
@@ -1932,7 +1935,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_json({"ok": False, "error": "Not found"}, status=404)
         except ServiceError as se:
-            self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
+            err_body = {"ok": False, "error": se.message, "code": se.code}
+            if getattr(se, "extra", None):
+                err_body.update(se.extra)
+            self._send_json(err_body, status=se.status)
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
@@ -1941,7 +1947,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._enforce_token_scope()
             self._handle_get()
         except ServiceError as se:
-            self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
+            err_body = {"ok": False, "error": se.message, "code": se.code}
+            if getattr(se, "extra", None):
+                err_body.update(se.extra)
+            self._send_json(err_body, status=se.status)
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
@@ -2572,7 +2581,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._enforce_token_scope()
             self._handle_post()
         except ServiceError as se:
-            self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
+            err_body = {"ok": False, "error": se.message, "code": se.code}
+            if getattr(se, "extra", None):
+                err_body.update(se.extra)
+            self._send_json(err_body, status=se.status)
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
@@ -2594,7 +2606,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     return
             self._send_json({"ok": False, "error": "Not Found"}, status=404)
         except ServiceError as se:
-            self._send_json({"ok": False, "error": se.message, "code": se.code}, status=se.status)
+            err_body = {"ok": False, "error": se.message, "code": se.code}
+            if getattr(se, "extra", None):
+                err_body.update(se.extra)
+            self._send_json(err_body, status=se.status)
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
@@ -3364,6 +3379,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     reason=str(body.get("reason") or ""),
                 )
             )
+            return
+
+        if req_path == "/api/admin/catalog/official":
+            user = self._current_user(required=True)
+            self._send_json(admin_create_official_asset(self.db, user, body))
+            return
+
+        m_del_off = re.match(r"^/api/admin/catalog/official/([^/]+)/delete$", req_path)
+        if m_del_off:
+            user = self._current_user(required=True)
+            self._send_json(admin_delete_official_asset(self.db, user, m_del_off.group(1), str(body.get("reason") or "")))
+            return
+
+        m_upd_off = re.match(r"^/api/admin/catalog/official/([^/]+)$", req_path)
+        if m_upd_off:
+            user = self._current_user(required=True)
+            self._send_json(admin_update_official_asset(self.db, user, m_upd_off.group(1), body))
             return
 
         if req_path == "/api/admin/catalog":

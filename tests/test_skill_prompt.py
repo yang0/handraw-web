@@ -86,7 +86,7 @@ class SkillPromptTests(unittest.TestCase):
         catalog_path = Path(__file__).resolve().parent.parent / "plugin" / "content" / "catalog.json"
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         layouts = [r for r in catalog["resources"] if r.get("kind") == "layout"]
-        self.assertEqual(len(layouts), 168, "Must contain exactly 168 layout definitions")
+        self.assertEqual(len(layouts), 170, "Must contain exactly 170 layout definitions")
         for item in layouts:
             defn = item.get("definition", "")
             self.assertTrue(defn, f"Layout {item['id']} definition must not be empty")
