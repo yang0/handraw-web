@@ -686,7 +686,9 @@ def _serialize_catalog_asset(row: sqlite3.Row, unlocked_set: set[str], current_u
     if source_type == "exclusive":
         public_def = row["definition"] or f"[CLOUD_BLACKBOX::{code}] 仅限在线创作工坊云端生图自动注入底层视觉参数。"
     elif not is_unlocked:
-        public_def = f"[LOCKED_ASSET::{code}] 付费共创资产（需 {cost} 积分解锁后查看完整定义词与创作台挂载权限）"
+        public_def = f"[LOCKED_ASSET::{code}] 付费共创资产（需 {cost} 积分解锁后可在线上创作台使用）"
+    elif cost > 0 and not (is_author or is_staff):
+        public_def = f"[CLOUD_BLACKBOX::{code}] 付费共创资产（已解锁，仅限在线创作工坊云端生图自动注入底层视觉参数）"
     else:
         public_def = row["definition"] or row["description"] or ""
 
@@ -1959,6 +1961,9 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
                 if not cover and imgs:
                     f = imgs[0]
                     cover = f.get("url", "") if isinstance(f, dict) else str(f or "")
+                p_cost = int(p.get("unlock_cost") or p.get("unlockCost") or 0)
+                is_staff = bool(current_user and current_user.get("role") in ("admin", "operator", "reviewer"))
+                can_read = (p_cost <= 0) or is_staff
                 pending_resources.append({
                     "id": tid,
                     "code": tid,
@@ -1970,16 +1975,16 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
                     "image": sanitize_media_url(cover),
                     "cover": sanitize_media_url(cover),
                     "description": p.get("description") or "",
-                    "definition": None,
-                    "unlockCost": 0,
+                    "definition": (p.get("definition") or "") if can_read else None,
+                    "unlockCost": p_cost,
                     "author": sr["owner_username"],
                     "authorName": sr["owner_username"],
                     "isMine": False,
                     "canUse": True,
                     "access": {
-                        "canRead": False,
+                        "canRead": can_read,
                         "canUse": True,
-                        "hiddenBy": "pending",
+                        "hiddenBy": None if can_read else "pending",
                     },
                 })
 
@@ -3546,7 +3551,7 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
             title = f"{a_row['code']} {a_row['name']}"
             author_uname = a_row["author_username"] if a_row["source_type"] == "community" else ""
             author_name = a_row["author_name"] if a_row["source_type"] == "community" else ""
-            unlocked_content = a_row["definition"] if a_row["source_type"] != "exclusive" else ""
+            unlocked_content = ""
         else:
             raise ServiceError("未找到待解锁内容", status=404)
 
@@ -6399,7 +6404,7 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
             "unlocked": is_unlocked,
             "source": "community",
             "author": {"username": r["author_username"], "name": r["author_name"]},
-            "content_url": f"/studio/api/assets/{code}/content" if is_unlocked else None,
+            "content_url": f"/studio/api/assets/{code}/content" if (is_unlocked and (int(r["unlock_cost"] or 0) <= 0 or is_mine)) else None,
         }
         if is_mine:
             owned.append(entry)
@@ -6469,6 +6474,8 @@ def build_skill_asset_content(db: Database, user: dict[str, Any], code: str) -> 
     hidden_by = (res.get("access") or {}).get("hiddenBy")
     if hidden_by == "blackbox":
         raise ServiceError("官网在线独占黑盒资产仅支持云端调用，不支持导出明文定义", status=403)
+    elif hidden_by == "paid":
+        raise ServiceError("付费资产仅支持在线创作台调用，不支持导出明文定义", status=403)
     elif hidden_by == "locked":
         raise ServiceError("该共创资产尚未解锁", status=403)
     elif hidden_by == "pending":
@@ -6487,7 +6494,7 @@ def build_skill_asset_content(db: Database, user: dict[str, Any], code: str) -> 
     resource: dict[str, Any] = {
         "kind": res["kind"],
         "name": f"{clean_code} {res['name']}",
-        "prompt_zh": res["definition"] or res.get("description") or clean_code,
+        "prompt_zh": res["definition"] or clean_code,
         "prompt_en": f"Handraw {res['kind']} {clean_code}: {res['name']}",
         "license": license_name,
         "version": "1.0.0",

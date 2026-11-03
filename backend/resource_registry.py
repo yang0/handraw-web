@@ -162,7 +162,7 @@ def resolve(
                     first = raw_imgs[0]
                     cover = first.get("url", "") if isinstance(first, dict) else str(first or "")
                 image = sanitize_media_url(cover)
-                unlock_cost = 0
+                unlock_cost = int(payload.get("unlock_cost") or payload.get("unlockCost") or 0)
                 for img in raw_imgs:
                     u = img.get("url", "") if isinstance(img, dict) else str(img or "")
                     if u:
@@ -226,21 +226,29 @@ def resolve(
             access["hiddenBy"] = "withdrawn"
             access["inject"] = None
     elif source_type == "pending" or status in ("pending", "changes_requested"):
-        if is_author or is_staff:
+        if unlock_cost <= 0:
+            # 免费，未收录（pending / changes_requested）：任何人（包括未登录）可见定义；登录用户可用，未登录不可用
             access["canRead"] = True
-            access["canUse"] = True
+            access["canUse"] = bool(is_logged_in)
             access["hiddenBy"] = None
             access["inject"] = None
-        elif is_logged_in:
-            access["canRead"] = False
-            access["canUse"] = True
-            access["hiddenBy"] = "pending"
-            access["inject"] = "definition"
         else:
-            access["canRead"] = False
-            access["canUse"] = False
-            access["hiddenBy"] = "pending"
-            access["inject"] = None
+            # 付费，未收录：作者与员工可见可用；其他登录用户可用但不可见（服务端注入）；未登录不可见不可用
+            if is_author or is_staff:
+                access["canRead"] = True
+                access["canUse"] = True
+                access["hiddenBy"] = None
+                access["inject"] = None
+            elif is_logged_in:
+                access["canRead"] = False
+                access["canUse"] = True
+                access["hiddenBy"] = "pending"
+                access["inject"] = "definition"
+            else:
+                access["canRead"] = False
+                access["canUse"] = False
+                access["hiddenBy"] = "pending"
+                access["inject"] = None
     elif source_type == "exclusive":
         is_unlocked = False
         if unlock_cost <= 0 or is_author or is_staff:
@@ -273,11 +281,17 @@ def resolve(
             ).fetchone()
             is_unlocked = bool(ul)
 
-        if is_unlocked:
+        if is_author or is_staff:
             access["canRead"] = True
             access["canUse"] = True
             access["hiddenBy"] = None
             access["inject"] = None
+        elif is_unlocked:
+            # 付费，已收录，已解锁买家：不显示定义（hiddenBy="paid"），可在线使用，服务端注入定义
+            access["canRead"] = False
+            access["canUse"] = True
+            access["hiddenBy"] = "paid"
+            access["inject"] = "definition"
         else:
             access["canRead"] = False
             access["canUse"] = False
