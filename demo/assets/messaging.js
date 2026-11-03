@@ -577,15 +577,33 @@
         ${result.nextBefore ? '<button class="btn" id="notifications-more" style="margin-top:12px;">加载更早通知</button>' : ''}
       `;
 
-      container.querySelector("#notifications-read-all").onclick = async () => {
-        await apiJson("/api/notifications/read", { method: "POST", body: { all: true } });
-        fetchUnreadCounts();
-        renderNotificationsTab(container);
+      const readAll = container.querySelector("#notifications-read-all");
+      if (readAll) readAll.onclick = async () => {
+        readAll.disabled = true;
+        try {
+          await apiJson("/api/notifications/read", { method: "POST", body: { all: true } });
+          fetchUnreadCounts();
+          renderNotificationsTab(container);
+        } catch (err) {
+          readAll.disabled = false;
+          const s = getS();
+          if (typeof s.toast === "function") s.toast("标记已读失败：" + (err.message || "请重试"));
+        }
       };
 
       container.querySelectorAll("[data-notification-id]").forEach(a => {
-        a.addEventListener("click", () => {
-          apiJson("/api/notifications/read", { method: "POST", body: { id: Number(a.dataset.notificationId) } }).catch(() => {});
+        a.addEventListener("click", async (ev) => {
+          // Following the link unloads the page and cancels the request, so the
+          // notification stayed unread. Wait for the write, then navigate.
+          if (a.dataset.markingRead === "1") return;
+          a.dataset.markingRead = "1";
+          ev.preventDefault();
+          try {
+            await apiJson("/api/notifications/read", { method: "POST", body: { id: Number(a.dataset.notificationId) } });
+            a.closest(".hw-detail-section-card")?.classList.remove("is-unread");
+            fetchUnreadCounts();
+          } catch (_) {}
+          window.location.href = a.getAttribute("href");
         });
       });
 
@@ -606,8 +624,14 @@
                 <a href="${esc(targetUrl(n))}" data-notification-id="${n.id}" style="font-weight:700;color:var(--ink-strong);text-decoration:none;">${esc(n.title)}</a>
                 <div style="font-size:11.5px;color:var(--ink-muted);margin-top:4px;">${esc(n.created_at)}</div>
               `;
-              article.querySelector("a").onclick = () => {
-                apiJson("/api/notifications/read", { method: "POST", body: { id: n.id } }).catch(() => {});
+              article.querySelector("a").onclick = async (ev) => {
+                ev.preventDefault();
+                try {
+                  await apiJson("/api/notifications/read", { method: "POST", body: { id: n.id } });
+                  article.classList.remove("is-unread");
+                  fetchUnreadCounts();
+                } catch (_) {}
+                window.location.href = targetUrl(n);
               };
               list.append(article);
             });
