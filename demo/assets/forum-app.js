@@ -24,7 +24,6 @@
   }
 
   const BOARD_DEFS = [
-    { key: "showcase", label: "🎨 晒作品", short: "晒作品" },
     { key: "tuning", label: "🎯 作品求改进 / 悬赏", short: "求调优" },
     { key: "experience", label: "📘 创作经验", short: "创作经验" },
     { key: "assets", label: "🎨 画风与图型专区", short: "画风图型" },
@@ -172,9 +171,6 @@
     authReturnView: "list",
     navHistoryDepth: 0
   };
-  if (typeof window !== "undefined") {
-    window.FUI = FUI;
-  }
 
   let draftAccount = null;
   let draftSaveTimer = null;
@@ -230,7 +226,7 @@
   function getValidCategories() {
     const rawBoards = (App.state && Array.isArray(App.state.forumBoards) && App.state.forumBoards.length)
       ? App.state.forumBoards
-      : BOARD_DEFS;
+      : ["all", "showcase", ...BOARD_DEFS.map((b) => b.key)];
     const keys = rawBoards
       .map((b) => (typeof b === "object" && b ? (b.key || b.id) : b))
       .filter(Boolean);
@@ -3915,6 +3911,7 @@
 
     const cats = [
       { key: "all", label: "📋 全部社区讨论", count: allTopics.length },
+      { key: "showcase", label: "🎨 晒作品", count: allTopics.filter((t) => t.category === "showcase").length },
       ...BOARD_DEFS.map((b) => ({
         key: b.key,
         label: b.label,

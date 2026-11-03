@@ -33,6 +33,15 @@ class MockElement {
   get value() { return this._value; }
   set value(v) { this._value = String(v); }
 
+  get textContent() {
+    return this.children
+      .map((c) => (typeof c === "string" ? c : (c.textContent || "")))
+      .join("");
+  }
+  set textContent(v) {
+    this.children = [String(v)];
+  }
+
   get innerHTML() {
     return this.children.map((c) => (typeof c === "string" ? c : c.outerHTML)).join("");
   }
@@ -159,6 +168,18 @@ function querySelector(root, sel) {
 }
 
 function querySelectorAll(root, sel) {
+  const parts = sel.trim().split(/\s+/);
+  if (parts.length > 1) {
+    let currentNodes = [root];
+    for (const part of parts) {
+      const nextNodes = [];
+      for (const node of currentNodes) {
+        nextNodes.push(...querySelectorAll(node, part));
+      }
+      currentNodes = nextNodes;
+    }
+    return currentNodes;
+  }
   const results = [];
   function walk(node) {
     if (typeof node === "string") return;
@@ -201,6 +222,7 @@ function createForumEnv(search = "") {
   const windowObj = {
     location: locationObj,
     addEventListener() {},
+    scrollTo() {},
     history: {
       pushState(_st, _title, url) {
         if (url) locationObj.href = url;
@@ -270,22 +292,27 @@ function createForumEnv(search = "") {
   return { context, window: windowObj, root, shared: S };
 }
 
-(function testForumCategoryShowcase() {
+(async function testForumCategoryShowcase() {
   console.log("Running Issue #17 Tests: Forum showcase category deep-link & highlighting...");
 
-  // Test 1: ?category=showcase initial URL sets FUI.category to showcase
+  // Test 1: ?category=showcase URL selects showcase and highlights it in sidebar
   {
     const env = createForumEnv("?category=showcase");
     vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"), env.context);
-    const FUI = env.window.FUI;
-    assert.ok(FUI, "FUI must be exposed or accessible on window");
-    assert.equal(FUI.category, "showcase", "?category=showcase must set FUI.category to 'showcase'");
 
     // Verify DOM rendering: the category button with data-fcat="showcase" has class "is-active"
     const showcaseBtn = env.root.querySelector('[data-fcat="showcase"]');
     assert.ok(showcaseBtn, "Sidebar must render a button for data-fcat='showcase'");
     assert.ok(showcaseBtn.classList.contains("is-active"), "Showcase category button must have 'is-active' class");
-    console.log("✓ Test 1 Passed: ?category=showcase sets FUI.category='showcase' and marks button is-active");
+    assert.ok(showcaseBtn.textContent.includes("晒作品"), "Showcase category button text must include '晒作品'");
+
+    // Verify other category buttons are not active
+    const allBtn = env.root.querySelector('[data-fcat="all"]');
+    assert.ok(allBtn && !allBtn.classList.contains("is-active"), "'all' category button must not have 'is-active'");
+    const tuningBtn = env.root.querySelector('[data-fcat="tuning"]');
+    assert.ok(tuningBtn && !tuningBtn.classList.contains("is-active"), "'tuning' category button must not have 'is-active'");
+
+    console.log("✓ Test 1 Passed: ?category=showcase marks '晒作品' as is-active and others inactive");
   }
 
   // Test 2: Fallback when boot is not yet loaded (App.state.forumBoards empty)
@@ -293,8 +320,13 @@ function createForumEnv(search = "") {
     const env = createForumEnv("?category=showcase");
     env.shared.App.state.forumBoards = null; // simulate boot not ready
     vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"), env.context);
-    const FUI = env.window.FUI;
-    assert.equal(FUI.category, "showcase", "Fallback whitelist must include 'showcase' when boot forumBoards is absent");
+
+    const showcaseBtn = env.root.querySelector('[data-fcat="showcase"]');
+    assert.ok(showcaseBtn, "Sidebar must render showcase button even when boot forumBoards is null");
+    assert.ok(showcaseBtn.classList.contains("is-active"), "Showcase must still be selected with fallback whitelist");
+    const allBtn = env.root.querySelector('[data-fcat="all"]');
+    assert.ok(!allBtn.classList.contains("is-active"), "'all' must not be active when showcase is selected");
+
     console.log("✓ Test 2 Passed: Fallback whitelist includes 'showcase' before boot arrives");
   }
 
@@ -303,8 +335,9 @@ function createForumEnv(search = "") {
     for (const cat of ["all", "tuning", "experience", "assets", "tools"]) {
       const env = createForumEnv(`?category=${cat}`);
       vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"), env.context);
-      const FUI = env.window.FUI;
-      assert.equal(FUI.category, cat, `?category=${cat} must set FUI.category to '${cat}'`);
+      const catBtn = env.root.querySelector(`[data-fcat="${cat}"]`);
+      assert.ok(catBtn, `Button for ${cat} must exist`);
+      assert.ok(catBtn.classList.contains("is-active"), `Button for ${cat} must have 'is-active' class`);
     }
     console.log("✓ Test 3 Passed: Standard categories (all, tuning, experience, assets, tools) still route correctly");
   }
@@ -313,22 +346,97 @@ function createForumEnv(search = "") {
   {
     const env = createForumEnv("?category=invalid_board");
     vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"), env.context);
-    const FUI = env.window.FUI;
-    assert.equal(FUI.category, "all", "Invalid category must not be accepted; defaults to 'all'");
+    const allBtn = env.root.querySelector('[data-fcat="all"]');
+    assert.ok(allBtn && allBtn.classList.contains("is-active"), "Invalid category must fall back to 'all' as active");
+    const showcaseBtn = env.root.querySelector('[data-fcat="showcase"]');
+    assert.ok(showcaseBtn && !showcaseBtn.classList.contains("is-active"), "Showcase must not be active for invalid category");
     console.log("✓ Test 4 Passed: Invalid category safely defaults to 'all'");
   }
 
-  // Test 5: Clicking showcase button switches category and syncs URL
+  // Test 5: Clicking showcase button switches category and updates DOM
   {
     const env = createForumEnv("");
     vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"), env.context);
-    const FUI = env.window.FUI;
-    assert.equal(FUI.category, "all");
+    const allBtn = env.root.querySelector('[data-fcat="all"]');
+    assert.ok(allBtn && allBtn.classList.contains("is-active"), "Default category is 'all'");
+
     const showcaseBtn = env.root.querySelector('[data-fcat="showcase"]');
     assert.ok(showcaseBtn, "Showcase button exists in default view");
     showcaseBtn.click();
-    assert.equal(FUI.category, "showcase", "Clicking showcase button updates FUI.category to 'showcase'");
-    console.log("✓ Test 5 Passed: Clicking showcase category updates FUI.category to 'showcase'");
+
+    // After clicking showcase, it becomes active
+    const activeShowcaseBtn = env.root.querySelector('[data-fcat="showcase"]');
+    assert.ok(activeShowcaseBtn && activeShowcaseBtn.classList.contains("is-active"), "Clicking showcase marks it as active");
+    const inactiveAllBtn = env.root.querySelector('[data-fcat="all"]');
+    assert.ok(inactiveAllBtn && !inactiveAllBtn.classList.contains("is-active"), "'all' button loses active class");
+
+    console.log("✓ Test 5 Passed: Clicking showcase category updates DOM active button");
+  }
+
+  // Test 6: Compose page board pills must NOT contain "晒作品"
+  {
+    const env = createForumEnv("");
+    vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"), env.context);
+    const newTextBtn = env.root.querySelector("#forum-btn-new-text");
+    assert.ok(newTextBtn, "New topic button must exist");
+    newTextBtn.click();
+
+    const composePills = env.root.querySelectorAll(".hw-compose-board-pill");
+    assert.ok(composePills.length > 0, "Compose board pills must be rendered");
+    const showcasePill = env.root.querySelector('#compose-board-pills [data-compose-cat="showcase"]');
+    assert.equal(showcasePill, null, "Compose board pills must NOT have showcase option");
+    for (const pill of composePills) {
+      assert.ok(!pill.textContent.includes("晒作品"), `Compose pill "${pill.textContent}" must not contain '晒作品'`);
+    }
+    console.log("✓ Test 6 Passed: Compose page board pills do NOT contain '晒作品'");
+  }
+
+  // Test 7: Moderator move dropdown must NOT contain "移至：晒作品"
+  {
+    const env = createForumEnv("?view=topic&id=top_1");
+    env.shared.App.state.loggedIn = true;
+    env.shared.App.state.user = { role: "admin", username: "admin_user" };
+    env.shared.apiJson = async (path) => {
+      if (path.includes("/replies")) {
+        return { ok: true, items: [], nextCursor: null };
+      }
+      return {
+        ok: true,
+        topic: {
+          id: "top_1",
+          title: "测试帖子",
+          category: "tuning",
+          author: "user_a",
+          authorName: "用户A"
+        },
+        mount: { kind: "none" },
+        viewer: { liked: false, favorited: false }
+      };
+    };
+
+    vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"), env.context);
+    // Wait for apiJson resolution
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const moveSelect = env.root.querySelector("#topic-mod-move-select");
+    assert.ok(moveSelect, "Admin viewing topic must see move select dropdown (#topic-mod-move-select)");
+    const showcaseOpt = env.root.querySelector('#topic-mod-move-select option[value="showcase"]');
+    assert.equal(showcaseOpt, null, "Move dropdown must NOT contain option with value='showcase'");
+    const allOptions = env.root.querySelectorAll("#topic-mod-move-select option");
+    assert.ok(allOptions.length > 0, "Move dropdown must have options for valid boards");
+    for (const opt of allOptions) {
+      assert.ok(!opt.textContent.includes("晒作品"), `Option "${opt.textContent}" must not contain '晒作品'`);
+    }
+    console.log("✓ Test 7 Passed: Moderator move dropdown does NOT contain '移至：晒作品'");
+  }
+
+  // Source-level guard: BOARD_DEFS must not contain showcase
+  {
+    const forumAppSrc = fs.readFileSync("demo/assets/forum-app.js", "utf8");
+    const boardDefsMatch = forumAppSrc.match(/const BOARD_DEFS = \[([\s\S]*?)\];/);
+    assert.ok(boardDefsMatch, "BOARD_DEFS definition must exist in forum-app.js");
+    assert.ok(!boardDefsMatch[1].includes('"showcase"') && !boardDefsMatch[1].includes("'showcase'"), "BOARD_DEFS array in forum-app.js must not contain 'showcase'");
+    console.log("✓ Source Guard Passed: BOARD_DEFS array in forum-app.js does not contain 'showcase'");
   }
 
   console.log("\n==========================================");
