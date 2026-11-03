@@ -1087,7 +1087,7 @@
       imgIndex: 0,
       totalImages: 1,
       imageUrl: (B.imagesFor(w)[0] || ""),
-      aspectRatio: 0.75,
+      aspectRatio: (B.parseAspectRatio ? B.parseAspectRatio(w, 0) : 1.0),
       work: w,
       batchId: w.batchId,
       batchTotal: w.batchTotal || 1,
@@ -1112,7 +1112,7 @@
       const imgIdx = item.imgIndex != null ? item.imgIndex : 0;
       const totalImgs = item.totalImages || 1;
       const imageUrl = item.imageUrl || (B.imagesFor(w)[0] || "");
-      const ar = item.aspectRatio || (B.parseAspectRatio ? B.parseAspectRatio(w, imgIdx) : 0.75);
+      const ar = item.aspectRatio || (B.parseAspectRatio ? B.parseAspectRatio(w, imgIdx) : 1.0);
       const disc = (App.state && App.state.discussions && App.state.discussions[id]) || null;
       const tid = disc ? disc.topicId : (w.topicId || null);
       const href = tid ? channelUrl("forum", { view: "topic", id: tid }) : channelUrl("main", { view: "work", id });
@@ -1289,10 +1289,58 @@
       search.oninput = queueSearch;
     }
 
+    let relayoutRaf = null;
+    function scheduleRelayout() {
+      if (relayoutRaf) return;
+      const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : setTimeout;
+      relayoutRaf = raf(() => {
+        relayoutRaf = null;
+        const masonryEl = document.getElementById("hw-wb-masonry");
+        if (!masonryEl) return;
+        const curCols = Number(masonryEl.getAttribute("data-columns")) || colCount;
+        reLayoutMasonry(curCols);
+      }, 16);
+    }
+
     function bindCardElementEvents(card) {
       const wid = card.getAttribute("data-wb-work");
       const imgIdx = Number(card.querySelector("[data-wb-img-idx]")?.getAttribute("data-wb-img-idx")) || 0;
       const w = (UI.worksFeed?.items || allWorks).find((x) => String(x.id) === wid);
+
+      const img = card.querySelector(".hw-wb-media img");
+      if (img) {
+        const handleImageDimensions = () => {
+          if (!img.naturalWidth || !img.naturalHeight) return;
+          const realAr = img.naturalWidth / img.naturalHeight;
+          const media = card.querySelector(".hw-wb-media");
+          if (media) {
+            media.style.aspectRatio = `${realAr}`;
+          }
+          const itemKey = card.getAttribute("data-wb-card-key") || card.getAttribute("data-wb-work");
+          const placedItem = (UI._worksMasonryPlaced || []).find((p) => (p.itemKey && p.itemKey === itemKey) || p.workId === itemKey);
+          if (placedItem) {
+            const oldAr = Number(placedItem.aspectRatio) || 1.0;
+            if (Math.abs(oldAr - realAr) > 0.005) {
+              placedItem.aspectRatio = realAr;
+              if (w) {
+                if (!Array.isArray(w.imageDimensions)) w.imageDimensions = [];
+                w.imageDimensions[imgIdx] = {
+                  width: img.naturalWidth,
+                  height: img.naturalHeight,
+                  aspectRatio: realAr
+                };
+              }
+              scheduleRelayout();
+            }
+          }
+        };
+
+        if (img.complete && img.naturalWidth > 0) {
+          handleImageDimensions();
+        } else {
+          img.addEventListener("load", handleImageDimensions, { once: true });
+        }
+      }
 
       card.querySelectorAll("[data-wb-open]").forEach((a) => {
         a.addEventListener("click", (e) => {
