@@ -1165,11 +1165,14 @@ class UnifiedRepliesTests(unittest.TestCase):
         self.assertEqual(row_pau_restored["status"], "published")
         self.assertEqual(row_pau_restored["status_source"], "")
 
-        # Both must now appear in anonymous boot
+        # Under #60: unlisted restored works are reachable via discussions mapping,
+        # but do not enter the forum list until listed_at_ms is set.
         boot_after = services.build_boot_payload(self.db, None)
         boot_topic_ids_after = {t["id"] for t in boot_after["topics"]}
-        self.assertIn(t_hid, boot_topic_ids_after)
-        self.assertIn(t_pau, boot_topic_ids_after)
+        self.assertNotIn(t_hid, boot_topic_ids_after)
+        self.assertNotIn(t_pau, boot_topic_ids_after)
+        self.assertEqual(boot_after.get("discussions", {}).get(w_hid, {}).get("topicId"), t_hid)
+        self.assertEqual(boot_after.get("discussions", {}).get(w_pau, {}).get("topicId"), t_pau)
 
         # Controls verification:
         # Restore w_del_ctrl:
