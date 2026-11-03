@@ -64,7 +64,7 @@ DEFAULT_SITE_SETTINGS: dict[str, object] = {
     "announcement": {
         "enabled": True,
         "badge": "✨ 2.0 正式上线",
-        "text": "Handraw 手绘风社区升级版：370+ 画风与 170+ 图型全量打通无限画布，新发作品直通 72h 首发曝光席，荒地首晒立奖 +15✦！",
+        "text": "Handraw 手绘风社区升级版：360+ 画风与 160+ 图型全量打通无限画布，荒地首晒立奖 +15✦！",
         "cta_label": "去创作台体验 ↗",
         "cta_channel": "studio",
     },
@@ -72,7 +72,7 @@ DEFAULT_SITE_SETTINGS: dict[str, object] = {
         "auto_pause_report_threshold": 3,
         "community_asset_default_status": "published",
         "work_default_status": "published",
-        "allow_self_review_for_admin": True,
+        "allow_self_review_for_admin": False,
     },
     "gateway": {
         "model": "gpt-image-2",
