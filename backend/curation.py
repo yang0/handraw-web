@@ -1621,7 +1621,7 @@ def publish_work_direct(
     same work instead of creating a second one.
     """
     body = body or {}
-    should_list = bool(listed or body.get("listed"))
+    should_list = bool(listed)
     username = _username(user)
     uid = _user_id(user)
     request_id = _s(body.get("requestId"), 80)

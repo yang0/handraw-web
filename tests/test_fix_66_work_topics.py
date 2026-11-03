@@ -177,6 +177,26 @@ class Fix66WorkTopicsTests(unittest.TestCase):
         self.assertNotIn(t_row["id"], boot_tids, "Projected work must not appear in forum list")
         self.assertIn(projected_wid, boot.get("discussions", {}), "Projected work must appear in discussions mapping")
 
+    def test_publish_work_direct_body_listed_cannot_override_server_listed_false(self):
+        """Client body with 'listed': True must not force listed_at_ms when server listed=False."""
+        res = publish_work_direct(
+            self.db,
+            self.author,
+            {
+                "title": "客户端试图强制入列作品",
+                "prompt": "prompt with client listed attempt",
+                "images": ["/images/individual/FA/FA-013.webp"],
+                "styles": ["FA-013"],
+                "listed": True,
+            },
+            listed=False,
+        )
+        tid = res["topicId"]
+        conn = self.db.get_conn()
+        row = conn.execute("SELECT listed_at_ms FROM forum_topics WHERE id = ?", (tid,)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertIsNone(row["listed_at_ms"], "Topic listed_at_ms must remain None when server listed=False")
+
 
 if __name__ == "__main__":
     unittest.main()
