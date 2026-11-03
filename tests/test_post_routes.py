@@ -437,7 +437,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         self.assertEqual(data_reader["mount"]["resource"]["definition"], "", "Unpaid user cannot see paid definition")
         self.assertFalse(data_reader["mount"]["resource"]["unlocked"])
 
-        # 3. User with settled unlock record: definition is visible
+        # 3. User with settled unlock record: paid definition is not shown to buyers (only usable online)
         buyer_token = self._login("pr_buyer", "pass-buyer")
         conn.execute(
             "INSERT INTO unlocks (user_id, target_type, target_id, cost, status, created_at) VALUES (?, 'asset', 'PAID-STYLE-1', 25, 'settled', ?)",
@@ -446,7 +446,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         conn.commit()
         status, data_buyer = self._request("GET", f"/api/posts/{topic_id}", token=buyer_token)
         self.assertEqual(status, 200)
-        self.assertEqual(data_buyer["mount"]["resource"]["definition"], "SUPER_SECRET_STYLE_DEFINITION")
+        self.assertEqual(data_buyer["mount"]["resource"]["definition"], "")
         self.assertTrue(data_buyer["mount"]["resource"]["unlocked"])
 
         # 4. Author request: definition is visible

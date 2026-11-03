@@ -192,7 +192,7 @@ class RemoveWorkPricingAcceptanceTests(unittest.TestCase):
         # Buyer unlocks style asset (cost: 20 -> buyer -20, author +16)
         res = S.unlock_paid_item(self.db, self.buyer, "asset", "PAID-STYLE-TEST")
         self.assertTrue(res.get("ok"))
-        self.assertEqual(res["unlockedContent"], "SECRET_STYLE_DEF")
+        self.assertEqual(res["unlockedContent"], "")
 
         buyer_bal_1 = int(self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id = ?", (self.buyer["id"],)).fetchone()["balance"])
         author_bal_1 = int(self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id = ?", (self.author["id"],)).fetchone()["balance"])

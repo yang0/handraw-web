@@ -474,9 +474,13 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
                     "examples": examples,
                     "description": asset_res.get("description") or "",
                     "definition": (
-                        strip_bilingual_definition(asset_res.get("definition") or "")
-                        if m_kind == "layout"
-                        else (asset_res.get("definition") or "")
+                        ""
+                        if (forum_resources._FILTER_BLACKBOX in (asset_res.get("definition") or "") or (asset_res.get("definition") or "").startswith("[LOCKED_ASSET::"))
+                        else (
+                            strip_bilingual_definition(asset_res.get("definition") or "")
+                            if m_kind == "layout"
+                            else (asset_res.get("definition") or "")
+                        )
                     ),
                     "unlocked": bool(asset_res.get("unlocked")),
                     "unlockCost": int(asset_res.get("unlockCost") or 0),

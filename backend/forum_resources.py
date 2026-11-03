@@ -208,8 +208,9 @@ def _asset_resource(row: dict[str, Any], unlocked: set[str], user) -> dict[str, 
     definition = ser.get("definition") or ""
     if source == "exclusive" or _FILTER_BLACKBOX in definition:
         definition = ""
-    allowed = int(row['unlock_cost'] or 0) <= 0 or row['code'] in unlocked or bool(user and (user.get('role') in _STAFF or user.get('username') == row['author_username']))
-    if not allowed:
+    can_read = int(row['unlock_cost'] or 0) <= 0 or bool(user and (user.get('role') in _STAFF or user.get('username') == row['author_username']))
+    is_unlocked = int(row['unlock_cost'] or 0) <= 0 or row['code'] in unlocked or bool(user and (user.get('role') in _STAFF or user.get('username') == row['author_username']))
+    if not can_read:
         definition = ''
     elif ser.get("kind") == "layout" and definition:
         definition = strip_bilingual_definition(definition)
@@ -220,8 +221,8 @@ def _asset_resource(row: dict[str, Any], unlocked: set[str], user) -> dict[str, 
         "images": [_local_image(ser["image"])] if ser["image"] else [],
         "author": ser["author"], "authorName": ser["authorName"],
         "sourceType": ser["sourceType"], "tier": ser["tier"],
-        "unlockCost": ser["unlockCost"], "unlocked": allowed,
-        "canUse": allowed,
+        "unlockCost": ser["unlockCost"], "unlocked": is_unlocked,
+        "canUse": is_unlocked,
         "status": row["status"], "publishedAtMs": int(row["published_at_ms"] or 0),
         "styles": [], "layout": None,
     }
@@ -300,10 +301,18 @@ def _context(db, user, kind, target):
         exists = conn.execute(f'SELECT 1 FROM {table} WHERE {key}=?',(target,)).fetchone()
         if exists or not sub or not topic or topic['status']!='published' or mapping['origin']!='submission':
             raise S.ServiceError('资源不存在或尚未收录',status=404)
-        preview = C._safe_preview(_payload(db,sub) or {})
+        p_data = _payload(db,sub) or {}
+        preview = C._safe_preview(p_data)
         images = [_image_of([i]) for i in (preview.get('images') or ([preview['image']] if preview.get('image') else []))]
-        resource = dict(preview,id=target,kind=kind,status=sub['status'],canUse=False,unlocked=False,
-                        definition='',prompt='',images=images,image=_image_of(images),
+        p_cost = int(p_data.get('unlock_cost') or p_data.get('unlockCost') or 0)
+        is_author = bool(user and user.get('username') == sub['owner_username'])
+        is_staff = bool(user and user.get('role') in _STAFF)
+        can_read = (p_cost <= 0) or is_author or is_staff
+        p_def = (p_data.get('definition') or '') if can_read else ''
+        if kind == 'layout' and p_def:
+            p_def = strip_bilingual_definition(p_def)
+        resource = dict(preview,id=target,kind=kind,status=sub['status'],canUse=bool(user or is_author or is_staff),unlocked=(p_cost <= 0 or is_author or is_staff),
+                        definition=p_def,prompt='',images=images,image=_image_of(images),
                         author=sub['owner_username'],authorName=topic['author_name'],sourceType='community')
     return kind,target,resource,published,mapping,sub,topic
 

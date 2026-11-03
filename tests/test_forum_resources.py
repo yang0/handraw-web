@@ -69,7 +69,13 @@ class ForumResourceTests(unittest.TestCase):
             self.assertFalse(detail['curation']['hasPublishedVersion'])
             self.assertEqual(detail['curation']['id'],sub['id'])
             self.assertEqual(len(detail['siblings']),2,'style and layout share the submission thread')
-            self.assertNotIn('秘密',json.dumps(detail,ensure_ascii=False))
+            # Issue #21: 免费画风/图型未收录前，所有人均可查看定义
+            self.assertIn('秘密定义', detail['resource']['definition'])
+        # Paid pending items must NOT expose definition to unlogged visitors
+        _, paid_subs = self.batch(price=5)
+        for kind in ('style', 'layout'):
+            p_detail = R.resource_detail(self.db, None, kind, paid_subs[kind]['targetId'])
+            self.assertNotIn('秘密', json.dumps(p_detail, ensure_ascii=False))
         # The work is already live on its own thread.
         work_detail=R.resource_detail(self.db,None,'work',subs['work']['targetId'])
         self.assertTrue(work_detail['resource']['canUse'])

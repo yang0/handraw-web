@@ -2202,7 +2202,7 @@
                           ? `<pre class="fwp-prompt-text" style="white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;background:var(--paper-bg);padding:14px;border-radius:8px;border:1px solid var(--line-soft);font-size:13px;line-height:1.6;">${esc(res.definition)}</pre>`
                           : `<p style="color:var(--ink-muted);font-size:13px;">暂无定义内容</p>`)
                       : `<div class="hw-locked-gate-box" style="padding:24px;text-align:center;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
-                          <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后查看定义</div>
+                          <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后可在线上创作台使用</div>
                           <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
                           <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 立即解锁</button>
                         </div>`)
@@ -3284,7 +3284,7 @@
             method: "POST",
             body: { targetId: mount.resource.code, targetType: "asset" }
           }).then(() => {
-            toast("🔓 解锁成功");
+            toast("已解锁，可在线上创作台使用");
             _activeTopicDetail.status = "loading";
             renderTopicDetailPage(root);
           }).catch((err) => {

@@ -108,6 +108,33 @@ class ResourceRegistryTests(unittest.TestCase):
                 (json.dumps(payload, ensure_ascii=False), now),
             )
 
+            # Insert a paid pending submission: USR-PAID-PENDING
+            self.paid_pending_code = "USR-PAID-PENDING"
+            tx.execute(
+                """
+                INSERT INTO curation_submissions
+                    (id, topic_id, owner_username, owner_user_id, kind, target_id, status, current_revision, request_id, created_at, updated_at)
+                VALUES ('sub_test_paid', 'topic_test_paid', ?, ?, 'style', ?, 'pending', 1, 'req_paid', ?, ?)
+                """,
+                (self.author["username"], self.author["id"], self.paid_pending_code, now, now),
+            )
+            payload_paid = {
+                "name": "付费未收录画风",
+                "description": "付费未收录画风描述",
+                "definition": self.secret_definition,
+                "cover": "/images/test-cover-paid.webp",
+                "images": ["/images/test-ex1.webp"],
+                "unlock_cost": 10,
+            }
+            tx.execute(
+                """
+                INSERT INTO curation_versions
+                    (id, submission_id, revision, payload_json, created_at)
+                VALUES ('ver_test_paid', 'sub_test_paid', 1, ?, ?)
+                """,
+                (json.dumps(payload_paid, ensure_ascii=False), now),
+            )
+
             # Insert an exclusive asset: FX-001
             tx.execute(
                 """
@@ -150,9 +177,20 @@ class ResourceRegistryTests(unittest.TestCase):
         self.assertIsNone(res["access"]["inject"])
         self.assertEqual(res["definition"], self.secret_definition)
 
-    def test_02_visitor_resolves_pending_without_definition(self) -> None:
-        """2. Non-author user: canRead=False, definition=None, inject='definition'."""
+    def test_02_visitor_resolves_free_pending_with_definition(self) -> None:
+        """2. Free pending resource: anyone can see definition (canRead=True, hiddenBy=None, inject=None)."""
         res = resource_registry.resolve(self.db.get_conn(), self.pending_code, viewer=self.visitor, purpose="generate")
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertTrue(res["canUse"])
+        self.assertTrue(res["access"]["canRead"])
+        self.assertIsNone(res["access"]["hiddenBy"])
+        self.assertIsNone(res["access"]["inject"])
+        self.assertEqual(res["definition"], self.secret_definition)
+
+    def test_02b_visitor_resolves_paid_pending_without_definition(self) -> None:
+        """2b. Paid pending resource: non-author logged-in user canUse=True, canRead=False, hiddenBy='pending', inject='definition'."""
+        res = resource_registry.resolve(self.db.get_conn(), self.paid_pending_code, viewer=self.visitor, purpose="generate")
         self.assertIsNotNone(res)
         assert res is not None
         self.assertTrue(res["canUse"])
@@ -163,14 +201,24 @@ class ResourceRegistryTests(unittest.TestCase):
         self.assertEqual(res["_raw_definition"], self.secret_definition)
 
     def test_03_anonymous_access_pending(self) -> None:
-        """3. Anonymous visitor cannot read and cannot use pending resource."""
-        res = resource_registry.resolve(self.db.get_conn(), self.pending_code, viewer=None, purpose="view")
-        self.assertIsNotNone(res)
-        assert res is not None
-        self.assertFalse(res["canUse"])
-        self.assertFalse(res["access"]["canRead"])
-        self.assertEqual(res["access"]["hiddenBy"], "pending")
-        self.assertIsNone(res["definition"])
+        """3. Free pending: anonymous can read definition but cannot use. Paid pending: neither."""
+        # Free pending
+        res_free = resource_registry.resolve(self.db.get_conn(), self.pending_code, viewer=None, purpose="view")
+        self.assertIsNotNone(res_free)
+        assert res_free is not None
+        self.assertFalse(res_free["canUse"])
+        self.assertTrue(res_free["access"]["canRead"])
+        self.assertIsNone(res_free["access"]["hiddenBy"])
+        self.assertEqual(res_free["definition"], self.secret_definition)
+
+        # Paid pending
+        res_paid = resource_registry.resolve(self.db.get_conn(), self.paid_pending_code, viewer=None, purpose="view")
+        self.assertIsNotNone(res_paid)
+        assert res_paid is not None
+        self.assertFalse(res_paid["canUse"])
+        self.assertFalse(res_paid["access"]["canRead"])
+        self.assertEqual(res_paid["access"]["hiddenBy"], "pending")
+        self.assertIsNone(res_paid["definition"])
 
     def test_04_collection_and_skill_library(self) -> None:
         """4. Collect pending resource: Skill library collected has it, content_url is None; export returns 403."""
@@ -228,7 +276,7 @@ class ResourceRegistryTests(unittest.TestCase):
         gen_res = prepare_cloud_generation(
             self.db,
             self.visitor,
-            {"prompt": "生成一幅荷塘月色", "style1": self.pending_code, "promptFromSkill": True},
+            {"prompt": "生成一幅荷塘月色", "style1": self.paid_pending_code, "promptFromSkill": True},
         )
         self.assertIn("genId", gen_res)
         gen_id = gen_res["genId"]
@@ -253,7 +301,7 @@ class ResourceRegistryTests(unittest.TestCase):
             gen_res = prepare_cloud_generation(
                 self.db,
                 self.visitor,
-                {"prompt": f"生成图，风格是{self.secret_definition}", "style1": self.pending_code, "promptFromSkill": True},
+                {"prompt": f"生成图，风格是{self.secret_definition}", "style1": self.paid_pending_code, "promptFromSkill": True},
             )
             # The client prompt contained the secret definition -> masked
             row = self.db.get_conn().execute("SELECT * FROM studio_generations WHERE id = ?", (gen_res["genId"],)).fetchone()
@@ -264,7 +312,8 @@ class ResourceRegistryTests(unittest.TestCase):
         """5b. GET /api/resources/<code> fields and verification that 'inject' is NEVER present."""
         cases = [
             # (code, user_token, expected_hidden_by)
-            (self.pending_code, self.visitor_token, "pending"),
+            (self.pending_code, self.visitor_token, None),
+            (self.paid_pending_code, self.visitor_token, "pending"),
             ("FX-001", None, "blackbox"),
             ("USR-S99", self.visitor_token, "locked"),
         ]
@@ -293,6 +342,45 @@ class ResourceRegistryTests(unittest.TestCase):
             self.assertNotIn('"inject"', body)
             data = json.loads(body)
             self.assertEqual(data["access"]["hiddenBy"], "withdrawn")
+
+    def test_05c_paid_resource_buyer_resolution_and_generation(self) -> None:
+        """5c. Paid published resource: unlocked buyer has canRead=False, canUse=True, hiddenBy='paid', inject='definition'."""
+        now = "2026-11-03T12:00:00Z"
+        with self.db.transaction() as tx:
+            tx.execute(
+                "INSERT INTO unlocks (user_id, target_type, target_id, cost, status, created_at) VALUES (?, 'asset', 'USR-S99', 10, 'settled', ?)",
+                (self.visitor["id"], now),
+            )
+
+        res = resource_registry.resolve(self.db.get_conn(), "USR-S99", viewer=self.visitor, purpose="generate")
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertTrue(res["canUse"])
+        self.assertFalse(res["access"]["canRead"])
+        self.assertEqual(res["access"]["hiddenBy"], "paid")
+        self.assertEqual(res["access"]["inject"], "definition")
+        self.assertIsNone(res["definition"])
+        self.assertEqual(res["_raw_definition"], "社区付费提示词定义")
+
+        # GET /api/resources/USR-S99 returns hiddenBy='paid' and definition=None
+        req = urllib.request.Request(f"{self.base}/api/resources/USR-S99")
+        req.add_header("Cookie", f"{SESSION_COOKIE_NAME}={self.visitor_token}")
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["access"]["hiddenBy"], "paid")
+            self.assertIsNone(data["definition"])
+
+        # Buyer generates with USR-S99 -> server injects definition
+        gen_res = prepare_cloud_generation(
+            self.db,
+            self.visitor,
+            {"prompt": "测试买家生成", "style1": "USR-S99", "promptFromSkill": True},
+        )
+        self.assertIn("genId", gen_res)
+        row = self.db.get_conn().execute("SELECT * FROM studio_generations WHERE id = ?", (gen_res["genId"],)).fetchone()
+        self.assertIn("社区付费提示词定义", row["prompt"])
+        self.assertNotIn("社区付费提示词定义", row["visible_prompt"] or "")
 
     def test_06_pending_resource_stamp_and_tip(self) -> None:
         """6. Pending resource: retired stamp returns 400, tip returns 400 (未收录资源不接受赞赏)."""
