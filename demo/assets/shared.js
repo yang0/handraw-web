@@ -648,10 +648,16 @@
       });
     }
 
+    const officialResourcesList = ((App.state && App.state.officialResources) || []).map((r) => ({
+      ...r,
+      sourceType: "official"
+    }));
+
     const all = [
       ...exclusiveList,
       ...((App.state && App.state.communityResources) || []),
       ...officialMerged,
+      ...officialResourcesList,
       ...((App.state && App.state.myResources) || []),
       ...((App.state && App.state.pendingResources) || [])
     ];

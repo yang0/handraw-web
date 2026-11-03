@@ -902,6 +902,7 @@
           <div class="adm-filters">
             <select class="adm-select" id="flt-cat-source">
               <option value="all" ${state.filters.catSource === "all" ? "selected" : ""}>全部来源</option>
+              <option value="official" ${state.filters.catSource === "official" ? "selected" : ""}>🏛️ 官方新增</option>
               <option value="exclusive" ${state.filters.catSource === "exclusive" ? "selected" : ""}>🔒 官网独占黑盒 (FX/LX)</option>
               <option value="community" ${state.filters.catSource === "community" ? "selected" : ""}>🌱 社区共创 (USR-S/L)</option>
               <option value="official_override" ${state.filters.catSource === "official_override" ? "selected" : ""}>📌 官方目录覆盖增强</option>
@@ -916,7 +917,8 @@
           </div>
           ${caps().canViewBlackbox
             ? `<div style="display:flex;gap:8px;">
-                <button class="adm-btn adm-btn-primary" id="btn-new-exclusive">+ 新建专属黑盒 FX/LX</button>
+                <button class="adm-btn adm-btn-primary" id="btn-new-official">+ 新增官方画风/图型</button>
+                <button class="adm-btn" id="btn-new-exclusive">+ 新建专属黑盒 FX/LX</button>
                 <button class="adm-btn" id="btn-new-override">+ 官方目录覆盖项</button>
               </div>`
             : `<span class="adm-badge neutral">当前角色仅可审核社区共创 USR-*，黑盒底层仅限超管</span>`}
@@ -937,15 +939,17 @@
             <tbody>
               ${state.data.catalog.map((a) => {
                 const canEdit = caps().canViewBlackbox || a.sourceType === "community";
+                const badgeClass = a.sourceType === "exclusive" ? "exclusive" : (a.sourceType === "official" ? "published" : "neutral");
+                const badgeLabel = a.sourceType === "official" ? "官方新增" : esc(a.sourceType);
                 return `
                   <tr>
                     <td><img class="adm-thumb" src="${esc(a.image)}" alt="${esc(a.code)}" loading="lazy" /></td>
                     <td>
                       <div><code><strong>${esc(a.code)}</strong></code> · <strong>${esc(a.name)}</strong></div>
-                      <div style="font-size:12px;color:var(--adm-ink-muted);margin-top:3px;">@${esc(a.authorUsername)} · ${esc(a.kind === "layout" ? "图型框架" : "画风指令")}</div>
+                      <div style="font-size:12px;color:var(--adm-ink-muted);margin-top:3px;">@${esc(a.authorUsername || "official")} · ${esc(a.kind === "layout" ? "图型框架" : "画风指令")}</div>
                     </td>
                     <td>
-                      <span class="adm-badge ${a.sourceType === "exclusive" ? "exclusive" : "neutral"}">${esc(a.sourceType)}</span>
+                      <span class="adm-badge ${badgeClass}">${badgeLabel}</span>
                       <div style="font-size:12px;color:var(--adm-ink-soft);margin-top:3px;">${esc(a.group)}</div>
                     </td>
                     <td>${a.unlockCost > 0 ? `<strong style="color:var(--adm-vermilion);">${a.unlockCost}✦</strong>` : `<span style="color:var(--adm-jade);">登录免费</span>`}</td>
@@ -2087,6 +2091,239 @@
     };
   }
 
+  function openOfficialCatalogModal(existing) {
+    const item = existing || {
+      code: "",
+      kind: "style",
+      series: "FA",
+      name: "",
+      unlockCost: 0,
+      image: "",
+      description: "",
+      definition: "",
+      status: "published",
+      featured: false,
+      isNew: true,
+      reason: "",
+    };
+
+    const isEdit = Boolean(existing);
+    let seriesVal = item.series || (item.code ? item.code.split("-")[0] : (item.kind === "layout" ? "SB" : "FA"));
+
+    const styleSeriesOpts = [
+      { val: "FA", label: "FA 国际社论幽默" },
+      { val: "FB", label: "FB 经典绘本叙事" },
+      { val: "FC", label: "FC 现代平面艺术" },
+      { val: "FD", label: "FD 日本当代插画" },
+      { val: "FE", label: "FE 新国风与传统工艺" },
+      { val: "FF", label: "FF 3D黏土毛毡与纸雕" },
+      { val: "FG", label: "FG 动漫和赛璐璐" },
+      { val: "FH", label: "FH 先锋实验与综合媒介" },
+      { val: "FI", label: "FI 写实摄影与视觉大片" },
+    ];
+    const layoutSeriesOpts = [
+      { val: "SB", label: "SB 分镜故事板 (comic-storyboard)" },
+      { val: "SC", label: "SC 社交卡片 (social-card)" },
+      { val: "IG", label: "IG 图鉴信息图 (infographic)" },
+      { val: "IP", label: "IP 角色展示 (ip-character)" },
+      { val: "EC", label: "EC 电商图文 (ecommerce)" },
+    ];
+
+    function getSeriesHtml(kind, selectedSeries) {
+      const opts = kind === "layout" ? layoutSeriesOpts : styleSeriesOpts;
+      return opts.map((o) => `<option value="${esc(o.val)}" ${o.val === selectedSeries ? "selected" : ""}>${esc(o.label)}</option>`).join("");
+    }
+
+    openModal(`
+      <h3 style="margin:0 0 14px;">${isEdit ? `✏️ 编辑官方资源 ${esc(item.code)}` : "🏛️ 新增官方画风 / 图型"}</h3>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>资源类型 ${isEdit ? "(不可改)" : ""}</label>
+          <select class="adm-select" id="moff-kind" ${isEdit ? "disabled" : ""}>
+            <option value="style" ${item.kind === "style" ? "selected" : ""}>🎨 画风 (style)</option>
+            <option value="layout" ${item.kind === "layout" ? "selected" : ""}>📐 图型 (layout)</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>官方系列 ${isEdit ? "(不可改)" : ""}</label>
+          <select class="adm-select" id="moff-series" ${isEdit ? "disabled" : ""}>
+            ${getSeriesHtml(item.kind, seriesVal)}
+          </select>
+        </div>
+      </div>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>资产编号 ${isEdit ? "(不可改)" : "(留空自动分配下一个空号，或手动指定如 FE-069)"}</label>
+          <input class="adm-input" id="moff-code" value="${esc(item.code)}" ${isEdit ? "disabled" : ""} placeholder="留空自动分配" />
+        </div>
+        <div class="adm-field">
+          <label>展示名称 (必填)</label>
+          <input class="adm-input" id="moff-name" value="${esc(item.name)}" placeholder="如：宋锦纹样平涂" />
+        </div>
+      </div>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>解锁积分门槛 (✦，0 为登录免费，最大 500)</label>
+          <input class="adm-input" type="number" id="moff-cost" value="${item.unlockCost || 0}" min="0" max="500" />
+        </div>
+        <div class="adm-field">
+          <label>上架状态</label>
+          <select class="adm-select" id="moff-status">
+            <option value="published" ${item.status === "published" ? "selected" : ""}>published (上架)</option>
+            <option value="hidden" ${item.status === "hidden" ? "selected" : ""}>hidden (隐藏)</option>
+          </select>
+        </div>
+      </div>
+      <div class="adm-field">
+        <label>封面图片 (支持 /uploads/ 上传或 https://img.handraw-style.com/images/ 地址)</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input class="adm-input" id="moff-image" value="${esc(item.image)}" placeholder="/uploads/... 或 https://img.handraw-style.com/images/..." style="flex:1;" />
+          <button class="adm-btn" id="moff-btn-upload">📷 上传封面</button>
+        </div>
+        <div id="moff-thumb-wrap" style="margin-top:8px;${item.image ? "" : "display:none;"}">
+          <img id="moff-thumb" src="${esc(item.image)}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid var(--adm-border);" />
+        </div>
+      </div>
+      <div class="adm-field">
+        <label>画风 / 图型核心定义 (必填，1–12000 字)</label>
+        <textarea class="adm-textarea" id="moff-def" style="min-height:90px;" placeholder="输入画风或图型的核心提示词定义…">${esc(item.definition || "")}</textarea>
+      </div>
+      <div class="adm-field">
+        <label>公开展示简介 (前端可见，≤2000 字)</label>
+        <input class="adm-input" id="moff-desc" value="${esc(item.description || "")}" placeholder="简要描述此官方资源的主题与适用场景…" />
+      </div>
+      <div class="adm-field">
+        <label>英文提示词 (可空，≤4000 字)</label>
+        <input class="adm-input" id="moff-prompt-en" value="${esc(item.promptEn || "")}" placeholder="可选：英文风格关键词…" />
+      </div>
+      <div class="adm-field">
+        <label>审计操作说明 (可选)</label>
+        <input class="adm-input" id="moff-reason" value="${esc(item.reason || "")}" placeholder="如：官方画风新增或专题发布…" />
+      </div>
+      <div style="display:flex;gap:16px;margin-bottom:14px;font-size:13px;">
+        <label><input type="checkbox" id="moff-featured" ${item.featured ? "checked" : ""} /> ⭐ 精选推荐</label>
+        <label><input type="checkbox" id="moff-new" ${item.isNew !== false ? "checked" : ""} /> ✨ 72h 首发标识</label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button class="adm-btn" id="moff-cancel">取消</button>
+        <button class="adm-btn adm-btn-primary" id="moff-save">💾 ${isEdit ? "保存官方修改" : "确认新增官方资源"}</button>
+      </div>
+    `);
+
+    const kindSelect = document.getElementById("moff-kind");
+    const seriesSelect = document.getElementById("moff-series");
+    if (kindSelect && seriesSelect && !isEdit) {
+      kindSelect.onchange = () => {
+        const k = kindSelect.value;
+        seriesSelect.innerHTML = getSeriesHtml(k, k === "layout" ? "SB" : "FA");
+      };
+    }
+
+    const imgInput = document.getElementById("moff-image");
+    const thumbWrap = document.getElementById("moff-thumb-wrap");
+    const thumbImg = document.getElementById("moff-thumb");
+    if (imgInput) {
+      imgInput.oninput = () => {
+        const val = imgInput.value.trim();
+        if (val) {
+          thumbImg.src = val;
+          thumbWrap.style.display = "";
+        } else {
+          thumbWrap.style.display = "none";
+        }
+      };
+    }
+
+    const btnUpload = document.getElementById("moff-btn-upload");
+    if (btnUpload) {
+      btnUpload.onclick = () => {
+        const fi = document.createElement("input");
+        fi.type = "file";
+        fi.accept = "image/webp,image/png,image/jpeg,image/jpg";
+        fi.onchange = () => {
+          const file = fi.files && fi.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = async () => {
+            try {
+              btnUpload.disabled = true;
+              btnUpload.textContent = "上传中…";
+              const res = await api("/api/uploads", {
+                method: "POST",
+                body: { dataUrl: reader.result, nameZh: file.name, cat: "official" },
+              });
+              if (res && res.url) {
+                imgInput.value = res.url;
+                thumbImg.src = res.url;
+                thumbWrap.style.display = "";
+                toast("封面图片上传成功");
+              }
+            } catch (err) {
+              toast(`上传失败：${err.message}`, true);
+            } finally {
+              btnUpload.disabled = false;
+              btnUpload.textContent = "📷 上传封面";
+            }
+          };
+          reader.readAsDataURL(file);
+        };
+        fi.click();
+      };
+    }
+
+    document.getElementById("moff-cancel").onclick = closeModal;
+    document.getElementById("moff-save").onclick = async () => {
+      try {
+        const nameVal = document.getElementById("moff-name").value.trim();
+        if (!nameVal) {
+          toast("请填写展示名称", true);
+          return;
+        }
+        const defVal = document.getElementById("moff-def").value.trim();
+        if (!defVal) {
+          toast("请填写画风/图型核心定义", true);
+          return;
+        }
+        const imgVal = imgInput.value.trim();
+        if (!imgVal) {
+          toast("请填写或上传封面图片", true);
+          return;
+        }
+
+        const body = {
+          kind: isEdit ? item.kind : kindSelect.value,
+          series: isEdit ? seriesVal : seriesSelect.value,
+          code: isEdit ? item.code : document.getElementById("moff-code").value.trim(),
+          name: nameVal,
+          image: imgVal,
+          definition: defVal,
+          description: document.getElementById("moff-desc").value.trim(),
+          promptEn: document.getElementById("moff-prompt-en").value.trim(),
+          unlockCost: parseInt(document.getElementById("moff-cost").value || "0", 10),
+          status: document.getElementById("moff-status").value,
+          featured: document.getElementById("moff-featured").checked,
+          isNew: document.getElementById("moff-new").checked,
+          reason: document.getElementById("moff-reason").value.trim(),
+        };
+
+        const targetUrl = isEdit
+          ? `/api/admin/catalog/official/${encodeURIComponent(item.code)}`
+          : "/api/admin/catalog/official";
+
+        const res = await api(targetUrl, { method: "POST", body });
+        closeModal();
+        let notice = `官方资源 ${res.code} ${isEdit ? "更新" : "新建"}成功！`;
+        if (res.warnings && res.warnings.length) {
+          notice += `（提示：${res.warnings.join("；")}）`;
+        }
+        toast(notice);
+        await reloadCurrent();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
   function openCatalogEditModal(existing, defaultSourceType) {
     const item = existing || {
       code: "",
@@ -2549,6 +2786,8 @@
         reloadCurrent();
       };
     }
+    const btnNewOff = document.getElementById("btn-new-official");
+    if (btnNewOff) btnNewOff.onclick = () => openOfficialCatalogModal(null);
     const btnNewEx = document.getElementById("btn-new-exclusive");
     if (btnNewEx) btnNewEx.onclick = () => openCatalogEditModal(null, "exclusive");
     const btnNewOv = document.getElementById("btn-new-override");
@@ -2557,16 +2796,26 @@
     root.querySelectorAll("[data-cat-edit]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const item = state.data.catalog.find((x) => x.code === btn.getAttribute("data-cat-edit"));
-        if (item) openCatalogEditModal(item, item.sourceType);
+        if (!item) return;
+        if (item.sourceType === "official") {
+          openOfficialCatalogModal(item);
+        } else {
+          openCatalogEditModal(item, item.sourceType);
+        }
       });
     });
     root.querySelectorAll("[data-cat-del]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const code = btn.getAttribute("data-cat-del");
+        const item = state.data.catalog.find((x) => x.code === code);
+        const isOfficial = item && item.sourceType === "official";
         try {
-          await api(`/api/admin/catalog/${encodeURIComponent(code)}/delete`, {
+          const deleteUrl = isOfficial
+            ? `/api/admin/catalog/official/${encodeURIComponent(code)}/delete`
+            : `/api/admin/catalog/${encodeURIComponent(code)}/delete`;
+          await api(deleteUrl, {
             method: "POST",
-            body: { reason: `管理员删除目录项 ${code}` },
+            body: { reason: `管理员删除${isOfficial ? "官方" : ""}目录项 ${code}` },
           });
           toast(`已删除资产 ${code}`);
           await reloadCurrent();

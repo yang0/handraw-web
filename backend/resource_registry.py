@@ -90,17 +90,22 @@ def resolve(
         secret_blackbox_prompt = ca_row["secret_blackbox_prompt"] or ""
         image = sanitize_media_url(ca_row["image_url"] or "")
         unlock_cost = int(ca_row["unlock_cost"] or 0)
-        author_username = str(ca_row["author_username"] or "")
-        author_name = str(ca_row["author_name"] or author_username or "")
-        if author_username:
-            u_row = conn.execute(
-                "SELECT id, display_name FROM users WHERE username = ?",
-                (author_username,),
-            ).fetchone()
-            if u_row:
-                owner_user_id = int(u_row["id"])
-                if not author_name and u_row["display_name"]:
-                    author_name = str(u_row["display_name"])
+        if source_type == "official":
+            author_username = ""
+            author_name = "Handraw 官方"
+            owner_user_id = None
+        else:
+            author_username = str(ca_row["author_username"] or "")
+            author_name = str(ca_row["author_name"] or author_username or "")
+            if author_username:
+                u_row = conn.execute(
+                    "SELECT id, display_name FROM users WHERE username = ?",
+                    (author_username,),
+                ).fetchone()
+                if u_row:
+                    owner_user_id = int(u_row["id"])
+                    if not author_name and u_row["display_name"]:
+                        author_name = str(u_row["display_name"])
     else:
         # 2. static catalog.json
         cat_item = static_catalog().get(clean_code)

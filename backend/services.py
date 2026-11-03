@@ -33,11 +33,12 @@ from .security import (
 
 
 class ServiceError(Exception):
-    def __init__(self, message: str, status: int = 400, code: str = "bad_request") -> None:
+    def __init__(self, message: str, status: int = 400, code: str = "bad_request", extra: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.status = status
         self.code = code
+        self.extra = extra or {}
 
 
 CREATOR_HONOR_TIERS = [
@@ -699,6 +700,7 @@ def _serialize_catalog_asset(row: sqlite3.Row, unlocked_set: set[str], current_u
 
     return {
         "id": code,
+        "code": code,
         "kind": row["kind"],
         "sourceType": source_type,
         "tier": row["tier"],
@@ -1872,12 +1874,15 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     exclusive_resources = []
     community_resources = []
     official_overrides = []
+    official_resources = []
     for r in cat_rows:
         ser = _serialize_catalog_asset(r, unlocked_set, current_user)
         if r["source_type"] == "exclusive":
             exclusive_resources.append(ser)
         elif r["source_type"] == "community":
             community_resources.append(ser)
+        elif r["source_type"] == "official":
+            official_resources.append(ser)
         else:
             official_overrides.append(ser)
 
@@ -2303,6 +2308,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         "exclusiveResources": exclusive_resources,
         "communityResources": community_resources,
         "officialOverrides": official_overrides,
+        "officialResources": official_resources,
         "myResources": my_resources,
         "pendingResources": pending_resources,
         "officialPresets": official_presets,
@@ -6380,6 +6386,7 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
     collected = []
     owned = []
     library_asset_filter, library_asset_ids = _seed_filter("code", "assets")
+    official = []
     for r in conn.execute(
         f"SELECT * FROM catalog_assets WHERE status = 'published' AND {library_asset_filter}",
         library_asset_ids,
@@ -6387,6 +6394,27 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
         code = r["code"]
         if r["source_type"] == "exclusive":
             # Online-exclusive blackbox styles cannot be exported offline to local skill library
+            continue
+        if r["source_type"] == "official_override":
+            continue
+        if r["source_type"] == "official":
+            if code in fav_codes:
+                cost = int(r["unlock_cost"] or 0)
+                is_unlocked = cost <= 0 or (code in unlocked_codes)
+                official.append(
+                    {
+                        "id": f"official:{code}",
+                        "ref": code,
+                        "title": r["name"],
+                        "name": r["name"],
+                        "kind": r["kind"],
+                        "version": "1.0.0",
+                        "collected": True,
+                        "unlocked": is_unlocked,
+                        "source": "official",
+                        "content_url": f"/studio/api/assets/{code}/content" if cost <= 0 else None,
+                    }
+                )
             continue
         is_mine = r["author_username"] == uname
         is_fav = code in fav_codes
@@ -6412,13 +6440,14 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
             collected.append(entry)
 
     # Also expose favorited official catalog items
-    official = []
+    handled_official_refs = {item["ref"] for item in official}
     cat_file = CONTENT_DIR / "catalog.json"
     if cat_file.is_file():
         cat_data = json.loads(cat_file.read_text(encoding="utf-8"))
         for item in cat_data.get("resources", []):
             code = item.get("id")
-            if code in fav_codes and item.get("kind") in ("style", "layout"):
+            if code in fav_codes and code not in handled_official_refs and item.get("kind") in ("style", "layout"):
+                handled_official_refs.add(code)
                 official.append(
                     {
                         "id": f"official:{code}",

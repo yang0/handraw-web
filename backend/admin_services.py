@@ -8,10 +8,12 @@ import sqlite3
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
-from .config import CONTENT_DIR, get_image_config_path
+from .config import CONTENT_DIR, get_image_config_path, get_uploads_dir
 from .db import Database, local_today_str, utc_now_iso
+from .runtime_policy import sanitize_media_url
 from .security import generate_api_key, hash_password
 from .services import (
     ACTOR_RANK,
@@ -28,6 +30,7 @@ from .services import (
     get_wallet_quota_state,
     is_demo_mode,
     record_audit_log,
+    seed_ids,
     _seed_filter,
 )
 
@@ -1329,6 +1332,8 @@ def admin_upsert_catalog_asset(
 
 
         if existing:
+            if existing["source_type"] == "official":
+                raise ServiceError("官方资源请用 /api/admin/catalog/official", status=409, code="cannot_override_official", extra={"code": "cannot_override_official"})
             if existing["source_type"] in ("exclusive", "official_override") and actor.get("role") != "admin":
                 raise ServiceError("仅超级管理员可编辑专属黑盒或官方覆盖配置", status=403)
             if existing["source_type"] == "community":
@@ -1502,6 +1507,462 @@ def admin_delete_catalog_asset(
         tx.execute("DELETE FROM catalog_assets WHERE code = ?", (clean,))
         record_audit_log(tx, actor, "catalog.delete", "catalog_asset", clean, reason or f"删除资产 {clean}", {"name": row["name"]})
     return {"ok": True, "code": clean}
+
+
+def _media_owner_for_admin(db: Database, media_url: str) -> int | None:
+    url = sanitize_media_url(media_url)
+    if not url:
+        return None
+    conn = db.get_conn()
+    if url.startswith("/uploads/"):
+        rel = url.removeprefix("/uploads/").split("?", 1)[0]
+        row = conn.execute(
+            "SELECT user_id FROM user_uploads WHERE image_url = ? OR file_path = ? OR file_path LIKE ? LIMIT 1",
+            (url, url, f"%\\{rel}"),
+        ).fetchone()
+        if not row:
+            for candidate in conn.execute("SELECT user_id, file_path FROM user_uploads"):
+                if Path(str(candidate["file_path"] or "")).name == Path(rel).name:
+                    row = candidate
+                    break
+        return int(row["user_id"]) if row else None
+    return None
+
+
+def _validate_official_asset_image(db: Database, actor: dict[str, Any], raw_image: str) -> tuple[str, list[str]]:
+    image = sanitize_media_url(str(raw_image or "").strip())
+    if not image:
+        raise ServiceError("请提供封面图片", status=400, code="image_invalid")
+
+    clean_path = image.split("?", 1)[0]
+    ext = Path(clean_path).suffix.lower()
+    if ext not in (".webp", ".png", ".jpg", ".jpeg"):
+        raise ServiceError("封面图片仅支持 .webp, .png, .jpg, .jpeg 格式", status=400, code="image_invalid")
+
+    warnings: list[str] = []
+    if image.startswith("https://img.handraw-style.com/images/"):
+        return image, warnings
+
+    if not image.startswith("/uploads/"):
+        raise ServiceError("封面图片必须为 /uploads/ 上传路径或 https://img.handraw-style.com/images/ 官方地址", status=400, code="image_invalid")
+
+    actor_id = actor.get("id")
+    owner_id = _media_owner_for_admin(db, image)
+    if owner_id is None or (actor_id is not None and owner_id != int(actor_id)):
+        raise ServiceError("不能使用他人上传或不存在的图片作为官方封面", status=400, code="image_invalid")
+
+    conn = db.get_conn()
+    row = conn.execute("SELECT file_path FROM user_uploads WHERE image_url = ? LIMIT 1", (image,)).fetchone()
+    fpath = Path(row["file_path"]) if row and row["file_path"] else None
+    if not fpath or not fpath.is_file():
+        rel = image.removeprefix("/uploads/").split("?", 1)[0]
+        fpath = get_uploads_dir() / rel
+
+    if not fpath.is_file():
+        raise ServiceError("封面图片文件不存在", status=400, code="image_invalid")
+
+    try:
+        from PIL import Image
+        with Image.open(fpath) as img:
+            w, h = img.size
+            if w != h:
+                warnings.append(f"封面不是正方形（{w}×{h}），列表中会被裁切")
+    except Exception as exc:
+        raise ServiceError("封面图片损坏或无法被图片库读取", status=400, code="image_invalid") from exc
+
+    return image, warnings
+
+
+def _get_official_series_group(series: str, kind: str) -> str:
+    series = series.strip().upper()
+    for it in _load_official_catalog_items():
+        cid = str(it.get("id") or "").strip().upper()
+        if cid.startswith(f"{series}-"):
+            grp = it.get("group") or it.get("category")
+            if grp:
+                return str(grp)
+    fallbacks = {
+        "FA": "FA 国际社论幽默 / Editorial & Humor Doodle",
+        "FB": "FB 经典绘本叙事 / Picture Book & Watercolor",
+        "FC": "FC 现代平面艺术 / Modern Graphic & Pop",
+        "FD": "FD 日本当代插画 / Japanese Contemporary & Manga",
+        "FE": "FE 新国风与传统工艺 / Chinese Traditional & Folk Craft",
+        "FF": "FF 3D黏土毛毡与纸雕 / 3D Clay, Felt & Papercraft",
+        "FG": "FG 动漫和赛璐璐 / Anime, Cel Animation & Retro Game",
+        "FH": "FH 先锋实验与综合媒介 / Mixed Media & Impasto Arts",
+        "FI": "FI 写实摄影与视觉大片 / Realistic, Photography & Cinematic Styles",
+        "SB": "comic-storyboard",
+        "SC": "social-card",
+        "IG": "infographic",
+        "IP": "ip-character",
+        "EC": "ecommerce",
+    }
+    return fallbacks.get(series, "官方图型" if kind == "layout" else "官方画风")
+
+
+def _check_official_name_taken(conn: sqlite3.Connection, kind: str, name: str, exclude_code: str = "") -> None:
+    norm_name = name.strip()
+    # 1. catalog.json
+    for it in _load_official_catalog_items():
+        if it.get("kind") == kind and (it.get("name") or "").strip() == norm_name:
+            dup_code = str(it.get("id") or "").strip().upper()
+            if dup_code != exclude_code:
+                raise ServiceError(f"已有同名官方资源（{dup_code}）", status=409, code="name_taken", extra={"existingCode": dup_code, "code": "name_taken"})
+    # 2. catalog_assets
+    rows = conn.execute(
+        "SELECT code, name FROM catalog_assets WHERE kind = ? AND source_type IN ('official', 'official_override') AND code <> ?",
+        (kind, exclude_code),
+    ).fetchall()
+    for r in rows:
+        if (r["name"] or "").strip() == norm_name:
+            dup_code = str(r["code"] or "").strip().upper()
+            raise ServiceError(f"已有同名官方资源（{dup_code}）", status=409, code="name_taken", extra={"existingCode": dup_code, "code": "name_taken"})
+
+
+def _allocate_official_code(conn: sqlite3.Connection, series: str) -> str:
+    series = series.strip().upper()
+    prefix = f"{series}-"
+    max_num = 0
+    # From catalog.json
+    for it in _load_official_catalog_items():
+        cid = str(it.get("id") or "").strip().upper()
+        if cid.startswith(prefix):
+            m = re.match(r"^" + re.escape(prefix) + r"(\d+)$", cid)
+            if m:
+                max_num = max(max_num, int(m.group(1)))
+    # From catalog_assets
+    rows = conn.execute("SELECT code FROM catalog_assets WHERE code LIKE ?", (f"{prefix}%",)).fetchall()
+    for r in rows:
+        cid = str(r["code"] or "").strip().upper()
+        m = re.match(r"^" + re.escape(prefix) + r"(\d+)$", cid)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+    next_num = max_num + 1
+    return f"{series}-{next_num:03d}"
+
+
+def admin_create_official_asset(
+    db: Database,
+    user: dict[str, Any] | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    actor = require_staff(user, allow_reviewer=False)
+    if "secretBlackboxPrompt" in payload:
+        raise ServiceError("官方资源不支持云端黑盒底层 Prompt", status=400)
+
+    series = str(payload.get("series") or "").strip().upper()
+    style_series = ("FA", "FB", "FC", "FD", "FE", "FF", "FG", "FH", "FI")
+    layout_series = ("SB", "SC", "IG", "IP", "EC")
+
+    kind = str(payload.get("kind") or "").strip().lower()
+    if not kind:
+        if series in style_series:
+            kind = "style"
+        elif series in layout_series:
+            kind = "layout"
+        else:
+            raise ServiceError("类型必须为 style 或 layout", status=400)
+    elif kind not in ("style", "layout"):
+        raise ServiceError("类型必须为 style 或 layout", status=400)
+
+    if kind == "style" and series not in style_series:
+        raise ServiceError(f"画风系列必须为 {', '.join(style_series)} 之一", status=400)
+    elif kind == "layout" and series not in layout_series:
+        raise ServiceError(f"图型系列必须为 {', '.join(layout_series)} 之一", status=400)
+
+    group_name = _get_official_series_group(series, kind)
+
+    conn = db.get_conn()
+    raw_code = str(payload.get("code") or "").strip().upper()
+    if raw_code:
+        pattern = rf"^{re.escape(series)}-\d{{2,3}}$"
+        if not re.match(pattern, raw_code):
+            raise ServiceError(f"编号格式不符合规范，须匹配 {series}-\\d{{2,3}}", status=400)
+        # Check collision in catalog.json
+        for it in _load_official_catalog_items():
+            if str(it.get("id") or "").strip().upper() == raw_code:
+                raise ServiceError(f"编号 {raw_code} 已被静态官方目录占用", status=409, code="code_taken", extra={"code": "code_taken"})
+        # Check collision in catalog_assets
+        if conn.execute("SELECT 1 FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (raw_code, raw_code)).fetchone():
+            raise ServiceError(f"编号 {raw_code} 已被占用", status=409, code="code_taken", extra={"code": "code_taken"})
+        if raw_code in seed_ids("assets"):
+            raise ServiceError(f"编号 {raw_code} 已被演示预置占用", status=409, code="code_taken", extra={"code": "code_taken"})
+        code = raw_code
+    else:
+        code = _allocate_official_code(conn, series)
+
+    name = str(payload.get("name") or "").strip()
+    if not (1 <= len(name) <= 120):
+        raise ServiceError("画风/图型名称不能为空且须在 1–120 字以内", status=400)
+    _check_official_name_taken(conn, kind, name)
+
+    image_url, warnings = _validate_official_asset_image(db, actor, str(payload.get("image") or ""))
+
+    definition = str(payload.get("definition") or "").strip()
+    if not (1 <= len(definition) <= 12000):
+        raise ServiceError("画风/图型定义不能为空且须在 1–12000 字以内", status=400)
+
+    description = str(payload.get("description") or "").strip()
+    if len(description) > 2000:
+        raise ServiceError("简介不能超过 2000 字", status=400)
+
+    prompt_en = str(payload.get("promptEn") or "").strip()
+    if len(prompt_en) > 4000:
+        raise ServiceError("英文提示词不能超过 4000 字", status=400)
+
+    raw_cost = payload.get("unlockCost")
+    if raw_cost is None:
+        unlock_cost = 0
+    else:
+        try:
+            unlock_cost = int(raw_cost)
+        except (ValueError, TypeError):
+            raise ServiceError("解锁积分必须为整数", status=400)
+    if not (0 <= unlock_cost <= 500):
+        raise ServiceError("解锁积分门槛必须在 0–500 范围内", status=400)
+    tier = "free" if unlock_cost == 0 else "credit"
+
+    status = str(payload.get("status") or "published").strip()
+    if status not in ("published", "hidden"):
+        raise ServiceError("状态仅支持 published 或 hidden", status=400)
+
+    featured = 1 if payload.get("featured", False) else 0
+    is_new = 1 if payload.get("isNew", True) else 0
+
+    now_iso = utc_now_iso()
+    now_ms = int(time.time() * 1000)
+
+    with db.transaction() as tx:
+        tx.execute(
+            """
+            INSERT INTO catalog_assets (
+                code, kind, source_type, author_username, author_name, name, group_name,
+                tier, unlock_cost, image_url, description, definition, prompt_en,
+                secret_blackbox_prompt, status, featured, is_new_release,
+                published_at_ms, created_label, created_at, updated_at
+            ) VALUES (?, ?, 'official', '', 'Handraw 官方', ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, '刚刚', ?, ?)
+            """,
+            (
+                code, kind, name, group_name, tier, unlock_cost, image_url,
+                description, definition, prompt_en, status, featured, is_new,
+                now_ms, now_iso, now_iso,
+            )
+        )
+        topic_id = ""
+        if status == "published":
+            from .resource_discussions import ensure_topic
+            res_dict = {
+                "code": code,
+                "kind": kind,
+                "name": name,
+                "image_url": image_url,
+                "description": description,
+                "definition": definition,
+                "source_type": "official",
+                "author_username": "",
+                "author_name": "Handraw 官方",
+                "status": status,
+            }
+            topic_id = ensure_topic(tx, kind, code, res_dict, initial_origin="official")
+
+        record_audit_log(
+            tx,
+            actor,
+            "catalog.official.create",
+            "catalog_asset",
+            code,
+            str(payload.get("reason") or f"新增官方资源 {code}《{name}》"),
+            {
+                "sourceType": "official",
+                "kind": kind,
+                "series": series,
+                "unlockCost": unlock_cost,
+                "status": status,
+                "featured": bool(featured),
+                "isNew": bool(is_new),
+            },
+        )
+    return {"ok": True, "code": code, "topicId": topic_id, "warnings": warnings}
+
+
+def admin_update_official_asset(
+    db: Database,
+    user: dict[str, Any] | None,
+    code: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    actor = require_staff(user, allow_reviewer=False)
+    if "secretBlackboxPrompt" in payload:
+        raise ServiceError("官方资源不支持云端黑盒底层 Prompt", status=400)
+
+    clean_code = str(code or "").strip().upper()
+    _admin_reject_seed_value(clean_code, "assets", "资产")
+
+    conn = db.get_conn()
+    existing = conn.execute("SELECT * FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (clean_code, clean_code)).fetchone()
+    if not existing:
+        raise ServiceError(f"未找到官方资产：{clean_code}", status=404)
+    if existing["source_type"] != "official":
+        raise ServiceError("该资产不是官方新增资产，无法在此接口更新", status=409)
+
+    kind = existing["kind"]
+    name = str(payload.get("name") if payload.get("name") is not None else existing["name"]).strip()
+    if not (1 <= len(name) <= 120):
+        raise ServiceError("名称不能为空且须在 1–120 字以内", status=400)
+    _check_official_name_taken(conn, kind, name, exclude_code=clean_code)
+
+    raw_image = str(payload.get("image") if payload.get("image") is not None else existing["image_url"]).strip()
+    image_url, warnings = _validate_official_asset_image(db, actor, raw_image)
+
+    raw_def = str(payload.get("definition") if payload.get("definition") is not None else existing["definition"]).strip()
+    if not (1 <= len(raw_def) <= 12000):
+        raise ServiceError("画风/图型定义不能为空且须在 1–12000 字以内", status=400)
+
+    desc = str(payload.get("description") if payload.get("description") is not None else (existing["description"] or "")).strip()
+    if len(desc) > 2000:
+        raise ServiceError("简介不能超过 2000 字", status=400)
+
+    prompt_en = str(payload.get("promptEn") if payload.get("promptEn") is not None else (existing["prompt_en"] or "")).strip()
+    if len(prompt_en) > 4000:
+        raise ServiceError("英文提示词不能超过 4000 字", status=400)
+
+    if payload.get("unlockCost") is not None:
+        try:
+            unlock_cost = int(payload["unlockCost"])
+        except (ValueError, TypeError):
+            raise ServiceError("解锁积分必须为整数", status=400)
+        if not (0 <= unlock_cost <= 500):
+            raise ServiceError("解锁积分门槛必须在 0–500 范围内", status=400)
+    else:
+        unlock_cost = int(existing["unlock_cost"] or 0)
+    tier = "free" if unlock_cost == 0 else "credit"
+
+    status = str(payload.get("status") if payload.get("status") is not None else existing["status"]).strip()
+    if status not in ("published", "hidden"):
+        raise ServiceError("状态仅支持 published 或 hidden", status=400)
+
+    featured = 1 if payload.get("featured", bool(existing["featured"])) else 0
+    is_new = 1 if payload.get("isNew", bool(existing["is_new_release"])) else 0
+
+    now_iso = utc_now_iso()
+    with db.transaction() as tx:
+        tx.execute(
+            """
+            UPDATE catalog_assets SET
+                name = ?, tier = ?, unlock_cost = ?, image_url = ?, description = ?,
+                definition = ?, prompt_en = ?, status = ?, featured = ?, is_new_release = ?,
+                updated_at = ?
+            WHERE code = ?
+            """,
+            (
+                name, tier, unlock_cost, image_url, desc, raw_def, prompt_en,
+                status, featured, is_new, now_iso, clean_code,
+            )
+        )
+        if status == "published":
+            from .resource_discussions import ensure_topic
+            res_dict = {
+                "code": clean_code,
+                "kind": kind,
+                "name": name,
+                "image_url": image_url,
+                "description": desc,
+                "definition": raw_def,
+                "source_type": "official",
+                "author_username": "",
+                "author_name": "Handraw 官方",
+                "status": status,
+            }
+            ensure_topic(tx, kind, clean_code, res_dict, initial_origin="official")
+
+        record_audit_log(
+            tx,
+            actor,
+            "catalog.official.update",
+            "catalog_asset",
+            clean_code,
+            str(payload.get("reason") or f"更新官方资源 {clean_code}《{name}》"),
+            {
+                "sourceType": "official",
+                "kind": kind,
+                "unlockCost": unlock_cost,
+                "status": status,
+                "featured": bool(featured),
+                "isNew": bool(is_new),
+            },
+        )
+    return {"ok": True, "code": clean_code, "warnings": warnings}
+
+
+def admin_delete_official_asset(
+    db: Database,
+    user: dict[str, Any] | None,
+    code: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    actor = require_staff(user, allow_reviewer=False)
+    clean_code = str(code or "").strip().upper()
+    _admin_reject_seed_value(clean_code, "assets", "资产")
+
+    conn = db.get_conn()
+    row = conn.execute("SELECT * FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (clean_code, clean_code)).fetchone()
+    if not row:
+        raise ServiceError(f"未找到官方资产：{clean_code}", status=404)
+    if row["source_type"] != "official":
+        raise ServiceError("仅官方新增资产可通过此接口删除", status=409)
+
+    kind = row["kind"]
+    # Reference checks:
+    # 1. works.styles_json / layout_code
+    if kind == "style":
+        works = conn.execute("SELECT styles_json FROM works WHERE styles_json LIKE ?", (f"%{clean_code}%",)).fetchall()
+        for w in works:
+            try:
+                s_list = json.loads(w["styles_json"] or "[]")
+                if clean_code in [str(x).upper() for x in s_list]:
+                    raise ServiceError("该资源已被作品引用，无法删除；请改用下架", status=409, code="asset_in_use")
+            except (ValueError, TypeError):
+                pass
+    elif kind == "layout":
+        w = conn.execute("SELECT 1 FROM works WHERE UPPER(layout_code) = ?", (clean_code,)).fetchone()
+        if w:
+            raise ServiceError("该资源已被作品引用，无法删除；请改用下架", status=409, code="asset_in_use")
+
+    # 2. interactions
+    if conn.execute("SELECT 1 FROM interactions WHERE target_id = ?", (clean_code,)).fetchone():
+        raise ServiceError("该资源已有用户互动，无法删除；请改用下架", status=409, code="asset_in_use")
+
+    # 3. collections
+    if conn.execute("SELECT 1 FROM collections WHERE target_id = ?", (clean_code,)).fetchone():
+        raise ServiceError("该资源已被用户收藏，无法删除；请改用下架", status=409, code="asset_in_use")
+
+    # 4. unlocks
+    if conn.execute("SELECT 1 FROM unlocks WHERE target_id = ?", (clean_code,)).fetchone():
+        raise ServiceError("该资源已有解锁记录，无法删除；请改用下架", status=409, code="asset_in_use")
+
+    # 5. curation_resource_topics with replies
+    m_topics = conn.execute("SELECT topic_id FROM curation_resource_topics WHERE UPPER(target_id) = ?", (clean_code,)).fetchall()
+    topic_ids = [str(t["topic_id"]) for t in m_topics]
+    for tid in topic_ids:
+        has_reply = conn.execute("SELECT 1 FROM forum_replies WHERE topic_id = ? LIMIT 1", (tid,)).fetchone()
+        if has_reply:
+            raise ServiceError("该资源关联讨论帖已有回复，无法删除；请改用下架", status=409, code="asset_in_use")
+
+    with db.transaction() as tx:
+        tx.execute("DELETE FROM catalog_assets WHERE code = ?", (clean_code,))
+        for tid in topic_ids:
+            tx.execute("DELETE FROM curation_resource_topics WHERE topic_id = ?", (tid,))
+            tx.execute("DELETE FROM forum_topics WHERE id = ?", (tid,))
+        record_audit_log(
+            tx,
+            actor,
+            "catalog.official.delete",
+            "catalog_asset",
+            clean_code,
+            reason or f"删除官方资产 {clean_code}",
+            {"name": row["name"]},
+        )
+    return {"ok": True, "code": clean_code}
 
 
 def admin_list_presets(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
