@@ -2421,7 +2421,10 @@
                       更新于 ${esc(formatArticleUpdated(a.updatedAtMs))} · 已生成 ${Number(a.runCount) || 0} 张配图
                     </div>
                   </div>
-                  <span class="btn btn-sm btn-primary">继续编辑 ↗</span>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <span class="btn btn-sm btn-primary">继续编辑 ↗</span>
+                    <button type="button" class="btn btn-sm" data-prof-del-article="${esc(a.id)}" style="padding:4px 9px;font-size:12px;color:#dc2626;border-color:rgba(220,38,38,0.3);background:#fff;" title="删除此文章">🗑️ 删除</button>
+                  </div>
                 </article>
               `
             )
@@ -2834,10 +2837,38 @@
     root.querySelectorAll("[data-prof-asset]").forEach((el) => {
       el.onclick = () => openAssetPage(el.getAttribute("data-prof-asset"));
     });
+    function deleteArticle(aid) {
+      const art = (UI.profileArticles || []).find((x) => x.id === aid);
+      const title = art?.articleTitle || "未命名文章";
+      if (S && typeof S.deleteArticle === "function") {
+        return S.deleteArticle(aid, {
+          articleTitle: title,
+          onSuccess() {
+            UI.profileArticles = (UI.profileArticles || []).filter((x) => x.id !== aid);
+            if (App.view === "profile" && UI.profileTab === "articles") {
+              renderMain();
+            }
+          }
+        });
+      }
+      UI.profileArticles = (UI.profileArticles || []).filter((x) => x.id !== aid);
+      if (App.view === "profile" && UI.profileTab === "articles") {
+        renderMain();
+      }
+    }
+
     root.querySelectorAll("[data-prof-article]").forEach((el) => {
-      el.onclick = () => {
+      el.onclick = (e) => {
+        if (e.target.closest("[data-prof-del-article]")) return;
         const aid = el.getAttribute("data-prof-article");
         window.location.href = channelUrl("studio", { entry: "article", articleId: aid, subview: "editor" });
+      };
+    });
+    root.querySelectorAll("[data-prof-del-article]").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const aid = btn.getAttribute("data-prof-del-article");
+        if (aid) deleteArticle(aid);
       };
     });
     const emptyArticleBtn = root.querySelector("#prof-empty-article-btn");

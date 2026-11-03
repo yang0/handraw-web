@@ -145,6 +145,7 @@ from .services import (
     save_user_studio_workflow,
     send_encourage_tip,
     submit_abuse_report,
+    delete_user_studio_article,
     list_user_studio_articles,
     sync_user_studio_articles,
     toggle_user_cheer,
@@ -1849,6 +1850,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 res = delete_user_studio_workflow(self.db, user, m_wf.group(1))  # type: ignore[arg-type]
                 self._send_json(res)
                 return
+            m_art = re.match(r"^/api/studio/articles/([^/]+)$", req_path)
+            if m_art:
+                user = self._current_user(required=True)
+                res = delete_user_studio_article(self.db, user, m_art.group(1))  # type: ignore[arg-type]
+                self._send_json(res)
+                return
             if req_path.startswith("/api/library/assets/"):
                 from .user_library import handle_library_delete
                 qs = parse_qs(parsed.query, keep_blank_values=True)
@@ -2895,6 +2902,18 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             user = self._current_user(required=True)
             articles = body.get("articles") if isinstance(body.get("articles"), list) else (body.get("_list") or [])
             self._send_json(sync_user_studio_articles(self.db, user, articles))  # type: ignore[arg-type]
+            return
+
+        if req_path == "/api/studio/articles/delete":
+            user = self._current_user(required=True)
+            aid = str(body.get("id") or body.get("articleId") or "").strip()
+            self._send_json(delete_user_studio_article(self.db, user, aid))  # type: ignore[arg-type]
+            return
+
+        m_art_del = re.match(r"^/api/studio/articles/([^/]+)/delete$", req_path)
+        if m_art_del:
+            user = self._current_user(required=True)
+            self._send_json(delete_user_studio_article(self.db, user, m_art_del.group(1)))  # type: ignore[arg-type]
             return
 
         if req_path == "/api/studio/parse-article":

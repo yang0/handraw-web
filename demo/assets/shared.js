@@ -3179,6 +3179,74 @@
     if (existing) existing.remove();
   }
 
+  /* ======================== ARTICLE MANAGEMENT ======================== */
+  async function deleteArticle(articleId, opts = {}) {
+    const aid = String(articleId || "").trim();
+    if (!aid) return Promise.reject(new Error("文章编号不能为空"));
+
+    const title = opts.articleTitle || opts.title || "未命名文章";
+    const onSuccess = opts.onSuccess;
+
+    return new Promise((resolve, reject) => {
+      openModal({
+        title: "删除文章",
+        sizeClass: "modal-narrow",
+        html: `
+          <div style="padding:16px 4px 8px;display:flex;flex-direction:column;gap:16px;">
+            <p style="margin:0;font-size:14px;line-height:1.6;color:var(--ink-base);">
+              确定要删除文章<strong>《${esc(title)}》</strong>吗？
+            </p>
+            <p style="margin:0;font-size:13px;color:#dc2626;background:#fef2f2;border:1px solid #fee2e2;padding:8px 12px;border-radius:6px;">
+              ⚠️ 删除后不可恢复，请谨慎操作。
+            </p>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;">
+              <button type="button" class="btn" id="hw-del-art-cancel-btn">取消</button>
+              <button type="button" class="btn btn-danger" id="hw-del-art-confirm-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;">确认删除</button>
+            </div>
+          </div>
+        `,
+        onMount(modalRoot) {
+          const cancelBtn = modalRoot.querySelector("#hw-del-art-cancel-btn");
+          const confirmBtn = modalRoot.querySelector("#hw-del-art-confirm-btn");
+
+          if (cancelBtn) {
+            cancelBtn.onclick = () => {
+              closeModal();
+              resolve({ ok: false, cancelled: true });
+            };
+          }
+
+          if (confirmBtn) {
+            confirmBtn.onclick = async () => {
+              confirmBtn.disabled = true;
+              confirmBtn.textContent = "正在删除…";
+              try {
+                const res = await apiJson(`/api/studio/articles/${encodeURIComponent(aid)}`, {
+                  method: "DELETE"
+                });
+                closeModal();
+                toast("🗑️ 文章已删除");
+                if (typeof onSuccess === "function") {
+                  try {
+                    onSuccess(res);
+                  } catch (e) {
+                    console.error("deleteArticle onSuccess handler error:", e);
+                  }
+                }
+                resolve(res);
+              } catch (err) {
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = "确认删除";
+                toast(`删除文章失败：${err.message || err}`);
+                reject(err);
+              }
+            };
+          }
+        }
+      });
+    });
+  }
+
   /* ======================== 1. UNIFIED AUTH PASS (STANDALONE PAGE ON MAIN & FORUM) ======================== */
   function mountAuthPassStage(container, { reasonText = "", onSuccess, onCancel } = {}) {
     let authTab = "login";
@@ -4503,8 +4571,11 @@
     canDeleteReply,
     canDeleteWork,
     canModerateWork,
-    canDeleteComment
+    canDeleteComment,
+    deleteArticle
   };
+
+  window.deleteArticle = deleteArticle;
 
   if (!window.Handraw) window.Handraw = {};
   window.Handraw.openFrontAnnouncementEditorModal = openFrontAnnouncementEditorModal;

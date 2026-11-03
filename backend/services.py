@@ -4899,7 +4899,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
         )
 
     arts = []
-    for r in conn.execute("SELECT * FROM studio_articles WHERE user_id = ? ORDER BY updated_at_ms DESC", (uid,)).fetchall():
+    for r in conn.execute("SELECT * FROM studio_articles WHERE user_id = ? AND COALESCE(deleted_at, '') = '' ORDER BY updated_at_ms DESC", (uid,)).fetchall():
         arts.append(
             {
                 "id": r["id"],
@@ -5121,7 +5121,7 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
                     status = excluded.status,
                     run_count = excluded.run_count,
                     updated_at_ms = excluded.updated_at_ms
-                WHERE studio_articles.user_id = excluded.user_id
+                WHERE studio_articles.user_id = excluded.user_id AND COALESCE(studio_articles.deleted_at, '') = ''
                 """,
                 (
                     aid,
@@ -5140,6 +5140,27 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
     return {"ok": True}
 
 
+def delete_user_studio_article(db: Database, user: dict[str, Any], article_id: str) -> dict[str, Any]:
+    """Soft-delete an article owned by the user.
+
+    Only the author can delete their own article. If the article does not
+    exist (or is already deleted), returns 404. If owned by someone else, returns 403.
+    """
+    uid = int(user["id"])
+    aid = str(article_id or "").strip()
+    if not aid:
+        raise ServiceError("文章编号不能为空", status=400, code="article_id_required")
+    with db.transaction() as tx:
+        row = tx.execute("SELECT user_id, deleted_at FROM studio_articles WHERE id = ?", (aid,)).fetchone()
+        if not row or (row["deleted_at"] and str(row["deleted_at"]).strip()):
+            raise ServiceError("文章不存在", status=404, code="article_not_found")
+        if int(row["user_id"] or 0) != uid:
+            raise ServiceError("无权删除其他账号的文章", status=403, code="article_forbidden")
+        now_iso = utc_now_iso()
+        tx.execute("UPDATE studio_articles SET deleted_at = ? WHERE id = ? AND user_id = ?", (now_iso, aid, uid))
+    return {"ok": True, "id": aid, "deleted": True}
+
+
 def list_user_studio_articles(db: Database, user: dict[str, Any]) -> dict[str, Any]:
     """The caller's own articles, and only ever their own.
 
@@ -5152,7 +5173,7 @@ def list_user_studio_articles(db: Database, user: dict[str, Any]) -> dict[str, A
         """
         SELECT id, article_title, status, run_count, created_at_ms, updated_at_ms
         FROM studio_articles
-        WHERE user_id = ?
+        WHERE user_id = ? AND COALESCE(deleted_at, '') = ''
         ORDER BY updated_at_ms DESC, id ASC
         LIMIT 200
         """,
