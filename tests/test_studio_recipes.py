@@ -38,6 +38,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from backend import skill_prompt
 from backend.curation import publish_work_direct
 from backend.recipe_routes import compute_input_fingerprint
 from backend.resource_discussions import resolve_resource
@@ -795,6 +796,7 @@ class StudioRecipesTests(unittest.TestCase):
         self.assertEqual(st_alice_masked, 200)
         self.assertEqual(r_alice_masked["draft"]["subjectHint"], "", "Masked work prompt must NOT leak into subjectHint")
 
+    @unittest.skipUnless(skill_prompt.skill_available(), "Skill checkout not available")
     def test_x3_prompt_preview_and_compose_kwargs(self) -> None:
         """X3: compose_prompt optional kwargs byte-for-byte baseline lock and preview propagation."""
         from backend import skill_prompt
@@ -1055,6 +1057,7 @@ class StudioRecipesTests(unittest.TestCase):
         self.assertEqual(st_ok, 200)
         self.assertEqual(r_ok["recipe"]["subject"], "合规修改")
 
+    @unittest.skipUnless(skill_prompt.skill_available(), "Skill checkout not available")
     def test_z1_template_fallback_includes_full_palette(self) -> None:
         """Z1: When AI call falls back to template, colors palette must be included alongside dominant color."""
         from backend import skill_prompt

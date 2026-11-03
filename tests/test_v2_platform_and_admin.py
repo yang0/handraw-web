@@ -440,6 +440,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         after_work=published_boot['credits']
 
         # Publish community style -> crosses total shares 1 -> 2 (rookie -> pioneer), earning +15 base + +10 honor upgrade!
+        tiny_png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII="
         code_a, res_a = fresh.request(
             "POST",
             "/api/catalog/community",
@@ -447,7 +448,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
                 "kind": "style",
                 "name": "开荒测试水彩风",
                 "group": "水彩插画",
-                "image": "/images/individual/FA/FA-003.webp",
+                "image": tiny_png,
                 "description": "柔和纸纹水彩",
                 "definition": "高克重棉浆水彩纸肌理，通透湿画法边缘自然水痕晕染。",
             },

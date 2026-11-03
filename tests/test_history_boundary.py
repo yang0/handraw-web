@@ -15,6 +15,8 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from backend import skill_prompt
+
 from backend.server import HandrawRequestHandler, init_database, load_localized_json
 from backend.services import (
     complete_cloud_generation,
@@ -337,6 +339,7 @@ class HistoryBoundaryTests(unittest.TestCase):
             )
         self.assertIn("尚未解锁付费编号", str(ctx.exception))
 
+    @unittest.skipUnless(skill_prompt.skill_available(), "Skill checkout not available")
     def test_model_receives_injected_definition_while_browser_does_not(self):
         """Gateway model payload receives the resolved definitions, while browser response does not."""
         cookie = self.login()
