@@ -779,6 +779,55 @@ rc.main()
         row_upd = self.db.get_conn().execute("SELECT source_type FROM catalog_assets WHERE code = 'FE-099'").fetchone()
         self.assertEqual(row_upd["source_type"], "official_override")
 
+    def test_13_concurrent_official_code_allocation(self) -> None:
+        """13. Concurrency test: Two threads concurrently create FE series official assets.
+        Both must return 200, receive different auto-allocated codes (e.g. FE-069 and FE-070),
+        and neither crashes with 500 or code collision.
+        """
+        img_url = "https://img.handraw-style.com/images/individual/FE/FE-069.webp"
+        results: list[tuple[int, dict]] = []
+        barrier = threading.Barrier(2)
+
+        def worker(idx: int) -> None:
+            payload = {
+                "series": "FE",
+                "code": "",
+                "name": f"并发测试官方画风_{idx}",
+                "description": f"并发画风描述_{idx}",
+                "definition": f"并发画风定义完整内容_{idx}",
+                "image": img_url,
+                "unlockCost": 0,
+            }
+            # Synchronize threads so both make request at the exact same moment
+            try:
+                barrier.wait(timeout=5)
+            except Exception:
+                pass
+            status, res = self._req("POST", "/api/admin/catalog/official", payload, cookie=self.cookie_admin)
+            results.append((status, res))
+
+        t1 = threading.Thread(target=worker, args=(1,))
+        t2 = threading.Thread(target=worker, args=(2,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertEqual(len(results), 2)
+        status1, res1 = results[0]
+        status2, res2 = results[1]
+
+        self.assertEqual(status1, 200, f"Thread 1 failed with {status1}: {res1}")
+        self.assertEqual(status2, 200, f"Thread 2 failed with {status2}: {res2}")
+        self.assertTrue(res1.get("ok"))
+        self.assertTrue(res2.get("ok"))
+
+        code1 = res1.get("code")
+        code2 = res2.get("code")
+        self.assertNotEqual(code1, code2, f"Both threads allocated the same code: {code1}")
+        self.assertEqual({code1, code2}, {"FE-069", "FE-070"})
+
+
 
 if __name__ == "__main__":
     unittest.main()

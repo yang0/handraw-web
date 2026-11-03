@@ -770,10 +770,10 @@
           <div class="adm-filters">
             <select class="adm-select" id="flt-works-status">
               <option value="all" ${state.filters.worksStatus === "all" ? "selected" : ""}>全部状态</option>
-              <option value="published" ${state.filters.worksStatus === "published" ? "selected" : ""}>已发布 (published)</option>
-              <option value="featured" ${state.filters.worksStatus === "featured" ? "selected" : ""}>精选推荐 (featured)</option>
-              <option value="paused" ${state.filters.worksStatus === "paused" ? "selected" : ""}>保护暂停 (paused)</option>
-              <option value="hidden" ${state.filters.worksStatus === "hidden" ? "selected" : ""}>已下架隐藏 (hidden)</option>
+              <option value="published" ${state.filters.worksStatus === "published" ? "selected" : ""}>已发布</option>
+              <option value="featured" ${state.filters.worksStatus === "featured" ? "selected" : ""}>精选推荐</option>
+              <option value="paused" ${state.filters.worksStatus === "paused" ? "selected" : ""}>保护暂停</option>
+              <option value="hidden" ${state.filters.worksStatus === "hidden" ? "selected" : ""}>已下架隐藏</option>
             </select>
             <input class="adm-input" id="flt-works-q" value="${esc(state.filters.worksQ)}" placeholder="搜索标题 / 作者 / 画风编号 / 图型编号…" style="width:260px;" />
             <button class="adm-btn" id="btn-works-search">🔍 筛选</button>
@@ -849,8 +849,8 @@
           <div class="adm-filters">
             <select class="adm-select" id="flt-comments-status">
               <option value="all" ${state.filters.commentsStatus === "all" ? "selected" : ""}>全部状态</option>
-              <option value="published" ${state.filters.commentsStatus === "published" ? "selected" : ""}>正常展示 (published)</option>
-              <option value="hidden" ${state.filters.commentsStatus === "hidden" ? "selected" : ""}>已隐藏 (hidden)</option>
+              <option value="published" ${state.filters.commentsStatus === "published" ? "selected" : ""}>正常展示</option>
+              <option value="hidden" ${state.filters.commentsStatus === "hidden" ? "selected" : ""}>已隐藏</option>
             </select>
             <input class="adm-input" id="flt-comments-q" value="${esc(state.filters.commentsQ)}" placeholder="搜索作品/画风/图型评论或用户名…" style="width:260px;" />
             <button class="adm-btn" id="btn-comments-search">🔍 筛选</button>
@@ -909,8 +909,8 @@
             </select>
             <select class="adm-select" id="flt-cat-kind">
               <option value="all" ${state.filters.catKind === "all" ? "selected" : ""}>画风 + 图型</option>
-              <option value="style" ${state.filters.catKind === "style" ? "selected" : ""}>仅画风 (style)</option>
-              <option value="layout" ${state.filters.catKind === "layout" ? "selected" : ""}>仅图型 (layout)</option>
+              <option value="style" ${state.filters.catKind === "style" ? "selected" : ""}>仅画风</option>
+              <option value="layout" ${state.filters.catKind === "layout" ? "selected" : ""}>仅图型</option>
             </select>
             <input class="adm-input" id="flt-cat-q" value="${esc(state.filters.catQ)}" placeholder="搜索编号 FX-001 / USR-S01 / 名称…" style="width:220px;" />
             <button class="adm-btn" id="btn-cat-search">🔍 筛选</button>
@@ -940,13 +940,25 @@
               ${state.data.catalog.map((a) => {
                 const canEdit = caps().canViewBlackbox || a.sourceType === "community";
                 const badgeClass = a.sourceType === "exclusive" ? "exclusive" : (a.sourceType === "official" ? "published" : "neutral");
-                const badgeLabel = a.sourceType === "official" ? "官方新增" : esc(a.sourceType);
+                const sourceLabels = {
+                  official: "官方新增",
+                  official_override: "官方覆盖",
+                  exclusive: "专属黑盒",
+                  community: "社区共创",
+                };
+                const badgeLabel = sourceLabels[a.sourceType] || esc(a.sourceType);
+                const statusLabels = {
+                  published: "已上架",
+                  paused: "已暂停",
+                  hidden: "已下架",
+                };
+                const statusLabel = statusLabels[a.status] || esc(a.status);
                 return `
                   <tr>
                     <td><img class="adm-thumb" src="${esc(a.image)}" alt="${esc(a.code)}" loading="lazy" /></td>
                     <td>
                       <div><code><strong>${esc(a.code)}</strong></code> · <strong>${esc(a.name)}</strong></div>
-                      <div style="font-size:12px;color:var(--adm-ink-muted);margin-top:3px;">@${esc(a.authorUsername || "official")} · ${esc(a.kind === "layout" ? "图型框架" : "画风指令")}</div>
+                      <div style="font-size:12px;color:var(--adm-ink-muted);margin-top:3px;">@${esc(a.authorUsername || "官方")} · ${esc(a.kind === "layout" ? "图型框架" : "画风指令")}</div>
                     </td>
                     <td>
                       <span class="adm-badge ${badgeClass}">${badgeLabel}</span>
@@ -959,7 +971,7 @@
                            <div style="font-size:11.5px;color:var(--adm-ink-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(a.secretBlackboxPrompt)}</div>`
                         : `<div style="font-size:12px;color:var(--adm-ink-soft);">明文/标准定义：${esc((a.definition || a.description || "").slice(0, 46))}</div>`}
                     </td>
-                    <td><span class="adm-badge ${esc(a.status)}">${esc(a.status)}</span></td>
+                    <td><span class="adm-badge ${esc(a.status)}">${statusLabel}</span></td>
                     <td>
                       <div class="adm-actions">
                         <button class="adm-btn adm-btn-sm" data-cat-edit="${esc(a.code)}" ${canEdit ? "" : "disabled"}>✏️ 编辑</button>
@@ -1076,13 +1088,13 @@
           <div class="adm-filters">
             <select class="adm-select" id="flt-reports-status">
               <option value="all" ${state.filters.reportsStatus === "all" ? "selected" : ""}>全部工单</option>
-              <option value="open" ${state.filters.reportsStatus === "open" ? "selected" : ""}>待处理 (open)</option>
-              <option value="confirmed" ${state.filters.reportsStatus === "confirmed" ? "selected" : ""}>已裁定违规 (confirmed)</option>
-              <option value="dismissed" ${state.filters.reportsStatus === "dismissed" ? "selected" : ""}>已驳回恢复 (dismissed)</option>
+              <option value="open" ${state.filters.reportsStatus === "open" ? "selected" : ""}>待处理</option>
+              <option value="confirmed" ${state.filters.reportsStatus === "confirmed" ? "selected" : ""}>已裁定违规</option>
+              <option value="dismissed" ${state.filters.reportsStatus === "dismissed" ? "selected" : ""}>已驳回恢复</option>
             </select>
             <button class="adm-btn" id="btn-reports-refresh">🔄 刷新队列</button>
           </div>
-          <div style="font-size:12px;color:var(--adm-ink-muted);">自动风控：同一内容累计举报达阈值将自动保护性暂停 (paused)，驳回举报可一键恢复展示</div>
+          <div style="font-size:12px;color:var(--adm-ink-muted);">自动风控：同一内容累计举报达阈值将自动保护性暂停，驳回举报可一键恢复展示</div>
         </div>
         <div class="adm-table-wrap">
           <table class="adm-table">
@@ -2122,11 +2134,11 @@
       { val: "FI", label: "FI 写实摄影与视觉大片" },
     ];
     const layoutSeriesOpts = [
-      { val: "SB", label: "SB 分镜故事板 (comic-storyboard)" },
-      { val: "SC", label: "SC 社交卡片 (social-card)" },
-      { val: "IG", label: "IG 图鉴信息图 (infographic)" },
-      { val: "IP", label: "IP 角色展示 (ip-character)" },
-      { val: "EC", label: "EC 电商图文 (ecommerce)" },
+      { val: "SB", label: "SB 分镜故事板" },
+      { val: "SC", label: "SC 社交卡片" },
+      { val: "IG", label: "IG 图鉴信息图" },
+      { val: "IP", label: "IP 角色展示" },
+      { val: "EC", label: "EC 电商图文" },
     ];
 
     function getSeriesHtml(kind, selectedSeries) {
@@ -2138,14 +2150,14 @@
       <h3 style="margin:0 0 14px;">${isEdit ? `✏️ 编辑官方资源 ${esc(item.code)}` : "🏛️ 新增官方画风 / 图型"}</h3>
       <div class="adm-form-grid">
         <div class="adm-field">
-          <label>资源类型 ${isEdit ? "(不可改)" : ""}</label>
+          <label>资源类型 ${isEdit ? "（不可修改）" : ""}</label>
           <select class="adm-select" id="moff-kind" ${isEdit ? "disabled" : ""}>
-            <option value="style" ${item.kind === "style" ? "selected" : ""}>🎨 画风 (style)</option>
-            <option value="layout" ${item.kind === "layout" ? "selected" : ""}>📐 图型 (layout)</option>
+            <option value="style" ${item.kind === "style" ? "selected" : ""}>🎨 画风</option>
+            <option value="layout" ${item.kind === "layout" ? "selected" : ""}>📐 图型</option>
           </select>
         </div>
         <div class="adm-field">
-          <label>官方系列 ${isEdit ? "(不可改)" : ""}</label>
+          <label>官方系列 ${isEdit ? "（不可修改）" : ""}</label>
           <select class="adm-select" id="moff-series" ${isEdit ? "disabled" : ""}>
             ${getSeriesHtml(item.kind, seriesVal)}
           </select>
@@ -2153,31 +2165,31 @@
       </div>
       <div class="adm-form-grid">
         <div class="adm-field">
-          <label>资产编号 ${isEdit ? "(不可改)" : "(留空自动分配下一个空号，或手动指定如 FE-069)"}</label>
+          <label>资产编号 ${isEdit ? "（不可修改）" : "（留空自动分配下一个空号，或手动指定如 FE-069）"}</label>
           <input class="adm-input" id="moff-code" value="${esc(item.code)}" ${isEdit ? "disabled" : ""} placeholder="留空自动分配" />
         </div>
         <div class="adm-field">
-          <label>展示名称 (必填)</label>
+          <label>展示名称（必填）</label>
           <input class="adm-input" id="moff-name" value="${esc(item.name)}" placeholder="如：宋锦纹样平涂" />
         </div>
       </div>
       <div class="adm-form-grid">
         <div class="adm-field">
-          <label>解锁积分门槛 (✦，0 为登录免费，最大 500)</label>
+          <label>解锁积分门槛（✦，0 为登录免费，最大 500）</label>
           <input class="adm-input" type="number" id="moff-cost" value="${item.unlockCost || 0}" min="0" max="500" />
         </div>
         <div class="adm-field">
           <label>上架状态</label>
           <select class="adm-select" id="moff-status">
-            <option value="published" ${item.status === "published" ? "selected" : ""}>published (上架)</option>
-            <option value="hidden" ${item.status === "hidden" ? "selected" : ""}>hidden (隐藏)</option>
+            <option value="published" ${item.status === "published" ? "selected" : ""}>已上架</option>
+            <option value="hidden" ${item.status === "hidden" ? "selected" : ""}>已隐藏</option>
           </select>
         </div>
       </div>
       <div class="adm-field">
-        <label>封面图片 (支持 /uploads/ 上传或 https://img.handraw-style.com/images/ 地址)</label>
+        <label>封面图片（支持上传本地图片或填写图片地址）</label>
         <div style="display:flex;gap:8px;align-items:center;">
-          <input class="adm-input" id="moff-image" value="${esc(item.image)}" placeholder="/uploads/... 或 https://img.handraw-style.com/images/..." style="flex:1;" />
+          <input class="adm-input" id="moff-image" value="${esc(item.image)}" placeholder="请上传或输入封面图片地址…" style="flex:1;" />
           <button class="adm-btn" id="moff-btn-upload">📷 上传封面</button>
         </div>
         <div id="moff-thumb-wrap" style="margin-top:8px;${item.image ? "" : "display:none;"}">
@@ -2185,24 +2197,24 @@
         </div>
       </div>
       <div class="adm-field">
-        <label>画风 / 图型核心定义 (必填，1–12000 字)</label>
+        <label>画风 / 图型核心定义（必填，1–12000 字）</label>
         <textarea class="adm-textarea" id="moff-def" style="min-height:90px;" placeholder="输入画风或图型的核心提示词定义…">${esc(item.definition || "")}</textarea>
       </div>
       <div class="adm-field">
-        <label>公开展示简介 (前端可见，≤2000 字)</label>
+        <label>公开展示简介（前端可见，≤2000 字）</label>
         <input class="adm-input" id="moff-desc" value="${esc(item.description || "")}" placeholder="简要描述此官方资源的主题与适用场景…" />
       </div>
       <div class="adm-field">
-        <label>英文提示词 (可空，≤4000 字)</label>
+        <label>英文提示词（可选，≤4000 字）</label>
         <input class="adm-input" id="moff-prompt-en" value="${esc(item.promptEn || "")}" placeholder="可选：英文风格关键词…" />
       </div>
       <div class="adm-field">
-        <label>审计操作说明 (可选)</label>
+        <label>审计操作说明（可选）</label>
         <input class="adm-input" id="moff-reason" value="${esc(item.reason || "")}" placeholder="如：官方画风新增或专题发布…" />
       </div>
       <div style="display:flex;gap:16px;margin-bottom:14px;font-size:13px;">
         <label><input type="checkbox" id="moff-featured" ${item.featured ? "checked" : ""} /> ⭐ 精选推荐</label>
-        <label><input type="checkbox" id="moff-new" ${item.isNew !== false ? "checked" : ""} /> ✨ 72h 首发标识</label>
+        <label><input type="checkbox" id="moff-new" ${item.isNew !== false ? "checked" : ""} /> ✨ 72小时首发标识</label>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
         <button class="adm-btn" id="moff-cancel">取消</button>
@@ -2351,8 +2363,8 @@
         <div class="adm-field">
           <label>类型</label>
           <select class="adm-select" id="mc-kind" ${existing ? "disabled" : ""}>
-            <option value="style" ${item.kind === "style" ? "selected" : ""}>🎨 画风 (style)</option>
-            <option value="layout" ${item.kind === "layout" ? "selected" : ""}>📐 图型 (layout)</option>
+            <option value="style" ${item.kind === "style" ? "selected" : ""}>🎨 画风</option>
+            <option value="layout" ${item.kind === "layout" ? "selected" : ""}>📐 图型</option>
           </select>
         </div>
       </div>
@@ -2361,28 +2373,28 @@
         <div class="adm-field"><label>所属分组</label><input class="adm-input" id="mc-group" value="${esc(item.group)}" /></div>
       </div>
       <div class="adm-form-grid">
-        <div class="adm-field"><label>解锁积分门槛 (✦，0 为登录免费)</label><input class="adm-input" type="number" id="mc-cost" value="${item.unlockCost}" min="0" max="500" /></div>
+        <div class="adm-field"><label>解锁积分门槛（✦，0 为登录免费）</label><input class="adm-input" type="number" id="mc-cost" value="${item.unlockCost}" min="0" max="500" /></div>
         <div class="adm-field">
           <label>上架状态</label>
           <select class="adm-select" id="mc-status">
-            <option value="published" ${item.status === "published" ? "selected" : ""}>published (上架)</option>
-            <option value="paused" ${item.status === "paused" ? "selected" : ""}>paused (暂停)</option>
-            <option value="hidden" ${item.status === "hidden" ? "selected" : ""}>hidden (隐藏)</option>
+            <option value="published" ${item.status === "published" ? "selected" : ""}>已上架</option>
+            <option value="paused" ${item.status === "paused" ? "selected" : ""}>已暂停</option>
+            <option value="hidden" ${item.status === "hidden" ? "selected" : ""}>已下架</option>
           </select>
         </div>
       </div>
       <div class="adm-field"><label>封面样张路径</label><input class="adm-input" id="mc-image" value="${esc(item.image)}" /></div>
-      <div class="adm-field"><label>公开展示简介 (前端可见)</label><input class="adm-input" id="mc-desc" value="${esc(item.description)}" /></div>
-      <div class="adm-field"><label>公开/解锁后明文规则 (共创 USR 适用；专属黑盒可留空或写公开导语)</label><textarea class="adm-textarea" id="mc-def" style="min-height:64px;">${esc(item.definition)}</textarea></div>
+      <div class="adm-field"><label>公开展示简介（前端可见）</label><input class="adm-input" id="mc-desc" value="${esc(item.description)}" /></div>
+      <div class="adm-field"><label>公开/解锁后明文规则（共创 USR 适用；专属黑盒可留空或写公开导语）</label><textarea class="adm-textarea" id="mc-def" style="min-height:64px;">${esc(item.definition)}</textarea></div>
       ${adminMode
         ? `<div class="adm-field">
-            <label style="color:var(--adm-vermilion);">🔒 服务端私有黑盒底层 Prompt（绝不下发浏览器，仅云端生图时由后端自动注入！）</label>
+            <label style="color:var(--adm-vermilion);">🔒 服务端私有黑盒底层提示词（绝不下发浏览器，仅云端生图时由后端自动注入！）</label>
             <textarea class="adm-textarea" id="mc-secret" placeholder="输入核心私有画风/版式视觉指令…">${esc(item.secretBlackboxPrompt || "")}</textarea>
           </div>`
         : ""}
       <div style="display:flex;gap:16px;margin-bottom:12px;font-size:13px;">
         <label><input type="checkbox" id="mc-featured" ${item.featured ? "checked" : ""} /> ⭐ 精选推荐</label>
-        <label><input type="checkbox" id="mc-new" ${item.isNew ? "checked" : ""} /> ✨ 72h 首发标识</label>
+        <label><input type="checkbox" id="mc-new" ${item.isNew ? "checked" : ""} /> ✨ 72小时首发标识</label>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
         <button class="adm-btn" id="mc-cancel">取消</button>

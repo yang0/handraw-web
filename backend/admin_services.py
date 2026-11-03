@@ -1672,7 +1672,6 @@ def admin_create_official_asset(
 
     group_name = _get_official_series_group(series, kind)
 
-    conn = db.get_conn()
     raw_code = str(payload.get("code") or "").strip().upper()
     if raw_code:
         pattern = rf"^{re.escape(series)}-\d{{2,3}}$"
@@ -1682,19 +1681,12 @@ def admin_create_official_asset(
         for it in _load_official_catalog_items():
             if str(it.get("id") or "").strip().upper() == raw_code:
                 raise ServiceError(f"编号 {raw_code} 已被静态官方目录占用", status=409, code="code_taken", extra={"code": "code_taken"})
-        # Check collision in catalog_assets
-        if conn.execute("SELECT 1 FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (raw_code, raw_code)).fetchone():
-            raise ServiceError(f"编号 {raw_code} 已被占用", status=409, code="code_taken", extra={"code": "code_taken"})
         if raw_code in seed_ids("assets"):
             raise ServiceError(f"编号 {raw_code} 已被演示预置占用", status=409, code="code_taken", extra={"code": "code_taken"})
-        code = raw_code
-    else:
-        code = _allocate_official_code(conn, series)
 
     name = str(payload.get("name") or "").strip()
     if not (1 <= len(name) <= 120):
         raise ServiceError("画风/图型名称不能为空且须在 1–120 字以内", status=400)
-    _check_official_name_taken(conn, kind, name)
 
     image_url, warnings = _validate_official_asset_image(db, actor, str(payload.get("image") or ""))
 
@@ -1733,6 +1725,15 @@ def admin_create_official_asset(
     now_ms = int(time.time() * 1000)
 
     with db.transaction() as tx:
+        if raw_code:
+            if tx.execute("SELECT 1 FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (raw_code, raw_code)).fetchone():
+                raise ServiceError(f"编号 {raw_code} 已被占用", status=409, code="code_taken", extra={"code": "code_taken"})
+            code = raw_code
+        else:
+            code = _allocate_official_code(tx, series)
+
+        _check_official_name_taken(tx, kind, name)
+
         tx.execute(
             """
             INSERT INTO catalog_assets (

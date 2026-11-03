@@ -175,34 +175,32 @@ def run_browser_verification() -> None:
             print(f"  ✓ Captured channel explore search screenshot: {shot3}")
 
             # ------------------------------------------------------------------
-            # Step 3: Studio Style Picker - Search "FE-069" & Select
+            # Step 3: Studio Direct Entry & Style Slot Display + Modal Search
             # ------------------------------------------------------------------
-            print("[3/3] Testing Studio Style Picker...")
-            page.goto(f"{base_url}/studio.html", wait_until="networkidle")
-            time.sleep(1)
+            print("[3/3] Testing Studio Direct Entry with ?style=FE-069...")
+            page.goto(f"{base_url}/studio/?style=FE-069", wait_until="networkidle")
+            time.sleep(1.5)
 
-            # Open style picker via studio API
-            page.evaluate("""() => {
-                if (window.HANDRAW_STUDIO && window.HANDRAW_STUDIO.openSkillFieldPickerModal) {
-                    window.HANDRAW_STUDIO.openSkillFieldPickerModal(null, "style1", {
-                        title: "🎨 选择画风",
-                        onPick: (id) => { console.log("Picked:", id); }
-                    });
-                }
-            }""")
-
-            page.wait_for_selector("#sp-picker-search", timeout=8000)
-            page.fill("#sp-picker-search", "FE-069")
-            time.sleep(1)
-
-            # Verify picker card is visible
-            page.wait_for_selector('[data-pick-id="FE-069"]', timeout=5000)
-            page.click('[data-pick-id="FE-069"]')
-            time.sleep(0.5)
-
-            shot4 = local_dir / "studio_official_picker.png"
+            # Wait for make-image picker card to display FE-069 and 宋锦纹样平涂
+            page.wait_for_selector('[data-pick-kind="style1"].is-selected', timeout=8000)
+            shot4 = local_dir / "studio_official_selected.png"
             page.screenshot(path=str(shot4))
-            print(f"  ✓ Captured studio style picker screenshot: {shot4}")
+            page.screenshot(path=str(local_dir / "studio_official_picker.png"))
+            print(f"  ✓ Captured studio style slot selected screenshot: {shot4}")
+
+            # Open the style picker modal by clicking the style slot card
+            page.click('[data-pick-kind="style1"]')
+            page.wait_for_selector("#sp-picker-search", timeout=8000)
+
+            # Search by name in the picker modal
+            page.fill("#sp-picker-search", "宋锦纹样平涂")
+            time.sleep(1)
+
+            # Verify the card is found in the search result
+            page.wait_for_selector('[data-pick-id="FE-069"]', timeout=5000)
+            shot5 = local_dir / "studio_official_modal_search.png"
+            page.screenshot(path=str(shot5))
+            print(f"  ✓ Captured studio style picker modal search screenshot: {shot5}")
 
             browser.close()
 
