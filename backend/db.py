@@ -146,7 +146,37 @@ class Database:
                         conn.execute("ROLLBACK;")
                     raise
 
+            def _run_pending_hooks(up_to_version: int | None = None) -> None:
+                completed_hooks = {
+                    int(row["version"])
+                    for row in conn.execute("SELECT version FROM schema_migration_hooks").fetchall()
+                }
+                all_applied_versions = {
+                    int(row["version"])
+                    for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
+                }
+                pending = sorted(
+                    v for v in all_applied_versions
+                    if v in POST_MIGRATION_HOOKS
+                    and v not in completed_hooks
+                    and (up_to_version is None or v < up_to_version)
+                )
+                for v in pending:
+                    conn.execute("BEGIN IMMEDIATE;")
+                    try:
+                        POST_MIGRATION_HOOKS[v](conn)
+                        conn.execute(
+                            "INSERT INTO schema_migration_hooks (version, completed_at) VALUES (?, ?)",
+                            (v, utc_now_iso()),
+                        )
+                        conn.execute("COMMIT;")
+                    except Exception:
+                        if conn.in_transaction:
+                            conn.execute("ROLLBACK;")
+                        raise
+
             for version, name, ddl in MIGRATIONS:
+                _run_pending_hooks(up_to_version=version)
                 if version in existing:
                     continue
                 if not isinstance(version, int) or not _MIGRATION_NAME_RE.fullmatch(name):
@@ -176,32 +206,9 @@ class Database:
                         conn.execute("ROLLBACK;")
                     raise
                 applied_names.append(name)
+                existing.add(version)
 
-            completed_hooks = {
-                int(row["version"])
-                for row in conn.execute("SELECT version FROM schema_migration_hooks").fetchall()
-            }
-            all_applied_versions = {
-                int(row["version"])
-                for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
-            }
-            pending_hook_versions = sorted(
-                v for v in all_applied_versions
-                if v in POST_MIGRATION_HOOKS and v not in completed_hooks
-            )
-            for v in pending_hook_versions:
-                conn.execute("BEGIN IMMEDIATE;")
-                try:
-                    POST_MIGRATION_HOOKS[v](conn)
-                    conn.execute(
-                        "INSERT INTO schema_migration_hooks (version, completed_at) VALUES (?, ?)",
-                        (v, utc_now_iso()),
-                    )
-                    conn.execute("COMMIT;")
-                except Exception:
-                    if conn.in_transaction:
-                        conn.execute("ROLLBACK;")
-                    raise
+            _run_pending_hooks(up_to_version=None)
         return applied_names
 
 

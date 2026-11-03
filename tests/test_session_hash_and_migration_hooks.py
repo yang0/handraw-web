@@ -294,6 +294,144 @@ class MigrationHooksUnitTests(unittest.TestCase):
                 db.close_thread_conn()
                 db.close()
 
+    def test_migration_and_hook_interleaved_execution_order(self):
+        from backend import migrations as migrations_module
+
+        orig_migrations = list(migrations_module.MIGRATIONS)
+        orig_hooks = dict(migrations_module.POST_MIGRATION_HOOKS)
+
+        try:
+            # ----------------------------------------------------
+            # Scenario 1: Fresh DB interleaved execution:
+            # Migration A -> Hook A -> Migration B -> Hook B
+            # ----------------------------------------------------
+            with TemporaryDirectory() as tmp1:
+                db_path1 = Path(tmp1) / "interleaved_fresh.db"
+                events1 = []
+
+                fake_migrations = [
+                    (
+                        10,
+                        "010_fake_a",
+                        "CREATE TABLE IF NOT EXISTS event_log (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT); "
+                        "INSERT INTO event_log (item) VALUES ('migration_a');",
+                    ),
+                    (
+                        20,
+                        "020_fake_b",
+                        "CREATE TABLE IF NOT EXISTS fake_b (id INT); "
+                        "INSERT INTO event_log (item) VALUES ('migration_b');",
+                    ),
+                ]
+
+                def hook_a(conn):
+                    events1.append("hook_a")
+                    conn.execute("INSERT INTO event_log (item) VALUES ('hook_a');")
+
+                def hook_b(conn):
+                    events1.append("hook_b")
+                    conn.execute("INSERT INTO event_log (item) VALUES ('hook_b');")
+
+                migrations_module.MIGRATIONS.clear()
+                migrations_module.MIGRATIONS.extend(fake_migrations)
+                migrations_module.POST_MIGRATION_HOOKS.clear()
+                migrations_module.POST_MIGRATION_HOOKS.update({10: hook_a, 20: hook_b})
+
+                db1 = Database(db_path1)
+                db1.migrate()
+
+                self.assertEqual(events1, ["hook_a", "hook_b"])
+                db_events1 = [
+                    r[0]
+                    for r in db1.get_conn().execute("SELECT item FROM event_log ORDER BY id").fetchall()
+                ]
+                self.assertEqual(
+                    db_events1,
+                    ["migration_a", "hook_a", "migration_b", "hook_b"],
+                    "Execution order on fresh DB must be Migration A -> Hook A -> Migration B -> Hook B",
+                )
+                db1.close_thread_conn()
+                db1.close()
+
+            # ----------------------------------------------------
+            # Scenario 2: Hook A fails on attempt 1:
+            # - Attempt 1: Migration B does not execute.
+            # - Attempt 2: Order is Hook A -> Migration B -> Hook B.
+            # ----------------------------------------------------
+            with TemporaryDirectory() as tmp2:
+                db_path2 = Path(tmp2) / "interleaved_retry.db"
+                events2 = []
+                hook_a_should_fail = True
+
+                def flaky_hook_a(conn):
+                    events2.append("hook_a")
+                    if hook_a_should_fail:
+                        raise RuntimeError("simulated hook_a failure")
+                    conn.execute("INSERT INTO event_log (item) VALUES ('hook_a');")
+
+                def hook_b2(conn):
+                    events2.append("hook_b")
+                    conn.execute("INSERT INTO event_log (item) VALUES ('hook_b');")
+
+                migrations_module.MIGRATIONS.clear()
+                migrations_module.MIGRATIONS.extend(fake_migrations)
+                migrations_module.POST_MIGRATION_HOOKS.clear()
+                migrations_module.POST_MIGRATION_HOOKS.update({10: flaky_hook_a, 20: hook_b2})
+
+                db2 = Database(db_path2)
+
+                # Attempt 1: Hook A fails
+                with self.assertRaises(RuntimeError) as cm:
+                    db2.migrate()
+                self.assertIn("simulated hook_a failure", str(cm.exception))
+
+                conn2 = db2.get_conn()
+                applied_v = [r[0] for r in conn2.execute("SELECT version FROM schema_migrations").fetchall()]
+                self.assertEqual(applied_v, [10], "Only Migration A should be recorded in schema_migrations")
+
+                hooks_v = [r[0] for r in conn2.execute("SELECT version FROM schema_migration_hooks").fetchall()]
+                self.assertEqual(hooks_v, [], "Hook A must not be recorded in schema_migration_hooks upon failure")
+
+                has_fake_b = conn2.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fake_b'"
+                ).fetchone()
+                self.assertIsNone(has_fake_b, "Migration B must not have executed when Hook A failed")
+
+                # Attempt 2: Hook A succeeds
+                hook_a_should_fail = False
+                events2.clear()
+
+                db2.migrate()
+
+                self.assertEqual(events2, ["hook_a", "hook_b"])
+                db_events2 = [
+                    r[0]
+                    for r in conn2.execute("SELECT item FROM event_log ORDER BY id").fetchall()
+                ]
+                self.assertEqual(
+                    db_events2,
+                    ["migration_a", "hook_a", "migration_b", "hook_b"],
+                    "On rerun after failure, sequence must be Hook A -> Migration B -> Hook B",
+                )
+
+                self.assertEqual(
+                    [r[0] for r in conn2.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()],
+                    [10, 20],
+                )
+                self.assertEqual(
+                    [r[0] for r in conn2.execute("SELECT version FROM schema_migration_hooks ORDER BY version").fetchall()],
+                    [10, 20],
+                )
+
+                db2.close_thread_conn()
+                db2.close()
+
+        finally:
+            migrations_module.MIGRATIONS.clear()
+            migrations_module.MIGRATIONS.extend(orig_migrations)
+            migrations_module.POST_MIGRATION_HOOKS.clear()
+            migrations_module.POST_MIGRATION_HOOKS.update(orig_hooks)
+
 
 class SessionHashHttpTests(unittest.TestCase):
     def setUp(self):
