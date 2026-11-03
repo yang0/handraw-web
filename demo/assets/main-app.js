@@ -2356,27 +2356,95 @@
         : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂未发布共创图型资产。</div>`;
     } else if (UI.profileTab === "topics") {
       tabBodyHtml = prof.topics.length
-        ? `<div style="display:grid;gap:12px;">
+        ? `<div style="display:flex;flex-direction:column;gap:12px;">
             ${prof.topics
-              .map(
-                (t) => `
-                  <article class="forum-topic-card" data-prof-topic="${esc(t.id)}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
-                    <div style="flex:1;min-width:240px;">
-                      <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;flex-wrap:wrap;">
-                        <span class="hw-card-code">${esc(t.categoryLabel || "社区讨论")}</span>
-                        ${t.pinned ? `<span class="hw-boost-pill">📌 置顶</span>` : ""}
-                        ${t.featured ? `<span class="hw-honor-badge seal-master">🌟 精华</span>` : ""}
+              .map((t) => {
+                const imgs = S.normalizeTopicImages ? S.normalizeTopicImages(t) : (t.images || []).map((im) => typeof im === "string" ? { url: im, tag: "" } : { url: im.url, tag: im.tag || "" });
+                const imgCount = imgs.length;
+                const cleanSnippet = typeof S.stripHtmlToSnippet === "function" ? S.stripHtmlToSnippet(t.summary || t.body || "", 140) : (t.summary || t.body || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 140);
+
+                const metaRowHtml = `
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px;">
+                    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                      ${t.pinned ? `<span style="background:var(--vermilion);color:#fff;font-size:11px;font-weight:800;padding:1px 7px;border-radius:4px;">📌 置顶</span>` : ""}
+                      ${t.featured ? `<span style="background:var(--gold);color:#fff;font-size:11px;font-weight:800;padding:1px 7px;border-radius:4px;">🌟 精华</span>` : ""}
+                      <span style="font-size:12px;font-weight:800;color:var(--vermilion);">${esc(t.categoryLabel || "社区讨论")}</span>
+                      ${
+                        imgCount > 0
+                          ? `<span class="forum-format-badge is-visual">🖼️ ${imgCount > 1 ? `${imgCount} 图分享` : "图文分享"}</span>`
+                          : ""
+                      }
+                      ${
+                        t.price > 0
+                          ? `<span style="background:var(--gold-wash);border:1px solid var(--gold-border);color:var(--gold);font-size:11.5px;font-weight:800;padding:1px 7px;border-radius:999px;">💎 ${t.price} 积分</span>`
+                          : ""
+                      }
+                      ${
+                        t.bounty > 0
+                          ? `<span style="background:${t.solved ? "var(--jade-wash)" : "var(--vermilion-wash)"};color:${t.solved ? "var(--jade)" : "var(--vermilion)"};font-size:11.5px;font-weight:800;padding:1px 8px;border-radius:999px;">${t.solved ? "✅ 已结" : `💰 悬赏 ${t.bounty}✦`}</span>`
+                          : ""
+                      }
+                    </div>
+                    <span style="font-size:12px;color:var(--ink-muted);">${esc(t.createdAt || "")}</span>
+                  </div>
+                `;
+
+                let bodyAndMediaHtml = "";
+                if (imgCount === 0) {
+                  bodyAndMediaHtml = `
+                    ${metaRowHtml}
+                    <h2 style="margin:0 0 6px;font-size:16.5px;line-height:1.42;">${esc(t.title)}</h2>
+                    ${cleanSnippet ? `<p style="margin:0;font-size:13.5px;color:var(--ink-body);line-height:1.62;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${esc(cleanSnippet)}</p>` : ""}
+                  `;
+                } else if (imgCount === 1) {
+                  const im = imgs[0];
+                  bodyAndMediaHtml = `
+                    <div class="forum-card-split" style="margin-bottom:0;">
+                      <div style="min-width:0;">
+                        ${metaRowHtml}
+                        <h2 style="margin:0 0 6px;font-size:16.5px;line-height:1.4;">${esc(t.title)}</h2>
+                        ${cleanSnippet ? `<p style="margin:0;font-size:13.5px;color:var(--ink-body);line-height:1.58;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${esc(cleanSnippet)}</p>` : ""}
                       </div>
-                      <h3 style="margin:0 0 6px;font-size:16px;">${esc(t.title)}</h3>
-                      <div style="font-size:12.5px;color:var(--ink-muted);">${esc((t.body || "").slice(0, 90))}…</div>
+                      <div class="forum-split-thumb" data-open-topic-img="0">
+                        <img data-hw-src="${esc(im.url)}" alt="${esc(im.tag || t.title)}" loading="lazy" />
+                        ${im.tag ? `<span class="forum-thumb-tag">${esc(im.tag)}</span>` : ""}
+                      </div>
                     </div>
-                    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;font-size:12.5px;color:var(--ink-muted);">
-                      <span>👍 ${S.getLikeCount("topic", t)} · 💬 ${(t.replies || []).length} 回复</span>
-                      <span class="btn btn-sm btn-primary">阅读全文与楼层 ↗</span>
+                  `;
+                } else {
+                  const shownImgs = imgs.slice(0, 4);
+                  const extraCount = imgs.length - shownImgs.length;
+                  const stripColClass = shownImgs.length === 2 ? "cols-2" : shownImgs.length === 4 ? "cols-4" : "";
+                  bodyAndMediaHtml = `
+                    ${metaRowHtml}
+                    <h2 style="margin:0 0 6px;font-size:16.5px;line-height:1.4;">${esc(t.title)}</h2>
+                    ${cleanSnippet ? `<p style="margin:0 0 8px;font-size:13.5px;color:var(--ink-body);line-height:1.56;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${esc(cleanSnippet)}</p>` : ""}
+                    <div class="forum-media-strip ${stripColClass}" style="margin-bottom:0;">
+                      ${shownImgs
+                        .map(
+                          (im, idx) => `
+                            <div class="forum-media-item" data-open-topic-img="${idx}">
+                              <img data-hw-src="${esc(im.url)}" alt="${esc(im.tag || t.title)}" loading="lazy" />
+                              ${im.tag ? `<span class="forum-thumb-tag">${esc(im.tag)}</span>` : ""}
+                              ${
+                                idx === shownImgs.length - 1 && extraCount > 0
+                                  ? `<span style="position:absolute;inset:0;background:rgba(20,17,15,0.55);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:850;">+${extraCount}</span>`
+                                  : ""
+                              }
+                            </div>
+                          `
+                        )
+                        .join("")}
                     </div>
+                  `;
+                }
+
+                return `
+                  <article class="forum-topic-card" data-prof-topic="${esc(t.id)}" style="margin-bottom:0;">
+                    ${bodyAndMediaHtml}
                   </article>
-                `
-              )
+                `;
+              })
               .join("")}
           </div>`
         : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">
