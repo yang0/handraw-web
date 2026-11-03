@@ -7,6 +7,7 @@
 ## 日常操作
 
 ```powershell
+python -m pip install -r requirements.txt
 ./ops/web.ps1 update
 ./ops/web.ps1 status
 ./ops/web.ps1 deploy -Commit <完整提交号>

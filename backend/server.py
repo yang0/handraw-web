@@ -3549,9 +3549,22 @@ def init_database(db_path: Path | str | None = None, force_reset: bool = False) 
     return db
 
 
+def check_optional_dependencies() -> None:
+    try:
+        import docx  # noqa: F401
+    except Exception:
+        logger.warning("缺少 python-docx，导入 .docx 会失败，请执行 pip install -r requirements.txt")
+    try:
+        import fitz  # noqa: F401
+    except Exception:
+        logger.warning("缺少 PyMuPDF，导入 .pdf 会失败，请执行 pip install -r requirements.txt")
+
+
 def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+
+    check_optional_dependencies()
 
     parser = argparse.ArgumentParser(description="Handraw Web single-backend server")
     parser.add_argument("--port", type=int, default=3080, help="Single HTTP port for all frontends (default: 3080)")
