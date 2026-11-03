@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import errno
 import hashlib
 import html
 import io
@@ -137,6 +138,7 @@ from .services import (
     publish_user_community_asset,
     publish_user_work,
     validate_topic_title,
+    record_cloud_generation_task_id,
     record_user_studio_history,
     redeem_code_for_user,
     refund_failed_cloud_generation,
@@ -324,6 +326,52 @@ def _cache_gateway_item_image(item: Any, filename_stem: str) -> str | None:
         raise RuntimeError(f"网关返回了不受支持的 Base64 图片：{exc}") from exc
 
 
+RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES = 30
+
+
+def _parse_created_at_dt(created_at_str: str | None) -> datetime | None:
+    """Parse created_at timestamp string into a timezone-aware UTC datetime."""
+    if not created_at_str:
+        return None
+    raw = str(created_at_str).strip()
+    if " " in raw and "T" not in raw:
+        raw = raw.replace(" ", "T")
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _gateway_failure_is_definite(exc: BaseException) -> bool:
+    """Return True if gateway definitely did not create the task or explicitly rejected it."""
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 408:
+            return False
+        return 400 <= exc.code < 500
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            return False
+        if isinstance(reason, (ConnectionRefusedError, socket.gaierror)):
+            return True
+        if isinstance(reason, OSError):
+            if getattr(reason, "errno", None) in (errno.ECONNREFUSED, getattr(errno, "WSAECONNREFUSED", 10061)):
+                return True
+            if getattr(reason, "winerror", None) == 10061:
+                return True
+        return False
+    if isinstance(exc, (ConnectionRefusedError, socket.gaierror)):
+        return True
+    if isinstance(exc, RuntimeError):
+        return True
+    return False
+
+
 class GenerationReconciler:
     """Durably reconcile live jobs without depending on an open browser.
 
@@ -357,7 +405,7 @@ class GenerationReconciler:
             pass
         rows = self.db.get_conn().execute(
             """
-            SELECT id, task_id, request_id, status
+            SELECT id, task_id, request_id, status, created_at
             FROM studio_generations
             WHERE engine = 'live' AND COALESCE(deleted_at, '') = ''
               AND status IN ('queued', 'running')
@@ -379,6 +427,14 @@ class GenerationReconciler:
                 result = gateway_request(f"/api/image-tasks?ids={urllib.parse.quote(lookup_id)}", timeout=12)
                 items = result.get("items") or []
                 if not items:
+                    created_dt = _parse_created_at_dt(row["created_at"])
+                    if created_dt and created_dt < (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES)):
+                        refund_failed_cloud_generation(
+                            self.db,
+                            generation_id,
+                            "网关未收到任务，已退还",
+                        )
+                        handled += 1
                     continue
                 item = items[0] if isinstance(items[0], dict) else {}
                 actual_id = str(item.get("id") or lookup_id)
@@ -3188,6 +3244,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 else:
                     endpoint = "/api/image-tasks/generations"
 
+                record_cloud_generation_task_id(self.db, gen_id, task_id)
                 gw_res = gateway_request(endpoint, payload=gw_payload, timeout=28)
                 actual_id = str(gw_res.get("id") or task_id)
                 complete_cloud_generation(self.db, gen_id, actual_id)
@@ -3210,20 +3267,45 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 if prep.get("promptTrimmed"):
                     gw_out["promptTrimmed"] = True
                 self._send_json(gw_out)
-            except urllib.error.HTTPError as he:
-                try:
-                    err_body = he.read().decode("utf-8", errors="ignore")
-                except Exception:
-                    err_body = ""
-                logger.warning("Gateway error: HTTP %s (body length: %s)", he.code, len(err_body))
-                err_msg = f"网关请求失败 (HTTP {he.code})"
-                refund_failed_cloud_generation(self.db, gen_id, err_msg)
-                self._send_json({"ok": False, "refunded": True, "error": f"{err_msg}（已自动退还额度/积分）"}, status=502)
             except Exception as exc:
-                logger.warning("Gateway exception: %s", type(exc).__name__)
-                err_msg = "生图网关连接失败"
-                refund_failed_cloud_generation(self.db, gen_id, err_msg)
-                self._send_json({"ok": False, "refunded": True, "error": f"{err_msg}（已自动退还额度/积分）"}, status=502)
+                if _gateway_failure_is_definite(exc):
+                    if isinstance(exc, urllib.error.HTTPError):
+                        try:
+                            err_body = exc.read().decode("utf-8", errors="ignore")
+                        except Exception:
+                            err_body = ""
+                        logger.warning("Gateway error: HTTP %s (body length: %s)", exc.code, len(err_body))
+                        err_msg = f"网关请求失败 (HTTP {exc.code})"
+                    elif isinstance(exc, RuntimeError):
+                        logger.warning("Gateway exception: %s", type(exc).__name__)
+                        err_msg = "生图网关连接失败"
+                    else:
+                        logger.warning("Gateway exception: %s", type(exc).__name__)
+                        err_msg = "生图网关连接失败"
+                    refund_failed_cloud_generation(self.db, gen_id, err_msg)
+                    self._send_json({"ok": False, "refunded": True, "error": f"{err_msg}（已自动退还额度/积分）"}, status=502)
+                else:
+                    logger.warning("Gateway exception: %s (status unknown, gen_id: %s)", type(exc).__name__, gen_id)
+                    confirming_out = {
+                        "ok": True,
+                        "genId": gen_id,
+                        "requestId": prep.get("requestId") or "",
+                        "idempotent": bool(prep.get("idempotent")),
+                        "taskId": task_id,
+                        "status": "queued",
+                        "confirming": True,
+                        "costType": prep["costType"],
+                        "creditsSpent": prep["creditsSpent"],
+                        "credits": prep["credits"],
+                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
+                    }
+                    if "systemAppend" in prep:
+                        confirming_out["systemAppend"] = prep["systemAppend"]
+                    if prep.get("recipeId"):
+                        confirming_out["recipeId"] = prep["recipeId"]
+                    if prep.get("promptTrimmed"):
+                        confirming_out["promptTrimmed"] = True
+                    self._send_json(confirming_out)
             return
 
         if req_path == "/api/studio/export-zip":
