@@ -6286,6 +6286,16 @@ def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_url
             tx.execute("UPDATE studio_generations SET task_id = ? WHERE id = ? AND status NOT IN ('refunded', 'success')", (task_id, gen_id))
 
 
+def record_cloud_generation_task_id(db: Database, gen_id: str, task_id: str) -> None:
+    """Record the client_task_id onto a pending studio generation before calling the gateway."""
+    with db.transaction() as tx:
+        tx.execute(
+            "UPDATE studio_generations SET task_id = ? WHERE id = ? AND status NOT IN ('refunded', 'success')",
+            (task_id, gen_id),
+        )
+
+
+
 def grant_studio_media_public(
     db: Database,
     user: dict[str, Any],
