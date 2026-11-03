@@ -112,4 +112,14 @@ FEATURE_MIGRATIONS = [
         ON tip_requests(user_id, created_at);
     """
     ),
+    (85, "085_expand_wallet_income_notify_kinds", """
+    DROP TRIGGER IF EXISTS notify_wallet_income;
+    CREATE TRIGGER notify_wallet_income AFTER INSERT ON ledgers
+    WHEN NEW.delta > 0 AND NEW.kind IN ('unlock_income','tip_income','bounty_reward','studio_refund','refund','tip_in','tip_official_in','unlock_royalty','bounty_win','unlock_refund','bounty_admin_award','bounty_admin_refund','admin_grant')
+    BEGIN
+        INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at)
+        VALUES(NEW.user_id,'wallet',NEW.reason,CASE WHEN NEW.ref_type != '' THEN NEW.ref_type ELSE 'wallet' END,NEW.ref_id,NEW.created_at);
+    END;
+    """
+    ),
 ]
