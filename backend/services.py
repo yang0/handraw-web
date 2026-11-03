@@ -6472,8 +6472,6 @@ def build_skill_asset_content(db: Database, user: dict[str, Any], code: str) -> 
     if not res:
         raise ServiceError(f"未找到资源编号：{clean_code}", status=404)
 
-    is_author = bool(user and ((res.get("owner", {}).get("userId") and int(user.get("id", -1)) == int(res["owner"]["userId"])) or (res.get("author") and user.get("username") == res["author"])))
-    is_staff = bool(user and user.get("role") in ("admin", "operator", "reviewer"))
     hidden_by = (res.get("access") or {}).get("hiddenBy")
     if hidden_by == "blackbox":
         raise ServiceError("官网在线独占黑盒资产仅支持云端调用，不支持导出明文定义", status=403)
@@ -6485,8 +6483,6 @@ def build_skill_asset_content(db: Database, user: dict[str, Any], code: str) -> 
         raise ServiceError("该资源尚未收录，暂不支持导出明文定义", status=403)
     elif hidden_by == "withdrawn":
         raise ServiceError("该资源已下架", status=403)
-    elif res.get("status") in ("pending", "changes_requested") and not (is_author or is_staff):
-        raise ServiceError("该资源尚未收录，暂不支持导出明文定义", status=403)
 
     if not (res.get("access") or {}).get("canRead"):
         raise ServiceError("暂无权查看此资源定义", status=403)

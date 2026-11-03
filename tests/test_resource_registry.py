@@ -234,10 +234,15 @@ class ResourceRegistryTests(unittest.TestCase):
         assert pending_item is not None
         self.assertIsNone(pending_item["content_url"])
 
-        # Non-author attempting export raises 403
+        # Free pending resource: other logged-in user can export definition via Skill content
+        visitor_content = build_skill_asset_content(self.db, self.visitor, self.pending_code)
+        self.assertEqual(visitor_content["resource"]["prompt_zh"], self.secret_definition)
+
+        # Paid pending resource: non-author attempting export raises 403
         with self.assertRaises(ServiceError) as ctx:
-            build_skill_asset_content(self.db, self.visitor, self.pending_code)
+            build_skill_asset_content(self.db, self.visitor, self.paid_pending_code)
         self.assertEqual(ctx.exception.status, 403)
+        self.assertIn("尚未收录", ctx.exception.message)
 
         # Author can export own definition
         author_content = build_skill_asset_content(self.db, self.author, self.pending_code)

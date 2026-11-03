@@ -450,3 +450,15 @@ class TestDefinitionVisibility(TestCase):
         # 4. Staff Skill content export succeeds
         staff_content = S.build_skill_asset_content(self.db, self.staff, self.paid_pub_code)
         self.assertEqual(staff_content["resource"]["prompt_zh"], self.paid_published_def)
+
+    def test_free_pending_resource_other_logged_in_user_can_export_skill_content(self) -> None:
+        """Free pending resource: other logged-in users calling Skill content export -> 200 with definition."""
+        content = S.build_skill_asset_content(self.db, self.buyer, self.free_pending_code)
+        self.assertEqual(content["resource"]["prompt_zh"], self.free_pending_def)
+
+    def test_paid_pending_resource_other_logged_in_user_skill_content_raises_403(self) -> None:
+        """Paid pending resource: other logged-in users calling Skill content export -> 403."""
+        with self.assertRaises(ServiceError) as ctx:
+            S.build_skill_asset_content(self.db, self.buyer, self.paid_pending_code)
+        self.assertEqual(ctx.exception.status, 403)
+        self.assertIn("尚未收录", ctx.exception.message)
