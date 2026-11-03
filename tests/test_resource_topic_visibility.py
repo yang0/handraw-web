@@ -430,9 +430,19 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
 
         self.assertIsNotNone(row1)
         self.assertIsNotNone(row2)
-        self.assertIn(row1["topic_id"], boot_tids, "Published work with prompt must be visible in boot")
-        self.assertIn(row2["topic_id"], boot_tids, "Published work without prompt is also visible in boot topics")
+        # Under #60: backfilled works default to unlisted (listed_at_ms IS NULL).
+        # They must not be in forum topic list, but exist, be published, and be accessible via discussions.
+        self.assertNotIn(row1["topic_id"], boot_tids, "Unlisted published work must not appear in forum list")
+        self.assertNotIn(row2["topic_id"], boot_tids, "Unlisted published work must not appear in forum list")
         self.assertNotIn(tid_draft, boot_tids, "Unpublished work topic must be hidden from boot topics")
+
+        t_row1 = conn.execute("SELECT status FROM forum_topics WHERE id = ?", (row1["topic_id"],)).fetchone()
+        t_row2 = conn.execute("SELECT status FROM forum_topics WHERE id = ?", (row2["topic_id"],)).fetchone()
+        self.assertEqual(t_row1["status"], "published")
+        self.assertEqual(t_row2["status"], "published")
+        self.assertEqual(boot.get("discussions", {}).get("w_good", {}).get("topicId"), row1["topic_id"])
+        self.assertEqual(boot.get("discussions", {}).get("w_noprompt", {}).get("topicId"), row2["topic_id"])
+        self.assertNotIn("w_draft", boot.get("discussions", {}), "Draft work must not appear in discussions")
 
     def test_10_production_mode_community_asset(self):
         """10. In non-demo production mode (HANDRAW_DEMO_MODE=0), community asset is visible with 0 replies."""

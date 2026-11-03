@@ -193,7 +193,9 @@ class HandrawBusinessSafetyTests(unittest.TestCase):
             complete_cloud_generation(db, prepared["genId"], "task-grant", ["/generated/private.webp"])
             granted = grant_studio_media_public(db, user, "/generated/private.webp", "work", row["id"], prepared["genId"])
             self.assertEqual(granted["mediaUrl"], "/generated/private.webp")
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM media_public_grants WHERE media_url = '/generated/private.webp'").fetchone()[0], 1)
+            # 594d3b2 added work projection public grant on completion; grant_studio_media_public adds a grant for row["id"].
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM media_public_grants WHERE media_url = '/generated/private.webp' AND target_id = ?", (row["id"],)).fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM media_public_grants WHERE media_url = '/generated/private.webp'").fetchone()[0], 2)
             with self.assertRaises(ServiceError) as forbidden:
                 grant_studio_media_public(db, other, "/generated/private.webp", "work", row["id"], prepared["genId"])
             self.assertEqual(forbidden.exception.status, 403)
