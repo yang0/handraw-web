@@ -39,6 +39,7 @@ from unittest.mock import patch
 from backend.server import (
     HandrawRequestHandler,
     GenerationReconciler,
+    GatewayNotConfigured,
     _gateway_failure_is_definite,
     _parse_created_at_dt,
     create_channel_server,
@@ -60,9 +61,13 @@ ORIGIN = "http://handraw.test"
 class GatewayFailureClassificationTests(unittest.TestCase):
     """Unit tests for _gateway_failure_is_definite exception classification."""
 
-    def test_unconfigured_gateway_runtime_error_is_definite(self):
-        exc = RuntimeError("未检测到本地生图网关配置 image-service.json")
+    def test_unconfigured_gateway_error_is_definite(self):
+        exc = GatewayNotConfigured("未检测到本地生图网关配置 image-service.json")
         self.assertTrue(_gateway_failure_is_definite(exc))
+
+    def test_plain_runtime_error_is_unknown(self):
+        exc = RuntimeError("something went wrong on server")
+        self.assertFalse(_gateway_failure_is_definite(exc))
 
     def test_connection_refused_is_definite(self):
         exc = urllib.error.URLError(ConnectionRefusedError(10061, "Connect call failed"))
@@ -391,14 +396,14 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
         self.assertEqual(wallet["free_quota_used"], 1)
 
     def test_unconfigured_gateway_refunds_immediately(self):
-        """Unconfigured gateway (RuntimeError before network) -> refund immediately, 502 with refunded: true."""
+        """Unconfigured gateway (GatewayNotConfigured before network) -> refund immediately, 502 with refunded: true."""
         conn = self.db.get_conn()
         uid = self.user["id"]
         conn.execute("UPDATE wallets SET free_quota_used = 0, balance = 20 WHERE user_id = ?", (uid,))
         conn.commit()
 
         req_id = f"req_unconfigured_{int(time.time() * 1000)}"
-        cfg_err = RuntimeError("未检测到本地生图网关配置 image-service.json")
+        cfg_err = GatewayNotConfigured("未检测到本地生图网关配置 image-service.json")
         with patch("backend.server.gateway_request", side_effect=cfg_err):
             status, res = self._post_generate({
                 "prompt": "未配置网关测试",
@@ -416,6 +421,119 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
 
         wallet = conn.execute("SELECT free_quota_used, balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
         self.assertEqual(wallet["free_quota_used"], 0)
+
+    def test_pre_submission_failure_without_request_id_refunds_immediately_and_unblocks_next_run(self):
+        """Failure before gateway submit (e.g. OSError in ref image) refunds immediately and leaves user unblocked."""
+        conn = self.db.get_conn()
+        uid = self.user["id"]
+        today = local_today_str()
+        conn.execute("UPDATE wallets SET free_quota_used = 0, balance = 20, free_quota_date = ? WHERE user_id = ?", (today, uid))
+        conn.commit()
+
+        with patch("backend.server.resolve_local_ref_image", side_effect=OSError("Disk read failure")):
+            status, res = self._post_generate({
+                "prompt": "预提交失败测试",
+                "customRefImg": "/uploads/nonexistent.png",
+            })
+
+        self.assertEqual(status, 502)
+        self.assertFalse(res.get("ok"))
+        self.assertTrue(res.get("refunded"))
+
+        # Quota should be restored
+        wallet = conn.execute("SELECT free_quota_used, balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        self.assertEqual(wallet["free_quota_used"], 0)
+        self.assertEqual(wallet["balance"], 20)
+
+        # Subsequent generation must NOT be blocked by 429 generation_in_progress
+        with patch("backend.server.gateway_request", return_value={"id": "next_ok", "status": "queued"}):
+            next_status, next_res = self._post_generate({
+                "prompt": "后续正常生图",
+            })
+        self.assertEqual(next_status, 200)
+        self.assertTrue(next_res.get("ok"))
+
+    def test_pre_submission_record_task_id_failure_refunds_immediately(self):
+        """Failure in record_cloud_generation_task_id (sqlite3.OperationalError) refunds immediately."""
+        import sqlite3
+        conn = self.db.get_conn()
+        uid = self.user["id"]
+        today = local_today_str()
+        conn.execute("UPDATE wallets SET free_quota_used = 0, balance = 20, free_quota_date = ? WHERE user_id = ?", (today, uid))
+        conn.commit()
+
+        with patch("backend.server.record_cloud_generation_task_id", side_effect=sqlite3.OperationalError("database locked")):
+            status, res = self._post_generate({
+                "prompt": "记录task_id失败测试",
+                "requestId": "req_db_locked_1",
+            })
+
+        self.assertEqual(status, 502)
+        self.assertFalse(res.get("ok"))
+        self.assertTrue(res.get("refunded"))
+
+        wallet = conn.execute("SELECT free_quota_used FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        self.assertEqual(wallet["free_quota_used"], 0)
+
+    def test_gateway_plain_runtime_error_does_not_refund_but_gateway_not_configured_refunds(self):
+        """Plain RuntimeError during gateway call -> confirming (no refund). GatewayNotConfigured -> refunds."""
+        conn = self.db.get_conn()
+        uid = self.user["id"]
+        today = local_today_str()
+        conn.execute("UPDATE wallets SET free_quota_used = 0, balance = 20, free_quota_date = ? WHERE user_id = ?", (today, uid))
+        conn.commit()
+
+        # Plain RuntimeError -> not refunded, confirming: true
+        with patch("backend.server.gateway_request", side_effect=RuntimeError("something unexpected on gateway")):
+            status1, res1 = self._post_generate({
+                "prompt": "普通RuntimeError测试",
+                "requestId": "req_plain_runtime_1",
+            })
+        self.assertEqual(status1, 200)
+        self.assertTrue(res1.get("confirming"))
+        wallet = conn.execute("SELECT free_quota_used FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        self.assertEqual(wallet["free_quota_used"], 1)
+
+        # Clear active generation so we can run next test
+        conn.execute("UPDATE studio_generations SET status = 'success' WHERE user_id = ?", (uid,))
+        conn.execute("UPDATE wallets SET free_quota_used = 0 WHERE user_id = ?", (uid,))
+        conn.commit()
+
+        # GatewayNotConfigured -> refunded: true, 502
+        with patch("backend.server.gateway_request", side_effect=GatewayNotConfigured("未配置网关")):
+            status2, res2 = self._post_generate({
+                "prompt": "未配置网关异常测试",
+                "requestId": "req_cfg_err_1",
+            })
+        self.assertEqual(status2, 502)
+        self.assertTrue(res2.get("refunded"))
+        wallet2 = conn.execute("SELECT free_quota_used FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        self.assertEqual(wallet2["free_quota_used"], 0)
+
+    def test_tasks_polling_returns_refunded_record_without_calling_gateway(self):
+        """When a generation is already refunded by reconciler, /api/studio/tasks returns status: refunded without calling gateway."""
+        conn = self.db.get_conn()
+        uid = self.user["id"]
+        tid = f"task_reconciled_refund_{int(time.time() * 1000)}"
+        with self.db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO studio_generations (id, user_id, username, task_id, request_id, engine, status, error_msg, created_at)
+                VALUES (?, ?, 'gen_tester', ?, 'req_ref_poll', 'live', 'refunded', '网关未收到任务，已退还', '2026-11-03 10:00:00')
+                """,
+                (f"gen_{tid}", uid, tid),
+            )
+
+        poll_req = urllib.request.Request(
+            f"{self.base}/api/studio/tasks?id={tid}",
+            headers={"Origin": ORIGIN, "Cookie": self.cookie},
+        )
+        with patch("backend.server.gateway_request") as mock_gw:
+            with urllib.request.urlopen(poll_req) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+        self.assertEqual(data.get("status"), "refunded")
+        mock_gw.assert_not_called()
 
     def test_no_request_id_timeout_preserves_queryable_task_id(self):
         """When request has no requestId, client_task_id is saved before call and queryable on timeout."""

@@ -4898,7 +4898,7 @@
         throw err;
       }
     }
-    throw new Error("云端生图等待超时");
+    throw new Error("等待时间较长，生成结果出来后会出现在生图历史里；如果最终没有生成，额度或积分会自动退还。");
   }
 
   function applyDurableTaskResult(task, images, errorMessage = "") {

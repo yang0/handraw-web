@@ -208,10 +208,14 @@ def load_image_service_config() -> dict[str, str]:
     return {}
 
 
+class GatewayNotConfigured(RuntimeError):
+    """Raised when the local image gateway configuration is missing."""
+
+
 def gateway_request(path: str, payload: dict[str, Any] | None = None, timeout: int = 30) -> dict[str, Any]:
     cfg = load_image_service_config()
     if not cfg:
-        raise RuntimeError("未检测到本地生图网关配置 image-service.json")
+        raise GatewayNotConfigured("未检测到本地生图网关配置 image-service.json")
     url = f"{cfg['base_url']}{path}"
     headers = {
         "Authorization": f"Bearer {cfg['key']}",
@@ -367,7 +371,7 @@ def _gateway_failure_is_definite(exc: BaseException) -> bool:
         return False
     if isinstance(exc, (ConnectionRefusedError, socket.gaierror)):
         return True
-    if isinstance(exc, RuntimeError):
+    if isinstance(exc, GatewayNotConfigured):
         return True
     return False
 
@@ -2239,6 +2243,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if not task_ref:
                 self._send_json({"error": "task not found"}, status=404)
                 return
+            rec_status = str(task_ref.get("status") or "").lower()
+            if rec_status in ("refunded", "success", "failed", "error", "cancelled", "canceled"):
+                self._send_json(task_ref)
+                return
             # A request may be found by idempotency key before the upstream
             # task id exists.  Return the durable reservation state without
             # querying the gateway as another user or as an anonymous caller.
@@ -3139,6 +3147,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             user = self._current_user(required=True)
             prep = prepare_cloud_generation(self.db, user, body)
             gen_id = prep["genId"]
+            submitted = False
             try:
                 claim = claim_cloud_generation_submission(self.db, user, gen_id)
                 if not claim.get("claimed"):
@@ -3245,6 +3254,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     endpoint = "/api/image-tasks/generations"
 
                 record_cloud_generation_task_id(self.db, gen_id, task_id)
+                submitted = True
                 gw_res = gateway_request(endpoint, payload=gw_payload, timeout=28)
                 actual_id = str(gw_res.get("id") or task_id)
                 complete_cloud_generation(self.db, gen_id, actual_id)
@@ -3268,7 +3278,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     gw_out["promptTrimmed"] = True
                 self._send_json(gw_out)
             except Exception as exc:
-                if _gateway_failure_is_definite(exc):
+                if not submitted:
+                    logger.warning("Gateway call not submitted (%s): %s", type(exc).__name__, exc)
+                    refund_failed_cloud_generation(self.db, gen_id, "生图网关连接失败")
+                    self._send_json({"ok": False, "refunded": True, "error": "生图网关连接失败（已自动退还额度/积分）"}, status=502)
+                elif _gateway_failure_is_definite(exc):
                     if isinstance(exc, urllib.error.HTTPError):
                         try:
                             err_body = exc.read().decode("utf-8", errors="ignore")
@@ -3276,9 +3290,6 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                             err_body = ""
                         logger.warning("Gateway error: HTTP %s (body length: %s)", exc.code, len(err_body))
                         err_msg = f"网关请求失败 (HTTP {exc.code})"
-                    elif isinstance(exc, RuntimeError):
-                        logger.warning("Gateway exception: %s", type(exc).__name__)
-                        err_msg = "生图网关连接失败"
                     else:
                         logger.warning("Gateway exception: %s", type(exc).__name__)
                         err_msg = "生图网关连接失败"
