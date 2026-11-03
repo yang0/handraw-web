@@ -2614,7 +2614,14 @@
   function goToWorkPage(workId, focusComment = false) {
     closeModal();
     const id = String(workId || "").trim();
-    if (id) window.location.href = channelUrl("main", {view:"work", id, ...(focusComment ? {focus:"comment"} : {})});
+    if (!id) return;
+    const disc = (App.state && App.state.discussions && App.state.discussions[id]) || null;
+    const tid = disc ? disc.topicId : null;
+    if (tid) {
+      goToTopicPage(tid);
+    } else {
+      window.location.href = `/t/work-${encodeURIComponent(id)}${focusComment ? "?focus=comment" : ""}`;
+    }
   }
 
   function goToTopicPage(topicId) {

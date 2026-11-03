@@ -89,6 +89,26 @@ def _resolve_ref_to_topic_id(conn: Any, ref: str, user: dict[str, Any] | None = 
             ).fetchone()
             if t and _is_topic_visible(conn, t, user):
                 return str(m_work["topic_id"])
+    else:
+        # Fallback 1: check forum_topics.work_id directly
+        t_by_w = conn.execute(
+            "SELECT id, status FROM forum_topics WHERE work_id = ?", (ref_work,)
+        ).fetchone()
+        if t_by_w and _is_topic_visible(conn, t_by_w, user):
+            return str(t_by_w["id"])
+
+        # Fallback 2: if published work exists, auto-prebuild topic
+        w_cur = conn.execute(
+            "SELECT * FROM works WHERE id = ? AND status = 'published'", (ref_work,)
+        ).fetchone()
+        if w_cur:
+            from .resource_discussions import ensure_topic
+            try:
+                tid = ensure_topic(conn, "work", ref_work, dict(w_cur), initial_origin="submission", listed_at_ms=None)
+                conn.commit()
+                return tid
+            except Exception:
+                pass
 
     # 3. Semantic prefix or direct style/layout code
     if ref.lower().startswith("style-"):
@@ -306,6 +326,52 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
         work_res["likes"] = w_likes
         work_res["favorites"] = w_favorites
         work_res["forks"] = w_forks
+
+        # Sibling works in the same generation batch
+        gw_row = conn.execute(
+            "SELECT generation_id FROM generation_works WHERE work_id = ?",
+            (m_target,),
+        ).fetchone()
+        batch_works: list[dict[str, Any]] = []
+        if gw_row and gw_row["generation_id"]:
+            gen_id = str(gw_row["generation_id"])
+            sibs = conn.execute(
+                """
+                SELECT gw.work_id, gw.item_key, w.title, w.images_json, t.id AS topic_id
+                FROM generation_works gw
+                JOIN works w ON w.id = gw.work_id
+                LEFT JOIN forum_topics t ON t.work_id = w.id
+                WHERE gw.generation_id = ? AND w.status = 'published'
+                ORDER BY gw.rowid ASC
+                """,
+                (gen_id,),
+            ).fetchall()
+            if len(sibs) > 1:
+                for idx, s in enumerate(sibs):
+                    s_imgs = json.loads(s["images_json"] or "[]") if s["images_json"] else []
+                    s_url = s_imgs[0] if s_imgs else ""
+                    if isinstance(s_url, dict):
+                        s_url = s_url.get("url", "")
+                    s_tid = s["topic_id"]
+                    if not s_tid:
+                        m_row = conn.execute(
+                            "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
+                            (s["work_id"],),
+                        ).fetchone()
+                        if m_row:
+                            s_tid = m_row["topic_id"]
+                    batch_works.append({
+                        "workId": s["work_id"],
+                        "topicId": s_tid or "",
+                        "title": s["title"] or "",
+                        "imageUrl": s_url,
+                        "itemKey": s["item_key"] or "",
+                        "index": idx + 1,
+                        "total": len(sibs),
+                        "isCurrent": (s["work_id"] == m_target),
+                    })
+        work_res["batchWorks"] = batch_works
+
         mount = {
             "kind": "work",
             "work": work_res,

@@ -2467,6 +2467,8 @@
                 ? "← 画风频道"
                 : mount.kind === "layout"
                 ? "← 图型频道"
+                : mount.kind === "work"
+                ? "← 晒作品广场"
                 : esc(topic.categoryLabel || "社区讨论")
             }</button>
             <span>/</span>
@@ -2701,7 +2703,13 @@
     }
 
     // Navigation buttons
-    root.querySelector("#topic-back-list-btn").onclick = () => openForumList(true);
+    root.querySelector("#topic-back-list-btn").onclick = () => {
+      if (mount.kind === "work") {
+        window.location.href = S.channelUrl("main", { view: "works" });
+        return;
+      }
+      openForumList(true);
+    };
     root.querySelector("#topic-crumb-board").onclick = () => {
       if (mount.kind === "style") {
         window.location.href = S.channelUrl("main", { view: "styles" });
@@ -2709,6 +2717,10 @@
       }
       if (mount.kind === "layout") {
         window.location.href = S.channelUrl("main", { view: "layouts" });
+        return;
+      }
+      if (mount.kind === "work") {
+        window.location.href = S.channelUrl("main", { view: "works" });
         return;
       }
       FUI.category = topic.category || "all";

@@ -214,7 +214,8 @@
       assets: acc.list,
       forkUrl,
       canFork,
-      unavailableText
+      unavailableText,
+      batchWorks: (work && work.batchWorks) || null
     };
   }
 
@@ -223,23 +224,34 @@
     return S.channelUrl("main", { view: "asset", id: asset.id });
   }
 
-  function renderGallery(images) {
-    if (!images || !images.length) return "";
-    const first = images[0];
-    const firstUrl = typeof first === "string" ? first : first.url;
-    const firstTag = typeof first === "object" ? first.tag : "";
-    const main = safeImageUrl(firstUrl);
+  function renderGallery(images, model) {
+    const batchWorks = model && Array.isArray(model.batchWorks) && model.batchWorks.length > 1 ? model.batchWorks : null;
+    const currentImg = (images && images[0]) || (batchWorks && (batchWorks.find((b) => b.isCurrent) || batchWorks[0]).imageUrl) || "";
+    const mainUrl = typeof currentImg === "string" ? currentImg : (currentImg && currentImg.url);
+    const main = safeImageUrl(mainUrl);
     if (!main) return "";
-    const thumbs = images.length > 1
-      ? `<div class="fwp-thumbs" role="tablist">${images.map((img, i) => {
-          const u = typeof img === "string" ? img : img.url;
-          const t = typeof img === "object" ? img.tag : "";
-          return `<button type="button" class="fwp-thumb${i === 0 ? " is-active" : ""}" data-fwp-src="${esc(safeImageUrl(u))}" role="tab" aria-selected="${i===0}" aria-label="查看第${i + 1}张图"${t ? ` data-fwp-tag="${esc(String(t))}"` : ""}><img data-hw-src="${esc(safeImageUrl(u))}" alt="" loading="lazy"></button>`;
-        }).join("")}</div>`
-      : "";
+
+    let thumbs = "";
+    if (batchWorks) {
+      thumbs = `<div class="fwp-thumbs" role="tablist" aria-label="同批次作品图片">${batchWorks.map((item, i) => {
+        const u = safeImageUrl(item.imageUrl);
+        const isActive = Boolean(item.isCurrent);
+        return `<button type="button" class="fwp-thumb${isActive ? " is-active" : ""}" data-fwp-topic="${esc(item.topicId)}" data-fwp-work="${esc(item.workId)}" data-fwp-src="${esc(u)}" role="tab" aria-selected="${isActive}" aria-label="切换至同批第 ${item.index || (i + 1)}/${item.total || batchWorks.length} 张图"><img data-hw-src="${esc(u)}" alt="" loading="lazy"><span class="fwp-thumb-badge" style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,0.6);color:#fff;font-size:10px;padding:0 4px;border-radius:3px;">${item.index || (i + 1)}/${item.total || batchWorks.length}</span></button>`;
+      }).join("")}</div>`;
+    } else if (images && images.length > 1) {
+      thumbs = `<div class="fwp-thumbs" role="tablist">${images.map((img, i) => {
+        const u = typeof img === "string" ? img : img.url;
+        const t = typeof img === "object" ? img.tag : "";
+        return `<button type="button" class="fwp-thumb${i === 0 ? " is-active" : ""}" data-fwp-src="${esc(safeImageUrl(u))}" role="tab" aria-selected="${i===0}" aria-label="查看第${i + 1}张图"${t ? ` data-fwp-tag="${esc(String(t))}"` : ""}><img data-hw-src="${esc(safeImageUrl(u))}" alt="" loading="lazy"></button>`;
+      }).join("")}</div>`;
+    }
+
     return `<div class="fwp-gallery">
-  <div class="fwp-gallery-stage" data-fwp-stage>
-    <img class="fwp-main" data-fwp-main data-hw-src="${esc(main)}" alt="${esc(firstTag || "作品图片")}" loading="lazy">
+  <div class="fwp-gallery-stage" data-fwp-stage style="position:relative;">
+    <img class="fwp-main" data-fwp-main data-hw-src="${esc(main)}" alt="${esc(model?.title || "作品图片")}" loading="lazy" style="cursor:zoom-in;">
+    <div class="fwp-gallery-overlay-bar" style="position:absolute;bottom:10px;right:10px;display:flex;gap:8px;z-index:2;">
+      <a class="btn btn-sm btn-primary fwp-download-btn" href="${esc(main)}" download="handraw-work.webp" target="_blank" rel="noopener noreferrer" style="font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,0.25);">⬇️ 下载原图</a>
+    </div>
   </div>
   ${thumbs}
 </div>`;
@@ -304,10 +316,10 @@
   function render(model) {
     if (!model || typeof model !== "object") return "";
     const title = esc(String(model.title || "作品帖"));
-    const gallery = renderGallery(model.images);
+    const gallery = renderGallery(model.images, model);
     const prompt = renderPrompt(model);
     const notes = renderNotes(model.notes);
-    const assets = renderAssets(model.assets,model);
+    const assets = renderAssets(model.assets, model);
     return `<section class="fwp" aria-label="作品详情">
   ${gallery}
   ${prompt}
@@ -329,22 +341,56 @@
     const main = scope.querySelector("[data-fwp-main]");
     const thumbs = scope.querySelectorAll(".fwp-thumb");
 
-    if (stage && main && thumbs.length) {
-      thumbs.forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const src = btn.getAttribute("data-fwp-src");
-          if (!src || !safeImageUrl(src)) return;
-          thumbs.forEach((b) => b.classList.toggle("is-active", b === btn));
-          main.setAttribute("src", src);
-          main.setAttribute('data-hw-src',src);
-          thumbs.forEach(b=>b.setAttribute('aria-selected',String(b===btn)));
-          const tag = btn.getAttribute("data-fwp-tag");
-          main.setAttribute("alt", tag || "作品图片");
-          if (window.HandrawImageLoader && window.HandrawImageLoader.scan) {
-            window.HandrawImageLoader.scan(stage);
-          }
-        });
+    if (stage && main) {
+      main.addEventListener("click", () => {
+        const currentSrc = main.getAttribute("src") || main.getAttribute("data-hw-src");
+        if (currentSrc && typeof S.openModal === "function") {
+          S.openModal({
+            title: `🖼️ ${esc(model.title || "作品大图")}`,
+            html: `
+              <div class="hw-modal-lightbox-container" style="text-align:center;">
+                <a href="${esc(currentSrc)}" target="_blank" rel="noopener noreferrer" title="点击新窗口打开" style="display:block;max-width:100%;">
+                  <img class="hw-modal-lightbox-img" src="${esc(currentSrc)}" alt="${esc(model.title || "作品原图")}" style="max-height:75vh;border-radius:8px;" />
+                </a>
+                <div style="display:flex;gap:10px;align-items:center;margin-top:14px;justify-content:center;flex-wrap:wrap;">
+                  <a class="btn btn-sm btn-primary" href="${esc(currentSrc)}" download="handraw-work.webp" target="_blank" rel="noopener noreferrer">⬇️ 下载原图</a>
+                  <a class="btn btn-sm" href="${esc(currentSrc)}" target="_blank" rel="noopener noreferrer">↗️ 新窗口查看</a>
+                </div>
+              </div>
+            `
+          });
+        }
       });
+
+      if (thumbs.length) {
+        thumbs.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const targetTid = btn.getAttribute("data-fwp-topic");
+            if (targetTid && targetTid !== model.sourceId) {
+              if (typeof window.HANDRAW_FORUM_OPEN_TOPIC === "function") {
+                window.HANDRAW_FORUM_OPEN_TOPIC(targetTid, 0);
+              } else {
+                window.location.href = S.channelUrl("forum", { view: "topic", id: targetTid });
+              }
+              return;
+            }
+
+            const src = btn.getAttribute("data-fwp-src");
+            if (!src || !safeImageUrl(src)) return;
+            thumbs.forEach((b) => b.classList.toggle("is-active", b === btn));
+            main.setAttribute("src", src);
+            main.setAttribute("data-hw-src", src);
+            thumbs.forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
+            const tag = btn.getAttribute("data-fwp-tag");
+            if (tag) main.setAttribute("alt", tag);
+            const dlBtn = stage.querySelector(".fwp-download-btn");
+            if (dlBtn) dlBtn.setAttribute("href", src);
+            if (window.HandrawImageLoader && window.HandrawImageLoader.scan) {
+              window.HandrawImageLoader.scan(stage);
+            }
+          });
+        });
+      }
     }
 
     const copyBtn = scope.querySelector("[data-fwp-copy]");

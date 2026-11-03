@@ -177,15 +177,16 @@ def get_works_feed(
     author = str(params.get("author") or "").strip()
     q = str(params.get("q") or params.get("query") or "").strip().lower()
     ids_param = str(params.get("ids") or "").strip()
+    is_search = bool(q)
 
     # Base admission filter: published, seed exclusion, non-empty images, valid JSON
-    seed_clause, seed_params = _seed_filter("id", "works")
+    seed_clause, seed_params = _seed_filter("w.id", "works")
     base_clauses = [
-        "status = 'published'",
+        "w.status = 'published'",
         seed_clause,
-        "images_json IS NOT NULL",
-        "TRIM(images_json) NOT IN ('', '[]', 'null')",
-        "json_valid(images_json) = 1",
+        "w.images_json IS NOT NULL",
+        "TRIM(w.images_json) NOT IN ('', '[]', 'null')",
+        "json_valid(w.images_json) = 1",
     ]
     base_params: list[Any] = list(seed_params)
 
@@ -194,41 +195,69 @@ def get_works_feed(
         id_list = [i.strip() for i in ids_param.split(",") if i.strip()]
         if id_list:
             placeholders = ", ".join("?" for _ in id_list)
-            base_clauses.append(f"id IN ({placeholders})")
+            base_clauses.append(f"w.id IN ({placeholders})")
             base_params.extend(id_list)
 
     # Access filter (free / paid)
     if access == "free":
-        base_clauses.append("price <= 0")
+        base_clauses.append("w.price <= 0")
     elif access == "paid":
-        base_clauses.append("price > 0")
+        base_clauses.append("w.price > 0")
 
     # Author filter
     if author:
-        base_clauses.append("author_username = ? COLLATE NOCASE")
+        base_clauses.append("w.author_username = ? COLLATE NOCASE")
         base_params.append(author)
 
     # Asset code filter (styles or layout)
     if asset:
-        base_clauses.append("(layout_code = ? OR styles_json LIKE ?)")
+        base_clauses.append("(w.layout_code = ? OR w.styles_json LIKE ?)")
         base_params.extend([asset, f"%{asset}%"])
 
     # Search keyword filter
     if q:
         kw = f"%{q}%"
         base_clauses.append(
-            "(title LIKE ? OR notes LIKE ? OR author_username LIKE ? OR author_name LIKE ? OR prompt LIKE ? OR styles_json LIKE ? OR layout_code LIKE ?)"
+            "(w.title LIKE ? OR w.notes LIKE ? OR w.author_username LIKE ? OR w.author_name LIKE ? OR w.prompt LIKE ? OR w.styles_json LIKE ? OR w.layout_code LIKE ?)"
         )
         base_params.extend([kw, kw, kw, kw, kw, kw, kw])
 
+    where_sql = " AND ".join(base_clauses)
+    cte_sql = f"""
+        WITH scoped_works AS (
+            SELECT
+                w.*,
+                COALESCE(gw.generation_id, 'work_' || w.id) AS batch_id,
+                COALESCE(gw.rowid, 0) AS gen_rowid
+            FROM works w
+            LEFT JOIN generation_works gw ON gw.work_id = w.id
+            WHERE {where_sql}
+        ),
+        ranked_works AS (
+            SELECT
+                sw.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY sw.batch_id
+                    ORDER BY sw.gen_rowid ASC, sw.published_at_ms ASC, sw.id ASC
+                ) AS batch_rank,
+                COUNT(*) OVER (
+                    PARTITION BY sw.batch_id
+                ) AS batch_total
+            FROM scoped_works sw
+        )
+    """
+
+    candidate_filter = "1 = 1" if is_search else "batch_rank = 1"
+
     # Compute format counts across the current filter scope (before format slicing)
     counts_sql = f"""
+        {cte_sql}
         SELECT
             COUNT(*) AS all_cnt,
             SUM(CASE WHEN json_valid(images_json) = 1 AND json_array_length(images_json) = 1 THEN 1 ELSE 0 END) AS single_cnt,
             SUM(CASE WHEN json_valid(images_json) = 1 AND json_array_length(images_json) > 1 THEN 1 ELSE 0 END) AS multi_cnt
-        FROM works
-        WHERE {" AND ".join(base_clauses)}
+        FROM ranked_works
+        WHERE {candidate_filter}
     """
     cnt_row = conn.execute(counts_sql, base_params).fetchone()
     total_all = int((cnt_row and cnt_row["all_cnt"]) or 0)
@@ -241,12 +270,12 @@ def get_works_feed(
     }
 
     # Format-specific clause
-    clauses = list(base_clauses)
-    filter_params = list(base_params)
     if fmt == "single":
-        clauses.append("json_valid(images_json) = 1 AND json_array_length(images_json) = 1")
+        fmt_clause = "json_valid(images_json) = 1 AND json_array_length(images_json) = 1"
     elif fmt == "multi":
-        clauses.append("json_valid(images_json) = 1 AND json_array_length(images_json) > 1")
+        fmt_clause = "json_valid(images_json) = 1 AND json_array_length(images_json) > 1"
+    else:
+        fmt_clause = "1 = 1"
 
     total_filtered = (
         total_single if fmt == "single" else (total_multi if fmt == "multi" else total_all)
@@ -363,12 +392,13 @@ def get_works_feed(
 
         if not sess_data:
             pop_sql = f"""
+                {cte_sql}
                 SELECT id
-                FROM works
-                WHERE {" AND ".join(clauses)}
+                FROM ranked_works
+                WHERE {candidate_filter} AND {fmt_clause}
                 ORDER BY {WORK_POPULAR_EXPR} DESC, published_at_ms DESC, id DESC
             """
-            id_rows = conn.execute(pop_sql, filter_params).fetchall()
+            id_rows = conn.execute(pop_sql, base_params).fetchall()
             ordered_ids = [r["id"] for r in id_rows]
             _FEED_POPULAR_SESSIONS[session_id] = (ordered_ids, time.time(), cur_uid, cur_filter)
 
@@ -381,17 +411,23 @@ def get_works_feed(
         if page_ids:
             ph = ", ".join("?" for _ in page_ids)
             work_rows = conn.execute(
-                f"SELECT * FROM works WHERE id IN ({ph})",
-                page_ids,
+                f"""
+                {cte_sql}
+                SELECT * FROM ranked_works WHERE id IN ({ph})
+                """,
+                (*base_params, *page_ids),
             ).fetchall()
             row_map = {r["id"]: r for r in work_rows}
             items = []
             for pid in page_ids:
                 row = row_map.get(pid)
                 if row and is_valid_work_row(row):
-                    w_dict = _serialize_work(row, comments_by_work, unlocked_set, current_user)
+                    w_dict = _serialize_work(row, comments_by_work, unlocked_set, current_user, conn=conn)
                     w_dict["liked"] = w_dict["id"] in liked_ids
                     w_dict["collected"] = w_dict["id"] in collected_ids
+                    w_dict["batchId"] = row["batch_id"]
+                    w_dict["batchTotal"] = int(row["batch_total"])
+                    w_dict["batchIndex"] = int(row["batch_rank"])
                     enrich_dimensions(w_dict)
                     items.append(w_dict)
         else:
@@ -410,8 +446,8 @@ def get_works_feed(
     # -------------------------------------------------------------
     # Sort Mode 2: "newest" (default) -> Stable keyset cursor pagination
     # -------------------------------------------------------------
-    query_clauses = list(clauses)
-    query_params = list(filter_params)
+    query_clauses = [candidate_filter, fmt_clause]
+    query_params = list(base_params)
 
     cursor_data = decode_cursor(cursor_str)
     if cursor_data and "ms" in cursor_data and "id" in cursor_data:
@@ -426,8 +462,9 @@ def get_works_feed(
     fetch_limit = limit + 1
     query_params.append(fetch_limit)
     newest_sql = f"""
+        {cte_sql}
         SELECT *
-        FROM works
+        FROM ranked_works
         WHERE {" AND ".join(query_clauses)}
         ORDER BY published_at_ms DESC, id DESC
         LIMIT ?
@@ -447,9 +484,12 @@ def get_works_feed(
     items = []
     for row in return_rows:
         if is_valid_work_row(row):
-            w_dict = _serialize_work(row, comments_by_work, unlocked_set, current_user)
+            w_dict = _serialize_work(row, comments_by_work, unlocked_set, current_user, conn=conn)
             w_dict["liked"] = w_dict["id"] in liked_ids
             w_dict["collected"] = w_dict["id"] in collected_ids
+            w_dict["batchId"] = row["batch_id"]
+            w_dict["batchTotal"] = int(row["batch_total"])
+            w_dict["batchIndex"] = int(row["batch_rank"])
             enrich_dimensions(w_dict)
             items.append(w_dict)
 
@@ -519,7 +559,31 @@ def get_work_by_id(
                 }
             )
 
-    w_dict = _serialize_work(row, {wid: comments}, unlocked_set, current_user)
+    w_dict = _serialize_work(row, {wid: comments}, unlocked_set, current_user, conn=conn)
+    gw_row = conn.execute(
+        "SELECT generation_id FROM generation_works WHERE work_id = ?", (wid,)
+    ).fetchone()
+    if gw_row and gw_row["generation_id"]:
+        gen_id = str(gw_row["generation_id"])
+        siblings = conn.execute(
+            """
+            SELECT gw.work_id, gw.rowid
+            FROM generation_works gw
+            JOIN works w ON w.id = gw.work_id
+            WHERE gw.generation_id = ? AND w.status = 'published'
+            ORDER BY gw.rowid ASC
+            """,
+            (gen_id,),
+        ).fetchall()
+        w_dict["batchId"] = gen_id
+        w_dict["batchTotal"] = len(siblings)
+        w_idx = next((i + 1 for i, s in enumerate(siblings) if s["work_id"] == wid), 1)
+        w_dict["batchIndex"] = w_idx
+    else:
+        w_dict["batchId"] = f"work_{wid}"
+        w_dict["batchTotal"] = 1
+        w_dict["batchIndex"] = 1
+
     if current_user:
         uid = int(current_user["id"])
         liked = conn.execute(

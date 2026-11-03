@@ -947,7 +947,9 @@ def admin_moderate_work(
                     source="author" if is_author and not (is_admin or is_operator) else "moderator",
                     reason="作品已删除", actor_role=actor_role, automated=True,
                 )
+            tx.execute("UPDATE forum_topics SET status = 'deleted' WHERE work_id = ?", (wid,))
             tx.execute("DELETE FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?", (wid,))
+            tx.execute("DELETE FROM generation_works WHERE work_id = ?", (wid,))
             tx.execute("DELETE FROM works WHERE id = ?", (wid,))
         else:
             raise ServiceError(f"不支持的作品审核动作：{act}")

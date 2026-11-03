@@ -44,9 +44,12 @@
 .hw-works-browser .hw-wb-media { position:relative; display:block; width:100%; overflow:hidden; background:var(--paper-inset,#f3ede3); }
 .hw-works-browser .hw-wb-media img { width:100%; height:auto; object-fit:contain; display:block; }
 .hw-works-browser .hw-wb-img-badge,
+.hw-works-browser .hw-wb-batch-badge,
 .hw-works-browser .hw-wb-media-count,
 .hw-works-browser .hw-wb-price { position:absolute; left:8px; bottom:8px; padding:2px 7px; border-radius:5px; background:rgba(43,39,35,.72); color:#fff; font-size:11px; }
-.hw-works-browser .hw-wb-img-badge { left:auto; right:8px; top:8px; bottom:auto; }
+.hw-works-browser .hw-wb-img-badge,
+.hw-works-browser .hw-wb-batch-badge { left:auto; right:8px; top:8px; bottom:auto; }
+.hw-works-browser .hw-wb-batch-badge { font-weight:600; letter-spacing:0.2px; backdrop-filter:blur(2px); }
 .hw-works-browser .hw-wb-media-count { left:auto; right:8px; }
 .hw-works-browser .hw-wb-price.is-free { background:rgba(82,104,74,.78); }
 .hw-works-browser .hw-wb-body { padding:9px 10px 10px; }

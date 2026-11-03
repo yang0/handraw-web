@@ -1530,6 +1530,13 @@ def _serialize_work(
     except Exception:
         stamps = {}
 
+    row_keys = row.keys() if hasattr(row, "keys") else row
+    batch_id = row["batch_id"] if "batch_id" in row_keys else None
+    batch_total = int(row["batch_total"]) if "batch_total" in row_keys and row["batch_total"] is not None else 1
+    batch_index = int(row["batch_rank"]) if "batch_rank" in row_keys and row["batch_rank"] is not None else (
+        int(row["batch_index"]) if "batch_index" in row_keys and row["batch_index"] is not None else 1
+    )
+
     return {
         "id": wid,
         "title": row["title"],
@@ -1563,6 +1570,9 @@ def _serialize_work(
         "reproducible": bool(str(row["prompt"] or "").strip()),
         "notes": row["notes"] or "",
         "comments": comments_by_work.get(wid, []),
+        "batchId": batch_id,
+        "batchTotal": batch_total,
+        "batchIndex": batch_index,
     }
 
 
@@ -2051,9 +2061,37 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
                 "time": cm["time_label"] or format_short_time(cm["created_at"]),
             }
         )
-    work_filter, work_ids = _seed_filter("id", "works")
+    work_filter, work_ids = _seed_filter("w.id", "works")
     work_rows = conn.execute(
-        f"SELECT * FROM works WHERE status = 'published' AND images_json IS NOT NULL AND TRIM(images_json) NOT IN ('', '[]', 'null') AND json_valid(images_json) = 1 AND {work_filter} ORDER BY featured DESC, published_at_ms DESC",
+        f"""
+        WITH scoped_works AS (
+            SELECT
+                w.*,
+                COALESCE(gw.generation_id, 'work_' || w.id) AS batch_id,
+                COALESCE(gw.rowid, 0) AS gen_rowid
+            FROM works w
+            LEFT JOIN generation_works gw ON gw.work_id = w.id
+            WHERE w.status = 'published'
+              AND w.images_json IS NOT NULL
+              AND TRIM(w.images_json) NOT IN ('', '[]', 'null')
+              AND json_valid(w.images_json) = 1
+              AND {work_filter}
+        ),
+        ranked_works AS (
+            SELECT
+                sw.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY sw.batch_id
+                    ORDER BY sw.gen_rowid ASC, sw.published_at_ms ASC, sw.id ASC
+                ) AS batch_rank,
+                COUNT(*) OVER (
+                    PARTITION BY sw.batch_id
+                ) AS batch_total
+            FROM scoped_works sw
+        )
+        SELECT * FROM ranked_works
+        ORDER BY featured DESC, published_at_ms DESC, id DESC
+        """,
         work_ids,
     ).fetchall()
     works_out: list[dict[str, Any]] = [_serialize_work(w, comments_by_work, unlocked_set, current_user, conn=conn) for w in work_rows]

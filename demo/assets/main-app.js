@@ -137,16 +137,18 @@
       }
     }
 
-    // Standalone Work Detail & Comment Page (?view=work&id=w_101 or legacy ?work=w_101)
+    // Standalone Work Detail & Comment Page (?view=work&id=w_101 or legacy ?work=w_101) -> unified into forum topic
     if (view === "work" || legacyWork) {
       const wid = (p.get("id") || legacyWork || "").trim();
       if (wid) {
-        UI.lastPrimaryView = "works";
-        App.view = "work";
-        UI.activeWorkId = wid;
-        UI.activeWorkImgIdx = 0;
-        UI.workFocusComment = p.get("focus") === "comment";
-        UI.workInlineDrawer = "";
+        const focus = p.get("focus") === "comment";
+        const disc = (App.state && App.state.discussions && App.state.discussions[wid]) || null;
+        const tid = disc ? disc.topicId : null;
+        if (tid) {
+          window.location.replace(channelUrl("forum", { view: "topic", id: tid, ...(focus ? { focus: "comment" } : {}) }));
+        } else {
+          window.location.replace(`/t/work-${encodeURIComponent(wid)}${focus ? "?focus=comment" : ""}`);
+        }
         return {};
       }
     }
@@ -370,7 +372,15 @@
   }
 
   function openWorkPage(workId, imgIndex = 0, focusComment = false) {
-    S.goToWorkPage(workId, focusComment);
+    const wid = String(workId || "").trim();
+    if (!wid) return;
+    const disc = (App.state && App.state.discussions && App.state.discussions[wid]) || null;
+    const tid = disc ? disc.topicId : null;
+    if (tid) {
+      window.location.href = channelUrl("forum", { view: "topic", id: tid, ...(focusComment ? { focus: "comment" } : {}) });
+    } else {
+      S.goToWorkPage(wid, focusComment);
+    }
   }
 
   function formatArticleUpdated(ms) {
@@ -1079,6 +1089,9 @@
       imageUrl: (B.imagesFor(w)[0] || ""),
       aspectRatio: 0.75,
       work: w,
+      batchId: w.batchId,
+      batchTotal: w.batchTotal || 1,
+      batchIndex: w.batchIndex || 1,
       resourceCodes: B.normalizeResourceCodes ? B.normalizeResourceCodes(w) : new Set(),
       styles: Array.isArray(w.styles) ? w.styles : [],
       layout: w.layout || ""
@@ -1100,7 +1113,9 @@
       const totalImgs = item.totalImages || 1;
       const imageUrl = item.imageUrl || (B.imagesFor(w)[0] || "");
       const ar = item.aspectRatio || (B.parseAspectRatio ? B.parseAspectRatio(w, imgIdx) : 0.75);
-      const href = channelUrl("main", { view: "work", id });
+      const disc = (App.state && App.state.discussions && App.state.discussions[id]) || null;
+      const tid = disc ? disc.topicId : (w.topicId || null);
+      const href = tid ? channelUrl("forum", { view: "topic", id: tid }) : channelUrl("main", { view: "work", id });
       const liked = Boolean(S.isLiked && S.isLiked("work", id));
       const likeCnt = (S.getLikeCount && S.getLikeCount("work", w)) ?? Number(w.likes || 0);
       const collected = Boolean(S.isCollected && S.isCollected("works", id));
@@ -1112,11 +1127,27 @@
         (App.state.loggedIn && App.state.user && w.author === App.state.user.username)
       );
       const marginStyle = (item.extraMargin && item.extraMargin > 0) ? `margin-top:${item.extraMargin}px;` : "";
+
+      const batchTotal = Number(item.batchTotal || w.batchTotal || 1);
+      const batchIdx = Number(item.batchIndex || w.batchIndex || 1);
+      const isSearchMode = Boolean(String(UI.workQuery || (filters && filters.query) || "").trim());
+
+      let badgeHtml = "";
+      if (batchTotal > 1) {
+        if (isSearchMode) {
+          badgeHtml = `<span class="hw-wb-batch-badge" title="同批第 ${batchIdx}/${batchTotal} 张">同批第 ${batchIdx}/${batchTotal} 张</span>`;
+        } else {
+          badgeHtml = `<span class="hw-wb-batch-badge" title="同批 ${batchTotal} 件作品">同批 ${batchTotal} 件</span>`;
+        }
+      } else if (totalImgs > 1) {
+        badgeHtml = `<span class="hw-wb-img-badge">图 ${imgIdx + 1}/${totalImgs}</span>`;
+      }
+
       return `
         <article class="hw-wb-card" data-wb-work="${esc(id)}" data-wb-card-key="${esc(itemKey)}" data-wb-author="${esc(item.author || item.authorUsername || w.author || w.author_username || "")}" style="${marginStyle}">
           <a class="hw-wb-media" href="${esc(href)}" data-wb-open="${esc(id)}" data-wb-img-idx="${imgIdx}" aria-label="打开作品：${esc(w.title || "未命名作品")}" style="aspect-ratio:${ar};">
             <img data-hw-src="${esc(imageUrl)}" alt="${esc(w.title || "作品图片")}" loading="lazy" />
-            ${totalImgs > 1 ? `<span class="hw-wb-img-badge">图 ${imgIdx + 1}/${totalImgs}</span>` : ""}
+            ${badgeHtml}
           </a>
           <div class="hw-wb-body">
             <h3 class="hw-wb-title"><a href="${esc(href)}" data-wb-open="${esc(id)}" data-wb-img-idx="${imgIdx}">${esc(w.title || "未命名作品")}</a></h3>
@@ -1962,7 +1993,15 @@
   }
 
   function renderWorkDetailPage(root) {
-    location.replace(channelUrl("main", {view:"work",id:UI.activeWorkId,...(UI.workFocusComment ? {focus:"comment"} : {})}));
+    const wid = UI.activeWorkId;
+    const focus = UI.workFocusComment;
+    const disc = (App.state && App.state.discussions && App.state.discussions[wid]) || null;
+    const tid = disc ? disc.topicId : null;
+    if (tid) {
+      window.location.replace(channelUrl("forum", { view: "topic", id: tid, ...(focus ? { focus: "comment" } : {}) }));
+    } else {
+      window.location.replace(`/t/work-${encodeURIComponent(wid)}${focus ? "?focus=comment" : ""}`);
+    }
   }
 
   async function loadUserGenerations(username, cursor = "", append = false) {
