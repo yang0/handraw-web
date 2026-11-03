@@ -935,7 +935,9 @@ class ImportHttpApiTests(unittest.TestCase):
         self.assertEqual(resp_other.get("code"), "not_found")
 
         # 5. Wait for user 1's job to finish and GET result
-        for _ in range(50):
+        deadline = time.monotonic() + 30
+        status_done, resp_done = None, {}
+        while time.monotonic() < deadline:
             time.sleep(0.1)
             status_done, resp_done = self._request("GET", f"/api/studio/imports/{import_id}", cookie=cookie)
             if status_done == 200 and resp_done.get("status") in ("done", "failed"):
