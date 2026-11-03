@@ -1086,8 +1086,11 @@ def resolve_binary_image(
             if not _path_is_within(target, root):
                 return None
             if prefix in ("/generated/", "/uploads/") and db is not None:
-                if not user or _media_owner(db, safe_url) != int(user["id"]):
-                    return None
+                # An explicit grant makes the picture as public as the content it
+                # belongs to; without one, only its owner may read it.
+                if not _is_published_media(db, safe_url):
+                    if not user or _media_owner(db, safe_url) != int(user["id"]):
+                        return None
             if target.is_file():
                 return target.read_bytes(), (target.suffix.lower() or ".webp")
     return None

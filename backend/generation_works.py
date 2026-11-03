@@ -138,6 +138,46 @@ def resolve_work_title(
     return "未命名作品"
 
 
+def _grant_work_media(
+    conn: sqlite3.Connection,
+    image_url: str,
+    author_username: str,
+    generation_id: str,
+    work_id: str,
+) -> None:
+    """Make a published work's picture readable by anyone who can see the work."""
+    url = str(image_url or "").split("?", 1)[0]
+    if not url.startswith(("/generated/", "/uploads/")):
+        return
+    owner = conn.execute(
+        "SELECT user_id FROM studio_generations WHERE id = ?", (generation_id,)
+    ).fetchone()
+    owner_id = int(owner["user_id"]) if owner and owner["user_id"] is not None else None
+    if owner_id is None:
+        u = conn.execute("SELECT id FROM users WHERE username = ?", (author_username,)).fetchone()
+        owner_id = int(u["id"]) if u else None
+    if owner_id is None:
+        return
+    conn.execute(
+        """
+        INSERT INTO media_public_grants
+            (id, media_url, owner_user_id, generation_id, target_type, target_id,
+             granted_by_user_id, granted_at, revoked_at)
+        VALUES (?, ?, ?, ?, 'work', ?, ?, ?, NULL)
+        ON CONFLICT(media_url, target_type, target_id) DO UPDATE SET revoked_at = NULL
+        """,
+        (
+            f"grant_{uuid.uuid4().hex}",
+            url,
+            owner_id,
+            generation_id,
+            work_id,
+            owner_id,
+            utc_now_iso(),
+        ),
+    )
+
+
 def _find_work_by_image(conn: sqlite3.Connection, image_url: str, author_username: str) -> str:
     """Return an existing work that already carries this picture, if any.
 
@@ -366,6 +406,12 @@ def project_generation_to_works(
         new_w_full = conn.execute("SELECT * FROM works WHERE id = ?", (work_id,)).fetchone()
         if new_w_full:
             ensure_topic(conn, "work", work_id, dict(new_w_full), initial_origin="generation")
+
+        # The picture is private media owned by its author, served only to them
+        # until something grants it to a published target. Publishing the work
+        # without granting meant everyone else -- and the author's own gallery
+        # when viewed from another account -- got a broken image.
+        _grant_work_media(conn, image_url, author_username, gen_id, work_id)
 
         projected_work_ids.append(work_id)
 
