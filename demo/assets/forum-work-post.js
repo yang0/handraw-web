@@ -158,13 +158,18 @@
     if (locked) prompt = "";
 
     // ---- 复刻链接 ----
+    // Only the canvas-only modes belong on the canvas. ``work.mode`` also holds
+    // a picture ratio for some rows ("3:4"), and treating that as a mode sent
+    // 做同款 to the empty canvas instead of the form that made the picture.
+    const CANVAS_MODES = ['canvas', 'advanced', 'workflow'];
+    const forkEntryFor = (mode) => (CANVAS_MODES.includes(String(mode || '').trim()) ? 'canvas' : 'quick');
     let forkUrl = "";
     let canFork = false;
     if (work && !locked && prompt) {
-      forkUrl = S.channelUrl("studio", { entry: ['graphic-text','pure-image','series'].includes(work.mode || 'graphic-text') ? 'quick' : 'canvas', fork: work.id });
+      forkUrl = S.channelUrl("studio", { entry: forkEntryFor(work.mode), fork: work.id });
       canFork = !!(forkUrl && safeHref(forkUrl));
     } else if (!work && hasRecipe && !recipeLocked && topic.id) {
-      forkUrl = S.channelUrl("studio", { entry: ['graphic-text','pure-image','series'].includes(recipe.mode || 'graphic-text') ? 'quick' : 'canvas', forkTopic: topic.id });
+      forkUrl = S.channelUrl("studio", { entry: forkEntryFor(recipe.mode), forkTopic: topic.id });
       canFork = !!(forkUrl && safeHref(forkUrl));
     }
 

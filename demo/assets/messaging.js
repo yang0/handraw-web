@@ -625,7 +625,8 @@
 
   function targetUrl(n) {
     if (n.target_type === "generation") {
-      const u = (App.state && App.state.user && App.state.user.username) || "";
+      const S = getS();
+      const u = (S.App && S.App.state && S.App.state.user && S.App.state.user.username) || "";
       return channelUrl("main", u ? { view: "profile", user: u, ptab: "generations" } : { view: "auth" });
     }
     if (n.target_type === "work") return channelUrl("main", { view: "work", id: n.target_id });
