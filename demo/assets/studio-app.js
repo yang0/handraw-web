@@ -635,27 +635,31 @@
           writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
         }
 
-        if (Array.isArray(ws.articles) && ws.articles.length) {
+        if (Array.isArray(ws.articles)) {
           ensureMyArticlesInitialized();
-          const artMap = new Map((CS.myArticles || []).map((a) => [a.id, a]));
+          const serverIds = new Set(ws.articles.map((a) => a.id));
+          const artMap = new Map();
           ws.articles.forEach((ra) => {
             if (!ra || !ra.id) return;
-            const prev = artMap.get(ra.id);
-            if (!prev || (Number(ra.updatedAtMs) || 0) >= (Number(prev.updatedAtMs) || 0)) {
-              artMap.set(ra.id, {
-                ...(prev || {}),
-                id: ra.id,
-                articleTitle: ra.articleTitle || "未命名文章",
-                markdown: ra.markdown || "",
-                cards: Array.isArray(ra.cards) ? ra.cards : [],
-                style1: ra.style1 || "",
-                layout: ra.layout || "",
-                status: ra.status || "ready",
-                runCount: Number(ra.runCount) || 0,
-                createdAtMs: Number(ra.createdAtMs) || Date.now(),
-                updatedAtMs: Number(ra.updatedAtMs) || Date.now(),
-                timeLabel: typeof formatArticleTimeLabel === "function" ? formatArticleTimeLabel(Number(ra.updatedAtMs) || Date.now()) : "近期"
-              });
+            const prev = (CS.myArticles || []).find((a) => a.id === ra.id);
+            artMap.set(ra.id, {
+              ...(prev || {}),
+              id: ra.id,
+              articleTitle: ra.articleTitle || "未命名文章",
+              markdown: ra.markdown || "",
+              cards: Array.isArray(ra.cards) ? ra.cards : [],
+              style1: ra.style1 || "",
+              layout: ra.layout || "",
+              status: ra.status || "ready",
+              runCount: Number(ra.runCount) || 0,
+              createdAtMs: Number(ra.createdAtMs) || Date.now(),
+              updatedAtMs: Number(ra.updatedAtMs) || Date.now(),
+              timeLabel: typeof formatArticleTimeLabel === "function" ? formatArticleTimeLabel(Number(ra.updatedAtMs) || Date.now()) : "近期"
+            });
+          });
+          (CS.myArticles || []).forEach((a) => {
+            if (a && a.id && a.isNewDraft && !serverIds.has(a.id)) {
+              artMap.set(a.id, a);
             }
           });
           CS.myArticles = [...artMap.values()];
@@ -11589,6 +11593,66 @@
     return bodyText || "点击进入文章配图编排页，可调整封面与章节插图提示词并批量生成配图。";
   }
 
+  function removeArticleFromWorkspace(aid) {
+    if (!aid) return;
+    if (CS.graph && Array.isArray(CS.graph.nodes)) {
+      CS.graph.nodes = CS.graph.nodes.filter(
+        (n) => !(n.type === "article_plan" && (n.id === aid || n.data?.articleId === aid))
+      );
+    }
+    for (const t of CS.tabs || []) {
+      if (t.graph && Array.isArray(t.graph.nodes)) {
+        t.graph.nodes = t.graph.nodes.filter(
+          (n) => !(n.type === "article_plan" && (n.id === aid || n.data?.articleId === aid))
+        );
+      }
+    }
+  }
+
+  function deleteArticle(aid) {
+    const art = findArticleById(aid) || (CS.myArticles || []).find((x) => x.id === aid);
+    const title = art?.articleTitle || (CS.articleEditorDraft?.id === aid ? CS.articleEditorDraft.title : "") || "未命名文章";
+    if (S && typeof S.deleteArticle === "function") {
+      return S.deleteArticle(aid, {
+        articleTitle: title,
+        onSuccess() {
+          CS.myArticles = (CS.myArticles || []).filter((x) => x.id !== aid);
+          removeArticleFromWorkspace(aid);
+          clearUnifiedArticleEditorFlush();
+          persistMyArticles();
+          persistOpenTabs();
+
+          const wasActive = CS.activeArticleId === aid || CS.articleEditorDraft?.id === aid;
+          if (wasActive) {
+            CS.articleEditorDraft = null;
+            CS.activeArticleId = CS.myArticles[0]?.id || null;
+          }
+
+          if (CS.articleSubView === "editor" || wasActive) {
+            openMyArticlesPage({ subView: "all-list" });
+          } else {
+            renderFullPreviewStage();
+          }
+        }
+      });
+    }
+    CS.myArticles = (CS.myArticles || []).filter((x) => x.id !== aid);
+    removeArticleFromWorkspace(aid);
+    clearUnifiedArticleEditorFlush();
+    persistMyArticles();
+    persistOpenTabs();
+    const wasActive = CS.activeArticleId === aid || CS.articleEditorDraft?.id === aid;
+    if (wasActive) {
+      CS.articleEditorDraft = null;
+      CS.activeArticleId = CS.myArticles[0]?.id || null;
+    }
+    if (CS.articleSubView === "editor" || wasActive) {
+      openMyArticlesPage({ subView: "all-list" });
+    } else {
+      renderFullPreviewStage();
+    }
+  }
+
   function renderAllArticlesPaginatedPage(sortedArticles) {
     const PAGE_SIZE = 6;
     const q = String(CS.articleListQuery || "").trim().toLowerCase();
@@ -11829,13 +11893,7 @@
         e.stopPropagation();
         const aid = delBtn.getAttribute("data-del-art-id");
         if (!aid) return;
-        CS.myArticles = (CS.myArticles || []).filter((x) => x.id !== aid);
-        if (CS.activeArticleId === aid) {
-          CS.activeArticleId = CS.myArticles[0]?.id || null;
-        }
-        persistMyArticles();
-        renderFullPreviewStage();
-        toast("🗑️ 已从历史文章列表中移除");
+        deleteArticle(aid);
       };
     });
   }
@@ -14540,6 +14598,7 @@
               导入/替换文档
               <input type="file" id="editor-file-replace-inp" accept=".md,.markdown,.txt,.doc,.docx,.pdf" hidden />
             </label>
+            <button type="button" class="btn btn-sm btn-danger" id="editor-btn-delete-article" style="padding:3px 10px;font-size:12px;font-weight:750;color:#dc2626;border-color:rgba(220,38,38,0.3);background:#fff;" title="删除当前文章">🗑️ 删除文章</button>
           </div>
         </header>
 
@@ -14662,6 +14721,15 @@
     if (backBtn) {
       backBtn.onclick = () => {
         openMyArticlesPage({ subView: "all-list" });
+      };
+    }
+
+    const delArtBtn = DOM.previewStage.querySelector("#editor-btn-delete-article");
+    if (delArtBtn) {
+      delArtBtn.onclick = () => {
+        const aid = draft.id || CS.activeArticleId;
+        if (!aid) return;
+        deleteArticle(aid);
       };
     }
 

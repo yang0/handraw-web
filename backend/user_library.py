@@ -496,7 +496,7 @@ def is_media_referenced(
         # 7. Check studio articles
         if _check_query(
             "studio_articles",
-            "SELECT 1 FROM studio_articles WHERE markdown LIKE ? OR cards_json LIKE ? LIMIT 1",
+            "SELECT 1 FROM studio_articles WHERE (markdown LIKE ? OR cards_json LIKE ?) AND COALESCE(deleted_at, '') = '' LIMIT 1",
             (url_like, url_like),
         ):
             return True

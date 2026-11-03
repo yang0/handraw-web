@@ -509,6 +509,14 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             ON media_public_grants(media_url, revoked_at);
         """,
     ),
+    (
+        83,
+        "083_studio_articles_deleted_at",
+        """
+        ALTER TABLE studio_articles ADD COLUMN deleted_at TEXT NOT NULL DEFAULT '';
+        CREATE INDEX IF NOT EXISTS idx_studio_articles_deleted ON studio_articles(user_id, deleted_at, updated_at_ms DESC);
+        """,
+    ),
 ]
 
 # Feature work can add independent additive migrations without creating a

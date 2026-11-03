@@ -494,7 +494,7 @@ def cleanup_unreferenced_import_media(db: Database, max_age_hours: int = 24) -> 
 
         with db.transaction() as tx:
             ref_art = tx.execute(
-                "SELECT 1 FROM studio_articles WHERE markdown LIKE ? OR cards_json LIKE ? LIMIT 1",
+                "SELECT 1 FROM studio_articles WHERE (markdown LIKE ? OR cards_json LIKE ?) AND COALESCE(deleted_at, '') = '' LIMIT 1",
                 (f"%{url}%", f"%{url}%"),
             ).fetchone()
             ref_job = tx.execute(
