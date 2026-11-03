@@ -24,6 +24,7 @@
   }
 
   const BOARD_DEFS = [
+    { key: "showcase", label: "🎨 晒作品", short: "晒作品" },
     { key: "tuning", label: "🎯 作品求改进 / 悬赏", short: "求调优" },
     { key: "experience", label: "📘 创作经验", short: "创作经验" },
     { key: "assets", label: "🎨 画风与图型专区", short: "画风图型" },
@@ -171,6 +172,9 @@
     authReturnView: "list",
     navHistoryDepth: 0
   };
+  if (typeof window !== "undefined") {
+    window.FUI = FUI;
+  }
 
   let draftAccount = null;
   let draftSaveTimer = null;
@@ -223,6 +227,19 @@
     syncDraftInputsFromDom(document.querySelector("#forum-app-root"));event.preventDefault();event.returnValue="";
   });
 
+  function getValidCategories() {
+    const rawBoards = (App.state && Array.isArray(App.state.forumBoards) && App.state.forumBoards.length)
+      ? App.state.forumBoards
+      : BOARD_DEFS;
+    const keys = rawBoards
+      .map((b) => (typeof b === "object" && b ? (b.key || b.id) : b))
+      .filter(Boolean);
+    if (!keys.includes("all")) {
+      keys.unshift("all");
+    }
+    return Array.from(new Set(keys));
+  }
+
   function parseInitialForumUrl() {
     const tPathMatch = window.location.pathname.match(/^\/t\/(.+)$/);
     if (tPathMatch) {
@@ -236,7 +253,7 @@
     const legacyTopic = (p.get("topic") || "").trim();
 
     if (p.get("asset")) FUI.filterAsset = p.get("asset").toUpperCase();
-    if (p.get("category") && ["all", "tuning", "experience", "assets", "tools"].includes(p.get("category"))) {
+    if (p.get("category") && getValidCategories().includes(p.get("category"))) {
       FUI.category = p.get("category");
     }
     // Legacy URL param 'format' (visual/text) is ignored; format filter is deprecated.
