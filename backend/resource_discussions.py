@@ -395,15 +395,18 @@ def topic_visibility_sql(reply_filter: str = "1=1", admin: bool = False) -> str:
             f"(SELECT COUNT(*) FROM forum_replies r "
             f"WHERE r.topic_id = forum_topics.id AND r.status = 'published' AND {rf}) >= {OFFICIAL_TOPIC_MIN_REPLIES}"
         )
-    work_cond = (
-        "("
-        "  ("
-        "    (forum_topics.work_id IS NULL OR forum_topics.work_id = '') "
-        "    AND NOT EXISTS (SELECT 1 FROM curation_resource_topics crt_w WHERE crt_w.kind = 'work' AND crt_w.topic_id = forum_topics.id)"
-        "  ) "
-        "  OR forum_topics.listed_at_ms IS NOT NULL"
-        ")"
-    )
+    if admin:
+        work_cond = "1=1"
+    else:
+        work_cond = (
+            "("
+            "  ("
+            "    (forum_topics.work_id IS NULL OR forum_topics.work_id = '') "
+            "    AND NOT EXISTS (SELECT 1 FROM curation_resource_topics crt_w WHERE crt_w.kind = 'work' AND crt_w.topic_id = forum_topics.id)"
+            "  ) "
+            "  OR forum_topics.listed_at_ms IS NOT NULL"
+            ")"
+        )
     return f"((id NOT IN ({official_sql}) OR {reply_cond}) AND {work_cond})"
 
 
@@ -423,12 +426,22 @@ def apply_boot(db, payload, current_user):
         topic = topics.get(tid)
         if not topic:
             if kind == 'work':
-                reply_cnt_row = conn.execute(
-                    "SELECT COUNT(*) AS c FROM forum_replies WHERE topic_id = ? AND status = 'published'",
-                    (tid,),
+                st_row = conn.execute(
+                    """
+                    SELECT ft.status AS topic_status, w.status AS work_status
+                    FROM forum_topics ft
+                    JOIN works w ON w.id = ?
+                    WHERE ft.id = ?
+                    """,
+                    (target, tid),
                 ).fetchone()
-                reply_cnt = int(reply_cnt_row["c"]) if reply_cnt_row else 0
-                payload['discussions'][norm_target] = {'topicId': tid, 'count': reply_cnt, 'origin': origin}
+                if st_row and st_row["topic_status"] == "published" and st_row["work_status"] == "published":
+                    reply_cnt_row = conn.execute(
+                        "SELECT COUNT(*) AS c FROM forum_replies WHERE topic_id = ? AND status = 'published'",
+                        (tid,),
+                    ).fetchone()
+                    reply_cnt = int(reply_cnt_row["c"]) if reply_cnt_row else 0
+                    payload['discussions'][norm_target] = {'topicId': tid, 'count': reply_cnt, 'origin': origin}
             continue
         replies = topic.get('replies', [])
         # A work is not a catalogue resource: resolve_resource() only knows

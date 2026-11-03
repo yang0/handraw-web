@@ -3623,11 +3623,11 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
 
 # ======================== PUBLISHING: WORKS, ASSETS, FORUM & BOUNTIES ========================
 
-def publish_user_work(db, user, body):
+def publish_user_work(db, user, body, *, listed: bool = True):
     # Works publish immediately (D-02).  Double review stays for styles and
     # layouts, which feed the shared catalogue.
     from .curation import publish_work_direct
-    return publish_work_direct(db, user, body)
+    return publish_work_direct(db, user, body, listed=listed)
 
 
 

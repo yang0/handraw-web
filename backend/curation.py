@@ -1608,13 +1608,20 @@ def _validate_references(tx,payload):
 SHOWCASE_CATEGORY = "showcase"
 
 
-def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+def publish_work_direct(
+    db: Database,
+    user: dict[str, Any],
+    body: dict[str, Any],
+    *,
+    listed: bool = False,
+) -> dict[str, Any]:
     """Publish one work immediately and return its canonical link.
 
     ``requestId`` is the idempotency key: replaying the same request returns the
     same work instead of creating a second one.
     """
     body = body or {}
+    should_list = bool(listed or body.get("listed"))
     username = _username(user)
     uid = _user_id(user)
     request_id = _s(body.get("requestId"), 80)
@@ -1677,7 +1684,12 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
             if dup:
                 wid = str(dup["id"])
                 from .resource_discussions import ensure_topic
-                topic_id = ensure_topic(tx, "work", wid, dict(dup), initial_origin="submission")
+                topic_id = ensure_topic(tx, "work", wid, dict(dup), initial_origin="submission", listed_at_ms=now_ms if should_list else None)
+                if should_list:
+                    tx.execute(
+                        "UPDATE forum_topics SET listed_at_ms = ?, updated_at = ? WHERE id = ? AND listed_at_ms IS NULL",
+                        (now_ms, now_iso, topic_id),
+                    )
                 return _work_receipt(tx, wid, topic_id=topic_id, deduplicated=True)
 
         owner_row = tx.execute(
@@ -1772,8 +1784,13 @@ def publish_work_direct(db: Database, user: dict[str, Any], body: dict[str, Any]
             _record_fork(tx, forked_from, uid, body.get("generationId") or "", now_iso)
 
         topic_id = _ensure_work_topic(
-            tx, work_id, username, display, title, images, styles, layout, now_iso, now_ms, summary=raw_notes
+            tx, work_id, username, display, title, images, styles, layout, now_iso, now_ms, summary=raw_notes, listed_at_ms=now_ms if should_list else None
         )
+        if should_list:
+            tx.execute(
+                "UPDATE forum_topics SET listed_at_ms = ?, updated_at = ? WHERE id = ? AND listed_at_ms IS NULL",
+                (now_ms, now_iso, topic_id),
+            )
         tx.execute(
             "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
             (work_id, topic_id, now_iso),
@@ -1940,6 +1957,7 @@ def _ensure_work_topic(
     now_iso: str,
     now_ms: int,
     summary: str = "",
+    listed_at_ms: int | None = None,
 ) -> str:
     from .resource_discussions import ensure_topic
     res_dict = {
@@ -1956,7 +1974,7 @@ def _ensure_work_topic(
         "notes": summary,
         "summary": summary,
     }
-    return ensure_topic(tx, "work", work_id, res_dict, initial_origin="submission")
+    return ensure_topic(tx, "work", work_id, res_dict, initial_origin="submission", listed_at_ms=listed_at_ms)
 
 
 def _work_receipt(
