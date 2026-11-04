@@ -414,81 +414,128 @@ def get_public_home_scenarios(
                 break
         scenario_samples_map[s_key] = picked_samples
 
-    # Pass 2: Auto-fill in scenario sort_order, skipping works already claimed
-    items: list[dict[str, Any]] = []
+    # Pass 2: Prepare candidate lists for each scenario (using date_key and engagement weighting)
+    candidates_by_scenario: dict[str, list[dict[str, Any]]] = {}
     for sc in sc_rows:
         s_key = sc["key"]
-        picked_samples = scenario_samples_map[s_key]
-
         try:
             match_rules = json.loads(sc["match_rules_json"] or "{}")
         except Exception:
             match_rules = {}
 
+        match_sql, match_params = build_scenario_match_clause(match_rules, table_alias="w")
+        candidate_rows = conn.execute(
+            f"""
+            SELECT w.*
+            FROM works w
+            WHERE w.status = 'published'
+              AND {seed_clause}
+              AND ({match_sql})
+            """,
+            (*seed_params, *match_params),
+        ).fetchall()
+
+        scored_cands: list[dict[str, Any]] = []
+        for cr in candidate_rows:
+            wid = cr["id"]
+            if wid in globally_claimed_work_ids:
+                continue
+            if not is_valid_work_row(cr):
+                continue
+            first_img = _extract_first_image(cr["images_json"])
+            if not first_img:
+                continue
+
+            # Deterministic daily rotation score
+            seed_str = f"{date_key}:{s_key}:{wid}"
+            h = int(hashlib.sha256(seed_str.encode("utf-8")).hexdigest()[:8], 16)
+            norm_h = h / 0xFFFFFFFF
+            likes = int(cr["likes"] or 0)
+            cheers = int(cr["cheers"] or 0)
+            weight = 1.0 + math.log1p(max(0, likes + cheers))
+            score = norm_h * weight
+
+            scored_cands.append(
+                {
+                    "id": wid,
+                    "title": cr["title"] or "",
+                    "imageUrl": first_img,
+                    "coverUrl": first_img,
+                    "author": cr["author_name"] or cr["author_username"] or "",
+                    "authorUsername": cr["author_username"] or "",
+                    "detailUrl": f"/?view=work&id={wid}",
+                    "isPinned": False,
+                    "score": score,
+                }
+            )
+
+        scored_cands.sort(key=lambda x: x["score"], reverse=True)
+        candidates_by_scenario[s_key] = scored_cands
+
+    # Pass 2: Round-robin allocation across scenarios
+    # In each round, every scenario that is not full and has available candidates takes 1 work.
+    # Scenarios with fewer available candidates pick first; ties broken by sort_order.
+    while True:
+        active_scenarios = []
+        for sc in sc_rows:
+            s_key = sc["key"]
+            if len(scenario_samples_map[s_key]) >= max_samples_per_scenario:
+                continue
+            avail = [c for c in candidates_by_scenario[s_key] if c["id"] not in globally_claimed_work_ids]
+            if avail:
+                active_scenarios.append(
+                    {
+                        "sc": sc,
+                        "key": s_key,
+                        "avail_count": len(avail),
+                        "sort_order": sc["sort_order"],
+                    }
+                )
+
+        if not active_scenarios:
+            break
+
+        active_scenarios.sort(key=lambda x: (x["avail_count"], x["sort_order"], x["key"]))
+
+        claimed_in_this_round = False
+        for act in active_scenarios:
+            s_key = act["key"]
+            if len(scenario_samples_map[s_key]) >= max_samples_per_scenario:
+                continue
+            # Pick the top unclaimed candidate for this scenario
+            for c in candidates_by_scenario[s_key]:
+                if c["id"] not in globally_claimed_work_ids:
+                    globally_claimed_work_ids.add(c["id"])
+                    scenario_samples_map[s_key].append(
+                        {
+                            "id": c["id"],
+                            "title": c["title"],
+                            "imageUrl": c["imageUrl"],
+                            "coverUrl": c["coverUrl"],
+                            "author": c["author"],
+                            "authorUsername": c["authorUsername"],
+                            "detailUrl": c["detailUrl"],
+                            "isPinned": False,
+                        }
+                    )
+                    claimed_in_this_round = True
+                    break
+
+        if not claimed_in_this_round:
+            break
+
+    # Build response items
+    items: list[dict[str, Any]] = []
+    for sc in sc_rows:
+        s_key = sc["key"]
+        try:
+            match_rules = json.loads(sc["match_rules_json"] or "{}")
+        except Exception:
+            match_rules = {}
         try:
             studio_params = json.loads(sc["studio_params_json"] or "{}")
         except Exception:
             studio_params = {}
-
-        needed = max_samples_per_scenario - len(picked_samples)
-        if needed > 0:
-            match_sql, match_params = build_scenario_match_clause(match_rules, table_alias="w")
-            candidate_rows = conn.execute(
-                f"""
-                SELECT w.*
-                FROM works w
-                WHERE w.status = 'published'
-                  AND {seed_clause}
-                  AND ({match_sql})
-                """,
-                (*seed_params, *match_params),
-            ).fetchall()
-
-            candidates: list[dict[str, Any]] = []
-            for cr in candidate_rows:
-                wid = cr["id"]
-                if wid in globally_claimed_work_ids:
-                    continue
-                if not is_valid_work_row(cr):
-                    continue
-                first_img = _extract_first_image(cr["images_json"])
-                if not first_img:
-                    continue
-
-                # Deterministic daily rotation score
-                seed_str = f"{date_key}:{s_key}:{wid}"
-                h = int(hashlib.sha256(seed_str.encode("utf-8")).hexdigest()[:8], 16)
-                norm_h = h / 0xFFFFFFFF
-                likes = int(cr["likes"] or 0)
-                cheers = int(cr["cheers"] or 0)
-                weight = 1.0 + math.log1p(max(0, likes + cheers))
-                score = norm_h * weight
-
-                candidates.append(
-                    {
-                        "work": cr,
-                        "score": score,
-                        "imageUrl": first_img,
-                    }
-                )
-
-            candidates.sort(key=lambda x: x["score"], reverse=True)
-
-            for cand in candidates[:needed]:
-                w = cand["work"]
-                globally_claimed_work_ids.add(w["id"])
-                picked_samples.append(
-                    {
-                        "id": w["id"],
-                        "title": w["title"] or "",
-                        "imageUrl": cand["imageUrl"],
-                        "coverUrl": cand["imageUrl"],
-                        "author": w["author_name"] or w["author_username"] or "",
-                        "authorUsername": w["author_username"] or "",
-                        "detailUrl": f"/?view=work&id={w['id']}",
-                        "isPinned": False,
-                    }
-                )
 
         items.append(
             {
@@ -499,7 +546,7 @@ def get_public_home_scenarios(
                 "studioParams": studio_params,
                 "matchRules": match_rules,
                 "sortOrder": sc["sort_order"],
-                "samples": picked_samples,
+                "samples": scenario_samples_map[s_key],
             }
         )
 

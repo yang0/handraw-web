@@ -306,6 +306,50 @@ class TestHomeScenarios(unittest.TestCase):
         all_ids2 = [s["id"] for it in data2["items"] for s in it["samples"]]
         self.assertEqual(len(all_ids2), len(set(all_ids2)))
 
+    def test_round_robin_shared_candidates_allocation(self) -> None:
+        """When two scenarios share candidates and the first scenario has enough to take all 4,
+        round-robin allocation ensures the second scenario still gets at least 1 work,
+        with zero duplicates across the page, and deterministic reproducibility."""
+        conn = self.db.get_conn()
+        # Insert 4 works matching both xiaohongshu (SC, 3:4) and gzh_inline (SC, 3:4)
+        for i in range(1, 5):
+            _insert_work(
+                conn,
+                wid=f"w_rr_{i}",
+                title=f"共享候选作品{i}",
+                layout="SC-001",
+                ratio="3:4",
+                status="published",
+                likes=i * 5,
+            )
+        conn.commit()
+
+        # Call with date_key
+        data1, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        xhs1 = next(it for it in data1["items"] if it["key"] == "xiaohongshu")
+        gzh1 = next(it for it in data1["items"] if it["key"] == "gzh_inline")
+
+        # The second scenario gzh_inline MUST get at least 1 work!
+        self.assertGreaterEqual(len(gzh1["samples"]), 1)
+        self.assertGreaterEqual(len(xhs1["samples"]), 1)
+
+        # Total works across both scenarios must be 4, and zero duplicates
+        xhs_ids = [s["id"] for s in xhs1["samples"]]
+        gzh_ids = [s["id"] for s in gzh1["samples"]]
+        self.assertTrue(set(xhs_ids).isdisjoint(set(gzh_ids)))
+
+        all_ids1 = [s["id"] for it in data1["items"] for s in it["samples"]]
+        self.assertEqual(len(all_ids1), len(set(all_ids1)), "No duplicate works across the entire page")
+
+        # Call again on the same day -> identical results
+        invalidate_scenarios_cache()
+        data2, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        xhs2 = next(it for it in data2["items"] if it["key"] == "xiaohongshu")
+        gzh2 = next(it for it in data2["items"] if it["key"] == "gzh_inline")
+
+        self.assertEqual([s["id"] for s in xhs1["samples"]], [s["id"] for s in xhs2["samples"]])
+        self.assertEqual([s["id"] for s in gzh1["samples"]], [s["id"] for s in gzh2["samples"]])
+
     def test_get_public_home_scenarios_selection_and_visibility(self) -> None:
         conn = self.db.get_conn()
         _insert_work(
