@@ -75,7 +75,7 @@ from backend.server import (
     load_image_service_config,
     size_for_ratio,
 )
-from backend.services import _seed_filter
+from backend.services import _seed_filter, grant_studio_media_public, set_work_visibility
 from backend.skill_prompt import compose_prompt
 from backend.works_feed import is_valid_work_row
 
@@ -358,16 +358,152 @@ def generate_and_cache_sample_image(prompt_text: str, ratio: str, request_id: st
     raise RuntimeError(f"网关生图任务超时未完成 (status: {status})")
 
 
-def run_seed_scenario_samples(
-    db_path: str | Path,
+def _ensure_scenario_work_configured(
+    db: Database,
+    author_user: dict[str, Any],
+    *,
+    scenario_key: str,
+    scenario_title: str,
+    preset: dict[str, Any],
+    req_id: str,
+    work_row: sqlite3.Row | dict[str, Any],
+    idx: int,
+    dry_run: bool = False,
+) -> list[str]:
+    """Ensure a scenario work has studio_generations, studio_generation_media, media_public_grants, and pin.
+
+    Does NOT modify the work's status. Returns the list of missing items that were supplemented.
+    """
+    work_id = str(work_row["id"])
+    images = json.loads(work_row["images_json"] or "[]")
+    image_url = images[0] if (images and isinstance(images, list)) else ""
+    if not image_url:
+        logger.warning("Work %s has no image in images_json, skipping configuration", work_id)
+        return []
+
+    conn = db.get_conn()
+    gen_id = f"gen_{req_id}"
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    repaired: list[str] = []
+
+    # 1. studio_generations
+    gen_row = conn.execute(
+        "SELECT id FROM studio_generations WHERE id = ? OR request_id = ?",
+        (gen_id, req_id),
+    ).fetchone()
+    actual_gen_id = gen_row["id"] if gen_row else gen_id
+
+    if not gen_row:
+        repaired.append("studio_generations")
+        if not dry_run:
+            try:
+                full_prompt = work_row["prompt"] or preset.get("theme", "")
+            except (IndexError, KeyError):
+                full_prompt = preset.get("theme", "")
+            with db.transaction() as tx:
+                tx.execute(
+                    """
+                    INSERT INTO studio_generations (
+                        id, user_id, username, tab_title, mode, mode_label, kind,
+                        recipe_summary, prompt, visible_prompt, prompt_masked, markdown,
+                        items_json, engine, cost_type, credits_spent, task_id, status,
+                        error_msg, created_at, request_id
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, 'single',
+                        ?, ?, ?, '', '',
+                        ?, 'live', 'free', 0, ?, 'success',
+                        '', ?, ?
+                    )
+                    """,
+                    (
+                        gen_id,
+                        int(author_user["id"]),
+                        author_user["username"],
+                        f"场景样图：{scenario_title}",
+                        str(preset.get("ratio") or "3:4"),
+                        "场景样图",
+                        f"{preset.get('style', '')} {preset.get('layout', '')}".strip(),
+                        full_prompt,
+                        preset.get("theme", ""),
+                        json.dumps([image_url]),
+                        req_id,
+                        now_iso,
+                        req_id,
+                    ),
+                )
+
+    # 2. studio_generation_media
+    media_row = conn.execute(
+        "SELECT id, generation_id FROM studio_generation_media WHERE media_url = ?",
+        (image_url,),
+    ).fetchone()
+    if not media_row or media_row["generation_id"] != actual_gen_id:
+        repaired.append("studio_generation_media")
+        if not dry_run:
+            with db.transaction() as tx:
+                if not media_row:
+                    tx.execute(
+                        """
+                        INSERT INTO studio_generation_media
+                        (id, generation_id, user_id, media_url, media_kind, storage_path, visibility, created_at)
+                        VALUES (?, ?, ?, ?, 'generated', '', 'public', ?)
+                        """,
+                        (f"gm_{req_id}", actual_gen_id, int(author_user["id"]), image_url, now_iso),
+                    )
+                else:
+                    tx.execute(
+                        "UPDATE studio_generation_media SET generation_id = ?, user_id = ?, visibility = 'public' WHERE id = ?",
+                        (actual_gen_id, int(author_user["id"]), media_row["id"]),
+                    )
+
+    # 3. media_public_grants (via official grant_studio_media_public)
+    grant_row = conn.execute(
+        """
+        SELECT id FROM media_public_grants
+        WHERE media_url = ? AND target_type = 'work' AND target_id = ? AND revoked_at IS NULL
+        """,
+        (image_url, work_id),
+    ).fetchone()
+    if not grant_row:
+        repaired.append("media_public_grants")
+        if not dry_run:
+            grant_studio_media_public(
+                db=db,
+                user=author_user,
+                media_url=image_url,
+                target_type="work",
+                target_id=work_id,
+                generation_id=actual_gen_id,
+            )
+
+    # 4. scenario_pinned_works
+    pin_row = conn.execute(
+        "SELECT 1 FROM scenario_pinned_works WHERE scenario_key = ? AND work_id = ?",
+        (scenario_key, work_id),
+    ).fetchone()
+    if not pin_row:
+        repaired.append("scenario_pinned_works")
+        if not dry_run:
+            admin_pin_scenario_work(
+                db,
+                author_user,
+                scenario_key=scenario_key,
+                work_id=work_id,
+                sort_order=(idx + 1) * 10,
+            )
+
+    return repaired
+
+
+def _run_seed_scenario_samples_impl(
+    db: Database,
     author_username: str,
     dry_run: bool = False,
     scenario_filter: str | None = None,
     max_per_scenario: int = 3,
     max_total_generations: int | None = None,
 ) -> dict[str, Any]:
-    """Execute scenario sample seed plan."""
-    db = Database(str(db_path))
+    """Execute scenario sample seed plan on an open Database."""
     db.migrate()
     conn = db.get_conn()
 
@@ -391,8 +527,6 @@ def run_seed_scenario_samples(
     total_generated = 0
 
     for sc in scenarios:
-        if not dry_run and max_total_generations is not None and total_generated >= max_total_generations:
-            break
         s_key = sc["key"]
         s_title = sc["title"]
         try:
@@ -417,28 +551,64 @@ def run_seed_scenario_samples(
             s_key, s_title, existing_count
         )
 
-        needed = max(0, 3 - existing_count)
-        if needed <= 0:
-            logger.info("Scenario '%s' already has >= 3 works, skipping.", s_key)
-            continue
-
         presets = SCENARIO_SAMPLE_PRESETS.get(s_key, [])
-        to_create = min(needed, max_per_scenario, len(presets))
 
-        for idx in range(to_create):
-            preset = presets[idx]
+        for idx, preset in enumerate(presets):
             req_id = f"seed_sample_{s_key}_{idx + 1}"
 
-            # Idempotency check: already exists in DB?
-            already_done = conn.execute(
-                "SELECT id, title, images_json FROM works WHERE request_id = ?", (req_id,)
+            # 1. Check if work already exists in DB by request_id
+            existing_work = conn.execute(
+                "SELECT id, title, prompt, images_json, status FROM works WHERE request_id = ?",
+                (req_id,),
             ).fetchone()
-            if already_done:
-                logger.info(
-                    "Work with request_id '%s' already exists (%s), skipping.",
-                    req_id, already_done["id"]
+
+            if existing_work:
+                work_id = str(existing_work["id"])
+                work_status = str(existing_work["status"])
+                repaired = _ensure_scenario_work_configured(
+                    db,
+                    author_user,
+                    scenario_key=s_key,
+                    scenario_title=s_title,
+                    preset=preset,
+                    req_id=req_id,
+                    work_row=existing_work,
+                    idx=idx,
+                    dry_run=dry_run,
                 )
+                if repaired:
+                    logger.info(
+                        "Repaired half-finished work '%s' (%s, status=%s): supplemented [%s]",
+                        work_id, req_id, work_status, ", ".join(repaired)
+                    )
+                    executed.append(
+                        {
+                            "scenarioKey": s_key,
+                            "workId": work_id,
+                            "requestId": req_id,
+                            "imageUrl": json.loads(existing_work["images_json"] or "[]")[0] if existing_work["images_json"] else "",
+                            "title": existing_work["title"],
+                            "repaired": repaired,
+                        }
+                    )
+                else:
+                    logger.info(
+                        "Work with request_id '%s' already exists (%s) and is fully configured, skipping.",
+                        req_id, work_id
+                    )
                 continue
+
+            # 2. Work does NOT exist yet. Check limits before creating.
+            if idx >= max_per_scenario:
+                continue
+
+            if existing_count >= 3:
+                logger.info("Scenario '%s' already has >= 3 public works, skipping new generation.", s_key)
+                continue
+
+            if max_total_generations is not None and total_generated >= max_total_generations:
+                logger.info("Reached max_total_generations limit (%d), stopping.", max_total_generations)
+                break
 
             plan_item = {
                 "scenarioKey": s_key,
@@ -455,10 +625,6 @@ def run_seed_scenario_samples(
                     s_key, preset["title"], preset["style"], preset["layout"], req_id
                 )
                 continue
-
-            if max_total_generations is not None and total_generated >= max_total_generations:
-                logger.info("Reached max_total_generations limit (%d), stopping.", max_total_generations)
-                break
 
             logger.info(
                 "Executing generation for '%s': title='%s', style='%s', layout='%s'...",
@@ -496,36 +662,47 @@ def run_seed_scenario_samples(
             work_id = receipt["workId"]
             logger.info("Successfully published work '%s' for scenario '%s'", work_id, s_key)
 
-            # Record public media grant so anonymous visitors can view the generated sample image
-            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            with db.transaction() as tx:
-                tx.execute(
-                    """
-                    INSERT OR REPLACE INTO studio_generation_media
-                    (id, generation_id, user_id, media_url, media_kind, storage_path, visibility, created_at)
-                    VALUES (?, ?, ?, ?, 'generated', '', 'public', ?)
-                    """,
-                    (f"gm_{work_id}", f"gen_{work_id}", int(author_user["id"]), image_url, now_iso),
+            # 4. Post-publish configuration (studio_generations, media, grant, pin)
+            try:
+                work_row = conn.execute(
+                    "SELECT id, title, prompt, images_json, status FROM works WHERE id = ?",
+                    (work_id,),
+                ).fetchone()
+                _ensure_scenario_work_configured(
+                    db,
+                    author_user,
+                    scenario_key=s_key,
+                    scenario_title=s_title,
+                    preset=preset,
+                    req_id=req_id,
+                    work_row=work_row,
+                    idx=idx,
+                    dry_run=False,
                 )
-                tx.execute(
-                    """
-                    INSERT INTO media_public_grants
-                    (id, media_url, owner_user_id, target_type, target_id, granted_by_user_id, granted_at, revoked_at)
-                    VALUES (?, ?, ?, 'work', ?, ?, ?, NULL)
-                    ON CONFLICT(media_url, target_type, target_id) DO UPDATE SET revoked_at=NULL, granted_at=excluded.granted_at
-                    """,
-                    (str(uuid.uuid4()), image_url, int(author_user["id"]), work_id, int(author_user["id"]), now_iso),
+            except Exception as exc:
+                logger.error(
+                    "授权或置顶失败 (work_id=%s, req_id=%s): %s。将自动隐藏作品以防破图外露并退出脚本。",
+                    work_id, req_id, exc, exc_info=True
                 )
-
-            # 4. Pin work to the scenario
-            admin_pin_scenario_work(
-                db, author_user,
-                scenario_key=s_key,
-                work_id=work_id,
-                sort_order=(idx + 1) * 10,
-            )
+                now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                try:
+                    with db.transaction() as tx:
+                        set_work_visibility(
+                            tx,
+                            work_id,
+                            "hidden",
+                            now_iso,
+                            source="moderator",
+                            reason=f"场景样图授权或置顶失败自动隐藏: {exc}",
+                            actor_role=author_user.get("role", "admin"),
+                        )
+                    logger.info("作品 %s 已成功变更为 hidden 状态", work_id)
+                except Exception as hide_err:
+                    logger.error("变更作品 %s 为 hidden 时发生错误: %s", work_id, hide_err)
+                raise RuntimeError(f"场景样图后置处理失败已隐藏作品: {exc}") from exc
 
             total_generated += 1
+            existing_count += 1
             executed.append(
                 {
                     "scenarioKey": s_key,
@@ -545,6 +722,29 @@ def run_seed_scenario_samples(
         "planned": planned,
         "executed": executed,
     }
+
+
+def run_seed_scenario_samples(
+    db_path: str | Path,
+    author_username: str,
+    dry_run: bool = False,
+    scenario_filter: str | None = None,
+    max_per_scenario: int = 3,
+    max_total_generations: int | None = None,
+) -> dict[str, Any]:
+    """Execute scenario sample seed plan with safe DB lifecycle management."""
+    db = Database(str(db_path))
+    try:
+        return _run_seed_scenario_samples_impl(
+            db,
+            author_username=author_username,
+            dry_run=dry_run,
+            scenario_filter=scenario_filter,
+            max_per_scenario=max_per_scenario,
+            max_total_generations=max_total_generations,
+        )
+    finally:
+        db.close()
 
 
 def main() -> None:
@@ -575,7 +775,8 @@ def main() -> None:
     print(f"Planned Generations: {result['plannedCount']}")
     print(f"Executed Generations: {result['executedCount']}")
     for ex in result["executed"]:
-        print(f"  [{ex['scenarioKey']}] Work: {ex['workId']}, Title: {ex['title']}, Image: {ex['imageUrl']}")
+        rep = f" (repaired: {', '.join(ex['repaired'])})" if ex.get("repaired") else ""
+        print(f"  [{ex['scenarioKey']}] Work: {ex['workId']}, Title: {ex['title']}, Image: {ex['imageUrl']}{rep}")
 
 
 if __name__ == "__main__":

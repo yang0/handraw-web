@@ -9,6 +9,7 @@ import tempfile
 import time
 from typing import Any
 import unittest
+from unittest import mock
 
 from backend.db import Database
 from backend.home_scenarios import (
@@ -607,6 +608,176 @@ class TestHomeScenarios(unittest.TestCase):
         h3 = FakeHandler({"If-None-Match": '"otheretag"'})
         h3._send_cached_json(obj, etag=etag)
         self.assertEqual(h3.response_code, 200)
+
+    def test_seed_scenario_samples_normal_anonymous_accessible(self) -> None:
+        """Seed script generates official work with studio_generations and grant; anonymous can access image."""
+        conn = self.db.get_conn()
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, password_hash, invite_code, role, status, created_at) VALUES (?, ?, ?, 'h', ?, ?, 'active', ?)",
+            (1, "yang0", "Yang", "inv_yang0", "admin", "2026-11-04T10:00:00Z"),
+        )
+        conn.commit()
+        seed_default_home_scenarios_hook(conn)
+
+        img_url = "/generated/seed_sample_comic_4panel_1_0.png"
+        with mock.patch("ops.seed_scenario_samples.generate_and_cache_sample_image", return_value=img_url):
+            from ops.seed_scenario_samples import run_seed_scenario_samples
+            res = run_seed_scenario_samples(
+                self.db_path,
+                author_username="yang0",
+                scenario_filter="comic_4panel",
+                max_total_generations=1,
+            )
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(len(res["executed"]), 1)
+        wid = res["executed"][0]["workId"]
+
+        # 1. Work published
+        w = conn.execute("SELECT * FROM works WHERE id = ?", (wid,)).fetchone()
+        self.assertIsNotNone(w)
+        self.assertEqual(w["status"], "published")
+        self.assertEqual(w["request_id"], "seed_sample_comic_4panel_1")
+
+        # 2. studio_generations created
+        gen = conn.execute("SELECT * FROM studio_generations WHERE request_id = 'seed_sample_comic_4panel_1'").fetchone()
+        self.assertIsNotNone(gen)
+        self.assertEqual(gen["status"], "success")
+        self.assertEqual(gen["user_id"], 1)
+
+        # 3. studio_generation_media created with valid FK
+        media = conn.execute("SELECT * FROM studio_generation_media WHERE media_url = ?", (img_url,)).fetchone()
+        self.assertIsNotNone(media)
+        self.assertEqual(media["generation_id"], gen["id"])
+        self.assertEqual(media["user_id"], 1)
+
+        # 4. media_public_grants created and active
+        grant = conn.execute(
+            "SELECT * FROM media_public_grants WHERE media_url = ? AND target_type = 'work' AND target_id = ? AND revoked_at IS NULL",
+            (img_url, wid),
+        ).fetchone()
+        self.assertIsNotNone(grant)
+        self.assertEqual(grant["owner_user_id"], 1)
+
+        # 5. Anonymous access check (same query as backend/server.py:794)
+        anon_check = conn.execute(
+            "SELECT 1 FROM media_public_grants WHERE media_url = ? AND revoked_at IS NULL LIMIT 1",
+            (img_url,),
+        ).fetchone()
+        self.assertIsNotNone(anon_check)
+
+        # 6. Scenario pin exists
+        pin = conn.execute(
+            "SELECT * FROM scenario_pinned_works WHERE scenario_key = 'comic_4panel' AND work_id = ?",
+            (wid,),
+        ).fetchone()
+        self.assertIsNotNone(pin)
+
+    def test_seed_scenario_samples_grant_failure_hides_work_and_exits(self) -> None:
+        """When authorization/pinning fails, work is automatically marked hidden and script raises RuntimeError."""
+        conn = self.db.get_conn()
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, password_hash, invite_code, role, status, created_at) VALUES (?, ?, ?, 'h', ?, ?, 'active', ?)",
+            (1, "yang0", "Yang", "inv_yang0", "admin", "2026-11-04T10:00:00Z"),
+        )
+        conn.commit()
+        seed_default_home_scenarios_hook(conn)
+
+        img_url = "/generated/seed_sample_comic_4panel_1_0.png"
+        with mock.patch("ops.seed_scenario_samples.generate_and_cache_sample_image", return_value=img_url):
+            with mock.patch("ops.seed_scenario_samples.grant_studio_media_public", side_effect=ServiceError("模拟授权失败", status=500)):
+                from ops.seed_scenario_samples import run_seed_scenario_samples
+                with self.assertRaises(RuntimeError) as ctx:
+                    run_seed_scenario_samples(
+                        self.db_path,
+                        author_username="yang0",
+                        scenario_filter="comic_4panel",
+                        max_total_generations=1,
+                    )
+                self.assertIn("场景样图后置处理失败已隐藏作品", str(ctx.exception))
+
+        # Check DB: work exists but status is hidden!
+        w = conn.execute("SELECT * FROM works WHERE request_id = 'seed_sample_comic_4panel_1'").fetchone()
+        self.assertIsNotNone(w)
+        self.assertEqual(w["status"], "hidden", "Failed authorization must mark work as hidden")
+
+        # It must NOT be included in public home scenarios
+        invalidate_scenarios_cache()
+        data, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        comic = next(it for it in data["items"] if it["key"] == "comic_4panel")
+        self.assertNotIn(w["id"], [s["id"] for s in comic["samples"]])
+
+    def test_seed_scenario_samples_repairs_half_finished_work_preserves_status(self) -> None:
+        """On rerun, existing half-finished work is supplemented (generations, media, grant, pin) while status is preserved."""
+        conn = self.db.get_conn()
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, password_hash, invite_code, role, status, created_at) VALUES (?, ?, ?, 'h', ?, ?, 'active', ?)",
+            (1, "yang0", "Yang", "inv_yang0", "admin", "2026-11-04T10:00:00Z"),
+        )
+        conn.commit()
+        seed_default_home_scenarios_hook(conn)
+
+        # Simulate work 48fa481b: published direct, then failed at FK, user hid it
+        img_url = "/generated/seed_sample_comic_4panel_1_0.png"
+        _insert_work(
+            conn,
+            wid="48fa481b-9f24-4748-b69a-27c39836d630",
+            title="生活漫画四格 · 周末猫咪与我的日常",
+            author="yang0",
+            status="hidden",  # Existing status is hidden
+            images=[img_url],
+            layout="SB-002",
+            ratio="1:1",
+        )
+        conn.execute(
+            "UPDATE works SET request_id = 'seed_sample_comic_4panel_1' WHERE id = '48fa481b-9f24-4748-b69a-27c39836d630'"
+        )
+        conn.commit()
+
+        # Run script with max_total_generations=0 (no new images generated)
+        from ops.seed_scenario_samples import run_seed_scenario_samples
+        res = run_seed_scenario_samples(
+            self.db_path,
+            author_username="yang0",
+            scenario_filter="comic_4panel",
+            max_total_generations=0,
+        )
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(len(res["executed"]), 1)
+        ex = res["executed"][0]
+        self.assertEqual(ex["workId"], "48fa481b-9f24-4748-b69a-27c39836d630")
+        self.assertEqual(
+            set(ex["repaired"]),
+            {"studio_generations", "studio_generation_media", "media_public_grants", "scenario_pinned_works"},
+        )
+
+        # Work status must NOT have changed: still hidden!
+        w = conn.execute("SELECT status FROM works WHERE id = '48fa481b-9f24-4748-b69a-27c39836d630'").fetchone()
+        self.assertEqual(w["status"], "hidden", "Repaired work status must NOT be modified")
+
+        # studio_generations exists
+        gen = conn.execute("SELECT * FROM studio_generations WHERE request_id = 'seed_sample_comic_4panel_1'").fetchone()
+        self.assertIsNotNone(gen)
+        self.assertEqual(gen["status"], "success")
+
+        # studio_generation_media exists
+        media = conn.execute("SELECT * FROM studio_generation_media WHERE media_url = ?", (img_url,)).fetchone()
+        self.assertIsNotNone(media)
+        self.assertEqual(media["generation_id"], gen["id"])
+
+        # media_public_grants exists
+        grant = conn.execute(
+            "SELECT * FROM media_public_grants WHERE media_url = ? AND target_type = 'work' AND target_id = '48fa481b-9f24-4748-b69a-27c39836d630' AND revoked_at IS NULL",
+            (img_url,),
+        ).fetchone()
+        self.assertIsNotNone(grant)
+
+        # scenario_pinned_works exists
+        pin = conn.execute(
+            "SELECT * FROM scenario_pinned_works WHERE scenario_key = 'comic_4panel' AND work_id = '48fa481b-9f24-4748-b69a-27c39836d630'",
+        ).fetchone()
+        self.assertIsNotNone(pin)
 
 
 if __name__ == "__main__":
