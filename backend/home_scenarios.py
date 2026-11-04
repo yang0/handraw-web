@@ -15,6 +15,7 @@ import logging
 import math
 import re
 import sqlite3
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -218,7 +219,8 @@ SCENARIOS_POST_MIGRATION_HOOKS: dict[int, Any] = {
 # In-Memory Server Cache
 # ---------------------------------------------------------------------------
 
-_SCENARIOS_CACHE: dict[str, tuple[dict[str, Any], str]] = {}
+SCENARIOS_CACHE_TTL_SECONDS = 120
+_SCENARIOS_CACHE: dict[str, tuple[dict[str, Any], str, float]] = {}
 
 
 def invalidate_scenarios_cache() -> None:
@@ -256,15 +258,15 @@ def build_scenario_match_clause(
             or_params.extend([s, f"{s}-%", f'%"{s}-%'])
         or_subclauses.append("(" + " OR ".join(series_ors) + ")")
 
-    # 2. Keywords match across text fields
+    # 2. Keywords match across title, subject, notes (prompt excluded per #70 review)
     if keywords_list:
         kw_ors: list[str] = []
         for kw in keywords_list:
             kw_param = f"%{kw}%"
             kw_ors.append(
-                f"({prefix}title LIKE ? OR {prefix}notes LIKE ? OR {prefix}prompt LIKE ? OR {prefix}subject LIKE ?)"
+                f"({prefix}title LIKE ? OR {prefix}subject LIKE ? OR {prefix}notes LIKE ?)"
             )
-            or_params.extend([kw_param, kw_param, kw_param, kw_param])
+            or_params.extend([kw_param, kw_param, kw_param])
         or_subclauses.append("(" + " OR ".join(kw_ors) + ")")
 
     if or_subclauses:
@@ -331,6 +333,10 @@ def get_public_home_scenarios(
 
     Uses deterministic rotation based on date_key and weights by user engagement.
     Reuses existing public visibility validation (status='published', valid images, seed exclusion).
+    Ensures that within the same day's results across all scenarios, each work appears at most once:
+      1. Pinned works take precedence and claim slots first.
+      2. Auto-filling proceeds in scenario sort_order, skipping works already claimed.
+    Supports in-memory caching with a short TTL (120s) fallback.
     Returns (payload_dict, etag_str).
     """
     from .services import _seed_filter
@@ -340,9 +346,17 @@ def get_public_home_scenarios(
     if not date_key:
         date_key = _now_iso()[:10]
 
+    now_mono = time.monotonic()
     cache_entry = _SCENARIOS_CACHE.get(date_key)
     if cache_entry is not None:
-        return cache_entry
+        payload, etag, expires_at = cache_entry
+        if now_mono < expires_at:
+            return payload, etag
+        else:
+            _SCENARIOS_CACHE.pop(date_key, None)
+
+    # Evict any other entries to prevent memory inflation from variable date queries
+    _SCENARIOS_CACHE.clear()
 
     seed_clause, seed_params = _seed_filter("w.id", "works")
 
@@ -354,21 +368,12 @@ def get_public_home_scenarios(
         """
     ).fetchall()
 
-    items: list[dict[str, Any]] = []
+    globally_claimed_work_ids: set[str] = set()
+    scenario_samples_map: dict[str, list[dict[str, Any]]] = {}
 
+    # Pass 1: Collect pinned works for each scenario in sort_order (pinned works take precedence)
     for sc in sc_rows:
         s_key = sc["key"]
-        try:
-            match_rules = json.loads(sc["match_rules_json"] or "{}")
-        except Exception:
-            match_rules = {}
-
-        try:
-            studio_params = json.loads(sc["studio_params_json"] or "{}")
-        except Exception:
-            studio_params = {}
-
-        # 1. Fetch pinned works that are publicly visible
         pinned_rows = conn.execute(
             f"""
             SELECT spw.work_id, spw.sort_order AS pin_order, w.*
@@ -383,18 +388,16 @@ def get_public_home_scenarios(
         ).fetchall()
 
         picked_samples: list[dict[str, Any]] = []
-        pinned_work_ids: set[str] = set()
-
         for pr in pinned_rows:
             if not is_valid_work_row(pr):
                 continue
             wid = pr["id"]
-            if wid in pinned_work_ids:
+            if wid in globally_claimed_work_ids:
                 continue
-            pinned_work_ids.add(wid)
             first_img = _extract_first_image(pr["images_json"])
             if not first_img:
                 continue
+            globally_claimed_work_ids.add(wid)
             picked_samples.append(
                 {
                     "id": wid,
@@ -409,8 +412,24 @@ def get_public_home_scenarios(
             )
             if len(picked_samples) >= max_samples_per_scenario:
                 break
+        scenario_samples_map[s_key] = picked_samples
 
-        # 2. If fewer than max_samples, auto-fill from matching public works
+    # Pass 2: Auto-fill in scenario sort_order, skipping works already claimed
+    items: list[dict[str, Any]] = []
+    for sc in sc_rows:
+        s_key = sc["key"]
+        picked_samples = scenario_samples_map[s_key]
+
+        try:
+            match_rules = json.loads(sc["match_rules_json"] or "{}")
+        except Exception:
+            match_rules = {}
+
+        try:
+            studio_params = json.loads(sc["studio_params_json"] or "{}")
+        except Exception:
+            studio_params = {}
+
         needed = max_samples_per_scenario - len(picked_samples)
         if needed > 0:
             match_sql, match_params = build_scenario_match_clause(match_rules, table_alias="w")
@@ -428,7 +447,7 @@ def get_public_home_scenarios(
             candidates: list[dict[str, Any]] = []
             for cr in candidate_rows:
                 wid = cr["id"]
-                if wid in pinned_work_ids:
+                if wid in globally_claimed_work_ids:
                     continue
                 if not is_valid_work_row(cr):
                     continue
@@ -457,6 +476,7 @@ def get_public_home_scenarios(
 
             for cand in candidates[:needed]:
                 w = cand["work"]
+                globally_claimed_work_ids.add(w["id"])
                 picked_samples.append(
                     {
                         "id": w["id"],
@@ -493,7 +513,7 @@ def get_public_home_scenarios(
     raw_json = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     etag = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()[:16]
 
-    _SCENARIOS_CACHE[date_key] = (payload, etag)
+    _SCENARIOS_CACHE[date_key] = (payload, etag, time.monotonic() + SCENARIOS_CACHE_TTL_SECONDS)
     return payload, etag
 
 
@@ -695,7 +715,7 @@ def admin_toggle_home_scenario(
     """Toggle enabled status of a scenario."""
     from .admin_services import record_audit_log, require_staff
 
-    require_staff(user, allow_reviewer=True)
+    require_staff(user, allow_reviewer=False)
     key = str(key or "").strip().lower()
     now_iso = _now_iso()
 
@@ -763,7 +783,7 @@ def admin_pin_scenario_work(
     """Pin a work to a scenario."""
     from .admin_services import record_audit_log, require_staff
 
-    require_staff(user, allow_reviewer=True)
+    require_staff(user, allow_reviewer=False)
     scenario_key = str(scenario_key or "").strip().lower()
     work_id = str(work_id or "").strip()
     if not scenario_key or not work_id:
@@ -809,7 +829,7 @@ def admin_unpin_scenario_work(
     """Unpin a work from a scenario."""
     from .admin_services import record_audit_log, require_staff
 
-    require_staff(user, allow_reviewer=True)
+    require_staff(user, allow_reviewer=False)
     scenario_key = str(scenario_key or "").strip().lower()
     work_id = str(work_id or "").strip()
 
@@ -840,7 +860,7 @@ def admin_reorder_scenario_pins(
     """Reorder pins for a scenario."""
     from .admin_services import record_audit_log, require_staff
 
-    require_staff(user, allow_reviewer=True)
+    require_staff(user, allow_reviewer=False)
     scenario_key = str(scenario_key or "").strip().lower()
 
     with db.transaction() as tx:

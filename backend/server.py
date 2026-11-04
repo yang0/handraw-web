@@ -2147,8 +2147,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         if req_path == "/api/public/home-scenarios":
             from .home_scenarios import get_public_home_scenarios
-            date_param = q1("date")
-            payload, etag = get_public_home_scenarios(self.db, date_key=date_param)
+            payload, etag = get_public_home_scenarios(self.db)
             self._send_cached_json(payload, etag=etag, cache_control="public, max-age=300")
             return
 

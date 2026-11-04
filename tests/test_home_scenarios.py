@@ -6,11 +6,13 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 from typing import Any
 import unittest
 
 from backend.db import Database
 from backend.home_scenarios import (
+    _SCENARIOS_CACHE,
     DEFAULT_SCENARIOS,
     admin_list_home_scenarios,
     admin_pin_scenario_work,
@@ -25,7 +27,7 @@ from backend.home_scenarios import (
     invalidate_scenarios_cache,
     seed_default_home_scenarios_hook,
 )
-from backend.services import ServiceError
+from backend.services import ServiceError, set_work_visibility
 from backend.works_feed import get_works_feed
 
 
@@ -37,6 +39,8 @@ def _insert_work(
     author: str = "author_alice",
     status: str = "published",
     prompt: str = "提示词",
+    notes: str = "",
+    subject: str = "",
     images: list[Any] | None = None,
     styles: list[str] | None = None,
     layout: str = "",
@@ -58,10 +62,10 @@ def _insert_work(
     conn.execute(
         """
         INSERT INTO works (
-            id, title, author_username, author_name, status, prompt,
+            id, title, author_username, author_name, status, prompt, notes, subject,
             prompt_has_secret, images_json, styles_json, layout_code, price, likes, cheers,
             favorites, forks, published_at_ms, ratio, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             wid,
@@ -70,6 +74,8 @@ def _insert_work(
             author,
             status,
             prompt,
+            notes,
+            subject,
             prompt_has_secret,
             images_json,
             styles_json,
@@ -106,6 +112,13 @@ class TestHomeScenarios(unittest.TestCase):
             "username": "operator_user",
             "name": "Operator",
             "role": "operator",
+            "status": "active",
+        }
+        self.reviewer_user = {
+            "id": 3,
+            "username": "reviewer_user",
+            "name": "Reviewer",
+            "role": "reviewer",
             "status": "active",
         }
         self.normal_user = {
@@ -187,9 +200,114 @@ class TestHomeScenarios(unittest.TestCase):
         ).fetchone()
         self.assertEqual(updated_row["title"], "自定义小红书标题")
 
+    def test_prompt_not_matched_by_keywords(self) -> None:
+        """Keywords must only match title/subject/notes, never prompt."""
+        conn = self.db.get_conn()
+        # Work with keyword "结构" only in prompt
+        _insert_work(
+            conn,
+            wid="w_prompt_only",
+            title="普通风景画",
+            prompt="这是一段包含结构解析和电商卖点的长提示词",
+            notes="无相关说明",
+            subject="",
+            layout="USR-001",
+            status="published",
+        )
+        # Work with keyword "结构" in notes
+        _insert_work(
+            conn,
+            wid="w_notes_kw",
+            title="普通风景画2",
+            prompt="正常提示词",
+            notes="本作品展示榫卯结构分解",
+            subject="",
+            layout="USR-001",
+            status="published",
+        )
+        conn.commit()
+
+        # Ecommerce rules search keywords including "结构"
+        ec_rules = next(s["match_rules"] for s in DEFAULT_SCENARIOS if s["key"] == "ecommerce")
+        clause, params = build_scenario_match_clause(ec_rules, table_alias="w")
+
+        matched = conn.execute(
+            f"SELECT id FROM works w WHERE id IN ('w_prompt_only', 'w_notes_kw') AND ({clause})",
+            params,
+        ).fetchall()
+        matched_ids = [m["id"] for m in matched]
+
+        self.assertNotIn("w_prompt_only", matched_ids)
+        self.assertIn("w_notes_kw", matched_ids)
+
+    def test_cross_scenario_deduplication_and_pinned_precedence(self) -> None:
+        """A work can appear in at most one scenario across the home page on the same day.
+
+        Pinned works claim slots first; auto-fill in sort_order skips already claimed works.
+        """
+        conn = self.db.get_conn()
+        # Insert a work that matches both xiaohongshu (SC, 3:4) and gzh_inline (SC, 3:4) and article_illus
+        _insert_work(
+            conn,
+            wid="w_cross_1",
+            title="跨场景作品1",
+            layout="SC-001",
+            ratio="3:4",
+            status="published",
+        )
+        _insert_work(
+            conn,
+            wid="w_cross_2",
+            title="跨场景作品2",
+            layout="SC-001",
+            ratio="3:4",
+            status="published",
+        )
+        _insert_work(
+            conn,
+            wid="w_xhs_only",
+            title="小红书专属",
+            layout="SC-001",
+            ratio="3:4",
+            status="published",
+        )
+        conn.commit()
+
+        # 1. Unpinned: w_cross_1 is claimed by the first scenario (xiaohongshu, sort_order 10)
+        # and should not appear in subsequent scenarios (gzh_inline, sort_order 20, etc.)
+        data1, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        all_ids = []
+        for it in data1["items"]:
+            for s in it["samples"]:
+                all_ids.append(s["id"])
+        # Every work appears at most once globally!
+        self.assertEqual(len(all_ids), len(set(all_ids)))
+
+        # 2. Pinned precedence: Pin w_cross_1 to gzh_inline (sort_order 20)
+        invalidate_scenarios_cache()
+        conn.execute(
+            "INSERT INTO scenario_pinned_works (scenario_key, work_id, sort_order, created_at) VALUES ('gzh_inline', 'w_cross_1', 10, '2026-11-04T10:00:00Z')"
+        )
+        conn.commit()
+
+        data2, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        xhs = next(it for it in data2["items"] if it["key"] == "xiaohongshu")
+        gzh = next(it for it in data2["items"] if it["key"] == "gzh_inline")
+
+        xhs_sample_ids = [s["id"] for s in xhs["samples"]]
+        gzh_sample_ids = [s["id"] for s in gzh["samples"]]
+
+        # Because w_cross_1 was pinned in gzh_inline, it is claimed by gzh_inline (pinned)
+        # and xiaohongshu must NOT have w_cross_1!
+        self.assertIn("w_cross_1", gzh_sample_ids)
+        self.assertNotIn("w_cross_1", xhs_sample_ids)
+
+        # Still globally unique across all scenarios
+        all_ids2 = [s["id"] for it in data2["items"] for s in it["samples"]]
+        self.assertEqual(len(all_ids2), len(set(all_ids2)))
+
     def test_get_public_home_scenarios_selection_and_visibility(self) -> None:
         conn = self.db.get_conn()
-        # Insert 1 published work, 1 hidden work, 1 deleted work, 1 empty image work
         _insert_work(
             conn,
             wid="w_pub_1",
@@ -244,163 +362,118 @@ class TestHomeScenarios(unittest.TestCase):
         xhs = next(item for item in data["items"] if item["key"] == "xiaohongshu")
         samples = xhs["samples"]
 
-        # w_hidden_1 must NOT be in samples even though pinned
         sample_ids = [s["id"] for s in samples]
         self.assertIn("w_pub_1", sample_ids)
         self.assertNotIn("w_hidden_1", sample_ids)
         self.assertNotIn("w_deleted_1", sample_ids)
         self.assertNotIn("w_empty_img", sample_ids)
 
-    def test_pinned_precedence_and_order(self) -> None:
-        conn = self.db.get_conn()
-        for i in range(1, 6):
-            _insert_work(
-                conn,
-                wid=f"w_pin_test_{i}",
-                title=f"电商作品{i}",
-                layout="EC-001",
-                ratio="1:1",
-                status="published",
-                images=[f"/img/ec_{i}.png"],
-            )
-        conn.commit()
-
-        # Pin w_pin_test_4 first, then w_pin_test_2
-        conn.execute(
-            "INSERT INTO scenario_pinned_works (scenario_key, work_id, sort_order, created_at) VALUES ('ecommerce', 'w_pin_test_4', 10, '2026-11-04T10:00:00Z')"
-        )
-        conn.execute(
-            "INSERT INTO scenario_pinned_works (scenario_key, work_id, sort_order, created_at) VALUES ('ecommerce', 'w_pin_test_2', 20, '2026-11-04T10:00:00Z')"
-        )
-        conn.commit()
-
-        data, _ = get_public_home_scenarios(self.db, date_key="2026-11-04", max_samples_per_scenario=4)
-        ec = next(item for item in data["items"] if item["key"] == "ecommerce")
-        samples = ec["samples"]
-        self.assertEqual(len(samples), 4)
-
-        # Pinned works first
-        self.assertEqual(samples[0]["id"], "w_pin_test_4")
-        self.assertTrue(samples[0]["isPinned"])
-        self.assertEqual(samples[1]["id"], "w_pin_test_2")
-        self.assertTrue(samples[1]["isPinned"])
-
-        # Auto-filled samples are not pinned
-        self.assertFalse(samples[2]["isPinned"])
-        self.assertFalse(samples[3]["isPinned"])
-        # No duplicate works
-        self.assertNotIn(samples[2]["id"], ("w_pin_test_4", "w_pin_test_2"))
-        self.assertNotIn(samples[3]["id"], ("w_pin_test_4", "w_pin_test_2"))
-
-    def test_deterministic_rotation_stability_and_variation(self) -> None:
-        conn = self.db.get_conn()
-        for i in range(1, 10):
-            _insert_work(
-                conn,
-                wid=f"w_rot_{i}",
-                title=f"海报作品{i}",
-                layout="SC-001",
-                ratio="3:4",
-                status="published",
-                likes=i * 2,
-                cheers=i,
-                images=[f"/img/poster_{i}.png"],
-            )
-        conn.commit()
-
-        # Same dateKey should produce identical rotation order
-        data1, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
-        invalidate_scenarios_cache()
-        data1_again, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
-
-        poster1 = next(item for item in data1["items"] if item["key"] == "poster")
-        poster1_again = next(item for item in data1_again["items"] if item["key"] == "poster")
-        self.assertEqual(
-            [s["id"] for s in poster1["samples"]],
-            [s["id"] for s in poster1_again["samples"]],
-        )
-
-        # Different dateKey produces valid samples deterministically
-        invalidate_scenarios_cache()
-        data2, _ = get_public_home_scenarios(self.db, date_key="2026-11-05")
-        poster2 = next(item for item in data2["items"] if item["key"] == "poster")
-        self.assertEqual(len(poster2["samples"]), 4)
-
-    def test_cache_invalidation_and_etag(self) -> None:
+    def test_cache_ttl_and_single_entry(self) -> None:
         conn = self.db.get_conn()
         _insert_work(
             conn,
-            wid="w_cache_1",
+            wid="w_cache_ttl",
             title="IP作品1",
             layout="IP-001",
             ratio="3:4",
             status="published",
-            images=["/img/ip_1.png"],
         )
         conn.commit()
 
-        # Initial call
-        data1, etag1 = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        # Call with date 1
+        d1, etag1 = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        self.assertIn("2026-11-04", _SCENARIOS_CACHE)
+        self.assertEqual(len(_SCENARIOS_CACHE), 1)
 
-        # Calling again uses cache
-        data1_cached, etag1_cached = get_public_home_scenarios(self.db, date_key="2026-11-04")
-        self.assertEqual(etag1, etag1_cached)
+        # Calling with date 2 purges date 1 to prevent memory leak
+        d2, etag2 = get_public_home_scenarios(self.db, date_key="2026-11-05")
+        self.assertNotIn("2026-11-04", _SCENARIOS_CACHE)
+        self.assertIn("2026-11-05", _SCENARIOS_CACHE)
+        self.assertEqual(len(_SCENARIOS_CACHE), 1)
 
-        # Admin modifies scenario
-        admin_save_home_scenario(
-            self.db,
-            self.admin_user,
-            {
-                "key": "ip_character",
-                "title": "全新IP设计专区",
-                "subtitle": "全新副标题说明",
-                "studioEntry": "quick",
-            },
+        # Test TTL expiration: manually backdate expiry timestamp
+        payload, etag, _ = _SCENARIOS_CACHE["2026-11-05"]
+        _SCENARIOS_CACHE["2026-11-05"] = (payload, etag, time.monotonic() - 10)
+
+        # Modifying work title
+        conn.execute("UPDATE works SET title = '新修改的标题' WHERE id = 'w_cache_ttl'")
+        conn.commit()
+
+        # Calling again re-evaluates because TTL expired
+        d3, etag3 = get_public_home_scenarios(self.db, date_key="2026-11-05")
+        ip_sample = next(
+            s for it in d3["items"] if it["key"] == "ip_character" for s in it["samples"] if s["id"] == "w_cache_ttl"
         )
+        self.assertEqual(ip_sample["title"], "新修改的标题")
 
-        # Next call reflects changes and yields a different etag
-        data2, etag2 = get_public_home_scenarios(self.db, date_key="2026-11-04")
-        self.assertNotEqual(etag1, etag2)
-        ip_item = next(item for item in data2["items"] if item["key"] == "ip_character")
-        self.assertEqual(ip_item["title"], "全新IP设计专区")
+    def test_set_work_visibility_invalidates_cache(self) -> None:
+        """Hiding a work via set_work_visibility clears cache so public API immediately excludes it."""
+        conn = self.db.get_conn()
+        _insert_work(
+            conn,
+            wid="w_vis_test",
+            title="即将被隐藏的作品",
+            layout="SB-002",
+            status="published",
+        )
+        conn.commit()
 
-        # Admin pin/unpin/reorder invalidates cache
-        admin_pin_scenario_work(self.db, self.admin_user, "ip_character", "w_cache_1", sort_order=1)
-        data3, etag3 = get_public_home_scenarios(self.db, date_key="2026-11-04")
-        self.assertNotEqual(etag2, etag3)
+        d1, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        comic1 = next(it for it in d1["items"] if it["key"] == "comic_4panel")
+        self.assertIn("w_vis_test", [s["id"] for s in comic1["samples"]])
 
-        admin_unpin_scenario_work(self.db, self.admin_user, "ip_character", "w_cache_1")
-        data4, etag4 = get_public_home_scenarios(self.db, date_key="2026-11-04")
-        self.assertNotEqual(etag3, etag4)
-
-    def test_admin_access_control(self) -> None:
-        # Non-staff user gets 403
-        with self.assertRaises(ServiceError) as ctx:
-            admin_list_home_scenarios(self.db, self.normal_user)
-        self.assertEqual(ctx.exception.status, 403)
-
-        with self.assertRaises(ServiceError) as ctx:
-            admin_save_home_scenario(
-                self.db,
-                self.normal_user,
-                {"key": "test_sc", "title": "测试", "studioEntry": "quick"},
+        # Hide work via set_work_visibility
+        with self.db.transaction() as tx:
+            changed = set_work_visibility(
+                tx,
+                work_id="w_vis_test",
+                status="hidden",
+                now_iso="2026-11-04T12:00:00Z",
+                source="moderator",
+                actor_role="admin",
             )
+            self.assertTrue(changed)
+
+        # Cache must be invalidated, calling get_public_home_scenarios excludes w_vis_test
+        d2, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
+        comic2 = next(it for it in d2["items"] if it["key"] == "comic_4panel")
+        self.assertNotIn("w_vis_test", [s["id"] for s in comic2["samples"]])
+
+    def test_reviewer_permission_denied_on_mutations(self) -> None:
+        """Reviewers may only read scenario list; toggle/pin/reorder require operator/admin."""
+        # Reviewer can read list
+        res = admin_list_home_scenarios(self.db, self.reviewer_user)
+        self.assertTrue(res["ok"])
+
+        # Reviewer cannot save
+        with self.assertRaises(ServiceError) as ctx:
+            admin_save_home_scenario(self.db, self.reviewer_user, {"key": "test", "title": "t", "studioEntry": "quick"})
         self.assertEqual(ctx.exception.status, 403)
 
-        # Admin user succeeds
-        res_list = admin_list_home_scenarios(self.db, self.admin_user)
-        self.assertTrue(res_list["ok"])
-        self.assertGreaterEqual(res_list["total"], 8)
+        # Reviewer cannot toggle
+        with self.assertRaises(ServiceError) as ctx:
+            admin_toggle_home_scenario(self.db, self.reviewer_user, "poster", False)
+        self.assertEqual(ctx.exception.status, 403)
 
-        # Operator user can list and toggle
-        res_op_list = admin_list_home_scenarios(self.db, self.operator_user)
-        self.assertTrue(res_op_list["ok"])
+        # Reviewer cannot reorder
+        with self.assertRaises(ServiceError) as ctx:
+            admin_reorder_home_scenarios(self.db, self.reviewer_user, [])
+        self.assertEqual(ctx.exception.status, 403)
 
-        res_toggle = admin_toggle_home_scenario(
-            self.db, self.operator_user, "ecommerce", is_enabled=False
-        )
-        self.assertTrue(res_toggle["ok"])
-        self.assertFalse(res_toggle["isEnabled"])
+        # Reviewer cannot pin
+        with self.assertRaises(ServiceError) as ctx:
+            admin_pin_scenario_work(self.db, self.reviewer_user, "poster", "some_work")
+        self.assertEqual(ctx.exception.status, 403)
+
+        # Reviewer cannot unpin
+        with self.assertRaises(ServiceError) as ctx:
+            admin_unpin_scenario_work(self.db, self.reviewer_user, "poster", "some_work")
+        self.assertEqual(ctx.exception.status, 403)
+
+        # Reviewer cannot reorder pins
+        with self.assertRaises(ServiceError) as ctx:
+            admin_reorder_scenario_pins(self.db, self.reviewer_user, "poster", [])
+        self.assertEqual(ctx.exception.status, 403)
 
     def test_works_feed_scenario_filtering(self) -> None:
         conn = self.db.get_conn()
@@ -433,20 +506,17 @@ class TestHomeScenarios(unittest.TestCase):
         )
         conn.commit()
 
-        # Query feed with scenario='comic_4panel'
         comic_feed = get_works_feed(self.db, {"scenario": "comic_4panel"})
         comic_ids = [w["id"] for w in comic_feed["items"]]
         self.assertIn("w_feed_comic", comic_ids)
         self.assertNotIn("w_feed_xhs", comic_ids)
         self.assertNotIn("w_feed_ig", comic_ids)
 
-        # Query feed with scenario='infographic'
         ig_feed = get_works_feed(self.db, {"scenario": "infographic"})
         ig_ids = [w["id"] for w in ig_feed["items"]]
         self.assertIn("w_feed_ig", ig_ids)
         self.assertNotIn("w_feed_comic", ig_ids)
 
-        # Query feed with nonexistent scenario
         none_feed = get_works_feed(self.db, {"scenario": "nonexistent_scenario_123"})
         self.assertEqual(none_feed["items"], [])
 

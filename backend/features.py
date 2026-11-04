@@ -250,6 +250,12 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
                 raise ServiceError("正文不能为空且不得超过 60000 字")
             tx.execute("UPDATE forum_topics SET title=?,summary=?,locked_body=?,updated_at=? WHERE id=? AND author_username=?", (title,summary,locked,now,item_id,user["username"]))
         record_audit_log(tx,user,"author_edit", "work" if kind=="works" else "topic",item_id,details={"title":title})
+    if kind == "works":
+        try:
+            from .home_scenarios import invalidate_scenarios_cache
+            invalidate_scenarios_cache()
+        except Exception:
+            pass
     return {"ok":True,"id":item_id}
 
 

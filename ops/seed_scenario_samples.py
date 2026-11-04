@@ -291,39 +291,26 @@ SCENARIO_SAMPLE_PRESETS: dict[str, list[dict[str, Any]]] = {
 }
 
 
-def get_or_create_admin_user(conn: Database) -> dict[str, Any]:
-    """Retrieve existing admin user or create official seed admin user."""
-    row = conn.get_conn().execute(
-        "SELECT id, username, display_name, role, status FROM users WHERE role = 'admin' AND status = 'active' ORDER BY id ASC LIMIT 1"
+def find_author_user(db: Database, username: str) -> dict[str, Any]:
+    """Retrieve existing active user by username, or error out. Never creates accounts."""
+    clean = (username or "").strip()
+    if not clean:
+        raise ValueError("必须指定 --author <username>")
+    row = db.get_conn().execute(
+        "SELECT id, username, display_name, role, status FROM users WHERE username = ? COLLATE NOCASE",
+        (clean,),
     ).fetchone()
-    if row:
-        return {
-            "id": int(row["id"]),
-            "username": str(row["username"]),
-            "display_name": str(row["display_name"]),
-            "role": "admin",
-            "status": "active",
-        }
-
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with conn.transaction() as tx:
-        tx.execute(
-            """
-            INSERT OR IGNORE INTO users (username, display_name, email, password_hash, invite_code, role, status, created_at)
-            VALUES ('official_admin', 'Handraw官方', 'official@handraw-style.com', 'seeded', 'inv_official', 'admin', 'active', ?)
-            """,
-            (now_iso,),
-        )
-        row2 = tx.execute(
-            "SELECT id, username, display_name, role, status FROM users WHERE username = 'official_admin'"
-        ).fetchone()
-        return {
-            "id": int(row2["id"]),
-            "username": str(row2["username"]),
-            "display_name": str(row2["display_name"]),
-            "role": "admin",
-            "status": "active",
-        }
+    if not row:
+        raise ValueError(f"指定的账号不存在: {username}")
+    if row["status"] != "active":
+        raise ValueError(f"指定的账号未处于激活状态: {username}")
+    return {
+        "id": int(row["id"]),
+        "username": str(row["username"]),
+        "display_name": str(row["display_name"]),
+        "role": str(row["role"]),
+        "status": "active",
+    }
 
 
 def generate_and_cache_sample_image(prompt_text: str, ratio: str, request_id: str) -> str:
@@ -373,6 +360,7 @@ def generate_and_cache_sample_image(prompt_text: str, ratio: str, request_id: st
 
 def run_seed_scenario_samples(
     db_path: str | Path,
+    author_username: str,
     dry_run: bool = False,
     scenario_filter: str | None = None,
     max_per_scenario: int = 3,
@@ -382,6 +370,9 @@ def run_seed_scenario_samples(
     db = Database(str(db_path))
     db.migrate()
     conn = db.get_conn()
+
+    author_user = find_author_user(db, author_username)
+    logger.info("Using author user: @%s (id: %s, role: %s)", author_user["username"], author_user["id"], author_user["role"])
 
     seed_clause, seed_params = _seed_filter("w.id", "works")
 
@@ -394,9 +385,6 @@ def run_seed_scenario_samples(
         if not scenarios:
             logger.warning("No scenario found with key '%s'", scenario_filter)
             return {"ok": True, "planned": [], "executed": []}
-
-    admin_user = get_or_create_admin_user(db)
-    logger.info("Using admin user: @%s (id: %s)", admin_user["username"], admin_user["id"])
 
     planned: list[dict[str, Any]] = []
     executed: list[dict[str, Any]] = []
@@ -504,13 +492,34 @@ def run_seed_scenario_samples(
                 "notes": preset.get("notes") or f"官方场景示例：{s_title}",
                 "requestId": req_id,
             }
-            receipt = publish_work_direct(db, admin_user, publish_body, listed=True)
+            receipt = publish_work_direct(db, author_user, publish_body, listed=True)
             work_id = receipt["workId"]
             logger.info("Successfully published work '%s' for scenario '%s'", work_id, s_key)
 
+            # Record public media grant so anonymous visitors can view the generated sample image
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            with db.transaction() as tx:
+                tx.execute(
+                    """
+                    INSERT OR REPLACE INTO studio_generation_media
+                    (id, generation_id, user_id, media_url, media_kind, storage_path, visibility, created_at)
+                    VALUES (?, ?, ?, ?, 'generated', '', 'public', ?)
+                    """,
+                    (f"gm_{work_id}", f"gen_{work_id}", int(author_user["id"]), image_url, now_iso),
+                )
+                tx.execute(
+                    """
+                    INSERT INTO media_public_grants
+                    (id, media_url, owner_user_id, target_type, target_id, granted_by_user_id, granted_at, revoked_at)
+                    VALUES (?, ?, ?, 'work', ?, ?, ?, NULL)
+                    ON CONFLICT(media_url, target_type, target_id) DO UPDATE SET revoked_at=NULL, granted_at=excluded.granted_at
+                    """,
+                    (str(uuid.uuid4()), image_url, int(author_user["id"]), work_id, int(author_user["id"]), now_iso),
+                )
+
             # 4. Pin work to the scenario
             admin_pin_scenario_work(
-                db, admin_user,
+                db, author_user,
                 scenario_key=s_key,
                 work_id=work_id,
                 sort_order=(idx + 1) * 10,
@@ -541,6 +550,7 @@ def run_seed_scenario_samples(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed sample works for home scenarios.")
     parser.add_argument("--db", required=True, help="Path to SQLite database file.")
+    parser.add_argument("--author", required=True, help="Username of existing user to publish samples as.")
     parser.add_argument("--dry-run", action="store_true", help="Print generation plan without calling gateway or modifying DB.")
     parser.add_argument("--scenario", default=None, help="Filter to run only for a specific scenario key.")
     parser.add_argument("--max", type=int, default=3, help="Max sample works to generate per scenario (default: 3).")
@@ -554,6 +564,7 @@ def main() -> None:
 
     result = run_seed_scenario_samples(
         db_path=db_path,
+        author_username=args.author,
         dry_run=args.dry_run,
         scenario_filter=args.scenario,
         max_per_scenario=args.max,
