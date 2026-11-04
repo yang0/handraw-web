@@ -275,7 +275,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 var(--hw-page-gutter);
   z-index: 25;
   box-sizing: border-box;
 }
@@ -433,7 +433,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 28px;
+  padding: 0 var(--hw-page-gutter);
   z-index: 30;
   box-sizing: border-box;
 }
@@ -599,7 +599,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px var(--hw-page-gutter);
   background: var(--ic-panel-solid, #ffffff);
   border-bottom: 1px solid var(--ic-border, #e2dcd2);
   flex-shrink: 0;
@@ -611,6 +611,10 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  width: calc(100% - 2 * var(--hw-page-gutter));
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
 }
 
 .ic-wechat-body .ic-pv-outline {
@@ -632,7 +636,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-  padding: 8px 14px;
+  padding: 8px var(--hw-page-gutter);
   background: var(--ic-panel-solid, #ffffff);
   border-top: 1px solid var(--ic-border, #e2dcd2);
   flex-shrink: 0;
@@ -718,7 +722,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 6px var(--hw-page-gutter);
   background: var(--ic-panel-solid, #ffffff);
   border-top: 1px solid var(--ic-border, #e2dcd2);
   flex-shrink: 0;

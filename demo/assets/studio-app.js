@@ -13669,7 +13669,7 @@
 
     DOM.previewStage.innerHTML = `
       <div class="ic-wechat-editor-root ic-article-preview-root">
-        <header class="ic-wechat-topbar">
+        <header class="ic-wechat-topbar" id="wechat-topbar">
           <div style="display:flex;align-items:center;gap:10px;">
             <button type="button" class="btn btn-sm" id="preview-btn-list" style="font-weight:750;padding:3px 10px;height:28px;box-sizing:border-box;">← 文章列表</button>
             <div class="ic-article-segmented-switch" id="preview-switch-group" role="group" aria-label="模式切换">
@@ -13689,7 +13689,7 @@
           </div>
         </div>
 
-        <footer class="ic-wechat-bottombar">
+        <footer class="ic-wechat-bottombar" id="wechat-bottombar">
           <span class="ic-article-preview-meta">${art.markdown ? (art.markdown.replace(/[#*\s]/g, "").length) : 0} 字 · 配图 ${cards.filter((c) => c.imageUrl).length}/${cards.length} 张</span>
         </footer>
       </div>
@@ -15550,8 +15550,6 @@
     }
   }
 
-  let _modeMoreOpen = false;
-
   function switchCreationStage(next) {
     if (next !== "article") flushUnifiedArticleEditor();
     if (next === "article") {
@@ -15607,39 +15605,19 @@
       <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
       <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
       <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
-      <div class="qc-mode-more" id="studio-mode-more-wrap">
-        <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-more-btn" aria-haspopup="true" aria-expanded="${_modeMoreOpen}">更多 ▾</button>
-        <div class="qc-more-menu" id="studio-mode-more-menu" ${_modeMoreOpen ? "" : "hidden"}>
-          <button type="button" class="qc-more-menu-item" id="studio-mode-canvas">高级画布</button>
-        </div>
-      </div>
+      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布</button>
     </div><button type="button" class="btn btn-sm qc-mode-history" id="studio-mode-history" title="查看生图历史记录">生图历史</button>`;
 
     const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
-    if (btnQuick) btnQuick.onclick = () => { _modeMoreOpen = false; switchCreationStage("quick"); };
+    if (btnQuick) btnQuick.onclick = () => { switchCreationStage("quick"); };
     const btnBatch = DOM.entryBar.querySelector("#studio-mode-batch");
-    if (btnBatch) btnBatch.onclick = () => { _modeMoreOpen = false; switchCreationStage("batch"); };
+    if (btnBatch) btnBatch.onclick = () => { switchCreationStage("batch"); };
     const btnArticle = DOM.entryBar.querySelector("#studio-mode-article");
-    if (btnArticle) btnArticle.onclick = () => { _modeMoreOpen = false; switchCreationStage("article"); };
-    const btnMore = DOM.entryBar.querySelector("#studio-mode-more-btn");
-    const menuMore = DOM.entryBar.querySelector("#studio-mode-more-menu");
-    if (btnMore && menuMore) {
-      btnMore.onclick = (e) => {
-        e.stopPropagation();
-        _modeMoreOpen = !_modeMoreOpen;
-        btnMore.setAttribute("aria-expanded", String(_modeMoreOpen));
-        menuMore.hidden = !_modeMoreOpen;
-      };
-    }
+    if (btnArticle) btnArticle.onclick = () => { switchCreationStage("article"); };
     const btnCanvas = DOM.entryBar.querySelector("#studio-mode-canvas");
-    if (btnCanvas) {
-      btnCanvas.onclick = () => {
-        _modeMoreOpen = false;
-        switchCreationStage("canvas");
-      };
-    }
+    if (btnCanvas) btnCanvas.onclick = () => { switchCreationStage("canvas"); };
     const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
-    if (btnHistory) btnHistory.onclick = () => { _modeMoreOpen = false; openHistoryPage(); };
+    if (btnHistory) btnHistory.onclick = () => { openHistoryPage(); };
   }
 
   let isRenderingQuickStart = false;

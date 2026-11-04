@@ -17,6 +17,7 @@
   --frame-line: inset 0 0 0 1px var(--line-soft, #e3dcd0);
   --stage-max-h: min(72vh, 720px);
   --tap-min: 40px;
+  --hw-page-gutter: max(24px, calc((100% - 1520px) / 2 + 24px));
 }
 
 /* ---------- 1. Feedback: focus, press, hover (pointer devices only) ---------- */
@@ -193,7 +194,7 @@ summary:focus-visible {
   align-items: center;
   column-gap: 18px;
   row-gap: var(--sp-2);
-  padding: 10px max(24px, calc((100% - 1520px) / 2 + 24px));
+  padding: 10px var(--hw-page-gutter);
 }
 .hw-topbar > .hw-topbar-inner { display: contents; }
 .hw-topbar .hw-brand { order: 1; }
@@ -376,6 +377,9 @@ summary:focus-visible {
 
 /* ---------- 10. Phone <=720px ---------- */
 @media (max-width: 720px) {
+  :root {
+    --hw-page-gutter: var(--sp-3, 12px);
+  }
   /* Header: 172px -> two rows. Row 1 brand + search + avatar, row 2 nav +
      quick links. theme.css targeted `.hw-nav`, a class that does not exist. */
   .hw-topbar {
@@ -383,7 +387,7 @@ summary:focus-visible {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas: "brand right right" "nav nav links";
     align-items: center;
-    padding: var(--sp-2) var(--sp-3) 0;
+    padding: var(--sp-2) var(--hw-page-gutter) 0;
     column-gap: var(--sp-3);
     row-gap: 2px;
   }
@@ -481,7 +485,7 @@ summary:focus-visible {
   /* Editor: one-row scrolling toolbar, compact history strip, two-row bar. */
   /* product-refresh.css fixed these at 48px / 60px; wrapped rows spilled over
      the history strip and below the screen. */
-  .ic-wechat-topbar { height: auto; flex-wrap: wrap; row-gap: 6px; padding: 6px var(--sp-2); }
+  .ic-wechat-topbar { height: auto; flex-wrap: wrap; row-gap: 6px; padding: 6px var(--hw-page-gutter); }
   .ic-wechat-bottombar { height: auto; min-height: 0; }
   .ic-wechat-topbar > div:nth-child(2) { order: 3; flex: 1 1 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   .ic-wechat-topbar > div:nth-child(2)::-webkit-scrollbar { display: none; }
@@ -498,7 +502,7 @@ summary:focus-visible {
   .ic-wechat-scroll-area { padding: var(--sp-3) var(--sp-2) var(--sp-6); }
   .ic-wechat-paper { padding: var(--sp-5) var(--sp-4) var(--sp-6); }
   .ic-wechat-paper .ic-wechat-title-input { font-size: 20px; }
-  .ic-wechat-bottombar { padding: 6px var(--sp-2); gap: 6px; }
+  .ic-wechat-bottombar { padding: 6px var(--hw-page-gutter); gap: 6px; }
   .ic-wechat-bottombar-left { flex: 1 1 100%; min-width: 0; gap: var(--sp-3); overflow-x: auto; scrollbar-width: none; }
   .ic-wechat-bottombar-left::-webkit-scrollbar { display: none; }
   .ic-wechat-bottom-select-group { flex-wrap: nowrap; }
@@ -1091,3 +1095,51 @@ summary:focus-visible {
   outline: 2px solid var(--ink-strong, #1f1b16);
   outline-offset: 2px;
 }
+
+/* ---------- 16. Studio width alignment across navigation bars and non-canvas workspaces (Issue #69) ---------- */
+#ic-entry-bar,
+.qc-entry-bar {
+  padding-left: var(--hw-page-gutter);
+  padding-right: var(--hw-page-gutter);
+  box-sizing: border-box;
+}
+
+#wechat-topbar,
+.ic-wechat-topbar {
+  padding-left: var(--hw-page-gutter);
+  padding-right: var(--hw-page-gutter);
+  box-sizing: border-box;
+}
+
+#wechat-bottombar,
+.ic-wechat-bottombar {
+  padding-left: var(--hw-page-gutter);
+  padding-right: var(--hw-page-gutter);
+  box-sizing: border-box;
+}
+
+.ic-wechat-editor-root {
+  background: var(--paper-bg);
+}
+
+.ic-wechat-body {
+  width: calc(100% - 2 * var(--hw-page-gutter));
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
+.ic-quick-stage {
+  padding-left: var(--hw-page-gutter);
+  padding-right: var(--hw-page-gutter);
+  box-sizing: border-box;
+}
+
+.make-image-container {
+  width: 100%;
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
