@@ -16,25 +16,120 @@
     return tags.slice(0, max);
   }
 
-  function renderTasks() {
-    var tasks = ["公众号配图", "小红书组图", "漫画绘本", "海报"];
-    var items = tasks
-      .map(function (label) {
-        var href = S.channelUrl("studio", { entry: "quick", purpose: label });
+  function renderScenarioCard(sc) {
+    var samples = Array.isArray(sc.samples) ? sc.samples : [];
+    var mediaHtml = "";
+
+    if (samples.length > 0) {
+      var sampleItems = samples.slice(0, 4).map(function (s, idx) {
+        var imgUrl = s.imageUrl || s.coverUrl || "";
+        var detailHref = s.detailUrl || S.channelUrl("main", { view: "work", id: s.id });
         return (
-          '<li class="hw-discovery__task">' +
-          '<a class="hw-discovery__task-link" href="' + S.esc(href) + '">' +
-          S.esc(label) +
-          "</a></li>"
+          '<a class="hw-scenario-thumb hw-scenario-thumb--' + (idx + 1) + '" href="' + S.esc(detailHref) + '" title="' + S.esc(s.title || sc.title) + '">' +
+          '<img data-hw-src="' + S.esc(imgUrl) + '" src="' + S.esc(imgUrl) + '" loading="lazy" alt="' + S.esc(s.title || sc.title) + '">' +
+          '</a>'
         );
-      })
-      .join("");
+      }).join("");
+
+      var collageClass = "hw-scenario-collage hw-scenario-collage--" + Math.min(samples.length, 4);
+      mediaHtml = '<div class="hw-scenario-card__media"><div class="' + collageClass + '">' + sampleItems + '</div></div>';
+    } else {
+      mediaHtml =
+        '<div class="hw-scenario-card__media hw-scenario-card__media--empty">' +
+        '<div class="hw-scenario-card__placeholder">' +
+        '<span class="hw-scenario-card__placeholder-icon" aria-hidden="true">🎨</span>' +
+        '<span class="hw-scenario-card__placeholder-text">待添加精选样图</span>' +
+        '</div></div>';
+    }
+
+    var studioParams = Object.assign({ entry: sc.studioEntry || "quick" }, sc.studioParams || {});
+    var primaryHref = S.channelUrl("studio", studioParams);
+    var secondaryHref = S.channelUrl("main", { view: "works", scenario: sc.key });
+
     return (
-      '<section class="hw-discovery__tasks">' +
-      '<h2 class="hw-discovery__heading">按用途开始</h2>' +
-      '<ul class="hw-discovery__task-list">' + items + "</ul>" +
-      "</section>"
+      '<div class="hw-scenario-card" data-scenario="' + S.esc(sc.key) + '">' +
+      mediaHtml +
+      '<div class="hw-scenario-card__body">' +
+      '<h3 class="hw-scenario-card__title">' + S.esc(sc.title || "") + '</h3>' +
+      '<p class="hw-scenario-card__desc">' + S.esc(sc.subtitle || "") + '</p>' +
+      '<div class="hw-scenario-card__actions">' +
+      '<a class="hw-scenario-card__btn-primary" href="' + S.esc(primaryHref) + '">用这个做一张</a>' +
+      '<a class="hw-scenario-card__btn-secondary" href="' + S.esc(secondaryHref) + '">看同类作品</a>' +
+      '</div>' +
+      '</div>' +
+      '</div>'
     );
+  }
+
+  function renderScenariosInner(items) {
+    if (!Array.isArray(items) || !items.length) return "";
+    var cards = items.map(function (sc) {
+      return renderScenarioCard(sc);
+    }).join("");
+
+    return (
+      '<div class="hw-discovery__section-head">' +
+      '<div class="hw-discovery__section-title-wrap">' +
+      '<h2 class="hw-discovery__heading">你想做什么</h2>' +
+      '<p class="hw-discovery__subheading">按实际使用场景挑选范例，直达预设创作台</p>' +
+      '</div>' +
+      '</div>' +
+      '<div class="hw-scenario-grid">' + cards + '</div>'
+    );
+  }
+
+  function renderScenarios(state, root) {
+    if (state.homeScenariosFailed) {
+      return '<section class="hw-discovery__section hw-discovery__scenarios" id="hw-discovery-scenarios-root" hidden></section>';
+    }
+
+    var scenarios = Array.isArray(state.homeScenarios) ? state.homeScenarios : null;
+
+    if (scenarios && scenarios.length > 0) {
+      return (
+        '<section class="hw-discovery__section hw-discovery__scenarios" id="hw-discovery-scenarios-root">' +
+        renderScenariosInner(scenarios) +
+        '</section>'
+      );
+    }
+
+    // Client-side fetch when running in browser and scenarios not loaded yet
+    if (typeof window !== "undefined" && (window.fetch || (S && typeof S.apiJson === "function")) && !state._scenariosFetching) {
+      state._scenariosFetching = true;
+      var fetcher = (S && typeof S.apiJson === "function")
+        ? S.apiJson("/api/public/home-scenarios")
+        : window.fetch("/api/public/home-scenarios").then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          });
+
+      fetcher
+        .then(function (res) {
+          state._scenariosFetching = false;
+          if (res && res.ok && Array.isArray(res.items) && res.items.length > 0) {
+            state.homeScenarios = res.items;
+            var el = document.getElementById("hw-discovery-scenarios-root");
+            if (el) {
+              el.innerHTML = renderScenariosInner(res.items);
+              el.hidden = false;
+            } else if (root && typeof root.innerHTML === "string") {
+              render(root);
+            }
+          } else {
+            state.homeScenariosFailed = true;
+            var elFail = document.getElementById("hw-discovery-scenarios-root");
+            if (elFail) elFail.hidden = true;
+          }
+        })
+        .catch(function () {
+          state._scenariosFetching = false;
+          state.homeScenariosFailed = true;
+          var elErr = document.getElementById("hw-discovery-scenarios-root");
+          if (elErr) elErr.hidden = true;
+        });
+    }
+
+    return '<section class="hw-discovery__section hw-discovery__scenarios" id="hw-discovery-scenarios-root" hidden></section>';
   }
 
   function renderEmpty() {
@@ -188,8 +283,8 @@
       '<a class="hw-discovery__btn" href="' + S.esc(createHref) + '">开始创作</a>' +
       "</p>" +
       "</div>" +
+      renderScenarios(state, root) +
       renderWorks(works, topics) +
-      renderTasks() +
       renderResources(resources) +
       renderTopics(topics) +
       "</div>";
@@ -197,5 +292,9 @@
     root.innerHTML = html;
   }
 
-  window.HandrawDiscovery = { render: render };
+  window.HandrawDiscovery = {
+    render: render,
+    renderScenariosInner: renderScenariosInner,
+    renderScenarioCard: renderScenarioCard,
+  };
 })();

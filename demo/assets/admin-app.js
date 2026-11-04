@@ -5,6 +5,7 @@
   const ROLE_MODULES = {
     admin: [
       { id: "dashboard", icon: "📊", label: "数据总览", desc: "全站核心指标、366+168 目录覆盖度、积分铸造消耗与审计轨迹" },
+      { id: "scenarios", icon: "🎯", label: "首页场景", desc: "配置首页 8 大场景、文案、创作台入口、匹配规则与精选置顶作品" },
       { id: "users", icon: "👥", label: "用户与权限管理", desc: "新建/移除账号、重置密码、RBAC 四级角色、论坛版主任命、积分调账与老站迁移" },
       { id: "works", icon: "🖼️", label: "作品与全站评论", desc: "社区作品流、72h 首发提权、精选推荐与作品/论坛/画风图型评论治理" },
       { id: "catalog", icon: "🔒", label: "专属黑盒与目录", desc: "官网独占 FX/LX 云端黑盒 Prompt、USR 共创资产与创作台官方预设" },
@@ -14,6 +15,7 @@
     ],
     operator: [
       { id: "dashboard", icon: "📊", label: "运营审查看板", desc: "社区活跃作品、官方目录点亮覆盖度、待裁定举报预警与内容安全态势" },
+      { id: "scenarios", icon: "🎯", label: "首页场景", desc: "配置首页使用场景与精选置顶样图" },
       { id: "users", icon: "👥", label: "用户治理与兑换码", desc: "普通违规账号冻结、荣誉授勋、每日免费生图额度重置与活动积分兑换码发放" },
       { id: "works", icon: "🖼️", label: "作品精选与全站评论", desc: "优质作品精选推荐、72h 首发曝光提权、违规下架与作品/论坛/画风图型评论治理" },
       { id: "governance", icon: "💬", label: "论坛运营与举报裁定", desc: "优质交流帖置顶加精、积分悬赏人工仲裁、违规举报核实下架与误报驳回" },
@@ -76,6 +78,7 @@
     },
     data: {
       dashboard: null,
+      scenarios: [],
       works: [],
       comments: [],
       catalog: [],
@@ -339,6 +342,9 @@
 
     if (mod === "dashboard") {
       state.data.dashboard = await api("/api/admin/dashboard");
+    } else if (mod === "scenarios") {
+      const res = await api("/api/admin/home-scenarios");
+      state.data.scenarios = res.items || [];
     } else if (mod === "works") {
       if (state.subtab.works === "comments_list") {
         const res = await api(`/api/admin/comments?status=${encodeURIComponent(state.filters.commentsStatus)}&q=${encodeURIComponent(state.filters.commentsQ)}`);
@@ -1633,6 +1639,7 @@
     else if (state.module === "mod_replies") bodyHtml = renderModeratorRepliesSection();
     else if (state.module === "mod_reports") bodyHtml = renderModeratorReportsSection();
     else if (state.module === "dashboard") bodyHtml = renderDashboardSection();
+    else if (state.module === "scenarios") bodyHtml = renderScenariosSection();
     else if (state.module === "works") bodyHtml = renderWorksSection();
     else if (state.module === "catalog") bodyHtml = renderCatalogSection();
     else if (state.module === "governance") bodyHtml = renderGovernanceSection();
@@ -2604,6 +2611,356 @@
     };
   }
 
+  function renderScenariosSection() {
+    const scenarios = state.data.scenarios || [];
+    return `
+      <section class="adm-section">
+        <div class="adm-section-header">
+          <div>
+            <h2 class="adm-section-title">🎯 首页场景配置与样图置顶</h2>
+            <p class="adm-section-desc">
+              管理首页首屏『你想做什么』8 大场景、文案、创作台入口、作品匹配规则与置顶样图。
+              每个场景展示 3~4 张样图，置顶公开作品优先，不足部分按日期种子与点赞加权确定性轮换。
+            </p>
+          </div>
+          <div class="adm-section-actions">
+            <button class="adm-btn adm-btn-secondary" id="adm-new-scenario-btn">➕ 新建自定义场景</button>
+          </div>
+        </div>
+
+        <div class="adm-scenario-cards">
+          ${scenarios.map((sc) => {
+            const rules = sc.matchRules || {};
+            const params = sc.studioParams || {};
+            const samples = sc.previewSamples || [];
+            const pins = sc.pins || [];
+
+            return `
+              <div class="adm-card adm-scenario-item" data-scenario-key="${esc(sc.key)}">
+                <div class="adm-scenario-head">
+                  <div class="adm-scenario-title-group">
+                    <span class="adm-badge">#${sc.sortOrder}</span>
+                    <h3 class="adm-scenario-name">${esc(sc.title)}</h3>
+                    <code class="adm-code">${esc(sc.key)}</code>
+                    <span class="adm-pill ${sc.isEnabled ? "adm-pill-green" : "adm-pill-gray"}">
+                      ${sc.isEnabled ? "已启用" : "已停用"}
+                    </span>
+                    <span class="adm-pill adm-pill-blue">入口: ${esc(sc.studioEntry)}</span>
+                  </div>
+                  <div class="adm-scenario-actions">
+                    <button class="adm-btn adm-btn-sm adm-btn-secondary" data-act="pin-work" data-key="${esc(sc.key)}">📌 搜索置顶</button>
+                    <button class="adm-btn adm-btn-sm adm-btn-secondary" data-act="edit-scenario" data-key="${esc(sc.key)}">✏️ 编辑</button>
+                    <button class="adm-btn adm-btn-sm ${sc.isEnabled ? "adm-btn-danger" : "adm-btn-primary"}" data-act="toggle-scenario" data-key="${esc(sc.key)}" data-enabled="${sc.isEnabled ? "1" : "0"}">
+                      ${sc.isEnabled ? "停用" : "启用"}
+                    </button>
+                  </div>
+                </div>
+
+                <div class="adm-scenario-desc-row">
+                  <strong>说明文案：</strong>${esc(sc.subtitle || "无说明")}
+                </div>
+
+                <div class="adm-scenario-meta-grid">
+                  <div><strong>创作入口参数：</strong><code>${esc(JSON.stringify(params))}</code></div>
+                  <div><strong>匹配系列代码：</strong>${rules.series && rules.series.length ? rules.series.map(s => `<span class="adm-tag">${esc(s)}</span>`).join(" ") : "<em>无</em>"}</div>
+                  <div><strong>画幅限制：</strong>${rules.ratios && rules.ratios.length ? rules.ratios.join(", ") : "任意"}</div>
+                  <div><strong>匹配关键词：</strong>${rules.keywords && rules.keywords.length ? rules.keywords.join(", ") : "<em>无</em>"}</div>
+                </div>
+
+                <div class="adm-scenario-preview-box">
+                  <div class="adm-preview-label">
+                    <span>🖼️ 当前前台实际展示样图 (${samples.length} 张)：</span>
+                    <a href="${esc(channelHref("main"))}?view=works&scenario=${encodeURIComponent(sc.key)}" target="_blank" class="adm-link">在广场查看同类作品 →</a>
+                  </div>
+                  <div class="adm-scenario-sample-thumbs">
+                    ${samples.length ? samples.map((s) => `
+                      <div class="adm-sample-thumb-item ${s.isPinned ? "is-pinned" : ""}">
+                        <img src="${esc(s.imageUrl || s.coverUrl)}" alt="${esc(s.title)}" />
+                        <div class="adm-sample-thumb-info">
+                          <span class="adm-sample-thumb-title" title="${esc(s.title)}">${esc(s.title || "无题")}</span>
+                          <span class="adm-sample-thumb-badge">${s.isPinned ? "📌 置顶" : "🔄 轮换"}</span>
+                        </div>
+                      </div>
+                    `).join("") : `<div class="adm-muted" style="padding:10px 0;">当前无匹配样图（前台将显示默认占位符）</div>`}
+                  </div>
+                </div>
+
+                ${pins.length ? `
+                  <div class="adm-scenario-pins-box">
+                    <div class="adm-pins-label">📌 已置顶作品 (${pins.length} 件，优先展示)：</div>
+                    <table class="adm-table adm-table-compact">
+                      <thead>
+                        <tr>
+                          <th style="width:50px;">顺序</th>
+                          <th style="width:60px;">缩略图</th>
+                          <th>标题与编号</th>
+                          <th>作者</th>
+                          <th>状态</th>
+                          <th style="width:100px;">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${pins.map(p => `
+                          <tr>
+                            <td>${p.pinOrder}</td>
+                            <td>
+                              ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;" />` : `<div style="width:40px;height:40px;background:#e5ded3;border-radius:4px;"></div>`}
+                            </td>
+                            <td>
+                              <strong>${esc(p.title)}</strong><br/>
+                              <code class="adm-code" style="font-size:11px;">${esc(p.workId)}</code>
+                            </td>
+                            <td>${esc(p.author)}</td>
+                            <td>
+                              ${p.isPublic ? `<span class="adm-pill adm-pill-green">公开</span>` : `<span class="adm-pill adm-pill-danger">不可见 (${esc(p.status)})</span>`}
+                            </td>
+                            <td>
+                              <button class="adm-btn adm-btn-xs adm-btn-danger" data-act="unpin-work" data-key="${esc(sc.key)}" data-work-id="${esc(p.workId)}">取消置顶</button>
+                            </td>
+                          </tr>
+                        `).join("")}
+                      </tbody>
+                    </table>
+                  </div>
+                ` : ""}
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  function openEditScenarioModal(scKey) {
+    const sc = (state.data.scenarios || []).find((x) => x.key === scKey) || {
+      key: "",
+      title: "",
+      subtitle: "",
+      studioEntry: "quick",
+      studioParams: {},
+      matchRules: { series: [], ratios: [], keywords: [] },
+      sortOrder: 10,
+      isEnabled: true,
+    };
+    const isNew = !scKey;
+    const rules = sc.matchRules || {};
+    const seriesVal = (rules.series || []).join(", ");
+    const ratiosVal = (rules.ratios || []).join(", ");
+    const keywordsVal = (rules.keywords || []).join(", ");
+    const paramsVal = JSON.stringify(sc.studioParams || {}, null, 2);
+
+    openModal(`
+      <h3 style="margin:0 0 14px;">${isNew ? "➕ 新建首页场景" : "✏️ 编辑首页场景：" + esc(sc.title)}</h3>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>场景标识 Key (小写字母/数字/连字符)</label>
+          <input class="adm-input" id="sc-key" value="${esc(sc.key)}" ${isNew ? "" : "readonly style='background:#f4eee6;'"} placeholder="如 xiaohongshu" />
+        </div>
+        <div class="adm-field">
+          <label>场景标题</label>
+          <input class="adm-input" id="sc-title" value="${esc(sc.title)}" placeholder="如 小红书套图" />
+        </div>
+      </div>
+      <div class="adm-field">
+        <label>一句话说明 (副标题)</label>
+        <input class="adm-input" id="sc-subtitle" value="${esc(sc.subtitle)}" placeholder="如 小红书爆款封面与排版，多图连贯成套输出" />
+      </div>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>创作台直达入口</label>
+          <select class="adm-select" id="sc-entry">
+            <option value="quick" ${sc.studioEntry === "quick" ? "selected" : ""}>quick (极速单图模式)</option>
+            <option value="batch" ${sc.studioEntry === "batch" ? "selected" : ""}>batch (多图套图批量模式)</option>
+            <option value="article" ${sc.studioEntry === "article" ? "selected" : ""}>article (文章智能配图模式)</option>
+            <option value="canvas" ${sc.studioEntry === "canvas" ? "selected" : ""}>canvas (自由画布模式)</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>排序权重 (从小到大，如 10, 20...)</label>
+          <input class="adm-input" id="sc-sort" type="number" value="${sc.sortOrder ?? 10}" />
+        </div>
+      </div>
+      <div class="adm-field">
+        <label>创作入口附加参数 (JSON 对象，可选 purpose, layout, style 等)</label>
+        <textarea class="adm-input" id="sc-params" rows="2" style="font-family:monospace;font-size:12px;">${esc(paramsVal)}</textarea>
+      </div>
+      <div style="margin: 12px 0 6px; font-weight: 700; font-size: 13.5px;">作品自动匹配规则 (任意组合)：</div>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>匹配图型/画风系列代码 (逗号分隔，如 SC, SB, IG, IP, EC, FA, FB)</label>
+          <input class="adm-input" id="sc-series" value="${esc(seriesVal)}" placeholder="SC, SB" />
+        </div>
+        <div class="adm-field">
+          <label>限制画幅比例 (逗号分隔，如 3:4, 16:9, 1:1，留空不限制)</label>
+          <input class="adm-input" id="sc-ratios" value="${esc(ratiosVal)}" placeholder="3:4, 1:1" />
+        </div>
+      </div>
+      <div class="adm-field">
+        <label>关键词模糊匹配 (逗号分隔，匹配作品标题、提示词、说明、主题)</label>
+        <input class="adm-input" id="sc-keywords" value="${esc(keywordsVal)}" placeholder="小红书, 套图, 组图" />
+      </div>
+      <div class="adm-field" style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+        <input type="checkbox" id="sc-enabled" ${sc.isEnabled ? "checked" : ""} style="width:16px;height:16px;" />
+        <label for="sc-enabled" style="font-size:13px;cursor:pointer;">启用此场景并在首页展示</label>
+      </div>
+      <div class="adm-modal-actions" style="margin-top:18px;display:flex;justify-content:flex-end;gap:10px;">
+        <button class="adm-btn adm-btn-secondary" id="sc-cancel">取消</button>
+        <button class="adm-btn adm-btn-primary" id="sc-save">保存场景</button>
+      </div>
+    `);
+
+    document.getElementById("sc-cancel").onclick = closeModal;
+    document.getElementById("sc-save").onclick = async () => {
+      const key = (document.getElementById("sc-key").value || "").trim().toLowerCase();
+      const title = (document.getElementById("sc-title").value || "").trim();
+      const subtitle = (document.getElementById("sc-subtitle").value || "").trim();
+      const studioEntry = document.getElementById("sc-entry").value;
+      const sortOrder = parseInt(document.getElementById("sc-sort").value, 10) || 0;
+      const isEnabled = document.getElementById("sc-enabled").checked;
+      let studioParams = {};
+      try {
+        const rawP = document.getElementById("sc-params").value.trim();
+        if (rawP) studioParams = JSON.parse(rawP);
+      } catch (e) {
+        toast("创作入口附加参数 JSON 格式不合法", true);
+        return;
+      }
+      const series = (document.getElementById("sc-series").value || "")
+        .split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+      const ratios = (document.getElementById("sc-ratios").value || "")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+      const keywords = (document.getElementById("sc-keywords").value || "")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+
+      try {
+        await api("/api/admin/home-scenarios", {
+          method: "POST",
+          body: {
+            action: isNew ? "create" : "update",
+            key,
+            title,
+            subtitle,
+            studioEntry,
+            studioParams,
+            matchRules: { series, ratios, keywords },
+            sortOrder,
+            isEnabled,
+          },
+        });
+        toast(`场景【${title}】已成功保存`);
+        closeModal();
+        await reloadCurrent();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  function openPinWorkModal(scKey) {
+    const sc = (state.data.scenarios || []).find((x) => x.key === scKey);
+    const title = sc ? sc.title : scKey;
+
+    openModal(`
+      <h3 style="margin:0 0 14px;">📌 为场景【${esc(title)}】置顶作品</h3>
+      <p style="font-size:13px;color:var(--adm-ink-muted);margin:0 0 14px;">
+        输入作品 ID 或输入关键词搜索公开作品进行置顶。置顶作品将在首页样图中排在首位。
+      </p>
+      <div class="adm-field">
+        <label>搜索作品 (输入标题 / 作者 / ID)</label>
+        <div style="display:flex;gap:8px;">
+          <input class="adm-input" id="pw-search" placeholder="输入关键词或作品ID..." />
+          <button class="adm-btn adm-btn-secondary" id="pw-do-search">搜索</button>
+        </div>
+      </div>
+      <div id="pw-results" style="max-height:220px;overflow-y:auto;margin:10px 0;border:1px solid var(--adm-line, #e3dcd0);border-radius:6px;padding:8px;background:#faf7f2;">
+        <div class="adm-muted" style="text-align:center;padding:12px;">输入关键词后点击搜索</div>
+      </div>
+      <div class="adm-form-grid" style="margin-top:12px;">
+        <div class="adm-field">
+          <label>已选作品 ID</label>
+          <input class="adm-input" id="pw-work-id" placeholder="如 work_102" />
+        </div>
+        <div class="adm-field">
+          <label>置顶显示顺序 (数字越小越靠前，如 10, 20...)</label>
+          <input class="adm-input" id="pw-order" type="number" value="10" />
+        </div>
+      </div>
+      <div class="adm-modal-actions" style="margin-top:18px;display:flex;justify-content:flex-end;gap:10px;">
+        <button class="adm-btn adm-btn-secondary" id="pw-cancel">取消</button>
+        <button class="adm-btn adm-btn-primary" id="pw-submit">确认置顶</button>
+      </div>
+    `);
+
+    const doSearch = async () => {
+      const q = (document.getElementById("pw-search").value || "").trim();
+      const resContainer = document.getElementById("pw-results");
+      resContainer.innerHTML = '<div class="adm-muted" style="text-align:center;padding:12px;">正在搜索...</div>';
+      try {
+        const res = await api(`/api/admin/works?status=published&q=${encodeURIComponent(q)}`);
+        const items = (res.items || []).slice(0, 15);
+        if (!items.length) {
+          resContainer.innerHTML = '<div class="adm-muted" style="text-align:center;padding:12px;">未找到匹配公开作品</div>';
+          return;
+        }
+        resContainer.innerHTML = items.map((w) => {
+          const img = (w.images && w.images[0]) || "";
+          return `
+            <div class="pw-pick-item" data-id="${esc(w.id)}" style="display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid #eee;cursor:pointer;background:#fff;border-radius:4px;margin-bottom:4px;">
+              ${img ? `<img src="${esc(img)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;" />` : `<div style="width:36px;height:36px;background:#eee;border-radius:4px;"></div>`}
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(w.title || "无题")}</div>
+                <div style="font-size:11px;color:#777;">ID: <code>${esc(w.id)}</code> · 作者: ${esc(w.authorName || w.author || "")} · ${esc(w.layout || w.layout_code || "自由排版")}</div>
+              </div>
+              <button type="button" class="adm-btn adm-btn-xs adm-btn-primary">选择</button>
+            </div>
+          `;
+        }).join("");
+
+        resContainer.querySelectorAll(".pw-pick-item").forEach((item) => {
+          item.onclick = () => {
+            const wid = item.getAttribute("data-id");
+            document.getElementById("pw-work-id").value = wid;
+          };
+        });
+      } catch (err) {
+        resContainer.innerHTML = `<div class="adm-muted" style="color:var(--adm-vermilion);">${esc(err.message)}</div>`;
+      }
+    };
+
+    document.getElementById("pw-do-search").onclick = doSearch;
+    document.getElementById("pw-search").onkeydown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doSearch();
+      }
+    };
+    document.getElementById("pw-cancel").onclick = closeModal;
+    document.getElementById("pw-submit").onclick = async () => {
+      const wid = (document.getElementById("pw-work-id").value || "").trim();
+      const order = parseInt(document.getElementById("pw-order").value, 10) || 10;
+      if (!wid) {
+        toast("请选择或填写要置顶的作品 ID", true);
+        return;
+      }
+      try {
+        await api("/api/admin/home-scenarios", {
+          method: "POST",
+          body: {
+            action: "pin",
+            scenarioKey: scKey,
+            workId: wid,
+            sortOrder: order,
+          },
+        });
+        toast(`作品 ${wid} 已成功置顶到场景【${title}】`);
+        closeModal();
+        await reloadCurrent();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
   /* ======================== EVENT BINDINGS ======================== */
 
   function bindConsoleEvents() {
@@ -2657,6 +3014,59 @@
         if (switcher.value) switchSandboxRole(switcher.value);
       };
     }
+
+    // Scenario Management Events
+    root.querySelectorAll("[data-act='toggle-scenario']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const key = btn.getAttribute("data-key");
+        const cur = btn.getAttribute("data-enabled") === "1";
+        try {
+          await api("/api/admin/home-scenarios", {
+            method: "POST",
+            body: { action: "toggle", key, isEnabled: !cur },
+          });
+          toast(`已${cur ? "停用" : "启用"}场景【${key}】`);
+          await reloadCurrent();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+    });
+
+    root.querySelectorAll("[data-act='edit-scenario']").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-key");
+        openEditScenarioModal(key);
+      });
+    });
+
+    root.querySelectorAll("[data-act='pin-work']").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-key");
+        openPinWorkModal(key);
+      });
+    });
+
+    root.querySelectorAll("[data-act='unpin-work']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const key = btn.getAttribute("data-key");
+        const wid = btn.getAttribute("data-work-id");
+        if (!confirm(`确认取消作品 ${wid} 在场景【${key}】的置顶吗？`)) return;
+        try {
+          await api("/api/admin/home-scenarios", {
+            method: "POST",
+            body: { action: "unpin", scenarioKey: key, workId: wid },
+          });
+          toast(`已取消置顶作品 ${wid}`);
+          await reloadCurrent();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+    });
+
+    const newScBtn = document.getElementById("adm-new-scenario-btn");
+    if (newScBtn) newScBtn.onclick = () => openEditScenarioModal("");
 
     // Moderator Console Events
     const btnModSearch = document.getElementById("btn-mod-search");

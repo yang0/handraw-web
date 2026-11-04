@@ -535,7 +535,14 @@ summary:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .hw-discovery__media,
   .hw-discovery__media img,
-  .hw-discovery__card .hw-discovery__title { transition: none; }
+  .hw-discovery__card .hw-discovery__title,
+  .hw-scenario-card,
+  .hw-scenario-thumb img,
+  .hw-scenario-card__btn-primary,
+  .hw-scenario-card__btn-secondary {
+    transition: none !important;
+    transform: none !important;
+  }
 }
 
 /* ---------- 3b-5 article flow ---------- */

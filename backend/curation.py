@@ -1289,6 +1289,11 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
     published['pioneer'] = pioneer if credited else False
     published['upgradedBadge'] = upgraded
     _event(tx, sub["id"], "system", "publish", {**published, "revision": revision})
+    try:
+        from .home_scenarios import invalidate_scenarios_cache
+        invalidate_scenarios_cache()
+    except Exception:
+        pass
     return published
 
 
@@ -1799,7 +1804,13 @@ def publish_work_direct(
             tx, uid, username, work_id, title, styles, layout, images, now_iso,
             before_tier=before_tier, honor_override=honor_override,
         )
-        return _work_receipt(tx, work_id, topic_id=topic_id, reward_info=reward_info)
+        receipt = _work_receipt(tx, work_id, topic_id=topic_id, reward_info=reward_info)
+    try:
+        from .home_scenarios import invalidate_scenarios_cache
+        invalidate_scenarios_cache()
+    except Exception:
+        pass
+    return receipt
 
 
 def _record_fork(tx, parent_work_id: str, uid: int, generation_id: str, now_iso: str) -> None:

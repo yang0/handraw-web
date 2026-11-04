@@ -568,5 +568,13 @@ except ImportError:  # pragma: no cover - compatibility for staged rollouts
 
 MIGRATIONS.extend(DM_MIGRATIONS)
 
+# Home Scenarios (migration block 086+).
+try:
+    from .home_scenarios import SCENARIOS_MIGRATIONS, SCENARIOS_POST_MIGRATION_HOOKS
+    POST_MIGRATION_HOOKS.update(SCENARIOS_POST_MIGRATION_HOOKS)
+    MIGRATIONS.extend(SCENARIOS_MIGRATIONS)
+except ImportError:  # pragma: no cover - compatibility for staged rollouts
+    SCENARIOS_MIGRATIONS = []
+
 # Ensure migrations execute in strictly ascending numerical order
 MIGRATIONS.sort(key=lambda m: m[0])
