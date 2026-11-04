@@ -747,4 +747,19 @@ function createTestGraph(options = {}) {
   console.log("✓ Test 10 Passed: Subject input focus preservation & no re-render on input verified.");
 }
 
-console.log("\nALL 10 TESTS PASSED SUCCESSFULLY!");
+// ============================================================================
+// Test 11: Canvas Mode Button Directly Placed next to Article Mode (No More Dropdown)
+// ============================================================================
+{
+  const freshStudioApp = fs.readFileSync("demo/assets/studio-app.js", "utf8");
+  assert.ok(!freshStudioApp.includes("studio-mode-more-wrap"), "studio-mode-more-wrap must be removed from studio-app.js");
+  assert.ok(!freshStudioApp.includes("studio-mode-more-btn"), "studio-mode-more-btn must be removed from studio-app.js");
+  assert.ok(!freshStudioApp.includes("studio-mode-more-menu"), "studio-mode-more-menu must be removed from studio-app.js");
+  assert.ok(!freshStudioApp.includes("_modeMoreOpen"), "_modeMoreOpen must be removed from studio-app.js");
+
+  const modeSwitchPattern = /id="studio-mode-article"[^>]*>文章配图<\/button>\s*<button[^>]+id="studio-mode-canvas"[^>]*>画布<\/button>/;
+  assert.ok(modeSwitchPattern.test(freshStudioApp), "Canvas button must be directly placed to the right of 文章配图 button with text '画布' and without '更多' dropdown");
+  console.log("✓ Test 11 Passed: Canvas button directly displayed to the right of 文章配图 without 更多 dropdown.");
+}
+
+console.log("\nALL 11 TESTS PASSED SUCCESSFULLY!");
