@@ -4072,17 +4072,20 @@
         </section>
         <div class="hw-account-form-grid">
           <div>
-            <label for="acc-display-name" style="font-size:12.5px;font-weight:750;display:block;margin-bottom:5px;">创作者昵称</label>
-            <input class="hw-input" style="width:100%;" id="acc-display-name" maxlength="40"
-              value="${esc(u.displayName || u.name || "")}" ${u.nicknameLocked !== false ? 'readonly aria-readonly="true"' : ""} />
-            <div class="hw-account-help">${u.nicknameLocked !== false ? "已确定，昵称不可再次更改；用户名 ID 同样不可修改。" : "还未设定昵称，你可以确定一次；保存后将永久锁定。"}</div>
+            <div style="font-size:12.5px;font-weight:750;margin-bottom:5px;">创作者昵称</div>
+            ${u.nicknameLocked !== false
+              ? `<div style="font-weight:700;">${esc(u.displayName || u.name || u.username)}</div>
+                 <div class="hw-account-help">已确定的昵称不可修改。</div>`
+              : `<label for="acc-display-name" class="hw-account-help">尚未设置昵称，可设置一次</label>
+                 <input class="hw-input" style="width:100%;" id="acc-display-name" maxlength="40" value="" placeholder="填写创作者昵称" />
+                 <div class="hw-account-help">昵称保存后不可再次修改，请确认后提交。</div>`}
+            <div class="hw-account-help">用户名：@${esc(u.username)}（不可修改）</div>
           </div>
           <div>
-            <label for="acc-email" style="font-size:12.5px;font-weight:750;display:block;margin-bottom:5px;">当前绑定邮箱</label>
-            <input class="hw-input" style="width:100%;" id="acc-email" type="email" readonly
-              value="${esc(u.email || "")}" />
-            <div class="hw-account-help">邮箱不可直接覆盖。必须验证新邮箱才能完成换绑。</div>
-            <div class="hw-account-help" id="acc-email-verify-status" role="status">正在检查邮箱验证状态…</div>
+            <div style="font-size:12.5px;font-weight:750;margin-bottom:5px;">当前绑定邮箱</div>
+            <div style="overflow-wrap:anywhere;">${esc(u.email || "尚未绑定")}</div>
+            <div class="hw-account-help">更换邮箱请使用下方的验证流程。</div>
+            <div class="hw-account-help" id="acc-email-verify-status" role="status" aria-live="polite">正在检查邮箱验证状态…</div>
           </div>
         </div>
 
@@ -4093,12 +4096,14 @@
 
         <section class="hw-account-security-panel">
           <h3>🔑 修改密码</h3>
-          <p class="hw-account-help">设置新密码会让其他设备的登录会话失效；至少 8 位，请勿重复使用旧密码。</p>
+          <p class="hw-account-help">修改成功后，当前浏览器继续登录，其他登录会话将退出。新密码至少 8 位。</p>
           <div class="hw-account-form-grid">
-            <input class="hw-input" type="password" id="acc-cur-pw" autocomplete="current-password" placeholder="当前登录密码" />
-            <input class="hw-input" type="password" id="acc-new-pw" minlength="8" maxlength="128" autocomplete="new-password" placeholder="新密码（8～128 位）" />
-            <input class="hw-input" type="password" id="acc-confirm-pw" autocomplete="new-password" placeholder="确认新密码" />
+            <label>当前密码<input class="hw-input" type="password" id="acc-cur-pw" autocomplete="current-password" /></label>
+            <label>新密码<input class="hw-input" type="password" id="acc-new-pw" minlength="8" maxlength="128" autocomplete="new-password" /></label>
+            <label>确认新密码<input class="hw-input" type="password" id="acc-confirm-pw" minlength="8" maxlength="128" autocomplete="new-password" /></label>
           </div>
+          <div style="margin-top:12px;"><button type="button" class="btn btn-sm" id="acc-password-save">修改密码</button></div>
+          <div id="acc-password-feedback" class="hw-account-help" role="status" aria-live="polite"></div>
         </section>
         <section class="hw-account-security-panel">
           <h3>✉️ 安全换绑邮箱</h3>
@@ -4110,7 +4115,6 @@
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;">
             <button type="button" class="btn btn-sm btn-primary" id="acc-change-email">发送新邮箱验证链接</button>
             <a class="btn btn-sm" href="${esc(channelUrl("main", {view:"verify-email"}))}">验证当前邮箱</a>
-            <a href="${esc(channelUrl("main", {view:"recovery"}))}">忘记密码？</a>
           </div>
           <span id="acc-email-feedback" role="status" aria-live="polite" class="hw-account-help"></span>
         </section>
@@ -4133,8 +4137,9 @@
           </div>
         </div>
 
-        <div style="display:flex;justify-content:flex-end;gap:10px;">
-          <button type="button" class="btn btn-primary" id="acc-save-btn">💾 保存个人账号资料与安全设置</button>
+        <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="hw-account-help" id="acc-profile-feedback" role="status" aria-live="polite"></span>
+          <button type="button" class="btn btn-primary" id="acc-save-btn">保存个人资料</button>
         </div>
       </div>
     `;
@@ -4251,46 +4256,87 @@
       finally { revokeBtn.disabled = false; }
     };
 
+    const profileFeedback = formEl.querySelector("#acc-profile-feedback");
     const saveBtn = formEl.querySelector("#acc-save-btn");
-    if (saveBtn) {
-      saveBtn.onclick = async () => {
-        const displayName = formEl.querySelector("#acc-display-name").value.trim();
-        const email = formEl.querySelector("#acc-email").value.trim();
-        const bio = formEl.querySelector("#acc-bio").value.trim();
-        const currentPassword = formEl.querySelector("#acc-cur-pw").value;
-        const newPassword = formEl.querySelector("#acc-new-pw").value;
-        const confirmed = formEl.querySelector("#acc-confirm-pw").value;
-        if (newPassword && (newPassword.length < 8 || newPassword !== confirmed)) {
-          toast("新密码至少 8 位，并且两次输入必须一致");
-          return;
-        }
+    if (saveBtn) saveBtn.onclick = async () => {
+      const nicknameInput = formEl.querySelector("#acc-display-name");
+      const bio = formEl.querySelector("#acc-bio").value.trim();
+      const payload = { bio };
+      if (nicknameInput) {
+        const displayName = nicknameInput.value.trim();
         if (!displayName) {
-          toast("显示昵称不能为空");
+          profileFeedback.textContent = "请先填写创作者昵称";
+          nicknameInput.focus();
           return;
         }
+        payload.displayName = displayName;
+      }
+      saveBtn.disabled = true;
+      profileFeedback.textContent = "正在保存个人资料…";
+      try {
         if (App.state.serverBacked) {
-          try {
-            const res = await apiJson("/api/auth/profile", {
-              method: "POST",
-              body: { displayName, email, bio, currentPassword, newPassword }
-            });
-            if (res.boot) applyBootState(res.boot);
-            toast(res.sessionsRevoked ? "密码已修改，其他设备已退出登录" : "个人资料已保存");
-            if (onSaved) onSaved();
-          } catch (err) {
-            toast(`保存失败：${err.message}`);
+          const res = await apiJson("/api/auth/profile", { method: "POST", body: payload });
+          if (res.boot) applyBootState(res.boot);
+        } else {
+          u.bio = bio;
+          if (nicknameInput) {
+            u.name = payload.displayName;
+            u.displayName = payload.displayName;
+            u.nicknameLocked = true;
           }
-          return;
+          saveState();
         }
-        u.name = displayName;
-        u.displayName = displayName;
-        u.email = email;
-        u.bio = bio;
-        saveState();
-        toast("个人资料已更新");
+        profileFeedback.textContent = "个人资料已保存";
+        toast("个人资料已保存");
         if (onSaved) onSaved();
-      };
-    }
+      } catch (err) {
+        profileFeedback.textContent = err.message || "保存失败，请重试";
+      } finally { saveBtn.disabled = false; }
+    };
+
+    const passwordBtn = formEl.querySelector("#acc-password-save");
+    if (passwordBtn) passwordBtn.onclick = async () => {
+      const oldField = formEl.querySelector("#acc-cur-pw");
+      const newField = formEl.querySelector("#acc-new-pw");
+      const confirmField = formEl.querySelector("#acc-confirm-pw");
+      const status = formEl.querySelector("#acc-password-feedback");
+      const currentPassword = oldField.value;
+      const newPassword = newField.value;
+      if (!currentPassword) {
+        status.textContent = "请输入当前密码";
+        oldField.focus();
+        return;
+      }
+      if (newPassword.length < 8 || newPassword.length > 128) {
+        status.textContent = "新密码需为 8～128 个字符";
+        newField.focus();
+        return;
+      }
+      if (newPassword !== confirmField.value) {
+        status.textContent = "两次输入的新密码不一致";
+        confirmField.focus();
+        return;
+      }
+      if (!App.state.serverBacked) {
+        status.textContent = "演示模式不支持修改真实密码";
+        return;
+      }
+      passwordBtn.disabled = true;
+      status.textContent = "正在修改密码…";
+      try {
+        const res = await apiJson("/api/auth/profile", {
+          method: "POST", body: { currentPassword, newPassword }
+        });
+        if (res.boot) applyBootState(res.boot);
+        oldField.value = "";
+        newField.value = "";
+        confirmField.value = "";
+        status.textContent = "密码已修改，其他登录设备已退出";
+        toast("密码已修改，其他登录设备已退出");
+      } catch (err) {
+        status.textContent = err.message || "修改密码失败，请重试";
+      } finally { passwordBtn.disabled = false; }
+    };
   }
 
   function openAccountSettingsModal() {
