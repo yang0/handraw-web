@@ -4211,6 +4211,10 @@
         <section data-account-panel="privacy" class="hw-account-security-panel">
           <h3>账号停用与数据说明</h3>
           <p class="hw-account-help">停用后无法继续登录，所有网页登录会话和已授权客户端将失效。已公开作品、历史交易与积分记录不会在停用时自动删除，相关数据处理请联系站点管理员。</p>
+          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;">
+            <button type="button" class="btn btn-sm" id="acc-export-data">导出我的基本资料与内容索引</button>
+            <span id="acc-export-feedback" class="hw-account-help" role="status" aria-live="polite"></span>
+          </div>
           <p class="hw-account-help">停用不可通过当前页面自行恢复。如果只是暂时离开，建议直接退出登录。</p>
           <div class="hw-account-form-grid">
             <label>确认用户名<input class="hw-input" id="acc-close-username" autocomplete="off" placeholder="输入 @${esc(u.username)} 对应的用户名" /></label>
@@ -4413,6 +4417,32 @@
         await readSessions();
       } catch (err) { status.textContent = err.message || "操作失败，请重试"; }
       finally { revokeBtn.disabled = false; }
+    };
+
+    const exportBtn = formEl.querySelector("#acc-export-data");
+    if (exportBtn) exportBtn.onclick = async () => {
+      const feedback = formEl.querySelector("#acc-export-feedback");
+      if (!App.state.serverBacked) {
+        feedback.textContent = "演示模式不支持下载真实账号数据";
+        return;
+      }
+      exportBtn.disabled = true;
+      feedback.textContent = "正在准备数据导出…";
+      try {
+        const data = await apiJson("/api/account/export");
+        const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "handraw-account-" + String(u.username).replace(/[^a-zA-Z0-9_-]/g, "") + ".json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        feedback.textContent = "已准备数据文件，浏览器将开始下载";
+      } catch (err) {
+        feedback.textContent = err.message || "导出失败，请稍后重试";
+      } finally { exportBtn.disabled = false; }
     };
 
     const closeBtn = formEl.querySelector("#acc-close-account");
