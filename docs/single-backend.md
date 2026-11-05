@@ -6,6 +6,18 @@ Windows 双击项目根目录的 `service.bat`，选择启动、关闭、重启�
 
 也可使用 `service.bat start`、`service.bat stop`、`service.bat restart`、`service.bat status`。
 
+建议 Windows 首次运行时创建项目专用 Python 虚拟环境（避免误用 Hermes 等其他项目的 Python）：
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\service.bat start
+```
+
+`service.bat` 会优先使用项目内 `.venv\Scripts\python.exe`，没有该环境时使用 PATH 中的 `python`。依赖预检查只检查模块是否存在，不会导入已弃用的 `fitz` 名称，因此不会因 PyMuPDF 的 `FutureWarning` 阻止启动。
+
+也可以在项目目录前台运行（终端保持打开，Ctrl+C 退出）：
+
 ```powershell
 python -X utf8 -m backend.server --port 3080
 ```
