@@ -52,19 +52,43 @@ function Start-Handraw {
         Show-HandrawStatus
         return
     }
-    $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    # Prefer a project-local interpreter over an unrelated activated venv
+    # (e.g. Hermes). Do not force users to change their system-wide PATH.
+    $localPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
+    if (Test-Path -LiteralPath $localPython -PathType Leaf) {
+        $python = $localPython
+    } else {
+        $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    }
+    # Check package presence WITHOUT importing fitz: modern PyMuPDF emits a
+    # FutureWarning from that legacy alias, and PowerShell 5.1 can promote
+    # native stderr into a terminating error under ErrorActionPreference=Stop.
     $checkScript = @'
+import importlib.util
 missing = []
-for mod, pkg in [('docx', 'python-docx'), ('fitz', 'PyMuPDF'), ('PIL', 'Pillow')]:
-    try:
-        __import__(mod)
-    except Exception:
-        missing.append(pkg)
+for modules, package in [
+    (('docx',), 'python-docx'),
+    (('pymupdf', 'fitz'), 'PyMuPDF'),
+    (('PIL',), 'Pillow'),
+]:
+    if not any(importlib.util.find_spec(name) is not None for name in modules):
+        missing.append(package)
 if missing:
     print(', '.join(missing))
 '@
-    $missingLibs = & $python -c $checkScript 2>$null
-    if ($missingLibs -and -not [string]::IsNullOrWhiteSpace($missingLibs)) {
+    # This is an advisory probe. Incidental native warnings must never prevent
+    # the actual server from starting; runtime failures are captured in logs.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $missingLibs = & $python -c $checkScript 2>$null
+        $probeExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($probeExitCode -ne 0) {
+        Write-Warning '依赖预检查未完成，将继续尝试启动服务；如启动失败请查看 .local\logs。'
+    } elseif ($missingLibs -and -not [string]::IsNullOrWhiteSpace($missingLibs)) {
         Write-Host "提示：缺少依赖库 $($missingLibs.Trim())，导入 .docx / .pdf 或图片处理可能会受影响。"
         Write-Host "请运行命令安装依赖：python -m pip install -r requirements.txt"
     }
