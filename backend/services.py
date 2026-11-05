@@ -1672,8 +1672,9 @@ def compute_public_asset_counts_and_creators(conn: sqlite3.Connection) -> tuple[
     creator_stats: dict[str, dict[str, Any]] = {}
 
     users_map = {
-        r["username"]: {"display_name": r["display_name"], "honor_override": r["honor_override"]}
-        for r in conn.execute("SELECT username, display_name, honor_override FROM users WHERE status = 'active'").fetchall()
+        r["username"]: {"display_name": r["display_name"], "honor_override": r["honor_override"],
+                         "avatar_url": r["avatar_url"]}
+        for r in conn.execute("SELECT username, display_name, honor_override, avatar_url FROM users WHERE status = 'active'").fetchall()
     }
 
     def ensure_rec(uname: str, aname: str) -> dict[str, Any]:
@@ -1684,6 +1685,7 @@ def compute_public_asset_counts_and_creators(conn: sqlite3.Connection) -> tuple[
             rec = {
                 "username": uname,
                 "authorName": clean_name,
+                "avatarUrl": uinfo.get("avatar_url") or "/assets/avatar-default.svg",
                 "stylesCount": 0,
                 "layoutsCount": 0,
                 "worksCount": 0,
@@ -2275,7 +2277,8 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
             "username": current_user["username"],
             "name": current_user["display_name"],
             "displayName": current_user["display_name"],
-            "avatarUrl": "/assets/user-avatar.webp",
+            "avatarUrl": current_user.get("avatar_url") or "/assets/avatar-default.svg",
+            "nicknameLocked": bool(current_user.get("nickname_locked", 1)),
             "email": current_user.get("email") or "",
             "bio": current_user.get("bio") or "",
             "role": u_role,
@@ -2319,6 +2322,14 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         "totalWorksCount": total_works_count,
         "totalCheersCount": total_cheers_count,
         "publicCreators": public_creators,
+        # Show an avatar for creators who only comment or reply, too; do not
+        # expose private emails, passwords or non-public profile fields.
+        "creatorAvatars": {
+            r["username"]: r["avatar_url"]
+            for r in conn.execute(
+                "SELECT username, avatar_url FROM users WHERE status='active' AND avatar_url!=''"
+            ).fetchall()
+        },
         "topics": topics_out,
         "forumBoards": FORUM_BOARDS,
         "forumModerators": forum_moderators,
