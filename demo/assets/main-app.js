@@ -12,8 +12,8 @@
     assetQuery: "",
     assetSort: "recommended", // 'recommended' | 'newest' | 'hot' | 'exclusive' | 'code'
     density: "standard", // 'compact' | 'standard' | 'large'
-    pageSize: 60,
-    shownCount: 60,
+    pageSize: 40,
+    shownCount: 40,
     spotlightCollapsed: true,
     workSort: "newest", // newest | favorites | cheers
     workFormat: "all", // all | single | multi
@@ -592,7 +592,8 @@
       })
       .slice(0, 3);
 
-    const topCreators = S.getTopCreators(5, "prolific", UI.rankPeriod);
+    const topCreators = !UI.assetQuery.trim() && !UI.spotlightCollapsed
+      ? S.getTopCreators(5, "prolific", UI.rankPeriod) : [];
     const pMeta = getPeriodMeta(UI.rankPeriod);
     const filtered = filterAssets(kind, activeGroup);
     // Repeatedly recomputing usage for both sides of every sort comparison
@@ -1051,7 +1052,7 @@
         const columns = waterfall ? Array.from(waterfall.querySelectorAll(".hw-wf-col")) : [];
         if (!columns.length) { UI.shownCount += 80; renderMain(); return; }
         const oldCount = Math.min(UI.shownCount, filtered.length);
-        const nextCount = Math.min(filtered.length, oldCount + 80);
+        const nextCount = Math.min(filtered.length, oldCount + 40);
         for (let idx = oldCount; idx < nextCount; idx++) {
           const wrapper = document.createElement("template");
           wrapper.innerHTML = renderAssetCard(filtered[idx]);
