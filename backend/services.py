@@ -54,7 +54,7 @@ CREATOR_HONOR_TIERS = [
 
 FORUM_BOARDS: list[dict[str, str]] = [
     {"key": "all", "label": "📋 全区总版主", "shortLabel": "全区总版", "desc": "跨全论坛所有板块享有置顶、加精、移版与违规治理权限"},
-    {"key": "showcase", "label": "🎨 晒作品", "shortLabel": "晒作品版", "desc": "发布作品即进入本版，作品、画风与图型自动关联，可回复讨论"},
+    {"key": "showcase", "label": "🎨 作品讨论", "shortLabel": "作品讨论版", "desc": "公开作品收到首条有效评论后进入本版，作品与讨论一对一关联"},
     {"key": "tuning", "label": "🎯 作品求调优 / 悬赏", "shortLabel": "调优悬赏版", "desc": "负责实测翻车诊断、提示词调优与求改悬赏帖秩序"},
     {"key": "experience", "label": "📘 实战经验与变现", "shortLabel": "实战变现版", "desc": "负责商单交付 SOP、小红书/公众号起号复盘与精选加精"},
     {"key": "assets", "label": "🎨 画风与图型专区", "shortLabel": "画风图型版", "desc": "负责 370+ 画风与 170+ 图型参数研讨、新风格共创交流"},
@@ -3639,11 +3639,12 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
 
 # ======================== PUBLISHING: WORKS, ASSETS, FORUM & BOUNTIES ========================
 
-def publish_user_work(db, user, body, *, listed: bool = True):
+def publish_user_work(db, user, body, *, listed: bool = False):
     # Works publish immediately (D-02).  Double review stays for styles and
     # layouts, which feed the shared catalogue.
     from .curation import publish_work_direct
-    return publish_work_direct(db, user, body, listed=listed)
+    # Explicit work publishing keeps its discussion unlisted until the first valid comment.
+    return publish_work_direct(db, user, body, listed=False)
 
 
 
@@ -3788,6 +3789,11 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
         else:
             recipe["sharedCard"] = shared_card
 
+    # Standalone forum posts can embed a work card, but must never claim the
+    # canonical work discussion or bypass its first-comment listing rule.
+    # The sharedCard stays inside recipe metadata for visual reference.
+    work_id = ""
+
     uid = int(user["id"])
     now_iso = utc_now_iso()
     now_ms = int(time.time() * 1000)
@@ -3844,34 +3850,6 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
                     )
                     new_bal = 0
 
-        if not work_id:
-            work_id = str(body.get("workId") or "").strip()[:64]
-
-        if work_id:
-            existing_mapping = tx.execute(
-                "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
-                (work_id,),
-            ).fetchone()
-            if not existing_mapping:
-                existing_topic = tx.execute(
-                    "SELECT id FROM forum_topics WHERE work_id = ?",
-                    (work_id,),
-                ).fetchone()
-                if existing_topic:
-                    existing_mapping = {"topic_id": existing_topic["id"]}
-                    tx.execute(
-                        "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
-                        (work_id, existing_topic["id"], now_iso),
-                    )
-
-            if existing_mapping:
-                tid = str(existing_mapping["topic_id"])
-                tx.execute(
-                    "UPDATE forum_topics SET summary = ?, title = CASE WHEN ? != '' THEN ? ELSE title END, listed_at_ms = COALESCE(listed_at_ms, ?), updated_at = ? WHERE id = ? AND author_username = ?",
-                    (summary, title, title, now_ms, now_iso, tid, user["username"]),
-                )
-                return {"ok": True, "topicId": tid, "topic": {"id": tid, "price": price}, "credits": new_bal, "bounty": bounty, "reused": True}
-
         recipe_str = json.dumps(recipe, ensure_ascii=False) if recipe else ""
         try:
             recipe_has_sec = 1 if (recipe and check_obj_has_secret(recipe, tx)) else 0
@@ -3910,20 +3888,6 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
                 now_ms,
             ),
         )
-
-        if work_id:
-            try:
-                tx.execute(
-                    "INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
-                    (work_id, tid, now_iso),
-                )
-            except sqlite3.IntegrityError:
-                mapped = tx.execute(
-                    "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
-                    (work_id,),
-                ).fetchone()
-                if mapped:
-                    tid = str(mapped["topic_id"])
 
     return {"ok": True, "topicId": tid, "topic": {"id": tid, "price": price}, "credits": new_bal, "bounty": bounty}
 

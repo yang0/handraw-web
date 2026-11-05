@@ -2482,7 +2482,7 @@
                 : mount.kind === "layout"
                 ? "← 图型频道"
                 : mount.kind === "work"
-                ? "← 晒作品广场"
+                ? "← 作品广场"
                 : esc(topic.categoryLabel || "社区讨论")
             }</button>
             <span>/</span>
@@ -3911,7 +3911,7 @@
 
     const cats = [
       { key: "all", label: "📋 全部社区讨论", count: allTopics.length },
-      { key: "showcase", label: "🎨 晒作品", count: allTopics.filter((t) => t.category === "showcase").length },
+      { key: "showcase", label: "🎨 作品讨论", count: allTopics.filter((t) => t.category === "showcase").length },
       ...BOARD_DEFS.map((b) => ({
         key: b.key,
         label: b.label,
@@ -3952,12 +3952,12 @@
     root.innerHTML = `
       <section class="hw-editorial-strip">
         <div>
-          <p class="hw-editorial-eyebrow">以图为先的创作者社区 · 晒图交流与灵感互助</p>
-          <h1 class="hw-editorial-title">晒作品、聊配方、求改图建议</h1>
-          <p class="hw-editorial-sub">在这里晒图交流作品，分享可复用的<strong>画风、图型与提示词</strong>；遇到问题也可以<strong>发帖求助</strong>，和大家一起探讨。</p>
+          <p class="hw-editorial-eyebrow">以作品为中心的创作者社区 · 经验交流与灵感互助</p>
+          <h1 class="hw-editorial-title">聊作品、聊配方、求改图建议</h1>
+          <p class="hw-editorial-sub">在作品详情页留言，即可开启论坛讨论；这里还可以分享<strong>创作经验、画风、图型与技巧</strong>，或发帖求助。</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-primary" id="forum-btn-new-visual">作品|画风|图型投稿</button>
+          <button type="button" class="btn btn-primary" id="forum-btn-new-visual">画风 / 图型投稿</button>
           <a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"mine"}))}">我的投稿</a>
           <a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"review"}))}">参与审核</a>
           ${isSuperAdmin ? `<a class="btn" href="${esc(channelUrl("forum", {view:"curation",tab:"admin"}))}">审核资格管理</a>` : ""}
@@ -4062,7 +4062,7 @@
             <div style="font-size:12px;font-weight:800;color:var(--vermilion);margin-bottom:6px;">交流与求助</div>
             <div style="font-weight:800;font-size:14.5px;margin-bottom:6px;">把做法说清楚，让交流更有用</div>
             <p style="margin:0;font-size:12.5px;color:var(--ink-body);line-height:1.58;">
-              • <strong>分享作品</strong>：附上主题、使用的画风或图型。<br/>
+              • <strong>讨论作品</strong>：在作品详情页直接评论，自动进入论坛。<br/>
               • <strong>交流做法</strong>：说明提示词、参考与调整过程。<br/>
               • <strong>遇到问题</strong>：贴出结果和预期，方便大家帮忙。
             </p>
@@ -4094,7 +4094,7 @@
       </div>
     `;
 
-    root.querySelector("#forum-btn-new-visual").onclick = () => S.goToCurationShare({kind:"work"});
+    root.querySelector("#forum-btn-new-visual").onclick = () => S.goToCurationShare({kind:"style"});
 
     root.querySelector("#forum-btn-new-text").onclick = () =>
       openComposeView({

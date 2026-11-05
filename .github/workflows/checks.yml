@@ -23,12 +23,25 @@ jobs:
       - run: node --check plugin/public/market.js && node --check plugin/public/forum-experience.js
       - run: node tests/test_share_preview.cjs
       - run: node tests/test_masonry_flow.cjs
+      - run: node --check demo/assets/mixed-feed.js && node tests/test_mixed_feed.cjs
       - run: node tests/test_forum_navigation.cjs
       - run: node --check plugin/public/studio.js && node tests/test_studio_command.cjs && node tests/test_studio_pager.cjs
       - run: node --check plugin/public/image-loader.js && node tests/test_image_loader.cjs
       - run: bash -n ops/server-deploy.sh ops/preview-server.sh ops/setup-preview.sh ops/test-server.sh
       - name: Check tracked files
         run: python ops/check_release.py
+  source-archive:
+    if: github.ref == 'refs/heads/feat/mixed-discovery-feed-comment-led-forum'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export complete tracked source ZIP
+        run: git archive --format=zip --output="$RUNNER_TEMP/handraw-optimized.zip" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: handraw-mixed-feed-full-source
+          path: ${{ runner.temp }}/handraw-optimized.zip
+          if-no-files-found: error
   ruby-syntax:
     runs-on: ubuntu-latest
     steps:

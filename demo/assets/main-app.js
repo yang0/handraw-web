@@ -287,7 +287,7 @@
       document.title = `${prof ? `@${prof.authorName} 的个人主页` : "个人主页与账号中心"} — Handraw 手绘风社区`;
       return;
     }
-    document.title = titles[App.view] || "Handraw 手绘风社区 2.0 — 画风库 · 图型库 · 晒作品广场";
+    document.title = titles[App.view] || "Handraw 手绘风社区 2.0 — 画风库 · 图型库 · 作品广场";
   }
 
   function syncUrl(pushHistory = false) {
@@ -489,6 +489,7 @@
     // Product-browse layout class only applies to styles/layouts/works.
     const isBrowse = ["styles", "layouts", "works"].includes(App.view);
     root.classList.toggle("hw-product-browse", isBrowse);
+    root.classList.toggle("hw-home-feed-root", App.view === "discover");
 
     if (window.HandrawAccountTools?.views.has(App.view)) {
       window.HandrawAccountTools.render(root, App.view);
@@ -501,7 +502,9 @@
     }
 
     if (App.view === "discover") {
-      if (window.HandrawDiscovery?.render) {
+      if (window.HandrawMixedFeed?.render) {
+        window.HandrawMixedFeed.render(root);
+      } else if (window.HandrawDiscovery?.render) {
         window.HandrawDiscovery.render(root);
       } else {
         root.innerHTML = `<div style="padding:48px 0;text-align:center;color:var(--ink-muted);">发现页正在加载…</div>`;
@@ -763,7 +766,7 @@
           <div class="hw-controls-left">
             <input type="search" class="hw-input" id="catalog-search" style="width:248px;" value="${esc(UI.assetQuery)}" placeholder="过滤编号（如 ${isStyle ? "FA-001 / USR-S05 / FX-001" : "SC-021 / USR-L04 / LX-001"}）或作者…" />
             <select class="hw-select" id="catalog-sort">
-              <option value="recommended" ${UI.assetSort === "recommended" ? "selected" : ""}>🔥 热门（被晒作品采用最多）</option>
+              <option value="recommended" ${UI.assetSort === "recommended" ? "selected" : ""}>🔥 热门（被作品采用最多）</option>
               <option value="newest" ${UI.assetSort === "newest" ? "selected" : ""}>🌱 最新入库优先</option>
               <option value="exclusive" ${UI.assetSort === "exclusive" ? "selected" : ""}>🔒 官网在线独占置顶</option>
               <option value="code" ${UI.assetSort === "code" ? "selected" : ""}>🔢 按编号字母顺序</option>
@@ -1205,7 +1208,7 @@
             <p class="hw-wb-sub">浏览社区公开作品，按画风、图型或关键词查找。</p>
           </div>
           <div class="hw-wb-head-actions">
-            <button type="button" class="btn btn-primary btn-sm" id="hw-wb-share">分享作品</button>
+            <a class="btn btn-primary btn-sm" href="${esc(channelUrl("studio", {entry:"quick"}))}">开始创作</a>
             <a class="hw-wb-rank-link" href="${esc(channelUrl("main",{view:"rankings",rtab:"works"}))}" id="hw-wb-rank">作品榜单 ↗</a>
           </div>
         </header>
@@ -1245,10 +1248,6 @@
       UI.workQuery = ""; UI.workFormat = "all"; UI.workAccess = "all";
       UI.workFilterAsset = ""; UI.workFilterAuthor = ""; UI.workScenario = "";
     });
-    const share = () => S.goToCurationShare({ kind: "work" });
-
-    const q = root.querySelector("#hw-wb-share");
-    if (q) q.onclick = share;
     const rank = root.querySelector("#hw-wb-rank");
     if (rank) rank.onclick = (e) => { e.preventDefault(); switchView("rankings", { rankTab: "works" }); };
 
@@ -1755,7 +1754,7 @@
                         <span class="hw-boost-pill">${esc(c.honor.boostText)}</span>
                       </div>
                       <div style="font-size:12px;color:var(--ink-muted);margin-top:2px;">
-                        ${esc(pMeta.shortPrefix)}画风 ${pStylesCnt} · 图型 ${pLayoutsCnt} · 晒作品 ${pWorksCnt}${
+                        ${esc(pMeta.shortPrefix)}画风 ${pStylesCnt} · 图型 ${pLayoutsCnt} · 作品 ${pWorksCnt}${
                           !isAllTime ? `（历史共 ${c.totalPublished} 项）` : ""
                         }
                       </div>
@@ -1873,7 +1872,7 @@
 
       tabBodyHtml = `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
-          <span style="font-size:12.8px;font-weight:750;color:var(--ink-body);">📊 按「${esc(pMeta.fullLabel)}」内的同款晒作品驱动数与新共创热度排定</span>
+          <span style="font-size:12.8px;font-weight:750;color:var(--ink-body);">📊 按「${esc(pMeta.fullLabel)}」内的同款作品驱动数与新共创热度排定</span>
           <span style="font-size:12.5px;color:var(--ink-muted);">${esc(pMeta.desc)}</span>
         </div>
         <div class="hw-rank-list-card">
@@ -1884,7 +1883,7 @@
               const prof = a.author ? statsMap.get(a.author) : null;
               const cheered = S.isCheered(a.id);
               const driveDesc = isAllTime
-                ? `累计驱动 <strong>${entry.totalWorkCnt}</strong> 件晒作品`
+                ? `累计驱动 <strong>${entry.totalWorkCnt}</strong> 件作品`
                 : `${esc(pMeta.shortPrefix)}驱动 <strong>${entry.periodWorkCnt}</strong> 件新作 · 历史累计 ${entry.totalWorkCnt} 件`;
               return `
                 <div class="hw-rank-table-row">
@@ -1948,7 +1947,7 @@
           <p class="hw-editorial-eyebrow">社区创作榜单 · 周榜 · 月榜 · 总榜</p>
           <h1 class="hw-editorial-title">周榜捧新人新作，月榜看中坚黑马，总榜敬殿堂传奇</h1>
           <p class="hw-editorial-sub">
-            默认展示<strong>「📅 周榜」</strong>（仅统计近 7 天新发布内容，不叠加历史殿堂曝光倍率），让每一位本周认真晒图与贡献配方的创作者都能冲上榜首，告别熟面孔长期霸榜！
+            默认展示<strong>「📅 周榜」</strong>（仅统计近 7 天新发布内容，不叠加历史殿堂曝光倍率），让每一位本周认真创作与贡献配方的创作者都能冲上榜首，告别熟面孔长期霸榜！
           </p>
         </div>
         ${renderMyHonorStatusCard(heroActionsHtml)}
@@ -2259,7 +2258,7 @@
     const bioText =
       (isMe && curUser.bio) ||
       prof.bio ||
-      `${prof.honor.desc} · 已在社区累计贡献 ${prof.works.length} 件晒作品与 ${prof.styles.length + prof.layouts.length} 项画风/图型资产。`;
+      `${prof.honor.desc} · 已在社区累计贡献 ${prof.works.length} 件作品与 ${prof.styles.length + prof.layouts.length} 项画风/图型资产。`;
 
     let tabBodyHtml = "";
     if (UI.profileTab === "works") {
@@ -2301,7 +2300,7 @@
             "standard"
           )
         : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">
-            暂未发布晒作品。${isMe ? `去 <a href="${esc(channelUrl("studio"))}" style="color:var(--vermilion);font-weight:800;">无限画布创作台 ↗</a> 生成并晒出第一幅作品吧！` : ""}
+            暂无公开作品。${isMe ? `去 <a href="${esc(channelUrl("studio"))}" style="color:var(--vermilion);font-weight:800;">无限画布创作台 ↗</a> 创作第一幅作品吧！` : ""}
           </div>`;
     } else if (UI.profileTab === "generations") {
       if (UI.profGenUser !== prof.username) {
@@ -2708,7 +2707,7 @@
               ),
               "standard"
             )
-          : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏晒作品</div>`;
+          : `<div style="padding:40px;text-align:center;color:var(--ink-muted);">暂未收藏作品</div>`;
       } else if (UI.favTab === "generations") {
         const items = UI._collectedGenerations || [];
         innerContentHtml = items.length
@@ -2902,7 +2901,7 @@
 
         <!-- Standalone Profile Section Tabs -->
         <div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
-          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 晒作品 (${prof.works.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品 (${prof.works.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "generations" ? "is-active" : ""}" data-ptab="generations" role="tab" aria-selected="${UI.profileTab === "generations"}">🕒 生图历史${UI.profGenTotal != null && UI.profGenUser === prof.username ? ` (${UI.profGenTotal})` : ""}</button>
           <button type="button" class="hw-pill ${UI.profileTab === "styles" ? "is-active" : ""}" data-ptab="styles" role="tab" aria-selected="${UI.profileTab === "styles"}">🎨 画风 (${prof.styles.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "layouts" ? "is-active" : ""}" data-ptab="layouts" role="tab" aria-selected="${UI.profileTab === "layouts"}">📐 图型 (${prof.layouts.length})</button>
@@ -3225,7 +3224,7 @@
 
         <div class="studio-step-card" style="margin:0;">
           <div style="font-weight:800;margin-bottom:6px;">🌟 荒地开垦首晒奖 (+15 积分)</div>
-          <p style="font-size:12.8px;color:var(--ink-muted);margin:0 0 12px;">给晒作品少于 3 个的冷门宝藏画风/图型发实战帖，双倍加奖且入驻新发曝光席！</p>
+          <p style="font-size:12.8px;color:var(--ink-muted);margin:0 0 12px;">给作品少于 3 个的冷门宝藏画风/图型发实战帖，双倍加奖且入驻新发曝光席！</p>
           <button type="button" class="btn btn-sm btn-primary" id="wallet-btn-pioneer">去发实战帖拿 +15 积分</button>
         </div>
 

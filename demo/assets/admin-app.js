@@ -1575,7 +1575,7 @@
         <div class="adm-form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
           <div class="adm-field"><label>新用户注册欢迎礼 (✦)</label><input class="adm-input" type="number" id="eco-welcome" value="${esc(eco.welcome_credits ?? 20)}" /></div>
           <div class="adm-field"><label>每日签到奖励 (✦)</label><input class="adm-input" type="number" id="eco-checkin" value="${esc(eco.daily_checkin_credits ?? 5)}" /></div>
-          <div class="adm-field"><label>晒作品基础奖励 (✦)</label><input class="adm-input" type="number" id="eco-work" value="${esc(eco.work_publish_credits ?? 5)}" /></div>
+          <div class="adm-field"><label>公开作品基础奖励 (✦)</label><input class="adm-input" type="number" id="eco-work" value="${esc(eco.work_publish_credits ?? 5)}" /></div>
           <div class="adm-field"><label>荒地开荒额外加奖 (✦)</label><input class="adm-input" type="number" id="eco-pioneer" value="${esc(eco.pioneer_bonus_credits ?? 10)}" /></div>
           <div class="adm-field"><label>贡献共创画风/图型奖励 (✦)</label><input class="adm-input" type="number" id="eco-asset" value="${esc(eco.asset_publish_credits ?? 15)}" /></div>
           <div class="adm-field"><label>每日免费云端生图额度 (张)</label><input class="adm-input" type="number" id="eco-quota" value="${esc(eco.daily_free_quota ?? 3)}" /></div>

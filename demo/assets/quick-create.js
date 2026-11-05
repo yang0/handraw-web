@@ -1,4 +1,4 @@
-// Quick-create view. Generation and publishing use the existing guarded Studio actions.
+// Quick-create view. Successful public generations appear in works; comments list discussions.
 (function () {
   const S = window.HANDRAW_SHARED;
   const RATIO_PATTERN = "[0-9]+(\\.[0-9]+)?:[0-9]+(\\.[0-9]+)?";
@@ -202,15 +202,14 @@
         '<span class="qc-result-title">' + esc(r.title || "") + "</span>",
         '<span class="qc-inline">',
         '<button type="button" class="qc-picker" data-qc-action="download" data-qc-id="' + esc(id) + '">下载</button>',
-        '<button type="button" class="qc-picker" data-qc-action="share" data-qc-id="' + esc(id) + '">发布到社区</button>',
-        "</span>",
+                "</span>",
         "</figcaption>",
         "</figure>"
       ].join("");
     }).join("");
     section.innerHTML = [
       "<h2>生成结果</h2>",
-      '<p class="qc-estimate">仅自己可见，点击发布并确认后才会公开。</p>',
+      '<p class="qc-estimate">成功生成的公开作品会自动进入作品广场；有评论后进入论坛。</p>',
       results.length ? '<div class="qc-results-grid">' + items + "</div>" : '<div class="qc-empty">还没有生成结果，填写主题后开始创作。</div>'
     ].join("");
     host.appendChild(section);
@@ -245,7 +244,6 @@
     if (action === "open-canvas" && typeof currentActions.openCanvas === "function") currentActions.openCanvas();
     else if (action === "open-history" && typeof currentActions.openHistory === "function") currentActions.openHistory();
     else if (action === "download" && typeof currentActions.download === "function") currentActions.download(btn.dataset.qcId);
-    else if (action === "share" && typeof currentActions.share === "function") currentActions.share(btn.dataset.qcId);
   });
 
   window.HandrawQuickCreate = { render: render, updateCost: updateCost };
