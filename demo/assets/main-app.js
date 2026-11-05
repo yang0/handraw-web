@@ -595,13 +595,19 @@
     const topCreators = S.getTopCreators(5, "prolific", UI.rankPeriod);
     const pMeta = getPeriodMeta(UI.rankPeriod);
     const filtered = filterAssets(kind, activeGroup);
+    // Repeatedly recomputing usage for both sides of every sort comparison
+    // was quadratic in practice on large style/layout catalogs.
+    const usageCounts = new Map();
+    if (UI.assetSort === "recommended" || UI.assetSort === "hot") {
+      for (const item of filtered) usageCounts.set(item.id, S.getAssetWorkCount(item.id));
+    }
 
     filtered.sort((a, b) => {
       if (UI.assetSort === "recommended" || UI.assetSort === "hot") {
         // "recommended" and "hot" merged into the single popularity rule:
         // how many published works reference this style or layout.
-        const sb = S.popularScore("style", { ...b, usageCount: S.getAssetWorkCount(b.id) });
-        const sa = S.popularScore("style", { ...a, usageCount: S.getAssetWorkCount(a.id) });
+        const sb = S.popularScore("style", { ...b, usageCount: usageCounts.get(b.id) || 0 });
+        const sa = S.popularScore("style", { ...a, usageCount: usageCounts.get(a.id) || 0 });
         if (sb !== sa) return sb - sa;
       } else if (UI.assetSort === "newest") {
         const af = S.isFreshRelease(a) ? 1 : 0;
@@ -624,6 +630,94 @@
     const remaining = Math.max(0, filtered.length - visibleItems.length);
     const favBucket = isStyle ? "styles" : "layouts";
     const showCommunityStage = !UI.assetQuery.trim() && !UI.spotlightCollapsed;
+
+    const renderAssetCard = (item) => {
+          const wCount = S.getAssetWorkCount(item.id);
+          const liked = S.isLiked(item.kind, item.id);
+          const likeCnt = S.getLikeCount(item.kind, item);
+          const collected = S.isCollected(favBucket, item.id);
+          const favCnt = S.getFavoriteCount(item.kind, item);
+          const commentCnt = S.getAssetComments(item.id).length;
+          const unlocked = S.isUnlocked(item.id, item);
+          const isFresh = S.isFreshRelease(item);
+          const prof = item.author ? statsMap.get(item.author) : null;
+          const cheered = S.isCheered(item.id);
+
+          let topBadge = "";
+          if (isFresh) {
+            topBadge = `<span class="hw-card-badge-tl badge-new-release">🆕 新发扶持 · ${esc(item.createdAt || "新入库")}</span>`;
+          } else if (item.sourceType === "exclusive") {
+            topBadge =
+              item.tier === "pro_credit"
+                ? `<span class="hw-card-badge-tl badge-exclusive-pro">${unlocked ? "💎 专业版已解锁" : `💎 专业独占 · ${item.unlockCost}积分`}</span>`
+                : `<span class="hw-card-badge-tl badge-exclusive-free">🔒 登录免费独占</span>`;
+          } else if (item.sourceType === "community") {
+            topBadge = `<span class="hw-card-badge-tl badge-community">${item.unlockCost > 0 && !unlocked ? `✨ 共创 · ${item.unlockCost}积分` : "✨ 社区共创"}</span>`;
+          }
+
+          const contributorHtml =
+            item.sourceType === "community" && prof && UI.density !== "compact"
+              ? `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:7px;padding:4px 7px;background:var(--paper-bg);border-radius:7px;">
+                  <button type="button" class="hw-author-chip" data-open-creator="${esc(prof.username)}">
+                    <span class="hw-creator-avatar-sm ${esc(prof.honor.sealClass)}">${esc(prof.avatarChar)}</span>
+                    <span style="max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(prof.authorName)}</span>
+                    <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:10px;padding:1px 5px;">${esc(prof.honor.shortBadge)}</span>
+                  </button>
+                  <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-asset="${esc(item.id)}" title="为贡献者送上鼓励">
+                    👏 ${item.cheers ?? 0}
+                  </button>
+                </div>
+              `
+              : "";
+
+          return `
+            <article class="hw-card ${isFresh ? "is-fresh-highlight" : ""}" data-asset-card="${esc(item.id)}">
+              <div class="hw-card-media" data-open-asset="${esc(item.id)}">
+                ${topBadge}
+                <button type="button" class="hw-card-fav-btn ${collected ? "is-collected" : ""}" data-fav-asset="${esc(item.id)}" data-social-action="collect" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" data-social-role="icon-only" title="收藏此${isStyle ? "画风" : "图型"}">
+                  ${collected ? "♥" : "♡"}
+                </button>
+                <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" loading="lazy" />
+                ${wCount > 0 ? `<span class="hw-card-workcount">${wCount} 作品</span>` : ""}
+              </div>
+              <div class="hw-card-body">
+                <div class="hw-card-code-row">
+                  <span class="hw-card-code">${esc(item.id)}</span>
+                  <span class="hw-card-group-tag">${esc(S.groupShortLabel(item))}</span>
+                </div>
+                <h3 class="hw-card-title" data-open-asset="${esc(item.id)}">${esc(item.name)}</h3>
+                <p class="hw-card-desc">${esc(item.description || "")}</p>
+                ${contributorHtml}
+                ${
+                  UI.density !== "compact"
+                    ? `
+                      <div class="hw-card-actions" style="display:flex;align-items:center;justify-content:space-between;gap:5px;margin-top:8px;padding-top:7px;border-top:1px dashed var(--line-soft);">
+                        <button type="button" class="btn btn-sm hw-action-btn ${liked ? "btn-primary is-active" : ""}" data-like-asset="${esc(item.id)}" data-social-action="like" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" title="点赞此${isStyle ? "画风" : "图型"}">
+                          👍 <span class="hw-social-count">${likeCnt}</span>
+                        </button>
+                        <button type="button" class="btn btn-sm hw-action-btn ${collected ? "btn-primary is-active" : ""}" data-fav-asset="${esc(item.id)}" data-social-action="collect" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" title="收藏此${isStyle ? "画风" : "图型"}">
+                          <span class="hw-fav-icon">${collected ? "♥" : "♡"}</span> <span class="hw-social-count">${favCnt}</span>
+                        </button>
+                        <button type="button" class="btn btn-sm hw-action-btn" data-comment-asset="${esc(item.id)}" title="查看与发表评论">
+                          💬 <span class="hw-social-count">${commentCnt}</span>
+                        </button>
+                      </div>
+                      <div class="hw-card-footer">
+                        <button type="button" class="btn btn-sm" style="padding:2px 8px;font-size:11.5px;" data-open-asset="${esc(item.id)}">
+                          ${wCount > 0 ? `🖼️ 看作品 (${wCount})` : "💬 详情与评论"}
+                        </button>
+                        <a class="btn btn-sm btn-primary" style="padding:2px 8px;font-size:11.5px;" href="${esc(channelUrl("studio", isStyle ? { style: item.id } : { layout: item.id }))}">
+                          去创作 ↗
+                        </a>
+                      </div>
+                    `
+                    : ""
+                }
+              </div>
+            </article>
+          `;
+    };
 
     root.innerHTML = `
       <section class="hw-catalog-actions" aria-label="${isStyle ? "画风" : "图型"}频道">
@@ -785,96 +879,7 @@
         </div>
       </div>
 
-      ${S.renderMasonry(
-        visibleItems.map((item) => {
-          const wCount = S.getAssetWorkCount(item.id);
-          const liked = S.isLiked(item.kind, item.id);
-          const likeCnt = S.getLikeCount(item.kind, item);
-          const collected = S.isCollected(favBucket, item.id);
-          const favCnt = S.getFavoriteCount(item.kind, item);
-          const commentCnt = S.getAssetComments(item.id).length;
-          const unlocked = S.isUnlocked(item.id, item);
-          const isFresh = S.isFreshRelease(item);
-          const prof = item.author ? statsMap.get(item.author) : null;
-          const cheered = S.isCheered(item.id);
-
-          let topBadge = "";
-          if (isFresh) {
-            topBadge = `<span class="hw-card-badge-tl badge-new-release">🆕 新发扶持 · ${esc(item.createdAt || "新入库")}</span>`;
-          } else if (item.sourceType === "exclusive") {
-            topBadge =
-              item.tier === "pro_credit"
-                ? `<span class="hw-card-badge-tl badge-exclusive-pro">${unlocked ? "💎 专业版已解锁" : `💎 专业独占 · ${item.unlockCost}积分`}</span>`
-                : `<span class="hw-card-badge-tl badge-exclusive-free">🔒 登录免费独占</span>`;
-          } else if (item.sourceType === "community") {
-            topBadge = `<span class="hw-card-badge-tl badge-community">${item.unlockCost > 0 && !unlocked ? `✨ 共创 · ${item.unlockCost}积分` : "✨ 社区共创"}</span>`;
-          }
-
-          const contributorHtml =
-            item.sourceType === "community" && prof && UI.density !== "compact"
-              ? `
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:7px;padding:4px 7px;background:var(--paper-bg);border-radius:7px;">
-                  <button type="button" class="hw-author-chip" data-open-creator="${esc(prof.username)}">
-                    <span class="hw-creator-avatar-sm ${esc(prof.honor.sealClass)}">${esc(prof.avatarChar)}</span>
-                    <span style="max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(prof.authorName)}</span>
-                    <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:10px;padding:1px 5px;">${esc(prof.honor.shortBadge)}</span>
-                  </button>
-                  <button type="button" class="hw-cheer-btn ${cheered ? "is-cheered" : ""}" data-cheer-asset="${esc(item.id)}" title="为贡献者送上鼓励">
-                    👏 ${item.cheers ?? 0}
-                  </button>
-                </div>
-              `
-              : "";
-
-          return `
-            <article class="hw-card ${isFresh ? "is-fresh-highlight" : ""}" data-asset-card="${esc(item.id)}">
-              <div class="hw-card-media" data-open-asset="${esc(item.id)}">
-                ${topBadge}
-                <button type="button" class="hw-card-fav-btn ${collected ? "is-collected" : ""}" data-fav-asset="${esc(item.id)}" data-social-action="collect" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" data-social-role="icon-only" title="收藏此${isStyle ? "画风" : "图型"}">
-                  ${collected ? "♥" : "♡"}
-                </button>
-                <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" loading="lazy" />
-                ${wCount > 0 ? `<span class="hw-card-workcount">${wCount} 作品</span>` : ""}
-              </div>
-              <div class="hw-card-body">
-                <div class="hw-card-code-row">
-                  <span class="hw-card-code">${esc(item.id)}</span>
-                  <span class="hw-card-group-tag">${esc(S.groupShortLabel(item))}</span>
-                </div>
-                <h3 class="hw-card-title" data-open-asset="${esc(item.id)}">${esc(item.name)}</h3>
-                <p class="hw-card-desc">${esc(item.description || "")}</p>
-                ${contributorHtml}
-                ${
-                  UI.density !== "compact"
-                    ? `
-                      <div class="hw-card-actions" style="display:flex;align-items:center;justify-content:space-between;gap:5px;margin-top:8px;padding-top:7px;border-top:1px dashed var(--line-soft);">
-                        <button type="button" class="btn btn-sm hw-action-btn ${liked ? "btn-primary is-active" : ""}" data-like-asset="${esc(item.id)}" data-social-action="like" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" title="点赞此${isStyle ? "画风" : "图型"}">
-                          👍 <span class="hw-social-count">${likeCnt}</span>
-                        </button>
-                        <button type="button" class="btn btn-sm hw-action-btn ${collected ? "btn-primary is-active" : ""}" data-fav-asset="${esc(item.id)}" data-social-action="collect" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" title="收藏此${isStyle ? "画风" : "图型"}">
-                          <span class="hw-fav-icon">${collected ? "♥" : "♡"}</span> <span class="hw-social-count">${favCnt}</span>
-                        </button>
-                        <button type="button" class="btn btn-sm hw-action-btn" data-comment-asset="${esc(item.id)}" title="查看与发表评论">
-                          💬 <span class="hw-social-count">${commentCnt}</span>
-                        </button>
-                      </div>
-                      <div class="hw-card-footer">
-                        <button type="button" class="btn btn-sm" style="padding:2px 8px;font-size:11.5px;" data-open-asset="${esc(item.id)}">
-                          ${wCount > 0 ? `🖼️ 看作品 (${wCount})` : "💬 详情与评论"}
-                        </button>
-                        <a class="btn btn-sm btn-primary" style="padding:2px 8px;font-size:11.5px;" href="${esc(channelUrl("studio", isStyle ? { style: item.id } : { layout: item.id }))}">
-                          去创作 ↗
-                        </a>
-                      </div>
-                    `
-                    : ""
-                }
-              </div>
-            </article>
-          `;
-        }),
-        UI.density
-      )}
+      ${S.renderMasonry(visibleItems.map(renderAssetCard), UI.density)}
 
       ${
         remaining > 0
@@ -936,16 +941,34 @@
     });
 
     const searchInput = root.querySelector("#catalog-search");
-    searchInput.oninput = (e) => {
-      UI.assetQuery = e.target.value;
-      UI.shownCount = UI.pageSize;
-      renderMain();
-      const nextInput = document.getElementById("catalog-search");
-      if (nextInput) {
-        nextInput.focus();
-        nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
-      }
+    let catalogSearchTimer = null;
+    let catalogComposing = false;
+    const scheduleCatalogSearch = () => {
+      UI.assetQuery = searchInput.value;
+      clearTimeout(catalogSearchTimer);
+      if (catalogComposing) return;
+      catalogSearchTimer = setTimeout(() => {
+        if (!searchInput.isConnected || App.view !== (isStyle ? "styles" : "layouts")) return;
+        const start = searchInput.selectionStart;
+        const end = searchInput.selectionEnd;
+        UI.shownCount = UI.pageSize;
+        renderMain();
+        const next = document.getElementById("catalog-search");
+        if (next) {
+          next.focus();
+          if (start != null && end != null) next.setSelectionRange(start, end);
+        }
+      }, 180);
     };
+    searchInput.addEventListener("compositionstart", () => {
+      catalogComposing = true;
+      clearTimeout(catalogSearchTimer);
+    });
+    searchInput.addEventListener("compositionend", () => {
+      catalogComposing = false;
+      scheduleCatalogSearch();
+    });
+    searchInput.oninput = scheduleCatalogSearch;
 
     root.querySelector("#catalog-sort").onchange = (e) => {
       UI.assetSort = e.target.value;
@@ -988,11 +1011,62 @@
       el.onclick = () => openAssetPage(el.getAttribute("data-open-asset"));
     });
 
+    // New cards are bound in isolation; previously rendered cards and loaded
+    // <img> elements stay mounted and do not have to reload or decode.
+    function bindNewAssetCard(card) {
+      card.querySelectorAll("[data-open-creator]").forEach((el) => {
+        el.onclick = (e) => { e.stopPropagation(); openCreatorCard(el.getAttribute("data-open-creator")); };
+      });
+      card.querySelectorAll("[data-cheer-asset]").forEach((btn) => {
+        btn.onclick = (e) => { e.stopPropagation(); S.toggleCheerItem("asset", btn.getAttribute("data-cheer-asset")); };
+      });
+      card.querySelectorAll("[data-like-asset]").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const id = btn.getAttribute("data-like-asset");
+          const item = App.resourceMap.get(id);
+          S.toggleLike(kind, id, `${id} ${item ? item.name : ""}`);
+        };
+      });
+      card.querySelectorAll("[data-fav-asset]").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const id = btn.getAttribute("data-fav-asset");
+          const item = App.resourceMap.get(id);
+          S.toggleCollect(favBucket, id, `${id} ${item ? item.name : ""}`);
+        };
+      });
+      card.querySelectorAll("[data-comment-asset]").forEach((btn) => {
+        btn.onclick = (e) => { e.stopPropagation(); openAssetPage(btn.getAttribute("data-comment-asset"), "comments"); };
+      });
+      card.querySelectorAll("[data-open-asset]").forEach((el) => {
+        el.onclick = () => openAssetPage(el.getAttribute("data-open-asset"));
+      });
+    }
+
     const loadMoreBtn = root.querySelector("#btn-load-more-assets");
     if (loadMoreBtn) {
       loadMoreBtn.onclick = () => {
-        UI.shownCount += 80;
-        renderMain();
+        const waterfall = root.querySelector(".hw-waterfall");
+        const columns = waterfall ? Array.from(waterfall.querySelectorAll(".hw-wf-col")) : [];
+        if (!columns.length) { UI.shownCount += 80; renderMain(); return; }
+        const oldCount = Math.min(UI.shownCount, filtered.length);
+        const nextCount = Math.min(filtered.length, oldCount + 80);
+        for (let idx = oldCount; idx < nextCount; idx++) {
+          const wrapper = document.createElement("template");
+          wrapper.innerHTML = renderAssetCard(filtered[idx]);
+          const card = wrapper.content.firstElementChild;
+          if (!card) continue;
+          columns[idx % columns.length].appendChild(card);
+          bindNewAssetCard(card);
+        }
+        UI.shownCount = nextCount;
+        if (nextCount >= filtered.length) {
+          loadMoreBtn.parentElement?.remove();
+        } else {
+          loadMoreBtn.textContent = `展开更多${isStyle ? "画风" : "图型"}（还有 ${filtered.length - nextCount} 项）`;
+        }
+        if (S.applyImageLazyLoading) S.applyImageLazyLoading(waterfall);
       };
     }
   }
