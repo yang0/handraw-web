@@ -37,7 +37,8 @@
     workInlineDrawer: "", // '' | 'share' | 'report'
     workFocusComment: false,
     profileUser: "",
-    profileTab: "works", // 'works' | 'generations' | 'styles' | 'layouts' | 'topics' | 'collections' | 'account'
+    profileTab: "works", // public content tabs only
+    accountSection: "profile", // profile | security | devices
     profGenerations: null,
     profGenUser: "",
     profGenLoading: false,
@@ -187,11 +188,19 @@
       }
     }
 
-    // Standalone Personal Homepage & Account Center (?view=profile&user=... or ?view=account)
-    if (view === "profile" || view === "account") {
+    // Separate account settings from the public creator profile; keep old links working.
+    if (view === "account" || (view === "profile" && p.get("ptab") === "account")) {
+      App.view = "account";
+      UI.accountSection = ["profile", "security", "devices"].includes(p.get("section")) ? p.get("section") : "profile";
+      if (view !== "account") {
+        window.history.replaceState({ view: "account" }, "", channelUrl("main", { view: "account", section: UI.accountSection }));
+      }
+      return {};
+    }
+    if (view === "profile") {
       App.view = "profile";
       UI.profileUser = (p.get("user") || "").trim();
-      let reqTab = view === "account" ? "account" : p.get("ptab") || "works";
+      let reqTab = p.get("ptab") || "works";
       let urlChanged = false;
       if (reqTab === "assets") {
         reqTab = "styles";
@@ -281,6 +290,10 @@
         return;
       }
     }
+    if (App.view === "account") {
+      document.title = "账号设置与安全中心 — Handraw 手绘风社区";
+      return;
+    }
     if (App.view === "profile") {
       const uname = UI.profileUser || App.state?.user?.username || "";
       const prof = uname ? S.getCreatorProfile(uname) : null;
@@ -306,6 +319,8 @@
       if (UI.rankPeriod) p.set("period", UI.rankPeriod);
     } else if (App.view === "work" && UI.activeWorkId) {
       p.set("id", UI.activeWorkId);
+    } else if (App.view === "account") {
+      p.set("section", UI.accountSection || "profile");
     } else if (App.view === "profile") {
       const uname = UI.profileUser || (App.state?.user?.username && App.state.user.username !== "guest" ? App.state.user.username : "");
       if (uname) p.set("user", uname);
@@ -404,6 +419,7 @@
   }
 
   function openProfilePage(username, ptab = "works") {
+    if (ptab === "account") { switchView("account"); return; }
     S.closeModal();
     const targetUser = String(username || (App.state && App.state.user && App.state.user.username) || "").trim();
     if (!targetUser || targetUser === "guest") {
@@ -438,6 +454,7 @@
         activeWorkId: UI.activeWorkId,
         profileUser: UI.profileUser,
         profileTab: UI.profileTab,
+        accountSection: UI.accountSection,
         deviceCode: App.view === "device" ? (new URLSearchParams(window.location.search).get("code") || "").trim() : ""
       };
     }
@@ -533,6 +550,7 @@
     else if (App.view === "wallet") renderWalletCenter(root);
     else if (App.view === "work") renderWorkDetailPage(root);
     else if (App.view === "profile") renderCreatorProfilePage(root);
+    else if (App.view === "account") renderAccountSettingsPage(root);
     else if (App.view === "auth") renderAuthPage(root);
     else if (App.view === "skill") renderSkillFunnelPage(root);
     else renderAssetCatalog(root, "style");
@@ -2308,6 +2326,49 @@
     });
   }
 
+  function renderAccountSettingsPage(root) {
+    if (!App.state?.loggedIn || !App.state?.user) {
+      root.innerHTML = `<section class="hw-account-page"><h1>请先登录</h1><p>登录后可管理个人资料与账号安全。</p><button class="btn btn-primary" id="account-login-btn">登录账号</button></section>`;
+      root.querySelector("#account-login-btn").onclick = () => openAuthPage("登录后管理账号设置");
+      return;
+    }
+    const section = ["profile", "security", "devices"].includes(UI.accountSection) ? UI.accountSection : "profile";
+    const sections = [
+      ["profile", "个人资料", "头像、昵称与简介"],
+      ["security", "登录与安全", "邮箱、密码和登录会话"],
+      ["devices", "设备与应用授权", "管理 Skill 与终端授权"]
+    ];
+    root.innerHTML = `
+      <section class="hw-account-settings hw-detail-page" id="account-settings-page">
+        <div class="hw-subpage-bar"><a class="btn btn-sm" href="${esc(channelUrl("main",{view:"profile",user:App.state.user.username}))}">← 我的创作者主页</a></div>
+        <h1>账号设置</h1>
+        <p class="hw-account-help">管理个人资料、登录安全和客户端授权。每项修改独立生效。</p>
+        <div class="hw-account-layout">
+          <nav class="hw-account-nav" aria-label="账号设置导航">
+            ${sections.map(([key,label,desc]) => `<a class="hw-account-nav-link ${section===key?"is-active":""}" ${section===key?'aria-current="page"':""} href="${esc(channelUrl("main",{view:"account",section:key}))}" data-account-section="${key}"><strong>${label}</strong><small>${desc}</small></a>`).join("")}
+          </nav>
+          <div class="hw-account-content">
+            <h2 class="hw-account-section-title">${sections.find(s => s[0] === section)[1]}</h2>
+            ${S.renderAccountSettingsFormHtml()}
+          </div>
+        </div>
+      </section>`;
+    // Render only controls that belong to the selected account task.
+    root.querySelectorAll("[data-account-panel]").forEach(node => {
+      if (node.dataset.accountPanel !== section) node.remove();
+    });
+    root.querySelectorAll("[data-account-section]").forEach(a => {
+      a.onclick = (event) => {
+        event.preventDefault();
+        if (UI.accountSection === a.dataset.accountSection) return;
+        UI.accountSection = a.dataset.accountSection;
+        syncUrl(true);
+        renderMain();
+      };
+    });
+    S.bindAccountSettingsForm(root, () => renderMain());
+  }
+
   function renderCreatorProfilePage(root) {
     const fallbackUser = App.state.loggedIn && App.state.user ? App.state.user.username : "";
     const targetUser = (UI.profileUser || fallbackUser || "").trim();
@@ -3025,7 +3086,7 @@
     });
 
     const goAccBtn = root.querySelector("#prof-go-account-btn");
-    if (goAccBtn) goAccBtn.onclick = () => openProfilePage(prof.username, "account");
+    if (goAccBtn) goAccBtn.onclick = () => switchView("account");
     const goWalBtn = root.querySelector("#prof-go-wallet-btn");
     if (goWalBtn) goWalBtn.onclick = () => switchView("wallet");
     const goCompBtn = root.querySelector("#prof-go-compose-btn");
@@ -3140,9 +3201,7 @@
       };
     }
 
-    if (UI.profileTab === "account" && isMe) {
-      S.bindAccountSettingsForm(root, () => renderMain());
-    }
+    // Account editing lives on ?view=account (legacy profile URLs redirect).
   }
 
   /* ======================== STANDALONE AUTH PASS PAGE (?view=auth) ======================== */
@@ -3158,6 +3217,7 @@
       UI.activeWorkId = snap.activeWorkId || UI.activeWorkId;
       UI.profileUser = snap.profileUser || UI.profileUser;
       UI.profileTab = snap.profileTab || UI.profileTab;
+      UI.accountSection = snap.accountSection || UI.accountSection;
       if (snap.view === "device" && snap.deviceCode) {
         const p = new URLSearchParams(window.location.search);
         p.set("code", snap.deviceCode);
