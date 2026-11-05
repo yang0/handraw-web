@@ -106,6 +106,10 @@ try {
 
     # Point the worktree's code at the main checkout's data and service configs.
     $env:HANDRAW_PRIVATE_STORAGE = $localDir
+    # Demo seed accounts are intentionally disabled in normal mode.  The
+    # isolated -Demo database must opt into those credentials explicitly.
+    # Also clear an inherited demo flag for normal starts on port 3080.
+    $env:HANDRAW_DEMO_MODE = if ($Demo) { '1' } else { '0' }
     $env:HANDRAW_IMAGE_CONFIG = Join-Path $repo 'image-service.json'
     $env:HANDRAW_AI_CONFIG = Join-Path $repo 'ai-service.json'
     $env:HANDRAW_MAIL_CONFIG = Join-Path $localDir 'mail-service.json'
