@@ -653,7 +653,7 @@ def _path_is_within(path: Path, root: Path) -> bool:
 # pixels, so each distinct width is rendered once into a private cache and
 # reused.  Anything we cannot decode is served as the original bytes.
 
-THUMB_WIDTHS = (320, 480, 640, 960, 1280)
+THUMB_WIDTHS = (48, 320, 480, 640, 960, 1280)  # 48px blur previews for progressive feed cards
 _THUMB_LOCK = threading.Lock()
 
 
@@ -694,7 +694,11 @@ def build_thumbnail(source: Path, width: int) -> bytes | None:
             if resized.mode not in ("RGB", "RGBA"):
                 resized = resized.convert("RGBA" if "A" in resized.getbands() else "RGB")
             buffer = io.BytesIO()
-            resized.save(buffer, format="WEBP", quality=82, method=4)
+            # Tiny preview variants should be cheap to encode and transmit.
+            # The normal sharp thumbnails keep their existing quality.
+            resized.save(buffer, format="WEBP",
+                         quality=55 if width <= 48 else 82,
+                         method=2 if width <= 48 else 4)
             return buffer.getvalue()
     except Exception:
         return None
