@@ -538,7 +538,7 @@ def backfill_work_topics(conn: sqlite3.Connection, *, batch_size: int = 100) -> 
 
     Idempotent and safe:
       1. Preserves existing topics: ID, replies, moderation status, counters.
-      2. Backfills listed_at_ms for historical published topics (status='published').
+      2. Backfills listed_at_ms only if a historical published topic has a published reply.
          Hidden/archived topics remain unlisted (listed_at_ms = NULL).
       3. Prebuilds unique topics for missing works across all origins with listed_at_ms = NULL.
       4. Records audit events in audit_logs so subsequent runs will never accidentally set listed_at_ms
