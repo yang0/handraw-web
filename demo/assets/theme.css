@@ -3737,3 +3737,53 @@ img[data-hw-src].hw-img-failed {
     transition-duration: 0.01ms !important;
   }
 }
+
+
+/* Identity foundation: recognizable avatars on every channel, not a shared logo. */
+.hw-creator-avatar-image,
+.hw-profile-avatar-xl.hw-creator-avatar-image,
+.hw-user-avatar-circle-img {
+  object-fit: cover;
+  object-position: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #f2e7d5;
+  color: transparent;
+}
+.hw-creator-avatar-image { vertical-align: middle; padding: 0; }
+.hw-creator-avatar-sm.hw-creator-avatar-image { width: 22px; height: 22px; }
+.hw-creator-avatar-md.hw-creator-avatar-image { width: 36px; height: 36px; }
+.hw-creator-avatar-lg.hw-creator-avatar-image { width: 52px; height: 52px; }
+.hw-profile-avatar-xl.hw-creator-avatar-image { width: 68px; height: 68px; }
+.hw-account-identity-row {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 14px; border: 1px solid var(--line-soft); border-radius: 14px;
+  background: var(--paper-bg);
+}
+.hw-account-avatar-preview {
+  width: 92px; height: 92px; border-radius: 50%;
+  border: 3px solid #fffaf3; outline: 1px solid var(--line-soft);
+  object-fit: cover; background: #edddc8; flex-shrink: 0;
+}
+.hw-account-identity-actions { display: grid; gap: 8px; min-width: 220px; flex: 1; }
+.hw-account-security-panel {
+  padding: 15px 16px; border: 1px solid var(--line-soft);
+  border-radius: 12px; background: var(--paper-bg);
+}
+.hw-account-security-panel h3 {
+  margin: 0 0 6px; font-size: 14px; color: var(--ink-strong);
+}
+.hw-account-security-panel .hw-account-form-grid input {
+  width: 100%; min-width: 0;
+}
+.hw-account-help {
+  display: block; font-size: 12px; line-height: 1.6; color: var(--ink-muted);
+  margin: 5px 0 10px;
+}
+#acc-display-name[readonly], #acc-email[readonly] {
+  background: #f3efe7; color: var(--ink-muted); cursor: not-allowed;
+}
+@media (max-width: 600px) {
+  .hw-account-identity-row { align-items: flex-start; gap: 12px; }
+  .hw-account-avatar-preview { width: 76px; height: 76px; }
+}
