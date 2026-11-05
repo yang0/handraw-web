@@ -31,6 +31,15 @@ jobs:
       - run: bash -n ops/server-deploy.sh ops/preview-server.sh ops/setup-preview.sh ops/test-server.sh
       - name: Check tracked files
         run: python ops/check_release.py
+  feed-ui-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --check demo/assets/main-app.js && node --check demo/assets/mixed-feed.js && node --check demo/assets/image-loader.js
+      - run: node tests/test_mixed_feed.cjs && node tests/test_main_image_loader.cjs && node tests/test_masonry_flow.cjs
   source-archive:
     if: github.ref == 'refs/heads/fix/feed-scroll-image-performance'
     runs-on: ubuntu-latest
