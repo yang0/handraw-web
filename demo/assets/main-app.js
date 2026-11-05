@@ -1573,9 +1573,7 @@
                     }
                   });
 
-                  if (typeof S.applyImageLazyLoading === "function") {
-                    S.applyImageLazyLoading(masonryEl);
-                  }
+                  window.HandrawImageLoader?.scan(masonryEl);
 
                   const countEl = root.querySelector(".hw-wb-count");
                   if (countEl) countEl.textContent = `共 ${UI.worksFeed.total || UI.worksFeed.items.length} 件`;
