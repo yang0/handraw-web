@@ -772,7 +772,7 @@
                       const cheered = S.isCheered(item.id);
                       return `
                         <article class="hw-new-card" data-spot-asset="${esc(item.id)}">
-                          <div class="hw-new-card-media" data-open-asset="${esc(item.id)}">
+                          <div class="hw-new-card-media hw-progressive-media" data-open-asset="${esc(item.id)}">
                             <span class="hw-card-badge-tl badge-new-release">🆕 ${esc(item.createdAt || "新发")}</span>
                             <img data-hw-src="${esc(item.image)}" alt="${esc(item.name)}" loading="lazy" />
                             <span class="hw-new-card-time">${esc(item.id)}</span>
