@@ -16,6 +16,10 @@ for (const panel of ["profile","security","devices"]) {
 }
 assert.match(shared, /id="acc-avatar-confirm"/, "avatar requires explicit confirmation");
 assert.match(shared, /pendingAvatar = file/, "selected avatar is only pending until confirmed");
+assert.match(shared, /avatarPreview\.toDataURL\("image\/png"\)/, "uploaded avatar uses approved square crop");
+assert.match(shared, /restoreAuthDraft\(\)/, "authentication drafts survive tab switching");
+assert.match(shared, /event\.key !== "Enter"/, "auth forms support Enter submission");
+assert.doesNotMatch(main, /data-ptab="account"/, "account settings is not a public profile tab");
 assert.match(shared, /创作者资料与邀请码（选填）/, "registration optional identity fields are collapsed");
 assert.match(shared, /if \(displayName\) \{[\s\S]*?payload\.displayName = displayName/, "empty nickname does not prevent bio save");
 assert.match(shared, /body: \{ currentPassword, newPassword \}/, "password change remains separate from profile update");
