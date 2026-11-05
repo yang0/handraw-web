@@ -4238,31 +4238,36 @@
     const avatarPreviewStage = formEl.querySelector("#acc-avatar-preview-stage");
     const avatarPreview = formEl.querySelector("#acc-avatar-upload-preview");
     let pendingAvatar = null;
-    let pendingAvatarUrl = "";
     let decodedAvatar = null;
+    let selectionId = 0;
     const avatarZoom = formEl.querySelector("#acc-avatar-zoom");
+    const avatarConfirm = formEl.querySelector("#acc-avatar-confirm");
     function drawAvatarPreview() {
       if (!decodedAvatar || !avatarPreview) return;
       const ctx = avatarPreview.getContext("2d");
-      if (!ctx) return;
+      if (!ctx) throw new Error("当前浏览器不支持头像裁剪，请更新浏览器");
       const w = decodedAvatar.naturalWidth, h = decodedAvatar.naturalHeight;
+      if (!w || !h) throw new Error("图片尺寸无效，请选择其他图片");
       const side = Math.min(w, h) / Number(avatarZoom?.value || 1);
       ctx.clearRect(0, 0, 320, 320);
       ctx.drawImage(decodedAvatar, (w-side)/2, (h-side)/2, side, side, 0, 0, 320, 320);
     }
-    if (avatarZoom) avatarZoom.oninput = drawAvatarPreview;
+    if (avatarZoom) avatarZoom.oninput = () => {
+      try { drawAvatarPreview(); }
+      catch (err) { avatarFeedback.textContent = err.message || "预览失败"; }
+    };
     function clearAvatarPreview() {
+      selectionId++;
       pendingAvatar = null;
       decodedAvatar = null;
-      if (pendingAvatarUrl) URL.revokeObjectURL(pendingAvatarUrl);
-      pendingAvatarUrl = "";
       if (avatarInput) avatarInput.value = "";
       if (avatarPreviewStage) avatarPreviewStage.hidden = true;
       if (avatarZoom) avatarZoom.value = "1";
+      if (avatarConfirm) avatarConfirm.disabled = true;
       if (avatarPreview) avatarPreview.getContext("2d")?.clearRect(0, 0, 320, 320);
     }
-    if (avatarInput) avatarInput.onchange = () => {
-      const file = avatarInput.files && avatarInput.files[0];
+    if (avatarInput) avatarInput.addEventListener("change", () => {
+      const file = avatarInput.files?.[0];
       clearAvatarPreview();
       if (!file) return;
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) {
@@ -4270,24 +4275,41 @@
         return;
       }
       pendingAvatar = file;
-      pendingAvatarUrl = URL.createObjectURL(file);
-      const image = new Image();
-      image.onload = () => {
-        if (pendingAvatar !== file) return;
-        decodedAvatar = image;
-        drawAvatarPreview();
-        avatarPreviewStage.hidden = false;
-        avatarFeedback.textContent = "请确认裁剪效果后上传";
-      };
-      image.onerror = () => {
-        if (pendingAvatar !== file) return;
+      const requestId = selectionId;
+      avatarPreviewStage.hidden = false;
+      avatarConfirm.disabled = true;
+      avatarFeedback.textContent = "已选择 " + file.name + "，正在读取图片…";
+      // Data URLs work when the site's CSP blocks blob: image sources.
+      const reader = new FileReader();
+      reader.onerror = () => {
+        if (requestId !== selectionId) return;
         clearAvatarPreview();
-        avatarFeedback.textContent = "无法读取此图片，请换一张图片重试";
+        avatarFeedback.textContent = "读取头像失败，请重新选择";
       };
-      image.src = pendingAvatarUrl;
-    };
+      reader.onload = () => {
+        if (requestId !== selectionId) return;
+        const image = new Image();
+        image.onload = () => {
+          if (requestId !== selectionId) return;
+          try {
+            decodedAvatar = image;
+            drawAvatarPreview();
+            avatarConfirm.disabled = false;
+            avatarFeedback.textContent = "预览已就绪，请调整缩放后确认上传";
+          } catch (err) {
+            avatarFeedback.textContent = err.message || "裁剪预览失败，请重新选择";
+          }
+        };
+        image.onerror = () => {
+          if (requestId !== selectionId) return;
+          avatarFeedback.textContent = "无法解码此图片，请选择 JPG、PNG 或 WebP";
+        };
+        image.src = String(reader.result || "");
+      };
+      reader.readAsDataURL(file);
+    });
     const cancelAvatar = formEl.querySelector("#acc-avatar-cancel");
-    if (cancelAvatar) cancelAvatar.onclick = clearAvatarPreview;
+    if (cancelAvatar) cancelAvatar.onclick = () => { clearAvatarPreview(); avatarFeedback.textContent = "已取消上传"; };
     const confirmAvatar = formEl.querySelector("#acc-avatar-confirm");
     if (confirmAvatar) confirmAvatar.onclick = async () => {
       if (!pendingAvatar || !decodedAvatar) return;
