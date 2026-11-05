@@ -2648,7 +2648,11 @@
       openLoginModal("请先登录账号以管理个人资料与安全设置");
       return;
     }
-    goToCreatorProfile(App.state.user.username, "account");
+    if (App.channel === "main" && typeof window.HANDRAW_MAIN_SWITCH_VIEW === "function") {
+      window.HANDRAW_MAIN_SWITCH_VIEW("account");
+    } else {
+      window.location.href = channelUrl("main", { view: "account", section: "profile" });
+    }
   }
 
   function goToAssetPage(assetId, subTab = "") {
@@ -2954,7 +2958,7 @@
                       <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "wallet" }))}" data-main-view="wallet" id="hw-dropdown-wallet">
                         <span>✦</span> <span>积分中心与创作密钥</span>
                       </a>
-                      <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "profile", user: curUser.username, ptab: "account" }))}" id="hw-dropdown-account">
+                      <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "account", section: "profile" }))}" id="hw-dropdown-account">
                         <span>⚙️</span> <span>账号资料与安全设置</span>
                       </a>
 
@@ -4086,7 +4090,7 @@
             : ""
         }
 
-        <section class="hw-account-identity-row" aria-label="头像和创作者身份">
+        <section data-account-panel="profile" class="hw-account-identity-row" aria-label="头像和创作者身份">
           <img class="hw-account-avatar-preview" src="${esc(u.avatarUrl || "/assets/avatar-default.svg")}" alt="我的创作者头像" />
           <div class="hw-account-identity-actions">
             <strong>${esc(u.displayName || u.name || u.username)}</strong>
@@ -4099,7 +4103,7 @@
             <span id="acc-avatar-feedback" role="status" aria-live="polite" style="font-size:12px;"></span>
           </div>
         </section>
-        <div class="hw-account-form-grid">
+        <div data-account-panel="profile" class="hw-account-form-grid">
           <div>
             <div style="font-size:12.5px;font-weight:750;margin-bottom:5px;">创作者昵称</div>
             ${u.nicknameLocked !== false
@@ -4113,17 +4117,16 @@
           <div>
             <div style="font-size:12.5px;font-weight:750;margin-bottom:5px;">当前绑定邮箱</div>
             <div style="overflow-wrap:anywhere;">${esc(u.email || "尚未绑定")}</div>
-            <div class="hw-account-help">更换邮箱请使用下方的验证流程。</div>
-            <div class="hw-account-help" id="acc-email-verify-status" role="status" aria-live="polite">正在检查邮箱验证状态…</div>
+            <div class="hw-account-help">邮箱验证及换绑请前往「登录与安全」。</div>
           </div>
         </div>
 
-        <div>
+        <div data-account-panel="profile">
           <label style="font-size:12.5px;font-weight:750;display:block;margin-bottom:5px;">个人创作简介（展示在你的公开个人主页顶部）</label>
           <textarea class="hw-textarea" rows="2" id="acc-bio" placeholder="一句话介绍你的擅长画风、版式方向或主理专栏…">${esc(u.bio || "")}</textarea>
         </div>
 
-        <section class="hw-account-security-panel">
+        <section data-account-panel="security" class="hw-account-security-panel">
           <h3>🔑 修改密码</h3>
           <p class="hw-account-help">修改成功后，当前浏览器继续登录，其他登录会话将退出。新密码至少 8 位。</p>
           <div class="hw-account-form-grid">
@@ -4134,8 +4137,9 @@
           <div style="margin-top:12px;"><button type="button" class="btn btn-sm" id="acc-password-save">修改密码</button></div>
           <div id="acc-password-feedback" class="hw-account-help" role="status" aria-live="polite"></div>
         </section>
-        <section class="hw-account-security-panel">
+        <section data-account-panel="security" class="hw-account-security-panel">
           <h3>✉️ 安全换绑邮箱</h3>
+          <div class="hw-account-help" id="acc-email-verify-status" role="status" aria-live="polite">正在检查邮箱验证状态…</div>
           <p class="hw-account-help">输入新邮箱与当前密码。验证链接会发送到新邮箱，确认前原邮箱继续有效；链接 30 分钟内有效、只能用一次。</p>
           <div class="hw-account-form-grid">
             <input class="hw-input" id="acc-new-email" type="email" autocomplete="email" placeholder="新邮箱地址" />
@@ -4148,7 +4152,7 @@
           <span id="acc-email-feedback" role="status" aria-live="polite" class="hw-account-help"></span>
         </section>
 
-        <section class="hw-account-security-panel">
+        <section data-account-panel="security" class="hw-account-security-panel">
           <h3>登录设备</h3>
           <p class="hw-account-help">可以查看当前网页登录会话，并通过密码退出其他设备。</p>
           <div id="acc-session-list" class="hw-account-help">正在读取…</div>
@@ -4157,7 +4161,7 @@
             <button class="btn btn-sm" type="button" id="acc-revoke-other-sessions">退出其他设备</button>
           </div>
         </section>
-        <div style="background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div data-account-panel="devices" style="background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
           <div style="font-size:12.8px;color:var(--ink-body);">
             <strong>已授权设备与客户端：</strong> <span>管理已授权的 Skill 插件与终端应用</span>
           </div>
@@ -4166,7 +4170,7 @@
           </div>
         </div>
 
-        <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div data-account-panel="profile" style="display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="hw-account-help" id="acc-profile-feedback" role="status" aria-live="polite"></span>
           <button type="button" class="btn btn-primary" id="acc-save-btn">保存个人资料</button>
         </div>
