@@ -4046,14 +4046,31 @@
             : ""
         }
 
+        <section class="hw-account-identity-row" aria-label="头像和创作者身份">
+          <img class="hw-account-avatar-preview" src="${esc(u.avatarUrl || "/assets/avatar-default.svg")}" alt="我的创作者头像" />
+          <div class="hw-account-identity-actions">
+            <strong>${esc(u.displayName || u.name || u.username)}</strong>
+            <span style="font-size:12px;color:var(--ink-muted);">公开头像 · 建议使用清晰正方形图片，JPG/PNG/WebP，最大 3 MB</span>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <label class="btn btn-sm" for="acc-avatar-file" style="cursor:pointer;">上传 / 更换头像</label>
+              <input type="file" id="acc-avatar-file" accept="image/jpeg,image/png,image/webp" style="position:absolute;width:1px;height:1px;opacity:0;" />
+              <button type="button" class="btn btn-sm" id="acc-avatar-reset">恢复默认头像</button>
+            </div>
+            <span id="acc-avatar-feedback" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+        </section>
         <div class="hw-account-form-grid">
           <div>
-            <label style="font-size:12.5px;font-weight:750;display:block;margin-bottom:5px;">创作者显示昵称</label>
-            <input class="hw-input" style="width:100%;" id="acc-display-name" value="${esc(u.displayName || u.name || "")}" />
+            <label for="acc-display-name" style="font-size:12.5px;font-weight:750;display:block;margin-bottom:5px;">创作者昵称</label>
+            <input class="hw-input" style="width:100%;" id="acc-display-name" maxlength="40"
+              value="${esc(u.displayName || u.name || "")}" ${u.nicknameLocked !== false ? 'readonly aria-readonly="true"' : ""} />
+            <div class="hw-account-help">${u.nicknameLocked !== false ? "已确定，昵称不可再次更改；用户名 ID 同样不可修改。" : "还未设定昵称，你可以确定一次；保存后将永久锁定。"}</div>
           </div>
           <div>
-            <label style="font-size:12.5px;font-weight:750;display:block;margin-bottom:5px;">绑定邮箱</label>
-            <input class="hw-input" style="width:100%;" id="acc-email" type="email" value="${esc(u.email || "")}" />
+            <label for="acc-email" style="font-size:12.5px;font-weight:750;display:block;margin-bottom:5px;">当前绑定邮箱</label>
+            <input class="hw-input" style="width:100%;" id="acc-email" type="email" readonly
+              value="${esc(u.email || "")}" />
+            <div class="hw-account-help">邮箱不可直接覆盖。必须验证新邮箱才能完成换绑。</div>
           </div>
         </div>
 
@@ -4062,13 +4079,29 @@
           <textarea class="hw-textarea" rows="2" id="acc-bio" placeholder="一句话介绍你的擅长画风、版式方向或主理专栏…">${esc(u.bio || "")}</textarea>
         </div>
 
-        <div style="background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:12px;padding:14px 16px;">
-          <div style="font-size:13px;font-weight:800;margin-bottom:8px;">🔑 修改登录密码（不修改密码请留空）</div>
+        <section class="hw-account-security-panel">
+          <h3>🔑 修改密码</h3>
+          <p class="hw-account-help">设置新密码会让其他设备的登录会话失效；至少 8 位，请勿重复使用旧密码。</p>
           <div class="hw-account-form-grid">
-            <input class="hw-input" style="width:100%;" type="password" id="acc-cur-pw" placeholder="当前旧密码（演示默认 handraw123）" />
-            <input class="hw-input" style="width:100%;" type="password" id="acc-new-pw" placeholder="设置新密码（至少 6 位）" />
+            <input class="hw-input" type="password" id="acc-cur-pw" autocomplete="current-password" placeholder="当前登录密码" />
+            <input class="hw-input" type="password" id="acc-new-pw" minlength="8" maxlength="128" autocomplete="new-password" placeholder="新密码（8～128 位）" />
+            <input class="hw-input" type="password" id="acc-confirm-pw" autocomplete="new-password" placeholder="确认新密码" />
           </div>
-        </div>
+        </section>
+        <section class="hw-account-security-panel">
+          <h3>✉️ 安全换绑邮箱</h3>
+          <p class="hw-account-help">输入新邮箱与当前密码。验证链接会发送到新邮箱，确认前原邮箱继续有效；链接 30 分钟内有效、只能用一次。</p>
+          <div class="hw-account-form-grid">
+            <input class="hw-input" id="acc-new-email" type="email" autocomplete="email" placeholder="新邮箱地址" />
+            <input class="hw-input" id="acc-email-password" type="password" autocomplete="current-password" placeholder="当前登录密码（用于安全验证）" />
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;">
+            <button type="button" class="btn btn-sm btn-primary" id="acc-change-email">发送新邮箱验证链接</button>
+            <a class="btn btn-sm" href="${esc(channelUrl("main", {view:"verify-email"}))}">验证当前邮箱</a>
+            <a href="${esc(channelUrl("main", {view:"recovery"}))}">忘记密码？</a>
+          </div>
+          <span id="acc-email-feedback" role="status" aria-live="polite" class="hw-account-help"></span>
+        </section>
 
         <div style="background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
           <div style="font-size:12.8px;color:var(--ink-body);">
@@ -4091,6 +4124,67 @@
     if (!formEl || !App.state || !App.state.user) return;
     const u = App.state.user;
 
+    const avatarInput = formEl.querySelector("#acc-avatar-file");
+    const avatarFeedback = formEl.querySelector("#acc-avatar-feedback");
+    if (avatarInput) avatarInput.onchange = async () => {
+      const file = avatarInput.files && avatarInput.files[0];
+      if (!file) return;
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) {
+        avatarFeedback.textContent = "仅支持 JPG、PNG、WebP，最大 3 MB";
+        avatarInput.value = "";
+        return;
+      }
+      avatarInput.disabled = true;
+      avatarFeedback.textContent = "正在安全处理头像…";
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("无法读取本地图片"));
+          reader.readAsDataURL(file);
+        });
+        await apiJson("/api/account/avatar", { method:"POST", body:{dataUrl} });
+        await refreshFromServer();
+        avatarFeedback.textContent = "头像已更新";
+        toast("头像已保存，各页面将同步显示");
+        if (onSaved) onSaved();
+      } catch (err) {
+        avatarFeedback.textContent = err.message || "头像上传失败";
+      } finally { avatarInput.disabled = false; avatarInput.value = ""; }
+    };
+    const resetAvatar = formEl.querySelector("#acc-avatar-reset");
+    if (resetAvatar) resetAvatar.onclick = async () => {
+      resetAvatar.disabled = true;
+      try {
+        await apiJson("/api/account/avatar/reset", {method:"POST", body:{}});
+        await refreshFromServer();
+        toast("已恢复默认头像");
+        if (onSaved) onSaved();
+      } catch (err) { toast(err.message); }
+      finally { resetAvatar.disabled = false; }
+    };
+
+    const changeEmailBtn = formEl.querySelector("#acc-change-email");
+    if (changeEmailBtn) changeEmailBtn.onclick = async () => {
+      const email = formEl.querySelector("#acc-new-email").value.trim();
+      const currentPassword = formEl.querySelector("#acc-email-password").value;
+      const status = formEl.querySelector("#acc-email-feedback");
+      if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email) || !currentPassword) {
+        status.textContent = "请输入有效的新邮箱地址及当前登录密码";
+        return;
+      }
+      changeEmailBtn.disabled = true;
+      status.textContent = "正在发送验证邮件…";
+      try {
+        const result = await apiJson("/api/auth/change-email", {
+          method:"POST", body:{email, currentPassword}
+        });
+        status.textContent = result.message || "请查看新邮箱，验证前原邮箱保持不变";
+        formEl.querySelector("#acc-email-password").value = "";
+      } catch (err) { status.textContent = err.message || "换绑请求失败"; }
+      finally { changeEmailBtn.disabled = false; }
+    };
+
     const saveBtn = formEl.querySelector("#acc-save-btn");
     if (saveBtn) {
       saveBtn.onclick = async () => {
@@ -4099,6 +4193,11 @@
         const bio = formEl.querySelector("#acc-bio").value.trim();
         const currentPassword = formEl.querySelector("#acc-cur-pw").value;
         const newPassword = formEl.querySelector("#acc-new-pw").value;
+        const confirmed = formEl.querySelector("#acc-confirm-pw").value;
+        if (newPassword && (newPassword.length < 8 || newPassword !== confirmed)) {
+          toast("新密码至少 8 位，并且两次输入必须一致");
+          return;
+        }
         if (!displayName) {
           toast("显示昵称不能为空");
           return;
@@ -4110,7 +4209,7 @@
               body: { displayName, email, bio, currentPassword, newPassword }
             });
             if (res.boot) applyBootState(res.boot);
-            toast("个人账号资料与安全设置已保存！");
+            toast(res.sessionsRevoked ? "密码已修改，其他设备已退出登录" : "个人资料已保存");
             if (onSaved) onSaved();
           } catch (err) {
             toast(`保存失败：${err.message}`);
