@@ -80,6 +80,7 @@ const fakeRoot = {
     return null;
   }
 };
+shared.App.state = state;
 sandbox.window.HandrawMixedFeed.render(fakeRoot);
 assert.equal(fullRenders, 1);
 assert.equal(typeof more.onclick, "function");
