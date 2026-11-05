@@ -1626,7 +1626,9 @@ def publish_work_direct(
     same work instead of creating a second one.
     """
     body = body or {}
-    should_list = bool(listed)
+    # Legacy callers may still pass listed=True; manual submission must not list a
+    # work discussion. Only record_atomic_reply_and_listing performs first listing.
+    should_list = False
     username = _username(user)
     uid = _user_id(user)
     request_id = _s(body.get("requestId"), 80)
