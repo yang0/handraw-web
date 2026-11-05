@@ -1922,7 +1922,8 @@
           username,
           authorName: cleanName,
           avatarChar: firstChar,
-          avatarUrl: "/assets/user-avatar.webp",
+          avatarUrl: (s.creatorAvatars && s.creatorAvatars[username]) || (pc && pc.avatarUrl) ||
+            (s.user && s.user.username === username && s.user.avatarUrl) || "/assets/avatar-default.svg",
           bio: (pc && pc.bio) || "",
           styles: [],
           layouts: [],
@@ -2009,7 +2010,8 @@
         username,
         authorName: username,
         avatarChar: String(username).charAt(0).toUpperCase() || "绘",
-        avatarUrl: "/assets/user-avatar.webp",
+        avatarUrl: (App.state?.creatorAvatars && App.state.creatorAvatars[username]) ||
+          "/assets/avatar-default.svg",
         styles: [],
         layouts: [],
         works: [],
@@ -2023,6 +2025,17 @@
         exposureScore: 0
       }
     );
+  }
+
+  function creatorAvatarHtml(profile, size = "sm") {
+    const p = profile || {};
+    const uname = p.username || p.author || "";
+    const src = (App.state?.creatorAvatars && App.state.creatorAvatars[uname]) ||
+      p.avatarUrl || "/assets/avatar-default.svg";
+    const legalSize = ["sm", "md", "lg", "xl"].includes(size) ? size : "sm";
+    return '<img class="hw-creator-avatar-' + legalSize + ' hw-creator-avatar-image" ' +
+      'src="' + esc(src) + '" alt="' + esc(p.authorName || p.name || uname || "创作者") +
+      '的头像" loading="lazy" decoding="async" />';
   }
 
   function getTopCreators(limit = 6, mode = "prolific", period = "all") {
@@ -2891,14 +2904,14 @@
               ? `
                 <div class="hw-user-dropdown-wrap" id="hw-user-dropdown-wrap">
                   <button type="button" class="hw-user-avatar-btn" id="hw-user-avatar-btn" aria-haspopup="true" aria-expanded="false" title="@${esc(curUser.name || curUser.username)} · 点击展开个人菜单">
-                    <img src="${esc(curUser.avatarUrl || userProf.avatarUrl || "/assets/user-avatar.webp")}" class="hw-user-avatar-circle-img" alt="${esc(curUser.name || curUser.username)}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
+                    <img src="${esc(curUser.avatarUrl || userProf.avatarUrl || "/assets/avatar-default.svg")}" class="hw-user-avatar-circle-img" alt="${esc(curUser.name || curUser.username)}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
                     <span class="hw-creator-avatar-sm ${esc(userProf.honor.sealClass)}" style="display:none;border-radius:50%;">${esc(userProf.avatarChar)}</span>
                     ${canAccessAdmin && s.user && s.user.openReportsCount > 0 ? `<span class="hw-avatar-dot-badge" title="有待办事项"></span>` : ""}
                   </button>
                   <div class="hw-user-dropdown-menu" id="hw-user-dropdown-menu">
                     <div class="hw-dropdown-header">
                       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                        <img src="${esc(curUser.avatarUrl || userProf.avatarUrl || "/assets/user-avatar.webp")}" class="hw-user-avatar-circle-img hw-avatar-dropdown-lg" alt="${esc(curUser.name || curUser.username)}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
+                        <img src="${esc(curUser.avatarUrl || userProf.avatarUrl || "/assets/avatar-default.svg")}" class="hw-user-avatar-circle-img hw-avatar-dropdown-lg" alt="${esc(curUser.name || curUser.username)}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
                         <span class="hw-creator-avatar-md ${esc(userProf.honor.sealClass)}" style="display:none;border-radius:50%;">${esc(userProf.avatarChar)}</span>
                         <div style="min-width:0;flex:1;">
                           <div style="font-weight:800;font-size:14.2px;color:var(--ink-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
@@ -4588,6 +4601,7 @@
     bindInlineReportPanel,
     renderAccountSettingsFormHtml,
     bindAccountSettingsForm,
+    creatorAvatarHtml,
     openCreatorProfileModal,
     openModal,
     closeModal,
