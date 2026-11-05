@@ -528,6 +528,16 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         DELETE FROM sessions;
         """,
     ),
+    (
+        87,
+        "087_user_avatar_and_locked_nickname",
+        """
+        -- Existing member display names are already selected and cannot be changed.
+        -- New members may choose their nickname once when registration omitted it.
+        ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT '';
+        ALTER TABLE users ADD COLUMN nickname_locked INTEGER NOT NULL DEFAULT 1;
+        """,
+    ),
 ]
 
 # Feature work can add independent additive migrations without creating a
