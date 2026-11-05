@@ -23,7 +23,7 @@
   // Browsers already cap per-host connections around 6 on HTTP/1.1. Staying at
   // that ceiling keeps the queue moving without starving other resources.
   const MAX_ACTIVE = 6;
-  const START_INTERVAL = 40;
+  const START_INTERVAL = 24; // One or two image starts per frame without a visible cascade.
   const SKELETON_DELAY = 120; // Fast local/cache hits should never flash a shimmer.
   const RETRY_DELAY = 4_000;
   const MAX_RETRIES = 2;
