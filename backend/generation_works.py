@@ -563,6 +563,12 @@ def backfill_work_topics(conn: sqlite3.Connection, *, batch_size: int = 100) -> 
             WHERE ((t.work_id IS NOT NULL AND t.work_id <> '') OR m.target_id IS NOT NULL)
               AND t.status = 'published'
               AND t.listed_at_ms IS NULL
+              -- Work discussions become listed only after the first published
+              -- reply; do not resurrect empty unlisted topics during backfill.
+              AND EXISTS (
+                  SELECT 1 FROM forum_replies r
+                  WHERE r.topic_id = t.id AND r.status = 'published'
+              )
               AND t.id NOT IN (
                   SELECT target_id FROM audit_logs WHERE action = 'work.prebuild_unlisted_topic'
               )
