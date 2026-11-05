@@ -63,6 +63,7 @@ jobs:
         with:
           node-version: '24'
       - run: node --check demo/assets/shared.js && node --check demo/assets/main-app.js && node --check demo/assets/forum-app.js
+      - run: node tests/test_account_settings_navigation.cjs
       - run: node --check demo/assets/account-tools.js && node --check demo/assets/studio-app.js && node --check demo/assets/studio-batch.js
   ruby-syntax:
     runs-on: ubuntu-latest
