@@ -1066,7 +1066,7 @@
         } else {
           loadMoreBtn.textContent = `展开更多${isStyle ? "画风" : "图型"}（还有 ${filtered.length - nextCount} 项）`;
         }
-        if (S.applyImageLazyLoading) S.applyImageLazyLoading(waterfall);
+        window.HandrawImageLoader?.scan(waterfall);
       };
     }
   }
