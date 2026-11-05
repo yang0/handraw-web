@@ -3313,6 +3313,16 @@
 
     const stage = container.querySelector("#auth-form-stage");
     const tabBtns = container.querySelectorAll("[data-atab]");
+    function authError(message, field) {
+      const el = stage.querySelector("#auth-inline-error");
+      if (el) el.textContent = message || "";
+      if (field) stage.querySelector(field)?.focus();
+    }
+    function bindAuthClear() {
+      stage.querySelectorAll("input").forEach((input) => {
+        input.addEventListener("input", () => authError(""));
+      });
+    }
 
     function renderStage() {
       tabBtns.forEach((b) => b.classList.toggle("is-active", b.getAttribute("data-atab") === authTab));
@@ -3327,40 +3337,48 @@
             <div>✦ 登录后立享全站实测大图、完整提示词、每日 3 次免费生图与跨子域名收藏夹</div>
             <div>✦ 原 Discourse 老论坛迁移账号支持原邮箱/用户名直接登录并自动升级加密</div>
           </div>
+          <p id="auth-inline-error" role="alert" style="color:var(--vermilion);font-size:13px;margin:0 0 10px;"></p>
           <div style="display:flex;gap:10px;justify-content:flex-end;">
             <button type="button" class="btn" id="login-cancel-btn">暂以游客浏览</button>
             <button type="button" class="btn btn-primary" id="login-confirm-btn">⚡ 登录并解锁全部内容</button>
           </div>
         `;
+        bindAuthClear();
         stage.querySelector("#login-cancel-btn").onclick = () => {
           if (onCancel) onCancel();
         };
         stage.querySelector("#login-confirm-btn").onclick = async () => {
           const identifier = stage.querySelector("#login-demo-account").value.trim();
           const password = stage.querySelector("#login-demo-password").value;
-          if (App.state && App.state.serverBacked) {
-            try {
+          if (!identifier) { authError("请输入用户名或邮箱", "#login-demo-account"); return; }
+          if (!password) { authError("请输入登录密码", "#login-demo-password"); return; }
+          const btn = stage.querySelector("#login-confirm-btn");
+          btn.disabled = true;
+          btn.textContent = "正在登录…";
+          authError("");
+          try {
+            if (App.state && App.state.serverBacked) {
               const res = await apiJson("/api/auth/login", {
-                method: "POST",
-                body: { identifier, password }
+                method: "POST", body: { identifier, password }
               });
               if (res.boot) applyBootState(res.boot);
-              toast(`✅ 欢迎回来 @${res.boot?.user?.name || identifier}！全部作品与提示词已解锁`);
-              if (onSuccess) onSuccess();
-            } catch (err) {
-              toast(`登录失败：${err.message}`);
+              toast(`欢迎回来 @${res.boot?.user?.name || identifier}！`);
+            } else {
+              App.state.loggedIn = true;
+              saveState();
+              toast("已登录账号");
             }
-            return;
+            if (onSuccess) onSuccess();
+          } catch (err) {
+            authError(err.message || "登录失败，请检查账号和密码");
+          } finally {
+            if (btn.isConnected) { btn.disabled = false; btn.textContent = "登录"; }
           }
-          App.state.loggedIn = true;
-          saveState();
-          toast("✅ 已登录账号，全部作品图片与提示词已显示！");
-          if (onSuccess) onSuccess();
         };
       } else {
         stage.innerHTML = `
           <div style="display:grid;gap:10px;margin-bottom:14px;">
-            <input class="hw-input" id="reg-username" placeholder="用户名（3~24 位字母/数字/下划线，如 ink_newbie）" />
+            <input class="hw-input" id="reg-username" placeholder="用户名（2～32 位字母/数字/下划线/连字符）" />
             <input class="hw-input" id="reg-display-name" maxlength="40" placeholder="创作者昵称（只能确定一次，例如：纸上造梦师）" />
             <span class="hw-account-help">昵称一旦选定不可修改；留空可先注册，再在账号设置中设置一次。</span>
             <input class="hw-input" id="reg-email" type="email" autocomplete="email" required placeholder="真实邮箱（用于密码找回，建议立即验证）" />
@@ -3368,11 +3386,13 @@
             <input class="hw-input" id="reg-confirm-password" type="password" autocomplete="new-password" minlength="8" placeholder="确认登录密码" />
             <input class="hw-input" id="reg-invite-code" value="${esc(urlRef)}" placeholder="好友邀请码（选填，填如 yang0 你额外多得 +10✦）" />
           </div>
+          <p id="auth-inline-error" role="alert" style="color:var(--vermilion);font-size:13px;margin:0 0 10px;"></p>
           <div style="display:flex;gap:10px;justify-content:flex-end;">
             <button type="button" class="btn" id="reg-cancel-btn">返回</button>
             <button type="button" class="btn btn-primary" id="reg-confirm-btn">🎉 立即注册领 +20 积分</button>
           </div>
         `;
+        bindAuthClear();
         stage.querySelector("#reg-cancel-btn").onclick = () => {
           if (onCancel) onCancel();
         };
@@ -3382,33 +3402,42 @@
           const email = stage.querySelector("#reg-email").value.trim();
           const password = stage.querySelector("#reg-password").value;
           const confirmed = stage.querySelector("#reg-confirm-password").value;
-          if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            toast("请填写有效邮箱，便于之后找回账号");
-            return;
+          if (!/^[a-zA-Z0-9_-]{2,32}$/.test(username)) {
+            authError("用户名需为 2～32 位字母、数字、下划线或连字符", "#reg-username"); return;
           }
-          if (password.length < 8 || password !== confirmed) {
-            toast("密码至少 8 位，且两次输入必须一致");
-            return;
+          if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            authError("请填写有效的邮箱地址", "#reg-email"); return;
+          }
+          if (password.length < 8) {
+            authError("登录密码至少 8 位", "#reg-password"); return;
+          }
+          if (password !== confirmed) {
+            authError("两次输入的密码不一致", "#reg-confirm-password"); return;
           }
           const inviteCode = stage.querySelector("#reg-invite-code").value.trim();
-          if (App.state && App.state.serverBacked) {
-            try {
+          const btn = stage.querySelector("#reg-confirm-btn");
+          btn.disabled = true;
+          btn.textContent = "正在创建账号…";
+          authError("");
+          try {
+            if (App.state && App.state.serverBacked) {
               const res = await apiJson("/api/auth/register", {
-                method: "POST",
-                body: { username, displayName, email, password, inviteCode }
+                method: "POST", body: { username, displayName, email, password, inviteCode }
               });
               if (res.boot) applyBootState(res.boot);
-              toast(`🎉 注册成功！欢迎 @${res.boot?.user?.name || username}，当前钱包余额 ${res.boot?.credits || 20}✦`);
-              if (onSuccess) onSuccess();
-            } catch (err) {
-              toast(`注册失败：${err.message}`);
+              toast(`注册成功！欢迎 @${res.boot?.user?.name || username}`);
+            } else {
+              App.state.loggedIn = true;
+              addLedger("新用户注册欢迎礼", +20);
+              saveState();
+              toast("注册成功");
             }
-            return;
+            if (onSuccess) onSuccess();
+          } catch (err) {
+            authError(err.message || "注册失败，请稍后重试");
+          } finally {
+            if (btn.isConnected) { btn.disabled = false; btn.textContent = "立即注册"; }
           }
-          App.state.loggedIn = true;
-          addLedger("新用户注册欢迎礼", +20);
-          saveState();
-          if (onSuccess) onSuccess();
         };
       }
     }
