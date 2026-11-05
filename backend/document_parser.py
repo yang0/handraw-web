@@ -46,7 +46,10 @@ def extract_text_from_file(file_bytes: bytes, filename: str = "") -> str:
     # 1. PDF Documents
     if lower_name.endswith(".pdf") or file_bytes.startswith(b"%PDF-"):
         try:
-            import fitz  # PyMuPDF
+            try:
+                import pymupdf as fitz  # Modern PyMuPDF name; avoids deprecated fitz warning.
+            except ImportError:
+                import fitz  # Compatibility with older PyMuPDF installations.
 
             doc = fitz.open(stream=file_bytes, filetype="pdf")
             pages_text = []
