@@ -234,3 +234,59 @@
   .hw-mf-card, .hw-mf-create { transition: none; }
   .hw-mf-card:hover, .hw-mf-create:hover { transform: none; }
 }
+
+/* Progressive media (discovery / styles / layouts / works).
+ * An aspect-ratio color card paints immediately. A cached 48px preview is
+ * softly blurred behind the original until its pixels are decoded.
+ * Transitions only affect opacity: no geometry animation or layout thrashing.
+ */
+.hw-progressive-media {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--hw-placeholder-color, #e8e1d7);
+}
+.hw-progressive-media::before {
+  content: "";
+  position: absolute;
+  inset: -14px;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--hw-preview-image, none);
+  background-position: center;
+  background-size: cover;
+  filter: blur(15px);
+  opacity: 0;
+  transform: scale(1.04);
+  transition: opacity 190ms ease-out;
+}
+.hw-progressive-media.hw-preview-ready::before { opacity: 1; }
+.hw-progressive-media > img[data-hw-src] {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+  background: transparent !important;
+  animation: none !important;
+  opacity: 0;
+  transition: opacity 260ms ease-out;
+}
+.hw-progressive-media > img[data-hw-src].hw-img-ready { opacity: 1; }
+/* Keep controls, captions and badges above the two image layers. */
+.hw-progressive-media > .hw-mf-photo-label,
+.hw-progressive-media > .hw-card-badge-tl,
+.hw-progressive-media > .hw-card-fav-btn,
+.hw-progressive-media > .hw-card-workcount,
+.hw-progressive-media > .hw-wb-img-badge,
+.hw-progressive-media > .hw-wb-batch-badge,
+.hw-progressive-media > .hw-wb-media-count,
+.hw-progressive-media > .hw-wb-price { z-index: 2; }
+@media (prefers-reduced-motion: reduce) {
+  .hw-progressive-media::before,
+  .hw-progressive-media > img[data-hw-src] { transition: none; }
+}
