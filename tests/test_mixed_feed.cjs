@@ -13,7 +13,7 @@ const shared = {
 const sandbox = { window: { HANDRAW_SHARED: shared } };
 const file = path.join(__dirname, "..", "demo", "assets", "mixed-feed.js");
 vm.runInNewContext(fs.readFileSync(file, "utf8"), sandbox, { filename: file });
-const { makeItems, renderCard } = sandbox.window.HandrawMixedFeed.testing;
+const { makeItems, renderCard, reconcileMediaRatio } = sandbox.window.HandrawMixedFeed.testing;
 
 const works = Array.from({ length: 40 }, (_, i) => ({
   id: "work_" + i, title: "测试作品 " + i, images: ["/w" + i + ".webp"],
@@ -48,6 +48,30 @@ assert.equal(resourceOnly.length, 10);
 const html = renderCard({ kind: "work", data: { ...works[0], title: "<script>" } }, state);
 assert.ok(!html.includes("<script>"), "work title must be escaped");
 assert.ok(html.includes("用同款做一张"), "remix entry exists");
+// Creation target ratios can differ from actual saved images: the card must
+// shrink/grow to the real bitmap ratio, rather than letterbox the picture.
+const ratioHtml = renderCard({ kind: "work", data: {
+  ...works[0], ratio: "2:3"
+}}, state);
+assert.ok(ratioHtml.includes('class="hw-mf-media has-ratio"'));
+assert.ok(ratioHtml.includes('style="aspect-ratio:2 / 3"'));
+const media = {
+  classList: { contains: (c) => c === "has-ratio" },
+  style: { aspectRatio: "2 / 3" }
+};
+const loadedImage = { tagName: "IMG", naturalWidth: 1024, naturalHeight: 1024, parentElement: media };
+assert.equal(reconcileMediaRatio(loadedImage), true, "wrong estimated aspect should be corrected");
+assert.equal(media.style.aspectRatio, "1024 / 1024", "use decoded image ratio to remove top/bottom bands");
+assert.equal(reconcileMediaRatio(loadedImage), false, "matching ratios should not trigger another layout");
+assert.equal(reconcileMediaRatio({ ...loadedImage, naturalWidth: 0 }), false,
+  "do not change placeholder before actual dimensions are available");
+const accurateMedia = {
+  classList: media.classList,
+  style: { aspectRatio: "4 / 3" }
+};
+assert.equal(reconcileMediaRatio({ ...loadedImage, naturalWidth: 800, naturalHeight: 600,
+  parentElement: accurateMedia }), false, "correct metadata must not cause relayout");
+
 const textHtml = renderCard({ kind: "topic", data: {
   id: "discussion_test", title: "让整张卡片可点击", summary: "讨论内容"
 }}, state);
@@ -69,7 +93,15 @@ const grid = {
 };
 const pager = { remove() { pagerRemoved = true; } };
 const more = {};
+let ratioCaptureListener = null;
+let ratioListenerCount = 0;
 const fakeRoot = {
+  addEventListener(event, listener, capture) {
+    if (event === "load" && capture) {
+      ratioCaptureListener = listener;
+      ratioListenerCount++;
+    }
+  },
   set innerHTML(markup) { this.html = markup; fullRenders++; },
   get innerHTML() { return this.html || ""; },
   querySelectorAll() { return []; },
@@ -82,6 +114,11 @@ const fakeRoot = {
 };
 shared.App.state = state;
 sandbox.window.HandrawMixedFeed.render(fakeRoot);
+assert.equal(typeof ratioCaptureListener, "function", "capture image loads on the feed root");
+const delegatedMedia = { classList: media.classList, style: { aspectRatio: "2 / 3" } };
+ratioCaptureListener({ target: { ...loadedImage, parentElement: delegatedMedia } });
+assert.equal(delegatedMedia.style.aspectRatio, "1024 / 1024", "late image load fixes visual bands");
+assert.equal(ratioListenerCount, 1);
 assert.equal(fullRenders, 1);
 assert.equal(typeof more.onclick, "function");
 more.onclick();
