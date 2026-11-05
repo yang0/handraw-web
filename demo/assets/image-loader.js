@@ -136,7 +136,9 @@
 
   function queuePreview(image) {
     const box = progressiveBox(image);
-    if (!box || image.classList.contains("hw-img-ready")) return;
+    if (!box || image.classList.contains("hw-img-ready") ||
+        (image.complete && image.naturalWidth > 0) ||
+        decodedSources.has(resolveSource(image))) return;
     preparePlaceholder(image);
     const source = previewSource(image);
     if (!source) return;
