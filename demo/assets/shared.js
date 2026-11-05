@@ -3361,9 +3361,11 @@
         stage.innerHTML = `
           <div style="display:grid;gap:10px;margin-bottom:14px;">
             <input class="hw-input" id="reg-username" placeholder="用户名（3~24 位字母/数字/下划线，如 ink_newbie）" />
-            <input class="hw-input" id="reg-display-name" placeholder="创作者昵称（选填，如：纸上造梦师）" />
-            <input class="hw-input" id="reg-email" type="email" placeholder="邮箱（选填，用于找回密码与老账号匹配）" />
-            <input class="hw-input" id="reg-password" type="password" placeholder="设置登录密码（至少 6 位）" />
+            <input class="hw-input" id="reg-display-name" maxlength="40" placeholder="创作者昵称（只能确定一次，例如：纸上造梦师）" />
+            <span class="hw-account-help">昵称一旦选定不可修改；留空可先注册，再在账号设置中设置一次。</span>
+            <input class="hw-input" id="reg-email" type="email" autocomplete="email" required placeholder="真实邮箱（用于密码找回，建议立即验证）" />
+            <input class="hw-input" id="reg-password" type="password" autocomplete="new-password" minlength="8" placeholder="设置登录密码（至少 8 位）" />
+            <input class="hw-input" id="reg-confirm-password" type="password" autocomplete="new-password" minlength="8" placeholder="确认登录密码" />
             <input class="hw-input" id="reg-invite-code" value="${esc(urlRef)}" placeholder="好友邀请码（选填，填如 yang0 你额外多得 +10✦）" />
           </div>
           <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -3379,6 +3381,15 @@
           const displayName = stage.querySelector("#reg-display-name").value.trim();
           const email = stage.querySelector("#reg-email").value.trim();
           const password = stage.querySelector("#reg-password").value;
+          const confirmed = stage.querySelector("#reg-confirm-password").value;
+          if (!email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+            toast("请填写有效邮箱，便于之后找回账号");
+            return;
+          }
+          if (password.length < 8 || password !== confirmed) {
+            toast("密码至少 8 位，且两次输入必须一致");
+            return;
+          }
           const inviteCode = stage.querySelector("#reg-invite-code").value.trim();
           if (App.state && App.state.serverBacked) {
             try {
