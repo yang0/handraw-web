@@ -4076,8 +4076,8 @@
       <div class="hw-detail-section-card" id="standalone-account-settings-form" style="display:grid;gap:16px;">
         <div style="border-bottom:1px solid var(--line-soft);padding-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
           <div>
-            <h2 style="margin:0 0 4px;font-size:19px;font-family:var(--font-serif);">⚙️ 个人账号资料与安全设置</h2>
-            <div style="font-size:12.5px;color:var(--ink-muted);">当前身份：<strong>${esc(roleLabelMap[mgmtRole] || roleLabelMap.none)}</strong> · 专属邀请码：<code>${esc(u.inviteCode || u.username)}</code></div>
+            <h2 style="margin:0 0 4px;font-size:19px;font-family:var(--font-serif);">我的账号</h2>
+            <div style="font-size:12.5px;color:var(--ink-muted);">当前身份：<strong>${esc(roleLabelMap[mgmtRole] || roleLabelMap.none)}</strong></div>
           </div>
           ${
             mgmtRole !== "none"
