@@ -1790,8 +1790,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", set_cookie)
         self._cors_headers()
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            pass
 
     def _send_bytes(self, data: bytes, content_type: str, cache: str = "no-cache") -> None:
         self.send_response(200)
@@ -1800,8 +1803,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", cache)
         self._cors_headers()
         self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.end_headers()
+            self.wfile.write(data)
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            pass
 
     def _send_cached_json(
         self,
