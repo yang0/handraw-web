@@ -3317,6 +3317,24 @@
 
     const stage = container.querySelector("#auth-form-stage");
     const tabBtns = container.querySelectorAll("[data-atab]");
+    const authDrafts = { login: {}, register: {} };
+    function rememberAuthDraft() {
+      stage.querySelectorAll("input").forEach((field) => {
+        if (field.id) authDrafts[authTab][field.id] = field.value;
+      });
+    }
+    function restoreAuthDraft() {
+      stage.querySelectorAll("input").forEach((field) => {
+        if (field.id && Object.prototype.hasOwnProperty.call(authDrafts[authTab], field.id)) {
+          field.value = authDrafts[authTab][field.id];
+        }
+      });
+    }
+    stage.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing || event.target.tagName !== "INPUT") return;
+      event.preventDefault();
+      stage.querySelector(authTab === "login" ? "#login-confirm-btn" : "#reg-confirm-btn")?.click();
+    });
     function authError(message, field) {
       const el = stage.querySelector("#auth-inline-error");
       if (el) el.textContent = message || "";
@@ -3347,6 +3365,7 @@
             <button type="button" class="btn btn-primary" id="login-confirm-btn">⚡ 登录并解锁全部内容</button>
           </div>
         `;
+        restoreAuthDraft();
         bindAuthClear();
         stage.querySelector("#login-cancel-btn").onclick = () => {
           if (onCancel) onCancel();
@@ -3401,6 +3420,7 @@
             <button type="button" class="btn btn-primary" id="reg-confirm-btn">🎉 立即注册领 +20 积分</button>
           </div>
         `;
+        restoreAuthDraft();
         bindAuthClear();
         stage.querySelector("#reg-cancel-btn").onclick = () => {
           if (onCancel) onCancel();
@@ -3453,6 +3473,8 @@
 
     tabBtns.forEach((b) => {
       b.onclick = () => {
+        if (authTab === b.getAttribute("data-atab")) return;
+        rememberAuthDraft();
         authTab = b.getAttribute("data-atab");
         renderStage();
       };
