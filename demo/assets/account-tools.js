@@ -167,10 +167,6 @@
     if(login && !document.querySelector("[data-account-recovery]")){
       const a=document.createElement("a");a.dataset.accountRecovery="1";a.href=mainUrl("recovery");a.textContent="忘记密码？";login.parentElement.append(a);
     }
-    const account=document.querySelector("#standalone-account-settings-form");
-    if(account && !account.querySelector("[data-account-verify]")){
-      const a=document.createElement("a");a.dataset.accountVerify="1";a.className="btn btn-sm";a.href=mainUrl("verify-email");a.textContent="验证邮箱";account.append(a);
-    }
     for(const [selector,items,view] of [["#standalone-work-detail-page",S.App.state?.works,"edit-work"],["#standalone-topic-detail-page",S.App.state?.topics,"edit-topic"]]){
       const page=document.querySelector(selector);
       if(!page || page.querySelector('[data-owner-edit]') || !S.App.state?.loggedIn)continue;
