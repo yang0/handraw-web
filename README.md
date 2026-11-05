@@ -16,4 +16,8 @@ python -m pip install -r requirements.txt
 
 开发、测试、数据规则和试运行说明见 `docs/`。
 
+本地新版只启动一个后端：`python -X utf8 -m backend.server --port 3080`。首页为 `/`，创作台为 `/studio/`，社区为 `/forum/`，后台为 `/admin/`。部署后保留二级域名，各域名反向代理到同一端口并保留 Host，见[单后端运行说明](docs/single-backend.md)。
+
+产品定位与改版范围见 [产品文档](docs/product-direction.md)。产品评审与 DeepSeek 任务分派见 [协作说明](docs/deepseek-workflow.md)；当前本地产品评审见 [2026-10-28 评审](docs/product-review-2026-10-28.md)。
+
 本地 `/web` 文件夹包含原有私人配置，始终不纳入 Git。运行中的用户数据、附件及凭据同样不进入版本库。
