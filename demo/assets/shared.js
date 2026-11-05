@@ -4143,12 +4143,14 @@
         <div data-account-panel="profile" class="hw-account-form-grid">
           <div>
             <div style="font-size:12.5px;font-weight:750;margin-bottom:5px;">创作者昵称</div>
-            ${u.nicknameLocked !== false
-              ? `<div style="font-weight:700;">${esc(u.displayName || u.name || u.username)}</div>
-                 <div class="hw-account-help">已确定的昵称不可修改。</div>`
-              : `<label for="acc-display-name" class="hw-account-help">尚未设置昵称，可设置一次</label>
-                 <input class="hw-input" style="width:100%;" id="acc-display-name" maxlength="40" value="" placeholder="填写创作者昵称" />
-                 <div class="hw-account-help">昵称保存后不可再次修改，请确认后提交。</div>`}
+            <input class="hw-input" style="width:100%;" id="acc-display-name" maxlength="40"
+              value="${esc(u.nicknameLocked === false ? "" : (u.displayName || u.name || ""))}" placeholder="创作者昵称（最多 40 字）"
+              ${u.nicknameNextChangeAt && Date.now() < u.nicknameNextChangeAt * 1000 ? 'disabled aria-disabled="true"' : ""} />
+            <div class="hw-account-help">
+              ${u.nicknameNextChangeAt && Date.now() < u.nicknameNextChangeAt * 1000
+                ? `昵称每 30 天可修改一次，下次可修改时间：${esc(new Date(u.nicknameNextChangeAt * 1000).toLocaleDateString("zh-CN"))}`
+                : "昵称每 30 天可修改一次。修改后公开作品的署名会同步更新。"}
+            </div>
             <div class="hw-account-help">用户名：@${esc(u.username)}（不可修改）</div>
           </div>
 
@@ -4410,8 +4412,9 @@
       if (nicknameInput) {
         const displayName = nicknameInput.value.trim();
         // Setting a nickname is optional; editing a biography must not lock it accidentally.
-        if (displayName) {
-          if (!window.confirm("创作者昵称一旦设置便无法修改，确认使用「" + displayName + "」吗？")) return;
+        const existingName = u.nicknameLocked === false ? "" : String(u.displayName || u.name || "");
+        if (displayName && displayName !== existingName) {
+          if (!window.confirm("昵称每 30 天仅可修改一次，且公开作品署名会同步更新。确认改为「" + displayName + "」吗？")) return;
           payload.displayName = displayName;
         }
       }
