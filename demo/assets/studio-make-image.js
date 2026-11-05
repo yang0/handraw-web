@@ -18,7 +18,7 @@
  *   - References: 【选择参考图】+ thumbnails in same row
  * - Collapsible "Prompt Preview": read-only, non-editable, live sync from assembleControlPrompt.
  * - Cost gate: strictly 1 image per request.
- * - Results: download, publish, "再来一张", "换个主题".
+ * - Results: download, "再来一张", "换个主题".
  * - No emoji in UI text.
  */
 (function (global) {
@@ -580,7 +580,6 @@
                         </div>
                         <div class="make-image-result-actions">
                           <button type="button" class="btn btn-sm btn-primary" data-action="download" data-url="${esc(r.imageUrl)}">下载</button>
-                          <button type="button" class="btn btn-sm" data-action="publish" data-result-idx="${idx}">发布</button>
                         </div>
                       </div>
                     `).join("")}
@@ -1058,16 +1057,6 @@
           a.download = "handraw-output.webp";
           a.rel = "noopener";
           a.click();
-        };
-      });
-
-      root.querySelectorAll("[data-action='publish']").forEach((btn) => {
-        btn.onclick = () => {
-          const idx = Number(btn.getAttribute("data-result-idx"));
-          const res = this.context?.results?.[idx];
-          if (res && res.node) {
-            this.actions?.openPublish(res.node);
-          }
         };
       });
 
