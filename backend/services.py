@@ -471,8 +471,8 @@ def register_user(
     uname = re.sub(r"[^a-zA-Z0-9_\-]", "", (username or "").strip())
     if len(uname) < 2 or len(uname) > 32:
         raise ServiceError("用户名需为 2~32 位字母、数字、下划线或连字符")
-    if len(password or "") < 6:
-        raise ServiceError("登录密码长度至少 6 位")
+    if len(password or "") < 8:
+        raise ServiceError("登录密码至少 8 位")
 
     clean_email = (email or f"{uname}@handraw-style.com").strip().lower()
     clean_dname = sanitize_plain_text(display_name, max_chars=40)
@@ -507,10 +507,10 @@ def register_user(
             """
             INSERT INTO users (
                 username, display_name, email, password_hash, password_algo,
-                role, status, bio, invite_code, invited_by, api_key, created_at, last_login_at
-            ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', 'user', 'active', 'Handraw 新锐社区创作者', ?, ?, ?, ?, ?)
+                role, status, bio, invite_code, invited_by, api_key, created_at, last_login_at, nickname_locked
+            ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', 'user', 'active', 'Handraw 新锐社区创作者', ?, ?, ?, ?, ?, ?)
             """,
-            (uname, dname, clean_email, pw_hash, uname, inviter_row["username"] if inviter_row else "", api_key or None, now_iso, now_iso),
+            (uname, dname, clean_email, pw_hash, uname, inviter_row["username"] if inviter_row else "", api_key or None, now_iso, now_iso, 1 if clean_dname else 0),
         )
         uid = int(cur.lastrowid)
         tx.execute(
@@ -621,56 +621,73 @@ def sandbox_switch_account(db: Database, target_username: str, user_agent: str =
 
 
 def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
-    """Self-service personal account profile & password management for logged-in users."""
+    """Update biography, choose nickname ONCE, and rotate password safely.
+
+    Email changes require separate proof-of-mail flow; this endpoint never
+    directly overwrites the account's recovery address.
+    """
     uid = int(user["id"])
     with db.transaction() as tx:
-        row = tx.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+        row = tx.execute("SELECT * FROM users WHERE id = ? AND status='active'", (uid,)).fetchone()
         if not row:
             raise ServiceError("账号不存在", status=404)
 
-        dname_raw = body.get("displayName") if body.get("displayName") is not None else row["display_name"]
-        dname = sanitize_plain_text(dname_raw, max_chars=40)
-        if not dname:
-            raise ServiceError("显示昵称不能为空")
-        email = str(body.get("email") if body.get("email") is not None else (row["email"] or "")).strip().lower()[:120]
-        bio_raw = body.get("bio") if body.get("bio") is not None else (row["bio"] or "")
-        bio = sanitize_plain_text(bio_raw, max_chars=300)
+        name = row["display_name"]
+        locked = bool(row["nickname_locked"])
+        if "displayName" in body:
+            requested = sanitize_plain_text(str(body.get("displayName") or ""), max_chars=40)
+            if not requested:
+                raise ServiceError("创作者昵称不能为空")
+            if requested != name:
+                if locked:
+                    raise ServiceError("昵称确定后不可修改", status=409, code="nickname_locked")
+                name = requested
+                locked = True
 
-        if email and email != (row["email"] or "").lower():
-            dup = tx.execute("SELECT id FROM users WHERE LOWER(email) = ? AND id != ?", (email, uid)).fetchone()
-            if dup:
-                raise ServiceError("该邮箱已被其他账号绑定")
+        if "email" in body and str(body.get("email") or "").strip().lower() != str(row["email"] or "").lower():
+            raise ServiceError("请使用邮箱换绑验证流程，新邮箱验证后才会生效", status=409, code="email_verification_required")
 
-        pw_hash = row["password_hash"]
-        pw_algo = row["password_algo"]
-        disc_salt = row["discourse_salt"]
+        bio = sanitize_plain_text(
+            body.get("bio") if body.get("bio") is not None else (row["bio"] or ""), max_chars=300
+        )
         new_pw = str(body.get("newPassword") or "")
+        pwd_hash, algo, salt = row["password_hash"], row["password_algo"], row["discourse_salt"]
         if new_pw:
-            if len(new_pw) < 6:
-                raise ServiceError("新登录密码长度至少 6 位")
-            cur_pw = str(body.get("currentPassword") or "")
-            if not verify_password(cur_pw, row["password_hash"], password_algo=row["password_algo"], discourse_salt=row["discourse_salt"]):
-                raise ServiceError("当前旧密码验证不正确", status=403)
-            pw_hash = hash_password(new_pw)
-            pw_algo = "pbkdf2_sha256"
-            disc_salt = ""
+            if len(new_pw) < 8 or len(new_pw) > 128:
+                raise ServiceError("新密码需要 8～128 个字符")
+            old_pw = str(body.get("currentPassword") or "")
+            if not verify_password(old_pw, pwd_hash, password_algo=algo, discourse_salt=salt):
+                raise ServiceError("当前密码不正确", status=403, code="incorrect_password")
+            if verify_password(new_pw, pwd_hash, password_algo=algo, discourse_salt=salt):
+                raise ServiceError("新密码不能与原密码相同", code="password_reused")
+            pwd_hash, algo, salt = hash_password(new_pw), "pbkdf2_sha256", ""
 
         api_key = generate_api_key() if body.get("regenerateApiKey") else row["api_key"]
         tx.execute(
-            """
-            UPDATE users SET display_name = ?, email = ?, bio = ?, password_hash = ?, password_algo = ?, discourse_salt = ?, api_key = ?
-            WHERE id = ?
-            """,
-            (dname, email, bio, pw_hash, pw_algo, disc_salt, api_key, uid),
+            """UPDATE users SET display_name=?, nickname_locked=?, bio=?, password_hash=?,
+                password_algo=?, discourse_salt=?, api_key=? WHERE id=?""",
+            (name, int(locked), bio, pwd_hash, algo, salt, api_key, uid),
         )
-        # Keep denormalized author_name fresh on user's works/topics/assets
-        if dname != row["display_name"]:
-            tx.execute("UPDATE works SET author_name = ? WHERE author_username = ?", (dname, row["username"]))
-            tx.execute("UPDATE forum_topics SET author_name = ? WHERE author_username = ?", (dname, row["username"]))
-            tx.execute("UPDATE catalog_assets SET author_name = ? WHERE author_username = ? AND source_type = 'community'", (dname, row["username"]))
-
-        updated = dict(tx.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone())
-    return {"ok": True, "boot": build_boot_payload(db, updated)}
+        if name != row["display_name"]:
+            tx.execute("UPDATE works SET author_name=? WHERE author_username=?", (name, row["username"]))
+            tx.execute("UPDATE forum_topics SET author_name=? WHERE author_username=?", (name, row["username"]))
+            tx.execute(
+                "UPDATE catalog_assets SET author_name=? WHERE author_username=? AND source_type='community'",
+                (name, row["username"]),
+            )
+        if new_pw:
+            # Keep the current browser session so the user can see success,
+            # revoke every other device/session. API-token requests have no
+            # browser session, therefore revoke all browser sessions.
+            raw_token = str(user.get("_session_token") or "")
+            if raw_token:
+                tx.execute("DELETE FROM sessions WHERE user_id=? AND token!=?",
+                           (uid, hash_session_token(raw_token)))
+            else:
+                tx.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+        updated = dict(tx.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
+    return {"ok": True, "boot": build_boot_payload(db, updated),
+            "sessionsRevoked": bool(new_pw)}
 
 
 # ======================== BOOT PAYLOAD & STRICT SERVER GATES ========================
