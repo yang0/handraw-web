@@ -21,7 +21,12 @@ assert.match(shared, /restoreAuthDraft\(\)/, "authentication drafts survive tab 
 assert.match(shared, /event\.key !== "Enter"/, "auth forms support Enter submission");
 assert.doesNotMatch(main, /data-ptab="account"/, "account settings is not a public profile tab");
 assert.match(shared, /创作者资料与邀请码（选填）/, "registration optional identity fields are collapsed");
-assert.match(shared, /if \(displayName\) \{[\s\S]*?payload\.displayName = displayName/, "empty nickname does not prevent bio save");
+assert.match(shared, /displayName && displayName !== existingName/, "only changed nicknames are submitted");
+assert.match(shared, /nicknameNextChangeAt/, "nickname cooldown is presented to users");
+assert.match(shared, /data-account-panel="email"/, "email has its own grouped panel");
+assert.match(shared, /data-account-panel="privacy"/, "account closure has a dedicated panel");
+assert.match(shared, /reader\.readAsDataURL\(file\)/, "avatar preview uses CSP-compatible FileReader");
+assert.match(shared, /\/api\/account\/close/, "closure action calls server after confirmation");
 assert.match(shared, /body: \{ currentPassword, newPassword \}/, "password change remains separate from profile update");
 assert.doesNotMatch(shared.slice(shared.indexOf("function renderAccountSettingsFormHtml"), shared.indexOf("function bindAccountSettingsForm")), /view:"recovery"/, "recovery entry is only in logged-out flow");
 console.log("Account navigation / registration regression guards passed");
