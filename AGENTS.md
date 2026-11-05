@@ -20,3 +20,12 @@ Interaction thesis: a short entrance reveal, restrained image hover, and immedia
 
 `plugin/` contains the Discourse extension; `ops/` handles backup and deployment;
 `skill-addon/` contains the portable personal-library integration; `tests/` contains local checks.
+
+## Product review workflow
+
+The primary reviewer owns product decisions, priorities, and acceptance. For the
+configured DeepSeek source-review and proposed-patch workflow, read
+`docs/deepseek-workflow.md` and use `ops/deepseek_task.py`. The reviewer inspects
+and applies accepted patches; this API helper does not execute shell commands or
+edit product files. Keep its credentials and task outputs under ignored `.local/`.
+Built-in implementation worker delegation still uses `luna_worker`.

@@ -132,7 +132,8 @@
           const payload={title:data.get("title")};
           if(kind==="works"){payload.prompt=data.get("prompt");payload.notes=data.get("notes");}
           else {payload.body=root.querySelector("#owner-public-body").innerHTML;payload.lockedBody=root.querySelector("#owner-locked-body")?.innerHTML||"";}
-          await S.apiJson(`/api/content/${kind}/${encodeURIComponent(id)}/edit`,{method:"POST",body:payload});
+          const result=await S.apiJson(`/api/content/${kind}/${encodeURIComponent(id)}/edit`,{method:"POST",body:payload});
+          if(result.status === "pending"){location.href=S.channelUrl("forum",{view:"curation",tab:"mine"});return;}
           location.href=kind==="works"?mainUrl("work",{id}):S.channelUrl("forum",{view:"topic",id});
         });
       }catch(e){if(isCurrent())feedback(root,e.message,true);}

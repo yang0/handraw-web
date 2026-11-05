@@ -62,9 +62,9 @@ DEFAULT_SITE_SETTINGS: dict[str, object] = {
     },
     "announcement": {
         "enabled": True,
-        "badge": "✨ 2.0 正式上线",
-        "text": "Handraw 手绘风社区升级版：370+ 画风与 170+ 图型全量打通无限画布，新发作品直通 72h 首发曝光席，荒地首晒立奖 +15✦！",
-        "cta_label": "去创作台体验 ↗",
+        "badge": "社区公告",
+        "text": "欢迎分享作品、提示词和创作经验。遇到问题，也可以带上预期效果一起讨论。",
+        "cta_label": "开始创作",
         "cta_channel": "studio",
     },
     "moderation": {
