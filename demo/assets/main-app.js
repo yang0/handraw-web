@@ -672,7 +672,7 @@
               ? `
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:7px;padding:4px 7px;background:var(--paper-bg);border-radius:7px;">
                   <button type="button" class="hw-author-chip" data-open-creator="${esc(prof.username)}">
-                    <span class="hw-creator-avatar-sm ${esc(prof.honor.sealClass)}">${esc(prof.avatarChar)}</span>
+                    ${S.creatorAvatarHtml(prof, "sm")}
                     <span style="max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(prof.authorName)}</span>
                     <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:10px;padding:1px 5px;">${esc(prof.honor.shortBadge)}</span>
                   </button>
@@ -782,7 +782,7 @@
                             <p class="hw-card-desc" style="margin:0;font-size:11.6px;">${esc(item.description || "")}</p>
                             <div style="margin-top:auto;padding-top:6px;border-top:1px dashed var(--line-soft);display:flex;align-items:center;justify-content:space-between;gap:6px;">
                               <button type="button" class="hw-author-chip" data-open-creator="${esc(prof.username)}">
-                                <span class="hw-creator-avatar-sm ${esc(h.sealClass)}">${esc(prof.avatarChar)}</span>
+                                ${S.creatorAvatarHtml(prof, "sm")}
                                 <span style="max-width:74px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(prof.authorName)}</span>
                                 <span class="hw-honor-badge ${esc(h.sealClass)}" style="padding:1px 5px;font-size:10px;">${esc(h.shortBadge)}</span>
                               </button>
@@ -833,7 +833,7 @@
                       return `
                         <div class="hw-mini-rank-row" data-open-creator="${esc(c.username)}" title="点击查看 @${esc(c.authorName)} 的荣誉主页与全部作品">
                           <span class="hw-rank-num ${rankCls}">${String(idx + 1).padStart(2, "0")}</span>
-                          <span class="hw-creator-avatar-sm ${esc(c.honor.sealClass)}">${esc(c.avatarChar)}</span>
+                          ${S.creatorAvatarHtml(c, "sm")}
                           <div style="min-width:0;flex:1;">
                             <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
                               <strong style="font-size:12.8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.authorName)}${isMe ? " (我)" : ""}</strong>
@@ -1792,7 +1792,7 @@
                     <span class="hw-boost-pill">🔥 ${esc(c.honor.boostText)}</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:12px;cursor:pointer;" data-open-creator="${esc(c.username)}">
-                    <div class="hw-creator-avatar-lg ${esc(c.honor.sealClass)}">${esc(c.avatarChar)}</div>
+                    ${S.creatorAvatarHtml(c, "lg")}
                     <div style="min-width:0;flex:1;">
                       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                         <strong style="font-size:16.5px;font-family:var(--font-serif);">${esc(c.authorName)}</strong>
@@ -1830,7 +1830,7 @@
                 <div class="hw-rank-table-row" style="${isMe ? "background:var(--vermilion-wash);" : ""}">
                   <div style="display:flex;align-items:center;gap:12px;min-width:240px;flex:1;">
                     <span class="hw-rank-num">${String(rankNum).padStart(2, "0")}</span>
-                    <span class="hw-creator-avatar-md ${esc(c.honor.sealClass)}" style="cursor:pointer;" data-open-creator="${esc(c.username)}">${esc(c.avatarChar)}</span>
+                    <span data-open-creator="${esc(c.username)}" style="cursor:pointer;">${S.creatorAvatarHtml(c, "md")}</span>
                     <div>
                       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                         <strong style="font-size:14px;cursor:pointer;" data-open-creator="${esc(c.username)}">${esc(c.authorName)}${isMe ? " (我)" : ""}</strong>
@@ -1899,7 +1899,7 @@
                   <h3 class="hw-card-title" style="font-size:15px;" data-rank-open-work="${esc(w.id)}">${esc(w.title)}</h3>
                   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;padding-top:8px;border-top:1px dashed var(--line-strong);">
                     <button type="button" class="hw-author-chip" data-open-creator="${esc(prof.username)}">
-                      <span class="hw-creator-avatar-sm ${esc(prof.honor.sealClass)}">${esc(prof.avatarChar)}</span>
+                      ${S.creatorAvatarHtml(prof, "sm")}
                       <span>${esc(w.authorName)}</span>
                       <span class="hw-honor-badge ${esc(prof.honor.sealClass)}" style="font-size:10px;padding:1px 5px;">${esc(prof.honor.shortBadge)}</span>
                     </button>
@@ -2881,7 +2881,7 @@
         <section class="hw-profile-hero">
           <div class="hw-profile-hero-top">
             <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;flex:1;min-width:260px;">
-              <div class="hw-profile-avatar-xl ${esc(prof.honor.sealClass)}">${esc(prof.avatarChar)}</div>
+              <img class="hw-profile-avatar-xl hw-creator-avatar-image" src="${esc(prof.avatarUrl || "/assets/avatar-default.svg")}" alt="${esc(prof.authorName)}的头像" />
               <div style="flex:1;min-width:220px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
                   <h1 style="margin:0;font-size:24px;font-family:var(--font-serif);color:var(--ink-strong);">@${esc(prof.authorName)}</h1>
