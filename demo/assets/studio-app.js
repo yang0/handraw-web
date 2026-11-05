@@ -16448,7 +16448,6 @@
   window.HANDRAW_STUDIO.getBatchParts = getBatchParts;
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   window.HANDRAW_STUDIO.resolveShareTitle = resolveShareTitle;
-  window.HANDRAW_STUDIO.shareHistoryEntryWork = shareHistoryEntryWork;
   window.HANDRAW_STUDIO.openHistoryStage = () => {
     CS.stageView = "history";
     renderHistoryStage();
