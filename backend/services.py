@@ -54,7 +54,7 @@ CREATOR_HONOR_TIERS = [
 
 FORUM_BOARDS: list[dict[str, str]] = [
     {"key": "all", "label": "📋 全区总版主", "shortLabel": "全区总版", "desc": "跨全论坛所有板块享有置顶、加精、移版与违规治理权限"},
-    {"key": "showcase", "label": "🎨 晒作品", "shortLabel": "晒作品版", "desc": "发布作品即进入本版，作品、画风与图型自动关联，可回复讨论"},
+    {"key": "showcase", "label": "🎨 作品讨论", "shortLabel": "作品讨论版", "desc": "公开作品收到首条有效评论后进入本版，作品与讨论一对一关联"},
     {"key": "tuning", "label": "🎯 作品求调优 / 悬赏", "shortLabel": "调优悬赏版", "desc": "负责实测翻车诊断、提示词调优与求改悬赏帖秩序"},
     {"key": "experience", "label": "📘 实战经验与变现", "shortLabel": "实战变现版", "desc": "负责商单交付 SOP、小红书/公众号起号复盘与精选加精"},
     {"key": "assets", "label": "🎨 画风与图型专区", "shortLabel": "画风图型版", "desc": "负责 370+ 画风与 170+ 图型参数研讨、新风格共创交流"},
