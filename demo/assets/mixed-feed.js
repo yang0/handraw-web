@@ -9,6 +9,7 @@
   var observer = null;
   var searchTimer = 0;
   var loadingScenarios = false;
+  var ratioBoundRoots = new WeakSet();
   var PATTERN = ["work", "work", "work", "resource", "work", "work", "work", "topic",
     "work", "work", "work", "resource", "work", "work", "work", "topic",
     "work", "work", "resource", "work"];
@@ -133,6 +134,40 @@
     var tid = discussion && discussion.topicId || w.topicId;
     return tid ? url("forum", { view: "topic", id: tid }) : url("main", { view: "work", id: w.id });
   }
+  // A generation's requested aspect ratio is not always the actual image
+  // dimensions (e.g. an edited/cropped work). Keep the estimated ratio only
+  // while loading, then correct the reserved box from decoded pixels. This
+  // removes the empty bands above/below object-fit:contain without cropping.
+  function reconcileMediaRatio(img) {
+    if (!img || !(img.naturalWidth > 0 && img.naturalHeight > 0)) return false;
+    var box = img.parentElement;
+    if (!box || !box.classList || !box.classList.contains("has-ratio")) return false;
+    var ratio = Number(img.naturalWidth) / Number(img.naturalHeight);
+    var parts = String(box.style.aspectRatio || "").split("/").map(Number);
+    var previous = parts.length === 2 && parts[0] > 0 && parts[1] > 0 ?
+      parts[0] / parts[1] : 0;
+    // Avoid a pointless layout update when metadata already matches the image.
+    if (previous > 0 && Math.abs(previous / ratio - 1) < 0.005) return false;
+    box.style.aspectRatio = img.naturalWidth + " / " + img.naturalHeight;
+    return true;
+  }
+
+  function bindMediaRatios(root) {
+    if (!root || !root.addEventListener || !root.querySelectorAll) return;
+    if (!ratioBoundRoots.has(root)) {
+      // Native image 'load' doesn't bubble; capture covers cards appended
+      // later, without one listener per image.
+      root.addEventListener("load", function (event) {
+        var img = event && event.target;
+        if (img && img.tagName === "IMG") reconcileMediaRatio(img);
+      }, true);
+      ratioBoundRoots.add(root);
+    }
+    root.querySelectorAll(".hw-mf-media.has-ratio img").forEach(function (img) {
+      if (img.complete) reconcileMediaRatio(img);
+    });
+  }
+
   function workCard(w, st) {
     var photo = firstImage(w.images);
     var likes = Number(w.likes || w.cheers || 0);
@@ -324,11 +359,12 @@
         '<div id="hw-mf-sentinel" aria-hidden="true"></div></div>' : '') +
       '</div>';
     bind(root, items);
+    bindMediaRatios(root);
     requestScenarios(st, root);
   }
 
   window.HandrawMixedFeed = {
     render: render,
-    testing: { makeItems: makeItems, renderCard: renderCard }
+    testing: { makeItems: makeItems, renderCard: renderCard, reconcileMediaRatio: reconcileMediaRatio }
   };
 })();
