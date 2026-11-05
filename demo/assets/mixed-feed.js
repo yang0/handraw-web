@@ -167,15 +167,18 @@
     var abstract = String(t.summary || t.description || t.body || "")
       .replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 90);
     var replies = Array.isArray(t.replies) ? t.replies.length : Number(t.replyCount || 0);
-    return '<article class="hw-mf-card hw-mf-card--topic">' +
-      (img ? '<a class="hw-mf-media" href="' + href + '"><img data-hw-src="' + esc(img) + '" alt="' +
-        esc(titleOf(t)) + '" loading="lazy"></a>' : "") +
+    // A single semantic link makes the whole text/image card clickable,
+    // including whitespace, with native keyboard focus and Enter handling.
+    return '<a class="hw-mf-card hw-mf-card--topic hw-mf-topic-link" href="' + href +
+      '" aria-label="查看讨论：' + esc(titleOf(t)) + '">' +
+      (img ? '<span class="hw-mf-media"><img data-hw-src="' + esc(img) + '" alt="' +
+        esc(titleOf(t)) + '" loading="lazy"></span>' : "") +
       '<div class="hw-mf-body"><span class="hw-mf-type">社区讨论</span>' +
-      '<a class="hw-mf-title" href="' + href + '">' + esc(titleOf(t)) + '</a>' +
+      '<span class="hw-mf-title">' + esc(titleOf(t)) + '</span>' +
       (abstract ? '<p class="hw-mf-excerpt">' + esc(abstract) + '</p>' : "") +
       '<div class="hw-mf-footer"><span class="hw-mf-author">' + esc(authorOf(t)) + '</span>' +
       '<span class="hw-mf-stats">💬 ' + esc(replies) + '</span></div>' +
-      '</div></article>';
+      '</div></a>';
   }
   function renderCard(item, st) {
     if (item.kind === "work") return workCard(item.data, st);
@@ -235,8 +238,26 @@
     var more = root.querySelector("#hw-mf-more");
     var loadMore = function () {
       if (visibleCount >= items.length) return;
-      visibleCount += 24;
-      render(root);
+      var grid = root.querySelector(".hw-mf-grid");
+      if (!grid) { render(root); return; }
+      var nextCount = Math.min(items.length, visibleCount + 24);
+      var nextHtml = items.slice(visibleCount, nextCount).map(function (item) {
+        return renderCard(item, (App && App.state) || {});
+      }).join("");
+      // Keep existing image elements alive: re-rendering root.innerHTML caused
+      // every previously decoded picture to flash on each "load more".
+      grid.insertAdjacentHTML("beforeend", nextHtml);
+      visibleCount = nextCount;
+      if (visibleCount >= items.length) {
+        if (observer) { observer.disconnect(); observer = null; }
+        var pager = root.querySelector(".hw-mf-pager");
+        if (pager) pager.remove();
+      } else if (observer) {
+        observer.disconnect();
+        var nextSentinel = root.querySelector("#hw-mf-sentinel");
+        if (nextSentinel) observer.observe(nextSentinel);
+      }
+      if (S.triggerImageLoaders) S.triggerImageLoaders(grid);
     };
     if (more) more.onclick = loadMore;
     var sentinel = root.querySelector("#hw-mf-sentinel");
