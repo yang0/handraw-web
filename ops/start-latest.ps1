@@ -100,7 +100,12 @@ function Backup-Database([string]$python, [string]$commit) {
 
 try {
     $commit = Update-LatestCode
-    $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $localPython = Join-Path $repo '.venv\Scripts\python.exe'
+    if (Test-Path -LiteralPath $localPython -PathType Leaf) {
+        $python = $localPython
+    } else {
+        $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    }
     Stop-OldServer
     Backup-Database $python $commit
 
@@ -113,6 +118,9 @@ try {
     $env:HANDRAW_IMAGE_CONFIG = Join-Path $repo 'image-service.json'
     $env:HANDRAW_AI_CONFIG = Join-Path $repo 'ai-service.json'
     $env:HANDRAW_MAIL_CONFIG = Join-Path $localDir 'mail-service.json'
+    # Recovery/verification links must resolve to the actual local site.
+    # -Demo uses 3097, while the normal local site uses 3080.
+    $env:HANDRAW_PUBLIC_URL = $origin
     if ($Port -ne 3080) { $env:HANDRAW_ALLOWED_ORIGINS = "$origin,http://localhost:$Port" }
 
     $logDir = Join-Path $localDir 'logs'
