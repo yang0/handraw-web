@@ -2533,6 +2533,16 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_bytes(load_benchmark_assets_json(self.db, user), "application/json; charset=utf-8", cache="no-store")
             return
 
+        if req_path.startswith("/avatars/"):
+            from .avatar_identity import avatar_file_for_path
+            path = avatar_file_for_path(req_path)
+            if path is not None and path.is_file():
+                self._send_bytes(path.read_bytes(), "image/webp",
+                                 cache="public, max-age=31536000, immutable")
+            else:
+                self.send_error(404, "Avatar not found")
+            return
+
         for prefix, root_dir in (
             ("/generated/", get_generated_dir()),
             ("/uploads/", get_uploads_dir()),
