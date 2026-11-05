@@ -39,6 +39,7 @@
   }
   function titleOf(item) { return String(item.title || item.name || "未命名作品"); }
   function authorOf(item) { return String(item.authorName || item.author || item.author_username || "社区创作者"); }
+  function avatarFor(item, state) { const key = item.author || item.author_username; return (state && state.creatorAvatars && state.creatorAvatars[key]) || "/assets/avatar-default.svg"; }
   function timestampOf(item) {
     var raw = item.publishedAtMs || item.published_at_ms || item.createdAtMs || item.updatedAtMs || 0;
     if (Number(raw) > 100000000000) return Number(raw);
