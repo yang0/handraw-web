@@ -177,11 +177,11 @@
     var hasTalk = commentCount > 0;
     var codes = [].concat(Array.isArray(w.styles) ? w.styles : [])
       .concat(w.layout || "").filter(Boolean).slice(0, 2);
-    var ratio = mediaRatio(w);
+    var ratio = mediaRatio(w) || "3 / 4";
     return '<article class="hw-mf-card hw-mf-card--work">' +
-      '<a class="hw-mf-media' + (ratio ? ' has-ratio' : '') +
-      '" href="' + workDetailHref(w, st) + '" aria-label="查看作品：' + esc(titleOf(w)) +
-      '"' + (ratio ? ' style="aspect-ratio:' + ratio + '"' : '') + '>' +
+      '<a class="hw-mf-media has-ratio hw-progressive-media" href="' + workDetailHref(w, st) +
+      '" aria-label="查看作品：' + esc(titleOf(w)) +
+      '" data-hw-refine-ratio="true" style="aspect-ratio:' + ratio + '">' +
       '<img data-hw-src="' + esc(photo) + '" alt="' + esc(titleOf(w)) + '" loading="lazy">' +
       (hasTalk ? '<span class="hw-mf-photo-label">💬 正在讨论</span>' : "") + '</a>' +
       '<div class="hw-mf-body">' +
@@ -200,8 +200,11 @@
     var kind = r.kind === "layout" || r.type === "layout" ||
       String(r.id).indexOf("SC-") === 0 || String(r.id).indexOf("IG-") === 0 ? "图型" : "画风";
     var href = url("main", { view: "asset", id: r.id });
+    var ratio = mediaRatio(r) || "3 / 4";
     return '<article class="hw-mf-card hw-mf-card--resource">' +
-      '<a class="hw-mf-media" href="' + href + '" aria-label="查看' + kind + '：' + esc(titleOf(r)) + '">' +
+      '<a class="hw-mf-media has-ratio hw-progressive-media" href="' + href +
+      '" aria-label="查看' + kind + '：' + esc(titleOf(r)) +
+      '" data-hw-refine-ratio="true" style="aspect-ratio:' + ratio + '">' +
       '<img data-hw-src="' + esc(img) + '" alt="' + esc(titleOf(r)) + '" loading="lazy">' +
       '<span class="hw-mf-photo-label hw-mf-photo-label--resource">' + kind + '资源</span></a>' +
       '<div class="hw-mf-body"><span class="hw-mf-type">可复用' + kind + '</span>' +
@@ -219,7 +222,9 @@
     // including whitespace, with native keyboard focus and Enter handling.
     return '<a class="hw-mf-card hw-mf-card--topic hw-mf-topic-link" href="' + href +
       '" aria-label="查看讨论：' + esc(titleOf(t)) + '">' +
-      (img ? '<span class="hw-mf-media"><img data-hw-src="' + esc(img) + '" alt="' +
+      (img ? '<span class="hw-mf-media has-ratio hw-progressive-media" data-hw-refine-ratio="true" ' +
+        'style="aspect-ratio:' + (mediaRatio(t) || "4 / 3") + '">' +
+        '<img data-hw-src="' + esc(img) + '" alt="' +
         esc(titleOf(t)) + '" loading="lazy"></span>' : "") +
       '<div class="hw-mf-body"><span class="hw-mf-type">社区讨论</span>' +
       '<span class="hw-mf-title">' + esc(titleOf(t)) + '</span>' +
