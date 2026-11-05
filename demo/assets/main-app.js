@@ -627,6 +627,21 @@
     const favBucket = isStyle ? "styles" : "layouts";
     const showCommunityStage = !UI.assetQuery.trim() && !UI.spotlightCollapsed;
 
+    const assetCardRatio = (item) => {
+      // Prefer actual cover dimensions; a generation target ratio may differ
+      // from the saved bitmap and is corrected by its 48px preview later.
+      const dims = Array.isArray(item.imageDimensions) ? item.imageDimensions[0] : item.imageDimensions;
+      const width = Number(item.imageWidth || item.coverWidth || (dims && dims.width));
+      const height = Number(item.imageHeight || item.coverHeight || (dims && dims.height));
+      if (width > 0 && height > 0) return width + " / " + height;
+      const raw = String(item.imageRatio || item.ratio || item.aspectRatio || "");
+      const match = /^(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)$/.exec(raw);
+      if (match && Number(match[1]) > 0 && Number(match[2]) > 0)
+        return Number(match[1]) + " / " + Number(match[2]);
+      const numeric = Number(raw);
+      return numeric > 0.2 && numeric < 5 ? numeric + " / 1" : "3 / 4";
+    };
+
     const renderAssetCard = (item) => {
           const wCount = S.getAssetWorkCount(item.id);
           const liked = S.isLiked(item.kind, item.id);
@@ -638,6 +653,7 @@
           const isFresh = S.isFreshRelease(item);
           const prof = item.author ? statsMap.get(item.author) : null;
           const cheered = S.isCheered(item.id);
+          const displayRatio = assetCardRatio(item);
 
           let topBadge = "";
           if (isFresh) {
@@ -669,7 +685,7 @@
 
           return `
             <article class="hw-card ${isFresh ? "is-fresh-highlight" : ""}" data-asset-card="${esc(item.id)}">
-              <div class="hw-card-media" data-open-asset="${esc(item.id)}">
+              <div class="hw-card-media hw-progressive-media" data-open-asset="${esc(item.id)}" data-hw-refine-ratio="true" style="aspect-ratio:${displayRatio}">
                 ${topBadge}
                 <button type="button" class="hw-card-fav-btn ${collected ? "is-collected" : ""}" data-fav-asset="${esc(item.id)}" data-social-action="collect" data-social-type="${isStyle ? "style" : "layout"}" data-social-id="${esc(item.id)}" data-social-role="icon-only" title="收藏此${isStyle ? "画风" : "图型"}">
                   ${collected ? "♥" : "♡"}
@@ -1225,7 +1241,7 @@
 
       return `
         <article class="hw-wb-card" data-wb-work="${esc(id)}" data-wb-card-key="${esc(itemKey)}" data-wb-author="${esc(item.author || item.authorUsername || w.author || w.author_username || "")}" style="${marginStyle}">
-          <a class="hw-wb-media" href="${esc(href)}" data-wb-open="${esc(id)}" data-wb-img-idx="${imgIdx}" aria-label="打开作品：${esc(w.title || "未命名作品")}" style="aspect-ratio:${ar};">
+          <a class="hw-wb-media hw-progressive-media" href="${esc(href)}" data-wb-open="${esc(id)}" data-wb-img-idx="${imgIdx}" aria-label="打开作品：${esc(w.title || "未命名作品")}" style="aspect-ratio:${ar};">
             <img data-hw-src="${esc(imageUrl)}" alt="${esc(w.title || "作品图片")}" loading="lazy" />
             ${badgeHtml}
           </a>
