@@ -2521,7 +2521,7 @@
               <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--line-soft);">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--ink-muted);">
                   <button type="button" class="hw-author-chip" data-open-creator="${esc(topic.author)}">
-                    <span class="hw-creator-avatar-sm ${esc(authorProf.honor?.sealClass || "")}">${esc(authorProf.avatarChar || "绘")}</span>
+                    ${S.creatorAvatarHtml(authorProf, "sm")}
                     <strong style="color:var(--ink-strong);">@${esc(topic.authorName || "创作者")}</strong>
                   </button>
                   ${renderModBadgeHtml(topic.author, topic.category)}
@@ -2642,7 +2642,7 @@
                   <div class="forum-side-card" style="display:grid;gap:12px;">
                     <div style="font-size:11.5px;font-weight:800;color:var(--ink-muted);letter-spacing:0.04em;">作者</div>
                     <div style="display:flex;gap:12px;align-items:center;">
-                      <div class="hw-creator-avatar-sm ${esc(authorProf.honor?.sealClass || "")}" style="width:46px;height:46px;font-size:18px;">${esc(authorProf.avatarChar || "绘")}</div>
+                      ${S.creatorAvatarHtml(authorProf, "md")}
                       <div style="min-width:0;">
                         <div style="font-weight:850;font-size:15px;color:var(--ink-strong);">@${esc(authorProf.authorName || topic.authorName || "创作者")}</div>
                       </div>
