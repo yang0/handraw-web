@@ -3382,13 +3382,18 @@
       } else {
         stage.innerHTML = `
           <div style="display:grid;gap:10px;margin-bottom:14px;">
-            <input class="hw-input" id="reg-username" placeholder="用户名（2～32 位字母/数字/下划线/连字符）" />
-            <input class="hw-input" id="reg-display-name" maxlength="40" placeholder="创作者昵称（只能确定一次，例如：纸上造梦师）" />
-            <span class="hw-account-help">昵称一旦选定不可修改；留空可先注册，再在账号设置中设置一次。</span>
-            <input class="hw-input" id="reg-email" type="email" autocomplete="email" required placeholder="真实邮箱（用于密码找回，建议立即验证）" />
-            <input class="hw-input" id="reg-password" type="password" autocomplete="new-password" minlength="8" placeholder="设置登录密码（至少 8 位）" />
-            <input class="hw-input" id="reg-confirm-password" type="password" autocomplete="new-password" minlength="8" placeholder="确认登录密码" />
-            <input class="hw-input" id="reg-invite-code" value="${esc(urlRef)}" placeholder="好友邀请码（选填，填如 yang0 你额外多得 +10✦）" />
+            <input class="hw-input" id="reg-email" type="email" autocomplete="email" required placeholder="邮箱（用于登录和找回密码）" />
+            <input class="hw-input" id="reg-username" autocomplete="username" placeholder="用户名（2～32 位字母/数字/下划线/连字符）" />
+            <input class="hw-input" id="reg-password" type="password" autocomplete="new-password" minlength="8" placeholder="设置密码（至少 8 位）" />
+            <input class="hw-input" id="reg-confirm-password" type="password" autocomplete="new-password" minlength="8" placeholder="确认密码" />
+            <details class="hw-account-register-optional" ${urlRef ? "open" : ""}>
+              <summary>创作者资料与邀请码（选填）</summary>
+              <div style="display:grid;gap:10px;margin-top:12px;">
+                <input class="hw-input" id="reg-display-name" maxlength="40" placeholder="创作者昵称（可注册后再设定）" />
+                <span class="hw-account-help">昵称当前只能设置一次，留空不影响注册与创作。</span>
+                <input class="hw-input" id="reg-invite-code" value="${esc(urlRef)}" placeholder="好友邀请码（选填）" />
+              </div>
+            </details>
           </div>
           <p id="auth-inline-error" role="alert" style="color:var(--vermilion);font-size:13px;margin:0 0 10px;"></p>
           <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -4096,9 +4101,17 @@
             <strong>${esc(u.displayName || u.name || u.username)}</strong>
             <span style="font-size:12px;color:var(--ink-muted);">公开头像 · 建议使用清晰正方形图片，JPG/PNG/WebP，最大 3 MB</span>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-              <label class="btn btn-sm" for="acc-avatar-file" style="cursor:pointer;">上传 / 更换头像</label>
+              <label class="btn btn-sm" for="acc-avatar-file" style="cursor:pointer;">选择头像</label>
               <input type="file" id="acc-avatar-file" accept="image/jpeg,image/png,image/webp" style="position:absolute;width:1px;height:1px;opacity:0;" />
               <button type="button" class="btn btn-sm" id="acc-avatar-reset">恢复默认头像</button>
+            </div>
+            <div id="acc-avatar-preview-stage" hidden>
+              <p class="hw-account-help">上传预览（服务端将自动裁剪为正方形）</p>
+              <img id="acc-avatar-upload-preview" alt="新头像预览" style="width:112px;height:112px;object-fit:cover;border-radius:50%;border:1px solid var(--line-soft);" />
+              <div style="display:flex;gap:8px;margin-top:8px;">
+                <button type="button" class="btn btn-sm btn-primary" id="acc-avatar-confirm">确认上传</button>
+                <button type="button" class="btn btn-sm" id="acc-avatar-cancel">取消</button>
+              </div>
             </div>
             <span id="acc-avatar-feedback" role="status" aria-live="polite" style="font-size:12px;"></span>
           </div>
@@ -4197,16 +4210,40 @@
 
     const avatarInput = formEl.querySelector("#acc-avatar-file");
     const avatarFeedback = formEl.querySelector("#acc-avatar-feedback");
-    if (avatarInput) avatarInput.onchange = async () => {
+    const avatarPreviewStage = formEl.querySelector("#acc-avatar-preview-stage");
+    const avatarPreview = formEl.querySelector("#acc-avatar-upload-preview");
+    let pendingAvatar = null;
+    let pendingAvatarUrl = "";
+    function clearAvatarPreview() {
+      pendingAvatar = null;
+      if (pendingAvatarUrl) URL.revokeObjectURL(pendingAvatarUrl);
+      pendingAvatarUrl = "";
+      if (avatarInput) avatarInput.value = "";
+      if (avatarPreviewStage) avatarPreviewStage.hidden = true;
+      if (avatarPreview) avatarPreview.removeAttribute("src");
+    }
+    if (avatarInput) avatarInput.onchange = () => {
       const file = avatarInput.files && avatarInput.files[0];
+      clearAvatarPreview();
       if (!file) return;
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) {
         avatarFeedback.textContent = "仅支持 JPG、PNG、WebP，最大 3 MB";
-        avatarInput.value = "";
         return;
       }
-      avatarInput.disabled = true;
-      avatarFeedback.textContent = "正在安全处理头像…";
+      pendingAvatar = file;
+      pendingAvatarUrl = URL.createObjectURL(file);
+      avatarPreview.src = pendingAvatarUrl;
+      avatarPreviewStage.hidden = false;
+      avatarFeedback.textContent = "请确认头像预览后上传";
+    };
+    const cancelAvatar = formEl.querySelector("#acc-avatar-cancel");
+    if (cancelAvatar) cancelAvatar.onclick = clearAvatarPreview;
+    const confirmAvatar = formEl.querySelector("#acc-avatar-confirm");
+    if (confirmAvatar) confirmAvatar.onclick = async () => {
+      const file = pendingAvatar;
+      if (!file) return;
+      confirmAvatar.disabled = true;
+      avatarFeedback.textContent = "正在上传头像…";
       try {
         const dataUrl = await new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -4214,14 +4251,15 @@
           reader.onerror = () => reject(new Error("无法读取本地图片"));
           reader.readAsDataURL(file);
         });
-        await apiJson("/api/account/avatar", { method:"POST", body:{dataUrl} });
+        await apiJson("/api/account/avatar", { method: "POST", body: { dataUrl } });
+        clearAvatarPreview();
         await refreshFromServer();
         avatarFeedback.textContent = "头像已更新";
         toast("头像已保存，各页面将同步显示");
         if (onSaved) onSaved();
       } catch (err) {
         avatarFeedback.textContent = err.message || "头像上传失败";
-      } finally { avatarInput.disabled = false; avatarInput.value = ""; }
+      } finally { if (confirmAvatar.isConnected) confirmAvatar.disabled = false; }
     };
     const resetAvatar = formEl.querySelector("#acc-avatar-reset");
     if (resetAvatar) resetAvatar.onclick = async () => {
@@ -4297,12 +4335,11 @@
       const payload = { bio };
       if (nicknameInput) {
         const displayName = nicknameInput.value.trim();
-        if (!displayName) {
-          profileFeedback.textContent = "请先填写创作者昵称";
-          nicknameInput.focus();
-          return;
+        // Setting a nickname is optional; editing a biography must not lock it accidentally.
+        if (displayName) {
+          if (!window.confirm("创作者昵称一旦设置便无法修改，确认使用「" + displayName + "」吗？")) return;
+          payload.displayName = displayName;
         }
-        payload.displayName = displayName;
       }
       saveBtn.disabled = true;
       profileFeedback.textContent = "正在保存个人资料…";
@@ -4312,7 +4349,7 @@
           if (res.boot) applyBootState(res.boot);
         } else {
           u.bio = bio;
-          if (nicknameInput) {
+          if (payload.displayName) {
             u.name = payload.displayName;
             u.displayName = payload.displayName;
             u.nicknameLocked = true;
