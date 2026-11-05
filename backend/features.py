@@ -333,6 +333,24 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
             if not isinstance(topic_id,int) or topic_id<=0:continue
             items.append({"title":str(item.get("title") or "教程"),"summary":str(item.get("summary") or ""),"url":f"https://handraw-style.com/t/topic/{topic_id}"})
         handler._send_json({"ok":True,"items":items});return True
+    if req_path == "/api/account/export":
+        user = handler._current_user(required=True)
+        db = handler.db.get_conn()
+        user_id = int(user["id"])
+        works = [dict(r) for r in db.execute(
+            "SELECT id,title,created_at FROM works WHERE author_username=? ORDER BY created_at DESC LIMIT 10000",
+            (user["username"],)).fetchall()]
+        topics = [dict(r) for r in db.execute(
+            "SELECT id,title,created_at FROM forum_topics WHERE author_username=? ORDER BY created_at DESC LIMIT 10000",
+            (user["username"],)).fetchall()]
+        wallet = db.execute("SELECT balance FROM wallets WHERE user_id=?", (user_id,)).fetchone()
+        handler._send_json({"ok": True, "exportedAt": utc_now_iso(),
+            "profile": {"username": user["username"], "displayName": user["display_name"],
+                        "email": user["email"], "bio": user["bio"], "createdAt": user["created_at"]},
+            "works": works, "forumTopics": topics,
+            "wallet": {"balance": wallet["balance"] if wallet else 0},
+            "note": "仅导出账号资料和作品、帖子索引；不包括完整媒体文件或依法保留的交易记录。"})
+        return True
     if req_path == "/api/account/status":
         user = handler._current_user(required=True)
         handler._send_json(account_status(handler.db,user));return True
