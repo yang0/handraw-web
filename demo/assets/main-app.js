@@ -582,15 +582,10 @@
     const allItems = isStyle ? App.styles : App.layouts;
     const statsMap = S.getCreatorStatsMap();
 
-    const commItems = allItems.filter((i) => i.sourceType === "community");
-    const freshSpotlightItems = commItems.filter((item) => S.isFreshRelease(item))
-      .sort((a, b) => {
-        const af = S.isFreshRelease(a) ? 1 : 0;
-        const bf = S.isFreshRelease(b) ? 1 : 0;
-        if (bf !== af) return bf - af;
-        return S.compareByRecency(a, b);
-      })
-      .slice(0, 3);
+    const freshSpotlightItems = !UI.assetQuery.trim() && !UI.spotlightCollapsed
+      ? allItems.filter((item) => item.sourceType === "community" && S.isFreshRelease(item))
+          .sort(S.compareByRecency).slice(0, 3)
+      : [];
 
     const topCreators = !UI.assetQuery.trim() && !UI.spotlightCollapsed
       ? S.getTopCreators(5, "prolific", UI.rankPeriod) : [];
