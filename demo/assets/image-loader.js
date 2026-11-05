@@ -227,15 +227,17 @@
   function scan(root = document) {
     if (!root) return;
     const register = (image) => {
-      if (!image || !image.isConnected || watched.has(image)) return;
-      watched.add(image);
-      if (!image.dataset.hwWidth) {
-        const guess = autoWidth(image);
-        if (guess > 0) image.dataset.hwWidth = String(guess);
+      if (!image || !image.isConnected) return;
+      if (!watched.has(image)) {
+        watched.add(image);
+        if (!image.dataset.hwWidth) {
+          const guess = autoWidth(image);
+          if (guess > 0) image.dataset.hwWidth = String(guess);
+        }
+        applyRatio(image);
+        if (observer) observer.observe(image);
       }
-      applyRatio(image);
-      if (observer) observer.observe(image);
-      else if (nearby(image)) enqueue(image);
+      if (!observer && nearby(image)) enqueue(image);
     };
     if (root.matches?.("img[data-hw-src]")) register(root);
     if (root.querySelectorAll) {
