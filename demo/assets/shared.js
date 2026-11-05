@@ -4082,6 +4082,7 @@
             <input class="hw-input" style="width:100%;" id="acc-email" type="email" readonly
               value="${esc(u.email || "")}" />
             <div class="hw-account-help">邮箱不可直接覆盖。必须验证新邮箱才能完成换绑。</div>
+            <div class="hw-account-help" id="acc-email-verify-status" role="status">正在检查邮箱验证状态…</div>
           </div>
         </div>
 
@@ -4143,6 +4144,18 @@
     const formEl = root.querySelector("#standalone-account-settings-form");
     if (!formEl || !App.state || !App.state.user) return;
     const u = App.state.user;
+
+    const emailStatus = formEl.querySelector("#acc-email-verify-status");
+    if (emailStatus && App.state.serverBacked) {
+      apiJson("/api/account/status").then((status) => {
+        if (!emailStatus.isConnected) return;
+        emailStatus.textContent =
+          (status.emailVerified ? "✓ 已验证邮箱" : "尚未验证邮箱") +
+          (status.mailEnabled ? "" : " · 站点尚未配置邮件服务，找回与换绑暂不可用");
+      }).catch(() => {
+        if (emailStatus.isConnected) emailStatus.textContent = "暂时无法读取邮箱状态";
+      });
+    }
 
     const avatarInput = formEl.querySelector("#acc-avatar-file");
     const avatarFeedback = formEl.querySelector("#acc-avatar-feedback");
