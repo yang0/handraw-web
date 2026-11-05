@@ -105,17 +105,23 @@ assert.equal(mainBox.style.aspectRatio,"48 / 32","preview dimensions correct geo
 assert.equal(mainBox.style["--hw-preview-image"],'url("/images/sample.webp?w=48")');
 assert.ok(mainBox.classList.contains("hw-preview-ready"));
 
-first.complete = true; first.naturalWidth=1200; first.naturalHeight=800; first.emit("load");
-assert.equal(first.classList.contains("hw-img-ready"),true);
-assert.equal(mainBox.style.aspectRatio,"48 / 32","matching dimensions avoid extra relayout");
-
-// A repeat card reuses the ready preview rather than downloading it again.
+// A repeat card reuses the tiny preview while its sharp bitmap is pending.
 const repeatBox = new Media();
 const repeat = new ImageElement("/images/sample.webp",repeatBox);
 window.HandrawImageLoader.scan(repeat); io.show([repeat]);
 advance(30);
 assert.equal(previews.length,1,"same thumbnail URL should be reused");
 assert.ok(repeatBox.classList.contains("hw-preview-ready"));
+
+first.complete = true; first.naturalWidth=1200; first.naturalHeight=800; first.emit("load");
+assert.equal(first.classList.contains("hw-img-ready"),true);
+assert.equal(mainBox.style.aspectRatio,"48 / 32","matching dimensions avoid extra relayout");
+
+const cachedBox = new Media();
+const alreadyDecoded = new ImageElement("/images/sample.webp",cachedBox);
+window.HandrawImageLoader.scan(alreadyDecoded); io.show([alreadyDecoded]);
+advance(30);
+assert.equal(previews.length,1,"cached sharp images must skip unnecessary tiny preview requests");
 
 // Remote images must not receive an unsupported thumbnail query parameter.
 const externalBox=new Media("4 / 5");
