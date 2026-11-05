@@ -681,7 +681,12 @@ def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) 
                 "UPDATE catalog_assets SET author_name=? WHERE author_username=? AND source_type='community'",
                 (name, row["username"]),
             )
+        if name != row["display_name"]:
+            tx.execute("INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at) VALUES(?,?,?,?,?,?)",
+                       (uid, "security", "你的创作者昵称已更新。如果不是本人操作，请检查账号安全。", "", "", utc_now_iso()))
         if new_pw:
+            tx.execute("INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at) VALUES(?,?,?,?,?,?)",
+                       (uid, "security", "你的登录密码已修改，其他网页登录会话已退出。", "", "", utc_now_iso()))
             # Keep the current browser session so the user can see success,
             # revoke every other device/session. API-token requests have no
             # browser session, therefore revoke all browser sessions.
