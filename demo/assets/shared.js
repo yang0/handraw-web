@@ -4194,9 +4194,10 @@
           <p class="hw-account-help">可以查看当前网页登录会话，并通过密码退出其他设备。</p>
           <div id="acc-session-list" class="hw-account-help">正在读取…</div>
           <div class="hw-account-form-grid">
-            <input class="hw-input" id="acc-session-password" type="password" placeholder="输入当前密码" autocomplete="current-password" />
+            <label>当前密码<input class="hw-input" id="acc-session-password" type="password" placeholder="验证账号身份" autocomplete="current-password" /></label>
             <button class="btn btn-sm" type="button" id="acc-revoke-other-sessions">退出其他设备</button>
           </div>
+          <div id="acc-session-feedback" class="hw-account-help" role="status" aria-live="polite"></div>
         </section>
         <div data-account-panel="devices" style="background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
           <div style="font-size:12.8px;color:var(--ink-body);">
@@ -4348,8 +4349,13 @@
         for (const item of result.items) {
           const line = document.createElement("p");
           line.className = "hw-account-session-row";
-          line.textContent = (item.current ? "当前设备 · " : "") +
-            (item.device || "未知设备") + " · " + (item.createdAt || "");
+          const agent = String(item.device || "");
+          const platform = /Windows/i.test(agent) ? "Windows" : /Macintosh|Mac OS X/i.test(agent) ? "macOS" : /Android/i.test(agent) ? "Android" : /iPhone|iPad/i.test(agent) ? "iOS" : /Linux/i.test(agent) ? "Linux" : "未知系统";
+          const browser = /Edg\//i.test(agent) ? "Edge" : /Firefox\//i.test(agent) ? "Firefox" : /Chrome\//i.test(agent) ? "Chrome" : /Safari\//i.test(agent) ? "Safari" : "浏览器";
+          const stamp = Number(item.createdAt);
+          const date = Number.isFinite(stamp) && stamp > 0 ? new Date(stamp < 1e12 ? stamp * 1000 : stamp).toLocaleString("zh-CN") : String(item.createdAt || "");
+          line.textContent = (item.current ? "● 当前浏览器 · " : "") + platform + " / " + browser + (date ? " · 登录于 " + date : "");
+          if (item.current) line.style.fontWeight = "700";
           sessionsMount.append(line);
         }
       } catch (err) { sessionsMount.textContent = err.message || "无法读取登录设备"; }
@@ -4358,16 +4364,20 @@
     const revokeBtn = formEl.querySelector("#acc-revoke-other-sessions");
     if (revokeBtn) revokeBtn.onclick = async () => {
       const pwInput = formEl.querySelector("#acc-session-password");
-      if (!pwInput.value) { toast("请输入当前密码"); return; }
+      const status = formEl.querySelector("#acc-session-feedback");
+      if (!pwInput.value) { status.textContent = "请输入当前密码后再继续"; pwInput.focus(); return; }
+      if (!window.confirm("确认退出其他所有浏览器登录会话？当前浏览器将保持登录。")) return;
       revokeBtn.disabled = true;
+      status.textContent = "正在撤销其他登录会话…";
       try {
         const res = await apiJson("/api/account/sessions/revoke-others", {
           method: "POST", body: { currentPassword: pwInput.value }
         });
         pwInput.value = "";
-        toast("已退出其他 " + res.revoked + " 个会话");
+        status.textContent = "已退出其他 " + res.revoked + " 个登录会话";
+        toast(status.textContent);
         await readSessions();
-      } catch (err) { toast(err.message || "操作失败"); }
+      } catch (err) { status.textContent = err.message || "操作失败，请重试"; }
       finally { revokeBtn.disabled = false; }
     };
 
