@@ -785,7 +785,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   assert.ok(providedActionKeys.size >= 8, `Expected at least 8 action keys, got ${providedActionKeys.size}`);
   assert.ok(providedActionKeys.has("openAssetPicker"), "studio-app.js must provide openAssetPicker");
   assert.ok(providedActionKeys.has("openImageLightbox"), "studio-app.js must provide openImageLightbox");
-  assert.ok(providedActionKeys.has("openPublish"), "studio-app.js must provide openPublish");
+  assert.ok(!providedActionKeys.has("openPublish"), "openPublish must not be provided: batch results no longer offer manual publishing");
   assert.ok(providedActionKeys.has("run"), "studio-app.js must provide run");
   assert.ok(providedActionKeys.has("runSingleRow"), "studio-app.js must provide runSingleRow");
   assert.ok(providedActionKeys.has("cancel"), "studio-app.js must provide cancel");

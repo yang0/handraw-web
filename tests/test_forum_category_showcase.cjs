@@ -304,7 +304,7 @@ function createForumEnv(search = "") {
     const showcaseBtn = env.root.querySelector('[data-fcat="showcase"]');
     assert.ok(showcaseBtn, "Sidebar must render a button for data-fcat='showcase'");
     assert.ok(showcaseBtn.classList.contains("is-active"), "Showcase category button must have 'is-active' class");
-    assert.ok(showcaseBtn.textContent.includes("晒作品"), "Showcase category button text must include '晒作品'");
+    assert.ok(showcaseBtn.textContent.includes("作品讨论"), "Showcase category button text must include '作品讨论'");
 
     // Verify other category buttons are not active
     const allBtn = env.root.querySelector('[data-fcat="all"]');
@@ -312,7 +312,7 @@ function createForumEnv(search = "") {
     const tuningBtn = env.root.querySelector('[data-fcat="tuning"]');
     assert.ok(tuningBtn && !tuningBtn.classList.contains("is-active"), "'tuning' category button must not have 'is-active'");
 
-    console.log("✓ Test 1 Passed: ?category=showcase marks '晒作品' as is-active and others inactive");
+    console.log("✓ Test 1 Passed: ?category=showcase marks '作品讨论' as is-active and others inactive");
   }
 
   // Test 2: Fallback when boot is not yet loaded (App.state.forumBoards empty)

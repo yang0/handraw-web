@@ -7296,6 +7296,19 @@
     return "未命名作品";
   }
 
+  async function deleteCloudHistory(id, all = false) {
+    if (!App.state || !App.state.serverBacked || !App.state.loggedIn) return { ok: true };
+    const response = await fetch("/api/studio/history/delete", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(all ? { all: true } : { id })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || `删除历史失败（HTTP ${response.status}）`);
+    return data;
+  }
+
   function renderHistoryStage() {
     if (!DOM.historyStage) return;
     if (CS.stageView !== "history") {

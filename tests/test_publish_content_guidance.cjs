@@ -93,8 +93,8 @@ const forumAppCode = fs.readFileSync(path.join(__dirname, "../demo/assets/forum-
 
 // Assert button HTML strings in forum-app.js
 assert.ok(
-  forumAppCode.includes('id="forum-btn-new-visual">作品|画风|图型投稿</button>'),
-  'forum-app.js must contain #forum-btn-new-visual with text "作品|画风|图型投稿"'
+  forumAppCode.includes('id="forum-btn-new-visual">画风 / 图型投稿</button>'),
+  'forum-app.js must contain #forum-btn-new-visual with text "画风 / 图型投稿"'
 );
 assert.ok(
   forumAppCode.includes('id="forum-btn-new-text">📝 发论坛讨论贴</button>'),
