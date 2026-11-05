@@ -24,6 +24,7 @@
   // that ceiling keeps the queue moving without starving other resources.
   const MAX_ACTIVE = 6;
   const START_INTERVAL = 40;
+  const SKELETON_DELAY = 120; // Fast local/cache hits should never flash a shimmer.
   const RETRY_DELAY = 4_000;
   const MAX_RETRIES = 2;
   const PREFETCH_MARGIN = "600px 0px";
@@ -145,9 +146,11 @@
     image.loading = "eager";
 
     let finished = false;
+    let skeletonTimer = null;
     const done = (failed) => {
       if (finished) return;
       finished = true;
+      if (skeletonTimer) clearTimeout(skeletonTimer);
       image.removeEventListener("load", loaded);
       image.removeEventListener("error", errored);
       inFlight.delete(image);
@@ -188,8 +191,13 @@
     image.addEventListener("load", loaded);
     image.addEventListener("error", errored);
 
-    if (!decodedSources.has(source)) markLoading(image);
-    else image.classList.remove("hw-img-loading");
+    if (!decodedSources.has(source)) {
+      // Defer the animated placeholder until we know this is not a fast
+      // memory/disk-cache hit; the immediate flash was very noticeable.
+      skeletonTimer = setTimeout(() => {
+        if (!finished && image.isConnected) markLoading(image);
+      }, SKELETON_DELAY);
+    } else image.classList.remove("hw-img-loading");
     // A cached image can be complete immediately; avoid waiting for another event.
     if (image.getAttribute?.("src") !== source) image.src = source;
     if (image.complete && image.naturalWidth > 0) done(false);
