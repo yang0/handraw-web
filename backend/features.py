@@ -362,6 +362,29 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
 
 
 def handle_feature_post(handler: Any, req_path: str, body: dict) -> bool:
+    if req_path == "/api/account/close":
+        user = handler._current_user(required=True)
+        from .security import verify_password
+        if str(body.get("confirmation") or "") != str(user["username"]):
+            raise ServiceError("请输入当前用户名以确认停用", status=400, code="confirmation_required")
+        current_password = str(body.get("currentPassword") or "")
+        with handler.db.transaction() as tx:
+            row = tx.execute("SELECT password_hash,password_algo,discourse_salt FROM users WHERE id=? AND status='active'",
+                             (user["id"],)).fetchone()
+            if not row or not verify_password(current_password, row["password_hash"],
+                    password_algo=row["password_algo"], discourse_salt=row["discourse_salt"]):
+                raise ServiceError("当前密码不正确", status=403, code="incorrect_password")
+            tx.execute("UPDATE users SET status='closed',closed_at=? WHERE id=? AND status='active'",
+                       (utc_now_iso(), user["id"]))
+            tx.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+            # Existing client grants and unredeemed device authorization must also lose access.
+            tx.execute("UPDATE api_tokens SET revoked_at=? WHERE user_id=? AND (revoked_at='' OR revoked_at IS NULL)",
+                       (utc_now_iso(), user["id"]))
+            tx.execute("UPDATE device_codes SET status='denied' WHERE user_id=? AND status IN ('pending','approved')",
+                       (user["id"],))
+        handler._send_json({"ok": True, "message": "账号已停用，所有会话及客户端令牌已失效。作品与历史记录不会自动删除。"},
+                           set_cookie=handler._cookie_for_token("", clear=True))
+        return True
     if req_path == "/api/account/sessions/revoke-others":
         user = handler._current_user(required=True)
         from .security import verify_password, hash_session_token
