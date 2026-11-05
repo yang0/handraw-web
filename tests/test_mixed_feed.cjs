@@ -88,6 +88,8 @@ assert.match(textHtml, /^<a class="hw-mf-card hw-mf-card--topic hw-mf-topic-link
 assert.match(textHtml, /href="\/forum\/discussion_test"/);
 assert.ok(!textHtml.includes("<a class=\"hw-mf-title\""), "no nested links in discussion card");
 assert.ok(textHtml.includes("讨论内容"), "summary remains visible");
+assert.ok(textHtml.includes("hw-mf-author-avatar"), "discussion cards include author avatar");
+assert.ok(html.includes("hw-mf-author-avatar"), "work cards include author avatar");
 // Loading the next page must append cards instead of recreating prior image elements.
 let fullRenders = 0;
 let appendedBatches = 0;
