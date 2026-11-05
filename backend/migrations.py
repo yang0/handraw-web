@@ -532,10 +532,27 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         87,
         "087_user_avatar_and_locked_nickname",
         """
-        -- Existing member display names are already selected and cannot be changed.
-        -- New members may choose their nickname once when registration omitted it.
+        -- Compatibility with original nickname identity policy.
         ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT '';
         ALTER TABLE users ADD COLUMN nickname_locked INTEGER NOT NULL DEFAULT 1;
+        """,
+    ),
+    (
+        88,
+        "088_account_identity_lifecycle",
+        """
+        -- Zero means legacy users are eligible for their first nickname change.
+        ALTER TABLE users ADD COLUMN nickname_changed_at INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN closed_at TEXT NOT NULL DEFAULT '';
+        CREATE TABLE IF NOT EXISTS auth_funnel_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_name TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            user_id INTEGER,
+            source TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_auth_funnel_events_name_time
+            ON auth_funnel_events(event_name, created_at);
         """,
     ),
 ]
