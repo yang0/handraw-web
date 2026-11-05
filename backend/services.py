@@ -3789,6 +3789,11 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
         else:
             recipe["sharedCard"] = shared_card
 
+    # Standalone forum posts can embed a work card, but must never claim the
+    # canonical work discussion or bypass its first-comment listing rule.
+    # The sharedCard stays inside recipe metadata for visual reference.
+    work_id = ""
+
     uid = int(user["id"])
     now_iso = utc_now_iso()
     now_ms = int(time.time() * 1000)
