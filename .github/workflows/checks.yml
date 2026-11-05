@@ -24,6 +24,7 @@ jobs:
       - run: node tests/test_share_preview.cjs
       - run: node tests/test_masonry_flow.cjs
       - run: node --check demo/assets/mixed-feed.js && node tests/test_mixed_feed.cjs
+      - run: node --check demo/assets/image-loader.js && node tests/test_main_image_loader.cjs
       - run: node tests/test_forum_navigation.cjs
       - run: node --check plugin/public/studio.js && node tests/test_studio_command.cjs && node tests/test_studio_pager.cjs
       - run: node --check plugin/public/image-loader.js && node tests/test_image_loader.cjs
@@ -31,7 +32,7 @@ jobs:
       - name: Check tracked files
         run: python ops/check_release.py
   source-archive:
-    if: github.ref == 'refs/heads/feat/mixed-discovery-feed-comment-led-forum'
+    if: github.ref == 'refs/heads/fix/feed-scroll-image-performance'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +40,7 @@ jobs:
         run: git archive --format=zip --output="$RUNNER_TEMP/handraw-optimized.zip" HEAD
       - uses: actions/upload-artifact@v4
         with:
-          name: handraw-mixed-feed-full-source
+          name: handraw-feed-performance-full-source
           path: ${{ runner.temp }}/handraw-optimized.zip
           if-no-files-found: error
   ruby-syntax:
