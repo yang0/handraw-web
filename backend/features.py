@@ -336,6 +336,19 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
     if req_path == "/api/account/status":
         user = handler._current_user(required=True)
         handler._send_json(account_status(handler.db,user));return True
+    if req_path == "/api/account/sessions":
+        user = handler._current_user(required=True)
+        from .security import hash_session_token
+        current = hash_session_token(str(user.get("_session_token") or "")) if user.get("_session_token") else ""
+        rows = handler.db.get_conn().execute(
+            "SELECT rowid AS session_id, token, user_agent, created_at, expires_at FROM sessions WHERE user_id=? AND expires_at>? ORDER BY created_at DESC LIMIT 30",
+            (user["id"], int(time.time())),
+        ).fetchall()
+        handler._send_json({"ok": True, "items": [
+            {"id": r["session_id"], "device": (r["user_agent"] or "未知设备")[:160],
+             "createdAt": r["created_at"], "current": bool(current and r["token"] == current)}
+            for r in rows
+        ]});return True
     if req_path == "/api/notifications":
         user = handler._current_user(required=True)
         try:before=max(0,int((qs.get("before") or ["0"])[0]))
@@ -349,6 +362,24 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
 
 
 def handle_feature_post(handler: Any, req_path: str, body: dict) -> bool:
+    if req_path == "/api/account/sessions/revoke-others":
+        user = handler._current_user(required=True)
+        from .security import verify_password, hash_session_token
+        current_row = handler.db.get_conn().execute(
+            "SELECT password_hash,password_algo,discourse_salt FROM users WHERE id=? AND status='active'",
+            (user["id"],),
+        ).fetchone()
+        if not current_row or not verify_password(str(body.get("currentPassword") or ""),
+            current_row["password_hash"], password_algo=current_row["password_algo"],
+            discourse_salt=current_row["discourse_salt"]):
+            raise ServiceError("当前登录密码不正确", status=403, code="incorrect_password")
+        current = hash_session_token(str(user.get("_session_token") or "")) if user.get("_session_token") else ""
+        with handler.db.transaction() as tx:
+            result = tx.execute(
+                "DELETE FROM sessions WHERE user_id=? AND token!=?",
+                (user["id"], current),
+            )
+        handler._send_json({"ok": True, "revoked": result.rowcount});return True
     if req_path == "/api/account/avatar":
         user = handler._current_user(required=True)
         from .avatar_identity import save_avatar
