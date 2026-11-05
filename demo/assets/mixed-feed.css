@@ -290,3 +290,8 @@
   .hw-progressive-media::before,
   .hw-progressive-media > img[data-hw-src] { transition: none; }
 }
+
+
+/* Featured release cards intentionally use a fixed-size editorial crop. */
+.hw-new-card-media.hw-progressive-media > img[data-hw-src] { object-fit: cover; }
+.hw-new-card-media.hw-progressive-media > .hw-new-card-time { z-index: 2; }
