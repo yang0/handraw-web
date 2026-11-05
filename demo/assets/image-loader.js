@@ -28,6 +28,8 @@
   const RETRY_DELAY = 4_000;
   const MAX_RETRIES = 2;
   const PREFETCH_MARGIN = "600px 0px";
+  const PREVIEW_MAX_ACTIVE = 3;
+  const PREVIEW_WIDTH = 48;
 
   const pending = new Set();
   const failures = new Set();
@@ -37,6 +39,13 @@
   const decodedSources = new Set();
   const visible = new WeakSet();
   const retries = new WeakMap();
+  // Progressive cards are opt-in. A bounded secondary queue loads tiny local
+  // previews only; unsupported remote URLs go straight from color to full image.
+  const previewPending = new Set();
+  const previewQueued = new WeakSet();
+  const previewRequests = new Map();
+  const previewCache = new Map();
+  let previewActive = 0;
   let active = 0;
   let lastStart = -START_INTERVAL;
   let retryAt = 0;
@@ -65,6 +74,114 @@
     if (!image.isConnected || !image.getClientRects || !image.getClientRects().length) return false;
     const rect = image.getBoundingClientRect();
     return rect.bottom >= -600 && rect.top <= window.innerHeight + 600 && rect.right >= -200 && rect.left <= window.innerWidth + 200;
+  }
+
+
+  const PLACEHOLDER_PALETTE = [
+    "#e5ddd2", "#dde7e5", "#e7e4ed", "#eadfd8",
+    "#e3e9d9", "#dae4ed", "#f0e1d9", "#e6e2d7"
+  ];
+
+  function progressiveBox(image) {
+    const box = image && image.parentElement;
+    return box && box.classList?.contains("hw-progressive-media") ? box : null;
+  }
+
+  /** Deterministic muted placeholder colors prevent a uniform grey feed. */
+  function preparePlaceholder(image) {
+    const box = progressiveBox(image);
+    if (!box || box.dataset.hwPlaceholderReady) return;
+    const key = image.dataset.hwSrc || "";
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
+    box.style.setProperty("--hw-placeholder-color",
+      PLACEHOLDER_PALETTE[(hash >>> 0) % PLACEHOLDER_PALETTE.length]);
+    box.dataset.hwPlaceholderReady = "true";
+  }
+
+  /** The preview and the final image share the same aspect-ratio container. */
+  function updateProgressiveRatio(image, width, height) {
+    const box = progressiveBox(image);
+    if (!box || box.dataset.hwRefineRatio !== "true" || !(width > 0 && height > 0)) return;
+    const ratio = width / height;
+    const existing = String(box.style.aspectRatio || "").split("/").map(Number);
+    const previous = existing.length === 2 && existing[0] > 0 && existing[1] > 0
+      ? existing[0] / existing[1] : Number(box.style.aspectRatio);
+    if (previous > 0 && Math.abs(previous / ratio - 1) < 0.005) return;
+    box.style.aspectRatio = width + " / " + height;
+  }
+
+  /** Never guess a query-string thumbnail contract for third-party images. */
+  function previewSource(image) {
+    const source = String(image.dataset.hwSrc || "").trim();
+    if (!/^\/(?:images|uploads|generated)\//.test(source) || /[?&]w=/.test(source)) return "";
+    return source + (source.includes("?") ? "&" : "?") + "w=" + PREVIEW_WIDTH;
+  }
+
+  function revealPreview(image, source, dimensions) {
+    const box = progressiveBox(image);
+    if (!box || image.classList.contains("hw-img-ready")) return;
+    updateProgressiveRatio(image, dimensions.width, dimensions.height);
+    box.style.setProperty("--hw-preview-image", "url(" + JSON.stringify(source) + ")");
+    box.classList.add("hw-preview-ready");
+  }
+
+  function trimPreviewCache() {
+    // Only metadata is retained. Browser HTTP cache owns the actual 48px bytes.
+    if (previewCache.size > 400) previewCache.delete(previewCache.keys().next().value);
+  }
+
+  function queuePreview(image) {
+    const box = progressiveBox(image);
+    if (!box || image.classList.contains("hw-img-ready")) return;
+    preparePlaceholder(image);
+    const source = previewSource(image);
+    if (!source) return;
+    const cached = previewCache.get(source);
+    if (cached) { revealPreview(image, source, cached); return; }
+    if (previewQueued.has(image) || typeof Image === "undefined") return;
+    previewQueued.add(image);
+    previewPending.add(image);
+    pumpPreviews();
+  }
+
+  function pumpPreviews() {
+    while (previewActive < PREVIEW_MAX_ACTIVE && previewPending.size) {
+      const image = previewPending.values().next().value;
+      previewPending.delete(image);
+      if (!image.isConnected || image.classList.contains("hw-img-ready")) continue;
+      const source = previewSource(image);
+      if (!source) continue;
+      const cached = previewCache.get(source);
+      if (cached) { revealPreview(image, source, cached); continue; }
+      if (previewRequests.has(source)) {
+        previewRequests.get(source).push(image);
+        continue;
+      }
+      previewActive++;
+      previewRequests.set(source, [image]);
+      const preview = new Image();
+      preview.decoding = "async";
+      preview.onload = () => {
+        const dims = { width: preview.naturalWidth, height: preview.naturalHeight };
+        const interested = previewRequests.get(source) || [];
+        previewRequests.delete(source);
+        previewActive = Math.max(0, previewActive - 1);
+        if (dims.width > 0 && dims.height > 0) {
+          previewCache.set(source, dims);
+          trimPreviewCache();
+          for (const candidate of interested) revealPreview(candidate, source, dims);
+        }
+        pumpPreviews();
+      };
+      preview.onerror = () => {
+        previewRequests.delete(source);
+        previewActive = Math.max(0, previewActive - 1);
+        // Tiny preview failure is cosmetic, not an image delivery failure.
+        pumpPreviews();
+      };
+      preview.src = source;
+    }
   }
 
   function showFailures() {
@@ -179,6 +296,7 @@
         failures.delete(image);
         retries.delete(image);
         image.dataset.hwLoaded = source;
+        updateProgressiveRatio(image, image.naturalWidth, image.naturalHeight);
         decodedSources.add(source);
         if (decodedSources.size > 1500) decodedSources.delete(decodedSources.values().next().value);
         image.classList.add("hw-img-ready");
@@ -210,7 +328,7 @@
       image.style.backgroundPosition = "center";
       image.dataset.hwLqipApplied = "true";
     }
-    image.classList.add("hw-img-loading");
+    if (!progressiveBox(image)) image.classList.add("hw-img-loading");
   }
 
   function markFailed(image) {
@@ -229,6 +347,7 @@
   function enqueue(image) {
     if (!image.isConnected || inFlight.has(image) || image.dataset.hwFailed) return;
     if (image.dataset.hwLoaded && image.dataset.hwLoaded === resolveSource(image)) return;
+    queuePreview(image);
     pending.add(image);
   }
 
@@ -243,6 +362,7 @@
           if (guess > 0) image.dataset.hwWidth = String(guess);
         }
         applyRatio(image);
+        preparePlaceholder(image);
         if (observer) observer.observe(image);
       }
       if (!observer && nearby(image)) enqueue(image);
