@@ -4151,11 +4151,7 @@
                  <div class="hw-account-help">昵称保存后不可再次修改，请确认后提交。</div>`}
             <div class="hw-account-help">用户名：@${esc(u.username)}（不可修改）</div>
           </div>
-          <div>
-            <div style="font-size:12.5px;font-weight:750;margin-bottom:5px;">当前绑定邮箱</div>
-            <div style="overflow-wrap:anywhere;">${esc(u.email || "尚未绑定")}</div>
-            <div class="hw-account-help">邮箱验证及换绑请前往「登录与安全」。</div>
-          </div>
+
         </div>
 
         <div data-account-panel="profile">
@@ -4174,8 +4170,9 @@
           <div style="margin-top:12px;"><button type="button" class="btn btn-sm" id="acc-password-save">修改密码</button></div>
           <div id="acc-password-feedback" class="hw-account-help" role="status" aria-live="polite"></div>
         </section>
-        <section data-account-panel="security" class="hw-account-security-panel">
-          <h3>✉️ 安全换绑邮箱</h3>
+        <section data-account-panel="email" class="hw-account-security-panel">
+          <h3>✉️ 邮箱与验证</h3>
+          <div style="font-size:13px;">当前绑定邮箱：<strong style="overflow-wrap:anywhere;">${esc(u.email || "尚未绑定")}</strong></div>
           <div class="hw-account-help" id="acc-email-verify-status" role="status" aria-live="polite">正在检查邮箱验证状态…</div>
           <p class="hw-account-help">输入新邮箱与当前密码。验证链接会发送到新邮箱，确认前原邮箱继续有效；链接 30 分钟内有效、只能用一次。</p>
           <div class="hw-account-form-grid">
@@ -4187,6 +4184,7 @@
             <a class="btn btn-sm" href="${esc(channelUrl("main", {view:"verify-email"}))}">验证当前邮箱</a>
           </div>
           <span id="acc-email-feedback" role="status" aria-live="polite" class="hw-account-help"></span>
+          <p class="hw-account-help">忘记密码请从退出登录后的登录页进入「忘记密码」流程；安全验证邮件会发送到当前或新邮箱。</p>
         </section>
 
         <section data-account-panel="security" class="hw-account-security-panel">
