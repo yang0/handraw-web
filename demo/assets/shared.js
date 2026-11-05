@@ -337,7 +337,7 @@
     { key: "NEW_RELEASE", label: "🌱 新发扶持" },
     { key: "COMMUNITY", label: "✨ 社区共创" },
     { key: "EXCLUSIVE", label: "🔒 在线独占" },
-    { key: "HAS_WORKS", label: "🔥 有晒作品" },
+    { key: "HAS_WORKS", label: "🔥 有作品" },
     { key: "FA", label: "FA 社论幽默" },
     { key: "FB", label: "FB 绘本水彩" },
     { key: "FC", label: "FC 现代几何" },
@@ -354,7 +354,7 @@
     { key: "NEW_RELEASE", label: "🌱 新发扶持" },
     { key: "COMMUNITY", label: "✨ 社区共创" },
     { key: "EXCLUSIVE", label: "🔒 在线独占" },
-    { key: "HAS_WORKS", label: "🔥 有晒作品" },
+    { key: "HAS_WORKS", label: "🔥 有作品" },
     { key: "social-card", label: "SC 小红书社媒卡" },
     { key: "infographic", label: "IG 知识信息图" },
     { key: "comic-storyboard", label: "SB 漫画分镜" },
@@ -1121,7 +1121,7 @@
             const emptyMsgs = {
               styles: "暂未收藏该类资产，去库里点亮 ♡ 吧！",
               layouts: "暂未收藏该类资产，去库里点亮 ♡ 吧！",
-              works: "暂未收藏晒作品",
+              works: "暂未收藏作品",
               topics: "暂未收藏论坛好帖",
               generations: "暂无生图历史收藏"
             };
@@ -1844,7 +1844,7 @@
       fullLabel: "🗓️ 月榜 · 近30天",
       shortPrefix: "本月",
       days: 30,
-      desc: "统计近 30 天持续活跃创作者与高人气晒作品"
+      desc: "统计近 30 天持续活跃创作者与高人气作品"
     },
     {
       key: "all",
@@ -2485,7 +2485,7 @@
             }
             const latestCredits = Number(App.state.credits != null ? App.state.credits : (App.state.user?.credits || 0));
             if (latestCredits < selectedAmount) {
-              toast(`当前积分不足（需 ${selectedAmount}✦，可用 ${latestCredits}✦），先去签到或晒图赚积分吧！`);
+              toast(`当前积分不足（需 ${selectedAmount}✦，可用 ${latestCredits}✦），先去签到或创作赚积分吧！`);
               return;
             }
 
@@ -2568,7 +2568,7 @@
       return false;
     }
     if ((App.state.credits || 0) < amount) {
-      toast(`当前积分不足 ${amount} 积分，先去签到或晒图赚积分吧！`);
+      toast(`当前积分不足 ${amount} 积分，先去签到或创作赚积分吧！`);
       return false;
     }
     const authorLabel = targetObj.authorName || "社区创作者";
@@ -3332,7 +3332,7 @@
                 body: { identifier, password }
               });
               if (res.boot) applyBootState(res.boot);
-              toast(`✅ 欢迎回来 @${res.boot?.user?.name || identifier}！全部晒作品与提示词已解锁`);
+              toast(`✅ 欢迎回来 @${res.boot?.user?.name || identifier}！全部作品与提示词已解锁`);
               if (onSuccess) onSuccess();
             } catch (err) {
               toast(`登录失败：${err.message}`);
@@ -3426,7 +3426,7 @@
 
   /* ======================== 2. INLINE NON-MODAL SHARE & REPORT DRAWERS ======================== */
   function renderInlineSharePanelHtml(itemType, item) {
-    const typeNames = { style: "画风", layout: "图型", work: "晒作品", topic: "实战帖" };
+    const typeNames = { style: "画风", layout: "图型", work: "作品", topic: "实战帖" };
     const tName = typeNames[itemType] || "内容";
     const code = (item && item.id) || "";
     const title = (item && (item.title || `${item.id} ${item.name || ""}`)) || "Handraw 精选";
@@ -3441,7 +3441,7 @@
       itemType === "topic"
         ? `在 Handraw 论坛看到一篇精彩实战帖《${title}》，来聊聊你的创作心得 👉 ${shareUrl}`
         : workCount !== null
-        ? `推荐一个超稳的手绘画风/图型【${title}】！社区里已经有 ${workCount} 个晒作品和现成提示词配方，点链接登录就能直接抄作业 👉 ${shareUrl}`
+        ? `推荐一个超稳的手绘画风/图型【${title}】！社区里已经有 ${workCount} 个作品和现成提示词配方，点链接登录就能直接抄作业 👉 ${shareUrl}`
         : `在 Handraw 手绘风社区挖到宝了：《${title}》，附完整画风+图型配方，一键就能在创作台复刻同款 👉 ${shareUrl}`;
 
     return `
@@ -3967,7 +3967,12 @@
       return;
     }
     const user = App.state.user.username;
-    const kind = ["style", "layout", "work"].includes(prefill.kind) ? prefill.kind : "work";
+    // Works are created by successful public generations, not manual forum posting.
+    if (prefill.kind === "work") {
+      window.location.href = channelUrl("studio", {entry: "quick"});
+      return;
+    }
+    const kind = ["style", "layout"].includes(prefill.kind) ? prefill.kind : "style";
     try {
       const payload = Object.assign({}, prefill, {kind, styles: prefill.styles || (prefill.style1 ? [prefill.style1] : [])});
       if (prefill.subject != null) payload.subject = String(prefill.subject);
