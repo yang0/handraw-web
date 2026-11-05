@@ -50,8 +50,10 @@ def send_account_mail(recipient: str, purpose: str, token: str) -> None:
         raise ServiceError("邮件服务尚未配置，请联系管理员", status=503, code="mail_unavailable")
     base = str(os.environ.get("HANDRAW_PUBLIC_URL", "http://localhost:3080")).rstrip("/")
     view = "reset-password" if purpose == "password_reset" else "verify-email"
-    url = base + "/?" + urlencode({"view": view, "token": token})
-    action = "重置密码" if purpose == "password_reset" else "验证邮箱"
+    url = base + "/?" + urlencode({"view": view, "token": token,
+                                   "purpose": "change" if purpose == "email_change" else "verify"})
+    action = {"password_reset": "重置密码", "verify_email": "验证邮箱",
+              "email_change": "验证并绑定新邮箱"}.get(purpose, "验证邮箱")
     msg = EmailMessage()
     msg["From"] = str(cfg["sender"])
     msg["To"] = recipient
@@ -102,6 +104,53 @@ def request_account_mail(db: Any, purpose: str, email: str, user: dict | None = 
     return generic
 
 
+def request_email_change(db: Any, user: dict, new_email: str, current_password: str) -> dict:
+    """A verified mailbox owns the recovery address. Never switch it in profile POST."""
+    from .security import verify_password
+    clean = str(new_email or "").strip().lower()
+    if len(clean) > 120 or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", clean):
+        raise ServiceError("请输入有效的新邮箱地址")
+    if not mail_ready():
+        raise ServiceError("邮件服务尚未配置，暂时不能换绑", status=503, code="mail_unavailable")
+    uid = int(user["id"])
+    row = db.get_conn().execute("SELECT * FROM users WHERE id=? AND status='active'", (uid,)).fetchone()
+    if not row:
+        raise ServiceError("账号已失效", status=403)
+    if clean == str(row["email"] or "").lower():
+        raise ServiceError("新邮箱不能与当前绑定邮箱相同")
+    if not verify_password(current_password, row["password_hash"],
+                           password_algo=row["password_algo"], discourse_salt=row["discourse_salt"]):
+        raise ServiceError("当前登录密码不正确", status=403, code="incorrect_password")
+    now = int(time.time())
+    raw = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    with db.transaction() as tx:
+        dup = tx.execute("SELECT id FROM users WHERE LOWER(email)=? AND id!=?", (clean, uid)).fetchone()
+        if dup:
+            raise ServiceError("该邮箱已经绑定其他账号", status=409, code="email_in_use")
+        last = tx.execute(
+            "SELECT created_at FROM account_action_tokens WHERE user_id=? AND purpose='email_change' ORDER BY created_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+        if last and now - int(last["created_at"]) < 60:
+            raise ServiceError("操作过于频繁，请一分钟后再试", status=429)
+        tx.execute(
+            "UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND purpose='email_change' AND consumed_at IS NULL",
+            (now, uid),
+        )
+        tx.execute(
+            "INSERT INTO account_action_tokens(token_hash,user_id,purpose,email,expires_at,created_at) VALUES(?,?,?,?,?,?)",
+            (digest, uid, "email_change", clean, now+1800, now),
+        )
+    try:
+        send_account_mail(clean, "email_change", raw)
+    except ServiceError:
+        with db.transaction() as tx:
+            tx.execute("DELETE FROM account_action_tokens WHERE token_hash=?", (digest,))
+        raise
+    return {"ok": True, "message": "验证邮件已发送到新邮箱。点击邮件链接后才会完成换绑。"}
+
+
 def consume_account_token(db: Any, purpose: str, token: str, password: str = "") -> dict:
     if not token or len(token) > 200:
         raise ServiceError("链接无效或已过期")
@@ -111,16 +160,32 @@ def consume_account_token(db: Any, purpose: str, token: str, password: str = "")
     now = int(time.time())
     with db.transaction() as tx:
         row = tx.execute("SELECT t.*,u.email AS current_email,u.status FROM account_action_tokens t JOIN users u ON u.id=t.user_id WHERE token_hash=? AND purpose=?", (digest,purpose)).fetchone()
-        if not row or row["consumed_at"] is not None or int(row["expires_at"]) <= now or row["email"].lower() != (row["current_email"] or "").lower() or row["status"] != "active":
+        if (not row or row["consumed_at"] is not None or int(row["expires_at"]) <= now
+                or row["status"] != "active" or
+                (purpose != "email_change" and row["email"].lower() != (row["current_email"] or "").lower())):
             raise ServiceError("链接无效或已过期，请重新申请")
         if purpose == "password_reset":
             tx.execute("UPDATE users SET password_hash=?,password_algo='pbkdf2_sha256',discourse_salt='' WHERE id=?", (hash_password(password),row["user_id"]))
             tx.execute("DELETE FROM sessions WHERE user_id=?", (row["user_id"],))
             tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND purpose=? AND consumed_at IS NULL", (now,row["user_id"],purpose))
+        elif purpose == "email_change":
+            existing = tx.execute("SELECT id FROM users WHERE LOWER(email)=? AND id!=?",
+                                  (row["email"].lower(), row["user_id"])).fetchone()
+            if existing:
+                raise ServiceError("这个邮箱已被其他账号绑定，请重新换绑", status=409, code="email_in_use")
+            tx.execute("UPDATE users SET email=? WHERE id=?", (row["email"], row["user_id"]))
+            tx.execute("INSERT INTO verified_emails(user_id,email,verified_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,verified_at=excluded.verified_at",
+                       (row["user_id"], row["email"], utc_now_iso()))
+            tx.execute("DELETE FROM sessions WHERE user_id=?", (row["user_id"],))
+            tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND purpose IN ('email_change','password_reset') AND consumed_at IS NULL",
+                       (now, row["user_id"]))
         else:
             tx.execute("INSERT INTO verified_emails(user_id,email,verified_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,verified_at=excluded.verified_at", (row["user_id"],row["email"],utc_now_iso()))
         tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE token_hash=?", (now,digest))
-    return {"ok": True, "message": "密码已重置，请重新登录" if purpose == "password_reset" else "邮箱验证成功"}
+    return {"ok": True, "message": (
+        "密码已重置，请重新登录" if purpose == "password_reset" else
+        "新邮箱已验证并完成换绑，请重新登录" if purpose == "email_change" else "邮箱验证成功"
+    )}
 
 
 def account_status(db: Any, user: dict) -> dict:
@@ -284,6 +349,25 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
 
 
 def handle_feature_post(handler: Any, req_path: str, body: dict) -> bool:
+    if req_path == "/api/account/avatar":
+        user = handler._current_user(required=True)
+        from .avatar_identity import save_avatar
+        handler._send_json(save_avatar(handler.db, user, str(body.get("dataUrl") or "")))
+        return True
+    if req_path == "/api/account/avatar/reset":
+        user = handler._current_user(required=True)
+        from .avatar_identity import reset_avatar
+        handler._send_json(reset_avatar(handler.db, user))
+        return True
+    if req_path == "/api/auth/change-email":
+        user = handler._current_user(required=True)
+        handler._send_json(request_email_change(handler.db,user,
+            str(body.get("email") or ""), str(body.get("currentPassword") or "")))
+        return True
+    if req_path == "/api/auth/confirm-email-change":
+        handler._send_json(consume_account_token(handler.db,"email_change",
+            str(body.get("token") or "")))
+        return True
     if req_path == "/api/auth/forgot-password":
         handler._send_json(request_account_mail(handler.db,"password_reset",str(body.get("email") or "")));return True
     if req_path == "/api/auth/reset-password":
