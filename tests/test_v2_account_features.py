@@ -86,6 +86,24 @@ class AccountFeaturesTests(unittest.TestCase):
         with self.assertRaises(ServiceError) as denied:features.edit_owned_content(self.db,self.b,"works",work["id"],{"title":"越权修改作品标题"})
         self.assertEqual(403,denied.exception.status)
 
+    def test_account_export_excludes_credentials_and_other_users(self):
+        user = self.a
+        class Handler:
+            db = self.db
+            def _current_user(self, required=True):
+                return user
+            def _send_json(self, payload, set_cookie=None):
+                self.response = payload
+        handler = Handler()
+        self.assertTrue(features.handle_feature_get(handler, "/api/account/export", {}))
+        exported = handler.response
+        self.assertTrue(exported["ok"])
+        self.assertEqual(exported["profile"]["username"], user["username"])
+        self.assertNotIn("password_hash", json.dumps(exported))
+        self.assertNotIn("discourse_salt", json.dumps(exported))
+        self.assertTrue(all(w["id"] for w in exported["works"]))
+        self.assertTrue(all(t["id"] for t in exported["forumTopics"]))
+
     def test_close_account_checks_password_and_revokes_all_grants(self):
         _, _ = login_user(self.db, self.a["username"], "handraw123")
         user = {**self.a}
