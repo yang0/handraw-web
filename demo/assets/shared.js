@@ -3382,7 +3382,7 @@
           const email = stage.querySelector("#reg-email").value.trim();
           const password = stage.querySelector("#reg-password").value;
           const confirmed = stage.querySelector("#reg-confirm-password").value;
-          if (!email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+          if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             toast("请填写有效邮箱，便于之后找回账号");
             return;
           }
@@ -4180,7 +4180,7 @@
       const email = formEl.querySelector("#acc-new-email").value.trim();
       const currentPassword = formEl.querySelector("#acc-email-password").value;
       const status = formEl.querySelector("#acc-email-feedback");
-      if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email) || !currentPassword) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !currentPassword) {
         status.textContent = "请输入有效的新邮箱地址及当前登录密码";
         return;
       }
