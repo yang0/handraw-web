@@ -58,6 +58,9 @@
     if (!raw) return "";
     if (raw.startsWith("data:")) return raw;
     if (/[?&]w=/.test(raw)) return raw;
+    // Only the Handraw media endpoint guarantees ?w= thumbnail support.
+    // Adding it to arbitrary remote hosts can break image URLs and caching.
+    if (!/^\/(?:images|uploads|generated)\//.test(raw)) return raw;
     const width = parseInt(image.dataset.hwWidth || "", 10);
     if (!width || width <= 0) return raw;
     return raw + (raw.includes("?") ? "&" : "?") + "w=" + width;
