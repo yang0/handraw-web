@@ -3850,34 +3850,6 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
                     )
                     new_bal = 0
 
-        if not work_id:
-            work_id = str(body.get("workId") or "").strip()[:64]
-
-        if work_id:
-            existing_mapping = tx.execute(
-                "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
-                (work_id,),
-            ).fetchone()
-            if not existing_mapping:
-                existing_topic = tx.execute(
-                    "SELECT id FROM forum_topics WHERE work_id = ?",
-                    (work_id,),
-                ).fetchone()
-                if existing_topic:
-                    existing_mapping = {"topic_id": existing_topic["id"]}
-                    tx.execute(
-                        "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
-                        (work_id, existing_topic["id"], now_iso),
-                    )
-
-            if existing_mapping:
-                tid = str(existing_mapping["topic_id"])
-                tx.execute(
-                    "UPDATE forum_topics SET summary = ?, title = CASE WHEN ? != '' THEN ? ELSE title END, listed_at_ms = COALESCE(listed_at_ms, ?), updated_at = ? WHERE id = ? AND author_username = ?",
-                    (summary, title, title, now_ms, now_iso, tid, user["username"]),
-                )
-                return {"ok": True, "topicId": tid, "topic": {"id": tid, "price": price}, "credits": new_bal, "bounty": bounty, "reused": True}
-
         recipe_str = json.dumps(recipe, ensure_ascii=False) if recipe else ""
         try:
             recipe_has_sec = 1 if (recipe and check_obj_has_secret(recipe, tx)) else 0
@@ -3916,20 +3888,6 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
                 now_ms,
             ),
         )
-
-        if work_id:
-            try:
-                tx.execute(
-                    "INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
-                    (work_id, tid, now_iso),
-                )
-            except sqlite3.IntegrityError:
-                mapped = tx.execute(
-                    "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
-                    (work_id,),
-                ).fetchone()
-                if mapped:
-                    tid = str(mapped["topic_id"])
 
     return {"ok": True, "topicId": tid, "topic": {"id": tid, "price": price}, "credits": new_bal, "bounty": bounty}
 
