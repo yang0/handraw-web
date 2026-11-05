@@ -222,6 +222,14 @@ def get_works_feed(
         )
         base_params.extend([kw, kw, kw, kw, kw, kw, kw])
 
+    # Scenario matching rule filter
+    scenario_param = str(params.get("scenario") or "").strip().lower()
+    if scenario_param:
+        from .home_scenarios import get_scenario_match_clause_by_key
+        sc_clause, sc_params = get_scenario_match_clause_by_key(conn, scenario_param, table_alias="w")
+        base_clauses.append(f"({sc_clause})")
+        base_params.extend(sc_params)
+
     where_sql = " AND ".join(base_clauses)
     cte_sql = f"""
         WITH scoped_works AS (

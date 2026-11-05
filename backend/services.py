@@ -2912,6 +2912,11 @@ def set_work_visibility(
             source="work", reason="" if publishing else reason,
             actor_role="" if publishing else actor_role, automated=True,
         )
+    try:
+        from .home_scenarios import invalidate_scenarios_cache
+        invalidate_scenarios_cache()
+    except Exception:
+        pass
     return True
 
 

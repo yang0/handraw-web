@@ -966,6 +966,11 @@ def admin_moderate_work(
             reason or f"作品治理操作：{act}",
             {"title": w["title"], "author": w["author_username"]},
         )
+    try:
+        from .home_scenarios import invalidate_scenarios_cache
+        invalidate_scenarios_cache()
+    except Exception:
+        pass
     return {"ok": True, "workId": wid, "action": act}
 
 

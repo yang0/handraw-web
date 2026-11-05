@@ -239,6 +239,10 @@
       UI.workFilterAuthor = p.get("author");
       App.view = "works";
     }
+    if (p.get("scenario")) {
+      UI.workScenario = p.get("scenario").trim().toLowerCase();
+      App.view = "works";
+    }
     if (App.view === "works") {
       UI.workFormat = ["single","multi"].includes(p.get("format")) ? p.get("format") : "all";
       UI.workAccess = ["free","paid"].includes(p.get("access")) ? p.get("access") : "all";
@@ -290,6 +294,7 @@
     const p = new URLSearchParams();
     p.set("view", App.view);
     if (App.view === "works") {
+      if (UI.workScenario) p.set("scenario", UI.workScenario);
       if (UI.workFilterAsset) p.set("filterAsset", UI.workFilterAsset);
       if (UI.workFilterAuthor) p.set("author", UI.workFilterAuthor);
       if (UI.workFormat !== "all") p.set("format", UI.workFormat);
@@ -998,11 +1003,12 @@
       query: UI.workQuery || "",
       asset: UI.workFilterAsset || "",
       author: UI.workFilterAuthor || "",
+      scenario: UI.workScenario || "",
       sort: UI.workSort === "newest" || UI.workSort === "popular" || UI.workSort === "favorites" || UI.workSort === "cheers"
         ? UI.workSort : "newest"
     };
 
-    const filterKey = `${filters.format}|${filters.access}|${filters.sort}|${filters.asset}|${filters.author}|${filters.query}`;
+    const filterKey = `${filters.format}|${filters.access}|${filters.sort}|${filters.asset}|${filters.author}|${filters.scenario}|${filters.query}`;
 
     if (typeof S.apiJson === "function" && (!UI.worksFeed || UI.worksFeed.key !== filterKey)) {
       const prevCounts = UI.worksFeed?.counts || B.countFormats(allWorks);
@@ -1025,6 +1031,7 @@
       if (filters.sort) params.set("sort", filters.sort);
       if (filters.asset) params.set("asset", filters.asset);
       if (filters.author) params.set("author", filters.author);
+      if (filters.scenario) params.set("scenario", filters.scenario);
       if (filters.query) params.set("q", filters.query);
 
       S.apiJson(`/api/works/feed?${params.toString()}`)
@@ -1066,7 +1073,7 @@
       : filtered.slice(0, shownCount);
     const hasFilters = Boolean(
       filters.format !== "all" || filters.access !== "all" ||
-      String(filters.query).trim() || filters.asset || filters.author
+      String(filters.query).trim() || filters.asset || filters.author || filters.scenario
     );
     const selectedAsset = filters.asset && App.resourceMap ? App.resourceMap.get(filters.asset) : null;
     const author = filters.author ? S.getCreatorProfile(filters.author) : null;
@@ -1221,7 +1228,8 @@
           <label>排序<select id="hw-wb-sort"><option value="newest" ${filters.sort === "newest" ? "selected" : ""}>最新发布</option><option value="favorites" ${filters.sort === "favorites" ? "selected" : ""}>最多收藏</option><option value="cheers" ${filters.sort === "cheers" ? "selected" : ""}>最多鼓励</option></select></label>
           ${hasFilters ? `<button type="button" class="hw-wb-reset" id="hw-wb-reset">清除筛选</button>` : ""}
         </div></div>
-        <div class="hw-wb-selected" ${!filters.asset && !filters.author ? "hidden" : ""}>
+        <div class="hw-wb-selected" ${!filters.asset && !filters.author && !filters.scenario ? "hidden" : ""}>
+          ${filters.scenario ? `<button type="button" class="hw-wb-chip is-active" id="hw-wb-scenario" aria-label="清除场景筛选"><span>场景：${esc(filters.scenario)}</span><span aria-hidden="true">×</span></button>` : ""}
           ${filters.asset ? `<button type="button" class="hw-wb-chip is-active" id="hw-wb-clear-asset" aria-label="清除资源筛选">${assetImage ? `<img data-hw-src="${esc(assetImage)}" alt="${esc(selectedAsset?.name || filters.asset)}" />` : ""}<span>${esc(selectedAsset?.name || "资源")} · ${esc(filters.asset)}</span><span aria-hidden="true">×</span></button>` : ""}
           ${filters.author ? `<button type="button" class="hw-wb-chip is-active" id="hw-wb-author" aria-label="清除作者筛选">作者：${esc(author?.authorName || filters.author)} <span aria-hidden="true">×</span></button>` : ""}
         </div>
@@ -1235,7 +1243,7 @@
     const change = (fn) => { fn(); UI.workShownCount = 24; rerender(); };
     const clearFilters = () => change(() => {
       UI.workQuery = ""; UI.workFormat = "all"; UI.workAccess = "all";
-      UI.workFilterAsset = ""; UI.workFilterAuthor = "";
+      UI.workFilterAsset = ""; UI.workFilterAuthor = ""; UI.workScenario = "";
     });
     const share = () => S.goToCurationShare({ kind: "work" });
 
@@ -1261,6 +1269,8 @@
     });
     const clearAsset = root.querySelector("#hw-wb-clear-asset");
     if (clearAsset) clearAsset.onclick = () => change(() => { UI.workFilterAsset=""; });
+    const clearScenario = root.querySelector("#hw-wb-scenario");
+    if (clearScenario) clearScenario.onclick = () => change(() => { UI.workScenario=""; });
     const authorBtn = root.querySelector("#hw-wb-author");
     if (authorBtn) authorBtn.onclick = (e) => {
       change(() => { UI.workFilterAuthor = ""; });

@@ -1803,6 +1803,33 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_cached_json(
+        self,
+        obj: dict[str, Any],
+        etag: str,
+        cache_control: str = "public, max-age=300",
+    ) -> None:
+        clean_etag = etag.strip().strip('"').strip("'")
+        inm = (self.headers.get("If-None-Match") or "").strip().strip('"').strip("'")
+        if inm and clean_etag and inm == clean_etag:
+            self.send_response(304)
+            self.send_header("ETag", f'"{clean_etag}"')
+            self.send_header("Cache-Control", cache_control)
+            self._cors_headers()
+            self.end_headers()
+            return
+
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", cache_control)
+        self.send_header("ETag", f'"{clean_etag}"')
+        self._cors_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _read_json_body(self) -> dict[str, Any]:
         if getattr(self, "_body_consumed", False):
             return {}
@@ -2118,6 +2145,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if req_path == "/api/public/home-scenarios":
+            from .home_scenarios import get_public_home_scenarios
+            payload, etag = get_public_home_scenarios(self.db)
+            self._send_cached_json(payload, etag=etag, cache_control="public, max-age=300")
+            return
+
         if req_path == "/__demo_state":
             self._require_demo_mode()
             with _LEGACY_DEMO_STATE_LOCK:
@@ -2414,6 +2447,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/admin/settings":
             user = self._current_user(required=True)
             self._send_json(admin_get_settings(self.db, user))
+            return
+
+        if req_path == "/api/admin/home-scenarios":
+            from .home_scenarios import admin_list_home_scenarios
+            user = self._current_user(required=True)
+            self._send_json(admin_list_home_scenarios(self.db, user))
             return
 
         if req_path == "/api/admin/audit-logs":
@@ -3532,6 +3571,53 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     reason=str(body.get("reason") or ""),
                 )
             )
+            return
+
+        if req_path == "/api/admin/home-scenarios":
+            from .home_scenarios import (
+                admin_save_home_scenario,
+                admin_toggle_home_scenario,
+                admin_reorder_home_scenarios,
+                admin_pin_scenario_work,
+                admin_unpin_scenario_work,
+                admin_reorder_scenario_pins,
+            )
+            user = self._current_user(required=True)
+            action = str(body.get("action") or "").strip().lower()
+            if action == "toggle":
+                is_enabled = bool(body.get("isEnabled") if body.get("isEnabled") is not None else body.get("is_enabled", True))
+                res = admin_toggle_home_scenario(
+                    self.db, user, key=str(body.get("key") or ""), is_enabled=is_enabled
+                )
+            elif action == "reorder":
+                res = admin_reorder_home_scenarios(
+                    self.db, user, orders=body.get("orders") or []
+                )
+            elif action == "pin":
+                res = admin_pin_scenario_work(
+                    self.db,
+                    user,
+                    scenario_key=str(body.get("scenarioKey") or body.get("scenario_key") or ""),
+                    work_id=str(body.get("workId") or body.get("work_id") or ""),
+                    sort_order=int(body.get("sortOrder") if body.get("sortOrder") is not None else body.get("sort_order", 0)),
+                )
+            elif action == "unpin":
+                res = admin_unpin_scenario_work(
+                    self.db,
+                    user,
+                    scenario_key=str(body.get("scenarioKey") or body.get("scenario_key") or ""),
+                    work_id=str(body.get("workId") or body.get("work_id") or ""),
+                )
+            elif action == "reorder_pins":
+                res = admin_reorder_scenario_pins(
+                    self.db,
+                    user,
+                    scenario_key=str(body.get("scenarioKey") or body.get("scenario_key") or ""),
+                    work_ids=body.get("workIds") or body.get("pins") or [],
+                )
+            else:
+                res = admin_save_home_scenario(self.db, user, body)
+            self._send_json(res)
             return
 
         self._send_json({"ok": False, "error": f"Unknown endpoint: {req_path}"}, status=404)
