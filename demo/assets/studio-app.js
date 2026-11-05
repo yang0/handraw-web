@@ -287,6 +287,9 @@
   }
 
   function confirmSecondaryBatchCost(count) {
+    // Costs and refund policy are displayed by the batch pane before start.
+    // The backend remains authoritative for quotas, reservations and charges.
+    return true;
     if (count <= 20) return true;
     const rawFree = Number(App.state && (App.state.freeQuotaRemaining ?? App.state.free_quota_remaining));
     const free = Number.isFinite(rawFree) ? Math.max(0, Math.min(Number(count || 0), rawFree)) : 0;
@@ -301,6 +304,8 @@
   }
 
   function confirmPotentialGenerationCost(count) {
+    // A click is the execute action; never open a blocking browser confirm.
+    return true;
     if (count > 20) {
       return confirmSecondaryBatchCost(count);
     }
