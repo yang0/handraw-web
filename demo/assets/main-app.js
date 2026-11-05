@@ -2920,8 +2920,6 @@
           ${innerContentHtml}
         </div>
       `;
-    } else if (UI.profileTab === "account" && isMe) {
-      tabBodyHtml = S.renderAccountSettingsFormHtml();
     }
 
     root.innerHTML = `
@@ -2971,7 +2969,7 @@
               ${
                 isMe
                   ? `
-                    <button type="button" class="btn ${UI.profileTab === "account" ? "btn-primary" : ""}" id="prof-go-account-btn">⚙️ 账号资料与安全设置</button>
+                    <button type="button" class="btn" id="prof-go-account-btn">⚙️ 账号设置</button>
                     <button type="button" class="btn btn-gold" id="prof-go-wallet-btn">✦ 积分钱包 (${App.state.credits}✦)</button>
                     <button type="button" class="btn" id="prof-go-compose-btn">✏️ 发论坛帖</button>
                     ${
@@ -3056,7 +3054,6 @@
               ? `
                 <button type="button" class="hw-pill ${UI.profileTab === "articles" ? "is-active" : ""}" data-ptab="articles" role="tab" aria-selected="${UI.profileTab === "articles"}">📝 文章 (${(UI.profileArticles || []).length})</button>
                 <button type="button" class="hw-pill ${UI.profileTab === "collections" ? "is-active" : ""}" data-ptab="collections" role="tab" aria-selected="${UI.profileTab === "collections"}">♥ 收藏夹</button>
-                <button type="button" class="hw-pill ${UI.profileTab === "account" ? "is-active" : ""}" data-ptab="account" role="tab" aria-selected="${UI.profileTab === "account"}">⚙️ 账号资料与安全设置</button>
               `
               : ""
           }
