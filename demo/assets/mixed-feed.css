@@ -178,7 +178,8 @@
 .hw-mf-codes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .hw-mf-codes span { background: var(--paper-inset, #efeae0); color: var(--mf-muted); font-size: 10px; padding: 2px 5px; border-radius: 4px; }
 .hw-mf-footer { display: flex; justify-content: space-between; align-items: center; gap: 7px; margin-top: 9px; font-size: 11px; color: var(--mf-muted); }
-.hw-mf-author { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.hw-mf-author { display: inline-flex; align-items: center; min-width: 0; gap: 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.hw-mf-author-avatar { width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: #efe5d6; object-fit: cover; }
 .hw-mf-stats { flex-shrink: 0; }
 .hw-mf-remix {
   display: block;
