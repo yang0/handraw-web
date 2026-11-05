@@ -2304,6 +2304,28 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
             "apiKeyMasked": (current_user["api_key"][:8] + "…" + current_user["api_key"][-4:]) if current_user.get("api_key") else "",
         }
 
+    # Only send avatar URLs for members who appear in public content or
+    # the current session; merely uploading an avatar must not disclose a
+    # private/non-publishing account in the anonymous boot API.
+    visible_avatar_users = {
+        str(pc.get("username") or "") for pc in public_creators
+    }
+    visible_avatar_users.update(str(w.get("author") or "") for w in works_out)
+    visible_avatar_users.update(str(t.get("author") or "") for t in topics_out)
+    visible_avatar_users.update(str(c.get("author") or "") for c in community_resources)
+    for work in works_out:
+        visible_avatar_users.update(
+            str(comment.get("user") or comment.get("author") or "")
+            for comment in (work.get("comments") or []) if isinstance(comment, dict)
+        )
+    for topic in topics_out:
+        visible_avatar_users.update(
+            str(reply.get("user") or reply.get("author") or "")
+            for reply in (topic.get("replies") or []) if isinstance(reply, dict)
+        )
+    if current_user:
+        visible_avatar_users.add(str(current_user["username"]))
+
     payload = {
         "version": 4,
         "serverBacked": True,
@@ -2329,6 +2351,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
             for r in conn.execute(
                 "SELECT username, avatar_url FROM users WHERE status='active' AND avatar_url!=''"
             ).fetchall()
+            if r["username"] in visible_avatar_users
         },
         "topics": topics_out,
         "forumBoards": FORUM_BOARDS,
