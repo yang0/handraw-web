@@ -3,7 +3,9 @@
   "use strict";
   const S = window.HANDRAW_SHARED;
   const views = new Set(["guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic"]);
-  const linkToken = new URLSearchParams(location.search).get("token") || "";
+  const linkParams = new URLSearchParams(location.search);
+  const linkToken = linkParams.get("token") || "";
+  const isEmailChange = linkParams.get("purpose") === "change";
   let activeRender = 0;
   const mainUrl = (view, extra = {}) => S.channelUrl("main", { view, ...extra });
   const esc = S.esc;
@@ -71,12 +73,16 @@
       return true;
     }
     if (view === "recovery") {
-      shell(root,"找回密码",`<p>输入注册邮箱，我们会发送一次性重置链接。</p><form class="hw-account-form"><label>注册邮箱<input class="hw-input" name="email" type="email" autocomplete="email" required></label><button class="btn btn-primary" type="submit">发送重置邮件</button></form><p><a href="${esc(mainUrl("auth"))}">返回登录</a></p>`);
+      shell(root,"找回密码",`<p>请输入你已绑定的真实邮箱地址。我们会发送 30 分钟有效的一次性重置链接。为保护隐私，无论邮箱是否存在，页面提示都相同。</p><form class="hw-account-form"><label>绑定邮箱<input class="hw-input" name="email" type="email" autocomplete="email" required></label><button class="btn btn-primary" type="submit">发送重置邮件</button></form><p class="hw-account-help">收不到邮件？查看垃圾邮件箱；如果此前没有绑定真实邮箱，请联系网站管理员核验归属。</p><p><a href="${esc(mainUrl("auth"))}">返回登录</a></p>`);
       bindForm(root,async data=>{ const result=await S.apiJson("/api/auth/forgot-password",{method:"POST",body:{email:data.get("email")}});feedback(root,result.message); });
       return true;
     }
+    if (view === "reset-password" && !linkToken) {
+      shell(root,"重置链接无效",`<p>链接中没有有效的重置凭证，请重新申请。</p><a class="btn btn-primary" href="${esc(mainUrl("recovery"))}">重新发送邮件</a>`);
+      return true;
+    }
     if (view === "reset-password") {
-      shell(root,"设置新密码",`<form class="hw-account-form"><label>新密码<input class="hw-input" name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>再次输入新密码<input class="hw-input" name="confirm" type="password" minlength="8" autocomplete="new-password" required></label><button class="btn btn-primary" type="submit">重置密码</button></form>`);
+      shell(root,"设置新密码",`<p class="hw-account-help">建议使用不少于 12 位的独立密码。重置成功后，所有其他登录设备将退出。</p><form class="hw-account-form"><label>新密码<input class="hw-input" name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>再次输入新密码<input class="hw-input" name="confirm" type="password" minlength="8" autocomplete="new-password" required></label><button class="btn btn-primary" type="submit">重置密码</button></form>`);
       bindForm(root,async data=>{
         if(data.get("password")!==data.get("confirm")) throw new Error("两次输入的密码不一致");
         const result=await S.apiJson("/api/auth/reset-password",{method:"POST",body:{token:linkToken,password:data.get("password")}});
@@ -85,8 +91,13 @@
       return true;
     }
     if(view==="verify-email" && linkToken){
-      shell(root,"验证邮箱",`<p>确认后完成邮箱验证。链接仅能使用一次。</p><form><button class="btn btn-primary" type="submit">确认验证</button></form>`);
-      bindForm(root,async()=>{const result=await S.apiJson("/api/auth/verify-email",{method:"POST",body:{token:linkToken}});feedback(root,result.message);});
+      shell(root,isEmailChange?"确认新邮箱换绑":"验证邮箱",
+        `<p>${isEmailChange?"确认后将绑定新邮箱并让所有设备重新登录。":"确认后完成邮箱验证。"}链接 30 分钟内有效且仅能使用一次。</p><form><button class="btn btn-primary" type="submit">${isEmailChange?"确认换绑新邮箱":"确认验证"}</button></form><p><a href="${esc(mainUrl("auth"))}">返回登录</a></p>`);
+      bindForm(root,async()=>{
+        const endpoint=isEmailChange?"/api/auth/confirm-email-change":"/api/auth/verify-email";
+        const result=await S.apiJson(endpoint,{method:"POST",body:{token:linkToken}});
+        if(isCurrent())shell(root,"操作成功",`<p>${esc(result.message)}</p><a class="btn btn-primary" href="${esc(mainUrl("auth"))}">重新登录</a>`);
+      });
       return true;
     }
     if(!S.App.state?.loggedIn){
