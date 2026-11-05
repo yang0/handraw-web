@@ -38,6 +38,18 @@ class WindowsLocalServiceScriptTests(unittest.TestCase):
         self.assertIn("import pymupdf as fitz", source)
         self.assertIn("except ImportError:\n                import fitz", source)
 
+    def test_latest_demo_mode_is_explicit_and_normal_mode_is_safe(self):
+        script = (REPO / "ops" / "start-latest.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("$env:HANDRAW_DEMO_MODE = if ($Demo) { '1' } else { '0' }", script)
+        self.assertIn("if ($Demo) { 3097 } else { 3080 }", script)
+        self.assertIn("demo_v2.db", script)
+        self.assertIn("handraw_v2.db", script)
+        # The flag must be set before launching the Python child process.
+        self.assertLess(
+            script.index("$env:HANDRAW_DEMO_MODE = if ($Demo)"),
+            script.index("Start-Process -FilePath $python")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
