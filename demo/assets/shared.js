@@ -4106,8 +4106,10 @@
               <button type="button" class="btn btn-sm" id="acc-avatar-reset">恢复默认头像</button>
             </div>
             <div id="acc-avatar-preview-stage" hidden>
-              <p class="hw-account-help">上传预览（服务端将自动裁剪为正方形）</p>
-              <img id="acc-avatar-upload-preview" alt="新头像预览" style="width:112px;height:112px;object-fit:cover;border-radius:50%;border:1px solid var(--line-soft);" />
+              <p class="hw-account-help">头像裁剪预览：调整缩放滑块，确认后再上传。</p>
+              <canvas id="acc-avatar-upload-preview" width="320" height="320" role="img" aria-label="裁剪后的头像预览" style="width:112px;height:112px;border-radius:50%;border:1px solid var(--line-soft);display:block;"></canvas>
+              <label class="hw-account-help" for="acc-avatar-zoom">裁剪缩放</label>
+              <input type="range" id="acc-avatar-zoom" min="1" max="3" step="0.1" value="1" aria-label="头像裁剪缩放" />
               <div style="display:flex;gap:8px;margin-top:8px;">
                 <button type="button" class="btn btn-sm btn-primary" id="acc-avatar-confirm">确认上传</button>
                 <button type="button" class="btn btn-sm" id="acc-avatar-cancel">取消</button>
@@ -4214,13 +4216,27 @@
     const avatarPreview = formEl.querySelector("#acc-avatar-upload-preview");
     let pendingAvatar = null;
     let pendingAvatarUrl = "";
+    let decodedAvatar = null;
+    const avatarZoom = formEl.querySelector("#acc-avatar-zoom");
+    function drawAvatarPreview() {
+      if (!decodedAvatar || !avatarPreview) return;
+      const ctx = avatarPreview.getContext("2d");
+      if (!ctx) return;
+      const w = decodedAvatar.naturalWidth, h = decodedAvatar.naturalHeight;
+      const side = Math.min(w, h) / Number(avatarZoom?.value || 1);
+      ctx.clearRect(0, 0, 320, 320);
+      ctx.drawImage(decodedAvatar, (w-side)/2, (h-side)/2, side, side, 0, 0, 320, 320);
+    }
+    if (avatarZoom) avatarZoom.oninput = drawAvatarPreview;
     function clearAvatarPreview() {
       pendingAvatar = null;
+      decodedAvatar = null;
       if (pendingAvatarUrl) URL.revokeObjectURL(pendingAvatarUrl);
       pendingAvatarUrl = "";
       if (avatarInput) avatarInput.value = "";
       if (avatarPreviewStage) avatarPreviewStage.hidden = true;
-      if (avatarPreview) avatarPreview.removeAttribute("src");
+      if (avatarZoom) avatarZoom.value = "1";
+      if (avatarPreview) avatarPreview.getContext("2d")?.clearRect(0, 0, 320, 320);
     }
     if (avatarInput) avatarInput.onchange = () => {
       const file = avatarInput.files && avatarInput.files[0];
@@ -4232,25 +4248,31 @@
       }
       pendingAvatar = file;
       pendingAvatarUrl = URL.createObjectURL(file);
-      avatarPreview.src = pendingAvatarUrl;
-      avatarPreviewStage.hidden = false;
-      avatarFeedback.textContent = "请确认头像预览后上传";
+      const image = new Image();
+      image.onload = () => {
+        if (pendingAvatar !== file) return;
+        decodedAvatar = image;
+        drawAvatarPreview();
+        avatarPreviewStage.hidden = false;
+        avatarFeedback.textContent = "请确认裁剪效果后上传";
+      };
+      image.onerror = () => {
+        if (pendingAvatar !== file) return;
+        clearAvatarPreview();
+        avatarFeedback.textContent = "无法读取此图片，请换一张图片重试";
+      };
+      image.src = pendingAvatarUrl;
     };
     const cancelAvatar = formEl.querySelector("#acc-avatar-cancel");
     if (cancelAvatar) cancelAvatar.onclick = clearAvatarPreview;
     const confirmAvatar = formEl.querySelector("#acc-avatar-confirm");
     if (confirmAvatar) confirmAvatar.onclick = async () => {
-      const file = pendingAvatar;
-      if (!file) return;
+      if (!pendingAvatar || !decodedAvatar) return;
       confirmAvatar.disabled = true;
       avatarFeedback.textContent = "正在上传头像…";
       try {
-        const dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(new Error("无法读取本地图片"));
-          reader.readAsDataURL(file);
-        });
+        // Send exactly the crop the user approved, not the uncropped original.
+        const dataUrl = avatarPreview.toDataURL("image/png");
         await apiJson("/api/account/avatar", { method: "POST", body: { dataUrl } });
         clearAvatarPreview();
         await refreshFromServer();
