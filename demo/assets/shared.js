@@ -4208,6 +4208,18 @@
           </div>
         </div>
 
+        <section data-account-panel="privacy" class="hw-account-security-panel">
+          <h3>账号停用与数据说明</h3>
+          <p class="hw-account-help">停用后无法继续登录，所有网页登录会话和已授权客户端将失效。已公开作品、历史交易与积分记录不会在停用时自动删除，相关数据处理请联系站点管理员。</p>
+          <p class="hw-account-help">停用不可通过当前页面自行恢复。如果只是暂时离开，建议直接退出登录。</p>
+          <div class="hw-account-form-grid">
+            <label>确认用户名<input class="hw-input" id="acc-close-username" autocomplete="off" placeholder="输入 @${esc(u.username)} 对应的用户名" /></label>
+            <label>当前登录密码<input class="hw-input" id="acc-close-password" type="password" autocomplete="current-password" /></label>
+          </div>
+          <div style="margin-top:12px;"><button class="btn btn-sm" type="button" id="acc-close-account">停用我的账号</button></div>
+          <p id="acc-close-feedback" class="hw-account-help" role="status" aria-live="polite"></p>
+        </section>
+
         <div data-account-panel="profile" style="display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="hw-account-help" id="acc-profile-feedback" role="status" aria-live="polite"></span>
           <button type="button" class="btn btn-primary" id="acc-save-btn">保存个人资料</button>
@@ -4401,6 +4413,38 @@
         await readSessions();
       } catch (err) { status.textContent = err.message || "操作失败，请重试"; }
       finally { revokeBtn.disabled = false; }
+    };
+
+    const closeBtn = formEl.querySelector("#acc-close-account");
+    if (closeBtn) closeBtn.onclick = async () => {
+      const confirmation = formEl.querySelector("#acc-close-username").value.trim();
+      const currentPassword = formEl.querySelector("#acc-close-password").value;
+      const feedback = formEl.querySelector("#acc-close-feedback");
+      if (confirmation !== String(u.username)) {
+        feedback.textContent = "请准确输入当前用户名以确认停用";
+        return;
+      }
+      if (!currentPassword) {
+        feedback.textContent = "请输入当前登录密码";
+        return;
+      }
+      if (!window.confirm("停用后全部登录设备和授权客户端将退出，历史公开内容不会自动删除。确定继续吗？")) return;
+      if (!App.state.serverBacked) {
+        feedback.textContent = "演示模式不支持停用账号";
+        return;
+      }
+      closeBtn.disabled = true;
+      feedback.textContent = "正在停用账号…";
+      try {
+        await apiJson("/api/account/close", {method:"POST", body:{confirmation, currentPassword}});
+        App.state.loggedIn = false;
+        App.state.user = null;
+        saveState();
+        window.location.href = channelUrl("main", {view:"auth"});
+      } catch (err) {
+        feedback.textContent = err.message || "停用失败，请稍后重试";
+        closeBtn.disabled = false;
+      }
     };
 
     const profileFeedback = formEl.querySelector("#acc-profile-feedback");
