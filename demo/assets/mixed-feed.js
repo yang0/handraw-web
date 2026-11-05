@@ -191,7 +191,7 @@
       (codes.length ? '<div class="hw-mf-codes">' + codes.map(function (s) {
         return '<span>' + esc(s) + '</span>';
       }).join("") + '</div>' : "") +
-      '<div class="hw-mf-footer"><span class="hw-mf-author">' + esc(authorOf(w)) + '</span>' +
+      '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" src="' + esc(avatarFor(w, st)) + '">' + esc(authorOf(w)) + '</span>' +
       '<span class="hw-mf-stats">♡ ' + esc(likes) + (commentCount ? ' · 💬 ' + esc(commentCount) : "") + '</span></div>' +
       '<a class="hw-mf-remix" href="' + url("studio", { fork: w.id }) + '">用同款做一张 ↗</a>' +
       '</div></article>';
