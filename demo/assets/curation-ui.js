@@ -214,7 +214,7 @@
 
   function renderShare(root, params) {
     var epoch = ++EPOCH, username = currentUser();
-    var kindDefault = (params.kind === "style" || params.kind === "layout") ? params.kind : "work";
+    var kindDefault = (params.kind === "style" || params.kind === "layout") ? params.kind : (params.editId && params.kind === "work" ? "work" : "style");
     var editId = params.editId || ""; // revise target
     var draftId = params.draft || "";
     var formKey = uuid();
@@ -287,7 +287,7 @@
 
       var kindSwitchHtml = editId ? "" : (
         '<div class="curation-kind-switch" role="radiogroup" aria-label="投稿类型">' +
-          ['work', 'style', 'layout'].map(function (k) {
+          ['style', 'layout'].map(function (k) {
             return '<label class="curation-kind-opt">' +
               '<input type="radio" name="share-kind" data-act="sharekind" value="' + k + '"' + (model.kind === k ? " checked" : "") + '> ' +
               esc(KIND_LABEL[k]) +
