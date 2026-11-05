@@ -774,7 +774,6 @@
                               ${rowStatus.key === "done" && itemResult?.imageUrl ? `
                                 <div class="batch-row-actions">
                                   <a href="${esc(itemResult.imageUrl)}" download="batch-${idx + 1}.webp" class="btn btn-sm batch-btn-dl" title="下载此图">下载</a>
-                                  <button type="button" class="btn btn-sm batch-btn-publish" data-publish-idx="${idx}" title="发布晒图">晒图</button>
                                 </div>
                               ` : ""}
                               ${rowStatus.key === "waiting" || rowStatus.key === "generating" ? `
@@ -828,7 +827,6 @@
                       <strong class="make-image-result-title" title="${esc(res.title || "")}">${esc(res.title || `图片 #${index + 1}`)}</strong>
                       <div class="make-image-result-actions">
                         <a href="${esc(res.imageUrl)}" download="handraw-batch-${index + 1}.webp" class="btn btn-sm">下载图片</a>
-                        <button type="button" class="btn btn-sm btn-publish" data-res-pub-idx="${index}">晒图分享</button>
                       </div>
                     </figcaption>
                   </figure>
@@ -1184,17 +1182,8 @@
               actionCell.innerHTML = `
                 <div class="batch-row-actions">
                   <a href="${esc(itemResult.imageUrl)}" download="batch-${updatedIndex + 1}.webp" class="btn btn-sm batch-btn-dl" title="下载此图">下载</a>
-                  <button type="button" class="btn btn-sm batch-btn-publish" data-publish-idx="${updatedIndex}" title="发布晒图">晒图</button>
                 </div>
               `;
-              const btnPub = actionCell.querySelector("[data-publish-idx]");
-              if (btnPub) {
-                btnPub.onclick = () => {
-                  if (this.actions?.openPublish) {
-                    this.actions.openPublish(itemResult.node || { data: { items: [itemResult] } });
-                  }
-                };
-              }
             } else if (hasFailed) {
               actionCell.innerHTML = `<button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${updatedIndex}">重试</button>`;
               const btnRetry = actionCell.querySelector("[data-retry-idx]");
@@ -1326,19 +1315,10 @@
             <strong class="make-image-result-title" title="${esc(cardTitle)}">${esc(cardTitle)}</strong>
             <div class="make-image-result-actions">
               <a href="${esc(res.imageUrl)}" download="handraw-batch-${index + 1}.webp" class="btn btn-sm">下载图片</a>
-              <button type="button" class="btn btn-sm btn-publish" data-res-pub-idx="${index}">晒图分享</button>
             </div>
           </figcaption>
         `;
         grid.appendChild(fig);
-        const pubBtn = fig.querySelector(`[data-res-pub-idx="${index}"]`);
-        if (pubBtn) {
-          pubBtn.onclick = () => {
-            if (this.actions?.openPublish) {
-              this.actions.openPublish(res.node || { data: { items: [res] } });
-            }
-          };
-        }
         if (global.HANDRAW_SHARED?.triggerImageLoaders) {
           global.HANDRAW_SHARED.triggerImageLoaders(fig);
         }
@@ -1889,7 +1869,7 @@
         };
       }
 
-      // 7. Preview Row Retries & Results (B2: openPublish / runSingleRow toast fallback)
+      // 7. Preview Row Retries & Results
       root.querySelectorAll("[data-retry-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-retry-idx"));
@@ -1900,25 +1880,6 @@
               const S = global.HANDRAW_SHARED;
               if (S?.toast) S.toast("当前操作不可用（缺少 action: runSingleRow）");
             }
-          }
-        };
-      });
-
-      root.querySelectorAll("[data-publish-idx]").forEach((btn) => {
-        btn.onclick = () => {
-          const idx = Number(btn.getAttribute("data-publish-idx"));
-          const displays = Array.isArray(self.context?.displays) ? self.context.displays : [];
-          const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
-          const itemResult = self.getItemResult(idx, displays, isBatchGallery);
-          const S = global.HANDRAW_SHARED;
-          if (itemResult?.node) {
-            if (self.actions?.openPublish) {
-              self.actions.openPublish(itemResult.node);
-            } else {
-              if (S?.toast) S.toast("当前操作不可用（缺少 action: openPublish）");
-            }
-          } else {
-            if (S?.toast) S.toast("该行还没有生成结果");
           }
         };
       });
@@ -2133,24 +2094,6 @@
           btnDownloadAll.textContent = "全部下载";
         };
       }
-
-      // 11. Result Card Publish Buttons
-      root.querySelectorAll("[data-res-pub-idx]").forEach((btn) => {
-        btn.onclick = () => {
-          const idx = Number(btn.getAttribute("data-res-pub-idx"));
-          const res = (self.context?.results || [])[idx];
-          const S = global.HANDRAW_SHARED;
-          if (res?.node) {
-            if (self.actions?.openPublish) {
-              self.actions.openPublish(res.node);
-            } else {
-              if (S?.toast) S.toast("当前操作不可用（缺少 action: openPublish）");
-            }
-          } else {
-            if (S?.toast) S.toast("该项还没有生成结果");
-          }
-        };
-      });
 
       if (global.HandrawImageLoader?.scan) {
         global.HandrawImageLoader.scan(root);
