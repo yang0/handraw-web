@@ -53,7 +53,8 @@ assert.ok(html.includes("用同款做一张"), "remix entry exists");
 const ratioHtml = renderCard({ kind: "work", data: {
   ...works[0], ratio: "2:3"
 }}, state);
-assert.ok(ratioHtml.includes('class="hw-mf-media has-ratio"'));
+assert.ok(ratioHtml.includes('class="hw-mf-media has-ratio hw-progressive-media"'));
+assert.ok(ratioHtml.includes('data-hw-refine-ratio="true"'));
 assert.ok(ratioHtml.includes('style="aspect-ratio:2 / 3"'));
 const media = {
   classList: { contains: (c) => c === "has-ratio" },
@@ -62,6 +63,14 @@ const media = {
 const loadedImage = { tagName: "IMG", naturalWidth: 1024, naturalHeight: 1024, parentElement: media };
 assert.equal(reconcileMediaRatio(loadedImage), true, "wrong estimated aspect should be corrected");
 assert.equal(media.style.aspectRatio, "1024 / 1024", "use decoded image ratio to remove top/bottom bands");
+const noMetaHtml = renderCard({ kind:"work", data:{...works[0], ratio:undefined, imageDimensions:undefined}}, state);
+assert.match(noMetaHtml, /class="hw-mf-media has-ratio hw-progressive-media"/);
+assert.match(noMetaHtml, /aspect-ratio:3 \/ 4/, "unknown ratio still reserves card height");
+const resourceHtml = renderCard({ kind:"resource", data:resources[0]}, state);
+assert.match(resourceHtml, /class="hw-mf-media has-ratio hw-progressive-media"/);
+const visualTopicHtml = renderCard({ kind:"topic", data:{id:"t_visual",title:"图文",images:["\/images\/t.png"]}},state);
+assert.match(visualTopicHtml, /hw-progressive-media/);
+
 assert.equal(reconcileMediaRatio(loadedImage), false, "matching ratios should not trigger another layout");
 assert.equal(reconcileMediaRatio({ ...loadedImage, naturalWidth: 0 }), false,
   "do not change placeholder before actual dimensions are available");
