@@ -126,7 +126,7 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
     images = [i for i in images if i][:9]
 
     category = 'showcase' if kind == 'work' else 'assets'
-    category_label = '🎨 晒作品' if kind == 'work' else '画风与图型专区'
+    category_label = '🎨 作品讨论' if kind == 'work' else '画风与图型专区'
     is_community_asset = (kind != 'work') and (resource.get('source_type') == 'community')
 
     t_status = 'published'
