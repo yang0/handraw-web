@@ -4205,6 +4205,39 @@
       finally { changeEmailBtn.disabled = false; }
     };
 
+    const sessionsMount = formEl.querySelector("#acc-session-list");
+    const readSessions = async () => {
+      if (!sessionsMount || !App.state.serverBacked) return;
+      try {
+        const result = await apiJson("/api/account/sessions");
+        sessionsMount.replaceChildren();
+        if (!result.items.length) sessionsMount.textContent = "没有活动中的浏览器登录会话";
+        for (const item of result.items) {
+          const line = document.createElement("p");
+          line.className = "hw-account-session-row";
+          line.textContent = (item.current ? "当前设备 · " : "") +
+            (item.device || "未知设备") + " · " + (item.createdAt || "");
+          sessionsMount.append(line);
+        }
+      } catch (err) { sessionsMount.textContent = err.message || "无法读取登录设备"; }
+    };
+    readSessions();
+    const revokeBtn = formEl.querySelector("#acc-revoke-other-sessions");
+    if (revokeBtn) revokeBtn.onclick = async () => {
+      const pwInput = formEl.querySelector("#acc-session-password");
+      if (!pwInput.value) { toast("请输入当前密码"); return; }
+      revokeBtn.disabled = true;
+      try {
+        const res = await apiJson("/api/account/sessions/revoke-others", {
+          method: "POST", body: { currentPassword: pwInput.value }
+        });
+        pwInput.value = "";
+        toast("已退出其他 " + res.revoked + " 个会话");
+        await readSessions();
+      } catch (err) { toast(err.message || "操作失败"); }
+      finally { revokeBtn.disabled = false; }
+    };
+
     const saveBtn = formEl.querySelector("#acc-save-btn");
     if (saveBtn) {
       saveBtn.onclick = async () => {
