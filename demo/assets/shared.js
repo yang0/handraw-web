@@ -4114,6 +4114,15 @@
           <span id="acc-email-feedback" role="status" aria-live="polite" class="hw-account-help"></span>
         </section>
 
+        <section class="hw-account-security-panel">
+          <h3>登录设备</h3>
+          <p class="hw-account-help">可以查看当前网页登录会话，并通过密码退出其他设备。</p>
+          <div id="acc-session-list" class="hw-account-help">正在读取…</div>
+          <div class="hw-account-form-grid">
+            <input class="hw-input" id="acc-session-password" type="password" placeholder="输入当前密码" autocomplete="current-password" />
+            <button class="btn btn-sm" type="button" id="acc-revoke-other-sessions">退出其他设备</button>
+          </div>
+        </section>
         <div style="background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
           <div style="font-size:12.8px;color:var(--ink-body);">
             <strong>已授权设备与客户端：</strong> <span>管理已授权的 Skill 插件与终端应用</span>
