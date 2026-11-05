@@ -26,6 +26,16 @@
   function firstImage(items) {
     return Array.isArray(items) && items.length ? pic(items[0]) : "";
   }
+  function mediaRatio(item) {
+    var dims = Array.isArray(item.imageDimensions) ? item.imageDimensions[0] : item.imageDimensions;
+    var x = Number(dims && (dims.width || dims.w));
+    var y = Number(dims && (dims.height || dims.h));
+    if (x > 0 && y > 0) return x + " / " + y;
+    var ratio = String(item.ratio || item.aspectRatio || "").trim();
+    var match = /^(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)$/.exec(ratio);
+    return match && Number(match[1]) > 0 && Number(match[2]) > 0 ?
+      Number(match[1]) + " / " + Number(match[2]) : "";
+  }
   function titleOf(item) { return String(item.title || item.name || "未命名作品"); }
   function authorOf(item) { return String(item.authorName || item.author || item.author_username || "社区创作者"); }
   function timestampOf(item) {
@@ -132,8 +142,11 @@
     var hasTalk = commentCount > 0;
     var codes = [].concat(Array.isArray(w.styles) ? w.styles : [])
       .concat(w.layout || "").filter(Boolean).slice(0, 2);
+    var ratio = mediaRatio(w);
     return '<article class="hw-mf-card hw-mf-card--work">' +
-      '<a class="hw-mf-media" href="' + workDetailHref(w, st) + '" aria-label="查看作品：' + esc(titleOf(w)) + '">' +
+      '<a class="hw-mf-media' + (ratio ? ' has-ratio' : '') +
+      '" href="' + workDetailHref(w, st) + '" aria-label="查看作品：' + esc(titleOf(w)) +
+      '"' + (ratio ? ' style="aspect-ratio:' + ratio + '"' : '') + '>' +
       '<img data-hw-src="' + esc(photo) + '" alt="' + esc(titleOf(w)) + '" loading="lazy">' +
       (hasTalk ? '<span class="hw-mf-photo-label">💬 正在讨论</span>' : "") + '</a>' +
       '<div class="hw-mf-body">' +
