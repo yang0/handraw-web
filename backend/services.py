@@ -621,7 +621,7 @@ def sandbox_switch_account(db: Database, target_username: str, user_agent: str =
 
 
 def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
-    """Update biography, choose nickname ONCE, and rotate password safely.
+    """Update biography, change nickname on a 30-day cooldown, and rotate password safely.
 
     Email changes require separate proof-of-mail flow; this endpoint never
     directly overwrites the account's recovery address.
@@ -634,15 +634,21 @@ def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) 
 
         name = row["display_name"]
         locked = bool(row["nickname_locked"])
+        last_nickname_change = int(row["nickname_changed_at"] or 0)
         if "displayName" in body:
             requested = sanitize_plain_text(str(body.get("displayName") or ""), max_chars=40)
             if not requested:
                 raise ServiceError("创作者昵称不能为空")
             if requested != name:
-                if locked:
-                    raise ServiceError("昵称确定后不可修改", status=409, code="nickname_locked")
+                cooldown = 30 * 24 * 60 * 60
+                remaining = last_nickname_change + cooldown - int(time.time())
+                if remaining > 0:
+                    raise ServiceError("昵称修改过于频繁，请在冷却期结束后重试",
+                                       status=409, code="nickname_cooldown",
+                                       extra={"nextChangeAt": last_nickname_change + cooldown})
                 name = requested
                 locked = True
+                last_nickname_change = int(time.time())
 
         if "email" in body and str(body.get("email") or "").strip().lower() != str(row["email"] or "").lower():
             raise ServiceError("请使用邮箱换绑验证流程，新邮箱验证后才会生效", status=409, code="email_verification_required")
@@ -664,9 +670,9 @@ def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) 
 
         api_key = generate_api_key() if body.get("regenerateApiKey") else row["api_key"]
         tx.execute(
-            """UPDATE users SET display_name=?, nickname_locked=?, bio=?, password_hash=?,
+            """UPDATE users SET display_name=?, nickname_locked=?, nickname_changed_at=?, bio=?, password_hash=?,
                 password_algo=?, discourse_salt=?, api_key=? WHERE id=?""",
-            (name, int(locked), bio, pwd_hash, algo, salt, api_key, uid),
+            (name, int(locked), last_nickname_change, bio, pwd_hash, algo, salt, api_key, uid),
         )
         if name != row["display_name"]:
             tx.execute("UPDATE works SET author_name=? WHERE author_username=?", (name, row["username"]))
@@ -2279,6 +2285,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
             "displayName": current_user["display_name"],
             "avatarUrl": current_user.get("avatar_url") or "/assets/avatar-default.svg",
             "nicknameLocked": bool(current_user.get("nickname_locked", 1)),
+            "nicknameNextChangeAt": (int(current_user.get("nickname_changed_at") or 0) + 30 * 86400) if current_user.get("nickname_changed_at") else 0,
             "email": current_user.get("email") or "",
             "bio": current_user.get("bio") or "",
             "role": u_role,
