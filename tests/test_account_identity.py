@@ -33,24 +33,33 @@ class AccountIdentityTests(unittest.TestCase):
         self.env.stop()
         self.temp.cleanup()
 
-    def test_existing_nickname_locked_but_new_blank_name_can_choose_once(self):
-        self.assertEqual(self.user["nickname_locked"], 1)
+    def test_nickname_can_change_then_respects_30_day_cooldown(self):
+        # Legacy locked users are allowed one rename after migration.
+        result = update_my_profile(self.db, self.user, {"displayName": "旧用户新昵称"})
+        self.assertEqual(result["boot"]["user"]["displayName"], "旧用户新昵称")
+        self.assertGreater(result["boot"]["user"]["nicknameNextChangeAt"], 0)
         with self.assertRaises(ServiceError) as denied:
-            update_my_profile(self.db, self.user, {"displayName": "修改种子昵称"})
-        self.assertEqual(denied.exception.code, "nickname_locked")
+            update_my_profile(self.db, self.user, {"displayName": "立刻再改"})
+        self.assertEqual(denied.exception.code, "nickname_cooldown")
+
         created, _ = register_user(
             self.db, "nickname_once_user", "Passw0rdSecure!", "nickname-once@example.org"
         )
         self.assertEqual(created["nickname_locked"], 0)
-        result = update_my_profile(self.db, created, {"displayName": "一纸灵感", "bio": "创作中"})
-        self.assertTrue(result["boot"]["user"]["nicknameLocked"])
+        first = update_my_profile(self.db, created, {"displayName": "一纸灵感", "bio": "创作中"})
+        self.assertEqual(first["boot"]["user"]["displayName"], "一纸灵感")
         with self.assertRaises(ServiceError):
             update_my_profile(self.db, created, {"displayName": "再改一次"})
+        # Simulate the cooling period having elapsed.
+        with self.db.transaction() as tx:
+            tx.execute("UPDATE users SET nickname_changed_at=? WHERE id=?", (1, created["id"]))
+        changed = update_my_profile(self.db, created, {"displayName": "满期改名"})
+        self.assertEqual(changed["boot"]["user"]["displayName"], "满期改名")
         refreshed = dict(self.db.get_conn().execute(
             "SELECT * FROM users WHERE id=?", (created["id"],)
         ).fetchone())
-        self.assertEqual(refreshed["display_name"], "一纸灵感")
         self.assertEqual(refreshed["bio"], "创作中")
+        self.assertEqual(refreshed["display_name"], "满期改名")
 
     def test_direct_email_update_rejected_and_verify_new_address_before_switch(self):
         old = self.user["email"]
