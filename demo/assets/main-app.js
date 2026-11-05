@@ -38,7 +38,7 @@
     workFocusComment: false,
     profileUser: "",
     profileTab: "works", // public content tabs only
-    accountSection: "profile", // profile | email | security | devices
+    accountSection: "profile", // profile | email | security | devices | privacy
     profGenerations: null,
     profGenUser: "",
     profGenLoading: false,
@@ -191,7 +191,7 @@
     // Separate account settings from the public creator profile; keep old links working.
     if (view === "account" || (view === "profile" && p.get("ptab") === "account")) {
       App.view = "account";
-      UI.accountSection = ["profile", "email", "security", "devices"].includes(p.get("section")) ? p.get("section") : "profile";
+      UI.accountSection = ["profile", "email", "security", "devices", "privacy"].includes(p.get("section")) ? p.get("section") : "profile";
       if (view !== "account") {
         window.history.replaceState({ view: "account" }, "", channelUrl("main", { view: "account", section: UI.accountSection }));
       }
@@ -2332,12 +2332,13 @@
       root.querySelector("#account-login-btn").onclick = () => openAuthPage("登录后管理账号设置");
       return;
     }
-    const section = ["profile", "email", "security", "devices"].includes(UI.accountSection) ? UI.accountSection : "profile";
+    const section = ["profile", "email", "security", "devices", "privacy"].includes(UI.accountSection) ? UI.accountSection : "profile";
     const sections = [
       ["profile", "个人资料", "头像、昵称与简介"],
       ["email", "邮箱与验证", "邮箱状态、验证与换绑"],
       ["security", "登录与安全", "密码与登录会话"],
-      ["devices", "设备与应用授权", "管理 Skill 与终端授权"]
+      ["devices", "设备与应用授权", "管理 Skill 与终端授权"],
+      ["privacy", "账号与数据", "了解数据保留和停用账号"]
     ];
     root.innerHTML = `
       <section class="hw-account-settings hw-detail-page" id="account-settings-page">
