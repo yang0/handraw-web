@@ -3289,7 +3289,6 @@
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
               <span id="bgal-filter-cnt" style="font-size:12px;font-weight:800;color:var(--ink-muted);">显示全部 ${items.length} 张</span>
               <button type="button" class="btn btn-sm" id="bgal-zip-btn" style="font-weight:800;">📦 打包下载全部 ZIP (${items.length}张)</button>
-              <button type="button" class="btn btn-sm btn-primary" id="bgal-pub-btn" style="font-weight:850;">🚀 晒图到社区</button>
             </div>
           </div>
 
@@ -3356,10 +3355,6 @@
 
         root.querySelector("#bgal-zip-btn").onclick = () => {
           exportZipPackage(dispNode.id);
-        };
-        root.querySelector("#bgal-pub-btn").onclick = () => {
-          S.closeModal();
-          openPublishModalForDisplay(dispNode);
         };
       }
     });
@@ -7301,45 +7296,6 @@
     return "未命名作品";
   }
 
-  function shareHistoryEntryWork(entryId) {
-    ensureGenerationHistoryInitialized();
-    const h = (CS.generationHistory || []).find((item) => item.id === entryId);
-    if (!h || !(h.items || []).length) return;
-    const imgs = (h.items || []).map((it) => it.imageUrl).filter(Boolean);
-    if (!imgs.length) return;
-    const styleMatch = String(h.recipeSummary || "").match(/#(F[A-Z]-\d{3})/);
-    const layoutMatch = String(h.recipeSummary || "").match(/#((?:SC|IG|SB|IP|EC)-\d{3})/);
-    const item = h.items[0];
-    const shareTitle = resolveShareTitle(h, item);
-    S.goToForumCompose({
-      category: "tuning",
-      title: shareTitle,
-      subject: item?.subject || h.subject || "",
-      image: imgs[0],
-      images: imgs,
-      prompt: h.prompt || item?.prompt || "",
-      style1: styleMatch ? styleMatch[1] : "",
-      layout: layoutMatch ? layoutMatch[1] : "",
-      mode: h.mode || "graphic-text",
-      generationId: h.id,
-      itemId: item?.id || "",
-      workId: h.workId || item?.workId || ""
-    });
-  }
-
-  async function deleteCloudHistory(id, all = false) {
-    if (!App.state || !App.state.serverBacked || !App.state.loggedIn) return { ok: true };
-    const response = await fetch("/api/studio/history/delete", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(all ? { all: true } : { id })
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.ok === false) throw new Error(data.error || `删除历史失败（HTTP ${response.status}）`);
-    return data;
-  }
-
   function renderHistoryStage() {
     if (!DOM.historyStage) return;
     if (CS.stageView !== "history") {
@@ -7455,7 +7411,6 @@
                             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
                               ${h.recipeId ? `<button type="button" class="btn btn-sm btn-primary" data-hist-redo-recipe="${esc(h.recipeId)}" style="font-weight:800;">再做一次</button>` : `<button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">↩ 恢复到画布</button>`}
                               <button type="button" class="btn btn-sm" data-hist-zip="${esc(h.id)}" style="color:#1f6f4a;border-color:rgba(31,111,74,0.35);font-weight:750;">📦 下载 ZIP</button>
-                              <button type="button" class="btn btn-sm" data-hist-share="${esc(h.id)}" style="font-weight:750;">✨ 晒图</button>
                               <button type="button" class="btn btn-sm" data-hist-del="${esc(h.id)}" style="color:#dc2626;" title="删除此条历史记录">🗑️ 删除</button>
                             </div>
                           </div>
@@ -7624,10 +7579,6 @@
           });
         }
       };
-    });
-
-    DOM.historyStage.querySelectorAll("[data-hist-share]").forEach((btn) => {
-      btn.onclick = () => shareHistoryEntryWork(btn.getAttribute("data-hist-share"));
     });
 
     DOM.historyStage.querySelectorAll("[data-hist-del]").forEach((btn) => {
@@ -8874,7 +8825,6 @@
                           <div style="display:flex;gap:6px;">
                             <button type="button" class="btn btn-sm" data-disp-open-gal="${esc(n.id)}" style="flex:1.18;font-weight:800;">百图画廊</button>
                             <button type="button" class="btn btn-sm" data-disp-zip="${esc(n.id)}" style="flex:1;">ZIP</button>
-                            <button type="button" class="btn btn-sm btn-primary" data-disp-pub="${esc(n.id)}" style="flex:0.95;font-weight:850;">晒图</button>
                           </div>
                         </div>
                       `
@@ -8927,7 +8877,6 @@
                         </div>
                         <div style="display:flex;gap:6px;">
                           <a class="btn btn-sm" href="${esc(it.imageUrl)}" download="handraw-output.webp" style="flex:1;text-align:center;">下载</a>
-                          <button type="button" class="btn btn-sm btn-primary" data-disp-pub="${esc(n.id)}" style="flex:1;font-weight:850;">晒图</button>
                         </div>
                       </div>
                     `
@@ -9785,14 +9734,6 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-pub]").forEach((btn) => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        const disp = getNodeById(btn.getAttribute("data-disp-pub"));
-        if (disp) openPublishModalForDisplay(disp);
-      };
-    });
-
     DOM.nodesLayer.querySelectorAll("[data-disp-gal-page]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
@@ -9967,87 +9908,6 @@
     window.resolveShareTitle = resolveShareTitle;
   }
 
-  function openPublishModalForDisplay(dispNode) {
-    if (!dispNode) return;
-    const isPlan = dispNode.type === "article_plan";
-    const rawItems = isPlan
-      ? sortPlanCardsInDocOrder(dispNode.data?.cards || []).filter((c) => c.imageUrl)
-      : dispNode.data?.items || [];
-    if (!rawItems.length) {
-      toast("请先生成图片后再晒图");
-      return;
-    }
-
-    const upEdge = CS.graph.edges.find((e) => e.to === dispNode.id);
-    const upParent = upEdge ? getNodeById(upEdge.from) : null;
-    const ctrl = isPlan
-      ? resolvePlanSourceControl(dispNode)
-      : upParent?.type === "article_plan"
-        ? resolvePlanSourceControl(upParent)
-        : upParent?.type === "output_control"
-          ? upParent
-          : CS.graph.nodes.find((n) => n.type === "output_control");
-
-    const rec = ctrl ? E.resolveControlRecipe(CS.graph, ctrl, Catalog) : null;
-    const imgs = rawItems.map((it) => it.imageUrl).filter(Boolean);
-    const prompt = isPlan
-      ? rawItems.map((c) => c.prompt).join("\n\n")
-      : rawItems[0]?.prompt || (ctrl ? E.assembleControlPrompt(CS.graph, ctrl, Catalog, "skill") : "");
-
-    const isFromArticle = isPlan || upParent?.type === "article_plan" || dispNode.data?.mode === "article-illust";
-
-    const firstSnap = getNormalizedRecipeSnapshot(rawItems[0]);
-    let subject = "";
-    if (firstSnap && firstSnap.subject) {
-      subject = firstSnap.subject;
-    } else if (rawItems[0]?.subject || rawItems[0]?.recipeSnapshot?.subject) {
-      subject = rawItems[0].subject || rawItems[0].recipeSnapshot.subject;
-    } else {
-      const qParts = getQuickParts(CS.graph);
-      if (qParts?.text?.data?.text) {
-        subject = String(qParts.text.data.text).trim();
-      } else if (ctrl) {
-        const upTextEdge = CS.graph.edges.find((e) => e.to === ctrl.id && getNodeById(e.from)?.type === "text_input");
-        if (upTextEdge) {
-          const upTextNode = getNodeById(upTextEdge.from);
-          if (upTextNode?.data?.text) {
-            subject = String(upTextNode.data.text).trim();
-          }
-        }
-      }
-    }
-
-    const defaultTitle = resolvePublishDefaultTitle(rawItems, dispNode, isPlan, isFromArticle);
-
-    const sharePayload = {
-      kind: "work",
-      category: isFromArticle ? "experience" : "tuning",
-      title: defaultTitle,
-      topicTitle: isFromArticle
-        ? `【文章配图晒图】${defaultTitle}`
-        : `【画布创作晒图】${defaultTitle}`,
-      topicBody: "我的创作实测分享",
-      prompt,
-      images: imgs,
-      topicImages: imgs.slice(0, 4).map((u, i) => ({ url: u, tag: `P${i + 1}` })),
-      style1: (firstSnap ? firstSnap.style1 : rec?.style1Id) || "",
-      styles: firstSnap
-        ? [firstSnap.style1, firstSnap.style2].filter(Boolean)
-        : (rec ? [rec.style1Id, rec.style2Id].filter(Boolean) : []),
-      layout: (firstSnap ? firstSnap.layout : rec?.layoutId) || "",
-      color: rec?.colorIds?.[0] || "C-15",
-      tone: rec?.toneIds?.[0] || "T-01",
-      ratio: rawItems[0]?.ratio || ctrl?.data?.ratio || "3:4",
-      mode: isFromArticle ? "article-illust" : ctrl?.data?.mode === "series" || ctrl?.data?.mode === "xhs-batch" ? "graphic-text" : ctrl?.data?.mode || "graphic-text",
-      mood: rec?.allMoods?.[0] || "诗意"
-    };
-    if (subject) {
-      sharePayload.subject = subject;
-    }
-
-    S.goToCurationShare(sharePayload);
-  }
-
   /* ======================== FLOATING SELECTION BAR & ITEM DELETION ======================== */
   function positionFloatingOverlays() {
     if (!DOM.overlayLayer || !DOM.viewport) return;
@@ -10127,7 +9987,7 @@
           }
           ${
             single && single.type === "output_display"
-              ? `<button type="button" class="ic-icon-btn is-active" id="ov-pub-disp">晒图</button>`
+              ? ""
               : ""
           }
           ${single && single.type !== "output_display" && single.type !== "article_plan" ? `<button type="button" class="ic-icon-btn" id="ov-dup">复制</button>` : ""}
@@ -10189,10 +10049,6 @@
       openPlanBtn.onclick = () => openArticlePlanWidePage(selNodes[0].id);
     }
 
-    const pubDispBtn = DOM.overlayLayer.querySelector("#ov-pub-disp");
-    if (pubDispBtn && selNodes[0]?.type === "output_display") {
-      pubDispBtn.onclick = () => openPublishModalForDisplay(selNodes[0]);
-    }
   }
 
   function deleteSelectedItems() {
@@ -15737,9 +15593,6 @@
             openImageLightbox: (url, title) => {
               openImageLightbox(url, title);
             },
-            openPublish: (node) => {
-              openPublishModalForDisplay(node);
-            },
             run: async () => {
               if (!bp || isBatchCurrentBusy()) return;
               const scope = activeCacheScope;
@@ -15861,9 +15714,6 @@
             }
           });
         },
-        openPublish: (node) => {
-          openPublishModalForDisplay(node);
-        },
         run: async () => {
           if (!p || isCurrentBusy()) return;
           const topic = String(p.text.data.text || "").trim();
@@ -15933,7 +15783,6 @@
       },
       openCanvas: () => switchCreationStage("canvas"),
       openHistory: () => { openHistoryPage(); },
-      share: id => { const result = results.find(it => it.id === id); if (result) openPublishModalForDisplay(result.node); },
       download: id => {
         const result = results.find(it => it.id === id);
         if (!result) return;
