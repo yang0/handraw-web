@@ -505,7 +505,8 @@
                         </svg>
                         <span>${busy ? "AI 规划中…" : "AI 规划这套图"}</span>
                       </button>
-                      ${this.planNotice ? `<span class="batch-plan-notice">${esc(this.planNotice)}</span>` : ""}
+                      ${this.planNotice ? `<span class="batch-plan-notice" role="status">${esc(this.planNotice)}</span>` : ""}
+                      ${this.lastPlanUndo ? '<button type="button" class="btn btn-sm" id="batch-undo-plan">撤销上次规划</button>' : ""}
                     </div>
                   </div>
                 </div>
@@ -1491,6 +1492,18 @@
         };
       }
 
+      // Restore a replan in-place; undo does not re-run the AI or charge.
+      const undoPlan = root.querySelector("#batch-undo-plan");
+      if (undoPlan) undoPlan.onclick = () => {
+        if (!self.lastPlanUndo) return;
+        loop.data.promptListText = self.lastPlanUndo.promptListText;
+        loop.data.batchRows = self.lastPlanUndo.batchRows;
+        self.lastPlanUndo = null;
+        self.planNotice = "已恢复原规划";
+        markDirty();
+        self.render();
+      };
+
       // (e) Layout requirement input
       const layoutReqInput = root.querySelector("#batch-layout-req-input");
       if (layoutReqInput) {
@@ -1508,12 +1521,12 @@
             ? Boolean(loop.data.promptListText && loop.data.promptListText.trim())
             : (Array.isArray(loop.data.batchRows) && loop.data.batchRows.some((r) => r.theme && r.theme.trim()));
 
-          if (hasExisting) {
-            const ok = typeof window.confirm === "function"
-              ? window.confirm("重新规划将覆盖当前已有的主题与图型内容，是否继续？")
-              : true;
-            if (!ok) return;
-          }
+          // Direct action: no confirmation modal. Preserve the existing
+          // planning data so a user can undo an accidental re-plan.
+          const priorPlan = hasExisting ? {
+            promptListText: loop.data.promptListText || "",
+            batchRows: JSON.parse(JSON.stringify(loop.data.batchRows || []))
+          } : null;
 
           const seed = String(loop.data.batchSeed || text?.data?.text || "").trim();
           if (!seed) {
@@ -1551,6 +1564,11 @@
             }
 
             const items = Array.isArray(data.items) ? data.items : [];
+            if (priorPlan) {
+              self.lastPlanUndo = priorPlan;
+              // Replan undo is an inline affordance, not a disruptive dialog.
+              self.planNotice = "规划已更新，可点击撤销恢复原列表";
+            }
             if (currentMode === "fixed") {
               loop.data.promptListText = items.map((it) => it.subject).join("\n");
               loop.data.batchRows = [];
@@ -1560,8 +1578,8 @@
             }
 
             if (data.source === "template") {
-              self.planNotice = "未使用 AI 规划，已按模板生成";
-            } else {
+              self.planNotice = priorPlan ? "模板规划已更新，可撤销" : "未使用 AI 规划，已按模板生成";
+            } else if (!priorPlan) {
               self.planNotice = "";
             }
 
@@ -2049,7 +2067,13 @@
           }
 
           if (self.actions?.run) {
-            self.actions.run();
+            // Prevent same-tick double click even before async run flips busy.
+            btnStart.disabled = true;
+            Promise.resolve().then(() => self.actions.run()).catch((err) => {
+              btnStart.disabled = false;
+              const S = global.HANDRAW_SHARED;
+              S?.toast?.(err?.message || "批量任务启动失败");
+            });
           } else {
             const S = global.HANDRAW_SHARED;
             if (S?.toast) S.toast("当前操作不可用（缺少 action: run）");
