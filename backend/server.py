@@ -2743,6 +2743,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             # caller pick a fresh username each time and bypass the limit, which
             # made invite farming unlimited.
             self._enforce_auth_rate_limit("register", "", per_ip_only=True)
+            with self.db.transaction() as tx:
+                tx.execute("INSERT INTO auth_funnel_events(event_name,created_at,source) VALUES(?,?,?)",
+                           ("register_attempt", int(time.time()), "web"))
             user_row, token = register_user(
                 self.db,
                 username=str(body.get("username") or ""),
@@ -2754,6 +2757,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 ip_addr=ip_addr,
             )
             boot = build_boot_payload(self.db, user_row)
+            with self.db.transaction() as tx:
+                tx.execute("INSERT INTO auth_funnel_events(event_name,created_at,user_id,source) VALUES(?,?,?,?)",
+                           ("register_success", int(time.time()), user_row["id"], "web"))
             cookie_hdr = None if body.get("noSession") else self._cookie_for_token(token)
             self._send_json({"ok": True, "token": token, "boot": boot}, set_cookie=cookie_hdr)
             return
@@ -2763,6 +2769,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 "login",
                 str(body.get("identifier") or body.get("username") or body.get("account") or body.get("email") or ""),
             )
+            with self.db.transaction() as tx:
+                tx.execute("INSERT INTO auth_funnel_events(event_name,created_at,source) VALUES(?,?,?)",
+                           ("login_attempt", int(time.time()), "web"))
             user_row, token = login_user(
                 self.db,
                 identifier=str(body.get("identifier") or body.get("username") or body.get("account") or body.get("email") or ""),
@@ -2771,6 +2780,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 ip_addr=ip_addr,
             )
             boot = build_boot_payload(self.db, user_row)
+            with self.db.transaction() as tx:
+                tx.execute("INSERT INTO auth_funnel_events(event_name,created_at,user_id,source) VALUES(?,?,?,?)",
+                           ("login_success", int(time.time()), user_row["id"], "web"))
             cookie_hdr = None if body.get("noSession") else self._cookie_for_token(token)
             self._send_json({"ok": True, "token": token, "boot": boot}, set_cookie=cookie_hdr)
             return
