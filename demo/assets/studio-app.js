@@ -286,40 +286,10 @@
     return Math.max(0, Number(count || 0) - Math.max(0, free));
   }
 
-  function confirmSecondaryBatchCost(count) {
-    // Costs and refund policy are displayed by the batch pane before start.
-    // The backend remains authoritative for quotas, reservations and charges.
-    return true;
-    if (count <= 20) return true;
-    const rawFree = Number(App.state && (App.state.freeQuotaRemaining ?? App.state.free_quota_remaining));
-    const free = Number.isFinite(rawFree) ? Math.max(0, Math.min(Number(count || 0), rawFree)) : 0;
-    const billable = estimateBillableImages(count);
-    const perImage = Math.max(0, Number(CS.serverCfg.creditPerImage || 0));
-    const total = billable * perImage;
-    const costPart = billable > 0
-      ? `预计消耗 ${total} 积分（其中免费额度 ${free} 张）`
-      : `将使用免费额度 ${count} 张（无积分消耗）`;
-    const confirmMsg = `本次将批量生成 ${count} 张图片，${costPart}。单次批量出图超过20张，任务与退款以服务端确认为准，确认继续？`;
-    return typeof window.confirm === "function" ? window.confirm(confirmMsg) : true;
-  }
-
-  function confirmPotentialGenerationCost(count) {
-    // A click is the execute action; never open a blocking browser confirm.
-    return true;
-    if (count > 20) {
-      return confirmSecondaryBatchCost(count);
-    }
-    if (!isLiveGenerationEnabled()) {
-      return true;
-    }
-    const billable = estimateBillableImages(count);
-    if (billable > 0) {
-      const perImage = Math.max(0, Number(CS.serverCfg.creditPerImage || 0));
-      const total = billable * perImage;
-      const text = `本次预计消耗 ${billable} 张付费额度${perImage ? `，约 ${total} 积分` : ""}。任务与退款以服务端确认为准，是否继续？`;
-      const ok = typeof window.confirm === "function" ? window.confirm(text) : true;
-      if (!ok) return false;
-    }
+  // The batch UI displays quantities and forecast charges before the user
+  // clicks Execute. A click immediately schedules the task; backend
+  // reservation/credit checks remain authoritative and idempotent.
+  function confirmPotentialGenerationCost(_count) {
     return true;
   }
 
