@@ -23,7 +23,8 @@
   // Browsers already cap per-host connections around 6 on HTTP/1.1. Staying at
   // that ceiling keeps the queue moving without starving other resources.
   const MAX_ACTIVE = 6;
-  const START_INTERVAL = 40;
+  const START_INTERVAL = 24; // One or two image starts per frame without a visible cascade.
+  const SKELETON_DELAY = 120; // Fast local/cache hits should never flash a shimmer.
   const RETRY_DELAY = 4_000;
   const MAX_RETRIES = 2;
   const PREFETCH_MARGIN = "600px 0px";
@@ -32,6 +33,9 @@
   const failures = new Set();
   const inFlight = new WeakSet();
   const watched = new WeakSet();
+  // Avoid replaying a skeleton animation for images previously decoded on this page.
+  const decodedSources = new Set();
+  const visible = new WeakSet();
   const retries = new WeakMap();
   let active = 0;
   let lastStart = -START_INTERVAL;
@@ -111,9 +115,17 @@
         timer = setTimeout(pump, wait);
         return;
       }
-      const image = [...pending].find(nearby);
+      let image = null;
+      for (const candidate of pending) {
+        if (!candidate.isConnected) { pending.delete(candidate); continue; }
+        // IO tells us visibility without a forced getBoundingClientRect per image.
+        if (observer ? visible.has(candidate) : nearby(candidate)) {
+          image = candidate;
+          break;
+        }
+      }
       if (!image) {
-        pending.clear();
+        if (!observer) pending.clear();
         return;
       }
       pending.delete(image);
@@ -134,9 +146,11 @@
     image.loading = "eager";
 
     let finished = false;
+    let skeletonTimer = null;
     const done = (failed) => {
       if (finished) return;
       finished = true;
+      if (skeletonTimer) clearTimeout(skeletonTimer);
       image.removeEventListener("load", loaded);
       image.removeEventListener("error", errored);
       inFlight.delete(image);
@@ -165,6 +179,8 @@
         failures.delete(image);
         retries.delete(image);
         image.dataset.hwLoaded = source;
+        decodedSources.add(source);
+        if (decodedSources.size > 1500) decodedSources.delete(decodedSources.values().next().value);
         image.classList.add("hw-img-ready");
         image.classList.remove("hw-img-loading");
       }
@@ -175,8 +191,16 @@
     image.addEventListener("load", loaded);
     image.addEventListener("error", errored);
 
-    markLoading(image);
-    image.src = source;
+    if (!decodedSources.has(source)) {
+      // Defer the animated placeholder until we know this is not a fast
+      // memory/disk-cache hit; the immediate flash was very noticeable.
+      skeletonTimer = setTimeout(() => {
+        if (!finished && image.isConnected) markLoading(image);
+      }, SKELETON_DELAY);
+    } else image.classList.remove("hw-img-loading");
+    // A cached image can be complete immediately; avoid waiting for another event.
+    if (image.getAttribute?.("src") !== source) image.src = source;
+    if (image.complete && image.naturalWidth > 0) done(false);
   }
 
   function markLoading(image) {
@@ -209,8 +233,9 @@
   }
 
   function scan(root = document) {
-    if (!root || !root.querySelectorAll) return;
-    for (const image of root.querySelectorAll("img[data-hw-src]")) {
+    if (!root) return;
+    const register = (image) => {
+      if (!image || !image.isConnected) return;
       if (!watched.has(image)) {
         watched.add(image);
         if (!image.dataset.hwWidth) {
@@ -220,9 +245,11 @@
         applyRatio(image);
         if (observer) observer.observe(image);
       }
-      if (!observer) {
-        if (nearby(image)) enqueue(image);
-      }
+      if (!observer && nearby(image)) enqueue(image);
+    };
+    if (root.matches?.("img[data-hw-src]")) register(root);
+    if (root.querySelectorAll) {
+      for (const image of root.querySelectorAll("img[data-hw-src]")) register(image);
     }
     pump();
   }
@@ -231,8 +258,13 @@
     ? null
     : new IntersectionObserver((entries) => {
         for (const { target, isIntersecting } of entries) {
-          if (isIntersecting) enqueue(target);
-          else pending.delete(target);
+          if (isIntersecting) {
+            visible.add(target);
+            enqueue(target);
+          } else {
+            visible.delete(target);
+            pending.delete(target);
+          }
         }
         pump();
       }, { rootMargin: PREFETCH_MARGIN });
@@ -257,11 +289,49 @@
     constants: { MAX_ACTIVE, START_INTERVAL, RETRY_DELAY, MAX_RETRIES, PREFETCH_MARGIN }
   };
 
-  if (typeof MutationObserver !== "undefined") {
-    new MutationObserver(() => scan(document)).observe(document.documentElement, { childList: true, subtree: true });
+  // Batch DOM additions into a single scan of only the new subtrees. Never
+  // rescan the whole document on each card append or on every scroll tick.
+  const addedRoots = new Set();
+  let scanScheduled = false;
+  function flushAdded() {
+    scanScheduled = false;
+    const roots = [...addedRoots];
+    addedRoots.clear();
+    for (const root of roots) if (root.isConnected) scan(root);
   }
-  window.addEventListener("scroll", () => scan(document), { passive: true });
-  window.addEventListener("resize", () => scan(document), { passive: true });
+  function scheduleAdded() {
+    if (scanScheduled) return;
+    scanScheduled = true;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(flushAdded);
+    else setTimeout(flushAdded, 0);
+  }
+  if (typeof MutationObserver !== "undefined") {
+    new MutationObserver((records) => {
+      for (const record of records || []) {
+        for (const node of record.addedNodes || []) {
+          if (node.nodeType !== 1) continue;
+          if (node.matches?.("img[data-hw-src]") || node.querySelector?.("img[data-hw-src]")) {
+            addedRoots.add(node);
+          }
+        }
+      }
+      if (addedRoots.size) scheduleAdded();
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  }
+  // IntersectionObserver already tracks scroll/resize; only use a throttled
+  // viewport scan on old browsers without it.
+  if (!observer) {
+    let fallbackScheduled = false;
+    const onViewport = () => {
+      if (fallbackScheduled) return;
+      fallbackScheduled = true;
+      const run = () => { fallbackScheduled = false; scan(document); };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+      else setTimeout(run, 100);
+    };
+    window.addEventListener("scroll", onViewport, { passive: true });
+    window.addEventListener("resize", onViewport, { passive: true });
+  }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => scan(document), { once: true });
   else scan(document);
 })();

@@ -48,4 +48,48 @@ assert.equal(resourceOnly.length, 10);
 const html = renderCard({ kind: "work", data: { ...works[0], title: "<script>" } }, state);
 assert.ok(!html.includes("<script>"), "work title must be escaped");
 assert.ok(html.includes("用同款做一张"), "remix entry exists");
-console.log("Mixed feed contract tests passed.");
+const textHtml = renderCard({ kind: "topic", data: {
+  id: "discussion_test", title: "让整张卡片可点击", summary: "讨论内容"
+}}, state);
+assert.match(textHtml, /^<a class="hw-mf-card hw-mf-card--topic hw-mf-topic-link"/);
+assert.match(textHtml, /href="\/forum\/discussion_test"/);
+assert.ok(!textHtml.includes("<a class=\"hw-mf-title\""), "no nested links in discussion card");
+assert.ok(textHtml.includes("讨论内容"), "summary remains visible");
+// Loading the next page must append cards instead of recreating prior image elements.
+let fullRenders = 0;
+let appendedBatches = 0;
+let lastAppend = "";
+let pagerRemoved = false;
+const grid = {
+  insertAdjacentHTML(position, markup) {
+    assert.equal(position, "beforeend");
+    appendedBatches++;
+    lastAppend = markup;
+  }
+};
+const pager = { remove() { pagerRemoved = true; } };
+const more = {};
+const fakeRoot = {
+  set innerHTML(markup) { this.html = markup; fullRenders++; },
+  get innerHTML() { return this.html || ""; },
+  querySelectorAll() { return []; },
+  querySelector(selector) {
+    if (selector === "#hw-mf-more") return more;
+    if (selector === ".hw-mf-grid") return grid;
+    if (selector === ".hw-mf-pager") return pager;
+    return null;
+  }
+};
+shared.App.state = state;
+sandbox.window.HandrawMixedFeed.render(fakeRoot);
+assert.equal(fullRenders, 1);
+assert.equal(typeof more.onclick, "function");
+more.onclick();
+assert.equal(fullRenders, 1, "loading more must not rerender the page shell");
+assert.equal(appendedBatches, 1, "append one batch of newly discovered cards");
+assert.ok(lastAppend.includes("hw-mf-card"));
+more.onclick();
+assert.equal(fullRenders, 1);
+assert.equal(appendedBatches, 2);
+assert.equal(pagerRemoved, true, "remove pagination when everything is loaded");
+console.log("Mixed feed composition, full-card navigation and append-only pagination passed.");
