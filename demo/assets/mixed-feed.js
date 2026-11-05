@@ -213,7 +213,7 @@
       '<div class="hw-mf-footer"><span class="hw-mf-author">#' + esc(r.id) + '</span>' +
       '<span class="hw-mf-stats">查看用法 ↗</span></div></div></article>';
   }
-  function topicCard(t) {
+  function topicCard(t, st) {
     var img = firstImage(t.images);
     var href = url("forum", { view: "topic", id: t.id });
     var abstract = String(t.summary || t.description || t.body || "")
@@ -230,14 +230,14 @@
       '<div class="hw-mf-body"><span class="hw-mf-type">社区讨论</span>' +
       '<span class="hw-mf-title">' + esc(titleOf(t)) + '</span>' +
       (abstract ? '<p class="hw-mf-excerpt">' + esc(abstract) + '</p>' : "") +
-      '<div class="hw-mf-footer"><span class="hw-mf-author">' + esc(authorOf(t)) + '</span>' +
+      '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" src="' + esc(avatarFor(t, st)) + '">' + esc(authorOf(t)) + '</span>' +
       '<span class="hw-mf-stats">💬 ' + esc(replies) + '</span></div>' +
       '</div></a>';
   }
   function renderCard(item, st) {
     if (item.kind === "work") return workCard(item.data, st);
     if (item.kind === "resource") return resourceCard(item.data);
-    return topicCard(item.data);
+    return topicCard(item.data, st);
   }
   function scenarioChips(st) {
     var scenarios = Array.isArray(st.homeScenarios) && st.homeScenarios.length ?
