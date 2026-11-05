@@ -270,7 +270,7 @@
         var nextSentinel = root.querySelector("#hw-mf-sentinel");
         if (nextSentinel) observer.observe(nextSentinel);
       }
-      if (S.triggerImageLoaders) S.triggerImageLoaders(grid);
+      window.HandrawImageLoader?.scan(grid);
     };
     if (more) more.onclick = loadMore;
     var sentinel = root.querySelector("#hw-mf-sentinel");
@@ -283,7 +283,7 @@
       }, { rootMargin: "180px" });
       observer.observe(sentinel);
     }
-    if (S.triggerImageLoaders) S.triggerImageLoaders(root);
+    window.HandrawImageLoader?.scan(root);
   }
   function render(root) {
     if (!root) return;
