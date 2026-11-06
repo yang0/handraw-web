@@ -79,7 +79,7 @@ def signup_status(handler: Any) -> dict:
     if not row:
         raise ServiceError("注册身份已过期，请重新发起第三方授权", status=401, code="oauth_signup_expired")
     return {"ok": True, "provider": row["provider"].capitalize(), "providerId": row["provider"], "providerLogin": row["provider_login"],
-            "suggestedUsername": _oauth_username(handler.db.get_conn(), row["provider_login"], row["provider_user_id"]),
+            "suggestedUsername": _oauth_username(handler.db.get_conn(), row["provider_login"], row["provider_user_id"], row["provider"]),
             "verifiedEmail": row["verified_email"]}
 
 
@@ -226,10 +226,10 @@ def fetch_github_identity(config: dict[str, str], code: str) -> dict:
             "email": verified[0] if verified else ""}
 
 
-def _oauth_username(conn: Any, login: str, subject: str) -> str:
+def _oauth_username(conn: Any, login: str, subject: str, provider: str = "github") -> str:
     slug = re.sub(r"[^A-Za-z0-9_-]", "", login)[:25] or "github"
     # A stable suffix avoids conflict with existing local usernames.
-    stem = (slug + "-gh" + subject)[0:32]
+    stem = (slug + ("-gg" if provider == "google" else "-gh") + subject)[0:32]
     name = stem
     number = 2
     while conn.execute("SELECT 1 FROM users WHERE username=?", (name,)).fetchone():
