@@ -21,12 +21,14 @@
     return {ok: true, demo:false, count:quantity, freeUsed, paidCount, unitPrice:Number(unitPrice),
       total, balance:Number(balance), affordable:total <= Number(balance)};
   }
+  let dialogOpen = false;
   function confirmGeneration(amount, options = {}) {
     const price = quote(amount, options);
     if (!price.ok) return Promise.resolve({approved:false, quote:price});
-    if (typeof document === "undefined" || !document.body || !document.createElement) {
+    if (typeof document === "undefined" || !document.body || !document.createElement || dialogOpen) {
       return Promise.resolve({approved:false, quote:price});
     }
+    dialogOpen = true;
     return new Promise((resolve) => {
       const overlay = document.createElement("div");
       overlay.className = "hw-article-charge-overlay";
@@ -60,6 +62,7 @@
       const finish = (approved) => {
         if (settled) return;
         settled = true;
+        dialogOpen = false;
         document.removeEventListener("keydown", onKeyDown, true);
         overlay.remove();
         if (previousFocus?.isConnected && typeof previousFocus.focus === "function") previousFocus.focus();
