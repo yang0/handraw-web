@@ -18,7 +18,7 @@
 - `demo/assets/studio-app.js`：两个文章导入入口改用 `POST /api/studio/imports` 与 `GET /api/studio/imports/:id`；ZIP 导出增加可见处理状态。
 - `demo/assets/studio-batch.js`：AI 批量规划增加可见耗时状态。
 - `backend/server.py`：从实际持久化的任务状态推导 `queued/extracting/structuring/validating/completed/failed`，并返回真实已处理分段数量。
-- 不额外向 LocalStorage 保存文章正文、文件字节或任何凭据；任务恢复仅保存任务 ID、文件名、开始时间。
+- 不额外向 LocalStorage 保存文章正文、文件字节或任何凭据；任务恢复仅保存任务 ID 和开始时间。
 
 ## 下一轮跨站推广（尚未实现）
 
