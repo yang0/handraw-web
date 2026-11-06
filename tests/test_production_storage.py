@@ -99,12 +99,22 @@ class PostgresSnapshotTests(unittest.TestCase):
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE COLLATE NOCASE,
                     email TEXT UNIQUE COLLATE NOCASE,
+                    display_name TEXT NOT NULL DEFAULT 'Legacy',
                     password_hash TEXT NOT NULL,
-                    discourse_salt TEXT NOT NULL DEFAULT ''
+                    password_algo TEXT NOT NULL DEFAULT 'pbkdf2_sha256',
+                    discourse_salt TEXT NOT NULL DEFAULT '',
+                    discourse_user_id INTEGER,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    role TEXT NOT NULL DEFAULT 'user',
+                    last_login_at TEXT
                 );
                 CREATE TABLE sessions (
                     token TEXT PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id)
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    user_agent TEXT NOT NULL DEFAULT '',
+                    ip_addr TEXT NOT NULL DEFAULT '',
+                    expires_at INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT ''
                 );"""
             )
             self.legacy_hash = hash_password("OldUsersPassword!")
@@ -165,6 +175,21 @@ class PostgresSnapshotTests(unittest.TestCase):
                 self.assertTrue(verify_password("OldUsersPassword!", row[3]))
                 cur.execute("SELECT token, user_id FROM sessions")
                 self.assertEqual(cur.fetchall(), [("persisted-session", 1)])
+                # Imported user can login with their existing password:
+                # PostgreSQL adapter must create a valid session without signup.
+                from backend.postgres_db import PostgresDatabase
+                from backend.services import login_user
+                app_db = PostgresDatabase(dsn)
+                try:
+                    user, session = login_user(app_db, "LeGaCy", "OldUsersPassword!")
+                    self.assertEqual(user["id"], 1)
+                    self.assertEqual(user["username"], "legacy")
+                    self.assertTrue(session.startswith("hws_"))
+                    self.assertEqual(pg.execute(
+                        "SELECT COUNT(*) FROM sessions WHERE user_id=1"
+                    ).fetchone()[0], 2)
+                finally:
+                    app_db.close()
                 with self.assertRaises(psycopg.errors.UniqueViolation):
                     cur.execute(
                         "INSERT INTO users(username,email,password_hash) VALUES(%s,%s,%s)",
