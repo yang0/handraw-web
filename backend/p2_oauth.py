@@ -51,6 +51,89 @@ def _clear_cookie(secure: bool) -> str:
     return "handraw_oauth_nonce=; Path=/api/auth/github; HttpOnly; SameSite=Lax; Max-Age=0" + suffix
 
 
+def _signup_cookie(ticket: str, secure: bool) -> str:
+    return ("handraw_oauth_signup=" + ticket +
+            "; Path=/api/auth/github; HttpOnly; SameSite=Lax; Max-Age=600" +
+            ("; Secure" if secure else ""))
+
+
+def _read_signup_ticket(handler: Any) -> str:
+    from http.cookies import SimpleCookie
+    cookie = SimpleCookie()
+    try:
+        cookie.load(handler.headers.get("Cookie") or "")
+        item = cookie.get("handraw_oauth_signup")
+        return item.value if item else ""
+    except Exception:
+        return ""
+
+
+def signup_status(handler: Any) -> dict:
+    ticket = _read_signup_ticket(handler)
+    if not ticket or len(ticket) > 256:
+        raise ServiceError("注册身份已过期，请重新使用 GitHub 授权", status=401, code="oauth_signup_expired")
+    row = handler.db.get_conn().execute(
+        "SELECT * FROM oauth_signup_tickets WHERE ticket_hash=? AND expires_at>?",
+        (_digest(ticket), int(time.time()))
+    ).fetchone()
+    if not row:
+        raise ServiceError("注册身份已过期，请重新使用 GitHub 授权", status=401, code="oauth_signup_expired")
+    return {"ok": True, "provider": "GitHub", "providerLogin": row["provider_login"],
+            "suggestedUsername": _oauth_username(handler.db.get_conn(), row["provider_login"], row["provider_user_id"]),
+            "verifiedEmail": row["verified_email"]}
+
+
+def finish_signup(handler: Any, body: dict) -> None:
+    ticket = _read_signup_ticket(handler)
+    if not ticket or len(ticket) > 256:
+        raise ServiceError("注册身份已过期，请重新 GitHub 授权", status=401, code="oauth_signup_expired")
+    username = str(body.get("username") or "").strip()
+    display_name = str(body.get("displayName") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{2,32}", username):
+        raise ServiceError("用户名需为 2～32 位字母、数字、下划线或连字符")
+    if len(display_name) > 40:
+        raise ServiceError("昵称不能超过 40 字符")
+    with handler.db._write_lock:
+        row = handler.db.get_conn().execute(
+            "SELECT * FROM oauth_signup_tickets WHERE ticket_hash=? AND expires_at>?",
+            (_digest(ticket), int(time.time()))
+        ).fetchone()
+        if not row:
+            raise ServiceError("注册身份已过期，请重新授权", status=401, code="oauth_signup_expired")
+        existing = handler.db.get_conn().execute(
+            "SELECT 1 FROM oauth_identities WHERE provider=? AND provider_user_id=?",
+            (row["provider"], row["provider_user_id"])
+        ).fetchone()
+        if existing:
+            raise ServiceError("此 GitHub 账号已经注册，请直接登录", status=409, code="oauth_account_exists")
+        created, session = register_user(
+            handler.db, username, secrets.token_urlsafe(48), row["verified_email"],
+            display_name=display_name or username,
+            user_agent=handler.headers.get("User-Agent") or "",
+            ip_addr=handler.client_address[0] if handler.client_address else "",
+        )
+        with handler.db.transaction() as tx:
+            tx.execute(
+                """INSERT INTO oauth_identities(provider,provider_user_id,user_id,provider_login,linked_at)
+                   VALUES(?,?,?,?,?)""",
+                (row["provider"], row["provider_user_id"], created["id"], row["provider_login"], utc_now_iso())
+            )
+            tx.execute(
+                """INSERT INTO verified_emails(user_id,email,verified_at) VALUES(?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,verified_at=excluded.verified_at""",
+                (created["id"], row["verified_email"], utc_now_iso())
+            )
+            tx.execute(
+                "INSERT INTO auth_funnel_events(event_name,created_at,user_id,source) VALUES(?,?,?,'github')",
+                ("register_success", int(time.time()), created["id"])
+            )
+            tx.execute("DELETE FROM oauth_signup_tickets WHERE ticket_hash=?", (_digest(ticket),))
+    from .p2_growth import record_login
+    record_login(handler.db, created, handler.headers.get("User-Agent") or "")
+    handler._send_json({"ok": True, "message": "GitHub 注册完成，昵称已固定，不可再修改"},
+                       set_cookie=handler._cookie_for_token(session))
+
+
 def _read_nonce(handler: Any) -> str:
     from http.cookies import SimpleCookie
     cookie = SimpleCookie()
@@ -222,40 +305,25 @@ def complete_github(handler: Any, qs: dict[str, list[str]]) -> None:
             if conflict:
                 raise ServiceError("当前邮箱已有 Handraw 账号，请先用密码登录后绑定 GitHub", status=409, code="oauth_link_required")
     if not linked:
-        # register_user grants standard signup rewards and saves its own session.
-        # The generated password is never revealed or stored as plaintext.
-        conn = handler.db.get_conn()
-        username = _oauth_username(conn, identity["login"], subject)
-        created, unused_token = register_user(
-            handler.db, username, secrets.token_urlsafe(48), email=identity["email"],
-            display_name=username, user_agent=handler.headers.get("User-Agent") or "",
-            ip_addr=handler.client_address[0] if handler.client_address else "",
+        # New social users must choose their immutable nickname explicitly.
+        # Store only a short-lived server-side identity claim, never an OAuth token.
+        ticket = secrets.token_urlsafe(36)
+        with handler.db.transaction() as tx:
+            tx.execute("DELETE FROM oauth_signup_tickets WHERE expires_at<?", (now,))
+            tx.execute(
+                """INSERT INTO oauth_signup_tickets
+                   (ticket_hash,provider,provider_user_id,provider_login,verified_email,created_at,expires_at)
+                   VALUES(?,'github',?,?,?,?,?)""",
+                (_digest(ticket), subject, identity["login"], identity["email"], now, now+600)
+            )
+        _redirect(handler, "/?view=oauth-register", _signup_cookie(ticket, secure), _clear_cookie(secure))
+        return
+    with handler.db.transaction() as tx:
+        session_token = create_session_for_user(
+            tx, int(linked["id"]),
+            handler.headers.get("User-Agent") or "",
+            handler.client_address[0] if handler.client_address else "",
         )
-        with handler.db.transaction() as tx:
-            tx.execute(
-                """INSERT INTO oauth_identities(provider,provider_user_id,user_id,provider_login,linked_at)
-                   VALUES('github',?,?,?,?)""",
-                (subject, created["id"], identity["login"], utc_now_iso()),
-            )
-            tx.execute(
-                """INSERT INTO verified_emails(user_id,email,verified_at) VALUES(?,?,?)
-                   ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,verified_at=excluded.verified_at""",
-                (created["id"], identity["email"], utc_now_iso()),
-            )
-            tx.execute(
-                "INSERT INTO auth_funnel_events(event_name,created_at,user_id,source) VALUES(?,?,?,'github')",
-                ("register_success", now, created["id"]),
-            )
-        linked = created
-        # Reuse the registration session instead of leaving an orphan session.
-        session_token = unused_token
-    else:
-        with handler.db.transaction() as tx:
-            session_token = create_session_for_user(
-                tx, int(linked["id"]),
-                handler.headers.get("User-Agent") or "",
-                handler.client_address[0] if handler.client_address else "",
-            )
     from .p2_growth import record_login
     new_device = record_login(handler.db, dict(linked), handler.headers.get("User-Agent") or "")
     if new_device:
