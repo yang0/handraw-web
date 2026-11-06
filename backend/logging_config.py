@@ -21,9 +21,9 @@ _CONFIGURED = False
 
 
 _SECRET_PATTERNS = (
-    (re.compile(r"(?i)(client_secret|api[_-]?key|access_token|refresh_token|password|authorization|cookie)(\\s*[=:]\\s*)([^\\s,;&]+)"), r"\\1\\2[REDACTED]"),
-    (re.compile(r"(?i)(postgres(?:ql)?://[^:/\\s]+:)[^@/\\s]+(@)"), r"\\1[REDACTED]\\2"),
-    (re.compile(r"(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+"), r"\\1[REDACTED]"),
+    (re.compile(r"(?i)(client_secret|api[_-]?key|access_token|refresh_token|password|authorization|cookie)(\s*[=:]\s*)([^\s,;&]+)"), r"\1\2[REDACTED]"),
+    (re.compile(r"(?i)(postgres(?:ql)?://[^:/\s]+:)[^@/\s]+(@)"), r"\1[REDACTED]\2"),
+    (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]+"), r"\1[REDACTED]"),
 )
 
 
