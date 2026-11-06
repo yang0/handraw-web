@@ -260,7 +260,7 @@ def complete_github(handler: Any, qs: dict[str, list[str]]) -> None:
     new_device = record_login(handler.db, dict(linked), handler.headers.get("User-Agent") or "")
     if new_device:
         from .features import try_send_security_alert
-        try_send_security_alert(linked["email"], "新设备或浏览器登录",
+        try_send_security_alert(handler.db, dict(linked), "新设备或浏览器登录",
                                 "我们发现一个新的浏览器环境使用 GitHub 登录你的账号。如果不是本人，请检查账号安全。")
     cookie = handler._cookie_for_token(session_token)
     _redirect(handler, "/?view=account&section=security&social=success", cookie, _clear_cookie(secure))
