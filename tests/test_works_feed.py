@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+from unittest.mock import patch
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -85,6 +87,7 @@ def _insert_work(
 
 class TestWorksFeed(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.test_db = server.init_database(Path(self.tmp_dir.name) / "feed_test.db")
         # Insert test users
