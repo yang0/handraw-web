@@ -82,7 +82,13 @@ def try_send_security_alert(db: Any, user: dict, action: str, detail: str) -> bo
     SMTP is temporarily unavailable. Callers already create a site notification.
     """
     email = str(user.get("email") or "").strip().lower()
-    if not email or not mail_ready():
+    if len(email) > 120 or not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email):
+        return False
+    try:
+        cfg = mail_config()
+    except (ValueError, TypeError, OSError):
+        return False
+    if not cfg.get("host") or not cfg.get("sender"):
         return False
     verified = db.get_conn().execute(
         "SELECT 1 FROM verified_emails WHERE user_id=? AND lower(email)=?",
@@ -90,7 +96,6 @@ def try_send_security_alert(db: Any, user: dict, action: str, detail: str) -> bo
     ).fetchone()
     if not verified:
         return False
-    cfg = mail_config()
     message = EmailMessage()
     message["From"] = str(cfg["sender"])
     message["To"] = email
