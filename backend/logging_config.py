@@ -20,22 +20,23 @@ _LOCK = threading.Lock()
 _CONFIGURED = False
 
 
-class _SensitiveDataFilter(logging.Filter):
-    """Redact common credentials that may accidentally appear in exception text."""
-    _patterns = (
-        (re.compile(r"(?i)(client_secret|api[_-]?key|access_token|refresh_token|password|authorization|cookie)(\s*[=:]\s*)([^\s,;&]+)"), r"\1\2[REDACTED]"),
-        (re.compile(r"(?i)(postgres(?:ql)?://[^:/\s]+:)[^@/\s]+(@)"), r"\1[REDACTED]\2"),
-        (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]+"), r"\1[REDACTED]"),
-    )
+_SECRET_PATTERNS = (
+    (re.compile(r"(?i)(client_secret|api[_-]?key|access_token|refresh_token|password|authorization|cookie)(\\s*[=:]\\s*)([^\\s,;&]+)"), r"\\1\\2[REDACTED]"),
+    (re.compile(r"(?i)(postgres(?:ql)?://[^:/\\s]+:)[^@/\\s]+(@)"), r"\\1[REDACTED]\\2"),
+    (re.compile(r"(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+"), r"\\1[REDACTED]"),
+)
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        # Format first so redaction applies to interpolated arguments as well.
-        message = record.getMessage()
-        for pattern, replacement in self._patterns:
-            message = pattern.sub(replacement, message)
-        record.msg = message
-        record.args = ()
-        return True
+
+def redact(message: str) -> str:
+    for pattern, replacement in _SECRET_PATTERNS:
+        message = pattern.sub(replacement, message)
+    return message
+
+
+class _SafeFormatter(logging.Formatter):
+    """Redact the rendered record, including exception tracebacks."""
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
 
 
 class _ErrorOnlyFilter(logging.Filter):
@@ -65,7 +66,7 @@ def configure_logging(private_storage: str | Path | None = None) -> Path:
         level = _LEVELS.get(level_name, logging.INFO)
         max_bytes = _int_env("HANDRAW_LOG_MAX_BYTES", 10 * 1024 * 1024, 1024, 100 * 1024 * 1024)
         backup_count = _int_env("HANDRAW_LOG_BACKUPS", 5, 1, 30)
-        formatter = logging.Formatter(
+        formatter = _SafeFormatter(
             "%(asctime)s %(levelname)-8s [%(process)d:%(threadName)s] %(name)s: %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S%z",
         )
@@ -82,7 +83,6 @@ def configure_logging(private_storage: str | Path | None = None) -> Path:
             )
             handler.setLevel(handler_level)
             handler.setFormatter(formatter)
-            handler.addFilter(_SensitiveDataFilter())
             if error_only:
                 handler.addFilter(_ErrorOnlyFilter())
             root.addHandler(handler)
@@ -90,7 +90,6 @@ def configure_logging(private_storage: str | Path | None = None) -> Path:
         stderr = logging.StreamHandler(sys.stderr)
         stderr.setLevel(level)
         stderr.setFormatter(formatter)
-        stderr.addFilter(_SensitiveDataFilter())
         root.addHandler(stderr)
         _CONFIGURED = True
         logging.getLogger(__name__).info(
