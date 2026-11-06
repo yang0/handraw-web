@@ -101,13 +101,13 @@
     const title = String(normalized.title || "").trim();
     const markdown = String(normalized.markdown || "");
     if (title) {
-      const lines = markdown.split("\\n");
+      const lines = markdown.split("\n");
       let index = 0;
       while (index < lines.length && !lines[index].trim()) index++;
       if (index < lines.length && lines[index].trim() === "# " + title) {
         lines.splice(0, index + 1);
         while (lines.length && !lines[0].trim()) lines.shift();
-        normalized.markdown = lines.join("\\n");
+        normalized.markdown = lines.join("\n");
       }
     }
     return normalized;
