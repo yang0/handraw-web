@@ -107,6 +107,36 @@ class P2IdentityGrowthTests(unittest.TestCase):
         with self.assertRaises(ServiceError):
             p2_growth.growth_report(self.db, {"role":"user"})
 
+    def test_draft_publish_transition_creates_activation_milestones(self):
+        created, _ = register_user(self.db, "draft_p2", "StrongPass2026!", "draft-p2@example.test")
+        uid = created["id"]
+        created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.db.transaction() as tx:
+            tx.execute(
+                """INSERT INTO works(id,author_username,author_name,title,prompt,status,
+                                     published_at_ms,created_at,updated_at)
+                   VALUES(?,?,?,?,?,'draft',?,?,?)""",
+                ("p2-draft-work",created["username"],created["display_name"],
+                 "待发布作品","测试提示词",int(datetime.now(timezone.utc).timestamp()*1000),
+                 created_at,created_at)
+            )
+            tx.execute("UPDATE works SET status='published' WHERE id='p2-draft-work'")
+            tx.execute(
+                """INSERT INTO forum_topics(id,category,category_label,title,
+                                             author_username,author_name,summary,status,
+                                             published_at_ms,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,'draft',?,?,?)""",
+                ("p2-draft-topic","experience","体验","首次发布的帖子",
+                 created["username"],created["display_name"],"帖子简介",
+                 int(datetime.now(timezone.utc).timestamp()*1000),created_at,created_at)
+            )
+            tx.execute("UPDATE forum_topics SET status='published' WHERE id='p2-draft-topic'")
+        events = {x["event_name"] for x in self.db.get_conn().execute(
+            "SELECT event_name FROM growth_events WHERE user_id=?", (uid,)
+        ).fetchall()}
+        self.assertIn("first_work", events)
+        self.assertIn("first_topic", events)
+
     def test_new_browser_environment_alert_is_not_sent_on_first_login(self):
         created, _ = register_user(self.db, "browser_p2", "StrongPass2026!", "browser@example.test")
         self.assertFalse(p2_growth.record_login(self.db, created, "Chrome/129.0 Windows"))
