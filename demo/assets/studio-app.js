@@ -46,7 +46,9 @@
   let _articlesSyncStatus = "idle";
   function setArticlesSyncStatus(status) {
     _articlesSyncStatus = status;
-    document.dispatchEvent(new CustomEvent("handraw:article-cloud-sync", {detail:{status}}));
+    if (typeof CustomEvent === "function" && typeof document.dispatchEvent === "function") {
+      document.dispatchEvent(new CustomEvent("handraw:article-cloud-sync", {detail:{status}}));
+    }
   }
   let _activeBatchRun = null;
 
