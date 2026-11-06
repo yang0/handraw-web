@@ -694,6 +694,26 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_oauth_signup_expires ON oauth_signup_tickets(expires_at);
         """,
     ),
+    (
+        92,
+        "092_activation_publish_transitions",
+        """
+        CREATE TRIGGER IF NOT EXISTS growth_work_publish_transition AFTER UPDATE OF status ON works
+        WHEN NEW.status='published' AND OLD.status!='published'
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          SELECT u.id,'first_work',date('now'),strftime('%Y-%m-%dT%H:%M:%SZ','now')
+          FROM users u WHERE u.username=NEW.author_username;
+        END;
+        CREATE TRIGGER IF NOT EXISTS growth_topic_publish_transition AFTER UPDATE OF status ON forum_topics
+        WHEN NEW.status='published' AND OLD.status!='published'
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          SELECT u.id,'first_topic',date('now'),strftime('%Y-%m-%dT%H:%M:%SZ','now')
+          FROM users u WHERE u.username=NEW.author_username;
+        END;
+        """,
+    ),
 ]
 
 # Feature work can add independent additive migrations without creating a
