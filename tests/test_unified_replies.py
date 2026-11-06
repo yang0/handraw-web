@@ -19,7 +19,7 @@ class UnifiedRepliesTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.path = Path(self.temp.name) / "test.db"
-        self._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"})
+        self._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test", "HANDRAW_DEMO_MODE": "0"})
         self._env.start()
         self.db = server.init_database(self.path)
         self.author, _ = services.register_user(self.db, "uni_author", "password-author")
