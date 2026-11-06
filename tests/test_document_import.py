@@ -970,10 +970,11 @@ class ImportHttpApiTests(unittest.TestCase):
             tx.execute("DELETE FROM studio_import_jobs WHERE user_id = 9999")
 
         # 7. Daily usage limit check (20 per day)
+        from backend.db import local_today_str
         with self.db.transaction() as tx:
             tx.execute(
-                "INSERT OR REPLACE INTO daily_usage (user_id, scope, usage_date, count) VALUES (?, 'parse', strftime('%Y-%m-%d', 'now', 'localtime'), 20)",
-                (self.u1["id"],),
+                "INSERT OR REPLACE INTO daily_usage (user_id, scope, usage_date, count) VALUES (?, 'parse', ?, 20)",
+                (self.u1["id"], local_today_str()),
             )
         status_limit, resp_limit = self._request(
             "POST",
