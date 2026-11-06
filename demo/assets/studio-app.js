@@ -12698,10 +12698,8 @@
         reader.onload = async (evt) => {
           const dataUrl = evt.target.result;
           try {
-            const res = await window.HandrawTaskJourney.submitImport(file.name, dataUrl, async (result) => {
-              if (!DOM.previewStage?.querySelector("#portal-file-input")) return false;
-              return true;
-            });
+            // Keep the result recoverable until the user explicitly approves it.
+            const res = await window.HandrawTaskJourney.submitImport(file.name, dataUrl, async () => false);
             if (!DOM.previewStage?.querySelector("#portal-file-input")) return;
             fileInput.disabled = false;
             const confirmed = await window.HandrawTaskJourney.reviewDocument(res, {
@@ -12767,6 +12765,7 @@
             window.history.replaceState(null, "", url.pathname + url.search);
 
             renderFullPreviewStage();
+            window.HandrawTaskJourney.acknowledgeImport();
             let succMsg = (res.aiUsed === "all" || res.aiUsed === true) ? "已用 AI 整理为 Markdown" : res.aiUsed === "partial" ? "部分段落 AI 整理失败，已保留原文，请检查结果" : "AI 不可用，已按原文导入，请检查标题和排版";
             if (res.truncated) succMsg += "（正文过长，已截断）";
             toast(succMsg);
@@ -14999,10 +14998,7 @@
         reader.onabort = () => finishReplace();
         reader.onload = async (evt) => {
           try {
-            const res = await window.HandrawTaskJourney.submitImport(file.name, evt.target.result, async () => {
-              if (!isCurrentEditor()) return false;
-              return true;
-            });
+            const res = await window.HandrawTaskJourney.submitImport(file.name, evt.target.result, async () => false);
             if (!isCurrentEditor()) return;
             const confirmed = await window.HandrawTaskJourney.reviewDocument(res, {
               fileName: file.name, replacing: true,
@@ -15032,6 +15028,7 @@
             renderFullPreviewStage();
             commitSync({ bumpTime: true, markSaved: true, collect: false });
             renderFullPreviewStage();
+            window.HandrawTaskJourney.acknowledgeImport();
 
             let succMsg = (res.aiUsed === "all" || res.aiUsed === true) ? "已用 AI 整理为 Markdown" : res.aiUsed === "partial" ? "部分段落 AI 整理失败，已保留原文，请检查结果" : "AI 不可用，已按原文导入，请检查标题和排版";
             if (res.truncated) succMsg += "（正文过长，已截断）";
