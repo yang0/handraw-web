@@ -104,8 +104,8 @@ def inspect_schema(conn, tables):
         columns[table] = cols
         for col in cols:
             if (col["pk"] == 1 and len([c for c in cols if c["pk"]]) == 1
-                    and re.search(r"\\b" + re.escape(col["name"]) +
-                                  r"\\s+INTEGER\\s+PRIMARY\\s+KEY\\s+AUTOINCREMENT\\b",
+                    and re.search(r"\b" + re.escape(col["name"]) +
+                                  r"\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b",
                                   create_sql, re.I)):
                 identity[table] = col["name"]
         foreign_keys.extend([(table, row) for row in _foreign_keys(conn, table)])
@@ -124,11 +124,11 @@ def inspect_schema(conn, tables):
             index_ddl = (index_ddl_row["sql"] if index_ddl_row else "") or ""
             partial = ""
             if index["partial"]:
-                matched = re.search(r"\\bWHERE\\s+(.+)$", index_ddl, re.I | re.S)
+                matched = re.search(r"\bWHERE\s+(.+)$", index_ddl, re.I | re.S)
                 if not matched:
                     raise ValueError("Cannot translate SQLite partial index " + index_name)
                 partial = matched.group(1).strip()
-                if re.search(r"strftime|json_extract|julianday|datetime\\s*\\(", partial, re.I):
+                if re.search(r"strftime|json_extract|julianday|datetime\s*\(", partial, re.I):
                     raise ValueError("SQLite-only unique index: " + index_name)
             unique_indexes.append((table, index_name, real_cols, partial))
     return columns, foreign_keys, unique_indexes, identity
