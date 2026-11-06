@@ -17,6 +17,7 @@ import threading
 from contextlib import contextmanager
 
 from psycopg import connect, sql
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.pq import TransactionStatus
 
 
@@ -190,8 +191,12 @@ class PostgresDatabase:
     """Thread-local psycopg connection with the Database.transaction contract."""
 
     def __init__(self, dsn: str):
-        if not dsn.startswith(("postgres://", "postgresql://")):
-            raise ValueError("Expected PostgreSQL DSN")
+        try:
+            parsed = conninfo_to_dict(dsn)
+        except Exception as exc:
+            raise ValueError("Expected a valid PostgreSQL connection string") from exc
+        if not isinstance(dsn, str) or not dsn.strip() or not parsed.get("dbname"):
+            raise ValueError("PostgreSQL connection string must specify dbname")
         self.db_path = "PostgreSQL (configured URL)"
         self._dsn = dsn
         self._local = threading.local()
