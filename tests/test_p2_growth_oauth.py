@@ -12,7 +12,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit, parse_qs
 
 from backend.server import init_database
-from backend.services import ServiceError, login_user, register_user
+from backend.services import ServiceError, login_user, register_user, update_my_profile
 from backend import p2_growth, p2_oauth
 
 
@@ -30,6 +30,11 @@ class FakeHandler:
         return self.user
     def _cookie_for_token(self, token):
         return "handraw_sid=" + token
+    def _send_json(self, obj, status=200, set_cookie=None):
+        self.response_json = obj
+        self.response_status = status
+        if set_cookie:
+            self.send_header("Set-Cookie", set_cookie)
     def send_response(self, status):
         self.response_status = status
     def send_header(self, name, value):
@@ -125,10 +130,24 @@ class P2IdentityGrowthTests(unittest.TestCase):
                    return_value={"subject":"90001","login":"p2user","email":"p2-social@example.test"}):
             p2_oauth.complete_github(handler, {"state":[state], "code":["mock-code"]})
         self.assertEqual(handler.response_status, 303)
+        self.assertEqual(handler.get_header("Location")[-1], "/?view=oauth-register")
+        signup_cookie = next(x for x in handler.get_header("Set-Cookie") if x.startswith("handraw_oauth_signup="))
+        handler.headers["Cookie"] = signup_cookie.split(";",1)[0]
+        status = p2_oauth.signup_status(handler)
+        self.assertEqual(status["providerLogin"], "p2user")
+        p2_oauth.finish_signup(handler, {"username":"my_new_social", "displayName":"不可变的首次昵称"})
+        self.assertEqual(handler.response_status, 200)
         link = self.db.get_conn().execute(
             "SELECT user_id FROM oauth_identities WHERE provider='github' AND provider_user_id='90001'"
         ).fetchone()
         self.assertIsNotNone(link)
+        new_user = dict(self.db.get_conn().execute(
+            "SELECT * FROM users WHERE id=?", (link["user_id"],)
+        ).fetchone())
+        self.assertEqual(new_user["display_name"], "不可变的首次昵称")
+        with self.assertRaises(ServiceError) as locked:
+            update_my_profile(self.db, new_user, {"displayName":"试图更改"})
+        self.assertEqual(locked.exception.code, "nickname_locked")
         with self.assertRaises(ServiceError) as denied:
             p2_oauth.complete_github(handler, {"state":[state], "code":["mock-code"]})
         self.assertEqual(denied.exception.code, "oauth_state_invalid")
