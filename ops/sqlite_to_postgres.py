@@ -17,6 +17,8 @@ Safety:
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import re
@@ -260,6 +262,51 @@ def verify_counts(cur, expected):
             raise ValueError("Count mismatch for " + table + ": " + str(actual) + " vs " + str(n))
 
 
+def _normalized_cell(value):
+    from decimal import Decimal
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"binaryBase64": base64.b64encode(bytes(value)).decode("ascii")}
+    if isinstance(value, Decimal):
+        return int(value) if value == int(value) else float(value)
+    return value
+
+
+def _digest_rows(rows) -> tuple[int, int, int]:
+    """Order-independent 256-bit row multiset checksum (sum + XOR).
+
+    Including both sum and XOR prevents duplicate rows cancelling in pairs.
+    Counts are checked separately. No raw row/password data is logged.
+    """
+    mod = (1 << 256) - 1
+    total, xor, count = 0, 0, 0
+    for row in rows:
+        payload = json.dumps([_normalized_cell(v) for v in row],
+                             ensure_ascii=False, separators=(",", ":"), default=str)
+        h = int.from_bytes(hashlib.sha256(payload.encode("utf-8")).digest(), "big")
+        total = (total + h) & mod
+        xor ^= h
+        count += 1
+    return count, total, xor
+
+
+def verify_content(cur, source, columns):
+    """Compare every imported row, not just table counts."""
+    for table, rows in columns.items():
+        names = [c["name"] for c in rows]
+        # Chunked cursors keep audit memory bounded on large snapshots.
+        source_cursor = source.execute(
+            "SELECT " + ",".join('"' + n + '"' for n in names) +
+            ' FROM "' + table + '"'
+        )
+        source_digest = _digest_rows(source_cursor)
+        cur.execute(sql.SQL("SELECT {} FROM {}").format(
+            sql.SQL(",").join(q(n) for n in names), q(table)
+        ))
+        target_digest = _digest_rows(cur)
+        if source_digest != target_digest:
+            raise ValueError("Full-row data mismatch in table " + table)
+
+
 def stage(source: Path, dsn: str, apply: bool) -> dict:
     conn, tables = read_snapshot(source)
     try:
@@ -302,7 +349,9 @@ def stage(source: Path, dsn: str, apply: bool) -> dict:
                 create_unique_indexes(cur, indexes)
                 create_foreign_keys(cur, fks)
                 verify_counts(cur, counts)
+                verify_content(cur, conn, cols)
             pg.commit()
+        result["checksumsVerified"] = True
         result["staged"] = True
         return result
     finally:
