@@ -104,13 +104,12 @@ def inspect_schema(conn, tables):
         columns[table] = cols
         for col in cols:
             if (col["pk"] == 1 and len([c for c in cols if c["pk"]]) == 1
-                    and re.search(r"\b" + re.escape(col["name"]) +
-                                  r"\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b",
+                    and re.search(r'\b"?'+re.escape(col["name"])+r'"?\s+INTEGER\s+PRIMARY\s+KEY\b',
                                   create_sql, re.I)):
                 identity[table] = col["name"]
         foreign_keys.extend([(table, row) for row in _foreign_keys(conn, table)])
         for index in conn.execute('PRAGMA index_list("%s")' % table):
-            if not index["unique"] or index["origin"] == "pk":
+            if index["origin"] == "pk":
                 continue
             index_name = index["name"]
             index_cols = conn.execute('PRAGMA index_xinfo("%s")' % index_name).fetchall()
@@ -130,7 +129,7 @@ def inspect_schema(conn, tables):
                 partial = matched.group(1).strip()
                 if re.search(r"strftime|json_extract|julianday|datetime\s*\(", partial, re.I):
                     raise ValueError("SQLite-only unique index: " + index_name)
-            unique_indexes.append((table, index_name, real_cols, partial))
+            unique_indexes.append((table, index_name, real_cols, partial, bool(index["unique"])))
     return columns, foreign_keys, unique_indexes, identity
 
 
@@ -209,10 +208,10 @@ def set_identity_sequences(cur, identity):
 
 
 def create_unique_indexes(cur, indexes):
-    for table, name, cols, predicate in indexes:
+    for table, name, cols, predicate, unique in indexes:
         if not cols:
             raise ValueError("Unique index without columns: " + name)
-        statement = sql.SQL("CREATE UNIQUE INDEX {} ON {} ({})").format(
+        statement = sql.SQL("CREATE " + ("UNIQUE " if unique else "") + "INDEX {} ON {} ({})").format(
             q("pg_" + name[:58]), q(table),
             sql.SQL(",").join(q(col) for col in cols),
         )
