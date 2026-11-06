@@ -2348,10 +2348,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 raise ServiceError("导入任务不存在", status=404, code="not_found")
 
             res_payload = json.loads(job["result_json"]) if job["result_json"] else None
+            # Stage derives from persisted facts, never an invented timer percentage.
+            job_status = str(job["status"])
+            total = int(job["progress_total"] or 0)
+            done = int(job["progress_done"] or 0)
+            stage = (
+                "queued" if job_status == "queued"
+                else "completed" if job_status == "done"
+                else "failed" if job_status == "failed"
+                else "extracting" if total == 0
+                else "validating" if done >= total
+                else "structuring"
+            )
             self._send_json({
                 "ok": True,
-                "status": job["status"],
-                "progress": {"done": job["progress_done"], "total": job["progress_total"]},
+                "status": job_status,
+                "stage": stage,
+                "progress": {"done": done, "total": total},
                 "error": job["error"],
                 "result": res_payload,
             })
