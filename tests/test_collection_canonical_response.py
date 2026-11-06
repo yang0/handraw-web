@@ -18,7 +18,7 @@ class CollectionCanonicalResponseTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.db = server.init_database(Path(self.temp.name) / "test_social.db")
-        self.user, _ = register_user(self.db, "user_tester", "pass123")
+        self.user, _ = register_user(self.db, "user_tester", "Pass1234!")
 
     def tearDown(self):
         self.db.get_conn().close()
