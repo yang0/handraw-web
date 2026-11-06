@@ -24,6 +24,8 @@ from backend.server import create_channel_server
 class ClientIpResolutionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._env = patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0", "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"})
+        cls._env.start()
         cls.temp = TemporaryDirectory()
         cls.db = server_module.init_database(Path(cls.temp.name) / "ip.db")
         cls.server = create_channel_server(0, "main", cls.db)
@@ -40,6 +42,7 @@ class ClientIpResolutionTests(unittest.TestCase):
         cls.db.get_conn().close()
         cls.db.close()
         cls.temp.cleanup()
+        cls._env.stop()
 
     def _register(self, username, headers=None):
         payload = json.dumps({"username": username, "password": "rate-limit-pass"}).encode()
