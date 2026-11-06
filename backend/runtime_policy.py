@@ -165,6 +165,12 @@ _AUTH_LIMITERS = {
 
 
 def check_auth_rate_limit(scope: str, key: str) -> bool:
+    # In production, authentication limits must be shared across all workers.
+    # A Redis outage is not a reason to bypass this security boundary.
+    from .redis_rate_limit import check_limit
+    redis_result = check_limit(scope, key)
+    if redis_result is not None:
+        return redis_result
     limiter = _AUTH_LIMITERS.get(scope) or _AUTH_LIMITERS["login"]
     return limiter.allow(f"{scope}:{key}")
 
