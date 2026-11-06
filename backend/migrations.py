@@ -571,6 +571,112 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             ON account_erasure_requests(status, requested_at);
         """,
     ),
+    (
+        90,
+        "090_p2_identity_growth_security",
+        """
+        CREATE TABLE IF NOT EXISTS oauth_identities (
+            provider TEXT NOT NULL,
+            provider_user_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            provider_login TEXT NOT NULL DEFAULT '',
+            linked_at TEXT NOT NULL,
+            PRIMARY KEY(provider, provider_user_id),
+            UNIQUE(provider,user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_oauth_identity_user ON oauth_identities(user_id);
+
+        CREATE TABLE IF NOT EXISTS oauth_flows (
+            state_hash TEXT PRIMARY KEY,
+            browser_nonce_hash TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            user_id INTEGER,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_oauth_flows_expires ON oauth_flows(expires_at);
+
+        CREATE TABLE IF NOT EXISTS growth_events (
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            event_name TEXT NOT NULL,
+            event_day TEXT NOT NULL,
+            happened_at TEXT NOT NULL,
+            PRIMARY KEY(user_id,event_name,event_day)
+        );
+        CREATE INDEX IF NOT EXISTS idx_growth_events_name_day ON growth_events(event_name,event_day);
+        CREATE TABLE IF NOT EXISTS security_devices (
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            fingerprint TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            PRIMARY KEY(user_id,fingerprint)
+        );
+        CREATE TRIGGER IF NOT EXISTS growth_first_collection AFTER INSERT ON collections
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          VALUES(NEW.user_id,'first_collection',substr(NEW.created_at,1,10),NEW.created_at);
+        END;
+        CREATE TRIGGER IF NOT EXISTS growth_first_work AFTER INSERT ON works
+        WHEN NEW.status='published'
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          SELECT u.id,'first_work',substr(NEW.created_at,1,10),NEW.created_at
+          FROM users u WHERE u.username=NEW.author_username;
+        END;
+        CREATE TRIGGER IF NOT EXISTS growth_first_topic AFTER INSERT ON forum_topics
+        WHEN NEW.status='published'
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          SELECT u.id,'first_topic',substr(NEW.created_at,1,10),NEW.created_at
+          FROM users u WHERE u.username=NEW.author_username;
+        END;
+        CREATE TRIGGER IF NOT EXISTS growth_first_generation AFTER INSERT ON studio_generations
+        WHEN NEW.status='success'
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          SELECT NEW.user_id,'first_generation',substr(NEW.created_at,1,10),NEW.created_at
+          WHERE NEW.user_id IS NOT NULL;
+        END;
+        CREATE TRIGGER IF NOT EXISTS growth_generation_success AFTER UPDATE OF status ON studio_generations
+        WHEN NEW.status='success' AND OLD.status!='success'
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          SELECT NEW.user_id,'first_generation',substr(strftime('%Y-%m-%d','now'),1,10),
+                 strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE NEW.user_id IS NOT NULL;
+        END;
+        CREATE TRIGGER IF NOT EXISTS growth_email_verified_insert AFTER INSERT ON verified_emails
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          VALUES(NEW.user_id,'email_verified',substr(NEW.verified_at,1,10),NEW.verified_at);
+        END;
+        CREATE TRIGGER IF NOT EXISTS growth_email_verified_update AFTER UPDATE ON verified_emails
+        BEGIN
+          INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+          VALUES(NEW.user_id,'email_verified',substr(NEW.verified_at,1,10),NEW.verified_at);
+        END;
+
+        -- Backfill prior milestones once, using the original timestamps.
+        INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+        SELECT user_id,'first_collection',substr(MIN(created_at),1,10),MIN(created_at)
+        FROM collections GROUP BY user_id;
+        INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+        SELECT u.id,'first_work',substr(MIN(w.created_at),1,10),MIN(w.created_at)
+        FROM works w JOIN users u ON u.username=w.author_username
+        WHERE w.status='published' GROUP BY u.id;
+        INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+        SELECT u.id,'first_topic',substr(MIN(t.created_at),1,10),MIN(t.created_at)
+        FROM forum_topics t JOIN users u ON u.username=t.author_username
+        WHERE t.status='published' GROUP BY u.id;
+        INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+        SELECT user_id,'first_generation',substr(MIN(created_at),1,10),MIN(created_at)
+        FROM studio_generations WHERE status='success' AND user_id IS NOT NULL GROUP BY user_id;
+        INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
+        SELECT user_id,'email_verified',substr(verified_at,1,10),verified_at
+        FROM verified_emails;
+        """,
+    ),
 ]
 
 # Feature work can add independent additive migrations without creating a
