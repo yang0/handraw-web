@@ -1,10 +1,15 @@
-# Handraw Web 2.0 — 4-Subdomain Production Reverse Proxy Template
+# Handraw Web 2.0 — unified single-port reverse proxy candidate (review before deploy)
+# Only a candidate: validate SSL cert locations and existing routing on the server.
+# The app still uses SQLite on its Python path; this Nginx config does NOT add
+# PostgreSQL/Redis support or replace the separate Discourse deployment.
+# Do not activate without backups, nginx -t, and an authorized deployment.
+
 #
-# Subdomains routed to unified Handraw Web 2.0 application ports:
+# Four public hostnames route to the SAME Python service on loopback:
 #   1. handraw-style.com         -> 127.0.0.1:3080 (Main Portal: Styles / Layouts / Works / Rankings / Wallet)
-#   2. studio.handraw-style.com  -> 127.0.0.1:3081 (Infinite Canvas Studio)
-#   3. forum.handraw-style.com   -> 127.0.0.1:3082 (Visual Creator Forum & Bounty Board)
-#   4. admin.handraw-style.com   -> 127.0.0.1:3083 (Admin Management Console — RBAC + IP allowlist recommended)
+#   2. studio.handraw-style.com  -> 127.0.0.1:3080 (Infinite Canvas Studio)
+#   3. forum.handraw-style.com   -> 127.0.0.1:3080 (Visual Creator Forum & Bounty Board)
+#   4. admin.handraw-style.com   -> 127.0.0.1:3080 (Admin Management Console — RBAC + IP allowlist recommended)
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -23,13 +28,17 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/handraw-style.com/privkey.cer;
     client_max_body_size 20m;
 
-    location ~* ^/(images|uploads|generated)/ {
+    # IMPORTANT: uploaded and generated media can be access-controlled.
+    # Forward to the app for per-user authorization; never force public caching.
+    location ~* ^/(uploads|generated)/ {
         proxy_pass http://127.0.0.1:3080;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800";
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "private, no-store" always;
     }
 
     location / {
@@ -51,7 +60,7 @@ server {
     client_max_body_size 25m;
 
     location / {
-        proxy_pass http://127.0.0.1:3081;
+        proxy_pass http://127.0.0.1:3080;
         proxy_http_version 1.1;
         proxy_read_timeout 120s;
         proxy_set_header Host $host;
@@ -70,7 +79,7 @@ server {
     client_max_body_size 20m;
 
     location / {
-        proxy_pass http://127.0.0.1:3082;
+        proxy_pass http://127.0.0.1:3080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -92,7 +101,7 @@ server {
     # deny all;
 
     location / {
-        proxy_pass http://127.0.0.1:3083;
+        proxy_pass http://127.0.0.1:3080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
