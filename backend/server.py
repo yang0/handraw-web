@@ -1667,7 +1667,24 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 db.release_request_connection()
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        pass
+        # Do not emit access URLs: OAuth callbacks and query strings can carry secrets.
+        # HTTP >= 400 is captured by the explicit error handlers below.
+        return
+
+    def _internal_error(self) -> None:
+        request_id = uuid.uuid4().hex[:12]
+        method = getattr(self, "command", "UNKNOWN")
+        # Record only the URL path, never OAuth codes, state, or query parameters.
+        path = urlparse(getattr(self, "path", "")).path[:200]
+        logger.exception(
+            "http_internal_error request_id=%s method=%s path=%s status=500",
+            request_id, method, path,
+        )
+        self._send_json(
+            {"ok": False, "error": "服务器内部错误，请使用请求编号联系管理员",
+             "code": "internal_error", "requestId": request_id},
+            status=500, request_id=request_id,
+        )
 
     @property
     def db(self) -> Database:
@@ -1790,6 +1807,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         obj: dict[str, Any],
         status: int = 200,
         set_cookie: str | None = None,
+        request_id: str | None = None,
     ) -> None:
         if status >= 400:
             self._drain_request_body()
@@ -1798,6 +1816,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
+        if request_id:
+            self.send_header("X-Request-ID", request_id)
         if set_cookie:
             self.send_header("Set-Cookie", set_cookie)
         self._cors_headers()
@@ -1984,8 +2004,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if getattr(se, "extra", None):
                 err_body.update(se.extra)
             self._send_json(err_body, status=se.status)
-        except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+        except Exception:
+            self._internal_error()
 
     def do_GET(self) -> None:
         try:
@@ -1996,8 +2016,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if getattr(se, "extra", None):
                 err_body.update(se.extra)
             self._send_json(err_body, status=se.status)
-        except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+        except Exception:
+            self._internal_error()
 
     def _handle_get(self) -> None:
         parsed = urlparse(self.path)
@@ -2655,8 +2675,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if getattr(se, "extra", None):
                 err_body.update(se.extra)
             self._send_json(err_body, status=se.status)
-        except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+        except Exception:
+            self._internal_error()
 
     def do_PUT(self) -> None:
         try:
@@ -2680,8 +2700,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if getattr(se, "extra", None):
                 err_body.update(se.extra)
             self._send_json(err_body, status=se.status)
-        except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+        except Exception:
+            self._internal_error()
 
     def _handle_post(self) -> None:
         parsed = urlparse(self.path)
@@ -3755,6 +3775,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.stdout.reconfigure(encoding="utf-8")
 
     _load_env_file_if_present()
+    from .logging_config import configure_logging
+    configure_logging(get_storage_root())
+    logger.info("server_startup pid=%s", os.getpid())
     check_optional_dependencies()
 
     from .redis_rate_limit import ensure_ready as ensure_redis_ready
