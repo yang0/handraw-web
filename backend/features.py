@@ -82,7 +82,7 @@ def try_send_security_alert(db: Any, user: dict, action: str, detail: str) -> bo
     SMTP is temporarily unavailable. Callers already create a site notification.
     """
     email = str(user.get("email") or "").strip().lower()
-    if len(email) > 120 or not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email):
+    if len(email) > 120 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         return False
     try:
         cfg = mail_config()
