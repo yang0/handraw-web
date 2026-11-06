@@ -2,6 +2,8 @@
 """Tests for canonical toggle_user_collection response fields (Issue #49)."""
 
 import unittest
+import os
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -16,6 +18,7 @@ from backend.services import (
 
 class CollectionCanonicalResponseTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.db = server.init_database(Path(self.temp.name) / "test_social.db")
         self.user, _ = register_user(self.db, "user_tester", "Pass1234!")
