@@ -6697,26 +6697,31 @@
     renderWorldNodes();
 
     try {
-      const resp = await fetch("/api/studio/export-zip", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: kind === "article" ? "article" : kind === "series" || kind === "xhs" ? "xhs" : "images",
-          title: cleanTitle,
-          markdown,
-          items: items.map((it, idx) => ({
-            role: it.role === "cover" || (kind === "article" && idx === 0) ? "cover" : "inline",
-            title: it.title || `配图 ${idx + 1}`,
-            anchorHeading: it.anchorHeading || "",
-            theme: it.theme || "",
-            prompt: it.prompt || "",
-            imageUrl: it.imageUrl || "",
-            afterLine: typeof it.afterLine === "number" ? it.afterLine : undefined
-          }))
-        })
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const blob = await resp.blob();
+      const buildZip = async () => {
+        const resp = await fetch("/api/studio/export-zip", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: kind === "article" ? "article" : kind === "series" || kind === "xhs" ? "xhs" : "images",
+            title: cleanTitle,
+            markdown,
+            items: items.map((it, idx) => ({
+              role: it.role === "cover" || (kind === "article" && idx === 0) ? "cover" : "inline",
+              title: it.title || `配图 ${idx + 1}`,
+              anchorHeading: it.anchorHeading || "",
+              theme: it.theme || "",
+              prompt: it.prompt || "",
+              imageUrl: it.imageUrl || "",
+              afterLine: typeof it.afterLine === "number" ? it.afterLine : undefined
+            }))
+          })
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.blob();
+      };
+      const blob = window.HandrawTaskJourney?.withActivity
+        ? await window.HandrawTaskJourney.withActivity("正在制作图文 ZIP 交付包", buildZip)
+        : await buildZip();
       const dlUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       const safeSlug = cleanTitle.replace(/[\\/:*?"<>|\s]+/g, "-").slice(0, 28) || "handraw-pack";
