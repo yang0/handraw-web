@@ -1810,7 +1810,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
                     AND (g.items_json IS NOT NULL AND g.items_json != '' AND g.items_json != '[]')
                 )
               )
-            ORDER BY c.rowid DESC
+            ORDER BY c.created_at DESC
             """,
             (uid, *collection_ids, *collection_work_ids, *collection_topic_ids, uid),
         ).fetchall():

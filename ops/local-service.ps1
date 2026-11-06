@@ -26,8 +26,7 @@ function Get-HandrawProcess {
     }
     $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $($owners[0])"
     $commandLine = [string]$owner.CommandLine
-    if (-not ($commandLine -match '-m\s+backend\.server(?:\s|$)' -and
-        $commandLine -match $databaseArgument)) {
+    if (-not ($commandLine -match '-m\s+backend\.server(?:\s|$)')) {
         throw "端口 $Port 被其他服务占用，未启动或关闭任何程序。"
     }
     return $owner
@@ -54,10 +53,20 @@ function Start-Handraw {
     }
     # Prefer a project-local interpreter over an unrelated activated venv
     # (e.g. Hermes). Do not force users to change their system-wide PATH.
-    $localPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
-    if (Test-Path -LiteralPath $localPython -PathType Leaf) {
-        $python = $localPython
-    } else {
+    $candidatePythons = @(
+        (Join-Path $projectRoot '.venv\Scripts\python.exe'),
+        'D:\Python313\python.exe'
+    ) + @(Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
+            Where-Object { $_.Source -notmatch '(?i)hermes' -and $_.Source -notmatch 'WindowsApps' } |
+            Select-Object -ExpandProperty Source)
+    $python = $null
+    foreach ($cand in $candidatePythons) {
+        if ($cand -and (Test-Path -LiteralPath $cand -PathType Leaf)) {
+            $python = $cand
+            break
+        }
+    }
+    if (-not $python) {
         $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     }
     # Check package presence WITHOUT importing fitz: modern PyMuPDF emits a
@@ -96,7 +105,20 @@ if missing:
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
     $outputLog = Join-Path $logDirectory "service-$Port.out.log"
     $errorLog = Join-Path $logDirectory "service-$Port.err.log"
-    $serverArguments = @('-X', 'utf8', '-u', '-m', 'backend.server', '--port', [string]$Port, '--db', "`"$databaseFile`"")
+    $envFile = Join-Path $projectRoot '.env.local'
+    $isPg = [bool]($env:HANDRAW_DATABASE_URL)
+    if (-not $isPg -and (Test-Path $envFile)) {
+        $isPg = [bool](Select-String -Path $envFile -Pattern '^\s*HANDRAW_DATABASE_URL\s*=' -Quiet)
+    }
+    if ($isPg) {
+        $infraScript = Join-Path $PSScriptRoot 'infra.ps1'
+        if (Test-Path $infraScript) {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $infraScript start
+        }
+        $serverArguments = @('-X', 'utf8', '-u', '-m', 'backend.server', '--port', [string]$Port)
+    } else {
+        $serverArguments = @('-X', 'utf8', '-u', '-m', 'backend.server', '--port', [string]$Port, '--db', "`"$databaseFile`"")
+    }
     Start-Process -FilePath $python -ArgumentList $serverArguments -WorkingDirectory $projectRoot `
         -WindowStyle Hidden -RedirectStandardOutput $outputLog -RedirectStandardError $errorLog | Out-Null
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
