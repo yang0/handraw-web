@@ -7,6 +7,8 @@ work's numbers, so the square and the forum never disagree.
 from __future__ import annotations
 
 import unittest
+import os
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -24,6 +26,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 
 class WorkCounterTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.db = server.init_database(Path(self.temp.name) / "counts.db")
         self.author, _ = register_user(self.db, "cnt_author", "password-a")
