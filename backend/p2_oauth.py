@@ -238,7 +238,7 @@ def start_github(handler: Any, mode: str = "login") -> None:
         return
     user = handler._current_user(required=(mode == "link"))
     if mode == "login" and user:
-        _redirect(handler, "/?view=account&section=profile")
+        _redirect(handler, "/")
         return
     state = secrets.token_urlsafe(36)
     nonce = secrets.token_urlsafe(36)
@@ -410,7 +410,7 @@ def complete_github(handler: Any, qs: dict[str, list[str]]) -> None:
         try_send_security_alert(handler.db, dict(linked), "新设备或浏览器登录",
                                 "我们发现一个新的浏览器环境使用 GitHub 登录你的账号。如果不是本人，请检查账号安全。")
     cookie = handler._cookie_for_token(session_token)
-    _redirect(handler, "/?view=account&section=security&social=success", cookie, _clear_cookie(secure))
+    _redirect(handler, "/", cookie, _clear_cookie(secure))
 
 
 def unlink_github(db: Any, user: dict, current_password: str) -> dict:

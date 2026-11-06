@@ -123,13 +123,14 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   const main = fs.readFileSync(path.join(__dirname, '../demo/assets/main-app.js'), 'utf8');
   const authRender = main.slice(main.indexOf('  function renderAuthPage(root)'), main.indexOf('  /* ======================== STANDALONE SKILL'));
   const app = {state: {loggedIn: true, user: {username: 'signed_in'}}, view: 'auth'};
-  let accountRenders = 0, urlSyncs = 0;
+  let accountRenders = 0, homeRenders = 0, urlSyncs = 0;
   vm.runInNewContext(authRender + '\nrenderAuthPage(root);', {
     App: app, UI: {}, root: {}, window: {location: {search: ''}}, URLSearchParams, syncUrl: () => { urlSyncs++; },
-    renderAccountSettingsPage: () => { accountRenders++; }
+    renderAccountSettingsPage: () => { accountRenders++; }, renderMain: () => { homeRenders++; }
   });
-  assert.equal(app.view, 'account');
-  assert.equal(accountRenders, 1, 'a signed-in user never sees the login form');
+  assert.equal(app.view, 'discover');
+  assert.equal(accountRenders, 0);
+  assert.equal(homeRenders, 1, 'a signed-in user returns to the home page');
   assert.equal(urlSyncs, 1);
   const authUI = {};
   let notice = '';

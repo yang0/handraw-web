@@ -3210,7 +3210,9 @@
     UI.authOnSuccess = null;
     UI.authReason = "";
 
-    if (snap && snap.view && snap.view !== "auth") {
+    if (runSuccessCallback && typeof cb !== "function") {
+      App.view = "discover";
+    } else if (snap && snap.view && snap.view !== "auth") {
       App.view = snap.view;
       UI.activeWorkId = snap.activeWorkId || UI.activeWorkId;
       UI.profileUser = snap.profileUser || UI.profileUser;
@@ -3222,7 +3224,7 @@
         window.history.replaceState({ view: "device" }, "", `${window.location.pathname}?${p.toString()}`);
       }
     } else {
-      App.view = UI.lastPrimaryView || "styles";
+      App.view = UI.lastPrimaryView || "discover";
     }
     syncUrl(false);
     S.saveState();
@@ -3234,10 +3236,11 @@
   function renderAuthPage(root) {
     if (App.state?.loggedIn && App.state.user?.username && App.state.user.username !== "guest") {
       const oauthFailed = new URLSearchParams(window.location.search).has("oauth_error");
-      App.view = "account";
-      UI.accountSection = oauthFailed ? "security" : "profile";
+      App.view = oauthFailed ? "account" : "discover";
+      if (oauthFailed) UI.accountSection = "security";
       syncUrl(false);
-      renderAccountSettingsPage(root);
+      if (oauthFailed) renderAccountSettingsPage(root);
+      else renderMain();
       if (oauthFailed) S.toast("第三方授权未完成。当前登录仍有效，请在账号安全中重新操作。");
       return;
     }

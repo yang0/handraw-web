@@ -82,7 +82,7 @@ class OAuthBrowserOriginTests(unittest.TestCase):
         self.assertIn('handraw_google_nonce=', headers['Set-Cookie'])
         return parse_qs(urlsplit(location).query)['state'][0]
 
-    def test_logged_in_login_entry_returns_account_without_starting_oauth(self):
+    def test_logged_in_login_entry_returns_home_without_starting_oauth(self):
         from backend.services import register_user
         _, token = register_user(self.db, 'already_signed_in', 'LocalTestPassword2026!')
         for provider in ('google', 'github'):
@@ -91,7 +91,7 @@ class OAuthBrowserOriginTests(unittest.TestCase):
                     'Cookie': 'handraw_sid=' + token, 'Accept': 'text/html',
                 })
                 self.assertEqual(status, 303)
-                self.assertEqual(headers['Location'], '/?view=account&section=profile')
+                self.assertEqual(headers['Location'], '/')
                 self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM oauth_flows').fetchone()[0], 0)
         self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM sessions').fetchone()[0], 1)
 

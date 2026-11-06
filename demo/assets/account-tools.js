@@ -102,7 +102,7 @@
             method:"POST",
             body:{username:String(data.get("username")||""), displayName:String(data.get("displayName")||"")}
           });
-          if (result.ok) window.location.href = mainUrl("account",{section:"profile"});
+          if (result.ok) window.location.href = mainUrl("discover");
         });
       } catch(err) {
         if (isCurrent()) shell(root,"第三方注册身份已过期",

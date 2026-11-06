@@ -74,7 +74,7 @@ def start_google(handler: Any, mode: str = "login") -> None:
         return
     user = handler._current_user(required=(mode == "link"))
     if mode == "login" and user:
-        _redirect(handler, "/?view=account&section=profile")
+        _redirect(handler, "/")
         return
     state = secrets.token_urlsafe(36)
     nonce = secrets.token_urlsafe(36)
@@ -235,7 +235,7 @@ def complete_google(handler: Any, qs: dict[str, list[str]]) -> None:
         from .features import try_send_security_alert
         try_send_security_alert(handler.db, dict(linked), "新浏览器 Google 登录",
                                 "有新的浏览器环境通过 Google 登录你的账号。如非本人，请立即检查账号安全。")
-    _redirect(handler, "/?view=account&section=security&social=success",
+    _redirect(handler, "/",
               handler._cookie_for_token(session), clear_cookie(secure))
 
 
