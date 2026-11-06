@@ -4121,7 +4121,7 @@
           <img class="hw-account-avatar-preview" src="${esc(u.avatarUrl || "/assets/avatar-default.svg")}" alt="我的创作者头像" />
           <div class="hw-account-identity-actions">
             <strong>${esc(u.displayName || u.name || u.username)}</strong>
-            <span style="font-size:12px;color:var(--ink-muted);">公开头像 · 支持 PNG / JPG / WebP 原图（最大 12 MB），上传前自动裁剪压缩</span>
+            <span style="font-size:12px;color:var(--ink-muted);">公开头像 · 支持 JPG、PNG、WebP，原始图片最大 3 MB；裁剪后再上传</span>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <label class="btn btn-sm" for="acc-avatar-file" style="cursor:pointer;">选择头像</label>
               <input type="file" id="acc-avatar-file" accept="image/jpeg,image/png,image/webp" style="position:absolute;width:1px;height:1px;opacity:0;" />
@@ -4139,7 +4139,7 @@
                 <button type="button" class="btn btn-sm" id="acc-avatar-cancel">取消</button>
               </div>
             </div>
-            <span id="acc-avatar-feedback" role="status" aria-live="polite" style="font-size:12px;"></span>
+            <div id="acc-avatar-feedback" role="status" aria-live="polite" aria-atomic="true" style="font-size:13px;line-height:1.5;font-weight:600;min-height:20px;" hidden></div>
           </div>
         </section>
         <div data-account-panel="profile" class="hw-account-form-grid">
@@ -4249,6 +4249,17 @@
 
     const avatarInput = formEl.querySelector("#acc-avatar-file");
     const avatarFeedback = formEl.querySelector("#acc-avatar-feedback");
+    const setAvatarFeedback = (message, kind = "info") => {
+      if (!avatarFeedback) return;
+      avatarFeedback.textContent = message;
+      avatarFeedback.hidden = !message;
+      avatarFeedback.setAttribute("role", kind === "error" ? "alert" : "status");
+      avatarFeedback.dataset.state = kind;
+      avatarFeedback.style.color = kind === "error" ? "var(--vermilion, #a43529)" : "var(--ink-body)";
+      avatarFeedback.style.background = kind === "error" ? "var(--vermilion-wash, #fff0ea)" : "transparent";
+      avatarFeedback.style.borderRadius = "8px";
+      avatarFeedback.style.padding = kind === "error" ? "9px 12px" : "0";
+    };
     const avatarPreviewStage = formEl.querySelector("#acc-avatar-preview-stage");
     const avatarPreview = formEl.querySelector("#acc-avatar-upload-preview");
     let pendingAvatar = null;
@@ -4331,7 +4342,7 @@
     };
     if (avatarZoom) avatarZoom.oninput = () => {
       try { drawAvatarPreview(); }
-      catch (err) { avatarFeedback.textContent = err.message || "预览失败"; }
+      catch (err) { setAvatarFeedback(err.message || "裁剪预览失败，请重新选择图片", "error"); }
     };
     function clearAvatarPreview() {
       selectionId++;
@@ -4355,20 +4366,19 @@
       const allowedType = ["image/jpeg", "image/png", "image/webp"].includes(file.type)
         || (!file.type && ["png", "jpg", "jpeg", "webp"].includes(ext));
       if (!allowedType) {
-        avatarFeedback.textContent = "文件格式不支持。请选 PNG、JPG 或 WebP 图片。";
+        setAvatarFeedback("图片格式不支持。请选择 JPG、PNG 或 WebP 格式。", "error");
         return;
       }
-      // PNGs are often significantly larger than equivalent JPEG/WebP files.
-      // The source can be 12MB, but a 320px crop is sent to the 3MB backend.
-      if (file.size > 12 * 1024 * 1024) {
-        avatarFeedback.textContent = "原图超过 12 MB，请先缩小图片后重试";
+      // Check the ORIGINAL source size, not only the compressed crop.
+      if (!file.size || file.size > 3 * 1024 * 1024) {
+        setAvatarFeedback("图片大小为 " + (file.size / (1024 * 1024)).toFixed(2) + " MB，原始文件不能超过 3 MB。请压缩或缩小图片后重试。", "error");
         return;
       }
       pendingAvatar = file;
       const requestId = selectionId;
       avatarPreviewStage.hidden = false;
       avatarConfirm.disabled = true;
-      avatarFeedback.textContent = "已选择 " + file.name + "，正在生成头像预览…";
+      setAvatarFeedback("已选择 " + file.name + "，正在生成头像预览…");
       const showDecodedImage = (image) => {
         if (requestId !== selectionId) {
           if (typeof image.close === "function") image.close();
@@ -4383,26 +4393,27 @@
           decodedAvatar = image;
           drawAvatarPreview();
           avatarConfirm.disabled = false;
-          avatarFeedback.textContent = "头像预览已完成，调整缩放后点击确认上传";
+          setAvatarFeedback("头像预览已完成，调整缩放后点击确认上传", "success");
         } catch (err) {
-          avatarFeedback.textContent = err.message || "预览失败，请尝试转换成 JPG";
+          setAvatarFeedback(err.message || "预览失败，请尝试重新导出图片", "error");
         }
       };
       const fallbackToImage = () => {
         const reader = new FileReader();
         reader.onerror = () => {
-          if (requestId === selectionId) avatarFeedback.textContent = "读取图片失败，请重新选择";
+          if (requestId === selectionId) setAvatarFeedback("图片读取失败，请重新选择。如果持续失败，请尝试另存为 JPG 或 PNG。", "error");
         };
         reader.onload = () => {
           if (requestId !== selectionId) return;
           const image = new Image();
           image.onload = () => showDecodedImage(image);
           image.onerror = () => {
-            if (requestId === selectionId) avatarFeedback.textContent = "PNG 解码失败，请尝试重新导出图片";
+            if (requestId === selectionId) setAvatarFeedback("图片解码失败，请重新导出为标准 PNG、JPG 或 WebP 后再试。", "error");
           };
           image.src = String(reader.result || "");
         };
-        reader.readAsDataURL(file);
+        try { reader.readAsDataURL(file); }
+        catch (err) { if (requestId === selectionId) setAvatarFeedback("无法读取图片：" + (err.message || "请更换图片"), "error"); }
       };
       // Blob-aware decode avoids huge PNG data URLs. Older browsers fall back
       // to FileReader + Image without silently failing.
@@ -4418,23 +4429,30 @@
       }
     });
     const cancelAvatar = formEl.querySelector("#acc-avatar-cancel");
-    if (cancelAvatar) cancelAvatar.onclick = () => { clearAvatarPreview(); avatarFeedback.textContent = "已取消上传"; };
+    if (cancelAvatar) cancelAvatar.onclick = () => { clearAvatarPreview(); setAvatarFeedback("已取消上传"); };
     const confirmAvatar = formEl.querySelector("#acc-avatar-confirm");
     if (confirmAvatar) confirmAvatar.onclick = async () => {
-      if (!pendingAvatar || !decodedAvatar) return;
+      if (!pendingAvatar || !decodedAvatar) {
+        setAvatarFeedback("图片尚未准备好，请先选择有效图片并等待预览完成。", "error");
+        return;
+      }
+      if (pendingAvatar.size > 3 * 1024 * 1024) {
+        setAvatarFeedback("原始图片超过 3 MB，请重新选择更小的图片。", "error");
+        return;
+      }
       confirmAvatar.disabled = true;
-      avatarFeedback.textContent = "正在上传头像…";
+      setAvatarFeedback("正在上传头像，请勿关闭页面…");
       try {
         // Send exactly the crop the user approved, not the uncropped original.
         const dataUrl = avatarPreview.toDataURL("image/png");
         await apiJson("/api/account/avatar", { method: "POST", body: { dataUrl } });
         clearAvatarPreview();
         await refreshFromServer();
-        avatarFeedback.textContent = "头像已更新";
+        setAvatarFeedback("头像已成功更新", "success");
         toast("头像已保存，各页面将同步显示");
         if (onSaved) onSaved();
       } catch (err) {
-        avatarFeedback.textContent = err.message || "头像上传失败";
+        setAvatarFeedback("头像上传失败：" + (err.message || "请检查网络后重试"), "error");
       } finally { if (confirmAvatar.isConnected) confirmAvatar.disabled = false; }
     };
     const resetAvatar = formEl.querySelector("#acc-avatar-reset");
