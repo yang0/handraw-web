@@ -2119,6 +2119,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # Core Boot & Public Counts
         if req_path == "/api/boot":
             user = self._current_user(required=False)
+            if user and user.get("status") == "active":
+                from .p2_growth import record_visit
+                record_visit(self.db, user)
             self._send_json(build_boot_payload(self.db, user))
             return
 
@@ -2756,6 +2759,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 user_agent=ua,
                 ip_addr=ip_addr,
             )
+            from .p2_growth import record_login
+            record_login(self.db, user_row, ua)
             boot = build_boot_payload(self.db, user_row)
             with self.db.transaction() as tx:
                 tx.execute("INSERT INTO auth_funnel_events(event_name,created_at,user_id,source) VALUES(?,?,?,?)",
@@ -2779,6 +2784,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 user_agent=ua,
                 ip_addr=ip_addr,
             )
+            from .p2_growth import record_login
+            unfamiliar_browser = record_login(self.db, user_row, ua)
+            if unfamiliar_browser:
+                from .features import try_send_security_alert
+                try_send_security_alert(self.db, user_row, "新的浏览器登录",
+                    "账号出现新的浏览器环境登录。如果不是你本人操作，请立即修改密码并退出其他设备。")
             boot = build_boot_payload(self.db, user_row)
             with self.db.transaction() as tx:
                 tx.execute("INSERT INTO auth_funnel_events(event_name,created_at,user_id,source) VALUES(?,?,?,?)",
@@ -2797,7 +2808,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         if req_path == "/api/auth/profile":
             user = self._current_user(required=True)
-            self._send_json(update_my_profile(self.db, user, body))  # type: ignore[arg-type]
+            updated = update_my_profile(self.db, user, body)
+            if body.get("newPassword"):
+                from .features import try_send_security_alert
+                try_send_security_alert(self.db, user, "密码已修改",
+                    "你的 Handraw 账号密码刚刚发生变化。若非本人操作，请立即使用已验证邮箱找回密码。")
+            self._send_json(updated)
             return
 
         if req_path == "/api/auth/sandbox-switch":
