@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   const S = window.HANDRAW_SHARED;
-  const views = new Set(["guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic"]);
+  const views = new Set(["guide", "recovery", "reset-password", "oauth-register", "verify-email", "notifications", "edit-work", "edit-topic"]);
   const linkParams = new URLSearchParams(location.search);
   const linkToken = linkParams.get("token") || "";
   const isEmailChange = linkParams.get("purpose") === "change";
@@ -75,6 +75,40 @@
     if (view === "recovery") {
       shell(root,"找回密码",`<p>请输入你已绑定的真实邮箱地址。我们会发送 30 分钟有效的一次性重置链接。为保护隐私，无论邮箱是否存在，页面提示都相同。</p><form class="hw-account-form"><label>绑定邮箱<input class="hw-input" name="email" type="email" autocomplete="email" required></label><button class="btn btn-primary" type="submit">发送重置邮件</button></form><p class="hw-account-help">收不到邮件？查看垃圾邮件箱；如果此前没有绑定真实邮箱，请联系网站管理员核验归属。</p><p><a href="${esc(mainUrl("auth"))}">返回登录</a></p>`);
       bindForm(root,async data=>{ const result=await S.apiJson("/api/auth/forgot-password",{method:"POST",body:{email:data.get("email")}});feedback(root,result.message); });
+      return true;
+    }
+    if (view === "oauth-register") {
+      shell(root, "使用 GitHub 注册 Handraw", `<p class="hw-account-help">正在读取已验证的 GitHub 身份…</p>`);
+      try {
+        const info = await S.apiJson("/api/auth/github/signup-status");
+        if (!isCurrent()) return true;
+        shell(root,"确认新账号与创作者昵称",
+          `<p class="hw-account-help">已验证 GitHub 身份：@${esc(info.providerLogin)}，邮箱：${esc(info.verifiedEmail)}。</p>
+           <p style="font-weight:700;color:var(--vermilion);">创作者昵称注册后不可修改，请核对后再完成注册。</p>
+           <form class="hw-account-form">
+             <label>Handraw 用户名
+               <input class="hw-input" name="username" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}"
+                      value="${esc(info.suggestedUsername)}" autocomplete="username" required />
+             </label>
+             <label>创作者昵称（选填，留空等于用户名）
+               <input class="hw-input" name="displayName" maxlength="40"
+                      placeholder="注册完成后永久固定" />
+             </label>
+             <button class="btn btn-primary" type="submit">确认昵称并完成注册</button>
+           </form>
+           <p class="hw-account-help">如需使用密码登录，可以注册后通过已验证邮箱的「忘记密码」流程设置密码。</p>`);
+        bindForm(root, async data => {
+          const result = await S.apiJson("/api/auth/github/finish-signup",{
+            method:"POST",
+            body:{username:String(data.get("username")||""), displayName:String(data.get("displayName")||"")}
+          });
+          if (result.ok) window.location.href = mainUrl("account",{section:"profile"});
+        });
+      } catch(err) {
+        if (isCurrent()) shell(root,"GitHub 注册身份已过期",
+          `<p>${esc(err.message || "请重新发起授权")}</p>
+           <a class="btn btn-primary" href="/api/auth/github/start?mode=login">重新使用 GitHub 授权</a>`);
+      }
       return true;
     }
     if (view === "reset-password" && !linkToken) {
