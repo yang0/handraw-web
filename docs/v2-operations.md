@@ -1,6 +1,6 @@
 # Handraw Web 2.0 运维与恢复
 
-本文对应新版 Python/SQLite 服务。它提供的是可审计的本地工具和操作约束，不代表服务器已经配置了自动备份或已经完成部署。
+本文对应新版 Python 服务的运维操作约束。如果使用本地 PostgreSQL 16 + Redis 架构运行，完整的原生与脚本化运维命令参见 [本地 PostgreSQL + Redis 运维手册](local-operations.md)。
 
 ## 1. 路径与边界
 

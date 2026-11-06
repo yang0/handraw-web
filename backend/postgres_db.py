@@ -100,6 +100,9 @@ def _rewrite(query: str) -> str:
                lambda m: "left(" + m.group(1) + ",10)", q, flags=re.I)
     q = re.sub(r"\bstrftime\(\s*'%s'\s*,\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)",
                lambda m: "floor(extract(epoch from (" + m.group(1) + ")::timestamp))::bigint", q, flags=re.I)
+    q = re.sub(r"\bCOALESCE\(\s*gw\.rowid\s*,\s*0\s*\)", "0", q, flags=re.I)
+    q = re.sub(r"\bgw\.rowid\b", "0", q, flags=re.I)
+    q = re.sub(r"\browid\b", "id", q, flags=re.I)
     if re.search(r"\b(strftime|julianday|json_extract|datetime\s*\()\s*\(", q, re.I):
         raise ValueError("SQLite SQL expression needs explicit PostgreSQL port")
     return q
@@ -145,7 +148,7 @@ class PgConnection:
 
     def __init__(self, connection):
         self._db = connection
-        self._identity = set()
+        self._identity: dict[str, str | None] = {}
 
     def execute(self, statement, params=()):
         source = str(statement)
@@ -163,10 +166,10 @@ class PgConnection:
                              AND is_identity='YES'""", (table,)
                     )
                     rows = introspect.fetchall()
-                if rows:
-                    self._identity.add(table)
-            if table in self._identity and not re.search(r"\bRETURNING\b", q, re.I):
-                q = q.rstrip().rstrip(";") + " RETURNING id"
+                self._identity[table] = rows[0][0] if rows else None
+            identity_col = self._identity.get(table)
+            if identity_col and not re.search(r"\bRETURNING\b", q, re.I):
+                q = q.rstrip().rstrip(";") + f' RETURNING "{identity_col}"'
                 identity = True
         cur = self._db.cursor()
         try:
@@ -239,6 +242,34 @@ class PostgresDatabase:
             versions, users = cursor.fetchone()
             if not versions or not users:
                 raise RuntimeError("PostgreSQL schema not imported; initialize and validate staging first")
+            cursor.execute("""
+                CREATE OR REPLACE FUNCTION json_valid(t text) RETURNS integer AS $func$
+                BEGIN
+                    IF t IS NULL THEN RETURN 0; END IF;
+                    RETURN CASE WHEN t IS JSON THEN 1 ELSE 0 END;
+                END;
+                $func$ LANGUAGE plpgsql IMMUTABLE;
+
+                CREATE OR REPLACE FUNCTION json_array_length(t text) RETURNS integer AS $func$
+                BEGIN
+                    IF t IS NULL OR NOT (t IS JSON) THEN RETURN 0; END IF;
+                    RETURN json_array_length(t::json);
+                EXCEPTION WHEN OTHERS THEN
+                    RETURN 0;
+                END;
+                $func$ LANGUAGE plpgsql IMMUTABLE;
+
+                CREATE OR REPLACE FUNCTION json_each(t text)
+                RETURNS TABLE (value text) AS $func$
+                BEGIN
+                    IF t IS NULL OR NOT (t IS JSON) THEN RETURN; END IF;
+                    RETURN QUERY
+                    SELECT elem FROM json_array_elements_text(t::json) AS elem;
+                EXCEPTION WHEN OTHERS THEN
+                    RETURN;
+                END;
+                $func$ LANGUAGE plpgsql IMMUTABLE;
+            """)
         return []
 
     def close_thread_conn(self):

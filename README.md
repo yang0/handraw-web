@@ -14,7 +14,7 @@ python -m pip install -r requirements.txt
 ./ops/web.ps1 rollback
 ```
 
-开发、测试、数据规则和试运行说明见 `docs/`。
+开发、测试、数据规则和试运行说明见 `docs/`。本地 PostgreSQL + Redis 及单后端运维命令见 [本地运维手册](docs/local-operations.md)。
 
 本地新版只启动一个后端：`python -X utf8 -m backend.server --port 3080`。首页为 `/`，创作台为 `/studio/`，社区为 `/forum/`，后台为 `/admin/`。部署后保留二级域名，各域名反向代理到同一端口并保留 Host，见[单后端运行说明](docs/single-backend.md)。
 

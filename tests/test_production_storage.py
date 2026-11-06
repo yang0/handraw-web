@@ -129,6 +129,8 @@ class PostgresSnapshotTests(unittest.TestCase):
         self.tool = load_stage_tool()
 
     def tearDown(self):
+        import gc
+        gc.collect()
         self.tmp.cleanup()
 
     def test_inspection_preserves_user_hashes_read_only(self):
@@ -138,9 +140,13 @@ class PostgresSnapshotTests(unittest.TestCase):
         self.assertEqual(result["users"], 1)
         self.assertEqual(result["sessions"], 1)
         self.assertTrue(verify_password("OldUsersPassword!", self.legacy_hash))
-        self.assertTrue(self.tool._is_nocase_column(
-            self.tool.read_snapshot(self.path)[0], "users", "username"
-        ))
+        snap_conn, _ = self.tool.read_snapshot(self.path)
+        try:
+            self.assertTrue(self.tool._is_nocase_column(
+                snap_conn, "users", "username"
+            ))
+        finally:
+            snap_conn.close()
         with sqlite3.connect(self.path) as conn:
             self.assertEqual(conn.execute(
                 "SELECT password_hash FROM users WHERE username='legacy'"
@@ -158,43 +164,54 @@ class PostgresSnapshotTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"),
                          "Isolated PostgreSQL staging URL not provided")
     def test_real_postgres_staging_preserves_login_hashes_and_casefold_uniqueness(self):
+        import uuid
         import psycopg
-        dsn = os.environ["HANDRAW_PG_STAGING_URL"]
-        result = self.tool.stage(self.path, dsn, True)
-        self.assertTrue(result["staged"])
-        self.assertEqual(result["users"], 1)
-        with psycopg.connect(dsn) as pg:
-            with pg.cursor() as cur:
-                cur.execute(
-                    "SELECT id, username, email, password_hash FROM users WHERE username = %s",
-                    ("LeGaCy",)
-                )
-                row = cur.fetchone()
-                self.assertEqual(row[0], 1)
-                self.assertEqual(row[1], "legacy")
-                self.assertTrue(verify_password("OldUsersPassword!", row[3]))
-                cur.execute("SELECT token, user_id FROM sessions")
-                self.assertEqual(cur.fetchall(), [("persisted-session", 1)])
-                # Imported user can login with their existing password:
-                # PostgreSQL adapter must create a valid session without signup.
-                from backend.postgres_db import PostgresDatabase
-                from backend.services import login_user
-                app_db = PostgresDatabase(dsn)
-                try:
-                    user, session = login_user(app_db, "LeGaCy", "OldUsersPassword!")
-                    self.assertEqual(user["id"], 1)
-                    self.assertEqual(user["username"], "legacy")
-                    self.assertTrue(session.startswith("hws_"))
-                    self.assertEqual(pg.execute(
-                        "SELECT COUNT(*) FROM sessions WHERE user_id=1"
-                    ).fetchone()[0], 2)
-                finally:
-                    app_db.close()
-                with self.assertRaises(psycopg.errors.UniqueViolation):
+        from psycopg import sql
+        from psycopg.conninfo import make_conninfo
+        admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
+        database_name = "handraw_stage_" + uuid.uuid4().hex[:12]
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
+        dsn = make_conninfo(admin_dsn, dbname=database_name)
+        try:
+            result = self.tool.stage(self.path, dsn, True)
+            self.assertTrue(result["staged"])
+            self.assertEqual(result["users"], 1)
+            with psycopg.connect(dsn) as pg:
+                with pg.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO users(username,email,password_hash) VALUES(%s,%s,%s)",
-                        ("LeGaCy", "another@example.test", self.legacy_hash)
+                        "SELECT id, username, email, password_hash FROM users WHERE username = %s",
+                        ("LeGaCy",)
                     )
+                    row = cur.fetchone()
+                    self.assertEqual(row[0], 1)
+                    self.assertEqual(row[1], "legacy")
+                    self.assertTrue(verify_password("OldUsersPassword!", row[3]))
+                    cur.execute("SELECT token, user_id FROM sessions")
+                    self.assertEqual(cur.fetchall(), [("persisted-session", 1)])
+                    # Imported user can login with their existing password:
+                    # PostgreSQL adapter must create a valid session without signup.
+                    from backend.postgres_db import PostgresDatabase
+                    from backend.services import login_user
+                    app_db = PostgresDatabase(dsn)
+                    try:
+                        user, session = login_user(app_db, "LeGaCy", "OldUsersPassword!")
+                        self.assertEqual(user["id"], 1)
+                        self.assertEqual(user["username"], "legacy")
+                        self.assertTrue(session.startswith("hws_"))
+                        self.assertEqual(pg.execute(
+                            "SELECT COUNT(*) FROM sessions WHERE user_id=1"
+                        ).fetchone()[0], 2)
+                    finally:
+                        app_db.close()
+                    with self.assertRaises(psycopg.errors.UniqueViolation):
+                        cur.execute(
+                            "INSERT INTO users(username,email,password_hash) VALUES(%s,%s,%s)",
+                            ("LeGaCy", "another@example.test", self.legacy_hash)
+                        )
+        finally:
+            with psycopg.connect(admin_dsn, autocommit=True) as admin:
+                admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(database_name)))
 
     @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL")
                          and os.environ.get("HANDRAW_PG_PARITY_TEST") == "YES",
@@ -243,6 +260,8 @@ class PostgresSnapshotTests(unittest.TestCase):
                 )
         finally:
             original.close()
+            import gc
+            gc.collect()
 
         info = self.tool.stage(file, parity_dsn, True)
         self.assertTrue(info["staged"])
@@ -306,6 +325,8 @@ class PostgresSnapshotTests(unittest.TestCase):
             ).fetchone()[0], initial)
         finally:
             pg.close()
+            with psycopg.connect(admin_dsn, autocommit=True) as admin:
+                admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(database_name)))
 
     def test_fk_violations_cannot_migrate(self):
         with sqlite3.connect(self.path) as conn:
