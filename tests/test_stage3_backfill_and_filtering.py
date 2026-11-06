@@ -110,7 +110,7 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
                 self.conn.execute(
                     "INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, status, created_at) "
                     "VALUES (?, ?, 'historic_reader', '历史读者', '历史真实回复', 'published', ?)",
-                    (f"historic_reply_{i:03d}", tid, now_iso),
+                    (f"historic_reply_{i:03d}", tid, utc_now_iso()),
                 )
             self.conn.commit()
 
