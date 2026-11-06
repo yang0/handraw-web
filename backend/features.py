@@ -96,9 +96,9 @@ def try_send_security_alert(db: Any, user: dict, action: str, detail: str) -> bo
     message["To"] = email
     message["Subject"] = "Handraw 账号安全提醒：" + str(action)[:50]
     message.set_content(
-        "你好，\\n\\n" + str(detail)[:600] +
-        "\\n\\n如非本人操作，请访问 Handraw 网站使用邮箱找回密码，并检查登录设备。"
-        "\\n这是一封安全提醒邮件，无需回复。"
+        "你好，\n\n" + str(detail)[:600] +
+        "\n\n如非本人操作，请访问 Handraw 网站使用邮箱找回密码，并检查登录设备。"
+        "\n这是一封安全提醒邮件，无需回复。"
     )
     try:
         factory = smtplib.SMTP_SSL if cfg.get("ssl") else smtplib.SMTP
@@ -189,6 +189,10 @@ def request_email_change(db: Any, user: dict, new_email: str, current_password: 
         with db.transaction() as tx:
             tx.execute("DELETE FROM account_action_tokens WHERE token_hash=?", (digest,))
         raise
+    try_send_security_alert(
+        db, dict(row), "请求换绑登录邮箱",
+        "有人刚刚申请更换该账号的登录邮箱。新邮箱在验证之前不会生效。如非本人，请立即更改密码。"
+    )
     return {"ok": True, "message": "验证邮件已发送到新邮箱。点击邮件链接后才会完成换绑。"}
 
 
@@ -526,6 +530,10 @@ def handle_feature_post(handler: Any, req_path: str, body: dict) -> bool:
                 "DELETE FROM sessions WHERE user_id=? AND token!=?",
                 (user["id"], current),
             )
+        with handler.db.transaction() as tx:
+            emit_notification(tx, user["id"], "security", "其他网页登录设备已被退出。如非本人操作，请立即更改密码。")
+        try_send_security_alert(handler.db, user, "其他设备已退出",
+                                "有人刚刚使用账号密码退出其他网页登录设备。如非本人，请立即重设密码。")
         handler._send_json({"ok": True, "revoked": result.rowcount});return True
     if req_path == "/api/account/avatar":
         user = handler._current_user(required=True)
