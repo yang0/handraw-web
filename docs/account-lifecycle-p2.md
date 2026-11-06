@@ -20,13 +20,15 @@ remain in the additive schema for compatibility; they do not authorize renaming.
 
 ## Avatar crop
 
-User may upload PNG, JPEG or WebP source files up to 12 MB. Source decoding uses
+User may upload PNG, JPEG or WebP source files up to **3 MB** (the original file, before cropping). Source decoding uses
 `createImageBitmap` when available and FileReader/Image as a fallback. The photo
 is previewed on a 320px canvas, with drag-to-pan, touch dragging, keyboard arrow
 movement, zoom slider and reset-to-center. The crop is clamped to source boundaries.
 The current 320px square crop is encoded as PNG and uploaded with explicit user
-confirmation; the server validates and transcodes it to WebP. The server's 3 MB
-limit applies to the generated crop, **not** the 12 MB source file.
+confirmation; the server validates and transcodes it to WebP. The frontend rejects original files exceeding 3 MB with a visible error message,
+while the server independently enforces its 3 MB limit on the uploaded crop.
+File type, decoding, dimension and network/upload failures display actionable
+error text in the avatar section rather than silently failing.
 Verify with real large transparent PNGs, portrait photos and square JPEG/WebP images.
 
 ## Account closure and deletion
