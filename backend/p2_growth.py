@@ -116,6 +116,7 @@ def growth_report(db: Any, actor: dict, days: int = 30) -> dict:
                 AND julianday(r.event_day)-julianday(date(u.created_at)) = 7
            WHERE date(u.created_at)>=date('now',? || ' days')
              AND u.role='user'
+             AND u.discourse_user_id IS NULL
            GROUP BY date(u.created_at) ORDER BY day""",
         (str(-days),)
     ).fetchall()]
