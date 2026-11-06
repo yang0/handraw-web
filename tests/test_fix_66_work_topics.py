@@ -111,7 +111,7 @@ class Fix66WorkTopicsTests(unittest.TestCase):
         self.assertEqual(boot["discussions"][wid]["topicId"], tid)
 
     def test_publish_work_direct_sets_listed_at_ms_and_idempotent_replay(self):
-        """Active publishing sets listed_at_ms and lists in forum; replay preserves listed_at_ms."""
+        """Active work publishes stay unlisted until first reply; replay preserves listing time."""
         req_id = "req_publish_test_123"
         receipt = services.publish_user_work(
             self.db,
@@ -127,14 +127,18 @@ class Fix66WorkTopicsTests(unittest.TestCase):
         tid = receipt["topicId"]
         conn = self.db.get_conn()
         row = conn.execute("SELECT listed_at_ms FROM forum_topics WHERE id = ?", (tid,)).fetchone()
+        self.assertIsNone(row["listed_at_ms"], "Work discussions start unlisted")
+        pre_boot = services.build_boot_payload(self.db, None)
+        self.assertNotIn(tid, {t["id"] for t in pre_boot.get("topics", [])})
+
+        # A real first reply lists the discussion exactly once.
+        services.publish_forum_reply_post(self.db, self.author, tid, "第一条公开回复")
+        row = conn.execute("SELECT listed_at_ms FROM forum_topics WHERE id = ?", (tid,)).fetchone()
         self.assertIsNotNone(row["listed_at_ms"])
         first_listed = int(row["listed_at_ms"])
         self.assertGreater(first_listed, 0)
-
-        # Must appear in forum topics list
         boot = services.build_boot_payload(self.db, None)
-        boot_tids = {t["id"] for t in boot.get("topics", [])}
-        self.assertIn(tid, boot_tids)
+        self.assertIn(tid, {t["id"] for t in boot.get("topics", [])})
 
         # Replay with same requestId
         time.sleep(0.01)
