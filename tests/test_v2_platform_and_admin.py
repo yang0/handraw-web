@@ -834,7 +834,9 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         self.assertEqual(c_upd, 200)
         xu_relogin = self.client("mod_candidate_xu", password="resetPass789")
         _, b_xu = xu_relogin.request("GET", "/api/boot")
-        self.assertEqual(b_xu["user"]["displayName"], "许版主·已改名")
+        # Nickname is immutable; bio editing and admin password resets must
+        # preserve the registered display name.
+        self.assertEqual(b_xu["user"]["displayName"], "许版主")
 
         c_reappoint, _ = admin.request(
             "POST",
