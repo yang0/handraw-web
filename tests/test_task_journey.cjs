@@ -77,5 +77,20 @@ function harness(responses) {
   assert.match(failure.panel.innerHTML,/解析文件失败/);
   assert.equal(failure.saved.size,0);
 
-  console.log("task-journey: async phases, H1 normalization, recovery cleanup and failure feedback OK");
+  const studioSource = fs.readFileSync(path.join(__dirname, "../demo/assets/studio-app.js"), "utf8");
+  assert.match(studioSource, /reviewDocument\(res,\s*\{/,
+    "new imports and replacements should require review");
+  assert.equal((studioSource.match(/reviewDocument\(res,\s*\{/g) || []).length, 2,
+    "both import entries must confirm");
+  assert.match(studioSource, /acknowledgeImport\(\)/,
+    "the import must remain recoverable until commit");
+  assert.match(studioSource, /本地已保存 · 云端同步失败/,
+    "cloud save failures must be visible");
+  assert.match(studioSource, /editor-sync-retry/,
+    "users need a cloud save retry affordance");
+  assert.match(code, /setRecoveredImportHandler/,
+    "resume panel should allow recover-to-editor");
+  assert.match(code, /status === 401|err.status === 401/,
+    "authorization errors must stop stale recovery polling");
+  console.log("task-journey: async phases, recovery, import review and sync feedback guards OK");
 })().catch(e => {console.error(e);process.exitCode=1;});
