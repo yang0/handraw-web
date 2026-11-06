@@ -594,7 +594,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         demo_t = conn.execute("SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = 'work_104'").fetchone()
         if demo_t:
             # Runtime demo access is captured on the HTTP server instance.
-            with patch.object(self.server, "allow_demo_routes", False):
+            with patch.object(self.server, "allow_demo_routes", False), patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}):
                 status, _ = self._request("GET", f"/api/posts/{demo_t['topic_id']}")
             self.assertEqual(status, 404, "Demo work must 404 when demo mode is off")
 
@@ -622,7 +622,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         """J6: Demo topic without demo mode returns 404 on both detail endpoint and /t/ redirect."""
         # topic_201 is a seed demo topic. A live server captures the demo
         # switch at creation, so disable it on that instance for this request.
-        with patch.object(self.server, "allow_demo_routes", False):
+        with patch.object(self.server, "allow_demo_routes", False), patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}):
             status, _ = self._request("GET", "/api/posts/topic_201")
             self.assertEqual(status, 404)
 
