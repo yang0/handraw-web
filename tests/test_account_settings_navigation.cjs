@@ -18,6 +18,13 @@ assert.ok(shared.includes('id="acc-avatar-confirm"'), "avatar upload requires co
 assert.ok(shared.includes("pendingAvatar = file"), "selection only stages avatar");
 assert.ok(shared.includes('avatarPreview.toDataURL("image/png")'), "upload uses approved square crop");
 assert.ok(shared.includes("createImageBitmap(file"), "PNG decoding supports native image bitmap");
+assert.ok(shared.includes("file.size > 3 * 1024 * 1024"), "original file over 3MB is rejected");
+assert.ok(!shared.includes("最大 12 MB") && !shared.includes("file.size > 12 * 1024 * 1024"), "12MB source allowance has been removed");
+assert.ok(shared.includes('role="status" aria-live="polite" aria-atomic="true"'), "avatar feedback is announced");
+assert.ok(shared.includes('kind === "error" ? "alert" : "status"'), "errors announce with alert role");
+assert.ok(shared.includes("图片解码失败") && shared.includes("图片读取失败"), "image processing errors are explicit");
+assert.ok(shared.includes("头像上传失败："), "server rejection is visible");
+assert.ok(shared.includes("图片尚未准备好"), "upload does not silently do nothing");
 assert.ok(shared.includes("reader.readAsDataURL(file)"), "fallback decoding exists");
 assert.ok(shared.includes('tabindex="0"'), "crop is keyboard accessible");
 assert.ok(shared.includes('"pointerdown"') && shared.includes('"pointermove"') && shared.includes('"pointerup"'), "drag event lifecycle");
