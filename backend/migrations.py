@@ -555,6 +555,22 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             ON auth_funnel_events(event_name, created_at);
         """,
     ),
+    (
+        89,
+        "089_account_recovery_and_erasure_requests",
+        """
+        -- A request, not an automatic destructive cleanup. Review retention first.
+        CREATE TABLE IF NOT EXISTS account_erasure_requests (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_at TEXT NOT NULL,
+            processed_at TEXT NOT NULL DEFAULT '',
+            review_note TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_account_erasure_status
+            ON account_erasure_requests(status, requested_at);
+        """,
+    ),
 ]
 
 # Feature work can add independent additive migrations without creating a
