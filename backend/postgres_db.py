@@ -141,6 +141,8 @@ class PgCursor:
 
 
 class PgConnection:
+    dialect = "postgresql"
+
     def __init__(self, connection):
         self._db = connection
         self._identity = set()
