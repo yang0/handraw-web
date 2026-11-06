@@ -243,7 +243,7 @@
     const interval = setInterval(() => { if (phase === "working") render(); }, 1000);
     try {
       const result = await work();
-      phase = "done";
+      phase = result && result.ok === false ? "failed" : "done";
       render();
       return result;
     } catch (error) {
