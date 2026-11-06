@@ -19,6 +19,7 @@ credentials.json
 image-service.json
 ai-service.json
 *.log
+*.log.*
 *.zip
 *.tar.gz
 /.coverage
