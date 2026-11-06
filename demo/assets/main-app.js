@@ -234,7 +234,7 @@
       return {};
     }
 
-    if (["discover", "styles", "layouts", "works", "rankings", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic", "device", "devices"].includes(view)) {
+    if (["discover", "styles", "layouts", "works", "rankings", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "reactivate", "verify-email", "notifications", "edit-work", "edit-topic", "device", "devices"].includes(view)) {
       App.view = view;
     } else {
       App.view = !view && p.get("q") ? "styles" : "discover";
