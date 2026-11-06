@@ -3726,10 +3726,27 @@ def check_optional_dependencies() -> None:
         logger.warning("缺少 PyMuPDF，导入 .pdf 会失败，请执行 pip install -r requirements.txt")
 
 
+def _load_env_file_if_present() -> None:
+    for env_name in (".env.local", ".env"):
+        env_file = Path(__file__).resolve().parent.parent / env_name
+        if env_file.is_file():
+            try:
+                for line in env_file.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip()
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+            except Exception:
+                pass
+
+
 def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
+    _load_env_file_if_present()
     check_optional_dependencies()
 
     parser = argparse.ArgumentParser(description="Handraw Web single-backend server")
