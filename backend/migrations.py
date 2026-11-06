@@ -677,6 +677,23 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         FROM verified_emails;
         """,
     ),
+    (
+        91,
+        "091_social_signup_confirmation",
+        """
+        -- GitHub can authenticate identity before an immutable nickname is chosen.
+        CREATE TABLE IF NOT EXISTS oauth_signup_tickets (
+            ticket_hash TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            provider_user_id TEXT NOT NULL,
+            provider_login TEXT NOT NULL DEFAULT '',
+            verified_email TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_oauth_signup_expires ON oauth_signup_tickets(expires_at);
+        """,
+    ),
 ]
 
 # Feature work can add independent additive migrations without creating a
