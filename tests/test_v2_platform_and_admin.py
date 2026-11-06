@@ -826,7 +826,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         self.assertIn("tools", xu_perm["profile"]["moderatedBoards"])
 
         # Self-service profile update
-        c_prof, _ = xu_cli.request("POST", "/api/auth/profile", {"displayName": "许版主·已改名", "bio": "热爱 ComfyUI 与手绘线稿"})
+        c_prof, _ = xu_cli.request("POST", "/api/auth/profile", {"bio": "热爱 ComfyUI 与手绘线稿"})
         self.assertEqual(c_prof, 200)
 
         # Super-admin resets password & revokes moderator, then deletes test account
