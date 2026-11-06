@@ -99,10 +99,10 @@ def growth_report(db: Any, actor: dict, days: int = 30) -> dict:
                   COUNT(*) AS registered,
                   COUNT(DISTINCT CASE WHEN v.user_id IS NOT NULL THEN u.id END) AS verified,
                   COUNT(DISTINCT CASE WHEN a.user_id IS NOT NULL THEN u.id END) AS activated_7d,
-                  COUNT(DISTINCT CASE WHEN u.created_at < datetime('now','-7 days')
+                  COUNT(DISTINCT CASE WHEN date(u.created_at) <= date('now','-8 days')
                       THEN u.id END) AS eligible_d7,
                   COUNT(DISTINCT CASE WHEN r.user_id IS NOT NULL
-                      AND u.created_at < datetime('now','-7 days') THEN u.id END) AS retained_d7
+                      AND date(u.created_at) <= date('now','-8 days') THEN u.id END) AS retained_d7
            FROM users u
            LEFT JOIN verified_emails v ON v.user_id=u.id
            LEFT JOIN (
@@ -113,7 +113,7 @@ def growth_report(db: Any, actor: dict, days: int = 30) -> dict:
            ) a ON a.user_id=u.id
                 AND julianday(a.first_at)-julianday(u.created_at) BETWEEN 0 AND 7
            LEFT JOIN growth_events r ON r.user_id=u.id AND r.event_name='site_visit'
-                AND julianday(r.event_day)-julianday(date(u.created_at)) BETWEEN 7 AND 7.999999
+                AND julianday(r.event_day)-julianday(date(u.created_at)) = 7
            WHERE date(u.created_at)>=date('now',? || ' days')
              AND u.role='user'
            GROUP BY date(u.created_at) ORDER BY day""",
