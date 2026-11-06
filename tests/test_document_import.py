@@ -829,7 +829,7 @@ class ImportHttpApiTests(unittest.TestCase):
         cls.temp_dir = tempfile.TemporaryDirectory()
         cls.uploads_dir = Path(cls.temp_dir.name) / "uploads"
         cls.uploads_dir.mkdir(parents=True, exist_ok=True)
-        cls.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(cls.uploads_dir)})
+        cls.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(cls.uploads_dir), "HANDRAW_DEMO_MODE": "0", "HANDRAW_ALLOWED_ORIGINS": "https://studio.handraw-style.com"})
         cls.env_patch.start()
         cls.db_path = Path(cls.temp_dir.name) / "http_test.db"
         cls.db = init_database(cls.db_path)
