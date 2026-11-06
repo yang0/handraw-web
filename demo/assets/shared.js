@@ -4216,6 +4216,12 @@
         </section>
 
         <section data-account-panel="security" class="hw-account-security-panel">
+          <h3>我的数据导出</h3>
+          <p class="hw-account-help">可以下载个人资料、作品与帖子、收藏、创作记录、积分记录和站内通知。导出文件可能包含私人创作内容，请妥善保管。此操作不会停用或删除账号。</p>
+          <button class="btn btn-sm" type="button" id="acc-export-data">下载我的账号数据（JSON）</button>
+          <p id="acc-export-feedback" class="hw-account-help" role="status" aria-live="polite"></p>
+        </section>
+        <section data-account-panel="security" class="hw-account-security-panel">
           <h3>关联的第三方登录</h3>
           <p class="hw-account-help">GitHub 身份按平台用户 ID 关联，不会自动按邮箱合并其他账号。解绑需要当前登录密码。</p>
           <div id="acc-github-status" role="status" aria-live="polite" class="hw-account-help">正在检查 GitHub 登录状态…</div>
@@ -4625,17 +4631,38 @@
       exportBtn.disabled = true;
       feedback.textContent = "正在准备数据导出…";
       try {
-        const data = await apiJson("/api/account/export");
+        const keys = ["works", "forumTopics", "collections", "studioGenerations", "walletHistory", "notifications"];
+        let data = { exportedAt: new Date().toISOString(), items: {} };
+        keys.forEach(key => { data.items[key] = []; });
+        let page = 0;
+        while (page < 1000) {
+          feedback.textContent = "正在下载账号资料，第 " + (page + 1) + " 页…";
+          const result = await apiJson("/api/account/export?page=" + page);
+          if (page === 0) {
+            data.profile = result.profile;
+            data.wallet = result.wallet;
+            data.verifiedEmailAt = result.verifiedEmailAt;
+            data.linkedProviders = result.linkedProviders;
+            data.note = result.note;
+          }
+          keys.forEach(key => {
+            if (Array.isArray(result[key])) data.items[key].push(...result[key]);
+          });
+          if (result.nextPage == null) break;
+          if (result.nextPage !== page + 1) throw new Error("导出分页异常，请重新尝试");
+          page++;
+        }
+        if (page >= 1000) throw new Error("导出数据超过当前浏览器限制，请联系管理员");
         const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
         const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "handraw-account-" + String(u.username).replace(/[^a-zA-Z0-9_-]/g, "") + ".json";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        feedback.textContent = "已准备数据文件，浏览器将开始下载";
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "handraw-account-" + String(u.username).replace(/[^a-zA-Z0-9_-]/g, "") + ".json";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+        feedback.textContent = "账号数据已整理完毕，正在下载，请妥善保管";
       } catch (err) {
         feedback.textContent = err.message || "导出失败，请稍后重试";
       } finally { exportBtn.disabled = false; }
