@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import unittest
+import os
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -18,6 +20,7 @@ from backend.seed import DEFAULT_SITE_SETTINGS
 
 class Fix65SmallDesignGapsTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "test_fix_65.db"
         self.db = server.init_database(self.db_path)
