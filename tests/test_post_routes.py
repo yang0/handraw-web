@@ -593,7 +593,9 @@ class PostRoutesHTTPTests(unittest.TestCase):
         # 4. Demo work work_104 in non-demo mode
         demo_t = conn.execute("SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = 'work_104'").fetchone()
         if demo_t:
-            status, _ = self._request("GET", f"/api/posts/{demo_t['topic_id']}")
+            # Runtime demo access is captured on the HTTP server instance.
+            with patch.object(self.server, "allow_demo_routes", False):
+                status, _ = self._request("GET", f"/api/posts/{demo_t['topic_id']}")
             self.assertEqual(status, 404, "Demo work must 404 when demo mode is off")
 
     def test_k8_work_detail_counters(self):
@@ -618,12 +620,14 @@ class PostRoutesHTTPTests(unittest.TestCase):
 
     def test_j6_demo_visibility_consistency(self):
         """J6: Demo topic without demo mode returns 404 on both detail endpoint and /t/ redirect."""
-        # topic_201 is a seed demo topic
-        status, _ = self._request("GET", "/api/posts/topic_201")
-        self.assertEqual(status, 404)
+        # topic_201 is a seed demo topic. A live server captures the demo
+        # switch at creation, so disable it on that instance for this request.
+        with patch.object(self.server, "allow_demo_routes", False):
+            status, _ = self._request("GET", "/api/posts/topic_201")
+            self.assertEqual(status, 404)
 
-        code, _ = self._request_raw_redirect("/t/topic_201")
-        self.assertEqual(code, 404)
+            code, _ = self._request_raw_redirect("/t/topic_201")
+            self.assertEqual(code, 404)
 
     def test_r1_catalog_assets_and_admin_save_ensure_topic(self):
         """R1: catalog_assets (exclusive & community) mapped by ensure_resource_topics;
@@ -777,7 +781,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
                 _, before_data = self._request("GET", f"/api/posts/{fb_tid}")
                 likes_before = before_data["mount"]["resource"]["likes"]
 
-                u_liker, _ = register_user(self.db, f"u1_liker_{int(time.time() * 1000)}", "pass-u1")
+                u_liker, _ = register_user(self.db, f"u1_liker_{int(time.time() * 1000)}", "PassU1_123!")
                 services.toggle_user_like(self.db, u_liker, "style", "FB-041")
 
                 _, after_data = self._request("GET", f"/api/posts/{fb_tid}")
