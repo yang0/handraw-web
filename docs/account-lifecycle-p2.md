@@ -8,30 +8,30 @@
 | --- | --- | --- |
 | 昵称与头像 | `/?view=account&section=profile` | 昵称注册后固定；JPG/PNG/WebP 原图不超过 3 MB，头像可拖动、缩放裁剪后确认上传 |
 | 邮箱验证与换绑 | `/?view=account&section=email` | 当前状态与「验证当前邮箱」相邻；换绑需当前密码及新邮箱的单次验证链接 |
-| 登录与安全 | `/?view=account&section=security` | 当前密码修改、设备会话管理、GitHub 绑定/解绑以及本人数据导出 |
+| 登录与安全 | `/?view=account&section=security` | 当前密码修改、设备会话管理、Google、GitHub 绑定/解绑以及本人数据导出 |
 | 客户端授权 | `/?view=account&section=devices` | 保持现有 Skill/终端授权与撤销机制 |
 | 找回密码 | `/?view=recovery` | 通过绑定邮箱申请 30 分钟有效的一次性链接；对未知账号返回相同提示 |
-| 社交账号首次注册 | `/?view=oauth-register` | GitHub 身份已验证后，明确确认用户名和不可修改的昵称再创建账号 |
+| 社交账号首次注册 | `/?view=oauth-register` | Google 或 GitHub 身份已验证后，明确确认用户名和不可修改的昵称再创建账号 |
 | 增长与激活 | 管理后台「数据总览」 | 仅管理员/运营可查看的聚合数据；不展示原始密码、邮箱或 IP |
 
-## 第三方登录：GitHub OAuth
+## 第三方登录：Google 和 GitHub OAuth
 
 使用 GitHub OAuth App 的授权码流程，服务器接收授权码并交换令牌；用户身份由 **GitHub 稳定数字 ID** 识别，不使用邮箱作为账号合并依据。
 
 - 在站点生产环境安全注入 `HANDRAW_GITHUB_CLIENT_ID`、`HANDRAW_GITHUB_CLIENT_SECRET`、`HANDRAW_GITHUB_CALLBACK_URL`，不要提交到仓库。
 - 回调必须精确配置为 `https://<站点域名>/api/auth/github/callback`。本地测试只允许 `http://localhost` 或 `http://127.0.0.1`。
-- 凭据不完整时，前端不显示 GitHub 登录按钮，服务端拒绝发起授权。正式上线仍需注册 GitHub OAuth App、保存密钥并进行真实回调验证。
+- 凭据不完整时，前端仍显示 Google/GitHub 两种登录选项，但明确标注「尚未启用」并禁用，不再静默隐藏；服务端拒绝没有配置的授权请求。正式上线仍需注册 OAuth 应用、保存密钥并进行真实回调验证。
 - 授权请求使用加密随机的 `state`，只存状态散列；独立的 HttpOnly、SameSite=Lax 浏览器 cookie 绑定回调。授权状态只能使用一次，并在 10 分钟后过期。回调不保存 GitHub access token。
 - 请求用户基本信息和主要已验证邮箱。已有 GitHub 绑定按 provider ID 登录；如果邮箱已有本地账号，不会自动链接，必须先本地登录再在安全设置中明确绑定。
 - 首次第三方注册经过十分钟有效的一次性待确认流程。用户明确选择用户名和昵称后才创建账号，注册后两者固定。GitHub 账号没有本地可知的密码；用户可以利用已验证邮箱的密码重置流程设置自己的密码。
 - 解除绑定需要当前密码。单个 Handraw 账号最多绑定一个 GitHub 身份，单个 GitHub ID 不能绑定多个本地账号。
 - 出于安全考虑不允许外部传入 callback URL、授权服务器地址或任意跳转地址，也不按第三方邮箱自动接管老账号。
-- 当前仅实现 **GitHub**。未来增加 Google/OIDC 须单独验证 ID token 的签名、issuer、audience、nonce 和密钥轮换，不可直接复用 GitHub 用户信息校验。
+- **Google 也已接入**：使用 Google OAuth 授权码 + S256 PKCE，并使用令牌交换后向 Google HTTPS UserInfo 端点取得稳定 `sub`、已验证邮箱作为身份依据；不会使用邮件地址自动合并账号。Google 配置项为 `HANDRAW_GOOGLE_CLIENT_ID`、`HANDRAW_GOOGLE_CLIENT_SECRET`、`HANDRAW_GOOGLE_CALLBACK_URL`，固定回调路径为 `/api/auth/google/callback`。采用 UserInfo 返回的 Google 身份而不是本地直接解码未验证的 ID token。生产上线前仍需以实际 Google OAuth 应用验收凭据和回调。
 - OAuth App 的状态绑定满足当前保密客户端流程；如果 GitHub 提供并强制支持 PKCE，应在部署前升级并通过端到端验证。
 
 ## 注册漏斗、激活和留存
 
-增量数据库迁移 **088、090、091、092** 增加事件与身份表。历史收藏/作品/帖子/生图成功事件在迁移时安全回填；不会删除历史数据。旧账号的 `nickname_locked=0` 不赋予改名权限。
+增量数据库迁移 **088、090、091、092、093** 增加事件与身份表。历史收藏/作品/帖子/生图成功事件在迁移时安全回填；不会删除历史数据。旧账号的 `nickname_locked=0` 不赋予改名权限。
 
 **事件定义：**
 
@@ -72,8 +72,8 @@ GROUP BY event_name;
 ## 验收与发布
 
 1. 运行 `python -m unittest discover -s tests -v`，尤其 `test_p2_growth_oauth.py`、`test_account_identity.py` 和 `test_v2_account_features.py`；执行账号 JS 回归与语法检查。
-2. 在**隔离测试数据库**上运行 090、091、092 增量迁移；检验老账号的昵称、邮箱、会话、作品和历史积分不变。生产部署前先备份，绝不通过数据库回滚删除新列。
-3. 用真实 GitHub OAuth App 端到端检查新注册昵称确认、老账号绑定/解绑、错误邮箱冲突、授权取消、过期及回调重放。
+2. 在**隔离测试数据库**上运行 090、091、092、093 增量迁移；检验老账号的昵称、邮箱、会话、作品和历史积分不变。生产部署前先备份，绝不通过数据库回滚删除新列。
+3. 用真实 Google、GitHub OAuth App 端到端检查新注册昵称确认、老账号绑定/解绑、错误邮箱冲突、授权取消、过期及回调重放。
 4. 配置受管理的 SMTP 账户，验证密码重置、安全通知、换绑邮件和服务不可用提示。邮箱和 OAuth 密钥不进入代码或 GitHub 仓库。
 5. 验证注册曝光、注册成功、首次关键行为、邮箱验证和 D7 真实 cohort；对匿名曝光/尝试与去重用户指标保持区别。
 6. 确认关闭状态的账号停用、注销及恢复端点仍不可调用，既不显示按钮也不操作现有数据。
