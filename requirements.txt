@@ -14,3 +14,9 @@ Pillow>=10.0
 # Browser-side checks (tests/test_browser_render.py).  The suite skips these
 # tests when Playwright or its Chromium build is unavailable.
 # playwright>=1.40
+
+# PostgreSQL/Redis production migration tooling and distributed auth protections.
+# Python v2 remains SQLite-backed until the PostgreSQL adapter passes parity CI.
+psycopg[binary]>=3.2,<4
+psycopg-pool>=3.2,<4
+redis>=5.2,<7
