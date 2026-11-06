@@ -3354,10 +3354,7 @@
             <input class="hw-input" id="login-demo-account" value="" autocomplete="username" placeholder="用户名或注册邮箱" />
             <input class="hw-input" id="login-demo-password" type="password" value="" autocomplete="current-password" placeholder="登录密码" />
           </div>
-          <div style="display:flex;gap:16px;flex-wrap:wrap;margin:-4px 0 14px;font-size:12.4px;">
-            <a href="?view=recovery" data-account-recovery>忘记密码</a>
-            <a href="?view=reactivate">恢复已停用的账号</a>
-          </div>
+          <div style="margin:-4px 0 14px;font-size:12.4px;"><a href="?view=recovery" data-account-recovery>忘记密码</a></div>
           <div style="display:grid;gap:6px;margin-bottom:14px;font-size:12.4px;color:var(--ink-muted);">
             <div>✦ 登录后立享全站实测大图、完整提示词、每日 3 次免费生图与跨子域名收藏夹</div>
             <div>✦ 原 Discourse 老论坛迁移账号支持原邮箱/用户名直接登录并自动升级加密</div>
@@ -3409,10 +3406,10 @@
             <input class="hw-input" id="reg-password" type="password" autocomplete="new-password" minlength="8" placeholder="设置密码（至少 8 位）" />
             <input class="hw-input" id="reg-confirm-password" type="password" autocomplete="new-password" minlength="8" placeholder="确认密码" />
             <details class="hw-account-register-optional" ${urlRef ? "open" : ""}>
-              <summary>创作者资料与邀请码（选填）</summary>
+              <summary>注册昵称与邀请码（选填）</summary>
               <div style="display:grid;gap:10px;margin-top:12px;">
-                <input class="hw-input" id="reg-display-name" maxlength="40" placeholder="创作者昵称（可注册后再设定）" />
-                <span class="hw-account-help">昵称当前只能设置一次，留空不影响注册与创作。</span>
+                <input class="hw-input" id="reg-display-name" maxlength="40" placeholder="创作者昵称（注册后无法修改）" />
+                <span class="hw-account-help">注册完成后昵称不可修改；留空时默认使用用户名作为昵称。</span>
                 <input class="hw-input" id="reg-invite-code" value="${esc(urlRef)}" placeholder="好友邀请码（选填）" />
               </div>
             </details>
@@ -4146,14 +4143,8 @@
         <div data-account-panel="profile" class="hw-account-form-grid">
           <div>
             <div style="font-size:12.5px;font-weight:750;margin-bottom:5px;">创作者昵称</div>
-            <input class="hw-input" style="width:100%;" id="acc-display-name" maxlength="40"
-              value="${esc(u.nicknameLocked === false ? "" : (u.displayName || u.name || ""))}" placeholder="创作者昵称（最多 40 字）"
-              ${u.nicknameNextChangeAt && Date.now() < u.nicknameNextChangeAt * 1000 ? 'disabled aria-disabled="true"' : ""} />
-            <div class="hw-account-help">
-              ${u.nicknameNextChangeAt && Date.now() < u.nicknameNextChangeAt * 1000
-                ? `昵称每 30 天可修改一次，下次可修改时间：${esc(new Date(u.nicknameNextChangeAt * 1000).toLocaleDateString("zh-CN"))}`
-                : "昵称每 30 天可修改一次。修改后公开作品的署名会同步更新。"}
-            </div>
+            <div style="font-weight:700;">${esc(u.displayName || u.name || u.username)}</div>
+            <div class="hw-account-help">注册后创作者昵称不可修改。</div>
             <div class="hw-account-help">用户名：@${esc(u.username)}（不可修改）</div>
           </div>
 
@@ -4210,26 +4201,6 @@
             <a class="btn btn-sm" href="/?view=devices">管理已授权设备</a>
           </div>
         </div>
-
-        <section data-account-panel="privacy" class="hw-account-security-panel">
-          <h3>账号停用与数据说明</h3>
-          <p class="hw-account-help">停用后无法继续登录，所有网页登录会话和已授权客户端将失效。已公开作品、历史交易与积分记录不会在停用时自动删除，相关数据处理请联系站点管理员。</p>
-          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;">
-            <button type="button" class="btn btn-sm" id="acc-export-data">导出我的基本资料与内容索引</button>
-            <span id="acc-export-feedback" class="hw-account-help" role="status" aria-live="polite"></span>
-          </div>
-          <p class="hw-account-help">停用后的 30 天内，如原邮箱已验证，可以通过登录页的「恢复停用账号」申请验证邮件。恢复后使用原密码登录；超过期限需联系管理员。</p>
-          <label style="display:flex;align-items:flex-start;gap:9px;font-size:13px;">
-            <input type="checkbox" id="acc-close-erasure" style="margin-top:3px;" />
-            同时提交个人数据删除审核申请（不会立即删除，公开内容及法律要求保留的数据需另行审核）
-          </label>
-          <div class="hw-account-form-grid">
-            <label>确认用户名<input class="hw-input" id="acc-close-username" autocomplete="off" placeholder="输入 @${esc(u.username)} 对应的用户名" /></label>
-            <label>当前登录密码<input class="hw-input" id="acc-close-password" type="password" autocomplete="current-password" /></label>
-          </div>
-          <div style="margin-top:12px;"><button class="btn btn-sm" type="button" id="acc-close-account">停用我的账号</button></div>
-          <p id="acc-close-feedback" class="hw-account-help" role="status" aria-live="polite"></p>
-        </section>
 
         <div data-account-panel="profile" style="display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="hw-account-help" id="acc-profile-feedback" role="status" aria-live="polite"></span>
@@ -4470,54 +4441,11 @@
       } finally { exportBtn.disabled = false; }
     };
 
-    const closeBtn = formEl.querySelector("#acc-close-account");
-    if (closeBtn) closeBtn.onclick = async () => {
-      const confirmation = formEl.querySelector("#acc-close-username").value.trim();
-      const currentPassword = formEl.querySelector("#acc-close-password").value;
-      const requestErasure = Boolean(formEl.querySelector("#acc-close-erasure")?.checked);
-      const feedback = formEl.querySelector("#acc-close-feedback");
-      if (confirmation !== String(u.username)) {
-        feedback.textContent = "请准确输入当前用户名以确认停用";
-        return;
-      }
-      if (!currentPassword) {
-        feedback.textContent = "请输入当前登录密码";
-        return;
-      }
-      if (!window.confirm("停用后所有设备将退出，30 天内可通过已验证邮箱恢复。历史公开内容不会自动删除。" + (requestErasure ? "同时提交数据删除审核申请。" : "") + "确定继续吗？")) return;
-      if (!App.state.serverBacked) {
-        feedback.textContent = "演示模式不支持停用账号";
-        return;
-      }
-      closeBtn.disabled = true;
-      feedback.textContent = "正在停用账号…";
-      try {
-        await apiJson("/api/account/close", {method:"POST", body:{confirmation, currentPassword, requestErasure}});
-        App.state.loggedIn = false;
-        App.state.user = null;
-        saveState();
-        window.location.href = channelUrl("main", {view:"auth"});
-      } catch (err) {
-        feedback.textContent = err.message || "停用失败，请稍后重试";
-        closeBtn.disabled = false;
-      }
-    };
-
     const profileFeedback = formEl.querySelector("#acc-profile-feedback");
     const saveBtn = formEl.querySelector("#acc-save-btn");
     if (saveBtn) saveBtn.onclick = async () => {
-      const nicknameInput = formEl.querySelector("#acc-display-name");
       const bio = formEl.querySelector("#acc-bio").value.trim();
       const payload = { bio };
-      if (nicknameInput) {
-        const displayName = nicknameInput.value.trim();
-        // Setting a nickname is optional; editing a biography must not lock it accidentally.
-        const existingName = u.nicknameLocked === false ? "" : String(u.displayName || u.name || "");
-        if (displayName && displayName !== existingName) {
-          if (!window.confirm("昵称每 30 天仅可修改一次，且公开作品署名会同步更新。确认改为「" + displayName + "」吗？")) return;
-          payload.displayName = displayName;
-        }
-      }
       saveBtn.disabled = true;
       profileFeedback.textContent = "正在保存个人资料…";
       try {
@@ -4526,11 +4454,6 @@
           if (res.boot) applyBootState(res.boot);
         } else {
           u.bio = bio;
-          if (payload.displayName) {
-            u.name = payload.displayName;
-            u.displayName = payload.displayName;
-            u.nicknameLocked = true;
-          }
           saveState();
         }
         profileFeedback.textContent = "个人资料已保存";
