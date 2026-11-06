@@ -104,6 +104,14 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
             tid = ensure_topic(self.conn, "work", wid, w, initial_origin="submission", listed_at_ms=None)
             if st == "hidden":
                 self.conn.execute("UPDATE forum_topics SET status = 'hidden' WHERE id = ?", (tid,))
+            else:
+                # Historical published work threads are listed only after a
+                # genuine published reply; merely existing is not enough.
+                self.conn.execute(
+                    "INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, status, created_at) "
+                    "VALUES (?, ?, 'historic_reader', '历史读者', '历史真实回复', 'published', ?)",
+                    (f"historic_reply_{i:03d}", tid, now_iso),
+                )
             self.conn.commit()
 
         # Pre-check counts
