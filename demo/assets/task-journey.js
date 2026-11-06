@@ -264,6 +264,13 @@
         draw(task);
       } catch (err) {
         if (task.state === "failed") throw err;
+        if (err.status === 401 || err.status === 403 || err.status === 404) {
+          task.state = "failed";
+          task.error = err.status === 404 ? "导入任务不存在或已过期" : "登录已失效，或当前账号无权查看此任务";
+          storage.clear();
+          draw(task);
+          throw new Error(task.error);
+        }
         consecutiveErrors++;
         task.warning = "网络连接暂时不稳定，正在重试查询进度…";
         draw(task);
@@ -359,6 +366,12 @@
     setRecoveredImportHandler(handler) {
       recoveredImportHandler = typeof handler === "function" ? handler : null;
       if (active?.state === "done" && active.recoverable) draw(active);
+    },
+    acknowledgeImport() {
+      if (!active || active.state !== "done") return;
+      active.recoverable = false;
+      storage.clear();
+      draw(active);
     }
   };
 })(window);
