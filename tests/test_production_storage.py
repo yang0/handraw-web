@@ -220,6 +220,27 @@ class PostgresSnapshotTests(unittest.TestCase):
             account, _ = register_user(original, "existing_user", "ExistingPassword2026!",
                                        "existing-user@example.test", "旧用户昵称")
             original_id = account["id"]
+            # Imported forum accounts must retain their historical login secret:
+            # no re-registration or forced password change for valid old hashes.
+            import hashlib
+            historical_password = "OriginalForumPassword2026!"
+            historical_salt = "forum-test-salt"
+            historical_hash = hashlib.pbkdf2_hmac(
+                "sha256", historical_password.encode(), historical_salt.encode(), 64000
+            ).hex()
+            historical, _ = register_user(
+                original, "forum_existing", "TemporaryRegistration2026!",
+                "forum-existing@example.test", "历史创作者"
+            )
+            historical_id = historical["id"]
+            with original.transaction() as tx:
+                tx.execute(
+                    """UPDATE users
+                       SET password_hash=?,password_algo='discourse_pbkdf2',
+                           discourse_salt=?,discourse_user_id=?
+                       WHERE id=?""",
+                    (historical_hash, historical_salt, 991100, historical_id)
+                )
         finally:
             original.close()
 
@@ -233,6 +254,18 @@ class PostgresSnapshotTests(unittest.TestCase):
             self.assertEqual(user["id"], original_id)
             self.assertEqual(user["display_name"], "旧用户昵称")
             self.assertTrue(session.startswith("hws_"))
+            historical_user, historical_session = login_user(
+                pg, "FoRuM_ExIsTiNg", historical_password
+            )
+            self.assertEqual(historical_user["id"], historical_id)
+            self.assertEqual(historical_user["display_name"], "历史创作者")
+            self.assertTrue(historical_session.startswith("hws_"))
+            updated = pg.get_conn().execute(
+                "SELECT password_algo,discourse_salt FROM users WHERE id=?",
+                (historical_id,)
+            ).fetchone()
+            self.assertEqual(updated["password_algo"], "pbkdf2_sha256")
+            self.assertEqual(updated["discourse_salt"], "")
             # A new user must also be able to register *after* the migration.
             newcomer, token = register_user(pg, "new_pg_user", "BrandNewPassword2026!",
                                            "new-pg-user@example.test", "新用户昵称")
