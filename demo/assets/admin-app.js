@@ -721,7 +721,7 @@
           激活：注册后7天内首次收藏、发作品、发帖或成功生图。留存：注册后第7天访问。
           历史数据已回填；浏览/提交为请求数，并非去重访客。
         </p>
-      </div>` : ""}
+      </div>` : (["admin","operator"].includes(r) ? `<div class="adm-panel">增长与激活统计暂不可用，请检查数据库迁移和服务器连接。</div>` : "")}
       <div class="adm-grid-2">
         <div class="adm-panel">
           <div class="adm-panel-head">
