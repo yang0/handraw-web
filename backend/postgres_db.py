@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from psycopg import connect, sql
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.pq import TransactionStatus
+from psycopg_pool import ConnectionPool
 
 
 class HybridRow(dict):
@@ -200,20 +201,23 @@ class PostgresDatabase:
         self.db_path = "PostgreSQL (configured URL)"
         self._dsn = dsn
         self._local = threading.local()
-        self._conns = set()
-        self._lock = threading.Lock()
+        self._write_lock = threading.RLock()  # legacy local critical sections only
+        size = min(32, max(2, int(os.environ.get("HANDRAW_PG_POOL_SIZE", "12"))))
+        self._pool = ConnectionPool(
+            conninfo=dsn, min_size=1, max_size=size, timeout=5.0,
+            kwargs={"autocommit": True, "connect_timeout": 5},
+            open=True,
+        )
 
     def get_conn(self):
         wrapper = getattr(self._local, "wrapper", None)
         if wrapper is None or wrapper._db.closed:
-            raw = connect(self._dsn, autocommit=True, connect_timeout=5)
+            raw = self._pool.getconn()
             raw.execute("SET statement_timeout = '30s'")
             raw.execute("SET lock_timeout = '5s'")
             raw.execute("SET idle_in_transaction_session_timeout = '60s'")
             wrapper = PgConnection(raw)
             self._local.wrapper = wrapper
-            with self._lock:
-                self._conns.add(raw)
         return wrapper
 
     @contextmanager
@@ -238,15 +242,12 @@ class PostgresDatabase:
     def close_thread_conn(self):
         wrapper = getattr(self._local, "wrapper", None)
         if wrapper:
-            with self._lock:
-                self._conns.discard(wrapper._db)
-            wrapper.close()
             self._local.wrapper = None
+            self._pool.putconn(wrapper._db)
+
+    def release_request_connection(self):
+        self.close_thread_conn()
 
     def close(self):
-        with self._lock:
-            conns = list(self._conns)
-            self._conns.clear()
-        for conn in conns:
-            conn.close()
-        self._local.wrapper = None
+        self.close_thread_conn()
+        self._pool.close()
