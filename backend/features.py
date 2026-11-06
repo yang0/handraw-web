@@ -401,6 +401,34 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
         from .p2_oauth import signup_status
         handler._send_json(signup_status(handler))
         return True
+    if req_path == "/api/auth/providers":
+        from .p2_oauth import github_config
+        from .p2_google import google_config
+        handler._send_json({"ok": True, "githubEnabled": bool(github_config()),
+                            "googleEnabled": bool(google_config())})
+        return True
+    if req_path == "/api/auth/google/status":
+        from .p2_google import google_status
+        user = handler._current_user(required=False)
+        handler._send_json({"ok": True, **google_status(handler.db, user)})
+        return True
+    if req_path == "/api/auth/google/start":
+        from .p2_google import start_google
+        handler._enforce_auth_rate_limit("oauth", "google", per_ip_only=True)
+        start_google(handler, (qs.get("mode") or ["login"])[0])
+        return True
+    if req_path == "/api/auth/google/callback":
+        from .p2_google import complete_google, clear_cookie, google_config
+        from .p2_oauth import _redirect
+        handler._enforce_auth_rate_limit("oauth_callback", "google", per_ip_only=True)
+        try:
+            complete_google(handler, qs)
+        except ServiceError as exc:
+            from urllib.parse import urlencode
+            cfg = google_config()
+            _redirect(handler, "/?view=auth&" + urlencode({"oauth_error": exc.code}),
+                      clear_cookie(bool(cfg and cfg["callback"].startswith("https://"))))
+        return True
     if req_path == "/api/auth/github/status":
         from .p2_oauth import oauth_status
         handler._send_json(oauth_status(handler.db, handler._current_user(required=False)))
@@ -539,6 +567,12 @@ def handle_feature_post(handler: Any, req_path: str, body: dict) -> bool:
         from .p2_oauth import finish_signup
         handler._enforce_auth_rate_limit("register", "", per_ip_only=True)
         finish_signup(handler, body)
+        return True
+    if req_path == "/api/auth/google/unlink":
+        from .p2_google import unlink_google
+        user = handler._current_user(required=True)
+        handler._enforce_auth_rate_limit("oauth_unlink", str(user["id"]), per_ip_only=True)
+        handler._send_json(unlink_google(handler.db, user, str(body.get("currentPassword") or "")))
         return True
     if req_path == "/api/auth/github/unlink":
         from .p2_oauth import unlink_github
