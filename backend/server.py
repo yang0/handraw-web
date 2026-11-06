@@ -1658,6 +1658,14 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
 class HandrawRequestHandler(BaseHTTPRequestHandler):
     server_version = "HandrawWeb/2.0"
 
+    def finish(self) -> None:
+        try:
+            super().finish()
+        finally:
+            db = getattr(self.server, "db", None)
+            if db is not None and hasattr(db, "release_request_connection"):
+                db.release_request_connection()
+
     def log_message(self, fmt: str, *args: Any) -> None:
         pass
 
