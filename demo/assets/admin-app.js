@@ -78,6 +78,7 @@
     },
     data: {
       dashboard: null,
+      growth: null,
       scenarios: [],
       works: [],
       comments: [],
@@ -342,6 +343,8 @@
 
     if (mod === "dashboard") {
       state.data.dashboard = await api("/api/admin/dashboard");
+      state.data.growth = ["admin", "operator"].includes(effRole())
+        ? await api("/api/admin/growth?days=30").catch(() => null) : null;
     } else if (mod === "scenarios") {
       const res = await api("/api/admin/home-scenarios");
       state.data.scenarios = res.items || [];
@@ -651,6 +654,8 @@
     const totalOfficial = k.officialStylesCount + k.officialLayoutsCount;
     const covPct = totalOfficial ? ((k.coveredOfficialCount * 100) / totalOfficial).toFixed(1) : "0.0";
     const r = effRole();
+    const growth = state.data.growth;
+    const sumGrowth = (name) => growth ? growth.funnel.filter(x => x.event_name === name).reduce((n,x)=>n+Number(x.total || 0),0) : 0;
 
     return `
       <div class="adm-kpi-grid">
@@ -688,6 +693,35 @@
         </div>` : ""}
       </div>
 
+      ${growth ? `
+      <div class="adm-panel">
+        <div class="adm-panel-head">
+          <h3 class="adm-panel-title">📈 注册漏斗与用户激活 · 近30天（UTC）</h3>
+          <span style="font-size:12px;color:var(--adm-ink-muted);">指标为去重注册用户；曝光和提交为请求次数</span>
+        </div>
+        <div class="adm-kpi-grid" style="margin-bottom:14px;">
+          <div class="adm-kpi-card"><div class="adm-kpi-label">注册页浏览 / 注册提交</div>
+            <div class="adm-kpi-val">${sumGrowth("signup_view")} / ${sumGrowth("signup_submit")}</div></div>
+          <div class="adm-kpi-card"><div class="adm-kpi-label">注册成功</div>
+            <div class="adm-kpi-val">${growth.summary.registered}</div></div>
+          <div class="adm-kpi-card"><div class="adm-kpi-label">7天内激活率</div>
+            <div class="adm-kpi-val">${growth.summary.activationRate}%</div>
+            <div class="adm-kpi-foot">已激活 ${growth.summary.activated7d} 人 · 收藏/发布/发帖/成功生图</div></div>
+          <div class="adm-kpi-card"><div class="adm-kpi-label">D7 留存率</div>
+            <div class="adm-kpi-val">${growth.summary.retentionD7Rate}%</div>
+            <div class="adm-kpi-foot">符合观察期 ${growth.summary.eligibleD7} 人 · 第7天回访 ${growth.summary.retainedD7} 人</div></div>
+        </div>
+        <div class="adm-table-wrap"><table class="adm-table">
+          <thead><tr><th>注册日期</th><th>注册数</th><th>当前已验证</th><th>7天内激活</th><th>D7 留存</th></tr></thead>
+          <tbody>${growth.cohorts.slice(-14).reverse().map(row=>`
+            <tr><td>${esc(row.day)}</td><td>${row.registered}</td><td>${row.verified}</td>
+            <td>${row.activated_7d}</td><td>${row.eligible_d7 ? row.retained_d7 : "观察中"}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <p style="font-size:12px;color:var(--adm-ink-muted);">
+          激活：注册后7天内首次收藏、发作品、发帖或成功生图。留存：注册后第7天访问。
+          历史数据已回填；浏览/提交为请求数，并非去重访客。
+        </p>
+      </div>` : ""}
       <div class="adm-grid-2">
         <div class="adm-panel">
           <div class="adm-panel-head">
