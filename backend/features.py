@@ -381,6 +381,10 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
 
 
 def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
+    if req_path == "/api/auth/github/signup-status":
+        from .p2_oauth import signup_status
+        handler._send_json(signup_status(handler))
+        return True
     if req_path == "/api/auth/github/status":
         from .p2_oauth import oauth_status
         handler._send_json(oauth_status(handler.db, handler._current_user(required=False)))
@@ -506,6 +510,11 @@ def handle_feature_post(handler: Any, req_path: str, body: dict) -> bool:
         handler._enforce_auth_rate_limit("funnel", "", per_ip_only=True)
         log_funnel_view(handler.db, str(body.get("event") or ""))
         handler._send_json({"ok": True})
+        return True
+    if req_path == "/api/auth/github/finish-signup":
+        from .p2_oauth import finish_signup
+        handler._enforce_auth_rate_limit("register", "", per_ip_only=True)
+        finish_signup(handler, body)
         return True
     if req_path == "/api/auth/github/unlink":
         from .p2_oauth import unlink_github
