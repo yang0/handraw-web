@@ -396,9 +396,17 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
         start_github(handler, mode)
         return True
     if req_path == "/api/auth/github/callback":
-        from .p2_oauth import complete_github
+        from .p2_oauth import complete_github, _redirect, _clear_cookie, github_config
         handler._enforce_auth_rate_limit("oauth_callback", "github", per_ip_only=True)
-        complete_github(handler, qs)
+        try:
+            complete_github(handler, qs)
+        except ServiceError as exc:
+            from urllib.parse import urlencode
+            mode = (qs.get("mode") or [""])[0]
+            target = "/?view=auth&" + urlencode({"oauth_error": exc.code})
+            config = github_config()
+            # No token/state/code or provider-returned query is reflected.
+            _redirect(handler, target, _clear_cookie(bool(config and config["callback"].startswith("https://"))))
         return True
     if req_path == "/api/admin/growth":
         from .p2_growth import growth_report
