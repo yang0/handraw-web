@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sqlite3
+import os
+from unittest.mock import patch
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -26,6 +28,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 @unittest.skipUnless(sys_path_ok, "ops package not importable")
 class CounterReconcileTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.path = Path(self.temp.name) / "reconcile.db"
         self.db = server.init_database(self.path)
@@ -79,6 +82,7 @@ class CounterReconcileTests(unittest.TestCase):
 @unittest.skipUnless(sys_path_ok, "ops package not importable")
 class ConvergeCommentsTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.path = Path(self.temp.name) / "converge.db"
         self.db = server.init_database(self.path)
