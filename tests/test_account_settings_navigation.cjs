@@ -24,6 +24,7 @@ assert.match(shared, /创作者资料与邀请码（选填）/, "registration op
 assert.match(shared, /displayName && displayName !== existingName/, "only changed nicknames are submitted");
 assert.match(shared, /nicknameNextChangeAt/, "nickname cooldown is presented to users");
 assert.match(shared, /data-account-panel="email"/, "email has its own grouped panel");
+assert.match(shared, /id="acc-send-email-verification"/, "email verification starts directly in email section");
 assert.match(shared, /data-account-panel="privacy"/, "account closure has a dedicated panel");
 assert.match(shared, /reader\.readAsDataURL\(file\)/, "avatar preview uses CSP-compatible FileReader");
 assert.match(shared, /\/api\/account\/close/, "closure action calls server after confirmation");
