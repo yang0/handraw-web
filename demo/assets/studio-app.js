@@ -16475,6 +16475,29 @@
       }
 
       mountStudioShell();
+      // A completed import from a previous tab/session may be recovered without
+      // overwriting the article the user is currently editing.
+      window.HandrawTaskJourney?.setRecoveredImportHandler(async (result) => {
+        if (!App.state?.loggedIn) throw new Error("请先登录原账号，才能恢复导入文章");
+        ensureMyArticlesInitialized();
+        const now = Date.now();
+        const id = E.uid("art");
+        const title = String(result.title || "导入文章").trim() || "导入文章";
+        const markdown = String(result.markdown || "");
+        if (!markdown.trim()) throw new Error("导入结果为空，未创建文章");
+        const art = {
+          id, articleTitle: title, markdown, cards: [], status: "ready",
+          createdAtMs: now, updatedAtMs: now, timeLabel: formatArticleTimeLabel(now),
+          linkedTabId: null, linkedPlanNodeId: null, style1: "FA-001",
+          layout: "IG-001", coverRatio: "2.35:1", inlineRatio: "4:3", runCount: 0
+        };
+        CS.myArticles.unshift(art);
+        persistMyArticles();
+        openUnifiedArticleEditor(id, {renderNow:true});
+        renderTopAndBottomDocks();
+        toast("已将恢复的文档作为新文章打开，未覆盖原有文章");
+        return true;
+      });
       await hydrateTabsAndUrlParams();
       renderShelfDrawer();
       fullRenderCanvas();
