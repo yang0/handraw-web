@@ -1,0 +1,23 @@
+/* Task journey: tactile ink-and-paper status, motion with reduced-motion support */
+.hw-task-journey{position:fixed;z-index:11000;right:24px;bottom:24px;width:min(390px,calc(100vw - 32px));padding:18px 20px 16px;background:var(--ic-panel-solid,#fffdf8);color:var(--ic-ink,#25211d);border:1px solid var(--ic-border,#dcd2c4);box-shadow:0 18px 64px rgba(48,34,23,.18),0 2px 10px rgba(48,34,23,.07);border-radius:18px;animation:hw-task-rise .34s cubic-bezier(.21,.85,.28,1.08);font-family:inherit}
+.hw-task-journey.is-hidden{display:none}
+.hw-task-head{display:flex;align-items:center;gap:12px;min-width:0}
+.hw-task-symbol{display:flex;align-items:center;justify-content:center;width:42px;height:42px;flex:none;background:#f7e4d9;color:#b63b25;border-radius:14px;font-size:24px;font-weight:800}
+.hw-task-identity{display:flex;flex:1;flex-direction:column;gap:3px;min-width:0}
+.hw-task-identity strong{font-size:14px;line-height:1.4}
+.hw-task-identity span{font-size:12px;opacity:.65;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.hw-task-minimize{border:0;background:transparent;color:inherit;opacity:.6;cursor:pointer;font-size:24px;padding:3px 6px;align-self:start}
+.hw-task-minimize:focus-visible,.hw-task-action:focus-visible{outline:3px solid #b9432f;outline-offset:3px}
+.hw-task-track{position:relative;height:8px;overflow:hidden;border-radius:999px;background:#e6ddd1;margin-top:18px}
+.hw-task-track-fill{height:100%;width:0;background:linear-gradient(90deg,#b93e2c,#e79050);border-radius:999px;transition:width .4s ease}
+.hw-task-track-fill.is-indeterminate{width:35%;animation:hw-task-sweep 1.6s ease-in-out infinite}
+.hw-task-stats{display:flex;justify-content:space-between;gap:10px;font-size:12px;margin-top:10px;opacity:.78;font-variant-numeric:tabular-nums}
+.hw-task-note{font-size:12px;line-height:1.6;margin:12px 0 0;color:#775c3b}
+.hw-task-note.is-error{color:#a12323}
+.hw-task-footnote{font-size:11px;line-height:1.55;opacity:.65;margin:11px 0 0}
+.hw-task-action{margin-top:14px;border:0;background:#b9412c;color:white;padding:9px 15px;border-radius:9px;cursor:pointer;font-weight:700}
+@keyframes hw-task-sweep{0%{transform:translateX(-110%)}100%{transform:translateX(310%)}}
+@keyframes hw-task-rise{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:600px){.hw-task-journey{right:12px;bottom:12px;padding:16px}}
+@media(prefers-reduced-motion:reduce){.hw-task-journey{animation:none}.hw-task-track-fill{transition:none}.hw-task-track-fill.is-indeterminate{animation:none;width:100%;opacity:.5}}
+.hw-task-journey.reduce-motion,.hw-task-journey.reduce-motion .hw-task-track-fill{animation:none;transition:none}
