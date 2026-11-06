@@ -4121,7 +4121,7 @@
           <img class="hw-account-avatar-preview" src="${esc(u.avatarUrl || "/assets/avatar-default.svg")}" alt="我的创作者头像" />
           <div class="hw-account-identity-actions">
             <strong>${esc(u.displayName || u.name || u.username)}</strong>
-            <span style="font-size:12px;color:var(--ink-muted);">公开头像 · 建议使用清晰正方形图片，JPG/PNG/WebP，最大 3 MB</span>
+            <span style="font-size:12px;color:var(--ink-muted);">公开头像 · 支持 PNG / JPG / WebP 原图（最大 12 MB），上传前自动裁剪压缩</span>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <label class="btn btn-sm" for="acc-avatar-file" style="cursor:pointer;">选择头像</label>
               <input type="file" id="acc-avatar-file" accept="image/jpeg,image/png,image/webp" style="position:absolute;width:1px;height:1px;opacity:0;" />
@@ -4258,7 +4258,7 @@
       if (!decodedAvatar || !avatarPreview) return;
       const ctx = avatarPreview.getContext("2d");
       if (!ctx) throw new Error("当前浏览器不支持头像裁剪，请更新浏览器");
-      const w = decodedAvatar.naturalWidth, h = decodedAvatar.naturalHeight;
+      const w = decodedAvatar.naturalWidth || decodedAvatar.width, h = decodedAvatar.naturalHeight || decodedAvatar.height;
       if (!w || !h) throw new Error("图片尺寸无效，请选择其他图片");
       const side = Math.min(w, h) / Number(avatarZoom?.value || 1);
       ctx.clearRect(0, 0, 320, 320);
@@ -4271,6 +4271,7 @@
     function clearAvatarPreview() {
       selectionId++;
       pendingAvatar = null;
+      if (decodedAvatar && typeof decodedAvatar.close === "function") decodedAvatar.close();
       decodedAvatar = null;
       if (avatarInput) avatarInput.value = "";
       if (avatarPreviewStage) avatarPreviewStage.hidden = true;
@@ -4278,47 +4279,75 @@
       if (avatarConfirm) avatarConfirm.disabled = true;
       if (avatarPreview) avatarPreview.getContext("2d")?.clearRect(0, 0, 320, 320);
     }
-    if (avatarInput) avatarInput.addEventListener("change", () => {
+    if (avatarInput) avatarInput.addEventListener("change", async () => {
       const file = avatarInput.files?.[0];
       clearAvatarPreview();
       if (!file) return;
-      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) {
-        avatarFeedback.textContent = "仅支持 JPG、PNG、WebP，最大 3 MB";
+      const ext = String(file.name || "").split(".").pop().toLowerCase();
+      const allowedType = ["image/jpeg", "image/png", "image/webp"].includes(file.type)
+        || (!file.type && ["png", "jpg", "jpeg", "webp"].includes(ext));
+      if (!allowedType) {
+        avatarFeedback.textContent = "文件格式不支持。请选 PNG、JPG 或 WebP 图片。";
+        return;
+      }
+      // PNGs are often significantly larger than equivalent JPEG/WebP files.
+      // The source can be 12MB, but a 320px crop is sent to the 3MB backend.
+      if (file.size > 12 * 1024 * 1024) {
+        avatarFeedback.textContent = "原图超过 12 MB，请先缩小图片后重试";
         return;
       }
       pendingAvatar = file;
       const requestId = selectionId;
       avatarPreviewStage.hidden = false;
       avatarConfirm.disabled = true;
-      avatarFeedback.textContent = "已选择 " + file.name + "，正在读取图片…";
-      // Data URLs work when the site's CSP blocks blob: image sources.
-      const reader = new FileReader();
-      reader.onerror = () => {
-        if (requestId !== selectionId) return;
-        clearAvatarPreview();
-        avatarFeedback.textContent = "读取头像失败，请重新选择";
-      };
-      reader.onload = () => {
-        if (requestId !== selectionId) return;
-        const image = new Image();
-        image.onload = () => {
-          if (requestId !== selectionId) return;
-          try {
-            decodedAvatar = image;
-            drawAvatarPreview();
-            avatarConfirm.disabled = false;
-            avatarFeedback.textContent = "预览已就绪，请调整缩放后确认上传";
-          } catch (err) {
-            avatarFeedback.textContent = err.message || "裁剪预览失败，请重新选择";
+      avatarFeedback.textContent = "已选择 " + file.name + "，正在生成头像预览…";
+      const showDecodedImage = (image) => {
+        if (requestId !== selectionId) {
+          if (typeof image.close === "function") image.close();
+          return;
+        }
+        try {
+          const w = image.naturalWidth || image.width;
+          const h = image.naturalHeight || image.height;
+          if (w < 32 || h < 32 || w * h > 16000000) {
+            throw new Error("图片需至少 32×32 像素，且不超过 1600 万像素");
           }
-        };
-        image.onerror = () => {
-          if (requestId !== selectionId) return;
-          avatarFeedback.textContent = "无法解码此图片，请选择 JPG、PNG 或 WebP";
-        };
-        image.src = String(reader.result || "");
+          decodedAvatar = image;
+          drawAvatarPreview();
+          avatarConfirm.disabled = false;
+          avatarFeedback.textContent = "头像预览已完成，调整缩放后点击确认上传";
+        } catch (err) {
+          avatarFeedback.textContent = err.message || "预览失败，请尝试转换成 JPG";
+        }
       };
-      reader.readAsDataURL(file);
+      const fallbackToImage = () => {
+        const reader = new FileReader();
+        reader.onerror = () => {
+          if (requestId === selectionId) avatarFeedback.textContent = "读取图片失败，请重新选择";
+        };
+        reader.onload = () => {
+          if (requestId !== selectionId) return;
+          const image = new Image();
+          image.onload = () => showDecodedImage(image);
+          image.onerror = () => {
+            if (requestId === selectionId) avatarFeedback.textContent = "PNG 解码失败，请尝试重新导出图片";
+          };
+          image.src = String(reader.result || "");
+        };
+        reader.readAsDataURL(file);
+      };
+      // Blob-aware decode avoids huge PNG data URLs. Older browsers fall back
+      // to FileReader + Image without silently failing.
+      if (typeof createImageBitmap === "function") {
+        try {
+          const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+          showDecodedImage(bitmap);
+        } catch (err) {
+          if (requestId === selectionId) fallbackToImage();
+        }
+      } else {
+        fallbackToImage();
+      }
     });
     const cancelAvatar = formEl.querySelector("#acc-avatar-cancel");
     if (cancelAvatar) cancelAvatar.onclick = () => { clearAvatarPreview(); avatarFeedback.textContent = "已取消上传"; };
