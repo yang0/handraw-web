@@ -307,6 +307,33 @@
     return true;
   }
 
+  // A priced article action needs explicit opt-in. Price shown here is an
+  // estimate; every actual reservation remains verified by the backend.
+  async function confirmArticleGenerationCost(count, { replacing = false, skipped = 0 } = {}) {
+    const guard = window.HandrawArticleGenerationGuard;
+    if (!guard) {
+      toast("费用确认模块尚未加载，请刷新页面后重试");
+      return false;
+    }
+    const demo = isDemoGenerationEnabled();
+    const free = App.state?.freeQuotaRemaining ?? App.state?.free_quota_remaining;
+    const price = CS.serverCfg?.creditPerImage;
+    const balance = App.state?.credits;
+    const quote = guard.quote(count, { demo, free, unitPrice: price, balance });
+    if (!quote.ok) {
+      toast(quote.reason);
+      return false;
+    }
+    if (!demo && !quote.affordable) {
+      toast("当前积分余额不足，请减少生成张数或补充额度");
+      return false;
+    }
+    const response = await guard.confirmGeneration(count, {
+      demo, free, unitPrice: price, balance, replacing, skipped
+    });
+    return Boolean(response.approved);
+  }
+
   function cancelActiveBatchGeneration() {
     if (!_activeBatchRun) return false;
     _activeBatchRun.cancelled = true;
@@ -5664,7 +5691,7 @@
     if (CS.stageView === "history") renderHistoryStage();
   }
 
-  async function generateSinglePlanCard(planNodeOrArtId, cardId, { silent = false, skipHistory = false } = {}) {
+  async function generateSinglePlanCard(planNodeOrArtId, cardId, { silent = false, skipHistory = false, skipCostConfirmation = false } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const target = resolveArticleTarget(planNodeOrArtId);
@@ -5672,7 +5699,11 @@
     if (!planNode || planNode.type !== "article_plan") return false;
     const card = (planNode.data.cards || []).find((c) => c.id === cardId);
     if (!card || card.status === "generating") return false;
-    if (card.status !== "error") card.requestId = "";
+    const sourcePrompt = String(card.prompt || "").trim();
+    if (sourcePrompt.length > 4000) {
+      if (!silent) toast("这张图的完整提示词超过 4000 字符，请精简后再生成；没有扣费");
+      return false;
+    }
 
     const hostGraph = target.isActiveCanvas ? CS.graph : target.hostTab?.graph || null;
     const ctrl =
@@ -5697,6 +5728,11 @@
       S.openLoginModal("调用云端真实大模型生图需先登录账号！", () => renderFullPreviewStage());
       return false;
     }
+    if (!skipCostConfirmation && !(await confirmArticleGenerationCost(1, {
+      replacing: Boolean(card.imageUrl)
+    }))) return false;
+    if (isStaleScope(runEpoch, runScope) || card.status === "generating") return false;
+    if (card.status !== "error") card.requestId = "";
 
     const hadDisplayBefore = target.isActiveCanvas
       ? getDownstreamDisplayNodes(planNode.id).some((d) => d.data?.planCardId === card.id)
@@ -5764,6 +5800,9 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             prompt: card.prompt || card.title || "手绘文章配图",
+            // Article cards already contain the complete user-visible prompt.
+            // Prevent the backend from silently composing another AI prompt.
+            promptFromSkill: Boolean(sourcePrompt),
             ratio: card.ratio || (card.role === "cover" ? "2.35:1" : "4:3"),
             style1: cardS1,
             style2: cardS2,
@@ -5866,7 +5905,7 @@
     }
   }
 
-  async function generateBatchPlanCards(planNodeOrArtId, { onlyPending = false, silent = false } = {}) {
+  async function generateBatchPlanCards(planNodeOrArtId, { onlyPending = true, silent = false } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const target = resolveArticleTarget(planNodeOrArtId);
@@ -5878,8 +5917,19 @@
       return false;
     }
 
-    const targets = onlyPending ? allCards.filter((c) => !c.imageUrl) : allCards;
-    const effectiveTargets = targets.length ? targets : allCards;
+    // All batch entry points intentionally skip completed cards. Regenerating
+    // an existing image must be a deliberate, separately priced card action.
+    const guard = window.HandrawArticleGenerationGuard;
+    if (!guard) { if (!silent) toast("配图确认模块尚未加载，请刷新页面"); return false; }
+    const effectiveTargets = guard.pendingCards(allCards);
+    if (!effectiveTargets.length) {
+      if (!silent) toast("所有配图均已完成；需要重新生成时请在对应卡片操作");
+      return false;
+    }
+    if (effectiveTargets.some((c) => String(c.prompt || "").trim().length > 4000)) {
+      if (!silent) toast("有配图提示词超过 4000 字符，请先精简；没有扣费");
+      return false;
+    }
 
     const hostGraph = target.isActiveCanvas ? CS.graph : target.hostTab?.graph || null;
     const ctrl =
@@ -5906,7 +5956,10 @@
     }
 
     const prevDispCount = target.isActiveCanvas ? getDownstreamDisplayNodes(planNode.id).length : 0;
-    if (!confirmPotentialGenerationCost(effectiveTargets.length)) return false;
+    if (!(await confirmArticleGenerationCost(effectiveTargets.length, {
+      skipped: allCards.length - effectiveTargets.length
+    }))) return false;
+    if (isStaleScope(runEpoch, runScope) || planNode.data.status === "generating") return false;
     const batchRun = { id: makeStableRequestId("article_batch"), cancelled: false };
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
@@ -5922,7 +5975,9 @@
       for (const c of effectiveTargets) {
         if (isStaleScope(runEpoch, runScope)) return false;
         if (batchRun.cancelled) break;
-        const ok = await generateSinglePlanCard(targetRefId, c.id, { silent: true, skipHistory: true });
+        const ok = await generateSinglePlanCard(targetRefId, c.id, {
+          silent: true, skipHistory: true, skipCostConfirmation: true
+        });
         if (isStaleScope(runEpoch, runScope)) return false;
         if (ok) okCount += 1;
       }
@@ -14210,10 +14265,10 @@
     const isGenerating = isArticleGenerating(target?.planNode?.data || {});
     const isPlanning = Boolean(CS.articleIsPlanning);
     const hasBodyText = Boolean((draft.markdown || "").trim());
-    const idleOrErrorCount = cards.filter((c) => !c.status || c.status === "idle" || c.status === "error").length;
+    const idleOrErrorCount = cards.filter((c) => !c.imageUrl && c.status !== "generating").length;
     const allDone = hasCards && cards.every((c) => c.status === "done" && c.imageUrl);
 
-    const canGenerate = hasCards && !isGenerating && !isPlanning;
+    const canGenerate = idleOrErrorCount > 0 && !isGenerating && !isPlanning;
     const canExport = hasImageUrl && hasBodyText && !isGenerating && !isPlanning;
     const canPublish = hasImageUrl && hasBodyText && !isGenerating && !isPlanning;
 
@@ -14231,7 +14286,7 @@
       isPrimaryPublish = true;
     }
 
-    const batchBtnText = hasCards && idleOrErrorCount > 0 ? `生成配图（${idleOrErrorCount} 张）` : "生成配图";
+    const batchBtnText = idleOrErrorCount > 0 ? `生成剩余配图（${idleOrErrorCount} 张）` : "配图已全部生成";
     let planBtnHtml = "AI 规划配图";
     if (isPlanning) {
       planBtnHtml = '<span class="art-spinner ic-art-spin-icon" style="margin-right:4px;"></span>AI 规划中…';
@@ -15428,7 +15483,7 @@
           toast("请先规划封面与插图位");
           return;
         }
-        await generateBatchPlanCards(draft.id);
+        await generateBatchPlanCards(draft.id, { onlyPending: true });
       };
     }
     if (exportBtn) {
