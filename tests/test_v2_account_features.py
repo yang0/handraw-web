@@ -40,6 +40,57 @@ class AccountFeaturesTests(unittest.TestCase):
         self.assertEqual(0,self.db.get_conn().execute("SELECT count(*) FROM sessions WHERE user_id=?",(self.a["id"],)).fetchone()[0])
         with self.assertRaises(ServiceError):features.consume_account_token(self.db,"password_reset",token,"AnotherPass2026!")
 
+    def test_password_reset_blocks_reuse_and_revokes_client_tokens(self):
+        from backend.services import register_user
+        created, _ = register_user(self.db, "reset_p2", "OriginalPassword2026!",
+                                   "reset-p2@example.test")
+        with self.db.transaction() as tx:
+            tx.execute(
+                """INSERT INTO api_tokens(id,user_id,name,scopes,token_hash,created_at)
+                   VALUES(?,?,?,?,?,?)""",
+                ("tok_test_p2", created["id"], "device", '["publish"]', "hash_reset_p2",
+                 "2026-01-01T00:00:00Z")
+            )
+        with patch("backend.features.send_account_mail") as send:
+            features.request_account_mail(self.db,"password_reset", created["email"])
+            token = send.call_args.args[2]
+        with self.assertRaises(ServiceError) as reused:
+            features.consume_account_token(self.db,"password_reset",token,"OriginalPassword2026!")
+        self.assertEqual(reused.exception.code, "password_reused")
+        features.consume_account_token(self.db,"password_reset",token,"NewSecurePassword2026!")
+        revoked = self.db.get_conn().execute(
+            "SELECT revoked_at FROM api_tokens WHERE id='tok_test_p2'"
+        ).fetchone()[0]
+        self.assertTrue(revoked)
+        with self.assertRaises(ServiceError):
+            features.consume_account_token(self.db,"password_reset",token,"AgainPassword2026!")
+
+    def test_paginated_export_covers_all_pages_but_never_exposes_secrets(self):
+        from backend.services import register_user
+        created, _ = register_user(self.db, "export_p2", "PrivatePassword2026!",
+                                   "export-p2@example.test")
+        with self.db.transaction() as tx:
+            for i in range(205):
+                tx.execute(
+                    "INSERT INTO collections(user_id,bucket,target_id,created_at) VALUES(?,?,?,?)",
+                    (created["id"], "styles", f"export-item-{i}", "2026-01-01T00:00:00Z")
+                )
+        class Handler:
+            db = self.db
+            def _current_user(self, required=True):
+                return created
+            def _send_json(self, payload, set_cookie=None):
+                self.response = payload
+        h=Handler()
+        self.assertTrue(features.handle_feature_get(h,"/api/account/export",{"page":["0"]}))
+        self.assertEqual(len(h.response["collections"]),200)
+        self.assertEqual(h.response["nextPage"],1)
+        self.assertNotIn("password_hash",json.dumps(h.response))
+        self.assertNotIn("token_hash",json.dumps(h.response))
+        self.assertTrue(features.handle_feature_get(h,"/api/account/export",{"page":["1"]}))
+        self.assertEqual(len(h.response["collections"]),5)
+        self.assertIsNone(h.response["nextPage"])
+
     def test_verification_binds_to_email_and_expires(self):
         with patch("backend.features.send_account_mail") as send:
             features.request_account_mail(self.db,"verify_email",self.a["email"],self.a)
