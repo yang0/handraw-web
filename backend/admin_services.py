@@ -2879,15 +2879,32 @@ def admin_delete_user(
             raise ServiceError("目标用户不存在", status=404)
         if target["username"] == "yang0":
             raise ServiceError("安全保护：禁止删除创站主超级管理员账号 yang0")
+        # Erase dependent rows before the account. Older implementations
+        # only removed a subset of FK children; growth/security records added
+        # in later migrations then caused user deletion to return HTTP 500.
+        # Keep foreign-key enforcement enabled: never work around it with
+        # PRAGMA foreign_keys=OFF.
+        tx.execute(
+            "DELETE FROM media_public_grants WHERE owner_user_id = ? OR granted_by_user_id = ?",
+            (uid, uid),
+        )
         for child_sql in (
             "DELETE FROM sessions WHERE user_id = ?",
             "DELETE FROM forum_moderators WHERE user_id = ?",
+            "DELETE FROM oauth_identities WHERE user_id = ?",
+            "DELETE FROM growth_events WHERE user_id = ?",
+            "DELETE FROM security_devices WHERE user_id = ?",
+            "DELETE FROM account_erasure_requests WHERE user_id = ?",
+            "DELETE FROM tip_requests WHERE user_id = ?",
+            "DELETE FROM studio_import_jobs WHERE user_id = ?",
+            "DELETE FROM studio_generation_media WHERE user_id = ?",
+            "DELETE FROM studio_quota_reservations WHERE user_id = ?",
             "DELETE FROM redeem_code_uses WHERE user_id = ?",
             "DELETE FROM collections WHERE user_id = ?",
             "DELETE FROM interactions WHERE user_id = ?",
             "DELETE FROM unlocks WHERE user_id = ?",
             "DELETE FROM user_uploads WHERE user_id = ?",
-            "DELETE FROM studio_workflows WHERE user_id = ? AND is_official_preset = 0",
+            "DELETE FROM studio_workflows WHERE user_id = ?",
             "DELETE FROM studio_articles WHERE user_id = ?",
             "DELETE FROM ledgers WHERE user_id = ?",
             "DELETE FROM wallets WHERE user_id = ?",
