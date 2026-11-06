@@ -168,6 +168,7 @@ def consume_account_token(db: Any, purpose: str, token: str, password: str = "")
             tx.execute("UPDATE users SET password_hash=?,password_algo='pbkdf2_sha256',discourse_salt='' WHERE id=?", (hash_password(password),row["user_id"]))
             tx.execute("DELETE FROM sessions WHERE user_id=?", (row["user_id"],))
             tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND purpose=? AND consumed_at IS NULL", (now,row["user_id"],purpose))
+            emit_notification(tx, row["user_id"], "security", "账号密码已通过邮箱重置，全部网页登录会话已失效。")
         elif purpose == "email_change":
             existing = tx.execute("SELECT id FROM users WHERE LOWER(email)=? AND id!=?",
                                   (row["email"].lower(), row["user_id"])).fetchone()
@@ -179,6 +180,7 @@ def consume_account_token(db: Any, purpose: str, token: str, password: str = "")
             tx.execute("DELETE FROM sessions WHERE user_id=?", (row["user_id"],))
             tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND purpose IN ('email_change','password_reset') AND consumed_at IS NULL",
                        (now, row["user_id"]))
+            emit_notification(tx, row["user_id"], "security", "登录邮箱已换绑，全部网页登录会话已失效。")
         else:
             tx.execute("INSERT INTO verified_emails(user_id,email,verified_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,verified_at=excluded.verified_at", (row["user_id"],row["email"],utc_now_iso()))
         tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE token_hash=?", (now,digest))
