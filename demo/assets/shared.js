@@ -4183,7 +4183,7 @@
           </div>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;">
             <button type="button" class="btn btn-sm btn-primary" id="acc-change-email">发送新邮箱验证链接</button>
-            <a class="btn btn-sm" href="${esc(channelUrl("main", {view:"verify-email"}))}">验证当前邮箱</a>
+            <button type="button" class="btn btn-sm" id="acc-send-email-verification">发送当前邮箱验证邮件</button>
           </div>
           <span id="acc-email-feedback" role="status" aria-live="polite" class="hw-account-help"></span>
           <p class="hw-account-help">忘记密码请从退出登录后的登录页进入「忘记密码」流程；安全验证邮件会发送到当前或新邮箱。</p>
@@ -4238,16 +4238,34 @@
     const u = App.state.user;
 
     const emailStatus = formEl.querySelector("#acc-email-verify-status");
-    if (emailStatus && App.state.serverBacked) {
-      apiJson("/api/account/status").then((status) => {
+    const verifyEmailBtn = formEl.querySelector("#acc-send-email-verification");
+    const readEmailStatus = async () => {
+      if (!emailStatus || !App.state.serverBacked) return;
+      try {
+        const status = await apiJson("/api/account/status");
         if (!emailStatus.isConnected) return;
         emailStatus.textContent =
           (status.emailVerified ? "✓ 已验证邮箱" : "尚未验证邮箱") +
-          (status.mailEnabled ? "" : " · 站点尚未配置邮件服务，找回与换绑暂不可用");
-      }).catch(() => {
-        if (emailStatus.isConnected) emailStatus.textContent = "暂时无法读取邮箱状态";
-      });
-    }
+          (status.mailEnabled ? "" : " · 站点尚未配置邮件服务，验证与换绑暂不可用");
+        if (verifyEmailBtn) {
+          verifyEmailBtn.hidden = Boolean(status.emailVerified);
+          verifyEmailBtn.disabled = !status.mailEnabled;
+        }
+      } catch (err) {
+        if (emailStatus.isConnected) emailStatus.textContent = "暂时无法读取邮箱验证状态";
+      }
+    };
+    if (verifyEmailBtn) verifyEmailBtn.onclick = async () => {
+      verifyEmailBtn.disabled = true;
+      emailStatus.textContent = "正在发送验证邮件…";
+      try {
+        const res = await apiJson("/api/auth/send-verification", {method:"POST",body:{}});
+        emailStatus.textContent = res.message || "请打开当前邮箱，点击验证链接";
+      } catch (err) {
+        emailStatus.textContent = err.message || "发送失败，请稍后重试";
+      } finally { verifyEmailBtn.disabled = false; }
+    };
+    readEmailStatus();
 
     const avatarInput = formEl.querySelector("#acc-avatar-file");
     const avatarFeedback = formEl.querySelector("#acc-avatar-feedback");
