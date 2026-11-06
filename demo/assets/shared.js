@@ -755,14 +755,21 @@
     let optRes;
     let bootRes;
     try {
+      const startupUrls = ["/data/catalog.json", "/data/options.json", "/api/boot"];
       const responses = await Promise.all([
-        fetch("/data/catalog.json"),
-        fetch("/data/options.json"),
-        fetch("/api/boot", { credentials: "include" })
+        fetch(startupUrls[0]),
+        fetch(startupUrls[1]),
+        fetch(startupUrls[2], { credentials: "include" })
       ]);
-      if (!responses[0].ok || !responses[1].ok || !responses[2].ok) {
-        const bad = responses.find((r) => !r.ok);
-        throw new Error(`启动接口失败（HTTP ${bad ? bad.status : "未知"}）`);
+      const failedIndex = responses.findIndex((r) => !r.ok);
+      if (failedIndex !== -1) {
+        const bad = responses[failedIndex];
+        let requestId = bad.headers.get("X-Request-ID") || "";
+        try {
+          const payload = await bad.clone().json();
+          requestId = requestId || String(payload.requestId || "");
+        } catch (_) { /* Static server errors need not be JSON. */ }
+        throw new Error(`启动接口失败：${startupUrls[failedIndex]}（HTTP ${bad.status}${requestId ? "，请求编号 " + requestId : ""}）`);
       }
       [catRes, optRes, bootRes] = await Promise.all(responses.map((r) => r.json()));
     } catch (err) {
