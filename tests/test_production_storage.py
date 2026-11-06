@@ -196,6 +196,51 @@ class PostgresSnapshotTests(unittest.TestCase):
                         ("LeGaCy", "another@example.test", self.legacy_hash)
                     )
 
+    @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL")
+                         and os.environ.get("HANDRAW_PG_PARITY_TEST") == "YES",
+                         "Full isolated PostgreSQL parity test is not enabled")
+    def test_full_v2_schema_and_existing_user_password_on_postgresql(self):
+        import uuid
+        import psycopg
+        from psycopg import sql
+        from psycopg.conninfo import make_conninfo
+        from backend.db import Database
+        from backend.services import register_user, login_user
+        from backend.postgres_db import PostgresDatabase
+
+        database_name = "handraw_parity_" + uuid.uuid4().hex[:12]
+        admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
+        parity_dsn = make_conninfo(admin_dsn, dbname=database_name)
+        file = Path(self.tmp.name) / "whole_v2.db"
+        original = Database(file)
+        try:
+            original.migrate()
+            account, _ = register_user(original, "existing_user", "ExistingPassword2026!",
+                                       "existing-user@example.test", "旧用户昵称")
+            original_id = account["id"]
+        finally:
+            original.close()
+
+        info = self.tool.stage(file, parity_dsn, True)
+        self.assertTrue(info["staged"])
+        self.assertGreater(info["tables"], 40)
+        pg = PostgresDatabase(parity_dsn)
+        try:
+            pg.migrate()
+            user, session = login_user(pg, "existing-user@example.test", "ExistingPassword2026!")
+            self.assertEqual(user["id"], original_id)
+            self.assertEqual(user["display_name"], "旧用户昵称")
+            self.assertTrue(session.startswith("hws_"))
+            # A new user must also be able to register *after* the migration.
+            newcomer, token = register_user(pg, "new_pg_user", "BrandNewPassword2026!",
+                                           "new-pg-user@example.test", "新用户昵称")
+            self.assertNotEqual(newcomer["id"], original_id)
+            self.assertTrue(token.startswith("hws_"))
+        finally:
+            pg.close()
+
     def test_fk_violations_cannot_migrate(self):
         with sqlite3.connect(self.path) as conn:
             conn.execute("INSERT INTO sessions(token,user_id) VALUES(?,?)", ("orphan", 999))
