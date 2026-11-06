@@ -62,3 +62,23 @@
 .hw-task-recovery-actions .hw-task-action{margin-top:14px}
 .hw-task-recovery-actions .hw-task-secondary{background:transparent;border:1px solid #ccae9d;color:#9a4433}
 .hw-task-recovery-actions button:focus-visible{outline:3px solid #df9371;outline-offset:2px}
+
+/* Article generation consent: paper-and-ink pricing sheet. */
+.hw-article-charge-overlay{position:fixed;inset:0;z-index:12100;display:grid;place-items:center;padding:16px;background:rgba(26,21,16,.58);backdrop-filter:blur(4px)}
+.hw-article-charge-dialog{width:min(460px,100%);max-height:90vh;overflow:auto;background:#fffdf8;color:#29221d;border:1px solid #dfd1c4;border-radius:20px;padding:26px;box-shadow:0 24px 80px rgba(25,15,10,.23)}
+.hw-article-charge-kicker{font-size:11px;letter-spacing:.13em;color:#ad4933;font-weight:800}
+.hw-article-charge-dialog h2{font-size:22px;margin:10px 0}
+.hw-article-charge-help{font-size:13px;line-height:1.65;color:#6a6057;margin:0 0 20px}
+.hw-article-charge-rows{display:flex;flex-direction:column;gap:12px;background:#f7f0e8;border-radius:13px;padding:15px}
+.hw-article-charge-rows>div{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.hw-article-charge-rows strong{font-variant-numeric:tabular-nums}
+.hw-article-charge-total{border-top:1px solid #dacbbd;padding-top:12px;font-weight:800;color:#a23c28}
+.hw-article-charge-note,.hw-article-charge-error{font-size:12px;line-height:1.65;margin:14px 0 0;color:#695d50}
+.hw-article-charge-error{color:#a12720}
+.hw-article-charge-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:24px}
+.hw-article-charge-actions button{padding:10px 16px;font-size:13px;font-weight:800;border-radius:9px;border:1px solid #d2c0b2;background:transparent;color:inherit;cursor:pointer}
+.hw-article-charge-actions .hw-article-charge-primary{background:#b9412c;color:#fff;border-color:#b9412c}
+.hw-article-charge-actions button:disabled{opacity:.45;cursor:not-allowed}
+.hw-article-charge-actions button:focus-visible{outline:3px solid #d7856f;outline-offset:3px}
+@media(max-width:600px){.hw-article-charge-dialog{padding:19px}.hw-article-charge-actions button{flex:1}}
+@media(prefers-reduced-motion:reduce){.hw-article-charge-overlay{backdrop-filter:none}}
