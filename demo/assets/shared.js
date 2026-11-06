@@ -3364,18 +3364,48 @@
     };
     function renderGithubAuth() {
       const slot = stage.querySelector("#github-auth-entry");
-      if (!slot || !App.state?.serverBacked) return;
-      apiJson("/api/auth/github/status").then(status => {
-        if (!slot.isConnected || !status.githubEnabled) return;
-        const a = document.createElement("a");
-        a.href = "/api/auth/github/start?mode=login";
-        a.className = "btn";
-        a.style.display = "inline-flex";
-        a.style.justifyContent = "center";
-        a.style.width = "100%";
-        a.textContent = "使用 GitHub 账号继续";
-        slot.append(a);
-      }).catch(() => {});
+      if (!slot) return;
+      const providers = [
+        { id: "google", name: "Google" },
+        { id: "github", name: "GitHub" }
+      ];
+      const draw = (flags, error = "") => {
+        if (!slot.isConnected) return;
+        slot.replaceChildren();
+        const label = document.createElement("div");
+        label.className = "hw-account-help";
+        label.style.marginBottom = "8px";
+        label.textContent = "或使用第三方账号继续";
+        slot.append(label);
+        providers.forEach(provider => {
+          const enabled = Boolean(flags?.[provider.id + "Enabled"]);
+          const button = document.createElement(enabled ? "a" : "button");
+          button.className = "btn btn-sm";
+          button.style.cssText = "width:100%;margin:0 0 8px;display:flex;align-items:center;justify-content:center;gap:8px;";
+          if (enabled) {
+            button.href = "/api/auth/" + provider.id + "/start?mode=login";
+            button.textContent = "使用 " + provider.name + " 账号继续";
+          } else {
+            button.type = "button";
+            button.disabled = true;
+            button.title = "服务端尚未完成 " + provider.name + " OAuth 配置";
+            button.textContent = provider.name + " 登录 · 尚未启用";
+          }
+          slot.append(button);
+        });
+        if (error || !flags?.googleEnabled || !flags?.githubEnabled) {
+          const hint = document.createElement("p");
+          hint.className = "hw-account-help";
+          hint.style.cssText = "margin:2px 0 12px;font-size:12px;";
+          hint.setAttribute("role", error ? "alert" : "status");
+          hint.textContent = error || "标记为「尚未启用」的登录方式，需要站点管理员先配置 OAuth 应用，不是图片加载问题。";
+          slot.append(hint);
+        }
+      };
+      draw(null, "");
+      if (!App.state?.serverBacked) return;
+      apiJson("/api/auth/providers").then(status => draw(status))
+        .catch(() => draw(null, "暂时无法读取第三方登录配置，当前无法使用 Google/GitHub 登录，请使用账号密码。"));
     }
     function renderStage() {
       tabBtns.forEach((b) => b.classList.toggle("is-active", b.getAttribute("data-atab") === authTab));
@@ -4542,53 +4572,80 @@
       finally { changeEmailBtn.disabled = false; }
     };
 
-    const githubStatus = formEl.querySelector("#acc-github-status");
-    const githubActions = formEl.querySelector("#acc-github-actions");
-    if (githubStatus && githubActions) {
-      apiJson("/api/auth/github/status").then(status => {
-        if (!githubStatus.isConnected) return;
-        githubActions.replaceChildren();
-        githubStatus.textContent = status.githubLinked
-          ? "已绑定 GitHub：" + (status.githubLogin || "已认证账号")
-          : status.githubEnabled ? "尚未绑定 GitHub" : "当前未启用第三方登录";
-        if (status.githubEnabled && !status.githubLinked) {
-          const link = document.createElement("a");
-          link.href = "/api/auth/github/start?mode=link";
-          link.className = "btn btn-sm";
-          link.textContent = "绑定 GitHub";
-          githubActions.append(link);
+    const socialStatus = formEl.querySelector("#acc-github-status");
+    const socialActions = formEl.querySelector("#acc-github-actions");
+    if (socialStatus && socialActions) {
+      const providerTypes = [
+        {id:"google", title:"Google"},
+        {id:"github", title:"GitHub"}
+      ];
+      const loadSocialStatus = async () => {
+        socialStatus.textContent = "正在读取 Google / GitHub 登录状态…";
+        socialActions.replaceChildren();
+        if (!App.state?.serverBacked) {
+          socialStatus.textContent = "演示模式无法绑定真实第三方账号";
+          return;
         }
-        if (status.githubLinked) {
-          const wrap = document.createElement("div");
-          wrap.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;align-items:center;";
-          const pw = document.createElement("input");
-          pw.type = "password";
-          pw.className = "hw-input";
-          pw.placeholder = "输入当前密码确认解绑";
-          pw.autocomplete = "current-password";
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "btn btn-sm";
-          btn.textContent = "解除 GitHub 绑定";
-          btn.onclick = async () => {
-            if (!pw.value) { githubStatus.textContent = "请输入当前密码后再解绑"; pw.focus(); return; }
-            if (!window.confirm("解除绑定后将无法使用 GitHub 登录。确认继续？")) return;
-            btn.disabled = true;
-            try {
-              const result = await apiJson("/api/auth/github/unlink", {method:"POST",
-                body:{currentPassword:pw.value}});
-              githubStatus.textContent = result.message || "已解除 GitHub 绑定";
-              githubActions.replaceChildren();
-              pw.value = "";
-            } catch (err) {
-              githubStatus.textContent = err.message || "解绑失败";
-              btn.disabled = false;
+        try {
+          const items = await Promise.all(providerTypes.map(async item => {
+            const status = await apiJson("/api/auth/" + item.id + "/status");
+            return {...item, enabled:Boolean(status[item.id + "Enabled"]),
+                    linked:Boolean(status[item.id + "Linked"]),
+                    login:status[item.id + "Login"] || ""};
+          }));
+          if (!socialStatus.isConnected) return;
+          socialStatus.textContent = "Google、GitHub 账号分别独立绑定，已注册邮箱不会自动合并账号。";
+          items.forEach(provider => {
+            const section = document.createElement("div");
+            section.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0;";
+            const status = document.createElement("span");
+            status.className = "hw-account-help";
+            status.style.flex = "1";
+            status.textContent = provider.title + "：" +
+              (provider.linked ? "已绑定 " + provider.login :
+               provider.enabled ? "尚未绑定" : "尚未启用（需管理员配置）");
+            section.append(status);
+            if (provider.enabled && !provider.linked) {
+              const link = document.createElement("a");
+              link.className = "btn btn-sm";
+              link.href = "/api/auth/" + provider.id + "/start?mode=link";
+              link.textContent = "绑定 " + provider.title;
+              section.append(link);
             }
-          };
-          wrap.append(pw, btn);
-          githubActions.append(wrap);
+            if (provider.linked) {
+              const pw = document.createElement("input");
+              pw.className = "hw-input";
+              pw.type = "password";
+              pw.placeholder = "当前密码（解绑验证）";
+              pw.autocomplete = "current-password";
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "btn btn-sm";
+              btn.textContent = "解绑 " + provider.title;
+              btn.onclick = async () => {
+                if (!pw.value) { socialStatus.textContent = "请输入当前密码后再解绑"; pw.focus(); return; }
+                if (!window.confirm("解除绑定后将无法用 " + provider.title + " 登录。确定继续吗？")) return;
+                btn.disabled = true;
+                try {
+                  await apiJson("/api/auth/" + provider.id + "/unlink",
+                    {method:"POST",body:{currentPassword:pw.value}});
+                  pw.value = "";
+                  await loadSocialStatus();
+                } catch (err) {
+                  socialStatus.textContent = err.message || "解绑失败，请重试";
+                  btn.disabled = false;
+                }
+              };
+              section.append(pw,btn);
+            }
+            socialActions.append(section);
+          });
+        } catch (err) {
+          if (socialStatus.isConnected) socialStatus.textContent =
+            "第三方登录状态读取失败：" + (err.message || "网络异常，请稍后重试");
         }
-      }).catch(() => { if (githubStatus.isConnected) githubStatus.textContent = "暂时无法读取第三方身份状态"; });
+      };
+      loadSocialStatus();
     }
 
     const sessionsMount = formEl.querySelector("#acc-session-list");
