@@ -25,8 +25,8 @@ class Fix66WorkTopicsTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "test_fix_66.db"
         self.db = server.init_database(self.db_path)
-        self.author, _ = services.register_user(self.db, "test_author", "pass123")
-        self.admin, _ = services.register_user(self.db, "test_admin", "pass123")
+        self.author, _ = services.register_user(self.db, "test_author", "Pass1234!")
+        self.admin, _ = services.register_user(self.db, "test_admin", "Pass1234!")
         conn = self.db.get_conn()
         conn.execute("UPDATE users SET role = 'admin' WHERE username = 'test_admin'")
         conn.commit()
