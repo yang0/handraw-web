@@ -71,13 +71,13 @@ def _read_signup_ticket(handler: Any) -> str:
 def signup_status(handler: Any) -> dict:
     ticket = _read_signup_ticket(handler)
     if not ticket or len(ticket) > 256:
-        raise ServiceError("注册身份已过期，请重新使用 GitHub 授权", status=401, code="oauth_signup_expired")
+        raise ServiceError("注册身份已过期，请重新发起第三方授权", status=401, code="oauth_signup_expired")
     row = handler.db.get_conn().execute(
         "SELECT * FROM oauth_signup_tickets WHERE ticket_hash=? AND expires_at>?",
         (_digest(ticket), int(time.time()))
     ).fetchone()
     if not row:
-        raise ServiceError("注册身份已过期，请重新使用 GitHub 授权", status=401, code="oauth_signup_expired")
+        raise ServiceError("注册身份已过期，请重新发起第三方授权", status=401, code="oauth_signup_expired")
     return {"ok": True, "provider": row["provider"].capitalize(), "providerId": row["provider"], "providerLogin": row["provider_login"],
             "suggestedUsername": _oauth_username(handler.db.get_conn(), row["provider_login"], row["provider_user_id"]),
             "verifiedEmail": row["verified_email"]}
