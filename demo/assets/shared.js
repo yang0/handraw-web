@@ -3346,6 +3346,26 @@
       });
     }
 
+    const trackAuthEvent = (eventName) => {
+      if (App.state?.serverBacked) {
+        apiJson("/api/auth/funnel-event", {method:"POST",body:{event:eventName}}).catch(() => {});
+      }
+    };
+    function renderGithubAuth() {
+      const slot = stage.querySelector("#github-auth-entry");
+      if (!slot || !App.state?.serverBacked) return;
+      apiJson("/api/auth/github/status").then(status => {
+        if (!slot.isConnected || !status.githubEnabled) return;
+        const a = document.createElement("a");
+        a.href = "/api/auth/github/start?mode=login";
+        a.className = "btn";
+        a.style.display = "inline-flex";
+        a.style.justifyContent = "center";
+        a.style.width = "100%";
+        a.textContent = "使用 GitHub 账号继续";
+        slot.append(a);
+      }).catch(() => {});
+    }
     function renderStage() {
       tabBtns.forEach((b) => b.classList.toggle("is-active", b.getAttribute("data-atab") === authTab));
       if (authTab === "login") {
@@ -3360,6 +3380,7 @@
             <div>✦ 原 Discourse 老论坛迁移账号支持原邮箱/用户名直接登录并自动升级加密</div>
           </div>
           <p id="auth-inline-error" role="alert" style="color:var(--vermilion);font-size:13px;margin:0 0 10px;"></p>
+          <div id="github-auth-entry" style="margin-bottom:12px;"></div>
           <div style="display:flex;gap:10px;justify-content:flex-end;">
             <button type="button" class="btn" id="login-cancel-btn">暂以游客浏览</button>
             <button type="button" class="btn btn-primary" id="login-confirm-btn">⚡ 登录并解锁全部内容</button>
@@ -3367,6 +3388,8 @@
         `;
         restoreAuthDraft();
         bindAuthClear();
+        trackAuthEvent("login_view");
+        renderGithubAuth();
         stage.querySelector("#login-cancel-btn").onclick = () => {
           if (onCancel) onCancel();
         };
@@ -3415,6 +3438,7 @@
             </details>
           </div>
           <p id="auth-inline-error" role="alert" style="color:var(--vermilion);font-size:13px;margin:0 0 10px;"></p>
+          <div id="github-auth-entry" style="margin-bottom:12px;"></div>
           <div style="display:flex;gap:10px;justify-content:flex-end;">
             <button type="button" class="btn" id="reg-cancel-btn">返回</button>
             <button type="button" class="btn btn-primary" id="reg-confirm-btn">🎉 立即注册领 +20 积分</button>
@@ -3422,10 +3446,13 @@
         `;
         restoreAuthDraft();
         bindAuthClear();
+        trackAuthEvent("signup_view");
+        renderGithubAuth();
         stage.querySelector("#reg-cancel-btn").onclick = () => {
           if (onCancel) onCancel();
         };
         stage.querySelector("#reg-confirm-btn").onclick = async () => {
+          trackAuthEvent("signup_submit");
           const username = stage.querySelector("#reg-username").value.trim();
           const displayName = stage.querySelector("#reg-display-name").value.trim();
           const email = stage.querySelector("#reg-email").value.trim();
@@ -4189,6 +4216,12 @@
         </section>
 
         <section data-account-panel="security" class="hw-account-security-panel">
+          <h3>关联的第三方登录</h3>
+          <p class="hw-account-help">GitHub 身份按平台用户 ID 关联，不会自动按邮箱合并其他账号。解绑需要当前登录密码。</p>
+          <div id="acc-github-status" role="status" aria-live="polite" class="hw-account-help">正在检查 GitHub 登录状态…</div>
+          <div id="acc-github-actions"></div>
+        </section>
+        <section data-account-panel="security" class="hw-account-security-panel">
           <h3>登录设备</h3>
           <p class="hw-account-help">可以查看当前网页登录会话，并通过密码退出其他设备。</p>
           <div id="acc-session-list" class="hw-account-help">正在读取…</div>
@@ -4490,6 +4523,55 @@
       } catch (err) { status.textContent = err.message || "换绑请求失败"; }
       finally { changeEmailBtn.disabled = false; }
     };
+
+    const githubStatus = formEl.querySelector("#acc-github-status");
+    const githubActions = formEl.querySelector("#acc-github-actions");
+    if (githubStatus && githubActions) {
+      apiJson("/api/auth/github/status").then(status => {
+        if (!githubStatus.isConnected) return;
+        githubActions.replaceChildren();
+        githubStatus.textContent = status.githubLinked
+          ? "已绑定 GitHub：" + (status.githubLogin || "已认证账号")
+          : status.githubEnabled ? "尚未绑定 GitHub" : "当前未启用第三方登录";
+        if (status.githubEnabled && !status.githubLinked) {
+          const link = document.createElement("a");
+          link.href = "/api/auth/github/start?mode=link";
+          link.className = "btn btn-sm";
+          link.textContent = "绑定 GitHub";
+          githubActions.append(link);
+        }
+        if (status.githubLinked) {
+          const wrap = document.createElement("div");
+          wrap.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;align-items:center;";
+          const pw = document.createElement("input");
+          pw.type = "password";
+          pw.className = "hw-input";
+          pw.placeholder = "输入当前密码确认解绑";
+          pw.autocomplete = "current-password";
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "btn btn-sm";
+          btn.textContent = "解除 GitHub 绑定";
+          btn.onclick = async () => {
+            if (!pw.value) { githubStatus.textContent = "请输入当前密码后再解绑"; pw.focus(); return; }
+            if (!window.confirm("解除绑定后将无法使用 GitHub 登录。确认继续？")) return;
+            btn.disabled = true;
+            try {
+              const result = await apiJson("/api/auth/github/unlink", {method:"POST",
+                body:{currentPassword:pw.value}});
+              githubStatus.textContent = result.message || "已解除 GitHub 绑定";
+              githubActions.replaceChildren();
+              pw.value = "";
+            } catch (err) {
+              githubStatus.textContent = err.message || "解绑失败";
+              btn.disabled = false;
+            }
+          };
+          wrap.append(pw, btn);
+          githubActions.append(wrap);
+        }
+      }).catch(() => { if (githubStatus.isConnected) githubStatus.textContent = "暂时无法读取第三方身份状态"; });
+    }
 
     const sessionsMount = formEl.querySelector("#acc-session-list");
     const readSessions = async () => {
