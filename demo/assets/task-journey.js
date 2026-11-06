@@ -220,5 +220,40 @@
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => resume(), {once: true});
   else resume();
-  global.HandrawTaskJourney = { submitImport, resume, downloadMarkdown };
+  // Reusable non-percent activity trace for synchronous AI planning/export.
+  // This intentionally never invents an ETA or a completion percentage.
+  async function withActivity(label, work) {
+    const id = "hw-activity-" + Math.random().toString(36).slice(2, 9);
+    const el = document.createElement("div");
+    el.id = id;
+    el.className = "hw-activity-trace";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    const started = Date.now();
+    let phase = "working";
+    const render = () => {
+      const seconds = Math.floor((Date.now() - started) / 1000);
+      el.innerHTML = `<span class="hw-activity-pulse" aria-hidden="true">${phase === "done" ? "✓" : phase === "failed" ? "!" : "✦"}</span>
+        <span class="hw-activity-label"><strong>${escapeHtml(phase === "done" ? "已完成" : phase === "failed" ? "处理失败" : label)}</strong>
+          <small>${phase === "working" ? `已等待 ${seconds} 秒 · 任务仍在进行` : phase === "done" ? "结果已经更新" : "请检查提示并重试"}</small></span>`;
+      el.classList.toggle("is-finished", phase !== "working");
+    };
+    document.body.appendChild(el);
+    render();
+    const interval = setInterval(() => { if (phase === "working") render(); }, 1000);
+    try {
+      const result = await work();
+      phase = "done";
+      render();
+      return result;
+    } catch (error) {
+      phase = "failed";
+      render();
+      throw error;
+    } finally {
+      clearInterval(interval);
+      setTimeout(() => el.remove(), phase === "failed" ? 9000 : 3500);
+    }
+  }
+  global.HandrawTaskJourney = { submitImport, resume, downloadMarkdown, withActivity };
 })(window);
