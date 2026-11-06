@@ -4283,8 +4283,8 @@
       const h = decodedAvatar.naturalHeight || decodedAvatar.height;
       const side = Math.min(w, h) / Number(avatarZoom?.value || 1);
       // Pointer and keyboard movement is measured in displayed preview pixels.
-      avatarPanX -= dx * side / avatarPreview.getBoundingClientRect().width;
-      avatarPanY -= dy * side / avatarPreview.getBoundingClientRect().height;
+      avatarPanX += dx * side / avatarPreview.getBoundingClientRect().width;
+      avatarPanY += dy * side / avatarPreview.getBoundingClientRect().height;
       drawAvatarPreview();
     }
     if (avatarPreview) {
