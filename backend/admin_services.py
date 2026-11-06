@@ -2884,6 +2884,33 @@ def admin_delete_user(
         # in later migrations then caused user deletion to return HTTP 500.
         # Keep foreign-key enforcement enabled: never work around it with
         # PRAGMA foreign_keys=OFF.
+        # Direct messages and announcements contain FK references to both
+        # sides of a conversation. Clear their children first, then parents.
+        tx.execute(
+            "DELETE FROM dm_messages WHERE sender_id = ? OR conversation_id IN "
+            "(SELECT id FROM dm_conversations WHERE user_low_id = ? OR user_high_id = ?)",
+            (uid, uid, uid),
+        )
+        tx.execute(
+            "DELETE FROM dm_members WHERE user_id = ? OR conversation_id IN "
+            "(SELECT id FROM dm_conversations WHERE user_low_id = ? OR user_high_id = ?)",
+            (uid, uid, uid),
+        )
+        tx.execute(
+            "DELETE FROM dm_conversations WHERE user_low_id = ? OR user_high_id = ?",
+            (uid, uid),
+        )
+        tx.execute("DELETE FROM dm_blocks WHERE user_id = ? OR blocked_user_id = ?", (uid, uid))
+        tx.execute(
+            "DELETE FROM dm_contact_history WHERE sender_id = ? OR recipient_id = ?",
+            (uid, uid),
+        )
+        tx.execute(
+            "DELETE FROM message_broadcast_reads WHERE user_id = ? OR broadcast_id IN "
+            "(SELECT id FROM message_broadcasts WHERE sender_id = ?)",
+            (uid, uid),
+        )
+        tx.execute("DELETE FROM message_broadcasts WHERE sender_id = ?", (uid,))
         tx.execute(
             "DELETE FROM media_public_grants WHERE owner_user_id = ? OR granted_by_user_id = ?",
             (uid, uid),
