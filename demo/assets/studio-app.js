@@ -40,6 +40,14 @@
   let _workspaceHydrationController = null;
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
+  let _articlesSyncVersion = 0;
+  let _articlesSyncedVersion = 0;
+  let _articlesSyncInFlight = false;
+  let _articlesSyncStatus = "idle";
+  function setArticlesSyncStatus(status) {
+    _articlesSyncStatus = status;
+    document.dispatchEvent(new CustomEvent("handraw:article-cloud-sync", {detail:{status}}));
+  }
   let _activeBatchRun = null;
 
   function isExplicitDemoMode() {
@@ -165,6 +173,10 @@
     if (!changed && CS.tabs.length) return false;
 
     cacheScopeEpoch += 1;
+    _articlesSyncVersion = 0;
+    _articlesSyncedVersion = 0;
+    _articlesSyncInFlight = false;
+    _articlesSyncStatus = "idle";
     if (_articlesSyncTimer) {
       clearTimeout(_articlesSyncTimer);
       _articlesSyncTimer = null;
@@ -549,15 +561,43 @@
   }
 
   function scheduleCloudArticlesSync() {
-    if (!App.state || !App.state.serverBacked || !App.state.loggedIn) return;
+    if (!App.state || !App.state.serverBacked || !App.state.loggedIn) {
+      setArticlesSyncStatus("local");
+      return;
+    }
+    _articlesSyncVersion += 1;
+    setArticlesSyncStatus("pending");
     if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
     const requestScope = activeCacheScope;
     const requestEpoch = cacheScopeEpoch;
-    _articlesSyncTimer = setTimeout(() => {
+    const send = async () => {
       _articlesSyncTimer = null;
       if (requestScope !== activeCacheScope || requestEpoch !== cacheScopeEpoch) return;
-      studioApiPost("/api/studio/articles", { articles: CS.myArticles || [] }, { requestScope, requestEpoch });
-    }, 450);
+      if (_articlesSyncInFlight) return; // The running request will send newer changes afterward.
+      _articlesSyncInFlight = true;
+      const sentVersion = _articlesSyncVersion;
+      const payload = { articles: CS.myArticles || [] };
+      setArticlesSyncStatus("syncing");
+      let response = null;
+      try {
+        response = await studioApiPost("/api/studio/articles", payload, { requestScope, requestEpoch });
+      } finally {
+        // Never let an older account's response update the current editor.
+        if (requestScope !== activeCacheScope || requestEpoch !== cacheScopeEpoch) return;
+        _articlesSyncInFlight = false;
+      }
+      if (response && response.ok !== false) {
+        _articlesSyncedVersion = Math.max(_articlesSyncedVersion, sentVersion);
+        if (_articlesSyncVersion === sentVersion) setArticlesSyncStatus("synced");
+      } else {
+        setArticlesSyncStatus("failed");
+      }
+      if (_articlesSyncVersion > sentVersion) {
+        if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
+        _articlesSyncTimer = setTimeout(send, 200);
+      }
+    };
+    _articlesSyncTimer = setTimeout(send, 450);
   }
 
   async function hydrateCloudStudioWorkspace() {
@@ -14515,7 +14555,8 @@
           <div class="ic-wechat-bottombar-left">
             <div class="ic-wechat-char-counter">
               正文字数 <strong id="editor-char-count">${(draft.markdown || "").length}</strong>
-              <span id="editor-save-state" style="font-size:11px;color:var(--ic-muted);font-weight:750;margin-left:8px;"></span>
+              <span id="editor-save-state" role="status" aria-live="polite" style="font-size:11px;color:var(--ic-muted);font-weight:750;margin-left:8px;"></span>
+              <button type="button" id="editor-sync-retry" class="hw-article-sync-retry" hidden>重试云端同步</button>
             </div>
 
             <div class="ic-wechat-bottom-select-group">
@@ -14675,10 +14716,26 @@
     const updateSavedState = (state) => {
       const el = DOM.previewStage.querySelector("#editor-save-state");
       if (!el) return;
-      if (state === "dirty") el.textContent = "保存中";
-      else if (state === "saved") el.textContent = "已保存";
+      const retry = DOM.previewStage.querySelector("#editor-sync-retry");
+      const remote = Boolean(App.state?.serverBacked && App.state?.loggedIn);
+      if (retry) retry.hidden = !remote || _articlesSyncStatus !== "failed";
+      if (state === "dirty") el.textContent = "本地保存中…";
       else if (state === "empty") el.textContent = "未填写";
+      else if (!remote || _articlesSyncStatus === "local") el.textContent = "已保存到此浏览器";
+      else if (_articlesSyncStatus === "failed") el.textContent = "本地已保存 · 云端同步失败";
+      else if (_articlesSyncStatus === "pending" || _articlesSyncStatus === "syncing") el.textContent = "本地已保存 · 正在同步云端…";
+      else if (_articlesSyncStatus === "synced") el.textContent = "已同步到云端";
+      else el.textContent = "已保存到此浏览器 · 云端状态待确认";
     };
+    const syncRetryBtn = DOM.previewStage.querySelector("#editor-sync-retry");
+    if (syncRetryBtn) syncRetryBtn.onclick = () => {
+      scheduleCloudArticlesSync();
+      updateSavedState("saved");
+    };
+    const handleCloudSyncState = () => {
+      if (isCurrentEditor()) updateSavedState(hasEditorContent() ? "saved" : "empty");
+    };
+    document.addEventListener("handraw:article-cloud-sync", handleCloudSyncState);
 
     const commitSync = ({ bumpTime = true, markSaved = true, collect = true } = {}) => {
       if (!isCurrentEditor()) return false;
@@ -14738,6 +14795,7 @@
         autoSyncTimer = null;
       }
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("handraw:article-cloud-sync", handleCloudSyncState);
     };
 
     // 预览 opens the reader preview page
