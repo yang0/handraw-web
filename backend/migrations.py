@@ -714,6 +714,14 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         END;
         """,
     ),
+    (
+        93,
+        "093_google_oidc_pkce",
+        """
+        -- OAuth code verifier is single-use and removed together with state.
+        ALTER TABLE oauth_flows ADD COLUMN code_verifier TEXT NOT NULL DEFAULT '';
+        """,
+    ),
 ]
 
 # Feature work can add independent additive migrations without creating a
