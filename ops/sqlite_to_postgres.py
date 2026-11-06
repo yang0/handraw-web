@@ -134,6 +134,16 @@ def inspect_schema(conn, tables):
     return columns, foreign_keys, unique_indexes, identity
 
 
+def _is_nocase_column(conn, table: str, column: str) -> bool:
+    source = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()["sql"]
+    for line in source.splitlines():
+        if re.search(r'^\\s*"?'+re.escape(column)+r'"?\\s+', line, re.I):
+            return bool(re.search(r'\\bCOLLATE\\s+NOCASE\\b', line, re.I))
+    return False
+
+
 def _defaults(col, source_create):
     value = col["dflt_value"]
     if value is None:
@@ -156,7 +166,7 @@ def build_tables(cur, conn, tables, cols, identity):
         pk_cols = [c["name"] for c in sorted(cols[table], key=lambda c: c["pk"]) if c["pk"]]
         for c in cols[table]:
             generated = identity.get(table) == c["name"]
-            dtype = _sqlite_type(c["type"], generated=generated)
+            dtype = "CITEXT" if _is_nocase_column(conn, table, c["name"]) else _sqlite_type(c["type"], generated=generated)
             clause = sql.SQL("{} {}{}{}").format(
                 q(c["name"]), sql.SQL(dtype),
                 sql.SQL("" if generated else _defaults(c, "")),
@@ -272,6 +282,9 @@ def stage(source: Path, dsn: str, apply: bool) -> dict:
                     raise ValueError("PostgreSQL target already contains tables; refusing overwrite")
                 cur.execute("SET LOCAL lock_timeout = '5s'")
                 cur.execute("SET LOCAL statement_timeout = '120s'")
+                # citext preserves SQLite COLLATE NOCASE equality and unique-email rules.
+                # This requires a DBA-approved PostgreSQL citext extension.
+                cur.execute("CREATE EXTENSION IF NOT EXISTS citext")
                 build_tables(cur, conn, tables, cols, identity)
                 import_rows(cur, conn, tables, cols)
                 set_identity_sequences(cur, identity)
