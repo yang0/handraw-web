@@ -411,21 +411,62 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
         handler._send_json({"ok":True,"items":items});return True
     if req_path == "/api/account/export":
         user = handler._current_user(required=True)
+        try:
+            page = int((qs.get("page") or ["0"])[0])
+        except (TypeError, ValueError):
+            raise ServiceError("分页参数无效")
+        if page < 0 or page > 100000:
+            raise ServiceError("分页参数无效")
+        page_size = 200
+        offset = page * page_size
         db = handler.db.get_conn()
-        user_id = int(user["id"])
-        works = [dict(r) for r in db.execute(
-            "SELECT id,title,created_at FROM works WHERE author_username=? ORDER BY created_at DESC LIMIT 10000",
-            (user["username"],)).fetchall()]
-        topics = [dict(r) for r in db.execute(
-            "SELECT id,title,created_at FROM forum_topics WHERE author_username=? ORDER BY created_at DESC LIMIT 10000",
-            (user["username"],)).fetchall()]
-        wallet = db.execute("SELECT balance FROM wallets WHERE user_id=?", (user_id,)).fetchone()
-        handler._send_json({"ok": True, "exportedAt": utc_now_iso(),
-            "profile": {"username": user["username"], "displayName": user["display_name"],
-                        "email": user["email"], "bio": user["bio"], "createdAt": user["created_at"]},
-            "works": works, "forumTopics": topics,
-            "wallet": {"balance": wallet["balance"] if wallet else 0},
-            "note": "仅导出账号资料和作品、帖子索引；不包括完整媒体文件或依法保留的交易记录。"})
+        uid, username = int(user["id"]), user["username"]
+        def rows(sql: str, args: tuple) -> list:
+            # Request one extra row so the client can retrieve all pages.
+            return [dict(r) for r in db.execute(sql + " LIMIT ? OFFSET ?",
+                                                  args + (page_size + 1, offset)).fetchall()]
+        resources = {
+            "works": rows(
+                """SELECT id,title,status,created_at,updated_at,prompt,notes
+                   FROM works WHERE author_username=? ORDER BY created_at,id""", (username,)),
+            "forumTopics": rows(
+                """SELECT id,title,status,summary,locked_body,created_at,updated_at
+                   FROM forum_topics WHERE author_username=? ORDER BY created_at,id""", (username,)),
+            "collections": rows(
+                """SELECT bucket,target_id,created_at FROM collections
+                   WHERE user_id=? ORDER BY created_at,bucket,target_id""", (uid,)),
+            "studioGenerations": rows(
+                """SELECT id,status,created_at,mode,recipe_summary,prompt,markdown
+                   FROM studio_generations WHERE user_id=? ORDER BY created_at,id""", (uid,)),
+            "walletHistory": rows(
+                """SELECT kind,reason,delta,balance_after,created_at,ref_type,ref_id
+                   FROM ledgers WHERE user_id=? ORDER BY created_at,id""", (uid,)),
+            "notifications": rows(
+                """SELECT kind,title,target_type,target_id,created_at,read_at
+                   FROM notifications WHERE user_id=? ORDER BY id""", (uid,)),
+        }
+        more = {key: len(items) > page_size for key, items in resources.items()}
+        data = {key: items[:page_size] for key, items in resources.items()}
+        if page == 0:
+            wallet = db.execute("SELECT balance FROM wallets WHERE user_id=?", (uid,)).fetchone()
+            verified = db.execute("SELECT verified_at FROM verified_emails WHERE user_id=? AND lower(email)=lower(?)",
+                                  (uid, user.get("email") or "")).fetchone()
+            providers = db.execute(
+                "SELECT provider,provider_login,linked_at FROM oauth_identities WHERE user_id=?", (uid,)
+            ).fetchall()
+            data.update({
+                "profile": {"username": username, "displayName": user["display_name"],
+                            "email": user["email"], "bio": user["bio"],
+                            "createdAt": user["created_at"], "lastLoginAt": user["last_login_at"]},
+                "wallet": {"balance": wallet["balance"] if wallet else 0},
+                "verifiedEmailAt": verified["verified_at"] if verified else "",
+                "linkedProviders": [dict(row) for row in providers],
+            })
+        data.update({"ok": True, "exportedAt": utc_now_iso(),
+                     "page": page, "pageSize": page_size,
+                     "hasMore": more, "nextPage": page + 1 if any(more.values()) else None,
+                     "note": "包含账号资料与本人作品、论坛、收藏、创作、积分和站内通知记录；不包含密码、会话/API 令牌与不属于本人的资料。"})
+        handler._send_json(data)
         return True
     if req_path == "/api/account/status":
         user = handler._current_user(required=True)
