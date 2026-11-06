@@ -12,6 +12,8 @@ import json
 import sqlite3
 import time
 import unittest
+import os
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -22,6 +24,7 @@ from backend.resource_discussions import ensure_topic
 
 class Fix66WorkTopicsTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "test_fix_66.db"
         self.db = server.init_database(self.db_path)
