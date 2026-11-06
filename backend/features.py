@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 
 from .config import WEB_ROOT, CONTENT_DIR
 from .db import utc_now_iso
-from .security import hash_password
+from .security import hash_password, verify_password
 from .services import ServiceError, record_audit_log
 
 
@@ -199,19 +199,26 @@ def request_email_change(db: Any, user: dict, new_email: str, current_password: 
 def consume_account_token(db: Any, purpose: str, token: str, password: str = "") -> dict:
     if not token or len(token) > 200:
         raise ServiceError("链接无效或已过期")
-    if purpose == "password_reset" and len(password) < 8:
-        raise ServiceError("新密码至少 8 位")
+    if purpose == "password_reset" and not 8 <= len(password) <= 128:
+        raise ServiceError("新密码必须为 8～128 位")
     digest = hashlib.sha256(token.encode()).hexdigest()
     now = int(time.time())
     with db.transaction() as tx:
-        row = tx.execute("SELECT t.*,u.email AS current_email,u.status FROM account_action_tokens t JOIN users u ON u.id=t.user_id WHERE token_hash=? AND purpose=?", (digest,purpose)).fetchone()
+        row = tx.execute("SELECT t.*,u.email AS current_email,u.status,u.password_hash,u.password_algo,u.discourse_salt FROM account_action_tokens t JOIN users u ON u.id=t.user_id WHERE token_hash=? AND purpose=?", (digest,purpose)).fetchone()
         if (not row or row["consumed_at"] is not None or int(row["expires_at"]) <= now
                 or row["status"] != "active" or
                 (purpose != "email_change" and row["email"].lower() != (row["current_email"] or "").lower())):
             raise ServiceError("链接无效或已过期，请重新申请")
         if purpose == "password_reset":
+            if verify_password(password, row["password_hash"],
+                               password_algo=row["password_algo"], discourse_salt=row["discourse_salt"]):
+                raise ServiceError("新密码不能与原密码相同", code="password_reused")
             tx.execute("UPDATE users SET password_hash=?,password_algo='pbkdf2_sha256',discourse_salt='' WHERE id=?", (hash_password(password),row["user_id"]))
             tx.execute("DELETE FROM sessions WHERE user_id=?", (row["user_id"],))
+            tx.execute("UPDATE api_tokens SET revoked_at=? WHERE user_id=? AND revoked_at=''",
+                       (utc_now_iso(), row["user_id"]))
+            tx.execute("UPDATE device_codes SET status='denied' WHERE user_id=? AND status IN ('pending','approved')",
+                       (row["user_id"],))
             tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND purpose=? AND consumed_at IS NULL", (now,row["user_id"],purpose))
             emit_notification(tx, row["user_id"], "security", "账号密码已通过邮箱重置，全部网页登录会话已失效。")
         elif purpose == "email_change":
@@ -223,6 +230,10 @@ def consume_account_token(db: Any, purpose: str, token: str, password: str = "")
             tx.execute("INSERT INTO verified_emails(user_id,email,verified_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,verified_at=excluded.verified_at",
                        (row["user_id"], row["email"], utc_now_iso()))
             tx.execute("DELETE FROM sessions WHERE user_id=?", (row["user_id"],))
+            tx.execute("UPDATE api_tokens SET revoked_at=? WHERE user_id=? AND revoked_at=''",
+                       (utc_now_iso(), row["user_id"]))
+            tx.execute("UPDATE device_codes SET status='denied' WHERE user_id=? AND status IN ('pending','approved')",
+                       (row["user_id"],))
             tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND purpose IN ('email_change','password_reset') AND consumed_at IS NULL",
                        (now, row["user_id"]))
             emit_notification(tx, row["user_id"], "security", "登录邮箱已换绑，全部网页登录会话已失效。")
