@@ -115,6 +115,77 @@
     }
     return normalized;
   }
+  // Review every AI-imported document before applying it to an article.
+  // No edited document is persisted by this dialog.
+  function reviewDocument(result, options = {}) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "hw-document-review-overlay";
+      const oldTitle = String(options.currentTitle || "");
+      const oldBody = String(options.currentMarkdown || "");
+      const title = String(result.title || options.fileName || "未命名文章");
+      const body = String(result.markdown || "");
+      const all = result.aiUsed === "all" || result.aiUsed === true;
+      const partial = result.aiUsed === "partial";
+      const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+      const aiLabel = all ? "全部段落已用 AI 整理" : partial
+        ? "部分段落由原文补齐，请重点检查" : "AI 未参与排版，已保留原文";
+      const changed = Boolean(options.replacing);
+      const titleLabel = changed ? "确认替换文档" : "确认导入文章";
+      const preview = body.slice(0, 7500);
+      overlay.innerHTML = `
+        <section class="hw-document-review" role="dialog" aria-modal="true" aria-labelledby="hw-doc-review-title">
+          <header class="hw-document-review-head">
+            <span class="hw-document-review-kicker">HANDRAW · 导入审校</span>
+            <h2 id="hw-doc-review-title">${titleLabel}</h2>
+            <p>AI 已完成文档整理。请先核对标题、正文和异常提示，确认后才更新编辑器。</p>
+          </header>
+          <div class="hw-document-review-meta">
+            <div><small>识别标题</small><strong>${escapeHtml(title)}</strong></div>
+            <div><small>处理结果</small><strong>${escapeHtml(aiLabel)}</strong></div>
+            <div><small>正文长度</small><strong>${body.length.toLocaleString()} 字符${changed ? " · 原稿 " + oldBody.length.toLocaleString() + " 字符" : ""}</strong></div>
+          </div>
+          ${partial || !all || warnings.length ? `<p class="hw-document-review-warning" role="status">
+            ${escapeHtml(partial ? "有段落处理失败并回退原文；请逐段核对后再应用。" : !all ? "本次未完整使用 AI 排版，请检查结果。" : "自动检查发现可能需要注意的内容。")}
+            ${warnings.length ? " · 后端报告 " + warnings.length + " 项检查提醒" : ""}
+          </p>` : ""}
+          ${changed ? `<p class="hw-document-review-protect">原稿《${escapeHtml(oldTitle || "未命名文章")}》在确认前保持不变；建议下载一份导入结果备用。</p>` : ""}
+          <label class="hw-document-review-preview-label" for="hw-doc-review-preview">Markdown 预览（最多展示前 7,500 字符）</label>
+          <pre id="hw-doc-review-preview" class="hw-document-review-preview" tabindex="0">${escapeHtml(preview)}${body.length > preview.length ? "\\n…余下内容可下载后查看" : ""}</pre>
+          <footer class="hw-document-review-actions">
+            <button type="button" data-review-cancel>返回原稿</button>
+            <button type="button" data-review-download>下载 Markdown</button>
+            <button type="button" class="hw-document-review-primary" data-review-apply>${changed ? "确认替换正文" : "导入并打开编辑器"}</button>
+          </footer>
+        </section>`;
+      const previousFocus = document.activeElement;
+      let settled = false;
+      const finish = (answer) => {
+        if (settled) return;
+        settled = true;
+        overlay.removeEventListener("keydown", onKeyDown);
+        overlay.remove();
+        if (previousFocus && typeof previousFocus.focus === "function" && previousFocus.isConnected) previousFocus.focus();
+        resolve(answer);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === "Escape") { event.preventDefault(); finish(false); }
+        if (event.key === "Tab") {
+          const buttons = [...overlay.querySelectorAll("button")];
+          if (buttons.length === 0) return;
+          const first = buttons[0], last = buttons[buttons.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        }
+      };
+      overlay.addEventListener("keydown", onKeyDown);
+      overlay.querySelector("[data-review-cancel]").addEventListener("click", () => finish(false));
+      overlay.querySelector("[data-review-apply]").addEventListener("click", () => finish(true));
+      overlay.querySelector("[data-review-download]").addEventListener("click", () => downloadMarkdown(result));
+      document.body.appendChild(overlay);
+      overlay.querySelector("[data-review-apply]").focus();
+    });
+  }
   function downloadMarkdown(result) {
     const md = String(result.markdown || "");
     const filename = String(result.title || "导入文章").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) || "导入文章";
@@ -258,5 +329,5 @@
       setTimeout(() => el.remove(), phase === "failed" ? 9000 : 3500);
     }
   }
-  global.HandrawTaskJourney = { submitImport, resume, downloadMarkdown, withActivity };
+  global.HandrawTaskJourney = { submitImport, resume, downloadMarkdown, reviewDocument, withActivity };
 })(window);
