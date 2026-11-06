@@ -196,6 +196,26 @@ python -m unittest tests/test_production_storage.py -v
 python -m unittest tests/test_p2_growth_oauth.py -v
 ```
 
+### 5.5 Web 日志与请求排障
+
+日常排障优先查看 `.local/logs/web-3080.log`。它包含时间、等级、API 路径、HTTP 状态、请求编号和处理耗时（发送响应头时）；5xx 在存在异常时附带堆栈。健康检查和正常静态资源请求不逐条记录。
+
+```powershell
+# 实时查看应用日志，Ctrl+C 只退出查看
+Get-Content .local\logs\web-3080.log -Tail 100 -Wait
+
+# 按浏览器响应头 X-Request-ID 或错误 JSON 的 requestId 定位请求
+Select-String -Path .local\logs\web-3080.log* -SimpleMatch '<请求编号>'
+```
+
+应用日志追加写入，重启保留；单文件达到 10 MiB 后轮转为 `.log.1` 至 `.log.5`。不同端口使用独立文件，例如演示服务为 `web-3097.log`。同端口多进程部署应改用进程外日志收集，不能共享 Python 的轮转文件。
+
+`service-3080.out.log` 仍是启动输出，`service-3080.err.log` 是警告、错误及进程标准错误；使用 `start-latest.bat` 则前缀为 `latest-3080`。这些启动器重定向文件会在重新启动时覆盖，且单次运行没有大小上限，因此历史排障优先使用应用轮转日志。
+
+GET、POST、PUT、DELETE、OPTIONS 共用异常入口；5xx 还在响应出口统一记录，覆盖主动返回的 502/503。浏览器收到未知异常时只显示通用错误及请求编号，详细错误留在服务端。默认请求日志继续关闭，以免原始请求行泄露 OAuth 查询参数；新增请求摘要不记录查询字符串、Cookie、Authorization 或请求体。格式化器额外遮蔽 URL 查询参数、连接串密码及常见 token，但无法识别任意业务文本中的秘密。
+
+目前 `/api/health` 的 `db: true` 是固定返回值，只能证明 HTTP 进程可访问，不能代替数据库、Redis 或业务初始化检查。完整评估与后续建议见 [日志系统评估](logging-review-20261106.md)。
+
 ---
 
 ## 6. 常见问题与排障

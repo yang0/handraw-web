@@ -1,5 +1,6 @@
 import builtins
 import logging
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -43,7 +44,10 @@ class StartupDependenciesSelfCheckTests(unittest.TestCase):
                 f"Expected warning mentioning python-docx and requirements.txt, got {cm.output}",
             )
 
-    def test_server_startup_continues_when_fitz_missing(self) -> None:
+    @patch.dict(os.environ, {"HANDRAW_DATABASE_URL": "", "HANDRAW_REDIS_URL": "", "HANDRAW_REDIS_REQUIRED": "0"})
+    @patch("backend.server._load_env_file_if_present")
+    @patch("backend.observability.configure_logging")
+    def test_server_startup_continues_when_fitz_missing(self, _logging, _env_file) -> None:
         real_import = builtins.__import__
 
         def fake_import(name, *args, **kwargs):

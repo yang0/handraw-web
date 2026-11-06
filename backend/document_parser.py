@@ -280,7 +280,7 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
     if not meta.get("ok"):
         reason = meta.get("reason")
         if reason == "no_key":
-            logger.info("No AI key configured; using heuristic parsing for '%s'", filename)
+            logger.info("No AI key configured; using heuristic parsing")
             return fallback_parse_article(clean_raw, filename, fallback_reason="no_key", truncated=truncated)
         logger.warning("AI parse failed (%s); falling back to heuristic parsing", reason)
         return fallback_parse_article(clean_raw, filename, fallback_reason="timeout_or_error", truncated=truncated)
@@ -305,7 +305,7 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
             title = str(parsed.get("title") or "").strip()
             markdown = str(parsed.get("markdown") or "").strip()
             if title and markdown:
-                logger.info("AI parsing succeeded! Extracted title: '%s', Markdown length: %d", title, len(markdown))
+                logger.info("AI parsing succeeded; Markdown length: %d", len(markdown))
                 res = {"title": title, "markdown": markdown, "aiUsed": True, "fallbackReason": ""}
                 if truncated:
                     res["truncated"] = True

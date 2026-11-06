@@ -317,10 +317,15 @@ def _access_map(tx: Any) -> dict[tuple[str, str], dict[str, Any]]:
 def _accepted_kinds_for(tx, username):
     # Only collected contributions confer earned access; demo and launch accounts never do.
     from .seed import seed_ids
-    if tx.execute("SELECT 1 FROM sqlite_master WHERE name='cold_start_registry'").fetchone() and tx.execute("SELECT 1 FROM cold_start_registry WHERE kind='user' AND item_id=?", (username,)).fetchone():
+    registry_query = (
+        "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='cold_start_registry'"
+        if getattr(tx, "dialect", "sqlite") == "postgresql"
+        else "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cold_start_registry'"
+    )
+    if tx.execute(registry_query).fetchone() and tx.execute("SELECT 1 FROM cold_start_registry WHERE kind='user' AND item_id=?", (username,)).fetchone():
         return set()
-    assets = tx.execute("SELECT code,kind FROM catalog_assets WHERE author_username=? COLLATE NOCASE AND source_type='community' AND status='published'", (username,)).fetchall()
-    works = tx.execute("SELECT id FROM works WHERE author_username=? COLLATE NOCASE AND status='published'", (username,)).fetchall()
+    assets = tx.execute("SELECT code,kind FROM catalog_assets WHERE LOWER(author_username)=LOWER(?) AND source_type='community' AND status='published'", (username,)).fetchall()
+    works = tx.execute("SELECT id FROM works WHERE LOWER(author_username)=LOWER(?) AND status='published'", (username,)).fetchall()
     kinds = {r['kind'] for r in assets if r['code'] not in seed_ids('assets')}
     if any(r['id'] not in seed_ids('works') for r in works):
         kinds.add('work')

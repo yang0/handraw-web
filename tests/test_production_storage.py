@@ -290,6 +290,29 @@ class PostgresSnapshotTests(unittest.TestCase):
                                            "new-pg-user@example.test", "新用户昵称")
             self.assertNotEqual(newcomer["id"], original_id)
             self.assertTrue(token.startswith("hws_"))
+            # Regression: authenticated boot formerly queried sqlite_master,
+            # then COLLATE NOCASE, while resolving earned reviewer access.
+            from backend.services import build_boot_payload
+            from backend.curation import _accepted_kinds_for
+            boot = build_boot_payload(pg, newcomer)
+            self.assertTrue(boot["loggedIn"])
+            self.assertEqual(boot["user"]["reviewAccess"]["kinds"], [])
+            with pg.transaction() as tx:
+                tx.execute(
+                    """INSERT INTO catalog_assets
+                       (code,kind,source_type,author_username,name,image_url,published_at_ms,created_at,updated_at)
+                       VALUES('pg_review_style','style','community','NeW_Pg_UsEr','Test','',1,'now','now')"""
+                )
+                tx.execute(
+                    """INSERT INTO works
+                       (id,author_username,author_name,title,prompt,published_at_ms,created_at,updated_at)
+                       VALUES('pg_review_work','NeW_Pg_UsEr','Test','Test','',1,'now','now')"""
+                )
+                self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), {"style", "work"})
+                tx.execute("CREATE TABLE cold_start_registry(kind TEXT,item_id TEXT)")
+                self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), {"style", "work"})
+                tx.execute("INSERT INTO cold_start_registry VALUES('user',?)", (newcomer["username"],))
+                self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), set())
             # Concurrent PG transactions must not overspend a wallet or mint
             # a duplicate ledger entry. Each thread owns a pooled connection.
             from concurrent.futures import ThreadPoolExecutor

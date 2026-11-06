@@ -409,7 +409,7 @@ class GenerationReconciler:
             from .services import run_blackbox_backfill
             run_blackbox_backfill(self.db)
         except Exception:
-            pass
+            logger.warning("worker=generation-reconciler phase=blackbox-backfill failed", exc_info=True)
         rows = self.db.get_conn().execute(
             """
             SELECT id, task_id, request_id, status, created_at
@@ -471,12 +471,16 @@ class GenerationReconciler:
             except Exception:
                 # Network errors, 404s and malformed gateway responses are
                 # unknown state. Keep the original charge and retry later.
+                logger.warning("worker=generation-reconciler generation_id=%s polling failed; will retry", generation_id, exc_info=True)
                 continue
         return handled
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            self.reconcile_once()
+            try:
+                self.reconcile_once()
+            except Exception:
+                logger.exception("worker=generation-reconciler iteration failed; will retry")
             self._stop.wait(self.interval_seconds)
 
     def start(self) -> "GenerationReconciler":
@@ -1667,7 +1671,44 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 db.release_request_connection()
 
     def log_message(self, fmt: str, *args: Any) -> None:
+        # BaseHTTPRequestHandler includes the raw request line (OAuth query
+        # secrets). Safe request summaries are emitted by send_response below.
         pass
+
+    def send_response(self, code: int, message: str | None = None) -> None:
+        if not hasattr(self, "_request_id"):
+            self._request_id = uuid.uuid4().hex
+        path = str(getattr(self, "path", "")).split("?", 1)[0].split("#", 1)[0]
+        path = re.sub(r"[\x00-\x20\x7f]", "_", path)[:512]
+        method = str(getattr(self, "command", "UNKNOWN"))
+        elapsed_ms = (time.monotonic() - getattr(self, "_request_started", time.monotonic())) * 1000
+        if code >= 400 or (path.startswith("/api/") and path != "/api/health"):
+            level = logging.ERROR if code >= 500 else (logging.WARNING if code >= 400 else logging.INFO)
+            logger.log(
+                level, "request_id=%s method=%s path=%s status=%s duration_ms=%.1f",
+                self._request_id, method, path, code, max(0, elapsed_ms),
+                exc_info=(sys.exc_info()[0] is not None) if code >= 500 else False,
+            )
+        super().send_response(code, message)
+        self.send_header("X-Request-ID", self._request_id)
+
+    def _dispatch_request(self, callback: Any, *, enforce_scope: bool = True) -> None:
+        """Single boundary for authorization, business errors and unexpected failures."""
+        self._request_id = uuid.uuid4().hex
+        self._request_started = time.monotonic()
+        try:
+            if enforce_scope:
+                self._enforce_token_scope()
+            callback()
+        except ServiceError as se:
+            err_body = {"ok": False, "error": se.message, "code": se.code}
+            if getattr(se, "extra", None):
+                err_body.update(se.extra)
+            self._send_json(err_body, status=se.status)
+        except Exception:
+            # send_response logs the active exception, including its traceback.
+            # Internal SQL/paths/provider details belong in logs, not responses.
+            self._send_json({"ok": False, "error": "服务暂时出错，请稍后重试", "code": "internal_error"}, status=500)
 
     @property
     def db(self) -> Database:
@@ -1793,6 +1834,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         if status >= 400:
             self._drain_request_body()
+            obj = dict(obj, requestId=getattr(self, "_request_id", None) or uuid.uuid4().hex)
+            self._request_id = obj["requestId"]
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1939,6 +1982,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         )
 
     def do_OPTIONS(self) -> None:
+        self._dispatch_request(self._handle_options, enforce_scope=False)
+
+    def _handle_options(self) -> None:
         origin = self.headers.get("Origin") or ""
         if origin and not origin_allowed(origin):
             self.send_response(403)
@@ -1950,54 +1996,39 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_DELETE(self) -> None:
+        self._dispatch_request(self._handle_delete)
+
+    def _handle_delete(self) -> None:
+        self._enforce_write_origin()
+        parsed = urlparse(self.path)
+        req_path = unquote(parsed.path)
+        m_wf = re.match(r"^/api/studio/workflows/([^/]+)$", req_path)
+        if m_wf:
+            user = self._current_user(required=True)
+            res = delete_user_studio_workflow(self.db, user, m_wf.group(1))  # type: ignore[arg-type]
+            self._send_json(res)
+            return
+        m_art = re.match(r"^/api/studio/articles/([^/]+)$", req_path)
+        if m_art:
+            user = self._current_user(required=True)
+            res = delete_user_studio_article(self.db, user, m_art.group(1))  # type: ignore[arg-type]
+            self._send_json(res)
+            return
+        if req_path.startswith("/api/library/assets/"):
+            from .user_library import handle_library_delete
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            if handle_library_delete(self, req_path, qs):
+                return
         try:
-            self._enforce_token_scope()
-            self._enforce_write_origin()
-            parsed = urlparse(self.path)
-            req_path = unquote(parsed.path)
-            m_wf = re.match(r"^/api/studio/workflows/([^/]+)$", req_path)
-            if m_wf:
-                user = self._current_user(required=True)
-                res = delete_user_studio_workflow(self.db, user, m_wf.group(1))  # type: ignore[arg-type]
-                self._send_json(res)
-                return
-            m_art = re.match(r"^/api/studio/articles/([^/]+)$", req_path)
-            if m_art:
-                user = self._current_user(required=True)
-                res = delete_user_studio_article(self.db, user, m_art.group(1))  # type: ignore[arg-type]
-                self._send_json(res)
-                return
-            if req_path.startswith("/api/library/assets/"):
-                from .user_library import handle_library_delete
-                qs = parse_qs(parsed.query, keep_blank_values=True)
-                if handle_library_delete(self, req_path, qs):
-                    return
-            try:
-                from .messaging import handle_dm_delete
-            except ImportError:  # pragma: no cover
-                handle_dm_delete = None
-            if handle_dm_delete and handle_dm_delete(self, req_path, parse_qs(parsed.query, keep_blank_values=True)):
-                return
-            self._send_json({"ok": False, "error": "Not found"}, status=404)
-        except ServiceError as se:
-            err_body = {"ok": False, "error": se.message, "code": se.code}
-            if getattr(se, "extra", None):
-                err_body.update(se.extra)
-            self._send_json(err_body, status=se.status)
-        except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+            from .messaging import handle_dm_delete
+        except ImportError:  # pragma: no cover
+            handle_dm_delete = None
+        if handle_dm_delete and handle_dm_delete(self, req_path, parse_qs(parsed.query, keep_blank_values=True)):
+            return
+        self._send_json({"ok": False, "error": "Not found"}, status=404)
 
     def do_GET(self) -> None:
-        try:
-            self._enforce_token_scope()
-            self._handle_get()
-        except ServiceError as se:
-            err_body = {"ok": False, "error": se.message, "code": se.code}
-            if getattr(se, "extra", None):
-                err_body.update(se.extra)
-            self._send_json(err_body, status=se.status)
-        except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+        self._dispatch_request(self._handle_get)
 
     def _handle_get(self) -> None:
         parsed = urlparse(self.path)
@@ -2647,41 +2678,26 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(file_path.read_bytes(), ctype, cache="no-cache")
 
     def do_POST(self) -> None:
-        try:
-            self._enforce_token_scope()
-            self._handle_post()
-        except ServiceError as se:
-            err_body = {"ok": False, "error": se.message, "code": se.code}
-            if getattr(se, "extra", None):
-                err_body.update(se.extra)
-            self._send_json(err_body, status=se.status)
-        except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+        self._dispatch_request(self._handle_post)
 
     def do_PUT(self) -> None:
-        try:
-            self._enforce_token_scope()
-            self._enforce_write_origin()
-            parsed = urlparse(self.path)
-            req_path = unquote(parsed.path)
-            if req_path.startswith("/api/studio/recipes"):
-                from .recipe_routes import handle_recipe_put
-                body = self._read_json_body()
-                if handle_recipe_put(self, req_path, body):
-                    return
-            if req_path.startswith("/api/library/assets/"):
-                from .user_library import handle_library_put
-                body = self._read_json_body()
-                if handle_library_put(self, req_path, body):
-                    return
-            self._send_json({"ok": False, "error": "Not Found"}, status=404)
-        except ServiceError as se:
-            err_body = {"ok": False, "error": se.message, "code": se.code}
-            if getattr(se, "extra", None):
-                err_body.update(se.extra)
-            self._send_json(err_body, status=se.status)
-        except Exception as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=500)
+        self._dispatch_request(self._handle_put)
+
+    def _handle_put(self) -> None:
+        self._enforce_write_origin()
+        parsed = urlparse(self.path)
+        req_path = unquote(parsed.path)
+        if req_path.startswith("/api/studio/recipes"):
+            from .recipe_routes import handle_recipe_put
+            body = self._read_json_body()
+            if handle_recipe_put(self, req_path, body):
+                return
+        if req_path.startswith("/api/library/assets/"):
+            from .user_library import handle_library_put
+            body = self._read_json_body()
+            if handle_library_put(self, req_path, body):
+                return
+        self._send_json({"ok": False, "error": "Not Found"}, status=404)
 
     def _handle_post(self) -> None:
         parsed = urlparse(self.path)
@@ -3119,7 +3135,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if len(file_bytes) > 10 * 1024 * 1024:
                 raise ServiceError("解码后文件大小超过 10MB 限制", status=413, code="payload_too_large")
 
-            logger.info("POST /api/studio/parse-article: user=%s, filename=%s, bytes=%d", user["username"], file_name, len(file_bytes))
+            logger.info("event=article_import user_id=%s bytes=%d", user["id"], len(file_bytes))
             parsed_res = parse_article_file(file_bytes, file_name)
             self._send_json({"ok": True, **parsed_res})
             return
@@ -3679,7 +3695,14 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": False, "error": f"Unknown endpoint: {req_path}"}, status=404)
 
 
-class DualStackHTTPServer(ThreadingHTTPServer):
+class HandrawHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # Final fallback for failures outside route dispatch, e.g. setup or
+        # connection cleanup. The stdlib default only prints to stderr.
+        logger.exception("event=http_connection_failure")
+
+
+class DualStackHTTPServer(HandrawHTTPServer):
     address_family = socket.AF_INET6
 
     def server_bind(self) -> None:
@@ -3702,9 +3725,9 @@ def create_channel_server(
         try:
             srv: ThreadingHTTPServer = DualStackHTTPServer((safe_host, port), HandrawRequestHandler)
         except Exception:
-            srv = ThreadingHTTPServer(("127.0.0.1", port), HandrawRequestHandler)
+            srv = HandrawHTTPServer(("127.0.0.1", port), HandrawRequestHandler)
     else:
-        srv = ThreadingHTTPServer((safe_host, port), HandrawRequestHandler)
+        srv = HandrawHTTPServer((safe_host, port), HandrawRequestHandler)
     srv.channel_role = role  # type: ignore[attr-defined]
     srv.db = db  # type: ignore[attr-defined]
     srv.allow_demo_routes = demo_mode if demo_mode is not None else demo_mode_enabled()  # type: ignore[attr-defined]
@@ -3755,6 +3778,15 @@ def main(argv: list[str] | None = None) -> None:
         sys.stdout.reconfigure(encoding="utf-8")
 
     _load_env_file_if_present()
+    parser = argparse.ArgumentParser(description="Handraw Web single-backend server")
+    parser.add_argument("--port", type=int, default=3080, help="Single HTTP port for all frontends (default: 3080)")
+    parser.add_argument("--host", type=str, default="", help="Bind host; wildcard requires HANDRAW_ALLOW_PUBLIC_BIND=1")
+    parser.add_argument("--db", type=str, default="", help="Optional custom SQLite DB path")
+    parser.add_argument("--reset-db", action="store_true", help="Reset seed data on startup")
+    parser.add_argument("--demo-mode", action="store_true", help="Explicitly enable isolated demo/test routes")
+    args = parser.parse_args(argv)
+    from .observability import configure_logging
+    configure_logging(port=args.port)
     check_optional_dependencies()
 
     from .redis_rate_limit import ensure_ready as ensure_redis_ready
@@ -3770,14 +3802,6 @@ def main(argv: list[str] | None = None) -> None:
                 "隔离环境使用 HANDRAW_PG_RUNTIME_ACK=STAGING_ONLY"
             )
     ensure_redis_ready()
-
-    parser = argparse.ArgumentParser(description="Handraw Web single-backend server")
-    parser.add_argument("--port", type=int, default=3080, help="Single HTTP port for all frontends (default: 3080)")
-    parser.add_argument("--host", type=str, default="", help="Bind host; wildcard requires HANDRAW_ALLOW_PUBLIC_BIND=1")
-    parser.add_argument("--db", type=str, default="", help="Optional custom SQLite DB path")
-    parser.add_argument("--reset-db", action="store_true", help="Reset seed data on startup")
-    parser.add_argument("--demo-mode", action="store_true", help="Explicitly enable isolated demo/test routes")
-    args = parser.parse_args(argv)
 
     if args.demo_mode:
         # Seed data and demo handlers share the same explicit opt-in switch.
@@ -3799,7 +3823,7 @@ def main(argv: list[str] | None = None) -> None:
         from .services import start_blackbox_backfill
         start_blackbox_backfill(db)
     except Exception:
-        pass
+        logger.exception("worker=blackbox-backfill failed to start")
     import_manager = getattr(server, "import_manager", None)
 
     print("Handraw Web single backend running (PostgreSQL STAGING ONLY + Redis)" if pg_url else "Handraw Web single backend running (SQLite WAL + safe bind):")
@@ -3823,4 +3847,8 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logger.exception("event=startup_failed")
+        raise SystemExit(1)
