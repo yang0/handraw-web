@@ -4171,15 +4171,18 @@
         <section data-account-panel="email" class="hw-account-security-panel">
           <h3>✉️ 邮箱与验证</h3>
           <div style="font-size:13px;">当前绑定邮箱：<strong style="overflow-wrap:anywhere;">${esc(u.email || "尚未绑定")}</strong></div>
-          <div class="hw-account-help" id="acc-email-verify-status" role="status" aria-live="polite">正在检查邮箱验证状态…</div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0 18px;padding:12px;border:1px solid var(--line-soft);border-radius:10px;">
+            <div id="acc-email-verify-status" role="status" aria-live="polite" style="font-size:13px;font-weight:700;flex:1;min-width:160px;">正在检查邮箱验证状态…</div>
+            <button type="button" class="btn btn-sm btn-primary" id="acc-send-email-verification" disabled>验证当前邮箱</button>
+          </div>
+          <h4 style="font-size:14px;margin:0 0 6px;">更换绑定邮箱</h4>
           <p class="hw-account-help">输入新邮箱与当前密码。验证链接会发送到新邮箱，确认前原邮箱继续有效；链接 30 分钟内有效、只能用一次。</p>
           <div class="hw-account-form-grid">
             <input class="hw-input" id="acc-new-email" type="email" autocomplete="email" placeholder="新邮箱地址" />
             <input class="hw-input" id="acc-email-password" type="password" autocomplete="current-password" placeholder="当前登录密码（用于安全验证）" />
           </div>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;">
-            <button type="button" class="btn btn-sm btn-primary" id="acc-change-email">发送新邮箱验证链接</button>
-            <button type="button" class="btn btn-sm" id="acc-send-email-verification">发送当前邮箱验证邮件</button>
+            <button type="button" class="btn btn-sm" id="acc-change-email">发送新邮箱验证链接</button>
           </div>
           <span id="acc-email-feedback" role="status" aria-live="polite" class="hw-account-help"></span>
           <p class="hw-account-help">忘记密码请从退出登录后的登录页进入「忘记密码」流程；安全验证邮件会发送到当前或新邮箱。</p>
@@ -4229,7 +4232,7 @@
           (status.mailEnabled ? "" : " · 站点尚未配置邮件服务，验证与换绑暂不可用");
         if (verifyEmailBtn) {
           verifyEmailBtn.hidden = Boolean(status.emailVerified);
-          verifyEmailBtn.disabled = !status.mailEnabled;
+          verifyEmailBtn.disabled = !status.mailEnabled || Boolean(status.emailVerified);
         }
       } catch (err) {
         if (emailStatus.isConnected) emailStatus.textContent = "暂时无法读取邮箱验证状态";
