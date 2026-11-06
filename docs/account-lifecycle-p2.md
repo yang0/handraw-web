@@ -1,73 +1,64 @@
-# Account lifecycle P2 — behavior and release checklist
+# Account identity, avatar and recovery — current product policy
 
-This document describes shipped account lifecycle behavior and the remaining external dependency for social login.
+## Shipped account settings
 
-## Account settings
+- `?view=account&section=profile`: immutable creator nickname, editable biography and avatar.
+- `?view=account&section=email`: current email status, verification and verified email change.
+- `?view=account&section=security`: password change and browser sessions.
+- `?view=account&section=devices`: authorized Skill and terminal clients.
 
-- `?view=account&section=profile`: avatar selection, crop, display name and biography.
-- `?view=account&section=email`: current email status, verification, confirmed change.
-- `?view=account&section=security`: password and active browser sessions.
-- `?view=account&section=devices`: existing Skill and terminal grants.
-- `?view=account&section=privacy`: basic JSON export and account closure.
+Legacy links to `?view=profile&ptab=account` redirect to the account center.
 
-Legacy `?view=profile&ptab=account` links redirect to the account center.
+## Creator nickname is immutable
 
-## Nickname policy
+The creator nickname is selected at registration. If omitted, the username is used as
+the nickname. **After registration the nickname cannot be edited**, including for
+legacy accounts with an earlier `nickname_locked=0` flag. Server-side profile
+changes reject a different displayName with `nickname_locked`. The user may still
+edit their biography. Columns `nickname_changed_at` and related migration 088
+remain in the additive schema for compatibility; they do not authorize renaming.
 
-Usernames are stable identifiers. Public display names may be changed once every 30 days.
-The server enforces the cooldown using `users.nickname_changed_at`, migration 088.
-Existing accounts begin with zero and are eligible for their first rename; future renames
-refresh the timestamp. Public authored works, topics, and community assets update their
-author display-name snapshot. Keep any external cached display labels consistent.
+## Avatar crop
 
-## Account closure — not full erasure
+User may upload PNG, JPEG or WebP source files up to 12 MB. Source decoding uses
+`createImageBitmap` when available and FileReader/Image as a fallback. The photo
+is previewed on a 320px canvas, with drag-to-pan, touch dragging, keyboard arrow
+movement, zoom slider and reset-to-center. The crop is clamped to source boundaries.
+The current 320px square crop is encoded as PNG and uploaded with explicit user
+confirmation; the server validates and transcodes it to WebP. The server's 3 MB
+limit applies to the generated crop, **not** the 12 MB source file.
+Verify with real large transparent PNGs, portrait photos and square JPEG/WebP images.
 
-`POST /api/account/close` requires an authenticated account, exact username confirmation,
-and the current password. It closes the account, deletes browser sessions, revokes
-personal API tokens, and denies issued device grants. Historical public works, comments,
-community moderation records, wallet balances and legally relevant records are **not**
-deleted automatically. The UI must never present this as irreversible deletion of all
-user data. A separately reviewed privacy-erasure workflow is necessary for deletion
-requests, historical authorship, financial records and legal retention.
+## Account closure and deletion
 
-`GET /api/account/export` exports basic profile information plus authored work/topic
-indexes and wallet balance. It intentionally excludes passwords, hashes, API keys and
-raw credentials. It is not an exhaustive personal-data portability archive.
+**Account closure, self-service deletion and reactivation are disabled.** The client
+must not display them; the backend does not expose `/api/account/close`,
+`/api/auth/request-reactivation` or `/api/auth/confirm-reactivation`. No existing
+user data is automatically erased. Additive migrations 088 and 089 may retain unused
+compatibility schema; that is not permission to operate closure flows.
+`GET /api/account/export` remains available to authenticated users at the API
+level as a limited, credential-free basic data export. A complete export and
+deletion policy require separate legal and product review.
 
-## Auth metrics
+## Registration metrics
 
-Migration 088 adds `auth_funnel_events`. Public registration and login endpoints
-record attempts and successes. Events contain no email, password, client IP or session
-token. The success rows contain a user ID solely to distinguish successful accounts.
-Example daily reporting:
+Migration 088 adds `auth_funnel_events`, which records login and registration
+attempts and successes. No password, IP address or email is stored in these events.
+This is **not** a complete activation/retention funnel.
 
-```sql
-SELECT date(created_at, 'unixepoch') AS day, event_name, count(*) AS events
-FROM auth_funnel_events
-WHERE created_at >= strftime('%s', 'now', '-30 days')
-GROUP BY day, event_name ORDER BY day DESC, event_name;
-```
+## Social login
 
-These are request-level counts, not a fully deduplicated visitor conversion funnel.
-Do not present attempts divided by successes as a unique-user conversion rate.
-Define retention and archival rules before operating at large scale.
+Social login remains disabled. A provider requires OAuth configuration, PKCE/state,
+strict redirect controls, verified identity, explicit linking, conflicts handling,
+callback replay protection, recovery policy and end-to-end tests. Do not ship a
+placeholder social login button.
 
-## Social login decision
+## Release verification
 
-Social login is **not activated**. There are no configured OAuth app credentials, state
-and PKCE handling, verified-email account linking, provider account conflict policy,
-or end-to-end callback tests in this codebase. Do not ship an inert Google/GitHub login
-button or auto-link by unverified email. Before enabling a provider, implement and test:
-state/CSRF protection, strict redirect allowlist, server-side token exchange, verified
-email checks, explicit account-linking for existing users, callback replay prevention,
-and a password-recovery alternative. Protect against provider email changes.
-
-## Deployment verification
-
-1. Deploy migration 088 additively. Never roll it back by deleting columns.
-2. Verify avatar selection gives immediate status and shows a crop after image load.
-3. Verify nickname changes once and is rejected before 30 days; legacy users can rename.
-4. Verify email, password and device controls appear in their correct independent panels.
-5. Verify invalid closure confirmation/password changes nothing.
-6. Verify successful closure revokes browser and API token access; data export omits secrets.
-7. Confirm the relevant CI jobs are green and test the flow in a real browser before production deploy.
+1. Complete additive DB migrations without destructive rollback.
+2. Test avatar source PNG/JPEG/WebP preview, drag movement, zoom and confirmed upload.
+3. Confirm every registered nickname, including legacy unlocked rows, is immutable.
+4. Confirm email verification, recovery, password change and sessions still work.
+5. Confirm closure/reactivation routes are unavailable and have no UI entry points.
+6. Verify account identity tests and regression guards are green, then test manually
+   in production-equivalent browsers before deployment.
