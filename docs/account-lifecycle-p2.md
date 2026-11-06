@@ -1,66 +1,82 @@
-# Account identity, avatar and recovery — current product policy
+# P2 第三阶段：增长、身份与账号安全交付说明
 
-## Shipped account settings
+此文档描述代码中的可用能力、外部配置条件、数据口径和生产验收。**账号自助停用、注销和自动删除仍然关闭。** 注册后昵称不可修改，包括旧账号。
 
-- `?view=account&section=profile`: immutable creator nickname, editable biography and avatar.
-- `?view=account&section=email`: current email status, verification and verified email change.
-- `?view=account&section=security`: password change and browser sessions.
-- `?view=account&section=devices`: authorized Skill and terminal clients.
+## 功能与页面
 
-Legacy links to `?view=profile&ptab=account` redirect to the account center.
+| 能力 | 入口 | 安全要求 |
+| --- | --- | --- |
+| 昵称与头像 | `/?view=account&section=profile` | 昵称注册后固定；JPG/PNG/WebP 原图不超过 3 MB，头像可拖动、缩放裁剪后确认上传 |
+| 邮箱验证与换绑 | `/?view=account&section=email` | 当前状态与「验证当前邮箱」相邻；换绑需当前密码及新邮箱的单次验证链接 |
+| 登录与安全 | `/?view=account&section=security` | 当前密码修改、设备会话管理、GitHub 绑定/解绑以及本人数据导出 |
+| 客户端授权 | `/?view=account&section=devices` | 保持现有 Skill/终端授权与撤销机制 |
+| 找回密码 | `/?view=recovery` | 通过绑定邮箱申请 30 分钟有效的一次性链接；对未知账号返回相同提示 |
+| 社交账号首次注册 | `/?view=oauth-register` | GitHub 身份已验证后，明确确认用户名和不可修改的昵称再创建账号 |
+| 增长与激活 | 管理后台「数据总览」 | 仅管理员/运营可查看的聚合数据；不展示原始密码、邮箱或 IP |
 
-## Creator nickname is immutable
+## 第三方登录：GitHub OAuth
 
-The creator nickname is selected at registration. If omitted, the username is used as
-the nickname. **After registration the nickname cannot be edited**, including for
-legacy accounts with an earlier `nickname_locked=0` flag. Server-side profile
-changes reject a different displayName with `nickname_locked`. The user may still
-edit their biography. Columns `nickname_changed_at` and related migration 088
-remain in the additive schema for compatibility; they do not authorize renaming.
+使用 GitHub OAuth App 的授权码流程，服务器接收授权码并交换令牌；用户身份由 **GitHub 稳定数字 ID** 识别，不使用邮箱作为账号合并依据。
 
-## Avatar crop
+- 在站点生产环境安全注入 `HANDRAW_GITHUB_CLIENT_ID`、`HANDRAW_GITHUB_CLIENT_SECRET`、`HANDRAW_GITHUB_CALLBACK_URL`，不要提交到仓库。
+- 回调必须精确配置为 `https://<站点域名>/api/auth/github/callback`。本地测试只允许 `http://localhost` 或 `http://127.0.0.1`。
+- 凭据不完整时，前端不显示 GitHub 登录按钮，服务端拒绝发起授权。正式上线仍需注册 GitHub OAuth App、保存密钥并进行真实回调验证。
+- 授权请求使用加密随机的 `state`，只存状态散列；独立的 HttpOnly、SameSite=Lax 浏览器 cookie 绑定回调。授权状态只能使用一次，并在 10 分钟后过期。回调不保存 GitHub access token。
+- 请求用户基本信息和主要已验证邮箱。已有 GitHub 绑定按 provider ID 登录；如果邮箱已有本地账号，不会自动链接，必须先本地登录再在安全设置中明确绑定。
+- 首次第三方注册经过十分钟有效的一次性待确认流程。用户明确选择用户名和昵称后才创建账号，注册后两者固定。GitHub 账号没有本地可知的密码；用户可以利用已验证邮箱的密码重置流程设置自己的密码。
+- 解除绑定需要当前密码。单个 Handraw 账号最多绑定一个 GitHub 身份，单个 GitHub ID 不能绑定多个本地账号。
+- 出于安全考虑不允许外部传入 callback URL、授权服务器地址或任意跳转地址，也不按第三方邮箱自动接管老账号。
+- 当前仅实现 **GitHub**。未来增加 Google/OIDC 须单独验证 ID token 的签名、issuer、audience、nonce 和密钥轮换，不可直接复用 GitHub 用户信息校验。
+- OAuth App 的状态绑定满足当前保密客户端流程；如果 GitHub 提供并强制支持 PKCE，应在部署前升级并通过端到端验证。
 
-User may upload PNG, JPEG or WebP source files up to **3 MB** (the original file, before cropping). Source decoding uses
-`createImageBitmap` when available and FileReader/Image as a fallback. The photo
-is previewed on a 320px canvas, with drag-to-pan, touch dragging, keyboard arrow
-movement, zoom slider and reset-to-center. The crop is clamped to source boundaries.
-The current 320px square crop is encoded as PNG and uploaded with explicit user
-confirmation; the server validates and transcodes it to WebP. The frontend rejects original files exceeding 3 MB with a visible error message,
-while the server independently enforces its 3 MB limit on the uploaded crop.
-File type, decoding, dimension and network/upload failures display actionable
-error text in the avatar section rather than silently failing.
-Verify with real large transparent PNGs, portrait photos and square JPEG/WebP images.
+## 注册漏斗、激活和留存
 
-## Account closure and deletion
+增量数据库迁移 **088、090、091** 增加事件与身份表。历史收藏/作品/帖子/生图成功事件在迁移时安全回填；不会删除历史数据。旧账号的 `nickname_locked=0` 不赋予改名权限。
 
-**Account closure, self-service deletion and reactivation are disabled.** The client
-must not display them; the backend does not expose `/api/account/close`,
-`/api/auth/request-reactivation` or `/api/auth/confirm-reactivation`. No existing
-user data is automatically erased. Additive migrations 088 and 089 may retain unused
-compatibility schema; that is not permission to operate closure flows.
-`GET /api/account/export` remains available to authenticated users at the API
-level as a limited, credential-free basic data export. A complete export and
-deletion policy require separate legal and product review.
+**事件定义：**
 
-## Registration metrics
+- `signup_view` / `signup_submit`：浏览注册表单 / 点击注册按钮的请求次数，未去重，匿名、不记录账号或 IP。
+- `register_attempt` / `register_success`：发起注册 / 成功创建的账号；注册成功带内部用户 ID。
+- `login_view` / `login_attempt` / `login_success`：访问登录表单 / 尝试登录 / 登录成功。
+- `email_verified`：当前账号完成邮箱验证，使用已验证邮箱表回填。
+- `first_collection`、`first_work`、`first_topic`、`first_generation`：首次收藏、发布作品、发帖、成功生图的里程碑。触发器自动记录，不依赖前端埋点才能识别。
+- `site_visit`：已登录用户当日通过 `/api/boot` 访问网站或登录；按用户和 UTC 日期去重。
+- **7 天内激活率**：注册后 7×24 小时内至少发生上述四种首次关键行为的注册用户 / 同期注册用户。
+- **D7 留存率**：注册第七个 UTC 日访问的注册用户 / 已满 8 天、拥有完整第七天观察期的注册用户。近期注册者从分母中排除。
+- 仅聚合展示；「浏览/尝试」是请求次数而非去重访客，不能当成独立用户转化率。
 
-Migration 088 adds `auth_funnel_events`, which records login and registration
-attempts and successes. No password, IP address or email is stored in these events.
-This is **not** a complete activation/retention funnel.
+查询 `GET /api/admin/growth?days=30`（范围 7～90 天），只有 admin/operator 权限可用。管理后台「数据总览」展示注册数、7 日激活、D7 留存及近期日级分组。示例自检：
 
-## Social login
+```sql
+SELECT event_name,COUNT(*) AS total
+FROM auth_funnel_events
+WHERE created_at >= strftime('%s','now','-30 days')
+GROUP BY event_name;
+```
 
-Social login remains disabled. A provider requires OAuth configuration, PKCE/state,
-strict redirect controls, verified identity, explicit linking, conflicts handling,
-callback replay protection, recovery policy and end-to-end tests. Do not ship a
-placeholder social login button.
+## 安全通知与恢复
 
-## Release verification
+- 登录成功记录粗粒度浏览器/系统组合（如 Windows/Chrome），不记录跟踪用 IP。首次出现新组合时发送站内安全通知；已验证邮箱且 SMTP 可用时尝试发送邮件。
+- 更改密码、请求邮箱换绑、完成邮箱换绑、邮箱重置密码、退出其他会话均会产生已设计的安全提醒。邮件是尽力而为，邮件服务失败不会将已经完成的敏感操作错误显示为未完成。
+- 密码重置令牌只保存 SHA-256 散列，使用一次、有效期 30 分钟；新密码 8～128 字符、不能与旧密码相同。重置密码及换绑邮箱都会撤销浏览器会话、个人 API 令牌和待处理设备授权。
+- 目前的「新设备」只是浏览器与操作系统组合变化提醒，并非可信硬件指纹、地理异常风控或强制多因素验证。对更严格的设备识别、MFA 与风险评分需要额外评审，不能虚称已有。
 
-1. Complete additive DB migrations without destructive rollback.
-2. Test avatar source PNG/JPEG/WebP preview, drag movement, zoom and confirmed upload.
-3. Confirm every registered nickname, including legacy unlocked rows, is immutable.
-4. Confirm email verification, recovery, password change and sessions still work.
-5. Confirm closure/reactivation routes are unavailable and have no UI entry points.
-6. Verify account identity tests and regression guards are green, then test manually
-   in production-equivalent browsers before deployment.
+## 个人数据处理
+
+`GET /api/account/export?page=N` 需要登录，每页最多 200 条，按资源类型分别分页。安全设置页的「下载我的账号数据」将多页合并为 JSON，包含本人资料、邮箱验证状态、绑定提供商摘要、作品/帖子、收藏、生图摘要、积分流水、通知等。
+
+导出**不含**密码哈希、原始令牌、API 密钥、会话凭据、原始 IP 或不属于本人的数据。导出文件可能包含用户自己的私密创作内容，前端应提示妥善保管。大型记录无法在浏览器容纳时会明确报错，不声称已完成。完整媒体文件仍需单独备份机制。
+
+自助停用、账号删除与自动恢复继续**禁用**：前后端不提供相应入口。旧增量迁移中保留的未启用兼容字段不代表可以执行注销。个人数据删除、保留、交易审计、公开作者身份处理与合规申请需要单独制定政策，不在此阶段启用不可逆删除。
+
+## 验收与发布
+
+1. 运行 `python -m unittest discover -s tests -v`，尤其 `test_p2_growth_oauth.py`、`test_account_identity.py` 和 `test_v2_account_features.py`；执行账号 JS 回归与语法检查。
+2. 在**隔离测试数据库**上运行 090、091 增量迁移；检验老账号的昵称、邮箱、会话、作品和历史积分不变。生产部署前先备份，绝不通过数据库回滚删除新列。
+3. 用真实 GitHub OAuth App 端到端检查新注册昵称确认、老账号绑定/解绑、错误邮箱冲突、授权取消、过期及回调重放。
+4. 配置受管理的 SMTP 账户，验证密码重置、安全通知、换绑邮件和服务不可用提示。邮箱和 OAuth 密钥不进入代码或 GitHub 仓库。
+5. 验证注册曝光、注册成功、首次关键行为、邮箱验证和 D7 真实 cohort；对匿名曝光/尝试与去重用户指标保持区别。
+6. 确认关闭状态的账号停用、注销及恢复端点仍不可调用，既不显示按钮也不操作现有数据。
+7. 仅在全量 CI 与真实浏览器手工验收通过后，按 `AGENTS.md` 做备份和固定提交版本的生产部署。
+
+**交付说明：** 本仓库不能替外部平台注册 OAuth App、注入真实凭据，也不能声称这些功能已在生产环境验证或部署。
