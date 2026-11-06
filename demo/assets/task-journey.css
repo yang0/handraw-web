@@ -21,3 +21,12 @@
 @media(max-width:600px){.hw-task-journey{right:12px;bottom:12px;padding:16px}}
 @media(prefers-reduced-motion:reduce){.hw-task-journey{animation:none}.hw-task-track-fill{transition:none}.hw-task-track-fill.is-indeterminate{animation:none;width:100%;opacity:.5}}
 .hw-task-journey.reduce-motion,.hw-task-journey.reduce-motion .hw-task-track-fill{animation:none;transition:none}
+
+.hw-task-steps{list-style:none;display:flex;justify-content:space-between;gap:4px;padding:0;margin:18px 0 0}
+.hw-task-steps li{min-width:0;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;text-align:center;font-size:10px;opacity:.47}
+.hw-task-step-dot{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;border:1px solid #c7bdb0;font-variant-numeric:tabular-nums;font-weight:750}
+.hw-task-steps li.is-passed{opacity:.86;color:#657959}.hw-task-steps li.is-passed .hw-task-step-dot{background:#e0e8d9;border-color:#b8c9ae}
+.hw-task-steps li.is-current{opacity:1;color:#a63c29;font-weight:800}.hw-task-steps li.is-current .hw-task-step-dot{background:#b9412c;border-color:#b9412c;color:#fff;box-shadow:0 0 0 4px #f5dfd7}
+.hw-task-journey.is-collapsed{width:auto;padding:0;overflow:hidden;border-radius:999px}
+.hw-task-reopen{padding:13px 18px;background:transparent;border:0;color:inherit;font-weight:800;font-size:12px;cursor:pointer}
+.hw-task-reopen:focus-visible{outline:3px solid #b9412c;outline-offset:-4px}
