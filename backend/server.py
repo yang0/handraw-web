@@ -3749,14 +3749,18 @@ def main(argv: list[str] | None = None) -> None:
     _load_env_file_if_present()
     check_optional_dependencies()
 
-    # Never run SQLite while claiming to use a PostgreSQL production URL.
-    # The PostgreSQL runtime adapter must pass parity tests before enabling it.
-    if os.environ.get("HANDRAW_DATABASE_URL", "").strip():
-        raise RuntimeError(
-            "PostgreSQL runtime adapter is not enabled yet. "
-            "HANDRAW_DATABASE_URL cannot silently fall back to SQLite."
-        )
     from .redis_rate_limit import ensure_ready as ensure_redis_ready
+    pg_url = os.environ.get("HANDRAW_DATABASE_URL", "").strip()
+    if pg_url:
+        # Fail closed: production always needs distributed authentication
+        # limits and a database staged with the full schema.
+        if os.environ.get("HANDRAW_REDIS_REQUIRED", "").strip().lower() not in {"1", "true", "yes"}:
+            raise RuntimeError("PostgreSQL 模式要求 HANDRAW_REDIS_REQUIRED=1")
+        if os.environ.get("HANDRAW_PG_RUNTIME_ACK", "") != "STAGING_ONLY":
+            raise RuntimeError(
+                "PostgreSQL 全业务 SQL/触发器尚未完成生产验收；"
+                "隔离环境使用 HANDRAW_PG_RUNTIME_ACK=STAGING_ONLY"
+            )
     ensure_redis_ready()
 
     parser = argparse.ArgumentParser(description="Handraw Web single-backend server")
@@ -3771,7 +3775,14 @@ def main(argv: list[str] | None = None) -> None:
         # Seed data and demo handlers share the same explicit opt-in switch.
         os.environ["HANDRAW_DEMO_MODE"] = "1"
 
-    db = init_database(args.db or get_db_path(), force_reset=args.reset_db)
+    if pg_url:
+        if args.db or args.reset_db or args.demo_mode:
+            raise RuntimeError("PostgreSQL 模式不允许 --db、--reset-db 或 --demo-mode")
+        from .postgres_db import PostgresDatabase
+        db = PostgresDatabase(pg_url)
+        db.migrate()
+    else:
+        db = init_database(args.db or get_db_path(), force_reset=args.reset_db)
 
     requested_host = args.host or None
     server = create_channel_server(args.port, "main", db, host=requested_host, demo_mode=args.demo_mode or None)
@@ -3783,7 +3794,7 @@ def main(argv: list[str] | None = None) -> None:
         pass
     import_manager = getattr(server, "import_manager", None)
 
-    print("Handraw Web single backend running (SQLite WAL + safe bind):")
+    print("Handraw Web single backend running (PostgreSQL STAGING ONLY + Redis)" if pg_url else "Handraw Web single backend running (SQLite WAL + safe bind):")
     print(f"  [bind] {getattr(server, 'bind_host', '127.0.0.1')}")
     print(f"  [首页]   http://localhost:{args.port}/")
     print(f"  [创作台] http://localhost:{args.port}/studio/")
