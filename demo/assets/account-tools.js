@@ -78,12 +78,12 @@
       return true;
     }
     if (view === "oauth-register") {
-      shell(root, "使用 GitHub 注册 Handraw", `<p class="hw-account-help">正在读取已验证的 GitHub 身份…</p>`);
+      shell(root, "使用第三方账号注册 Handraw", `<p class="hw-account-help">正在读取已验证的第三方身份…</p>`);
       try {
         const info = await S.apiJson("/api/auth/github/signup-status");
         if (!isCurrent()) return true;
         shell(root,"确认新账号与创作者昵称",
-          `<p class="hw-account-help">已验证 GitHub 身份：@${esc(info.providerLogin)}，邮箱：${esc(info.verifiedEmail)}。</p>
+          `<p class="hw-account-help">已验证 ${esc(info.provider)} 身份：${esc(info.providerLogin)}，邮箱：${esc(info.verifiedEmail)}。</p>
            <p style="font-weight:700;color:var(--vermilion);">创作者昵称注册后不可修改，请核对后再完成注册。</p>
            <form class="hw-account-form">
              <label>Handraw 用户名
@@ -105,9 +105,9 @@
           if (result.ok) window.location.href = mainUrl("account",{section:"profile"});
         });
       } catch(err) {
-        if (isCurrent()) shell(root,"GitHub 注册身份已过期",
+        if (isCurrent()) shell(root,"第三方注册身份已过期",
           `<p>${esc(err.message || "请重新发起授权")}</p>
-           <a class="btn btn-primary" href="/api/auth/github/start?mode=login">重新使用 GitHub 授权</a>`);
+           <a class="btn btn-primary" href="${esc(mainUrl("auth"))}">返回登录并重新授权</a>`);
       }
       return true;
     }
