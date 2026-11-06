@@ -63,6 +63,46 @@ class AdminUserDeletionForeignKeyTests(unittest.TestCase):
                             ("media_fixture_delete", "/generated/fixture.png", uid, uid,
                              "work", "fixture_work", now),
                         )
+                        actor_id = int(admin["id"])
+                        low, high = sorted((actor_id, uid))
+                        dm = tx.execute(
+                            "INSERT INTO dm_conversations(user_low_id,user_high_id,created_at,updated_at)"
+                            " VALUES (?,?,?,?)",
+                            (low, high, now, now),
+                        )
+                        conversation_id = int(dm.lastrowid)
+                        tx.execute(
+                            "INSERT INTO dm_messages(conversation_id,sender_id,body,client_message_id,created_at)"
+                            " VALUES (?,?,?,?,?)",
+                            (conversation_id, uid, "Hello", "fixture_message", now),
+                        )
+                        tx.execute(
+                            "INSERT INTO dm_members(conversation_id,user_id) VALUES (?,?)",
+                            (conversation_id, uid),
+                        )
+                        tx.execute(
+                            "INSERT INTO dm_members(conversation_id,user_id) VALUES (?,?)",
+                            (conversation_id, actor_id),
+                        )
+                        tx.execute(
+                            "INSERT INTO dm_blocks(user_id,blocked_user_id,created_at)"
+                            " VALUES (?,?,?)",
+                            (actor_id, uid, now),
+                        )
+                        tx.execute(
+                            "INSERT INTO dm_contact_history(sender_id,recipient_id,first_contact_date,first_contact_at)"
+                            " VALUES (?,?,?,?)",
+                            (uid, actor_id, "2026-11-07", now),
+                        )
+                        announcement = tx.execute(
+                            "INSERT INTO message_broadcasts(sender_id,title,body,audience_cutoff,request_id,published_at)"
+                            " VALUES (?,?,?,?,?,?)",
+                            (uid, "Test announcement", "Hello", now, "fixture_broadcast", now),
+                        )
+                        tx.execute(
+                            "INSERT INTO message_broadcast_reads(broadcast_id,user_id,read_at) VALUES (?,?,?)",
+                            (int(announcement.lastrowid), actor_id, now),
+                        )
                     admin_row = dict(db.get_conn().execute(
                         "SELECT * FROM users WHERE id=?", (admin["id"],)
                     ).fetchone())
