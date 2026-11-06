@@ -27,6 +27,7 @@
   }
   let active = null;
   let restored = false;
+  let recoveredImportHandler = null;
   function draw(task) {
     const el = ensurePanel();
     const state = task.state || "queued";
@@ -75,7 +76,10 @@
       </div>
       ${task.warning ? `<p class="hw-task-note">${escapeHtml(task.warning)}</p>` : ""}
       ${failed ? `<p class="hw-task-note is-error">${escapeHtml(task.error || "请重试；原有文章未更改。")}</p>` : ""}
-      ${complete && task.recoverable ? '<button class="hw-task-action" data-task-recover type="button">下载已整理的 Markdown</button>' : ""}
+      ${complete && task.recoverable ? `<div class="hw-task-recovery-actions">
+        ${recoveredImportHandler ? '<button class="hw-task-action" data-task-apply type="button">审校并打开编辑器</button>' : ""}
+        <button class="hw-task-action hw-task-secondary" data-task-recover type="button">下载 Markdown</button>
+      </div>` : ""}
       ${!complete && !failed ? '<p class="hw-task-footnote">后台仍在处理；关闭此面板不会停止任务，刷新页面可以恢复查看。</p>' : ""}
     `;
     el.querySelector("[data-task-hide]")?.addEventListener("click", () => {
@@ -87,6 +91,27 @@
       if (task.result) {
         downloadMarkdown(task.result);
         storage.clear();
+      }
+    });
+    el.querySelector("[data-task-apply]")?.addEventListener("click", async () => {
+      if (!recoveredImportHandler || !task.result) return;
+      const button = el.querySelector("[data-task-apply]");
+      if (button) { button.disabled = true; button.textContent = "正在打开编辑器…"; }
+      try {
+        const confirmed = await reviewDocument(task.result, {replacing:false});
+        if (confirmed) {
+          const applied = await recoveredImportHandler(task.result);
+          if (applied !== false) {
+            task.recoverable = false;
+            storage.clear();
+            draw(task);
+          }
+        }
+      } catch (error) {
+        task.warning = "恢复文章失败，结果仍可下载：" + (error?.message || "请重试");
+        draw(task);
+      } finally {
+        if (button?.isConnected) button.disabled = false;
       }
     });
     if (el.classList.contains("is-collapsed")) {
@@ -329,5 +354,11 @@
       setTimeout(() => el.remove(), phase === "failed" ? 9000 : 3500);
     }
   }
-  global.HandrawTaskJourney = { submitImport, resume, downloadMarkdown, reviewDocument, withActivity };
+  global.HandrawTaskJourney = {
+    submitImport, resume, downloadMarkdown, reviewDocument, withActivity,
+    setRecoveredImportHandler(handler) {
+      recoveredImportHandler = typeof handler === "function" ? handler : null;
+      if (active?.state === "done" && active.recoverable) draw(active);
+    }
+  };
 })(window);
