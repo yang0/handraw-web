@@ -39,7 +39,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 class PostRoutesHTTPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"})
+        cls._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test", "HANDRAW_DEMO_MODE": "1"})
         cls._env.start()
         cls.temp = TemporaryDirectory()
         cls.db_path = Path(cls.temp.name) / "post_routes.db"
