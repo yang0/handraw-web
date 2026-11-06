@@ -327,6 +327,30 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
 
 
 def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
+    if req_path == "/api/auth/github/status":
+        from .p2_oauth import oauth_status
+        handler._send_json(oauth_status(handler.db, handler._current_user(required=False)))
+        return True
+    if req_path == "/api/auth/github/start":
+        from .p2_oauth import start_github
+        handler._enforce_auth_rate_limit("oauth", "github", per_ip_only=True)
+        mode = (qs.get("mode") or ["login"])[0]
+        start_github(handler, mode)
+        return True
+    if req_path == "/api/auth/github/callback":
+        from .p2_oauth import complete_github
+        handler._enforce_auth_rate_limit("oauth_callback", "github", per_ip_only=True)
+        complete_github(handler, qs)
+        return True
+    if req_path == "/api/admin/growth":
+        from .p2_growth import growth_report
+        user = handler._current_user(required=True)
+        try:
+            days = int((qs.get("days") or ["30"])[0])
+        except (TypeError, ValueError):
+            raise ServiceError("日期范围无效")
+        handler._send_json(growth_report(handler.db, user, days=days))
+        return True
     if req_path == "/api/guides":
         editorial=json.loads((CONTENT_DIR/"editorial.json").read_text(encoding="utf-8"))
         items=[]
@@ -382,6 +406,18 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
 
 
 def handle_feature_post(handler: Any, req_path: str, body: dict) -> bool:
+    if req_path == "/api/auth/funnel-event":
+        from .p2_growth import log_funnel_view
+        handler._enforce_auth_rate_limit("funnel", "", per_ip_only=True)
+        log_funnel_view(handler.db, str(body.get("event") or ""))
+        handler._send_json({"ok": True})
+        return True
+    if req_path == "/api/auth/github/unlink":
+        from .p2_oauth import unlink_github
+        user = handler._current_user(required=True)
+        handler._enforce_auth_rate_limit("oauth_unlink", str(user["id"]), per_ip_only=True)
+        handler._send_json(unlink_github(handler.db, user, str(body.get("currentPassword") or "")))
+        return True
     if req_path == "/api/account/sessions/revoke-others":
         user = handler._current_user(required=True)
         from .security import verify_password, hash_session_token
