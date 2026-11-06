@@ -5787,10 +5787,6 @@
       if (useLiveApi) {
         const refImages = (rec?.assetItems || []).map((a) => a.image).filter(Boolean);
         const requestId = card.requestId = ensureStableRequestId(card.requestId, `article_${card.id || "card"}`);
-        if (!confirmPotentialGenerationCost(1)) {
-          card.status = "idle";
-          return false;
-        }
         card.taskId = "";
         commitArticleTargetChanges(target, { bumpTime: false });
         const resp = await fetch("/api/studio/generate", {
@@ -5911,6 +5907,10 @@
     const target = resolveArticleTarget(planNodeOrArtId);
     const planNode = target?.planNode || null;
     if (!planNode || planNode.type !== "article_plan" || planNode.data.status === "generating") return false;
+    if (_activeBatchRun) {
+      if (!silent) toast("另一批图片正在生成，请等待完成或停止后再操作");
+      return false;
+    }
     const allCards = sortPlanCardsInDocOrder(planNode.data.cards || []);
     if (!allCards.length) {
       if (!silent) toast("当前文章暂无配图卡片，请在段落间隙点击「＋ 在此处添加配图卡片」");
