@@ -1552,12 +1552,19 @@
           else btnPlan.textContent = "AI 规划中…";
 
           try {
-            const resp = await fetch("/api/studio/batch-plan", {
-              method: "POST",
-              credentials: "include",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(reqBody)
-            });
+            const resp = await (global.HandrawTaskJourney?.withActivity
+              ? global.HandrawTaskJourney.withActivity("AI 正在规划这套图", () => fetch("/api/studio/batch-plan", {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(reqBody)
+                }))
+              : fetch("/api/studio/batch-plan", {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(reqBody)
+                }));
             const data = await resp.json();
             if (!resp.ok || !data.ok) {
               throw new Error(data.error || `HTTP ${resp.status}`);
