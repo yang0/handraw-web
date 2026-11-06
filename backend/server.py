@@ -3749,6 +3749,16 @@ def main(argv: list[str] | None = None) -> None:
     _load_env_file_if_present()
     check_optional_dependencies()
 
+    # Never run SQLite while claiming to use a PostgreSQL production URL.
+    # The PostgreSQL runtime adapter must pass parity tests before enabling it.
+    if os.environ.get("HANDRAW_DATABASE_URL", "").strip():
+        raise RuntimeError(
+            "PostgreSQL runtime adapter is not enabled yet. "
+            "HANDRAW_DATABASE_URL cannot silently fall back to SQLite."
+        )
+    from .redis_rate_limit import ensure_ready as ensure_redis_ready
+    ensure_redis_ready()
+
     parser = argparse.ArgumentParser(description="Handraw Web single-backend server")
     parser.add_argument("--port", type=int, default=3080, help="Single HTTP port for all frontends (default: 3080)")
     parser.add_argument("--host", type=str, default="", help="Bind host; wildcard requires HANDRAW_ALLOW_PUBLIC_BIND=1")
