@@ -84,7 +84,10 @@
       el.querySelector(".hw-task-reopen")?.addEventListener("click", () => draw(task));
     });
     el.querySelector("[data-task-recover]")?.addEventListener("click", () => {
-      if (task.result) downloadMarkdown(task.result);
+      if (task.result) {
+        downloadMarkdown(task.result);
+        storage.clear();
+      }
     });
     if (el.classList.contains("is-collapsed")) {
       // Keep the minimized pill in place on polling updates until user reopens it.
