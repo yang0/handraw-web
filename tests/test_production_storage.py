@@ -124,6 +124,32 @@ class PostgresSnapshotTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.tool.stage(self.path, "", False)
 
+    @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"),
+                         "Isolated PostgreSQL staging URL not provided")
+    def test_real_postgres_staging_preserves_login_hashes_and_casefold_uniqueness(self):
+        import psycopg
+        dsn = os.environ["HANDRAW_PG_STAGING_URL"]
+        result = self.tool.stage(self.path, dsn, True)
+        self.assertTrue(result["staged"])
+        self.assertEqual(result["users"], 1)
+        with psycopg.connect(dsn) as pg:
+            with pg.cursor() as cur:
+                cur.execute(
+                    "SELECT id, username, email, password_hash FROM users WHERE username = %s",
+                    ("LeGaCy",)
+                )
+                row = cur.fetchone()
+                self.assertEqual(row[0], 1)
+                self.assertEqual(row[1], "legacy")
+                self.assertTrue(verify_password("OldUsersPassword!", row[3]))
+                cur.execute("SELECT token, user_id FROM sessions")
+                self.assertEqual(cur.fetchall(), [("persisted-session", 1)])
+                with self.assertRaises(psycopg.errors.UniqueViolation):
+                    cur.execute(
+                        "INSERT INTO users(username,email,password_hash) VALUES(%s,%s,%s)",
+                        ("LeGaCy", "another@example.test", self.legacy_hash)
+                    )
+
     def test_fk_violations_cannot_migrate(self):
         with sqlite3.connect(self.path) as conn:
             conn.execute("INSERT INTO sessions(token,user_id) VALUES(?,?)", ("orphan", 999))
