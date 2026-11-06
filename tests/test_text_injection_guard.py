@@ -278,16 +278,26 @@ class TextInjectionIntegrationHTTPTests(unittest.TestCase):
         self.assertTrue(res.get("ok"))
 
     def test_profile_update_sanitized(self):
-        payload = {
+        # Display names are immutable after registration; sanitized attempts to
+        # change them must be rejected, not silently accepted.
+        rejected = {
             "displayName": "<script>alert(1)</script>安全绘师",
             "bio": "<img src=x onerror=alert(1)>专注于手绘与视觉设计",
         }
-        code, res = self.request("POST", "/api/auth/profile", payload, cookie=self.token)
+        code, res = self.request("POST", "/api/auth/profile", rejected, cookie=self.token)
+        self.assertEqual(code, 409)
+        self.assertEqual(res.get("code"), "nickname_locked")
+
+        # Bio is editable and must still strip executable markup.
+        code, res = self.request("POST", "/api/auth/profile", {
+            "bio": rejected["bio"],
+        }, cookie=self.token)
         self.assertEqual(code, 200)
 
-        # Check DB
-        u_row = self.db.get_conn().execute("SELECT display_name, bio FROM users WHERE id = ?", (self.user["id"],)).fetchone()
-        self.assertEqual(u_row["display_name"], "安全绘师")
+        u_row = self.db.get_conn().execute(
+            "SELECT display_name, bio FROM users WHERE id = ?", (self.user["id"],)
+        ).fetchone()
+        self.assertEqual(u_row["display_name"], self.user["display_name"])
         self.assertEqual(u_row["bio"], "专注于手绘与视觉设计")
 
 
