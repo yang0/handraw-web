@@ -53,3 +53,7 @@
 .hw-document-review-actions button:focus-visible{outline:3px solid #df9371;outline-offset:2px}
 @media(max-width:650px){.hw-document-review{padding:18px;max-height:94vh}.hw-document-review-meta{grid-template-columns:1fr}.hw-document-review-actions button{flex:1}.hw-document-review-preview{max-height:25vh}}
 @media(prefers-reduced-motion:reduce){.hw-document-review-overlay{backdrop-filter:none}}
+
+.hw-article-sync-retry{margin-left:5px;border:0;background:transparent;color:#b9412c;cursor:pointer;font-size:11px;font-weight:800;text-decoration:underline;text-underline-offset:3px;padding:4px}
+.hw-article-sync-retry[hidden]{display:none}
+.hw-article-sync-retry:focus-visible{outline:2px solid #b9412c;outline-offset:2px}
