@@ -13,7 +13,6 @@ import secrets
 import smtplib
 import ssl
 import time
-from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import parseaddr
 from pathlib import Path
@@ -50,13 +49,11 @@ def send_account_mail(recipient: str, purpose: str, token: str) -> None:
     if not cfg.get("host") or not cfg.get("sender"):
         raise ServiceError("邮件服务尚未配置，请联系管理员", status=503, code="mail_unavailable")
     base = str(os.environ.get("HANDRAW_PUBLIC_URL", "http://localhost:3080")).rstrip("/")
-    view = ("reset-password" if purpose == "password_reset" else
-            "reactivate" if purpose == "account_reactivate" else "verify-email")
+    view = "reset-password" if purpose == "password_reset" else "verify-email"
     url = base + "/?" + urlencode({"view": view, "token": token,
                                    "purpose": "change" if purpose == "email_change" else "verify"})
     action = {"password_reset": "重置密码", "verify_email": "验证邮箱",
-              "email_change": "验证并绑定新邮箱",
-              "account_reactivate": "恢复停用的账号"}.get(purpose, "验证邮箱")
+              "email_change": "验证并绑定新邮箱"}.get(purpose, "验证邮箱")
     msg = EmailMessage()
     msg["From"] = str(cfg["sender"])
     msg["To"] = recipient
@@ -152,94 +149,6 @@ def request_email_change(db: Any, user: dict, new_email: str, current_password: 
             tx.execute("DELETE FROM account_action_tokens WHERE token_hash=?", (digest,))
         raise
     return {"ok": True, "message": "验证邮件已发送到新邮箱。点击邮件链接后才会完成换绑。"}
-
-
-ACCOUNT_RECOVERY_WINDOW_SECONDS = 30 * 86400
-
-
-def _closed_account_recoverable(closed_at: str, now: int) -> bool:
-    try:
-        closed_ts = int(datetime.fromisoformat(closed_at.replace("Z", "+00:00")).timestamp())
-    except (ValueError, TypeError, AttributeError):
-        return False
-    return 0 <= now - closed_ts <= ACCOUNT_RECOVERY_WINDOW_SECONDS
-
-
-def request_account_reactivation(db: Any, email: str) -> dict:
-    """Send a one-time reactivation link only for recently closed verified accounts.
-
-    Return a neutral message regardless of whether the email is registered.
-    """
-    generic = {"ok": True, "message": "如果符合恢复条件，验证邮件将发送到该邮箱，请检查收件箱。"}
-    clean = parseaddr(str(email or "").strip())[1].lower()
-    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", clean) or len(clean) > 120:
-        raise ServiceError("请输入有效邮箱地址")
-    if not mail_ready():
-        raise ServiceError("邮件服务尚未配置，请联系管理员", status=503, code="mail_unavailable")
-    now = int(time.time())
-    row = db.get_conn().execute(
-        """SELECT u.id,u.email,u.status,u.closed_at,v.email AS verified_email
-           FROM users u LEFT JOIN verified_emails v ON v.user_id=u.id
-           WHERE lower(u.email)=?""", (clean,)
-    ).fetchone()
-    if (not row or row["status"] != "closed" or not row["verified_email"]
-            or row["verified_email"].lower() != clean
-            or not _closed_account_recoverable(row["closed_at"], now)):
-        return generic
-    token = secrets.token_urlsafe(32)
-    digest = hashlib.sha256(token.encode()).hexdigest()
-    with db.transaction() as tx:
-        previous = tx.execute(
-            "SELECT created_at FROM account_action_tokens WHERE user_id=? AND purpose='account_reactivate' ORDER BY created_at DESC LIMIT 1",
-            (row["id"],)
-        ).fetchone()
-        if previous and now - int(previous["created_at"]) < 60:
-            return generic
-        tx.execute(
-            "UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND purpose='account_reactivate' AND consumed_at IS NULL",
-            (now, row["id"])
-        )
-        tx.execute(
-            "INSERT INTO account_action_tokens(token_hash,user_id,purpose,email,expires_at,created_at) VALUES(?,?,?,?,?,?)",
-            (digest, row["id"], "account_reactivate", clean, now + 1800, now)
-        )
-    try:
-        send_account_mail(clean, "account_reactivate", token)
-    except ServiceError:
-        with db.transaction() as tx:
-            tx.execute("DELETE FROM account_action_tokens WHERE token_hash=?", (digest,))
-        raise
-    return generic
-
-
-def consume_account_reactivation(db: Any, token: str) -> dict:
-    if not token or len(token) > 200:
-        raise ServiceError("恢复链接无效或已过期", code="invalid_reactivation_token")
-    digest = hashlib.sha256(token.encode()).hexdigest()
-    now = int(time.time())
-    with db.transaction() as tx:
-        row = tx.execute(
-            """SELECT a.*,u.status,u.closed_at,u.email AS current_email,
-                      v.email AS verified_email
-               FROM account_action_tokens a
-               JOIN users u ON u.id=a.user_id
-               LEFT JOIN verified_emails v ON v.user_id=u.id
-               WHERE a.token_hash=? AND a.purpose='account_reactivate'""",
-            (digest,)
-        ).fetchone()
-        if (not row or row["consumed_at"] is not None or int(row["expires_at"]) <= now
-                or row["status"] != "closed"
-                or not row["verified_email"] or row["verified_email"].lower() != row["current_email"].lower()
-                or row["email"].lower() != row["current_email"].lower()
-                or not _closed_account_recoverable(row["closed_at"], now)):
-            raise ServiceError("恢复链接无效或已过期，请重新申请", code="invalid_reactivation_token")
-        tx.execute("UPDATE users SET status='active',closed_at='' WHERE id=? AND status='closed'", (row["user_id"],))
-        tx.execute(
-            "UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND consumed_at IS NULL",
-            (now, row["user_id"])
-        )
-        emit_notification(tx, row["user_id"], "security", "你的账号已通过已验证邮箱恢复，请重新登录并检查账户安全。")
-    return {"ok": True, "message": "账号已恢复，请使用原有密码重新登录。"}
 
 
 def consume_account_token(db: Any, purpose: str, token: str, password: str = "") -> dict:
@@ -473,45 +382,6 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
 
 
 def handle_feature_post(handler: Any, req_path: str, body: dict) -> bool:
-    if req_path == "/api/auth/request-reactivation":
-        handler._send_json(request_account_reactivation(handler.db, str(body.get("email") or "")))
-        return True
-    if req_path == "/api/auth/confirm-reactivation":
-        handler._send_json(consume_account_reactivation(handler.db, str(body.get("token") or "")))
-        return True
-    if req_path == "/api/account/close":
-        user = handler._current_user(required=True)
-        from .security import verify_password
-        if str(body.get("confirmation") or "") != str(user["username"]):
-            raise ServiceError("请输入当前用户名以确认停用", status=400, code="confirmation_required")
-        current_password = str(body.get("currentPassword") or "")
-        with handler.db.transaction() as tx:
-            row = tx.execute("SELECT password_hash,password_algo,discourse_salt FROM users WHERE id=? AND status='active'",
-                             (user["id"],)).fetchone()
-            if not row or not verify_password(current_password, row["password_hash"],
-                    password_algo=row["password_algo"], discourse_salt=row["discourse_salt"]):
-                raise ServiceError("当前密码不正确", status=403, code="incorrect_password")
-            tx.execute("UPDATE users SET status='closed',closed_at=? WHERE id=? AND status='active'",
-                       (utc_now_iso(), user["id"]))
-            tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE user_id=? AND consumed_at IS NULL",
-                       (int(time.time()), user["id"]))
-            if body.get("requestErasure") is True:
-                tx.execute(
-                    """INSERT INTO account_erasure_requests(user_id,status,requested_at)
-                       VALUES(?, 'pending', ?)
-                       ON CONFLICT(user_id) DO UPDATE SET status='pending',
-                       requested_at=excluded.requested_at,processed_at='',review_note=''""",
-                    (user["id"], utc_now_iso())
-                )
-            tx.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
-            # Existing client grants and unredeemed device authorization must also lose access.
-            tx.execute("UPDATE api_tokens SET revoked_at=? WHERE user_id=? AND (revoked_at='' OR revoked_at IS NULL)",
-                       (utc_now_iso(), user["id"]))
-            tx.execute("UPDATE device_codes SET status='denied' WHERE user_id=? AND status IN ('pending','approved')",
-                       (user["id"],))
-        handler._send_json({"ok": True, "message": "账号已停用，所有会话及客户端令牌已失效。30 天内可通过已验证邮箱申请恢复。删除审核需单独处理。"},
-                           set_cookie=handler._cookie_for_token("", clear=True))
-        return True
     if req_path == "/api/account/sessions/revoke-others":
         user = handler._current_user(required=True)
         from .security import verify_password, hash_session_token
