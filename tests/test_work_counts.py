@@ -16,6 +16,7 @@ from backend import server
 from backend.services import (
     build_boot_payload,
     publish_user_work,
+    publish_forum_reply_post,
     register_user,
     toggle_user_collection,
     toggle_user_like,
@@ -77,6 +78,9 @@ class WorkCounterTests(unittest.TestCase):
     def test_boot_reports_the_same_numbers_in_both_views(self):
         toggle_user_like(self.db, self.reader, "topic", self.topic_id)
         toggle_user_collection(self.db, self.reader, "topics", self.topic_id)
+        # Work discussions are listed after the first public reply, not upon
+        # publication. Make the topic visible before comparing boot views.
+        publish_forum_reply_post(self.db, self.author, self.topic_id, "第一条公开讨论")
 
         boot = build_boot_payload(self.db, None)
         work = next(w for w in boot["works"] if w["id"] == self.work_id)
