@@ -510,7 +510,7 @@ def register_user(
                 role, status, bio, invite_code, invited_by, api_key, created_at, last_login_at, nickname_locked
             ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', 'user', 'active', 'Handraw 新锐社区创作者', ?, ?, ?, ?, ?, ?)
             """,
-            (uname, dname, clean_email, pw_hash, uname, inviter_row["username"] if inviter_row else "", api_key or None, now_iso, now_iso, 1 if clean_dname else 0),
+            (uname, dname, clean_email, pw_hash, uname, inviter_row["username"] if inviter_row else "", api_key or None, now_iso, now_iso, 1),
         )
         uid = int(cur.lastrowid)
         tx.execute(
@@ -621,7 +621,7 @@ def sandbox_switch_account(db: Database, target_username: str, user_agent: str =
 
 
 def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
-    """Update biography, change nickname on a 30-day cooldown, and rotate password safely.
+    """Update biography and rotate password; registration nickname stays immutable.
 
     Email changes require separate proof-of-mail flow; this endpoint never
     directly overwrites the account's recovery address.
@@ -633,22 +633,15 @@ def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) 
             raise ServiceError("账号不存在", status=404)
 
         name = row["display_name"]
-        locked = bool(row["nickname_locked"])
+        locked = True
         last_nickname_change = int(row["nickname_changed_at"] or 0)
+        # Display names are chosen at registration (falling back to username).
+        # Do not reopen legacy nickname_locked=0 accounts for editing.
         if "displayName" in body:
             requested = sanitize_plain_text(str(body.get("displayName") or ""), max_chars=40)
-            if not requested:
-                raise ServiceError("创作者昵称不能为空")
             if requested != name:
-                cooldown = 30 * 24 * 60 * 60
-                remaining = last_nickname_change + cooldown - int(time.time())
-                if remaining > 0:
-                    raise ServiceError("昵称修改过于频繁，请在冷却期结束后重试",
-                                       status=409, code="nickname_cooldown",
-                                       extra={"nextChangeAt": last_nickname_change + cooldown})
-                name = requested
-                locked = True
-                last_nickname_change = int(time.time())
+                raise ServiceError("创作者昵称在注册完成后不可修改",
+                                   status=409, code="nickname_locked")
 
         if "email" in body and str(body.get("email") or "").strip().lower() != str(row["email"] or "").lower():
             raise ServiceError("请使用邮箱换绑验证流程，新邮箱验证后才会生效", status=409, code="email_verification_required")
@@ -2290,7 +2283,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
             "displayName": current_user["display_name"],
             "avatarUrl": current_user.get("avatar_url") or "/assets/avatar-default.svg",
             "nicknameLocked": bool(current_user.get("nickname_locked", 1)),
-            "nicknameNextChangeAt": (int(current_user.get("nickname_changed_at") or 0) + 30 * 86400) if current_user.get("nickname_changed_at") else 0,
+            "nicknameNextChangeAt": 0,
             "email": current_user.get("email") or "",
             "bio": current_user.get("bio") or "",
             "role": u_role,
