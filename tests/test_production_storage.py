@@ -61,6 +61,27 @@ class RedisRateLimitTests(unittest.TestCase):
             self.assertNotIn("email@example.com", client.seen[0][0])
             self.assertNotIn("198.51.100.9", client.seen[0][0])
 
+    @unittest.skipUnless(os.environ.get("HANDRAW_REDIS_URL"), "Real Redis not configured")
+    def test_real_redis_atomic_limit_across_threads(self):
+        import concurrent.futures
+        import secrets
+        url = os.environ["HANDRAW_REDIS_URL"]
+        subject = "test-" + secrets.token_hex(16)
+        with patch.dict(os.environ, {"HANDRAW_REDIS_PREFIX": "handraw:ci"}):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+                allowed = list(pool.map(
+                    lambda _: redis_rate_limit.check_limit("login", subject), range(12)
+                ))
+        self.assertEqual(allowed.count(True), 8)
+        self.assertEqual(allowed.count(False), 4)
+        client = redis_rate_limit._connect(url)
+        import hashlib
+        key = ("handraw:ci:rate:login:" +
+               hashlib.sha256(("login:" + subject).encode()).hexdigest())
+        self.assertGreater(client.ttl(key), 0)
+        self.assertLessEqual(client.ttl(key), 300)
+        client.delete(key)
+
     def test_redis_outage_fails_closed_when_configured(self):
         with patch.dict(os.environ, {
             "HANDRAW_REDIS_URL": "redis://localhost:6379/0",
