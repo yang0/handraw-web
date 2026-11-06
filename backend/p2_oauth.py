@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -20,6 +21,76 @@ from typing import Any
 from .db import utc_now_iso
 from .services import ServiceError, create_session_for_user, register_user
 from .security import verify_password
+
+logger = logging.getLogger(__name__)
+
+
+def _canonicalize_oauth_start(handler: Any, callback: str, provider: str, mode: str) -> bool:
+    """Set browser-bound state only on the configured callback's host.
+
+    localhost and 127.0.0.1 have separate cookie jars even if both redirect
+    URIs are registered with the provider. Never derive a target from Host.
+    """
+    host = (handler.headers.get("Host") or "").lower()
+    target = urllib.parse.urlsplit(callback)
+    default_port = 443 if target.scheme == "https" else 80
+    try:
+        incoming = urllib.parse.urlsplit(f"{target.scheme}://{host}")
+        same_host = (incoming.hostname == target.hostname and
+                     (incoming.port or default_port) == (target.port or default_port))
+    except ValueError:
+        same_host = False
+    if not host or same_host:
+        return False
+    if mode == "link":
+        # Two host-only login sessions may belong to different accounts. Never
+        # silently switch the account whose provider binding is being changed.
+        raise ServiceError("请先使用登录回调配置的网站地址登录账号，再绑定第三方登录", status=409,
+                           code="oauth_origin_mismatch")
+    destination = urllib.parse.urlunsplit((
+        target.scheme, target.netloc, f"/api/auth/{provider}/start",
+        urllib.parse.urlencode({"mode": mode}), "",
+    ))
+    logger.info("event=oauth_origin_redirect provider=%s request_id=%s", provider,
+                getattr(handler, "_request_id", "unavailable"))
+    _redirect(handler, destination)
+    return True
+
+
+def _invalid_state(handler: Any, reason: str) -> None:
+    # Only an enumerated diagnostic is retained, never state/code/cookie values.
+    handler._oauth_failure_reason = reason
+    raise ServiceError("授权已过期或浏览器验证不匹配，请重新发起登录", status=400, code="oauth_state_invalid")
+
+
+def _validate_callback_fields(handler: Any, state: str, code: str, nonce: str) -> None:
+    if not state or len(state) > 256:
+        _invalid_state(handler, "invalid_state_parameter")
+    if not nonce or len(nonce) > 256:
+        _invalid_state(handler, "missing_browser_nonce" if not nonce else "invalid_browser_nonce")
+    if not code or len(code) > 2048:
+        _invalid_state(handler, "invalid_code_parameter")
+
+
+def _validate_flow(handler: Any, row: Any, provider: str, now: int, nonce: str, *, pkce: bool = False) -> None:
+    if not row:
+        _invalid_state(handler, "flow_missing_or_consumed")
+    if row["expires_at"] <= now:
+        _invalid_state(handler, "flow_expired")
+    if row["provider"] != provider:
+        _invalid_state(handler, "provider_mismatch")
+    if not secrets.compare_digest(row["browser_nonce_hash"], _digest(nonce)):
+        _invalid_state(handler, "browser_nonce_mismatch")
+    if pkce and not row["code_verifier"]:
+        _invalid_state(handler, "pkce_verifier_missing")
+
+
+def _log_callback_failure(handler: Any, provider: str, error: ServiceError) -> None:
+    logger.warning(
+        "event=oauth_callback_rejected provider=%s code=%s reason=%s request_id=%s",
+        provider, error.code, getattr(handler, "_oauth_failure_reason", "provider_or_account_rejected"),
+        getattr(handler, "_request_id", "unavailable"), exc_info=error.status >= 500,
+    )
 
 
 def github_config() -> dict[str, str] | None:
@@ -163,6 +234,8 @@ def start_github(handler: Any, mode: str = "login") -> None:
         raise ServiceError("尚未配置 GitHub 登录", status=503, code="social_not_configured")
     if mode not in {"login", "link"}:
         raise ServiceError("无效的授权用途")
+    if _canonicalize_oauth_start(handler, config["callback"], "github", mode):
+        return
     user = handler._current_user(required=(mode == "link"))
     if mode == "login" and user:
         raise ServiceError("当前已登录，请使用账号设置中的绑定入口", status=409)
@@ -248,8 +321,7 @@ def complete_github(handler: Any, qs: dict[str, list[str]]) -> None:
     code = (qs.get("code") or [""])[0]
     nonce = _read_nonce(handler)
     secure = config["callback"].startswith("https://")
-    if not state or len(state) > 256 or not nonce or not code or len(code) > 2048:
-        raise ServiceError("授权状态无效，请重新发起 GitHub 登录", status=400, code="oauth_state_invalid")
+    _validate_callback_fields(handler, state, code, nonce)
     now = int(time.time())
     # Consumed before contacting the provider to prohibit callback replay even
     # when the upstream network call fails.
@@ -257,9 +329,7 @@ def complete_github(handler: Any, qs: dict[str, list[str]]) -> None:
         row = tx.execute(
             "SELECT * FROM oauth_flows WHERE state_hash=?", (_digest(state),)
         ).fetchone()
-        if (not row or row["expires_at"] <= now or row["provider"] != "github"
-                or not secrets.compare_digest(row["browser_nonce_hash"], _digest(nonce))):
-            raise ServiceError("授权已过期或浏览器状态不匹配，请重新尝试", status=400, code="oauth_state_invalid")
+        _validate_flow(handler, row, "github", now, nonce)
         tx.execute("DELETE FROM oauth_flows WHERE state_hash=?", (_digest(state),))
     identity = fetch_github_identity(config, code)
     subject = identity["subject"]

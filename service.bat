@@ -48,7 +48,7 @@ pause
 goto menu
 
 :open
-start "" "http://127.0.0.1:3080/"
+start "" "http://localhost:3080/"
 goto menu
 
 :command

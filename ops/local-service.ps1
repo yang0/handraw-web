@@ -14,6 +14,7 @@ if (-not $DatabasePath) {
 }
 $databaseFile = [IO.Path]::GetFullPath($DatabasePath)
 $localOrigin = "http://127.0.0.1:$Port"
+$browserOrigin = "http://localhost:$Port"
 $escapedDatabase = [regex]::Escape($databaseFile)
 $databaseArgument = '(?i)(?:^|\s)--db(?:\s+|=)(?:"' + $escapedDatabase + '"|' + $escapedDatabase + '(?=\s|$))'
 
@@ -39,10 +40,10 @@ function Show-HandrawStatus {
         return
     }
     Write-Host "服务正在运行，PID：$($running.ProcessId)，端口：$Port"
-    Write-Host "首页：   $localOrigin/"
-    Write-Host "创作台： $localOrigin/studio/"
-    Write-Host "社区：   $localOrigin/forum/"
-    Write-Host "后台：   $localOrigin/admin/"
+    Write-Host "首页：   $browserOrigin/"
+    Write-Host "创作台： $browserOrigin/studio/"
+    Write-Host "社区：   $browserOrigin/forum/"
+    Write-Host "后台：   $browserOrigin/admin/"
 }
 
 function Start-Handraw {

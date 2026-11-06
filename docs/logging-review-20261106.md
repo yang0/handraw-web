@@ -40,3 +40,13 @@
 - 相关检查结果：33 项日志、账户、安全及启动检查通过，29 项文档导入检查通过，1 项隔离 PostgreSQL 全 schema 检查通过；本机服务重启后 `/api/boot` 返回 200，响应编号与应用日志一致。
 
 测试输出保存在忽略目录 `.local/logging-*.log`。本次不包含生产部署。
+
+## OAuth 303 失败补充检查
+
+后续真实 Google 登录以 `oauth_state_invalid` 返回登录页。日志显示授权发起与回调间隔约 9 秒，检查时对应 Google 授权记录仍未过期。现有日志没有记录被业务层转换为 303 的拒绝原因，因此不能单凭该次记录断定究竟是 Cookie 缺失还是不匹配。
+
+隔离 HTTP + CookieJar 回归复现了地址切换问题：从 `127.0.0.1` 设置的浏览器 Cookie 不会随 `localhost` 回调发送。控制台同时允许两个回调地址不会改变 Cookie 的 Host 绑定。本次在创建授权状态前将登录入口切换到配置回调的 Host，并把本地菜单链接统一到 `localhost`；账号绑定在 Host 不同时拒绝继续，以免切换到另一个 Host 的不同账号。
+
+授权回调拒绝现在额外记录 `event=oauth_callback_rejected`、provider、错误码、请求编号和枚举原因。覆盖 Cookie 缺失/不匹配、状态过期/已消费、提供方不符及 PKCE verifier 缺失，仍不记录授权参数或 Cookie 值。普通 HTTP 303 摘要不再是这类失败的唯一证据。
+
+33 项相关回归通过，其中新增真实 HTTP/CookieJar 回归覆盖 Google 登录跨地址往返、Google/GitHub 登录入口、跨 Host 绑定拒绝、重复回调以及各状态拒绝原因。提供方身份接口均为模拟，不代表已替用户完成真实 Google 授权。输出为 `.local/oauth-origin-final-20261106.log`。

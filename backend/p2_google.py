@@ -22,7 +22,10 @@ from typing import Any
 from .db import utc_now_iso
 from .security import verify_password
 from .services import ServiceError, create_session_for_user
-from .p2_oauth import _digest, _redirect, _signup_cookie, _oauth_username
+from .p2_oauth import (
+    _canonicalize_oauth_start, _digest, _redirect, _signup_cookie, _oauth_username,
+    _validate_callback_fields, _validate_flow,
+)
 
 
 def google_config() -> dict[str, str] | None:
@@ -67,6 +70,8 @@ def start_google(handler: Any, mode: str = "login") -> None:
         raise ServiceError("Google 登录尚未配置", status=503, code="social_not_configured")
     if mode not in {"login", "link"}:
         raise ServiceError("授权用途无效")
+    if _canonicalize_oauth_start(handler, cfg["callback"], "google", mode):
+        return
     user = handler._current_user(required=(mode == "link"))
     if mode == "login" and user:
         raise ServiceError("当前已登录，请在账号安全设置中绑定 Google", status=409)
@@ -147,16 +152,11 @@ def complete_google(handler: Any, qs: dict[str, list[str]]) -> None:
     code = (qs.get("code") or [""])[0]
     nonce = _nonce(handler)
     secure = cfg["callback"].startswith("https://")
-    if not state or len(state) > 256 or not nonce or not code or len(code) > 2048:
-        raise ServiceError("Google 授权状态无效，请重新尝试", status=400, code="oauth_state_invalid")
+    _validate_callback_fields(handler, state, code, nonce)
     now = int(time.time())
     with handler.db.transaction() as tx:
         row = tx.execute("SELECT * FROM oauth_flows WHERE state_hash=?", (_digest(state),)).fetchone()
-        if (not row or row["expires_at"] <= now or row["provider"] != "google"
-                or not secrets.compare_digest(row["browser_nonce_hash"], _digest(nonce))
-                or not row["code_verifier"]):
-            raise ServiceError("Google 授权状态已过期或浏览器验证不匹配",
-                               status=400, code="oauth_state_invalid")
+        _validate_flow(handler, row, "google", now, nonce, pkce=True)
         tx.execute("DELETE FROM oauth_flows WHERE state_hash=?", (_digest(state),))
     identity = fetch_google_identity(cfg, code, row["code_verifier"])
     subject = identity["subject"]

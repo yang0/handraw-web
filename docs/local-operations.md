@@ -216,6 +216,14 @@ GET、POST、PUT、DELETE、OPTIONS 共用异常入口；5xx 还在响应出口�
 
 目前 `/api/health` 的 `db: true` 是固定返回值，只能证明 HTTP 进程可访问，不能代替数据库、Redis 或业务初始化检查。完整评估与后续建议见 [日志系统评估](logging-review-20261106.md)。
 
+### 5.6 本地 Google / GitHub 登录地址
+
+本机当前第三方回调配置使用 `http://localhost:3080/api/auth/<provider>/callback`，日常浏览统一使用 `http://localhost:3080/`。Google 控制台同时允许 `localhost` 和 `127.0.0.1` 的来源与回调，并不会让它们共享 Cookie。
+
+登录从其他 Host 发起时，服务会先跳到配置回调的 Host，然后才创建 OAuth state 和浏览器校验 Cookie。第三方账号绑定不会自动切换 Host，以免切换到另一地址下不同的登录账号；应先在配置回调的网站地址登录，再发起绑定。菜单打开首页和状态输出已统一使用 `localhost`，本机健康探测仍使用回环 IP。
+
+OAuth 回调即使最终以 303 返回登录页，也会额外记录 `event=oauth_callback_rejected`，包含 provider、错误码、请求编号及无敏感值的原因，例如 `missing_browser_nonce`、`browser_nonce_mismatch`、`flow_expired`、`flow_missing_or_consumed`。不会记录 Cookie、state、授权 code 或 PKCE verifier 的值。授权记录过期、被重复使用、提供方不符或 Cookie 不匹配时，仍然拒绝登录。
+
 ---
 
 ## 6. 常见问题与排障

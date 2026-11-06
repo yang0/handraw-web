@@ -419,13 +419,14 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
         return True
     if req_path == "/api/auth/google/callback":
         from .p2_google import complete_google, clear_cookie, google_config
-        from .p2_oauth import _redirect
+        from .p2_oauth import _redirect, _log_callback_failure
         handler._enforce_auth_rate_limit("oauth_callback", "google", per_ip_only=True)
         try:
             complete_google(handler, qs)
         except ServiceError as exc:
             from urllib.parse import urlencode
             cfg = google_config()
+            _log_callback_failure(handler, "google", exc)
             _redirect(handler, "/?view=auth&" + urlencode({"oauth_error": exc.code}),
                       clear_cookie(bool(cfg and cfg["callback"].startswith("https://"))))
         return True
@@ -440,12 +441,13 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
         start_github(handler, mode)
         return True
     if req_path == "/api/auth/github/callback":
-        from .p2_oauth import complete_github, _redirect, _clear_cookie, github_config
+        from .p2_oauth import complete_github, _redirect, _clear_cookie, github_config, _log_callback_failure
         handler._enforce_auth_rate_limit("oauth_callback", "github", per_ip_only=True)
         try:
             complete_github(handler, qs)
         except ServiceError as exc:
             from urllib.parse import urlencode
+            _log_callback_failure(handler, "github", exc)
             mode = (qs.get("mode") or [""])[0]
             target = "/?view=auth&" + urlencode({"oauth_error": exc.code})
             config = github_config()
