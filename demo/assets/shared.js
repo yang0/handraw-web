@@ -3354,7 +3354,10 @@
             <input class="hw-input" id="login-demo-account" value="" autocomplete="username" placeholder="用户名或注册邮箱" />
             <input class="hw-input" id="login-demo-password" type="password" value="" autocomplete="current-password" placeholder="登录密码" />
           </div>
-          <div style="margin:-4px 0 14px;font-size:12.4px;"><a href="?view=recovery" data-account-recovery>忘记密码</a></div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin:-4px 0 14px;font-size:12.4px;">
+            <a href="?view=recovery" data-account-recovery>忘记密码</a>
+            <a href="?view=reactivate">恢复已停用的账号</a>
+          </div>
           <div style="display:grid;gap:6px;margin-bottom:14px;font-size:12.4px;color:var(--ink-muted);">
             <div>✦ 登录后立享全站实测大图、完整提示词、每日 3 次免费生图与跨子域名收藏夹</div>
             <div>✦ 原 Discourse 老论坛迁移账号支持原邮箱/用户名直接登录并自动升级加密</div>
@@ -4215,7 +4218,11 @@
             <button type="button" class="btn btn-sm" id="acc-export-data">导出我的基本资料与内容索引</button>
             <span id="acc-export-feedback" class="hw-account-help" role="status" aria-live="polite"></span>
           </div>
-          <p class="hw-account-help">停用不可通过当前页面自行恢复。如果只是暂时离开，建议直接退出登录。</p>
+          <p class="hw-account-help">停用后的 30 天内，如原邮箱已验证，可以通过登录页的「恢复停用账号」申请验证邮件。恢复后使用原密码登录；超过期限需联系管理员。</p>
+          <label style="display:flex;align-items:flex-start;gap:9px;font-size:13px;">
+            <input type="checkbox" id="acc-close-erasure" style="margin-top:3px;" />
+            同时提交个人数据删除审核申请（不会立即删除，公开内容及法律要求保留的数据需另行审核）
+          </label>
           <div class="hw-account-form-grid">
             <label>确认用户名<input class="hw-input" id="acc-close-username" autocomplete="off" placeholder="输入 @${esc(u.username)} 对应的用户名" /></label>
             <label>当前登录密码<input class="hw-input" id="acc-close-password" type="password" autocomplete="current-password" /></label>
@@ -4467,6 +4474,7 @@
     if (closeBtn) closeBtn.onclick = async () => {
       const confirmation = formEl.querySelector("#acc-close-username").value.trim();
       const currentPassword = formEl.querySelector("#acc-close-password").value;
+      const requestErasure = Boolean(formEl.querySelector("#acc-close-erasure")?.checked);
       const feedback = formEl.querySelector("#acc-close-feedback");
       if (confirmation !== String(u.username)) {
         feedback.textContent = "请准确输入当前用户名以确认停用";
@@ -4476,7 +4484,7 @@
         feedback.textContent = "请输入当前登录密码";
         return;
       }
-      if (!window.confirm("停用后全部登录设备和授权客户端将退出，历史公开内容不会自动删除。确定继续吗？")) return;
+      if (!window.confirm("停用后所有设备将退出，30 天内可通过已验证邮箱恢复。历史公开内容不会自动删除。" + (requestErasure ? "同时提交数据删除审核申请。" : "") + "确定继续吗？")) return;
       if (!App.state.serverBacked) {
         feedback.textContent = "演示模式不支持停用账号";
         return;
@@ -4484,7 +4492,7 @@
       closeBtn.disabled = true;
       feedback.textContent = "正在停用账号…";
       try {
-        await apiJson("/api/account/close", {method:"POST", body:{confirmation, currentPassword}});
+        await apiJson("/api/account/close", {method:"POST", body:{confirmation, currentPassword, requestErasure}});
         App.state.loggedIn = false;
         App.state.user = null;
         saveState();
