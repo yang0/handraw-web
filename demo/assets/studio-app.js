@@ -12644,19 +12644,21 @@
         const file = e.target.files?.[0];
         if (!file) return;
         fileInput.value = "";
-        if (loadingBox) loadingBox.style.display = "block";
+        if (loadingBox) loadingBox.style.display = "none";
+        fileInput.disabled = true;
         const reader = new FileReader();
+        reader.onerror = () => { fileInput.disabled = false; toast("文件读取失败，请重新选择"); };
+        reader.onabort = () => { fileInput.disabled = false; };
+
         reader.onload = async (evt) => {
           const dataUrl = evt.target.result;
           try {
-            const res = await S.apiJson("/api/studio/parse-article", {
-              method: "POST",
-              body: {
-                fileName: file.name,
-                fileData: dataUrl
-              }
+            const res = await window.HandrawTaskJourney.submitImport(file.name, dataUrl, async (result) => {
+              if (!DOM.previewStage?.querySelector("#portal-file-input")) return false;
+              return true;
             });
-            if (loadingBox) loadingBox.style.display = "none";
+            if (!DOM.previewStage?.querySelector("#portal-file-input")) return;
+            fileInput.disabled = false;
 
             ensureMyArticlesInitialized();
             const now = Date.now();
@@ -12715,11 +12717,11 @@
             window.history.replaceState(null, "", url.pathname + url.search);
 
             renderFullPreviewStage();
-            let succMsg = res.aiUsed ? "已用 AI 整理为 Markdown" : "AI 不可用，已按原文导入，标题需要手动调整";
+            let succMsg = (res.aiUsed === "all" || res.aiUsed === true) ? "已用 AI 整理为 Markdown" : res.aiUsed === "partial" ? "部分段落 AI 整理失败，已保留原文，请检查结果" : "AI 不可用，已按原文导入，请检查标题和排版";
             if (res.truncated) succMsg += "（正文过长，已截断）";
             toast(succMsg);
           } catch (err) {
-            if (loadingBox) loadingBox.style.display = "none";
+            fileInput.disabled = false;
             if (err.status === 401 || err.code === "login_required") {
               toast("请先登录后再导入文档");
               if (typeof S.openLoginModal === "function") {
@@ -14929,9 +14931,9 @@
         reader.onabort = () => finishReplace();
         reader.onload = async (evt) => {
           try {
-            const res = await S.apiJson("/api/studio/parse-article", {
-              method: "POST",
-              body: { fileName: file.name, fileData: evt.target.result }
+            const res = await window.HandrawTaskJourney.submitImport(file.name, evt.target.result, async () => {
+              if (!isCurrentEditor()) return false;
+              return true;
             });
             if (!isCurrentEditor()) return;
             const okTitle = res && typeof res.title === "string" ? res.title : savedSnapshot.title;
@@ -14957,7 +14959,7 @@
             commitSync({ bumpTime: true, markSaved: true, collect: false });
             renderFullPreviewStage();
 
-            let succMsg = res.aiUsed ? "已用 AI 整理为 Markdown" : "AI 不可用，已按原文导入，标题需要手动调整";
+            let succMsg = (res.aiUsed === "all" || res.aiUsed === true) ? "已用 AI 整理为 Markdown" : res.aiUsed === "partial" ? "部分段落 AI 整理失败，已保留原文，请检查结果" : "AI 不可用，已按原文导入，请检查标题和排版";
             if (res.truncated) succMsg += "（正文过长，已截断）";
             toast(succMsg);
           } catch (err) {
