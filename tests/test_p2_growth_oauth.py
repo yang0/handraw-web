@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from backend.server import init_database
 from backend.services import ServiceError, login_user, register_user, update_my_profile
-from backend import p2_growth, p2_oauth
+from backend import p2_growth, p2_oauth, p2_google
 
 
 class FakeHandler:
@@ -54,6 +54,9 @@ class P2IdentityGrowthTests(unittest.TestCase):
             "HANDRAW_GITHUB_CLIENT_ID": "test-id",
             "HANDRAW_GITHUB_CLIENT_SECRET": "test-secret",
             "HANDRAW_GITHUB_CALLBACK_URL": "http://localhost:3080/api/auth/github/callback",
+            "HANDRAW_GOOGLE_CLIENT_ID": "google-test-client",
+            "HANDRAW_GOOGLE_CLIENT_SECRET": "google-test-secret",
+            "HANDRAW_GOOGLE_CALLBACK_URL": "http://localhost:3080/api/auth/google/callback",
         })
         self.env.start()
         self.db = init_database(Path(self.tmp.name) / "p2.db")
@@ -184,6 +187,76 @@ class P2IdentityGrowthTests(unittest.TestCase):
         self.assertEqual(self.db.get_conn().execute(
             "SELECT COUNT(*) FROM verified_emails WHERE user_id=?", (link["user_id"],)
         ).fetchone()[0], 1)
+
+    def _begin_google(self, mode="login", user=None):
+        handler = FakeHandler(self.db, user)
+        p2_google.start_google(handler, mode)
+        self.assertEqual(handler.response_status, 303)
+        url = handler.get_header("Location")[-1]
+        self.assertTrue(url.startswith("https://accounts.google.com/o/oauth2/v2/auth?"))
+        params = parse_qs(urlsplit(url).query)
+        self.assertEqual(params["code_challenge_method"], ["S256"])
+        self.assertIn("code_challenge", params)
+        state = params["state"][0]
+        cookie = next(x for x in handler.get_header("Set-Cookie")
+                      if x.startswith("handraw_google_nonce="))
+        handler.headers["Cookie"] = cookie.split(";",1)[0]
+        handler.headers_out.clear()
+        return handler, state
+
+    def test_google_first_signup_requires_nickname_confirmation_and_prevents_replay(self):
+        handler, state = self._begin_google()
+        with patch("backend.p2_google.fetch_google_identity",
+                   return_value={"subject":"10390011","login":"Google Test","email":"google-p2@example.test"}):
+            p2_google.complete_google(handler, {"state":[state],"code":["mock-google-code"]})
+        self.assertEqual(handler.get_header("Location")[-1], "/?view=oauth-register")
+        cookie = next(x for x in handler.get_header("Set-Cookie")
+                      if x.startswith("handraw_oauth_signup="))
+        handler.headers["Cookie"] = cookie.split(";",1)[0]
+        claim = p2_oauth.signup_status(handler)
+        self.assertEqual(claim["provider"], "Google")
+        self.assertEqual(claim["verifiedEmail"], "google-p2@example.test")
+        p2_oauth.finish_signup(handler, {"username":"google_p2","displayName":"首次 Google 昵称"})
+        row = self.db.get_conn().execute(
+            "SELECT * FROM users WHERE username='google_p2'"
+        ).fetchone()
+        self.assertEqual(row["display_name"], "首次 Google 昵称")
+        binding = self.db.get_conn().execute(
+            "SELECT provider FROM oauth_identities WHERE user_id=?", (row["id"],)
+        ).fetchone()
+        self.assertEqual(binding["provider"], "google")
+        with self.assertRaises(ServiceError):
+            p2_oauth.finish_signup(handler, {"username":"google_p2_replay"})
+        with self.assertRaises(ServiceError) as denied:
+            p2_google.complete_google(handler, {"state":[state],"code":["mock-google-code"]})
+        self.assertEqual(denied.exception.code, "oauth_state_invalid")
+
+    def test_google_email_collision_requires_explicit_link_and_password_to_unlink(self):
+        handler, state = self._begin_google()
+        with patch("backend.p2_google.fetch_google_identity",
+                   return_value={"subject":"10390012","login":"Other","email":self.seed["email"]}):
+            with self.assertRaises(ServiceError) as denied:
+                p2_google.complete_google(handler, {"state":[state],"code":["mock-google-code"]})
+        self.assertEqual(denied.exception.code, "oauth_link_required")
+        handler, state = self._begin_google("link", self.seed)
+        with patch("backend.p2_google.fetch_google_identity",
+                   return_value={"subject":"10390012","login":"Other","email":self.seed["email"]}):
+            p2_google.complete_google(handler, {"state":[state],"code":["mock-google-code"]})
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT user_id FROM oauth_identities WHERE provider='google' AND provider_user_id='10390012'"
+        ).fetchone()["user_id"], self.seed["id"])
+        with self.assertRaises(ServiceError):
+            p2_google.unlink_google(self.db, self.seed, "incorrect")
+        self.assertTrue(p2_google.unlink_google(self.db, self.seed, "handraw123")["ok"])
+
+    def test_google_state_browser_mismatch_stops_before_token_exchange(self):
+        handler, state = self._begin_google()
+        handler.headers["Cookie"] = "handraw_google_nonce=wrong"
+        with patch("backend.p2_google.fetch_google_identity") as identity:
+            with self.assertRaises(ServiceError) as denied:
+                p2_google.complete_google(handler, {"state":[state],"code":["mock-google-code"]})
+            identity.assert_not_called()
+        self.assertEqual(denied.exception.code, "oauth_state_invalid")
 
     def test_github_email_collision_requires_explicit_linking(self):
         handler, state = self._begin_oauth()
