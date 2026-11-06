@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sqlite3
+import os
+from unittest.mock import patch
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,6 +24,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 
 class _Base(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.path = Path(self.temp.name) / "db.sqlite"
         self.db = server.init_database(self.path)
@@ -176,6 +179,9 @@ class ForkTargetValidationTests(_Base):
 
 
 class PurgeScriptTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
+
     def test_purge_identifies_and_removes_unbacked_fork_rows(self):
         from ops import purge_publish_time_forks as purge
 
