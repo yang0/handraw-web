@@ -12664,6 +12664,11 @@
             });
             if (!DOM.previewStage?.querySelector("#portal-file-input")) return;
             fileInput.disabled = false;
+            const confirmed = await window.HandrawTaskJourney.reviewDocument(res, {
+              fileName: file.name, replacing: false
+            });
+            if (!confirmed) { toast("已保留原页面，文档未导入编辑器"); return; }
+            if (!DOM.previewStage?.querySelector("#portal-file-input")) return;
 
             ensureMyArticlesInitialized();
             const now = Date.now();
@@ -14941,6 +14946,12 @@
               return true;
             });
             if (!isCurrentEditor()) return;
+            const confirmed = await window.HandrawTaskJourney.reviewDocument(res, {
+              fileName: file.name, replacing: true,
+              currentTitle: savedSnapshot.title, currentMarkdown: savedSnapshot.markdown
+            });
+            if (!confirmed) { toast("已保留原稿，本次替换已取消"); return; }
+            if (!isCurrentEditor()) { toast("编辑器已切换，未覆盖其他文章"); return; }
             const okTitle = res && typeof res.title === "string" ? res.title : savedSnapshot.title;
             const okMarkdown = res && typeof res.markdown === "string" ? res.markdown : savedSnapshot.markdown;
             draft.title = okTitle;
