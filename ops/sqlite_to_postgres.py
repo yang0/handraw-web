@@ -138,8 +138,8 @@ def _is_nocase_column(conn, table: str, column: str) -> bool:
         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone()["sql"]
     for line in source.splitlines():
-        if re.search(r'^\\s*"?'+re.escape(column)+r'"?\\s+', line, re.I):
-            return bool(re.search(r'\\bCOLLATE\\s+NOCASE\\b', line, re.I))
+        if re.search(r'^\s*"?'+re.escape(column)+r'"?\s+', line, re.I):
+            return bool(re.search(r'\bCOLLATE\s+NOCASE\b', line, re.I))
     return False
 
 
@@ -254,6 +254,8 @@ def stage(source: Path, dsn: str, apply: bool) -> dict:
     conn, tables = read_snapshot(source)
     try:
         counts = _source_counts(conn, tables)
+        if not counts.get("users"):
+            raise ValueError("Source contains no legacy users; refusing an empty-account migration")
         cols, fks, indexes, identity = inspect_schema(conn, tables)
         result = {"tables": len(tables), "rows": sum(counts.values()),
                   "users": counts.get("users", 0),
