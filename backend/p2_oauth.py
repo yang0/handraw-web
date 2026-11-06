@@ -286,6 +286,14 @@ def complete_github(handler: Any, qs: dict[str, list[str]]) -> None:
                    VALUES('github',?,?,?,?)""",
                 (subject, user["id"], identity["login"], utc_now_iso()),
             )
+            tx.execute(
+                """INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at)
+                   VALUES(?,'security',?,'','',?)""",
+                (user["id"], "GitHub 第三方登录已绑定。如非本人操作，请立即检查账号安全。", utc_now_iso())
+            )
+        from .features import try_send_security_alert
+        try_send_security_alert(handler.db, user, "GitHub 已绑定",
+                                "你的 Handraw 账号刚刚绑定 GitHub 登录。如非本人，请立即修改密码和检查账号。")
         _redirect(handler, "/?view=account&section=security&social=linked", _clear_cookie(secure))
         return
 
@@ -346,7 +354,17 @@ def unlink_github(db: Any, user: dict, current_password: str) -> dict:
     ):
         raise ServiceError("需要正确的当前密码才能解除第三方绑定", status=403, code="incorrect_password")
     with db.transaction() as tx:
-        tx.execute("DELETE FROM oauth_identities WHERE provider='github' AND user_id=?", (user["id"],))
+        deleted = tx.execute("DELETE FROM oauth_identities WHERE provider='github' AND user_id=?", (user["id"],))
+        if deleted.rowcount:
+            tx.execute(
+                """INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at)
+                   VALUES(?,'security',?,'','',?)""",
+                (user["id"], "GitHub 第三方登录绑定已解除。", utc_now_iso())
+            )
+    if deleted.rowcount:
+        from .features import try_send_security_alert
+        try_send_security_alert(db, user, "GitHub 已解绑",
+                                "你的 Handraw 账号刚刚解除 GitHub 登录。如非本人，请立即修改密码。")
     return {"ok": True, "message": "GitHub 绑定已解除"}
 
 
