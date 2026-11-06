@@ -73,9 +73,9 @@ class ResourceRegistryTests(unittest.TestCase):
         self.thread.start()
 
         # Users: author and reviewer/visitor
-        self.author, self.author_token = register_user(self.db, "style_author", "pass123", display_name="画风创作者")
-        self.visitor, self.visitor_token = register_user(self.db, "style_visitor", "pass123", display_name="访客用户")
-        self.staff, self.staff_token = register_user(self.db, "admin_user", "pass123", display_name="超级管理员")
+        self.author, self.author_token = register_user(self.db, "style_author", "Pass1234!", display_name="画风创作者")
+        self.visitor, self.visitor_token = register_user(self.db, "style_visitor", "Pass1234!", display_name="访客用户")
+        self.staff, self.staff_token = register_user(self.db, "admin_user", "Pass1234!", display_name="超级管理员")
         with self.db.transaction() as tx:
             tx.execute("UPDATE users SET role = 'admin' WHERE id = ?", (self.staff["id"],))
 
