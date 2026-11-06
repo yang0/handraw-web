@@ -21,11 +21,11 @@ class Fix65SmallDesignGapsTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "test_fix_65.db"
         self.db = server.init_database(self.db_path)
-        self.author, _ = services.register_user(self.db, "author_65", "pass123")
-        self.user_b, _ = services.register_user(self.db, "solver_65", "pass123")
-        self.outsider, _ = services.register_user(self.db, "outsider_65", "pass123")
-        self.admin, _ = services.register_user(self.db, "admin_65", "pass123")
-        self.operator, _ = services.register_user(self.db, "operator_65", "pass123")
+        self.author, _ = services.register_user(self.db, "author_65", "Pass1234!")
+        self.user_b, _ = services.register_user(self.db, "solver_65", "Pass1234!")
+        self.outsider, _ = services.register_user(self.db, "outsider_65", "Pass1234!")
+        self.admin, _ = services.register_user(self.db, "admin_65", "Pass1234!")
+        self.operator, _ = services.register_user(self.db, "operator_65", "Pass1234!")
 
         conn = self.db.get_conn()
         conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (self.admin["id"],))
