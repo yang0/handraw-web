@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
-from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, build_opener
+from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
 from backend.db import Database
 from backend.server import HandrawRequestHandler
@@ -65,9 +65,9 @@ class OAuthBrowserOriginTests(unittest.TestCase):
         self.env.stop()
         self.temp.cleanup()
 
-    def request(self, url):
+    def request(self, url, headers=None):
         try:
-            response = self.opener.open(url, timeout=5)
+            response = self.opener.open(Request(url, headers=headers or {}), timeout=5)
         except HTTPError as exc:
             response = exc
         with response:
@@ -81,6 +81,27 @@ class OAuthBrowserOriginTests(unittest.TestCase):
         self.assertTrue(location.startswith('https://accounts.google.com/'))
         self.assertIn('handraw_google_nonce=', headers['Set-Cookie'])
         return parse_qs(urlsplit(location).query)['state'][0]
+
+    def test_logged_in_login_entry_returns_account_without_starting_oauth(self):
+        from backend.services import register_user
+        _, token = register_user(self.db, 'already_signed_in', 'LocalTestPassword2026!')
+        for provider in ('google', 'github'):
+            with self.subTest(provider=provider):
+                status, headers = self.request(self.canonical + f'/api/auth/{provider}/start', {
+                    'Cookie': 'handraw_sid=' + token, 'Accept': 'text/html',
+                })
+                self.assertEqual(status, 303)
+                self.assertEqual(headers['Location'], '/?view=account&section=profile')
+                self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM oauth_flows').fetchone()[0], 0)
+        self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM sessions').fetchone()[0], 1)
+
+    def test_browser_pages_use_one_local_session_host(self):
+        with patch.dict(os.environ, {'HANDRAW_PUBLIC_URL': self.alias}):
+            for path in ('/?view=auth', '/studio/', '/forum/?view=compose', '/admin/'):
+                with self.subTest(path=path):
+                    status, headers = self.request(self.alias + path, {'Accept': 'text/html'})
+                    self.assertEqual(status, 303)
+                    self.assertEqual(headers['Location'], self.canonical + path)
 
     def callback(self, state, origin=None):
         return self.request((origin or self.canonical) + '/api/auth/google/callback?' +

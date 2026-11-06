@@ -1675,6 +1675,14 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # secrets). Safe request summaries are emitted by send_response below.
         pass
 
+    def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+        if not hasattr(self, "headers"):
+            # Malformed HTTP before a request has even been parsed.
+            super().send_error(code, message, explain)
+            return
+        public_message = "找不到请求的内容" if code == 404 else "这个操作暂时无法执行，请返回首页后重试。"
+        self._send_json({"ok": False, "error": public_message, "code": "http_error"}, status=code)
+
     def send_response(self, code: int, message: str | None = None) -> None:
         if not hasattr(self, "_request_id"):
             self._request_id = uuid.uuid4().hex
@@ -1836,6 +1844,25 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._drain_request_body()
             obj = dict(obj, requestId=getattr(self, "_request_id", None) or uuid.uuid4().hex)
             self._request_id = obj["requestId"]
+            from .application_errors import render_error_page, wants_error_page
+            if wants_error_page(self.headers):
+                body = render_error_page(status, obj.get("error") or "请返回首页后重试。", self._request_id)
+                self.send_response(status)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+                if set_cookie:
+                    self.send_header("Set-Cookie", set_cookie)
+                self.send_header("Content-Length", str(len(body)))
+                try:
+                    self.end_headers()
+                    if self.command != "HEAD":
+                        self.wfile.write(body)
+                except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                    pass
+                return
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1847,7 +1874,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         try:
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             pass
 
@@ -2032,6 +2060,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_get(self) -> None:
         parsed = urlparse(self.path)
+        from .application_errors import canonical_local_page
+        if canonical_local_page(self, parsed):
+            return
         req_path = unquote(parsed.path)
         qs = parse_qs(parsed.query)
         raw_host = self.headers.get("Host") or "localhost:3080"
@@ -2703,6 +2734,17 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
         self._enforce_write_origin()
+        if req_path == "/api/client-errors":
+            self._enforce_auth_rate_limit("client_error", "", per_ip_only=True)
+            try:
+                report_size = int(self.headers.get("Content-Length") or "0")
+            except ValueError:
+                raise ServiceError("Content-Length 无效", status=400, code="invalid_content_length")
+            if report_size > 4096:
+                raise ServiceError("错误报告过大", status=413, code="client_error_too_large")
+            from .application_errors import record_client_error
+            record_client_error(self, self._read_json_body())
+            return
         body = self._read_json_body()
         ua = self.headers.get("User-Agent") or ""
         ip_addr = self.client_address[0] if self.client_address else ""

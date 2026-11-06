@@ -140,10 +140,12 @@
 
   async function api(path, options) {
     const opts = Object.assign({ credentials: "include", headers: {} }, options || {});
+    opts.headers = Object.assign({"Accept": "application/json"}, opts.headers);
     if (opts.body && typeof opts.body === "object" && !(opts.body instanceof FormData)) {
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(opts.body);
     }
+    if (window.HandrawErrors) return window.HandrawErrors.fetchJson(path, opts);
     const res = await fetch(path, opts);
     let data = {};
     try {
@@ -3630,6 +3632,7 @@
     } catch (err) {
       renderAccessGate();
       toast(err.message, true);
+      if (!err.status || err.status >= 500) window.HandrawErrors?.handle(err, {kind: "boot"});
     }
   }
 

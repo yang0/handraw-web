@@ -3232,6 +3232,15 @@
   }
 
   function renderAuthPage(root) {
+    if (App.state?.loggedIn && App.state.user?.username && App.state.user.username !== "guest") {
+      const oauthFailed = new URLSearchParams(window.location.search).has("oauth_error");
+      App.view = "account";
+      UI.accountSection = oauthFailed ? "security" : "profile";
+      syncUrl(false);
+      renderAccountSettingsPage(root);
+      if (oauthFailed) S.toast("第三方授权未完成。当前登录仍有效，请在账号安全中重新操作。");
+      return;
+    }
     root.innerHTML = `
       <div class="hw-detail-page" id="standalone-auth-page" style="max-width:600px;margin:0 auto;">
         <div class="hw-subpage-bar">
@@ -3517,8 +3526,15 @@
     updateSeoTitle();
     renderMain();
   }).catch((error) => {
+    const incident = window.HandrawErrors?.report(error, {kind: "boot"});
     const root=document.getElementById("main-app-root");
-    root.innerHTML=`<section class="hw-account-page"><h1>暂时无法加载社区</h1><p role="alert">${esc(error.message)}</p><button class="btn btn-primary" id="main-retry-boot">重试</button></section>`;
+    const message = error.status >= 400 && error.status < 500 ? error.message : "页面初始化未能完成，请稍后重试。";
+    root.innerHTML=`<section class="hw-account-page"><h1>暂时无法加载社区</h1><p role="alert">${esc(message)}</p><p id="main-boot-reference" style="font-size:12px;overflow-wrap:anywhere;user-select:all"></p><button class="btn btn-primary" id="main-retry-boot">重试</button></section>`;
+    const reference = root.querySelector("#main-boot-reference");
+    if (incident && reference) {
+      reference.textContent = "问题编号：" + incident.id;
+      incident.listeners.push(id => { if (reference.isConnected) reference.textContent = "问题编号：" + id; });
+    }
     root.querySelector("#main-retry-boot").onclick=()=>location.reload();
   });
 })();

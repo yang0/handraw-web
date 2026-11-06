@@ -13,6 +13,7 @@ from functools import lru_cache
 
 
 _LIMITS = {
+    "client_error": (20, 60),
     "login": (8, 300),
     "register": (5, 900),
     "reset": (5, 900),

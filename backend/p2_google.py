@@ -74,7 +74,8 @@ def start_google(handler: Any, mode: str = "login") -> None:
         return
     user = handler._current_user(required=(mode == "link"))
     if mode == "login" and user:
-        raise ServiceError("当前已登录，请在账号安全设置中绑定 Google", status=409)
+        _redirect(handler, "/?view=account&section=profile")
+        return
     state = secrets.token_urlsafe(36)
     nonce = secrets.token_urlsafe(36)
     verifier = secrets.token_urlsafe(48)

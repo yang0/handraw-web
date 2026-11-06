@@ -4,6 +4,7 @@ import json
 import logging
 import tempfile
 import threading
+import sys
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -11,7 +12,7 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from backend.observability import RedactingFormatter, configure_logging
+from backend.observability import RedactingFormatter, configure_logging, log_unhandled_exception, log_unhandled_thread
 from backend.server import GenerationReconciler, HandrawHTTPServer, HandrawRequestHandler
 from backend.services import ServiceError
 
@@ -126,6 +127,7 @@ class LoggingConfigurationTests(unittest.TestCase):
     def test_configuration_is_idempotent_and_file_rotation_preserves_history(self):
         root = logging.getLogger()
         old_handlers, old_level = list(root.handlers), root.level
+        old_sys_hook, old_thread_hook = sys.excepthook, threading.excepthook
         with tempfile.TemporaryDirectory() as temp, patch('backend.observability.get_storage_root', return_value=Path(temp)), patch('sys.stderr', new_callable=io.StringIO):
             try:
                 configure_logging()
@@ -148,6 +150,19 @@ class LoggingConfigurationTests(unittest.TestCase):
                         root.removeHandler(handler)
                         handler.close()
                 root.setLevel(old_level)
+                sys.excepthook, threading.excepthook = old_sys_hook, old_thread_hook
+
+    def test_system_and_thread_exceptions_reach_application_logger(self):
+        from types import SimpleNamespace
+        try:
+            raise RuntimeError('test system failure')
+        except RuntimeError:
+            info = sys.exc_info()
+            with self.assertLogs('handraw.system', level='CRITICAL') as logs:
+                log_unhandled_exception(*info)
+                log_unhandled_thread(SimpleNamespace(exc_type=info[0], exc_value=info[1], exc_traceback=info[2], thread=threading.current_thread()))
+        self.assertIn('event=process_unhandled_exception', logs.output[0])
+        self.assertIn('event=thread_unhandled_exception', logs.output[1])
 
     def test_background_reconciler_logs_and_survives_iteration_failure(self):
         worker = GenerationReconciler(Mock())

@@ -238,7 +238,8 @@ def start_github(handler: Any, mode: str = "login") -> None:
         return
     user = handler._current_user(required=(mode == "link"))
     if mode == "login" and user:
-        raise ServiceError("当前已登录，请使用账号设置中的绑定入口", status=409)
+        _redirect(handler, "/?view=account&section=profile")
+        return
     state = secrets.token_urlsafe(36)
     nonce = secrets.token_urlsafe(36)
     now = int(time.time())

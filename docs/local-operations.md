@@ -224,6 +224,14 @@ GET、POST、PUT、DELETE、OPTIONS 共用异常入口；5xx 还在响应出口�
 
 OAuth 回调即使最终以 303 返回登录页，也会额外记录 `event=oauth_callback_rejected`，包含 provider、错误码、请求编号及无敏感值的原因，例如 `missing_browser_nonce`、`browser_nonce_mismatch`、`flow_expired`、`flow_missing_or_consumed`。不会记录 Cookie、state、授权 code 或 PKCE verifier 的值。授权记录过期、被重复使用、提供方不符或 Cookie 不匹配时，仍然拒绝登录。
 
+### 5.7 应用错误与系统异常
+
+浏览器直接打开失败接口时会显示带操作入口和问题编号的错误页；API 客户端仍收到 JSON。四个前端在应用脚本前加载统一异常模块，捕获脚本异常、未处理 Promise、关键脚本加载失败，并为公共 API 失败提供统一错误类型和请求编号。
+
+前端事件写入 `web-3080.log` 的 `event=client_error`；主线程/后台线程未捕获异常分别为 `process_unhandled_exception` / `thread_unhandled_exception`。上报有字段白名单、来源校验、体积及频率限制，不上传原始消息、堆栈或请求内容。已登录用户再次点击第三方登录会返回账号页面；本地页面统一 Host，避免两个地址下登录与退出状态不一致。
+
+机制、覆盖范围及新增模块接入要求见 [应用错误与系统异常](application-errors.md)。
+
 ---
 
 ## 6. 常见问题与排障

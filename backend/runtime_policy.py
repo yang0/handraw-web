@@ -157,6 +157,7 @@ class _TokenBucketLimiter:
 
 
 _AUTH_LIMITERS = {
+    "client_error": _TokenBucketLimiter(20, 3),
     "login": _TokenBucketLimiter(8, 300),
     "register": _TokenBucketLimiter(5, 900),
     "reset": _TokenBucketLimiter(5, 900),

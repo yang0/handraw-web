@@ -3,9 +3,29 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
+import threading
 from logging.handlers import RotatingFileHandler
 
 from .config import get_storage_root
+
+
+def log_unhandled_exception(exc_type, value, traceback) -> None:
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, value, traceback)
+        return
+    logging.getLogger("handraw.system").critical(
+        "event=process_unhandled_exception", exc_info=(exc_type, value, traceback),
+    )
+
+
+def log_unhandled_thread(args) -> None:
+    if issubclass(args.exc_type, SystemExit):
+        return
+    logging.getLogger("handraw.system").critical(
+        "event=thread_unhandled_exception thread=%s", getattr(args.thread, "name", "unknown"),
+        exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+    )
 
 
 class RedactingFormatter(logging.Formatter):
@@ -45,3 +65,5 @@ def configure_logging(port: int = 3080) -> None:
         handler._handraw_logging = True
         root.addHandler(handler)
     root.setLevel(logging.INFO)
+    sys.excepthook = log_unhandled_exception
+    threading.excepthook = log_unhandled_thread

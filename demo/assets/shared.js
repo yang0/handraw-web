@@ -542,11 +542,12 @@
   }
 
   async function apiJson(url, opts = {}) {
-    const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+    const headers = Object.assign({ "Content-Type": "application/json", "Accept": "application/json" }, opts.headers || {});
     const fetchOpts = Object.assign({ credentials: "include" }, opts, { headers });
     if (fetchOpts.body && typeof fetchOpts.body === "object" && !(fetchOpts.body instanceof FormData)) {
       fetchOpts.body = JSON.stringify(fetchOpts.body);
     }
+    if (window.HandrawErrors) return window.HandrawErrors.fetchJson(url, fetchOpts);
     const res = await fetch(url, fetchOpts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
@@ -676,12 +677,16 @@
   }
 
   function notifyAll() {
-    renderChrome();
+    try { renderChrome(); } catch (err) {
+      console.error(err);
+      window.HandrawErrors?.handle(err, {kind: "render"});
+    }
     for (const fn of App.listeners) {
       try {
         fn(App.state);
       } catch (err) {
         console.error(err);
+        window.HandrawErrors?.handle(err, {kind: "render"});
       }
     }
   }
@@ -762,16 +767,22 @@
       ]);
       if (!responses[0].ok || !responses[1].ok || !responses[2].ok) {
         const bad = responses.find((r) => !r.ok);
+        if (window.HandrawErrors && bad) {
+          const data = await bad.json().catch(() => ({}));
+          throw window.HandrawErrors.apiError(bad, data, {kind: "boot"});
+        }
         throw new Error(`启动接口失败（HTTP ${bad ? bad.status : "未知"}）`);
       }
       [catRes, optRes, bootRes] = await Promise.all(responses.map((r) => r.json()));
     } catch (err) {
+      window.HandrawErrors?.report(err, {kind: "boot"});
       App.bootError = {
         channel: channelName,
-        message: `无法连接 Handraw 服务：${err && err.message ? err.message : "启动接口不可用"}`,
+        message: `无法连接 Handraw 服务：${err && err.status ? err.message : "页面初始化未能完成，请稍后重试。"}`,
         retry: () => initApp(channelName, onChange)
       };
-      throw new Error(App.bootError.message);
+      err.message = App.bootError.message;
+      throw err;
     }
 
     App.catalogRaw = catRes;
@@ -3303,14 +3314,14 @@
     const urlRef = new URLSearchParams(window.location.search).get("ref") || "";
     const oauthError = new URLSearchParams(window.location.search).get("oauth_error") || "";
     const oauthErrorMessages = {
-      oauth_state_invalid: "GitHub 授权已过期或浏览器验证不匹配，请重新尝试。",
-      oauth_link_required: "这个邮箱已有 Handraw 账号，请先用密码登录，再到账号安全页面绑定 GitHub。",
-      oauth_verified_email_required: "GitHub 主要邮箱尚未验证，请先在 GitHub 验证邮箱后重试。",
-      oauth_provider_unavailable: "GitHub 服务暂不可用，请稍后重试或使用账号密码。",
-      oauth_already_linked: "该 GitHub 身份已绑定其他 Handraw 账号。",
+      oauth_state_invalid: "第三方授权已过期或浏览器验证不匹配，请重新尝试。",
+      oauth_link_required: "这个邮箱已有 Handraw 账号，请先用密码登录，再到账号安全页面绑定第三方登录。",
+      oauth_verified_email_required: "第三方账号的邮箱尚未验证，请先验证邮箱后重试。",
+      oauth_provider_unavailable: "第三方登录服务暂不可用，请稍后重试或使用账号密码。",
+      oauth_already_linked: "该第三方身份已绑定其他 Handraw 账号。",
       oauth_account_inactive: "关联账号当前无法登录，请联系管理员。",
-      oauth_denied: "GitHub 授权没有完成，请重试。",
-      bad_request: "GitHub 登录未能完成，请重新授权。"
+      oauth_denied: "第三方授权没有完成，请重试。",
+      bad_request: "第三方登录未能完成，请重新授权。"
     };
 
     container.innerHTML = `
@@ -3434,7 +3445,7 @@
         `;
         restoreAuthDraft();
         bindAuthClear();
-        if (oauthError) authError(oauthErrorMessages[oauthError] || "GitHub 授权未完成，请重新尝试。");
+        if (oauthError) authError(oauthErrorMessages[oauthError] || "第三方授权未完成，请重新尝试。");
         trackAuthEvent("login_view");
         renderGithubAuth();
         stage.querySelector("#login-cancel-btn").onclick = () => {
