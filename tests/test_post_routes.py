@@ -798,9 +798,9 @@ class PostRoutesHTTPTests(unittest.TestCase):
         now_ts = int(time.time() * 1000)
 
         # 1. Create test users: tipper (alice), payee superadmin (admin_payee), community creator (bob)
-        u_tipper, _ = register_user(self.db, f"tipper_{now_ts}", "pass123")
-        u_payee, _ = register_user(self.db, f"admin_payee_{now_ts}", "pass123")
-        u_bob, _ = register_user(self.db, f"bob_creator_{now_ts}", "pass123")
+        u_tipper, _ = register_user(self.db, f"tipper_{now_ts}", "Pass1234!")
+        u_payee, _ = register_user(self.db, f"admin_payee_{now_ts}", "Pass1234!")
+        u_bob, _ = register_user(self.db, f"bob_creator_{now_ts}", "Pass1234!")
 
         tipper_uid = int(u_tipper["id"])
         payee_uid = int(u_payee["id"])
