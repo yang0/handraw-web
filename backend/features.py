@@ -75,6 +75,47 @@ def send_account_mail(recipient: str, purpose: str, token: str) -> None:
         raise ServiceError("邮件暂时无法发送，请稍后重试", status=503, code="mail_unavailable") from exc
 
 
+def try_send_security_alert(db: Any, user: dict, action: str, detail: str) -> bool:
+    """Best-effort security email only to the current *verified* mailbox.
+
+    Never fail a completed login, password change, or email verification because
+    SMTP is temporarily unavailable. Callers already create a site notification.
+    """
+    email = str(user.get("email") or "").strip().lower()
+    if not email or not mail_ready():
+        return False
+    verified = db.get_conn().execute(
+        "SELECT 1 FROM verified_emails WHERE user_id=? AND lower(email)=?",
+        (user["id"], email),
+    ).fetchone()
+    if not verified:
+        return False
+    cfg = mail_config()
+    message = EmailMessage()
+    message["From"] = str(cfg["sender"])
+    message["To"] = email
+    message["Subject"] = "Handraw 账号安全提醒：" + str(action)[:50]
+    message.set_content(
+        "你好，\\n\\n" + str(detail)[:600] +
+        "\\n\\n如非本人操作，请访问 Handraw 网站使用邮箱找回密码，并检查登录设备。"
+        "\\n这是一封安全提醒邮件，无需回复。"
+    )
+    try:
+        factory = smtplib.SMTP_SSL if cfg.get("ssl") else smtplib.SMTP
+        options = {"context": ssl.create_default_context()} if cfg.get("ssl") else {}
+        with factory(str(cfg["host"]), int(cfg["port"]), timeout=8, **options) as smtp:
+            if not cfg.get("ssl") and cfg.get("starttls", True):
+                smtp.ehlo()
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.ehlo()
+            if cfg.get("username"):
+                smtp.login(str(cfg["username"]), str(cfg.get("password") or ""))
+            smtp.send_message(message)
+        return True
+    except (OSError, smtplib.SMTPException, ValueError):
+        return False
+
+
 def request_account_mail(db: Any, purpose: str, email: str, user: dict | None = None) -> dict:
     clean = parseaddr(email.strip())[1].lower()
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", clean):
@@ -184,6 +225,15 @@ def consume_account_token(db: Any, purpose: str, token: str, password: str = "")
         else:
             tx.execute("INSERT INTO verified_emails(user_id,email,verified_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,verified_at=excluded.verified_at", (row["user_id"],row["email"],utc_now_iso()))
         tx.execute("UPDATE account_action_tokens SET consumed_at=? WHERE token_hash=?", (now,digest))
+    if purpose in ("password_reset", "email_change"):
+        fresh = db.get_conn().execute("SELECT * FROM users WHERE id=?", (row["user_id"],)).fetchone()
+        if fresh:
+            try_send_security_alert(
+                db, dict(fresh),
+                "邮箱换绑完成" if purpose == "email_change" else "密码已重置",
+                "账号的登录邮箱已更换，所有网页登录会话已失效。" if purpose == "email_change"
+                else "账号密码已通过邮件验证重置，所有网页登录会话已失效。"
+            )
     return {"ok": True, "message": (
         "密码已重置，请重新登录" if purpose == "password_reset" else
         "新邮箱已验证并完成换绑，请重新登录" if purpose == "email_change" else "邮箱验证成功"
