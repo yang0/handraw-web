@@ -78,7 +78,7 @@ def signup_status(handler: Any) -> dict:
     ).fetchone()
     if not row:
         raise ServiceError("注册身份已过期，请重新使用 GitHub 授权", status=401, code="oauth_signup_expired")
-    return {"ok": True, "provider": "GitHub", "providerLogin": row["provider_login"],
+    return {"ok": True, "provider": row["provider"].capitalize(), "providerId": row["provider"], "providerLogin": row["provider_login"],
             "suggestedUsername": _oauth_username(handler.db.get_conn(), row["provider_login"], row["provider_user_id"]),
             "verifiedEmail": row["verified_email"]}
 
@@ -86,7 +86,7 @@ def signup_status(handler: Any) -> dict:
 def finish_signup(handler: Any, body: dict) -> None:
     ticket = _read_signup_ticket(handler)
     if not ticket or len(ticket) > 256:
-        raise ServiceError("注册身份已过期，请重新 GitHub 授权", status=401, code="oauth_signup_expired")
+        raise ServiceError("注册身份已过期，请重新发起第三方授权", status=401, code="oauth_signup_expired")
     username = str(body.get("username") or "").strip()
     display_name = str(body.get("displayName") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{2,32}", username):
@@ -105,7 +105,7 @@ def finish_signup(handler: Any, body: dict) -> None:
             (row["provider"], row["provider_user_id"])
         ).fetchone()
         if existing:
-            raise ServiceError("此 GitHub 账号已经注册，请直接登录", status=409, code="oauth_account_exists")
+            raise ServiceError("此第三方账号已经注册，请直接登录", status=409, code="oauth_account_exists")
         created, session = register_user(
             handler.db, username, secrets.token_urlsafe(48), row["verified_email"],
             display_name=display_name or username,
@@ -124,13 +124,13 @@ def finish_signup(handler: Any, body: dict) -> None:
                 (created["id"], row["verified_email"], utc_now_iso())
             )
             tx.execute(
-                "INSERT INTO auth_funnel_events(event_name,created_at,user_id,source) VALUES(?,?,?,'github')",
-                ("register_success", int(time.time()), created["id"])
+                "INSERT INTO auth_funnel_events(event_name,created_at,user_id,source) VALUES(?,?,?,?)",
+                ("register_success", int(time.time()), created["id"], row["provider"])
             )
             tx.execute("DELETE FROM oauth_signup_tickets WHERE ticket_hash=?", (_digest(ticket),))
     from .p2_growth import record_login
     record_login(handler.db, created, handler.headers.get("User-Agent") or "")
-    handler._send_json({"ok": True, "message": "GitHub 注册完成，昵称已固定，不可再修改"},
+    handler._send_json({"ok": True, "message": "账号注册完成，昵称已固定，不可再修改"},
                        set_cookie=handler._cookie_for_token(session))
 
 
