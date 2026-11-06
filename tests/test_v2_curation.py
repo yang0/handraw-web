@@ -247,8 +247,13 @@ class CurationTests(unittest.TestCase):
                 self.assertIsNotNone(self.db.get_conn().execute('SELECT 1 FROM works WHERE id=?',(res['workId'],)).fetchone())
                 self.assertEqual(res['url'],f"/forum/?view=resource&kind=work&id={res['workId']}")
                 status,_,boot=request('/api/boot')
-                self.assertTrue(any(t['id']==res['topicId'] for t in boot['topics']))
+                # An actively published work is visible in works; its forum
+                # discussion stays unlisted until a real comment is published.
+                self.assertFalse(any(t['id']==res['topicId'] for t in boot['topics']))
                 self.assertTrue(any(w['id']==res['workId'] for w in boot['works']))
+                S.publish_forum_reply_post(self.db, self.author, res['topicId'], '作品交流首条回复')
+                _, _, listed_boot = request('/api/boot')
+                self.assertTrue(any(t['id']==res['topicId'] for t in listed_boot['topics']))
                 self.assertEqual(len(self.db.get_conn().execute('SELECT * FROM media_public_grants WHERE target_id=?',(res['topicId'],)).fetchall()),1)
                 board=self.db.get_conn().execute('SELECT category FROM forum_topics WHERE id=?',(res['topicId'],)).fetchone()
                 self.assertEqual(board['category'],'showcase')
