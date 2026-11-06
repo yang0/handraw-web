@@ -1810,6 +1810,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         request_id: str | None = None,
     ) -> None:
         if status >= 400:
+            if request_id is None:
+                logger.warning(
+                    "http_client_error method=%s path=%s status=%d code=%s",
+                    getattr(self, "command", "UNKNOWN"),
+                    urlparse(getattr(self, "path", "")).path[:200],
+                    status, str(obj.get("code") or "unknown")[:80],
+                )
             self._drain_request_body()
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -2151,6 +2158,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 from .p2_growth import record_visit
                 record_visit(self.db, user)
             self._send_json(build_boot_payload(self.db, user))
+            logger.debug("http_boot_success authenticated=%s", bool(user))
             return
 
         # Public Works Feed & Detail
