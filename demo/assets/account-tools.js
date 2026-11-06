@@ -151,7 +151,26 @@
       try{
         const result=await S.apiJson("/api/notifications");if(!isCurrent())return true;
         shell(root,"消息通知",`<p>${result.unread} 条未读消息</p><button class="btn" id="notifications-read-all">全部标为已读</button><div class="hw-notification-list">${result.items.map(n=>`<article class="hw-detail-section-card ${n.read_at?"":"is-unread"}"><a href="${esc(targetUrl(n))}" data-notification-id="${n.id}">${esc(n.title)}</a><small>${esc(n.created_at)}</small></article>`).join("")||'<p class="hw-empty-state">暂时没有新消息。收到回复、评论或处理结果后，会出现在这里。</p>'}</div>${result.nextBefore?'<button class="btn" id="notifications-more">加载更早消息</button>':""}`);
-        root.querySelector("#notifications-read-all").onclick=async()=>{await S.apiJson("/api/notifications/read",{method:"POST",body:{all:true}});render(root,view);};
+        const readAll=root.querySelector("#notifications-read-all");
+        if(readAll){
+          readAll.disabled=!Number(result.unread);
+          readAll.onclick=async()=>{
+            if(readAll.disabled)return;
+            readAll.disabled=true;
+            readAll.setAttribute("aria-busy","true");
+            readAll.textContent="正在同步已读状态…";
+            try{
+              await S.apiJson("/api/notifications/read",{method:"POST",body:{all:true}});
+              if(isCurrent())await render(root,view);
+            }catch(e){
+              if(isCurrent()){
+                feedback(root,"标记已读失败，消息未清除："+(e.message||"请重试"),true);
+                readAll.disabled=false;
+                readAll.textContent="重新标记全部已读";
+              }
+            }finally{readAll.removeAttribute("aria-busy");}
+          };
+        }
         root.querySelectorAll("[data-notification-id]").forEach(a=>a.addEventListener("click",()=>{S.apiJson("/api/notifications/read",{method:"POST",body:{id:Number(a.dataset.notificationId)}}).catch(()=>{});}));
         let before=result.nextBefore;
         const more=root.querySelector("#notifications-more");
