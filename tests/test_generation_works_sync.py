@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
+from unittest.mock import patch
 import sqlite3
 import tempfile
 import time
@@ -33,6 +35,7 @@ from backend.works_feed import get_works_feed, get_work_by_id
 
 class TestGenerationWorksSync(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_gen_works.db"
         self.db = init_database(self.db_path)
