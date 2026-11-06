@@ -3815,8 +3815,8 @@ img[data-hw-src].hw-img-failed {
 #acc-avatar-preview-stage[hidden] { display: none !important; }
 @media (max-width: 760px) {
   .hw-account-layout { grid-template-columns: minmax(0,1fr); gap: 14px; }
-  .hw-account-nav { grid-template-columns: repeat(3,minmax(0,1fr)); position: static; gap: 5px; }
-  .hw-account-nav-link { padding: 10px 8px; text-align: center; }
+  .hw-account-nav { display: flex; overflow-x: auto; position: static; gap: 5px; padding-bottom: 5px; scroll-snap-type: x proximity; }
+  .hw-account-nav-link { flex: 0 0 auto; min-width: 102px; padding: 10px 8px; text-align: center; scroll-snap-align: start; }
   .hw-account-nav-link strong { font-size: 13px; }
   .hw-account-nav-link small { display: none; }
 }
