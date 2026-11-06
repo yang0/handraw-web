@@ -33,33 +33,29 @@ class AccountIdentityTests(unittest.TestCase):
         self.env.stop()
         self.temp.cleanup()
 
-    def test_nickname_can_change_then_respects_30_day_cooldown(self):
-        # Legacy locked users are allowed one rename after migration.
-        result = update_my_profile(self.db, self.user, {"displayName": "旧用户新昵称"})
-        self.assertEqual(result["boot"]["user"]["displayName"], "旧用户新昵称")
-        self.assertGreater(result["boot"]["user"]["nicknameNextChangeAt"], 0)
+    def test_nickname_is_immutable_after_registration_including_legacy_unlocked(self):
+        before = self.user["display_name"]
         with self.assertRaises(ServiceError) as denied:
-            update_my_profile(self.db, self.user, {"displayName": "立刻再改"})
-        self.assertEqual(denied.exception.code, "nickname_cooldown")
+            update_my_profile(self.db, self.user, {"displayName": "不能再修改的昵称"})
+        self.assertEqual(denied.exception.code, "nickname_locked")
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT display_name FROM users WHERE id=?", (self.user["id"],)
+        ).fetchone()[0], before)
 
-        created, _ = register_user(
-            self.db, "nickname_once_user", "Passw0rdSecure!", "nickname-once@example.org"
-        )
-        self.assertEqual(created["nickname_locked"], 0)
-        first = update_my_profile(self.db, created, {"displayName": "一纸灵感", "bio": "创作中"})
-        self.assertEqual(first["boot"]["user"]["displayName"], "一纸灵感")
-        with self.assertRaises(ServiceError):
-            update_my_profile(self.db, created, {"displayName": "再改一次"})
-        # Simulate the cooling period having elapsed.
+        created, _ = register_user(self.db, "nickname_no_change", "Passw0rdSecure!",
+                                    "nickname-no-change@example.org")
+        self.assertEqual(created["nickname_locked"], 1)
+        self.assertEqual(created["display_name"], "nickname_no_change")
+        with self.assertRaises(ServiceError) as denied:
+            update_my_profile(self.db, created, {"displayName": "注册后更改"})
+        self.assertEqual(denied.exception.code, "nickname_locked")
         with self.db.transaction() as tx:
-            tx.execute("UPDATE users SET nickname_changed_at=? WHERE id=?", (1, created["id"]))
-        changed = update_my_profile(self.db, created, {"displayName": "满期改名"})
-        self.assertEqual(changed["boot"]["user"]["displayName"], "满期改名")
-        refreshed = dict(self.db.get_conn().execute(
-            "SELECT * FROM users WHERE id=?", (created["id"],)
-        ).fetchone())
-        self.assertEqual(refreshed["bio"], "创作中")
-        self.assertEqual(refreshed["display_name"], "满期改名")
+            tx.execute("UPDATE users SET nickname_locked=0,nickname_changed_at=0 WHERE id=?", (created["id"],))
+        with self.assertRaises(ServiceError):
+            update_my_profile(self.db, created, {"displayName": "旧状态也不可更改"})
+        result = update_my_profile(self.db, created, {"bio": "简介仍可编辑"})
+        self.assertEqual(result["boot"]["user"]["bio"], "简介仍可编辑")
+        self.assertEqual(result["boot"]["user"]["displayName"], "nickname_no_change")
 
     def test_direct_email_update_rejected_and_verify_new_address_before_switch(self):
         old = self.user["email"]
