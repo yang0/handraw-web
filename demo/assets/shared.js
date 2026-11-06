@@ -4128,8 +4128,10 @@
               <button type="button" class="btn btn-sm" id="acc-avatar-reset">恢复默认头像</button>
             </div>
             <div id="acc-avatar-preview-stage" hidden>
-              <p class="hw-account-help">头像裁剪预览：调整缩放滑块，确认后再上传。</p>
-              <canvas id="acc-avatar-upload-preview" width="320" height="320" role="img" aria-label="裁剪后的头像预览" style="width:112px;height:112px;border-radius:50%;border:1px solid var(--line-soft);display:block;"></canvas>
+              <p class="hw-account-help">拖动图片调整头像位置，或用滑块缩放，确认后再上传。</p>
+              <canvas id="acc-avatar-upload-preview" width="320" height="320" role="img" aria-label="可拖动调整裁剪位置的头像预览" tabindex="0" style="width:224px;height:224px;max-width:100%;border-radius:50%;border:2px solid var(--line-soft);display:block;cursor:grab;touch-action:none;user-select:none;"></canvas>
+              <div class="hw-account-help">拖动头像或使用方向键移动，预览中的圆形区域就是最终头像。</div>
+              <button type="button" class="btn btn-sm" id="acc-avatar-center">恢复居中</button>
               <label class="hw-account-help" for="acc-avatar-zoom">裁剪缩放</label>
               <input type="range" id="acc-avatar-zoom" min="1" max="3" step="0.1" value="1" aria-label="头像裁剪缩放" />
               <div style="display:flex;gap:8px;margin-top:8px;">
@@ -4252,18 +4254,81 @@
     let pendingAvatar = null;
     let decodedAvatar = null;
     let selectionId = 0;
+    let avatarPanX = 0;
+    let avatarPanY = 0;
+    let avatarDrag = null;
     const avatarZoom = formEl.querySelector("#acc-avatar-zoom");
     const avatarConfirm = formEl.querySelector("#acc-avatar-confirm");
+    const avatarCenter = formEl.querySelector("#acc-avatar-center");
     function drawAvatarPreview() {
       if (!decodedAvatar || !avatarPreview) return;
       const ctx = avatarPreview.getContext("2d");
       if (!ctx) throw new Error("当前浏览器不支持头像裁剪，请更新浏览器");
-      const w = decodedAvatar.naturalWidth || decodedAvatar.width, h = decodedAvatar.naturalHeight || decodedAvatar.height;
+      const w = decodedAvatar.naturalWidth || decodedAvatar.width;
+      const h = decodedAvatar.naturalHeight || decodedAvatar.height;
       if (!w || !h) throw new Error("图片尺寸无效，请选择其他图片");
       const side = Math.min(w, h) / Number(avatarZoom?.value || 1);
+      const limitX = (w - side) / 2;
+      const limitY = (h - side) / 2;
+      avatarPanX = Math.max(-limitX, Math.min(limitX, avatarPanX));
+      avatarPanY = Math.max(-limitY, Math.min(limitY, avatarPanY));
+      const sx = limitX - avatarPanX;
+      const sy = limitY - avatarPanY;
       ctx.clearRect(0, 0, 320, 320);
-      ctx.drawImage(decodedAvatar, (w-side)/2, (h-side)/2, side, side, 0, 0, 320, 320);
+      ctx.drawImage(decodedAvatar, sx, sy, side, side, 0, 0, 320, 320);
     }
+    function panAvatar(dx, dy) {
+      if (!decodedAvatar) return;
+      const w = decodedAvatar.naturalWidth || decodedAvatar.width;
+      const h = decodedAvatar.naturalHeight || decodedAvatar.height;
+      const side = Math.min(w, h) / Number(avatarZoom?.value || 1);
+      // Pointer and keyboard movement is measured in displayed preview pixels.
+      avatarPanX -= dx * side / avatarPreview.getBoundingClientRect().width;
+      avatarPanY -= dy * side / avatarPreview.getBoundingClientRect().height;
+      drawAvatarPreview();
+    }
+    if (avatarPreview) {
+      avatarPreview.addEventListener("pointerdown", (event) => {
+        if (!decodedAvatar || event.button !== 0) return;
+        avatarDrag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+        avatarPreview.setPointerCapture(event.pointerId);
+        avatarPreview.style.cursor = "grabbing";
+      });
+      avatarPreview.addEventListener("pointermove", (event) => {
+        if (!avatarDrag || event.pointerId !== avatarDrag.id) return;
+        const dx = event.clientX - avatarDrag.x;
+        const dy = event.clientY - avatarDrag.y;
+        avatarDrag.x = event.clientX;
+        avatarDrag.y = event.clientY;
+        panAvatar(dx, dy);
+      });
+      const stopAvatarDrag = (event) => {
+        if (!avatarDrag || event.pointerId !== avatarDrag.id) return;
+        avatarDrag = null;
+        avatarPreview.style.cursor = "grab";
+        if (avatarPreview.hasPointerCapture(event.pointerId)) avatarPreview.releasePointerCapture(event.pointerId);
+      };
+      avatarPreview.addEventListener("pointerup", stopAvatarDrag);
+      avatarPreview.addEventListener("pointercancel", stopAvatarDrag);
+      avatarPreview.addEventListener("lostpointercapture", () => {
+        avatarDrag = null;
+        avatarPreview.style.cursor = "grab";
+      });
+      avatarPreview.addEventListener("keydown", (event) => {
+        const step = event.shiftKey ? 24 : 8;
+        const move = { ArrowLeft: [step, 0], ArrowRight: [-step, 0],
+                       ArrowUp: [0, step], ArrowDown: [0, -step] }[event.key];
+        if (!move || !decodedAvatar) return;
+        event.preventDefault();
+        panAvatar(move[0], move[1]);
+      });
+    }
+    if (avatarCenter) avatarCenter.onclick = () => {
+      avatarPanX = 0;
+      avatarPanY = 0;
+      if (avatarZoom) avatarZoom.value = "1";
+      drawAvatarPreview();
+    };
     if (avatarZoom) avatarZoom.oninput = () => {
       try { drawAvatarPreview(); }
       catch (err) { avatarFeedback.textContent = err.message || "预览失败"; }
@@ -4271,6 +4336,9 @@
     function clearAvatarPreview() {
       selectionId++;
       pendingAvatar = null;
+      avatarDrag = null;
+      avatarPanX = 0;
+      avatarPanY = 0;
       if (decodedAvatar && typeof decodedAvatar.close === "function") decodedAvatar.close();
       decodedAvatar = null;
       if (avatarInput) avatarInput.value = "";
