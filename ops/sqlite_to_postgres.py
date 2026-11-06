@@ -116,7 +116,12 @@ def inspect_schema(conn, tables):
             real_cols = [r["name"] for r in index_cols if r["key"] and r["cid"] >= 0]
             expressions = [r for r in index_cols if r["key"] and r["cid"] < 0]
             if expressions:
-                raise ValueError("Expression unique index requires manual port: " + index_name)
+                # Port only the audited arithmetic popularity index. Any other
+                # expression must be reviewed rather than silently discarded.
+                if table == "works" and index_name == "idx_works_popular_v3":
+                    unique_indexes.append((table, index_name, [], "", False))
+                    continue
+                raise ValueError("Expression index requires explicit PostgreSQL port: " + index_name)
             index_ddl_row = conn.execute(
                 "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (index_name,)
             ).fetchone()
@@ -209,8 +214,13 @@ def set_identity_sequences(cur, identity):
 
 def create_unique_indexes(cur, indexes):
     for table, name, cols, predicate, unique in indexes:
+        if table == "works" and name == "idx_works_popular_v3":
+            cur.execute("""CREATE INDEX pg_idx_works_popular_v3 ON works(
+                status, (likes + 2 * favorites + forks) DESC, published_at_ms DESC
+            )""")
+            continue
         if not cols:
-            raise ValueError("Unique index without columns: " + name)
+            raise ValueError("Index without columns: " + name)
         statement = sql.SQL("CREATE " + ("UNIQUE " if unique else "") + "INDEX {} ON {} ({})").format(
             q("pg_" + name[:58]), q(table),
             sql.SQL(",").join(q(col) for col in cols),
