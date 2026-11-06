@@ -195,7 +195,7 @@
       task.id = submitted.importId;
       if (!task.id) throw new Error("服务器未返回任务编号");
       task.message = "";
-      storage.write({ id: task.id, fileName, startedAt: task.startedAt });
+      storage.write({ id: task.id, startedAt: task.startedAt });
       return await poll(task, onDone);
     } catch (err) {
       if (!task.id || task.state === "failed") {
@@ -211,7 +211,7 @@
     restored = true;
     const saved = storage.read();
     if (!saved?.id || active) return;
-    const task = { id: saved.id, fileName: saved.fileName, state: "queued",
+    const task = { id: saved.id, fileName: "上次导入的文档", state: "queued",
       startedAt: saved.startedAt || Date.now(), progress: { done: 0, total: 0 }, recoverable: true };
     active = task;
     draw(task);
