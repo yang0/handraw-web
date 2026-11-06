@@ -206,7 +206,13 @@ def apply_wallet_delta(
 ) -> tuple[int, bool]:
     """Atomically apply credit delta and write append-only ledger. Returns (new_balance, applied)."""
     now = utc_now_iso()
-    w = tx.execute("SELECT balance, locked FROM wallets WHERE user_id = ?", (user_id,)).fetchone()
+    # PostgreSQL transactions must lock the wallet row before reading its
+    # balance. A process-local SQLite RLock does not protect separate workers.
+    # The ledger and balance update remain in the same database transaction.
+    wallet_sql = "SELECT balance, locked FROM wallets WHERE user_id = ?"
+    if getattr(tx, "dialect", "") == "postgresql":
+        wallet_sql += " FOR UPDATE"
+    w = tx.execute(wallet_sql, (user_id,)).fetchone()
     if not w:
         tx.execute(
             "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
