@@ -36,10 +36,21 @@
     const percent = total > 0 ? Math.min(100, Math.round(done / total * 100)) : null;
     const complete = state === "done";
     const failed = state === "failed";
+    const stage = task.stage || (state === "queued" ? "queued" : total ? "structuring" : "extracting");
     const message = complete ? "文档整理完成" : failed ? "文档导入未完成" :
-      task.message || (state === "queued" ? "已加入处理队列" : total > 0
-        ? "AI 正在整理第 " + Math.min(done + 1, total) + " / " + total + " 段"
-        : "正在提取文档与图片");
+      task.message || (stage === "queued" ? "已加入处理队列" :
+        stage === "extracting" ? "正在提取文档结构与图片" :
+        stage === "validating" ? "正在核对内容完整性，准备结果" :
+        "AI 正在整理第 " + Math.min(done + 1, total) + " / " + total + " 段");
+    const steps = [
+      {id:"queued",label:"已提交"},
+      {id:"extracting",label:"提取"},
+      {id:"structuring",label:"AI 整理"},
+      {id:"validating",label:"核对"},
+      {id:"completed",label:"完成"}
+    ];
+    const stageOrder = ["queued", "extracting", "structuring", "validating", "completed"];
+    const stageIndex = complete ? 4 : Math.max(0, stageOrder.indexOf(stage));
     const elapsed = task.startedAt ? Math.max(0, Math.floor((Date.now() - task.startedAt) / 1000)) : 0;
     el.innerHTML = `
       <div class="hw-task-head">
@@ -50,6 +61,9 @@
         </div>
         <button class="hw-task-minimize" data-task-hide type="button" aria-label="收起任务面板">×</button>
       </div>
+      <ol class="hw-task-steps" aria-label="导入处理阶段">
+        ${steps.map((step, index) => `<li class="${index < stageIndex ? "is-passed" : index === stageIndex ? "is-current" : ""}" ${index === stageIndex ? 'aria-current="step"' : ""}><span class="hw-task-step-dot" aria-hidden="true">${index < stageIndex ? "✓" : index + 1}</span><span>${step.label}</span></li>`).join("")}
+      </ol>
       <div class="hw-task-track" role="progressbar" aria-label="文档分段处理进度"
         aria-valuemin="0" ${percent === null ? "" : `aria-valuenow="${percent}" aria-valuemax="100"`}
         aria-valuetext="${total ? `已完成 ${done} / ${total} 段` : "正在准备文档"}">
@@ -64,11 +78,22 @@
       ${complete && task.recoverable ? '<button class="hw-task-action" data-task-recover type="button">下载已整理的 Markdown</button>' : ""}
       ${!complete && !failed ? '<p class="hw-task-footnote">后台仍在处理；关闭此面板不会停止任务，刷新页面可以恢复查看。</p>' : ""}
     `;
-    el.querySelector("[data-task-hide]")?.addEventListener("click", () => { el.classList.add("is-hidden"); });
+    el.querySelector("[data-task-hide]")?.addEventListener("click", () => {
+      el.classList.add("is-collapsed");
+      el.innerHTML = '<button class="hw-task-reopen" type="button" aria-label="重新展开任务进度">✦ 查看任务进度</button>';
+      el.querySelector(".hw-task-reopen")?.addEventListener("click", () => draw(task));
+    });
     el.querySelector("[data-task-recover]")?.addEventListener("click", () => {
       if (task.result) downloadMarkdown(task.result);
     });
-    el.classList.remove("is-hidden");
+    if (el.classList.contains("is-collapsed")) {
+      // Keep the minimized pill in place on polling updates until user reopens it.
+      el.classList.remove("is-hidden");
+      el.innerHTML = '<button class="hw-task-reopen" type="button">✦ ' + escapeHtml(message) + '</button>';
+      el.querySelector(".hw-task-reopen")?.addEventListener("click", () => {
+        el.classList.remove("is-collapsed"); draw(task);
+      });
+    } else el.classList.remove("is-hidden");
     if (REDUCED()) el.classList.add("reduce-motion");
   }
   function downloadMarkdown(result) {
@@ -98,6 +123,9 @@
         const status = await api("/api/studio/imports/" + encodeURIComponent(task.id));
         consecutiveErrors = 0;
         task.state = status.status;
+        task.stage = status.stage || "";
+        task.message = "";
+        task.warning = "";
         task.progress = status.progress || { done: 0, total: 0 };
         if (task.state === "done") {
           task.result = status.result || {};
