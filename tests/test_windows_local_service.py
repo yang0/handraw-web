@@ -17,7 +17,8 @@ REPO = Path(__file__).resolve().parents[1]
 class WindowsLocalServiceScriptTests(unittest.TestCase):
     def test_preflight_is_warning_free_and_syntax_valid(self):
         source = (REPO / "ops" / "local-service.ps1").read_text(encoding="utf-8-sig")
-        self.assertIn("$localPython = Join-Path $projectRoot '.venv\\Scripts\\python.exe'", source)
+        self.assertIn("$candidatePythons = @(", source)
+        self.assertIn("(Join-Path $projectRoot '.venv\\Scripts\\python.exe')", source)
         marker = "$checkScript = @'\n"
         self.assertIn(marker, source)
         script = source.split(marker, 1)[1].split("\n'@", 1)[0]
