@@ -3301,6 +3301,17 @@
   function mountAuthPassStage(container, { reasonText = "", onSuccess, onCancel } = {}) {
     let authTab = "login";
     const urlRef = new URLSearchParams(window.location.search).get("ref") || "";
+    const oauthError = new URLSearchParams(window.location.search).get("oauth_error") || "";
+    const oauthErrorMessages = {
+      oauth_state_invalid: "GitHub 授权已过期或浏览器验证不匹配，请重新尝试。",
+      oauth_link_required: "这个邮箱已有 Handraw 账号，请先用密码登录，再到账号安全页面绑定 GitHub。",
+      oauth_verified_email_required: "GitHub 主要邮箱尚未验证，请先在 GitHub 验证邮箱后重试。",
+      oauth_provider_unavailable: "GitHub 服务暂不可用，请稍后重试或使用账号密码。",
+      oauth_already_linked: "该 GitHub 身份已绑定其他 Handraw 账号。",
+      oauth_account_inactive: "关联账号当前无法登录，请联系管理员。",
+      oauth_denied: "GitHub 授权没有完成，请重试。",
+      bad_request: "GitHub 登录未能完成，请重新授权。"
+    };
 
     container.innerHTML = `
       <div style="background:var(--vermilion-wash);border:1px solid var(--vermilion-border);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:13.2px;color:var(--ink-strong);">
@@ -3388,6 +3399,7 @@
         `;
         restoreAuthDraft();
         bindAuthClear();
+        if (oauthError) authError(oauthErrorMessages[oauthError] || "GitHub 授权未完成，请重新尝试。");
         trackAuthEvent("login_view");
         renderGithubAuth();
         stage.querySelector("#login-cancel-btn").onclick = () => {
