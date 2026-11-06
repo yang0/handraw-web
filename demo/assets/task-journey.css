@@ -57,3 +57,8 @@
 .hw-article-sync-retry{margin-left:5px;border:0;background:transparent;color:#b9412c;cursor:pointer;font-size:11px;font-weight:800;text-decoration:underline;text-underline-offset:3px;padding:4px}
 .hw-article-sync-retry[hidden]{display:none}
 .hw-article-sync-retry:focus-visible{outline:2px solid #b9412c;outline-offset:2px}
+
+.hw-task-recovery-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hw-task-recovery-actions .hw-task-action{margin-top:14px}
+.hw-task-recovery-actions .hw-task-secondary{background:transparent;border:1px solid #ccae9d;color:#9a4433}
+.hw-task-recovery-actions button:focus-visible{outline:3px solid #df9371;outline-offset:2px}
