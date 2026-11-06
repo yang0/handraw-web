@@ -104,36 +104,25 @@ class AccountFeaturesTests(unittest.TestCase):
         self.assertTrue(all(w["id"] for w in exported["works"]))
         self.assertTrue(all(t["id"] for t in exported["forumTopics"]))
 
-    def test_close_account_checks_password_and_revokes_all_grants(self):
-        _, _ = login_user(self.db, self.a["username"], "handraw123")
-        user = {**self.a}
+    def test_account_closure_and_reactivation_routes_are_disabled(self):
         class Handler:
             db = self.db
             def _current_user(self, required=True):
-                return user
-            def _cookie_for_token(self, token, clear=False):
-                return "cleared" if clear else token
-            def _send_json(self, payload, set_cookie=None):
-                self.response = payload
-                self.cookie = set_cookie
+                return self.user
+            user = self.a
         handler = Handler()
-        with self.assertRaises(ServiceError) as wrong_user:
-            features.handle_feature_post(handler, "/api/account/close",
-                                         {"confirmation": "not-my-username", "currentPassword": "handraw123"})
-        self.assertEqual(wrong_user.exception.code, "confirmation_required")
-        with self.assertRaises(ServiceError) as wrong_password:
-            features.handle_feature_post(handler, "/api/account/close",
-                                         {"confirmation": self.a["username"], "currentPassword": "invalid"})
-        self.assertEqual(wrong_password.exception.code, "incorrect_password")
-        self.assertTrue(features.handle_feature_post(handler, "/api/account/close",
-                                                     {"confirmation": self.a["username"], "currentPassword": "handraw123"}))
-        row = self.db.get_conn().execute("SELECT status,closed_at FROM users WHERE id=?", (self.a["id"],)).fetchone()
-        self.assertEqual(row["status"], "closed")
-        self.assertTrue(row["closed_at"])
-        self.assertEqual(handler.cookie, "cleared")
-        self.assertEqual(0, self.db.get_conn().execute("SELECT count(*) FROM sessions WHERE user_id=?", (self.a["id"],)).fetchone()[0])
-        with self.assertRaises(ServiceError):
-            login_user(self.db, self.a["username"], "handraw123")
+        self.assertFalse(features.handle_feature_post(
+            handler, "/api/account/close",
+            {"confirmation": self.a["username"], "currentPassword": "handraw123"}
+        ))
+        self.assertFalse(features.handle_feature_post(
+            handler, "/api/auth/request-reactivation",
+            {"email": self.a["email"]}
+        ))
+        self.assertFalse(features.handle_feature_post(
+            handler, "/api/auth/confirm-reactivation",
+            {"token": "invalid"}
+        ))
 
     def test_author_cannot_sneak_script_into_topic_edit(self):
         topic=self.db.get_conn().execute("SELECT id FROM forum_topics WHERE author_username=? LIMIT 1",(self.a["username"],)).fetchone()
