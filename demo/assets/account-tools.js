@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   const S = window.HANDRAW_SHARED;
-  const views = new Set(["guide", "recovery", "reset-password", "reactivate", "verify-email", "notifications", "edit-work", "edit-topic"]);
+  const views = new Set(["guide", "recovery", "reset-password", "verify-email", "notifications", "edit-work", "edit-topic"]);
   const linkParams = new URLSearchParams(location.search);
   const linkToken = linkParams.get("token") || "";
   const isEmailChange = linkParams.get("purpose") === "change";
@@ -88,36 +88,6 @@
         const result=await S.apiJson("/api/auth/reset-password",{method:"POST",body:{token:linkToken,password:data.get("password")}});
         if(isCurrent()){shell(root,"密码已重置",`<p>${esc(result.message)}</p><a class="btn btn-primary" href="${esc(mainUrl("auth"))}">重新登录</a>`);}
       });
-      return true;
-    }
-    if (view === "reactivate") {
-      if (!linkToken) {
-        shell(root,"恢复已停用的账号",
-          `<p>停用后的 30 天内，若原邮箱已验证，可以申请一次性恢复链接。验证邮件不会透露邮箱是否关联账号。</p>
-             <form class="hw-account-form">
-               <label>原绑定邮箱<input class="hw-input" type="email" name="email" autocomplete="email" required /></label>
-               <button class="btn btn-primary" type="submit">发送账号恢复邮件</button>
-             </form>
-             <p class="hw-account-help">超过恢复期限或此前未验证邮箱，请联系站点管理员审核；恢复后仍需要密码登录。</p>
-             <p><a href="${esc(mainUrl("auth"))}">返回登录</a></p>`);
-        bindForm(root, async data => {
-          const result = await S.apiJson("/api/auth/request-reactivation", {
-            method:"POST", body:{email:String(data.get("email")||"")}
-          });
-          feedback(root,result.message);
-        });
-      } else {
-        shell(root,"确认恢复账号",
-          `<p>确认后恢复已停用的账号，原有密码仍然有效。链接仅可使用一次且 30 分钟内有效。</p>
-             <form class="hw-account-form"><button type="submit" class="btn btn-primary">确认恢复账号</button></form>`);
-        bindForm(root, async () => {
-          const result = await S.apiJson("/api/auth/confirm-reactivation",{
-            method:"POST",body:{token:linkToken}
-          });
-          if (isCurrent()) shell(root,"账号恢复成功",
-            `<p>${esc(result.message)}</p><a class="btn btn-primary" href="${esc(mainUrl("auth"))}">重新登录</a>`);
-        });
-      }
       return true;
     }
     if(view==="verify-email" && linkToken){
