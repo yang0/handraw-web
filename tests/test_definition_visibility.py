@@ -65,10 +65,10 @@ class TestDefinitionVisibility(TestCase):
         self.thread.start()
 
         # Users: author, buyer, visitor, staff
-        self.author, self.author_token = S.register_user(self.db, "author_user", "pass123", display_name="Author One")
-        self.buyer, self.buyer_token = S.register_user(self.db, "buyer_user", "pass123", display_name="Buyer One")
-        self.visitor, self.visitor_token = S.register_user(self.db, "visitor_user", "pass123", display_name="Visitor One")
-        self.staff, self.staff_token = S.register_user(self.db, "staff_user", "pass123", display_name="Staff One")
+        self.author, self.author_token = S.register_user(self.db, "author_user", "Pass1234!", display_name="Author One")
+        self.buyer, self.buyer_token = S.register_user(self.db, "buyer_user", "Pass1234!", display_name="Buyer One")
+        self.visitor, self.visitor_token = S.register_user(self.db, "visitor_user", "Pass1234!", display_name="Visitor One")
+        self.staff, self.staff_token = S.register_user(self.db, "staff_user", "Pass1234!", display_name="Staff One")
         with self.db.transaction() as tx:
             tx.execute("UPDATE users SET role = 'reviewer' WHERE id = ?", (self.staff["id"],))
             # Give buyer credits
