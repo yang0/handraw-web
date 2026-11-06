@@ -271,6 +271,39 @@ class PostgresSnapshotTests(unittest.TestCase):
                                            "new-pg-user@example.test", "新用户昵称")
             self.assertNotEqual(newcomer["id"], original_id)
             self.assertTrue(token.startswith("hws_"))
+            # Concurrent PG transactions must not overspend a wallet or mint
+            # a duplicate ledger entry. Each thread owns a pooled connection.
+            from concurrent.futures import ThreadPoolExecutor
+            from backend.services import apply_wallet_delta, ServiceError
+            initial = int(pg.get_conn().execute(
+                "SELECT balance FROM wallets WHERE user_id=?", (newcomer["id"],)
+            ).fetchone()["balance"])
+            def spend(i):
+                try:
+                    with pg.transaction() as tx:
+                        apply_wallet_delta(
+                            tx, newcomer["id"], -1, "pg_parity_spend",
+                            "PG concurrent wallet test", event_key=f"pg-parity-{i}"
+                        )
+                    return True
+                except ServiceError as exc:
+                    if exc.code == "insufficient_credits":
+                        return False
+                    raise
+                finally:
+                    pg.close_thread_conn()
+            attempts = initial + 5
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                verdicts = list(pool.map(spend, range(attempts)))
+            self.assertEqual(verdicts.count(True), initial)
+            self.assertEqual(verdicts.count(False), 5)
+            self.assertEqual(pg.get_conn().execute(
+                "SELECT balance FROM wallets WHERE user_id=?", (newcomer["id"],)
+            ).fetchone()["balance"], 0)
+            self.assertEqual(pg.get_conn().execute(
+                "SELECT COUNT(*) FROM ledgers WHERE user_id=? AND kind='pg_parity_spend'",
+                (newcomer["id"],)
+            ).fetchone()[0], initial)
         finally:
             pg.close()
 
