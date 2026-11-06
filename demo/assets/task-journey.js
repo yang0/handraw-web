@@ -96,6 +96,22 @@
     } else el.classList.remove("is-hidden");
     if (REDUCED()) el.classList.add("reduce-motion");
   }
+  function normalizeDocument(result) {
+    const normalized = { ...result };
+    const title = String(normalized.title || "").trim();
+    const markdown = String(normalized.markdown || "");
+    if (title) {
+      const lines = markdown.split("\\n");
+      let index = 0;
+      while (index < lines.length && !lines[index].trim()) index++;
+      if (index < lines.length && lines[index].trim() === "# " + title) {
+        lines.splice(0, index + 1);
+        while (lines.length && !lines[0].trim()) lines.shift();
+        normalized.markdown = lines.join("\\n");
+      }
+    }
+    return normalized;
+  }
   function downloadMarkdown(result) {
     const md = String(result.markdown || "");
     const filename = String(result.title || "导入文章").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) || "导入文章";
@@ -128,7 +144,7 @@
         task.warning = "";
         task.progress = status.progress || { done: 0, total: 0 };
         if (task.state === "done") {
-          task.result = status.result || {};
+          task.result = normalizeDocument(status.result || {});
           task.recoverable = !onDone;
           draw(task);
           if (onDone) {
