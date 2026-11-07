@@ -176,13 +176,13 @@ def check_auth_rate_limit(scope: str, key: str) -> bool:
     return limiter.allow(f"{scope}:{key}")
 
 
-_ALLOWED_IMAGE_MIMES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+_ALLOWED_IMAGE_MIMES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
 
 
 def image_extension_for_mime(mime: str) -> str:
     clean = (mime or "").split(";", 1)[0].strip().lower()
     if clean not in _ALLOWED_IMAGE_MIMES:
-        raise ValueError("仅支持 PNG、JPEG 或 WebP 图片")
+        raise ValueError("仅支持 PNG、JPEG、WebP 或 GIF 图片")
     return _ALLOWED_IMAGE_MIMES[clean]
 
 
@@ -200,6 +200,24 @@ def validate_image_bytes(raw: bytes, mime: str = "") -> tuple[bytes, str]:
         raise ValueError("JPEG 图片签名无效")
     if clean_mime == "image/webp" and not (payload.startswith(b"RIFF") and payload[8:12] == b"WEBP"):
         raise ValueError("WebP 图片签名无效")
+    if clean_mime == "image/gif":
+        if not payload.startswith((b"GIF87a", b"GIF89a")) or len(payload) < 13:
+            raise ValueError("GIF 图片签名无效")
+        # Guard against hostile animation bombs, not just compressed bytes.
+        import io
+        from PIL import Image, UnidentifiedImageError
+        try:
+            with Image.open(io.BytesIO(payload)) as frame:
+                frame_count = int(getattr(frame, "n_frames", 1))
+                pixels = int(frame.width) * int(frame.height)
+                if (frame_count < 1 or frame_count > 180 or pixels > 16_000_000
+                        or pixels * frame_count > 300_000_000):
+                    raise ValueError("GIF 帧数或尺寸超出安全范围")
+                frame.seek(frame_count - 1)
+                frame.load()
+        except (UnidentifiedImageError, OSError, EOFError) as error:
+            raise ValueError("GIF 图片内容无效或不完整") from error
+
     return payload, ext
 
 
@@ -207,7 +225,7 @@ def decode_data_image_url(data_url: str) -> tuple[bytes, str, str]:
     raw = (data_url or "").strip()
     match = re.fullmatch(r"data:([^;,\s]+);base64,([A-Za-z0-9+/=\r\n]+)", raw, flags=re.IGNORECASE)
     if not match:
-        raise ValueError("无效的图片上传格式（需为 data:image/png|jpeg|webp;base64）")
+        raise ValueError("无效的图片上传格式（需为 data:image/png|jpeg|webp|gif;base64）")
     mime = match.group(1).lower()
     try:
         payload = base64.b64decode(match.group(2), validate=True)
