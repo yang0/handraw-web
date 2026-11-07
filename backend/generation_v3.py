@@ -31,6 +31,9 @@ V3_MIGRATIONS = [
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, source, external_run_id)
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_runs_request
+            ON generation_runs(user_id,source,request_id)
+            WHERE request_id <> '';
         CREATE INDEX IF NOT EXISTS idx_generation_runs_owner_recent
             ON generation_runs(user_id,created_at DESC,id DESC);
 
@@ -146,10 +149,14 @@ def _stable_id(prefix: str, *segments: object) -> str:
 
 def _storage_url(value: str) -> str:
     url = str(value or "").strip().split("?", 1)[0]
-    if not url or not (
-        url.startswith(("/generated/", "/uploads/"))
-        or url.startswith(("https://", "http://", "/images/"))
-    ):
+    # The upstream generation/upload endpoint authenticates media ownership.
+    # Normalize here but refuse traversal, protocol-relative and bare paths.
+    if not url or (url.startswith("/") and not url.startswith("//")
+                   and ".." not in url.split("/") and "\\x00" not in url):
+        pass
+    elif url.startswith(("https://", "http://")):
+        pass
+    else:
         raise ValueError("Invalid generated media URL")
     return url
 
