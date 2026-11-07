@@ -2380,6 +2380,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        m_run = re.fullmatch(r"/api/studio/runs/([A-Za-z0-9_-]{1,120})", req_path)
+        if m_run:
+            user = self._current_user(required=True)
+            from .generation_v3 import get_owned_studio_run
+            self._send_json(get_owned_studio_run(self.db, user, m_run.group(1)))
+            return
+
         if req_path == "/api/studio/workspace":
             user = self._current_user(required=False)
             self._send_json(get_studio_workspace(self.db, user))

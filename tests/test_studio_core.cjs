@@ -106,6 +106,24 @@ assert.equal(projection.isTerminal,false);
 assert.equal(projection.viewStatus,"running");
 const stop=Core.selectRunProjection(run,items,{cancelRequested:true});
 assert.equal(stop.viewStatus,"cancel_requested");
+const actualV3 = Core.selectRunProjection({source:"web",expectedCount:3,status:"partial"}, [
+  {position:0,slotIndex:0,status:"success",mediaId:"media-1"},
+  {position:1000,slotIndex:1,status:"failed"},
+  {position:2000,slotIndex:2,status:"generating"}
+]);
+assert.equal(actualV3.total,3);
+assert.equal(actualV3.succeeded,1);
+assert.equal(actualV3.failed,1);
+assert.equal(actualV3.generating,1);
+assert.equal(actualV3.viewStatus,"running");
+const multiOutput=Core.selectRunProjection({source:"web",expectedCount:2,status:"partial"},[
+  {position:0,status:"success",mediaId:"a"},
+  {position:1,status:"failed"},
+  {position:1000,status:"success",mediaId:"b"}
+]);
+assert.equal(multiOutput.total,2);
+assert.equal(multiOutput.partialOutputs,1);
+assert.equal(multiOutput.viewStatus,"partial");
 const noMedia=Core.selectRunProjection({expected_count:1,status:"success"},[{position:0,status:"success"}]);
 assert.equal(noMedia.succeeded,0);
 assert.equal(noMedia.unknown,1);

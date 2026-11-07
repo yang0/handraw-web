@@ -265,40 +265,44 @@
   const ITEM_PERSISTED = new Set(["pending", "generating", "success", "failed", "cancelled"]);
   function selectRunProjection(run, items = [], options = {}) {
     const expected = Math.max(0, Number(options.expectedCount ?? run?.expected_count ?? run?.expectedCount ?? 0) || 0);
-    const byPosition = new Map();
+    const bySlot = new Map();
     for (const item of Array.isArray(items) ? items : []) {
-      const pos = Number(item.position);
-      if (!Number.isInteger(pos) || pos < 0 || (expected && pos >= expected)) continue;
-      // Existing V3 schema has exactly one Item per position. Ignore duplicate
-      // deliveries; an explicitly newer attempt can supersede older transient.
-      const previous = byPosition.get(pos);
-      const attempt = Number(item.attempt || 0);
-      if (!previous || attempt > Number(previous.attempt || 0)) byPosition.set(pos, item);
+      const position = Number(item.position);
+      if (!Number.isInteger(position) || position < 0) continue;
+      const slot = Number(item.slotIndex ?? item.batchIndex ??
+        (run?.source === "web" && position >= 1000 ? Math.floor(position / 1000) : position));
+      if (!Number.isInteger(slot) || slot < 0 || (expected && slot >= expected)) continue;
+      if (!bySlot.has(slot)) bySlot.set(slot, []);
+      bySlot.get(slot).push(item);
     }
     const totals = { succeeded: 0, failed: 0, cancelled: 0, generating: 0, queued: 0, unknown: 0 };
-    for (let pos = 0; pos < Math.max(expected, byPosition.size); pos++) {
-      const item = byPosition.get(pos);
-      if (!item) { totals.queued++; continue; }
-      const status = item.status;
-      if (status === "success") {
-        if (item.media_id || item.mediaId) totals.succeeded++;
-        else totals.unknown++;
-      } else if (status === "failed") totals.failed++;
-      else if (status === "cancelled") totals.cancelled++;
-      else if (status === "generating") totals.generating++;
-      else if (status === "pending") totals.queued++;
+    const width = Math.max(expected, ...[...bySlot.keys()].map(n => n + 1), 0);
+    let partialOutputs = 0;
+    for (let slot = 0; slot < width; slot++) {
+      const candidates = bySlot.get(slot) || [];
+      if (!candidates.length) { totals.queued++; continue; }
+      const hasSuccess = candidates.some(item => item.status === "success" && (item.media_id || item.mediaId));
+      const hasFailed = candidates.some(item => item.status === "failed");
+      if (candidates.some(item => item.status === "generating")) totals.generating++;
+      else if (candidates.some(item => item.status === "pending")) totals.queued++;
+      else if (hasSuccess) totals.succeeded++;
+      else if (hasFailed) totals.failed++;
+      else if (candidates.every(item => item.status === "cancelled")) totals.cancelled++;
       else totals.unknown++;
+      if (hasSuccess && hasFailed) partialOutputs++;
     }
     const total = Object.values(totals).reduce((a, b) => a + b, 0);
     const isTerminal = total > 0 && totals.succeeded + totals.failed + totals.cancelled === total;
     const isStopping = options.cancelRequested === true;
     return {
       runId: run?.id || run?.runId || "", persistedStatus: RUN_PERSISTED.has(run?.status) ? run.status : "unknown",
-      total, ...totals, processed: totals.succeeded + totals.failed + totals.cancelled,
+      total, ...totals, partialOutputs,
+      processed: totals.succeeded + totals.failed + totals.cancelled,
       isTerminal, isStopping, canRetry: totals.failed + totals.cancelled > 0,
       viewStatus: isStopping && !isTerminal ? "cancel_requested"
         : totals.unknown ? "unknown" : isTerminal
-        ? totals.succeeded === total ? "success" : totals.succeeded ? "partial" : totals.failed ? "failed" : "cancelled"
+        ? totals.succeeded === total && !partialOutputs ? "success"
+          : totals.succeeded ? "partial" : totals.failed ? "failed" : "cancelled"
         : totals.generating ? "running" : "pending"
     };
   }

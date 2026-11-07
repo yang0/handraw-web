@@ -779,3 +779,53 @@ def cancel_unsubmitted_web_slots(
         "alreadySubmittedPositions": skipped,
         "remoteTasksCancelled": False,
     }
+
+def get_owned_studio_run(db: Any, user: dict[str, Any], run_id: str) -> dict[str, Any]:
+    """Authenticated, V3-authoritative Run/Item read model (Studio 2.0 #119).
+
+    The external gateway accounting table is not a second history. For Web
+    Runs, a position uses batch-index*1000+image-index; response includes the
+    stable slotIndex for correct browser projection and restart recovery.
+    """
+    from .services import ServiceError
+    uid = int(user["id"])
+    conn = db.get_conn()
+    run = conn.execute(
+        """SELECT r.id,r.source,r.external_run_id,r.expected_count,r.status,
+                  r.created_at,r.updated_at,w.id AS work_id
+           FROM generation_runs r LEFT JOIN works w ON w.run_id=r.id
+           WHERE r.id=? AND r.user_id=?""", (str(run_id), uid),
+    ).fetchone()
+    if not run:
+        raise ServiceError("生成任务不存在", status=404, code="run_not_found")
+    items = conn.execute(
+        """SELECT i.id,i.position,i.status,i.media_id,i.error_code,
+                  i.created_at,i.updated_at,m.storage_key
+           FROM generation_items i LEFT JOIN media_assets m
+             ON m.id=i.media_id AND m.owner_user_id=?
+           WHERE i.run_id=? ORDER BY i.position""", (uid, str(run_id)),
+    ).fetchall()
+    return {
+        "ok": True,
+        "run": {
+            "id": str(run["id"]), "source": str(run["source"]),
+            "expectedCount": int(run["expected_count"]), "status": str(run["status"]),
+            "workId": str(run["work_id"] or ""),
+            "createdAt": str(run["created_at"]), "updatedAt": str(run["updated_at"]),
+        },
+        "items": [
+            {
+                "id": str(i["id"]), "position": int(i["position"]),
+                "slotIndex": int(i["position"]) // 1000
+                    if str(run["source"]) == "web" else int(i["position"]),
+                "imageIndex": int(i["position"]) % 1000
+                    if str(run["source"]) == "web" else 0,
+                "status": str(i["status"]),
+                "mediaId": str(i["media_id"] or ""),
+                "imageUrl": str(i["storage_key"] or "") if i["status"] == "success" else "",
+                "errorCode": str(i["error_code"] or ""),
+            }
+            for i in items
+        ],
+    }
+
