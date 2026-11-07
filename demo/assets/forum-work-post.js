@@ -118,9 +118,9 @@
       if (!recipeImages.length && recipe.image) recipeImages = normImages([recipe.image]);
     }
     const hasRecipe = !!(recipe && (recipePrompt || recipeTheme));
-    // Images alone never qualify; a work must expose an actual reproduction path.
-    if (work && (work.reproducible === false || (!work.promptMasked && !String(work.prompt || work.subject || '').trim()))) work = null;
-
+    // Work media and reproduction are independent: a generated work remains
+    // viewable and author-editable even when its prompt is confidential or
+    // intentionally omitted. The "做同款" action remains gated by prompt.
     if (!work && !hasRecipe) return null;
 
     // ---- 标题：优先作品标题，其次帖子标题 ----
