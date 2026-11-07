@@ -120,3 +120,35 @@
 .hw-document-fidelity-columns pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:#f7f1e8;padding:11px;border-radius:7px;font-size:11px;line-height:1.6}
 @media(max-width:660px){.hw-article-plan-review{padding:17px}.hw-document-fidelity-columns{grid-template-columns:1fr}.hw-article-plan-review footer button{flex:1}}
 @media(prefers-reduced-motion:reduce){.hw-article-plan-review-overlay{backdrop-filter:none}}
+
+/* Document import: one genuinely spacious editing surface, no split panes. */
+.hw-document-review-overlay{padding:clamp(8px,2vw,24px)}
+.hw-document-review.hw-document-review-single,.hw-document-review:has(.hw-document-review-single-editor){
+  width:min(1180px,100%);height:min(94dvh,1000px);max-height:94dvh;
+  padding:clamp(16px,2vw,28px);overflow:hidden;gap:10px;
+}
+.hw-document-review-head{flex-shrink:0;gap:2px}
+.hw-document-review-head h2{font-size:21px}
+.hw-document-review-head p{font-size:12px}
+.hw-document-review-meta-compact{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;flex-shrink:0}
+.hw-document-review-meta-compact>div{padding:7px 11px}
+.hw-document-review-warning,.hw-document-review-protect{font-size:11px;padding:6px 10px;flex-shrink:0}
+.hw-document-review-hints{padding:7px 10px;border:1px solid #e3d4c2;border-radius:8px;background:#fbf4e9;font-size:11px;flex-shrink:0}
+.hw-document-review-hints summary{cursor:pointer;font-weight:800}
+.hw-document-review-hints p{margin:7px 0 0;line-height:1.5}
+.hw-document-review-single-editor{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;gap:7px}
+.hw-document-review-single-editor>label,.hw-document-review-editor-head label{font-size:12px;font-weight:800}
+.hw-document-review-single-editor input{width:100%;box-sizing:border-box;flex:none;border:1px solid #d6c9bc;background:#fff;padding:10px 12px;border-radius:8px;font:inherit;font-size:14px;color:inherit}
+.hw-document-review-editor-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#hw-doc-review-count{color:#806f5e;font-size:11px;font-variant-numeric:tabular-nums}
+#hw-doc-review-editor{box-sizing:border-box;display:block;flex:1 1 auto;min-height:150px;width:100%;resize:none;padding:18px 20px;border:1px solid #d5c8ba;border-radius:10px;background:#fff;outline:none;color:#29231f;font:14px/1.85 ui-monospace,SFMono-Regular,Consolas,monospace;overflow:auto;white-space:pre-wrap}
+#hw-doc-review-editor:focus-visible,.hw-document-review-single-editor input:focus-visible{outline:2px solid #b9412c;outline-offset:1px}
+.hw-document-review-actions{flex-shrink:0;padding-top:8px;border-top:1px solid #e8ddd0}
+@media(max-width:650px){
+ .hw-document-review:has(.hw-document-review-single-editor){height:96dvh;max-height:96dvh;padding:12px;gap:7px}
+ .hw-document-review-meta-compact{grid-template-columns:1fr}
+ .hw-document-review-meta-compact>div{padding:5px 8px}
+ .hw-document-review-actions{gap:6px}
+ .hw-document-review-actions button{padding:9px 6px;font-size:11px}
+ #hw-doc-review-editor{font-size:13px;padding:12px;min-height:100px}
+}
