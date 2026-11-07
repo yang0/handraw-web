@@ -1985,6 +1985,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # 3. 'library' scope: personal library read endpoints and collection toggle
         if "library" in scopes:
             if method == "GET":
+                # Scoped Skill bearer tokens can read their own imported private
+                # media; _private_media_access still enforces actual ownership.
+                if re.fullmatch(r"/generated/skill_[a-f0-9]{32}\.(?:png|jpg|webp)", req_path):
+                    return
                 if req_path in ("/api/v1/me/resources", "/api/v1/me/generations",
                                 "/api/v1/me/collection-items", "/api/v1/me/notifications"):
                     return
