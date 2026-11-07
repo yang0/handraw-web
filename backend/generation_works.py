@@ -178,36 +178,6 @@ def _grant_work_media(
     )
 
 
-def _find_work_by_image(conn: sqlite3.Connection, image_url: str, author_username: str) -> str:
-    """Return an existing work that already carries this picture, if any.
-
-    Matching on the picture rather than on the generation is deliberate: the
-    same file reaches works by two routes -- published from the writing desk and
-    projected from history -- and only one of them may exist.
-    """
-    if not image_url:
-        return ""
-    rows = conn.execute(
-        """
-        SELECT id, images_json FROM works
-        WHERE author_username = ? AND COALESCE(images_json, '') <> ''
-          AND COALESCE(origin,'web') IN ('web','legacy')
-        ORDER BY published_at_ms ASC
-        """,
-        (author_username,),
-    ).fetchall()
-    for r in rows:
-        try:
-            images = json.loads(r["images_json"] or "[]")
-        except Exception:
-            continue
-        for im in images:
-            url = im if isinstance(im, str) else (im.get("url") if isinstance(im, dict) else "")
-            if url and url == image_url:
-                return str(r["id"])
-    return ""
-
-
 def project_generation_to_works(
     conn: sqlite3.Connection,
     generation_id_or_row: str | sqlite3.Row | dict[str, Any],
@@ -323,16 +293,6 @@ def project_generation_to_works(
         "SELECT id AS work_id FROM works WHERE run_id=?",
         (canonical_run_id,),
     ).fetchone()
-    if not mapping:
-        # An explicit direct-share might already refer to the same picture.
-        # Adopt that *unbound* work, rather than duplicating a gallery card.
-        adopted = _find_work_by_image(conn, urls[0], author_username)
-        if adopted:
-            taken = conn.execute(
-                "SELECT run_id FROM works WHERE id=?", (adopted,),
-            ).fetchone()
-            if taken and not taken["run_id"]:
-                mapping = {"work_id": adopted}
     if mapping:
         wid = str(mapping["work_id"])
         work = conn.execute(
