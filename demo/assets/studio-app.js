@@ -7735,6 +7735,7 @@
     const clearBtn = DOM.historyStage.querySelector("#hist-clear-all");
     if (clearBtn) {
       clearBtn.onclick = async () => {
+        if (typeof window.confirm === "function" && !window.confirm("清空生图历史将删除生成记录，并可能使关联的公开作品下架。此操作不可恢复，确定继续吗？")) return;
         clearBtn.disabled = true;
         try {
           await deleteCloudHistory("", true);
@@ -7790,6 +7791,8 @@
     DOM.historyStage.querySelectorAll("[data-hist-del]").forEach((btn) => {
       btn.onclick = async () => {
         const hid = btn.getAttribute("data-hist-del");
+        if (!hid) return;
+        if (typeof window.confirm === "function" && !window.confirm("删除本次生成记录后，关联的公开作品可能同步下架，确定继续吗？")) return;
         btn.disabled = true;
         try {
           await deleteCloudHistory(hid, false);
