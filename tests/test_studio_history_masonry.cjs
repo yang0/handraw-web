@@ -4,6 +4,8 @@ const fs = require("node:fs");
 
 const studio = fs.readFileSync("demo/assets/studio-app.js", "utf8");
 const styles = fs.readFileSync("demo/assets/studio-canvas.css", "utf8");
+const quickStyles = fs.readFileSync("demo/assets/quick-create.css", "utf8");
+assert.match(quickStyles, /\.qc-entry-bar\s*\{\s*padding-inline:\s*max\(var\(--hw-page-gutter, 16px\), calc\(\(100% - 1140px\) \/ 2\)\);/, "Navigation rail contract changed: update shared content width together");
 const start = studio.indexOf("  function historyRecordCategory(h) {");
 const end = studio.indexOf("  /* ======================== VIEWPORT", start);
 assert.ok(start >= 0 && end > start, "Studio history helpers and stage must exist");
@@ -137,8 +139,8 @@ const sharedShellStyle = [
   ".ic-workflows-stage .ic-wf-minimal-tools",
   ".ic-history-stage .ic-hist-page-inner,",
   ".ic-workflows-stage .ic-wf-page-inner",
-  "--ic-library-max-width: none",
-  "--ic-library-side-gap: 6px"
+  "--ic-library-max-width: 1140px",
+  "--ic-library-side-gap: var(--hw-page-gutter, 24px)"
 ];
 for (const fragment of sharedShellStyle) {
   assert.ok(styles.includes(fragment), "Shared history/workflow alignment missing: " + fragment);
@@ -192,4 +194,4 @@ for (const action of ["data-wf-open", "data-wf-dl", "data-wf-rm"]) {
 assert.ok(workflowStage.innerHTML.includes("2 个节点"), "Card should show node count");
 assert.ok(workflowStage.innerHTML.includes("1 条连线"), "Card should show edge count");
 
-console.log("Studio history and workflows: full-width navigation alignment, responsive cards, renamed canvas and actions passed");
+console.log("Studio history and workflows: 1140px navigation rail alignment, responsive cards, renamed canvas and actions passed");
