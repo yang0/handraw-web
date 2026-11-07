@@ -2358,12 +2358,13 @@
       root.querySelector("#account-login-btn").onclick = () => openAuthPage("登录后管理账号设置");
       return;
     }
-    const section = ["profile", "email", "security", "devices"].includes(UI.accountSection) ? UI.accountSection : "profile";
+    const section = ["profile", "email", "security", "devices", "cloud"].includes(UI.accountSection) ? UI.accountSection : "profile";
     const sections = [
       ["profile", "个人资料", "头像、昵称与简介"],
       ["email", "邮箱与验证", "邮箱状态、验证与换绑"],
       ["security", "登录与安全", "密码与登录会话"],
-      ["devices", "设备与应用授权", "管理 Skill 与终端授权"]
+      ["devices", "设备与应用授权", "管理 Skill 与终端授权"],
+      ["cloud", "个人云空间", "我的画风、图型与生成历史"]
     ];
     root.innerHTML = `
       <section class="hw-account-settings hw-detail-page" id="account-settings-page">
@@ -2373,7 +2374,7 @@
           </nav>
           <div class="hw-account-content">
             <h2 class="hw-account-section-title">${sections.find(s => s[0] === section)[1]}</h2>
-            ${S.renderAccountSettingsFormHtml()}
+            ${section === "cloud" ? '<div id="hw-cloud-content"></div>' : S.renderAccountSettingsFormHtml()}
           </div>
         </div>
       </section>`;
@@ -2390,7 +2391,14 @@
         renderMain();
       };
     });
-    S.bindAccountSettingsForm(root, () => renderMain());
+    if (section === "cloud") {
+      const content = root.querySelector("#hw-cloud-content");
+      if (content && window.HandrawCloudCenter) {
+        window.HandrawCloudCenter.mount(content, S.apiJson);
+      }
+    } else {
+      S.bindAccountSettingsForm(root, () => renderMain());
+    }
   }
 
   function groupProfilePublishedWorks(rows) {
