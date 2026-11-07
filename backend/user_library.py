@@ -1024,12 +1024,23 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                 # Must commit cleanup intent atomically with the asset update.
                 from .media_gc import queue_media_cleanup
                 queue_media_cleanup(tx, file_to_unlink_url)
-    except Exception:
-        if newly_created_url:
-            from .media_storage import discard_uncommitted_media
-            discard_uncommitted_media(handler.db, newly_created_url)
-        elif newly_created_file is not None:
-            newly_created_file.unlink(missing_ok=True)
+    except Exception as exc:
+        # Request IDs are emitted by the HTTP error boundary. Log the affected
+        # asset and operation, never the Base64 image or user-provided content.
+        logger.exception("event=library_asset_save_failed user_id=%s uid=%s", user_id, uid)
+        try:
+            if newly_created_url:
+                from .media_storage import discard_uncommitted_media
+                discard_uncommitted_media(handler.db, newly_created_url)
+            elif newly_created_file is not None:
+                newly_created_file.unlink(missing_ok=True)
+        except Exception:
+            logger.exception("event=library_asset_upload_cleanup_failed uid=%s", uid)
+        if isinstance(exc, OSError):
+            raise ServiceError(
+                "私人图库存储暂时不可用，请重试；已有图片不会丢失",
+                status=503, code="library_storage_unavailable",
+            ) from exc
         raise
 
     # Old media is reclaimed asynchronously only after its references vanish.
