@@ -5163,6 +5163,66 @@
     renderRedeemStage();
   }
 
+  // Issue #114: left-to-right CSS Grid masonry for personal profiles.
+  // CSS multi-columns fill vertically first, leaving most of the viewport
+  // empty when there are only one to three cards. Dense rows with measured
+  // spans preserve responsive columns and variable-height image cards.
+  const profileMasonryBindings = new Map();
+  function layoutProfileMasonry(grid) {
+    if (!grid || !grid.children || !grid.isConnected) return;
+    for (const [oldGrid, binding] of profileMasonryBindings) {
+      if (!oldGrid.isConnected) {
+        binding.observer?.disconnect();
+        profileMasonryBindings.delete(oldGrid);
+      }
+    }
+    const old = profileMasonryBindings.get(grid);
+    if (old) old.observer?.disconnect();
+    const state = { observer: null, scheduled: false };
+    const measure = () => {
+      if (!grid.isConnected) {
+        state.observer?.disconnect();
+        profileMasonryBindings.delete(grid);
+        return;
+      }
+      const css = window.getComputedStyle ? window.getComputedStyle(grid) : null;
+      const row = Number.parseFloat(css?.gridAutoRows) || 8;
+      const gap = Number.parseFloat(css?.rowGap) || 8;
+      const children = Array.from(grid.children).filter((node) => node.nodeType === 1);
+      const heights = children.map((node) => Math.max(1, node.scrollHeight || node.offsetHeight || 1));
+      children.forEach((node, index) => {
+        const span = Math.max(1, Math.ceil((heights[index] + gap) / (row + gap)));
+        const next = "span " + span;
+        if (node.style.gridRowEnd !== next) node.style.gridRowEnd = next;
+      });
+    };
+    const schedule = () => {
+      if (state.scheduled) return;
+      state.scheduled = true;
+      const raf = window.requestAnimationFrame || ((fn) => setTimeout(fn, 0));
+      raf(() => {
+        state.scheduled = false;
+        measure();
+      });
+    };
+    // A ResizeObserver picks up lazy-loaded images and text wrapping. A
+    // supported browser will remeasure without extra scroll/resize handlers.
+    if (typeof ResizeObserver !== "undefined") {
+      state.observer = new ResizeObserver(schedule);
+      state.observer.observe(grid);
+      Array.from(grid.children).forEach((node) => state.observer.observe(node));
+    } else {
+      // Without ResizeObserver the grid remains left-to-right; images still
+      // trigger recomputation and a resize refreshes measurements.
+      Array.from(grid.querySelectorAll("img")).forEach((img) => {
+        img.addEventListener("load", schedule, { once: true });
+        img.addEventListener("error", schedule, { once: true });
+      });
+    }
+    profileMasonryBindings.set(grid, state);
+    schedule();
+  }
+
   function renderMasonry(cardHtmlList, density = "standard") {
     const colCount = density === "compact" ? 8 : density === "large" ? 3 : 5;
     const cols = Array.from({ length: colCount }, () => []);
@@ -5244,6 +5304,7 @@
     toast,
     apiJson,
     channelUrl,
+    layoutProfileMasonry,
     renderMasonry,
     renderChrome,
     initApp,
