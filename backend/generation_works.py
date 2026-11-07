@@ -175,6 +175,89 @@ def recover_generation_work_assets(
     return styles, layout
 
 
+
+def generation_image_assets(
+    conn: sqlite3.Connection,
+    work_row: sqlite3.Row | dict[str, Any],
+    image_urls: list[str],
+) -> list[dict[str, Any]]:
+    """Resolve public per-image style/layout IDs from this work's own web generation.
+
+    Match by persisted media URL, never by array index alone: async batch
+    completions, cover changes and retries must not attach another image's
+    style/layout. No prompts or private recipe definitions leave this function.
+    An empty result means only work-level metadata is available.
+    """
+    keys = work_row.keys() if hasattr(work_row, "keys") else work_row
+    run_id = str(work_row["run_id"] or "") if "run_id" in keys else ""
+    if not run_id or not image_urls:
+        return []
+    run = conn.execute(
+        "SELECT user_id,source,external_run_id FROM generation_runs WHERE id=?",
+        (run_id,),
+    ).fetchone()
+    if not run or str(run["source"]) != "web":
+        return []
+
+    external = str(run["external_run_id"] or "")
+    rows = conn.execute(
+        """
+        SELECT * FROM studio_generations
+        WHERE user_id=? AND status='success'
+          AND COALESCE(deleted_at,'')=''
+          AND (id=? OR batch_id=?)
+        ORDER BY batch_index ASC,created_at DESC,id DESC
+        """,
+        (run["user_id"], external, external),
+    ).fetchall()
+    expected = set(image_urls)
+    by_url: dict[str, dict[str, Any]] = {}
+    seen_attempts: set[str] = set()
+    for source in rows:
+        batch = str(source["batch_id"] or "")
+        # The latest successful attempt for a planned slot is authoritative.
+        attempt_key = f"batch:{source['batch_index']}" if batch == external and batch else f"id:{source['id']}"
+        if attempt_key in seen_attempts:
+            continue
+        seen_attempts.add(attempt_key)
+        try:
+            items = json.loads(source["items_json"] or "[]")
+        except (TypeError, ValueError):
+            items = []
+        if not isinstance(items, list):
+            continue
+        for idx, item in enumerate(items):
+            if isinstance(item, dict) and str(item.get("status") or "").lower() in (
+                "failed", "error", "refunded", "cancelled",
+            ):
+                continue
+            _, url = derive_item_key(item, idx)
+            if url not in expected or url in by_url:
+                continue
+            item_dict = item if isinstance(item, dict) else None
+            styles, layout = extract_generation_styles_and_layout(conn, source, item_dict)
+            if not styles and not layout:
+                by_url[url] = {"url": url, "styles": [], "layout": "", "scope": "missing"}
+                continue
+            # A snapshot on the item itself is definitively per-image; a
+            # one-output generation slot has equally unambiguous provenance.
+            item_styles, item_layout = extract_generation_styles_and_layout(
+                conn,
+                {"recipe_id": "", "recipe_summary": "", "system_append_json": ""},
+                item_dict,
+            )
+            scope = "image" if item_styles or item_layout or len(items) == 1 else "group"
+            by_url[url] = {
+                "url": url, "styles": styles, "layout": layout, "scope": scope,
+            }
+    if not by_url:
+        return []
+    return [
+        by_url.get(url, {"url": url, "styles": [], "layout": "", "scope": "missing"})
+        for url in image_urls
+    ]
+
+
 def resolve_work_title(
     row: sqlite3.Row | dict[str, Any],
     item: dict[str, Any] | None = None,
