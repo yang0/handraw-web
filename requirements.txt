@@ -16,7 +16,10 @@ Pillow>=10.0
 # playwright>=1.40
 
 # PostgreSQL/Redis production migration tooling and distributed auth protections.
-# Python v2 remains SQLite-backed until the PostgreSQL adapter passes parity CI.
+# Fresh PostgreSQL V3 bootstrap and Redis task-coordination adapter.
 psycopg[binary]>=3.2,<4
 psycopg-pool>=3.2,<4
 redis>=5.2,<7
+
+# Optional, required when HANDRAW_OBJECT_BUCKET enables S3/R2/MinIO.
+boto3>=1.35,<2
