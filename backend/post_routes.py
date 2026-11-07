@@ -17,7 +17,6 @@ import urllib.parse
 
 from . import forum_resources
 from . import services as S
-from .generation_works import sort_generation_batch_works
 from .resource_discussions import resolve_resource
 from .skill_prompt import strip_bilingual_definition
 
@@ -328,51 +327,9 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
         work_res["favorites"] = w_favorites
         work_res["forks"] = w_forks
 
-        # Sibling works in the same generation batch
-        gw_row = conn.execute(
-            "SELECT generation_id FROM generation_works WHERE work_id = ?",
-            (m_target,),
-        ).fetchone()
-        batch_works: list[dict[str, Any]] = []
-        if gw_row and gw_row["generation_id"]:
-            gen_id = str(gw_row["generation_id"])
-            sibs = conn.execute(
-                """
-                SELECT gw.work_id, gw.item_key, gw.created_at AS mapped_at, w.title, w.images_json, t.id AS topic_id
-                FROM generation_works gw
-                JOIN works w ON w.id = gw.work_id
-                LEFT JOIN forum_topics t ON t.work_id = w.id
-                WHERE gw.generation_id = ? AND w.status = 'published'
-                ORDER BY gw.created_at ASC, gw.item_key ASC, gw.work_id ASC
-                """,
-                (gen_id,),
-            ).fetchall()
-            sibs = sort_generation_batch_works(conn, gen_id, sibs)
-            if len(sibs) > 1:
-                for idx, s in enumerate(sibs):
-                    s_imgs = json.loads(s["images_json"] or "[]") if s["images_json"] else []
-                    s_url = s_imgs[0] if s_imgs else ""
-                    if isinstance(s_url, dict):
-                        s_url = s_url.get("url", "")
-                    s_tid = s["topic_id"]
-                    if not s_tid:
-                        m_row = conn.execute(
-                            "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
-                            (s["work_id"],),
-                        ).fetchone()
-                        if m_row:
-                            s_tid = m_row["topic_id"]
-                    batch_works.append({
-                        "workId": s["work_id"],
-                        "topicId": s_tid or "",
-                        "title": s["title"] or "",
-                        "imageUrl": s_url,
-                        "itemKey": s["item_key"] or "",
-                        "index": idx + 1,
-                        "total": len(sibs),
-                        "isCurrent": (s["work_id"] == m_target),
-                    })
-        work_res["batchWorks"] = batch_works
+        # A generated work contains all its media; never create a separate
+        # related-work rail for images from the same run.
+        work_res["batchWorks"] = []
 
         mount = {
             "kind": "work",
