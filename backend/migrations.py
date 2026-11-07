@@ -774,40 +774,10 @@ except ImportError:  # pragma: no cover - compatibility for staged rollouts
 from .skill_web_schema import SKILL_WEB_MIGRATIONS
 MIGRATIONS.extend(SKILL_WEB_MIGRATIONS)
 
-def _repair_existing_public_generation_works(conn: Any) -> None:
-    """Repair already-public history in one migration without exposing private rows.
-
-    A corrupt legacy record must not prevent the website from starting.
-    Each row uses a savepoint, so one failure cannot leave a half-published work.
-    Failed rows remain available for the administrator's reconciliation audit.
-    """
-    import logging
-    from .generation_works import project_generation_to_works
-    log = logging.getLogger("handraw.migrations")
-    rows = conn.execute("""
-        SELECT id FROM studio_generations
-        WHERE status='success' AND visibility='public'
-          AND COALESCE(deleted_at,'')='' AND COALESCE(engine,'')!='demo'
-          AND items_json IS NOT NULL AND items_json NOT IN ('','[]')
-        ORDER BY created_at DESC,id DESC
-    """).fetchall()
-    failures = 0
-    for row in rows:
-        conn.execute("SAVEPOINT skill_public_repair")
-        try:
-            project_generation_to_works(conn, str(row["id"]))
-        except Exception as error:
-            conn.execute("ROLLBACK TO SAVEPOINT skill_public_repair")
-            failures += 1
-            log.warning("Public generation work repair skipped id=%s: %s", row["id"], error)
-        finally:
-            conn.execute("RELEASE SAVEPOINT skill_public_repair")
-    if failures:
-        log.warning("%s legacy public generations remain unprojected; use admin audit/reconcile", failures)
-
-# V3 projection inserts works.generation_batch_key, created by migration 098.
-# Run the reconciliation only AFTER that column and its unique index exist.
-POST_MIGRATION_HOOKS[98] = _repair_existing_public_generation_works
+# Handraw V3 is built on a fresh database; there is no old user content to
+# backfill. The unified generation/media model is part of initial setup.
+from .generation_v3 import V3_MIGRATIONS
+MIGRATIONS.extend(V3_MIGRATIONS)
 
 # Ensure migrations execute in strictly ascending numerical order
 MIGRATIONS.sort(key=lambda m: m[0])
