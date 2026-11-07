@@ -46,27 +46,6 @@ def derive_item_key(item: Any, fallback_idx: int = 0) -> tuple[str, str]:
     return item_key, image_url
 
 
-def sort_generation_batch_works(conn: Any, generation_id: str, rows: list[Any]) -> list[Any]:
-    """Use the source image order instead of a database-specific hidden rowid."""
-    generation = conn.execute("SELECT items_json FROM studio_generations WHERE id = ?", (generation_id,)).fetchone()
-    positions: dict[str, int] = {}
-    if generation:
-        try:
-            items = json.loads(generation["items_json"] or "[]")
-        except (TypeError, ValueError):
-            logger.warning("Batch image order metadata is invalid; generation_id=%s", generation_id)
-            items = []
-        if isinstance(items, list):
-            for index, item in enumerate(items):
-                key, _ = derive_item_key(item, fallback_idx=index)
-                positions.setdefault(key, index)
-    missing_position = max(positions.values(), default=-1) + 1
-    return sorted(rows, key=lambda row: (
-        positions.get(str(row["item_key"]), missing_position),
-        str(row["mapped_at"] or ""), str(row["item_key"] or ""), str(row["work_id"]),
-    ))
-
-
 def extract_generation_styles_and_layout(
     conn: sqlite3.Connection,
     row: sqlite3.Row | dict[str, Any],
