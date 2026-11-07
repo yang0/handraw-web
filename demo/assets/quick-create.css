@@ -1015,3 +1015,13 @@
     min-height: 180px;
   }
 }
+
+/* Global studio navigation: history and workflows are sibling destinations. */
+.qc-entry-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 0 0 auto; }
+.qc-entry-actions .qc-mode-history { margin-left: 0; }
+.qc-mode-workflows { min-height: 40px; padding: 6px 14px; white-space: nowrap; }
+@media(max-width:768px) {
+  .qc-entry-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+  .qc-entry-actions { gap: 6px; }
+  .qc-mode-workflows { min-height: 44px; padding: 6px 10px; font-size: 12px; }
+}

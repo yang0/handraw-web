@@ -146,6 +146,7 @@
     historyReturnStage: "quick",
     historyReturnUrl: "",
     historyExpandedPromptIds: {},
+    historyExpandedBatchIds: {},
     historySelectedPreview: {},
     workflowQuery: "",
     activePlanNodeId: null,
@@ -250,6 +251,7 @@
     CS.redoStack = [];
     CS.arrangeUndoSnapshot = null;
     CS.historyExpandedPromptIds = {};
+    CS.historyExpandedBatchIds = {};
     CS.historySelectedPreview = {};
     CS.stageView = "canvas";
     CS.historyPage = 1;
@@ -1314,28 +1316,13 @@
     };
 
     DOM.workflowsStage.innerHTML = `
-      <div class="ic-pv-topbar">
-        <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-          <button type="button" class="btn btn-sm" id="wf-back-canvas" style="font-weight:800;">← 返回画布</button>
-          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">预置示范与我的工作流 (${allWf.length})</span>
-          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">按典型真实创作场景按需编排节点 · 点击「打开」即可在画布直接运行体验</span>
-        </div>
-
-        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-          <button type="button" class="btn btn-sm" id="wf-restore-presets" title="恢复全部 7 套官方典型场景示范工作流" style="font-weight:800;">恢复官方示范</button>
-          <input
-            type="search"
-            class="hw-input"
-            id="wf-search-inp"
-            value="${esc(CS.workflowQuery || "")}"
-            placeholder="搜索场景、节点或工作流…"
-            style="width:220px;height:32px;padding:4px 10px;font-size:12.5px;"
-          />
-          <label class="btn btn-primary btn-sm" style="cursor:pointer;font-weight:800;">
-            选择 JSON 文件导入
-            <input type="file" id="wf-import-file-inp" accept=".json,application/json" hidden />
-          </label>
-        </div>
+      <div class="ic-wf-minimal-tools" role="search">
+        <input type="search" class="hw-input" id="wf-search-inp"
+          value="${esc(CS.workflowQuery || "")}" placeholder="搜索工作流…" aria-label="搜索工作流" />
+        <label class="btn btn-primary btn-sm" style="cursor:pointer;font-weight:800;">
+          导入工作流
+          <input type="file" id="wf-import-file-inp" accept=".json,application/json" hidden />
+        </label>
       </div>
 
       <div class="ic-wf-page-scroll" id="wf-page-scroll">
@@ -1347,8 +1334,7 @@
                   <div style="font-size:16px;font-weight:850;color:var(--ic-ink);margin-bottom:6px;">${
                     allWf.length === 0 ? "暂无已保存的工作流" : "没有匹配搜索词的工作流"
                   }</div>
-                  <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">可在无限画布右下角缩略图旁点击「保存」保存当前画布，或点击上方「恢复官方示范」。</div>
-                  <button type="button" class="btn btn-primary" id="wf-empty-go-canvas">返回无限画布</button>
+                  <div style="font-size:13px;color:var(--ic-muted);">可在「高级画布」中保存工作流，或使用上方按钮导入 JSON 工作流。</div>
                 </div>
               `
               : `
@@ -1404,36 +1390,6 @@
         const len = inp.value.length;
         inp.setSelectionRange(len, len);
       }
-    }
-
-    const goBackCanvas = () => {
-      CS.stageView = "canvas";
-      try {
-        if (window.location.search.includes("view=")) {
-          window.history.replaceState(null, "", window.location.pathname);
-        }
-      } catch (_) {}
-      renderTopAndBottomDocks();
-      requestAnimationFrame(() => renderMinimap());
-    };
-
-    const backBtn = DOM.workflowsStage.querySelector("#wf-back-canvas");
-    if (backBtn) backBtn.onclick = goBackCanvas;
-
-    const emptyGoBtn = DOM.workflowsStage.querySelector("#wf-empty-go-canvas");
-    if (emptyGoBtn) emptyGoBtn.onclick = goBackCanvas;
-
-    const restorePresetsBtn = DOM.workflowsStage.querySelector("#wf-restore-presets");
-    if (restorePresetsBtn) {
-      restorePresetsBtn.onclick = () => {
-        const officialList = buildOfficialPresetWorkflows();
-        const officialIds = new Set(officialList.map((w) => w.id));
-        const customOnly = (CS.savedWorkflows || []).filter((w) => w && !officialIds.has(w.id) && !w.isOfficialPreset);
-        CS.savedWorkflows = [...customOnly, ...officialList];
-        writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-        renderWorkflowsStage();
-        toast("✨ 已恢复全部 7 套官方典型场景示范工作流！");
-      };
     }
 
     const searchInp = DOM.workflowsStage.querySelector("#wf-search-inp");
@@ -7515,12 +7471,23 @@
   }
 
   function historyRecordCategory(h) {
-    // Group legacy records by today's four creation modes without rewriting history.
-    if (h.mode === "article-illust" || h.kind === "article") return "article";
-    if (h.kind === "loop" || h.kind === "series" || h.mode === "series" || h.mode === "batch" ||
+    // Each generation belongs to exactly one mode, including standalone article covers.
+    const mode = String(h.mode || "").toLowerCase().replace(/_/g, "-");
+    const kind = String(h.kind || "").toLowerCase();
+    const label = `${h.modeLabel || ""} ${h.tabTitle || ""}`;
+    if (["article-illust", "article-cover"].includes(mode) || kind === "article" ||
+        h.articleTitle || /文章封面|文章配图|文章插图/.test(label)) return "article";
+    if (["loop", "series", "batch"].includes(kind) || ["series", "batch"].includes(mode) ||
         /循环批量|批量|套图/.test(String(h.modeLabel || ""))) return "batch";
+    if (kind === "cover" || /封面图|独立封面/.test(label) ||
+        (Array.isArray(h.items) && h.items.length === 1 &&
+          (h.items[0]?.role === "cover" || /封面/.test(String(h.items[0]?.title || ""))))) return "article";
     if (h.recipeId || h.tabTitle === "做图配方") return "quick";
     return "canvas";
+  }
+
+  function historyImageCount(h) {
+    return (Array.isArray(h.items) ? h.items : []).filter((it) => it && it.imageUrl).length;
   }
 
   function historyStatusCategory(h) {
@@ -7557,12 +7524,18 @@
     const allHist = CS.generationHistory || [];
     const filterMode = CS.historyFilter || "all";
     const statusFilter = CS.historyStatusFilter || "all";
+    const imageCounts = { all: 0, quick: 0, batch: 0, article: 0, canvas: 0 };
+    for (const history of allHist) {
+      const amount = historyImageCount(history);
+      imageCounts.all += amount;
+      imageCounts[historyRecordCategory(history)] += amount;
+    }
     const q = String(CS.historyQuery || "").trim().toLowerCase();
 
     const filtered = allHist.filter((h) => {
       if (filterMode !== "all" && historyRecordCategory(h) !== filterMode) return false;
       if (statusFilter !== "all" && historyStatusCategory(h) !== statusFilter) return false;
-      if (q && !q.split(/\\s+/).every((part) => historySearchText(h).includes(part))) return false;
+      if (q && !q.split(/\s+/).every((part) => historySearchText(h).includes(part))) return false;
       return true;
     });
     if (CS.historySort === "oldest") filtered.reverse();
@@ -7577,18 +7550,17 @@
     DOM.historyStage.innerHTML = `
       <div class="ic-pv-topbar ic-history-topbar">
         <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-          <button type="button" class="btn btn-sm" id="hist-back-creation" style="font-weight:800;">← 返回创作</button>
-          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">🕒 生图历史 (${allHist.length})</span>
-          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">当前加载最近 ${allHist.length} 条记录，支持查找、恢复与下载</span>
+          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">🕒 生图历史 · ${imageCounts.all} 张</span>
+          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">${allHist.length} 次生成 · 按分类查看图片张数</span>
         </div>
 
         <div class="ic-history-controls">
           <div class="ic-view-seg">
-            <button type="button" class="ic-view-seg-btn ${filterMode === "all" ? "is-active" : ""}" data-hist-filter="all">全部</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "quick" ? "is-active" : ""}" data-hist-filter="quick">做图</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "batch" ? "is-active" : ""}" data-hist-filter="batch">批量</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "article" ? "is-active" : ""}" data-hist-filter="article">文章配图</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "canvas" ? "is-active" : ""}" data-hist-filter="canvas">画布</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "all" ? "is-active" : ""}" data-hist-filter="all">全部 (${imageCounts.all})</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "quick" ? "is-active" : ""}" data-hist-filter="quick">做图 (${imageCounts.quick})</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "batch" ? "is-active" : ""}" data-hist-filter="batch">批量 (${imageCounts.batch})</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "article" ? "is-active" : ""}" data-hist-filter="article">文章配图 (${imageCounts.article})</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "canvas" ? "is-active" : ""}" data-hist-filter="canvas">画布 (${imageCounts.canvas})</button>
           </div>
           <input
             type="search"
@@ -7623,11 +7595,10 @@
                     allHist.length === 0 ? "暂无生成历史记录" : "没有匹配当前筛选条件的历史记录"
                   }</div>
                   <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">在做图、批量、文章配图或高级画布生成后，可以在此查找历史记录。</div>
-                  <button type="button" class="btn btn-primary" id="hist-empty-back-creation">返回创作</button>
                 </div>
               `
               : `
-                <div style="display:flex;flex-direction:column;gap:14px;" id="hist-records-list">
+                <div class="ic-hist-masonry-grid" id="hist-records-list">
                   ${pageItems
                     .map((h) => {
                       const promptExpanded = Boolean(CS.historyExpandedPromptIds[h.id]);
@@ -7636,11 +7607,16 @@
                       const selImgItem =
                         selImgIdx >= 0 && (h.items || [])[selImgIdx] ? (h.items || [])[selImgIdx] : null;
                       const cleanPromptOneLine = String(S.filterDisplayPrompt ? S.filterDisplayPrompt(h.prompt || "") : (h.prompt || "")).replace(/\s+/g, " ").trim();
+                      const coverIdx = (h.items || []).findIndex((it) => it && it.imageUrl);
+                      const coverItem = coverIdx < 0 ? null : h.items[coverIdx];
+                      const imageCount = historyImageCount(h);
+                      const batchExpanded = Boolean(CS.historyExpandedBatchIds[h.id]);
 
                       return `
                         <article class="ic-hist-entry-card" data-hist-id="${esc(h.id)}">
                           <div class="ic-hist-entry-head">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;">
+                              <span class="ic-hist-category-chip">${esc(({ quick: "做图", batch: "批量", article: "文章配图", canvas: "画布" })[historyRecordCategory(h)])}</span>
                               <span class="ic-node-badge ${h.kind === "loop" ? "ic-badge-loop" : "ic-badge-output-ctrl"}">${esc(h.modeLabel || "生成记录")}</span>
                               ${h.demoMode || h.engine === "demo" ? '<span class="ic-node-badge" style="background:#fff4d6;color:#8a5a00;border:1px solid #e8c46a;">🧪 演示样图</span>' : ""}
                               <strong style="font-size:14.5px;font-weight:850;color:var(--ic-ink);">${esc(h.subject || h.title || h.tabTitle || "画布工作流")}</strong>
@@ -7657,7 +7633,21 @@
                             </div>
                           </div>
 
-                          <div class="ic-hist-gallery">
+                          ${coverItem ? `
+                            <div class="ic-hist-cover">
+                              <button type="button" class="ic-hist-cover-button"
+                                ${imageCount > 1
+                                  ? `data-hist-expand-batch="${esc(h.id)}" aria-expanded="${batchExpanded}" aria-label="${batchExpanded ? "收起" : "展开"}全部 ${imageCount} 张图片"`
+                                  : `data-hist-img-toggle="${esc(h.id)}" data-hist-img-idx="${coverIdx}" aria-label="预览生成图片"`}
+                              >
+                                <img data-hw-src="${esc(coverItem.imageUrl)}" alt="${esc(coverItem.title || h.subject || "生成图片")}" loading="lazy" />
+                                ${imageCount > 1 ? `<span class="ic-hist-cover-count">${imageCount} 张 · ${batchExpanded ? "收起图片" : "查看全部"}</span>` : ""}
+                              </button>
+                              <a href="${esc(coverItem.imageUrl)}" class="ic-hist-cover-download" data-hist-image-download download="handraw-history.webp" aria-label="下载封面或首张生成图片">↓ 下载</a>
+                            </div>
+                          ` : `<div class="ic-hist-no-image">暂无可预览的图片</div>`}
+                          ${batchExpanded && imageCount > 1 ? `
+                          <div class="ic-hist-gallery ic-hist-expanded-gallery">
                             ${(h.items || [])
                               .map(
                                 (it, iIdx) => `
@@ -7676,7 +7666,7 @@
                               )
                               .join("")}
                           </div>
-
+                          ` : ""}
                           ${
                             selImgItem
                               ? `
@@ -7745,12 +7735,6 @@
         inp.setSelectionRange(len, len);
       }
     }
-
-    const backBtn = DOM.historyStage.querySelector("#hist-back-creation");
-    if (backBtn) backBtn.onclick = returnFromHistoryPage;
-
-    const emptyGoBtn = DOM.historyStage.querySelector("#hist-empty-back-creation");
-    if (emptyGoBtn) emptyGoBtn.onclick = returnFromHistoryPage;
 
     DOM.historyStage.querySelectorAll("[data-hist-filter]").forEach((btn) => {
       btn.onclick = () => {
@@ -7831,6 +7815,7 @@
           await deleteCloudHistory(hid, false);
           CS.generationHistory = (CS.generationHistory || []).filter((item) => item.id !== hid);
           delete CS.historyExpandedPromptIds[hid];
+          delete CS.historyExpandedBatchIds[hid];
           delete CS.historySelectedPreview[hid];
           writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
           renderTopAndBottomDocks();
@@ -7839,6 +7824,14 @@
           toast(`删除历史失败：${err.message || err}`);
           btn.disabled = false;
         }
+      };
+    });
+
+    DOM.historyStage.querySelectorAll("[data-hist-expand-batch]").forEach((btn) => {
+      btn.onclick = () => {
+        const hid = btn.getAttribute("data-hist-expand-batch");
+        CS.historyExpandedBatchIds[hid] = !CS.historyExpandedBatchIds[hid];
+        renderHistoryStage();
       };
     });
 
@@ -10720,7 +10713,6 @@
         <div class="ic-tabs-pinned">
           <button type="button" class="ic-tab-action-pill" id="tb-new-wf" title="新建工作流标签页">＋ 新建 ▾</button>
           <button type="button" class="ic-tab-action-pill" id="tb-all-tabs" title="展开全部已打开标签页列表">已打开 ${CS.tabs.filter((t) => !isArticleTab(t)).length} ▾</button>
-          <button type="button" class="ic-tab-action-pill ${CS.stageView === "workflows" ? "is-active" : ""}" id="tb-open-wflib" title="查看我保存的工作流">工作流</button>
         </div>
       </div>
 
@@ -10814,8 +10806,6 @@
       openAllTabsPopover(allTabsBtn);
     };
 
-    const btnOpenWflib = DOM.workbenchBar.querySelector("#tb-open-wflib");
-    if (btnOpenWflib) btnOpenWflib.onclick = () => openWorkflowsPage();
     const btnThemeToggle = DOM.workbenchBar.querySelector("#tb-theme-toggle");
     if (btnThemeToggle) btnThemeToggle.onclick = () => {
       CS.canvasTheme = CS.canvasTheme === "dark" ? "paper" : "dark";
@@ -12121,7 +12111,7 @@
     }
 
     if (DOM.workbenchBar) {
-      DOM.workbenchBar.style.display = (CS.stageView === "canvas" || CS.stageView === "workflows") ? "" : "none";
+      DOM.workbenchBar.style.display = CS.stageView === "canvas" ? "" : "none";
     }
 
     renderCreationModeBar();
@@ -15857,13 +15847,14 @@
     const canvas = CS.stageView === "canvas";
     const article = CS.stageView === "preview" || CS.stageView === "article";
     const history = CS.stageView === "history";
+    const workflows = CS.stageView === "workflows";
     const historyCount = (CS.generationHistory || []).length;
     DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作任务">
       <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
       <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
       <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
       <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">高级画布</button>
-    </div><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button>`;
+    </div><div class="qc-entry-actions"><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
 
     const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
     if (btnQuick) btnQuick.onclick = () => { switchCreationStage("quick"); };
@@ -15875,6 +15866,8 @@
     if (btnCanvas) btnCanvas.onclick = () => { switchCreationStage("canvas"); };
     const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
     if (btnHistory) btnHistory.onclick = () => { openHistoryPage(); };
+    const btnWorkflows = DOM.entryBar.querySelector("#studio-mode-workflows");
+    if (btnWorkflows) btnWorkflows.onclick = () => { openWorkflowsPage(); };
   }
 
   let isRenderingQuickStart = false;
