@@ -5781,6 +5781,7 @@
     if (!planNode || planNode.type !== "article_plan") return false;
     const card = (planNode.data.cards || []).find((c) => c.id === cardId);
     if (!card || card.status === "generating") return false;
+    const previousImageUrl = card.imageUrl || "";
     const sourcePrompt = String(card.prompt || "").trim();
     if (sourcePrompt.length > 4000) {
       if (!silent) toast("这张图的完整提示词超过 4000 字符，请精简后再生成；没有扣费");
@@ -5935,6 +5936,9 @@
       }
 
       if (isStaleScope(runEpoch, runScope)) return false;
+      if (previousImageUrl && previousImageUrl !== imgUrl) {
+        window.HandrawArticleWorkbench?.pushVariant(card, previousImageUrl, "之前的成图");
+      }
       card.imageUrl = imgUrl;
       card.generationMode = useLiveApi ? "live" : "demo";
       card.demoMode = !useLiveApi;
@@ -6003,13 +6007,17 @@
     // an existing image must be a deliberate, separately priced card action.
     const guard = window.HandrawArticleGenerationGuard;
     if (!guard) { if (!silent) toast("配图确认模块尚未加载，请刷新页面"); return false; }
-    const effectiveTargets = guard.pendingCards(allCards);
-    if (!effectiveTargets.length) {
+    const pending = guard.pendingCards(allCards);
+    if (!pending.length) {
       if (!silent) toast("所有配图均已完成；需要重新生成时请在对应卡片操作");
       return false;
     }
+    const selection = await window.HandrawArticleWorkbench.selectGeneration(pending);
+    if (!selection.approved) return false;
+    const effectiveTargets = window.HandrawArticleWorkbench.choices(pending, selection.ids);
+    if (!effectiveTargets.length) return false;
     if (effectiveTargets.some((c) => String(c.prompt || "").trim().length > 4000)) {
-      if (!silent) toast("有配图提示词超过 4000 字符，请先精简；没有扣费");
+      if (!silent) toast("本次选中的配图有提示词超过 4000 字符，请先精简；没有扣费");
       return false;
     }
 
@@ -6042,7 +6050,10 @@
       skipped: allCards.length - effectiveTargets.length
     }))) return false;
     if (isStaleScope(runEpoch, runScope) || planNode.data.status === "generating") return false;
-    const batchRun = { id: makeStableRequestId("article_batch"), cancelled: false };
+    const batchRun = { id: makeStableRequestId("article_batch"), cancelled: false,
+      total: effectiveTargets.length, completed: 0, failed: 0, running: 0,
+      parallel: selection.parallel, startedAt: Date.now(), ids: effectiveTargets.map(x=>x.id) };
+    CS.lastArticleBatchSummary = null;
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
     planNode.data.status = "generating";
@@ -6054,15 +6065,31 @@
     let okCount = 0;
     const targetRefId = target.isActiveCanvas ? planNode.id : target.art?.id || planNode.id;
     try {
-      for (const c of effectiveTargets) {
-        if (isStaleScope(runEpoch, runScope)) return false;
-        if (batchRun.cancelled) break;
-        const ok = await generateSinglePlanCard(targetRefId, c.id, {
-          silent: true, skipHistory: true, skipCostConfirmation: true
-        });
-        if (isStaleScope(runEpoch, runScope)) return false;
-        if (ok) okCount += 1;
-      }
+      await window.HandrawArticleWorkbench.runPool(effectiveTargets, selection.parallel,
+        async (c) => {
+          if (isStaleScope(runEpoch, runScope) || batchRun.cancelled) return false;
+          batchRun.running += 1;
+          try {
+            return await generateSinglePlanCard(targetRefId, c.id, {
+              silent: true, skipHistory: true, skipCostConfirmation: true
+            });
+          } finally {
+            batchRun.running = Math.max(0,batchRun.running-1);
+          }
+        },
+        () => batchRun.cancelled || isStaleScope(runEpoch, runScope),
+        (_,ok) => {
+          batchRun.completed += 1;
+          if (ok) okCount += 1;
+          else batchRun.failed += 1;
+          CS.lastArticleBatchSummary = {
+            total: batchRun.total, succeeded: okCount, failed: batchRun.failed,
+            skipped: allCards.length - effectiveTargets.length,
+            finished: batchRun.completed, startedAt: batchRun.startedAt,
+            running: batchRun.running
+          };
+        }
+      );
       if (batchRun.cancelled) {
         if (!silent) toast(`已取消批量生成，${Math.max(0, effectiveTargets.length - okCount)} 个尚未提交项保留未生成状态。`);
         return okCount > 0;
@@ -6071,11 +6098,7 @@
       recordArticlePlanHistory(target.isActiveCanvas ? ctrl : null, planNode);
       commitArticleTargetChanges(target, { bumpTime: true });
       if (!silent) {
-        toast(
-          target.isActiveCanvas
-            ? `🎉 已生成 ${okCount} 张文章配图，并自动连接 ${okCount} 个「图片显示」节点！`
-            : `🎉 已批量生成 ${okCount} 张文章配图！`
-        );
+        toast(`批量完成：成功 ${okCount} 张，失败 ${batchRun.failed} 张，跳过 ${allCards.length-effectiveTargets.length} 张；失败项可以单独重试。`);
       }
       return okCount > 0;
     } finally {
@@ -6086,6 +6109,7 @@
       if (!isStaleScope(runEpoch, runScope)) {
         planNode.data.status = "ready";
         if (ctrl) ctrl.data.status = "done";
+        if (CS.lastArticleBatchSummary) CS.lastArticleBatchSummary.running = 0;
         commitArticleTargetChanges(target, { bumpTime: false });
         renderFullPreviewStage();
         if (target.isActiveCanvas) {
