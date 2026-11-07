@@ -359,10 +359,11 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
     # Both website and Skill histories are private owner-scoped reads.
     rows = conn.execute("""
         SELECT id, created_at, status, 'skill' AS origin, external_run_id, original_request,
-               images_json, visibility FROM skill_generation_runs WHERE user_id=? AND status='success'
+               images_json, visibility, '' AS batch_id, 0 AS batch_index, 1 AS batch_total
+        FROM skill_generation_runs WHERE user_id=? AND status='success'
         UNION ALL
         SELECT id, created_at, status, 'web' AS origin, '' AS external_run_id, prompt,
-               items_json, visibility FROM studio_generations
+               items_json, visibility, batch_id, batch_index, batch_total FROM studio_generations
         WHERE user_id=? AND COALESCE(deleted_at,'')=''
         ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
     """, (uid,uid,limit+1,offset)).fetchall()
@@ -372,9 +373,18 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
             media=json.loads(row["images_json"] or "[]")
         except (ValueError,TypeError):
             media=[]
-        linked = [str(x["work_id"]) for x in conn.execute(
-            "SELECT work_id FROM generation_works WHERE generation_id=?",
-            (row["id"],)).fetchall()] if row["origin"] == "skill" else []
+        batch_id = str(row["batch_id"] or "")
+        if row["origin"] == "web" and batch_id:
+            batch_work = conn.execute(
+                "SELECT id FROM works WHERE generation_batch_key=?",
+                (f"{uid}:{batch_id}",),
+            ).fetchone()
+            linked = [str(batch_work["id"])] if batch_work else []
+        else:
+            linked = [str(x["work_id"]) for x in conn.execute(
+                "SELECT work_id FROM generation_works WHERE generation_id=?",
+                (row["id"],),
+            ).fetchall()]
         published=conn.execute(
             "SELECT work_id FROM skill_history_publications "
             "WHERE user_id=? AND source=? AND history_id=?",
@@ -384,7 +394,43 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
                        "status":row["status"],"visibility":row["visibility"],
                        "workIds": linked, "publishedWorkId": (linked[0] if linked else
                        (published["work_id"] if published else None)),
-                       "createdAt":row["created_at"]})
+                       "createdAt":row["created_at"],
+                       "batchId":batch_id,"batchIndex":int(row["batch_index"] or 0),
+                       "batchTotal":int(row["batch_total"] or 1)})
+    # A Web batch consists of many gateway calls, but one user's history run.
+    grouped: list[dict[str, Any]] = []
+    by_batch: dict[str, dict[str, Any]] = {}
+    for entry in result:
+        bid = entry["batchId"] if entry["originClient"] == "web" else ""
+        if not bid:
+            entry["imageCount"] = len(entry["images"])
+            grouped.append(entry)
+            continue
+        if bid not in by_batch:
+            combined = dict(entry)
+            combined["id"] = bid
+            combined["images"] = []
+            combined["_slots"] = []
+            by_batch[bid] = combined
+            grouped.append(combined)
+        combined = by_batch[bid]
+        combined["_slots"].append((entry["batchIndex"], entry["images"]))
+        if entry["workIds"]:
+            combined["workIds"] = entry["workIds"]
+            combined["publishedWorkId"] = entry["workIds"][0]
+        if entry["status"] == "success":
+            combined["status"] = "success"
+    for combined in by_batch.values():
+        seen = set()
+        for _, images in sorted(combined.pop("_slots"), key=lambda x: x[0]):
+            for image in images:
+                url = image if isinstance(image, str) else str(image.get("imageUrl") or image.get("url") or "")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                combined["images"].append(image)
+        combined["imageCount"] = len(combined["images"])
+    result = grouped
     return {"ok": True,"items":result,"hasMore":len(rows)>limit,
             "nextCursor":str(offset+limit) if len(rows)>limit else None}
 
