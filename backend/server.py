@@ -2694,7 +2694,18 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path.startswith("/avatars/"):
             from .avatar_identity import avatar_file_for_path
             path = avatar_file_for_path(req_path)
-            if path is not None and path.is_file():
+            if path is None:
+                self.send_error(404, "Avatar not found")
+                return
+            if not path.is_file():
+                try:
+                    from .object_storage import ensure_local_copy
+                    ensure_local_copy(req_path, path)
+                except Exception:
+                    logger.exception("Avatar object storage read failed")
+                    self.send_error(503, "Avatar temporarily unavailable")
+                    return
+            if path.is_file():
                 self._send_bytes(path.read_bytes(), "image/webp",
                                  cache="public, max-age=31536000, immutable")
             else:
