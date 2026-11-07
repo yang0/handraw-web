@@ -2383,6 +2383,13 @@
     const workPost = mount.kind === "work" && mount.work && hasModule("HandrawForumWork", "fromTopic")
       ? window.HandrawForumWork.fromTopic(topic, [mount.work], App.resourceMap, unlocked || S.isStaff?.())
       : null;
+    if (workPost) {
+      const owner = mount.work.author || mount.work.author_username || "";
+      workPost.canEditCover = Boolean(
+        App.state?.loggedIn && App.state?.user && owner &&
+        App.state.user.username === owner
+      );
+    }
 
     const cardsToRender = [];
     if (topic.sharedCard && topic.sharedCard.title) {
