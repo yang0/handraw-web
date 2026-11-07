@@ -82,10 +82,8 @@
         ${links.length ? '<div style="display:flex;gap:8px;overflow-x:auto;">' +
           links.map((url) => '<img loading="lazy" alt="生成结果" src="' + escapeHtml(url) +
             '" style="width:80px;height:80px;object-fit:cover;border-radius:8px;" />').join("") + '</div>' : ""}
-        ${run.canPublish ? '<button type="button" class="btn btn-primary btn-sm" style="margin-top:10px;" data-cloud-publish="' +
-           escapeHtml(run.id) + '">选择并发布到作品广场</button>' : ""}
         ${run.publishedWorkId ? '<a class="btn btn-sm" style="margin-top:10px;" href="/?view=work&id=' +
-          encodeURIComponent(run.publishedWorkId) + '">查看已发布作品</a>' : ""}
+          encodeURIComponent(run.publishedWorkId) + '">查看公开作品</a>' : ""}
       </article>`;
     }).join("") : '<p style="color:var(--ink-muted);">暂无云端生成历史。</p>';
     container.querySelector("[data-cloud-more-history]").hidden = !data.historyCursor;
@@ -95,7 +93,7 @@
     const data = state();
     container.innerHTML = `
       <div class="hw-cloud-center" id="hw-private-cloud-center">
-        <p style="color:var(--ink-muted);margin:0 0 18px;">你的私有画风、图型和创作历史可以从 Skill 同步到同一 Handraw 账号；同步不会自动公开发布。</p>
+        <p style="color:var(--ink-muted);margin:0 0 18px;">你的自建画风、图型与个人图库仍属于私有资源；网站成功生成的图片和 Skill 主动上传的作品会直接公开展示。</p>
         <p data-cloud-status role="status" aria-live="polite" style="min-height:1.5em;color:var(--ink-muted);"></p>
         <section>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -132,7 +130,7 @@
         </section>
         <section style="margin-top:24px;">
           <h3>我的生成历史</h3>
-          <p style="color:var(--ink-muted);font-size:13px;">这里只对账号本人显示云端记录。历史不等于公开作品；只有明确发布后才进入作品广场。</p>
+          <p style="color:var(--ink-muted);font-size:13px;">历史详情仅本人查看；网站新成功生成的图片与 Skill 上传的作品会自动进入公开作品列表。旧私有历史不会自动公开。</p>
           <div data-cloud-history></div>
           <button type="button" class="btn btn-sm" data-cloud-more-history hidden>加载更多历史</button>
         </section>
@@ -201,30 +199,6 @@
         const resource = data.resources.find((r) => r.id === edit.dataset.cloudEdit);
         if (resource) editor(resource);
         return;
-      }
-      const publish = event.target.closest("[data-cloud-publish]");
-      if (publish) {
-        const item = data.history.find((r) => r.id === publish.dataset.cloudPublish);
-        if (!item || !item.canPublish || data.isBusy) return;
-        const title = window.prompt("请输入作品标题（将对所有访客公开）", "我的 Handraw 作品");
-        if (title === null || !title.trim()) return;
-        const prompt = window.prompt("请编辑并确认即将公开的提示词。不要包含隐私或商业机密。", item.originalRequest || "");
-        if (prompt === null || !prompt.trim()) return;
-        const images = Array.isArray(item.images) ? item.images : [];
-        const count = Math.min(images.length, 9);
-        if (!count || !window.confirm(
-          "即将公开标题、你确认的提示词和前 " + count + " 张图片。发布后其他用户可查看，确定继续吗？"
-        )) return;
-        run(async () => {
-          const response = await api(
-            "/api/v1/me/generations/" + encodeURIComponent(item.id) + "/publish",
-            { method: "POST", body: { title: title.trim(), prompt, confirmed: true,
-              indices: Array.from({ length: count }, (_, i) => i) } }
-          );
-          item.canPublish = false;
-          item.publishedWorkId = response.workId;
-          renderLists(shell, data);
-        }, "作品发布成功，可在个人主页和作品广场查看。");
       }
     });
     shell.querySelector("[data-cloud-more-resources]").addEventListener("click", () => run(() => loadResources(true)));
