@@ -3091,9 +3091,14 @@ def toggle_user_like(
 
     with db.transaction() as tx:
         if norm_type == "work":
-            w_row = tx.execute("SELECT id, title, author_name, likes, status FROM works WHERE id = ?", (tid,)).fetchone()
+            w_row = tx.execute("SELECT id, title, author_name, author_username, run_id, likes, status FROM works WHERE id = ?", (tid,)).fetchone()
             if not w_row or str(w_row["status"]) != "published":
                 raise ServiceError("作品不存在或已下架", status=404)
+            # Generated works have one canonical social identity. Do not let
+            # creators like their own run via either "generation" or "work".
+            if (w_row["run_id"] and
+                    str(w_row["author_username"]).casefold() == str(user.get("username") or "").casefold()):
+                raise ServiceError("不能为自己的生图历史点赞", status=403, code="self_like_forbidden")
             title_lbl = w_row["title"]
         elif norm_type == "topic":
             t_row = tx.execute("SELECT id, title, author_name, likes FROM forum_topics WHERE id = ?", (tid,)).fetchone()
