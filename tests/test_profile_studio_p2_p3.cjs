@@ -14,19 +14,21 @@ function extractHelper(source, start, end, name) {
   return vm.runInNewContext(source.slice(a, b) + "\n" + name, {});
 }
 
-// Profile: one public card per generated batch; legacy standalone works remain distinct.
+// Profile V3: each logical run has ONE work containing all successful images.
+// A duplicate record for that same work must not render a second card; work IDs
+// are authoritative, so never collapse unrelated works by their batch labels.
 const group = extractHelper(main, "  function groupProfilePublishedWorks(rows) {", "  async function loadProfilePublishedWorks(", "groupProfilePublishedWorks");
 const result = group([
-  { id: "w1", batchId: "gen_1", batchTotal: 3, batchIndex: 2, images: ["/second.png"] },
-  { id: "w0", batchId: "gen_1", batchTotal: 3, batchIndex: 1, images: ["/first.png"] },
-  { id: "w1", batchId: "gen_1", batchTotal: 3, batchIndex: 2, images: ["/second.png"] },
-  { id: "w2", batchId: "work_w2", batchTotal: 1, images: ["/solo.png"] },
+  { id: "w0", batchId: "gen_1", images: ["/first.png", "/second.png", "/third.gif"], coverUrl: "/second.png" },
+  { id: "w0", batchId: "gen_1", images: ["/first.png", "/second.png", "/third.gif"], coverUrl: "/second.png" },
+  { id: "w2", batchId: "work_w2", images: ["/solo.png"] },
 ]);
-assert.equal(result.length, 2, "same batch must show one profile card");
-assert.equal(result[0].cover.id, "w0", "use batchIndex=1 as canonical card target");
-assert.equal(result[0].total, 3, "preserve server's public batch size if only some images are loaded");
-assert.deepEqual(Array.from(result[0].thumbnails), ["/first.png", "/second.png"]);
-assert.equal(result[1].cover.id, "w2", "legacy standalone work must be preserved");
+assert.equal(result.length, 2, "same work must show one profile card");
+assert.equal(result[0].cover.id, "w0", "the canonical work ID drives the profile card");
+assert.equal(result[0].total, 3, "all successful media belongs to one work");
+assert.deepEqual(Array.from(result[0].cover.images), ["/first.png", "/second.png", "/third.gif"]);
+assert.equal(result[0].cover.coverUrl, "/second.png", "author-selected cover is preserved");
+assert.equal(result[1].cover.id, "w2", "standalone work must remain distinct");
 assert.ok(main.includes('data-prof-work="${esc(cover.id)}"'), "click should still use canonical published work ID");
 assert.ok(main.includes('UI.profileWorkRows = [...merged.values()]'), "profile must use authoritative author feed");
 assert.ok(main.includes("profileWorksHasMore"), "pagination must be supported");
