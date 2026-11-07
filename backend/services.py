@@ -6543,24 +6543,12 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) ->
                 (_stable_id("item", canonical_run_id, position),
                  canonical_run_id, position, now_iso, now_iso),
             )
-        related = tx.execute(
-            """
-            SELECT status FROM studio_generations
-            WHERE user_id=? AND
-              (id=? OR (batch_id<>'' AND batch_id=?))
-            """,
-            (uid, gen_id, str(row["batch_id"] or "")),
-        ).fetchall()
-        has_pending = any(x["status"] in ("queued", "running") for x in related)
-        has_success = any(x["status"] == "success" for x in related)
-        if not has_pending:
-            tx.execute(
-                """
-                UPDATE generation_runs SET status=?,updated_at=?
-                WHERE user_id=? AND source='web' AND external_run_id=?
-                """,
-                ("partial" if has_success else "failed", now_iso, uid, logical_key),
-            )
+        # V3: use ONE slot-driven state machine for success, failure and
+        # cancellation. Gateway execution rows are billing facts, not another
+        # authoritative logical-run state.
+        if exists:
+            from .generation_v3 import refresh_run_status
+            refresh_run_status(tx, canonical_run_id)
 
 
 def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_urls: list[str] | None = None) -> None:
