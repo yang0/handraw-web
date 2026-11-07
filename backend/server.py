@@ -2732,7 +2732,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 if prefix == "/images/" and rel.lower().startswith("custom/") and not include_private_benchmark_assets():
                     self.send_error(404, "Media not found")
                     return
-                if True:
+                if root_dir.exists() or prefix in ("/generated/", "/uploads/"):
                     # Authorize before any object-storage read-through; S3 keys
                     # are never accessible merely because a URL was guessed.
                     target = (root_dir / rel).resolve()
