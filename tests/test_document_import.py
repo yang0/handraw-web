@@ -204,6 +204,13 @@ class DocumentImportWorkflowTests(unittest.TestCase):
         self.db.close()
         self.temp_dir.cleanup()
 
+    def _run_due_media_gc(self):
+        """Execute queued cleanup instead of assuming SQL commits unlink files."""
+        from backend.media_gc import drain_media_gc
+        with self.db.transaction() as tx:
+            tx.execute("UPDATE media_gc_jobs SET next_attempt_at=0, claim_until=0")
+        return drain_media_gc(self.db, limit=30)
+
     def test_fidelity_verification(self):
         # Verbatim case
         orig = "# 标题\n\n正文 100% 测试，包含数字 42 与公式 2 × 2 = 4。\n\n![](upload:1)"
@@ -401,6 +408,8 @@ class DocumentImportWorkflowTests(unittest.TestCase):
 
         cleaned = cleanup_unreferenced_import_media(self.db, max_age_hours=1)
         self.assertEqual(cleaned, 1)
+        self.assertTrue(dummy_file.exists(), "GC is deliberately deferred")
+        self.assertEqual(self._run_due_media_gc()["deleted"], 1)
         self.assertFalse(dummy_file.exists())
 
     def test_q3_task_timeout_watchdog_and_worker_discard(self):
@@ -425,11 +434,11 @@ class DocumentImportWorkflowTests(unittest.TestCase):
         self.assertEqual(row["error"], "处理超时")
 
         # 2. Worker attempting to complete a timed-out job cannot overwrite 'failed'
-        uploads_dir = Path(self.temp_dir.name) / f"uploads_{uuid.uuid4().hex}"
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-        img_file = uploads_dir / "discarded.png"
-        img_file.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        # The file must be in the configured private-media namespace, so the
+        # GC cannot be tricked into unlinking arbitrary paths outside uploads.
         img_url = f"/uploads/{uuid.uuid4().hex}_discarded.png"
+        img_file = self.uploads_dir / img_url.removeprefix("/uploads/")
+        img_file.write_bytes(b"\x89PNG\r\n\x1a\nfake")
         with self.db.transaction() as tx:
             tx.execute(
                 """
@@ -448,6 +457,8 @@ class DocumentImportWorkflowTests(unittest.TestCase):
 
         from backend.document_importer import _cleanup_job_media
         _cleanup_job_media(self.db, self.user["id"], [img_url])
+        self.assertTrue(img_file.exists(), "Cleanup queues a GC job")
+        self.assertEqual(self._run_due_media_gc()["deleted"], 1)
         self.assertFalse(img_file.exists())
         with self.db.transaction() as tx:
             saved_row = tx.execute("SELECT 1 FROM user_uploads WHERE id = 'UPL-discarded'").fetchone()
@@ -578,6 +589,8 @@ class DocumentImportWorkflowTests(unittest.TestCase):
 
         cleaned = cleanup_unreferenced_import_media(self.db, max_age_hours=24)
         self.assertEqual(cleaned, 1)
+        self.assertTrue(f_old_unref.exists())
+        self.assertEqual(self._run_due_media_gc()["deleted"], 1)
         self.assertFalse(f_old_unref.exists())
         self.assertTrue(f_new_unref.exists())
         self.assertTrue(f_old_ref.exists())
