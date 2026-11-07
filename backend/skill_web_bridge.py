@@ -34,7 +34,13 @@ def _uuid(value: Any) -> str:
 
 
 def _user(handler: Any) -> dict[str, Any]:
-    return handler._current_user(required=True)
+    user = handler._current_user(required=True)
+    if user.get("_auth_kind") == "token":
+        from .user_library import check_token_rate_limit
+        token_key = str(user.get("_token_id") or user.get("id"))
+        if not check_token_rate_limit(token_key):
+            raise ServiceError("客户端请求过于频繁", status=429, code="rate_limited")
+    return user
 
 
 def _one(qs: dict[str, list[str]], key: str, default: str = "") -> str:
@@ -190,7 +196,7 @@ def _history_payload(body: dict[str, Any]) -> tuple[str, str, list[dict[str, Any
         if not raw or len(raw) > 15 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != item["sha256"].lower():
             raise ServiceError("图片大小或 SHA256 不匹配", status=400, code="image_checksum_mismatch")
         data.append({"sha256": item["sha256"].lower(), "dataUrl": image_str,
-                     "name": str(item.get("name") or "")[:100]})
+                     "name": str(item.get("name") or "")[:100], "bytes": len(raw)})
     request_id = str(body.get("requestId") or "")
     if not re.fullmatch(r"skill-history-[a-f0-9-]{36}", request_id):
         raise ServiceError("请求幂等标识无效", status=400, code="invalid_request_id")
@@ -213,6 +219,16 @@ def import_history(db: Any, user: dict[str, Any], body: dict[str, Any], image_st
         old = db.get_conn().execute(
             "SELECT * FROM skill_generation_runs WHERE user_id=? AND (external_run_id=? OR request_id=?)",
             (uid, rid, body["requestId"])).fetchone()
+        if not old or old["status"] != "success":
+            completed = json.loads(old["images_json"] or "[]") if old else []
+            used_bytes = db.get_conn().execute(
+                "SELECT COALESCE(SUM(bytes),0) FROM user_uploads "
+                "WHERE user_id=? AND cat='skill_history'", (uid,)
+            ).fetchone()[0]
+            remaining_bytes = sum(item["bytes"] for item in images[len(completed):])
+            if int(used_bytes or 0) + remaining_bytes > 1024 * 1024 * 1024:
+                raise ServiceError("个人生图云历史空间已达到 1 GiB 上限",status=413,
+                                   code="skill_history_storage_quota_exceeded")
         if old:
             if old["external_run_id"] != rid or old["request_hash"] != fingerprint:
                 raise ServiceError("重复请求内容不一致", status=409, code="idempotency_conflict")
