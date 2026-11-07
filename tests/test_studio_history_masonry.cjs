@@ -85,4 +85,20 @@ assert.match(stage.innerHTML, /生图历史 · 9 张/, "Total count must be unch
 assert.ok(styles.includes("max-width: 1140px"), "Toolbar must be contained");
 assert.ok(styles.includes(".ic-hist-masonry-grid") && styles.includes("column-count: 3"));
 assert.ok(styles.includes("column-count: 2") && styles.includes("column-count: 1"));
-console.log("Studio history: 9-image category totals, cover recognition, masonry and batch reveal passed");
+// Workflow library: one shared top-level nav, no duplicate canvas/workflow bars.
+assert.ok(studio.includes('id="studio-mode-workflows"'), "Workflow shortcut should be beside generation history");
+assert.ok(studio.includes('id="studio-mode-history"'));
+assert.ok(!studio.includes('id="tb-open-wflib"'), "Remove workflow button from canvas tab bar");
+assert.ok(studio.includes('DOM.workbenchBar.style.display = CS.stageView === "canvas" ? "" : "none"'),
+  "Hide canvas tabs on standalone workflow library");
+const workflowStart = studio.indexOf("  function renderWorkflowsStage() {");
+const workflowEnd = studio.indexOf("  /*", workflowStart + 20);
+const workflow = studio.slice(workflowStart, workflowEnd > workflowStart ? workflowEnd : undefined);
+for (const id of ['id="wf-search-inp"', 'id="wf-import-file-inp"', 'id="wf-saved-list-box"']) {
+  assert.ok(workflow.includes(id), "Workflow page is missing " + id);
+}
+for (const id of ['id="wf-back-canvas"', 'id="wf-restore-presets"', 'id="wf-empty-go-canvas"']) {
+  assert.ok(!workflow.includes(id), "Redundant workflow control still exists: " + id);
+}
+assert.ok(workflow.includes('class="ic-wf-minimal-tools"'));
+console.log("Studio history and workflows: 9-image categories, masonry, navigation and minimal workflow library passed");
