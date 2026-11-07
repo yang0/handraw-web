@@ -422,7 +422,9 @@ def _work_id(value: str) -> str:
 
 def social_like(db: Any, user: dict[str, Any], work_id: str, body: dict[str,Any]) -> dict[str,Any]:
     from .services import toggle_user_like
-    return toggle_user_like(db,user,"work",_work_id(work_id),"set" if body.get("liked") is True else "unset")
+    if type(body.get("liked")) is not bool:
+        raise ServiceError("liked 必须明确是 true 或 false", status=400, code="invalid_like_action")
+    return toggle_user_like(db,user,"work",_work_id(work_id),"set" if body["liked"] else "unset")
 
 
 def social_comment(db: Any, user: dict[str, Any], work_id: str, body: dict[str, Any]) -> dict[str,Any]:
