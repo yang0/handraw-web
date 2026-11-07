@@ -130,7 +130,11 @@
         authorUsername: author,
         imgIndex: 0,
         totalImages: imgs.length,
-        imageUrl: imgs.includes(w.coverUrl) ? w.coverUrl : imgs[0],
+        // Serve GIF covers as a single still WebP frame in the masonry feed.
+        // The work detail keeps the original animated GIF URL intact.
+        imageUrl: ((cover) => /\\.gif(?:$|\\?)/i.test(cover)
+          ? cover + (cover.includes("?") ? "&" : "?") + "w=480"
+          : cover)(imgs.includes(w.coverUrl) ? w.coverUrl : imgs[0]),
         aspectRatio: parseAspectRatio(w, 0),
         work: w,
         batchId: w.batchId,
