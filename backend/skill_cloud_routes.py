@@ -384,16 +384,23 @@ def list_generations(db: Any, user: dict, qs: dict) -> dict:
     cursor = _query(qs, "cursor", "")
     uid = int(user["id"])
     conn = db.get_conn()
+    cursor_time, sep, cursor_id = cursor.partition("::")
+    if cursor and (not sep or not cursor_time or not WORK_RE.fullmatch(cursor_id)
+                   or len(cursor_time) > 48 or any(c not in "0123456789-:TZ+." for c in cursor_time)):
+        raise ServiceError("历史分页游标无效", status=400, code="invalid_cursor")
+    predicate = " AND (created_at<? OR (created_at=? AND id<?))" if cursor else ""
+    params = ((uid, cursor_time, cursor_time, cursor_id,
+               uid, cursor_time, cursor_time, cursor_id, limit + 1)
+              if cursor else (uid, uid, limit + 1))
     rows = conn.execute(
-        """SELECT 'skill' AS origin, id, created_at FROM skill_generation_runs WHERE user_id=?
-           UNION ALL
-           SELECT 'web' AS origin, id, created_at FROM studio_generations
-           WHERE user_id=? AND COALESCE(deleted_at,'')=''
-           ORDER BY created_at DESC,id DESC""",
-        (uid, uid),
+        """SELECT 'skill' AS origin, id, created_at FROM skill_generation_runs WHERE user_id=?"""
+        + predicate
+        + """ UNION ALL SELECT 'web' AS origin, id, created_at FROM studio_generations
+              WHERE user_id=? AND COALESCE(deleted_at,'')=''"""
+        + predicate
+        + " ORDER BY created_at DESC,id DESC LIMIT ?",
+        params,
     ).fetchall()
-    if cursor:
-        rows = [r for r in rows if (r["created_at"] + "::" + r["id"]) < cursor]
     page = rows[:limit]
     result = []
     for row in page:
