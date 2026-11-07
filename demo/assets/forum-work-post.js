@@ -220,7 +220,8 @@
       forkUrl,
       canFork,
       unavailableText,
-      batchWorks: (work && work.batchWorks) || null
+      batchWorks: (work && work.batchWorks) || null,
+      coverUrl: work && safeImageUrl(work.coverUrl || "") || ""
     };
   }
 
@@ -231,7 +232,8 @@
 
   function renderGallery(images, model) {
     const batchWorks = model && Array.isArray(model.batchWorks) && model.batchWorks.length > 1 ? model.batchWorks : null;
-    const currentImg = (images && images[0]) || (batchWorks && (batchWorks.find((b) => b.isCurrent) || batchWorks[0]).imageUrl) || "";
+    const currentImg = (model && model.coverUrl && (images || []).some(img => (typeof img === "string" ? img : img && img.url) === model.coverUrl) && model.coverUrl)
+      || (images && images[0]) || (batchWorks && (batchWorks.find((b) => b.isCurrent) || batchWorks[0]).imageUrl) || "";
     const mainUrl = typeof currentImg === "string" ? currentImg : (currentImg && currentImg.url);
     const main = safeImageUrl(mainUrl);
     if (!main) return "";
@@ -247,7 +249,7 @@
       thumbs = `<div class="fwp-thumbs" role="tablist">${images.map((img, i) => {
         const u = typeof img === "string" ? img : img.url;
         const t = typeof img === "object" ? img.tag : "";
-        return `<button type="button" class="fwp-thumb${i === 0 ? " is-active" : ""}" data-fwp-src="${esc(safeImageUrl(u))}" role="tab" aria-selected="${i===0}" aria-label="查看第${i + 1}张图"${t ? ` data-fwp-tag="${esc(String(t))}"` : ""}><img data-hw-src="${esc(safeImageUrl(u))}" alt="" loading="lazy"></button>`;
+        return `<button type="button" class="fwp-thumb${safeImageUrl(u) === main ? " is-active" : ""}" data-fwp-src="${esc(safeImageUrl(u))}" role="tab" aria-selected="${safeImageUrl(u) === main}" aria-label="查看第${i + 1}张图"${t ? ` data-fwp-tag="${esc(String(t))}"` : ""}><img data-hw-src="${esc(safeImageUrl(u))}" alt="" loading="lazy"></button>`;
       }).join("")}</div>`;
     }
 
@@ -255,6 +257,9 @@
   <div class="fwp-gallery-stage" data-fwp-stage style="position:relative;">
     <img class="fwp-main" data-fwp-main data-hw-src="${esc(main)}" alt="${esc(model?.title || "作品图片")}" loading="lazy" style="cursor:zoom-in;">
     <div class="fwp-gallery-overlay-bar" style="position:absolute;bottom:10px;right:10px;display:flex;gap:8px;z-index:2;">
+      ${model && model.canEditCover && model.source === "work" && (model.images || []).length > 1
+        ? `<button type="button" class="btn btn-sm fwp-set-cover-btn" data-fwp-set-cover title="将正在查看的图片设为作品封面">设为封面</button>`
+        : ""}
       <a class="btn btn-sm btn-primary fwp-download-btn" href="${esc(main)}" download="handraw-work.webp" target="_blank" rel="noopener noreferrer" style="font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,0.25);">⬇️ 下载原图</a>
     </div>
   </div>
@@ -345,6 +350,35 @@
     const stage = scope.querySelector("[data-fwp-stage]");
     const main = scope.querySelector("[data-fwp-main]");
     const thumbs = scope.querySelectorAll(".fwp-thumb");
+    const coverButton = scope.querySelector("[data-fwp-set-cover]");
+    const refreshCoverButton = () => {
+      if (!coverButton || !main) return;
+      const current = main.getAttribute("data-hw-src") || main.getAttribute("src") || "";
+      const selected = current === model.coverUrl;
+      coverButton.disabled = selected;
+      coverButton.textContent = selected ? "当前封面" : "设为封面";
+      coverButton.setAttribute("aria-label", selected ? "当前图片已是封面" : "将当前图片设为封面");
+    };
+    if (coverButton && model.canEditCover && model.source === "work") {
+      refreshCoverButton();
+      coverButton.addEventListener("click", async () => {
+        const url = main && (main.getAttribute("data-hw-src") || main.getAttribute("src"));
+        if (!url || !safeImageUrl(url) || coverButton.disabled) return;
+        coverButton.disabled = true;
+        try {
+          const response = await S.apiJson(`/api/works/${encodeURIComponent(model.sourceId)}/cover`, {
+            method: "POST", body: { imageUrl: url }
+          });
+          if (!response || response.ok === false) throw new Error(response && response.error || "更新失败");
+          model.coverUrl = response.coverUrl || url;
+          toast("已更新封面，广场及个人主页会显示这张图片");
+          refreshCoverButton();
+        } catch (error) {
+          coverButton.disabled = false;
+          toast("设置封面失败：" + (error.message || error));
+        }
+      });
+    }
 
     if (stage && main) {
       main.addEventListener("click", () => {
@@ -390,6 +424,7 @@
             if (tag) main.setAttribute("alt", tag);
             const dlBtn = stage.querySelector(".fwp-download-btn");
             if (dlBtn) dlBtn.setAttribute("href", src);
+            refreshCoverButton();
             if (window.HandrawImageLoader && window.HandrawImageLoader.scan) {
               window.HandrawImageLoader.scan(stage);
             }
