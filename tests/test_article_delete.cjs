@@ -67,16 +67,22 @@ test("Issue #62: Article Deletion in Editor, Profile, and History Pagination", a
     );
   });
 
-  await t.test("3. Studio app: Editor delete button & wiring", () => {
-    assert.ok(
-      studioAppSource.includes('id="editor-btn-delete-article"'),
-      "studio-app.js must render #editor-btn-delete-article in editor header"
-    );
-    assert.match(
-      studioAppSource,
-      /querySelector\(\s*["']#editor-btn-delete-article["']\s*\)[\s\S]*?deleteArticle/,
-      "studio-app.js must wire #editor-btn-delete-article to deleteArticle"
-    );
+  await t.test("3. Studio app: Sidebar hover deletion and right-aligned editor switch", () => {
+    assert.ok(studioAppSource.includes("data-sidebar-del-art-id"),
+      "sidebar history rows must render an individual delete action");
+    assert.match(studioAppSource,
+      /querySelectorAll\(\s*["']\[data-sidebar-del-art-id\]["']\s*\)[\s\S]*?stopPropagation\(\)[\s\S]*?deleteArticle\(aid\)/,
+      "sidebar deletion must not open the article and must call deleteArticle");
+    assert.ok(!studioAppSource.includes('id="editor-btn-delete-article"'),
+      "delete must no longer occupy the editor toolbar");
+    assert.ok(studioAppSource.includes('id="editor-switch-preview"'),
+      "editor preview toggle must remain available");
+    assert.ok(!studioAppSource.includes("微信公众号排版</span>"),
+      "remove the unnecessary WeChat formatting label");
+    assert.ok(!studioAppSource.includes('id="pv-all-back-canvas"'),
+      "history pagination must not offer a back-to-canvas action");
+    assert.ok(studioAppSource.includes("← 返回编辑模式"),
+      "history pagination back button must use the new label");
   });
 
   await t.test("4. Studio app: History pagination delete button calls unified deleteArticle", () => {
