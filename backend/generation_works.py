@@ -184,6 +184,32 @@ def project_generation_to_works(
     *,
     force_visibility: str | None = None,
 ) -> list[str]:
+    """Atomically project one logical run regardless of the caller's context.
+
+    A SAVEPOINT works both inside a surrounding DB.transaction() and when a
+    maintenance/test caller invokes the projector directly on an autocommit
+    connection. Partial published works/media/grants cannot escape on failure.
+    """
+    sp = f"v3_project_{uuid.uuid4().hex[:12]}"
+    conn.execute(f"SAVEPOINT {sp}")
+    try:
+        result = _project_generation_impl(
+            conn, generation_id_or_row, force_visibility=force_visibility,
+        )
+        conn.execute(f"RELEASE SAVEPOINT {sp}")
+        return result
+    except BaseException:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+        conn.execute(f"RELEASE SAVEPOINT {sp}")
+        raise
+
+
+def _project_generation_impl(
+    conn: sqlite3.Connection,
+    generation_id_or_row: str | sqlite3.Row | dict[str, Any],
+    *,
+    force_visibility: str | None = None,
+) -> list[str]:
     """Persist one public work per logical generation batch, with all its images.
 
     A generation is the work's identity, not an individual image. One mapping
