@@ -3923,8 +3923,9 @@ body.ic-studio-body .hw-topbar {
 /* Shared visual alignment for history and workflow library views. */
 .ic-history-stage,
 .ic-workflows-stage {
-  --ic-library-max-width: 1140px;
-  --ic-library-side-gap: 20px;
+  /* Match the edge-to-edge creation navigation rather than the old 1140px workspace. */
+  --ic-library-max-width: none;
+  --ic-library-side-gap: 6px;
 }
 .ic-history-stage .ic-history-topbar,
 .ic-workflows-stage .ic-wf-minimal-tools {
