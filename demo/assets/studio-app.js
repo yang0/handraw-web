@@ -4286,6 +4286,14 @@
   function persistMyArticles() {
     ensureMyArticlesInitialized();
     writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
+    if (_articlesCloudConflict) {
+      // Changes made after detecting a conflict must also survive a reload.
+      writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
+        createdAt: Date.now(),
+        articles: JSON.parse(JSON.stringify(CS.myArticles || [])),
+        activeId: CS.activeArticleId || ""
+      });
+    }
     scheduleCloudArticlesSync();
   }
 
