@@ -4523,6 +4523,51 @@ def get_public_generation_history(
     return items
 
 
+def _merge_public_generation_batch_images(
+    conn: sqlite3.Connection, row: sqlite3.Row | dict[str, Any], item: dict[str, Any],
+) -> None:
+    """Attach all successful public image slots to one creator-history entry."""
+    keys = row.keys() if hasattr(row, "keys") else row
+    batch_id = str(row["batch_id"] or "") if "batch_id" in keys else ""
+    if not batch_id:
+        return
+    rows = conn.execute(
+        """
+        SELECT items_json FROM studio_generations
+        WHERE user_id=? AND batch_id=? AND status='success'
+          AND visibility='public' AND COALESCE(deleted_at,'')=''
+          AND engine!='demo'
+        ORDER BY batch_index ASC, created_at ASC, id ASC
+        """,
+        (int(row["user_id"]), batch_id),
+    ).fetchall()
+    urls: list[str] = []
+    seen: set[str] = set()
+    for source in rows:
+        try:
+            images = json.loads(source["items_json"] or "[]")
+        except (ValueError, TypeError):
+            images = []
+        if not isinstance(images, list):
+            continue
+        for media in images:
+            if isinstance(media, dict) and str(media.get("status") or "").lower() in (
+                "failed", "error", "refunded", "cancelled",
+            ):
+                continue
+            url = (
+                media.strip() if isinstance(media, str)
+                else str(media.get("imageUrl") or media.get("url") or "").strip()
+                if isinstance(media, dict) else ""
+            )
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+    item["images"] = urls
+    item["imageCount"] = len(urls)
+    item["batchId"] = batch_id
+
+
 def get_user_public_generations(
     db: Database,
     username: str,
@@ -4568,15 +4613,23 @@ def get_user_public_generations(
 
     params.append(safe_limit + 1)
 
+    # Choose one real generation row per logical batch BEFORE pagination and
+    # COUNT. Otherwise a single 5-image run appears as five history cards.
     sql = f"""
-        SELECT * FROM studio_generations
-        WHERE user_id = ?
-          AND status = 'success'
-          AND COALESCE(deleted_at, '') = ''
-          AND engine != 'demo'
-          AND visibility = 'public'
-          AND (items_json IS NOT NULL AND items_json != '' AND items_json != '[]')
-          {cursor_clause}
+        WITH eligible AS (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY CASE WHEN batch_id<>'' THEN batch_id ELSE id END
+                ORDER BY batch_index ASC, created_at ASC, id ASC
+            ) AS task_rank
+            FROM studio_generations
+            WHERE user_id = ?
+              AND status = 'success'
+              AND COALESCE(deleted_at, '') = ''
+              AND engine != 'demo'
+              AND visibility = 'public'
+              AND (items_json IS NOT NULL AND items_json != '' AND items_json != '[]')
+        )
+        SELECT * FROM eligible WHERE task_rank = 1 {cursor_clause}
         ORDER BY created_at DESC, id DESC
         LIMIT ?
     """
@@ -4588,6 +4641,7 @@ def get_user_public_generations(
     items: list[dict[str, Any]] = []
     for r in result_rows:
         serialized = serialize_public_generation_history(r, conn)
+        _merge_public_generation_batch_images(conn, r, serialized)
         if serialized.get("images"):
             items.append(serialized)
 
@@ -4601,7 +4655,8 @@ def get_user_public_generations(
 
     total_row = conn.execute(
         """
-        SELECT COUNT(1) FROM studio_generations
+        SELECT COUNT(DISTINCT CASE WHEN batch_id<>'' THEN batch_id ELSE id END)
+        FROM studio_generations
         WHERE user_id = ?
           AND status = 'success'
           AND COALESCE(deleted_at, '') = ''
@@ -4656,6 +4711,7 @@ def get_user_public_generation_by_id(
         raise ServiceError("生图记录不存在或不可见", status=404, code="not_found")
 
     serialized = serialize_public_generation_history(row, conn)
+    _merge_public_generation_batch_images(conn, row, serialized)
     if not serialized.get("images"):
         raise ServiceError("生图记录不存在或无结果图片", status=404, code="not_found")
 
