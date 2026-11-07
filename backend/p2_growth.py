@@ -87,39 +87,81 @@ def growth_report(db: Any, actor: dict, days: int = 30) -> dict:
         raise ServiceError("无权查看增长指标", status=403, code="forbidden")
     days = max(7, min(90, int(days)))
     conn = db.get_conn()
-    # Report request-level landing / submit counts separately from registered-user cohorts.
-    funnel = [dict(x) for x in conn.execute(
-        """SELECT date(created_at,'unixepoch') AS day,event_name,COUNT(*) AS total
-           FROM auth_funnel_events
-           WHERE created_at >= strftime('%s','now',? || ' days')
-           GROUP BY day,event_name ORDER BY day""", (str(-days),)
-    ).fetchall()]
-    cohorts = [dict(x) for x in conn.execute(
-        """SELECT date(u.created_at) AS day,
-                  COUNT(*) AS registered,
-                  COUNT(DISTINCT CASE WHEN v.user_id IS NOT NULL THEN u.id END) AS verified,
-                  COUNT(DISTINCT CASE WHEN a.user_id IS NOT NULL THEN u.id END) AS activated_7d,
-                  COUNT(DISTINCT CASE WHEN date(u.created_at) <= date('now','-8 days')
-                      THEN u.id END) AS eligible_d7,
-                  COUNT(DISTINCT CASE WHEN r.user_id IS NOT NULL
-                      AND date(u.created_at) <= date('now','-8 days') THEN u.id END) AS retained_d7
-           FROM users u
-           LEFT JOIN verified_emails v ON v.user_id=u.id
-           LEFT JOIN (
-               SELECT g.user_id,MIN(g.happened_at) AS first_at
-               FROM growth_events g
-               WHERE g.event_name IN ('first_collection','first_work','first_topic','first_generation')
-               GROUP BY g.user_id
-           ) a ON a.user_id=u.id
-                AND julianday(a.first_at)-julianday(u.created_at) BETWEEN 0 AND 7
-           LEFT JOIN growth_events r ON r.user_id=u.id AND r.event_name='site_visit'
-                AND julianday(r.event_day)-julianday(date(u.created_at)) = 7
-           WHERE date(u.created_at)>=date('now',? || ' days')
-             AND u.role='user'
-             AND u.discourse_user_id IS NULL
-           GROUP BY date(u.created_at) ORDER BY day""",
-        (str(-days),)
-    ).fetchall()]
+    # PostgreSQL is the authoritative production DB. Keep the date math
+    # portable instead of sending SQLite julianday/strftime to its adapter.
+    if getattr(conn, "dialect", "") == "postgresql":
+        funnel = [dict(x) for x in conn.execute(
+            """
+            SELECT (to_timestamp(created_at) AT TIME ZONE 'UTC')::date::text AS day,
+                   event_name, COUNT(*) AS total
+            FROM auth_funnel_events
+            WHERE created_at >= floor(extract(epoch FROM now())) - ? * 86400
+            GROUP BY day,event_name ORDER BY day
+            """, (days,),
+        ).fetchall()]
+        cohorts = [dict(x) for x in conn.execute(
+            """
+            WITH activation AS (
+                SELECT user_id, MIN(happened_at) AS first_at
+                FROM growth_events
+                WHERE event_name IN
+                    ('first_collection','first_work','first_topic','first_generation')
+                GROUP BY user_id
+            )
+            SELECT LEFT(u.created_at,10) AS day,
+                   COUNT(*) AS registered,
+                   COUNT(DISTINCT CASE WHEN v.user_id IS NOT NULL THEN u.id END) AS verified,
+                   COUNT(DISTINCT CASE WHEN a.user_id IS NOT NULL THEN u.id END) AS activated_7d,
+                   COUNT(DISTINCT CASE WHEN LEFT(u.created_at,10)::date
+                       <= CURRENT_DATE - 8 THEN u.id END) AS eligible_d7,
+                   COUNT(DISTINCT CASE WHEN r.user_id IS NOT NULL
+                       AND LEFT(u.created_at,10)::date <= CURRENT_DATE - 8
+                       THEN u.id END) AS retained_d7
+            FROM users u
+            LEFT JOIN verified_emails v ON v.user_id=u.id
+            LEFT JOIN activation a ON a.user_id=u.id
+               AND (a.first_at::timestamptz-u.created_at::timestamptz)
+                   BETWEEN interval '0 seconds' AND interval '7 days'
+            LEFT JOIN growth_events r ON r.user_id=u.id AND r.event_name='site_visit'
+               AND r.event_day::date=LEFT(u.created_at,10)::date+7
+            WHERE LEFT(u.created_at,10)::date >= CURRENT_DATE - ? AND u.role='user'
+              AND u.discourse_user_id IS NULL
+            GROUP BY LEFT(u.created_at,10) ORDER BY day
+            """, (days,),
+        ).fetchall()]
+    else:
+        funnel = [dict(x) for x in conn.execute(
+            """SELECT date(created_at,'unixepoch') AS day,event_name,COUNT(*) AS total
+               FROM auth_funnel_events
+               WHERE created_at >= strftime('%s','now',? || ' days')
+               GROUP BY day,event_name ORDER BY day""", (str(-days),)
+        ).fetchall()]
+        cohorts = [dict(x) for x in conn.execute(
+            """SELECT date(u.created_at) AS day,
+                      COUNT(*) AS registered,
+                      COUNT(DISTINCT CASE WHEN v.user_id IS NOT NULL THEN u.id END) AS verified,
+                      COUNT(DISTINCT CASE WHEN a.user_id IS NOT NULL THEN u.id END) AS activated_7d,
+                      COUNT(DISTINCT CASE WHEN date(u.created_at) <= date('now','-8 days')
+                          THEN u.id END) AS eligible_d7,
+                      COUNT(DISTINCT CASE WHEN r.user_id IS NOT NULL
+                          AND date(u.created_at) <= date('now','-8 days') THEN u.id END) AS retained_d7
+               FROM users u
+               LEFT JOIN verified_emails v ON v.user_id=u.id
+               LEFT JOIN (
+                   SELECT g.user_id,MIN(g.happened_at) AS first_at
+                   FROM growth_events g
+                   WHERE g.event_name IN ('first_collection','first_work','first_topic','first_generation')
+                   GROUP BY g.user_id
+               ) a ON a.user_id=u.id
+                    AND julianday(a.first_at)-julianday(u.created_at) BETWEEN 0 AND 7
+               LEFT JOIN growth_events r ON r.user_id=u.id AND r.event_name='site_visit'
+                    AND julianday(r.event_day)-julianday(date(u.created_at)) = 7
+               WHERE date(u.created_at)>=date('now',? || ' days')
+                 AND u.role='user'
+                 AND u.discourse_user_id IS NULL
+               GROUP BY date(u.created_at) ORDER BY day""",
+            (str(-days),)
+        ).fetchall()]
     total = lambda key: sum(int(d.get(key) or 0) for d in cohorts)
     registered = total("registered")
     d7_eligible = total("eligible_d7")
