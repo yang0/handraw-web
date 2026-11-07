@@ -272,7 +272,8 @@ class PostgresDatabase:
                           to_regclass('public.generation_runs'),
                           to_regclass('public.generation_items'),
                           to_regclass('public.media_assets'),
-                          to_regclass('public.work_media')"""
+                          to_regclass('public.work_media'),
+                          to_regclass('public.media_gc_jobs')"""
             )
             required_tables = cursor.fetchone()
             if not all(required_tables):
@@ -280,9 +281,9 @@ class PostgresDatabase:
                     "PostgreSQL V3 schema is missing. Initialize an EMPTY "
                     "database with python -m ops.bootstrap_postgres_v3 --apply"
                 )
-            cursor.execute("SELECT 1 FROM schema_migrations WHERE version=99 LIMIT 1")
+            cursor.execute("SELECT 1 FROM schema_migrations WHERE version=100 LIMIT 1")
             if not cursor.fetchone():
-                raise RuntimeError("Missing native V3 schema baseline (migration 099)")
+                raise RuntimeError("Missing native V3 schema baseline and media GC (migration 100)")
             cursor.execute(
                 """SELECT COUNT(*) FROM pg_trigger
                    WHERE tgname IN ('v3_run_immutable','v3_media_immutable',
