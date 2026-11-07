@@ -173,11 +173,11 @@ def delete_resource(db: Any, user: dict[str, Any], rid: str, body_revision: str)
 
 def _history_payload(body: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]], str]:
     rid = _uuid(body.get("externalRunId"))
-    if body.get("originClient") != "skill" or body.get("visibility") != "private" or body.get("status") != "success":
-        raise ServiceError("仅允许导入明确私有的 Skill 成功生成历史", status=400, code="private_history_only")
+    if body.get("originClient") != "skill" or body.get("visibility") != "public" or body.get("status") != "success":
+        raise ServiceError("上传 Skill 作品必须明确声明 public，历史私有记录不自动公开", status=400, code="public_submission_required")
     original = body.get("originalRequest")
     images = body.get("images")
-    if not isinstance(original, str) or not original.strip() or len(original) > 50000:
+    if not isinstance(original, str) or not original.strip() or len(original) > 20000:
         raise ServiceError("原始创作指令无效", status=400, code="invalid_prompt")
     if not isinstance(images, list) or not (1 <= len(images) <= 12):
         raise ServiceError("图片数量需为 1–12", status=400, code="invalid_images")
@@ -206,60 +206,120 @@ def _history_payload(body: dict[str, Any]) -> tuple[str, str, list[dict[str, Any
     return rid, original, data, fingerprint
 
 
-def import_history(db: Any, user: dict[str, Any], body: dict[str, Any], image_store: Any) -> dict[str, Any]:
-    """Store private media incrementally and resume interrupted uploads by run ID.
+def _publish_skill_run_images(db: Any, user: dict[str, Any], run_id: str,
+                              original: str, saved: list[dict[str, Any]],
+                              external_id: str) -> list[str]:
+    """Ensure exactly one published work per Skill image, with durable media grants.
 
-    A partially uploaded run is not visible in history and is never promoted to
-    a public work. Retrying the same request reuses committed image references.
+    Retried partial uploads and publication errors are idempotent; pre-existing
+    private records are deliberately excluded from this path.
+    """
+    from .services import publish_user_work
+    from .server import validate_publish_media, _grant_published_media
+    uid = int(user["id"])
+    ids: list[str] = []
+    for index, item in enumerate(saved):
+        url = str(item["url"])
+        mapping = db.get_conn().execute(
+            "SELECT work_id FROM skill_generation_work_items "
+            "WHERE run_id=? AND image_index=? AND user_id=?",
+            (run_id, index, uid)).fetchone()
+        if mapping:
+            ids.append(str(mapping["work_id"]))
+            continue
+        payload = validate_publish_media(db, user, {
+            "title": f"Skill 手绘创作 {index + 1}",
+            "prompt": original, "images": [url], "styles": [], "layout": "",
+            "price": 0, "requestId": f"skill-gen-{external_id}-{index}",
+        })
+        if payload.get("images") != [url]:
+            raise ServiceError("作品媒体验证失败", status=403, code="invalid_public_media")
+        receipt = publish_user_work(db, user, payload)
+        wid = str(receipt["workId"])
+        _grant_published_media(db, user, payload, target_type="work", target_id=wid)
+        grant = db.get_conn().execute(
+            "SELECT 1 FROM media_public_grants "
+            "WHERE media_url=? AND target_type='work' AND target_id=? "
+            "AND revoked_at IS NULL LIMIT 1",
+            (url.split("?", 1)[0], wid)).fetchone()
+        if not grant:
+            raise ServiceError("作品已创建但媒体授权失败，重试可恢复", status=503,
+                               code="media_grant_pending")
+        with db.transaction() as tx:
+            tx.execute(
+                "INSERT OR IGNORE INTO skill_generation_work_items "
+                "(user_id,run_id,image_index,work_id,created_at) VALUES (?,?,?,?,?)",
+                (uid, run_id, index, wid, utc_now_iso()))
+        ids.append(wid)
+    return ids
+
+
+def import_history(db: Any, user: dict[str, Any], body: dict[str, Any], image_store: Any) -> dict[str, Any]:
+    """A user-authorized Skill upload publishes all images without a second action.
+
+    Locally recorded history does not call this endpoint. Never migrate earlier
+    private runs, including retries against a pre-existing private run ID.
     """
     rid, original, images, fingerprint = _history_payload(body)
+    from .services import check_text_has_secret
+    if check_text_has_secret(original, db.get_conn()):
+        raise ServiceError("提示词包含受保护内容，不能公开上传", status=400,
+                           code="public_prompt_protected")
     uid = int(user["id"])
     now = utc_now_iso()
     with db._write_lock:
         old = db.get_conn().execute(
             "SELECT * FROM skill_generation_runs WHERE user_id=? AND (external_run_id=? OR request_id=?)",
             (uid, rid, body["requestId"])).fetchone()
-        if not old or old["status"] != "success":
-            completed = json.loads(old["images_json"] or "[]") if old else []
-            used_bytes = db.get_conn().execute(
-                "SELECT COALESCE(SUM(bytes),0) FROM user_uploads "
-                "WHERE user_id=? AND cat='skill_history'", (uid,)
-            ).fetchone()[0]
-            remaining_bytes = sum(item["bytes"] for item in images[len(completed):])
-            if int(used_bytes or 0) + remaining_bytes > 1024 * 1024 * 1024:
-                raise ServiceError("个人生图云历史空间已达到 1 GiB 上限",status=413,
-                                   code="skill_history_storage_quota_exceeded")
         if old:
-            if old["external_run_id"] != rid or old["request_hash"] != fingerprint:
+            if old["visibility"] != "public":
+                raise ServiceError("原有私有历史不能通过重试变为公开，请创建新的上传记录",
+                                   status=409, code="private_history_preserved")
+            if old["external_run_id"] != rid or old["request_id"] != body["requestId"] or old["request_hash"] != fingerprint:
                 raise ServiceError("重复请求内容不一致", status=409, code="idempotency_conflict")
-            if old["status"] == "success":
-                return {"ok": True, "id": old["id"], "visibility": "private", "deduped": True}
             new_id = old["id"]
             saved = json.loads(old["images_json"] or "[]")
             if len(saved) > len(images) or any(
-                saved[idx]["sha256"] != item["sha256"] for idx, item in enumerate(saved)
+                saved[index]["sha256"] != item["sha256"] for index, item in enumerate(saved)
             ):
                 raise ServiceError("云端上传进度与图片不一致", status=409, code="upload_state_conflict")
         else:
             new_id = "skillgen_" + uuid.uuid4().hex
             saved = []
+        if not old or len(saved) < len(images):
+            used = db.get_conn().execute(
+                "SELECT COALESCE(SUM(bytes),0) FROM user_uploads "
+                "WHERE user_id=? AND cat='skill_history'", (uid,)).fetchone()[0]
+            remaining = sum(image["bytes"] for image in images[len(saved):])
+            if int(used or 0) + remaining > 1024 * 1024 * 1024:
+                raise ServiceError("Skill 云端作品存储已达到 1 GiB 上限", status=413,
+                                   code="skill_history_storage_quota_exceeded")
+        if not old:
             with db.transaction() as tx:
                 tx.execute("""INSERT INTO skill_generation_runs
                     (id,user_id,external_run_id,request_id,request_hash,original_request,images_json,
-                     status,visibility,created_at) VALUES(?,?,?,?,?,?,?,'uploading','private',?)""",
+                     status,visibility,created_at) VALUES(?,?,?,?,?,?,?,'uploading','public',?)""",
                     (new_id, uid, rid, body["requestId"], fingerprint, original, "[]", now))
         for index in range(len(saved), len(images)):
             item = images[index]
             result = image_store(db, user, item["dataUrl"],
-                                 name_zh=f"Skill 创作历史 {index + 1}", cat="skill_history")
+                                 name_zh=f"Skill 创作作品 {index + 1}", cat="skill_history")
             saved.append({"url": result["url"], "sha256": item["sha256"]})
             with db.transaction() as tx:
-                tx.execute("UPDATE skill_generation_runs SET images_json=? WHERE id=? AND user_id=?",
-                           (json.dumps(saved, ensure_ascii=False), new_id, uid))
+                tx.execute(
+                    "UPDATE skill_generation_runs SET images_json=? WHERE id=? AND user_id=?",
+                    (json.dumps(saved, ensure_ascii=False), new_id, uid))
+        works = _publish_skill_run_images(db, user, new_id, original, saved, rid)
+        if len(works) != len(images):
+            raise ServiceError("部分图片尚未完成公开，重试可恢复", status=503,
+                               code="publication_incomplete")
         with db.transaction() as tx:
-            tx.execute("UPDATE skill_generation_runs SET status='success' WHERE id=? AND user_id=?",
-                       (new_id, uid))
-    return {"ok": True, "id": new_id, "visibility": "private", "deduped": False}
+            tx.execute(
+                "UPDATE skill_generation_runs SET status='success' WHERE id=? AND user_id=?",
+                (new_id, uid))
+    return {"ok": True, "id": new_id, "visibility": "public",
+            "workIds": works, "deduped": bool(old and old["status"] == "success")}
+
 
 def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dict[str, Any]:
     uid = int(user["id"])
@@ -287,6 +347,9 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
             media=json.loads(row["images_json"] or "[]")
         except (ValueError,TypeError):
             media=[]
+        linked = [str(x["work_id"]) for x in conn.execute(
+            "SELECT work_id FROM skill_generation_work_items WHERE user_id=? AND run_id=? "
+            "ORDER BY image_index", (uid,row["id"])).fetchall()] if row["origin"] == "skill" else []
         published=conn.execute(
             "SELECT work_id FROM skill_history_publications "
             "WHERE user_id=? AND source=? AND history_id=?",
@@ -294,103 +357,13 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
         result.append({"id":row["id"],"originClient":row["origin"],"externalRunId":row["external_run_id"],
                        "originalRequest":row["original_request"],"images":media,
                        "status":row["status"],"visibility":row["visibility"],
-                       "canPublish":row["status"]=="success" and row["visibility"]=="private" and not published,
-                       "publishedWorkId":published["work_id"] if published else None,
+                       "workIds": linked, "publishedWorkId": (linked[0] if linked else
+                       (published["work_id"] if published else None)),
                        "createdAt":row["created_at"]})
     return {"ok": True,"items":result,"hasMore":len(rows)>limit,
             "nextCursor":str(offset+limit) if len(rows)>limit else None}
 
 
-
-def publish_history(db: Any, user: dict[str, Any], history_id: str, body: dict[str,Any]) -> dict[str,Any]:
-    """Create a public work ONLY after an explicit confirmation from the owner."""
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", history_id):
-        raise ServiceError("历史 ID 无效", status=400, code="invalid_id")
-    title = body.get("title")
-    prompt = body.get("prompt")
-    if (not isinstance(title,str) or not title.strip() or len(title)>140
-            or not isinstance(prompt,str) or not prompt.strip() or len(prompt)>20000
-            or body.get("confirmed") is not True):
-        raise ServiceError("必须确认公开的标题、提示词和图片",status=400,code="publication_confirmation_required")
-    uid=int(user["id"])
-    with db._write_lock:
-        conn=db.get_conn()
-        row=conn.execute(
-            "SELECT id,status,visibility,images_json FROM skill_generation_runs WHERE id=? AND user_id=?",
-            (history_id,uid)).fetchone()
-        source="skill"
-        if not row:
-            row=conn.execute(
-                "SELECT id,status,visibility,items_json AS images_json FROM studio_generations "
-                "WHERE id=? AND user_id=? AND COALESCE(deleted_at,'')=''",
-                (history_id,uid)).fetchone()
-            source="web"
-        if not row:
-            raise ServiceError("历史记录不存在",status=404,code="not_found")
-        previous=conn.execute(
-            "SELECT work_id FROM skill_history_publications WHERE user_id=? AND source=? AND history_id=?",
-            (uid,source,history_id)).fetchone()
-        if previous:
-            return {"ok":True,"workId":previous["work_id"],"alreadyPublished":True}
-        if row["status"]!="success" or row["visibility"]!="private":
-            raise ServiceError("只能发布未公开的成功创作历史",status=409,code="not_private_history")
-        if source=="web":
-            legacy=conn.execute(
-                "SELECT work_id FROM generation_works WHERE generation_id=? LIMIT 1",
-                (history_id,)).fetchone()
-            if legacy:
-                raise ServiceError("该网站生成记录已关联旧版公开作品，不能再次创建",status=409,code="legacy_work_exists")
-        try:
-            originals=json.loads(row["images_json"] or "[]")
-        except (ValueError,TypeError):
-            originals=[]
-        urls=[]
-        for item in originals:
-            if isinstance(item,str):
-                url=item
-            elif isinstance(item,dict):
-                url=str(item.get("url") or item.get("imageUrl") or item.get("image") or "")
-            else:
-                continue
-            if url and url not in urls:
-                urls.append(url)
-        raw_indices=body.get("indices")
-        if raw_indices is not None:
-            if (not isinstance(raw_indices,list) or not raw_indices
-                    or len(raw_indices)>9 or any(type(i) is not int or i<0 or i>=len(urls) for i in raw_indices)
-                    or len(set(raw_indices)) != len(raw_indices)):
-                raise ServiceError("图片选择无效",status=400,code="invalid_image_selection")
-            urls=[urls[i] for i in raw_indices]
-        if not (1<=len(urls)<=9):
-            raise ServiceError("请选择 1–9 张图片发布",status=400,code="invalid_images")
-        from .server import validate_publish_media, _grant_published_media
-        from .services import publish_user_work
-        payload=validate_publish_media(db,user,{
-            "title":title.strip(),"prompt":prompt,"images":urls,
-            "styles":[],"layout":"","price":0,
-            "requestId":"history-pub-"+history_id,
-        })
-        if len(payload.get("images") or []) != len(urls):
-            raise ServiceError("有部分图片不可发布",status=403,code="media_not_publishable")
-        result=publish_user_work(db,user,payload)
-        _grant_published_media(db,user,payload,target_type="topic",target_id=str(result.get("topicId") or ""))
-        # A successful work row is not enough: public media must have a durable
-        # grant, otherwise the gallery would show broken images. Retry is safe
-        # because requestId is stable and publish_user_work is idempotent.
-        for media_url in urls:
-            if media_url.startswith(("/uploads/","/generated/")):
-                granted=conn.execute(
-                    "SELECT 1 FROM media_public_grants WHERE media_url=? AND revoked_at IS NULL LIMIT 1",
-                    (media_url.split("?",1)[0],)).fetchone()
-                if not granted:
-                    raise ServiceError("作品已创建但图片公开授权尚未完成，请重试",status=503,
-                                       code="media_grant_pending")
-        wid=str(result["workId"])
-        with db.transaction() as tx:
-            tx.execute("INSERT OR IGNORE INTO skill_history_publications "
-                       "(user_id,source,history_id,work_id,created_at) VALUES(?,?,?,?,?)",
-                       (uid,source,history_id,wid,utc_now_iso()))
-        return {"ok":True,"workId":wid,"url":result.get("url"),"alreadyPublished":False}
 
 def notification_list(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dict[str, Any]:
     uid=int(user["id"])
@@ -541,11 +514,9 @@ def handle_post(handler: Any, path: str, body: dict[str,Any]) -> bool:
     if path == "/api/admin/skill-bridge/reconcile":
         handler._send_json(reconcile_legacy_generations(handler.db,_user(handler),body))
     elif path == "/api/v1/me/generations":
-        # Import only when explicitly requested; never auto-publish to works.
+        # Skill deliberately uploads finished images as public works in one operation.
         from .server import save_data_url_upload
         handler._send_json(import_history(handler.db,_user(handler),body,save_data_url_upload))
-    elif (m:=re.fullmatch(r"/api/v1/me/generations/([^/]+)/publish",path)):
-        handler._send_json(publish_history(handler.db,_user(handler),m[1],body))
     elif (m:=re.fullmatch(r"/api/v1/works/([^/]+)/likes",path)):
         handler._send_json(social_like(handler.db,_user(handler),m[1],body))
     elif (m:=re.fullmatch(r"/api/v1/works/([^/]+)/comments",path)):
