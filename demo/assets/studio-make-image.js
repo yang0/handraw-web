@@ -567,8 +567,8 @@
               ${statusText ? `<div class="make-image-status" role="status">${esc(statusText)}</div>` : ""}
 
               <!-- Results Gallery -->
-              ${results.length ? `
-                <div class="make-image-results-section">
+              <div class="make-image-results-section make-image-result-workspace" aria-label="图片创作结果">
+                ${results.length ? `
                   <div class="make-image-results-head">
                     <h3 style="margin:0;font-size:15px;font-weight:700;">生成结果 (${results.length} 张)</h3>
                     <div style="display:flex;gap:8px;">
@@ -582,14 +582,26 @@
                         <div class="make-image-result-thumb">
                           <img src="${esc(r.imageUrl)}" alt="生成结果 #${idx + 1}" loading="lazy" />
                         </div>
-                        <div class="make-image-result-actions">
-                          <button type="button" class="btn btn-sm btn-primary" data-action="download" data-url="${esc(r.imageUrl)}">下载</button>
+                        <div class="make-image-result-caption">
+                          <strong class="make-image-result-title">${esc(r.title || `结果 #${idx + 1}`)}</strong>
+                          <div class="make-image-result-actions">
+                            <button type="button" class="btn btn-sm" data-action="view" data-result-idx="${idx}">查看大图</button>
+                            <button type="button" class="btn btn-sm btn-primary" data-action="download" data-url="${esc(r.imageUrl)}">下载</button>
+                            <button type="button" class="btn btn-sm" data-action="reference" data-result-idx="${idx}">作为参考图</button>
+                            <button type="button" class="btn btn-sm" data-action="canvas">进入画布</button>
+                          </div>
                         </div>
                       </div>
                     `).join("")}
                   </div>
-                </div>
-              ` : ""}
+              ` : `
+                  <div class="make-image-empty-result" role="status">
+                    <div class="make-image-empty-result-icon" aria-hidden="true">▧</div>
+                    <strong>${busy ? "图片正在生成中…" : "创作结果将在这里显示"}</strong>
+                    <p>${busy ? "可以停止本地等待；已提交的云端任务仍可能完成。" : "左侧输入主题并选择画风，生成成功后可查看大图、下载或继续创作。"}</p>
+                  </div>
+              `}
+              </div>
 
             </div>
           </form>
@@ -1094,6 +1106,26 @@
           a.rel = "noopener";
           a.click();
         };
+      });
+
+      root.querySelectorAll("[data-action='view']").forEach(btn => {
+        btn.onclick = () => {
+          const index = Number(btn.getAttribute("data-result-idx"));
+          const result = this.context?.results?.[index];
+          if (result?.imageUrl && this.actions?.openImageLightbox) {
+            this.actions.openImageLightbox(result.imageUrl, result.title || "生成图片");
+          }
+        };
+      });
+      root.querySelectorAll("[data-action='reference']").forEach(btn => {
+        btn.onclick = () => {
+          const index = Number(btn.getAttribute("data-result-idx"));
+          const result = this.context?.results?.[index];
+          if (result?.imageUrl) this.actions?.addResultAsReference?.(result);
+        };
+      });
+      root.querySelectorAll("[data-action='canvas']").forEach(btn => {
+        btn.onclick = () => this.actions?.openCanvas?.();
       });
 
       const againBtn = root.querySelector("#make-image-btn-again");

@@ -1029,3 +1029,79 @@
 .qc-entry-bar {
   padding-inline: var(--hw-page-gutter);
 }
+
+
+/* Studio 2.0 quick-image surface (#128): results remain visible alongside
+   the creation form. Batch keeps its original full-width planning table. */
+@media (min-width: 1060px) {
+  .make-image-container:not(.batch-container) .make-image-main-grid {
+    display: grid;
+    grid-template-columns: minmax(340px, 440px) minmax(330px, 1fr);
+    grid-auto-rows: min-content;
+    gap: 14px 22px;
+    align-items: start;
+  }
+  .make-image-container:not(.batch-container) .make-image-main-grid > :not(.make-image-results-section) {
+    grid-column: 1;
+    min-width: 0;
+  }
+  .make-image-container:not(.batch-container) .make-image-result-workspace {
+    grid-column: 2;
+    grid-row: 1 / span 20;
+    align-self: start;
+    position: sticky;
+    top: 18px;
+    margin: 0;
+    max-height: calc(100vh - 90px);
+    overflow: auto;
+    padding: 14px;
+    border: 1px solid var(--line-soft);
+    border-radius: 10px;
+    background: var(--paper-bg);
+  }
+  .make-image-container:not(.batch-container) .make-image-pickers-row,
+  .make-image-container:not(.batch-container) .make-image-pickers-row.has-style2 {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+  .make-image-container:not(.batch-container) .make-image-picker-card {
+    padding: 8px;
+  }
+  .make-image-container:not(.batch-container) .make-image-result-workspace .make-image-results-grid {
+    grid-template-columns: 1fr;
+    margin-top: 12px;
+  }
+}
+.make-image-container:not(.batch-container) .make-image-result-thumb {
+  aspect-ratio: auto;
+  min-height: 210px;
+  max-height: min(65vh,640px);
+}
+.make-image-container:not(.batch-container) .make-image-result-thumb img {
+  width: 100%;
+  height: auto;
+  max-height: min(65vh,640px);
+  object-fit: contain;
+}
+.make-image-empty-result {
+  min-height: 270px;
+  padding: 24px;
+  background: var(--paper-card);
+  color: var(--ink-muted);
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+}
+.make-image-empty-result p { font-size: 12px; line-height: 1.6; max-width: 320px; margin: 0; }
+.make-image-empty-result strong { color: var(--ink-main); }
+.make-image-empty-result-icon { font-size: 36px; opacity: .4; }
+.make-image-container:not(.batch-container) .make-image-result-actions {
+  grid-template-columns: repeat(2,minmax(0,1fr));
+}
+@media (max-width: 1059px) {
+  .make-image-container:not(.batch-container) .make-image-result-workspace { margin-top: 18px; }
+}

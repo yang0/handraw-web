@@ -16372,7 +16372,7 @@
       const busy = isCurrentBusy();
       const displays = p ? getDownstreamDisplayNodes(p.ctrl.id) : [];
       const results = displays.flatMap((dn) => (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
-        id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn
+        id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn, item: it
       })));
       let statusText = busy
         ? "正在生成，可点击「停止等待」结束当前页面的生成流程；已提交云端的任务可能继续执行或计费。"
@@ -16438,6 +16438,25 @@
         markDirtyAndRender,
         persistDraft,
         ensureAssetItems: (items) => ensureAssetNode(items),
+        openImageLightbox: (url, title) => openImageLightbox(url, title),
+        openCanvas: () => switchCreationStage("canvas"),
+        addResultAsReference: (result) => {
+          if (!p || !result?.imageUrl) return;
+          const prior = Array.isArray(p.asset?.data?.items) ? p.asset.data.items : [];
+          if (prior.some(it => it.image === result.imageUrl)) {
+            toast("这张图片已经是参考图");
+            return;
+          }
+          ensureAssetNode([...prior, {
+            id: result.item?.mediaId || result.item?.media_id || E.uid("ref"),
+            mediaId: result.item?.mediaId || result.item?.media_id || undefined,
+            name: result.title || "已生成图片参考",
+            image: result.imageUrl,
+            cat: "other",
+            source: "generated"
+          }]);
+          toast("已加入参考图，可继续调整主题后生成");
+        },
         openAssetPicker: ({ kind, field, currentId, onSelect } = {}) => {
           if (!p?.skill) {
             toast("画风/图型选择器暂不可用：请刷新创作台后重试");
