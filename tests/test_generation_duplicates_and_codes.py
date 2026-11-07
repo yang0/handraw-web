@@ -353,15 +353,23 @@ class GenerationDuplicatesAndCodesTests(unittest.TestCase):
                     """,
                     (f"gen_seed_{i}", uid, json.dumps(img), now),
                 )
+            # A gateway execution is not a public V3 work until projection.
+            # Three live runs generate three works; sample ledgers are excluded.
+            from backend.generation_works import project_generation_to_works
+            for i in range(3):
+                self.assertEqual(len(project_generation_to_works(tx, f"gen_seed_{i}")), 1)
 
         data = get_user_public_generations(self.db, "su_editorial", limit=10)
         self.assertTrue(data["ok"])
-        # Exactly 3 generations, total 3
         self.assertEqual(len(data["generations"]), 3)
         self.assertEqual(data["total"], 3)
-        # All returned IDs start with gen_
+        self.assertEqual(
+            {g["sourceGenerationId"] for g in data["generations"]},
+            {"gen_seed_0", "gen_seed_1", "gen_seed_2"},
+        )
         for g in data["generations"]:
-            self.assertTrue(g["id"].startswith("gen_"), f"Expected gen_ id, got {g['id']}")
+            self.assertTrue(g["id"].startswith("run_"))
+            self.assertTrue(g["workId"].startswith("work_"))
             # styles and layouts are lists of dicts
             for s in g["styles"]:
                 self.assertTrue(CODE_RE.match(s["code"]))
