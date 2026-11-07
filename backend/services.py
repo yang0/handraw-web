@@ -4604,6 +4604,57 @@ def _merge_public_generation_batch_images(
     item["batchId"] = batch_id
 
 
+def _serialize_public_run_work(
+    conn: sqlite3.Connection, row: sqlite3.Row | dict[str, Any],
+) -> dict[str, Any]:
+    """The public creator-history card is a view of one published work/run."""
+    from .generation_v3 import work_images
+
+    uid = int(row["user_id"])
+    run_id = str(row["run_id"])
+    wid = str(row["work_id"])
+    images = work_images(conn, wid)
+    source = str(row["source"])
+    metadata: dict[str, Any] = {}
+    if source == "web":
+        gateway = conn.execute(
+            """
+            SELECT * FROM studio_generations
+            WHERE user_id=? AND status='success'
+              AND (id=? OR (batch_id<>'' AND batch_id=?))
+              AND COALESCE(deleted_at,'')=''
+            ORDER BY batch_index ASC,created_at ASC,id ASC LIMIT 1
+            """,
+            (uid, row["external_run_id"], row["external_run_id"]),
+        ).fetchone()
+        if gateway:
+            metadata = serialize_public_generation_history(gateway, conn)
+            metadata["sourceGenerationId"] = str(gateway["id"])
+    if not metadata:
+        metadata = {
+            "styles": [], "layouts": [], "fork": None, "mode": source,
+            "ratio": "3:4", "createdAt": "",
+        }
+    # No generation-record likes, favorite buckets or duplicated public
+    # media arrays. All media and interactions come from this ONE work.
+    subject = str(row["work_title"] or "手绘创作")
+    metadata.update({
+        "id": run_id,
+        "runId": run_id,
+        "workId": wid,
+        "author": str(row["author_username"]),
+        "created_at": str(row["created_at"]),
+        "createdAt": format_short_time(row["created_at"]),
+        "images": images,
+        "imageCount": len(images),
+        "topic": subject,
+        "title": subject,
+        "subject": subject,
+        "originClient": source,
+    })
+    return metadata
+
+
 def get_user_public_generations(
     db: Database,
     username: str,
@@ -4612,104 +4663,59 @@ def get_user_public_generations(
     limit: int = 24,
     viewer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Retrieve public generation history for a creator with stable cursor pagination."""
+    """Public creator history: one row per published logical run and work."""
     conn = db.get_conn()
-    u_clean = str(username or "").strip()
-    u_row = conn.execute("SELECT id, username FROM users WHERE username = ?", (u_clean,)).fetchone()
+    u_row = conn.execute(
+        "SELECT id FROM users WHERE username=?", (str(username or "").strip(),),
+    ).fetchone()
     if not u_row:
         raise ServiceError("创作者不存在", status=404, code="user_not_found")
     uid = int(u_row["id"])
-
-    with db.transaction() as tx:
-        deduplicate_generation_history(tx, user_id=uid)
-
-    conn = db.get_conn()
     safe_limit = max(1, min(60, int(limit)))
-
-    cursor_created_at = None
-    cursor_id = None
+    since = None
     if cursor:
-        cur_str = str(cursor).strip()
         try:
             import base64
-            decoded = base64.urlsafe_b64decode(cur_str.encode("ascii")).decode("utf-8")
-            parts = decoded.split("|", 1)
-            if len(parts) == 2:
-                cursor_created_at, cursor_id = parts
-        except Exception:
-            parts = cur_str.split("|", 1)
-            if len(parts) == 2:
-                cursor_created_at, cursor_id = parts
+            since = base64.urlsafe_b64decode(str(cursor).encode("ascii")).decode("utf-8").split("|", 1)
+        except (ValueError, UnicodeError):
+            raise ServiceError("无效的分页游标", status=400, code="invalid_cursor") from None
+        if len(since) != 2 or not all(since):
+            raise ServiceError("无效的分页游标", status=400, code="invalid_cursor")
 
-    params: list[Any] = [uid]
-    cursor_clause = ""
-    if cursor_created_at and cursor_id:
-        cursor_clause = " AND (created_at < ? OR (created_at = ? AND id < ?))"
-        params.extend([cursor_created_at, cursor_created_at, cursor_id])
-
-    params.append(safe_limit + 1)
-
-    # Choose one real generation row per logical batch BEFORE pagination and
-    # COUNT. Otherwise a single 5-image run appears as five history cards.
-    sql = f"""
-        WITH eligible AS (
-            SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY CASE WHEN batch_id<>'' THEN batch_id ELSE id END
-                ORDER BY batch_index ASC, created_at ASC, id ASC
-            ) AS task_rank
-            FROM studio_generations
-            WHERE user_id = ?
-              AND status = 'success'
-              AND COALESCE(deleted_at, '') = ''
-              AND engine != 'demo'
-              AND visibility = 'public'
-              AND (items_json IS NOT NULL AND items_json != '' AND items_json != '[]')
-        )
-        SELECT * FROM eligible WHERE task_rank = 1 {cursor_clause}
-        ORDER BY created_at DESC, id DESC
-        LIMIT ?
+    sql = """
+        SELECT r.id AS run_id,r.user_id,r.source,r.external_run_id,r.created_at,
+               w.id AS work_id,w.title AS work_title,w.author_username
+        FROM generation_runs r JOIN works w ON w.run_id=r.id
+        WHERE r.user_id=? AND w.status='published'
     """
+    params: list[Any] = [uid]
+    if since:
+        sql += " AND (r.created_at<? OR (r.created_at=? AND r.id<?))"
+        params.extend([since[0], since[0], since[1]])
+    sql += " ORDER BY r.created_at DESC,r.id DESC LIMIT ?"
+    params.append(safe_limit + 1)
     rows = conn.execute(sql, tuple(params)).fetchall()
-
-    has_more = len(rows) > safe_limit
-    result_rows = rows[:safe_limit]
-
-    items: list[dict[str, Any]] = []
-    for r in result_rows:
-        serialized = serialize_public_generation_history(r, conn)
-        _merge_public_generation_batch_images(conn, r, serialized)
-        if serialized.get("images"):
-            items.append(serialized)
-
+    visible = rows[:safe_limit]
+    items = [_serialize_public_run_work(conn, row) for row in visible]
     attach_generation_social_counts(conn, items, viewer=viewer)
-
     next_cursor = None
-    if has_more and result_rows:
-        last = result_rows[-1]
+    if len(rows) > safe_limit and visible:
         import base64
-        next_cursor = base64.urlsafe_b64encode(f"{last['created_at']}|{last['id']}".encode("utf-8")).decode("ascii")
-
+        last = visible[-1]
+        next_cursor = base64.urlsafe_b64encode(
+            f"{last['created_at']}|{last['run_id']}".encode("utf-8")
+        ).decode("ascii")
     total_row = conn.execute(
         """
-        SELECT COUNT(DISTINCT CASE WHEN batch_id<>'' THEN batch_id ELSE id END)
-        FROM studio_generations
-        WHERE user_id = ?
-          AND status = 'success'
-          AND COALESCE(deleted_at, '') = ''
-          AND engine != 'demo'
-          AND visibility = 'public'
-          AND (items_json IS NOT NULL AND items_json != '' AND items_json != '[]')
+        SELECT COUNT(*) FROM generation_runs r JOIN works w ON w.run_id=r.id
+        WHERE r.user_id=? AND w.status='published'
         """,
         (uid,),
     ).fetchone()
-    total_count = int(total_row[0]) if total_row else len(items)
-
     return {
-        "ok": True,
-        "generations": items,
-        "nextCursor": next_cursor,
-        "hasMore": bool(has_more),
-        "total": total_count,
+        "ok": True, "generations": items, "nextCursor": next_cursor,
+        "hasMore": len(rows) > safe_limit,
+        "total": int(total_row[0]) if total_row else len(items),
     }
 
 
@@ -4720,43 +4726,33 @@ def get_user_public_generation_by_id(
     *,
     viewer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Retrieve a single public generation item for a creator by id."""
+    """Resolve the public work, not a single Web gateway subrequest."""
     conn = db.get_conn()
-    u_clean = str(username or "").strip()
-    u_row = conn.execute("SELECT id, username FROM users WHERE username = ?", (u_clean,)).fetchone()
+    u_row = conn.execute(
+        "SELECT id FROM users WHERE username=?", (str(username or "").strip(),),
+    ).fetchone()
     if not u_row:
         raise ServiceError("创作者不存在", status=404, code="user_not_found")
     uid = int(u_row["id"])
-
-    with db.transaction() as tx:
-        deduplicate_generation_history(tx, user_id=uid)
-
-    conn = db.get_conn()
-    gen_id = str(generation_id or "").strip()
+    identifier = str(generation_id or "").strip()
+    try:
+        wid = _generation_work_id(conn, identifier)
+    except ServiceError:
+        raise ServiceError("生图作品不存在或不可见", status=404, code="not_found") from None
     row = conn.execute(
         """
-        SELECT * FROM studio_generations
-        WHERE id = ?
-          AND user_id = ?
+        SELECT r.id AS run_id,r.user_id,r.source,r.external_run_id,r.created_at,
+               w.id AS work_id,w.title AS work_title,w.author_username
+        FROM works w JOIN generation_runs r ON r.id=w.run_id
+        WHERE w.id=? AND r.user_id=? AND w.status='published'
         """,
-        (gen_id, uid),
+        (wid, uid),
     ).fetchone()
-
-    is_owner = bool(viewer and int(viewer.get("id") or 0) == uid)
-    if not check_generation_social_accessible(row, viewer=viewer, allow_own=is_owner):
-        raise ServiceError("生图记录不存在或不可见", status=404, code="not_found")
-
-    serialized = serialize_public_generation_history(row, conn)
-    _merge_public_generation_batch_images(conn, row, serialized)
-    if not serialized.get("images"):
-        raise ServiceError("生图记录不存在或无结果图片", status=404, code="not_found")
-
-    attach_generation_social_counts(conn, [serialized], viewer=viewer)
-
-    return {
-        "ok": True,
-        "generation": serialized,
-    }
+    if not row:
+        raise ServiceError("生图作品不存在或不可见", status=404, code="not_found")
+    item = _serialize_public_run_work(conn, row)
+    attach_generation_social_counts(conn, [item], viewer=viewer)
+    return {"ok": True, "generation": item}
 
 
 def get_user_collected_generations(
@@ -4764,34 +4760,22 @@ def get_user_collected_generations(
     user: dict[str, Any],
     limit: int = 60,
 ) -> dict[str, Any]:
-    uid = int(user["id"])
+    """Generated works in the ONE canonical favorites bucket ('works')."""
     conn = db.get_conn()
+    uid = int(user["id"])
     safe_limit = max(1, min(100, int(limit)))
-
     rows = conn.execute(
         """
-        SELECT g.*
-        FROM collections c
-        JOIN studio_generations g ON g.id = c.target_id
-        WHERE c.user_id = ?
-          AND c.bucket = 'generations'
-          AND g.status = 'success'
-          AND COALESCE(g.deleted_at, '') = ''
-          AND g.engine != 'demo'
-          AND (g.user_id = ? OR g.visibility = 'public')
-          AND (g.items_json IS NOT NULL AND g.items_json != '' AND g.items_json != '[]')
-        ORDER BY c.created_at DESC
-        LIMIT ?
+        SELECT r.id AS run_id,r.user_id,r.source,r.external_run_id,r.created_at,
+               w.id AS work_id,w.title AS work_title,w.author_username
+        FROM collections c JOIN works w ON w.id=c.target_id
+        JOIN generation_runs r ON r.id=w.run_id
+        WHERE c.user_id=? AND c.bucket='works' AND w.status='published'
+        ORDER BY c.created_at DESC,w.id DESC LIMIT ?
         """,
-        (uid, uid, safe_limit),
+        (uid, safe_limit),
     ).fetchall()
-
-    items = []
-    for r in rows:
-        ser = serialize_public_generation_history(r, conn)
-        if ser.get("images"):
-            items.append(ser)
-
+    items = [_serialize_public_run_work(conn, row) for row in rows]
     attach_generation_social_counts(conn, items, viewer=user)
     return {"ok": True, "generations": items}
 
