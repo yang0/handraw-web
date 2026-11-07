@@ -220,7 +220,7 @@ def get_works_feed(
         base_clauses.append(
             "(w.title LIKE ? OR w.subject LIKE ? OR w.notes LIKE ? OR w.author_username LIKE ? OR w.author_name LIKE ? OR w.prompt LIKE ? OR w.styles_json LIKE ? OR w.layout_code LIKE ?)"
         )
-        base_params.extend([kw, kw, kw, kw, kw, kw, kw, kw, kw])
+        base_params.extend([kw, kw, kw, kw, kw, kw, kw, kw])
 
     # Scenario matching rule filter
     scenario_param = str(params.get("scenario") or "").strip().lower()
