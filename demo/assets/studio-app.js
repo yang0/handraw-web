@@ -381,6 +381,33 @@
     return true;
   }
 
+  function reconcileDetachedQuickState(parts) {
+    if (!parts?.ctrl) return false;
+    const ctrlId = parts.ctrl.id;
+    // Saved browser state cannot prove a network request is still owned by
+    // this page. Only the live run/quick submit lock may disable editing.
+    if (_activeBatchRun?.ctrlId === ctrlId ||
+        (quickBusy?.id === ctrlId && quickBusy.scope === activeCacheScope)) return false;
+    const displays = getDownstreamDisplayNodes(ctrlId);
+    const stale = parts.ctrl.data.status === "generating" ||
+      displays.some((node) => node.data?.status === "generating");
+    if (!stale) return false;
+    const pending = displays.some((node) => node.data?.pendingTaskId ||
+      node.data?.pendingRequestId || Object.keys(node.data?.pendingTasksBySlot || {}).length) ||
+      (CS.pendingTasks || []).some((task) => task.ctrlId === ctrlId || task.tabId === CS.activeTabId);
+    const hasResult = displays.some((node) => (node.data?.items || []).some((item) => item?.imageUrl));
+    parts.ctrl.data.status = pending ? "stopped" : hasResult ? "done" : "idle";
+    for (const node of displays) {
+      if (node.data?.status === "generating") {
+        node.data.status = (node.data.items || []).some((item) => item?.imageUrl) ? "done" : "idle";
+      }
+    }
+    // Keep upstream task/request IDs. The resumable poller may still deliver
+    // results or refunds; this only unlocks abandoned local form controls.
+    persistOpenTabs();
+    return true;
+  }
+
   function cancelActiveBatchGeneration(expectedCtrlId = null) {
     const run = _activeBatchRun;
     if (!run && expectedCtrlId) {
@@ -16300,16 +16327,19 @@
       const tab = ensureQuickTab();
       p = getQuickParts(tab?.graph || CS.graph);
     }
+    // A server restart leaves serialized "generating" flags in localStorage.
+    // Recover only actual cloud requests; never let those flags lock the UI.
+    reconcileDetachedQuickState(p);
 
     if (window.HandrawMakeImage) {
       const isCurrentBusy = () => {
         if (!p) return false;
-        if (p.ctrl.data.status === "generating") return true;
-        if (quickBusy?.id === p.ctrl.id && quickBusy.scope === activeCacheScope) return true;
-        const displays = getDownstreamDisplayNodes(p.ctrl.id);
-        if (displays.some((d) => d.data?.status === "generating" || d.data?.pendingTaskId || d.data?.pendingRequestId)) return true;
-        if (Array.isArray(CS.pendingTasks) && CS.pendingTasks.some((t) => t.ctrlId === p.ctrl.id || t.tabId === CS.activeTabId)) return true;
-        return false;
+        // Cloud recovery reservations must not impersonate a live local run.
+        // A run is busy only while this page owns its submit/abort controller.
+        return Boolean(
+          (_activeBatchRun?.ctrlId === p.ctrl.id && !_activeBatchRun.cancelled) ||
+          (quickBusy?.id === p.ctrl.id && quickBusy.scope === activeCacheScope)
+        );
       };
       const busy = isCurrentBusy();
       const displays = p ? getDownstreamDisplayNodes(p.ctrl.id) : [];
@@ -16365,6 +16395,15 @@
         forkSource: CS.forkGenerationSource
       }, {
         isBusy: isCurrentBusy,
+        cancel: () => {
+          const stopped = cancelActiveBatchGeneration(p.ctrl.id);
+          if (stopped) {
+            // The active worker will persist its "stopped" state when its
+            // in-flight fetch settles. The UI should become responsive now.
+            renderQuickStart();
+          }
+          return stopped;
+        },
         clearWorkspaceResults: (ctrlId) => clearControlWorkspaceResults(ctrlId || p.ctrl.id),
         markDirtyAndRender,
         persistDraft,
