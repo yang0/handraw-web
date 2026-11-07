@@ -320,6 +320,15 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
             raise S.ServiceError("作品不存在或不可见", status=404)
         w_row = conn.execute("SELECT * FROM works WHERE id = ?", (m_target,)).fetchone()
         work_res = forum_resources._work_resource(w_row, unlocked_set, user)
+        if w_row["run_id"]:
+            from .generation_v3 import work_images
+            work_res["images"] = work_images(conn, m_target)
+            if w_row["cover_media_id"]:
+                cover = conn.execute(
+                    "SELECT storage_key FROM media_assets WHERE id=?",
+                    (w_row["cover_media_id"],),
+                ).fetchone()
+                work_res["coverUrl"] = str(cover["storage_key"]) if cover else ""
         w_likes = int(w_row["likes"] or 0)
         w_favorites = int(w_row["favorites"] or 0)
         w_forks = int(w_row["forks"] or 0)
