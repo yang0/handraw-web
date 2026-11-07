@@ -2497,7 +2497,7 @@
         tabBodyHtml = `<div class="hw-detail-section-card" role="status" style="padding:44px;text-align:center;color:var(--ink-muted);">正在加载公开作品…</div>`;
       } else {
         tabBodyHtml = groups.length
-          ? S.renderMasonry(groups.map(({ cover, total }) => `
+          ? `<div class="hw-profile-feed hw-profile-work-feed">${groups.map(({ cover, total }) => `
               <article class="hw-card hw-profile-work-group" data-prof-work="${esc(cover.id)}" tabindex="0" role="button" aria-label="查看作品：${esc(cover.title)}${total > 1 ? `，共 ${total} 张` : ""}" style="cursor:pointer;">
                 <div class="hw-card-media">
                   <img data-hw-src="${esc(cover.coverUrl && cover.images.includes(cover.coverUrl) ? cover.coverUrl : cover.images[0])}" alt="${esc(cover.title)}" loading="lazy" />
@@ -2511,7 +2511,7 @@
                   </div>
                 </div>
               </article>
-            `), "standard")
+            `).join("")}</div>`
           : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂无公开作品。${isMe ? `去 <a href="${esc(channelUrl("studio", { entry: "quick" }))}" style="color:var(--vermilion);font-weight:800;">创作台 ↗</a> 开始创作吧！` : ""}</div>`;
         if (serverBacked && UI.profileWorksHasMore) {
           tabBodyHtml += `<div style="text-align:center;padding:18px 0;"><button type="button" class="btn" id="prof-work-loadmore-btn" ${UI.profileWorksLoading ? "disabled" : ""}>${UI.profileWorksLoading ? "加载中…" : "加载更多作品"}</button></div>`;
@@ -2988,6 +2988,13 @@
         </div>
       </div>
     `;
+
+    // Layout the active tab after DOM insertion. CSS Grid places the first
+    // few cards in separate columns; measured spans pack later rows without
+    // the vertical-first balancing bug of CSS multi-columns.
+    if (typeof S.layoutProfileMasonry === "function") {
+      root.querySelectorAll(".hw-profile-feed").forEach((grid) => S.layoutProfileMasonry(grid));
+    }
 
     const activeTabPill = root.querySelector(".hw-profile-tabs .hw-pill.is-active");
     if (activeTabPill) {
