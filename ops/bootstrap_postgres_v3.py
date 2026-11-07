@@ -79,7 +79,7 @@ def bootstrap(*, dsn: str, apply: bool) -> dict:
             )
             required = {
                 "generation_runs", "generation_items", "media_assets",
-                "work_media", "works", "studio_generations", "users",
+                "work_media", "media_gc_jobs", "works", "studio_generations", "users",
                 "schema_migrations",
             }
             if not required.issubset(set(tables)):
