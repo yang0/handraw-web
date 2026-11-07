@@ -2639,6 +2639,7 @@ def toggle_user_collection(
 ) -> dict[str, Any]:
     if bucket not in ("styles", "layouts", "works", "topics", "generations"):
         raise ServiceError("收藏夹分类无效")
+    from_generation_history = bucket == "generations"
     tid = (target_id or "").strip()
     if not tid:
         raise ServiceError("缺少收藏目标 ID")
@@ -2709,7 +2710,10 @@ def toggle_user_collection(
             elif bucket == "topics":
                 tx.execute("UPDATE forum_topics SET favorites = favorites + 1 WHERE id = ?", (tid,))
 
-            if bucket != "generations":
+            # Generation-history favorites now share the works bucket, but
+            # an alias must not grant first-collect bonus credits. Preserve
+            # the original API's no-reward rule after canonicalization.
+            if not from_generation_history:
                 u_row = tx.execute("SELECT first_collect_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
                 if u_row and not int(u_row["first_collect_rewarded"]):
                     settings = get_site_settings(tx)
