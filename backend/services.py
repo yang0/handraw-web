@@ -5634,31 +5634,64 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
 
 
 def delete_user_studio_history(db: Database, user: dict[str, Any], history_id: str) -> dict[str, Any]:
-    """Hide one cloud history row owned by the current user.
+    """Soft-delete one complete logical Web run, never just one gateway slot.
 
-    This is a soft delete so a generation's task, quota reservation, and
-    accounting trail cannot be erased by a history UI action.
+    The execution/billing rows remain for refunds and audits. All successful
+    sibling slots become invisible as a single transaction, and the canonical
+    generated work is hidden. Accept UI batch IDs, V3 run IDs, and individual
+    execution IDs without relying on legacy mapping tables.
     """
     uid = int(user["id"])
-    hid = str(history_id or "").strip()
-    if not hid:
+    key = str(history_id or "").strip()
+    if not key:
         raise ServiceError("历史记录编号不能为空", status=400, code="history_id_required")
     with db.transaction() as tx:
-        row = tx.execute("SELECT user_id, status, deleted_at FROM studio_generations WHERE id = ?", (hid,)).fetchone()
-        if not row:
-            return {"ok": True, "id": hid, "deleted": False}
-        if int(row["user_id"] or 0) != uid:
-            raise ServiceError("无权删除其他账号的历史记录", status=403, code="history_forbidden")
-        if row["status"] in ("queued", "running"):
+        logical = tx.execute(
+            """SELECT id,external_run_id,status FROM generation_runs
+               WHERE user_id=? AND source='web' AND
+                 (id=? OR external_run_id=?) LIMIT 1""",
+            (uid, key, key),
+        ).fetchone()
+        if logical:
+            external = str(logical["external_run_id"])
+            rows = tx.execute(
+                """SELECT id,status,deleted_at FROM studio_generations
+                   WHERE user_id=? AND
+                     (id=? OR (batch_id<>'' AND batch_id=?))""",
+                (uid, external, external),
+            ).fetchall()
+        else:
+            execution = tx.execute(
+                "SELECT user_id,batch_id FROM studio_generations WHERE id=?", (key,),
+            ).fetchone()
+            if not execution:
+                return {"ok": True, "id": key, "deleted": False}
+            if int(execution["user_id"] or 0) != uid:
+                raise ServiceError("无权删除其他账号的历史记录", status=403, code="history_forbidden")
+            batch_id = str(execution["batch_id"] or "")
+            rows = tx.execute(
+                """SELECT id,status,deleted_at FROM studio_generations
+                   WHERE user_id=? AND
+                     (id=? OR (batch_id<>'' AND batch_id=?))""",
+                (uid, key, batch_id),
+            ).fetchall()
+        if any(str(r["status"]) in ("queued", "running") for r in rows):
             raise ServiceError("生成任务仍在进行中，完成或失败后才能删除历史", status=409, code="history_active")
-        if row["deleted_at"]:
-            return {"ok": True, "id": hid, "deleted": False}
-        tx.execute("UPDATE studio_generations SET deleted_at = ? WHERE id = ? AND user_id = ?", (utc_now_iso(), hid, uid))
-        # A history deletion must not commit unless all associated public works
-        # were hidden in the same transaction.
+        active = [str(r["id"]) for r in rows if not r["deleted_at"]]
+        if not active:
+            return {"ok": True, "id": key, "deleted": False}
+        now = utc_now_iso()
+        for execution_id in active:
+            tx.execute(
+                """UPDATE studio_generations SET deleted_at=?
+                   WHERE id=? AND user_id=? AND COALESCE(deleted_at,'')=''""",
+                (now, execution_id, uid),
+            )
+        # Hide after all siblings have been updated; otherwise one remaining
+        # slot could incorrectly republish the work during this operation.
         from .generation_works import sync_generation_visibility
-        sync_generation_visibility(tx, hid, "private", is_deleted=True)
-    return {"ok": True, "id": hid, "deleted": True}
+        sync_generation_visibility(tx, active[0], "private", is_deleted=True)
+    return {"ok": True, "id": key, "deleted": True, "executionCount": len(active)}
 
 
 def delete_all_user_studio_history(db: Database, user: dict[str, Any]) -> dict[str, Any]:
