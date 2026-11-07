@@ -13788,6 +13788,7 @@
           <div class="ic-art-subject">
             <span class="ic-art-subject-prefix ic-art-subject-lbl">主题：</span>${esc(cardPromptDesc)}
           </div>
+          <div class="ic-art-reason"><strong>推荐理由：</strong>${esc(card.purpose || "辅助理解文章的核心内容")}</div>
           ${
             status === "error"
               ? `<div class="ic-art-error-note" style="font-size:12px;color:var(--art-err-ink);line-height:1.5;">${esc(card.errorText || "生成没有成功，可以重试")}</div>`
@@ -13872,6 +13873,7 @@
           <div class="ic-art-subject">
             <span class="ic-art-subject-prefix ic-art-subject-lbl">主题：</span>${esc(cardPromptDesc)}
           </div>
+          <div class="ic-art-reason"><strong>推荐理由：</strong>${esc(card.purpose || "辅助理解文章的核心内容")}</div>
           ${
             status === "error"
               ? `<div class="ic-art-error-note" style="font-size:12px;color:var(--art-err-ink);line-height:1.5;">${esc(card.errorText || "生成没有成功，可以重试")}</div>`
@@ -15306,6 +15308,17 @@
           inlineRatio: draft.inlineRatio || "4:3"
         });
 
+        const review = await window.HandrawArticleReview.reviewPlan(aiCards, {
+          source: data.source, articleType: data.articleType,
+          existingCards: draft.cards || target?.planNode?.data?.cards || target?.art?.cards || []
+        });
+        if (!review.approved) {
+          CS.articleIsPlanning = false;
+          renderFullPreviewStage();
+          toast("已保留原配图方案");
+          return;
+        }
+        if (CS.activeArticleId !== reqArticleId || !isCurrentEditor()) return;
         const oldCardsBackup = JSON.parse(
           JSON.stringify(draft.cards || target?.planNode?.data?.cards || target?.art?.cards || [])
         );
@@ -15322,15 +15335,16 @@
         }, 10000);
 
         // Mark entrance animation for newly planned cards
-        aiCards.forEach((c) => {
+        const approvedCards = review.cards;
+        approvedCards.forEach((c) => {
           c.isNewEntrance = true;
         });
 
-        draft.cards = aiCards;
-        planUnifiedArticleDraft(draft, { aiCards });
+        draft.cards = approvedCards;
+        planUnifiedArticleDraft(draft, { aiCards: approvedCards });
 
-        const coverCards = aiCards.filter((c) => c.role === "cover");
-        const inlines = aiCards.filter((c) => c.role !== "cover");
+        const coverCards = approvedCards.filter((c) => c.role === "cover");
+        const inlines = approvedCards.filter((c) => c.role !== "cover");
         if (data.source === "model") {
           const coverPart = coverCards.length ? `${coverCards.length} 张封面 + ` : "";
           toast(`已规划 ${coverPart}${inlines.length} 张插图`);
