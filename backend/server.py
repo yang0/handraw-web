@@ -3417,6 +3417,16 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(record_user_studio_history(self.db, user, body))  # type: ignore[arg-type]
             return
 
+        m_batch_cancel = re.match(r"^/api/studio/batches/([^/]+)/cancel-pending/?$", req_path)
+        if m_batch_cancel:
+            user = self._current_user(required=True)
+            from .generation_v3 import cancel_unsubmitted_web_slots
+            self._send_json(cancel_unsubmitted_web_slots(
+                self.db, user, m_batch_cancel.group(1),
+                body.get("positions") or [],
+            ))
+            return
+
         m_fork_gen = re.match(r"^/api/studio/generations/([^/]+)/fork$", req_path)
         if m_fork_gen:
             user = self._current_user(required=True)
