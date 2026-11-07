@@ -6084,10 +6084,11 @@
           else batchRun.failed += 1;
           CS.lastArticleBatchSummary = {
             total: batchRun.total, succeeded: okCount, failed: batchRun.failed,
-            skipped: allCards.length - effectiveTargets.length,
+            skipped: allCards.length - effectiveTargets.length, parallel: selection.parallel,
             finished: batchRun.completed, startedAt: batchRun.startedAt,
-            running: batchRun.running
+            running: batchRun.running, ids: batchRun.ids
           };
+          if (!isStaleScope(runEpoch, runScope)) renderFullPreviewStage();
         }
       );
       if (batchRun.cancelled) {
@@ -14577,6 +14578,20 @@
       }
     }
 
+    // Real task state is derived from settled card requests, never fake progress.
+    const batchState = _activeBatchRun || CS.lastArticleBatchSummary;
+    const batchSummaryHtml = batchState && Array.isArray(batchState.ids || CS.lastArticleBatchSummary?.ids)
+      ? `<section class="hw-article-generation-summary" aria-live="polite">
+          <div class="hw-article-summary-head"><strong>${_activeBatchRun ? "正在并发生图" : "本批生成结果"}</strong>
+          <span>${batchState.completed ?? batchState.finished ?? 0} / ${batchState.total} 已处理 · ${batchState.parallel || 1} 路并发</span></div>
+          <div class="hw-article-summary-meter" role="progressbar" aria-label="本批生成进度" aria-valuemin="0"
+            aria-valuemax="${batchState.total}" aria-valuenow="${batchState.completed ?? batchState.finished ?? 0}">
+            <span style="width:${Math.round(100 * (batchState.completed ?? batchState.finished ?? 0) / Math.max(1,batchState.total))}%"></span>
+          </div>
+          <p>成功 ${batchState.succeeded ?? 0} 张 · 失败 ${batchState.failed ?? 0} 张 · 跳过 ${batchState.skipped ?? 0} 张
+            ${_activeBatchRun ? " · 运行中 " + (_activeBatchRun.running || 0) + " 张" : " · 失败项可单独重试"}</p>
+        </section>` : "";
+
     // Construct #art-editor-flow HTML
     const renderCardHtml = (card, inlineNo, anchorHtml, plainAnchor, extraOpts = {}) => {
       return renderArticleEditorCardHtml(card, inlineNo, anchorHtml, plainAnchor, Object.assign({
@@ -14798,6 +14813,7 @@
 
               <!-- Summary / Status / Error bar -->
               ${summaryHtml}
+              ${batchSummaryHtml}
 
               <!-- Editor Flow -->
               <div id="art-editor-flow">
