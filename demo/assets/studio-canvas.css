@@ -3764,14 +3764,14 @@ body.ic-studio-body .hw-topbar {
   border-radius: 14px;
   white-space: normal;
 }
-/* Issue #86: use explicit tracks, not multicol auto-balancing.
-   Multicol can stack a small number of tall cards into the leftmost column. */
+/* Issues #86 / #92: explicit grid tracks avoid multicol stacking and
+   match the homepage feed's responsive 5/4/3/2/1 card widths. */
 .ic-hist-masonry-grid {
   display: grid;
   width: 100%;
   min-width: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 17px;
   align-items: start;
 }
 .ic-hist-masonry-grid .ic-hist-entry-card {
@@ -3873,13 +3873,17 @@ body.ic-studio-body .hw-topbar {
 .ic-hist-masonry-grid .ic-hist-prompt-snippet { flex-basis: 100%; }
 .ic-hist-masonry-grid .ic-hist-inline-preview { padding: 8px; }
 .ic-hist-masonry-grid .ic-hist-inline-preview img { max-height: 300px; }
-@media (max-width: 1000px) {
-  .ic-hist-masonry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1400px) {
+  .ic-hist-masonry-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-@media (max-width: 620px) {
+@media (max-width: 1100px) {
+  .ic-hist-masonry-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .ic-hist-masonry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+}
+@media (max-width: 350px) {
   .ic-hist-masonry-grid { grid-template-columns: minmax(0, 1fr); }
-  .ic-history-stage .ic-history-topbar { width: calc(100% - 20px); padding: 10px; margin-top: 10px; }
-  .ic-hist-masonry-grid { gap: 12px; }
 }
 
 .ic-hist-category-chip {
