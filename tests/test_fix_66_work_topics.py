@@ -168,12 +168,13 @@ class Fix66WorkTopicsTests(unittest.TestCase):
         services.complete_cloud_generation(self.db, prepared["genId"], "task-proj-1", [img_url])
 
         conn = self.db.get_conn()
-        gw = conn.execute(
-            "SELECT work_id FROM generation_works WHERE generation_id = ?",
+        row = conn.execute(
+            """SELECT w.id FROM works w JOIN generation_runs r ON r.id=w.run_id
+               WHERE r.source='web' AND r.external_run_id=?""",
             (prepared["genId"],),
         ).fetchone()
-        self.assertIsNotNone(gw, "Generation must be projected to a work")
-        projected_wid = gw["work_id"]
+        self.assertIsNotNone(row, "Generation must have a canonical work")
+        projected_wid = row["id"]
 
         t_row = conn.execute("SELECT id, listed_at_ms FROM forum_topics WHERE work_id = ?", (projected_wid,)).fetchone()
         self.assertIsNotNone(t_row, "Prebuilt topic must exist for projected work")
