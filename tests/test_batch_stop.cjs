@@ -39,7 +39,7 @@ assert.equal(run.controller.signal.aborted,true, "Browser POST/poll must abort")
 assert.equal(aborts,1);
 assert.equal(stopping,1);
 assert.equal(state.activeBatchRun,run);
-assert.match(messages.at(-1),/2 张已发出的图片仍可能在云端完成或计费/);
+assert.match(messages.at(-1),/正在停止本地等待；2 张已提交云端的图片仍可能生成或计费，请查看生图历史/);
 assert.equal(stop("ctrl_batch"),false,"Repeated stops must be idempotent");
 assert.equal(aborts,1);
 assert.equal(stopping,1);
