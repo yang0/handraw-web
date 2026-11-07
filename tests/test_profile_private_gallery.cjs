@@ -36,13 +36,15 @@ class Element {
   addEventListener(name, fn) { this.callbacks[name] = fn; }
   setAttribute(name, val) { this.attributes[name] = val; }
 }
-const cards = new Element(), more = new Element(), file = new Element(), status = new Element();
+const cards = new Element(), more = new Element(), file = new Element(), status = new Element(), retry = new Element();
+retry.hidden = true;
 const categories = ["all", "characters", "props", "scenes", "other"].map(cat => {
   const el = new Element(); el.dataset.galleryCategory = cat; return el;
 });
 const elements = new Map([
   ["[data-gallery-cards]", cards], ["[data-gallery-more]", more],
-  ["[data-gallery-file]", file], ["[data-gallery-message]", status]
+  ["[data-gallery-file]", file], ["[data-gallery-message]", status],
+  ["[data-gallery-retry]", retry]
 ]);
 const root = new Element();
 root.querySelector = selector => elements.get(selector) || null;
@@ -53,6 +55,7 @@ const uploads = [ {uid, revision:1, name:"私家角色",
   imageUrl:"/api/library/assets/" + uid + "/image",
   publicUrl:"/uploads/should-not-be-used.webp", cat:"characters", origin:"skill"} ];
 const calls = [];
+let failNextPut = false;
 async function api(path, init) {
   calls.push({path, init});
   if (path.startsWith("/api/library/assets?")) {
@@ -64,6 +67,13 @@ async function api(path, init) {
     return {ok:true};
   }
   if (init?.method === "PUT") {
+    if (failNextPut) {
+      failNextPut = false;
+      const err = new Error("服务暂时出错（问题编号：60c109fd85ff4b4ab20a7084bc4c1560）");
+      err.status = 500;
+      err.code = "internal_error";
+      throw err;
+    }
     uploads.push({
       uid:anotherUid, revision:1, name:init.body.name, cat:init.body.cat, origin:"web",
       imageUrl:"/api/library/assets/" + anotherUid + "/image"
@@ -104,7 +114,17 @@ vm.runInNewContext(source,ctx);
   assert.ok(calls.some(c=>c.init?.method==="DELETE" && c.path.includes("baseRevision=1")));
 
   file.files=[{name:"新人设.png",size:120,type:"image/png"}];
+  failNextPut = true;
   await file.callbacks.change();
+  assert.equal(uploads.length, 0, "Failed upload must not add an empty card");
+  assert.equal(retry.hidden, false, "Retry must be available after a server failure");
+  assert.match(status.textContent, /服务器保存失败/);
+  assert.match(status.textContent, /60c109fd85ff4b4ab20a7084bc4c1560/);
+  const failedPut = calls.filter(c => c.init?.method === "PUT").at(-1);
+  await retry.callbacks.click();
+  const successfulPut = calls.filter(c => c.init?.method === "PUT").at(-1);
+  assert.equal(failedPut.path, successfulPut.path, "Retry must reuse the same asset UID");
+  assert.equal(retry.hidden, true, "Retry must hide after a successful upload");
   assert.equal(uploads.length,1);
   assert.equal(uploads[0].name,"新人设");
   assert.ok(calls.some(c=>c.init?.method==="PUT" && c.init.body.cat==="characters"));
