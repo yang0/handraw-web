@@ -234,7 +234,7 @@ def project_generation_to_works(
     *,
     force_visibility: str | None = None,
 ) -> list[str]:
-    """Persist one public work per completed generation run, with all its images.
+    """Persist one public work per logical generation batch, with all its images.
 
     A generation is the work's identity, not an individual image. One mapping
     row (item_key='__run__') is stored for the entire run. Both the work and
@@ -265,23 +265,45 @@ def project_generation_to_works(
     if "engine" in keys and str(row["engine"] or "") == "demo":
         return []
 
-    try:
-        raw_items = json.loads(row["items_json"] or "[]")
-    except (ValueError, TypeError):
-        raw_items = []
-    if not isinstance(raw_items, list):
-        return []
+    batch_id = str(row["batch_id"] or "").strip() if "batch_id" in keys else ""
+    batch_key = f"{int(row['user_id'])}:{batch_id}" if batch_id else ""
+    # Every cloud request is an execution slot; batch_id names the logical run.
+    # Gather completed siblings in stable requested slot order (not completion
+    # order), so the cover can be the first successful planned result.
+    if batch_id:
+        source_rows = conn.execute(
+            """
+            SELECT * FROM studio_generations
+            WHERE user_id = ? AND batch_id = ? AND status = 'success'
+              AND visibility = 'public' AND COALESCE(deleted_at,'') = ''
+              AND engine != 'demo'
+            ORDER BY batch_index ASC, created_at ASC, id ASC
+            """,
+            (int(row["user_id"]), batch_id),
+        ).fetchall()
+    else:
+        source_rows = [row]
 
-    # Preserve the creator's order, including the first *successful* picture
-    # as the default cover. Do not create duplicate media for repeated URLs.
-    valid_items: list[tuple[dict[str, Any] | None, str]] = []
+    valid_items: list[tuple[dict[str, Any] | None, str, str]] = []
     seen_urls: set[str] = set()
-    for idx, raw in enumerate(raw_items):
-        _, url = derive_item_key(raw, idx)
-        if not url or url in seen_urls:
+    for source in source_rows:
+        try:
+            raw_items = json.loads(source["items_json"] or "[]")
+        except (ValueError, TypeError):
+            raw_items = []
+        if not isinstance(raw_items, list):
             continue
-        seen_urls.add(url)
-        valid_items.append((raw if isinstance(raw, dict) else None, url))
+        for idx, raw in enumerate(raw_items):
+            # A failed slot with stale media data is not a published image.
+            if isinstance(raw, dict) and str(raw.get("status") or "").lower() in (
+                "failed", "error", "refunded", "cancelled",
+            ):
+                continue
+            _, url = derive_item_key(raw, idx)
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            valid_items.append((raw if isinstance(raw, dict) else None, url, str(source["id"])))
     if not valid_items:
         return []
 
@@ -309,13 +331,20 @@ def project_generation_to_works(
     ).fetchone()
     author_name = str(author["display_name"]) if author and author["display_name"] else author_username
     first_item = valid_items[0][0]
-    urls = [url for _, url in valid_items]
+    urls = [url for _, url, _ in valid_items]
     images_json = json.dumps(urls, ensure_ascii=False)
 
-    mapping = conn.execute(
-        "SELECT work_id FROM generation_works WHERE generation_id = ? ORDER BY created_at LIMIT 1",
-        (gen_id,),
-    ).fetchone()
+    mapping = None
+    if batch_key:
+        mapping = conn.execute(
+            "SELECT id AS work_id FROM works WHERE generation_batch_key = ?",
+            (batch_key,),
+        ).fetchone()
+    if not mapping:
+        mapping = conn.execute(
+            "SELECT work_id FROM generation_works WHERE generation_id = ? ORDER BY created_at LIMIT 1",
+            (gen_id,),
+        ).fetchone()
     if mapping:
         wid = str(mapping["work_id"])
         work = conn.execute(
@@ -352,7 +381,7 @@ def project_generation_to_works(
                 status, featured, is_new_release, pioneer_rewarded, cheers,
                 likes, favorites, forks, tips, views, stamp_counts_json,
                 published_at_ms, created_label, created_at, updated_at,
-                origin, request_id, forked_from_id, subject
+                origin, request_id, forked_from_id, subject, generation_batch_key
             ) VALUES (
                 ?, ?, ?, ?, ?, ?,
                 ?, '', 'C-15', 'T-01', ?, ?,
@@ -360,14 +389,14 @@ def project_generation_to_works(
                 'published', 0, 1, 0, 0,
                 0, 0, 0, 0, 0, '{}',
                 ?, '刚刚', ?, ?,
-                'generation', '', ?, ?
+                'generation', '', ?, ?, ?
             )
             """,
             (
                 wid, author_username, author_name, title, images_json,
                 json.dumps(styles, ensure_ascii=False), layout, ratio, mode,
                 safe_prompt, int(prompt_has_secret), published_at_ms,
-                created_at, created_at, fork_id, subject,
+                created_at, created_at, fork_id, subject, batch_key,
             ),
         )
         conn.execute(
@@ -378,8 +407,8 @@ def project_generation_to_works(
 
     # The work's images are all publicly readable; their source library remains
     # independently permissioned. Create media grants for every linked image.
-    for url in urls:
-        _grant_work_media(conn, url, author_username, gen_id, wid)
+    for _, url, owner_generation_id in valid_items:
+        _grant_work_media(conn, url, author_username, owner_generation_id, wid)
 
     from .resource_discussions import ensure_topic
     current = conn.execute("SELECT * FROM works WHERE id = ?", (wid,)).fetchone()
