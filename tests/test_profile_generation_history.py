@@ -161,6 +161,38 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
                 ),
             )
 
+    def test_profile_history_collapses_async_slots_to_one_multi_image_run(self):
+        uid = self.creator_alice["id"]
+        conn = self.db.get_conn()
+        for index in (2, 0, 1):
+            gid = f"public_batch_{index}"
+            self._insert_generation(
+                uid, gid, topic="三张小镇插画",
+                created_at=f"2026-11-07T10:0{index}:00Z",
+                images=[f"/generated/scene_{index}.webp"],
+            )
+            conn.execute(
+                "UPDATE studio_generations SET batch_id=?,batch_index=?,batch_total=? WHERE id=?",
+                ("logical_batch_profile", index, 3, gid),
+            )
+        conn.commit()
+        result = get_user_public_generations(self.db, "alice", limit=1)
+        self.assertEqual(result["total"], 1)
+        self.assertFalse(result["hasMore"])
+        self.assertEqual(len(result["generations"]), 1)
+        run = result["generations"][0]
+        self.assertEqual(run["imageCount"], 3)
+        self.assertEqual(run["batchId"], "logical_batch_profile")
+        self.assertEqual(
+            run["images"],
+            ["/generated/scene_0.webp", "/generated/scene_1.webp",
+             "/generated/scene_2.webp"],
+        )
+        details = get_user_public_generation_by_id(
+            self.db, "alice", run["id"]
+        )
+        self.assertEqual(details["generation"]["images"], run["images"])
+
     def test_schema_visibility_and_index(self):
         conn = self.db.get_conn()
         columns = [row[1] for row in conn.execute("PRAGMA table_info(studio_generations)").fetchall()]
