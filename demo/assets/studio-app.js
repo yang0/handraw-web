@@ -5746,7 +5746,7 @@
     if (CS.stageView === "history") renderHistoryStage();
   }
 
-  async function generateSinglePlanCard(planNodeOrArtId, cardId, { silent = false, skipHistory = false, skipCostConfirmation = false } = {}) {
+  async function generateSinglePlanCard(planNodeOrArtId, cardId, { silent = false, skipHistory = false, skipCostConfirmation = false, batchId = "", batchIndex = 0, batchTotal = 1 } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const target = resolveArticleTarget(planNodeOrArtId);
@@ -5755,6 +5755,11 @@
     const card = (planNode.data.cards || []).find((c) => c.id === cardId);
     if (!card || card.status === "generating") return false;
     const previousImageUrl = card.imageUrl || "";
+    if (batchId) {
+      card.batchId = batchId;
+      card.batchIndex = batchIndex;
+      card.batchTotal = batchTotal;
+    }
     const sourcePrompt = String(card.prompt || "").trim();
     if (sourcePrompt.length > 4000) {
       if (!silent) toast("这张图的完整提示词超过 4000 字符，请精简后再生成；没有扣费");
@@ -5788,7 +5793,7 @@
       replacing: Boolean(card.imageUrl)
     }))) return false;
     if (isStaleScope(runEpoch, runScope) || card.status === "generating") return false;
-    if (card.status !== "error") card.requestId = "";
+    if (card.status !== "error" || !card.taskId) card.requestId = "";
 
     const hadDisplayBefore = target.isActiveCanvas
       ? getDownstreamDisplayNodes(planNode.id).some((d) => d.data?.planCardId === card.id)
@@ -5862,6 +5867,11 @@
             refImages,
             recipeSnapshot: card.recipeSnapshot,
             creationSource: "article",
+            ...(card.batchId ? {
+              batchId: card.batchId,
+              batchIndex: card.batchIndex || 0,
+              batchTotal: card.batchTotal || 1
+            } : {}),
             requestId,
             clientRequestId: requestId,
             confirmCost: true
@@ -6024,7 +6034,18 @@
       skipped: allCards.length - effectiveTargets.length
     }))) return false;
     if (isStaleScope(runEpoch, runScope) || planNode.data.status === "generating") return false;
-    const batchRun = { id: makeStableRequestId("article_batch"), cancelled: false,
+    // Retry incomplete cards in the SAME logical run if all selected cards
+    // belong to one unfinished batch. A new user batch gets a new work.
+    const previousBatches = [...new Set(effectiveTargets.map(x => x.batchId).filter(Boolean))];
+    const resumeBatch = previousBatches.length === 1 && effectiveTargets.every(x => x.batchId === previousBatches[0]);
+    const resolvedBatchId = resumeBatch ? previousBatches[0] : makeStableRequestId("article_batch");
+    const resolvedBatchTotal = resumeBatch ? (effectiveTargets[0].batchTotal || effectiveTargets.length) : effectiveTargets.length;
+    effectiveTargets.forEach((card, index) => {
+      card.batchId = resolvedBatchId;
+      card.batchTotal = resolvedBatchTotal;
+      if (!resumeBatch) card.batchIndex = index;
+    });
+    const batchRun = { id: resolvedBatchId, cancelled: false,
       total: effectiveTargets.length, completed: 0, failed: 0, running: 0,
       parallel: selection.parallel, startedAt: Date.now(), ids: effectiveTargets.map(x=>x.id) };
     CS.lastArticleBatchSummary = null;
@@ -6045,7 +6066,8 @@
           batchRun.running += 1;
           try {
             return await generateSinglePlanCard(targetRefId, c.id, {
-              silent: true, skipHistory: true, skipCostConfirmation: true
+              silent: true, skipHistory: true, skipCostConfirmation: true,
+              batchId: c.batchId, batchIndex: c.batchIndex, batchTotal: c.batchTotal
             });
           } finally {
             batchRun.running = Math.max(0,batchRun.running-1);
