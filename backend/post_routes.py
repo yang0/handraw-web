@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-import sqlite3
 from typing import Any
 import urllib.parse
 
@@ -37,7 +36,8 @@ def _is_topic_visible(conn: Any, t_row: Any, user: dict[str, Any] | None = None)
     return True
 
 
-def _resolve_ref_to_topic_id(conn: Any, ref: str, user: dict[str, Any] | None = None) -> str | None:
+def _resolve_ref_to_topic_id(db: Any, ref: str, user: dict[str, Any] | None = None) -> str | None:
+    conn = db.get_conn()
     ref = ref.strip()
     if not ref:
         return None
@@ -103,12 +103,9 @@ def _resolve_ref_to_topic_id(conn: Any, ref: str, user: dict[str, Any] | None = 
         ).fetchone()
         if w_cur:
             from .resource_discussions import ensure_topic
-            try:
-                tid = ensure_topic(conn, "work", ref_work, dict(w_cur), initial_origin="submission", listed_at_ms=None)
-                conn.commit()
-                return tid
-            except Exception:
-                pass
+            with db.transaction() as tx:
+                tid = ensure_topic(tx, "work", ref_work, dict(w_cur), initial_origin="submission", listed_at_ms=None)
+            return tid
 
     # 3. Semantic prefix or direct style/layout code
     if ref.lower().startswith("style-"):
@@ -147,7 +144,7 @@ def _resolve_ref_to_topic_id(conn: Any, ref: str, user: dict[str, Any] | None = 
 def _handle_t_redirect(handler: Any, ref: str, qs: dict[str, list[str]] | None = None) -> bool:
     conn = handler.db.get_conn()
     user = handler._current_user(required=False)
-    topic_id = _resolve_ref_to_topic_id(conn, ref, user)
+    topic_id = _resolve_ref_to_topic_id(handler.db, ref, user)
     if not topic_id:
         code = ""
         kind = None
@@ -176,12 +173,8 @@ def _handle_t_redirect(handler: Any, ref: str, qs: dict[str, list[str]] | None =
             res = resolve_resource(conn, kind, code, viewer=user, include_pending=True)
             if res:
                 from .resource_discussions import ensure_topic
-                try:
-                    topic_id = ensure_topic(conn, kind, code, res)
-                    conn.commit()
-                except sqlite3.IntegrityError:
-                    conn.rollback()
-                    topic_id = _resolve_ref_to_topic_id(conn, ref, user)
+                with handler.db.transaction() as tx:
+                    topic_id = ensure_topic(tx, kind, code, res)
 
         if not topic_id:
             from .config import DEMO_DIR

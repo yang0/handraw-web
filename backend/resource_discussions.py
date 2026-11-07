@@ -17,6 +17,12 @@ from .config import CONTENT_DIR
 from . import services as S
 from .runtime_policy import sanitize_html, sanitize_media_url, sanitize_plain_text
 
+try:
+    from psycopg import IntegrityError as PostgresIntegrityError
+except ImportError:  # SQLite-only installations need no PostgreSQL driver.
+    PostgresIntegrityError = sqlite3.IntegrityError
+
+TOPIC_INTEGRITY_ERRORS = (sqlite3.IntegrityError, PostgresIntegrityError)
 
 @lru_cache(maxsize=1)
 def static_catalog():
@@ -219,7 +225,7 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
         )
         tx.execute(f"RELEASE SAVEPOINT {sp_name}")
         return tid
-    except sqlite3.IntegrityError:
+    except TOPIC_INTEGRITY_ERRORS:
         tx.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
         tx.execute(f"RELEASE SAVEPOINT {sp_name}")
 
