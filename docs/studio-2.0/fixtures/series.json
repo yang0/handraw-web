@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "p-series",
+    "kind": "series",
+    "revision": 2,
+    "authority": "spec"
+  },
+  "creationSpec": {
+    "schemaVersion": 1,
+    "revision": 1,
+    "subject": "杭州春日旅行指南",
+    "outputMode": "graphic-text",
+    "style": {
+      "id": "FA-001",
+      "type": "style"
+    },
+    "fusionEnabled": false,
+    "layout": {
+      "id": "SC-021",
+      "type": "layout"
+    },
+    "colors": [],
+    "tones": [],
+    "moods": [],
+    "ratio": "3:4",
+    "ratioSource": "default",
+    "referenceMedia": [
+      {
+        "mediaId": "media-self-1",
+        "role": "scene"
+      }
+    ],
+    "lockedFields": [
+      "style"
+    ]
+  },
+  "plan": {
+    "planId": "pl-6",
+    "revision": 3,
+    "kind": "story-series",
+    "slots": [
+      {
+        "slotId": "slot-1",
+        "order": 0,
+        "subject": "封面",
+        "overrides": {},
+        "lockedFields": []
+      },
+      {
+        "slotId": "slot-2",
+        "order": 1,
+        "subject": "西湖",
+        "overrides": {},
+        "lockedFields": []
+      },
+      {
+        "slotId": "slot-3",
+        "order": 2,
+        "subject": "龙井",
+        "overrides": {
+          "layout": {
+            "id": "SC-022",
+            "type": "layout"
+          }
+        },
+        "lockedFields": [
+          "layout"
+        ]
+      },
+      {
+        "slotId": "slot-4",
+        "order": 3,
+        "subject": "美食",
+        "overrides": {},
+        "lockedFields": []
+      },
+      {
+        "slotId": "slot-5",
+        "order": 4,
+        "subject": "路线",
+        "overrides": {},
+        "lockedFields": []
+      },
+      {
+        "slotId": "slot-6",
+        "order": 5,
+        "subject": "总结",
+        "overrides": {},
+        "lockedFields": []
+      }
+    ]
+  }
+}
