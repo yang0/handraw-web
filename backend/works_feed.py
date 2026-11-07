@@ -232,31 +232,22 @@ def get_works_feed(
         base_params.extend(sc_params)
 
     where_sql = " AND ".join(base_clauses)
+    # V3 stores all images in one canonical work. Feed rows are already the
+    # gallery unit; do not join generation mappings or run expensive window
+    # rankings to collapse several per-image works.
     cte_sql = f"""
-        WITH scoped_works AS (
-            SELECT
-                w.*,
-                COALESCE(gw.generation_id, 'work_' || w.id) AS batch_id,
-                COALESCE(gw.rowid, 0) AS gen_rowid
+        WITH ranked_works AS (
+            SELECT w.*,
+                   'work_' || w.id AS batch_id,
+                   1 AS batch_rank,
+                   1 AS batch_total
             FROM works w
-            LEFT JOIN generation_works gw ON gw.work_id = w.id
             WHERE {where_sql}
-        ),
-        ranked_works AS (
-            SELECT
-                sw.*,
-                ROW_NUMBER() OVER (
-                    PARTITION BY sw.batch_id
-                    ORDER BY sw.gen_rowid ASC, sw.published_at_ms ASC, sw.id ASC
-                ) AS batch_rank,
-                COUNT(*) OVER (
-                    PARTITION BY sw.batch_id
-                ) AS batch_total
-            FROM scoped_works sw
         )
     """
 
-    candidate_filter = "1 = 1" if is_search else "batch_rank = 1"
+    candidate_filter = "1 = 1"
+
 
     # Compute format counts across the current filter scope (before format slicing)
     counts_sql = f"""
