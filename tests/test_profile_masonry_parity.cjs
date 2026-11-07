@@ -23,8 +23,10 @@ assert.match(css, /\.hw-profile-feed\s*\{[^}]*display:\s*grid;[^}]*grid-template
   "Wide profile feed must use five explicit left-to-right tracks");
 assert.match(homeCss, /\.hw-mf-grid\s*\{[^}]*column-count:\s*5;/s);
 for (const [width, count] of [[1400,4],[1100,3],[760,2],[350,1]]) {
+  const cols = count === 1 ? "minmax\\(0, 1fr\\)" :
+    "repeat\\(" + count + ", minmax\\(0, 1fr\\)\\)";
   assert.match(css, new RegExp("@media \\(max-width: " + width +
-    "px\\)[^}]*\\.hw-profile-feed \\{ grid-template-columns: repeat\\(" + count + ", minmax\\(0, 1fr\\)\\);"),
+    "px\\)[^}]*\\.hw-profile-feed \\{ grid-template-columns: " + cols + ";"),
     "Profile masonry at " + width + "px must match homepage: " + count);
   assert.ok(homeCss.includes("@media (max-width: " + width + "px)"),
     "Homepage breakpoint changed; review profile parity");
