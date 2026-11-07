@@ -514,7 +514,7 @@ def save_data_url_upload(
 
     raw_cat = str(cat or "other").strip().lower()
     PUBLIC_CATS = ("characters", "props", "scenes", "other")
-    INTERNAL_CATS = ("forum", "skill_history")          # 仅由论坛/投稿发布写入，原样保留
+    INTERNAL_CATS = ("forum", "share", "skill_history")          # 仅由论坛/投稿发布写入，原样保留
     if raw_cat in PUBLIC_CATS or raw_cat in INTERNAL_CATS:
         safe_cat = raw_cat
     else:
