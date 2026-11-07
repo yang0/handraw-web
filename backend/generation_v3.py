@@ -606,9 +606,13 @@ def record_public_work(
     for removed in removed_urls:
         tx.execute(
             """UPDATE media_public_grants SET revoked_at=?
-               WHERE target_type='work' AND target_id=? AND media_url=?
-                 AND revoked_at IS NULL""",
-            (now, work_id, removed),
+               WHERE media_url=? AND revoked_at IS NULL AND (
+                 (target_type='work' AND target_id=?) OR
+                 (target_type='topic' AND target_id IN (
+                    SELECT id FROM forum_topics WHERE work_id=?
+                 ))
+               )""",
+            (now, removed, work_id, work_id),
         )
         if removed.startswith(("/generated/", "/uploads/")):
             from .media_gc import queue_media_cleanup
