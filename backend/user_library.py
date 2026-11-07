@@ -344,10 +344,25 @@ def is_media_referenced(
         return True
 
     if clean_url:
-        # 2. Check media public grants (any grant row means image was shared)
+        # 2. Only valid, currently published grants can keep an object alive.
+        # A stale grant for a hidden/deleted work cannot pin an orphan forever.
         if _check_query(
             "media_public_grants",
-            "SELECT 1 FROM media_public_grants WHERE media_url = ? AND revoked_at IS NULL LIMIT 1",
+            """SELECT 1 FROM media_public_grants g
+               WHERE g.media_url=? AND g.revoked_at IS NULL AND (
+                   (g.target_type='work' AND EXISTS (
+                       SELECT 1 FROM works w WHERE w.id=g.target_id
+                         AND w.status='published'
+                   )) OR
+                   (g.target_type='topic' AND EXISTS (
+                       SELECT 1 FROM forum_topics t WHERE t.id=g.target_id
+                         AND t.status='published'
+                   )) OR
+                   (g.target_type='asset' AND EXISTS (
+                       SELECT 1 FROM catalog_assets a WHERE a.code=g.target_id
+                         AND a.status='published'
+                   ))
+               ) LIMIT 1""",
             (clean_url,),
         ):
             return True
