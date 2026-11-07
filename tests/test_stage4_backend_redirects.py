@@ -99,8 +99,8 @@ class Stage4BackendRedirectsTests(unittest.TestCase):
         gen_row = {
             "id": "gen_batch_99",
             "user_id": self.alice["id"],
-            "username": "alice",
-            "author_name": "Alice",
+            "username": self.alice["username"],
+            "author_name": self.alice.get("display_name") or self.alice["username"],
             "subject": "batch generation subject",
             "mode": "quick",
             "engine": "dall-e-3",
@@ -121,7 +121,7 @@ class Stage4BackendRedirectsTests(unittest.TestCase):
             "completed_at": now_iso,
         }
 
-        # Project generation to 4 works
+        # V3 projects all four images into a single canonical work
         work_ids = project_generation_to_works(self.conn, gen_row)
         self.assertEqual(len(work_ids), 1)
 
