@@ -799,7 +799,22 @@ def _is_published_media(db: Database, media_url: str) -> bool:
     conn = db.get_conn()
     try:
         row = conn.execute(
-            "SELECT 1 FROM media_public_grants WHERE media_url = ? AND revoked_at IS NULL LIMIT 1",
+            """
+            SELECT 1 FROM media_public_grants g
+            WHERE g.media_url=? AND g.revoked_at IS NULL
+              AND (
+                (g.target_type='work' AND EXISTS (
+                    SELECT 1 FROM works w
+                    WHERE w.id=g.target_id AND w.status='published'
+                ))
+                OR (g.target_type='topic' AND EXISTS (
+                    SELECT 1 FROM forum_topics t
+                    WHERE t.id=g.target_id AND t.status='published'
+                ))
+                OR (g.target_type NOT IN ('work','topic'))
+              )
+            LIMIT 1
+            """,
             (target,),
         ).fetchone()
     except Exception:
