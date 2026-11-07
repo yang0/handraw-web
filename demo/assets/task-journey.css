@@ -82,3 +82,41 @@
 .hw-article-charge-actions button:focus-visible{outline:3px solid #d7856f;outline-offset:3px}
 @media(max-width:600px){.hw-article-charge-dialog{padding:19px}.hw-article-charge-actions button{flex:1}}
 @media(prefers-reduced-motion:reduce){.hw-article-charge-overlay{backdrop-filter:none}}
+
+/* P1: AI plan decisions and document fidelity compare. */
+.hw-article-plan-review-overlay{position:fixed;inset:0;z-index:12300;display:grid;place-items:center;padding:16px;background:rgba(25,20,17,.65);backdrop-filter:blur(4px)}
+.hw-article-plan-review{width:min(750px,100%);max-height:90vh;overflow:auto;background:#fffdf8;color:#29231e;border-radius:20px;padding:26px;box-shadow:0 25px 80px #20170c44}
+.hw-art-review-kicker{font-size:11px;color:#b9412c;letter-spacing:.12em;font-weight:850}
+.hw-article-plan-review h2{margin:8px 0;font-size:23px}
+.hw-article-plan-review header p{margin:0;line-height:1.65;color:#756b61;font-size:13px}
+.hw-art-review-tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
+.hw-art-review-tags span{background:#f3e8db;border-radius:30px;padding:5px 10px;font-size:11px}
+.hw-art-review-list{display:flex;flex-direction:column;gap:10px;max-height:50vh;overflow:auto;margin:20px 0}
+.hw-art-review-choice{display:flex;gap:13px;border:1px solid #dfd2c4;border-radius:12px;padding:13px;cursor:pointer}
+.hw-art-review-choice:has(input:checked){border-color:#c78d72;background:#fff8f2}
+.hw-art-review-choice input{margin-top:4px;accent-color:#b9412c}
+.hw-art-review-main{display:flex;flex-direction:column;gap:6px;min-width:0}
+.hw-art-review-main strong{font-size:14px}
+.hw-art-review-main small{color:#897a69;font-size:11px}
+.hw-art-review-purpose,.hw-art-review-subject{font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.hw-art-review-purpose b,.hw-art-review-subject b{color:#a54a32}
+.hw-art-review-summary{font-size:12px;color:#77685a}
+.hw-article-plan-review footer{display:flex;gap:10px;justify-content:flex-end}
+.hw-article-plan-review footer button{border:1px solid #d9c9b8;background:transparent;border-radius:9px;padding:10px 16px;font-weight:800;cursor:pointer}
+.hw-article-plan-review footer .hw-art-review-apply{background:#b9412c;color:#fff;border-color:#b9412c}
+.hw-article-plan-review button:disabled{opacity:.45;cursor:not-allowed}
+.hw-article-plan-review :focus-visible{outline:3px solid #e6a686;outline-offset:2px}
+.ic-art-reason{font-size:11.5px;line-height:1.55;color:#776a58;margin:5px 0 0}
+.ic-art-reason strong{color:#a64a31}
+.hw-document-fidelity{padding:13px;border:1px solid #dfd2c4;background:#f8f3eb;border-radius:12px;font-size:12px;display:flex;flex-direction:column;gap:7px}
+.hw-document-fidelity p{margin:0;line-height:1.6;color:#665c52}
+.hw-document-fidelity-details summary{cursor:pointer;font-weight:750}
+.hw-document-fidelity-segment{margin-top:12px;padding:12px;border:1px solid #e0d3c5;background:#fffdf9;border-radius:9px}
+.hw-document-fidelity-segment h3{font-size:12px;margin:0 0 8px}
+.hw-document-fidelity-issues{color:#a53d2d;margin:6px 0}
+.hw-document-fidelity-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.hw-document-fidelity-columns>div{min-width:0}
+.hw-document-fidelity-columns b{font-size:11px}
+.hw-document-fidelity-columns pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:#f7f1e8;padding:11px;border-radius:7px;font-size:11px;line-height:1.6}
+@media(max-width:660px){.hw-article-plan-review{padding:17px}.hw-document-fidelity-columns{grid-template-columns:1fr}.hw-article-plan-review footer button{flex:1}}
+@media(prefers-reduced-motion:reduce){.hw-article-plan-review-overlay{backdrop-filter:none}}
