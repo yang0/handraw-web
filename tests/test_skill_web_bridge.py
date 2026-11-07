@@ -103,6 +103,24 @@ class SkillWebBridgeTests(unittest.TestCase):
         self.assertEqual(recent["items"][0]["id"], ids[0])
         self.assertIsNotNone(recent["items"][0]["deletedAt"])
 
+    def test_rollout_flag_makes_new_website_history_private_without_rewriting_legacy(self):
+        from backend.services import record_user_studio_history
+        with patch.dict(os.environ, {"HANDRAW_PRIVATE_GENERATION_HISTORY_V1": "1"}):
+            record_user_studio_history(self.db, self.owner, {
+                "id": "web_hist_private_flag", "tabTitle": "本地记录",
+                "mode": "graphic-text", "kind": "single",
+                "items": [{"imageUrl": "/images/individual/FA/FA-013.webp"}],
+            })
+        row=self.db.get_conn().execute(
+            "SELECT visibility FROM studio_generations WHERE id='web_hist_private_flag'"
+        ).fetchone()
+        self.assertEqual(row["visibility"], "private")
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM generation_works WHERE generation_id='web_hist_private_flag'"
+        ).fetchone()[0],0)
+        own=bridge.list_history(self.db,self.owner,{})
+        self.assertTrue(any(r["id"]=="web_hist_private_flag" and r["canPublish"] for r in own["items"]))
+
     def test_history_private_idempotent_and_not_work(self):
         rid = str(uuid.uuid4())
         image = b"fixture-image"
