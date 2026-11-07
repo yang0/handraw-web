@@ -2332,8 +2332,8 @@
             <button type="button" class="btn btn-sm" id="topic-error-back">← 返回论坛讨论列表</button>
           </div>
           <div class="hw-detail-section-card" style="text-align:center;padding:48px 24px;">
-            <h2 style="margin:0 0 8px;">网络加载失败</h2>
-            <p style="color:var(--ink-muted);margin:0 0 18px;">${esc((_activeTopicDetail.err && _activeTopicDetail.err.message) || "请求失败，请检查网络后重试。")}</p>
+            <h2 style="margin:0 0 8px;">暂时无法加载帖子</h2>
+            <p style="color:var(--ink-muted);margin:0 0 18px;">${esc((_activeTopicDetail.err && _activeTopicDetail.err.message) || "请求失败，请稍后重试。")}</p>
             <button type="button" class="btn btn-primary" id="topic-retry-btn">重新加载</button>
           </div>
         </div>

@@ -17,6 +17,7 @@ import urllib.parse
 
 from . import forum_resources
 from . import services as S
+from .generation_works import sort_generation_batch_works
 from .resource_discussions import resolve_resource
 from .skill_prompt import strip_bilingual_definition
 
@@ -337,15 +338,16 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
             gen_id = str(gw_row["generation_id"])
             sibs = conn.execute(
                 """
-                SELECT gw.work_id, gw.item_key, w.title, w.images_json, t.id AS topic_id
+                SELECT gw.work_id, gw.item_key, gw.created_at AS mapped_at, w.title, w.images_json, t.id AS topic_id
                 FROM generation_works gw
                 JOIN works w ON w.id = gw.work_id
                 LEFT JOIN forum_topics t ON t.work_id = w.id
                 WHERE gw.generation_id = ? AND w.status = 'published'
-                ORDER BY gw.rowid ASC
+                ORDER BY gw.created_at ASC, gw.item_key ASC, gw.work_id ASC
                 """,
                 (gen_id,),
             ).fetchall()
+            sibs = sort_generation_batch_works(conn, gen_id, sibs)
             if len(sibs) > 1:
                 for idx, s in enumerate(sibs):
                     s_imgs = json.loads(s["images_json"] or "[]") if s["images_json"] else []

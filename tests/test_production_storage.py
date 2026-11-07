@@ -351,6 +351,42 @@ class PostgresSnapshotTests(unittest.TestCase):
             with psycopg.connect(admin_dsn, autocommit=True) as admin:
                 admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(database_name)))
 
+    @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
+    def test_batch_post_and_work_details_on_postgresql(self):
+        import uuid
+        import psycopg
+        from psycopg import sql
+        from psycopg.conninfo import make_conninfo
+        from backend.db import Database
+        from backend.postgres_db import PostgresDatabase
+        from tests.test_batch_detail_order import seed_batch_detail, assert_batch_detail_order
+        snapshot = Path(self.tmp.name) / 'batch_detail.db'
+        source = Database(snapshot)
+        with patch.dict(os.environ, {'HANDRAW_DEMO_MODE': '0'}):
+            try:
+                source.migrate()
+                seed_batch_detail(source)
+            finally:
+                source.close()
+            admin_dsn = os.environ['HANDRAW_PG_STAGING_URL']
+            name = 'handraw_batch_' + uuid.uuid4().hex[:12]
+            with psycopg.connect(admin_dsn, autocommit=True) as admin:
+                admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
+            pg = None
+            try:
+                dsn = make_conninfo(admin_dsn, dbname=name)
+                self.tool.stage(snapshot, dsn, True)
+                pg = PostgresDatabase(dsn)
+                pg.migrate()
+                # These routes must remain reads, including on a real PG connection.
+                pg.get_conn()._db.execute('SET default_transaction_read_only=on')
+                assert_batch_detail_order(self, pg)
+            finally:
+                if pg:
+                    pg.close()
+                with psycopg.connect(admin_dsn, autocommit=True) as admin:
+                    admin.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(name)))
+
     def test_fk_violations_cannot_migrate(self):
         with sqlite3.connect(self.path) as conn:
             conn.execute("INSERT INTO sessions(token,user_id) VALUES(?,?)", ("orphan", 999))

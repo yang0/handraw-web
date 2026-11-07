@@ -11,6 +11,7 @@ import uuid
 
 from .db import Database
 from .media_dims import image_size
+from .generation_works import sort_generation_batch_works
 from .ranking import WORK_POPULAR_EXPR, normalize_sort
 from .services import (
     _seed_filter,
@@ -575,14 +576,15 @@ def get_work_by_id(
         gen_id = str(gw_row["generation_id"])
         siblings = conn.execute(
             """
-            SELECT gw.work_id, gw.rowid
+            SELECT gw.work_id, gw.item_key, gw.created_at AS mapped_at
             FROM generation_works gw
             JOIN works w ON w.id = gw.work_id
             WHERE gw.generation_id = ? AND w.status = 'published'
-            ORDER BY gw.rowid ASC
+            ORDER BY gw.created_at ASC, gw.item_key ASC, gw.work_id ASC
             """,
             (gen_id,),
         ).fetchall()
+        siblings = sort_generation_batch_works(conn, gen_id, siblings)
         w_dict["batchId"] = gen_id
         w_dict["batchTotal"] = len(siblings)
         w_idx = next((i + 1 for i, s in enumerate(siblings) if s["work_id"] == wid), 1)
