@@ -5162,7 +5162,7 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
                 continue
             aid = str(art["id"])
             existing = tx.execute(
-                "SELECT user_id, updated_at_ms, deleted_at FROM studio_articles WHERE id = ?",
+                "SELECT * FROM studio_articles WHERE id = ?",
                 (aid,),
             ).fetchone()
             if existing:
@@ -5173,6 +5173,22 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
                         raise ServiceError("文章已经删除，请将本地内容另存为新文章", status=409, code="article_deleted")
                     # Compatibility with legacy clients: never resurrect a
                     # previously deleted article, and do not fail the batch.
+                    continue
+                # A full-workspace sync may include untouched articles. Do not
+                # bump their revisions or manufacture cross-tab conflicts.
+                new_title = str(art.get("articleTitle") or "未命名文章")[:140]
+                new_cards = json.dumps(art.get("cards") or [], ensure_ascii=False)
+                unchanged = (
+                    existing["article_title"] == new_title
+                    and str(existing["markdown"] or "") == str(art.get("markdown") or "")
+                    and str(existing["cards_json"] or "[]") == new_cards
+                    and str(existing["style1"] or "") == str(art.get("style1") or "")
+                    and str(existing["layout_code"] or "") == str(art.get("layout") or "")
+                    and str(existing["status"] or "") == str(art.get("status") or "ready")
+                    and int(existing["run_count"] or 0) == int(art.get("runCount") or 0)
+                )
+                if unchanged:
+                    versions[aid] = int(existing["updated_at_ms"] or 0)
                     continue
             if "baseUpdatedAtMs" in art:
                 try:
