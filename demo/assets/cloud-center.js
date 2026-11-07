@@ -396,7 +396,7 @@
         message("正在保存「" + file.name + "」到私人图库…");
         const result = await api("/api/library/assets/" + uid, {method:"PUT",body:{
           uid: uid, cat: category === "all" ? "other" : category,
-          name: file.name.replace(/\\.[^.]+$/, "") || "我的素材",
+          name: file.name.replace(/\.[^.]+$/, "") || "我的素材",
           dataUrl: dataUrl, origin: "web"
         }});
         const saved = result && (result.item || (result.uid ? result : null));
