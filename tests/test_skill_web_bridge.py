@@ -201,6 +201,26 @@ class SkillWebBridgeTests(unittest.TestCase):
             bridge.import_history(self.db, self.owner, {**data, "visibility": "public"},
                                   lambda *a, **kw: self.fail("must never save"))
 
+    def test_legacy_reconciliation_is_admin_only_and_never_promotes_private(self):
+        with self.assertRaises(ServiceError) as unauthorised:
+            bridge.legacy_generation_audit(self.db,self.owner)
+        self.assertEqual(unauthorised.exception.status,403)
+        admin={**self.owner,"role":"admin"}
+        public=bridge.legacy_generation_audit(self.db,admin)
+        self.assertEqual(public["withoutMappedWork"],0)
+        with self.assertRaises(ServiceError):
+            bridge.reconcile_legacy_generations(self.db,admin,{"batchSize":10})
+        from backend.services import record_user_studio_history
+        with patch.dict(os.environ,{"HANDRAW_PRIVATE_GENERATION_HISTORY_V1":"1"}):
+            record_user_studio_history(self.db,self.owner,{
+                "id":"private_audit_only","tabTitle":"私有历史","mode":"graphic-text",
+                "items":[{"imageUrl":"/images/individual/FA/FA-013.webp"}]})
+        before=self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
+        repair=bridge.reconcile_legacy_generations(
+            self.db,admin,{"batchSize":10,"confirmed":True})
+        self.assertTrue(repair["ok"])
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before)
+
     def test_notifications_scoped_to_owner(self):
         with self.db.transaction() as tx:
             tx.execute("INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at)"
