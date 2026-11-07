@@ -1,44 +1,48 @@
-# Skill × Web：当前公开多图作品接口与联调说明（V3 P0）
+# Handraw Skill × Web · V3 统一任务与多图作品合同
 
-> 2026-11-07。**以 [V3 规范](generation-works-v3.md) / [Issue #84](https://github.com/yang0/handraw-web/issues/84) 为准。**
-> 这份文件代替原先“每张图片单独创建作品、二次发布”的 V1 实施说明。
-> Web：`yang0/handraw-web@main`；Skill：`yang0/handraw-style@feature/skill-web-unification-v1-20261107`。
+> 2026-11-07 · 统一架构以 [Handraw V3 规范](generation-works-v3.md) 和 [Issue #84](https://github.com/yang0/handraw-web/issues/84) 为准。
+>
+> Web：https://github.com/yang0/handraw-web （`main`）
+> Skill：https://github.com/yang0/handraw-style （`feature/skill-web-unification-v1-20261107`）
+>
+> **网站未发布且没有需保留的旧生成数据。全新数据库初始化，不做旧数据迁移或历史作品回填。**
 
-## 已实现的过渡合同（V3 P0）
+## 1. 冻结产品合同
 
-- 网站每个“逻辑生成批次”对应最多一件公开作品；画布单张或批量请求带稳定 `batchId`、0-based `batchIndex`、`batchTotal`。每个模型执行槽位仍有自己的 `requestId`，不能拿请求 ID 当整批作品 ID。
-- Web 使用 `studio_generations` 存各执行槽位，V3 迁移 098 添加批次字段；`works.generation_batch_key` 唯一索引约束同一用户同一批次仅有一件作品。各槽位成功后按计划顺序汇入同一 `works.images_json`；默认封面是第一张成功图片。
-- 一次非批次请求也只能创建一件作品，作品内可以包含多张图。失败/无图的任务不创建公开作品。
-- Skill `history record` 只写本地；明确执行 `history upload` 后发送全部图片，服务端自动公开为**一件多图作品**，返回 `{workId,workIds:[workId],imageCount}`；上传端校验回执，不确认全部图片就不把本地记录标成 synced。
-- 作品广场、个人主页按作品计数，一个作品一张封面卡；多图卡显示数量。点击作品进入作品/关联讨论详情，完整图片列表由 `works.images_json` 提供；后续补图会同步更新论坛主题媒体。
-- 社区点赞/收藏/评论/举报是整个 `work_id` 的行为，不能按每张图片复制作品或主题。管理员审核隐藏状态不可因为后续批次结果恢复公开。
-- 网站成功生成图片自动公开，Skill 用户明确上传后公开；私人参考图库、自建画风/图型和未上传 Skill 本地图片仍保持私有。
+- 每个逻辑任务 `generation_runs` 最多只有一个公开 `works`，同一作品包含全部成功的图片/GIF。
+- 作品广场、个人主页一件作品一张封面卡，显示图片数，详情按顺序展示全部图片。
+- 网站成功生成时自动公开；Skill 仅在用户明确执行 `history upload` 时上传并公开；不需要二次发布。
+- `generation_items` 保存全部输出槽位（包括失败项）；`media_assets` 和 `work_media` 是成功作品图片的权威身份与有序关联。
+- 点赞、评论、收藏、举报全部关联唯一 `work_id`。参考图库、私有画风/图型、未上传的 Skill 本地文件和黑盒提示词依然受保护。
 
-## 接口与权限
+## 2. 关键接口
 
-| 入口 | 行为 |
+| 接口 | 核心行为 |
 | --- | --- |
-| `POST /api/studio/generate` | 新增批次字段：`batchId`、`batchIndex`、`batchTotal`；成功时自动关联唯一作品 |
-| `POST /api/v1/me/generations` | Skill 主动上传完整 run；必须具备 `publish` scope；幂等返回单一 `workId` |
-| `GET /api/v1/me/generations` | 本人可见跨端历史，Web 批次按逻辑任务归组 |
-| `GET /api/works/feed?author=用户名` | 个人公开作品分页，一件作品一行 |
-| `GET /api/works/feed` | 广场分页，一件作品一张卡，多图标记实际数量 |
-| 作品详情 / 论坛主题 | 同一 `work_id` 下展示全部图片和一套互动 |
-| `GET /api/admin/skill-bridge/audit` | 管理员审核尚未完成的旧公开映射问题（开发环境辅助） |
+| `POST /api/studio/generate` | 一个画布批次共享 `batchId`，每张网关请求单独有 `requestId`、`batchIndex`、`batchTotal` |
+| `POST /api/v1/me/generations` | Skill 主动上传整批图片，服务器返回 `workId`、`workIds: [workId]`、`imageCount` |
+| `GET /api/v1/me/generations` | 根据 `generation_runs` 分页，网站和 Skill 合并为一个逻辑任务历史，带图片和失败槽位 |
+| `GET /api/works/feed` | 直接对 `works` 分页，一件作品一行/一张卡 |
+| 作品详情/讨论主题 | 读取同一作品的全部图片，作品详情的权威图片顺序来自 `work_media JOIN media_assets` |
 
-**旧合同不再有效**：`workIds` 不是逐图片 ID 列表；它只能是 `[workId]`。不再提供生成历史的二次发布按钮或接口。
+**旧接口已废弃**：`/api/admin/skill-bridge/audit`、`/api/admin/skill-bridge/reconcile`；旧 Skill 专用历史与作品映射表不再创建。作品回执 `workIds` 不是逐张图片列表，只能包含单个 `workId`。
 
-## 未完成（Issue #84 P1）
+## 3. 数据库与运行时边界
 
-- 规范化统一 `generation_runs`、`generation_items`、`media_assets`、`work_media`，移除历史 JSON 媒体身份多处重复及旧双链映射表。
-- PostgreSQL 权威数据与 Redis 任务状态/缓存、对象存储适配；跨端任务与媒体的规范化唯一约束。
-- 可编辑封面，图片级状态与部分失败槽位的完整统一模型。
-- 跨分页历史聚合、媒体授权异步补偿、端到端真实浏览器测试、Web CI 恢复。
+- SQLite 新数据库初始化包含 V3 规范化 Schema；旧 `generation_works`、`skill_generation_runs`、`skill_generation_work_items`、`skill_history_publications` 不再创建。
+- `studio_generations` 仍专用于云端网关**执行、扣费、失败退款及任务恢复**，不再代表公开作品身份。
+- `works.images_json` 是作品广场列表读取的缓存。同步写入规范化媒体后在同一数据库事务刷新，数据库触发器拒绝不一致；详情直接读取规范化媒体。
+- `studio_generation_media`、`media_public_grants` 仍参与上传归属和媒体公开授权。隐藏作品时需要同时校验授权目标的公开状态。
+- Redis 只承担缓存/限流/任务租约，不能成为生成历史或作品的权威数据库。
+- PostgreSQL 的原生 V3 DDL、现有 Python 业务 SQL 适配和实际生产集成测试尚未全部完成；目前不能将 SQLite 新 Schema 当作 PG 可直接部署的版本。
 
-## 已有验证与发布门禁
+## 4. 验收清单
 
-- Skill 开发分支 GitHub Actions `Skill cloud bridge contract tests` 最新提交通过（包含 Python 语法及离线合同测试）。
-- Web 前端 JavaScript 语法检查通过，覆盖“一作品仅一候选封面”的直接检查；添加 Python 和 CJS 回归测试，**尚无可信 Web CI 全绿记录**。
-- Web GitHub Actions jobs 在分配 Runner 之前失败且无任何测试步骤，不能把失败等同于测试失败，更不能宣称通过。
-- Web `main` 的 GitHub 提交**不等于服务器部署**。发布前必须运行隔离数据库测试、跨端真实上传与批量乱序测试、手机/桌面作品详情测试，确认媒体授权及管理隐藏策略。
-- 没有正式发布，允许设计干净的新 Schema；任何重建测试数据库之前依然要备份并确认数据库环境，不自动删除旧库。
+- [x] 新 schema、直接 `works.run_id` 一对一关系、媒体身份和封面约束、失败槽位持久化逻辑已提交。
+- [x] Web 批量 ID、Skill 可恢复上传、统一跨端历史、单封面瀑布流逻辑已提交。
+- [x] 源码添加数据库约束、安全授权和回归测试。
+- [ ] 真正执行 Web 全量 Python/Node CI，修复测试并保证全绿。
+- [ ] 用真实 Web/Skill 客户端做跨端上传/生成、乱序、失败重试、GIF、移动端完整 E2E。
+- [ ] PostgreSQL 原生 Schema、Redis 集成以及对象存储一致性和并发验收。
+
+**提交到 GitHub 不等于部署到服务器，也不等于所有测试通过。Issue #84 保持开放直到验证完成。**
