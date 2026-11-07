@@ -134,6 +134,62 @@ V3_MIGRATIONS = [
         BEGIN
             SELECT RAISE(ABORT,'cannot_remove_cover_media');
         END;
+        CREATE TRIGGER IF NOT EXISTS trg_works_images_cache_guard
+        BEFORE UPDATE OF images_json ON works
+        WHEN NEW.run_id IS NOT NULL AND json(NEW.images_json) <> (
+            SELECT COALESCE(json_group_array(storage_key),'[]') FROM (
+                SELECT m.storage_key
+                FROM work_media wm JOIN media_assets m ON m.id=wm.media_id
+                WHERE wm.work_id=NEW.id ORDER BY wm.position ASC
+            )
+        )
+        BEGIN
+            SELECT RAISE(ABORT,'generated_work_media_cache_mismatch');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_work_media_owner_update
+        BEFORE UPDATE OF media_id,work_id ON work_media
+        BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+                SELECT 1 FROM works w
+                JOIN users u ON u.username=w.author_username
+                JOIN media_assets m ON m.id=NEW.media_id
+                WHERE w.id=NEW.work_id AND m.owner_user_id=u.id
+            ) THEN RAISE(ABORT,'work_media_owner_mismatch') END;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_generation_item_owner_insert
+        BEFORE INSERT ON generation_items
+        WHEN NEW.media_id IS NOT NULL
+        BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+                SELECT 1 FROM generation_runs r
+                JOIN media_assets m ON m.id=NEW.media_id
+                WHERE r.id=NEW.run_id AND r.user_id=m.owner_user_id
+            ) THEN RAISE(ABORT,'generation_item_owner_mismatch') END;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_generation_item_owner_update
+        BEFORE UPDATE OF media_id,run_id ON generation_items
+        WHEN NEW.media_id IS NOT NULL
+        BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+                SELECT 1 FROM generation_runs r
+                JOIN media_assets m ON m.id=NEW.media_id
+                WHERE r.id=NEW.run_id AND r.user_id=m.owner_user_id
+            ) THEN RAISE(ABORT,'generation_item_owner_mismatch') END;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_generation_run_identity_immutable
+        BEFORE UPDATE OF user_id,source,external_run_id ON generation_runs
+        WHEN NEW.user_id<>OLD.user_id OR NEW.source<>OLD.source
+             OR NEW.external_run_id<>OLD.external_run_id
+        BEGIN
+            SELECT RAISE(ABORT,'run_identity_is_immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_media_asset_identity_immutable
+        BEFORE UPDATE OF owner_user_id,storage_key ON media_assets
+        WHEN NEW.owner_user_id<>OLD.owner_user_id
+             OR NEW.storage_key<>OLD.storage_key
+        BEGIN
+            SELECT RAISE(ABORT,'media_identity_is_immutable');
+        END;
     """),
 ]
 
