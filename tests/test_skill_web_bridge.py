@@ -103,52 +103,62 @@ class SkillWebBridgeTests(unittest.TestCase):
         self.assertEqual(recent["items"][0]["id"], ids[0])
         self.assertIsNotNone(recent["items"][0]["deletedAt"])
 
-    def test_rollout_flag_makes_new_website_history_private_without_rewriting_legacy(self):
+    def test_website_new_generations_are_public_even_when_legacy_flag_set(self):
         from backend.services import record_user_studio_history
         with patch.dict(os.environ, {"HANDRAW_PRIVATE_GENERATION_HISTORY_V1": "1"}):
             record_user_studio_history(self.db, self.owner, {
-                "id": "web_hist_private_flag", "tabTitle": "本地记录",
+                "id": "web_hist_public", "tabTitle": "生成记录",
                 "mode": "graphic-text", "kind": "single",
+                "prompt": "纸上绘制风景",
                 "items": [{"imageUrl": "/images/individual/FA/FA-013.webp"}],
             })
-        row=self.db.get_conn().execute(
-            "SELECT visibility FROM studio_generations WHERE id='web_hist_private_flag'"
+        row = self.db.get_conn().execute(
+            "SELECT visibility FROM studio_generations WHERE id='web_hist_public'"
         ).fetchone()
-        self.assertEqual(row["visibility"], "private")
-        self.assertEqual(self.db.get_conn().execute(
-            "SELECT COUNT(*) FROM generation_works WHERE generation_id='web_hist_private_flag'"
-        ).fetchone()[0],0)
-        own=bridge.list_history(self.db,self.owner,{})
-        self.assertTrue(any(r["id"]=="web_hist_private_flag" and r["canPublish"] for r in own["items"]))
-
-    def test_history_private_idempotent_and_not_work(self):
-        rid = str(uuid.uuid4())
-        image = b"fixture-image"
-        data = {"externalRunId": rid, "originClient": "skill", "visibility": "private",
-                "status": "success", "requestId": "skill-history-" + rid,
-                "originalRequest": "用户最初的创作要求",
-                "images": [{"name": "image.png", "sha256": hashlib.sha256(image).hexdigest(),
-                             "dataUrl": "data:image/png;base64," +
-                             base64.b64encode(image).decode("ascii")}]}
-        saves = []
-        def save_stub(db, user, data_url, name_zh, cat):
-            self.assertEqual(cat, "skill_history")
-            saves.append(data_url)
-            return {"url": "/uploads/private-" + str(len(saves)) + ".png"}
-        before = self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
-        first = bridge.import_history(self.db, self.owner, data, save_stub)
-        repeat = bridge.import_history(self.db, self.owner, data, save_stub)
-        self.assertEqual(first["id"], repeat["id"])
-        self.assertTrue(repeat["deduped"])
-        self.assertEqual(len(saves), 1)
-        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0], before)
+        self.assertEqual(row["visibility"], "public")
+        mapped = self.db.get_conn().execute(
+            "SELECT work_id FROM generation_works WHERE generation_id='web_hist_public'"
+        ).fetchone()
+        self.assertIsNotNone(mapped)
         own = bridge.list_history(self.db, self.owner, {})
-        self.assertTrue(any(x["id"] == first["id"] and x["visibility"] == "private"
-                            for x in own["items"]))
+        self.assertTrue(any(r["id"] == "web_hist_public" and r["visibility"] == "public"
+                            for r in own["items"]))
+
+    def test_skill_upload_publishes_one_work_per_image_without_duplicates(self):
+        from backend.server import save_data_url_upload
+        img = Image.new("RGB", (3, 3), (30, 160, 80))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        raw = buf.getvalue()
+        rid = str(uuid.uuid4())
+        data = {"externalRunId": rid, "originClient": "skill", "visibility": "public",
+                "status": "success", "requestId": "skill-history-" + rid,
+                "originalRequest": "纸张纹理上的绿色小树",
+                "images": [{"name": "image.png", "sha256": hashlib.sha256(raw).hexdigest(),
+                             "dataUrl": "data:image/png;base64," +
+                             base64.b64encode(raw).decode("ascii")}]}
+        before = self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
+        first = bridge.import_history(self.db, self.owner, data, save_data_url_upload)
+        repeat = bridge.import_history(self.db, self.owner, data, save_data_url_upload)
+        self.assertEqual(first["id"], repeat["id"])
+        self.assertEqual(first["workIds"], repeat["workIds"])
+        self.assertTrue(repeat["deduped"])
+        self.assertEqual(first["visibility"], "public")
+        self.assertEqual(len(first["workIds"]), 1)
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0], before + 1)
+        work = self.db.get_conn().execute(
+            "SELECT status,author_username,images_json FROM works WHERE id=?",
+            (first["workIds"][0],)).fetchone()
+        self.assertEqual(work["status"], "published")
+        self.assertEqual(work["author_username"], self.owner["username"])
+        own = bridge.list_history(self.db, self.owner, {})
+        self.assertTrue(any(x["id"] == first["id"] and x["visibility"] == "public"
+                            and x["workIds"] == first["workIds"] for x in own["items"]))
         self.assertFalse(any(x["id"] == first["id"] for x in
                              bridge.list_history(self.db, self.other, {})["items"]))
         with self.assertRaises(ServiceError) as error:
-            bridge.import_history(self.db, self.owner, {**data, "originalRequest": "被篡改"}, save_stub)
+            bridge.import_history(self.db, self.owner, {**data, "originalRequest": "被篡改"},
+                                  save_data_url_upload)
         self.assertEqual(error.exception.status, 409)
 
     def test_history_upload_resumes_after_interruption_without_duplicate_media(self):
@@ -157,7 +167,7 @@ class SkillWebBridgeTests(unittest.TestCase):
         images=[{"name":name,"sha256":hashlib.sha256(blob).hexdigest(),
                  "dataUrl":"data:image/png;base64,"+base64.b64encode(blob).decode()}
                 for name,blob in (("one.png",a),("two.png",b))]
-        payload={"externalRunId":rid,"originClient":"skill","visibility":"private",
+        payload={"externalRunId":rid,"originClient":"skill","visibility":"public",
                  "status":"success","requestId":"skill-history-"+rid,
                  "originalRequest":"多图片批量任务", "images":images}
         saved=[]
@@ -179,10 +189,12 @@ class SkillWebBridgeTests(unittest.TestCase):
             self.assertEqual(data_url,images[1]["dataUrl"])
             saved.append(data_url)
             return {"url":"/uploads/saved-two.png"}
-        completed=bridge.import_history(self.db,self.owner,payload,resume_store)
-        self.assertEqual(completed["visibility"],"private")
-        self.assertEqual(len(saved),2)
-        self.assertTrue(bridge.import_history(self.db,self.owner,payload,resume_store)["deduped"])
+        with patch.object(bridge, "_publish_skill_run_images", return_value=["work_a", "work_b"]):
+            completed=bridge.import_history(self.db,self.owner,payload,resume_store)
+            self.assertEqual(completed["visibility"],"public")
+            self.assertEqual(completed["workIds"],["work_a","work_b"])
+            self.assertEqual(len(saved),2)
+            self.assertTrue(bridge.import_history(self.db,self.owner,payload,resume_store)["deduped"])
         self.assertEqual(self.db.get_conn().execute(
             "SELECT COUNT(*) FROM skill_generation_runs WHERE user_id=? AND external_run_id=?",
             (self.owner["id"],rid)).fetchone()[0],1)
@@ -195,7 +207,7 @@ class SkillWebBridgeTests(unittest.TestCase):
                 ("UPL_quota_test",self.owner["id"],1024*1024*1024,"2026-11-07T00:00:00Z"))
         rid=str(uuid.uuid4())
         blob=b"another-asset"
-        payload={"externalRunId":rid,"originClient":"skill","visibility":"private",
+        payload={"externalRunId":rid,"originClient":"skill","visibility":"public",
                  "status":"success","requestId":"skill-history-"+rid,
                  "originalRequest":"私人提示词","images":[{
                     "name":"test.png","sha256":hashlib.sha256(blob).hexdigest(),
@@ -210,7 +222,7 @@ class SkillWebBridgeTests(unittest.TestCase):
 
     def test_history_invalid_payload_is_rejected_before_storage(self):
         rid = str(uuid.uuid4())
-        data = {"externalRunId": rid, "originClient": "skill", "visibility": "private",
+        data = {"externalRunId": rid, "originClient": "skill", "visibility": "public",
                 "status": "success", "requestId": "skill-history-" + rid,
                 "originalRequest": "hello", "images": [{
                     "dataUrl": "data:image/png;base64,aGVsbG8=",
@@ -222,25 +234,28 @@ class SkillWebBridgeTests(unittest.TestCase):
             bridge.import_history(self.db, self.owner, {**data, "visibility": "public"},
                                   lambda *a, **kw: self.fail("must never save"))
 
-    def test_legacy_reconciliation_is_admin_only_and_never_promotes_private(self):
+    def test_legacy_reconciliation_excludes_existing_private_history(self):
         with self.assertRaises(ServiceError) as unauthorised:
-            bridge.legacy_generation_audit(self.db,self.owner)
-        self.assertEqual(unauthorised.exception.status,403)
-        admin={**self.owner,"role":"admin"}
-        public=bridge.legacy_generation_audit(self.db,admin)
-        self.assertEqual(public["withoutMappedWork"],0)
+            bridge.legacy_generation_audit(self.db, self.owner)
+        self.assertEqual(unauthorised.exception.status, 403)
+        admin = {**self.owner, "role": "admin"}
+        with self.db.transaction() as tx:
+            tx.execute("""INSERT INTO studio_generations
+                (id,user_id,username,tab_title,mode,prompt,items_json,status,created_at,visibility,engine)
+                VALUES ('private_audit_only',?,?,?,?,?,'["/images/individual/FA/FA-013.webp"]',
+                        'success','2026-11-07T00:00:00Z','private','sample')""",
+                (self.owner["id"], self.owner["username"], "私有旧历史",
+                 "graphic-text", "仅本人可见"))
         with self.assertRaises(ServiceError):
-            bridge.reconcile_legacy_generations(self.db,admin,{"batchSize":10})
-        from backend.services import record_user_studio_history
-        with patch.dict(os.environ,{"HANDRAW_PRIVATE_GENERATION_HISTORY_V1":"1"}):
-            record_user_studio_history(self.db,self.owner,{
-                "id":"private_audit_only","tabTitle":"私有历史","mode":"graphic-text",
-                "items":[{"imageUrl":"/images/individual/FA/FA-013.webp"}]})
-        before=self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
-        repair=bridge.reconcile_legacy_generations(
-            self.db,admin,{"batchSize":10,"confirmed":True})
-        self.assertTrue(repair["ok"])
-        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before)
+            bridge.reconcile_legacy_generations(self.db, admin, {"batchSize":10})
+        before = self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
+        repaired = bridge.reconcile_legacy_generations(
+            self.db, admin, {"batchSize":10,"confirmed":True})
+        self.assertTrue(repaired["ok"])
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0], before)
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT visibility FROM studio_generations WHERE id='private_audit_only'"
+        ).fetchone()[0], "private")
 
     def test_notifications_scoped_to_owner(self):
         with self.db.transaction() as tx:
@@ -329,71 +344,61 @@ class SkillWebHttpScopeTests(SkillWebBridgeTests):
         self.assertEqual(self.request("PUT","/api/v1/me/resources/"+rid,publish,body)[0],403)
         self.assertEqual(self.request("GET","/api/v1/me/resources")[0],401)
 
-    def test_http_explicit_publication_is_idempotent_and_grants_media(self):
-        library=self.token(["library"])
+    def test_http_upload_is_public_idempotent_and_media_accessible(self):
+        library = self.token(["library"])
+        publisher = self.token(["publish"])
+        img = Image.new("RGB",(4,4),(44,66,88))
+        buf = io.BytesIO()
+        img.save(buf,format="PNG")
+        raw = buf.getvalue()
+        rid = str(uuid.uuid4())
+        payload = {"externalRunId":rid,"originClient":"skill","visibility":"public",
+                   "status":"success","originalRequest":"公开手绘红色花朵",
+                   "requestId":"skill-history-"+rid,
+                   "images":[{"name":"01.png","sha256":hashlib.sha256(raw).hexdigest(),
+                              "dataUrl":"data:image/png;base64,"+base64.b64encode(raw).decode()}]}
+        before = self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
+        self.assertEqual(self.request("POST","/api/v1/me/generations",library,payload)[0],403)
+        status,first=self.request("POST","/api/v1/me/generations",publisher,payload)
+        self.assertEqual(status,200,first)
+        self.assertEqual(first["visibility"],"public")
+        self.assertEqual(len(first["workIds"]),1)
+        status,again=self.request("POST","/api/v1/me/generations",publisher,payload)
+        self.assertEqual(status,200,again)
+        self.assertTrue(again["deduped"])
+        self.assertEqual(again["workIds"],first["workIds"])
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before+1)
+        wid=first["workIds"][0]
+        row=self.db.get_conn().execute(
+            "SELECT status,images_json FROM works WHERE id=?", (wid,)).fetchone()
+        self.assertEqual(row["status"],"published")
+        image_url=json.loads(row["images_json"])[0]
+        grant=self.db.get_conn().execute(
+            "SELECT 1 FROM media_public_grants WHERE media_url=? AND target_type='work' "
+            "AND target_id=? AND revoked_at IS NULL", (image_url,wid)).fetchone()
+        self.assertIsNotNone(grant)
+        self.assertEqual(self.request("GET","/api/v1/me/generations",library)[0],200)
+
+    def test_http_second_publish_step_is_not_available(self):
+        publisher = self.token(["publish"])
+        status,_=self.request("POST","/api/v1/me/generations/skillgen_unknown/publish",
+                              publisher,{"confirmed":True,"title":"作品","prompt":"公开"})
+        self.assertNotEqual(status,200)
+
+    def test_http_old_private_upload_is_rejected_without_publication(self):
         publisher=self.token(["publish"])
-        img=Image.new("RGB",(4,4),(44,66,88))
-        buf=io.BytesIO(); img.save(buf,format="PNG")
-        raw=buf.getvalue()
-        rid=str(uuid.uuid4())
-        payload={"externalRunId":rid,"originClient":"skill","visibility":"private",
-                 "status":"success","originalRequest":"不公开的原始指令",
-                 "requestId":"skill-history-"+rid,
-                 "images":[{"name":"01.png","sha256":hashlib.sha256(raw).hexdigest(),
-                            "dataUrl":"data:image/png;base64,"+base64.b64encode(raw).decode()}]}
-        status,history=self.request("POST","/api/v1/me/generations",library,payload)
-        self.assertEqual(status,200,history)
-        hid=history["id"]
-        before=self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
-        self.assertEqual(before,self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0])
-        no_consent={"title":"公开作品","prompt":"公开安全的提示词"}
-        self.assertEqual(self.request("POST","/api/v1/me/generations/"+hid+"/publish",
-                                      publisher,no_consent)[0],400)
-        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before)
-        consent={**no_consent,"confirmed":True,"indices":[0]}
-        status,work=self.request("POST","/api/v1/me/generations/"+hid+"/publish",
-                                 publisher,consent)
-        self.assertEqual(status,200,work)
-        self.assertTrue(work["workId"])
-        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before+1)
-        status,repeat=self.request("POST","/api/v1/me/generations/"+hid+"/publish",
-                                   publisher,consent)
-        self.assertEqual(status,200,repeat)
-        self.assertEqual(repeat["workId"],work["workId"])
-        self.assertTrue(repeat["alreadyPublished"])
-        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before+1)
-        result=bridge.list_history(self.db,self.owner,{})
-        self.assertEqual(result["items"][0]["publishedWorkId"],work["workId"])
-        self.assertFalse(result["items"][0]["canPublish"])
-        record=self.db.get_conn().execute("SELECT images_json FROM works WHERE id=?",
-                                         (work["workId"],)).fetchone()
-        image_url=json.loads(record["images_json"])[0]
-        granted=self.db.get_conn().execute(
-            "SELECT 1 FROM media_public_grants WHERE media_url=? AND revoked_at IS NULL",
-            (image_url,)).fetchone()
-        self.assertIsNotNone(granted)
-
-    def test_http_publication_respects_token_scope(self):
-        reader=self.token(["library"])
-        self.assertEqual(self.request("POST","/api/v1/me/generations/skillgen_unknown/publish",
-                                      reader,{"confirmed":True,"title":"作品","prompt":"公开"})[0],403)
-
-    def test_http_private_import_does_not_create_work(self):
-        library=self.token(["library"])
         img=Image.new("RGB",(3,3),(255,0,0))
-        out=io.BytesIO(); img.save(out,format="PNG")
+        out=io.BytesIO()
+        img.save(out,format="PNG")
         raw=out.getvalue()
         rid=str(uuid.uuid4())
         body={"externalRunId":rid,"originClient":"skill","visibility":"private",
-              "status":"success","originalRequest":"私人创作指令",
+              "status":"success","originalRequest":"历史私有指令",
               "requestId":"skill-history-"+rid,
               "images":[{"name":"01.png","sha256":hashlib.sha256(raw).hexdigest(),
                          "dataUrl":"data:image/png;base64,"+base64.b64encode(raw).decode()}]}
         before=self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
-        status,created=self.request("POST","/api/v1/me/generations",library,body)
-        self.assertEqual(status,200,created)
-        self.assertEqual(created["visibility"],"private")
-        self.assertEqual(self.request("POST","/api/v1/me/generations",library,body)[1]["deduped"],True)
+        status,failed=self.request("POST","/api/v1/me/generations",publisher,body)
+        self.assertEqual(status,400,failed)
         self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before)
-        self.assertEqual(self.request("GET","/api/v1/me/generations",library)[0],200)
-        self.assertEqual(self.request("POST","/api/v1/me/generations",self.token(["publish"]),body)[0],403)
+
