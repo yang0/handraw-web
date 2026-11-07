@@ -85,6 +85,8 @@ jobs:
           node --check demo/assets/cloud-center.js
           node --check demo/assets/studio-batch.js
           node --check demo/assets/studio-app.js
+          node --check demo/assets/studio-make-image.js
+          node tests/test_studio_picker_interactions.cjs
           node tests/test_profile_private_gallery.cjs
           node tests/test_studio_batch.cjs
           node tests/test_batch_progress_incremental.cjs
