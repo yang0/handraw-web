@@ -2393,10 +2393,17 @@
   }
 
   function groupProfilePublishedWorks(rows) {
-    // One generation run is one work. Grouping images again at render time can
-    // incorrectly duplicate cards and break server-side pagination counts.
+    // V3 has one work per logical run. Fold duplicate records only by work ID,
+    // never by batchId: different work IDs must remain independently addressable.
+    const seen = new Set();
     return (Array.isArray(rows) ? rows : [])
-      .filter(w => w && w.id && Array.isArray(w.images) && w.images.length)
+      .filter(w => {
+        if (!w || !w.id || !Array.isArray(w.images) || !w.images.length) return false;
+        const id = String(w.id);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      })
       .map(w => ({ cover: w, total: w.images.length }));
   }
 
