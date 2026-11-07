@@ -414,6 +414,47 @@ def download_resource(db: Any, user: dict[str, Any], resource_id: str) -> dict[s
     return {"ok":True,**build_skill_asset_content(db,user,resource_id)}
 
 
+
+def _require_admin(user: dict[str,Any]) -> None:
+    if user.get("role") != "admin":
+        raise ServiceError("没有管理权限",status=403,code="admin_required")
+
+
+def legacy_generation_audit(db: Any, user: dict[str,Any]) -> dict[str,Any]:
+    """Read-only reconciliation of historical rows already marked public."""
+    _require_admin(user)
+    conn=db.get_conn()
+    where="""g.status='success' AND g.visibility='public'
+        AND COALESCE(g.deleted_at,'')='' AND g.engine!='demo'
+        AND COALESCE(g.items_json,'') NOT IN ('','[]')"""
+    eligible=conn.execute("SELECT COUNT(*) FROM studio_generations g WHERE "+where).fetchone()[0]
+    missing=conn.execute(
+        "SELECT COUNT(*) FROM studio_generations g WHERE "+where+
+        " AND NOT EXISTS (SELECT 1 FROM generation_works gw WHERE gw.generation_id=g.id)"
+    ).fetchone()[0]
+    return {"ok":True,"eligibleLegacyPublic":eligible,"withoutMappedWork":missing,
+            "note":"仅统计既有公开记录；私有历史未参与，也不会自动发布"}
+
+
+def reconcile_legacy_generations(db: Any, user: dict[str,Any], body: dict[str,Any]) -> dict[str,Any]:
+    """Explicit admin-only batch repair; never promote private histories."""
+    _require_admin(user)
+    if body.get("confirmed") is not True:
+        raise ServiceError("必须明确确认修复旧公开作品",status=400,code="confirmation_required")
+    try:
+        batch=int(body.get("batchSize") or 50)
+    except (TypeError,ValueError):
+        raise ServiceError("batchSize 格式错误",status=400,code="invalid_batch_size") from None
+    if not 1<=batch<=100:
+        raise ServiceError("batchSize 必须介于 1–100",status=400,code="invalid_batch_size")
+    cursor=body.get("cursor")
+    if cursor is not None and (not isinstance(cursor,str) or len(cursor)>240):
+        raise ServiceError("游标不正确",status=400,code="invalid_cursor")
+    from .generation_works import backfill_historical_generations
+    with db._write_lock:
+        result=backfill_historical_generations(db.get_conn(),batch_size=batch,cursor=cursor)
+    return {"ok":True,**result}
+
 def _work_id(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", str(value)):
         raise ServiceError("作品编号无效",status=400,code="invalid_id")
@@ -445,7 +486,9 @@ def comments(db: Any, user: dict[str,Any] | None, work_id: str, qs: dict[str,lis
 
 
 def handle_get(handler: Any, path: str, qs: dict[str,list[str]]) -> bool:
-    if path == "/api/v1/me/resources":
+    if path == "/api/admin/skill-bridge/audit":
+        handler._send_json(legacy_generation_audit(handler.db,_user(handler)))
+    elif path == "/api/v1/me/resources":
         handler._send_json(list_resources(handler.db,_user(handler),qs))
     elif path == "/api/v1/me/collection-items":
         handler._send_json(collection_items(handler.db,_user(handler)))
@@ -479,7 +522,9 @@ def handle_delete(handler: Any, path: str, qs: dict[str,list[str]]) -> bool:
 
 
 def handle_post(handler: Any, path: str, body: dict[str,Any]) -> bool:
-    if path == "/api/v1/me/generations":
+    if path == "/api/admin/skill-bridge/reconcile":
+        handler._send_json(reconcile_legacy_generations(handler.db,_user(handler),body))
+    elif path == "/api/v1/me/generations":
         # Import only when explicitly requested; never auto-publish to works.
         from .server import save_data_url_upload
         handler._send_json(import_history(handler.db,_user(handler),body,save_data_url_upload))
