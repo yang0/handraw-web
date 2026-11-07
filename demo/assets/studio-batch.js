@@ -244,10 +244,11 @@
       const rMap = (catalog && catalog.resourceMap) || new Map();
       const hasSpecific = Boolean(row && row.layout && String(row.layout).trim());
       const specificId = hasSpecific ? String(row.layout).trim() : "";
-      const effectiveId = specificId || globalLayoutId || "SC-021";
+      const effectiveId = specificId || globalLayoutId || "";
       const res = effectiveId ? (rMap.get(effectiveId) || catalog?.layouts?.find((l) => l.id === effectiveId)) : null;
-      const thumbUrl = res?.image || "/images/layouts/social-cards/SC-021.webp";
-      const codeText = effectiveId;
+      // An illustration placeholder is not an authorized selected layout.
+      const thumbUrl = res?.image || "";
+      const codeText = effectiveId || "待选择";
       const nameText = res ? (res.name_zh || res.name || effectiveId) : (hasSpecific ? specificId : "默认图型");
       const btnTitle = hasSpecific ? `图型版式：${effectiveId} ${nameText}（点击更换）` : `跟随全局图型 ${effectiveId}（点击更换）`;
       const ariaLabel = hasSpecific ? `图型版式：${effectiveId} ${nameText}` : `跟随全局图型 ${effectiveId} ${nameText}`;
@@ -255,7 +256,7 @@
       return `
         <button type="button" class="btn batch-row-layout-btn" data-pick-layout-idx="${idx}" data-hover-src="${esc(thumbUrl)}" data-hover-code="${esc(codeText)}" data-hover-name="${esc(nameText)}" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
           <span class="batch-row-layout-thumb-wrap" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}">
-            <img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />
+            ${thumbUrl ? `<img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />` : '<span class="batch-row-layout-placeholder">选择图型</span>'}
           </span>
           <span class="batch-row-layout-info">
             <span class="batch-row-layout-code">${esc(codeText)}</span>
@@ -315,6 +316,13 @@
       const cd = p.ctrl.data || {};
       const ld = p.loop.data || {};
       const ad = p.asset?.data || {};
+      if (global.HandrawStudioCore) {
+        this.context.effectiveCreationSpec = global.HandrawStudioCore.normalizeLegacyParts(p).spec;
+        this.context.seriesPlan = global.HandrawStudioCore.normalizeLegacyBatch(p.loop);
+        if (!Array.isArray(ld.studio2SlotIds) || ld.studio2SlotIds.length !== this.context.seriesPlan.slots.length) {
+          global.HandrawStudioCore.pinLegacySlotIds(p.loop, this.context.seriesPlan);
+        }
+      }
 
       // M1: ctrl.data.count folded into batchCount if > 1, then reset to 1
       if (p.ctrl?.data && Number(p.ctrl.data.count) > 1) {
@@ -1370,9 +1378,15 @@
         btn.onclick = () => {
           const mode = btn.getAttribute("data-set-mode");
           if (!mode) return;
-          ctrl.data.mode = mode;
-          const opt = OUTPUT_MODE_OPTIONS.find((o) => o.id === mode);
-          if (opt?.defaultRatio) ctrl.data.ratio = opt.defaultRatio;
+          if (global.HandrawStudioCore) {
+            global.HandrawStudioCore.setMode(ctrl.data, mode);
+          } else {
+            const oldDefault = OUTPUT_MODE_OPTIONS.find(o => o.id === ctrl.data.mode)?.defaultRatio || "3:4";
+            const explicit = ctrl.data.ratioSource === "user" || (ctrl.data.ratio && ctrl.data.ratio !== oldDefault);
+            ctrl.data.mode = mode;
+            if (!explicit) ctrl.data.ratio = OUTPUT_MODE_OPTIONS.find(o => o.id === mode)?.defaultRatio || "3:4";
+            ctrl.data.ratioSource = explicit ? "user" : "default";
+          }
           markDirty();
         };
       });
@@ -1383,7 +1397,7 @@
         btnSingle.onclick = () => {
           if (!skill.data.fusion) return;
           skill.data.fusion = false;
-          skill.data.style2 = "";
+          // Retain the unused second style as a draft; it is not sent when fusion is off.
           markDirty();
         };
       }
@@ -1460,18 +1474,12 @@
       if (btnStratFixed) {
         btnStratFixed.onclick = () => {
           if (loop.data.batchLayoutMode === "fixed") return;
-          // Switching from AI to Fixed: prompt confirmation if rows have varied layouts
+          // Strategy is a view policy; never destroy per-slot layout/reference
+          // overrides when switching to a uniform layout. They are restored
+          // when the user returns to per-slot (AI) mode.
           const rows = Array.isArray(loop.data.batchRows) ? loop.data.batchRows : [];
           if (rows.length > 0) {
-            const hasCustomLayouts = rows.some((r) => r.layout && r.layout !== (skill.data.layout || ""));
-            if (hasCustomLayouts) {
-              const ok = typeof window.confirm === "function"
-                ? window.confirm("切换到固定图型将丢失每张独立的图型设置，所有图片将使用统一图型。是否继续？")
-                : true;
-              if (!ok) return;
-            }
             loop.data.promptListText = rows.map((r) => r.theme).filter(Boolean).join("\n");
-            loop.data.batchRows = [];
           }
           loop.data.batchLayoutMode = "fixed";
           markDirty();
@@ -1493,11 +1501,22 @@
           loop.data.batchLayoutMode = "ai";
           const rawText = typeof loop.data.promptListText === "string" ? loop.data.promptListText : "";
           const lines = rawText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+          const previous = Array.isArray(loop.data.batchRows) ? loop.data.batchRows : [];
+          const slotIds = Array.isArray(loop.data.studio2SlotIds) ? loop.data.studio2SlotIds : [];
           if (lines.length > 0) {
-            loop.data.batchRows = lines.map((line) => ({ theme: line, layout: skill.data.layout || "" }));
+            loop.data.batchRows = lines.map((line, i) => ({
+              ...(previous[i] || {}), theme: line,
+              slotId: previous[i]?.slotId || slotIds[i] || "",
+              // A missing layout follows global; do not invent a selection.
+              layout: previous[i]?.layout || ""
+            }));
           } else {
             const cnt = Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6));
-            loop.data.batchRows = Array.from({ length: cnt }, () => ({ theme: "", layout: skill.data.layout || "" }));
+            loop.data.batchRows = Array.from({ length: cnt }, (_, i) => ({
+              ...(previous[i] || {}), theme: previous[i]?.theme || "",
+              slotId: previous[i]?.slotId || slotIds[i] || "",
+              layout: previous[i]?.layout || ""
+            }));
           }
           markDirty();
         };
@@ -1651,7 +1670,7 @@
       if (promptsInput) {
         promptsInput.oninput = () => {
           loop.data.promptListText = promptsInput.value;
-          loop.data.batchRows = [];
+          // Keep hidden AI-mode row overrides for reversible strategy switches.
           self.updatePreviewAndCost(root);
         };
         promptsInput.onblur = () => {
@@ -2011,6 +2030,7 @@
 
           ctrl.data.mode = "graphic-text";
           ctrl.data.ratio = "3:4";
+          ctrl.data.ratioSource = "default";
           ctrl.data.count = 1;
           ctrl.data.status = "idle";
           delete ctrl.data.error;
@@ -2043,6 +2063,7 @@
           loop.data.batchLayoutMode = "fixed";
           loop.data.batchLayoutReq = "";
           loop.data.batchRows = [];
+          loop.data.studio2SlotIds = [];
           loop.data.promptListText = "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集";
           loop.data.status = "idle";
           loop.data.currentStep = 0;

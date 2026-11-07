@@ -16481,6 +16481,21 @@
             if (input) input.focus();
             return;
           }
+          // The canonical adapter validates selected resources before we
+          // create a billable Run. Server entitlement checks remain mandatory.
+          if (window.HandrawStudioCore) {
+            const projected = window.HandrawStudioCore.normalizeLegacyParts(p);
+            const validated = window.HandrawStudioCore.validateSpec(projected.spec, { catalog: Catalog });
+            if (!validated.ok) {
+              const code = validated.errors[0]?.code || "invalid_spec";
+              const field = validated.errors[0]?.field || "";
+              toast(code === "missing_style" ? "请先选择画风（画风是必选项）"
+                : code === "invalid_resource" ? `所选${field}资源无效或不可用，请重新选择`
+                : code === "invalid_ratio" ? "画幅比例格式无效，请重新设置"
+                : "创作参数不完整，请检查后重试");
+              return;
+            }
+          }
           // Strictly 1 image per brief
           p.ctrl.data.count = 1;
           const scope = activeCacheScope;

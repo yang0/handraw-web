@@ -277,6 +277,11 @@
       const td = p.text.data || {};
       const cd = p.ctrl.data || {};
       const ad = p.asset?.data || {};
+      // A read-only canonical projection: legacy nodes stay the only writable
+      // draft until the Project API is migrated (#121/#122).
+      if (global.HandrawStudioCore) {
+        this.context.effectiveCreationSpec = global.HandrawStudioCore.normalizeLegacyParts(p).spec;
+      }
 
       const isFusion = Boolean(sd.fusion);
       const style1Id = sd.style1 || "";
@@ -608,7 +613,8 @@
       if (btnSingle) {
         btnSingle.onclick = () => {
           sd.fusion = false;
-          sd.style2 = "";
+          // Keep the secondary selection as disabled draft data: switching
+          // fusion on again should not force a needless re-selection.
           this.actions?.markDirtyAndRender();
         };
       }
@@ -726,10 +732,15 @@
       root.querySelectorAll("[data-set-mode]").forEach((btn) => {
         btn.onclick = () => {
           const mode = btn.getAttribute("data-set-mode");
-          cd.mode = mode;
-          const opt = OUTPUT_MODE_OPTIONS.find((m) => m.id === mode);
-          if (opt && opt.defaultRatio) {
-            cd.ratio = opt.defaultRatio;
+          if (global.HandrawStudioCore) {
+            global.HandrawStudioCore.setMode(cd, mode);
+          } else {
+            const oldMode = cd.mode;
+            const oldDefault = OUTPUT_MODE_OPTIONS.find(m => m.id === oldMode)?.defaultRatio || "3:4";
+            const explicit = cd.ratioSource === "user" || (cd.ratio && cd.ratio !== oldDefault);
+            cd.mode = mode;
+            if (!explicit) cd.ratio = OUTPUT_MODE_OPTIONS.find(m => m.id === mode)?.defaultRatio || "3:4";
+            cd.ratioSource = explicit ? "user" : "default";
           }
           this.actions?.markDirtyAndRender();
         };
@@ -739,6 +750,7 @@
       root.querySelectorAll("[data-set-ratio]").forEach((btn) => {
         btn.onclick = () => {
           cd.ratio = btn.getAttribute("data-set-ratio");
+          cd.ratioSource = "user";
           this.actions?.markDirtyAndRender();
         };
       });
@@ -750,6 +762,7 @@
           const val = ratioInput.value.trim();
           if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
             cd.ratio = val;
+            cd.ratioSource = "user";
             root.querySelectorAll("[data-set-ratio]").forEach((b) => {
               const match = b.getAttribute("data-set-ratio") === val;
               b.classList.toggle("btn-primary", match);
@@ -763,6 +776,7 @@
           const val = ratioInput.value.trim();
           if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
             cd.ratio = val;
+            cd.ratioSource = "user";
             this.actions?.markDirtyAndRender();
           } else {
             ratioInput.value = cd.ratio || "3:4";
@@ -972,6 +986,7 @@
 
           cd.mode = "graphic-text";
           cd.ratio = "3:4";
+          cd.ratioSource = "default";
           cd.count = 1;
           cd.status = "idle";
           delete cd.error;
