@@ -1,4 +1,4 @@
-"""Tests for Stage 5: Plaza Same-Batch Folding + Search Individual Items (Issue #60)."""
+"""V3 contract: one multi-image generation is one public work in every feed mode."""
 from __future__ import annotations
 
 import json
@@ -79,7 +79,7 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
             ),
         )
         self.batch_wids = project_generation_to_works(self.conn, gen_batch_row)
-        self.assertEqual(len(self.batch_wids), 4)
+        self.assertEqual(len(self.batch_wids), 1)
 
         # 2. Create a single-image generation for Alice
         gen_single_row = {
@@ -149,99 +149,49 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
         self._env.stop()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_plaza_feed_collapses_same_batch_to_single_representative(self) -> None:
-        """In plaza browsing without search, 4 same-batch works collapse to 1 representative card."""
+    def test_plaza_displays_one_multi_image_work_not_four_cards(self):
         feed = get_works_feed(self.db, {"sort": "newest"})
         self.assertTrue(feed["ok"])
-        items = feed["items"]
+        self.assertEqual(feed["total"], 3)  # batch, single, direct work
+        self.assertEqual(len(feed["items"]), 3)
+        rep = next(x for x in feed["items"] if x["id"] == self.batch_wids[0])
+        self.assertEqual(len(rep["images"]), 4)
+        self.assertEqual(rep["images"][0], "/img/pup1.png")
+        self.assertEqual(rep["batchTotal"], 1)
 
-        # Exactly 3 items in feed: 1 representative from batch, 1 single, 1 legacy
-        self.assertEqual(feed["total"], 3)
-        self.assertEqual(len(items), 3)
-
-        rep_item = next((it for it in items if it["id"] == self.batch_wids[0]), None)
-        self.assertIsNotNone(rep_item, "First work in batch must be representative")
-        self.assertEqual(rep_item["batchTotal"], 4)
-        self.assertEqual(rep_item["batchIndex"], 1)
-
-        # Other 3 sibling works must NOT appear in plaza feed
-        for sibling_id in self.batch_wids[1:]:
-            self.assertNotIn(sibling_id, [it["id"] for it in items])
-
-        # Single work has batchTotal = 1
-        single_item = next((it for it in items if it["id"] == self.single_wids[0]), None)
-        self.assertIsNotNone(single_item)
-        self.assertEqual(single_item["batchTotal"], 1)
-
-    def test_search_mode_returns_all_individual_items_with_indices(self) -> None:
-        """In search mode, works are NOT collapsed: 4 batch works return as 4 cards with batch index."""
-        feed = get_works_feed(self.db, {"q": "小狗"})
+    def test_search_returns_one_multi_image_work(self):
+        feed = get_works_feed(self.db, {"q": "batch generation cute puppies"})
         self.assertTrue(feed["ok"])
-        items = feed["items"]
+        self.assertEqual(feed["total"], 1)
+        self.assertEqual([it["id"] for it in feed["items"]], self.batch_wids)
+        self.assertEqual(len(feed["items"][0]["images"]), 4)
 
-        # 4 cards returned for search matching '小狗'
-        self.assertEqual(feed["total"], 4)
-        self.assertEqual(len(items), 4)
+    def test_paginated_feed_never_duplicates_the_run(self):
+        first = get_works_feed(self.db, {"sort": "newest", "limit": 2})
+        self.assertEqual(first["total"], 3)
+        self.assertEqual(len(first["items"]), 2)
+        self.assertTrue(first["hasMore"])
+        second = get_works_feed(self.db, {
+            "sort": "newest", "limit": 2, "cursor": first["nextCursor"],
+        })
+        self.assertEqual(len(second["items"]), 1)
+        ids = [w["id"] for w in first["items"] + second["items"]]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(ids.count(self.batch_wids[0]), 1)
 
-        returned_ids = [it["id"] for it in items]
-        self.assertEqual(set(returned_ids), set(self.batch_wids))
-
-        # Check batch metadata on search items
-        for it in items:
-            self.assertEqual(it["batchTotal"], 4)
-            idx = self.batch_wids.index(it["id"]) + 1
-            self.assertEqual(it["batchIndex"], idx)
-
-    def test_pagination_folds_first_then_slices(self) -> None:
-        """Pagination must fold by batch first, then count and slice so page limits and totals are exact."""
-        # Page 1 with limit = 2
-        p1 = get_works_feed(self.db, {"sort": "newest", "limit": 2})
-        self.assertEqual(p1["total"], 3)
-        self.assertEqual(len(p1["items"]), 2)
-        self.assertTrue(p1["hasMore"])
-        self.assertIsNotNone(p1["nextCursor"])
-
-        # Page 2
-        p2 = get_works_feed(self.db, {"sort": "newest", "limit": 2, "cursor": p1["nextCursor"]})
-        self.assertEqual(len(p2["items"]), 1)
-        self.assertFalse(p2["hasMore"])
-
-        all_ids = [it["id"] for it in p1["items"]] + [it["id"] for it in p2["items"]]
-        self.assertEqual(len(all_ids), 3)
-        self.assertEqual(len(set(all_ids)), 3)
-
-    def test_representative_deletion_automatically_promotes_next_item(self) -> None:
-        """Deleting representative work automatically advances the representative to the next sibling."""
-        rep_id = self.batch_wids[0]
-        next_rep_id = self.batch_wids[1]
-
-        # Admin deletes first representative
-        res = admin_moderate_work(self.db, self.admin, rep_id, "delete")
+    def test_moderator_hidden_run_is_not_repromoted(self):
+        work_id = self.batch_wids[0]
+        res = admin_moderate_work(self.db, self.admin, work_id, "delete")
         self.assertTrue(res["ok"])
-
-        # Feed must now show next_rep_id as representative with batchTotal = 3
+        # Replaying a generation cannot recreate a deleted/hidden work.
+        project_generation_to_works(self.conn, "gen_batch_4img")
         feed = get_works_feed(self.db, {"sort": "newest"})
-        items = feed["items"]
-        self.assertEqual(feed["total"], 3)
-
-        new_rep = next((it for it in items if it["id"] == next_rep_id), None)
-        self.assertIsNotNone(new_rep, "Next work in batch must become representative")
-        self.assertEqual(new_rep["batchTotal"], 3)
-        self.assertEqual(new_rep["batchIndex"], 1)
-
-        # Delete remaining 3 works
-        for wid in self.batch_wids[1:]:
-            admin_moderate_work(self.db, self.admin, wid, "delete")
-
-        # Now the batch has completely disappeared from plaza
-        feed_after = get_works_feed(self.db, {"sort": "newest"})
-        self.assertEqual(feed_after["total"], 2)  # Only single + legacy
-        for wid in self.batch_wids:
-            self.assertNotIn(wid, [it["id"] for it in feed_after["items"]])
-
-        # Studio generation record is still preserved
-        gen_exists = self.conn.execute("SELECT 1 FROM studio_generations WHERE id = 'gen_batch_4img'").fetchone()
-        self.assertIsNotNone(gen_exists, "studio_generations record must be preserved")
+        self.assertNotIn(work_id, [row["id"] for row in feed["items"]])
+        self.assertEqual(feed["total"], 2)
+        gen = self.conn.execute(
+            "SELECT 1 FROM studio_generations WHERE id='gen_batch_4img'"
+        ).fetchone()
+        self.assertIsNotNone(gen)
 
 
 if __name__ == "__main__":
