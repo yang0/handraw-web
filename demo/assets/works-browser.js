@@ -37,31 +37,9 @@
       return true;
     });
 
-    let result;
-    if (query) {
-      // 搜索逐件：不折叠
-      result = matching;
-    } else {
-      // 广场同批折叠：按批次折叠，同一批次只保留一个代表（原始顺序最靠前的那张）
-      const batchMap = new Map();
-      for (const w of matching) {
-        const bId = w.batchId || ("work_" + w.id);
-        if (!batchMap.has(bId)) {
-          batchMap.set(bId, []);
-        }
-        batchMap.get(bId).push(w);
-      }
-      result = [];
-      for (const [bId, group] of batchMap.entries()) {
-        group.sort((a, b) => Number(a.batchIndex || 1) - Number(b.batchIndex || 1));
-        const rep = group[0];
-        result.push({
-          ...rep,
-          batchTotal: group.length,
-          batchIndex: 1
-        });
-      }
-    }
+    // V3: gallery entries are canonical works, not individual image slots.
+    // Never collapse distinct work IDs or expand a multi-image work during search.
+    const result = matching;
 
     const recency = shared.compareByRecency;
     result.sort((a, b) => {
