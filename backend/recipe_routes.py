@@ -622,8 +622,9 @@ def draft_recipe_from_work(
         raw_prompt = str(serialized.get("prompt") or "").strip()
         sentences = [part.strip() for part in re.split(r"[。！？\n.!?]", raw_prompt) if part.strip()]
         subject_hint = sentences[0][:80] if sentences else ""
-    if not subject_hint:
-        # A public work title is safe and more useful than an empty theme.
+    if not subject_hint and not serialized.get("promptMasked"):
+        # Only use the public title for an unmasked work. The existing
+        # black-box contract requires an empty hint on masked works.
         subject_hint = str(serialized.get("title") or "").strip()[:80]
 
     raw_styles = work.get("styles_json") or "[]"
