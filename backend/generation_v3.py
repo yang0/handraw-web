@@ -516,6 +516,7 @@ def record_public_work(
         raise ValueError("No valid generated media")
 
     now = _now()
+    previous_media_urls = work_images(tx, work_id) if work["run_id"] else []
     # Unlink cover before replacing the ordered collection; DB triggers enforce
     # that a new cover belongs to this work.
     tx.execute("UPDATE works SET run_id=?, cover_media_id=NULL WHERE id=?", (run_id, work_id))
@@ -559,6 +560,19 @@ def record_public_work(
         "UPDATE generation_runs SET status=?,updated_at=? WHERE id=?",
         (run_status, now, run_id),
     )
+    # Replaced media must immediately lose this work's public grant. Physical
+    # deletion happens only after a delayed, durable DB-reference check.
+    removed_urls = set(previous_media_urls) - {entry[2] for entry in entries}
+    for removed in removed_urls:
+        tx.execute(
+            """UPDATE media_public_grants SET revoked_at=?
+               WHERE target_type='work' AND target_id=? AND media_url=?
+                 AND revoked_at IS NULL""",
+            (now, work_id, removed),
+        )
+        if removed.startswith(("/generated/", "/uploads/")):
+            from .media_gc import queue_media_cleanup
+            queue_media_cleanup(tx, removed)
     return run_id
 
 
