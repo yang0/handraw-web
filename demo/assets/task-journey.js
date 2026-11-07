@@ -153,6 +153,11 @@
       const all = result.aiUsed === "all" || result.aiUsed === true;
       const partial = result.aiUsed === "partial";
       const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+      const fidelity = global.HandrawArticleReview?.fidelitySummary(result) || {
+        segments: [], failures: 0, issues: 0, ratio: null
+      };
+      const fidelityRisk = fidelity.issues > 0 || fidelity.failures > 0 ||
+        (fidelity.ratio !== null && Math.abs(fidelity.ratio) > 5);
       const aiLabel = all ? "全部段落已用 AI 整理" : partial
         ? "部分段落由原文补齐，请重点检查" : "AI 未参与排版，已保留原文";
       const changed = Boolean(options.replacing);
@@ -175,6 +180,24 @@
             ${warnings.length ? " · 后端报告 " + warnings.length + " 项检查提醒" : ""}
           </p>` : ""}
           ${changed ? `<p class="hw-document-review-protect">原稿《${escapeHtml(oldTitle || "未命名文章")}》在确认前保持不变；建议下载一份导入结果备用。</p>` : ""}
+          <div class="hw-document-fidelity" role="region" aria-label="内容保真核对">
+            <strong>内容保真检查</strong>
+            <span>分段 ${fidelity.segments.length} · AI 回退 ${fidelity.failures} 段 · 检查异常 ${fidelity.issues} 项
+              ${fidelity.ratio !== null ? " · 文字差异 " + escapeHtml(fidelity.ratio) + "%" : ""}</span>
+            <p>${fidelityRisk ? "存在需要核对的内容，请重点检查下方异常段落；字符比例不代表全部事实核验。" : "未发现明显结构差异。请检查标题、表格、数字和引用，自动检查不能保证内容完全一致。"}</p>
+            ${fidelity.segments.length ? `<details class="hw-document-fidelity-details" ${fidelityRisk ? "open" : ""}>
+              <summary>逐段查看原文与整理结果（${fidelity.segments.length} 段）</summary>
+              ${fidelity.segments.map((segment, idx) => `<section class="hw-document-fidelity-segment">
+                <h3>第 ${idx + 1} 段 · ${segment.aiUsed ? "AI 整理" : "原文回退"}
+                  ${Array.isArray(segment.issues) && segment.issues.length ? " · " + segment.issues.length + " 项警告" : ""}</h3>
+                ${Array.isArray(segment.issues) && segment.issues.length ? `<div class="hw-document-fidelity-issues">${segment.issues.map(x => escapeHtml(String(x))).join("、")}</div>` : ""}
+                <div class="hw-document-fidelity-columns">
+                  <div><b>原始内容</b><pre>${escapeHtml(segment.original || "")}</pre></div>
+                  <div><b>整理后内容</b><pre>${escapeHtml(segment.result || "")}</pre></div>
+                </div>
+              </section>`).join("")}
+            </details>` : "<p>本次导入没有分段原文数据，无法进行逐段自动对照。</p>"}
+          </div>
           <label class="hw-document-review-preview-label" for="hw-doc-review-preview">Markdown 预览（最多展示前 7,500 字符）</label>
           <pre id="hw-doc-review-preview" class="hw-document-review-preview" tabindex="0">${escapeHtml(preview)}${body.length > preview.length ? "\\n…余下内容可下载后查看" : ""}</pre>
           <footer class="hw-document-review-actions">
