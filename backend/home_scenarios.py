@@ -376,6 +376,13 @@ def _cover_for_work(row: Any) -> str:
 # Public API: GET /api/public/home-scenarios
 # ---------------------------------------------------------------------------
 
+def _scene_preview_url(url: str) -> str:
+    """Display animated GIF works as still image cards; details keep the GIF."""
+    if url.startswith("/") and url.split("?", 1)[0].lower().endswith(".gif"):
+        return url + ("&" if "?" in url else "?") + "w=480"
+    return url
+
+
 def _cached_scenarios_current(conn: Any, payload: dict[str, Any]) -> bool:
     """Never serve a cached card for an unpublished or updated work.
 
@@ -493,7 +500,7 @@ def get_public_home_scenarios(
                 {
                     "id": wid,
                     "title": pr["title"] or "",
-                    "imageUrl": first_img,
+                    "imageUrl": _scene_preview_url(first_img),
                     "coverUrl": first_img,
                     "author": pr["author_name"] or pr["author_username"] or "",
                     "authorUsername": pr["author_username"] or "",
@@ -551,7 +558,7 @@ def get_public_home_scenarios(
                 {
                     "id": wid,
                     "title": cr["title"] or "",
-                    "imageUrl": first_img,
+                    "imageUrl": _scene_preview_url(first_img),
                     "coverUrl": first_img,
                     "author": cr["author_name"] or cr["author_username"] or "",
                     "authorUsername": cr["author_username"] or "",
@@ -720,7 +727,7 @@ def admin_list_home_scenarios(
                     "title": pr["title"] or "(已删除作品)",
                     "status": pr["status"] or "deleted",
                     "author": pr["author_name"] or pr["author_username"] or "",
-                    "imageUrl": _cover_for_work(pr) if pr["images_json"] else "",
+                    "imageUrl": _scene_preview_url(_cover_for_work(pr)) if pr["images_json"] else "",
                     "isPublic": bool(pr["status"] == "published" and is_valid_work_row(pr)),
                     "createdBy": pr["created_by"],
                     "pinnedAt": pr["pinned_at"],
