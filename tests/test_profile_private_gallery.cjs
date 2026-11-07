@@ -34,6 +34,7 @@ class Element {
     }};
   }
   addEventListener(name, fn) { this.callbacks[name] = fn; }
+  focus() {}
   setAttribute(name, val) { this.attributes[name] = val; }
 }
 const cards = new Element(), more = new Element(), file = new Element(), status = new Element(), retry = new Element();
