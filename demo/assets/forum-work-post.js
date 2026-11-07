@@ -285,7 +285,18 @@
 </div>`;
   }
 
-  function renderPrompt(model) {
+  function forkUrlForImage(model, imageUrl) {
+    if (!model || !model.canFork || !safeHref(model.forkUrl)) return "";
+    if (model.source !== "work") return model.forkUrl;
+    const images = Array.isArray(model.images) ? model.images : [];
+    const index = images.findIndex((img) =>
+      safeImageUrl(typeof img === "string" ? img : img && img.url) === imageUrl);
+    if (index < 0) return model.forkUrl;
+    const sep = model.forkUrl.includes("?") ? "&" : "?";
+    return model.forkUrl + sep + "image=" + index;
+  }
+
+  function renderPrompt(model, imageUrl) {
     const t = "生图提示词";
     let body;
     if (model.locked) {
@@ -299,8 +310,9 @@
       ? `<button type="button" class="fwp-copy" data-fwp-copy>复制</button>`
       : "";
     let forkHtml = "";
-    if (model.canFork && safeHref(model.forkUrl)) {
-      forkHtml = `<a class="fwp-fork" href="${esc(safeHref(model.forkUrl))}">做同款</a>`;
+    const selectedForkUrl = forkUrlForImage(model, imageUrl);
+    if (selectedForkUrl) {
+      forkHtml = `<a class="fwp-fork" data-fwp-fork href="${esc(selectedForkUrl)}">做同款</a>`;
     } else if (!model.locked) {
       forkHtml = `<button type="button" class="fwp-fork is-disabled" disabled>暂不可做同款</button>`;
     }
@@ -366,13 +378,13 @@
     if (!model || typeof model !== "object") return "";
     const title = esc(String(model.title || "作品帖"));
     const gallery = renderGallery(model.images, model);
-    const prompt = renderPrompt(model);
-    const notes = renderNotes(model.notes);
     const images = Array.isArray(model.images) ? model.images : [];
     const cover = model.coverUrl && images.some((img) =>
       (typeof img === "string" ? img : img && img.url) === model.coverUrl) ? model.coverUrl : "";
     const first = images[0];
     const initialUrl = cover || (typeof first === "string" ? first : first && first.url) || "";
+    const prompt = renderPrompt(model, initialUrl);
+    const notes = renderNotes(model.notes);
     const assets = renderAssets(model, initialUrl);
     return `<section class="fwp" aria-label="作品详情">
   ${gallery}
@@ -470,6 +482,8 @@
             if (dlBtn) dlBtn.setAttribute("href", src);
             const assetsPanel = scope.querySelector("[data-fwp-assets]");
             if (assetsPanel) assetsPanel.innerHTML = renderAssetContents(model, src);
+            const forkLink = scope.querySelector("[data-fwp-fork]");
+            if (forkLink) forkLink.setAttribute("href", forkUrlForImage(model, src));
             refreshCoverButton();
             if (window.HandrawImageLoader && window.HandrawImageLoader.scan) {
               window.HandrawImageLoader.scan(stage);
