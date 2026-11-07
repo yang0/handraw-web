@@ -242,7 +242,7 @@ def execute_batch_plan(
         "1. 只输出 JSON 对象；顶层只有 items 数组，每条仅有 subject 和 layout 字段。禁止附加示例。\n"
         f"2. 必须恰好返回 {cnt} 条 items，主题不重复、紧扣本次母题；每条不超过120字，无编号。\n"
         "3. layout 必须来自完整目录，按每条主题的画面内容、信息密度及叙事需求匹配。\n"
-        f"4. 固定模式全部使用 {norm_fixed_layout or '用户选定图型'}；AI 模式允许语义合理重复，禁止轮换固定编号。\n"
+        f"4. {'固定模式全部使用用户指定的图型。' if norm_mode == 'fixed' else 'AI 模式允许语义合理重复，禁止轮换固定编号。'}\n"
         "5. 不使用历史示例、few-shot、默认图型或预设搭配。只输出合法 JSON。"
     )
 
