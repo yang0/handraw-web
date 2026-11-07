@@ -743,22 +743,8 @@ def cancel_unsubmitted_web_slots(
             )
             cancelled.append(pos)
 
-        statuses = tx.execute(
-            "SELECT status FROM generation_items WHERE run_id=?", (run["id"],)
-        ).fetchall()
-        finished = len(statuses) >= int(run["expected_count"])
-        if finished and all(s["status"] in ("success", "failed", "cancelled") for s in statuses):
-            success_count = sum(s["status"] == "success" for s in statuses)
-            status = (
-                "success" if success_count == int(run["expected_count"])
-                else "partial" if success_count
-                else "cancelled" if all(s["status"] == "cancelled" for s in statuses)
-                else "failed"
-            )
-            tx.execute(
-                "UPDATE generation_runs SET status=?,updated_at=? WHERE id=?",
-                (status, now, run["id"]),
-            )
+        refresh_run_status(tx, str(run["id"]))
+
     return {
         "ok": True, "runId": run["id"], "batchId": batch_id,
         "cancelledPositions": cancelled,
