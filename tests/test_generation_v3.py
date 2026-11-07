@@ -195,6 +195,69 @@ class GenerationV3Tests(unittest.TestCase):
             )
         self.assertEqual(len(uploaded_skill_images(self.db.get_conn(), rid)), 2)
 
+    def test_partial_success_retains_failed_slots_and_history(self):
+        from backend.skill_web_bridge import list_history
+        uid = self.owner_id
+        wid = self._new_work()
+        with self.db.transaction() as tx:
+            run_id = ensure_run(
+                tx, user_id=uid, source="web",
+                external_run_id="partial_batch", expected_count=5,
+                request_id="partial_batch",
+            )
+            for position in (3000, 4000):
+                tx.execute(
+                    """
+                    INSERT INTO generation_items
+                      (id,run_id,position,status,error_code,created_at,updated_at)
+                    VALUES (?,?,?,'failed','gateway_failed','now','now')
+                    """,
+                    (f"failed_item_{position}", run_id, position),
+                )
+            record_public_work(
+                tx, user_id=uid, source="web",
+                external_run_id="partial_batch",
+                work_id=wid, expected_count=5,
+                ordered_images=[
+                    (0, "/generated/one.webp", ""),
+                    (1000, "/generated/two.webp", ""),
+                    (2000, "/generated/three.webp", ""),
+                ],
+            )
+        conn = self.db.get_conn()
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM generation_items WHERE run_id=?", (run_id,),
+        ).fetchone()[0], 5)
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM generation_items WHERE run_id=? AND status='failed'",
+            (run_id,),
+        ).fetchone()[0], 2)
+        self.assertEqual(conn.execute(
+            "SELECT status FROM generation_runs WHERE id=?", (run_id,),
+        ).fetchone()[0], "partial")
+        history = list_history(self.db, self.creator, {})
+        run = next(item for item in history["items"] if item["id"] == run_id)
+        self.assertEqual(run["imageCount"], 3)
+        self.assertEqual(len(run["items"]), 5)
+        self.assertEqual(run["workIds"], [wid])
+        self.assertEqual(len([i for i in run["items"] if i["status"] == "failed"]), 2)
+
+    def test_generated_work_cache_cannot_disagree_with_canonical_media(self):
+        wid = self._new_work()
+        with self.db.transaction() as tx:
+            record_public_work(
+                tx, user_id=self.owner_id, source="web",
+                external_run_id="cache_guard", work_id=wid,
+                ordered_images=[(0, "/generated/one.webp", "")],
+                expected_count=1,
+            )
+        with self.assertRaises(sqlite3.IntegrityError):
+            with self.db.transaction() as tx:
+                tx.execute(
+                    "UPDATE works SET images_json=? WHERE id=?",
+                    (json.dumps(["/generated/unlinked.webp"]), wid),
+                )
+
     def test_empty_work_must_not_publish(self):
         wid = self._new_work()
         with self.assertRaises(ValueError):
