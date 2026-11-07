@@ -929,7 +929,10 @@
       return ld.batchRows.slice(0, maxIter).map((row, idx) => {
         const rowTheme = typeof row === "string" ? row : (row && row.theme != null ? String(row.theme) : "");
         const rowLayout = (row && typeof row === "object" && row.layout) ? String(row.layout).trim() : "";
-        const effLayout = rowLayout || rec.layoutId || "";
+        // Fixed means use one global layout regardless of preserved per-row
+        // overrides. The per-row draft is retained for reversible AI strategy.
+        const aiLayouts = ld.batchLayoutMode === "ai" || (!ld.batchLayoutMode && Array.isArray(ld.batchRows));
+        const effLayout = aiLayouts ? (rowLayout || rec.layoutId || "") : (rec.layoutId || "");
         const lRes = effLayout ? (rMap.get(effLayout) || (catalog?.layouts?.find((l) => l.id === effLayout))) || null : null;
         let mergedTheme = rowTheme;
         if (rec.combinedText) {
@@ -956,7 +959,7 @@
         return {
           index: idx,
           loopMode: "prompts",
-          itemKey: `row_${idx}`,
+          itemKey: row && row.slotId ? String(row.slotId) : `row_${idx}`,
           shortLabel: cleanShort + (rowTheme.length > 16 ? "…" : ""),
           title: `循环 #${idx + 1} · ${cleanShort}${rowTheme.length > 16 ? "…" : ""}`,
           style1: "",

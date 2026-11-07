@@ -132,3 +132,19 @@ const done=Core.selectRunProjection({expected_count:2,status:"partial"},[
 assert.equal(done.viewStatus,"partial");
 assert.equal(done.isTerminal,true);
 console.log("studio2 core: fixtures, legacy adapter, ratio, patches, resource validation, stable slots and Run projection pass");
+
+// Fixed strategy must not accidentally execute hidden AI layout overrides.
+const E = require("../demo/assets/studio-prompt-engine.js");
+assert.ok(typeof E.resolveLoopIterations === "function");
+const g={nodes:[
+ {id:"l",type:"loop",data:{loopMode:"prompts",batchLayoutMode:"fixed",batchRows:[{slotId:"stable-1",theme:"第一张",layout:"SC-021"}],promptListText:"第一张"}},
+ {id:"s",type:"skill_params",data:{style1:"FA-001",layout:"SC-022"}},
+ {id:"t",type:"text_input",data:{text:""}}
+],edges:[{id:"e",from:"s",to:"l"}]};
+const rec={layoutId:"SC-022",combinedText:"",assetItems:[]};
+const it=E.resolveLoopIterations(g,g.nodes[0],rec,{resourceMap:new Map(),layouts:[]});
+assert.equal(it.length,1);
+assert.equal(it[0].layout,"SC-022");
+assert.equal(it[0].itemKey,"stable-1");
+g.nodes[0].data.batchLayoutMode="ai";
+assert.equal(E.resolveLoopIterations(g,g.nodes[0],rec,{resourceMap:new Map(),layouts:[]})[0].layout,"SC-021");
