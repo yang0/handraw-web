@@ -9,7 +9,7 @@ const win = {
     esc: (value) => String(value == null ? "" : value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
     resourceLabel: (item) => item.name,
     filterDisplayPrompt: (value) => value,
-    channelUrl: () => "/studio/",
+    channelUrl: (_channel, params) => "/studio/?" + new URLSearchParams(params).toString(),
     toast: () => {},
   },
 };
@@ -42,6 +42,7 @@ function clickSecond(model) {
   };
   const assets = { innerHTML: "" };
   const download = { setAttribute(key, value) { this[key] = value; } };
+  const fork = { setAttribute(key, value) { this[key] = value; } };
   const stage = { querySelector(key) { return key === ".fwp-download-btn" ? download : null; } };
   const thumbs = ["/img/first.webp", "/img/second.webp"].map((url, index) => ({
     getAttribute(key) { return key === "data-fwp-src" ? url : null; },
@@ -56,6 +57,7 @@ function clickSecond(model) {
         "[data-fwp-stage]": stage,
         "[data-fwp-main]": main,
         "[data-fwp-assets]": assets,
+        "[data-fwp-fork]": fork,
       }[key] || null;
     },
     querySelectorAll(key) { return key === ".fwp-thumb" ? thumbs : []; },
@@ -63,7 +65,7 @@ function clickSecond(model) {
   FWP.bind(root, model);
   assert.equal(typeof listeners[1], "function");
   listeners[1]();
-  return { html: assets.innerHTML, src: imageAttrs.src, download: download.href };
+  return { html: assets.innerHTML, src: imageAttrs.src, download: download.href, fork: fork.href };
 }
 
 const model = makeModel([
@@ -75,10 +77,12 @@ assert.match(html, /FA-011/);
 assert.match(html, /SC-001/);
 assert.doesNotMatch(html, /FB-022/);
 assert.doesNotMatch(html, /全部画风|全部图型/);
+assert.match(html, /fork=work_1&amp;image=0/);
 assert.match(html, /href="\/t\/SC-001" target="_blank" rel="noopener noreferrer"/);
 const switched = clickSecond(model);
 assert.equal(switched.src, "/img/second.webp");
 assert.equal(switched.download, "/img/second.webp");
+assert.match(switched.fork, /fork=work_1&image=1/);
 assert.match(switched.html, /FB-022/);
 assert.match(switched.html, /IG-006/);
 assert.doesNotMatch(switched.html, /FA-011|SC-001/);
