@@ -431,6 +431,11 @@ def social_like(db: Any, user: dict, wid: str, body: dict) -> dict:
 
 
 def social_comment(db: Any, user: dict, wid: str, body: dict) -> dict:
+    """Create one domain comment per requestId, including concurrent retries.
+
+    A pending request is durable and never replayed blindly after a crash:
+    consumers receive outcome_uncertain and must reconcile instead.
+    """
     from .services import add_comment_to_work
     content = str(body.get("text") or "").strip()
     if not 1 <= len(content) <= 3000:
@@ -440,27 +445,48 @@ def social_comment(db: Any, user: dict, wid: str, body: dict) -> dict:
         raise ServiceError("评论需要幂等 requestId", status=400, code="invalid_request_id")
     uid = int(user["id"])
     body_hash = hashlib.sha256((wid + "\n" + content).encode()).hexdigest()
-    # Reuse the project's RLock: underlying add_comment_to_work opens its own
-    # transaction. Concurrent retries in this process cannot double-create.
-    with db._write_lock:
-        row = db.get_conn().execute(
+    # Reservation has a database unique key, not just a per-process mutex.
+    with db.transaction() as tx:
+        row = tx.execute(
             "SELECT * FROM skill_comment_requests WHERE user_id=? AND request_id=?",
             (uid, request_id),
         ).fetchone()
         if row:
             if row["work_id"] != wid or row["body_hash"] != body_hash:
                 raise ServiceError("评论幂等键已用于不同内容", status=409, code="conflict")
+            if not row["reply_id"]:
+                raise ServiceError("评论提交结果待核实，禁止重复发送", status=409,
+                                   code="outcome_uncertain")
             return {"ok": True, "replyId": row["reply_id"], "deduped": True}
+        tx.execute(
+            """INSERT INTO skill_comment_requests
+               (user_id,request_id,work_id,body_hash,reply_id,created_at)
+               VALUES(?,?,?,?,?,?)""",
+            (uid, request_id, wid, body_hash, "", utc_now_iso()),
+        )
+    try:
         result = add_comment_to_work(db, user, wid, content)
+    except ServiceError:
+        # Domain validation failed before the comment committed: release the
+        # reservation so the user can correct it and retry.
         with db.transaction() as tx:
             tx.execute(
-                """INSERT INTO skill_comment_requests
-                   (user_id,request_id,work_id,body_hash,reply_id,created_at)
-                   VALUES(?,?,?,?,?,?)""",
-                (uid, request_id, wid, body_hash, result["replyId"], utc_now_iso()),
+                "DELETE FROM skill_comment_requests WHERE user_id=? AND request_id=? AND reply_id=''",
+                (uid, request_id),
             )
+        raise
+    except Exception:
+        # A backend failure could have happened after the reply committed.
+        # Keep the reservation to avoid duplicating an already-visible reply.
+        logger.exception("Skill comment result uncertain (requestId suppressed)")
+        raise ServiceError("评论提交结果待核实，请在网站确认", status=409,
+                           code="outcome_uncertain") from None
+    with db.transaction() as tx:
+        tx.execute(
+            "UPDATE skill_comment_requests SET reply_id=? WHERE user_id=? AND request_id=?",
+            (result["replyId"], uid, request_id),
+        )
     return result
-
 
 def handle_get(handler: Any, path: str, qs: dict) -> bool:
     if path == "/api/v1/me/resources":
