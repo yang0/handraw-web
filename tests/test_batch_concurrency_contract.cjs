@@ -36,7 +36,7 @@ function deferred() {
   let resolve;
   return {promise:new Promise(r => {resolve=r;}), resolve:()=>resolve()};
 }
-async function flush() { await Promise.resolve(); await Promise.resolve(); }
+async function flush() { await new Promise(resolve => setImmediate(resolve)); }
 
 (async()=>{
   // 5 tasks, capacity 2: exactly two HTTP requests can be in flight.
