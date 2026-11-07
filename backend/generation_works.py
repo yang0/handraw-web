@@ -267,7 +267,6 @@ def project_generation_to_works(
         return []
 
     batch_id = str(row["batch_id"] or "").strip() if "batch_id" in keys else ""
-    batch_key = f"{int(row['user_id'])}:{batch_id}" if batch_id else ""
     # Every cloud request is an execution slot; batch_id names the logical run.
     # Gather completed siblings in stable requested slot order (not completion
     # order), so the cover can be the first successful planned result.
@@ -335,36 +334,25 @@ def project_generation_to_works(
     urls = [url for _, url, _ in valid_items]
     images_json = json.dumps(urls, ensure_ascii=False)
 
-    mapping = None
-    if batch_key:
-        mapping = conn.execute(
-            "SELECT id AS work_id FROM works WHERE generation_batch_key = ?",
-            (batch_key,),
-        ).fetchone()
+    # One work is linked directly to its canonical run. No separate mapping
+    # table is needed; batches and individual requests use the same key.
+    from .generation_v3 import _stable_id
+    canonical_run_id = _stable_id(
+        "run", int(row["user_id"]), "web", batch_id or gen_id,
+    )
+    mapping = conn.execute(
+        "SELECT id AS work_id FROM works WHERE run_id=?",
+        (canonical_run_id,),
+    ).fetchone()
     if not mapping:
-        mapping = conn.execute(
-            "SELECT work_id FROM generation_works WHERE generation_id = ? ORDER BY created_at LIMIT 1",
-            (gen_id,),
-        ).fetchone()
-    if not mapping:
-        # An author may already have published this first image through the
-        # direct share form. Adopt its work rather than display two cards for
-        # the same picture, while never merging unrelated generated runs.
+        # An explicit direct-share might already refer to the same picture.
+        # Adopt that *unbound* work, rather than duplicating a gallery card.
         adopted = _find_work_by_image(conn, urls[0], author_username)
         if adopted:
             taken = conn.execute(
-                "SELECT generation_batch_key FROM works WHERE id=?", (adopted,)
+                "SELECT run_id FROM works WHERE id=?", (adopted,),
             ).fetchone()
-            if taken and str(taken["generation_batch_key"] or "") in ("", batch_key):
-                if batch_key:
-                    conn.execute(
-                        "UPDATE works SET generation_batch_key=? WHERE id=?",
-                        (batch_key, adopted),
-                    )
-                conn.execute(
-                    "INSERT INTO generation_works (generation_id,item_key,work_id,created_at) "
-                    "VALUES (?,'__run__',?,?)", (gen_id, adopted, now),
-                )
+            if taken and not taken["run_id"]:
                 mapping = {"work_id": adopted}
     if mapping:
         wid = str(mapping["work_id"])
@@ -402,7 +390,7 @@ def project_generation_to_works(
                 status, featured, is_new_release, pioneer_rewarded, cheers,
                 likes, favorites, forks, tips, views, stamp_counts_json,
                 published_at_ms, created_label, created_at, updated_at,
-                origin, request_id, forked_from_id, subject, generation_batch_key
+                origin, request_id, forked_from_id, subject
             ) VALUES (
                 ?, ?, ?, ?, ?, ?,
                 ?, '', 'C-15', 'T-01', ?, ?,
@@ -410,20 +398,15 @@ def project_generation_to_works(
                 'published', 0, 1, 0, 0,
                 0, 0, 0, 0, 0, '{}',
                 ?, '刚刚', ?, ?,
-                'generation', '', ?, ?, ?
+                'generation', '', ?, ?
             )
             """,
             (
                 wid, author_username, author_name, title, images_json,
                 json.dumps(styles, ensure_ascii=False), layout, ratio, mode,
                 safe_prompt, int(prompt_has_secret), published_at_ms,
-                created_at, created_at, fork_id, subject, batch_key,
+                created_at, created_at, fork_id, subject,
             ),
-        )
-        conn.execute(
-            "INSERT INTO generation_works (generation_id,item_key,work_id,created_at) "
-            "VALUES (?,'__run__',?,?)",
-            (gen_id, wid, now),
         )
 
     # Canonical V3 persistence: the gateway's subrequest rows are only
@@ -465,68 +448,50 @@ def sync_generation_visibility(
     *,
     is_deleted: bool = False,
 ) -> None:
-    """Synchronize generation visibility and deletion state to projected works."""
-    from .services import set_work_visibility, utc_now_iso
+    """Refresh the single work of a logical run when a slot is hidden/deleted."""
+    from .services import set_work_visibility
+    from .generation_v3 import _stable_id
 
-    run = conn.execute(
-        "SELECT user_id, batch_id FROM studio_generations WHERE id=?",
+    source = conn.execute(
+        "SELECT user_id,batch_id FROM studio_generations WHERE id=?",
         (generation_id,),
     ).fetchone()
-    batch_id = str(run["batch_id"] or "") if run else ""
+    if not source or source["user_id"] is None:
+        return
+    owner_id = int(source["user_id"])
+    batch_id = str(source["batch_id"] or "")
+    external_id = batch_id or generation_id
+    run_id = _stable_id("run", owner_id, "web", external_id)
+    work = conn.execute(
+        "SELECT id,status,status_source FROM works WHERE run_id=?",
+        (run_id,),
+    ).fetchone()
+    if new_visibility == "public" and not is_deleted:
+        project_generation_to_works(conn, generation_id, force_visibility="public")
+        return
     if batch_id:
-        # A parallel image request is a *slot*, not the public work itself.
-        # Removing one slot must never hide successful images in other slots.
-        batch_key = f"{int(run['user_id'])}:{batch_id}"
+        # Preserve the work if any other successful image slot survives.
         remaining = conn.execute(
             """
             SELECT id FROM studio_generations
             WHERE user_id=? AND batch_id=? AND id<>? AND status='success'
               AND visibility='public' AND COALESCE(deleted_at,'')=''
               AND engine!='demo'
-            ORDER BY batch_index ASC, created_at ASC, id ASC LIMIT 1
+            ORDER BY batch_index ASC,created_at ASC,id ASC LIMIT 1
             """,
-            (int(run["user_id"]), batch_id, generation_id),
-        ).fetchone() if (new_visibility != "public" or is_deleted) else None
+            (owner_id, batch_id, generation_id),
+        ).fetchone()
         if remaining:
             project_generation_to_works(conn, str(remaining["id"]))
             return
-        work = conn.execute(
-            "SELECT id,status,status_source FROM works WHERE generation_batch_key=?",
-            (batch_key,),
-        ).fetchone()
-        if new_visibility != "public" or is_deleted:
-            if work and str(work["status_source"] or "") not in ("admin", "moderator", "report"):
-                set_work_visibility(
-                    conn, str(work["id"]), "hidden", utc_now_iso(),
-                    source="generation", reason="此批次已无公开生成图片", automated=True,
-                )
-            return
-        project_generation_to_works(conn, generation_id, force_visibility="public")
-        return
-
-    rows = conn.execute(
-        "SELECT work_id FROM generation_works WHERE generation_id = ?",
-        (generation_id,),
-    ).fetchall()
-
-    now_iso = utc_now_iso()
-
-    if new_visibility != "public" or is_deleted:
-        for r in rows:
-            wid = str(r["work_id"])
-            set_work_visibility(
-                conn,
-                wid,
-                "hidden",
-                now_iso,
-                source="generation",
-                reason="关联生成记录已设为私密或删除",
-                automated=True,
-            )
-    else:
-        # Became public
-        project_generation_to_works(conn, generation_id, force_visibility="public")
-
+    if work and str(work["status_source"] or "") not in (
+        "admin", "moderator", "report",
+    ):
+        set_work_visibility(
+            conn, str(work["id"]), "hidden", utc_now_iso(),
+            source="generation", reason="此任务没有可公开的生成图片",
+            automated=True,
+        )
 
 def backfill_historical_generations(
     conn: sqlite3.Connection,
@@ -586,28 +551,30 @@ def backfill_historical_generations(
     }
 
 
-def get_work_generation_provenance(conn: sqlite3.Connection, work_id: str) -> dict[str, Any] | None:
-    """Return generation mapping provenance for a work if it originated from a generation."""
+def get_work_generation_provenance(
+    conn: sqlite3.Connection, work_id: str,
+) -> dict[str, Any] | None:
+    """The work's direct run FK is its authoritative provenance."""
     row = conn.execute(
         """
-        SELECT gw.generation_id, gw.item_key, gw.created_at, sg.subject, sg.mode, sg.engine
-        FROM generation_works gw
-        LEFT JOIN studio_generations sg ON sg.id = gw.generation_id
-        WHERE gw.work_id = ?
+        SELECT r.id, r.external_run_id, r.source, r.created_at,
+               r.original_request
+        FROM works w JOIN generation_runs r ON r.id=w.run_id
+        WHERE w.id=?
         """,
         (work_id,),
     ).fetchone()
     if not row:
         return None
     return {
-        "generationId": row["generation_id"],
-        "itemKey": row["item_key"],
+        "generationId": row["external_run_id"],
+        "runId": row["id"],
+        "itemKey": "__run__",
         "createdAt": row["created_at"],
-        "subject": row["subject"] or "",
-        "mode": row["mode"] or "",
-        "engine": row["engine"] or "",
+        "subject": row["original_request"] or "",
+        "mode": row["source"],
+        "engine": row["source"],
     }
-
 
 def backfill_work_topics(conn: sqlite3.Connection, *, batch_size: int = 100) -> dict[str, Any]:
     """Backfill missing topics for all published works (generations, web, legacy) and preserve listed states.
