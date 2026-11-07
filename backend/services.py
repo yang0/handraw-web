@@ -5415,11 +5415,10 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 """,
                 (*values, clean_subj, clean_subj, fork_gen_id, fork_gen_id, fork_item_id, fork_item_id, target_id, uid),
             )
-            try:
-                from .generation_works import project_generation_to_works
-                project_generation_to_works(tx, target_id)
-            except Exception as e:
-                logger.warning("Project generation %s to works failed: %s", target_id, e)
+            # Public success must not be committed without its canonical works.
+            # Projection errors roll back this transaction instead of silently hiding images.
+            from .generation_works import project_generation_to_works
+            project_generation_to_works(tx, target_id)
             return {"ok": True, "id": target_id}
         else:
             tx.execute(
@@ -5433,11 +5432,10 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 (hid, uid, user["username"], *values, json.dumps({"creationSource": creation_source}), now_iso, req_id, clean_subj, fork_gen_id, fork_item_id,
                  "public"),
             )
-            try:
-                from .generation_works import project_generation_to_works
-                project_generation_to_works(tx, hid)
-            except Exception as e:
-                logger.warning("Project generation %s to works failed: %s", hid, e)
+            # Public success must not be committed without its canonical works.
+            # Projection errors roll back this transaction instead of silently hiding images.
+            from .generation_works import project_generation_to_works
+            project_generation_to_works(tx, hid)
             return {"ok": True, "id": hid}
 
 
@@ -6376,11 +6374,10 @@ def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_url
                             utc_now_iso(),
                         ),
                     )
-            try:
-                from .generation_works import project_generation_to_works
-                project_generation_to_works(tx, gen_id)
-            except Exception as e:
-                logger.warning("Project live generation %s to works failed: %s", gen_id, e)
+            # Public success must not be committed without its canonical works.
+            # Projection errors roll back this transaction instead of silently hiding images.
+            from .generation_works import project_generation_to_works
+            project_generation_to_works(tx, gen_id)
         else:
             tx.execute("UPDATE studio_generations SET task_id = ? WHERE id = ? AND status NOT IN ('refunded', 'success')", (task_id, gen_id))
 
