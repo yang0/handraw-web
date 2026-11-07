@@ -461,6 +461,50 @@ def uploaded_skill_images(tx: sqlite3.Connection, run_id: str) -> list[dict[str,
     return saved
 
 
+def refresh_run_status(tx: sqlite3.Connection, run_id: str) -> str:
+    """Derive the single logical-run state from authoritative output slots.
+
+    No gateway execution row or client-provided status can override a finished
+    item. A batch remains running until all declared output slots are terminal.
+    Failed and cancelled slots remain visible to the owner's history.
+    """
+    run = tx.execute(
+        "SELECT id,source,status,expected_count FROM generation_runs WHERE id=?",
+        (run_id,),
+    ).fetchone()
+    if not run:
+        raise ValueError("Generation run does not exist")
+    rows = tx.execute(
+        "SELECT position,status FROM generation_items WHERE run_id=?",
+        (run_id,),
+    ).fetchall()
+    positions: dict[int, set[str]] = {}
+    for row in rows:
+        position = int(row["position"])
+        slot = position // 1000 if run["source"] == "web" else position
+        positions.setdefault(slot, set()).add(str(row["status"]))
+    terminal = {"success", "failed", "cancelled"}
+    if len(positions) < int(run["expected_count"]) or any(
+        not states <= terminal for states in positions.values()
+    ):
+        # Skill media uploads must not be treated as a published task until
+        # the work commit succeeds, even if some files have been uploaded.
+        status = "uploading" if run["source"] == "skill" and run["status"] == "uploading" else "running"
+    elif all("success" in states for states in positions.values()):
+        status = "success"
+    elif any("success" in states for states in positions.values()):
+        status = "partial"
+    elif all(states == {"cancelled"} for states in positions.values()):
+        status = "cancelled"
+    else:
+        status = "failed"
+    tx.execute(
+        "UPDATE generation_runs SET status=?, updated_at=? WHERE id=?",
+        (status, _now(), run_id),
+    )
+    return status
+
+
 def record_public_work(
     tx: sqlite3.Connection,
     *,
@@ -555,31 +599,7 @@ def record_public_work(
         (cover_id, json.dumps([e[2] for e in entries], ensure_ascii=False),
          now, work_id),
     )
-    # A partially generated batch is still RUNNING until all expected slots
-    # reach a terminal state. "partial" means finished with some failures,
-    # not merely "the first of five images has arrived".
-    states = tx.execute(
-        "SELECT position,status FROM generation_items WHERE run_id=?",
-        (run_id,),
-    ).fetchall()
-    terminal = {"success", "failed", "cancelled"}
-    slot_states: dict[int, set[str]] = {}
-    for item in states:
-        slot = int(item["position"]) // 1000 if source == "web" else int(item["position"])
-        slot_states.setdefault(slot, set()).add(str(item["status"]))
-    completed = len(slot_states) >= expected_count and all(
-        statuses <= terminal for statuses in slot_states.values()
-    )
-    if not completed:
-        run_status = "running"
-    elif all("success" in statuses for statuses in slot_states.values()):
-        run_status = "success"
-    else:
-        run_status = "partial"
-    tx.execute(
-        "UPDATE generation_runs SET status=?,updated_at=? WHERE id=?",
-        (run_status, now, run_id),
-    )
+    refresh_run_status(tx, run_id)
     # Replaced media must immediately lose this work's public grant. Physical
     # deletion happens only after a delayed, durable DB-reference check.
     removed_urls = set(previous_media_urls) - {entry[2] for entry in entries}
