@@ -1425,7 +1425,9 @@ def _private_media_access(
     if owner is not None and user and int(user.get("id") or 0) == owner:
         return True, "private, no-store"
     if _is_published_media(db, safe):
-        return True, "public, max-age=86400"
+        # A work can be hidden by moderation later. Never emit long-lived
+        # immutable/CDN cache headers for user-generated media access grants.
+        return True, "public, max-age=60, must-revalidate"
     return False, "private, no-store"
 
 
@@ -2755,7 +2757,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                         if resized:
                             # A transcoded variant is addressable by its own URL,
                             # so it can be cached by any shared layer.
-                            cache_policy = "public, max-age=604800" if prefix == "/images/" else "private, max-age=86400"
+                            cache_policy = "public, max-age=604800" if prefix == "/images/" else "private, no-store"
                         self._send_bytes(payload, ctype, cache=cache_policy)
                         return
                 self.send_error(404, "Media not found")
