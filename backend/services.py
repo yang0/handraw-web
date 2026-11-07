@@ -6439,6 +6439,27 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) ->
         # The run remains the history identity even when every subrequest
         # fails. Do not create a public work for a fully failed run.
         logical_key = str(row["batch_id"] or "") or gen_id
+        from .generation_v3 import _stable_id
+        canonical_run_id = _stable_id("run", uid, "web", logical_key)
+        exists = tx.execute(
+            "SELECT 1 FROM generation_runs WHERE id=?", (canonical_run_id,),
+        ).fetchone()
+        if exists:
+            position = (
+                int(row["batch_index"] or 0) * 1000
+                if row["batch_id"] else 0
+            )
+            tx.execute(
+                """
+                INSERT INTO generation_items
+                  (id,run_id,position,status,media_id,error_code,created_at,updated_at)
+                VALUES (?, ?, ?, 'failed',NULL,'gateway_failed',?,?)
+                ON CONFLICT(run_id,position) DO UPDATE SET
+                    status='failed',media_id=NULL,error_code='gateway_failed',updated_at=excluded.updated_at
+                """,
+                (_stable_id("item", canonical_run_id, position),
+                 canonical_run_id, position, now_iso, now_iso),
+            )
         related = tx.execute(
             """
             SELECT status FROM studio_generations
