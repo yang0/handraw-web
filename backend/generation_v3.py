@@ -421,7 +421,7 @@ def record_public_work(
         expected_count=expected_count, request_id=request_id,
     )
     work = tx.execute(
-        "SELECT id,run_id,author_username FROM works WHERE id=?", (work_id,),
+        "SELECT id,run_id,author_username,cover_media_id FROM works WHERE id=?", (work_id,),
     ).fetchone()
     if not work:
         raise ValueError("Work must exist before media linkage")
@@ -480,9 +480,14 @@ def record_public_work(
             "INSERT INTO work_media(work_id,media_id,position) VALUES (?,?,?)",
             (work_id, media_id, rank),
         )
+    previous_cover = str(work["cover_media_id"] or "")
+    valid_media_ids = {entry[1] for entry in entries}
+    # Preserve the author's chosen cover as more async output slots finish.
+    # Fall back to the first successful image only if that media disappeared.
+    cover_id = previous_cover if previous_cover in valid_media_ids else entries[0][1]
     tx.execute(
         "UPDATE works SET cover_media_id=?,images_json=?,updated_at=? WHERE id=?",
-        (entries[0][1], json.dumps([e[2] for e in entries], ensure_ascii=False),
+        (cover_id, json.dumps([e[2] for e in entries], ensure_ascii=False),
          now, work_id),
     )
     run_status = "success" if len(entries) >= expected_count else "partial"
