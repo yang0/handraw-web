@@ -5066,12 +5066,12 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
                 (r["id"],),
             ).fetchall()
             if mapped_rows:
-                key_to_wid = {mr["item_key"]: mr["work_id"] for mr in mapped_rows}
+                # A generation run has one work with all successful images.
+                # Every image opens the same canonical work detail.
+                work_id = mapped_rows[0]["work_id"]
                 for it in items:
-                    it_k = it.get("id") or f"img_{hashlib.sha256((it.get('imageUrl') or '').encode('utf-8')).hexdigest()[:16]}"
-                    if it_k in key_to_wid:
-                        it["workId"] = key_to_wid[it_k]
-                hist_entry["workId"] = mapped_rows[0]["work_id"]
+                    it["workId"] = work_id
+                hist_entry["workId"] = work_id
         except Exception:
             pass
         if snap:
