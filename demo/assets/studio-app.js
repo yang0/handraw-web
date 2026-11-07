@@ -7501,7 +7501,8 @@
   }
 
   async function deleteCloudHistory(id, all = false) {
-    if (!App.state || !App.state.serverBacked || !App.state.loggedIn) return { ok: true };
+    if (!App.state || !App.state.serverBacked) return { ok: true };
+    if (!App.state.loggedIn) throw new Error("登录后才能管理云端生图历史");
     const response = await fetch("/api/studio/history/delete", {
       method: "POST",
       credentials: "include",
@@ -7833,7 +7834,7 @@
           delete CS.historySelectedPreview[hid];
           writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
           renderTopAndBottomDocks();
-          toast("已删除该条历史记录");
+          toast("已删除生成记录；关联公开作品（如有）已同步下架");
         } catch (err) {
           toast(`删除历史失败：${err.message || err}`);
           btn.disabled = false;
