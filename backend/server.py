@@ -406,7 +406,7 @@ class GenerationReconciler:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def reconcile_once(self) -> int:
+    def reconcile_once(self, lease=None) -> int:
         cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.db.transaction() as tx:
             tx.execute(
@@ -430,6 +430,9 @@ class GenerationReconciler:
         ).fetchall()
         handled = 0
         for row in rows:
+            if lease is not None and not lease.valid():
+                logger.warning("Reconciliation interrupted: Redis leadership lost")
+                break
             generation_id = str(row["id"])
             task_id = str(row["task_id"] or "").strip()
             # If the submit process died before receiving an upstream id, use
@@ -486,7 +489,10 @@ class GenerationReconciler:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                self.reconcile_once()
+                from .redis_jobs import generation_reconcile_lease
+                with generation_reconcile_lease() as lease:
+                    if lease.valid():
+                        self.reconcile_once(lease=lease)
             except Exception:
                 logger.exception("worker=generation-reconciler iteration failed; will retry")
             self._stop.wait(self.interval_seconds)
