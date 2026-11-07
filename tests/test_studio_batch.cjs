@@ -204,7 +204,7 @@ function parseHtml(html) {
         return html.includes('id="batch-btn-pick-global-refs"') ? getNode("batch-btn-pick-global-refs", () => ({ id: "batch-btn-pick-global-refs", onclick: null })) : null;
       }
       if (selector === ".batch-plan-notice") {
-        const m = html.match(/<span class="batch-plan-notice">([\s\S]*?)<\/span>/);
+        const m = html.match(/<span class="batch-plan-notice"[^>]*>([\s\S]*?)<\/span>/);
         return m ? { textContent: m[1] } : null;
       }
       if (selector === ".batch-cost-wrap") {
