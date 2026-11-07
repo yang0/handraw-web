@@ -1217,7 +1217,7 @@ def resolve_local_ref_image(
     if not res:
         return None
     raw_bytes, ext = res
-    mime = "image/webp" if ext == ".webp" else "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+    mime = "image/gif" if ext == ".gif" else "image/webp" if ext == ".webp" else "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
     return {"b64_json": base64.b64encode(raw_bytes).decode("ascii"), "mime_type": mime}
 
 
