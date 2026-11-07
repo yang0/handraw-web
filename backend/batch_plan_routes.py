@@ -261,7 +261,7 @@ def execute_batch_plan(
         try:
             clean_json = response_text.strip()
             if "```" in clean_json:
-                match = re.search(r"```(?:json)?\\s*([\\s\\S]*?)\\s*```", clean_json)
+                match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", clean_json)
                 if match:
                     clean_json = match.group(1).strip()
             parsed = json.loads(clean_json)
@@ -273,7 +273,7 @@ def execute_batch_plan(
                 if not isinstance(raw_it, dict):
                     raise ValueError("invalid item")
                 subj = str(raw_it.get("subject") or "").strip()
-                subj = re.sub(r"^(?:[0-9]+[.\\-、]\\s*|[\\-*•]\\s*|#\\d+\\s*)", "", subj).strip()
+                subj = re.sub(r"^(?:[0-9]+[.\-、]\s*|[\-*•]\s*|#\d+\s*)", "", subj).strip()
                 if not subj or subj in seen_subjects:
                     raise ValueError("missing or duplicate subject")
                 seen_subjects.add(subj)
