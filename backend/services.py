@@ -1803,25 +1803,15 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
             f"""
             SELECT c.bucket, c.target_id
             FROM collections c
-            LEFT JOIN studio_generations g ON (c.bucket = 'generations' AND g.id = c.target_id)
             WHERE c.user_id = ?
               AND (
                 (c.bucket IN ('styles', 'layouts') AND {collection_filter})
                 OR (c.bucket = 'works' AND {collection_work_filter})
                 OR (c.bucket = 'topics' AND {collection_topic_filter})
-                OR (
-                    c.bucket = 'generations'
-                    AND g.id IS NOT NULL
-                    AND g.status = 'success'
-                    AND COALESCE(g.deleted_at, '') = ''
-                    AND g.engine != 'demo'
-                    AND (g.user_id = ? OR g.visibility = 'public')
-                    AND (g.items_json IS NOT NULL AND g.items_json != '' AND g.items_json != '[]')
-                )
               )
             ORDER BY c.created_at DESC
             """,
-            (uid, *collection_ids, *collection_work_ids, *collection_topic_ids, uid),
+            (uid, *collection_ids, *collection_work_ids, *collection_topic_ids),
         ).fetchall():
             b = r["bucket"]
             if b in collections:
@@ -1863,24 +1853,15 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
             f"""
             SELECT i.target_type, i.target_id, i.stamp_label
             FROM interactions i
-            LEFT JOIN studio_generations g ON (i.target_type = 'like_generation' AND g.id = i.target_id)
             WHERE i.user_id = ?
               AND (
                 (i.target_type IN ('like_style', 'like_layout') AND {interaction_asset_filter})
-                OR (i.target_type IN ('like_work', 'like_topic') AND ({interaction_work_filter} OR {interaction_topic_filter}))
-                OR (
-                    i.target_type = 'like_generation'
-                    AND g.id IS NOT NULL
-                    AND g.status = 'success'
-                    AND COALESCE(g.deleted_at, '') = ''
-                    AND g.engine != 'demo'
-                    AND (g.user_id = ? OR g.visibility = 'public')
-                    AND (g.items_json IS NOT NULL AND g.items_json != '' AND g.items_json != '[]')
-                )
-                OR i.target_type NOT IN ('like_style', 'like_layout', 'like_work', 'like_topic', 'like_generation')
+                OR (i.target_type = 'like_work' AND {interaction_work_filter})
+                OR (i.target_type = 'like_topic' AND {interaction_topic_filter})
+                OR i.target_type NOT IN ('like_style', 'like_layout', 'like_work', 'like_topic')
               )
             """,
-            (uid, *interaction_asset_ids, *interaction_work_ids, *interaction_topic_ids, uid),
+            (uid, *interaction_asset_ids, *interaction_work_ids, *interaction_topic_ids),
         ).fetchall():
             ttype = str(r["target_type"] or "")
             if ttype.startswith("like_"):
