@@ -545,7 +545,7 @@ class GenerationSocialActionsTests(unittest.TestCase):
         self.assertFalse(res.get("generation", {}).get("fork", {}).get("visible"))
 
     def test_boot_payload_collections_and_liked_ids(self):
-        """Verify /api/boot payload includes collections.generations and likedIds contains like_generation."""
+        """Canonical V3 generated works share the works bucket and like IDs."""
         self._insert_generation(self.alice["id"], "gen_alice_boot", topic="引导生图")
         bob_cookie = f"handraw_sid={self.bob_token}"
 
@@ -566,12 +566,12 @@ class GenerationSocialActionsTests(unittest.TestCase):
         status, boot = self._req("/api/boot", method="GET", cookie=bob_cookie)
         self.assertEqual(status, 200)
         cols = boot.get("collections", {})
-        self.assertIn("generations", cols)
+        self.assertIn("works", cols)
         w = self.db.get_conn().execute(
             """SELECT w.id FROM works w JOIN generation_runs r ON r.id=w.run_id
                WHERE r.external_run_id='gen_alice_boot'"""
         ).fetchone()[0]
-        self.assertIn(w, cols["generations"])
+        self.assertIn(w, cols["works"])
 
         liked_ids = boot.get("likedIds", [])
         self.assertTrue(
