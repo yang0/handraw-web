@@ -7869,6 +7869,8 @@
                       const coverItem = coverIdx < 0 ? null : h.items[coverIdx];
                       const imageCount = historyImageCount(h);
                       const batchExpanded = Boolean(CS.historyExpandedBatchIds[h.id]);
+                      const workId = String(h.workId || coverItem?.workId || "").trim();
+                      const detailHref = workId && S.channelUrl ? S.channelUrl("main", { view: "work", id: workId }) : "";
 
                       return `
                         <article class="ic-hist-entry-card" data-hist-id="${esc(h.id)}">
@@ -7886,6 +7888,7 @@
 
                             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
                               ${h.recipeId && historyRecordCategory(h) === "quick" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-redo-recipe="${esc(h.recipeId)}" style="font-weight:800;">使用原配方</button>` : historyRecordCategory(h) === "canvas" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">恢复到画布</button>` : historyRecordCategory(h) !== "other" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-open-mode="${historyRecordCategory(h)}" style="font-weight:800;">${({quick: "去做图", batch: "去批量", article: "去文章配图"})[historyRecordCategory(h)]}</button>` : ""}
+                              ${detailHref && imageCount > 1 ? `<button type="button" class="btn btn-sm" data-hist-expand-batch="${esc(h.id)}" aria-expanded="${batchExpanded}">${batchExpanded ? "收起图片" : `展开全部 ${imageCount} 张`}</button>` : ""}
                               <button type="button" class="btn btn-sm" data-hist-zip="${esc(h.id)}" ${!(h.items || []).some((it) => it.imageUrl) ? "disabled" : ""} style="color:#1f6f4a;border-color:rgba(31,111,74,0.35);font-weight:750;">📦 下载 ZIP</button>
                               <button type="button" class="btn btn-sm" data-hist-del="${esc(h.id)}" style="color:#dc2626;" title="删除此条历史记录">🗑️ 删除</button>
                             </div>
@@ -7893,14 +7896,14 @@
 
                           ${coverItem ? `
                             <div class="ic-hist-cover">
-                              <button type="button" class="ic-hist-cover-button"
-                                ${imageCount > 1
-                                  ? `data-hist-expand-batch="${esc(h.id)}" aria-expanded="${batchExpanded}" aria-label="${batchExpanded ? "收起" : "展开"}全部 ${imageCount} 张图片"`
-                                  : `data-hist-img-toggle="${esc(h.id)}" data-hist-img-idx="${coverIdx}" aria-label="预览生成图片"`}
-                              >
-                                <img data-hw-src="${esc(coverItem.imageUrl)}" alt="${esc(coverItem.title || h.subject || "生成图片")}" loading="lazy" />
-                                ${imageCount > 1 ? `<span class="ic-hist-cover-count">${imageCount} 张 · ${batchExpanded ? "收起图片" : "查看全部"}</span>` : ""}
-                              </button>
+                              ${detailHref
+                                  ? `<a class="ic-hist-cover-button" href="${esc(detailHref)}" target="_blank" rel="noopener noreferrer" aria-label="新标签查看作品详情">`
+                                  : `<button type="button" class="ic-hist-cover-button" ${imageCount > 1
+                                    ? `data-hist-expand-batch="${esc(h.id)}" aria-expanded="${batchExpanded}" aria-label="${batchExpanded ? "收起" : "展开"}全部 ${imageCount} 张图片"`
+                                    : `data-hist-img-toggle="${esc(h.id)}" data-hist-img-idx="${coverIdx}" aria-label="预览生成图片"`}>`}
+                                 <img data-hw-src="${esc(coverItem.imageUrl)}" alt="${esc(coverItem.title || h.subject || "生成图片")}" loading="lazy" />
+                                 ${imageCount > 1 ? `<span class="ic-hist-cover-count">${imageCount} 张 · ${detailHref ? "查看作品详情" : batchExpanded ? "收起图片" : "查看全部"}</span>` : ""}
+                                 ${detailHref ? "</a>" : "</button>"}
                               <a href="${esc(coverItem.imageUrl)}" class="ic-hist-cover-download" data-hist-image-download download="handraw-history.webp" aria-label="下载封面或首张生成图片">↓ 下载</a>
                             </div>
                           ` : `<div class="ic-hist-no-image">暂无可预览的图片</div>`}
@@ -7911,13 +7914,14 @@
                                 (it, iIdx) => `
                                   <div
                                     class="ic-hist-img-tile ${selImgIdx === iIdx ? "is-selected" : ""}"
-                                    data-hist-img-toggle="${esc(h.id)}"
-                                    data-hist-img-idx="${iIdx}"
-                                    title="点击在页内展开/收起大图预览"
+                                    ${detailHref ? "" : `data-hist-img-toggle="${esc(h.id)}" data-hist-img-idx="${iIdx}"`}
+                                    title="${detailHref ? "新标签打开作品详情" : "点击在页内展开/收起大图预览"}"
                                   >
-                                    <img data-hw-src="${esc(it.imageUrl)}" alt="${esc(it.title || `成图 ${iIdx + 1}`)}" loading="lazy" />
+                                    ${detailHref ? `<a class="ic-hist-tile-detail" href="${esc(detailHref)}" target="_blank" rel="noopener noreferrer" aria-label="新标签查看作品详情">` : ""}
+                                     <img data-hw-src="${esc(it.imageUrl)}" alt="${esc(it.title || `成图 ${iIdx + 1}`)}" loading="lazy" />
                                     ${it.ratio ? `<span class="ic-hist-img-badge">${esc(it.ratio)}</span>` : ""}
                                     <div class="ic-hist-img-caption">${esc(it.title || `成图 #${iIdx + 1}`)}</div>
+                                     ${detailHref ? "</a>" : ""}
                                     <a href="${esc(it.imageUrl)}" class="ic-hist-img-download" data-hist-image-download download="handraw-${iIdx + 1}.webp" aria-label="下载第 ${iIdx + 1} 张图片">↓ 下载</a>
                                   </div>
                                 `

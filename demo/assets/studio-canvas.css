@@ -3813,6 +3813,10 @@ body.ic-studio-body .hw-topbar {
   cursor: zoom-in;
 }
 .ic-hist-cover-button[aria-expanded] { cursor: pointer; }
+a.ic-hist-cover-button, a.ic-hist-tile-detail { text-decoration: none; color: inherit; }
+a.ic-hist-cover-button { cursor: pointer; }
+.ic-hist-tile-detail { display: block; }
+.ic-hist-tile-detail:focus-visible { outline: 3px solid var(--vermilion); outline-offset: -3px; }
 .ic-hist-cover-button img {
   display: block;
   width: 100%;

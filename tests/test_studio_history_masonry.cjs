@@ -46,7 +46,7 @@ const compile = new Function(
 );
 const switchedModes = [];
 const app = compile(
-  { historyStage: stage }, state, { filterDisplayPrompt: (x) => x },
+  { historyStage: stage }, state, { filterDisplayPrompt: (x) => x, channelUrl: (_c, { id }) => "/t/" + encodeURIComponent(id) },
   (x) => String(x ?? ""), () => {}, { activeElement: null },
   { history: { replaceState() {} }, confirm: () => true }, () => {}, () => {}, () => {}, () => {}, () => {},
   (mode) => switchedModes.push(mode)
@@ -107,6 +107,21 @@ state.historyFilter = "canvas";
 app.renderHistoryStage();
 assert.ok(stage.innerHTML.includes('data-hist-restore="canvas"'));
 state.historyFilter = "all";
+state.generationHistory.push({
+  id: "linked_run", workId: "work_real_123", creationSource: "batch",
+  mode: "batch", kind: "multi", status: "success",
+  items: [{ imageUrl: "/linked1.webp" }, { imageUrl: "/linked2.webp" }]
+});
+app.renderHistoryStage();
+assert.ok(stage.innerHTML.includes('href="/t/work_real_123" target="_blank" rel="noopener noreferrer"'),
+  "Public work cover opens canonical work detail in a new tab");
+assert.ok(stage.innerHTML.includes('data-hist-expand-batch="linked_run"'), "Batch expansion stays available");
+const linked = stage.expandBindings.find(btn => btn.id === "linked_run");
+assert.ok(linked && typeof linked.onclick === "function");
+linked.onclick();
+assert.ok(stage.innerHTML.includes('class="ic-hist-tile-detail" href="/t/work_real_123"'),
+  "Expanded pictures use the same canonical work detail");
+assert.ok(!stage.innerHTML.includes('data-hist-img-toggle="linked_run"'), "Work images do not use inline preview");
 assert.ok(styles.includes("--ic-library-max-width: none"), "History/workflow must not have a competing fixed width cap");
 assert.ok(styles.includes("--ic-library-side-gap: var(--hw-page-gutter, 24px)"), "Library must inherit navigation page gutter");
 const feedStyles = fs.readFileSync("demo/assets/mixed-feed.css", "utf8");
