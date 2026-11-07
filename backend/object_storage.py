@@ -35,7 +35,7 @@ def _key(url: str) -> str:
             or "\x00" in clean or "\\" in clean):
         raise ValueError("Unsafe private media key")
     prefix = os.environ.get("HANDRAW_OBJECT_PREFIX", "handraw/v3").strip("/")
-    if any(seg in ("", ".", "..") for seg in prefix.split("/")):
+    if prefix and any(seg in ("", ".", "..") for seg in prefix.split("/")):
         raise ValueError("Unsafe object storage prefix")
     return "/".join([*([prefix] if prefix else []), *pieces])
 
@@ -44,8 +44,8 @@ def _key(url: str) -> str:
 def _client():
     import boto3
     from botocore.config import Config
-    region = os.environ.get("HANDRAW_OBJECT_REGION", "auto")
     endpoint = os.environ.get("HANDRAW_OBJECT_ENDPOINT", "").strip() or None
+    region = os.environ.get("HANDRAW_OBJECT_REGION", "").strip() or ("auto" if endpoint else "us-east-1")
     return boto3.client(
         "s3", endpoint_url=endpoint, region_name=region,
         config=Config(
@@ -65,14 +65,17 @@ def put(url: str, payload: bytes, *, mime: str | None = None) -> None:
     if not payload or len(payload) > MAX_OBJECT_BYTES:
         raise ValueError("Invalid object payload size")
     key = _key(url)
-    _client().put_object(
-        Bucket=os.environ["HANDRAW_OBJECT_BUCKET"].strip(),
-        Key=key,
-        Body=payload,
-        ContentType=mime or mimetypes.guess_type(url)[0] or "application/octet-stream",
-        CacheControl="private, no-store",
-        ServerSideEncryption="AES256",
-    )
+    options = {
+        "Bucket": os.environ["HANDRAW_OBJECT_BUCKET"].strip(),
+        "Key": key,
+        "Body": payload,
+        "ContentType": mime or mimetypes.guess_type(url)[0] or "application/octet-stream",
+        "CacheControl": "private, no-store",
+    }
+    sse = os.environ.get("HANDRAW_OBJECT_SSE", "").strip()
+    if sse:
+        options["ServerSideEncryption"] = sse
+    _client().put_object(**options)
 
 
 def ensure_local_copy(url: str, target: Path) -> bool:
