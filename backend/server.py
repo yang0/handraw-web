@@ -540,6 +540,7 @@ def save_data_url_upload(
         from .user_library import check_user_upload_quota, next_change_seq
 
         new_file_path: Path | None = None
+        new_media_url: str | None = None
         try:
             with db.transaction() as tx:
                 # Check deduplication against existing active assets (library categories only)
@@ -574,6 +575,7 @@ def save_data_url_upload(
                 fname = f"{up_id}{ext}"
                 fpath = uploads_dir / fname
                 public_url = f"/uploads/{fname}"
+                new_media_url = public_url
                 from .media_storage import persist_media_bytes
                 persist_media_bytes(public_url, raw_bytes)
                 new_file_path = fpath
@@ -622,11 +624,11 @@ def save_data_url_upload(
                     "assetUid": asset_uid,
                 }
         except Exception:
-            if new_file_path is not None:
-                try:
-                    new_file_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+            if new_media_url:
+                from .media_storage import discard_uncommitted_media
+                discard_uncommitted_media(db, new_media_url)
+            elif new_file_path is not None:
+                new_file_path.unlink(missing_ok=True)
             raise
 
     uploads_dir = get_uploads_dir()
