@@ -1316,28 +1316,13 @@
     };
 
     DOM.workflowsStage.innerHTML = `
-      <div class="ic-pv-topbar">
-        <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-          <button type="button" class="btn btn-sm" id="wf-back-canvas" style="font-weight:800;">← 返回画布</button>
-          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">预置示范与我的工作流 (${allWf.length})</span>
-          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">按典型真实创作场景按需编排节点 · 点击「打开」即可在画布直接运行体验</span>
-        </div>
-
-        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-          <button type="button" class="btn btn-sm" id="wf-restore-presets" title="恢复全部 7 套官方典型场景示范工作流" style="font-weight:800;">恢复官方示范</button>
-          <input
-            type="search"
-            class="hw-input"
-            id="wf-search-inp"
-            value="${esc(CS.workflowQuery || "")}"
-            placeholder="搜索场景、节点或工作流…"
-            style="width:220px;height:32px;padding:4px 10px;font-size:12.5px;"
-          />
-          <label class="btn btn-primary btn-sm" style="cursor:pointer;font-weight:800;">
-            选择 JSON 文件导入
-            <input type="file" id="wf-import-file-inp" accept=".json,application/json" hidden />
-          </label>
-        </div>
+      <div class="ic-wf-minimal-tools" role="search">
+        <input type="search" class="hw-input" id="wf-search-inp"
+          value="${esc(CS.workflowQuery || "")}" placeholder="搜索工作流…" aria-label="搜索工作流" />
+        <label class="btn btn-primary btn-sm" style="cursor:pointer;font-weight:800;">
+          导入工作流
+          <input type="file" id="wf-import-file-inp" accept=".json,application/json" hidden />
+        </label>
       </div>
 
       <div class="ic-wf-page-scroll" id="wf-page-scroll">
@@ -1349,8 +1334,7 @@
                   <div style="font-size:16px;font-weight:850;color:var(--ic-ink);margin-bottom:6px;">${
                     allWf.length === 0 ? "暂无已保存的工作流" : "没有匹配搜索词的工作流"
                   }</div>
-                  <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">可在无限画布右下角缩略图旁点击「保存」保存当前画布，或点击上方「恢复官方示范」。</div>
-                  <button type="button" class="btn btn-primary" id="wf-empty-go-canvas">返回无限画布</button>
+                  <div style="font-size:13px;color:var(--ic-muted);">可在「高级画布」中保存工作流，或使用上方按钮导入 JSON 工作流。</div>
                 </div>
               `
               : `
@@ -1406,36 +1390,6 @@
         const len = inp.value.length;
         inp.setSelectionRange(len, len);
       }
-    }
-
-    const goBackCanvas = () => {
-      CS.stageView = "canvas";
-      try {
-        if (window.location.search.includes("view=")) {
-          window.history.replaceState(null, "", window.location.pathname);
-        }
-      } catch (_) {}
-      renderTopAndBottomDocks();
-      requestAnimationFrame(() => renderMinimap());
-    };
-
-    const backBtn = DOM.workflowsStage.querySelector("#wf-back-canvas");
-    if (backBtn) backBtn.onclick = goBackCanvas;
-
-    const emptyGoBtn = DOM.workflowsStage.querySelector("#wf-empty-go-canvas");
-    if (emptyGoBtn) emptyGoBtn.onclick = goBackCanvas;
-
-    const restorePresetsBtn = DOM.workflowsStage.querySelector("#wf-restore-presets");
-    if (restorePresetsBtn) {
-      restorePresetsBtn.onclick = () => {
-        const officialList = buildOfficialPresetWorkflows();
-        const officialIds = new Set(officialList.map((w) => w.id));
-        const customOnly = (CS.savedWorkflows || []).filter((w) => w && !officialIds.has(w.id) && !w.isOfficialPreset);
-        CS.savedWorkflows = [...customOnly, ...officialList];
-        writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-        renderWorkflowsStage();
-        toast("✨ 已恢复全部 7 套官方典型场景示范工作流！");
-      };
     }
 
     const searchInp = DOM.workflowsStage.querySelector("#wf-search-inp");
@@ -10759,7 +10713,6 @@
         <div class="ic-tabs-pinned">
           <button type="button" class="ic-tab-action-pill" id="tb-new-wf" title="新建工作流标签页">＋ 新建 ▾</button>
           <button type="button" class="ic-tab-action-pill" id="tb-all-tabs" title="展开全部已打开标签页列表">已打开 ${CS.tabs.filter((t) => !isArticleTab(t)).length} ▾</button>
-          <button type="button" class="ic-tab-action-pill ${CS.stageView === "workflows" ? "is-active" : ""}" id="tb-open-wflib" title="查看我保存的工作流">工作流</button>
         </div>
       </div>
 
@@ -10853,8 +10806,6 @@
       openAllTabsPopover(allTabsBtn);
     };
 
-    const btnOpenWflib = DOM.workbenchBar.querySelector("#tb-open-wflib");
-    if (btnOpenWflib) btnOpenWflib.onclick = () => openWorkflowsPage();
     const btnThemeToggle = DOM.workbenchBar.querySelector("#tb-theme-toggle");
     if (btnThemeToggle) btnThemeToggle.onclick = () => {
       CS.canvasTheme = CS.canvasTheme === "dark" ? "paper" : "dark";
@@ -12160,7 +12111,7 @@
     }
 
     if (DOM.workbenchBar) {
-      DOM.workbenchBar.style.display = (CS.stageView === "canvas" || CS.stageView === "workflows") ? "" : "none";
+      DOM.workbenchBar.style.display = CS.stageView === "canvas" ? "" : "none";
     }
 
     renderCreationModeBar();
@@ -15896,13 +15847,14 @@
     const canvas = CS.stageView === "canvas";
     const article = CS.stageView === "preview" || CS.stageView === "article";
     const history = CS.stageView === "history";
+    const workflows = CS.stageView === "workflows";
     const historyCount = (CS.generationHistory || []).length;
     DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作任务">
       <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
       <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
       <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
       <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">高级画布</button>
-    </div><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button>`;
+    </div><div class="qc-entry-actions"><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
 
     const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
     if (btnQuick) btnQuick.onclick = () => { switchCreationStage("quick"); };
@@ -15914,6 +15866,8 @@
     if (btnCanvas) btnCanvas.onclick = () => { switchCreationStage("canvas"); };
     const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
     if (btnHistory) btnHistory.onclick = () => { openHistoryPage(); };
+    const btnWorkflows = DOM.entryBar.querySelector("#studio-mode-workflows");
+    if (btnWorkflows) btnWorkflows.onclick = () => { openWorkflowsPage(); };
   }
 
   let isRenderingQuickStart = false;
