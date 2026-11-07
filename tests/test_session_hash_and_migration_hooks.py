@@ -234,7 +234,10 @@ class MigrationHooksUnitTests(unittest.TestCase):
             hook_calls = {}
             orig_hooks = dict(POST_MIGRATION_HOOKS)
             try:
-                for v in (66, 69, 75, 77, 79, 80, 82):
+                # V3 removed retired hooks (including 079), so only compare
+                # versions registered by the current fresh-schema code.
+                hook_versions = tuple(sorted(orig_hooks))
+                for v in hook_versions:
                     def make_tracker(version):
                         def _tracker(c):
                             hook_calls[version] = hook_calls.get(version, 0) + 1
@@ -252,7 +255,7 @@ class MigrationHooksUnitTests(unittest.TestCase):
                     int(r["version"])
                     for r in conn.execute("SELECT version FROM schema_migration_hooks").fetchall()
                 }
-                for v in (66, 69, 75, 77, 79, 80, 82):
+                for v in hook_versions:
                     self.assertIn(v, recorded_versions)
             finally:
                 POST_MIGRATION_HOOKS.clear()
