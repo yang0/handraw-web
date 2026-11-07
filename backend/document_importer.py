@@ -422,8 +422,9 @@ def save_uploaded_image_bytes(
                 ),
             )
     except Exception:
-        # File written on disk but DB registration failed: remove file immediately
-        fpath.unlink(missing_ok=True)
+        # An image lives in the private object store as well as local cache.
+        from .media_storage import discard_uncommitted_media
+        discard_uncommitted_media(db, public_url)
         raise
 
     return public_url
