@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const main = fs.readFileSync("demo/assets/main-app.js", "utf8");
 const source = fs.readFileSync("demo/assets/cloud-center.js", "utf8");
 const theme = fs.readFileSync("demo/assets/theme.css", "utf8");
-assert.match(theme, /\.hw-personal-gallery-grid\.is-empty\s*\{\s*column-count:\s*1\s*;/, "Empty gallery must be one column");
+assert.match(theme, /\.hw-personal-gallery-grid\.is-empty\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/, "Empty gallery must fill one grid track");
 assert.match(theme, /\.hw-personal-gallery-empty\s*\{[^}]*width:\s*100%/, "Empty gallery card must fill the gallery width");
 assert.match(source, /cards\.classList\.toggle\("is-empty", visible\.length === 0\)/, "Empty state must toggle masonry off");
 assert.match(main, /label: "我的图库"/, "Creative Resources must contain My Gallery");
