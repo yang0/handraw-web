@@ -1714,5 +1714,38 @@ class UserLibrarySyncTests(unittest.TestCase):
         files_after = set(uploads_dir.glob("UPL-*"))
         self.assertEqual(files_before, files_after, "No orphan files should remain in uploads dir after failure")
 
+    def test_37_library_storage_failure_is_retryable_without_empty_asset(self):
+        """Storage provider errors surface as 503; retrying the UID saves once."""
+        data_url, _, _ = _make_data_url()
+        uid = _uid("web-library-storage-failure")
+        from backend.services import ServiceError
+
+        with patch("backend.media_storage.persist_media_bytes",
+                   side_effect=RuntimeError("simulated private object storage outage")):
+            st, body, _ = self._request(
+                "PUT", f"/api/library/assets/{uid}",
+                {"name": "临时存储故障", "cat": "characters",
+                 "dataUrl": data_url, "origin": "web"}, cookie=self.cookie_a,
+            )
+        self.assertEqual(st, 503)
+        self.assertEqual(body.get("code"), "library_storage_unavailable")
+        row = self.db.get_conn().execute(
+            "SELECT id FROM user_uploads WHERE asset_uid = ?", (uid,)
+        ).fetchone()
+        self.assertIsNone(row, "Failed save must roll back the private asset")
+
+        st, body, _ = self._request(
+            "PUT", f"/api/library/assets/{uid}",
+            {"name": "临时存储故障", "cat": "characters",
+             "dataUrl": data_url, "origin": "web"}, cookie=self.cookie_a,
+        )
+        self.assertEqual(st, 201)
+        self.assertEqual(body.get("uid"), uid)
+        row = self.db.get_conn().execute(
+            "SELECT COUNT(*) AS n FROM user_uploads WHERE asset_uid = ?", (uid,)
+        ).fetchone()
+        self.assertEqual(int(row["n"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
