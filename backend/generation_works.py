@@ -448,6 +448,42 @@ def sync_generation_visibility(
     """Synchronize generation visibility and deletion state to projected works."""
     from .services import set_work_visibility, utc_now_iso
 
+    run = conn.execute(
+        "SELECT user_id, batch_id FROM studio_generations WHERE id=?",
+        (generation_id,),
+    ).fetchone()
+    batch_id = str(run["batch_id"] or "") if run else ""
+    if batch_id:
+        # A parallel image request is a *slot*, not the public work itself.
+        # Removing one slot must never hide successful images in other slots.
+        batch_key = f"{int(run['user_id'])}:{batch_id}"
+        remaining = conn.execute(
+            """
+            SELECT id FROM studio_generations
+            WHERE user_id=? AND batch_id=? AND id<>? AND status='success'
+              AND visibility='public' AND COALESCE(deleted_at,'')=''
+              AND engine!='demo'
+            ORDER BY batch_index ASC, created_at ASC, id ASC LIMIT 1
+            """,
+            (int(run["user_id"]), batch_id, generation_id),
+        ).fetchone() if (new_visibility != "public" or is_deleted) else None
+        if remaining:
+            project_generation_to_works(conn, str(remaining["id"]))
+            return
+        work = conn.execute(
+            "SELECT id,status,status_source FROM works WHERE generation_batch_key=?",
+            (batch_key,),
+        ).fetchone()
+        if new_visibility != "public" or is_deleted:
+            if work and str(work["status_source"] or "") not in ("admin", "moderator", "report"):
+                set_work_visibility(
+                    conn, str(work["id"]), "hidden", utc_now_iso(),
+                    source="generation", reason="此批次已无公开生成图片", automated=True,
+                )
+            return
+        project_generation_to_works(conn, generation_id, force_visibility="public")
+        return
+
     rows = conn.execute(
         "SELECT work_id FROM generation_works WHERE generation_id = ?",
         (generation_id,),
