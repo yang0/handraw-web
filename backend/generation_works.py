@@ -234,146 +234,115 @@ def project_generation_to_works(
     *,
     force_visibility: str | None = None,
 ) -> list[str]:
-    """Project completed generation images into real works rows idempotently.
+    """Persist one public work per completed generation run, with all its images.
 
-    - Validates generation success, non-empty items, and public visibility.
-    - Creates or reuses mapping in generation_works (generation_id, item_key) -> work_id.
-    - Preserves original generation timestamp published_at_ms (never uses backfill time).
-    - Respects administrator moderation locks (never republishes admin-hidden works).
-    - Never leaks internal prompt secrets or private recipes to public fields.
+    A generation is the work's identity, not an individual image. One mapping
+    row (item_key='__run__') is stored for the entire run. Both the work and
+    every media grant are written in the caller's database transaction.
     """
     if isinstance(generation_id_or_row, str):
-        row = conn.execute("SELECT * FROM studio_generations WHERE id = ?", (generation_id_or_row,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM studio_generations WHERE id = ?", (generation_id_or_row,)
+        ).fetchone()
     else:
         row = generation_id_or_row
-
     if not row:
         return []
 
-    row_keys = row.keys() if hasattr(row, "keys") else row
+    keys = row.keys() if hasattr(row, "keys") else row
     gen_id = str(row["id"])
-    status = str(row["status"] or "")
-    if status != "success":
-        return []
-
-    if "deleted_at" in row_keys and row["deleted_at"]:
-        # Soft-deleted: ensure hidden
+    if "deleted_at" in keys and row["deleted_at"]:
         sync_generation_visibility(conn, gen_id, "private", is_deleted=True)
         return []
-
-    vis = force_visibility or (str(row["visibility"] or "public") if "visibility" in row_keys else "public")
+    vis = force_visibility or (
+        str(row["visibility"] or "public") if "visibility" in keys else "public"
+    )
     if vis != "public":
-        # Private generation: ensure hidden
-        sync_generation_visibility(conn, gen_id, "private", is_deleted=False)
+        sync_generation_visibility(conn, gen_id, "private")
+        return []
+    if str(row["status"] or "") != "success":
+        return []
+    if "engine" in keys and str(row["engine"] or "") == "demo":
         return []
 
-    engine = str(row["engine"] or "") if "engine" in row_keys else ""
-    if engine == "demo":
-        return []
-
-    raw_items_str = row["items_json"] if "items_json" in row_keys else "[]"
     try:
-        raw_items = json.loads(raw_items_str or "[]")
-    except Exception:
+        raw_items = json.loads(row["items_json"] or "[]")
+    except (ValueError, TypeError):
         raw_items = []
+    if not isinstance(raw_items, list):
+        return []
 
-    if not isinstance(raw_items, list) or not raw_items:
+    # Preserve the creator's order, including the first *successful* picture
+    # as the default cover. Do not create duplicate media for repeated URLs.
+    valid_items: list[tuple[dict[str, Any] | None, str]] = []
+    seen_urls: set[str] = set()
+    for idx, raw in enumerate(raw_items):
+        _, url = derive_item_key(raw, idx)
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        valid_items.append((raw if isinstance(raw, dict) else None, url))
+    if not valid_items:
         return []
 
     from .services import get_generation_visible_prompt, check_text_has_secret
-
-    vis_prompt, was_masked = get_generation_visible_prompt(row)
-    has_sec = False
+    visible_prompt, was_masked = get_generation_visible_prompt(row)
     try:
-        has_sec = check_text_has_secret(vis_prompt, conn)
+        has_secret = check_text_has_secret(visible_prompt, conn)
     except Exception:
-        pass
-    prompt_has_secret = 1 if (was_masked or has_sec) else 0
-    safe_prompt = "" if prompt_has_secret else vis_prompt
+        has_secret = True  # Do not expose a prompt when safety inspection fails.
+    prompt_has_secret = bool(was_masked or has_secret)
+    safe_prompt = "" if prompt_has_secret else visible_prompt
 
-    created_at_iso = str(row["created_at"] or "") or utc_now_iso()
+    now = utc_now_iso()
+    created_at = str(row["created_at"] or now)
     try:
-        dt = datetime.fromisoformat(created_at_iso.replace("Z", "+00:00"))
-        published_at_ms = int(dt.timestamp() * 1000)
-    except Exception:
+        published_at_ms = int(
+            datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp() * 1000
+        )
+    except (ValueError, TypeError):
         published_at_ms = int(time.time() * 1000)
 
     author_username = str(row["username"] or "")
-    u_row = conn.execute("SELECT display_name FROM users WHERE username = ?", (author_username,)).fetchone()
-    author_name = str(u_row["display_name"]) if u_row and u_row["display_name"] else author_username
+    author = conn.execute(
+        "SELECT display_name FROM users WHERE username = ?", (author_username,)
+    ).fetchone()
+    author_name = str(author["display_name"]) if author and author["display_name"] else author_username
+    first_item = valid_items[0][0]
+    urls = [url for _, url in valid_items]
+    images_json = json.dumps(urls, ensure_ascii=False)
 
-    fork_work_id = str(row["fork_work_id"] or "") if "fork_work_id" in row_keys else ""
-    subject = str(row["subject"] or "") if "subject" in row_keys else ""
-    mode = str(row["mode"] or "graphic-text") if "mode" in row_keys else "graphic-text"
-
-    projected_work_ids: list[str] = []
-
-    for idx, raw_item in enumerate(raw_items):
-        item_key, image_url = derive_item_key(raw_item, fallback_idx=idx)
-        if not image_url:
-            continue
-
-        item_dict = raw_item if isinstance(raw_item, dict) else None
-
-        # Check existing mapping
-        mapping = conn.execute(
-            "SELECT work_id FROM generation_works WHERE generation_id = ? AND item_key = ?",
-            (gen_id, item_key),
+    mapping = conn.execute(
+        "SELECT work_id FROM generation_works WHERE generation_id = ? ORDER BY created_at LIMIT 1",
+        (gen_id,),
+    ).fetchone()
+    if mapping:
+        wid = str(mapping["work_id"])
+        work = conn.execute(
+            "SELECT status,status_source FROM works WHERE id = ?", (wid,)
         ).fetchone()
-
-        if mapping:
-            existing_wid = str(mapping["work_id"])
-            # Ensure work still exists and check moderation status
-            w_cur = conn.execute(
-                "SELECT id, status, status_source, status_actor_role FROM works WHERE id = ?",
-                (existing_wid,),
-            ).fetchone()
-            if w_cur:
-                w_status = str(w_cur["status"] or "")
-                w_source = str(w_cur["status_source"] or "")
-                # Rule: Never re-publish works hidden by a moderator/admin!
-                if w_status != "published" and w_source in ("moderator", "admin", "report"):
-                    # Keep as-is, do not re-publish
-                    projected_work_ids.append(existing_wid)
-                    continue
-                elif w_status != "published" and w_source == "generation":
-                    # Was previously hidden by generation visibility, now public again
-                    from .services import set_work_visibility
-                    set_work_visibility(conn, existing_wid, "published", utc_now_iso(), automated=True)
-                    w_status = "published"
-
-                # Pre-build / ensure topic exists for public existing work
-                if w_status == "published":
-                    from .resource_discussions import ensure_topic
-                    w_full = conn.execute("SELECT * FROM works WHERE id = ?", (existing_wid,)).fetchone()
-                    if w_full:
-                        ensure_topic(conn, "work", existing_wid, dict(w_full), initial_origin="generation")
-
-            projected_work_ids.append(existing_wid)
-            continue
-
-        # The picture may already be a work because its author shared it before
-        # this projection existed. Adopting that row keeps one picture one work;
-        # creating another is exactly how a shared generation showed up twice.
-        adopted = _find_work_by_image(conn, image_url, author_username)
-        if adopted:
-            conn.execute(
-                "INSERT OR IGNORE INTO generation_works (generation_id, item_key, work_id, created_at) VALUES (?, ?, ?, ?)",
-                (gen_id, item_key, adopted, utc_now_iso()),
-            )
-            w_full = conn.execute("SELECT * FROM works WHERE id = ?", (adopted,)).fetchone()
-            if w_full and str(w_full["status"]) == "published":
-                from .resource_discussions import ensure_topic
-                ensure_topic(conn, "work", adopted, dict(w_full), initial_origin="generation")
-            projected_work_ids.append(adopted)
-            continue
-
-        # Create new work row
-        work_id = f"work_{uuid.uuid4().hex}"
-        title = resolve_work_title(row, item_dict)
-        styles, layout = extract_generation_styles_and_layout(conn, row, item_dict)
-        ratio = str((item_dict.get("ratio") if item_dict else "") or "3:4")
-
+        if not work:
+            raise RuntimeError(f"Generation {gen_id} has a dangling work link {wid}")
+        source = str(work["status_source"] or "")
+        status = str(work["status"] or "")
+        if status != "published" and source in ("moderator", "admin", "report"):
+            return [wid]  # Never override an administrator's moderation decision.
+        if status != "published" and source == "generation":
+            from .services import set_work_visibility
+            set_work_visibility(conn, wid, "published", now, automated=True)
+        # Multiple images become ONE work, including when a retried run gains images.
+        conn.execute(
+            "UPDATE works SET images_json = ?, updated_at = ? WHERE id = ?",
+            (images_json, now, wid),
+        )
+    else:
+        wid = f"work_{uuid.uuid4().hex}"
+        title = resolve_work_title(row, first_item)
+        styles, layout = extract_generation_styles_and_layout(conn, row, first_item)
+        ratio = str((first_item.get("ratio") if first_item else "") or "3:4")
+        mode = str(row["mode"] or "graphic-text") if "mode" in keys else "graphic-text"
+        subject = str(row["subject"] or "") if "subject" in keys else ""
+        fork_id = str(row["fork_work_id"] or "") if "fork_work_id" in keys else ""
         conn.execute(
             """
             INSERT INTO works (
@@ -395,48 +364,28 @@ def project_generation_to_works(
             )
             """,
             (
-                work_id,
-                author_username,
-                author_name,
-                title,
-                json.dumps([image_url], ensure_ascii=False),
-                json.dumps(styles, ensure_ascii=False),
-                layout,
-                ratio,
-                mode,
-                safe_prompt,
-                prompt_has_secret,
-                published_at_ms,
-                created_at_iso,
-                created_at_iso,
-                fork_work_id,
-                subject,
+                wid, author_username, author_name, title, images_json,
+                json.dumps(styles, ensure_ascii=False), layout, ratio, mode,
+                safe_prompt, int(prompt_has_secret), published_at_ms,
+                created_at, created_at, fork_id, subject,
             ),
         )
-
         conn.execute(
-            """
-            INSERT INTO generation_works (generation_id, item_key, work_id, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (gen_id, item_key, work_id, utc_now_iso()),
+            "INSERT INTO generation_works (generation_id,item_key,work_id,created_at) "
+            "VALUES (?,'__run__',?,?)",
+            (gen_id, wid, now),
         )
 
-        # Pre-build topic for newly created public work
-        from .resource_discussions import ensure_topic
-        new_w_full = conn.execute("SELECT * FROM works WHERE id = ?", (work_id,)).fetchone()
-        if new_w_full:
-            ensure_topic(conn, "work", work_id, dict(new_w_full), initial_origin="generation")
+    # The work's images are all publicly readable; their source library remains
+    # independently permissioned. Create media grants for every linked image.
+    for url in urls:
+        _grant_work_media(conn, url, author_username, gen_id, wid)
 
-        # The picture is private media owned by its author, served only to them
-        # until something grants it to a published target. Publishing the work
-        # without granting meant everyone else -- and the author's own gallery
-        # when viewed from another account -- got a broken image.
-        _grant_work_media(conn, image_url, author_username, gen_id, work_id)
-
-        projected_work_ids.append(work_id)
-
-    return projected_work_ids
+    from .resource_discussions import ensure_topic
+    current = conn.execute("SELECT * FROM works WHERE id = ?", (wid,)).fetchone()
+    if current and str(current["status"]) == "published":
+        ensure_topic(conn, "work", wid, dict(current), initial_origin="generation")
+    return [wid]
 
 
 def sync_generation_visibility(
