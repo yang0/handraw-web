@@ -208,9 +208,14 @@
     const slots = active.map((row, index) => {
       const subject = text(row.theme || row.subject).trim();
       const slotId = row.slotId || ids[index] || ("legacy-" + stableHash([text(ld.id || options.key || "batch"), index, subject].join("|")));
+      const overrides = row.layout ? { layout: resource(row.layout, "layout") } : {};
+      if (row.ratio) overrides.ratio = row.ratio;
+      if (row.style1) overrides.style = resource(row.style1, "style");
       return {
         slotId: text(slotId), order: index, subject,
-        overrides: row.layout ? { layout: resource(row.layout, "layout") } : {},
+        overrides,
+        referenceMedia: normalizeMedia(row.assetItems),
+        skipGlobalRefs: Boolean(row.skipGlobalRefs),
         lockedFields: clone(Array.isArray(row.lockedFields) ? row.lockedFields : [])
       };
     });
@@ -222,6 +227,38 @@
   function pinLegacySlotIds(loop, plan) {
     if (!loop?.data || !plan?.slots) return;
     loop.data.studio2SlotIds = plan.slots.map(slot => slot.slotId);
+    if (loop.data.batchLayoutMode === "ai" && Array.isArray(loop.data.batchRows)) {
+      loop.data.batchRows.forEach((row, i) => {
+        if (row && plan.slots[i] && !row.slotId) row.slotId = plan.slots[i].slotId;
+      });
+    }
+  }
+
+  // Replanning never destroys per-slot image references, manual locks or
+  // stable identity. AI may revise unlocked subject/layout only.
+  function mergeLegacyPlanRows(loop, items, mode) {
+    const ld = loop?.data || {};
+    const rows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
+    const ids = Array.isArray(ld.studio2SlotIds) ? ld.studio2SlotIds : [];
+    const next = (Array.isArray(items) ? items : []).map((item, index) => {
+      const prior = rows[index] || {};
+      const lockedFields = Array.isArray(prior.lockedFields) ? prior.lockedFields : [];
+      const proposedTheme = text(item?.subject || item?.theme);
+      const slotId = prior.slotId || ids[index]
+        || ("slot-" + stableHash([text(ld.id || "batch"), index, proposedTheme].join("|")));
+      return {
+        ...clone(prior), slotId,
+        theme: lockedFields.includes("subject") && prior.theme ? prior.theme : proposedTheme,
+        layout: lockedFields.includes("layout") ? text(prior.layout)
+          : mode === "ai" ? text(item?.layout) : text(prior.layout)
+      };
+    });
+    return {
+      batchRows: next,
+      promptListText: next.map(row => row.theme).join("\n"),
+      studio2SlotIds: next.map(row => row.slotId),
+      planRevision: Math.max(0, Number(ld.planRevision) || 0) + 1
+    };
   }
 
   const RUN_PERSISTED = new Set(["pending", "uploading", "running", "partial", "success", "failed", "cancelled"]);
@@ -269,7 +306,7 @@
   const api = Object.freeze({
     VERSION, MODE_RATIO, normalizeLegacyParts, applyLegacySpec, setMode, setRatio,
     validateRatio, validateSpec, applySpecPatch, resolveEffectiveSpec,
-    normalizeLegacyBatch, pinLegacySlotIds, selectRunProjection,
+    normalizeLegacyBatch, pinLegacySlotIds, mergeLegacyPlanRows, selectRunProjection,
     RUN_PERSISTED, ITEM_PERSISTED
   });
   root.HandrawStudioCore = api;

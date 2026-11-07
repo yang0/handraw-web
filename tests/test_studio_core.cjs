@@ -63,6 +63,32 @@ legacy.data.batchLayoutMode="ai";
 legacy.data.batchRows=[{theme:"第一张",layout:"SC-021"},{theme:"第二张"},{theme:"第三张"}];
 assert.equal(Core.normalizeLegacyBatch(legacy).slots[0].slotId,first.slots[0].slotId);
 assert.equal(Core.normalizeLegacyBatch(legacy).slots[0].overrides.layout.id,"SC-021");
+// AI replan: slot identity, private reference selection, manual overrides and
+// explicit locks must survive. Undo also restores stable slot revisions.
+const prevPlan = {data:{id:"loop-2",batchLayoutMode:"ai",planRevision:1,
+  studio2SlotIds:["slot-a","slot-b"],
+  batchRows:[
+    {slotId:"slot-a",theme:"手工主题",layout:"SC-021",assetItems:[{mediaId:"private-a",role:"character"}],
+      skipGlobalRefs:true,lockedFields:["subject","layout"]},
+    {slotId:"slot-b",theme:"旧主题",layout:"SC-021",assetItems:[{mediaId:"private-b",role:"scene"}]}
+  ]}};
+const replanned = Core.mergeLegacyPlanRows(prevPlan,[
+  {subject:"AI 想覆盖",layout:"SC-022"},{subject:"新的第二张",layout:"SC-022"}
+],"ai");
+assert.equal(replanned.batchRows[0].slotId,"slot-a");
+assert.equal(replanned.batchRows[0].theme,"手工主题");
+assert.equal(replanned.batchRows[0].layout,"SC-021");
+assert.equal(replanned.batchRows[0].assetItems[0].mediaId,"private-a");
+assert.equal(replanned.batchRows[0].skipGlobalRefs,true);
+assert.equal(replanned.batchRows[1].theme,"新的第二张");
+assert.equal(replanned.batchRows[1].layout,"SC-022");
+assert.equal(replanned.batchRows[1].slotId,"slot-b");
+assert.equal(replanned.planRevision,2);
+const fixedReplan=Core.mergeLegacyPlanRows(prevPlan,[{subject:"新一"},{subject:"新二"}],"fixed");
+assert.equal(fixedReplan.batchRows[1].layout,"SC-021");
+prevPlan.data.batchRows=replanned.batchRows;
+Core.pinLegacySlotIds(prevPlan,Core.normalizeLegacyBatch(prevPlan));
+assert.equal(Core.normalizeLegacyBatch(prevPlan).slots[0].referenceMedia[0].mediaId,"private-a");
 const run={id:"r1",expected_count:6,status:"partial"};
 const items=[
  {position:4,status:"failed"},{position:1,status:"generating"},

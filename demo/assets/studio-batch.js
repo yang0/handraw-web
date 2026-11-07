@@ -1548,6 +1548,8 @@
         if (!self.lastPlanUndo) return;
         loop.data.promptListText = self.lastPlanUndo.promptListText;
         loop.data.batchRows = self.lastPlanUndo.batchRows;
+        loop.data.studio2SlotIds = self.lastPlanUndo.studio2SlotIds || [];
+        loop.data.planRevision = self.lastPlanUndo.planRevision || 0;
         self.lastPlanUndo = null;
         self.planNotice = "已恢复原规划";
         markDirty();
@@ -1575,8 +1577,21 @@
           // planning data so a user can undo an accidental re-plan.
           const priorPlan = hasExisting ? {
             promptListText: loop.data.promptListText || "",
-            batchRows: JSON.parse(JSON.stringify(loop.data.batchRows || []))
+            batchRows: JSON.parse(JSON.stringify(loop.data.batchRows || [])),
+            studio2SlotIds: [...(loop.data.studio2SlotIds || [])],
+            planRevision: loop.data.planRevision || 0
           } : null;
+          // Prevent late AI responses from overwriting edits made while
+          // planning; inputs remain editable and each request is versioned.
+          const planningRevision = JSON.stringify({
+            promptListText: loop.data.promptListText || "",
+            batchRows: loop.data.batchRows || [],
+            studio2SlotIds: loop.data.studio2SlotIds || [],
+            batchSeed: loop.data.batchSeed || "",
+            batchCount: loop.data.batchCount || 6,
+            styleId: skill.data.style1 || "",
+            layoutMode: currentMode
+          });
 
           const seed = String(loop.data.batchSeed || text?.data?.text || "").trim();
           if (!seed) {
@@ -1623,18 +1638,37 @@
               throw new Error((data.error || `HTTP ${resp.status}`) + incident);
             }
 
+            const latestRevision = JSON.stringify({
+              promptListText: loop.data.promptListText || "",
+              batchRows: loop.data.batchRows || [],
+              studio2SlotIds: loop.data.studio2SlotIds || [],
+              batchSeed: loop.data.batchSeed || "",
+              batchCount: loop.data.batchCount || 6,
+              styleId: skill.data.style1 || "",
+              layoutMode: loop.data.batchLayoutMode || "fixed"
+            });
+            if (latestRevision !== planningRevision) {
+              self.planNotice = "规划返回时方案已被修改，已保留最新草稿；可重新规划";
+              markDirty();
+              return;
+            }
             const items = Array.isArray(data.items) ? data.items : [];
             if (priorPlan) {
               self.lastPlanUndo = priorPlan;
               // Replan undo is an inline affordance, not a disruptive dialog.
               self.planNotice = "规划已更新，可点击撤销恢复原列表";
             }
-            if (currentMode === "fixed") {
-              loop.data.promptListText = items.map((it) => it.subject).join("\n");
-              loop.data.batchRows = [];
+            if (global.HandrawStudioCore) {
+              const merged = global.HandrawStudioCore.mergeLegacyPlanRows(loop, items, currentMode);
+              loop.data.promptListText = merged.promptListText;
+              loop.data.batchRows = merged.batchRows;
+              loop.data.studio2SlotIds = merged.studio2SlotIds;
+              loop.data.planRevision = merged.planRevision;
+            } else if (currentMode === "fixed") {
+              loop.data.promptListText = items.map(it => it.subject).join("\n");
             } else {
-              loop.data.batchRows = items.map((it) => ({ theme: it.subject, layout: it.layout || "" }));
-              loop.data.promptListText = items.map((it) => it.subject).join("\n");
+              loop.data.batchRows = items.map(it => ({ theme: it.subject, layout: it.layout || "" }));
+              loop.data.promptListText = items.map(it => it.subject).join("\n");
             }
 
             if (data.source === "template") {
@@ -1770,6 +1804,7 @@
           const idx = Number(btn.getAttribute("data-del-row-idx"));
           if (!Array.isArray(loop.data.batchRows)) return;
           loop.data.batchRows.splice(idx, 1);
+          if (Array.isArray(loop.data.studio2SlotIds)) loop.data.studio2SlotIds.splice(idx, 1);
           loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
           markDirty();
         };
@@ -1779,12 +1814,16 @@
       if (btnAddRow) {
         btnAddRow.onclick = () => {
           if (!Array.isArray(loop.data.batchRows)) loop.data.batchRows = [];
+          const slotId = (self.getPromptEngine()?.uid || (() => "slot-" + Date.now()))("slot");
           loop.data.batchRows.push({
+            slotId,
             theme: "",
-            layout: skill.data.layout || "",
+            layout: "", // inherit global; do not copy a selected layout unnecessarily
             assetItems: [],
             skipGlobalRefs: false
           });
+          if (!Array.isArray(loop.data.studio2SlotIds)) loop.data.studio2SlotIds = [];
+          loop.data.studio2SlotIds.push(slotId);
           markDirty();
         };
       }
