@@ -28,7 +28,7 @@ def enabled() -> bool:
 
 def _key(url: str) -> str:
     clean = str(url or "").split("?", 1)[0].strip()
-    if not clean.startswith(("/generated/", "/uploads/")):
+    if not clean.startswith(("/generated/", "/uploads/", "/avatars/")):
         raise ValueError("Unsupported private media namespace")
     pieces = clean.lstrip("/").split("/")
     if (len(pieces) < 2 or any(p in ("", ".", "..") for p in pieces)
