@@ -559,6 +559,12 @@ def get_work_by_id(
             )
 
     w_dict = _serialize_work(row, {wid: comments}, unlocked_set, current_user, conn=conn)
+    if row["run_id"]:
+        # A generated work's ordered canonical media is authoritative; the
+        # works.images_json value is only a transactionally maintained feed
+        # thumbnail cache, never the source for the full detail response.
+        from .generation_v3 import work_images
+        w_dict["images"] = work_images(conn, wid)
     # V3: one work already represents the whole generation. There are no
     # sibling per-image works to look up or fold.
     run = conn.execute(
