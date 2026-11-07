@@ -43,30 +43,14 @@ test("Issue #62: Article Deletion in Editor, Profile, and History Pagination", a
     );
   });
 
-  await t.test("2. Main app: Profile articles list delete button & wiring", () => {
-    // data-prof-del-article button in card
-    assert.ok(
-      mainAppSource.includes("data-prof-del-article"),
-      "main-app.js must render a delete button with data-prof-del-article on article cards"
-    );
-    // Card click must guard against delete button click
-    assert.ok(
-      mainAppSource.includes('e.target.closest("[data-prof-del-article]")'),
-      "main-app.js card click must ignore clicks on data-prof-del-article"
-    );
-    // deleteArticle function in main-app.js
-    assert.ok(
-      mainAppSource.includes("function deleteArticle("),
-      "main-app.js must define a deleteArticle helper"
-    );
-    // Wired to deleteArticle
-    assert.match(
-      mainAppSource,
-      /querySelectorAll\(\s*["']\[data-prof-del-article\]["']\s*\)[\s\S]*?deleteArticle/,
-      "data-prof-del-article buttons must invoke deleteArticle"
-    );
+  await t.test("2. Profile keeps articles in the studio, not public tabs", () => {
+    assert.ok(!mainAppSource.includes('data-ptab="articles"'),
+      "Profile must not render a private article management tab");
+    assert.ok(!mainAppSource.includes("data-prof-del-article"),
+      "Article deletion no longer belongs to the public profile");
+    assert.ok(mainAppSource.includes('view: "articles-all"'),
+      "Legacy profile article deep links must open studio article history");
   });
-
   await t.test("3. Studio app: Sidebar hover deletion and right-aligned editor switch", () => {
     assert.ok(studioAppSource.includes("data-sidebar-del-art-id"),
       "sidebar history rows must render an individual delete action");
