@@ -3923,9 +3923,9 @@ body.ic-studio-body .hw-topbar {
 /* Shared visual alignment for history and workflow library views. */
 .ic-history-stage,
 .ic-workflows-stage {
-  /* Match the edge-to-edge creation navigation rather than the old 1140px workspace. */
-  --ic-library-max-width: none;
-  --ic-library-side-gap: 6px;
+  /* Same centered 1140px content rail as .qc-entry-bar in quick-create.css. */
+  --ic-library-max-width: 1140px;
+  --ic-library-side-gap: var(--hw-page-gutter, 24px);
 }
 .ic-history-stage .ic-history-topbar,
 .ic-workflows-stage .ic-wf-minimal-tools {
@@ -4042,8 +4042,8 @@ body.ic-studio-body .hw-topbar {
   .ic-wf-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 620px) {
-  .ic-history-stage,
-  .ic-workflows-stage { --ic-library-side-gap: 10px; }
+   .ic-history-stage,
+  .ic-workflows-stage { --ic-library-side-gap: var(--hw-page-gutter, 12px); }
   .ic-history-stage .ic-history-topbar,
   .ic-workflows-stage .ic-wf-minimal-tools {
     margin-top: 10px;
