@@ -234,6 +234,55 @@ class SkillWebHttpScopeTests(SkillWebBridgeTests):
         self.assertEqual(self.request("PUT","/api/v1/me/resources/"+rid,publish,body)[0],403)
         self.assertEqual(self.request("GET","/api/v1/me/resources")[0],401)
 
+    def test_http_explicit_publication_is_idempotent_and_grants_media(self):
+        library=self.token(["library"])
+        publisher=self.token(["publish"])
+        img=Image.new("RGB",(4,4),(44,66,88))
+        buf=io.BytesIO(); img.save(buf,format="PNG")
+        raw=buf.getvalue()
+        rid=str(uuid.uuid4())
+        payload={"externalRunId":rid,"originClient":"skill","visibility":"private",
+                 "status":"success","originalRequest":"不公开的原始指令",
+                 "requestId":"skill-history-"+rid,
+                 "images":[{"name":"01.png","sha256":hashlib.sha256(raw).hexdigest(),
+                            "dataUrl":"data:image/png;base64,"+base64.b64encode(raw).decode()}]}
+        status,history=self.request("POST","/api/v1/me/generations",library,payload)
+        self.assertEqual(status,200,history)
+        hid=history["id"]
+        before=self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
+        self.assertEqual(before,self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0])
+        no_consent={"title":"公开作品","prompt":"公开安全的提示词"}
+        self.assertEqual(self.request("POST","/api/v1/me/generations/"+hid+"/publish",
+                                      publisher,no_consent)[0],400)
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before)
+        consent={**no_consent,"confirmed":True,"indices":[0]}
+        status,work=self.request("POST","/api/v1/me/generations/"+hid+"/publish",
+                                 publisher,consent)
+        self.assertEqual(status,200,work)
+        self.assertTrue(work["workId"])
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before+1)
+        status,repeat=self.request("POST","/api/v1/me/generations/"+hid+"/publish",
+                                   publisher,consent)
+        self.assertEqual(status,200,repeat)
+        self.assertEqual(repeat["workId"],work["workId"])
+        self.assertTrue(repeat["alreadyPublished"])
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],before+1)
+        result=bridge.list_history(self.db,self.owner,{})
+        self.assertEqual(result["items"][0]["publishedWorkId"],work["workId"])
+        self.assertFalse(result["items"][0]["canPublish"])
+        record=self.db.get_conn().execute("SELECT images_json FROM works WHERE id=?",
+                                         (work["workId"],)).fetchone()
+        image_url=json.loads(record["images_json"])[0]
+        granted=self.db.get_conn().execute(
+            "SELECT 1 FROM media_public_grants WHERE media_url=? AND revoked_at IS NULL",
+            (image_url,)).fetchone()
+        self.assertIsNotNone(granted)
+
+    def test_http_publication_respects_token_scope(self):
+        reader=self.token(["library"])
+        self.assertEqual(self.request("POST","/api/v1/me/generations/skillgen_unknown/publish",
+                                      reader,{"confirmed":True,"title":"作品","prompt":"公开"})[0],403)
+
     def test_http_private_import_does_not_create_work(self):
         library=self.token(["library"])
         img=Image.new("RGB",(3,3),(255,0,0))
