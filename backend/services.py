@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
 import sqlite3
 import threading
