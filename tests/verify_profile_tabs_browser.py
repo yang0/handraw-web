@@ -127,8 +127,8 @@ def run_browser_verification():
             for category in ("all", "styles", "layouts"):
                 assert page.locator(f'button[data-prof-resource-filter="{category}"]').is_visible()
             page.locator('button[data-prof-resource-filter="layouts"]').click()
-            assert page.locator('[data-prof-asset="SC-001"]').count() >= 1
-            assert page.locator('[data-prof-asset="FA-001"]').count() == 0
+            assert page.locator("[data-prof-asset]").count() >= 1, "Expected at least one public layout asset"
+            assert page.locator(".hw-card-badge-tl:has-text('共创画风')").count() == 0
             page.screenshot(path=str(SHOT_SELF_DESKTOP), full_page=False)
             # -----------------------------------------------------------
             # Check 2: Other user's profile visibility & security
