@@ -239,7 +239,7 @@ class GenerationSocialActionsTests(unittest.TestCase):
                WHERE r.external_run_id='gen_alice_social'"""
         ).fetchone()[0]
         cnt = conn.execute(
-            "SELECT COUNT(*) FROM interactions WHERE target_type='work' AND target_id=?",
+            "SELECT COUNT(*) FROM interactions WHERE target_type='like_work' AND target_id=?",
             (work_id,),
         ).fetchone()[0]
         self.assertEqual(cnt, 1)
