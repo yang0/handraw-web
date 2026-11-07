@@ -793,12 +793,20 @@
               title: rw.title || "云端工作流",
               updatedAt: "云端同步",
               updatedAtMs: Number(rw.updatedAtMs) || Date.now(),
+              serverUpdatedAtMs: Number(rw.updatedAtMs) || 0,
+              cloudSaveState: "synced",
               blueprint: rw.blueprint || normG.blueprint || "single",
               graph: normG
             };
             const prev = byId.get(rw.id);
             if (!prev || (Number(rw.updatedAtMs) || 0) >= (Number(prev.updatedAtMs) || 0)) {
               byId.set(rw.id, item);
+            } else {
+              // An offline/local draft is newer. Keep it as the editable
+              // version while tracking the server's actual CAS revision.
+              prev.serverUpdatedAtMs = Number(rw.updatedAtMs) || 0;
+              prev.cloudSaveState = "local";
+              byId.set(rw.id, prev);
             }
           });
           const customs = [...byId.values()].filter((w) => !w.isOfficialPreset);
@@ -1232,52 +1240,105 @@
 
   function markActiveTabDirty() {
     const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
-    if (cur) cur.dirty = true;
+    if (cur) {
+      cur.dirty = true;
+      cur.editRevision = Number(cur.editRevision || 0) + 1;
+    }
   }
 
-  function saveCurrentWorkflow(asNew = false) {
+  async function saveCurrentWorkflow(asNew = false) {
     syncCurrentTabSnapshot();
     const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
-    if (!cur) return;
+    if (!cur) return false;
+    // Two clicks cannot race a stale base revision against our own save.
+    if (cur.savePromise) {
+      await cur.savePromise.catch(() => {});
+      return saveCurrentWorkflow(asNew);
+    }
     ensureDefaultSavedWorkflows();
 
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const requestedEditEpoch = Number(cur.editRevision || 0);
     const nowStr = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
     const nowMs = Date.now();
-    const existing = !asNew && cur.savedId ? CS.savedWorkflows.find((w) => w.id === cur.savedId && !w.isOfficialPreset) : null;
-    let savedTarget = null;
-
-    if (existing) {
-      existing.title = cur.title;
-      existing.updatedAt = `今天 ${nowStr}`;
-      existing.updatedAtMs = nowMs;
-      existing.blueprint = CS.graph.blueprint;
-      existing.graph = cloneGraph(CS.graph);
-      savedTarget = existing;
-    } else {
-      const newId = E.uid("savedwf");
-      cur.savedId = newId;
+    const existing = !asNew && cur.savedId
+      ? CS.savedWorkflows.find(w => w.id === cur.savedId && !w.isOfficialPreset) : null;
+    let savedTarget = existing;
+    if (!savedTarget) {
+      cur.savedId = E.uid("savedwf");
       savedTarget = {
-        id: newId,
+        id: cur.savedId,
         title: asNew ? `${cur.title} (副本)` : cur.title,
-        updatedAt: `今天 ${nowStr}`,
-        updatedAtMs: nowMs,
         blueprint: CS.graph.blueprint,
-        graph: cloneGraph(CS.graph)
+        graph: cloneGraph(CS.graph),
+        serverUpdatedAtMs: 0
       };
       CS.savedWorkflows.unshift(savedTarget);
     }
-    cur.dirty = false;
+    savedTarget.title = savedTarget.title || cur.title;
+    if (!asNew) savedTarget.title = cur.title;
+    savedTarget.updatedAt = `本机 ${nowStr}`;
+    savedTarget.updatedAtMs = nowMs;
+    savedTarget.blueprint = CS.graph.blueprint;
+    savedTarget.graph = cloneGraph(CS.graph);
+    savedTarget.cloudSaveState = "local";
     writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
     persistOpenTabs();
     renderTopAndBottomDocks();
-    studioApiPost("/api/studio/workflows", {
+
+    if (!App.state?.serverBacked || !App.state?.loggedIn) {
+      cur.dirty = false; // Saved locally, NOT in the cloud.
+      toast("已保存到本机，尚未同步云端");
+      return true;
+    }
+
+    const request = {
       id: savedTarget.id,
       title: savedTarget.title,
       blueprint: savedTarget.blueprint,
       graph: savedTarget.graph,
-      updatedAtMs: nowMs
-    });
-    toast(`💾 工作流《${cur.title}》已保存！（共 ${CS.graph.nodes.length} 个节点）`);
+      baseUpdatedAtMs: Number(savedTarget.serverUpdatedAtMs || 0)
+    };
+    savedTarget.cloudSaveState = "saving";
+    toast("工作流已保存在本机，正在同步云端…");
+    const promise = (async () => {
+      let response = null, httpStatus = 0;
+      try {
+        const resp = await fetch("/api/studio/workflows", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request)
+        });
+        httpStatus = resp.status;
+        response = await resp.json().catch(() => null);
+        if (!resp.ok || !response?.ok) throw new Error(response?.error || "cloud_save_failed");
+      } catch (err) {
+        if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return false;
+        savedTarget.cloudSaveState = httpStatus === 409 ? "conflict" : "error";
+        cur.dirty = true;
+        writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
+        toast(httpStatus === 409
+          ? "云端版本冲突：本机草稿已保留，请检查后另存副本"
+          : "云端保存失败：本机草稿已保留，可稍后重试");
+        renderTopAndBottomDocks();
+        return false;
+      }
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return false;
+      savedTarget.serverUpdatedAtMs = Number(response.updatedAtMs) || 0;
+      savedTarget.cloudSaveState = "synced";
+      savedTarget.updatedAt = "已云端保存";
+      // If another edit arrived while saving, preserve dirty and require a
+      // subsequent save, rather than falsely acknowledging the newer edit.
+      cur.dirty = Number(cur.editRevision || 0) !== requestedEditEpoch;
+      writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
+      persistOpenTabs();
+      renderTopAndBottomDocks();
+      toast(cur.dirty ? "上一版本已同步云端，新的修改仍待保存" : "工作流已云端保存");
+      return true;
+    })();
+    cur.savePromise = promise;
+    try { return await promise; }
+    finally { if (cur.savePromise === promise) delete cur.savePromise; }
   }
 
   function exportWorkflowJsonFile(wfObj) {

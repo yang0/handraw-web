@@ -18,6 +18,7 @@ jobs:
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
       - run: python -m unittest discover -s tests -p 'test_article_versions.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_workflow_versions.py' -v
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
   python-full:

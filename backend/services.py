@@ -5322,30 +5322,65 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
 
 
 def save_user_studio_workflow(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    """Persist a workflow using server revisions and optional optimistic locking.
+
+    Existing clients may omit baseUpdatedAtMs. New Studio2 clients MUST pass
+    the last server-acknowledged version (0 for a new workflow). A stale write
+    never overwrites another tab's graph. The local draft is the client's
+    responsibility until this response is acknowledged.
+    """
     uid = int(user["id"])
-    wf_id = str(body.get("id") or f"wf_{int(time.time() * 1000)}")
+    wf_id = str(body.get("id") or f"wf_{uuid.uuid4().hex}")
     title = str(body.get("title") or "未命名工作流").strip()[:100]
     blueprint = str(body.get("blueprint") or "single")
     graph_json = json.dumps(body.get("graph") or {}, ensure_ascii=False)
-    now_ms = int(body.get("updatedAtMs") or time.time() * 1000)
+    now_ms = int(time.time() * 1000)
     now_iso = utc_now_iso()
 
     with db.transaction() as tx:
+        existing = tx.execute(
+            "SELECT user_id, is_official_preset, title, blueprint, graph_json, updated_at_ms "
+            "FROM studio_workflows WHERE id = ?",
+            (wf_id,),
+        ).fetchone()
+        if existing and (
+            int(existing["user_id"]) != uid or int(existing["is_official_preset"] or 0)
+        ):
+            raise ServiceError("无权修改此工作流", status=403, code="workflow_forbidden")
+        current_version = int(existing["updated_at_ms"] or 0) if existing else 0
+        if "baseUpdatedAtMs" in body:
+            try:
+                base = int(body["baseUpdatedAtMs"])
+            except (TypeError, ValueError) as exc:
+                raise ServiceError("工作流基准版本无效", status=400, code="invalid_workflow_version") from exc
+            if base != current_version:
+                raise ServiceError(
+                    "云端工作流已由其他窗口更新，当前草稿保留在本机；请检查冲突后另存副本",
+                    status=409, code="workflow_version_conflict",
+                    extra={"currentRevision": current_version},
+                )
+        if existing and (
+            str(existing["title"]) == title
+            and str(existing["blueprint"]) == blueprint
+            and str(existing["graph_json"]) == graph_json
+        ):
+            return {"ok": True, "id": wf_id, "updatedAtMs": current_version, "unchanged": True}
+        next_version = max(now_ms, current_version + 1)
         tx.execute(
             """
-            INSERT INTO studio_workflows (id, user_id, title, blueprint, scenario_badge, scenario_desc, graph_json, is_official_preset, enabled, sort_order, updated_at_ms, created_at)
+            INSERT INTO studio_workflows (id, user_id, title, blueprint, scenario_badge, scenario_desc, graph_json,
+                is_official_preset, enabled, sort_order, updated_at_ms, created_at)
             VALUES (?, ?, ?, ?, '', '', ?, 0, 1, 0, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 blueprint = excluded.blueprint,
                 graph_json = excluded.graph_json,
                 updated_at_ms = excluded.updated_at_ms
-            WHERE studio_workflows.user_id = excluded.user_id
+            WHERE studio_workflows.user_id = excluded.user_id AND studio_workflows.is_official_preset = 0
             """,
-            (wf_id, uid, title, blueprint, graph_json, now_ms, now_iso),
+            (wf_id, uid, title, blueprint, graph_json, next_version, now_iso),
         )
-    return {"ok": True, "id": wf_id}
-
+    return {"ok": True, "id": wf_id, "updatedAtMs": next_version}
 
 def delete_user_studio_workflow(db: Database, user: dict[str, Any], wf_id: str) -> dict[str, Any]:
     uid = int(user["id"])
