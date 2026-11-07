@@ -18,6 +18,7 @@
     const form = document.querySelector(rootSelector + " [data-cloud-editor]");
     if (!form) return;
     form.hidden = false;
+    form.style.display = "grid";
     form.elements.kind.value = resource ? resource.kind : "style";
     form.elements.name.value = resource ? resource.name : "";
     form.elements.zh.value = resource ? resource.definition.zh : "";
@@ -79,7 +80,7 @@
           <div data-cloud-resources style="margin-top:12px;"></div>
           <button type="button" class="btn btn-sm" data-cloud-more-resources hidden>加载更多资源</button>
         </section>
-        <form data-cloud-editor hidden style="border:1px solid var(--line,#ddd);border-radius:12px;padding:16px;margin:18px 0;display:grid;gap:10px;">
+        <form data-cloud-editor hidden style="border:1px solid var(--line,#ddd);border-radius:12px;padding:16px;margin:18px 0;display:none;gap:10px;">
           <h3 data-cloud-editor-heading style="margin:0;">新建私有资源</h3>
           <label>资源类型 <select name="kind" required><option value="style">画风</option><option value="layout">图型</option></select></label>
           <label>名称 <input name="name" required maxlength="120" style="width:100%;" /></label>
@@ -140,6 +141,7 @@
     shell.querySelector("[data-cloud-new]").addEventListener("click", () => editor(null));
     shell.querySelector("[data-cloud-cancel]").addEventListener("click", () => {
       shell.querySelector("[data-cloud-editor]").hidden = true;
+      shell.querySelector("[data-cloud-editor]").style.display = "none";
     });
     shell.addEventListener("click", (event) => {
       const edit = event.target.closest("[data-cloud-edit]");
@@ -168,6 +170,7 @@
         if (form.dataset.revision) payload.baseRevision = Number(form.dataset.revision);
         await api("/api/v1/me/resources/" + encodeURIComponent(id), { method: "PUT", body: payload });
         form.hidden = true;
+        form.style.display = "none";
         await loadResources();
       });
     });
