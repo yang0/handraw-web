@@ -11,7 +11,8 @@
     return typeof url === "string" && /^\/(?:uploads|generated|images)\/[a-z0-9/_\.%-]+$/i.test(url) ? url : "";
   };
   const state = () => ({
-    resources: [], history: [], resourcesCursor: null, historyCursor: null,
+    resources: [], history: [], assets: [], collections: [],
+    resourcesCursor: null, historyCursor: null, assetsCursor: null,
     editing: null, isBusy: false
   });
   function editor(resource) {
@@ -51,6 +52,26 @@
       '<p style="color:var(--ink-muted);">暂无自建画风和图型。你可以在 Skill 创建后同步，也可以在这里新建。</p>';
     const moreResources = container.querySelector("[data-cloud-more-resources]");
     moreResources.hidden = !data.resourcesCursor;
+    const assets = container.querySelector("[data-cloud-assets]");
+    assets.innerHTML = data.assets.length ? data.assets.map((item) => {
+      const url = safeImage(item.publicUrl || item.imageUrl);
+      return `<article class="hw-detail-section-card" style="padding:10px;min-width:105px;width:130px;">
+        ${url ? '<img loading="lazy" alt="' + escapeHtml(item.name) + '" src="' + escapeHtml(url) +
+          '" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:7px;" />' : ""}
+        <strong style="font-size:12px;overflow-wrap:anywhere;">${escapeHtml(item.name || item.localId || item.uid)}</strong>
+        <div style="font-size:11px;color:var(--ink-muted);">${escapeHtml(item.cat)}</div>
+      </article>`;
+    }).join("") : '<p style="color:var(--ink-muted);">尚无云端个人素材。可以从 Skill 的自建图库同步。</p>';
+    container.querySelector("[data-cloud-more-assets]").hidden = !data.assetsCursor;
+    const collections = container.querySelector("[data-cloud-collections]");
+    collections.innerHTML = data.collections.length ? data.collections.map(item => `
+      <article class="hw-detail-section-card" style="padding:11px;margin-bottom:7px;">
+        <strong>${escapeHtml(item.name || item.title || item.ref)}</strong>
+        <span style="font-size:12px;color:var(--ink-muted);">
+          · ${item.kind === "layout" ? "图型" : "画风"}
+          · ${item.unlocked && item.syncEligible ? "已授权，可同步 Skill" : item.unlocked ? "已获取，暂不可离线导出" : "仅收藏，未解锁完整定义"}
+        </span>
+      </article>`).join("") : '<p style="color:var(--ink-muted);">暂无已收藏或已获取资源。</p>';
     const history = container.querySelector("[data-cloud-history]");
     history.innerHTML = data.history.length ? data.history.map((run) => {
       const links = Array.isArray(run.images) ? run.images.slice(0, 6).map(safeImage).filter(Boolean) : [];
@@ -99,6 +120,17 @@
           </div>
         </form>
         <section style="margin-top:24px;">
+          <h3>我的图库</h3>
+          <p style="color:var(--ink-muted);font-size:13px;">Skill 自建角色、道具和场景同步后，会保留到你的私有图库。这里仅展示本人素材。</p>
+          <div data-cloud-assets style="display:flex;flex-wrap:wrap;gap:10px;"></div>
+          <button type="button" class="btn btn-sm" data-cloud-more-assets hidden>加载更多素材</button>
+        </section>
+        <section style="margin-top:24px;">
+          <h3>我的画风与图型收藏</h3>
+          <p style="color:var(--ink-muted);font-size:13px;">收藏与完整访问资格不同。已解锁且允许离线使用的定义才能同步到 Skill。</p>
+          <div data-cloud-collections></div>
+        </section>
+        <section style="margin-top:24px;">
           <h3>我的生成历史</h3>
           <p style="color:var(--ink-muted);font-size:13px;">这里只对账号本人显示云端记录。历史不等于公开作品；只有明确发布后才进入作品广场。</p>
           <div data-cloud-history></div>
@@ -119,6 +151,22 @@
       const rows = (response.items || []).filter((x) => !x.deletedAt);
       data.resources = more ? data.resources.concat(rows) : rows;
       data.resourcesCursor = response.hasMore ? response.nextCursor : null;
+      renderLists(shell, data);
+    }
+    async function loadAssets(more = false) {
+      const path = "/api/library/assets?limit=100" + (more && data.assetsCursor ?
+        "&since=" + encodeURIComponent(data.assetsCursor) : "");
+      const response = await api(path);
+      if (!shell.isConnected) return;
+      const rows = (response.items || []).filter(item => !item.deletedAt);
+      data.assets = more ? data.assets.concat(rows) : rows;
+      data.assetsCursor = response.hasMore ? response.nextCursor : null;
+      renderLists(shell, data);
+    }
+    async function loadCollections() {
+      const response = await api("/api/v1/me/collection-items");
+      if (!shell.isConnected) return;
+      data.collections = response.items || [];
       renderLists(shell, data);
     }
     async function loadHistory(more = false) {
@@ -181,6 +229,7 @@
     });
     shell.querySelector("[data-cloud-more-resources]").addEventListener("click", () => run(() => loadResources(true)));
     shell.querySelector("[data-cloud-more-history]").addEventListener("click", () => run(() => loadHistory(true)));
+    shell.querySelector("[data-cloud-more-assets]").addEventListener("click", () => run(() => loadAssets(true)));
     shell.querySelector("[data-cloud-editor]").addEventListener("submit", (event) => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -203,7 +252,9 @@
         await loadResources();
       });
     });
-    await run(async () => { await Promise.all([loadResources(), loadHistory()]); });
+    await run(async () => {
+      await Promise.all([loadResources(), loadHistory(), loadAssets(), loadCollections()]);
+    });
   }
   window.HandrawCloudCenter = { mount };
 })();
