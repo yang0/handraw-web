@@ -130,7 +130,6 @@
 /* Field Wrap */
 .make-image-field-wrap { display:flex;flex-direction:column;gap:6px; }
 .make-image-field-label { font-size:12px;font-weight:700;color:var(--ink-main); }
-.make-image-subject-banner { font-size:12px;font-weight:700;color:var(--vermilion);background:rgba(201,76,46,0.06);padding:6px 10px;border-radius:4px;border-left:3px solid var(--vermilion); }
 .make-image-textarea { box-sizing:border-box;width:100%;min-height:72px;padding:8px 12px;font:inherit;font-size:13px;line-height:1.6;color:var(--ink-main);background:var(--paper-bg);border:1px solid var(--line-strong);border-radius:6px;resize:vertical; }
 .make-image-textarea:focus-visible { outline:2px solid var(--vermilion);outline-offset:1px;border-color:var(--vermilion); }
 .make-image-input { box-sizing:border-box;width:100%;min-height:36px;padding:6px 10px;font:inherit;font-size:13px;color:var(--ink-main);background:var(--paper-bg);border:1px solid var(--line-strong);border-radius:6px; }
