@@ -212,6 +212,7 @@ def _find_work_by_image(conn: sqlite3.Connection, image_url: str, author_usernam
         """
         SELECT id, images_json FROM works
         WHERE author_username = ? AND COALESCE(images_json, '') <> ''
+          AND COALESCE(origin,'web') IN ('web','legacy')
         ORDER BY published_at_ms ASC
         """,
         (author_username,),
@@ -345,6 +346,26 @@ def project_generation_to_works(
             "SELECT work_id FROM generation_works WHERE generation_id = ? ORDER BY created_at LIMIT 1",
             (gen_id,),
         ).fetchone()
+    if not mapping:
+        # An author may already have published this first image through the
+        # direct share form. Adopt its work rather than display two cards for
+        # the same picture, while never merging unrelated generated runs.
+        adopted = _find_work_by_image(conn, urls[0], author_username)
+        if adopted:
+            taken = conn.execute(
+                "SELECT generation_batch_key FROM works WHERE id=?", (adopted,)
+            ).fetchone()
+            if taken and str(taken["generation_batch_key"] or "") in ("", batch_key):
+                if batch_key:
+                    conn.execute(
+                        "UPDATE works SET generation_batch_key=? WHERE id=?",
+                        (batch_key, adopted),
+                    )
+                conn.execute(
+                    "INSERT INTO generation_works (generation_id,item_key,work_id,created_at) "
+                    "VALUES (?,'__run__',?,?)", (gen_id, adopted, now),
+                )
+                mapping = {"work_id": adopted}
     if mapping:
         wid = str(mapping["work_id"])
         work = conn.execute(
