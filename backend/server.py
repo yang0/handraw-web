@@ -3969,10 +3969,11 @@ def main(argv: list[str] | None = None) -> None:
         # limits and a database staged with the full schema.
         if os.environ.get("HANDRAW_REDIS_REQUIRED", "").strip().lower() not in {"1", "true", "yes"}:
             raise RuntimeError("PostgreSQL 模式要求 HANDRAW_REDIS_REQUIRED=1")
-        if os.environ.get("HANDRAW_PG_RUNTIME_ACK", "") != "STAGING_ONLY":
+        if os.environ.get("HANDRAW_PG_RUNTIME_ACK", "") != "V3_NATIVE":
             raise RuntimeError(
-                "PostgreSQL 全业务 SQL/触发器尚未完成生产验收；"
-                "隔离环境使用 HANDRAW_PG_RUNTIME_ACK=STAGING_ONLY"
+                "PostgreSQL 模式只接受全新 V3 原生数据库；"
+                "先运行 python -m ops.bootstrap_postgres_v3 --apply，"
+                "再设置 HANDRAW_PG_RUNTIME_ACK=V3_NATIVE"
             )
     ensure_redis_ready()
 
@@ -3986,6 +3987,10 @@ def main(argv: list[str] | None = None) -> None:
         from .postgres_db import PostgresDatabase
         db = PostgresDatabase(pg_url)
         db.migrate()
+        # Production-like initialization contains only site policy defaults;
+        # no demo users, no old SQLite source, and no migration of user data.
+        from .seed import ensure_seeded
+        ensure_seeded(db)
     else:
         db = init_database(args.db or get_db_path(), force_reset=args.reset_db)
 
@@ -3999,7 +4004,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.exception("worker=blackbox-backfill failed to start")
     import_manager = getattr(server, "import_manager", None)
 
-    print("Handraw Web single backend running (PostgreSQL STAGING ONLY + Redis)" if pg_url else "Handraw Web single backend running (SQLite WAL + safe bind):")
+    print("Handraw Web single backend running (PostgreSQL V3 + Redis)" if pg_url else "Handraw Web single backend running (SQLite WAL + safe bind):")
     print(f"  [bind] {getattr(server, 'bind_host', '127.0.0.1')}")
     print(f"  [首页]   http://localhost:{args.port}/")
     print(f"  [创作台] http://localhost:{args.port}/studio/")
