@@ -16,6 +16,8 @@ jobs:
       - run: node --check demo/assets/task-journey.js && node --check demo/assets/studio-app.js && node --check demo/assets/studio-batch.js
       - run: node tests/test_task_journey.cjs
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
+      - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
+      - run: python -m unittest discover -s tests -p 'test_article_versions.py' -v
   portable-client:
     runs-on: ubuntu-latest
     steps:
