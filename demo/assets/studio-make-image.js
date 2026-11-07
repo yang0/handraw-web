@@ -643,6 +643,11 @@
             }
           });
         };
+        card.onkeydown = (event) => {
+          if (event.target !== card || !["Enter", " "].includes(event.key)) return;
+          event.preventDefault();
+          card.onclick(event);
+        };
       });
 
       // Clear buttons for main pickers
