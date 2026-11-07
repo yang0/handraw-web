@@ -5021,6 +5021,7 @@
         ctrlId: "",
         dispId: "",
         mode: task.mode || "generation",
+        creationSource: task.creationSource || "",
         modeLabel: task.modeLabel || "云端直出",
         kind: task.kind || "single",
         recipeSummary: task.recipeSummary || "",
@@ -5033,6 +5034,7 @@
     entry.id = id || entry.id;
     entry.requestId = requestId || entry.requestId || "";
     if (taskSubject && !entry.subject) entry.subject = taskSubject;
+    if (task.creationSource) entry.creationSource = task.creationSource;
     entry.taskId = "";
     entry.status = errorMessage ? "error" : "success";
     entry.engine = "live";
@@ -5383,6 +5385,7 @@
       requestId,
       kind: isBatch ? (rawEntry.kind || "multi") : (rawEntry.kind || "single"),
       mode: rawEntry.mode || "graphic-text",
+      creationSource: ["quick", "batch", "article", "canvas", "other"].includes(rawEntry.creationSource) ? rawEntry.creationSource : "",
       modeLabel: rawEntry.modeLabel || (isBatch ? `批量生成 · ${items.length} 张` : "生成"),
       tabTitle: rawEntry.tabTitle || "当前工作流",
       subject: rawEntry.subject || (items.length > 0 ? (items[0].subject || items[0].recipeSnapshot?.subject) : "") || "",
@@ -5467,6 +5470,7 @@
           ctrlId: existing.ctrlId || normalized.ctrlId || "",
           dispId: existing.dispId || normalized.dispId || "",
           recipeId: existing.recipeId || normalized.recipeId || "",
+          creationSource: normalized.creationSource || existing.creationSource || "",
           recipeSnapshot: normalized.promptMasked ? null : (normalized.recipeSnapshot || existing.recipeSnapshot || null),
           items: (Array.isArray(normalized.items) && normalized.items.length) ? normalized.items : existing.items
         };
@@ -5479,6 +5483,7 @@
           engine: isExistingServer ? existing.engine : normalized.engine,
           status: isExistingServer ? existing.status : normalized.status,
           requestId: existing.requestId || normalized.requestId || "",
+          creationSource: normalized.creationSource || existing.creationSource || "",
           subject: normalized.subject || existing.subject || "",
           articleTitle: normalized.articleTitle || existing.articleTitle || "",
           title: (existing.isCustomTitle || existing.titleSource === "manual") ? existing.title : (normalized.title || existing.title || ""),
@@ -5522,7 +5527,7 @@
     return parts.join(" · ");
   }
 
-  function recordGenerationHistory(ctrlNode, items = [], kind = "single", markdown = "") {
+  function recordGenerationHistory(ctrlNode, items = [], kind = "single", markdown = "", creationSource = "") {
     ensureGenerationHistoryInitialized();
     if (!ctrlNode || !Array.isArray(items) || !items.length) return;
     const isRecipe = Boolean(ctrlNode.styleIds || ctrlNode.style_ids || (typeof ctrlNode.id === "string" && ctrlNode.id.startsWith("rcp_")));
@@ -5607,6 +5612,7 @@
         isLoopBatch ? `循环批量 · ${items.length} 张` : `${modeMeta ? modeMeta.label : "生成"} · ${items.length} 张`
       }`,
       kind: kind || (items.length > 1 ? "multi" : "single"),
+      creationSource: creationSource || (isRecipe ? "quick" : "canvas"),
       engine: isLive ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
       recipeSummary: summaryText,
@@ -5699,6 +5705,7 @@
       ctrlId: ctrlNode ? ctrlNode.id : "",
       dispId: planNode.id,
       mode: "article-illust",
+      creationSource: "article",
       modeLabel: `${isDemoGenerationEnabled() ? "🧪 演示样图 · " : ""}文章配图 · ${readyCards.length} 张`,
       kind: "article",
       engine: isLive ? "live" : "demo",
@@ -5854,6 +5861,7 @@
             layout: cardLay,
             refImages,
             recipeSnapshot: card.recipeSnapshot,
+            creationSource: "article",
             requestId,
             clientRequestId: requestId,
             confirmCost: true
@@ -6098,6 +6106,7 @@
   async function runOutputControlNode(ctrlId, { onlyItemIdx = null, onlyDispNodeId = null, silent = false } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
+    const creationSource = CS.stageView === "batch" ? "batch" : CS.stageView === "quick" ? "quick" : CS.stageView === "preview" || CS.stageView === "article" ? "article" : "canvas";
     const ctrl = getNodeById(ctrlId);
     if (!ctrl || ctrl.type !== "output_control" || ctrl.data.status === "generating") {
       if (ctrl && ctrl.data.status === "generating" && !silent) {
@@ -6389,6 +6398,7 @@
                 layout: sp.layout || rec.layoutId || "",
                 refImages,
                 recipeSnapshot: sp.recipeSnapshot,
+                creationSource,
                 requestId,
                 clientRequestId: requestId,
                 confirmCost: true,
@@ -6638,7 +6648,7 @@
           activeLoopNode.data.totalSteps = plan.specs.length;
         }
         if (allItems.length > 0) {
-          recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown);
+          recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown, creationSource);
         }
         markActiveTabDirty();
         persistOpenTabs();
@@ -6680,7 +6690,7 @@
         activeLoopNode.data.totalSteps = plan.specs.length;
       }
       if (allItems.length > 0) {
-        recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown);
+        recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown, creationSource);
       }
       markActiveTabDirty();
       persistOpenTabs();
@@ -7472,19 +7482,22 @@
   }
 
   function historyRecordCategory(h) {
-    // Each generation belongs to exactly one mode, including standalone article covers.
+    const explicit = String(h.creationSource || "").toLowerCase();
+    if (["quick", "batch", "article", "canvas", "other"].includes(explicit)) return explicit;
+    // Older records did not persist an entry-point field: infer only from
+    // reliable metadata. "graphic-text" and "3:4" describe output, not a canvas.
     const mode = String(h.mode || "").toLowerCase().replace(/_/g, "-");
     const kind = String(h.kind || "").toLowerCase();
     const label = `${h.modeLabel || ""} ${h.tabTitle || ""}`;
     if (["article-illust", "article-cover"].includes(mode) || kind === "article" ||
-        h.articleTitle || /文章封面|文章配图|文章插图/.test(label)) return "article";
-    if (["loop", "series", "batch"].includes(kind) || ["series", "batch"].includes(mode) ||
-        /循环批量|批量|套图/.test(String(h.modeLabel || ""))) return "batch";
-    if (kind === "cover" || /封面图|独立封面/.test(label) ||
-        (Array.isArray(h.items) && h.items.length === 1 &&
+        h.articleTitle || /文章封面|文章配图|文章插图/.test(label) ||
+        kind === "cover" || (Array.isArray(h.items) && h.items.length === 1 &&
           (h.items[0]?.role === "cover" || /封面/.test(String(h.items[0]?.title || ""))))) return "article";
-    if (h.recipeId || h.tabTitle === "做图配方") return "quick";
-    return "canvas";
+    if (["loop", "series", "batch"].includes(kind) || ["series", "batch"].includes(mode) ||
+        /循环批量|批量|套图/.test(label)) return "batch";
+    if (h.recipeId || h.tabTitle === "做图配方" || /^rcp_/.test(String(h.requestId || ""))) return "quick";
+    // A node ID is not proof of canvas origin: quick/batch forms also run graph nodes.
+    return "other";
   }
 
   function historyImageCount(h) {
@@ -7525,7 +7538,7 @@
     const allHist = CS.generationHistory || [];
     const filterMode = CS.historyFilter || "all";
     const statusFilter = CS.historyStatusFilter || "all";
-    const imageCounts = { all: 0, quick: 0, batch: 0, article: 0, canvas: 0 };
+    const imageCounts = { all: 0, quick: 0, batch: 0, article: 0, canvas: 0, other: 0 };
     for (const history of allHist) {
       const amount = historyImageCount(history);
       imageCounts.all += amount;
@@ -7562,6 +7575,7 @@
             <button type="button" class="ic-view-seg-btn ${filterMode === "batch" ? "is-active" : ""}" data-hist-filter="batch">批量 (${imageCounts.batch})</button>
             <button type="button" class="ic-view-seg-btn ${filterMode === "article" ? "is-active" : ""}" data-hist-filter="article">文章配图 (${imageCounts.article})</button>
             <button type="button" class="ic-view-seg-btn ${filterMode === "canvas" ? "is-active" : ""}" data-hist-filter="canvas">画布 (${imageCounts.canvas})</button>
+            ${imageCounts.other ? `<button type="button" class="ic-view-seg-btn ${filterMode === "other" ? "is-active" : ""}" data-hist-filter="other">其他来源 (${imageCounts.other})</button>` : ""}
           </div>
           <input
             type="search"
@@ -7617,7 +7631,7 @@
                         <article class="ic-hist-entry-card" data-hist-id="${esc(h.id)}">
                           <div class="ic-hist-entry-head">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;">
-                              <span class="ic-hist-category-chip">${esc(({ quick: "做图", batch: "批量", article: "文章配图", canvas: "画布" })[historyRecordCategory(h)])}</span>
+                              <span class="ic-hist-category-chip">${esc(({ quick: "做图", batch: "批量", article: "文章配图", canvas: "画布", other: "其他来源" })[historyRecordCategory(h)])}</span>
                               <span class="ic-node-badge ${h.kind === "loop" ? "ic-badge-loop" : "ic-badge-output-ctrl"}">${esc(h.modeLabel || "生成记录")}</span>
                               ${h.demoMode || h.engine === "demo" ? '<span class="ic-node-badge" style="background:#fff4d6;color:#8a5a00;border:1px solid #e8c46a;">🧪 演示样图</span>' : ""}
                               <strong style="font-size:14.5px;font-weight:850;color:var(--ic-ink);">${esc(h.subject || h.title || h.tabTitle || "画布工作流")}</strong>
@@ -7628,7 +7642,7 @@
                             </div>
 
                             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
-                              ${h.recipeId ? `<button type="button" class="btn btn-sm btn-primary" data-hist-redo-recipe="${esc(h.recipeId)}" style="font-weight:800;">再做一次</button>` : `<button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">↩ 恢复到画布</button>`}
+                              ${h.recipeId && historyRecordCategory(h) === "quick" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-redo-recipe="${esc(h.recipeId)}" style="font-weight:800;">使用原配方</button>` : historyRecordCategory(h) === "canvas" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">恢复到画布</button>` : historyRecordCategory(h) !== "other" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-open-mode="${historyRecordCategory(h)}" style="font-weight:800;">${({quick: "去做图", batch: "去批量", article: "去文章配图"})[historyRecordCategory(h)]}</button>` : ""}
                               <button type="button" class="btn btn-sm" data-hist-zip="${esc(h.id)}" ${!(h.items || []).some((it) => it.imageUrl) ? "disabled" : ""} style="color:#1f6f4a;border-color:rgba(31,111,74,0.35);font-weight:750;">📦 下载 ZIP</button>
                               <button type="button" class="btn btn-sm" data-hist-del="${esc(h.id)}" style="color:#dc2626;" title="删除此条历史记录">🗑️ 删除</button>
                             </div>
@@ -7767,6 +7781,14 @@
     };
     DOM.historyStage.querySelectorAll("[data-hist-image-download]").forEach((el) => {
       el.onclick = (event) => event.stopPropagation();
+    });
+
+    DOM.historyStage.querySelectorAll("[data-hist-open-mode]").forEach((btn) => {
+      btn.onclick = () => {
+        const source = btn.getAttribute("data-hist-open-mode");
+        if (source === "quick" || source === "batch") switchCreationStage(source);
+        else if (source === "article") switchCreationStage("article");
+      };
     });
 
     DOM.historyStage.querySelectorAll("[data-hist-restore]").forEach((btn) => {
