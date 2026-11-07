@@ -193,8 +193,11 @@ class SkillWebBridgeTests(unittest.TestCase):
         urls = json.loads(work["images_json"])
         self.assertEqual(len(urls), 3)
         self.assertEqual(self.db.get_conn().execute(
-            "SELECT COUNT(*) FROM generation_works WHERE generation_id=?", (first["id"],)
+            "SELECT COUNT(*) FROM works WHERE run_id=?", (first["id"],)
         ).fetchone()[0], 1)
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM work_media WHERE work_id=?", (first["workId"],)
+        ).fetchone()[0], 3)
         for url in urls:
             self.assertTrue(self.db.get_conn().execute(
                 "SELECT 1 FROM media_public_grants WHERE media_url=? AND target_type='work' "
@@ -202,43 +205,67 @@ class SkillWebBridgeTests(unittest.TestCase):
             ).fetchone())
 
     def test_history_upload_resumes_after_interruption_without_duplicate_media(self):
-        rid=str(uuid.uuid4())
-        a,b=b"image-one",b"image-two"
-        images=[{"name":name,"sha256":hashlib.sha256(blob).hexdigest(),
-                 "dataUrl":"data:image/png;base64,"+base64.b64encode(blob).decode()}
-                for name,blob in (("one.png",a),("two.png",b))]
-        payload={"externalRunId":rid,"originClient":"skill","visibility":"public",
-                 "status":"success","requestId":"skill-history-"+rid,
-                 "originalRequest":"多图片批量任务", "images":images}
-        saved=[]
-        def failing_store(db,user,data_url,name_zh,cat):
-            if len(saved)==1:
-                raise RuntimeError("temporary image upload failure")
-            saved.append(data_url)
-            return {"url":"/uploads/saved-one.png"}
+        from backend.server import save_data_url_upload
+        rid = str(uuid.uuid4())
+        images = []
+        for colour in ((90, 140, 50), (50, 140, 90)):
+            buff = io.BytesIO()
+            Image.new("RGB", (3, 3), colour).save(buff, format="PNG")
+            blob = buff.getvalue()
+            images.append({
+                "name": "image.png",
+                "sha256": hashlib.sha256(blob).hexdigest(),
+                "dataUrl": "data:image/png;base64," + base64.b64encode(blob).decode(),
+            })
+        payload = {
+            "externalRunId": rid, "originClient": "skill", "visibility": "public",
+            "status": "success", "requestId": "skill-history-" + rid,
+            "originalRequest": "两张手绘插画", "images": images,
+        }
+        attempts = []
+        def fail_once(db, user, data_url, name_zh, cat):
+            if attempts:
+                raise RuntimeError("temporary upload failure")
+            attempts.append(data_url)
+            return save_data_url_upload(db, user, data_url, name_zh=name_zh, cat=cat)
         with self.assertRaises(RuntimeError):
-            bridge.import_history(self.db,self.owner,payload,failing_store)
-        row=self.db.get_conn().execute(
-            "SELECT status,images_json FROM skill_generation_runs WHERE user_id=? AND external_run_id=?",
-            (self.owner["id"],rid)).fetchone()
-        self.assertEqual(row["status"],"uploading")
-        self.assertEqual(len(json.loads(row["images_json"])),1)
-        self.assertFalse(any(item["externalRunId"]==rid for item in
-                             bridge.list_history(self.db,self.owner,{})["items"]))
-        def resume_store(db,user,data_url,name_zh,cat):
-            self.assertEqual(data_url,images[1]["dataUrl"])
-            saved.append(data_url)
-            return {"url":"/uploads/saved-two.png"}
-        with patch.object(bridge, "_publish_skill_run_images", return_value=["work_a"]):
-            completed=bridge.import_history(self.db,self.owner,payload,resume_store)
-            self.assertEqual(completed["visibility"],"public")
-            self.assertEqual(completed["workIds"],["work_a"])
-            self.assertEqual(len(saved),2)
-            self.assertEqual(completed["imageCount"], 2)
-            self.assertTrue(bridge.import_history(self.db,self.owner,payload,resume_store)["deduped"])
-        self.assertEqual(self.db.get_conn().execute(
-            "SELECT COUNT(*) FROM skill_generation_runs WHERE user_id=? AND external_run_id=?",
-            (self.owner["id"],rid)).fetchone()[0],1)
+            bridge.import_history(self.db, self.owner, payload, fail_once)
+        conn = self.db.get_conn()
+        row = conn.execute(
+            "SELECT id,status FROM generation_runs WHERE user_id=? AND source='skill' "
+            "AND external_run_id=?", (self.owner["id"], rid)
+        ).fetchone()
+        self.assertEqual(row["status"], "uploading")
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM generation_items WHERE run_id=?", (row["id"],)
+        ).fetchone()[0], 1)
+        self.assertTrue(any(
+            item["id"] == row["id"] and not item["workIds"]
+            for item in bridge.list_history(self.db, self.owner, {})["items"]
+        ))
+        resumed = []
+        def finish_upload(db, user, data_url, name_zh, cat):
+            self.assertEqual(data_url, images[1]["dataUrl"])
+            resumed.append(data_url)
+            return save_data_url_upload(db, user, data_url, name_zh=name_zh, cat=cat)
+        complete = bridge.import_history(self.db, self.owner, payload, finish_upload)
+        self.assertEqual(complete["id"], row["id"])
+        self.assertEqual(complete["imageCount"], 2)
+        self.assertEqual(len(complete["workIds"]), 1)
+        self.assertEqual(len(resumed), 1)
+        repeated = bridge.import_history(
+            self.db, self.owner, payload,
+            lambda *args, **kwargs: self.fail("already uploaded slots must not save again"),
+        )
+        self.assertTrue(repeated["deduped"])
+        self.assertEqual(repeated["workIds"], complete["workIds"])
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM generation_runs WHERE user_id=? AND external_run_id=?",
+            (self.owner["id"], rid)
+        ).fetchone()[0], 1)
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM work_media WHERE work_id=?", (complete["workId"],)
+        ).fetchone()[0], 2)
 
     def test_private_history_quota_rejects_without_writing_new_media(self):
         with self.db.transaction() as tx:
@@ -259,7 +286,7 @@ class SkillWebBridgeTests(unittest.TestCase):
         self.assertEqual(error.exception.status,413)
         self.assertEqual(error.exception.code,"skill_history_storage_quota_exceeded")
         self.assertIsNone(self.db.get_conn().execute(
-            "SELECT id FROM skill_generation_runs WHERE external_run_id=?", (rid,)).fetchone())
+            "SELECT id FROM generation_runs WHERE external_run_id=?", (rid,)).fetchone())
 
     def test_history_invalid_payload_is_rejected_before_storage(self):
         rid = str(uuid.uuid4())
@@ -275,55 +302,22 @@ class SkillWebBridgeTests(unittest.TestCase):
             bridge.import_history(self.db, self.owner, {**data, "visibility": "public"},
                                   lambda *a, **kw: self.fail("must never save"))
 
-    def test_legacy_reconciliation_excludes_existing_private_history(self):
-        with self.assertRaises(ServiceError) as unauthorised:
-            bridge.legacy_generation_audit(self.db, self.owner)
-        self.assertEqual(unauthorised.exception.status, 403)
-        admin = {**self.owner, "role": "admin"}
-        with self.db.transaction() as tx:
-            tx.execute("""INSERT INTO studio_generations
-                (id,user_id,username,tab_title,mode,prompt,items_json,status,created_at,visibility,engine)
-                VALUES ('private_audit_only',?,?,?,?,?,'["/images/individual/FA/FA-013.webp"]',
-                        'success','2026-11-07T00:00:00Z','private','sample')""",
-                (self.owner["id"], self.owner["username"], "私有旧历史",
-                 "graphic-text", "仅本人可见"))
-        with self.assertRaises(ServiceError):
-            bridge.reconcile_legacy_generations(self.db, admin, {"batchSize":10})
-        before = self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
-        repaired = bridge.reconcile_legacy_generations(
-            self.db, admin, {"batchSize":10,"confirmed":True})
-        self.assertTrue(repaired["ok"])
-        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0], before)
-        self.assertEqual(self.db.get_conn().execute(
-            "SELECT visibility FROM studio_generations WHERE id='private_audit_only'"
-        ).fetchone()[0], "private")
-
-    def test_migration_repair_maps_only_existing_public_history(self):
+    def test_new_database_has_no_legacy_skill_generation_tables(self):
+        conn = self.db.get_conn()
         from backend.migrations import POST_MIGRATION_HOOKS
-        self.assertIn(98, POST_MIGRATION_HOOKS)
-        with self.db.transaction() as tx:
-            for hid, visibility, path in (
-                ("public_missing_work", "public", "/images/individual/FA/FA-013.webp"),
-                ("private_preserved", "private", "/images/individual/FA/FA-014.webp"),
-            ):
-                tx.execute("""INSERT INTO studio_generations
-                    (id,user_id,username,tab_title,mode,prompt,items_json,status,
-                     created_at,visibility,engine)
-                    VALUES (?,?,?,?,?, ?, ?, 'success', ?, ?, 'sample')""",
-                    (hid,self.owner["id"],self.owner["username"],hid,
-                     "graphic-text","一张铅笔风格插画",json.dumps([path]),
-                     "2026-11-07T00:00:00Z",visibility))
-        with self.db.transaction() as tx:
-            POST_MIGRATION_HOOKS[98](tx)
-            POST_MIGRATION_HOOKS[98](tx)
-        public_count=self.db.get_conn().execute(
-            "SELECT COUNT(*) FROM generation_works WHERE generation_id='public_missing_work'"
-        ).fetchone()[0]
-        private_count=self.db.get_conn().execute(
-            "SELECT COUNT(*) FROM generation_works WHERE generation_id='private_preserved'"
-        ).fetchone()[0]
-        self.assertEqual(public_count,1)
-        self.assertEqual(private_count,0)
+        self.assertNotIn(98, POST_MIGRATION_HOOKS)
+        names = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        for table in (
+            "skill_generation_runs", "skill_generation_work_items",
+            "skill_history_publications",
+        ):
+            self.assertNotIn(table, names)
+        self.assertIn("generation_runs", names)
+        self.assertIn("generation_items", names)
+        self.assertIn("work_media", names)
+        self.assertIn("media_assets", names)
 
     def test_notifications_scoped_to_owner(self):
         with self.db.transaction() as tx:
