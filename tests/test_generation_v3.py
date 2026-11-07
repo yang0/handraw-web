@@ -67,7 +67,8 @@ class GenerationV3Tests(unittest.TestCase):
             )
         self.assertEqual(self.db.get_conn().execute(
             "SELECT status FROM generation_runs WHERE id=?", (first,)
-        ).fetchone()[0], "partial")
+        ).fetchone()[0], "running",
+        "A batch with a missing output slot remains in progress")
         with self.db.transaction() as tx:
             second = record_public_work(
                 tx, user_id=uid, source="web", external_run_id="canvas_batch",
@@ -113,6 +114,34 @@ class GenerationV3Tests(unittest.TestCase):
         self.assertEqual(conn.execute(
             "SELECT COUNT(*) FROM media_assets WHERE owner_user_id=?", (uid,)
         ).fetchone()[0], 2)
+
+    def test_mixed_terminal_slots_are_partial_and_a_deleted_run_stays_deleted(self):
+        wid = self._new_work()
+        with self.db.transaction() as tx:
+            run_id = record_public_work(
+                tx, user_id=self.owner_id, source="web",
+                external_run_id="partial_then_deleted", work_id=wid,
+                ordered_images=[(0, "/generated/ok.webp", "")], expected_count=2,
+            )
+            tx.execute(
+                """INSERT INTO generation_items
+                   (id,run_id,position,status,error_code,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                ("failed_item", run_id, 1000, "failed", "gateway_failed", "now", "now"),
+            )
+            from backend.generation_v3 import refresh_run_status
+            self.assertEqual(refresh_run_status(tx, run_id), "partial")
+            tx.execute(
+                "UPDATE generation_runs SET publication_deleted_at='2026-11-07T12:00:00Z' WHERE id=?",
+                (run_id,),
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be republished"):
+            with self.db.transaction() as tx:
+                record_public_work(
+                    tx, user_id=self.owner_id, source="web",
+                    external_run_id="partial_then_deleted", work_id=wid,
+                    ordered_images=[(0, "/generated/ok.webp", "")], expected_count=2,
+                )
 
     def test_unique_work_per_run_and_owner_guard(self):
         wid = self._new_work()
