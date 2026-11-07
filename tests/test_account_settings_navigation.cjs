@@ -7,6 +7,10 @@ const main = fs.readFileSync(path.join(root, "demo/assets/main-app.js"), "utf8")
 const shared = fs.readFileSync(path.join(root, "demo/assets/shared.js"), "utf8");
 
 assert.match(main, /function renderAccountSettingsPage\(root\)/, "account settings has its own view");
+const accountRender = main.slice(main.indexOf("function renderAccountSettingsPage(root)"), main.indexOf("function groupProfilePublishedWorks"));
+assert.ok(!accountRender.includes("← 我的创作者主页"), "account header breadcrumb removed");
+assert.ok(!accountRender.includes("<h1>账号设置</h1>"), "account heading removed");
+assert.ok(accountRender.includes("hw-account-layout"), "two-column account layout remains");
 assert.match(main, /view === "account" \|\| \(view === "profile" && p\.get\("ptab"\) === "account"\)/, "legacy profile account URLs redirect");
 assert.match(main, /App\.view === "account"\) renderAccountSettingsPage\(root\)/, "account route renders settings");
 assert.match(main, /UI\.accountSection = snap\.accountSection \|\| UI\.accountSection/, "auth returns to selected account section");

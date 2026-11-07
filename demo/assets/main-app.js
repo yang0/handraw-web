@@ -2367,9 +2367,6 @@
     ];
     root.innerHTML = `
       <section class="hw-account-settings hw-detail-page" id="account-settings-page">
-        <div class="hw-subpage-bar"><a class="btn btn-sm" href="${esc(channelUrl("main",{view:"profile",user:App.state.user.username}))}">← 我的创作者主页</a></div>
-        <h1>账号设置</h1>
-        <p class="hw-account-help">管理个人资料、登录安全和客户端授权。每项修改独立生效。</p>
         <div class="hw-account-layout">
           <nav class="hw-account-nav" aria-label="账号设置导航">
             ${sections.map(([key,label,desc]) => `<a class="hw-account-nav-link ${section===key?"is-active":""}" ${section===key?'aria-current="page"':""} href="${esc(channelUrl("main",{view:"account",section:key}))}" data-account-section="${key}"><strong>${label}</strong><small>${desc}</small></a>`).join("")}
@@ -2421,7 +2418,7 @@
     UI.profileWorksLoading = true;
     UI.profileWorksError = "";
     try {
-      const q = new URLSearchParams({ author: username, sort: "newest", limit: "100" });
+      const q = new URLSearchParams({ author: username, sort: "newest", limit: "24" });
       if (cursor) q.set("cursor", cursor);
       const res = await S.apiJson(`/api/works/feed?${q}`);
       if (UI.profileWorksUser !== username) return;
@@ -2508,7 +2505,7 @@
       }
       const rows = serverBacked ? UI.profileWorkRows : prof.works;
       const groups = groupProfilePublishedWorks(rows);
-      if (rows === null) {
+      if (rows === null && !UI.profileWorksError) {
         tabBodyHtml = `<div class="hw-detail-section-card" role="status" style="padding:44px;text-align:center;color:var(--ink-muted);">正在加载公开作品…</div>`;
       } else {
         tabBodyHtml = groups.length
@@ -2864,14 +2861,14 @@
       }
 
       tabBodyHtml = `
-        <div class="hw-detail-section-card">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-            <div class="hw-pills-row" style="margin:0;">
-              <button type="button" class="hw-pill ${UI.favTab === "styles" ? "is-active" : ""}" data-prof-ftab="styles">🎨 收藏画风 (${(cols.styles || []).length})</button>
-              <button type="button" class="hw-pill ${UI.favTab === "layouts" ? "is-active" : ""}" data-prof-ftab="layouts">📐 收藏图型 (${(cols.layouts || []).length})</button>
-              <button type="button" class="hw-pill ${UI.favTab === "works" ? "is-active" : ""}" data-prof-ftab="works">🖼️ 收藏作品 (${(cols.works || []).length})</button>
-              <button type="button" class="hw-pill ${UI.favTab === "generations" ? "is-active" : ""}" data-prof-ftab="generations">⚡ 收藏生图 (${(cols.generations || []).length})</button>
-              <button type="button" class="hw-pill ${UI.favTab === "topics" ? "is-active" : ""}" data-prof-ftab="topics">💬 收藏帖子 (${(cols.topics || []).length})</button>
+        <div class="hw-detail-section-card hw-profile-collections">
+          <div class="hw-collections-toolbar">
+            <div class="hw-pills-row hw-collections-tabs" role="tablist" aria-label="收藏内容分类">
+              <button type="button" class="hw-pill ${UI.favTab === "styles" ? "is-active" : ""}" data-prof-ftab="styles" role="tab" aria-selected="${UI.favTab === "styles"}">🎨 收藏画风 (${(cols.styles || []).length})</button>
+              <button type="button" class="hw-pill ${UI.favTab === "layouts" ? "is-active" : ""}" data-prof-ftab="layouts" role="tab" aria-selected="${UI.favTab === "layouts"}">📐 收藏图型 (${(cols.layouts || []).length})</button>
+              <button type="button" class="hw-pill ${UI.favTab === "works" ? "is-active" : ""}" data-prof-ftab="works" role="tab" aria-selected="${UI.favTab === "works"}">🖼️ 收藏作品 (${(cols.works || []).length})</button>
+              <button type="button" class="hw-pill ${UI.favTab === "generations" ? "is-active" : ""}" data-prof-ftab="generations" role="tab" aria-selected="${UI.favTab === "generations"}">⚡ 收藏生图 (${(cols.generations || []).length})</button>
+              <button type="button" class="hw-pill ${UI.favTab === "topics" ? "is-active" : ""}" data-prof-ftab="topics" role="tab" aria-selected="${UI.favTab === "topics"}">💬 收藏帖子 (${(cols.topics || []).length})</button>
             </div>
             ${
               (cols[UI.favTab] || []).length > 0
@@ -2886,18 +2883,6 @@
 
     root.innerHTML = `
       <div class="hw-profile-page" id="standalone-profile-page">
-        <div class="hw-subpage-bar">
-          <div class="hw-subpage-crumbs">
-            <button type="button" class="btn btn-sm" id="prof-back-btn">← 返回浏览</button>
-            <span>/</span>
-            <span>🏠 创作者个人主页</span>
-            <span>/</span>
-            <strong>@${esc(prof.authorName)}</strong>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button type="button" class="btn btn-sm" id="prof-rankings-btn">🏆 创作者荣誉榜单 ↗</button>
-          </div>
-        </div>
 
         <section class="hw-profile-hero">
           <div class="hw-profile-hero-top">
@@ -2931,11 +2916,9 @@
               ${
                 isMe
                   ? `
-                    <a class="btn btn-primary" id="prof-go-studio-btn" href="${esc(channelUrl("studio", { entry: "quick" }))}">管理我的创作 ↗</a>
                     <button type="button" class="btn" id="prof-go-collections-btn">♥ 收藏夹</button>
                     <button type="button" class="btn" id="prof-go-account-btn">⚙️ 账号设置</button>
                     <button type="button" class="btn btn-gold" id="prof-go-wallet-btn">✦ 积分钱包 (${App.state.credits}✦)</button>
-                    <button type="button" class="btn" id="prof-go-compose-btn">✏️ 发论坛帖</button>
                     ${
                       myMgmtRole && myMgmtRole !== "none"
                         ? `<a class="btn btn-primary" href="${esc(channelUrl("admin", myMgmtRole === "admin" ? { module: "users" } : {}))}">🏛️ 管理后台 ↗</a>`
@@ -3007,12 +2990,11 @@
         </section>
 
         <!-- Standalone Profile Section Tabs -->
-        <div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
+        ${UI.profileTab !== "collections" ? `<div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
           <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品${UI.profileWorksUser === prof.username && UI.profileWorksTotal !== null ? ` (${UI.profileWorksTotal})` : ""}</button>
           <button type="button" class="hw-pill ${UI.profileTab === "resources" ? "is-active" : ""}" data-ptab="resources" role="tab" aria-selected="${UI.profileTab === "resources"}">🎨 创作资源 (${prof.styles.length + prof.layouts.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 社区动态 (${prof.topics.length})</button>
-        </div>
-        ${UI.profileTab === "collections" && isMe ? `<div style="margin-bottom:12px;"><button type="button" class="btn btn-sm" id="prof-collections-back-btn">← 返回公开主页</button></div>` : ""}
+        </div>` : ""}
         <div id="profile-tab-stage">
           ${tabBodyHtml}
         </div>
@@ -3027,8 +3009,6 @@
       } catch (_) {}
     }
 
-    root.querySelector("#prof-back-btn").onclick = () => navigateBack(UI.lastPrimaryView || "styles");
-    root.querySelector("#prof-rankings-btn").onclick = () => switchView("rankings", { rankTab: "creators" });
 
     root.querySelectorAll("[data-ptab]").forEach((btn) => {
       btn.onclick = () => {
@@ -3038,8 +3018,6 @@
 
     const collectionsBtn = root.querySelector("#prof-go-collections-btn");
     if (collectionsBtn) collectionsBtn.onclick = () => openProfilePage(prof.username, "collections");
-    const collectionsBackBtn = root.querySelector("#prof-collections-back-btn");
-    if (collectionsBackBtn) collectionsBackBtn.onclick = () => openProfilePage(prof.username, "works");
     root.querySelectorAll("[data-prof-resource-filter]").forEach((btn) => {
       btn.onclick = () => {
         UI.profileResourceFilter = btn.getAttribute("data-prof-resource-filter") || "all";
@@ -3050,8 +3028,6 @@
     if (goAccBtn) goAccBtn.onclick = () => switchView("account");
     const goWalBtn = root.querySelector("#prof-go-wallet-btn");
     if (goWalBtn) goWalBtn.onclick = () => switchView("wallet");
-    const goCompBtn = root.querySelector("#prof-go-compose-btn");
-    if (goCompBtn) goCompBtn.onclick = () => S.goToForumCompose();
     const emptyCompBtn = root.querySelector("#prof-empty-compose-btn");
     if (emptyCompBtn) emptyCompBtn.onclick = () => S.goToForumCompose();
     const filterAuthorBtn = root.querySelector("#prof-filter-author-btn");
@@ -3069,7 +3045,7 @@
     const workRetryBtn = root.querySelector("#prof-work-retry-btn");
     if (workRetryBtn) workRetryBtn.onclick = () => {
       UI.profileWorksError = "";
-      loadProfilePublishedWorks(prof.username, UI.profileWorksCursor, Boolean(UI.profileWorkRows));
+      loadProfilePublishedWorks(prof.username, UI.profileWorkRows ? UI.profileWorksCursor : "", Boolean(UI.profileWorkRows));
     };
     root.querySelectorAll("[data-prof-work]").forEach((el) => {
       el.onclick = () => openWorkPage(el.getAttribute("data-prof-work"), 0, false);
