@@ -3820,3 +3820,16 @@ img[data-hw-src].hw-img-failed {
   .hw-account-nav-link strong { font-size: 13px; }
   .hw-account-nav-link small { display: none; }
 }
+
+/* Profile: generated batches are presented as one public work group. */
+.hw-profile-work-group:focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: 3px;
+}
+.hw-profile-batch-count {
+  color: #fff;
+  background: rgba(24, 19, 15, .78);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-weight: 800;
+}
