@@ -101,4 +101,64 @@ for (const id of ['id="wf-back-canvas"', 'id="wf-restore-presets"', 'id="wf-empt
   assert.ok(!workflow.includes(id), "Redundant workflow control still exists: " + id);
 }
 assert.ok(workflow.includes('class="ic-wf-minimal-tools"'));
-console.log("Studio history and workflows: 9-image categories, masonry, navigation and minimal workflow library passed");
+
+const sharedShellStyle = [
+  ".ic-history-stage .ic-history-topbar,",
+  ".ic-workflows-stage .ic-wf-minimal-tools",
+  ".ic-history-stage .ic-hist-page-inner,",
+  ".ic-workflows-stage .ic-wf-page-inner",
+  "--ic-library-max-width: 1140px"
+];
+for (const fragment of sharedShellStyle) {
+  assert.ok(styles.includes(fragment), "Shared history/workflow alignment missing: " + fragment);
+}
+assert.ok(styles.includes(".ic-wf-card-grid") && styles.includes("grid-template-columns: repeat(3, minmax(0, 1fr))"),
+  "Desktop workflow list needs three cards across");
+assert.ok(styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
+  "Tablet workflow list needs two cards across");
+assert.ok(styles.includes("grid-template-columns: minmax(0, 1fr)"),
+  "Mobile workflow list needs a single card column");
+assert.ok(studio.includes('id="studio-mode-canvas"') && studio.includes('>画布</button>'),
+  "Global canvas button should be named 画布");
+assert.ok(!studio.includes("高级画布"), "Studio UI must not keep the old canvas label");
+
+const workflowStage = {
+  style: {}, innerHTML: "",
+  querySelector() { return null; },
+  querySelectorAll() { return []; }
+};
+const workflowData = {
+  stageView: "workflows", workflowQuery: "",
+  savedWorkflows: [
+    {
+      id: "wf_1", title: "示范工作流", updatedAt: "今天", scenarioBadge: "海报",
+      scenarioDesc: "可复用的创作节点", graph: {
+        nodes: [{ type: "text_input" }, { type: "output_control" }], edges: [{ from: "a", to: "b" }]
+      }
+    },
+    {
+      id: "wf_2", title: "自定义工作流", updatedAt: "昨天",
+      graph: { nodes: [{ type: "output_display" }], edges: [] }
+    }
+  ]
+};
+const wfSourceStart = studio.indexOf("  function renderWorkflowsStage() {");
+const wfSourceEnd = studio.indexOf("  /* ======================== UNDO/REDO", wfSourceStart);
+assert.ok(wfSourceStart >= 0 && wfSourceEnd > wfSourceStart);
+const renderWorkflow = new Function("DOM", "CS", "esc", "ensureDefaultSavedWorkflows", "document",
+  studio.slice(wfSourceStart, wfSourceEnd) + "\nreturn renderWorkflowsStage;")(
+    { workflowsStage: workflowStage }, workflowData, (v) => String(v), () => {}, { activeElement: null }
+  );
+renderWorkflow();
+assert.ok(workflowStage.innerHTML.includes('class="ic-wf-card-grid"'), "Workflow list must be a card grid");
+assert.equal((workflowStage.innerHTML.match(/class="ic-wf-entry-card"/g) || []).length, 2);
+for (const name of ["示范工作流", "自定义工作流"]) {
+  assert.ok(workflowStage.innerHTML.includes(name), "Missing workflow card: " + name);
+}
+for (const action of ["data-wf-open", "data-wf-dl", "data-wf-rm"]) {
+  assert.ok(workflowStage.innerHTML.includes(action), "Workflow cards must preserve action: " + action);
+}
+assert.ok(workflowStage.innerHTML.includes("2 个节点"), "Card should show node count");
+assert.ok(workflowStage.innerHTML.includes("1 条连线"), "Card should show edge count");
+
+console.log("Studio history and workflows: aligned 1140px layout, responsive cards, renamed canvas and actions passed");
