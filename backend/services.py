@@ -5019,10 +5019,14 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
                     items.append({"id": f"{r['id']}_{idx}", "title": r["tab_title"] or "生成项", "imageUrl": it, "ratio": "3:4"})
 
         snap = None
+        creation_source = ""
         if r["system_append_json"]:
             try:
                 s_data = json.loads(r["system_append_json"])
                 snap = s_data.get("recipeSnapshot")
+                candidate = str(s_data.get("creationSource") or "").strip().lower()
+                if candidate in ("quick", "batch", "article", "canvas", "other"):
+                    creation_source = candidate
             except Exception:
                 pass
 
@@ -5054,6 +5058,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "requestId": r["request_id"] or "",
             "error": sanitize_client_error_msg(r["error_msg"], r["status"]),
             "recipeId": r["recipe_id"] if "recipe_id" in r_keys else "",
+            "creationSource": creation_source,
         }
         try:
             mapped_rows = conn.execute(
@@ -5322,6 +5327,9 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                     raise ServiceError(f"无效的资源编号: {c}", status=400, code="invalid_resource_code")
 
     uid = int(user["id"])
+    creation_source = str(entry.get("creationSource") or "").strip().lower()
+    if creation_source not in ("quick", "batch", "article", "canvas", "other"):
+        creation_source = ""
     hid = str(entry.get("id") or f"hist_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}").strip()[:160]
     if not hid:
         raise ServiceError("历史记录编号不能为空", status=400, code="history_id_required")
@@ -5418,11 +5426,11 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 """
                 INSERT INTO studio_generations (
                     id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
-                    prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type, credits_spent, status, created_at, request_id,
+                    prompt, visible_prompt, prompt_masked, markdown, items_json, system_append_json, engine, cost_type, credits_spent, status, created_at, request_id,
                     subject, fork_generation_id, fork_item_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?, ?)
                 """,
-                (hid, uid, user["username"], *values, now_iso, req_id, clean_subj, fork_gen_id, fork_item_id),
+                (hid, uid, user["username"], *values, json.dumps({"creationSource": creation_source}), now_iso, req_id, clean_subj, fork_gen_id, fork_item_id),
             )
             try:
                 from .generation_works import project_generation_to_works
@@ -6089,6 +6097,9 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
 
         needs_compose = (not from_skill) and bool(style1 or style2 or layout)
         prompt_ready = 0 if needs_compose else 1
+        creation_source = str(body.get("creationSource") or "").strip().lower()
+        if creation_source not in ("quick", "batch", "article", "canvas"):
+            creation_source = "other"
 
         snap = body.get("recipeSnapshot")
         if not snap and (style1 or style2 or layout):
@@ -6113,7 +6124,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 initial_prompt if recipe_id else initial_prompt[:4000],
                 initial_visible_prompt if (initial_visible_prompt is None or recipe_id) else initial_visible_prompt[:4000],
                 prompt_masked_init,
-                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False, "recipeSnapshot": snap}, ensure_ascii=False),
+                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False, "recipeSnapshot": snap, "creationSource": creation_source}, ensure_ascii=False),
                 cost_type,
                 credits_spent,
                 request_id,
