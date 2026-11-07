@@ -20,6 +20,7 @@ from backend.services import (
     get_user_public_generations,
     get_user_public_generation_by_id,
     record_user_studio_history,
+    get_studio_workspace,
     prepare_cloud_generation,
     register_user,
 )
@@ -326,6 +327,37 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
                 {"visibility": "private", "topic": "test", "items": [{"imageUrl": "https://example.com/1.png"}]},
             )
         self.assertEqual(ctx.exception.code, "visibility_not_allowed")
+
+    def test_creation_source_is_persisted_for_history_and_cloud_generations(self):
+        # Creation entry point is independent of output mode, image ratio or prompt.
+        for source in ("quick", "batch", "article", "canvas"):
+            record_user_studio_history(self.db, self.creator_alice, {
+                "id": f"hist_origin_{source}",
+                "tabTitle": "表单生图",
+                "mode": "graphic-text",
+                "kind": "single",
+                "creationSource": source,
+                "items": [{"imageUrl": f"/image_{source}.webp"}],
+            })
+        workspace = get_studio_workspace(self.db, self.creator_alice)
+        origins = {x["id"]: x.get("creationSource") for x in workspace["history"]}
+        for source in ("quick", "batch", "article", "canvas"):
+            self.assertEqual(origins[f"hist_origin_{source}"], source)
+
+        # Cloud requests must persist the source in their own metadata as well.
+        result = prepare_cloud_generation(
+            self.db, self.creator_alice,
+            {"prompt": "手绘树木", "ratio": "3:4", "creationSource": "batch", "confirmCost": True},
+        )
+        gen_id = result["genId"]
+        row = self.db.get_conn().execute(
+            "SELECT system_append_json FROM studio_generations WHERE id = ?", (gen_id,)
+        ).fetchone()
+        self.assertEqual(json.loads(row["system_append_json"])["creationSource"], "batch")
+        workspace = get_studio_workspace(self.db, self.creator_alice)
+        entries = [x for x in workspace["history"] if x["id"] == gen_id]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["creationSource"], "batch")
 
     def test_global_rename_no_lingering_shice_zuopin(self):
         root = Path(__file__).resolve().parent.parent
