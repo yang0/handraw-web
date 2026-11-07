@@ -2526,6 +2526,45 @@ def check_generation_social_accessible(
     return True
 
 
+def _generation_work_id(conn: sqlite3.Connection, identifier: str) -> str:
+    """Resolve a Web execution ID, V3 run ID, or work ID to one real work.
+
+    All generation-history interactions are recorded against works.id.
+    No legacy per-image likes, generation collection bucket or duplicate
+    forum interactions are created in new V3 databases.
+    """
+    key = str(identifier or "").strip()
+    if not key:
+        raise ServiceError("缺少作品编号", status=400, code="work_required")
+    work = conn.execute(
+        "SELECT id FROM works WHERE id=? AND status='published'", (key,),
+    ).fetchone()
+    if work:
+        return str(work["id"])
+    work = conn.execute(
+        """SELECT w.id FROM works w JOIN generation_runs r ON r.id=w.run_id
+           WHERE r.id=? AND w.status='published'""",
+        (key,),
+    ).fetchone()
+    if work:
+        return str(work["id"])
+    source = conn.execute(
+        """SELECT user_id,COALESCE(NULLIF(batch_id,''),id) AS external_run_id
+           FROM studio_generations WHERE id=?""",
+        (key,),
+    ).fetchone()
+    if source:
+        work = conn.execute(
+            """SELECT w.id FROM works w JOIN generation_runs r ON r.id=w.run_id
+               WHERE r.user_id=? AND r.source='web'
+                 AND r.external_run_id=? AND w.status='published'""",
+            (int(source["user_id"]), source["external_run_id"]),
+        ).fetchone()
+        if work:
+            return str(work["id"])
+    raise ServiceError("作品不存在或已下架", status=404, code="work_not_found")
+
+
 def attach_generation_social_counts(
     conn: sqlite3.Connection,
     items: list[dict[str, Any]],
@@ -2617,11 +2656,9 @@ def toggle_user_collection(
             raise ServiceError("作品不存在或已下架", status=404)
 
     if bucket == "generations":
-        g_row = db.get_conn().execute(
-            "SELECT * FROM studio_generations WHERE id = ?", (tid,)
-        ).fetchone()
-        if not check_generation_social_accessible(g_row, viewer=user, allow_own=True):
-            raise ServiceError("生图记录不存在或不可见", status=404, code="not_found")
+        # Generation history is only a view of the canonical work.
+        bucket = "works"
+        tid = _generation_work_id(db.get_conn(), tid)
 
     with db.transaction() as tx:
         existing = tx.execute(
@@ -3014,7 +3051,8 @@ def toggle_user_like(
     elif raw_type in ("work", "topic"):
         norm_type = raw_type
     elif raw_type in ("generation", "like_generation"):
-        norm_type = "generation"
+        norm_type = "work"
+        tid = _generation_work_id(db.get_conn(), tid)
     else:
         raise ServiceError("不支持的点赞目标类型")
 
