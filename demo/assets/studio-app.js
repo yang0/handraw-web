@@ -2753,8 +2753,8 @@
       fusion: isDual,
       style1: styles[0] || "",
       style2: isDual ? styles[1] : "",
-      layout: w.layout && Catalog.resourceMap.has(w.layout) ? w.layout : "",
-      colors: w.color && Catalog.resourceMap.has(w.color) ? [w.color] : [],
+      layout: w.layout || "",
+      colors: w.color ? [w.color] : [],
       tones: w.tone ? [w.tone] : [],
       moods: w.mood ? [w.mood] : []
     });
@@ -2873,7 +2873,8 @@
       // A V3 work can have different recipes for each image. Retain the image
       // selector until the server confirms the draft was applied; failed
       // requests stay retryable by refreshing the deep link.
-      CS.stageView = "quick";
+      const forkCanvas = params.get("entry") === "canvas";
+      CS.stageView = forkCanvas ? "canvas" : "quick";
       const forkImage = params.get("image");
       let forkStarted = false;
       const executeFork = async () => {
@@ -2900,17 +2901,39 @@
           }
           const data = await resp.json();
           if (!data || !data.draft) throw new Error("作品缺少可使用的配方参数");
-          CS.stageView = "quick";
-          // Use the real active graph, not the MakeImage singleton's transient
-          // context which may still be empty during initial tab hydration.
-          applyForkDraftToQuickNodes(data.draft);
-          if (!getQuickParts()) throw new Error("创作台尚未准备好，请刷新重试");
+          if (forkCanvas) {
+            const draft = data.draft;
+            const graph = buildForkGraphFromWork({
+              styles: draft.styleIds || [],
+              layout: draft.layoutId || "",
+              color: (draft.colors || [])[0] || "",
+              tone: (draft.tones || [])[0] || "",
+              mood: (draft.moods || [])[0] || "",
+              ratio: draft.ratio || "3:4",
+              mode: ["canvas", "advanced", "workflow"].includes(draft.mode) ? "graphic-text" : draft.mode,
+              prompt: draft.subjectHint || draft.subject || "",
+              title: draft.subjectHint || "",
+            });
+            const created = createWorkflowTab({
+              title: "做同款 · " + (draft.subjectHint || "作品"),
+              blueprint: graph.blueprint, graph, makeActive: false,
+            });
+            activateWorkflowTab(created.id, { switchToCanvas: true });
+            persistOpenTabs();
+            fullRenderCanvas();
+          } else {
+            CS.stageView = "quick";
+            // Use the real active graph, not the MakeImage singleton's transient
+            // context which may still be empty during initial tab hydration.
+            applyForkDraftToQuickNodes(data.draft);
+            if (!getQuickParts()) throw new Error("创作台尚未准备好，请刷新重试");
+          }
           const cleanUrl = new URL(window.location.href);
           cleanUrl.searchParams.delete("fork");
           cleanUrl.searchParams.delete("image");
-          cleanUrl.searchParams.set("entry", "quick");
+          cleanUrl.searchParams.set("entry", forkCanvas ? "canvas" : "quick");
           window.history.replaceState(null, "", cleanUrl.pathname + cleanUrl.search);
-          renderQuickStart();
+          if (!forkCanvas) renderQuickStart();
           toast("已载入同款参数，可继续调整画风、图型和主题");
         } catch (error) {
           forkStarted = false;
@@ -12865,7 +12888,8 @@
     td.subjectHint = draft.subjectHint || extractedTheme || "";
 
     cd.ratio = draft.ratio || "3:4";
-    cd.mode = draft.mode === "pure-image" ? "pure" : (draft.mode || "graphic-text");
+    const forkMode = draft.mode === "pure-image" ? "pure" : (draft.mode || "graphic-text");
+    cd.mode = ["graphic-text", "pure", "poster", "series"].includes(forkMode) ? forkMode : "graphic-text";
     cd.count = 1;
 
     markActiveTabDirty();
