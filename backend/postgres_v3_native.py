@@ -20,7 +20,7 @@ ALTER TABLE generation_runs ADD CONSTRAINT chk_run_source_v3
 ALTER TABLE generation_runs ADD CONSTRAINT chk_run_count_v3
     CHECK (expected_count >= 1);
 ALTER TABLE generation_runs ADD CONSTRAINT chk_run_status_v3
-    CHECK (status IN ('pending','uploading','running','partial','success','failed'));
+    CHECK (status IN ('pending','uploading','running','partial','success','failed','cancelled'));
 ALTER TABLE generation_items ADD CONSTRAINT chk_item_position_v3
     CHECK (position >= 0);
 ALTER TABLE generation_items ADD CONSTRAINT chk_item_status_v3
