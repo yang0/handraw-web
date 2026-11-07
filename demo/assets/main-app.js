@@ -38,6 +38,7 @@
     workFocusComment: false,
     profileUser: "",
     profileTab: "works", // public content tabs only
+    profileResourceFilter: "all", // all | styles | layouts
     accountSection: "profile", // profile | email | security | devices | privacy
     profGenerations: null,
     profGenUser: "",
@@ -202,9 +203,18 @@
       UI.profileUser = (p.get("user") || "").trim();
       let reqTab = p.get("ptab") || "works";
       let urlChanged = false;
-      if (reqTab === "assets") {
-        reqTab = "styles";
+      if (["assets", "styles", "layouts"].includes(reqTab)) {
+        UI.profileResourceFilter = reqTab === "layouts" ? "layouts" : "styles";
+        reqTab = "resources";
         urlChanged = true;
+      } else if (reqTab === "generations") {
+        // The public profile shows generated images via published works only.
+        reqTab = "works";
+        urlChanged = true;
+      }
+      if (reqTab === "articles" && App.state?.loggedIn && App.state.user?.username === UI.profileUser) {
+        window.location.replace(channelUrl("studio", { view: "articles-all", page: 1 }));
+        return {};
       }
       const isMe = Boolean(App.state && App.state.loggedIn && App.state.user && App.state.user.username && App.state.user.username === UI.profileUser);
       if (App.state && !isMe && ["collections", "account", "articles"].includes(reqTab)) {
@@ -222,7 +232,7 @@
           window.history.replaceState({ view: "profile" }, "", `${window.location.pathname}?${nextP.toString()}`);
         } catch (_) {}
       }
-      UI.profileTab = ["works", "generations", "styles", "layouts", "topics", "articles", "collections", "account"].includes(reqTab) ? reqTab : "works";
+      UI.profileTab = ["works", "resources", "topics", "collections", "articles"].includes(reqTab) ? reqTab : "works";
       return {};
     }
 
@@ -429,9 +439,18 @@
     if (["styles", "layouts", "works"].includes(App.view)) {
       UI.lastPrimaryView = App.view;
     }
-    let cleanTab = ["works", "generations", "styles", "layouts", "topics", "articles", "collections", "account"].includes(ptab) ? ptab : "works";
-    if (ptab === "assets") cleanTab = "styles";
+    let cleanTab = ["works", "resources", "topics", "articles", "collections"].includes(ptab) ? ptab : "works";
+    if (["assets", "styles", "layouts"].includes(ptab)) {
+      cleanTab = "resources";
+      UI.profileResourceFilter = ptab === "layouts" ? "layouts" : "styles";
+    } else if (ptab === "resources") {
+      UI.profileResourceFilter = "all";
+    }
     const isMe = Boolean(App.state && App.state.loggedIn && App.state.user && App.state.user.username && App.state.user.username === targetUser);
+    if (cleanTab === "articles" && isMe) {
+      window.location.href = channelUrl("studio", { view: "articles-all", page: 1 });
+      return;
+    }
     if (!isMe && ["collections", "account", "articles"].includes(cleanTab)) {
       cleanTab = "works";
     }
@@ -2381,12 +2400,16 @@
 
     const prof = S.getCreatorProfile(targetUser);
     const isMe = Boolean(App.state.loggedIn && App.state.user && App.state.user.username === prof.username);
+    if (UI.profileTab === "articles" && isMe) {
+      window.location.replace(channelUrl("studio", { view: "articles-all", page: 1 }));
+      return;
+    }
     if (!isMe && ["collections", "account", "articles"].includes(UI.profileTab)) {
       UI.profileTab = "works";
       syncUrl(false);
     }
-    if (UI.profileTab === "assets") {
-      UI.profileTab = "styles";
+    if (["assets", "styles", "layouts", "generations"].includes(UI.profileTab)) {
+      UI.profileTab = "works";
       syncUrl(false);
     }
 
@@ -2448,115 +2471,36 @@
         : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">
             暂无公开作品。${isMe ? `去 <a href="${esc(channelUrl("studio"))}" style="color:var(--vermilion);font-weight:800;">无限画布创作台 ↗</a> 创作第一幅作品吧！` : ""}
           </div>`;
-    } else if (UI.profileTab === "generations") {
-      if (UI.profGenUser !== prof.username) {
-        UI.profGenerations = null;
-        UI.profGenUser = prof.username;
-        UI.profGenCursor = "";
-        UI.profGenHasMore = false;
-        UI.profGenTotal = null;
-      }
-      if (UI.profGenerations === null && !UI.profGenLoading) {
-        loadUserGenerations(prof.username);
-        tabBodyHtml = `<div style="text-align:center;padding:48px 20px;color:var(--ink-muted);">🕒 正在加载生图历史…</div>`;
-      } else if (UI.profGenLoading && UI.profGenerations === null) {
-        tabBodyHtml = `<div style="text-align:center;padding:48px 20px;color:var(--ink-muted);">🕒 正在加载生图历史…</div>`;
-      } else if (UI.profGenerations && UI.profGenerations.length === 0) {
-        tabBodyHtml = `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂无公开的生图历史。</div>`;
-      } else if (UI.profGenerations && UI.profGenerations.length > 0) {
-        const cards = UI.profGenerations.map((g) => {
-          const img0 = (g.images && g.images[0]) || "/images/poster-demo-autumn-equinox.webp";
-          const count = g.imageCount || (g.images ? g.images.length : 1);
-          const title = g.topic || g.title || "手绘风生成作品";
-
-          const rawItems = [...(g.styles || []), ...(g.layouts || [])];
-          const validCodes = [];
-          const seenCodes = new Set();
-          for (const it of rawItems) {
-            const rawCode = (typeof it === "string" ? it : it && it.code ? it.code : "").trim().toUpperCase().replace(/^#/, "");
-            if (/^(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+$/.test(rawCode) && !seenCodes.has(rawCode)) {
-              seenCodes.add(rawCode);
-              validCodes.push(rawCode);
-              if (validCodes.length >= 2) break;
-            }
-          }
-          const codeBadgeText = validCodes.join(" · ");
-          const dateText = esc(g.createdAt || g.created_at || "近期");
-
-          return `
-            <article class="hw-card" data-prof-gen="${esc(g.id)}" style="cursor:pointer;">
-              <div class="hw-card-media">
-                <img data-hw-src="${esc(img0)}" alt="${esc(title)}" loading="lazy" />
-                ${count > 1 ? `<span class="hw-card-badge-tl" style="background:rgba(20,20,20,0.75);color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;">🖼️ ${count} 张</span>` : ""}
-              </div>
-              <div class="hw-card-body">
-                <h3 class="hw-card-title">${esc(title)}</h3>
-                ${codeBadgeText ? `
-                  <div style="font-size:12px;color:var(--brand-vermilion,#e15b3c);font-weight:600;margin-bottom:4px;">
-                    <span>${esc(codeBadgeText)}</span>
-                  </div>
-                ` : ""}
-                <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;align-items:center;">
-                  <span>${dateText}</span>
-                  <span>👍 ${g.likes || 0} · ⭐️ ${g.favorites || 0}</span>
+    } else if (UI.profileTab === "resources") {
+      const resourceOptions = [{ value: "all", label: "全部" }, { value: "styles", label: "画风" }, { value: "layouts", label: "图型" }];
+      const type = ["styles", "layouts"].includes(UI.profileResourceFilter) ? UI.profileResourceFilter : "all";
+      const resources = [
+        ...prof.styles.map((it) => ({ ...it, _profileResourceType: "styles" })),
+        ...prof.layouts.map((it) => ({ ...it, _profileResourceType: "layouts" }))
+      ].filter((it) => type === "all" || type === it._profileResourceType);
+      tabBodyHtml = `
+        <div class="hw-pills-row hw-profile-resource-filters" role="group" aria-label="创作资源分类" style="margin:0 0 16px;">
+          ${resourceOptions.map((opt) => `<button type="button" class="hw-pill ${type === opt.value ? "is-active" : ""}" data-prof-resource-filter="${opt.value}" aria-pressed="${type === opt.value}">${opt.label} (${opt.value === "all" ? prof.styles.length + prof.layouts.length : opt.value === "styles" ? prof.styles.length : prof.layouts.length})</button>`).join("")}
+        </div>
+        ${resources.length
+          ? S.renderMasonry(resources.map((it) => `
+              <article class="hw-card" data-prof-asset="${esc(it.id)}" style="cursor:pointer;">
+                <div class="hw-card-media">
+                  <span class="hw-card-badge-tl badge-community">✨ ${it._profileResourceType === "styles" ? "共创画风" : "共创图型"}</span>
+                  <img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" loading="lazy" />
                 </div>
-              </div>
-            </article>
-          `;
-        });
-        const moreBtn = UI.profGenHasMore
-          ? `<div style="text-align:center;padding:24px 0;"><button type="button" class="btn btn-primary" id="prof-gen-loadmore-btn" ${UI.profGenLoading ? "disabled" : ""}>${UI.profGenLoading ? "加载中…" : "加载更多历史记录"}</button></div>`
-          : "";
-        tabBodyHtml = S.renderMasonry(cards, "standard") + moreBtn;
-      }
-    } else if (UI.profileTab === "styles") {
-      tabBodyHtml = prof.styles.length
-        ? S.renderMasonry(
-            prof.styles.map(
-              (it) => `
-                <article class="hw-card" data-prof-asset="${esc(it.id)}" style="cursor:pointer;">
-                  <div class="hw-card-media">
-                    <span class="hw-card-badge-tl badge-community">✨ 共创画风</span>
-                    <img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" loading="lazy" />
+                <div class="hw-card-body">
+                  <div class="hw-card-code">${esc(it.id)}</div>
+                  <h3 class="hw-card-title">${esc(it.name)}</h3>
+                  <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;">
+                    <span>🖼️ ${S.getAssetWorkCount(it.id)} 件同款作品</span>
+                    <span>💬 ${S.getAssetComments(it.id).length} 条评论</span>
                   </div>
-                  <div class="hw-card-body">
-                    <div class="hw-card-code">${esc(it.id)}</div>
-                    <h3 class="hw-card-title">${esc(it.name)}</h3>
-                    <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;">
-                      <span>🖼️ ${S.getAssetWorkCount(it.id)} 件同款作品</span>
-                      <span>💬 ${S.getAssetComments(it.id).length} 条评论</span>
-                    </div>
-                  </div>
-                </article>
-              `
-            ),
-            "standard"
-          )
-        : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂未发布共创画风资产。</div>`;
-    } else if (UI.profileTab === "layouts") {
-      tabBodyHtml = prof.layouts.length
-        ? S.renderMasonry(
-            prof.layouts.map(
-              (it) => `
-                <article class="hw-card" data-prof-asset="${esc(it.id)}" style="cursor:pointer;">
-                  <div class="hw-card-media">
-                    <span class="hw-card-badge-tl badge-community">✨ 共创图型</span>
-                    <img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" loading="lazy" />
-                  </div>
-                  <div class="hw-card-body">
-                    <div class="hw-card-code">${esc(it.id)}</div>
-                    <h3 class="hw-card-title">${esc(it.name)}</h3>
-                    <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;">
-                      <span>🖼️ ${S.getAssetWorkCount(it.id)} 件同款作品</span>
-                      <span>💬 ${S.getAssetComments(it.id).length} 条评论</span>
-                    </div>
-                  </div>
-                </article>
-              `
-            ),
-            "standard"
-          )
-        : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂未发布共创图型资产。</div>`;
+                </div>
+              </article>
+            `), "standard")
+          : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂无公开的${type === "all" ? "创作资源" : type === "styles" ? "共创画风" : "共创图型"}。</div>`}
+      `;
     } else if (UI.profileTab === "topics") {
       tabBodyHtml = prof.topics.length
         ? `<div style="display:flex;flex-direction:column;gap:12px;">
@@ -2654,54 +2598,6 @@
             暂未发布论坛实战帖。
             ${isMe ? `<div style="margin-top:12px;"><button type="button" class="btn btn-primary" id="prof-empty-compose-btn">✏️ 去发布第一篇图文论坛帖</button></div>` : ""}
           </div>`;
-    } else if (UI.profileTab === "articles" && isMe) {
-      // The article desk's own list, private to its author.
-      if (UI._profileArticlesFor !== prof.username) {
-        UI._profileArticlesFor = prof.username;
-        UI.profileArticles = null;
-        if (typeof S.apiJson === "function") {
-          S.apiJson("/api/studio/articles")
-            .then((res) => {
-              UI.profileArticles = (res && res.items) || [];
-              if (App.view === "profile" && UI.profileTab === "articles") renderMain();
-            })
-            .catch(() => {
-              UI.profileArticles = [];
-              if (App.view === "profile" && UI.profileTab === "articles") renderMain();
-            });
-        }
-      }
-      const arts = UI.profileArticles;
-      if (arts === null) {
-        tabBodyHtml = `<div style="padding:40px;text-align:center;color:var(--ink-muted);">正在加载文章…</div>`;
-      } else if (!arts.length) {
-        tabBodyHtml = `
-          <div style="padding:48px 24px;text-align:center;color:var(--ink-muted);">
-            还没有写过文章。
-            <div style="margin-top:12px;"><button type="button" class="btn btn-primary" id="prof-empty-article-btn">✏️ 去创作台写第一篇</button></div>
-          </div>`;
-      } else {
-        tabBodyHtml = `<div style="display:grid;gap:12px;">
-          ${arts
-            .map(
-              (a) => `
-                <article class="forum-topic-card" data-prof-article="${esc(a.id)}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
-                  <div style="flex:1;min-width:240px;">
-                    <h3 style="margin:0 0 6px;font-size:16px;">${esc(a.articleTitle || "未命名文章")}</h3>
-                    <div style="font-size:12.5px;color:var(--ink-muted);">
-                      更新于 ${esc(formatArticleUpdated(a.updatedAtMs))} · 已生成 ${Number(a.runCount) || 0} 张配图
-                    </div>
-                  </div>
-                  <div style="display:flex;align-items:center;gap:8px;">
-                    <span class="btn btn-sm btn-primary">继续编辑 ↗</span>
-                    <button type="button" class="btn btn-sm" data-prof-del-article="${esc(a.id)}" style="padding:4px 9px;font-size:12px;color:#dc2626;border-color:rgba(220,38,38,0.3);background:#fff;" title="删除此文章">🗑️ 删除</button>
-                  </div>
-                </article>
-              `
-            )
-            .join("")}
-        </div>`;
-      }
     } else if (UI.profileTab === "collections" && isMe) {
       const cols = App.state.collections || { styles: [], layouts: [], works: [], topics: [], generations: [] };
       if (!["styles", "layouts", "works", "topics", "generations"].includes(UI.favTab)) {
@@ -2970,6 +2866,8 @@
               ${
                 isMe
                   ? `
+                    <a class="btn btn-primary" id="prof-go-studio-btn" href="${esc(channelUrl("studio", { entry: "quick" }))}">管理我的创作 ↗</a>
+                    <button type="button" class="btn" id="prof-go-collections-btn">♥ 收藏夹</button>
                     <button type="button" class="btn" id="prof-go-account-btn">⚙️ 账号设置</button>
                     <button type="button" class="btn btn-gold" id="prof-go-wallet-btn">✦ 积分钱包 (${App.state.credits}✦)</button>
                     <button type="button" class="btn" id="prof-go-compose-btn">✏️ 发论坛帖</button>
@@ -3046,20 +2944,10 @@
         <!-- Standalone Profile Section Tabs -->
         <div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
           <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品 (${prof.works.length})</button>
-          <button type="button" class="hw-pill ${UI.profileTab === "generations" ? "is-active" : ""}" data-ptab="generations" role="tab" aria-selected="${UI.profileTab === "generations"}">🕒 生图历史${UI.profGenTotal != null && UI.profGenUser === prof.username ? ` (${UI.profGenTotal})` : ""}</button>
-          <button type="button" class="hw-pill ${UI.profileTab === "styles" ? "is-active" : ""}" data-ptab="styles" role="tab" aria-selected="${UI.profileTab === "styles"}">🎨 画风 (${prof.styles.length})</button>
-          <button type="button" class="hw-pill ${UI.profileTab === "layouts" ? "is-active" : ""}" data-ptab="layouts" role="tab" aria-selected="${UI.profileTab === "layouts"}">📐 图型 (${prof.layouts.length})</button>
-          <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 论坛帖 (${prof.topics.length})</button>
-          ${
-            isMe
-              ? `
-                <button type="button" class="hw-pill ${UI.profileTab === "articles" ? "is-active" : ""}" data-ptab="articles" role="tab" aria-selected="${UI.profileTab === "articles"}">📝 文章 (${(UI.profileArticles || []).length})</button>
-                <button type="button" class="hw-pill ${UI.profileTab === "collections" ? "is-active" : ""}" data-ptab="collections" role="tab" aria-selected="${UI.profileTab === "collections"}">♥ 收藏夹</button>
-              `
-              : ""
-          }
+          <button type="button" class="hw-pill ${UI.profileTab === "resources" ? "is-active" : ""}" data-ptab="resources" role="tab" aria-selected="${UI.profileTab === "resources"}">🎨 创作资源 (${prof.styles.length + prof.layouts.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 社区动态 (${prof.topics.length})</button>
         </div>
-
+        ${UI.profileTab === "collections" && isMe ? `<div style="margin-bottom:12px;"><button type="button" class="btn btn-sm" id="prof-collections-back-btn">← 返回公开主页</button></div>` : ""}
         <div id="profile-tab-stage">
           ${tabBodyHtml}
         </div>
@@ -3083,6 +2971,16 @@
       };
     });
 
+    const collectionsBtn = root.querySelector("#prof-go-collections-btn");
+    if (collectionsBtn) collectionsBtn.onclick = () => openProfilePage(prof.username, "collections");
+    const collectionsBackBtn = root.querySelector("#prof-collections-back-btn");
+    if (collectionsBackBtn) collectionsBackBtn.onclick = () => openProfilePage(prof.username, "works");
+    root.querySelectorAll("[data-prof-resource-filter]").forEach((btn) => {
+      btn.onclick = () => {
+        UI.profileResourceFilter = btn.getAttribute("data-prof-resource-filter") || "all";
+        renderMain();
+      };
+    });
     const goAccBtn = root.querySelector("#prof-go-account-btn");
     if (goAccBtn) goAccBtn.onclick = () => switchView("account");
     const goWalBtn = root.querySelector("#prof-go-wallet-btn");
@@ -3105,53 +3003,13 @@
     root.querySelectorAll("[data-prof-asset]").forEach((el) => {
       el.onclick = () => openAssetPage(el.getAttribute("data-prof-asset"));
     });
-    function deleteArticle(aid) {
-      const art = (UI.profileArticles || []).find((x) => x.id === aid);
-      const title = art?.articleTitle || "未命名文章";
-      if (S && typeof S.deleteArticle === "function") {
-        return S.deleteArticle(aid, {
-          articleTitle: title,
-          onSuccess() {
-            UI.profileArticles = (UI.profileArticles || []).filter((x) => x.id !== aid);
-            if (App.view === "profile" && UI.profileTab === "articles") {
-              renderMain();
-            }
-          }
-        });
-      }
-      UI.profileArticles = (UI.profileArticles || []).filter((x) => x.id !== aid);
-      if (App.view === "profile" && UI.profileTab === "articles") {
-        renderMain();
-      }
-    }
-
-    root.querySelectorAll("[data-prof-article]").forEach((el) => {
-      el.onclick = (e) => {
-        if (e.target.closest("[data-prof-del-article]")) return;
-        const aid = el.getAttribute("data-prof-article");
-        window.location.href = channelUrl("studio", { entry: "article", articleId: aid, subview: "editor" });
-      };
-    });
-    root.querySelectorAll("[data-prof-del-article]").forEach((btn) => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        const aid = btn.getAttribute("data-prof-del-article");
-        if (aid) deleteArticle(aid);
-      };
-    });
-    const emptyArticleBtn = root.querySelector("#prof-empty-article-btn");
-    if (emptyArticleBtn) {
-      emptyArticleBtn.onclick = () => {
-        window.location.href = channelUrl("studio", { entry: "article" });
-      };
-    }
     root.querySelectorAll("[data-prof-topic]").forEach((el) => {
       el.onclick = () => S.goToTopicPage(el.getAttribute("data-prof-topic"));
     });
     root.querySelectorAll("[data-prof-gen]").forEach((el) => {
       el.onclick = () => {
         const gid = el.getAttribute("data-prof-gen");
-        const found = (UI.profGenerations || []).find((x) => x.id === gid);
+        const found = (UI.profGenerations || []).find((x) => x.id === gid) || (UI._collectedGenerations || []).find((x) => x.id === gid);
         if (found) {
           openGenerationDetailModal(found);
         }
