@@ -162,6 +162,9 @@ class GenerationSocialActionsTests(unittest.TestCase):
                     fork_item_id,
                 ),
             )
+            if status == "success" and visibility == "public" and engine != "demo" and not deleted_at and images:
+                from backend.generation_works import project_generation_to_works
+                self.assertEqual(len(project_generation_to_works(tx, gen_id)), 1)
 
     def test_migration_and_no_extra_count_columns(self):
         """Verify schema migration 73 added fork columns and NO count columns were added to studio_generations."""
@@ -231,9 +234,13 @@ class GenerationSocialActionsTests(unittest.TestCase):
 
         # Verify DB interactions count is strictly 1
         conn = self.db.get_conn()
+        work_id = conn.execute(
+            """SELECT w.id FROM works w JOIN generation_runs r ON r.id=w.run_id
+               WHERE r.external_run_id='gen_alice_social'"""
+        ).fetchone()[0]
         cnt = conn.execute(
-            "SELECT COUNT(*) FROM interactions WHERE target_type = 'like_generation' AND target_id = ?",
-            ("gen_alice_social",),
+            "SELECT COUNT(*) FROM interactions WHERE target_type='work' AND target_id=?",
+            (work_id,),
         ).fetchone()[0]
         self.assertEqual(cnt, 1)
 
@@ -269,7 +276,8 @@ class GenerationSocialActionsTests(unittest.TestCase):
         self.assertTrue(res.get("ok"))
         gens = res.get("generations", [])
         self.assertEqual(len(gens), 1)
-        self.assertEqual(gens[0]["id"], "gen_alice_social")
+        self.assertTrue(gens[0]["id"].startswith("run_"))
+        self.assertEqual(gens[0]["workId"], work_id)
         self.assertEqual(gens[0]["likes"], 1)
         self.assertEqual(gens[0]["favorites"], 1)
         self.assertTrue(gens[0]["liked"])
@@ -559,12 +567,16 @@ class GenerationSocialActionsTests(unittest.TestCase):
         self.assertEqual(status, 200)
         cols = boot.get("collections", {})
         self.assertIn("generations", cols)
-        self.assertIn("gen_alice_boot", cols["generations"])
+        w = self.db.get_conn().execute(
+            """SELECT w.id FROM works w JOIN generation_runs r ON r.id=w.run_id
+               WHERE r.external_run_id='gen_alice_boot'"""
+        ).fetchone()[0]
+        self.assertIn(w, cols["generations"])
 
         liked_ids = boot.get("likedIds", [])
         self.assertTrue(
-            any("gen_alice_boot" in str(x) for x in liked_ids),
-            f"Liked ID for gen_alice_boot not found in {liked_ids}",
+            any(w in str(x) for x in liked_ids),
+            f"Canonical work like missing from {liked_ids}",
         )
 
     def test_generation_history_order_preserved(self):
@@ -585,7 +597,7 @@ class GenerationSocialActionsTests(unittest.TestCase):
         # Query Alice's generations: order must still be gen_3, gen_2, gen_1 (time desc)
         status, res = self._req("/api/users/alice/generations", method="GET")
         self.assertEqual(status, 200)
-        ids = [g["id"] for g in res.get("generations", [])]
+        ids = [g["sourceGenerationId"] for g in res.get("generations", [])]
         self.assertEqual(ids, ["gen_3", "gen_2", "gen_1"])
 
     def test_fork_locked_paid_resource_requires_unlock_on_generation(self):
