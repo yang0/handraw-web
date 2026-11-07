@@ -44,6 +44,10 @@ WHITELIST_FIELDS = {
     "liked",
     "favorited",
     "fork",
+    "runId",
+    "workId",
+    "originClient",
+    "sourceGenerationId",
 }
 
 FORBIDDEN_FIELDS = {
@@ -123,6 +127,7 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
         styles: list[str] | None = None,
         layouts: list[str] | None = None,
         prompt: str = "A detailed prompt with secrets",
+        project: bool = True,
     ):
         if images is None:
             images = ["https://example.com/cat1.webp"]
@@ -160,6 +165,9 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
                     prompt,
                 ),
             )
+            if project and status == "success" and visibility == "public" and engine != "demo" and not deleted_at and images:
+                from backend.generation_works import project_generation_to_works
+                self.assertEqual(len(project_generation_to_works(tx, gen_id)), 1)
 
     def test_profile_history_collapses_async_slots_to_one_multi_image_run(self):
         uid = self.creator_alice["id"]
@@ -169,20 +177,23 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
             self._insert_generation(
                 uid, gid, topic="三张小镇插画",
                 created_at=f"2026-11-07T10:0{index}:00Z",
-                images=[f"/generated/scene_{index}.webp"],
+                images=[f"/generated/scene_{index}.webp"], project=False,
             )
             conn.execute(
                 "UPDATE studio_generations SET batch_id=?,batch_index=?,batch_total=? WHERE id=?",
                 ("logical_batch_profile", index, 3, gid),
             )
         conn.commit()
+        from backend.generation_works import project_generation_to_works
+        self.assertEqual(len(project_generation_to_works(conn, "public_batch_2")), 1)
         result = get_user_public_generations(self.db, "alice", limit=1)
         self.assertEqual(result["total"], 1)
         self.assertFalse(result["hasMore"])
         self.assertEqual(len(result["generations"]), 1)
         run = result["generations"][0]
         self.assertEqual(run["imageCount"], 3)
-        self.assertEqual(run["batchId"], "logical_batch_profile")
+        self.assertEqual(run["sourceGenerationId"], "public_batch_0")
+        self.assertTrue(run["workId"].startswith("work_"))
         self.assertEqual(
             run["images"],
             ["/generated/scene_0.webp", "/generated/scene_1.webp",
@@ -222,7 +233,8 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
         self.assertEqual(len(generations), 1)
 
         item = generations[0]
-        self.assertEqual(item["id"], "gen_alice_1")
+        self.assertTrue(item["id"].startswith("run_"))
+        self.assertEqual(item["sourceGenerationId"], "gen_alice_1")
         self.assertEqual(item["author"], "alice")
         self.assertEqual(item["topic"], "水彩风景")
         self.assertEqual(item["imageCount"], 2)
@@ -258,7 +270,8 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
 
         generations = data.get("generations", [])
         ids = [g["id"] for g in generations]
-        self.assertEqual(ids, ["gen_ok"])
+        self.assertEqual(len(ids), 1)
+        self.assertEqual(generations[0]["sourceGenerationId"], "gen_ok")
 
     def test_cursor_pagination_and_sorting(self):
         # Insert 15 generations with distinct timestamps
@@ -278,8 +291,8 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
 
         self.assertEqual(len(data1["generations"]), 6)
         self.assertTrue(data1["hasMore"])
-        self.assertEqual(data1["generations"][0]["id"], "gen_bob_14")
-        self.assertEqual(data1["generations"][-1]["id"], "gen_bob_09")
+        self.assertEqual(data1["generations"][0]["sourceGenerationId"], "gen_bob_14")
+        self.assertEqual(data1["generations"][-1]["sourceGenerationId"], "gen_bob_09")
         cursor1 = data1["nextCursor"]
         self.assertTrue(cursor1)
 
@@ -290,8 +303,8 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
 
         self.assertEqual(len(data2["generations"]), 6)
         self.assertTrue(data2["hasMore"])
-        self.assertEqual(data2["generations"][0]["id"], "gen_bob_08")
-        self.assertEqual(data2["generations"][-1]["id"], "gen_bob_03")
+        self.assertEqual(data2["generations"][0]["sourceGenerationId"], "gen_bob_08")
+        self.assertEqual(data2["generations"][-1]["sourceGenerationId"], "gen_bob_03")
 
         # Page 3: with cursor
         cursor2 = data2["nextCursor"]
@@ -301,8 +314,8 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
 
         self.assertEqual(len(data3["generations"]), 3)
         self.assertFalse(data3["hasMore"])
-        self.assertEqual(data3["generations"][0]["id"], "gen_bob_02")
-        self.assertEqual(data3["generations"][-1]["id"], "gen_bob_00")
+        self.assertEqual(data3["generations"][0]["sourceGenerationId"], "gen_bob_02")
+        self.assertEqual(data3["generations"][-1]["sourceGenerationId"], "gen_bob_00")
 
     def test_get_user_public_generation_by_id(self):
         self._insert_generation(
@@ -321,7 +334,8 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
 
         self.assertTrue(data.get("ok"))
         g = data.get("generation", {})
-        self.assertEqual(g["id"], "gen_alice_detail")
+        self.assertTrue(g["id"].startswith("run_"))
+        self.assertEqual(g["sourceGenerationId"], "gen_alice_detail")
         self.assertEqual(g["author"], "alice")
         self.assertEqual(g["topic"], "特写古风插画")
         for forbidden in FORBIDDEN_FIELDS:
