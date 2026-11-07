@@ -141,6 +141,8 @@
     historyPage: 1,
     historyFilter: "all",
     historyQuery: "",
+    historyStatusFilter: "all",
+    historySort: "newest",
     historyReturnStage: "quick",
     historyReturnUrl: "",
     historyExpandedPromptIds: {},
@@ -253,6 +255,8 @@
     CS.historyPage = 1;
     CS.historyFilter = "all";
     CS.historyQuery = "";
+    CS.historyStatusFilter = "all";
+    CS.historySort = "newest";
     CS.historyReturnStage = "quick";
     CS.historyReturnUrl = "";
     _activeBatchRun = null;
@@ -5499,12 +5503,14 @@
           isCustomTitle: Boolean(existing.isCustomTitle || normalized.isCustomTitle),
           titleSource: existing.titleSource || normalized.titleSource || "",
           recipeSummary: existing.recipeSummary || normalized.recipeSummary || "",
-          prompt: existing.prompt || normalized.prompt || "",
+          // The server's masking decision always wins over stale local history.
+          prompt: normalized.promptMasked ? "" : (normalized.prompt || existing.prompt || ""),
+          promptMasked: Boolean(normalized.promptMasked),
           markdown: existing.markdown || normalized.markdown || "",
           ctrlId: existing.ctrlId || normalized.ctrlId || "",
           dispId: existing.dispId || normalized.dispId || "",
           recipeId: existing.recipeId || normalized.recipeId || "",
-          recipeSnapshot: existing.recipeSnapshot || normalized.recipeSnapshot || null,
+          recipeSnapshot: normalized.promptMasked ? null : (normalized.recipeSnapshot || existing.recipeSnapshot || null),
           items: (Array.isArray(normalized.items) && normalized.items.length) ? normalized.items : existing.items
         };
       } else {
@@ -7516,6 +7522,26 @@
     return "canvas";
   }
 
+  function historyStatusCategory(h) {
+    const status = String(h.status || "success").toLowerCase();
+    if (["queued", "running", "pending", "generating"].includes(status)) return "active";
+    if (["success", "completed", "done"].includes(status)) return "success";
+    return "failed";
+  }
+
+  function historySearchText(h) {
+    const snapshot = h.recipeSnapshot && typeof h.recipeSnapshot === "object" ? h.recipeSnapshot : {};
+    const parts = [h.id, h.subject, h.title, h.tabTitle, h.mode, h.modeLabel, h.createdAt,
+      h.created_at, h.recipeSummary, h.articleTitle, h.status, h.requestId,
+      h.promptMasked ? "" : h.prompt,
+      snapshot.subject, snapshot.layout, snapshot.layoutId, snapshot.layout_id,
+      ...(Array.isArray(snapshot.styles) ? snapshot.styles : []),
+      ...(Array.isArray(snapshot.styleIds) ? snapshot.styleIds : []),
+      ...(Array.isArray(snapshot.style_ids) ? snapshot.style_ids : [])];
+    for (const it of h.items || []) parts.push(it.title, it.subject, it.ratio, it.id);
+    return parts.filter(Boolean).join(" ").toLowerCase();
+  }
+
   function renderHistoryStage() {
     if (!DOM.historyStage) return;
     if (CS.stageView !== "history") {
@@ -7526,20 +7552,19 @@
     ensureGenerationHistoryInitialized();
 
     const wasSearchFocused = document.activeElement && document.activeElement.id === "hist-search-inp";
+    const prevScrollTop = DOM.historyStage.querySelector("#hist-page-scroll")?.scrollTop || 0;
     const allHist = CS.generationHistory || [];
     const filterMode = CS.historyFilter || "all";
+    const statusFilter = CS.historyStatusFilter || "all";
     const q = String(CS.historyQuery || "").trim().toLowerCase();
 
     const filtered = allHist.filter((h) => {
       if (filterMode !== "all" && historyRecordCategory(h) !== filterMode) return false;
-      if (q) {
-        const hay = `${h.subject || ""} ${h.title || ""} ${h.tabTitle || ""} ${h.modeLabel || ""} ${h.recipeSummary || ""} ${h.prompt || ""} ${(h.items || [])
-          .map((it) => `${it.title || ""} ${it.subject || ""}`)
-          .join(" ")}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
+      if (statusFilter !== "all" && historyStatusCategory(h) !== statusFilter) return false;
+      if (q && !q.split(/\\s+/).every((part) => historySearchText(h).includes(part))) return false;
       return true;
     });
+    if (CS.historySort === "oldest") filtered.reverse();
 
     const PAGE_SIZE = 6;
     const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
