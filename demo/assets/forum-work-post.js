@@ -368,9 +368,10 @@
     const gallery = renderGallery(model.images, model);
     const prompt = renderPrompt(model);
     const notes = renderNotes(model.notes);
-    const cover = model.coverUrl && model.images.some((img) =>
+    const images = Array.isArray(model.images) ? model.images : [];
+    const cover = model.coverUrl && images.some((img) =>
       (typeof img === "string" ? img : img && img.url) === model.coverUrl) ? model.coverUrl : "";
-    const first = model.images[0];
+    const first = images[0];
     const initialUrl = cover || (typeof first === "string" ? first : first && first.url) || "";
     const assets = renderAssets(model, initialUrl);
     return `<section class="fwp" aria-label="作品详情">
