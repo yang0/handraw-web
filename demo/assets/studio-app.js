@@ -6088,7 +6088,21 @@
         }
       );
       if (batchRun.cancelled) {
-        if (!silent) toast(`已取消批量生成，${Math.max(0, effectiveTargets.length - okCount)} 个尚未提交项保留未生成状态。`);
+        if (useLiveApi) {
+          try {
+            const positions = effectiveTargets
+              .filter(card => card.status !== "done")
+              .map(card => card.batchIndex);
+            if (positions.length) {
+              await S.apiJson(`/api/studio/batches/${encodeURIComponent(resolvedBatchId)}/cancel-pending`, {
+                method: "POST", body: { positions }
+              });
+            }
+          } catch (error) {
+            console.warn("文章配图尚未提交的图片槽位取消状态未能同步", error);
+          }
+        }
+        if (!silent) toast(`已停止后续提交，${Math.max(0, effectiveTargets.length - okCount)} 项尚未全部成功；已提交上游的任务仍会按实际结果结算。`);
         return okCount > 0;
       }
       planNode.data.runCount = (planNode.data.runCount || 0) + 1;
