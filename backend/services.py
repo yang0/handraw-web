@@ -762,11 +762,32 @@ _SECRETS_CACHE: dict[str, Any] = {
 }
 _LAST_SCANNED_SECRETS_HASH = ""
 
+# Only the running server binds this object. Avoid silently opening a second
+# SQLite database when production uses PostgreSQL, especially during private
+# prompt/black-box scans (a security-sensitive operation).
+_RUNTIME_DB: Any | None = None
+
+
+def bind_runtime_database(db: Any) -> None:
+    global _RUNTIME_DB
+    _RUNTIME_DB = db
+
+
+def _runtime_connection(conn: Any | None) -> Any | None:
+    if conn is not None:
+        return conn
+    if _RUNTIME_DB is not None:
+        return _RUNTIME_DB.get_conn()
+    return None
+
 
 def get_secrets_cache(conn: sqlite3.Connection | None = None, force: bool = False) -> tuple[str, list[str], set[str]]:
     global _SECRETS_CACHE
     now = time.time()
     secrets: list[str] = []
+    conn = _runtime_connection(conn)
+    if conn is None and os.environ.get("HANDRAW_DATABASE_URL", "").strip():
+        raise SecretsScanError("PostgreSQL runtime database is not bound; cannot inspect protected prompts")
     if conn is not None:
         try:
             rows = conn.execute(
@@ -982,6 +1003,10 @@ def get_valid_catalog_codes(conn: sqlite3.Connection | None = None) -> dict[str,
     tones = set(static["tones"])
 
     rows: list[Any] = []
+    conn = _runtime_connection(conn)
+    if conn is None and os.environ.get("HANDRAW_DATABASE_URL", "").strip():
+        # Do not load a stale SQLite catalog in a PostgreSQL-only process.
+        return static
     if conn is not None:
         try:
             rows = conn.execute("SELECT code, kind FROM catalog_assets").fetchall()
