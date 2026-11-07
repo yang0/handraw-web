@@ -473,6 +473,7 @@
             refreshCoverButton();
             if (window.HandrawImageLoader && window.HandrawImageLoader.scan) {
               window.HandrawImageLoader.scan(stage);
+              if (assetsPanel) window.HandrawImageLoader.scan(assetsPanel);
             }
           });
         });
