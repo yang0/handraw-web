@@ -3927,6 +3927,8 @@ def create_channel_server(
         srv = HandrawHTTPServer((safe_host, port), HandrawRequestHandler)
     srv.channel_role = role  # type: ignore[attr-defined]
     srv.db = db  # type: ignore[attr-defined]
+    from .services import bind_runtime_database
+    bind_runtime_database(db)  # Security/catalog reads use the same authoritative DB.
     srv.allow_demo_routes = demo_mode if demo_mode is not None else demo_mode_enabled()  # type: ignore[attr-defined]
     srv.bind_host = safe_host  # type: ignore[attr-defined]
     from backend.document_importer import get_import_manager
@@ -4021,11 +4023,8 @@ def main(argv: list[str] | None = None) -> None:
     requested_host = args.host or None
     server = create_channel_server(args.port, "main", db, host=requested_host, demo_mode=args.demo_mode or None)
     reconciler = GenerationReconciler(db).start()
-    try:
-        from .services import start_blackbox_backfill
-        start_blackbox_backfill(db)
-    except Exception:
-        logger.exception("worker=blackbox-backfill failed to start")
+    # Fresh V3 has no legacy data and therefore no background blackbox
+    # backfill. Protected prompts are verified synchronously on publication.
     import_manager = getattr(server, "import_manager", None)
 
     print("Handraw Web single backend running (PostgreSQL V3 + Redis)" if pg_url else "Handraw Web single backend running (SQLite WAL + safe bind):")
