@@ -16221,9 +16221,19 @@
             markDirtyAndRender,
             ensureAssetItems: (items) => ensureBatchAssetNode(items),
             openAssetPicker: ({ kind, field, current, onPick, title } = {}) => {
-              if (!bp || isBatchCurrentBusy()) return;
-              const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
-              openSkillFieldPickerModal(bp.skill, targetField, { current, onPick, title });
+              // Resource selection configures the next run, even when an older
+              // batch is generating. Never silently swallow the click.
+              if (!bp?.skill) {
+                toast("画风/图型选择器暂不可用：请刷新创作台后重试");
+                return;
+              }
+              const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : kind === "tone" ? "tones" : kind === "mood" ? "moods" : "colors");
+              try {
+                openSkillFieldPickerModal(bp.skill, targetField, { current, onPick, title });
+              } catch (err) {
+                console.error("Batch resource picker failed:", err);
+                toast("无法打开选择器，请刷新页面后重试");
+              }
             },
             openReferencePicker: (opts = {}) => {
               if (!bp || isBatchCurrentBusy()) return;
@@ -16355,10 +16365,30 @@
         markDirtyAndRender,
         persistDraft,
         ensureAssetItems: (items) => ensureAssetNode(items),
-        openAssetPicker: ({ kind, field, currentId, onSelect }) => {
-          if (!p || isCurrentBusy()) return;
+        openAssetPicker: ({ kind, field, currentId, onSelect } = {}) => {
+          if (!p?.skill) {
+            toast("画风/图型选择器暂不可用：请刷新创作台后重试");
+            return;
+          }
+          // Editing the next generation's settings must not be blocked by a
+          // pending image task from a previous run.
           const targetField = field || (kind === "style" || kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors");
-          openSkillFieldPickerModal(p.skill, targetField);
+          try {
+            if (typeof onSelect === "function") {
+              openSkillFieldPickerModal(p.skill, targetField, {
+                current: currentId,
+                onPick: (id) => {
+                  if (!CS.graph.nodes.includes(p.skill)) return;
+                  onSelect(id);
+                }
+              });
+            } else {
+              openSkillFieldPickerModal(p.skill, targetField);
+            }
+          } catch (err) {
+            console.error("Make-image resource picker failed:", err);
+            toast("无法打开选择器，请刷新页面后重试");
+          }
         },
         openReferencePicker: ({ currentRefs, onConfirm }) => {
           if (!p || isCurrentBusy()) return;
