@@ -350,14 +350,27 @@
     return Boolean(response.approved);
   }
 
-  function cancelActiveBatchGeneration() {
-    if (!_activeBatchRun) return false;
-    _activeBatchRun.cancelled = true;
-    CS.activeBatchRun = _activeBatchRun;
-    if (window.HandrawBatchCreate && typeof window.HandrawBatchCreate.setStopping === "function") {
-      window.HandrawBatchCreate.setStopping();
+  function cancelActiveBatchGeneration(expectedCtrlId = null) {
+    const run = _activeBatchRun;
+    // A stale pending remote task must not masquerade as a locally running
+    // batch, and a batch button must never cancel a different workstream.
+    if (!run || run.cancelled || (expectedCtrlId && run.ctrlId !== expectedCtrlId)) {
+      toast("当前没有可停止的批量任务；已提交的云端任务可在生图历史查看。");
+      return false;
     }
-    toast("正在停止批量生成；已提交的当前任务会继续完成。");
+    run.cancelled = true;
+    CS.activeBatchRun = run;
+    // Abort the browser's in-flight POST/poll, not just queued worker slots.
+    // The gateway might already have accepted a request: abort does NOT
+    // cancel the model job or imply that its credits were refunded.
+    if (run.controller && !run.controller.signal?.aborted) {
+      try { run.controller.abort(); } catch (_) {}
+    }
+    if (window.HandrawBatchCreate?.setStopping) window.HandrawBatchCreate.setStopping();
+    const submitted = run.submittedSlots?.size || 0;
+    toast(submitted
+      ? `已停止继续提交和本地等待；${submitted} 张已发出的图片仍可能在云端完成或计费，请查看生图历史。`
+      : "已停止批量生成，尚未提交的图片不会计费。");
     return true;
   }
 
@@ -6308,8 +6321,9 @@
     }
 
     const startedAt = Date.now();
-    const batchRun = { id: makeStableRequestId("output_batch"), cancelled: false };
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const submittedSlots = new Set();
+    const batchRun = { id: batchId, ctrlId: ctrl.id, cancelled: false, controller, submittedSlots };
     if (controller) _generationControllers.add(controller);
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
@@ -6365,7 +6379,6 @@
       // Bounded worker pool: all requests share a logical batch, but each
       // slot has an independent id and stable output position.
       const runningIndices = new Set();
-      const submittedSlots = new Set();
       let stopLaunching = false;
       const requestedConcurrency = Number(activeLoopNode?.data?.batchConcurrency || ctrl.data.batchConcurrency || 3);
       const concurrency = resolvedOnlyIdx !== null ? 1 : Math.max(1,
@@ -6461,7 +6474,6 @@
           };
           dn.data.pendingRequestId = requestId;
         }
-        persistOpenTabs(); // Each slot survives refresh, including pending POST.
         if (dn) {
           dn.data.pendingRequestIds = dn.data.pendingRequestIds || {};
           dn.data.pendingRequestIds[slotKey] = requestId;
@@ -6478,6 +6490,9 @@
             prompt: skillPrompt,
             recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
           };
+          // Persist the request and its exact slot/spec together, before
+          // the first network byte is sent or a stop can abort the fetch.
+          persistOpenTabs();
         }
 
         try {
@@ -6794,7 +6809,9 @@
             }
           }
         }
-        ctrl.data.status = "idle";
+        // Local waiting is over. Pending upstream requests are recoverable
+        // from the per-slot request IDs stored on the display nodes.
+        ctrl.data.status = "stopped";
         for (const dn of dispNodes) {
           if (isBatchGallery) dn.data.status = Array.isArray(dn.data.items) && dn.data.items.length ? "done" : "idle";
           else if (dn.data.status === "generating") dn.data.status = Array.isArray(dn.data.items) && dn.data.items.length ? "done" : "idle";
@@ -6817,10 +6834,11 @@
             activeIndex: null,
             busy: false,
             isStopping: false,
+            summaryText: `已停止 · 成功 ${completedCount} 张 · ${submittedSlots.size} 张已提交云端（可能仍在执行）`,
             batchId
           });
         }
-        if (!silent) toast(`已取消尚未提交的批量任务；已完成的 ${completedCount} 张图片已保留。`);
+        if (!silent) toast(`已停止本地等待并取消后续提交，已完成 ${completedCount} 张已保留；${submittedSlots.size} 张已提交的任务可能仍在云端执行或计费。`);
         return allItems.length > 0;
       }
 
@@ -16066,6 +16084,10 @@
           if (!bp) return false;
           if (bp.ctrl.data.status === "generating" || bp.loop.data.status === "running") return true;
           if (quickBusy?.id === bp.ctrl.id && quickBusy.scope === activeCacheScope) return true;
+          // Stopping the local transport does not clear remote reservations.
+          // Keep them recoverable, but don't trap the user in a stale
+          // generating spinner or leave the Stop button permanently visible.
+          if (bp.ctrl.data.status === "stopped") return false;
           const downstream = getDownstreamDisplayNodes(bp.ctrl.id);
           if (downstream.some((d) => d.data?.status === "generating" || d.data?.pendingTaskId || d.data?.pendingRequestId)) return true;
           if (Array.isArray(CS.pendingTasks) && CS.pendingTasks.some((t) => t.ctrlId === bp.ctrl.id || t.tabId === CS.activeTabId)) return true;
@@ -16185,7 +16207,7 @@
               }
             },
             cancel: () => {
-              cancelActiveBatchGeneration();
+              return cancelActiveBatchGeneration(bp.ctrl.id);
             }
           }
         );
