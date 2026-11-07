@@ -795,10 +795,10 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                                 uploads_dir.mkdir(parents=True, exist_ok=True)
                                 fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                                 fpath = uploads_dir / fname
-                                from .media_storage import persist_media_bytes
-                                persist_media_bytes(f"/uploads/{fname}", raw_bytes)
-                                newly_created_file = fpath
                                 newly_created_url = f"/uploads/{fname}"
+                                from .media_storage import persist_media_bytes
+                                persist_media_bytes(newly_created_url, raw_bytes)
+                                newly_created_file = fpath
                                 image_url = f"/uploads/{fname}"
                                 file_path_str = str(fpath)
                                 bytes_count = len(raw_bytes)
@@ -963,10 +963,10 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                             uploads_dir.mkdir(parents=True, exist_ok=True)
                             fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                             fpath = uploads_dir / fname
-                            from .media_storage import persist_media_bytes
-                            persist_media_bytes(f"/uploads/{fname}", raw_bytes)
-                            newly_created_file = fpath
                             newly_created_url = f"/uploads/{fname}"
+                            from .media_storage import persist_media_bytes
+                            persist_media_bytes(newly_created_url, raw_bytes)
+                            newly_created_file = fpath
                             image_url = f"/uploads/{fname}"
                             file_path_str = str(fpath)
                             bytes_count = len(raw_bytes)
@@ -1073,10 +1073,10 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                         uploads_dir.mkdir(parents=True, exist_ok=True)
                         fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                         fpath = uploads_dir / fname
-                        from .media_storage import persist_media_bytes
-                        persist_media_bytes(f"/uploads/{fname}", raw_bytes)
-                        newly_created_file = fpath
                         newly_created_url = f"/uploads/{fname}"
+                        from .media_storage import persist_media_bytes
+                        persist_media_bytes(newly_created_url, raw_bytes)
+                        newly_created_file = fpath
                         image_url = f"/uploads/{fname}"
 
                         name = str(body.get("name") or body.get("nameZh") or "").strip()[:60] or "自建资产"
