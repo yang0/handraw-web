@@ -35,7 +35,8 @@ assert.equal(guard.quote(1,{demo:true}).total,0);
 assert.equal(guard.quote(0,{demo:true}).ok,false);
 assert.equal(typeof guard.confirmGeneration(1,{free:undefined,unitPrice:2,balance:6}).then,"function",
   "cross-VM promises should be verified by their thenable contract");
-assert.match(studioSrc,/const effectiveTargets = guard\.pendingCards\(allCards\)/);
+assert.match(studioSrc,/const pending = guard\.pendingCards\(allCards\)/);
+assert.match(studioSrc,/const effectiveTargets = window\.HandrawArticleWorkbench\.choices\(pending, selection\.ids\)/);
 assert.match(studioSrc,/skipCostConfirmation: true/);
 assert.match(studioSrc,/await confirmArticleGenerationCost\(effectiveTargets\.length/);
 assert.match(studioSrc,/await confirmArticleGenerationCost\(1,/);
