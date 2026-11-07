@@ -235,17 +235,21 @@ def generation_image_assets(
             if url not in expected or url in by_url:
                 continue
             item_dict = item if isinstance(item, dict) else None
-            styles, layout = extract_generation_styles_and_layout(conn, source, item_dict)
-            if not styles and not layout:
-                by_url[url] = {"url": url, "styles": [], "layout": "", "scope": "missing"}
-                continue
-            # A snapshot on the item itself is definitively per-image; a
-            # one-output generation slot has equally unambiguous provenance.
+            # Item-level values override row-level defaults; mixing row styles
+            # into an explicitly styled image would falsely show another image's
+            # style after a thumbnail switch.
             item_styles, item_layout = extract_generation_styles_and_layout(
                 conn,
                 {"recipe_id": "", "recipe_summary": "", "system_append_json": ""},
                 item_dict,
             )
+            source_styles, source_layout = extract_generation_styles_and_layout(conn, source)
+            styles, layout = item_styles or source_styles, item_layout or source_layout
+            if not styles and not layout:
+                by_url[url] = {"url": url, "styles": [], "layout": "", "scope": "missing"}
+                continue
+            # A snapshot on the item itself is definitively per-image; a
+            # one-output generation slot has equally unambiguous provenance.
             scope = "image" if item_styles or item_layout or len(items) == 1 else "group"
             by_url[url] = {
                 "url": url, "styles": styles, "layout": layout, "scope": scope,
