@@ -122,9 +122,12 @@ def bootstrap(*, dsn: str, apply: bool) -> dict:
                     # Import only migration metadata. The source contains
                     # ZERO accounts, generated images or forum content.
                     for table in ("schema_migrations", "schema_migration_hooks"):
+                        if table not in columns:
+                            continue
                         rows = conn.execute('SELECT * FROM "' + table + '"').fetchall()
                         if rows:
                             staging.import_rows(cur, conn, [table], columns)
+                    staging.set_identity_sequences(cur, identity)
                     staging.create_unique_indexes(cur, indexes)
                     staging.create_foreign_keys(cur, foreign_keys)
                     cur.execute(NATIVE_V3_SQL)
