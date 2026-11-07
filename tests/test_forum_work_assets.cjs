@@ -12,16 +12,16 @@ const S = {
 };
 const w = { HANDRAW_SHARED: S };
 vm.runInNewContext(src, { window: w });
-const module = w.HandrawForumWork;
-assert.ok(module && module.fromTopic && module.render);
+const workModule = w.HandrawForumWork;
+assert.ok(workModule && workModule.fromTopic && workModule.render);
 const topic = { title: "原创作品", workId: "work_001" };
 const work = {
   id: "work_001", title: "原创作品", images: ["/media/original.webp"],
   styles: ["FA-003", "FB-006"], layout: "SC-021", promptMasked: true
 };
-const model = module.fromTopic(topic, [work], new Map(), false);
+const model = workModule.fromTopic(topic, [work], new Map(), false);
 assert.equal(model.assets.length, 3, "Codes must survive before the catalog hydrates");
-const html = module.render(model);
+const html = workModule.render(model);
 for (const code of ["FA-003", "FB-006", "SC-021"]) {
   assert.ok(html.includes(code), "Work detail should preserve source code " + code);
 }
@@ -29,17 +29,17 @@ assert.match(html, /使用的画风与图型/);
 assert.match(html, /href="\/t\/FA-003" target="_blank" rel="noopener noreferrer"/);
 assert.match(html, /href="\/t\/SC-021" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /SECRET_INTERNAL_PROMPT/);
-const blank = module.fromTopic(topic, [{
+const blank = workModule.fromTopic(topic, [{
   id: "work_001", title: "空元数据", images: ["/media/a.webp"],
   styles: [], layout: ""
 }], new Map(), true);
-const blankHtml = module.render(blank);
+const blankHtml = workModule.render(blank);
 assert.match(blankHtml, /画风：原始生成记录未提供相关信息/);
 assert.match(blankHtml, /图型：原始生成记录未提供相关信息/);
-const hydrated = module.fromTopic(topic, [work], new Map([
+const hydrated = workModule.fromTopic(topic, [work], new Map([
   ["FA-003", {id:"FA-003",kind:"style",name:"画风三",image:"/fa3.webp"}],
   ["SC-021", {id:"SC-021",kind:"layout",name:"图型二十一",image:"/sc21.webp"}]
 ]), true);
-assert.match(module.render(hydrated), /画风三/);
-assert.match(module.render(hydrated), /图型二十一/);
+assert.match(workModule.render(hydrated), /画风三/);
+assert.match(workModule.render(hydrated), /图型二十一/);
 console.log("work detail: style/layout codes, catalog and fallback, new-tab links OK");
