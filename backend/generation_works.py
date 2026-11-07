@@ -248,11 +248,18 @@ def _project_generation_impl(
     if batch_id:
         source_rows = conn.execute(
             """
-            SELECT * FROM studio_generations
-            WHERE user_id = ? AND batch_id = ? AND status = 'success'
-              AND visibility = 'public' AND COALESCE(deleted_at,'') = ''
-              AND engine != 'demo'
-            ORDER BY batch_index ASC, created_at ASC, id ASC
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY batch_index
+                    ORDER BY created_at DESC, id DESC
+                ) AS attempt_rank
+                FROM studio_generations
+                WHERE user_id=? AND batch_id=? AND status='success'
+                  AND visibility='public' AND COALESCE(deleted_at,'')=''
+                  AND engine!='demo'
+            )
+            SELECT * FROM ranked WHERE attempt_rank=1
+            ORDER BY batch_index ASC
             """,
             (int(row["user_id"]), batch_id),
         ).fetchall()
