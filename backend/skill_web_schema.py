@@ -68,5 +68,17 @@ SKILL_WEB_MIGRATIONS = [
         );
         CREATE INDEX IF NOT EXISTS idx_skill_history_work ON skill_history_publications(work_id);
     """),
+    (97, "097_skill_public_generation_work_items", """
+        CREATE TABLE IF NOT EXISTS skill_generation_work_items (
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            run_id TEXT NOT NULL REFERENCES skill_generation_runs(id),
+            image_index INTEGER NOT NULL CHECK(image_index >= 0),
+            work_id TEXT NOT NULL REFERENCES works(id),
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, image_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_work_items_owner
+            ON skill_generation_work_items(user_id, run_id, image_index);
+    """),
 ]
 
