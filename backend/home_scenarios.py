@@ -303,6 +303,11 @@ def get_scenario_match_clause_by_key(
     return build_scenario_match_clause(rules, table_alias=table_alias)
 
 
+def invalidate_home_scenarios_cache() -> None:
+    """Drop cached scene cards when the author updates a canonical work cover."""
+    _SCENARIOS_CACHE.clear()
+
+
 def _extract_first_image(images_json: str | None) -> str:
     """Safely extract the first valid image URL from images_json."""
     if not images_json:
@@ -318,6 +323,20 @@ def _extract_first_image(images_json: str | None) -> str:
     except Exception:
         pass
     return ""
+
+
+def _cover_for_work(row: Any) -> str:
+    """Honor the V3 cover selection, including pinned and admin scene cards."""
+    first = _extract_first_image(row["images_json"])
+    selected = str(row["selected_cover_url"] or "").strip()
+    if selected and first:
+        try:
+            images = json.loads(row["images_json"] or "[]")
+            if selected in images:
+                return selected
+        except (TypeError, ValueError):
+            pass
+    return first
 
 
 # ---------------------------------------------------------------------------
@@ -376,9 +395,11 @@ def get_public_home_scenarios(
         s_key = sc["key"]
         pinned_rows = conn.execute(
             f"""
-            SELECT spw.work_id, spw.sort_order AS pin_order, w.*
+            SELECT spw.work_id, spw.sort_order AS pin_order, w.*,
+                   cover.storage_key AS selected_cover_url
             FROM scenario_pinned_works spw
             JOIN works w ON w.id = spw.work_id
+            LEFT JOIN media_assets cover ON cover.id = w.cover_media_id
             WHERE spw.scenario_key = ?
               AND w.status = 'published'
               AND {seed_clause}
@@ -394,7 +415,7 @@ def get_public_home_scenarios(
             wid = pr["id"]
             if wid in globally_claimed_work_ids:
                 continue
-            first_img = _extract_first_image(pr["images_json"])
+            first_img = _cover_for_work(pr)
             if not first_img:
                 continue
             globally_claimed_work_ids.add(wid)
@@ -426,8 +447,9 @@ def get_public_home_scenarios(
         match_sql, match_params = build_scenario_match_clause(match_rules, table_alias="w")
         candidate_rows = conn.execute(
             f"""
-            SELECT w.*
+            SELECT w.*, cover.storage_key AS selected_cover_url
             FROM works w
+            LEFT JOIN media_assets cover ON cover.id = w.cover_media_id
             WHERE w.status = 'published'
               AND {seed_clause}
               AND ({match_sql})
@@ -442,7 +464,7 @@ def get_public_home_scenarios(
                 continue
             if not is_valid_work_row(cr):
                 continue
-            first_img = _extract_first_image(cr["images_json"])
+            first_img = _cover_for_work(cr)
             if not first_img:
                 continue
 
@@ -605,9 +627,11 @@ def admin_list_home_scenarios(
         pinned_rows = conn.execute(
             f"""
             SELECT spw.sort_order AS pin_order, spw.created_by, spw.created_at AS pinned_at,
-                   w.id, w.title, w.status, w.author_username, w.author_name, w.images_json, w.likes, w.cheers
+                   w.id, w.title, w.status, w.author_username, w.author_name,
+                   w.images_json, w.likes, w.cheers, cover.storage_key AS selected_cover_url
             FROM scenario_pinned_works spw
             LEFT JOIN works w ON w.id = spw.work_id
+            LEFT JOIN media_assets cover ON cover.id = w.cover_media_id
             WHERE spw.scenario_key = ?
             ORDER BY spw.sort_order ASC, spw.created_at ASC
             """,
@@ -623,7 +647,7 @@ def admin_list_home_scenarios(
                     "title": pr["title"] or "(已删除作品)",
                     "status": pr["status"] or "deleted",
                     "author": pr["author_name"] or pr["author_username"] or "",
-                    "imageUrl": _extract_first_image(pr["images_json"]) if pr["images_json"] else "",
+                    "imageUrl": _cover_for_work(pr) if pr["images_json"] else "",
                     "isPublic": bool(pr["status"] == "published" and is_valid_work_row(pr)),
                     "createdBy": pr["created_by"],
                     "pinnedAt": pr["pinned_at"],
