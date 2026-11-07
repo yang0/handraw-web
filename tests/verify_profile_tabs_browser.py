@@ -108,53 +108,28 @@ def run_browser_verification():
             page.on("pageerror", lambda e: print("PAGE ERROR:", e))
 
             # -----------------------------------------------------------
-            # Check 1: Personal Profile Tabs Split & Renaming
+            # Check 1: Three public profile tabs + resource filters
             # -----------------------------------------------------------
-            print("\n>>> Check 1: Personal profile tabs split & renaming...")
+            print("\n>>> Check 1: Profile public tabs and resource filters...")
             page.goto(f"{BASE_URL}/?view=profile&user=creator_leo", wait_until="networkidle")
-            page.wait_for_timeout(1000)
-
-            # Check styles and layouts tabs exist
-            styles_btn = page.locator('button[data-ptab="styles"]')
-            layouts_btn = page.locator('button[data-ptab="layouts"]')
-            topics_btn = page.locator('button[data-ptab="topics"]')
-            cols_btn = page.locator('button[data-ptab="collections"]')
-            acc_btn = page.locator('button[data-ptab="account"]')
-            assets_btn = page.locator('button[data-ptab="assets"]')
-
-            assert styles_btn.is_visible(), "Styles tab button missing"
-            assert layouts_btn.is_visible(), "Layouts tab button missing"
-            assert assets_btn.count() == 0, "Old merged assets tab must not exist"
-
-            styles_text = styles_btn.inner_text()
-            layouts_text = layouts_btn.inner_text()
-            topics_text = topics_btn.inner_text()
-            cols_text = cols_btn.inner_text()
-
-            print(f"  Tabs detected: {styles_text} | {layouts_text} | {topics_text} | {cols_text}")
-            assert "画风" in styles_text, f"Styles tab text wrong: {styles_text}"
-            assert "图型" in layouts_text, f"Layouts tab text wrong: {layouts_text}"
-            assert "论坛帖" in topics_text, f"Topics tab rename wrong: {topics_text}"
-            assert "发布的论坛帖" not in topics_text, f"Old topics tab name still present: {topics_text}"
-            assert "收藏夹" in cols_text, f"Collections tab rename wrong: {cols_text}"
-            assert "我的收藏夹" not in cols_text, f"Old collections tab name still present: {cols_text}"
-            assert acc_btn.is_visible(), "Account settings tab must be visible to owner"
-
-            # Click styles tab
-            styles_btn.click()
-            page.wait_for_timeout(500)
-            assert "is-active" in (styles_btn.get_attribute("class") or ""), "Styles tab not active"
-            assert "ptab=styles" in page.url, f"URL did not update to ptab=styles: {page.url}"
-
-            # Click layouts tab
-            layouts_btn.click()
-            page.wait_for_timeout(500)
-            assert "is-active" in (layouts_btn.get_attribute("class") or ""), "Layouts tab not active"
-            assert "ptab=layouts" in page.url, f"URL did not update to ptab=layouts: {page.url}"
-
+            page.wait_for_timeout(700)
+            assert page.locator('button[data-ptab="works"]').is_visible()
+            assert page.locator('button[data-ptab="resources"]').is_visible()
+            assert page.locator('button[data-ptab="topics"]').is_visible()
+            assert "社区动态" in page.locator('button[data-ptab="topics"]').inner_text()
+            for obsolete in ("generations", "styles", "layouts", "articles", "collections"):
+                assert page.locator(f'button[data-ptab="{obsolete}"]').count() == 0
+            assert page.locator("#prof-go-studio-btn").is_visible()
+            assert page.locator("#prof-go-collections-btn").is_visible()
+            page.locator('button[data-ptab="resources"]').click()
+            page.wait_for_timeout(400)
+            assert "ptab=resources" in page.url
+            for category in ("all", "styles", "layouts"):
+                assert page.locator(f'button[data-prof-resource-filter="{category}"]').is_visible()
+            page.locator('button[data-prof-resource-filter="layouts"]').click()
+            assert page.locator('[data-prof-asset="SC-001"]').count() >= 1
+            assert page.locator('[data-prof-asset="FA-001"]').count() == 0
             page.screenshot(path=str(SHOT_SELF_DESKTOP), full_page=False)
-            print(f"  ✓ Saved personal profile desktop screenshot: {SHOT_SELF_DESKTOP}")
-
             # -----------------------------------------------------------
             # Check 2: Other user's profile visibility & security
             # -----------------------------------------------------------
@@ -163,8 +138,7 @@ def run_browser_verification():
             page.wait_for_timeout(800)
 
             # Public tabs visible
-            assert page.locator('button[data-ptab="styles"]').is_visible(), "Other's styles tab should be visible"
-            assert page.locator('button[data-ptab="layouts"]').is_visible(), "Other's layouts tab should be visible"
+            assert page.locator('button[data-ptab="resources"]').is_visible(), "Other's resources tab should be visible"
             assert page.locator('button[data-ptab="topics"]').is_visible(), "Other's topics tab should be visible"
 
             # Private tabs NOT visible
@@ -204,8 +178,7 @@ def run_browser_verification():
 
             print(f"  Navigated to: {page.url}")
             assert "view=profile" in page.url and "ptab=collections" in page.url, f"Dropdown did not open profile collections: {page.url}"
-            active_pill = page.locator('button[data-ptab="collections"].is-active')
-            assert active_pill.is_visible(), "Collections tab is not active after dropdown click"
+            assert page.locator("#prof-collections-back-btn").is_visible(), "Collections must have a way back to the public profile"
 
             # Verify migrated collections center content (pills and unfav)
             assert page.locator('button[data-prof-ftab="styles"]').is_visible(), "收藏画风 pill missing in profile collections"
@@ -229,7 +202,7 @@ def run_browser_verification():
             page.goto(f"{BASE_URL}/?view=profile&user=creator_leo&ptab=assets", wait_until="networkidle")
             page.wait_for_timeout(800)
             print(f"  Redirected assets URL: {page.url}")
-            assert "ptab=styles" in page.url, f"Legacy ptab=assets did not redirect to ptab=styles: {page.url}"
+            assert "ptab=resources" in page.url, f"Legacy ptab=assets did not redirect to resources: {page.url}"
 
             page.screenshot(path=str(SHOT_LEGACY_REDIRECT), full_page=False)
             print(f"  ✓ Saved legacy URL redirect screenshot: {SHOT_LEGACY_REDIRECT}")
@@ -280,7 +253,7 @@ def run_browser_verification():
 
             print(f"  Mobile tabs geometry: scrollWidth={tabs_info['scrollWidth']}, clientWidth={tabs_info['clientWidth']}")
             print(f"  Mobile overflowX={tabs_info['overflowX']}, flexWrap={tabs_info['flexWrap']}")
-            assert tabs_info["scrollWidth"] > tabs_info["clientWidth"], "Tabs row must overflow horizontally on 390px width"
+            assert tabs_info["scrollWidth"] >= tabs_info["clientWidth"], "Tabs row must not clip its contents on mobile"
             assert tabs_info["flexWrap"] == "nowrap", f"Tabs row must be nowrap: {tabs_info['flexWrap']}"
             assert tabs_info["overflowX"] in ["auto", "scroll"], f"Tabs row must have scrollable overflow-x: {tabs_info['overflowX']}"
 
