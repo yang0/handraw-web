@@ -486,6 +486,13 @@ class GenerationReconciler:
                 with generation_reconcile_lease() as lease:
                     if lease.valid():
                         self.reconcile_once(lease=lease)
+                    if lease.valid():
+                        # Media deletion uses the same cross-process lease and
+                        # an independent durable claim; Redis holds no truth.
+                        from .media_gc import drain_media_gc
+                        drained = drain_media_gc(self.db, limit=5)
+                        if drained["deleted"] or drained["failed"]:
+                            logger.info("worker=media-gc result=%s", drained)
             except Exception:
                 logger.exception("worker=generation-reconciler iteration failed; will retry")
             self._stop.wait(self.interval_seconds)
