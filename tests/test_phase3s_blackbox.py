@@ -1263,7 +1263,7 @@ class Phase3sBlackboxTests(unittest.TestCase):
             },
         }
 
-        m_dict = mask_recipe_data(r_dict)
+        m_dict = mask_recipe_data(r_dict, conn=self.db.get_conn())
         raw_m_dict = json.dumps(m_dict, ensure_ascii=False)
         self.assertNotIn(self.paid_secret, raw_m_dict, "Masked recipe must not contain secret anywhere!")
         self.assertEqual(m_dict["prompt"], "")
@@ -1452,6 +1452,21 @@ class Phase3sBlackboxTests(unittest.TestCase):
                 """,
                 (gid, self.user_alice["id"], leak_msg),
             )
+            # A failed V3 task still owns a canonical run and a failed output
+            # slot. Gateway ledgers alone are not public/user history.
+            from backend.generation_v3 import ensure_run, refresh_run_status
+            run_id = ensure_run(
+                tx, user_id=self.user_alice["id"], source="web",
+                external_run_id=gid, expected_count=1, request_id="req_h4",
+            )
+            tx.execute(
+                """INSERT INTO generation_items
+                   (id,run_id,position,status,media_id,error_code,created_at,updated_at)
+                   VALUES (?,?,0,'failed',NULL,'gateway_http_400',
+                           '2026-10-31T00:00:00Z','2026-10-31T00:00:00Z')""",
+                ("item_" + gid, run_id),
+            )
+            refresh_run_status(tx, run_id)
 
         # Check /api/studio/workspace
         st_ws, r_ws = self._req("GET", "/api/studio/workspace", cookie=self.cookie_a)
