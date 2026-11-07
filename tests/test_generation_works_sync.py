@@ -17,7 +17,6 @@ from backend.generation_works import (
     derive_item_key,
     project_generation_to_works,
     sync_generation_visibility,
-    backfill_historical_generations,
     get_work_generation_provenance,
 )
 from backend.resource_discussions import comment
@@ -79,8 +78,13 @@ class TestGenerationWorksSync(unittest.TestCase):
         self.assertEqual(wids_1, wids_2)
         self.assertEqual(wids_2, wids_3)
 
-        # Check mapping table count
-        m_count = conn.execute("SELECT COUNT(*) FROM generation_works WHERE generation_id = ?", (gen_id,)).fetchone()[0]
+        # Direct FK: one run has exactly one published work.
+        m_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM works w JOIN generation_runs r ON r.id=w.run_id
+            WHERE r.source='web' AND r.external_run_id=?
+            """, (gen_id,),
+        ).fetchone()[0]
         self.assertEqual(m_count, 1)
 
         # Check works table count
@@ -96,18 +100,14 @@ class TestGenerationWorksSync(unittest.TestCase):
             self.assertEqual(w["title"], "书店一隅")
             self.assertEqual(w["subject"], "书店一隅")
 
-        # Step 2: backfill_historical_generations 3 times
-        b1 = backfill_historical_generations(conn)
-        b2 = backfill_historical_generations(conn)
-        b3 = backfill_historical_generations(conn)
-
-        self.assertEqual(b1["projected"], 1)
-        self.assertEqual(b2["projected"], 1)
-        self.assertEqual(b3["projected"], 1)
-
-        # Still strictly 1 work for the run, containing both images
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM generation_works WHERE generation_id = ?", (gen_id,)).fetchone()[0], 1)
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM works WHERE origin = 'generation'").fetchone()[0], 1)
+        # New databases do not perform a legacy history backfill.
+        # The canonical image list remains exactly two on every replay.
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM work_media WHERE work_id=?", (wids_1[0],)
+        ).fetchone()[0], 2)
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM works WHERE origin='generation'"
+        ).fetchone()[0], 1)
 
     def test_multi_image_run_keeps_cover_and_single_gallery_work(self):
         """Five outputs are one work; blank and duplicate results are not published."""
@@ -136,8 +136,8 @@ class TestGenerationWorksSync(unittest.TestCase):
         work = conn.execute("SELECT images_json FROM works WHERE id=?", (work_ids[0],)).fetchone()
         self.assertEqual(json.loads(work["images_json"]), urls)
         self.assertEqual(conn.execute(
-            "SELECT COUNT(*) FROM generation_works WHERE generation_id='gen_multi_v3'"
-        ).fetchone()[0], 1)
+            "SELECT COUNT(*) FROM work_media WHERE work_id=?", (work_ids[0],)
+        ).fetchone()[0], 5)
         feed = get_works_feed(self.db, {"author": uname, "sort": "newest", "limit": 10})
         matching = [w for w in feed["items"] if w["id"] == work_ids[0]]
         self.assertEqual(len(matching), 1)
@@ -167,9 +167,10 @@ class TestGenerationWorksSync(unittest.TestCase):
         conn.commit()
         self.assertEqual(work_ids[0], work_ids[1])
         rows = conn.execute(
-            "SELECT id,images_json,generation_batch_key FROM works "
-            "WHERE generation_batch_key=?",
-            (f"{uid}:batch_unique_v3",),
+            """SELECT w.id,w.images_json,r.external_run_id
+               FROM works w JOIN generation_runs r ON r.id=w.run_id
+               WHERE r.user_id=? AND r.external_run_id=?""",
+            (uid, "batch_unique_v3"),
         ).fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(json.loads(rows[0]["images_json"]),
@@ -184,7 +185,7 @@ class TestGenerationWorksSync(unittest.TestCase):
             project_generation_to_works(conn, "gen_batch_slot_0")
             project_generation_to_works(conn, "gen_batch_slot_1")
         self.assertEqual(conn.execute(
-            "SELECT COUNT(*) FROM generation_works WHERE work_id=?", (work_ids[0],)
+            "SELECT COUNT(*) FROM works WHERE id=? AND run_id IS NOT NULL", (work_ids[0],)
         ).fetchone()[0], 1)
         works = get_works_feed(self.db, {"author": uname, "sort": "newest", "limit": 20})
         self.assertEqual(len([w for w in works["items"] if w["id"] == work_ids[0]]), 1)
@@ -355,8 +356,8 @@ class TestGenerationWorksSync(unittest.TestCase):
         )
         self.assertEqual(
             conn.execute(
-                "SELECT COUNT(*) FROM generation_works gw JOIN works w ON w.id = gw.work_id "
-                "WHERE gw.generation_id LIKE 'gen_atomic_%' AND w.status = 'published'"
+                "SELECT COUNT(*) FROM works w JOIN generation_runs r ON r.id=w.run_id "
+                "WHERE r.external_run_id LIKE 'gen_atomic_%' AND w.status='published'"
             ).fetchone()[0],
             2,
             "Linked public works must remain visible after a rolled-back delete",
@@ -368,8 +369,8 @@ class TestGenerationWorksSync(unittest.TestCase):
         )
         self.assertEqual(
             conn.execute(
-                "SELECT COUNT(*) FROM generation_works gw JOIN works w ON w.id = gw.work_id "
-                "WHERE gw.generation_id = 'gen_atomic_1' AND w.status = 'published'"
+                "SELECT COUNT(*) FROM works w JOIN generation_runs r ON r.id=w.run_id "
+                "WHERE r.external_run_id = 'gen_atomic_1' AND w.status='published'"
             ).fetchone()[0],
             0,
         )
