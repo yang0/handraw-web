@@ -88,6 +88,7 @@ jobs:
           node tests/test_profile_private_gallery.cjs
           node tests/test_studio_batch.cjs
           node tests/test_batch_progress_incremental.cjs
+          node tests/test_batch_concurrency_contract.cjs
   progressive-thumb-regression:
     runs-on: ubuntu-latest
     steps:
