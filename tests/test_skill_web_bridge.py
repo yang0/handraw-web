@@ -151,6 +151,42 @@ class SkillWebBridgeTests(unittest.TestCase):
             bridge.import_history(self.db, self.owner, {**data, "originalRequest": "被篡改"}, save_stub)
         self.assertEqual(error.exception.status, 409)
 
+    def test_history_upload_resumes_after_interruption_without_duplicate_media(self):
+        rid=str(uuid.uuid4())
+        a,b=b"image-one",b"image-two"
+        images=[{"name":name,"sha256":hashlib.sha256(blob).hexdigest(),
+                 "dataUrl":"data:image/png;base64,"+base64.b64encode(blob).decode()}
+                for name,blob in (("one.png",a),("two.png",b))]
+        payload={"externalRunId":rid,"originClient":"skill","visibility":"private",
+                 "status":"success","requestId":"skill-history-"+rid,
+                 "originalRequest":"多图片批量任务", "images":images}
+        saved=[]
+        def failing_store(db,user,data_url,name_zh,cat):
+            if len(saved)==1:
+                raise RuntimeError("temporary image upload failure")
+            saved.append(data_url)
+            return {"url":"/uploads/saved-one.png"}
+        with self.assertRaises(RuntimeError):
+            bridge.import_history(self.db,self.owner,payload,failing_store)
+        row=self.db.get_conn().execute(
+            "SELECT status,images_json FROM skill_generation_runs WHERE user_id=? AND external_run_id=?",
+            (self.owner["id"],rid)).fetchone()
+        self.assertEqual(row["status"],"uploading")
+        self.assertEqual(len(json.loads(row["images_json"])),1)
+        self.assertFalse(any(item["externalRunId"]==rid for item in
+                             bridge.list_history(self.db,self.owner,{})["items"]))
+        def resume_store(db,user,data_url,name_zh,cat):
+            self.assertEqual(data_url,images[1]["dataUrl"])
+            saved.append(data_url)
+            return {"url":"/uploads/saved-two.png"}
+        completed=bridge.import_history(self.db,self.owner,payload,resume_store)
+        self.assertEqual(completed["visibility"],"private")
+        self.assertEqual(len(saved),2)
+        self.assertTrue(bridge.import_history(self.db,self.owner,payload,resume_store)["deduped"])
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM skill_generation_runs WHERE user_id=? AND external_run_id=?",
+            (self.owner["id"],rid)).fetchone()[0],1)
+
     def test_history_invalid_payload_is_rejected_before_storage(self):
         rid = str(uuid.uuid4())
         data = {"externalRunId": rid, "originClient": "skill", "visibility": "private",
