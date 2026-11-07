@@ -2533,7 +2533,7 @@
           ${resourceOptions.map((opt) => `<button type="button" class="hw-pill ${type === opt.value ? "is-active" : ""}" data-prof-resource-filter="${opt.value}" aria-pressed="${type === opt.value}">${opt.label}${opt.value === "gallery" ? " · 私有" : ` (${opt.value === "all" ? prof.styles.length + prof.layouts.length : opt.value === "styles" ? prof.styles.length : prof.layouts.length})`}</button>`).join("")}
         </div>
         ${type === "gallery" && isMe ? '<div id="hw-profile-private-gallery" aria-live="polite">正在加载我的图库…</div>' : resources.length
-          ? S.renderMasonry(resources.map((it) => `
+          ? `<div class="hw-profile-feed hw-profile-resource-feed">${resources.map((it) => `
               <article class="hw-card" data-prof-asset="${esc(it.id)}" style="cursor:pointer;">
                 <div class="hw-card-media">
                   <span class="hw-card-badge-tl badge-community">✨ ${it._profileResourceType === "styles" ? "共创画风" : "共创图型"}</span>
@@ -2548,12 +2548,12 @@
                   </div>
                 </div>
               </article>
-            `), "standard")
+            `).join("")}</div>`
           : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂无公开的${type === "all" ? "创作资源" : type === "styles" ? "共创画风" : "共创图型"}。</div>`}
       `;
     } else if (UI.profileTab === "topics") {
       tabBodyHtml = prof.topics.length
-        ? `<div style="display:flex;flex-direction:column;gap:12px;">
+        ? `<div class="hw-profile-feed hw-profile-topic-feed">
             ${prof.topics
               .map((t) => {
                 const imgs = S.normalizeTopicImages ? S.normalizeTopicImages(t) : (t.images || []).map((im) => typeof im === "string" ? { url: im, tag: "" } : { url: im.url, tag: im.tag || "" });
@@ -2637,7 +2637,7 @@
                 }
 
                 return `
-                  <article class="forum-topic-card" data-prof-topic="${esc(t.id)}" style="margin-bottom:0;">
+                  <article class="forum-topic-card hw-profile-topic-card" data-prof-topic="${esc(t.id)}" tabindex="0" role="link" aria-label="查看社区帖子：${esc(t.title)}">
                     ${bodyAndMediaHtml}
                   </article>
                 `;
@@ -3057,6 +3057,12 @@
     });
     root.querySelectorAll("[data-prof-topic]").forEach((el) => {
       el.onclick = () => S.goToTopicPage(el.getAttribute("data-prof-topic"));
+      el.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          el.click();
+        }
+      };
     });
     root.querySelectorAll("[data-prof-gen]").forEach((el) => {
       el.onclick = () => {
