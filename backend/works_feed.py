@@ -284,7 +284,7 @@ def get_works_feed(
     comment_filter, comment_ids = _seed_filter("id", "work_comments")
     comments_by_work: dict[str, list[dict[str, Any]]] = {}
     for cm in conn.execute(
-        f"SELECT * FROM work_comments WHERE status = 'published' AND {comment_filter} ORDER BY rowid ASC",
+        f"SELECT * FROM work_comments WHERE status = 'published' AND {comment_filter} ORDER BY created_at ASC, id ASC",
         comment_ids,
     ).fetchall():
         comments_by_work.setdefault(cm["work_id"], []).append(
@@ -532,7 +532,7 @@ def get_work_by_id(
             "time": cm["time_label"] or cm["created_at"],
         }
         for cm in conn.execute(
-            f"SELECT * FROM work_comments WHERE work_id = ? AND status = 'published' AND {comment_filter} ORDER BY rowid ASC",
+            f"SELECT * FROM work_comments WHERE work_id = ? AND status = 'published' AND {comment_filter} ORDER BY created_at ASC, id ASC",
             (wid, *comment_ids),
         ).fetchall()
     ]
