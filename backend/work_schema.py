@@ -958,22 +958,12 @@ WHERE status = 'published' AND listed_at_ms IS NULL;
 """
 
 
-def backfill_work_topics_hook(conn: sqlite3.Connection) -> None:
-    """Backfill missing topics for all published works across generations, web, and legacy."""
-    try:
-        from .generation_works import backfill_work_topics
-        backfill_work_topics(conn)
-    except Exception as e:
-        logger.warning("Work topics backfill hook failed: %s", e)
-
-
 WORK_POST_MIGRATION_HOOKS: dict[int, Any] = {
     66: normalize_historical_asset_uids,
     69: deduplicate_generation_history,
     75: zero_topic_publish_credits_hook,
     77: zero_reply_publish_credits_hook,
     80: audit_and_deduplicate_work_topics,
-    82: backfill_work_topics_hook,
 }
 
 WORK_MIGRATIONS: list[tuple[int, str, str]] = [
