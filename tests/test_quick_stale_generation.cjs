@@ -62,4 +62,32 @@ function scenario({pending=false, hasResult=false, live=false}={}) {
   assert.equal(run.ctrl.data.status,"generating");
   assert.equal(run.saved.length,0);
 }
-console.log("Quick restart recovery: stale idle, remote pending, saved result and active-run protection passed");
+// Simulate clicking the visible stop control in the quick UI.
+{
+  const sandbox = {HANDRAW_SHARED:{toast(){}},console,Map,Set,Array,Math,Number};
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(make, sandbox);
+  const controller = new sandbox.HandrawMakeImage.MakeImageController();
+  const stopButton = {disabled:false,textContent:"停止等待"};
+  const root = {
+    querySelector(selector) { return selector === "#make-image-btn-stop" ? stopButton : null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  controller.context = {
+    parts: {
+      skill:{data:{colors:[],moods:[]}},
+      text:{data:{}},ctrl:{data:{}},asset:{data:{}}
+    },busy:true
+  };
+  let stops=0;
+  controller.actions = {cancel() { stops++; return true; }};
+  controller.bindEvents(root);
+  assert.equal(typeof stopButton.onclick, "function", "Stop button must be bound");
+  stopButton.onclick();
+  assert.equal(stops,1,"Stop click must call the current run cancel action");
+  assert.equal(stopButton.disabled,true,"Stop must suppress duplicate clicks");
+  assert.match(stopButton.textContent,/正在停止/);
+}
+console.log("Quick restart recovery and stop-click interaction passed");
