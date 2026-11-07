@@ -80,3 +80,29 @@ def persist_media_bytes(
     finally:
         if tmp:
             Path(tmp).unlink(missing_ok=True)
+
+
+
+def discard_uncommitted_media(db: object, url: str) -> None:
+    """Reclaim a newly allocated, unique media URL after SQL write rollback.
+
+    For unique upload IDs only. Never use on a content-addressed URL that may
+    already be associated with a successful generation. Any object-store
+    outage is recorded as a durable GC job rather than silently leaking data.
+    """
+    import logging
+
+    log = logging.getLogger("handraw.media.storage")
+    from .object_storage import delete_private_object
+
+    try:
+        delete_private_object(url)
+        local_path_for_url(url).unlink(missing_ok=True)
+    except Exception:
+        log.warning("Could not discard uncommitted object %s; queuing cleanup", url, exc_info=True)
+        try:
+            with db.transaction() as tx:
+                from .media_gc import queue_media_cleanup
+                queue_media_cleanup(tx, url, delay_seconds=60)
+        except Exception:
+            log.exception("Failed to enqueue orphaned media for cleanup: %s", url)
