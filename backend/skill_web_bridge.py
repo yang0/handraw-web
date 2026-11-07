@@ -397,7 +397,7 @@ def list_history(
     for row in rows[:limit]:
         image_rows = conn.execute(
             """
-            SELECT i.position, i.status, m.storage_key, m.sha256
+            SELECT i.position, i.status, i.error_code, m.storage_key, m.sha256
             FROM generation_items i
             LEFT JOIN media_assets m ON m.id=i.media_id
             WHERE i.run_id=?
@@ -418,6 +418,15 @@ def list_history(
             "originalRequest": row["original_request"],
             "images": media,
             "imageCount": len(media),
+            "items": [
+                {
+                    "position": int(item["position"]),
+                    "status": item["status"],
+                    "imageUrl": item["storage_key"] or "",
+                    "errorCode": item["error_code"] or "",
+                }
+                for item in image_rows
+            ],
             "status": row["status"],
             "visibility": "public" if wid else "private",
             "workIds": [wid] if wid else [],
