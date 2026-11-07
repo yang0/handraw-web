@@ -256,6 +256,9 @@ class SkillCloudV1Tests(unittest.TestCase):
         self.req("POST", "/api/v1/works/"+wid+"/likes", {"liked": True}, self.publish_token)
         self.assertEqual(self.db.get_conn().execute(
             "SELECT likes FROM works WHERE id=?", (wid,)).fetchone()[0], 1)
+        from backend.works_feed import get_work_by_id
+        self.assertTrue(get_work_by_id(self.db, wid, current_user=self.alice)["liked"],
+                        "Website work detail must reflect the Skill like")
         comment_request = {"text": "很棒的作品！",
                            "requestId": "skill-comment-" + uuid.uuid4().hex}
         status, comment = self.req("POST", "/api/v1/works/"+wid+"/comments",
