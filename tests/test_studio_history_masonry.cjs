@@ -106,8 +106,14 @@ app.renderHistoryStage();
 assert.ok(stage.innerHTML.includes('data-hist-restore="canvas"'));
 state.historyFilter = "all";
 assert.ok(styles.includes("max-width: 1140px"), "Toolbar must be contained");
-assert.ok(styles.includes(".ic-hist-masonry-grid") && styles.includes("column-count: 3"));
-assert.ok(styles.includes("column-count: 2") && styles.includes("column-count: 1"));
+assert.match(styles, /\.ic-hist-masonry-grid\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/s,
+  "Desktop must use explicit three-column grid tracks, not CSS multicol balancing");
+assert.ok(styles.includes(".ic-hist-masonry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }"),
+  "Tablet history must use two grid tracks");
+assert.ok(styles.includes(".ic-hist-masonry-grid { grid-template-columns: minmax(0, 1fr); }"),
+  "Phone history must use one grid track");
+assert.ok(!styles.includes("column-count: 3"),
+  "Regression: multicol auto-balancing can stack two history cards in the first column");
 // Workflow library: one shared top-level nav, no duplicate canvas/workflow bars.
 assert.ok(studio.includes('id="studio-mode-workflows"'), "Workflow shortcut should be beside generation history");
 assert.ok(studio.includes('id="studio-mode-history"'));
