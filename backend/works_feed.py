@@ -559,6 +559,13 @@ def get_work_by_id(
             )
 
     w_dict = _serialize_work(row, {wid: comments}, unlocked_set, current_user, conn=conn)
+    if row["run_id"] and (not w_dict["styles"] or not w_dict["layout"]):
+        from .generation_works import recover_generation_work_assets
+        recovered_styles, recovered_layout = recover_generation_work_assets(conn, row)
+        if not w_dict["styles"]:
+            w_dict["styles"] = recovered_styles
+        if not w_dict["layout"]:
+            w_dict["layout"] = recovered_layout
     if row["run_id"]:
         # A generated work's ordered canonical media is authoritative; the
         # works.images_json value is only a transactionally maintained feed

@@ -313,6 +313,13 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
             raise S.ServiceError("作品不存在或不可见", status=404)
         w_row = conn.execute("SELECT * FROM works WHERE id = ?", (m_target,)).fetchone()
         work_res = forum_resources._work_resource(w_row, unlocked_set, user)
+        if w_row["run_id"] and (not work_res.get("styles") or not work_res.get("layout")):
+            from .generation_works import recover_generation_work_assets
+            recovered_styles, recovered_layout = recover_generation_work_assets(conn, w_row)
+            if not work_res.get("styles"):
+                work_res["styles"] = recovered_styles
+            if not work_res.get("layout"):
+                work_res["layout"] = recovered_layout
         if w_row["run_id"]:
             from .generation_v3 import work_images
             work_res["images"] = work_images(conn, m_target)

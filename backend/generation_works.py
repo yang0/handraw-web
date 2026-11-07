@@ -55,18 +55,43 @@ def extract_generation_styles_and_layout(
     styles: list[str] = []
     layout: str = ""
 
-    # 1. From item recipeSnapshot if present
-    if item and isinstance(item.get("recipeSnapshot"), dict):
-        snap = item["recipeSnapshot"]
-        s_list = snap.get("styles") or snap.get("style_ids") or []
-        if isinstance(s_list, list):
-            for s in s_list:
-                c = str(s).strip().upper().lstrip("#")
-                if CODE_RE.match(c) and c not in styles:
-                    styles.append(c)
-        l_code = str(snap.get("layout") or snap.get("layout_id") or "").strip().upper().lstrip("#")
-        if CODE_RE.match(l_code):
-            layout = l_code
+    # 1. Prefer the actual generation snapshot. The quick/batch studio
+    # persists singular style1/style2 and camelCase variants as well as lists.
+    row_keys = row.keys() if hasattr(row, "keys") else row
+    snapshots: list[dict[str, Any]] = []
+    if isinstance(item, dict):
+        for snap in (item.get("recipeSnapshot"), item.get("recipe"), item):
+            if isinstance(snap, dict):
+                snapshots.append(snap)
+    if "system_append_json" in row_keys and row["system_append_json"]:
+        try:
+            system_data = json.loads(row["system_append_json"])
+            if isinstance(system_data, dict):
+                for snap in (system_data.get("recipeSnapshot"), system_data.get("recipe"), system_data):
+                    if isinstance(snap, dict):
+                        snapshots.append(snap)
+        except (ValueError, TypeError):
+            pass
+
+    def code_of(value: Any) -> str:
+        if isinstance(value, dict):
+            value = value.get("code") or value.get("id") or ""
+        return str(value or "").strip().upper().lstrip("#")
+
+    for snap in snapshots:
+        for key in ("styles", "style_ids", "styleIds", "style1", "style2",
+                    "style", "styleCode", "style1Code", "style2Code"):
+            value = snap.get(key)
+            for raw in (value if isinstance(value, list) else [value]):
+                code = code_of(raw)
+                if CODE_RE.fullmatch(code) and code not in styles:
+                    styles.append(code)
+        if not layout:
+            for key in ("layout", "layout_id", "layoutId", "layoutCode"):
+                code = code_of(snap.get(key))
+                if CODE_RE.fullmatch(code):
+                    layout = code
+                    break
 
     # 2. From studio_recipes if recipe_id is present
     row_keys = row.keys() if hasattr(row, "keys") else row
@@ -100,6 +125,53 @@ def extract_generation_styles_and_layout(
                 if c not in styles:
                     styles.append(c)
 
+    return styles, layout
+
+
+def recover_generation_work_assets(
+    conn: sqlite3.Connection,
+    work_row: sqlite3.Row | dict[str, Any],
+) -> tuple[list[str], str]:
+    """Read-only fallback for older generated works missing resource metadata.
+
+    Works remain the publication source of truth. Only missing style/layout
+    fields are recovered from the same owner's linked successful web run.
+    """
+    keys = work_row.keys() if hasattr(work_row, "keys") else work_row
+    run_id = str(work_row["run_id"] or "") if "run_id" in keys else ""
+    if not run_id:
+        return [], ""
+    run = conn.execute(
+        "SELECT user_id, source, external_run_id FROM generation_runs WHERE id=?",
+        (run_id,),
+    ).fetchone()
+    if not run or str(run["source"]) != "web":
+        return [], ""
+    external = str(run["external_run_id"] or "")
+    rows = conn.execute(
+        """
+        SELECT * FROM studio_generations
+        WHERE user_id=? AND status='success'
+          AND (id=? OR batch_id=?)
+          AND COALESCE(deleted_at,'')=''
+        ORDER BY batch_index ASC, created_at ASC, id ASC
+        """,
+        (run["user_id"], external, external),
+    ).fetchall()
+    styles: list[str] = []
+    layout = ""
+    for row in rows:
+        try:
+            raw_items = json.loads(row["items_json"] or "[]")
+        except (TypeError, ValueError):
+            raw_items = []
+        item = next((part for part in raw_items if isinstance(part, dict)), None) if isinstance(raw_items, list) else None
+        found_styles, found_layout = extract_generation_styles_and_layout(conn, row, item)
+        for code in found_styles:
+            if code not in styles:
+                styles.append(code)
+        if not layout and found_layout:
+            layout = found_layout
     return styles, layout
 
 
