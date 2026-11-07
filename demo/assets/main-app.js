@@ -46,7 +46,7 @@
     profileWorksCursor: "",
     profileWorksHasMore: false,
     profileWorksTotal: null,
-    accountSection: "profile", // profile | email | security | devices | privacy
+    accountSection: "profile", // profile | email | security | devices | cloud
     profGenerations: null,
     profGenUser: "",
     profGenLoading: false,
@@ -199,7 +199,7 @@
     // Separate account settings from the public creator profile; keep old links working.
     if (view === "account" || (view === "profile" && p.get("ptab") === "account")) {
       App.view = "account";
-      UI.accountSection = ["profile", "email", "security", "devices"].includes(p.get("section")) ? p.get("section") : "profile";
+      UI.accountSection = ["profile", "email", "security", "devices", "cloud"].includes(p.get("section")) ? p.get("section") : "profile";
       if (view !== "account") {
         window.history.replaceState({ view: "account" }, "", channelUrl("main", { view: "account", section: UI.accountSection }));
       }
