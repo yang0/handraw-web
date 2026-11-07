@@ -253,7 +253,8 @@
               '">' + c[1] + '</button>';
           }).join("") +
           '</div><span data-gallery-message role="status" aria-live="polite"></span>' +
-          '<button type="button" class="btn btn-sm" data-gallery-retry hidden>重试上传</button></div>' +
+          '<button type="button" class="btn btn-sm" data-gallery-retry hidden>重试上传</button>' +
+          '<button type="button" class="btn btn-sm" data-gallery-copy-error hidden>复制问题编号</button></div>' +
         '<div class="hw-personal-gallery-grid" data-gallery-cards></div>' +
         '<div class="hw-personal-gallery-footer"><button type="button" class="btn btn-sm" data-gallery-more hidden>加载更多素材</button></div>' +
       '</section>';
@@ -261,6 +262,7 @@
     const more = container.querySelector("[data-gallery-more]");
     const fileInput = container.querySelector("[data-gallery-file]");
     const retryUpload = container.querySelector("[data-gallery-retry]");
+    const copyError = container.querySelector("[data-gallery-copy-error]");
     function message(msg, error) {
       const node = container.querySelector("[data-gallery-message]");
       if (node) {
@@ -362,6 +364,7 @@
       const code = String((err && err.code) || "");
       const id = /[a-f0-9]{32}/i.exec(String((err && err.message) || ""));
       const suffix = id ? "（问题编号：" + id[0] + "）" : "";
+      if (copyError) { copyError.hidden = !id; copyError.dataset.requestId = id ? id[0] : ""; }
       if (status === 401 || status === 403) return "登录失效或没有上传权限，请重新登录";
       if (status === 413 || code === "image_too_large" || code === "payload_too_large")
         return "图片过大，单张最多 15 MB、4000 万像素";
@@ -381,6 +384,7 @@
       busy = true;
       fileInput.disabled = true;
       if (retryUpload) retryUpload.hidden = true;
+      if (copyError) copyError.hidden = true;
       message("正在读取「" + file.name + "」…");
       try {
         const dataUrl = await new Promise(function (resolve, reject) {
@@ -433,6 +437,18 @@
       return uploadPending();
     });
     if (retryUpload) retryUpload.addEventListener("click", uploadPending);
+    if (copyError) copyError.addEventListener("click", async function () {
+      const id = copyError.dataset.requestId;
+      if (!id) return;
+      try {
+        if (!window.navigator || !window.navigator.clipboard || !window.navigator.clipboard.writeText)
+          throw new Error("no clipboard");
+        await window.navigator.clipboard.writeText(id);
+        message("问题编号已复制：" + id);
+      } catch (_) {
+        message("问题编号：" + id + "（可手动选中复制）", true);
+      }
+    });
     await load(false);
   }
   window.HandrawCloudCenter = { mount, mountGallery };
