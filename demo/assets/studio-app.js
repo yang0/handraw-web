@@ -6376,6 +6376,19 @@
 
         const slotKey = sp.slotKey || String(i);
         currentSlotKey = slotKey;
+        // A deliberate image-level rerun must reserve a NEW gateway request
+        // while remaining in the SAME logical batch/work. Otherwise it simply
+        // replays the old failed request and never generates a replacement.
+        if (resolvedOnlyIdx !== null && dn && dn.data && !dn.data.pendingTaskId) {
+          const previous = (dn.data.items || []).find(it =>
+            it && (it.slotKey === slotKey || (it.requestId && it.requestId === dn.data.pendingRequestIds?.[slotKey]))
+          );
+          if (previous && (previous.failed || previous.imageUrl)) {
+            const previousRequestId = dn.data.pendingRequestIds?.[slotKey];
+            if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[slotKey];
+            if (previousRequestId && dn.data.pendingSpec) delete dn.data.pendingSpec[previousRequestId];
+          }
+        }
         let requestId = dn && dn.data && dn.data.pendingRequestIds && dn.data.pendingRequestIds[slotKey];
         if (!requestId) {
           requestId = makeStableRequestId(`out_${batchId}_${slotKey}`);
@@ -6662,6 +6675,21 @@
       }
 
       if (batchRun.cancelled) {
+        if (useLiveApi) {
+          const notSubmitted = plan.specs
+            .map((sp, i) => ({i, key: sp.slotKey || String(i)}))
+            .filter(({key}) => !completedSlots.has(key) && !failedSlots.has(key))
+            .map(({i}) => i);
+          if (notSubmitted.length) {
+            try {
+              await S.apiJson(`/api/studio/batches/${encodeURIComponent(batchId)}/cancel-pending`, {
+                method: "POST", body: { positions: notSubmitted }
+              });
+            } catch (error) {
+              console.warn("未提交图片的取消状态尚未同步到服务器", error);
+            }
+          }
+        }
         ctrl.data.status = "idle";
         for (const dn of dispNodes) {
           if (isBatchGallery) dn.data.status = Array.isArray(dn.data.items) && dn.data.items.length ? "done" : "idle";
