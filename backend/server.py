@@ -242,11 +242,19 @@ def cache_generated_image_bytes(raw_bytes: bytes, mime: str, filename_stem: str)
     payload, ext = validate_image_bytes(raw_bytes, mime)
     gen_dir = get_generated_dir()
     gen_dir.mkdir(parents=True, exist_ok=True)
-    out_name = f"{_safe_generated_stem(filename_stem)}{ext}"
+    # Content-addressed names protect immutable media identities on retries.
+    out_name = f"{_safe_generated_stem(filename_stem)}-{hashlib.sha256(payload).hexdigest()[:16]}{ext}"
     out_path = gen_dir / out_name
     with out_path.open("wb") as fp:
         fp.write(payload)
-    return f"/generated/{out_name}"
+    public_url = f"/generated/{out_name}"
+    try:
+        from .object_storage import put as store_private_object
+        store_private_object(public_url, payload, mime=mime)
+    except Exception:
+        out_path.unlink(missing_ok=True)
+        raise  # never complete a generation if durable object upload failed
+    return public_url
 
 
 def _same_remote_origin(left: str, right: str) -> bool:
@@ -567,6 +575,8 @@ def save_data_url_upload(
                     raise ServiceError("上传文件名冲突，请重试", status=503, code="upload_collision") from exc
                 new_file_path = fpath
                 public_url = f"/uploads/{fname}"
+                from .object_storage import put as store_private_object
+                store_private_object(public_url, raw_bytes)
 
                 asset_uid = str(uuid.uuid4())
                 now_iso = utc_now_iso()
@@ -630,6 +640,12 @@ def save_data_url_upload(
     except FileExistsError as exc:
         raise ServiceError("上传文件名冲突，请重试", status=503, code="upload_collision") from exc
     public_url = f"/uploads/{fname}"
+    try:
+        from .object_storage import put as store_private_object
+        store_private_object(public_url, raw_bytes)
+    except Exception:
+        fpath.unlink(missing_ok=True)
+        raise
     return {
         "id": up_id,
         "url": public_url,
@@ -1166,7 +1182,7 @@ def resolve_binary_image(
             if prefix == "/images/" and rel.lower().startswith("custom/") and not include_private_benchmark_assets():
                 return None
             safe_url = sanitize_media_url(s)
-            if not safe_url or not root.exists():
+            if not safe_url:
                 return None
             target = (root / rel).resolve()
             if not _path_is_within(target, root):
@@ -1177,6 +1193,10 @@ def resolve_binary_image(
                 if not _is_published_media(db, safe_url):
                     if not user or _media_owner(db, safe_url) != int(user["id"]):
                         return None
+            if prefix in ("/generated/", "/uploads/") and not target.is_file():
+                from .object_storage import ensure_local_copy
+                if not ensure_local_copy(safe_url, target):
+                    return None
             if target.is_file():
                 return target.read_bytes(), (target.suffix.lower() or ".webp")
     return None
@@ -2694,9 +2714,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 if prefix == "/images/" and rel.lower().startswith("custom/") and not include_private_benchmark_assets():
                     self.send_error(404, "Media not found")
                     return
-                if root_dir.exists():
+                if True:
+                    # Authorize before any object-storage read-through; S3 keys
+                    # are never accessible merely because a URL was guessed.
                     target = (root_dir / rel).resolve()
-                    if _path_is_within(target, root_dir) and target.is_file():
+                    if _path_is_within(target, root_dir):
                         ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
                         if prefix == "/images/":
                             cache_policy = "public, max-age=86400"
@@ -2706,6 +2728,19 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                             if not allowed:
                                 self.send_error(404, "Media not found")
                                 return
+                            if not target.is_file():
+                                from .object_storage import ensure_local_copy
+                                try:
+                                    if not ensure_local_copy(f"{prefix}{rel}", target):
+                                        self.send_error(404, "Media not found")
+                                        return
+                                except Exception:
+                                    logger.exception("object_storage read-through failed for authorized media")
+                                    self.send_error(503, "Media temporarily unavailable")
+                                    return
+                        if not target.is_file():
+                            self.send_error(404, "Media not found")
+                            return
                         payload, ctype, resized = read_with_thumbnail(target, normalize_thumb_width(q1("w")))
                         if resized:
                             # A transcoded variant is addressable by its own URL,
