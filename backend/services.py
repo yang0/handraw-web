@@ -5766,6 +5766,21 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
     uid = int(user["id"])
     uname = user["username"]
 
+    # A canvas batch sends independent gateway requests but represents one
+    # logical public work. Validate the group boundary server-side.
+    batch_id = str(body.get("batchId") or "").strip()
+    if batch_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", batch_id):
+        raise ServiceError("批次 ID 无效", status=400, code="invalid_batch_id")
+    try:
+        batch_index = int(body.get("batchIndex", 0))
+        batch_total = int(body.get("batchTotal", 1))
+    except (ValueError, TypeError):
+        raise ServiceError("批次序号无效", status=400, code="invalid_batch_index")
+    if batch_total < 1 or batch_total > 200 or batch_index < 0 or batch_index >= batch_total:
+        raise ServiceError("批次序号超出范围", status=400, code="invalid_batch_index")
+    if not batch_id and (batch_index != 0 or batch_total != 1):
+        raise ServiceError("缺少批次 ID", status=400, code="invalid_batch_id")
+
     recipe_id = str(body.get("recipeId") or "").strip()
     r_colors: list[str] = []
     r_tones: list[str] = []
@@ -6138,6 +6153,11 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 fork_item_target,
             ),
         )
+        if batch_id:
+            tx.execute(
+                "UPDATE studio_generations SET batch_id=?,batch_index=?,batch_total=? WHERE id=?",
+                (batch_id, batch_index, batch_total, gen_id),
+            )
         if cost_type == "free_quota":
             tx.execute(
                 """
