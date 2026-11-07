@@ -74,6 +74,26 @@ def get_valid_layout_map(db: Database | None = None) -> dict[str, str]:
     return layouts
 
 
+def get_layout_descriptions(valid_layouts: dict[str, str]) -> dict[str, str]:
+    """Optional catalog metadata, never a preferred list or example set."""
+    descriptions: dict[str, str] = {}
+    cat_file = CONTENT_DIR / "catalog.json"
+    if not cat_file.is_file():
+        return descriptions
+    try:
+        data = json.loads(cat_file.read_text(encoding="utf-8"))
+        for item in data.get("resources", []):
+            code = str(item.get("id") or "").strip().upper()
+            if code not in valid_layouts:
+                continue
+            detail = str(item.get("description") or item.get("summary") or "").strip()
+            if detail:
+                descriptions[code] = re.sub(r"\s+", " ", detail)[:180]
+    except (OSError, ValueError, TypeError):
+        pass
+    return descriptions
+
+
 def get_style_display_name(style_id: str, db: Database | None = None) -> str:
     """Lookup style name from catalog or DB."""
     clean_id = str(style_id or "").strip().upper()
@@ -198,8 +218,10 @@ def execute_batch_plan(
     # Use the complete catalog; no first-N sampling or code-family favoritism.
     if norm_mode == "ai" and not valid_layouts:
         raise ServiceError("暂无可用图型，无法推荐", status=503, code="layout_catalog_empty")
-    layout_options_str = "\\n".join(
-        f"{code}: {valid_layouts[code]}" for code in sorted(valid_layouts)
+    descriptions = get_layout_descriptions(valid_layouts)
+    layout_options_str = "\n".join(
+        f"{code}: {valid_layouts[code]}" + (f" — {descriptions[code]}" if code in descriptions else "")
+        for code in sorted(valid_layouts)
     )
     style_display = get_style_display_name(norm_style_id, db)
 
@@ -217,10 +239,10 @@ def execute_batch_plan(
         "完整可用图型目录（只能从中选，不能按编号顺序或默认偏好选择）：\n"
         f"{layout_options_str}\n\n"
         "输出规则：\n"
-        "1. 只输出 JSON 对象；顶层只有 items 数组，每条仅有 subject 和 layout 字段。禁止附加示例。\\n"
-        f"2. 必须恰好返回 {cnt} 条 items，主题不重复、紧扣本次母题；每条不超过120字，无编号。\\n"
-        "3. layout 必须来自完整目录，按每条主题的画面内容、信息密度及叙事需求匹配。\\n"
-        f"4. 固定模式全部使用 {norm_fixed_layout or '用户选定图型'}；AI 模式允许语义合理重复，禁止轮换固定编号。\\n"
+        "1. 只输出 JSON 对象；顶层只有 items 数组，每条仅有 subject 和 layout 字段。禁止附加示例。\n"
+        f"2. 必须恰好返回 {cnt} 条 items，主题不重复、紧扣本次母题；每条不超过120字，无编号。\n"
+        "3. layout 必须来自完整目录，按每条主题的画面内容、信息密度及叙事需求匹配。\n"
+        f"4. 固定模式全部使用 {norm_fixed_layout or '用户选定图型'}；AI 模式允许语义合理重复，禁止轮换固定编号。\n"
         "5. 不使用历史示例、few-shot、默认图型或预设搭配。只输出合法 JSON。"
     )
 
