@@ -79,7 +79,7 @@ jobs:
         with:
           node-version: '24'
       - run: node --check demo/assets/main-app.js && node --check demo/assets/mixed-feed.js && node --check demo/assets/image-loader.js
-      - run: node tests/test_mixed_feed.cjs && node tests/test_main_image_loader.cjs && node tests/test_progressive_image_loader.cjs && node tests/test_masonry_flow.cjs && node tests/test_profile_studio_p2_p3.cjs && node tests/test_studio_history_masonry.cjs
+      - run: node tests/test_mixed_feed.cjs && node tests/test_main_image_loader.cjs && node tests/test_progressive_image_loader.cjs && node tests/test_masonry_flow.cjs && node tests/test_profile_studio_p2_p3.cjs && node tests/test_studio_history_masonry.cjs && node tests/test_forum_work_assets.cjs
       - name: Private gallery, batch parallel UI and progress regression
         run: |
           node --check demo/assets/cloud-center.js

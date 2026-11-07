@@ -125,7 +125,7 @@ assert.ok(!stage.innerHTML.includes('data-hist-img-toggle="linked_run"'), "Work 
 assert.ok(styles.includes("--ic-library-max-width: none"), "History/workflow must not have a competing fixed width cap");
 assert.ok(styles.includes("--ic-library-side-gap: var(--hw-page-gutter, 24px)"), "Library must inherit navigation page gutter");
 const feedStyles = fs.readFileSync("demo/assets/mixed-feed.css", "utf8");
-assert.match(styles, /\\.ic-hist-masonry-grid\\s*\\{[^}]*display:\\s*grid;[^}]*grid-template-columns:\\s*repeat\\(5, minmax\\(0, 1fr\\)\\)/s,
+assert.match(styles, /\.ic-hist-masonry-grid\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/s,
   "History must use five explicit grid tracks on wide screens, matching the homepage");
 for (const [breakpoint, columns] of [[1400, 4], [1100, 3], [760, 2], [350, 1]]) {
   const track = columns === 1 ? "minmax(0, 1fr)" : "repeat(" + columns + ", minmax(0, 1fr))";
