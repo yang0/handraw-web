@@ -81,6 +81,10 @@ V3_MIGRATIONS = [
 
         ALTER TABLE works ADD COLUMN run_id TEXT;
         ALTER TABLE works ADD COLUMN cover_media_id TEXT;
+        -- Distinguish a temporary first-completion cover from a deliberate
+        -- choice by the author. Async arrivals may revise only the former.
+        ALTER TABLE works ADD COLUMN cover_selected_by_author INTEGER NOT NULL
+            DEFAULT 0 CHECK(cover_selected_by_author IN (0,1));
         CREATE UNIQUE INDEX IF NOT EXISTS idx_works_run_id
             ON works(run_id) WHERE run_id IS NOT NULL;
 
@@ -537,7 +541,9 @@ def record_public_work(
     ).fetchone():
         raise ValueError("Deleted generation work cannot be republished")
     work = tx.execute(
-        "SELECT id,run_id,author_username,cover_media_id FROM works WHERE id=?", (work_id,),
+        """SELECT id,run_id,author_username,cover_media_id,
+                  cover_selected_by_author FROM works WHERE id=?""",
+        (work_id,),
     ).fetchone()
     if not work:
         raise ValueError("Work must exist before media linkage")
@@ -599,12 +605,17 @@ def record_public_work(
         )
     previous_cover = str(work["cover_media_id"] or "")
     valid_media_ids = {entry[1] for entry in entries}
-    # Preserve the author's chosen cover as more async output slots finish.
-    # Fall back to the first successful image only if that media disappeared.
-    cover_id = previous_cover if previous_cover in valid_media_ids else entries[0][1]
+    # The default cover follows the first successful *planned* slot even if
+    # responses arrive out of order. Only an explicit author choice is sticky.
+    keep_author_cover = bool(work["cover_selected_by_author"]) and (
+        previous_cover in valid_media_ids
+    )
+    cover_id = previous_cover if keep_author_cover else entries[0][1]
     tx.execute(
-        "UPDATE works SET cover_media_id=?,images_json=?,updated_at=? WHERE id=?",
-        (cover_id, json.dumps([e[2] for e in entries], ensure_ascii=False),
+        """UPDATE works SET cover_media_id=?,cover_selected_by_author=?,
+                  images_json=?,updated_at=? WHERE id=?""",
+        (cover_id, int(keep_author_cover),
+         json.dumps([e[2] for e in entries], ensure_ascii=False),
          now, work_id),
     )
     refresh_run_status(tx, run_id)
@@ -680,7 +691,8 @@ def set_work_cover(db: Any, user: dict[str, Any], work_id: str, image_url: str) 
         if not media:
             raise ServiceError("只能选择本作品中已成功生成的图片作为封面", status=400, code="cover_not_in_work")
         tx.execute(
-            "UPDATE works SET cover_media_id=?,updated_at=? WHERE id=?",
+            """UPDATE works SET cover_media_id=?,cover_selected_by_author=1,
+                      updated_at=? WHERE id=?""",
             (media["media_id"], _now(), work_id),
         )
     # The home scene API caches cards for 120 seconds; author edits must be
