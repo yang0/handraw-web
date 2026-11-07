@@ -36,7 +36,9 @@ assert.match(css, /\.hw-profile-topic-card \.forum-card-split\s*\{[^}]*flex-dire
 assert.match(css, /\.hw-personal-gallery-grid\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\);/s,
   "Private gallery must use a left-to-right five-track grid");
 for (const [width,count] of [[1400,4],[1100,3],[760,2],[350,1]]) {
-  assert.match(css, new RegExp("@media\\(max-width:" + width + "px\\) \\{ \\.hw-personal-gallery-grid:not\\(\\.is-empty\\) \\{ grid-template-columns:repeat\\(" + count + ",minmax\\(0,1fr\\)\\);"),
+  const cols = count === 1 ? "minmax\\(0,1fr\\)" : "repeat\\(" + count + ",minmax\\(0,1fr\\)\\)";
+  assert.match(css, new RegExp("@media\\(max-width:" + width +
+    "px\\) \\{ \\.hw-personal-gallery-grid:not\\(\\.is-empty\\) \\{ grid-template-columns:" + cols + ";"),
     "Private gallery breakpoints should match homepage at " + width + "px");
 }
 assert.match(gallery, /data-gallery-upload-form hidden/, "Gallery must have a review form");
