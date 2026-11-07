@@ -1995,12 +1995,24 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # contract a bounded allowance for a few 15 MiB photos. The regular
         # website's 20 MiB JSON limit remains unchanged.
         target_path = unquote(urlparse(self.path).path)
-        authenticated = self._current_user(required=False) if (
-            self.command == "POST" and target_path == "/api/v1/me/generations"
-        ) else None
-        body_limit = (64 * 1024 * 1024) if authenticated else MAX_JSON_BODY_BYTES
+        history_sync = self.command == "POST" and target_path == "/api/v1/me/generations"
+        library_image_put = self.command == "PUT" and bool(
+            re.fullmatch(r"/api/library/assets/[0-9a-fA-F-]{36}", target_path)
+        )
+        authenticated = self._current_user(required=False) if (history_sync or library_image_put) else None
+        # 15 MiB binary becomes ~20 MiB as a Base64 data URL. Give only the
+        # authenticated private library endpoint enough JSON headroom.
+        body_limit = (
+            64 * 1024 * 1024 if (history_sync and authenticated) else
+            24 * 1024 * 1024 if (library_image_put and authenticated) else
+            MAX_JSON_BODY_BYTES
+        )
         if length > body_limit:
-            raise ServiceError("请求体过大；请分批同步生图历史", status=413, code="payload_too_large")
+            raise ServiceError(
+                "图片或请求数据过大；图库单图上限 15 MB" if library_image_put else
+                "请求体过大；请缩小图片或分批上传",
+                status=413, code="payload_too_large",
+            )
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
