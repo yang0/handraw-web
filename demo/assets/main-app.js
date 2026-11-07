@@ -2633,12 +2633,33 @@
             <h3 style="margin:8px 0;">${esc(it.name)}</h3>
             <p style="font-size:12px;color:var(--ink-muted);">仅本人可见 · ${esc(it.license || "")}</p>
             <pre style="white-space:pre-wrap;font:inherit;font-size:12px;max-height:130px;overflow:auto;">${esc(it.definition?.zh || "")}</pre>
-            <button type="button" class="btn btn-sm" data-copy-private-resource="${esc(it.id)}">复制完整定义</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm" data-copy-private-resource="${esc(it.id)}">复制完整定义</button>
+              <button type="button" class="btn btn-sm" data-edit-private-resource="${esc(it.id)}">编辑</button>
+            </div>
           </article>`).join("");
         tabBodyHtml = `
           <section class="hw-detail-section-card" style="margin-bottom:20px;">
             <h3 style="margin:0 0 8px;">我的私有画风与图型</h3>
             <p style="font-size:12px;color:var(--ink-muted);">Skill 同步的资源默认私有，不会自动公开或成为官方编号资源。</p>
+            <button type="button" id="create-private-resource" class="btn btn-sm" style="margin:5px 0 15px;">＋ 新建私有画风/图型</button>
+            <form id="private-resource-editor" hidden style="padding:14px;border:1px solid var(--border, #ddd);border-radius:12px;margin-bottom:16px;">
+              <h4 id="private-resource-form-title" style="margin:0 0 12px;">新建个人资源</h4>
+              <input type="hidden" name="resourceId" />
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+                <label>类型<select name="kind" required class="form-control" style="width:100%;"><option value="style">画风</option><option value="layout">图型</option></select></label>
+                <label>名称<input name="name" required maxlength="120" class="form-control" style="width:100%;" /></label>
+              </div>
+              <label style="display:block;margin-top:10px;">中文完整定义<textarea name="zh" required maxlength="30000" rows="4" class="form-control" style="width:100%;"></textarea></label>
+              <label style="display:block;margin-top:10px;">英文完整定义<textarea name="en" required maxlength="30000" rows="4" class="form-control" style="width:100%;"></textarea></label>
+              <label style="display:block;margin-top:10px;">许可说明<input name="license" required maxlength="1000" class="form-control" style="width:100%;" value="个人使用" /></label>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
+                <button type="submit" class="btn btn-primary">保存到个人云端（私有）</button>
+                <button type="button" id="cancel-private-resource" class="btn">取消</button>
+                <button type="button" id="delete-private-resource" class="btn" hidden>删除</button>
+              </div>
+              <p id="private-resource-form-error" role="alert" style="color:var(--vermilion);font-size:12px;"></p>
+            </form>
             ${UI.personalResourcesLoading || UI.personalResources === null
               ? "<p>正在加载个人云端资源…</p>" :
                 UI.personalResourcesError
@@ -3121,6 +3142,72 @@
         openProfilePage(prof.username, btn.getAttribute("data-ptab"));
       };
     });
+
+    const resourceEditor = root.querySelector("#private-resource-editor");
+    if (resourceEditor) {
+      const field = (key) => resourceEditor.elements.namedItem(key);
+      const openEditor = (item) => {
+        resourceEditor.hidden = false;
+        field("resourceId").value = item?.id || "";
+        field("kind").value = item?.kind || "style";
+        field("name").value = item?.name || "";
+        field("zh").value = item?.definition?.zh || "";
+        field("en").value = item?.definition?.en || "";
+        field("license").value = item?.license || "个人使用";
+        root.querySelector("#private-resource-form-title").textContent = item ? "编辑个人资源" : "新建个人资源";
+        root.querySelector("#delete-private-resource").hidden = !item;
+        root.querySelector("#private-resource-form-error").textContent = "";
+        resourceEditor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      };
+      root.querySelector("#create-private-resource").onclick = () => openEditor(null);
+      root.querySelectorAll("[data-edit-private-resource]").forEach((btn) => {
+        btn.onclick = () => {
+          const item = (UI.personalResources || []).find((it) => it.id === btn.dataset.editPrivateResource);
+          if (item) openEditor(item);
+        };
+      });
+      root.querySelector("#cancel-private-resource").onclick = () => { resourceEditor.hidden = true; };
+      const editorError = root.querySelector("#private-resource-form-error");
+      resourceEditor.onsubmit = async (event) => {
+        event.preventDefault();
+        const id = field("resourceId").value || crypto.randomUUID();
+        const existing = (UI.personalResources || []).find((it) => it.id === id);
+        const body = {
+          id, kind: field("kind").value, name: field("name").value.trim(),
+          definition: { zh: field("zh").value.trim(), en: field("en").value.trim() },
+          license: field("license").value.trim(), examples: existing?.examples || [],
+          version: existing?.version || "1.0.0", origin: existing?.origin || null,
+          visibility: "private", schemaVersion: 1
+        };
+        if (existing) body.baseRevision = existing.revision;
+        const submitButton = resourceEditor.querySelector('[type="submit"]');
+        submitButton.disabled = true;
+        editorError.textContent = "";
+        try {
+          const result = await S.apiJson("/api/v1/me/resources/" + encodeURIComponent(id), { method: "PUT", body });
+          const updated = result.resource;
+          UI.personalResources = [...(UI.personalResources || []).filter((it) => it.id !== updated.id), updated];
+          toast("已保存到私有云端；Skill 可同步最新版本");
+          renderMain();
+        } catch (error) {
+          editorError.textContent = error.status === 409 ? "资源已在另一设备更新，请刷新后再编辑。" : (error.message || "保存失败");
+        } finally { submitButton.disabled = false; }
+      };
+      root.querySelector("#delete-private-resource").onclick = async () => {
+        const id = field("resourceId").value;
+        const existing = (UI.personalResources || []).find((it) => it.id === id);
+        if (!existing || !window.confirm("确定从云端删除这份私有资源？已同步的本地副本不会自动删除。")) return;
+        try {
+          await S.apiJson("/api/v1/me/resources/" + encodeURIComponent(id)
+            + "?baseRevision=" + encodeURIComponent(existing.revision), { method: "DELETE" });
+          UI.personalResources = (UI.personalResources || []).filter((it) => it.id !== id);
+          toast("资源已从个人云端删除");
+          renderMain();
+        } catch (error) {
+          editorError.textContent = error.status === 409 ? "版本已更新，请刷新后重试。" : (error.message || "删除失败");
+        }
+      };
+    }
 
     root.querySelectorAll("[data-copy-private-resource]").forEach((btn) => {
       btn.onclick = async () => {
