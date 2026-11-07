@@ -2363,10 +2363,6 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(get_user_collected_generations(self.db, user, limit=lim))
             return
 
-        from .skill_cloud_routes import handle_put as skill_cloud_put
-        if req_path.startswith("/api/v1/me/resources/"):
-            if skill_cloud_put(self, req_path, self._read_json_body()):
-                return
         if req_path.startswith("/api/studio/recipes"):
             from .recipe_routes import handle_recipe_get
             if handle_recipe_get(self, req_path, qs):
@@ -2768,6 +2764,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._enforce_write_origin()
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        from .skill_cloud_routes import handle_put as skill_cloud_put
+        if req_path.startswith("/api/v1/me/resources/"):
+            if skill_cloud_put(self, req_path, self._read_json_body()):
+                return
         if req_path.startswith("/api/studio/recipes"):
             from .recipe_routes import handle_recipe_put
             body = self._read_json_body()
