@@ -453,7 +453,7 @@
     if (["styles", "layouts", "works"].includes(App.view)) {
       UI.lastPrimaryView = App.view;
     }
-    let cleanTab = ["works", "resources", "topics", "articles", "collections"].includes(ptab) ? ptab : "works";
+    let cleanTab = ["works", "resources", "topics", "articles", "collections", "history"].includes(ptab) ? ptab : "works";
     if (["assets", "styles", "layouts"].includes(ptab)) {
       cleanTab = "resources";
       UI.profileResourceFilter = ptab === "layouts" ? "layouts" : "styles";
@@ -465,7 +465,7 @@
       window.location.href = channelUrl("studio", { view: "articles-all", page: 1 });
       return;
     }
-    if (!isMe && ["collections", "account", "articles"].includes(cleanTab)) {
+    if (!isMe && ["collections", "account", "articles", "history"].includes(cleanTab)) {
       cleanTab = "works";
     }
     const isEntering = App.view !== "profile" || UI.profileUser !== targetUser || UI.profileTab !== cleanTab;
