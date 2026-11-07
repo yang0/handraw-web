@@ -107,8 +107,8 @@ state.historyFilter = "canvas";
 app.renderHistoryStage();
 assert.ok(stage.innerHTML.includes('data-hist-restore="canvas"'));
 state.historyFilter = "all";
-assert.match(styles, /--ic-library-max-width:\\s*none;/, "History/workflow must not be capped at 1140px");
-assert.match(styles, /--ic-library-side-gap:\\s*6px;/, "History/workflow should use the navigation's narrow side gutters");
+assert.ok(styles.includes("--ic-library-max-width: 1140px"), "Library must match navigation 1140px rail");
+assert.ok(styles.includes("--ic-library-side-gap: var(--hw-page-gutter, 24px)"), "Library must inherit navigation page gutter");
 assert.match(styles, /\.ic-hist-masonry-grid\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/s,
   "Desktop must use explicit three-column grid tracks, not CSS multicol balancing");
 assert.ok(styles.includes(".ic-hist-masonry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }"),
