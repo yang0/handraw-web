@@ -45,6 +45,7 @@
     profileWorksError: "",
     profileWorksCursor: "",
     profileWorksHasMore: false,
+    profileWorksTotal: null,
     accountSection: "profile", // profile | email | security | devices | privacy
     profGenerations: null,
     profGenUser: "",
@@ -2409,7 +2410,7 @@
       const members = [...group.works.values()].sort((a, b) =>
         (Number(a.batchIndex) || 1) - (Number(b.batchIndex) || 1));
       const cover = members[0];
-      const total = Math.max(members.length, ...members.map((w) => Number(w.batchTotal) || 1));
+      const total = Math.max(members.length, ...members.map((w) => Number(w.batchTotal) || 1), ...members.map((w) => w.images.length));
       const thumbnails = members.flatMap((w) => w.images).filter(Boolean).slice(0, 3);
       return { cover, total, thumbnails };
     });
@@ -2431,6 +2432,7 @@
       UI.profileWorkRows = [...merged.values()];
       UI.profileWorksCursor = res.nextCursor || "";
       UI.profileWorksHasMore = Boolean(res.hasMore && res.nextCursor);
+      UI.profileWorksTotal = typeof res.total === "number" ? res.total : null;
       // Keep the shared work cache usable for existing detail navigation.
       res.items.forEach((w) => {
         const idx = App.state.works.findIndex((item) => String(item.id) === String(w.id));
@@ -2496,6 +2498,7 @@
         UI.profileWorkRows = null;
         UI.profileWorksCursor = "";
         UI.profileWorksHasMore = false;
+        UI.profileWorksTotal = null;
         UI.profileWorksLoading = false;
         UI.profileWorksError = "";
       }
@@ -2512,6 +2515,7 @@
               <article class="hw-card hw-profile-work-group" data-prof-work="${esc(cover.id)}" tabindex="0" role="button" aria-label="查看作品：${esc(cover.title)}${total > 1 ? `，共 ${total} 张` : ""}" style="cursor:pointer;">
                 <div class="hw-card-media">
                   <img data-hw-src="${esc(thumbnails[0] || cover.images[0])}" alt="${esc(cover.title)}" loading="lazy" />
+                  ${total > 1 && thumbnails.length > 1 ? `<div class="hw-profile-batch-strip" aria-hidden="true">${thumbnails.slice(1, 3).map((image) => `<img data-hw-src="${esc(image)}" alt="" loading="lazy" />`).join("")}</div>` : ""}
                   ${total > 1 ? `<span class="hw-card-badge-tl hw-profile-batch-count">🖼️ ${total} 张 · 作品组</span>` : ""}
                 </div>
                 <div class="hw-card-body">
@@ -3003,7 +3007,7 @@
 
         <!-- Standalone Profile Section Tabs -->
         <div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
-          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品 (${prof.works.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品${UI.profileWorksUser === prof.username && UI.profileWorksTotal !== null ? ` (${UI.profileWorksTotal})` : ""}</button>
           <button type="button" class="hw-pill ${UI.profileTab === "resources" ? "is-active" : ""}" data-ptab="resources" role="tab" aria-selected="${UI.profileTab === "resources"}">🎨 创作资源 (${prof.styles.length + prof.layouts.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 社区动态 (${prof.topics.length})</button>
         </div>
