@@ -6640,6 +6640,12 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) ->
 
 
 def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_urls: list[str] | None = None) -> None:
+    if image_urls is not None and not any(str(url or "").strip() for url in image_urls):
+        # Gateway status "success" is not success for the user if every
+        # image download/validation failed. Never consume quota and leave
+        # a permanently empty public generation in its place.
+        refund_failed_cloud_generation(db, gen_id, "生图任务未返回可保存的有效图片")
+        return
     with db.transaction() as tx:
         generation = tx.execute(
             "SELECT user_id, fork_work_id, engine, status FROM studio_generations WHERE id = ?", (gen_id,)
