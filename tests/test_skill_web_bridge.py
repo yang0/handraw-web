@@ -123,8 +123,13 @@ class SkillWebBridgeTests(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(mapped)
         own = bridge.list_history(self.db, self.owner, {})
-        self.assertTrue(any(r["id"] == "web_hist_public" and r["visibility"] == "public"
-                            for r in own["items"]))
+        self.assertTrue(any(
+            r["externalRunId"] == "web_hist_public"
+            and r["id"].startswith("run_")
+            and r["visibility"] == "public"
+            and r["workId"] == mapped["work_id"]
+            for r in own["items"]
+        ))
 
     def test_skill_upload_publishes_one_work_per_image_without_duplicates(self):
         from backend.server import save_data_url_upload
