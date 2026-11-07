@@ -1999,12 +1999,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 return
             if method == "DELETE" and re.fullmatch(r"^/api/v1/me/resources/[^/]+$", req_path):
                 return
-            if method == "POST" and req_path == "/api/v1/me/generations":
-                return
         # Publishing scope covers the explicitly user-requested social writes.
         if "publish" in scopes and method == "POST" and (
-            re.fullmatch(r"^/api/v1/works/[^/]+/(likes|comments)$", req_path)
-            or re.fullmatch(r"^/api/v1/me/generations/[^/]+/publish$", req_path)
+            req_path == "/api/v1/me/generations"
+            or re.fullmatch(r"^/api/v1/works/[^/]+/(likes|comments)$", req_path)
         ):
             return
 
