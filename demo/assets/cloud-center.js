@@ -336,6 +336,9 @@
         '</div>';
       more.hidden = !cursor;
       more.disabled = busy;
+      if (visible.length && typeof window.HANDRAW_SHARED?.layoutProfileMasonry === "function") {
+        window.HANDRAW_SHARED.layoutProfileMasonry(cards);
+      }
     }
     async function load(append) {
       if (busy) return;
