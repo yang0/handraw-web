@@ -1545,8 +1545,11 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
         profile_user = ""
 
     work_rows = conn.execute(
-        "SELECT id, title, author_username, author_name, images_json, styles_json, layout_code, price, prompt, prompt_has_secret, notes, cheers "
-        "FROM works WHERE status = 'published' ORDER BY featured DESC, published_at_ms DESC"
+        "SELECT w.id, w.title, w.author_username, w.author_name, w.images_json, "
+        "w.styles_json, w.layout_code, w.price, w.prompt, w.prompt_has_secret, "
+        "w.notes, w.cheers, cover.storage_key AS selected_cover_url "
+        "FROM works w LEFT JOIN media_assets cover ON cover.id=w.cover_media_id "
+        "WHERE w.status='published' ORDER BY w.featured DESC, w.published_at_ms DESC"
     ).fetchall()
     if not demo_mode_enabled():
         work_rows = [w for w in work_rows if not _is_demo_seed_record(w["id"])]
@@ -1561,10 +1564,24 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
     og_image = f"{base}/images/poster-demo-autumn-equinox.webp"
     json_ld: dict[str, Any]
 
+    def _seo_cover_url(work: Any) -> str:
+        """Use the author's linked cover, not the first output slot.
+
+        Keep GIFs as still thumbnails in social previews and server-rendered
+        discovery cards. Work details continue to use the animated original.
+        """
+        imgs = json.loads(work["images_json"] or "[]")
+        preferred = str(work["selected_cover_url"] or "")
+        selected = preferred if preferred and preferred in imgs else (
+            imgs[0] if imgs else "/images/poster-demo-autumn-equinox.webp"
+        )
+        if selected.startswith("/") and selected.split("?", 1)[0].lower().endswith(".gif"):
+            return selected + ("&" if "?" in selected else "?") + "w=480"
+        return selected
+
     target_work = next((w for w in work_rows if w["id"] == work_id), None) if work_id else None
     if target_work:
-        imgs = json.loads(target_work["images_json"] or "[]")
-        first_img = imgs[0] if imgs else "/images/poster-demo-autumn-equinox.webp"
+        first_img = _seo_cover_url(target_work)
         og_image = first_img if first_img.startswith("http") else f"{base}{first_img}"
         styles_list = json.loads(target_work["styles_json"] or "[]")
         recipe_tags = " / ".join([*styles_list, *([target_work["layout_code"]] if target_work["layout_code"] else [])])
@@ -1663,8 +1680,7 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
 
     ssr_cards: list[str] = []
     for w in work_rows[:24]:
-        imgs = json.loads(w["images_json"] or "[]")
-        img0 = imgs[0] if imgs else "/images/poster-demo-autumn-equinox.webp"
+        img0 = _seo_cover_url(w)
         styles = json.loads(w["styles_json"] or "[]")
         tags = " · ".join([*styles, *([w["layout_code"]] if w["layout_code"] else [])]) or "自由手绘创作"
         safe_p, _ = get_work_client_prompt(w, is_admin_route=False)
