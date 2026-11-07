@@ -311,6 +311,10 @@ def reserve_skill_run(
         tx, user_id=user_id, source="skill", external_run_id=external_run_id,
         expected_count=expected_count, request_id=request_id,
     )
+    if getattr(tx, "dialect", "") == "postgresql":
+        tx.execute(
+            "SELECT id FROM generation_runs WHERE id=? FOR UPDATE", (run_id,),
+        ).fetchone()
     row = tx.execute(
         "SELECT request_hash,original_request FROM generation_runs WHERE id=?",
         (run_id,),
