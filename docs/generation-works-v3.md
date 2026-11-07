@@ -1,101 +1,82 @@
-# Handraw V3 — 统一生图任务、作品和媒体模型
+# Handraw V3 · 统一任务、媒体与公开多图作品
 
-> 2026-11-07 · 产品决策基线。跟踪 Issue：[ #84 ](https://github.com/yang0/handraw-web/issues/84)。
-> 网站尚未正式发布，不再以旧版生成历史/作品 API 与旧数据模型兼容为重构约束；**严禁直接对未经确认的用户数据库执行清库**。
->
-> Web：`yang0/handraw-web@main`；Skill：`yang0/handraw-style@feature/skill-web-unification-v1-20261107`。
-> **本文件同时标记目标架构与实际提交状态；未标记为完成的项目不可宣称已上线。**
+> 设计决策日期：2026-11-07 · 追踪：[Issue #84](https://github.com/yang0/handraw-web/issues/84)  
+> 适用仓库：Web **https://github.com/yang0/handraw-web**（`main`）与 Skill **https://github.com/yang0/handraw-style**（`feature/skill-web-unification-v1-20261107`）。  
+> **明确前提：网站尚未上线，没有需保留的用户旧数据。V3 采用全新数据库初始化，不做历史数据兼容、旧历史补录或旧图片迁移。** 任何实际重建/删除数据库仍需操作人员确认本机环境，本工程不会自动清库。
 
-## 1. 不可变产品规则
+## 1. 冻结的业务规则
 
-1. **一个逻辑生成任务 = 最多一件作品 = 广场/个人主页最多一张封面卡片。**
-2. 一件作品可以有 1–N 张成功生成的图片/GIF；单个生成请求失败或无有效图片时不产生公开作品。
-3. 网站成功生图自动公开；Skill **用户主动把本地任务上传到网站**后自动公开，且一次上传只生成一件多图作品。无二次发布按钮。
-4. 历史按任务分组（不是按图片）；详情按计划输出顺序显示全部成功图片、失败槽位、下载和复刻能力。默认封面为排序后的首张成功图。
-5. 点赞、收藏、评论、举报、浏览、作品互动计数、论坛讨论全部绑定同一个 `work_id`；不会因一次任务有 5 张图产生 5 份互动或 5 个帖子。
-6. 作品默认公开**不代表个人图库、角色/参考素材、私有画风/图型定义、内部系统提示词、凭据自动公开**。管理员隐藏/删除状态仍生效。
-7. 同一批次异步完成或跨端重试均只会补充作品图片，不能新建第二份作品；对象存储上传/授权失败不得默默标记生成完成。
+1. 一条**逻辑生成任务最多一件作品**。网站成功生成与 Skill 用户明确上传的作品自动公开，不提供“发布到广场”的二次操作。
+2. 一件作品可包含 N 张成功图片或 GIF；**作品广场和个人主页均只显示封面一张卡**，多图卡显示真实媒体数量。详情显示所有成功图片，并保持计划输出顺序。
+3. 批量生成与执行请求分离：画布一次“生成 N 张”拥有稳定 `batchId`；各网关请求有独立 `requestId`、`batchIndex`、`batchTotal`。一批中 3 成功 2 失败：1 件公开作品、3 张公开图片，任务历史保留全部失败槽位。
+4. 点赞、收藏、评论、举报、复刻等作用于同一个 `works.id`，不为每张图片复制作品、讨论主题或互动。
+5. 用户个人图库、参考素材、未上传的 Skill 本地图片、私有画风/图型定义和内部隐藏提示词不会因为生成作品默认公开而自动公开。
+6. 作品隐藏/删除由审核状态控制；某个批次子请求失败或被删除不能自动隐藏剩余成功图片；管理员隐藏不能被后续子任务自动取消。
+7. 失败必须显式记录并可恢复，存储成功但作品写入失败不能静默返回成功。
 
-## 2. 任务语义：UI 批次 ≠ 模型请求
-
-画布批量生图当前为每个输出槽位发出独立的 `POST /api/studio/generate`；不同的 `requestId` 只用于**子请求幂等**，不能用作作品身份。
-
-V3 客户端增加：
-- `batchId`：一次用户创作行为的稳定逻辑任务 ID，同一批 N 图共享。
-- `batchIndex`：0-based 槽位索引。
-- `batchTotal`：预期输出槽位数。
-
-服务端用 `(user_id,batchId)` 确定唯一公开作品；已成功的槽位按 `batchIndex` 排序后汇入同一作品。首个槽位完成即可出现封面，后续完成原地追加；已隐藏作品不能因为其他槽位完成而被恢复公开。失败槽位只出现在任务历史中，不进入作品媒体。
-
-Skill 本地以 `externalRunId` 表示逻辑任务；`history record` 不联网；`history upload` 一次上传全部图片，回执为 `workId`、`workIds: [workId]`、`imageCount`。重复上传使用相同 `externalRunId`/`requestId`。
-
-## 3. 目标规范化数据库（P1 完成后）
+## 2. 规范化数据模型（已提交的 SQLite 开发实现）
 
 ```text
-users 1─N generation_runs
-                │ 1─N
-                ▼
-         generation_items ─────> media_assets
-                │                     ▲
-                │ 1:0..1              │
-                ▼                     │
-             works 1─N────────── work_media
-                │
-                ├── work_interactions / work_comments
-                └── forum_threads (0..1)
+users
+ └── generation_runs (owner, source, external_run_id, idempotency key, status)
+       ├── generation_items (position, status, media_id, error_code)
+       │                         └── media_assets (owner, storage key, SHA-256, MIME)
+       └── works (run_id UNIQUE, cover_media_id, title, moderation/interaction)
+             ├── work_media (media_id, position) ────────────> media_assets
+             ├── work_comments / social interactions / collections
+             └── forum_topics (one shared discussion)
 ```
 
-- `generation_runs(id, user_id, source, external_run_id, request_id, status, params_json, created_at)`：统一网站/Skill/后续客户端；一个 run 最多一件 work。
-- `generation_items(run_id, item_key, position, status, media_id)`：每个执行槽位有稳定主键和顺序；失败项可没有 media_id。
-- `media_assets(id, owner_id, storage_key, sha256, mime_type, width, height, size_bytes)`：原图与 GIF 的文件身份；对象存储放二进制文件。
-- `works(id, run_id NULLABLE UNIQUE, owner_id, title, cover_media_id, status, moderation_status, published_at)`：**唯一社区作品实体**。不由生成而来的直接作品可不关联 run。
-- `work_media(work_id, media_id, position)`：唯一组合和稳定排序，封面必须属于当前作品媒体集合。
-- `interactions`、`comments`、`forum`：统一关联单件 works，不做逐图作品。
+核心实现：`backend/generation_v3.py`；**数据库初始化定义** `V3_MIGRATIONS`，建立 `generation_runs`、`generation_items`、`media_assets`、`work_media`，给 `works` 增加 `run_id`、`cover_media_id`。
 
-规范化之后，生成任务 JSON 不再是公开媒体唯一身份；`generation_works`、`skill_generation_work_items`、`skill_history_publications` 等旧中间映射和两套独立生成历史会被替代。**这一步仍属于 P1，不应误报已完成。**
+关键数据库约束：
+- `UNIQUE(user_id,source,external_run_id)`、`UNIQUE(user_id,source,request_id)`（非空键）与 `works.run_id UNIQUE`，防止重试产生第二件作品。
+- `UNIQUE(generation_items.run_id,position)`、`UNIQUE(work_media.work_id,position)`、`PRIMARY KEY(work_id,media_id)`，保证图片项稳定并且每件作品的媒体可排序。
+- 外键、触发器阻止不同用户间篡改运行归属/媒体归属；封面必须属于当前作品；run/media 的关键身份不可更改。
+- `works.images_json` **只是瀑布流列表的派生显示缓存**，唯一媒体身份在 `media_assets` + `work_media`。写入服务在同一事务中更新，数据库触发器拒绝与媒体关联不一致的缓存；作品详情直接读权威媒体表。
+- `generation_items` 保留失败槽位与错误码；成功且有媒体 ID 的槽位才能出现在公开作品中。
+- 原图、GIF 二进制不存入 SQL；文件存储与独立私有素材授权仍由现有服务管理。
 
-约束：
-- `UNIQUE (user_id, source, request_id)`：请求幂等；来源/请求键不能为空时才启用。
-- `UNIQUE (run_id)` on works：一个逻辑任务最多一件作品。
-- `UNIQUE (run_id, item_key)` 和 `UNIQUE (run_id, position)`：任务输出稳定、不会重复。
-- 只在状态成功且媒体存在、审核正常且未删除时广场可见；状态机与审核状态分离。
-- 对象上传不可加入 PostgreSQL 事务：先可靠保存/验证媒体，再在数据库事务中提交关联与状态，失败可通过幂等任务重试和后台对账修复。
-- PostgreSQL 负责权威数据；Redis 只承载任务队列、短期缓存和限流；S3/R2/MinIO 等对象存储负责原图/GIF/衍生文件。
+**V3 不创建旧版 `generation_works`、`skill_generation_runs`、`skill_generation_work_items`、`skill_history_publications` 表。** 旧版历史补录管理接口及数据库 backfill hook 已移除。SQLite 迁移编号仍为内部初始化机制，**不是旧用户数据升级承诺**。
 
-## 4. 当前 P0 过渡实现（与最终规范化模型明确区分）
+## 3. 写入与读取流程
 
-| 范围 | 当前完成情况 |
-| --- | --- |
-| 网站逻辑批次身份 | 已添加迁移 098：`studio_generations.batch_id/batch_index/batch_total`；`works.generation_batch_key` 及唯一索引 |
-| Web 生成 → 作品 | `generation_works.project_generation_to_works` 按完成槽位聚合，不再逐张创建作品；所有图片保留在**同一 works.images_json** |
-| Web 历史 | `services` 按 batchId 合并页面初始化历史；保留子请求 pendingTasks 供恢复 |
-| Skill 上传 | 一次 run 创建一件包含 N 图的 works；回执 `workId`、单元素 `workIds`、`imageCount` |
-| 作品广场 | `works-browser.unpackWorkCandidates` 一件作品只产生一张卡；显示 `N 张`角标 |
-| 个人主页 | 直接按作品渲染一张封面卡片，不额外渲染三图横条 |
-| 讨论详情 | 同一作品后续补图，`ensure_topic` 刷新主题媒体列表，保留原评论/主题 ID |
-| 安全/审核 | 默认公开生成作品；私有素材权限及管理员隐藏不因批次追加改变 |
-| P1 目标 | 统一 `generation_runs/generation_items/media_assets/work_media` 及去除旧重复表：**尚未完成** |
+### Web 云端生成
 
-当前部分过渡实现仍使用 SQLite Schema 和 `works.images_json`，这不是最终最佳实践；先保证“一个逻辑 run 只产生一件作品”的业务正确性，再做干净规范化与 PostgreSQL 切换。
+`POST /api/studio/generate` 接收 `batchId` / `batchIndex` / `batchTotal`，与网关子请求幂等 ID 分离。后端在生成计费/执行记录的事务中保留统一 `generation_runs` 记录；网关成功后，以真实结果构建 `generation_items` 和 `media_assets`，在一个数据库事务中关联最多一条 `works` 以及全部 `work_media`。生成失败/退款的子请求在 `generation_items` 留下失败状态，失败整批没有作品。分批/乱序返回按槽位顺序汇总，第一张成功图是默认封面。
 
-## 5. API 与 UI 验收
+`studio_generations` 暂时继续存在，定位为**网关执行、扣费、退款、任务恢复的底层记录**，不是作品或生成历史的权威模型。统一生成历史由 `generation_runs` 承载。
 
-| 场景 | 预期 |
-| --- | --- |
-| Web 单图 | 1 run → 1 work → 1 卡，详情 1 图 |
-| Web 批量 5 图，异步乱序 | 同 `batchId`、5 子请求 → 1 work、1 卡、详情 5 图；封面按 `batchIndex` 取首张成功图 |
-| 5 图 3 成功 2 失败 | 1 work、详情 3 图；历史留失败槽位，不渲染空白公开卡 |
-| 全失败/无图 | 不生成公开作品 |
-| Skill 上传 5 张 | 1 work、1 卡、5 图、同一组互动；返回单个 `workId` |
-| Skill 断点重传 | `workId` 不变；无重复图片/作品/帖子 |
-| 匿名浏览多图详情 | 所有成功图能看，个人图库和内部 prompt 仍不可访问 |
-| 被管理员隐藏的作品 | 后续子任务成功不能重新公开 |
-| 数据出错 | 必须回滚或显式报错，不能“历史 18 张、作品 0 张”却静默成功 |
+### Skill 用户主动上传
 
-## 6. 质量门槛
+`history record` 为纯本地操作。`history upload` 提交一个稳定 `externalRunId`、请求哈希与全部图片；每张成功存储的媒体在 `generation_items` 持久登记，断点续传只上传缺失槽位。整个任务公开时仅创建一件 works，并在最后确认全部媒体授权与关联成功；回执为：
 
-- Web Python 单元/HTTP/权限测试、CJS 瀑布流/路由测试、Skill CLI 回执测试。
-- 服务端隔离数据库：真实多图乱序完成、重试、并发、部分失败、媒体归属、hidden 作品、数据库唯一约束。
-- 两端浏览器 E2E：个人主页、广场、详情、GIF、移动端、图片顺序与计数。
-- GitHub Actions Runner 必须真正执行测试；**创建/合并提交≠部署上线，也不能把 Runner 分配失败写成 CI 通过。**
-- 未正式发布时允许重建开发数据库进行干净迁移，但先确认开发环境与备份；不自动删除任何数据库。
+```json
+{"ok":true,"id":"run_...","workId":"work_...","workIds":["work_..."],"imageCount":5,"visibility":"public"}
+```
+
+客户端确认 `workIds` 只包含 `workId`，且 `imageCount` 与本地图片数一致后，才标记上传成功。不接受同一外部运行 ID 使用不同原始指令或图片哈希重试。
+
+### 统一读取
+
+- 个人主页与广场：按 **works** 分页，一个作品一张封面卡。
+- 作品详情：从 `work_media JOIN media_assets` 按 `position` 读取全部成功图片；评论和点赞统一绑定作品 ID。
+- `GET /api/v1/me/generations`：按 `generation_runs` 分页，网站和 Skill 共享一套数据模型；包含图片、输出槽位状态与失败码。
+- 论坛主题：每件作品最多一个帖子；批量后续成功图片会更新其详情图片列表。
+- 管理员隐藏/删除不因新生成子项自动恢复公开。
+
+## 4. 当前保留但不属于“旧版本兼容”的部分
+
+网站核心的 `studio_generations`、`studio_generation_media` 和 `media_public_grants` 仍承担执行计费、媒体上传归属与公开读权限；不应与 `generation_runs` 的**逻辑任务**混淆。其功能拆分以后可以进一步收敛，但不要为了减少表名而破坏退款、授权或恢复机制。
+
+现有 `works.images_json` 仅为公开列表缓存；直接手动修改会被数据库约束拒绝。正式上线如果切换 PostgreSQL，必须把这些 SQLite trigger/DDL 改写成 PostgreSQL 的 FK/约束/触发器或事务服务，不可直接照搬 SQLite SQL。
+
+## 5. 质量与上线门槛（尚未全部满足）
+
+- 已新增/更新隔离测试：独立任务一次生成多图；多路乱序到达；重复请求/上传；跨用户媒体归属；封面约束；列表缓存一致性；3 成功 2 失败的槽位保留；Skill 断点续传；单卡瀑布流和作品详情。
+- 仍须实际运行 Python 全量单元测试、Node 交互回归、Web ↔ Skill 真实上传 E2E 与跨进程并发测试。**Web GitHub Actions 当前在 Runner 作业步骤开始前失败，没有可信全绿结果。**
+- PostgreSQL 原生 V3 schema 与完整运行时适配、对象存储持久性与授权测试仍需单独完成；当前不可称为 PostgreSQL 生产部署就绪。
+- 没有旧数据可迁移，因此不做数据转换脚本、旧数据修复 UI、历史图片回填。开发机已有 SQLite 测试库也不能自动覆盖；重建前由操作者确认数据库位置并清空。
+- 未达到全部门槛前，Issue #84 保持开放，不能宣称全部完成或已部署。
+
+> 本文件覆盖 `docs/skill-web-unification-v1.md` 及旧 V1 实施说明中所有“历史私有默认/逐图发布/二次发布/旧数据回填”的过时表述。
