@@ -6272,6 +6272,21 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 "UPDATE studio_generations SET batch_id=?,batch_index=?,batch_total=? WHERE id=?",
                 (batch_id, batch_index, batch_total, gen_id),
             )
+        # V3: reserve the logical run once, not once per gateway subrequest.
+        # Concurrent model calls may have distinct requestId values, but share
+        # their user's stable batchId and therefore one run / public work.
+        from .generation_v3 import ensure_run
+        canonical_run_id = ensure_run(
+            tx, user_id=uid, source="web",
+            external_run_id=batch_id or gen_id,
+            expected_count=batch_total if batch_id else 1,
+            request_id=batch_id or request_id,
+        )
+        tx.execute(
+            "UPDATE generation_runs SET original_request=? WHERE id=?",
+            (user_subject, canonical_run_id),
+        )
+
         if cost_type == "free_quota":
             tx.execute(
                 """
@@ -6447,6 +6462,28 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) ->
                 event_key=f"gen_refund_{gen_id}",
                 ref_type="generation",
                 ref_id=gen_id,
+            )
+
+        # The run remains the history identity even when every subrequest
+        # fails. Do not create a public work for a fully failed run.
+        logical_key = str(row["batch_id"] or "") or gen_id
+        related = tx.execute(
+            """
+            SELECT status FROM studio_generations
+            WHERE user_id=? AND
+              (id=? OR (batch_id<>'' AND batch_id=?))
+            """,
+            (uid, gen_id, str(row["batch_id"] or "")),
+        ).fetchall()
+        has_pending = any(x["status"] in ("queued", "running") for x in related)
+        has_success = any(x["status"] == "success" for x in related)
+        if not has_pending:
+            tx.execute(
+                """
+                UPDATE generation_runs SET status=?,updated_at=?
+                WHERE user_id=? AND source='web' AND external_run_id=?
+                """,
+                ("partial" if has_success else "failed", now_iso, uid, logical_key),
             )
 
 
