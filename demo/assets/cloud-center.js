@@ -57,7 +57,7 @@
     moreResources.hidden = !data.resourcesCursor;
     const assets = container.querySelector("[data-cloud-assets]");
     assets.innerHTML = data.assets.length ? data.assets.map((item) => {
-      const url = safeImage(item.publicUrl || item.imageUrl);
+      const url = safeImage(item.imageUrl || item.publicUrl); // Always prefer owner-authenticated image endpoint.
       return `<article class="hw-detail-section-card" style="padding:10px;min-width:105px;width:130px;">
         ${url ? '<img loading="lazy" alt="' + escapeHtml(item.name) + '" src="' + escapeHtml(url) +
           '" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:7px;" />' : ""}
