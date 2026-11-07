@@ -117,3 +117,17 @@ def ensure_local_copy(url: str, target: Path) -> bool:
     finally:
         Path(tmp_name).unlink(missing_ok=True)
     return True
+
+
+def delete_private_object(url: str) -> None:
+    """Remove an unreferenced object, only after DB reference checks.
+
+    Call from the durable media GC worker; do not invoke while holding a
+    database transaction or while media may still be used by a work.
+    """
+    if not enabled():
+        return
+    _client().delete_object(
+        Bucket=os.environ["HANDRAW_OBJECT_BUCKET"].strip(),
+        Key=_key(url),
+    )
