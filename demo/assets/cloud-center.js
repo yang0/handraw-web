@@ -247,6 +247,18 @@
           '<p>私人素材仅自己可见。与 Skill 自建图库双向同步，也可以在这里直接添加图片。</p></div>' +
           '<label class="btn btn-primary btn-sm">添加图片' +
             '<input data-gallery-file type="file" accept="image/png,image/jpeg,image/webp" hidden /></label></div>' +
+        '<form class="hw-personal-gallery-upload-form" data-gallery-upload-form hidden>' +
+          '<div class="hw-personal-gallery-upload-head"><strong>添加到我的图库</strong><span data-gallery-selected-file></span></div>' +
+          '<div class="hw-personal-gallery-upload-fields">' +
+            '<label>素材名称<input type="text" data-gallery-name maxlength="80" required placeholder="给图片起一个易识别的名称" autocomplete="off" /></label>' +
+            '<label>素材类别<select data-gallery-upload-category required>' +
+              cats.filter(function (cat) { return cat[0] !== "all"; }).map(function (cat) {
+                return '<option value="' + cat[0] + '">' + cat[1] + '</option>';
+              }).join("") + '</select></label>' +
+          '</div><div class="hw-personal-gallery-upload-actions">' +
+            '<button type="button" class="btn btn-sm" data-gallery-cancel>取消</button>' +
+            '<button type="submit" class="btn btn-primary btn-sm" data-gallery-submit>确认上传</button>' +
+          '</div></form>' +
         '<div class="hw-personal-gallery-controls"><div class="hw-pills-row" aria-label="图库分类">' +
           cats.map(function (c) {
             return '<button type="button" class="hw-pill" data-gallery-category="' + c[0] +
@@ -263,6 +275,25 @@
     const fileInput = container.querySelector("[data-gallery-file]");
     const retryUpload = container.querySelector("[data-gallery-retry]");
     const copyError = container.querySelector("[data-gallery-copy-error]");
+    const uploadForm = container.querySelector("[data-gallery-upload-form]");
+    const uploadName = container.querySelector("[data-gallery-name]");
+    const uploadCategory = container.querySelector("[data-gallery-upload-category]");
+    const selectedFileLabel = container.querySelector("[data-gallery-selected-file]");
+    const uploadSubmit = container.querySelector("[data-gallery-submit]");
+    const uploadCancel = container.querySelector("[data-gallery-cancel]");
+    function showUploadForm() {
+      if (uploadForm) uploadForm.hidden = !pendingFile;
+      if (selectedFileLabel) selectedFileLabel.textContent = pendingFile
+        ? pendingFile.name + " · " + (pendingFile.size / (1024 * 1024)).toFixed(2) + " MB"
+        : "";
+      if (uploadSubmit) {
+        uploadSubmit.disabled = busy || !pendingFile;
+        uploadSubmit.textContent = busy ? "正在上传…" : "确认上传";
+      }
+      if (uploadName) uploadName.disabled = busy;
+      if (uploadCategory) uploadCategory.disabled = busy;
+      if (uploadCancel) uploadCancel.disabled = busy;
+    }
     function message(msg, error) {
       const node = container.querySelector("[data-gallery-message]");
       if (node) {
@@ -381,7 +412,20 @@
       pendingUid = pendingUid || (window.crypto && window.crypto.randomUUID && window.crypto.randomUUID());
       if (!pendingUid) { message("浏览器无法生成安全 ID，请更新浏览器", true); return; }
       const uid = pendingUid;
+      const name = (uploadName?.value || "").trim();
+      const cat = uploadCategory?.value || "other";
+      if (!name || name.length > 80) {
+        message("请填写 1—80 字的素材名称", true);
+        uploadName?.focus();
+        return;
+      }
+      if (!["characters", "props", "scenes", "other"].includes(cat)) {
+        message("请选择有效的素材类别", true);
+        uploadCategory?.focus();
+        return;
+      }
       busy = true;
+      showUploadForm();
       fileInput.disabled = true;
       if (retryUpload) retryUpload.hidden = true;
       if (copyError) copyError.hidden = true;
@@ -395,8 +439,8 @@
         });
         message("正在保存「" + file.name + "」到私人图库…");
         const result = await api("/api/library/assets/" + uid, {method:"PUT",body:{
-          uid: uid, cat: category === "all" ? "other" : category,
-          name: file.name.replace(/\.[^.]+$/, "") || "我的素材",
+          uid: uid, cat: cat,
+          name: name,
           dataUrl: dataUrl, origin: "web"
         }});
         const saved = result && (result.item || (result.uid ? result : null));
@@ -408,6 +452,7 @@
         pendingFile = null;
         pendingUid = null;
         busy = false;
+        showUploadForm();
         const refreshed = await load(false);
         message(refreshed
           ? (result && result.deduped ? "图片已存在，已为你显示" : "添加成功，Skill 同步后即可使用")
@@ -418,6 +463,7 @@
       } finally {
         busy = false;
         fileInput.disabled = false;
+        showUploadForm();
         render();
       }
     }
@@ -434,7 +480,24 @@
         message("只支持 15 MB 以内的 PNG、JPEG、WebP 图片", true);
         return;
       }
-      return uploadPending();
+      if (uploadName) uploadName.value = (file.name.replace(/\.[^.]+$/, "") || "我的素材").slice(0, 80);
+      if (uploadCategory) uploadCategory.value = category === "all" ? "other" : category;
+      showUploadForm();
+      message("已选择图片，请填写名称并确认类别后上传。");
+      uploadName?.focus();
+    });
+    if (uploadForm) uploadForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      uploadPending();
+    });
+    if (uploadCancel) uploadCancel.addEventListener("click", function () {
+      if (busy) return;
+      pendingFile = null;
+      pendingUid = null;
+      if (retryUpload) retryUpload.hidden = true;
+      if (copyError) copyError.hidden = true;
+      showUploadForm();
+      message("已取消添加图片");
     });
     if (retryUpload) retryUpload.addEventListener("click", uploadPending);
     if (copyError) copyError.addEventListener("click", async function () {
