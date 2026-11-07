@@ -16501,6 +16501,51 @@
         ensureAssetItems: (items) => ensureAssetNode(items),
         openImageLightbox: (url, title) => openImageLightbox(url, title),
         openCanvas: () => switchCreationStage("canvas"),
+        plan: async () => {
+          const subject = String(p.text.data.text || "").trim();
+          if (!subject) return toast("请先填写主题");
+          const sd = p.skill.data, cd = p.ctrl.data;
+          const signature = () => JSON.stringify({
+            subject: p.text.data.text, style: sd.style1, layout: sd.layout,
+            ratio: cd.ratio, ratioSource: cd.ratioSource
+          });
+          const base = signature();
+          let payload = null;
+          try {
+            const resp = await fetch("/api/studio/image-plan", {
+              method: "POST", credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                subject, selectedStyleId: sd.style1 || "",
+                selectedLayoutId: sd.layout || "",
+                ratio: cd.ratioSource === "user" ? cd.ratio : "",
+                lockedFields: [
+                  ...(sd.style1 ? ["style"] : []),
+                  ...(sd.layout ? ["layout"] : []),
+                  ...(cd.ratioSource === "user" ? ["ratio"] : [])
+                ]
+              })
+            });
+            payload = await resp.json();
+            if (!resp.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${resp.status}`);
+          } catch (err) {
+            toast(`AI 规划失败：${err.message || "服务暂不可用"}`);
+            return;
+          }
+          if (!CS.graph.nodes.includes(p.skill) || signature() !== base) {
+            toast("AI 规划返回时参数已修改，已保留你的最新设置，请重新规划");
+            return;
+          }
+          const proposal = payload.proposal || {};
+          if (!sd.style1 && proposal.styleId) sd.style1 = proposal.styleId;
+          if (!sd.layout && proposal.layoutId) sd.layout = proposal.layoutId;
+          if (cd.ratioSource !== "user" && proposal.ratio) {
+            cd.ratio = proposal.ratio;
+            cd.ratioSource = "default";
+          }
+          markDirtyAndRender();
+          toast("AI 已推荐合法画风、图型和画幅；可调整后再生成，不会自动扣费");
+        },
         addResultAsReference: (result) => {
           if (!p || !result?.imageUrl) return;
           const prior = Array.isArray(p.asset?.data?.items) ? p.asset.data.items : [];

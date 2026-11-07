@@ -557,6 +557,7 @@
                   ${busy ? `<span class="make-image-busy-hint">生成中 · 停止仅中断本地等待；已提交云端的任务可能继续执行或计费</span>` : ""}
                   <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
                   ${busy ? '<button type="button" class="btn btn-sm" id="make-image-btn-stop">停止等待</button>' : ""}
+                  <button type="button" class="btn btn-sm" id="make-image-btn-ai-plan" ${this.isPlanning ? 'disabled' : ''} title="根据主题和实际可用画风、图型规划，不触发付费生图">${this.isPlanning ? 'AI 正在规划…' : 'AI 辅助设计'}</button>
                   <button type="button" class="btn btn-primary make-image-btn-run" id="make-image-btn-run" ${busy ? "disabled" : ""}>
                     ${busy ? "正在生成中…" : "开始生成 (1张)"}
                   </button>
@@ -1081,6 +1082,29 @@
           }
         };
       }
+
+      // A plan is distinct from generation. No duplicate confirmation modal.
+      const planBtn = root.querySelector("#make-image-btn-ai-plan");
+      if (planBtn) planBtn.onclick = async () => {
+        const subject = String(td.text || "").trim();
+        if (!subject) {
+          global.HANDRAW_SHARED?.toast?.("请先填写创作主题，再使用 AI 辅助设计");
+          return;
+        }
+        if (this.isPlanning) return;
+        this.isPlanning = true;
+        planBtn.disabled = true;
+        planBtn.textContent = "AI 正在规划…";
+        try {
+          await this.actions?.plan?.();
+        } finally {
+          this.isPlanning = false;
+          if (planBtn.isConnected) {
+            planBtn.disabled = false;
+            planBtn.textContent = "AI 辅助设计";
+          }
+        }
+      };
 
       // 9. Run button
       const runBtn = root.querySelector("#make-image-btn-run");

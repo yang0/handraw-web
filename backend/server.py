@@ -3454,6 +3454,19 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if handle_fission_post(self, req_path, body):
                 return
 
+        if req_path == "/api/studio/image-plan":
+            user = self._current_user(required=True)
+            from .studio_image_plan import execute_image_plan
+            self._send_json(execute_image_plan(
+                self.db, user,
+                subject=str(body.get("subject") or ""),
+                selected_style=str(body.get("selectedStyleId") or ""),
+                selected_layout=str(body.get("selectedLayoutId") or ""),
+                ratio=str(body.get("ratio") or ""),
+                locked_fields=body.get("lockedFields") if isinstance(body.get("lockedFields"), list) else []
+            ))
+            return
+
         if req_path == "/api/studio/batch-plan":
             from .batch_plan_routes import handle_batch_plan_post
             if handle_batch_plan_post(self, req_path, body):
