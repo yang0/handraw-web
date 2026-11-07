@@ -6395,6 +6395,30 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             expected_count=batch_total if batch_id else 1,
             request_id=batch_id or request_id,
         )
+        if batch_id:
+            # Serialize remote-submission reservation against cancellation.
+            # The cancellation endpoint locks the SAME run before writing a
+            # cancelled slot, so a late client request cannot bypass it.
+            if getattr(tx, "dialect", "") == "postgresql":
+                tx.execute(
+                    "SELECT id FROM generation_runs WHERE id=? FOR UPDATE",
+                    (canonical_run_id,),
+                ).fetchone()
+            slot_position = batch_index * 1000
+            prior_slot = tx.execute(
+                "SELECT status FROM generation_items WHERE run_id=? AND position=?",
+                (canonical_run_id, slot_position),
+            ).fetchone()
+            if prior_slot and prior_slot["status"] == "cancelled":
+                if body.get("retryCancelled") is not True:
+                    raise ServiceError(
+                        "该图片已被取消；如需重新生成，请明确选择重试",
+                        status=409, code="generation_slot_cancelled",
+                    )
+                tx.execute(
+                    "DELETE FROM generation_items WHERE run_id=? AND position=? AND status='cancelled'",
+                    (canonical_run_id, slot_position),
+                )
         tx.execute(
             "UPDATE generation_runs SET original_request=? WHERE id=?",
             (user_subject, canonical_run_id),
