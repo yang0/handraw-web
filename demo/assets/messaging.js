@@ -174,6 +174,9 @@
         align-items: center;
         background: var(--paper-bg, #fbf7ee);
       }
+      .hw-dm-back-button {
+        display: none;
+      }
       .hw-dm-messages-area {
         flex: 1;
         overflow-y: auto;
@@ -274,6 +277,9 @@
         margin-top: 4px;
       }
       @media (max-width: 640px) {
+        .hw-dm-back-button {
+          display: inline-flex;
+        }
         .hw-dm-container {
           grid-template-columns: 1fr;
         }
@@ -544,7 +550,7 @@
       activeTab = "dm";
       root.querySelector("#hw-msg-tab-dm").classList.add("is-active");
       root.querySelector("#hw-msg-tab-notifications").classList.remove("is-active");
-      renderDirectMessagesTab(root.querySelector("#hw-msg-tab-content"), reqUser);
+      renderDirectMessagesTab(root.querySelector("#hw-msg-tab-content"), new URLSearchParams(window.location.search).get("user") || "");
     };
 
     const tabContent = root.querySelector("#hw-msg-tab-content");
@@ -553,6 +559,19 @@
     } else {
       renderNotificationsTab(tabContent);
     }
+  }
+
+  function returnToConversationList(container) {
+    container.querySelector("#hw-dm-sidebar")?.classList.remove("is-chat-active");
+    container.querySelector("#hw-dm-chat-pane")?.classList.remove("is-chat-active");
+    stopConvPolling();
+    activeConversationId = null;
+    activePeerUser = null;
+    container.querySelectorAll(".hw-dm-conv-item.is-active").forEach(item => item.classList.remove("is-active"));
+    const url = new URL(window.location.href);
+    url.searchParams.delete("user");
+    url.searchParams.set("tab", "dm");
+    window.history.replaceState(null, "", url.pathname + url.search);
   }
 
   // Render Notifications Tab
@@ -782,7 +801,7 @@
     chatPane.innerHTML = `
       <div class="hw-dm-chat-header">
         <div style="display:flex;align-items:center;gap:10px;">
-          <button type="button" class="btn btn-sm" id="hw-dm-back-btn" style="padding:4px 8px;font-size:12px;">← 返回</button>
+          <button type="button" class="btn btn-sm hw-dm-back-button" id="hw-dm-back-btn" style="padding:4px 8px;font-size:12px;">← 返回列表</button>
           <div class="hw-creator-avatar-sm" style="width:32px;height:32px;font-size:14px;background:var(--paper-soft);display:flex;align-items:center;justify-content:center;border-radius:999px;">📢</div>
           <div>
             <strong style="font-size:14px;color:var(--ink-strong);">管理员公告</strong>
@@ -801,11 +820,7 @@
       </div>
     `;
 
-    chatPane.querySelector("#hw-dm-back-btn").onclick = () => {
-      sidebar.classList.remove("is-chat-active");
-      chatPane.classList.remove("is-chat-active");
-      activeConversationId = null;
-    };
+    chatPane.querySelector("#hw-dm-back-btn").onclick = () => returnToConversationList(container);
 
     if (isAdmin) {
       const pubBtn = chatPane.querySelector("#hw-bc-publish-btn");
@@ -1022,7 +1037,7 @@
       chatPane.innerHTML = `
         <div class="hw-dm-chat-header">
           <div style="display:flex;align-items:center;gap:10px;">
-            <button type="button" class="btn btn-sm" id="hw-dm-back-btn" style="padding:4px 8px;font-size:12px;">← 返回</button>
+            <button type="button" class="btn btn-sm hw-dm-back-button" id="hw-dm-back-btn" style="padding:4px 8px;font-size:12px;">← 返回列表</button>
             <div class="hw-creator-avatar-sm seal-novice" style="width:32px;height:32px;font-size:13px;">${esc((conv.peer.displayName || conv.peer.username)[0])}</div>
             <div>
               <strong style="font-size:14px;color:var(--ink-strong);">@${esc(conv.peer.displayName || conv.peer.username)}</strong>
@@ -1048,12 +1063,7 @@
       `;
 
       // Back button on mobile
-      chatPane.querySelector("#hw-dm-back-btn").onclick = () => {
-        sidebar.classList.remove("is-chat-active");
-        chatPane.classList.remove("is-chat-active");
-        stopConvPolling();
-        activeConversationId = null;
-      };
+      chatPane.querySelector("#hw-dm-back-btn").onclick = () => returnToConversationList(container);
 
       // Block/Unblock button
       chatPane.querySelector("#hw-dm-block-btn").onclick = async () => {
@@ -1175,7 +1185,7 @@
     chatPane.innerHTML = `
       <div class="hw-dm-chat-header">
         <div style="display:flex;align-items:center;gap:10px;">
-          <button type="button" class="btn btn-sm" id="hw-dm-back-btn" style="padding:4px 8px;font-size:12px;">← 返回</button>
+          <button type="button" class="btn btn-sm hw-dm-back-button" id="hw-dm-back-btn" style="padding:4px 8px;font-size:12px;">← 返回列表</button>
           <div class="hw-creator-avatar-sm seal-novice" style="width:32px;height:32px;font-size:13px;">${esc(targetUsername[0])}</div>
           <div>
             <strong style="font-size:14px;color:var(--ink-strong);">发私信给 @${esc(targetUsername)}</strong>
@@ -1196,10 +1206,7 @@
       </div>
     `;
 
-    chatPane.querySelector("#hw-dm-back-btn").onclick = () => {
-      sidebar.classList.remove("is-chat-active");
-      chatPane.classList.remove("is-chat-active");
-    };
+    chatPane.querySelector("#hw-dm-back-btn").onclick = () => returnToConversationList(container);
 
     const input = chatPane.querySelector("#hw-dm-input");
     const sendBtn = chatPane.querySelector("#hw-dm-send-btn");

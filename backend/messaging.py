@@ -281,11 +281,11 @@ def send_direct_message(db: Database, user: dict[str, Any], body: dict[str, Any]
             (u_low, u_high),
         ).fetchone()
         if not conv:
-            tx.execute(
+            inserted_conversation = tx.execute(
                 "INSERT INTO dm_conversations (user_low_id, user_high_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
                 (u_low, u_high, now_iso, now_iso),
             )
-            conv_id = int(tx.execute("SELECT last_insert_rowid()").fetchone()[0])
+            conv_id = int(inserted_conversation.lastrowid)
             tx.execute(
                 "INSERT INTO dm_members (conversation_id, user_id, last_read_message_id, read_at) VALUES (?, ?, 0, NULL), (?, ?, 0, NULL)",
                 (conv_id, u_low, conv_id, u_high),
@@ -293,11 +293,11 @@ def send_direct_message(db: Database, user: dict[str, Any], body: dict[str, Any]
         else:
             conv_id = int(conv["id"])
 
-        tx.execute(
+        inserted_message = tx.execute(
             "INSERT INTO dm_messages (conversation_id, sender_id, body, client_message_id, created_at) VALUES (?, ?, ?, ?, ?)",
             (conv_id, sender_id, clean_body, client_msg_id, now_iso),
         )
-        msg_id = int(tx.execute("SELECT last_insert_rowid()").fetchone()[0])
+        msg_id = int(inserted_message.lastrowid)
 
         tx.execute(
             "UPDATE dm_conversations SET last_message_id = ?, updated_at = ? WHERE id = ?",
@@ -306,8 +306,8 @@ def send_direct_message(db: Database, user: dict[str, Any], body: dict[str, Any]
 
         # Advance sender's read cursor to own message
         tx.execute(
-            "UPDATE dm_members SET last_read_message_id = MAX(last_read_message_id, ?), read_at = ? WHERE conversation_id = ? AND user_id = ?",
-            (msg_id, now_iso, conv_id, sender_id),
+            "UPDATE dm_members SET last_read_message_id = CASE WHEN last_read_message_id < ? THEN ? ELSE last_read_message_id END, read_at = ? WHERE conversation_id = ? AND user_id = ?",
+            (msg_id, msg_id, now_iso, conv_id, sender_id),
         )
 
         # Durably record contact history for new contact rate limit
@@ -565,11 +565,11 @@ def mark_dm_read(db: Database, user: dict[str, Any], conversation_id: int, body:
         tx.execute(
             """
             UPDATE dm_members
-            SET last_read_message_id = MAX(last_read_message_id, ?),
+            SET last_read_message_id = CASE WHEN last_read_message_id < ? THEN ? ELSE last_read_message_id END,
                 read_at = CASE WHEN ? > last_read_message_id THEN ? ELSE read_at END
             WHERE conversation_id = ? AND user_id = ?
             """,
-            (msg_id, msg_id, now_iso, conversation_id, uid),
+            (msg_id, msg_id, msg_id, now_iso, conversation_id, uid),
         )
         updated_cursor = tx.execute(
             "SELECT last_read_message_id FROM dm_members WHERE conversation_id = ? AND user_id = ?",
@@ -707,14 +707,14 @@ def send_message_broadcast(db: Database, user: dict[str, Any], body: dict[str, A
     # 3. Insert ONE row into message_broadcasts. Zero fan-out.
     audience_cutoff = now_iso
     with db.transaction() as tx:
-        tx.execute(
+        inserted_broadcast = tx.execute(
             """
             INSERT INTO message_broadcasts (sender_id, title, body, audience_cutoff, request_id, published_at, withdrawn_at)
             VALUES (?, ?, ?, ?, ?, ?, NULL)
             """,
             (admin_id, raw_title, raw_body, audience_cutoff, raw_req_id, now_iso),
         )
-        bc_id = int(tx.execute("SELECT last_insert_rowid()").fetchone()[0])
+        bc_id = int(inserted_broadcast.lastrowid)
 
     return {
         "ok": True,

@@ -387,6 +387,84 @@ class PostgresSnapshotTests(unittest.TestCase):
                 with psycopg.connect(admin_dsn, autocommit=True) as admin:
                     admin.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(name)))
 
+    @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
+    def test_messaging_lifecycle_on_postgresql(self):
+        import uuid
+        import psycopg
+        from psycopg import sql
+        from psycopg.conninfo import make_conninfo
+        from backend.db import Database
+        from backend.services import register_user, ServiceError
+        from backend.postgres_db import PostgresDatabase
+        from backend.messaging import (
+            send_direct_message, list_dm_messages, mark_dm_read, get_messages_unread_summary,
+            block_user, unblock_user, send_message_broadcast, mark_message_broadcast_read,
+            withdraw_message_broadcast,
+        )
+        snapshot = Path(self.tmp.name) / 'messaging.db'
+        source = Database(snapshot)
+        try:
+            source.migrate()
+            users = [register_user(source, name, 'IsolatedMessagingPassword!')[0]
+                     for name in ('pg_dm_sender', 'pg_dm_recipient', 'pg_dm_admin')]
+            source.get_conn().execute("UPDATE users SET role='admin' WHERE id=?", (users[2]['id'],))
+            users[2]['role'] = 'admin'
+        finally:
+            source.close()
+        admin_dsn = os.environ['HANDRAW_PG_STAGING_URL']
+        name = 'handraw_dm_' + uuid.uuid4().hex[:12]
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
+        pg = None
+        try:
+            dsn = make_conninfo(admin_dsn, dbname=name)
+            self.tool.stage(snapshot, dsn, True)
+            pg = PostgresDatabase(dsn)
+            pg.migrate()
+            sender, recipient, outsider = users
+            payload = {'recipientId': recipient['id'], 'body': 'Isolated PG message', 'clientMessageId': 'pg-dm-first'}
+            first = send_direct_message(pg, sender, payload)
+            self.assertTrue(first['ok'])
+            self.assertGreater(first['conversationId'], 0)
+            self.assertGreater(first['message']['id'], 0)
+            replay = send_direct_message(pg, sender, payload)
+            self.assertTrue(replay['replayed'])
+            self.assertEqual(replay['message']['id'], first['message']['id'])
+            second = send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-second'))
+            conv_id = first['conversationId']
+            self.assertEqual(second['conversationId'], conv_id)
+            cursor = mark_dm_read(pg, recipient, conv_id, {'messageId': second['message']['id']})
+            self.assertEqual(cursor['lastReadMessageId'], second['message']['id'])
+            cursor = mark_dm_read(pg, recipient, conv_id, {'messageId': first['message']['id']})
+            self.assertEqual(cursor['lastReadMessageId'], second['message']['id'])
+            self.assertEqual(get_messages_unread_summary(pg, recipient)['direct'], 0)
+            reply = send_direct_message(pg, recipient, {'recipientId': sender['id'], 'body': 'Isolated reply', 'clientMessageId': 'pg-dm-reply'})
+            self.assertEqual(reply['conversationId'], conv_id)
+            self.assertEqual(get_messages_unread_summary(pg, sender)['direct'], 1)
+            self.assertEqual(len(list_dm_messages(pg, sender, conv_id, {})['messages']), 3)
+            with self.assertRaises(ServiceError) as denied:
+                list_dm_messages(pg, outsider, conv_id, {})
+            self.assertEqual(denied.exception.status, 403)
+            block_user(pg, recipient, {'userId': sender['id']})
+            with self.assertRaises(ServiceError) as blocked:
+                send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-blocked'))
+            self.assertEqual(blocked.exception.code, 'dm_blocked')
+            unblock_user(pg, recipient, str(sender['id']))
+            sent = send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-after-unblock'))
+            self.assertTrue(sent['ok'])
+            broadcast = send_message_broadcast(pg, outsider, {'title': 'Isolated notice', 'body': 'Isolated broadcast', 'requestId': 'pg-broadcast'})
+            bc_id = broadcast['broadcast']['id']
+            self.assertGreater(bc_id, 0)
+            self.assertTrue(mark_message_broadcast_read(pg, sender, bc_id)['ok'])
+            self.assertTrue(withdraw_message_broadcast(pg, outsider, bc_id)['ok'])
+            self.assertEqual(pg.get_conn().execute('SELECT COUNT(*) FROM dm_messages').fetchone()[0], 4)
+            self.assertEqual(pg.get_conn().execute('SELECT COUNT(*) FROM dm_conversations').fetchone()[0], 1)
+        finally:
+            if pg:
+                pg.close()
+            with psycopg.connect(admin_dsn, autocommit=True) as admin:
+                admin.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(name)))
+
     def test_fk_violations_cannot_migrate(self):
         with sqlite3.connect(self.path) as conn:
             conn.execute("INSERT INTO sessions(token,user_id) VALUES(?,?)", ("orphan", 999))
