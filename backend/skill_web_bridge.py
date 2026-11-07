@@ -1,7 +1,9 @@
-"""Skill/Web v1: private resources, private Skill history and scoped social APIs.
+"""Handraw V3: private resource sync, unified generation runs and social APIs.
 
-Server-side contract for handraw-style/skills/handraw-cloud/scripts/handraw_cloud.py.
-This module never publishes uploaded generations or private definitions.
+Contract for handraw-style/skills/handraw-cloud/scripts/handraw_cloud.py.
+Local Skill history stays offline until the user explicitly uploads it; that
+upload creates ONE public multi-image work backed by canonical run/media rows.
+Private personal resource definitions are not published by this module.
 """
 from __future__ import annotations
 
