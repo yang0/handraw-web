@@ -191,60 +191,63 @@ class BatchPlanRoutesTests(unittest.TestCase):
         for it in items_def:
             self.assertEqual(it["layout"], def_code)
 
-    def test_03_ai_invalid_layout_sanitized(self) -> None:
-        """3. AI returned invalid layout codes are discarded and fall back cleanly."""
-        fake_ai_response = json.dumps({
-            "items": [
-                {"subject": "晨光推开咖啡馆木门", "layout": "SC-021"},  # valid
-                {"subject": "手冲咖啡的水流与香气", "layout": "NON_EXISTENT_LAYOUT_XYZ"},  # invalid -> fallback
-                {"subject": "午后窗边翻阅旧画册", "layout": "IG-003"},  # valid
-            ]
-        })
-
+    def test_03_ai_invalid_layout_rejected_without_fallback(self) -> None:
+        """Invalid AI layout must fail rather than silently adopting fixedLayout."""
+        fake_ai_response = json.dumps({"items": [
+            {"subject": "晨光推开咖啡馆木门", "layout": "SC-021"},
+            {"subject": "手冲咖啡的水流与香气", "layout": "NON_EXISTENT_LAYOUT_XYZ"},
+            {"subject": "午后窗边翻阅旧画册", "layout": "IG-003"},
+        ]})
         with patch("backend.batch_plan_routes.chat", return_value=(fake_ai_response, {"ok": True})):
-            st, res = self._req(
-                "POST",
-                "/api/studio/batch-plan",
-                {
-                    "seed": "咖啡馆的一天",
-                    "count": 3,
-                    "layoutMode": "ai",
-                    "fixedLayout": "SC-021",
-                },
-                cookie=self.cookie,
-            )
-            self.assertEqual(st, 200)
-            self.assertEqual(res.get("source"), "model")
-            items = res.get("items", [])
-            self.assertEqual(len(items), 3)
-            self.assertEqual(items[0]["layout"], "SC-021")
-            # Invalid was sanitized to fixedLayout (SC-021) or empty
-            self.assertIn(items[1]["layout"], ("SC-021", ""))
-            self.assertNotEqual(items[1]["layout"], "NON_EXISTENT_LAYOUT_XYZ")
-            self.assertEqual(items[2]["layout"], "IG-003")
+            st, res = self._req("POST", "/api/studio/batch-plan", {
+                "seed": "咖啡馆的一天", "count": 3,
+                "layoutMode": "ai", "fixedLayout": "SC-021",
+            }, cookie=self.cookie)
+        self.assertEqual(st, 502)
+        self.assertEqual(res.get("code"), "batch_plan_ai_invalid")
 
-    def test_04_template_fallback_on_unconfigured_model(self) -> None:
-        """4. Fallback to deterministic template generator returning source: 'template' and exact count."""
-        st, res = self._req(
-            "POST",
-            "/api/studio/batch-plan",
-            {
-                "seed": "胡同里的手艺人",
-                "count": 6,
-                "layoutMode": "ai",
-                "layoutRequirement": "前两张分镜，后面图鉴",
-            },
-            cookie=self.cookie,
-        )
+    def test_04_no_ai_fallback_on_unconfigured_model(self) -> None:
+        """Without model there is no pretend recommendation or default SC layout."""
+        st, res = self._req("POST", "/api/studio/batch-plan", {
+            "seed": "胡同里的手艺人", "count": 6,
+            "layoutMode": "ai", "layoutRequirement": "前两张分镜，后面图鉴",
+        }, cookie=self.cookie)
+        self.assertEqual(st, 503)
+        self.assertEqual(res.get("code"), "batch_plan_ai_unavailable")
+
+    def test_06_all_layouts_available_without_few_shot(self) -> None:
+        """Every actual catalog entry, including beyond 40, is supplied to the model."""
+        layouts = {f"USR-L{i:03d}": f"自定义图型{i}" for i in range(75)}
+        response = json.dumps({"items": [{"subject": "显微镜下的叶片脉络", "layout": "USR-L074"}]})
+        captured = []
+
+        def fake_chat(messages, **kwargs):
+            captured.extend(messages)
+            return response, {"ok": True}
+
+        with patch("backend.batch_plan_routes.get_valid_layout_map", return_value=layouts), \\
+             patch("backend.batch_plan_routes.chat", side_effect=fake_chat):
+            st, res = self._req("POST", "/api/studio/batch-plan", {
+                "seed": "植物显微观察", "count": 1, "layoutMode": "ai",
+            }, cookie=self.cookie)
         self.assertEqual(st, 200)
-        self.assertTrue(res.get("ok"))
-        self.assertEqual(res.get("source"), "template")
-        items = res.get("items", [])
-        self.assertEqual(len(items), 6)
-        # Non-empty subjects, valid layout strings
-        for it in items:
-            self.assertTrue(it["subject"])
-            self.assertTrue(it["layout"])
+        self.assertEqual(res["items"][0]["layout"], "USR-L074")
+        self.assertEqual(len(captured), 2)
+        self.assertIn("USR-L074", captured[1]["content"])
+        self.assertIn("USR-L000", captured[1]["content"])
+        self.assertNotIn("SC-001", captured[1]["content"])
+        self.assertNotIn("SC-006", captured[1]["content"])
+        self.assertNotIn("例如", captured[1]["content"])
+        self.assertNotIn('{"items":', captured[1]["content"])
+
+    def test_07_ai_incomplete_response_does_not_pad_templates(self) -> None:
+        response = json.dumps({"items": [{"subject": "第一张", "layout": "SC-021"}]})
+        with patch("backend.batch_plan_routes.chat", return_value=(response, {"ok": True})):
+            st, res = self._req("POST", "/api/studio/batch-plan", {
+                "seed": "两张不同主题", "count": 2, "layoutMode": "ai",
+            }, cookie=self.cookie)
+        self.assertEqual(st, 502)
+        self.assertEqual(res.get("code"), "batch_plan_ai_invalid")
 
     def test_05_daily_quota_limit(self) -> None:
         """5. Daily quota limit 50 requests/day per user triggers 429."""
