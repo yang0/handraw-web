@@ -67,5 +67,7 @@ python -m ops.bootstrap_postgres_v3 --apply
 2. `backend/home_scenarios.py`：首页场景推荐、人工置顶及管理预览采用作者选择的封面，不再默认首张图。
 3. 首页推荐缓存使用 Redis 共享 revision；封面编辑和场景管理修改会通知其他进程淘汰旧缓存。Redis 不可用时不提供可能过期的进程内缓存；SQLite 单进程本地开发仍可缓存。
 4. 缓存命中时再核对公开作品当前审核状态和所选封面，防止多进程事务提交时序及审核隐藏后展示旧缓存卡片。
+5. Skill/Web 统一历史接口的 `visibility` 改为依据关联作品**实时审核状态**判定，不再以 `workId` 存在就推断为公开；独立回传 `workStatus` 便于作者辨认审核隐藏作品，保留可追溯的 run/work ID。
+6. Skill 同一个 `externalRunId` 的上传/断点续传在 PostgreSQL 多进程模式使用 **session-level advisory lock** 串行化，避免两个服务进程同时上传同一槽位；不同 run 可并行，锁冲突返回 HTTP 409 `upload_in_progress`，锁释放失败会断开持锁连接。SQLite 开发仍使用原有进程锁。
 
 **仍未完成的验收与架构工作**：Web 全量 Python/Node/浏览器测试，Skill ↔ Web 实际 E2E，PostgreSQL 全业务端到端运行，Redis 与对象存储故障恢复/多进程并发验收，以及进一步审计底层 `studio_generations` 的职责收敛。未把这些标记为完成；Issue 继续保持 Open。
