@@ -1994,8 +1994,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if method == "POST" and req_path == "/api/v1/me/generations":
                 return
         # Publishing scope covers the explicitly user-requested social writes.
-        if "publish" in scopes and method == "POST" and re.fullmatch(
-            r"^/api/v1/works/[^/]+/(likes|comments)$", req_path
+        if "publish" in scopes and method == "POST" and (
+            re.fullmatch(r"^/api/v1/works/[^/]+/(likes|comments)$", req_path)
+            or re.fullmatch(r"^/api/v1/me/generations/[^/]+/publish$", req_path)
         ):
             return
 
