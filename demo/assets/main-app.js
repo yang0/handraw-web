@@ -3257,20 +3257,21 @@
         const title = form.elements.namedItem("title").value.trim();
         const prompt = form.elements.namedItem("prompt").value.trim();
         if (!title || !prompt) return;
+        if (prompt.replace(/\s+/g, "").length < 8) {
+          form.querySelector(".hw-history-publish-error").textContent = "公开创作说明至少需要 8 个字";
+          return;
+        }
         if (!window.confirm("即将向所有访客公开 " + urls.length + " 张图片及你填写的公开说明，是否确定发布？")) return;
         const submit = form.querySelector('[type="submit"]');
         submit.disabled = true;
         const errorEl = form.querySelector(".hw-history-publish-error");
         errorEl.textContent = "";
         try {
-          const result = await S.apiJson("/api/entries", { method: "POST", body: {
-            entry: {
-              kind: "work", title, cover_url: urls[0],
-              content: { prompt, examples: urls.slice(1).map((image, idx) => ({ theme: "作品" + (idx + 2), image })) },
-              requestId: "web-history-" + id
-            }
+          const result = await S.apiJson("/api/works", { method: "POST", body: {
+            title, prompt, notes: prompt, images: urls, origin: "web",
+            requestId: "web-history-" + id
           } });
-          if (!result || result.ok === false || !result.id) throw new Error("发布结果尚未确认");
+          if (!result || result.ok === false || !result.workId) throw new Error("发布结果尚未确认");
           toast("作品已发布到广场");
           UI.profileWorkRows = null;
           UI.profileWorksUser = "";
