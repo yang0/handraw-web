@@ -2036,7 +2036,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     reply_filter, reply_ids = _seed_filter("id", "forum_replies")
     reply_topic_filter, reply_topic_ids = _seed_filter("topic_id", "topics")
     for rp in conn.execute(
-        f"SELECT * FROM forum_replies WHERE status = 'published' AND {reply_filter} AND {reply_topic_filter} ORDER BY rowid ASC",
+        f"SELECT * FROM forum_replies WHERE status = 'published' AND {reply_filter} AND {reply_topic_filter} ORDER BY created_at ASC, id ASC",
         (*reply_ids, *reply_topic_ids),
     ).fetchall():
         replies_by_topic.setdefault(rp["topic_id"], []).append(
@@ -2102,7 +2102,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     comment_filter, comment_ids = _seed_filter("id", "work_comments")
     comment_work_filter, comment_work_ids = _seed_filter("work_id", "works")
     for cm in conn.execute(
-        f"SELECT * FROM work_comments WHERE status = 'published' AND {comment_filter} AND {comment_work_filter} ORDER BY rowid ASC",
+        f"SELECT * FROM work_comments WHERE status = 'published' AND {comment_filter} AND {comment_work_filter} ORDER BY created_at ASC, id ASC",
         (*comment_ids, *comment_work_ids),
     ).fetchall():
         comments_by_work.setdefault(cm["work_id"], []).append(
@@ -2140,7 +2140,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     asset_comment_filter, asset_comment_ids = _seed_filter("id", "asset_comments")
     asset_comment_asset_filter, asset_comment_asset_ids = _seed_filter("asset_code", "assets")
     for ac in conn.execute(
-        f"SELECT * FROM asset_comments WHERE status = 'published' AND {asset_comment_filter} AND {asset_comment_asset_filter} ORDER BY rowid ASC",
+        f"SELECT * FROM asset_comments WHERE status = 'published' AND {asset_comment_filter} AND {asset_comment_asset_filter} ORDER BY created_at ASC, id ASC",
         (*asset_comment_ids, *asset_comment_asset_ids),
     ).fetchall():
         asset_comments.setdefault(ac["asset_code"], []).append(
