@@ -7580,7 +7580,7 @@
     const filtered = allHist.filter((h) => {
       if (filterMode !== "all" && historyRecordCategory(h) !== filterMode) return false;
       if (statusFilter !== "all" && historyStatusCategory(h) !== statusFilter) return false;
-      if (q && !q.split(/\\s+/).every((part) => historySearchText(h).includes(part))) return false;
+      if (q && !q.split(/\s+/).every((part) => historySearchText(h).includes(part))) return false;
       return true;
     });
     if (CS.historySort === "oldest") filtered.reverse();
@@ -7661,6 +7661,7 @@
                         <article class="ic-hist-entry-card" data-hist-id="${esc(h.id)}">
                           <div class="ic-hist-entry-head">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;">
+                              <span class="ic-hist-category-chip">${esc(({ quick: "做图", batch: "批量", article: "文章配图", canvas: "画布" })[historyRecordCategory(h)])}</span>
                               <span class="ic-node-badge ${h.kind === "loop" ? "ic-badge-loop" : "ic-badge-output-ctrl"}">${esc(h.modeLabel || "生成记录")}</span>
                               ${h.demoMode || h.engine === "demo" ? '<span class="ic-node-badge" style="background:#fff4d6;color:#8a5a00;border:1px solid #e8c46a;">🧪 演示样图</span>' : ""}
                               <strong style="font-size:14.5px;font-weight:850;color:var(--ic-ink);">${esc(h.subject || h.title || h.tabTitle || "画布工作流")}</strong>
