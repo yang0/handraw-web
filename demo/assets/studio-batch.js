@@ -371,12 +371,21 @@
       const results = Array.isArray(this.context?.results) ? this.context.results : [];
 
       const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
-      let currentStep = ld.currentStep || 0;
-      let totalSteps = ld.totalSteps || totalCount;
-      let completedCount = typeof ld.completedCount === "number" ? ld.completedCount : 0;
-      let failedCount = typeof ld.failedCount === "number" ? ld.failedCount : 0;
-      let isStopping = Boolean(ld.isStopping);
-      let activeIndex = typeof ld.activeIndex === "number" ? ld.activeIndex : (currentStep > 0 ? currentStep - 1 : (busy ? 0 : null));
+      // The displayed slot results are the source of truth. Node progress can
+      // be stale (0/2) after a re-render even while both images are visible.
+      const slotResults = iterations.map((_, index) => this.getItemResult(index, displays, isBatchGallery));
+      const progress = this.progressState?.batchId === this.activeBatchId ? this.progressState : null;
+      const currentStep = ld.currentStep || 0;
+      const totalSteps = ld.totalSteps || totalCount;
+      const completedCount = Math.max(slotResults.filter((item) => item?.imageUrl).length,
+        progress?.completedCount || 0);
+      const failedCount = Math.max(slotResults.filter((item) => item?.failed && !item?.imageUrl).length,
+        progress?.failedCount || 0);
+      const isStopping = Boolean(progress?.isStopping || ld.isStopping);
+      const activeIndices = Array.isArray(progress?.activeIndices) ? progress.activeIndices : [];
+      const activeIndex = activeIndices.length ? activeIndices[0]
+        : (busy && typeof ld.activeIndex === "number" ? ld.activeIndex
+          : (busy && currentStep < totalSteps ? currentStep : null));
 
       this.hostElement.innerHTML = `
         <div class="make-image-container batch-container">
@@ -385,6 +394,11 @@
               <h1 class="make-image-title">批量</h1>
               <p class="make-image-lede">套图规划批量出图：统一画风与母题，AI 规划每张主题与图型，支持自由微调。</p>
             </div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;">同时生成
+              <select class="hw-input" id="batch-concurrency" aria-label="批量生图并发数量" ${busy ? "disabled" : ""}>
+                ${[1,2,3,4].map((n) => `<option value="${n}" ${Number(ld.batchConcurrency || 3) === n ? "selected" : ""}>${n} 张</option>`).join("")}
+              </select>
+            </label>
           </div>
 
           <form class="make-image-form" novalidate onsubmit="return false;">
@@ -793,7 +807,7 @@
               <div class="batch-action-bar">
                 <div class="batch-cost-wrap">
                   ${this.renderCostHtml(totalCount)}
-                  ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
+                  ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
                 </div>
 
                 <div class="batch-btn-wrap">
@@ -871,7 +885,10 @@
         return { key: "failed", label: "失败", className: "is-failed" };
       }
       if (busy) {
-        const isCurrentActive = activeIndex !== null
+        const activeSet = this.progressState?.batchId === this.activeBatchId
+          ? this.progressState?.activeIndices : null;
+        const isCurrentActive = Array.isArray(activeSet) && activeSet.length
+          ? activeSet.includes(rowIndex) : activeIndex !== null
           ? activeIndex === rowIndex
           : (currentStep === rowIndex + 1 || (currentStep === 0 && rowIndex === 0));
         if (isCurrentActive) {
@@ -883,7 +900,7 @@
       return { key: "waiting", label: "等待", className: "is-waiting" };
     }
 
-    formatProgressStatus({ completedCount = 0, totalCount = 0, activeIndex = null, failedCount = 0, isStopping = false } = {}) {
+    formatProgressStatus({ completedCount = 0, totalCount = 0, activeIndex = null, activeIndices = [], failedCount = 0, isStopping = false } = {}) {
       if (isStopping) {
         let msg = `正在停止…（已完成 ${completedCount} / ${totalCount} 张`;
         if (failedCount > 0) msg += ` · 失败 ${failedCount} 张`;
@@ -891,7 +908,9 @@
         return msg;
       }
       let txt = `已完成 ${completedCount} / ${totalCount} 张`;
-      if (activeIndex !== null && activeIndex >= 0 && activeIndex < totalCount) {
+      if (Array.isArray(activeIndices) && activeIndices.length > 1) {
+        txt += ` · 并行生成中 ${activeIndices.length} 张…`;
+      } else if (activeIndex !== null && activeIndex >= 0 && activeIndex < totalCount) {
         txt += ` · 正在生成第 ${activeIndex + 1} 张…`;
       }
       if (failedCount > 0) {
@@ -981,7 +1000,7 @@
 
       if (!this.context) this.context = {};
       this.context.results = [];
-      this.progressState = { completedCount: 0, failedCount: 0, totalCount, activeIndex: 0, busy: true, isStopping: false };
+      this.progressState = { completedCount: 0, failedCount: 0, totalCount, activeIndex: 0, activeIndices: [], busy: true, isStopping: false, batchId: this.activeBatchId };
 
       if (!host) return;
 
@@ -1052,6 +1071,7 @@
       failedCount = 0,
       totalCount = 0,
       activeIndex = null,
+      activeIndices = [],
       busy = false,
       isStopping = false,
       summaryText = null,
@@ -1064,7 +1084,7 @@
         }
         this.activeBatchId = incomingBatchId;
       }
-      this.progressState = { completedCount, failedCount, totalCount, activeIndex, busy, isStopping };
+      this.progressState = { completedCount, failedCount, totalCount, activeIndex, activeIndices, busy, isStopping, batchId: this.activeBatchId };
       const host = this.hostElement;
       if (!host) return;
 
@@ -1080,7 +1100,7 @@
             busyEl.className = "batch-busy-status";
             costWrap.appendChild(busyEl);
           }
-          busyEl.textContent = this.formatProgressStatus({ completedCount, totalCount, activeIndex, failedCount, isStopping });
+          busyEl.textContent = this.formatProgressStatus({ completedCount, totalCount, activeIndex, activeIndices, failedCount, isStopping });
         } else {
           const busyEl = costWrap.querySelector(".batch-busy-status");
           if (busyEl && typeof busyEl.remove === "function") busyEl.remove();
@@ -1893,6 +1913,13 @@
           skill.data.sc022Pinyin = sc022PinyinInput.value.trim();
         };
       }
+
+      // Default three in-flight requests, with a user-selectable 1-4 bound.
+      const concurrencyControl = root.querySelector("#batch-concurrency");
+      if (concurrencyControl) concurrencyControl.onchange = () => {
+        loop.data.batchConcurrency = Math.max(1, Math.min(4, Number(concurrencyControl.value) || 3));
+        markDirty();
+      };
 
       // 7. Preview Row Retries & Results
       root.querySelectorAll("[data-retry-idx]").forEach((btn) => {
