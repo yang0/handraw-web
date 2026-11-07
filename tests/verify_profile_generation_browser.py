@@ -185,14 +185,19 @@ def run_browser_verification():
             page.goto(f"{BASE_URL}/studio/?entry=quick", wait_until="networkidle")
             page.wait_for_selector("#studio-mode-history", timeout=6000)
             page.locator("#studio-mode-history").click()
-            page.wait_for_selector("#hist-back-creation", timeout=6000)
+            page.wait_for_selector(".ic-hist-masonry-grid", timeout=6000)
             assert "view=history" in page.url, f"Studio history navigation failed: {page.url}"
             for category in ("all", "quick", "batch", "article", "canvas"):
                 assert page.locator(f'[data-hist-filter="{category}"]').is_visible()
             assert page.locator("#hist-status-filter").is_visible()
             assert page.locator("#hist-sort").is_visible()
             assert page.locator("#hist-clear-all").count() == 0
-            assert page.locator(".ic-hist-img-download").count() > 0, "Images need a direct download action"
+            assert page.locator(".ic-hist-cover-download").count() > 0, "Cover images need a direct download action"
+            assert page.locator("#hist-back-creation").count() == 0
+            assert page.locator(".ic-hist-cover").count() == 3, "One cover per generation task"
+            assert page.locator('[data-hist-filter="all"]').inner_text().endswith("(6)")
+            page.locator('[data-hist-expand-batch="gen_leo_003"]').click()
+            assert page.locator('[data-hist-img-toggle="gen_leo_003"]').count() == 2
             page.locator("#hist-search-inp").fill("山水")
             page.wait_for_timeout(300)
             assert page.locator('[data-hist-id="gen_leo_003"]').count() == 1
@@ -201,27 +206,29 @@ def run_browser_verification():
             page.locator("#hist-status-filter").select_option("success")
             page.locator("#hist-sort").select_option("oldest")
             assert page.locator('[data-hist-id="gen_leo_003"]').count() == 1
-            page.locator("#hist-back-creation").click()
-            assert "entry=quick" in page.url, f"Did not restore quick creation mode: {page.url}"
+            page.locator("#studio-mode-quick").click()
+            assert "entry=quick" in page.url, f"Quick creation navigation failed: {page.url}"
             page.goto(f"{BASE_URL}/studio/?entry=batch", wait_until="networkidle")
             page.locator("#studio-mode-history").click()
-            page.locator("#hist-back-creation").click()
-            assert "entry=batch" in page.url, f"Did not restore batch creation mode: {page.url}"
+            page.locator("#studio-mode-batch").click()
+            assert "entry=batch" in page.url, f"Batch creation navigation failed: {page.url}"
 
             # Check 4: Existing direct history URLs remain inside the studio.
             # -----------------------------------------------------------
             print("\n>>> Check 4: Legacy history deep link remains in studio...")
             page.goto(f"{BASE_URL}/studio/?view=history&page=2", wait_until="networkidle")
-            page.wait_for_selector("#hist-back-creation", timeout=6000)
+            page.wait_for_selector(".ic-hist-masonry-grid", timeout=6000)
             assert "view=history" in page.url, f"Legacy history URL left the studio: {page.url}"
-            page.locator("#hist-back-creation").click()
+            page.locator("#studio-mode-quick").click()
             assert "entry=quick" in page.url
 
             # Check 5: Mobile viewport.
             # -----------------------------------------------------------
             page.set_viewport_size({"width": 390, "height": 844})
             page.goto(f"{BASE_URL}/studio/?view=history", wait_until="networkidle")
-            page.wait_for_selector("#hist-back-creation", timeout=6000)
+            page.wait_for_selector(".ic-hist-masonry-grid", timeout=6000)
+            columns = page.locator(".ic-hist-masonry-grid").evaluate("(el) => getComputedStyle(el).columnCount")
+            assert columns == "1", f"Mobile history should use one column: {columns}"
             page.screenshot(path=str(MOBILE_SCREENSHOT), full_page=False)
 
             # -----------------------------------------------------------
