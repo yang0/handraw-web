@@ -971,7 +971,7 @@ class UserLibrarySyncTests(unittest.TestCase):
         _token_rate_logs.clear()
 
     def test_21_historical_duplicate_uploads_backfill_safe(self):
-        """Test that historical duplicate uploads with identical sha256 don't crash backfill with 500."""
+        """Fresh V3 skips unsynced rows, and deduplicates valid new uploads."""
         # 1. Create a real image file on disk
         img_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
         fpath = self.uploads_dir / "UPL-hist-dup.png"
@@ -995,20 +995,16 @@ class UserLibrarySyncTests(unittest.TestCase):
                 (self.user_a["id"], str(fpath), len(img_bytes)),
             )
 
-        # GET /api/library/assets triggers backfill: must succeed with 200 (NOT 500 UNIQUE constraint failed)
+        # GET must not run a legacy backfill or leak malformed records.
         s_get, res_get, _ = self._request("GET", "/api/library/assets", cookie=self.cookie_a)
         self.assertEqual(s_get, 200)
-
-        # Verify DB rows: one has sha256 = img_sha, other has sha256 IS NULL
+        self.assertFalse(any("Hist " in it["name"] for it in res_get["items"]))
         rows = self.db.get_conn().execute(
-            "SELECT id, sha256, asset_uid, change_seq FROM user_uploads WHERE id IN ('UPL-hist-1', 'UPL-hist-2') ORDER BY id ASC"
+            "SELECT id,sha256,asset_uid,change_seq FROM user_uploads "
+            "WHERE id IN ('UPL-hist-1','UPL-hist-2') ORDER BY id"
         ).fetchall()
         self.assertEqual(len(rows), 2)
-        shas = [r["sha256"] for r in rows]
-        self.assertIn(img_sha, shas)
-        self.assertIn(None, shas)
-        # Both must have valid asset_uid and change_seq
-        self.assertTrue(all(r["asset_uid"] and r["change_seq"] for r in rows))
+        self.assertTrue(all(r["sha256"] is None and r["asset_uid"] is None for r in rows))
 
         # PUT works without 500
         u_new = _uid("hist_new")
@@ -1016,11 +1012,15 @@ class UserLibrarySyncTests(unittest.TestCase):
         s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{u_new}", {"name": "Fresh Item", "dataUrl": d}, cookie=self.cookie_a)
         self.assertEqual(s_put, 201)
 
-        # Legacy upload with same content as hist dup returns existing asset (deduped: True)
+        # An old malformed row cannot impersonate a newly uploaded V3 asset.
         d_dup = f"data:image/png;base64,{base64.b64encode(img_bytes).decode('ascii')}"
         s_leg, res_leg, _ = self._request("POST", "/api/uploads", {"dataUrl": d_dup, "nameZh": "Upload Hist Dup"}, cookie=self.cookie_a)
         self.assertEqual(s_leg, 200)
-        self.assertTrue(res_leg.get("deduped"))
+        self.assertFalse(res_leg.get("deduped"))
+        s_again, res_again, _ = self._request("POST", "/api/uploads", {"dataUrl": d_dup, "nameZh": "Upload Again"}, cookie=self.cookie_a)
+        self.assertEqual(s_again, 200)
+        self.assertTrue(res_again.get("deduped"))
+        self.assertEqual(res_again["id"], res_leg["id"])
 
     def test_22_media_reference_protection_expanded(self):
         """Test media reference check covers summary, locked_body, replies text, recipes references, and fails safe."""
@@ -1612,7 +1612,7 @@ class UserLibrarySyncTests(unittest.TestCase):
         self.assertEqual(s_del4, 200)
 
     def test_34_backfill_does_not_let_forum_steal_sha(self):
-        """Test N3: ensure_user_uploads_synced does not let forum rows steal sha256 from library assets."""
+        """An unsynced row and a forum upload cannot hijack fresh V3 dedup."""
         d, test_sha, _ = _make_data_url(color=(100, 100, 100))
         from backend.runtime_policy import decode_data_image_url
 
@@ -1641,17 +1641,25 @@ class UserLibrarySyncTests(unittest.TestCase):
         from backend.user_library import ensure_user_uploads_synced
         ensure_user_uploads_synced(self.db, self.user_a["id"])
 
-        # Library row must have received the sha256
-        lib_row = self.db.get_conn().execute("SELECT asset_uid, sha256 FROM user_uploads WHERE id = 'UPL_lib_nosha'").fetchone()
-        self.assertEqual(lib_row["sha256"], test_sha)
-        self.assertTrue(lib_row["asset_uid"])
-
-        # Sending PUT with same image data returns deduped: true mapping to this library row
+        # V3 never retroactively synthesizes a SHA or UID on a read.
+        lib_row = self.db.get_conn().execute(
+            "SELECT asset_uid,sha256 FROM user_uploads WHERE id='UPL_lib_nosha'"
+        ).fetchone()
+        self.assertIsNone(lib_row["asset_uid"])
+        self.assertIsNone(lib_row["sha256"])
+        # Newly uploaded image must be its own owned asset, not forum or
+        # malformed legacy content sharing the same hash.
         new_uid = str(uuid.uuid4())
-        s_put, res_put, _ = self._request("PUT", f"/api/library/assets/{new_uid}", {"dataUrl": d, "name": "Dedup Test"}, cookie=self.cookie_a)
-        self.assertEqual(s_put, 200)
-        self.assertTrue(res_put.get("deduped"))
-        self.assertEqual(res_put.get("uid"), lib_row["asset_uid"])
+        s_put, res_put, _ = self._request(
+            "PUT", f"/api/library/assets/{new_uid}",
+            {"dataUrl": d, "name": "Dedup Test"}, cookie=self.cookie_a,
+        )
+        self.assertEqual(s_put, 201)
+        self.assertEqual(res_put["uid"], new_uid)
+        fresh = self.db.get_conn().execute(
+            "SELECT sha256 FROM user_uploads WHERE asset_uid=?", (new_uid,)
+        ).fetchone()
+        self.assertEqual(fresh["sha256"], test_sha)
 
     def test_35_get_assets_fast_and_non_blocking_under_write_lock(self):
         """Test N4: GET /api/library/assets executes in < 1s and returns 200 without partial data when write lock is held."""
