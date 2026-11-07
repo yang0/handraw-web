@@ -222,7 +222,23 @@ def run_browser_verification():
             page.locator("#studio-mode-quick").click()
             assert "entry=quick" in page.url
 
-            # Check 5: Mobile viewport.
+            # Check 5: The workflow library has one global navigation and minimal tools.
+            # -----------------------------------------------------------
+            print("\\n>>> Check 5: Minimal workflow library and direct legacy URL...")
+            page.goto(f"{BASE_URL}/studio/?view=workflows", wait_until="networkidle")
+            page.wait_for_selector("#wf-search-inp", timeout=6000)
+            assert page.locator("#studio-mode-workflows").is_visible()
+            assert page.locator("#wf-import-file-inp").count() == 1
+            assert page.locator("#wf-saved-list-box").count() == 1
+            assert not page.locator("#ic-workbench-bar").is_visible(), "Canvas tab navigation must be hidden"
+            assert page.locator("#wf-back-canvas").count() == 0
+            assert page.locator("#wf-restore-presets").count() == 0
+            assert page.locator("#tb-open-wflib").count() == 0
+            page.locator("#wf-search-inp").fill("no-such-workflow-search-value")
+            assert page.locator("#wf-saved-list-box").count() == 0
+            page.locator("#wf-search-inp").fill("")
+
+            # Check 6: Mobile viewport.
             # -----------------------------------------------------------
             page.set_viewport_size({"width": 390, "height": 844})
             page.goto(f"{BASE_URL}/studio/?view=history", wait_until="networkidle")
