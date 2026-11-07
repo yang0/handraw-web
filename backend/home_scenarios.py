@@ -376,6 +376,41 @@ def _cover_for_work(row: Any) -> str:
 # Public API: GET /api/public/home-scenarios
 # ---------------------------------------------------------------------------
 
+def _cached_scenarios_current(conn: Any, payload: dict[str, Any]) -> bool:
+    """Never serve a cached card for an unpublished or updated work.
+
+    Cache revisions may arrive before a transaction commits on another worker.
+    Checking the authoritative rows also prevents a brief visibility leak in
+    that window, and catches work deletions not originating in this module.
+    """
+    from .works_feed import is_valid_work_row
+
+    cards = {
+        str(sample["id"]): str(sample["coverUrl"])
+        for scenario in payload.get("items", [])
+        for sample in scenario.get("samples", [])
+    }
+    if not cards:
+        return True
+    placeholders = ",".join("?" for _ in cards)
+    rows = conn.execute(
+        f"""
+        SELECT w.id, w.status, w.images_json,
+               cover.storage_key AS selected_cover_url
+        FROM works w
+        LEFT JOIN media_assets cover ON cover.id=w.cover_media_id
+        WHERE w.id IN ({placeholders})
+        """,
+        tuple(cards),
+    ).fetchall()
+    if len(rows) != len(cards):
+        return False
+    for row in rows:
+        if not is_valid_work_row(row) or _cover_for_work(row) != cards[row["id"]]:
+            return False
+    return True
+
+
 def get_public_home_scenarios(
     db: Database,
     date_key: str | None = None,
@@ -403,7 +438,7 @@ def get_public_home_scenarios(
     cache_entry = _SCENARIOS_CACHE.get(cache_key) if cache_key is not None else None
     if cache_entry is not None:
         payload, etag, expires_at = cache_entry
-        if now_mono < expires_at:
+        if now_mono < expires_at and _cached_scenarios_current(conn, payload):
             return payload, etag
         else:
             if cache_key is not None:
