@@ -187,6 +187,27 @@ class SkillWebBridgeTests(unittest.TestCase):
             "SELECT COUNT(*) FROM skill_generation_runs WHERE user_id=? AND external_run_id=?",
             (self.owner["id"],rid)).fetchone()[0],1)
 
+    def test_private_history_quota_rejects_without_writing_new_media(self):
+        with self.db.transaction() as tx:
+            tx.execute("""INSERT INTO user_uploads
+                (id,user_id,cat,name_zh,image_url,bytes,created_at)
+                VALUES (?,?, 'skill_history','Existing history','/uploads/quota-existing.png',?,?)""",
+                ("UPL_quota_test",self.owner["id"],1024*1024*1024,"2026-11-07T00:00:00Z"))
+        rid=str(uuid.uuid4())
+        blob=b"another-asset"
+        payload={"externalRunId":rid,"originClient":"skill","visibility":"private",
+                 "status":"success","requestId":"skill-history-"+rid,
+                 "originalRequest":"私人提示词","images":[{
+                    "name":"test.png","sha256":hashlib.sha256(blob).hexdigest(),
+                    "dataUrl":"data:image/png;base64,"+base64.b64encode(blob).decode()}]}
+        with self.assertRaises(ServiceError) as error:
+            bridge.import_history(self.db,self.owner,payload,
+                                  lambda *a,**kw:self.fail("storage call must not happen"))
+        self.assertEqual(error.exception.status,413)
+        self.assertEqual(error.exception.code,"skill_history_storage_quota_exceeded")
+        self.assertIsNone(self.db.get_conn().execute(
+            "SELECT id FROM skill_generation_runs WHERE external_run_id=?", (rid,)).fetchone())
+
     def test_history_invalid_payload_is_rejected_before_storage(self):
         rid = str(uuid.uuid4())
         data = {"externalRunId": rid, "originClient": "skill", "visibility": "private",
