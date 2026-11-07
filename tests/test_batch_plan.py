@@ -225,7 +225,7 @@ class BatchPlanRoutesTests(unittest.TestCase):
             captured.extend(messages)
             return response, {"ok": True}
 
-        with patch("backend.batch_plan_routes.get_valid_layout_map", return_value=layouts), \\
+        with patch("backend.batch_plan_routes.get_valid_layout_map", return_value=layouts), \
              patch("backend.batch_plan_routes.chat", side_effect=fake_chat):
             st, res = self._req("POST", "/api/studio/batch-plan", {
                 "seed": "植物显微观察", "count": 1, "layoutMode": "ai",
