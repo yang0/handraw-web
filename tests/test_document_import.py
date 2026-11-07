@@ -554,7 +554,7 @@ class DocumentImportWorkflowTests(unittest.TestCase):
             self.assertLessEqual(len(md), 6000)
 
     def test_q8_cleanup_unreferenced_import_media(self):
-        uploads_dir = Path(self.temp_dir.name) / "uploads_q8"
+        uploads_dir = self.uploads_dir
         uploads_dir.mkdir(parents=True, exist_ok=True)
 
         f_old_unref = uploads_dir / "old_unref.png"
