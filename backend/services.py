@@ -2570,48 +2570,57 @@ def attach_generation_social_counts(
     items: list[dict[str, Any]],
     viewer: dict[str, Any] | None = None,
 ) -> None:
+    """One generated work has ONE set of likes/favorites, on works.id only."""
     if not items:
         return
-    gen_ids = [str(it["id"]).strip() for it in items if it.get("id")]
-    if not gen_ids:
-        return
-    ph = ",".join("?" for _ in gen_ids)
-
-    likes_map: dict[str, int] = {}
-    for r in conn.execute(
-        f"SELECT target_id, COUNT(*) AS cnt FROM interactions WHERE target_type = 'like_generation' AND target_id IN ({ph}) GROUP BY target_id",
-        gen_ids,
-    ).fetchall():
-        likes_map[str(r["target_id"])] = int(r["cnt"])
-
-    favs_map: dict[str, int] = {}
-    for r in conn.execute(
-        f"SELECT target_id, COUNT(*) AS cnt FROM collections WHERE bucket = 'generations' AND target_id IN ({ph}) GROUP BY target_id",
-        gen_ids,
-    ).fetchall():
-        favs_map[str(r["target_id"])] = int(r["cnt"])
-
+    linked: dict[str, str] = {}
+    for item in items:
+        identity = str(item.get("workId") or "").strip()
+        if not identity:
+            try:
+                identity = _generation_work_id(conn, str(item.get("id") or ""))
+            except ServiceError:
+                identity = ""
+        linked[str(item.get("id") or "")] = identity
+    work_ids = sorted({wid for wid in linked.values() if wid})
+    works: dict[str, dict[str, Any]] = {}
     viewer_likes: set[str] = set()
     viewer_favs: set[str] = set()
-    if viewer and viewer.get("id"):
-        vuid = int(viewer["id"])
-        for r in conn.execute(
-            f"SELECT target_id FROM interactions WHERE user_id = ? AND target_type = 'like_generation' AND target_id IN ({ph})",
-            (vuid, *gen_ids),
+    if work_ids:
+        placeholders = ",".join("?" for _ in work_ids)
+        for row in conn.execute(
+            f"SELECT id,likes,favorites FROM works WHERE status='published' "
+            f"AND id IN ({placeholders})",
+            tuple(work_ids),
         ).fetchall():
-            viewer_likes.add(str(r["target_id"]))
-        for r in conn.execute(
-            f"SELECT target_id FROM collections WHERE user_id = ? AND bucket = 'generations' AND target_id IN ({ph})",
-            (vuid, *gen_ids),
-        ).fetchall():
-            viewer_favs.add(str(r["target_id"]))
+            works[str(row["id"])] = dict(row)
+        if viewer and viewer.get("id"):
+            user_id = int(viewer["id"])
+            viewer_likes = {
+                str(row["target_id"]) for row in conn.execute(
+                    f"SELECT target_id FROM interactions "
+                    f"WHERE target_type='like_work' AND user_id=? "
+                    f"AND target_id IN ({placeholders})",
+                    (user_id, *work_ids),
+                ).fetchall()
+            }
+            viewer_favs = {
+                str(row["target_id"]) for row in conn.execute(
+                    f"SELECT target_id FROM collections "
+                    f"WHERE bucket='works' AND user_id=? "
+                    f"AND target_id IN ({placeholders})",
+                    (user_id, *work_ids),
+                ).fetchall()
+            }
 
-    for it in items:
-        gid = str(it.get("id") or "").strip()
-        it["likes"] = likes_map.get(gid, 0)
-        it["favorites"] = favs_map.get(gid, 0)
-        it["liked"] = gid in viewer_likes if viewer else False
-        it["favorited"] = gid in viewer_favs if viewer else False
+    for item in items:
+        wid = linked.get(str(item.get("id") or ""), "")
+        row = works.get(wid)
+        item["workId"] = wid or None
+        item["likes"] = int(row["likes"] or 0) if row else 0
+        item["favorites"] = int(row["favorites"] or 0) if row else 0
+        item["liked"] = bool(wid in viewer_likes)
+        item["favorited"] = bool(wid in viewer_favs)
 
 
 def toggle_user_collection(
