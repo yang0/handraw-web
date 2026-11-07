@@ -771,7 +771,7 @@ except ImportError:  # pragma: no cover - compatibility for staged rollouts
     SCENARIOS_MIGRATIONS = []
 
 # Skill/Web unified personal cloud (additive, no legacy data rewrite).
-from .skill_web_bridge import SKILL_WEB_MIGRATIONS
+from .skill_web_schema import SKILL_WEB_MIGRATIONS
 MIGRATIONS.extend(SKILL_WEB_MIGRATIONS)
 
 # Ensure migrations execute in strictly ascending numerical order
