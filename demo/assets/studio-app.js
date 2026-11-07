@@ -432,11 +432,13 @@
     if (run.controller && !run.controller.signal?.aborted) {
       try { run.controller.abort(); } catch (_) {}
     }
-    if (window.HandrawBatchCreate?.setStopping) window.HandrawBatchCreate.setStopping();
+    const quickTask = CS.stageView === "quick" && getQuickParts()?.ctrl.id === run.ctrlId;
+    if (!quickTask && window.HandrawBatchCreate?.setStopping) window.HandrawBatchCreate.setStopping();
     const submitted = run.submittedSlots?.size || 0;
     toast(submitted
-      ? `已停止继续提交和本地等待；${submitted} 张已发出的图片仍可能在云端完成或计费，请查看生图历史。`
-      : "已停止批量生成，尚未提交的图片不会计费。");
+      ? `正在停止本地等待；${submitted} 张已提交云端的图片仍可能生成或计费，请查看生图历史。`
+      : quickTask ? "正在停止当前做图任务；未提交云端的请求不会发出。" :
+        "已停止批量生成，尚未提交的图片不会计费。");
     return true;
   }
 
