@@ -23,6 +23,7 @@
   const OPEN_TABS_KEY = "handraw_open_tabs_v10";
   const HISTORY_STORAGE_KEY = "handraw_gen_history_v4";
   const MY_ARTICLES_STORAGE_KEY = "handraw_my_articles_v1";
+  const ARTICLE_CONFLICT_BACKUP_KEY = "handraw_article_conflict_backup_v1";
   const RECENT_AUDIENCE_KEY = "handraw_recent_audiences_v1";
   const RECENT_SCENE_KEY = "handraw_recent_scenes_v1";
   const SCOPED_STORAGE_KEYS = new Set([
@@ -32,6 +33,7 @@
     OPEN_TABS_KEY,
     HISTORY_STORAGE_KEY,
     MY_ARTICLES_STORAGE_KEY,
+    ARTICLE_CONFLICT_BACKUP_KEY,
     RECENT_AUDIENCE_KEY,
     RECENT_SCENE_KEY
   ]);
@@ -638,8 +640,13 @@
       }
       if (httpStatus === 409 && (response?.code === "article_version_conflict" || response?.code === "article_deleted")) {
         _articlesCloudConflict = true;
+        writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
+          createdAt: Date.now(),
+          articles: JSON.parse(JSON.stringify(CS.myArticles || [])),
+          activeId: CS.activeArticleId || ""
+        });
         setArticlesSyncStatus("conflict");
-        toast("云端文章版本冲突：已停止自动覆盖，浏览器内的修改仍保留。请下载本地稿并重新加载。");
+        toast("云端版本冲突，已停止自动覆盖并保留本地备份。请先恢复为新文章，或下载 Markdown 后人工合并。");
         return;
       }
       if (httpStatus >= 200 && httpStatus < 300 && response?.ok) {
@@ -711,6 +718,11 @@
 
         if (Array.isArray(ws.articles)) {
           ensureMyArticlesInitialized();
+          const conflictBackup = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
+          if (conflictBackup?.articles?.length) {
+            _articlesCloudConflict = true;
+            setArticlesSyncStatus("conflict");
+          }
           const serverIds = new Set(ws.articles.map((a) => a.id));
           const artMap = new Map();
           ws.articles.forEach((ra) => {
@@ -14809,7 +14821,7 @@
       const remote = Boolean(App.state?.serverBacked && App.state?.loggedIn);
       if (retry) {
         retry.hidden = !remote || !["failed", "conflict"].includes(_articlesSyncStatus);
-        retry.textContent = _articlesSyncStatus === "conflict" ? "下载本地稿" : "重试云端同步";
+        retry.textContent = _articlesSyncStatus === "conflict" ? "恢复为新文章" : "重试云端同步";
       }
       if (state === "dirty") el.textContent = "本地保存中…";
       else if (state === "empty") el.textContent = "未填写";
@@ -14823,6 +14835,26 @@
     const syncRetryBtn = DOM.previewStage.querySelector("#editor-sync-retry");
     if (syncRetryBtn) syncRetryBtn.onclick = () => {
       if (_articlesCloudConflict) {
+        const backup = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
+        const source = (backup?.articles || []).find(a => a.id === draft.id);
+        if (source) {
+          ensureMyArticlesInitialized();
+          const copy = JSON.parse(JSON.stringify(source));
+          copy.id = E.uid("art");
+          copy.articleTitle = (copy.articleTitle || "未命名文章") + " · 冲突恢复副本";
+          copy.title = copy.articleTitle;
+          copy.linkedTabId = null;
+          copy.linkedPlanNodeId = null;
+          copy.createdAtMs = Date.now();
+          copy.updatedAtMs = Date.now();
+          CS.myArticles.unshift(copy);
+          _articlesCloudConflict = false;
+          writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
+          persistMyArticles();
+          openUnifiedArticleEditor(copy.id, {renderNow: true});
+          toast("已作为新文章恢复本地版本，原云端文章保持不变");
+          return;
+        }
         const md = String(draft.markdown || "");
         const blob = new Blob([md], {type:"text/markdown;charset=utf-8"});
         const url = URL.createObjectURL(blob);
