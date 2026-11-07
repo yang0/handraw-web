@@ -22,9 +22,11 @@ V3_MIGRATIONS = [
             source TEXT NOT NULL CHECK(source IN ('web','skill','api')),
             external_run_id TEXT NOT NULL,
             request_id TEXT NOT NULL DEFAULT '',
+            request_hash TEXT NOT NULL DEFAULT '',
+            original_request TEXT NOT NULL DEFAULT '',
             expected_count INTEGER NOT NULL CHECK(expected_count >= 1),
             status TEXT NOT NULL DEFAULT 'running'
-                CHECK(status IN ('pending','running','partial','success','failed')),
+                CHECK(status IN ('pending','uploading','running','partial','success','failed')),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, source, external_run_id)
@@ -218,6 +220,103 @@ def _upsert_media(
     elif digest and not exists["sha256"]:
         tx.execute("UPDATE media_assets SET sha256=? WHERE id=?", (digest, media_id))
     return media_id
+
+
+def reserve_skill_run(
+    tx: sqlite3.Connection,
+    *,
+    user_id: int,
+    external_run_id: str,
+    request_id: str,
+    request_hash: str,
+    original_request: str,
+    expected_count: int,
+) -> str:
+    """Same run for a retry, without silently accepting edited content."""
+    run_id = ensure_run(
+        tx, user_id=user_id, source="skill", external_run_id=external_run_id,
+        expected_count=expected_count, request_id=request_id,
+    )
+    row = tx.execute(
+        "SELECT request_hash,original_request FROM generation_runs WHERE id=?",
+        (run_id,),
+    ).fetchone()
+    if row["request_hash"] and (
+        row["request_hash"] != request_hash or
+        row["original_request"] != original_request
+    ):
+        raise ValueError("Skill upload retry conflicts with the original request")
+    tx.execute(
+        """
+        UPDATE generation_runs
+        SET request_hash=?,original_request=?,status=CASE
+              WHEN status='success' THEN 'success' ELSE 'uploading' END,
+            updated_at=?
+        WHERE id=?
+        """,
+        (request_hash, original_request, _now(), run_id),
+    )
+    return run_id
+
+
+def record_skill_uploaded_item(
+    tx: sqlite3.Connection,
+    *,
+    run_id: str,
+    user_id: int,
+    position: int,
+    url: str,
+    sha256: str,
+) -> None:
+    if position < 0:
+        raise ValueError("Invalid upload position")
+    row = tx.execute(
+        "SELECT user_id,source,expected_count FROM generation_runs WHERE id=?",
+        (run_id,),
+    ).fetchone()
+    if not row or row["source"] != "skill" or int(row["user_id"]) != user_id:
+        raise ValueError("Skill run ownership mismatch")
+    if position >= int(row["expected_count"]):
+        raise ValueError("Upload position outside declared run")
+    media_id = _upsert_media(tx, owner_id=user_id, url=url, sha256=sha256)
+    existing = tx.execute(
+        "SELECT media_id FROM generation_items WHERE run_id=? AND position=?",
+        (run_id, position),
+    ).fetchone()
+    if existing and existing["media_id"] != media_id:
+        raise ValueError("Upload position changed during retry")
+    now = _now()
+    if not existing:
+        tx.execute(
+            """
+            INSERT INTO generation_items
+              (id,run_id,position,status,media_id,created_at,updated_at)
+            VALUES (?,?,?,'success',?,?,?)
+            """,
+            (_stable_id("item", run_id, position), run_id, position, media_id, now, now),
+        )
+    tx.execute(
+        "UPDATE generation_runs SET updated_at=? WHERE id=?", (now, run_id),
+    )
+
+
+def uploaded_skill_images(tx: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
+    """Get only *contiguous* uploaded positions, so retries resume correctly."""
+    rows = tx.execute(
+        """
+        SELECT i.position,m.storage_key,m.sha256
+        FROM generation_items i JOIN media_assets m ON m.id=i.media_id
+        WHERE i.run_id=? AND i.status='success'
+        ORDER BY i.position ASC
+        """,
+        (run_id,),
+    ).fetchall()
+    saved: list[dict[str, Any]] = []
+    for row in rows:
+        if int(row["position"]) != len(saved):
+            raise ValueError("Skill uploaded image positions are not contiguous")
+        saved.append({"url": row["storage_key"], "sha256": row["sha256"]})
+    return saved
 
 
 def record_public_work(
