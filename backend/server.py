@@ -930,10 +930,10 @@ def _entry_to_work_body(entry: dict[str, Any]) -> dict[str, Any]:
         if url and url not in deduped:
             deduped.append(url)
 
-    # A caller sending more than nine images is rejected even when they collapse
+    # A caller sending more than twelve images is rejected even when they collapse
     # to fewer unique URLs, so the "split the share" instruction still surfaces.
-    if len(image_urls) > 9:
-        raise ServiceError("一次最多 9 张图片，请分批发布", status=400, code="too_many_images")
+    if len(image_urls) > 12:
+        raise ServiceError("一次最多 12 张图片，请分批发布", status=400, code="too_many_images")
 
     # Assets carry "official:<CODE>" refs; split them by role.
     styles = _codes(entry.get("styleIds") or entry.get("styles") or [])
