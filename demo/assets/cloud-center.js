@@ -451,6 +451,7 @@
         }
         pendingFile = null;
         pendingUid = null;
+        if (category !== "all" && category !== cat) category = cat;
         busy = false;
         showUploadForm();
         const refreshed = await load(false);
@@ -488,7 +489,7 @@
     });
     if (uploadForm) uploadForm.addEventListener("submit", function (event) {
       event.preventDefault();
-      uploadPending();
+      return uploadPending();
     });
     if (uploadCancel) uploadCancel.addEventListener("click", function () {
       if (busy) return;
