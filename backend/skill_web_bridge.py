@@ -209,49 +209,73 @@ def _history_payload(body: dict[str, Any]) -> tuple[str, str, list[dict[str, Any
 def _publish_skill_run_images(db: Any, user: dict[str, Any], run_id: str,
                               original: str, saved: list[dict[str, Any]],
                               external_id: str) -> list[str]:
-    """Ensure exactly one published work per Skill image, with durable media grants.
+    """Publish one canonical work containing every image in this Skill run.
 
-    Retried partial uploads and publication errors are idempotent; pre-existing
-    private records are deliberately excluded from this path.
+    A replay returns the same work. Uploaded images are validated together,
+    then granted to the same public work rather than creating N work records.
     """
     from .services import publish_user_work
     from .server import validate_publish_media, _grant_published_media
+
     uid = int(user["id"])
-    ids: list[str] = []
-    for index, item in enumerate(saved):
-        url = str(item["url"])
-        mapping = db.get_conn().execute(
-            "SELECT work_id FROM skill_generation_work_items "
-            "WHERE run_id=? AND image_index=? AND user_id=?",
-            (run_id, index, uid)).fetchone()
-        if mapping:
-            ids.append(str(mapping["work_id"]))
-            continue
-        payload = validate_publish_media(db, user, {
-            "title": f"Skill 手绘创作 {index + 1}",
-            "prompt": original, "images": [url], "styles": [], "layout": "",
-            "price": 0, "requestId": f"skill-gen-{external_id}-{index}",
-        })
-        if payload.get("images") != [url]:
-            raise ServiceError("作品媒体验证失败", status=403, code="invalid_public_media")
-        receipt = publish_user_work(db, user, payload)
-        wid = str(receipt["workId"])
-        _grant_published_media(db, user, payload, target_type="work", target_id=wid)
+    urls = [str(item["url"]) for item in saved]
+    if not urls:
+        return []
+
+    row = db.get_conn().execute(
+        "SELECT work_id FROM generation_works WHERE generation_id=?",
+        (run_id,),
+    ).fetchone()
+    if row:
+        wid = str(row["work_id"])
+        work = db.get_conn().execute(
+            "SELECT images_json FROM works WHERE id=?", (wid,)
+        ).fetchone()
+        if not work:
+            raise ServiceError("生成任务对应的作品不存在", status=409, code="work_link_broken")
+        if json.loads(work["images_json"] or "[]") != urls:
+            raise ServiceError("任务对应作品的图片不一致", status=409, code="work_images_conflict")
+        return [wid]
+
+    payload = validate_publish_media(db, user, {
+        "title": "Skill 手绘创作",
+        "prompt": original,
+        "images": urls,
+        "styles": [],
+        "layout": "",
+        "price": 0,
+        "origin": "generation",
+        "requestId": f"skill-gen-{external_id}",
+    })
+    if payload.get("images") != urls:
+        raise ServiceError("作品媒体验证失败", status=403, code="invalid_public_media")
+
+    receipt = publish_user_work(db, user, payload)
+    wid = str(receipt["workId"])
+    _grant_published_media(db, user, payload, target_type="work", target_id=wid)
+    for url in urls:
         grant = db.get_conn().execute(
             "SELECT 1 FROM media_public_grants "
             "WHERE media_url=? AND target_type='work' AND target_id=? "
             "AND revoked_at IS NULL LIMIT 1",
-            (url.split("?", 1)[0], wid)).fetchone()
+            (url.split("?", 1)[0], wid),
+        ).fetchone()
         if not grant:
-            raise ServiceError("作品已创建但媒体授权失败，重试可恢复", status=503,
+            raise ServiceError("作品媒体授权未完成，重试可恢复", status=503,
                                code="media_grant_pending")
-        with db.transaction() as tx:
-            tx.execute(
-                "INSERT OR IGNORE INTO skill_generation_work_items "
-                "(user_id,run_id,image_index,work_id,created_at) VALUES (?,?,?,?,?)",
-                (uid, run_id, index, wid, utc_now_iso()))
-        ids.append(wid)
-    return ids
+
+    with db.transaction() as tx:
+        tx.execute(
+            "INSERT OR IGNORE INTO generation_works (generation_id,item_key,work_id,created_at) "
+            "VALUES (?,'__run__',?,?)",
+            (run_id, wid, utc_now_iso()),
+        )
+        linked = tx.execute(
+            "SELECT work_id FROM generation_works WHERE generation_id=?", (run_id,)
+        ).fetchone()
+        if not linked or str(linked["work_id"]) != wid:
+            raise ServiceError("作品关联冲突", status=409, code="work_link_conflict")
+    return [wid]
 
 
 def import_history(db: Any, user: dict[str, Any], body: dict[str, Any], image_store: Any) -> dict[str, Any]:
@@ -310,7 +334,7 @@ def import_history(db: Any, user: dict[str, Any], body: dict[str, Any], image_st
                     "UPDATE skill_generation_runs SET images_json=? WHERE id=? AND user_id=?",
                     (json.dumps(saved, ensure_ascii=False), new_id, uid))
         works = _publish_skill_run_images(db, user, new_id, original, saved, rid)
-        if len(works) != len(images):
+        if len(works) != 1:
             raise ServiceError("部分图片尚未完成公开，重试可恢复", status=503,
                                code="publication_incomplete")
         with db.transaction() as tx:
@@ -318,7 +342,8 @@ def import_history(db: Any, user: dict[str, Any], body: dict[str, Any], image_st
                 "UPDATE skill_generation_runs SET status='success' WHERE id=? AND user_id=?",
                 (new_id, uid))
     return {"ok": True, "id": new_id, "visibility": "public",
-            "workIds": works, "deduped": bool(old and old["status"] == "success")}
+            "workIds": works, "workId": works[0], "imageCount": len(saved),
+            "deduped": bool(old and old["status"] == "success")}
 
 
 def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dict[str, Any]:
@@ -348,8 +373,8 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
         except (ValueError,TypeError):
             media=[]
         linked = [str(x["work_id"]) for x in conn.execute(
-            "SELECT work_id FROM skill_generation_work_items WHERE user_id=? AND run_id=? "
-            "ORDER BY image_index", (uid,row["id"])).fetchall()] if row["origin"] == "skill" else []
+            "SELECT work_id FROM generation_works WHERE generation_id=?",
+            (row["id"],)).fetchall()] if row["origin"] == "skill" else []
         published=conn.execute(
             "SELECT work_id FROM skill_history_publications "
             "WHERE user_id=? AND source=? AND history_id=?",
