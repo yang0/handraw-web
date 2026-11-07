@@ -146,6 +146,7 @@
     historyReturnStage: "quick",
     historyReturnUrl: "",
     historyExpandedPromptIds: {},
+    historyExpandedBatchIds: {},
     historySelectedPreview: {},
     workflowQuery: "",
     activePlanNodeId: null,
@@ -250,6 +251,7 @@
     CS.redoStack = [];
     CS.arrangeUndoSnapshot = null;
     CS.historyExpandedPromptIds = {};
+    CS.historyExpandedBatchIds = {};
     CS.historySelectedPreview = {};
     CS.stageView = "canvas";
     CS.historyPage = 1;
@@ -7515,12 +7517,22 @@
   }
 
   function historyRecordCategory(h) {
-    // Group legacy records by today's four creation modes without rewriting history.
-    if (h.mode === "article-illust" || h.kind === "article") return "article";
-    if (h.kind === "loop" || h.kind === "series" || h.mode === "series" || h.mode === "batch" ||
+    // Each generation belongs to exactly one mode, including standalone article covers.
+    const mode = String(h.mode || "").toLowerCase().replace(/_/g, "-");
+    const kind = String(h.kind || "").toLowerCase();
+    const label = `${h.modeLabel || ""} ${h.tabTitle || ""}`;
+    if (["article-illust", "article-cover"].includes(mode) || kind === "article" ||
+        h.articleTitle || /文章封面|文章配图|文章插图/.test(label)) return "article";
+    if (["loop", "series", "batch"].includes(kind) || ["series", "batch"].includes(mode) ||
         /循环批量|批量|套图/.test(String(h.modeLabel || ""))) return "batch";
+    if (kind === "cover" || /封面图|独立封面/.test(label) ||
+        (Array.isArray(h.items) && h.items.length === 1 && h.items[0]?.role === "cover")) return "article";
     if (h.recipeId || h.tabTitle === "做图配方") return "quick";
     return "canvas";
+  }
+
+  function historyImageCount(h) {
+    return (Array.isArray(h.items) ? h.items : []).filter((it) => it && it.imageUrl).length;
   }
 
   function historyStatusCategory(h) {
@@ -7557,6 +7569,12 @@
     const allHist = CS.generationHistory || [];
     const filterMode = CS.historyFilter || "all";
     const statusFilter = CS.historyStatusFilter || "all";
+    const imageCounts = { all: 0, quick: 0, batch: 0, article: 0, canvas: 0 };
+    for (const history of allHist) {
+      const amount = historyImageCount(history);
+      imageCounts.all += amount;
+      imageCounts[historyRecordCategory(history)] += amount;
+    }
     const q = String(CS.historyQuery || "").trim().toLowerCase();
 
     const filtered = allHist.filter((h) => {
@@ -7577,18 +7595,17 @@
     DOM.historyStage.innerHTML = `
       <div class="ic-pv-topbar ic-history-topbar">
         <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-          <button type="button" class="btn btn-sm" id="hist-back-creation" style="font-weight:800;">← 返回创作</button>
-          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">🕒 生图历史 (${allHist.length})</span>
-          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">当前加载最近 ${allHist.length} 条记录，支持查找、恢复与下载</span>
+          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">🕒 生图历史 · ${imageCounts.all} 张</span>
+          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">${allHist.length} 次生成 · 按分类查看图片张数</span>
         </div>
 
         <div class="ic-history-controls">
           <div class="ic-view-seg">
-            <button type="button" class="ic-view-seg-btn ${filterMode === "all" ? "is-active" : ""}" data-hist-filter="all">全部</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "quick" ? "is-active" : ""}" data-hist-filter="quick">做图</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "batch" ? "is-active" : ""}" data-hist-filter="batch">批量</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "article" ? "is-active" : ""}" data-hist-filter="article">文章配图</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "canvas" ? "is-active" : ""}" data-hist-filter="canvas">画布</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "all" ? "is-active" : ""}" data-hist-filter="all">全部 (${imageCounts.all})</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "quick" ? "is-active" : ""}" data-hist-filter="quick">做图 (${imageCounts.quick})</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "batch" ? "is-active" : ""}" data-hist-filter="batch">批量 (${imageCounts.batch})</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "article" ? "is-active" : ""}" data-hist-filter="article">文章配图 (${imageCounts.article})</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "canvas" ? "is-active" : ""}" data-hist-filter="canvas">画布 (${imageCounts.canvas})</button>
           </div>
           <input
             type="search"
@@ -7623,7 +7640,6 @@
                     allHist.length === 0 ? "暂无生成历史记录" : "没有匹配当前筛选条件的历史记录"
                   }</div>
                   <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">在做图、批量、文章配图或高级画布生成后，可以在此查找历史记录。</div>
-                  <button type="button" class="btn btn-primary" id="hist-empty-back-creation">返回创作</button>
                 </div>
               `
               : `
@@ -7746,12 +7762,6 @@
       }
     }
 
-    const backBtn = DOM.historyStage.querySelector("#hist-back-creation");
-    if (backBtn) backBtn.onclick = returnFromHistoryPage;
-
-    const emptyGoBtn = DOM.historyStage.querySelector("#hist-empty-back-creation");
-    if (emptyGoBtn) emptyGoBtn.onclick = returnFromHistoryPage;
-
     DOM.historyStage.querySelectorAll("[data-hist-filter]").forEach((btn) => {
       btn.onclick = () => {
         CS.historyFilter = btn.getAttribute("data-hist-filter") || "all";
@@ -7831,6 +7841,7 @@
           await deleteCloudHistory(hid, false);
           CS.generationHistory = (CS.generationHistory || []).filter((item) => item.id !== hid);
           delete CS.historyExpandedPromptIds[hid];
+          delete CS.historyExpandedBatchIds[hid];
           delete CS.historySelectedPreview[hid];
           writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
           renderTopAndBottomDocks();
