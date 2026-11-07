@@ -73,6 +73,17 @@ SKILL_WEB_MIGRATIONS = [
             PRIMARY KEY(user_id,request_id)
         );
     """),
+    (96, "096_skill_explicit_history_publications", """
+        CREATE TABLE IF NOT EXISTS skill_history_publications (
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            source TEXT NOT NULL CHECK(source IN ('skill','web')),
+            history_id TEXT NOT NULL,
+            work_id TEXT NOT NULL REFERENCES works(id),
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(user_id,source,history_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_history_work ON skill_history_publications(work_id);
+    """),
 ]
 
 
@@ -315,10 +326,10 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
     # Both website and Skill histories are private owner-scoped reads.
     rows = conn.execute("""
         SELECT id, created_at, status, 'skill' AS origin, external_run_id, original_request,
-               images_json FROM skill_generation_runs WHERE user_id=? AND status='success'
+               images_json, visibility FROM skill_generation_runs WHERE user_id=? AND status='success'
         UNION ALL
         SELECT id, created_at, status, 'web' AS origin, '' AS external_run_id, prompt,
-               items_json FROM studio_generations
+               items_json, visibility FROM studio_generations
         WHERE user_id=? AND COALESCE(deleted_at,'')=''
         ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
     """, (uid,uid,limit+1,offset)).fetchall()
@@ -330,11 +341,86 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
             media=[]
         result.append({"id":row["id"],"originClient":row["origin"],"externalRunId":row["external_run_id"],
                        "originalRequest":row["original_request"],"images":media,
-                       "status":row["status"],"visibility":"private" if row["origin"]=="skill" else "legacy",
+                       "status":row["status"],"visibility":row["visibility"],
+                       "canPublish":row["status"]=="success" and row["visibility"]=="private",
                        "createdAt":row["created_at"]})
     return {"ok": True,"items":result,"hasMore":len(rows)>limit,
             "nextCursor":str(offset+limit) if len(rows)>limit else None}
 
+
+
+def publish_history(db: Any, user: dict[str, Any], history_id: str, body: dict[str,Any]) -> dict[str,Any]:
+    """Create a public work ONLY after an explicit confirmation from the owner."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", history_id):
+        raise ServiceError("历史 ID 无效", status=400, code="invalid_id")
+    title = body.get("title")
+    prompt = body.get("prompt")
+    if (not isinstance(title,str) or not title.strip() or len(title)>140
+            or not isinstance(prompt,str) or not prompt.strip() or len(prompt)>20000
+            or body.get("confirmed") is not True):
+        raise ServiceError("必须确认公开的标题、提示词和图片",status=400,code="publication_confirmation_required")
+    uid=int(user["id"])
+    with db._write_lock:
+        conn=db.get_conn()
+        row=conn.execute(
+            "SELECT id,status,visibility,images_json FROM skill_generation_runs WHERE id=? AND user_id=?",
+            (history_id,uid)).fetchone()
+        source="skill"
+        if not row:
+            row=conn.execute(
+                "SELECT id,status,visibility,items_json AS images_json FROM studio_generations "
+                "WHERE id=? AND user_id=? AND COALESCE(deleted_at,'')=''",
+                (history_id,uid)).fetchone()
+            source="web"
+        if not row:
+            raise ServiceError("历史记录不存在",status=404,code="not_found")
+        previous=conn.execute(
+            "SELECT work_id FROM skill_history_publications WHERE user_id=? AND source=? AND history_id=?",
+            (uid,source,history_id)).fetchone()
+        if previous:
+            return {"ok":True,"workId":previous["work_id"],"alreadyPublished":True}
+        if row["status"]!="success" or row["visibility"]!="private":
+            raise ServiceError("只能发布未公开的成功创作历史",status=409,code="not_private_history")
+        try:
+            originals=json.loads(row["images_json"] or "[]")
+        except (ValueError,TypeError):
+            originals=[]
+        urls=[]
+        for item in originals:
+            if isinstance(item,str):
+                url=item
+            elif isinstance(item,dict):
+                url=str(item.get("url") or item.get("imageUrl") or item.get("image") or "")
+            else:
+                continue
+            if url and url not in urls:
+                urls.append(url)
+        raw_indices=body.get("indices")
+        if raw_indices is not None:
+            if (not isinstance(raw_indices,list) or not raw_indices
+                    or len(raw_indices)>9 or any(type(i) is not int or i<0 or i>=len(urls) for i in raw_indices)
+                    or len(set(raw_indices)) != len(raw_indices)):
+                raise ServiceError("图片选择无效",status=400,code="invalid_image_selection")
+            urls=[urls[i] for i in raw_indices]
+        if not (1<=len(urls)<=9):
+            raise ServiceError("请选择 1–9 张图片发布",status=400,code="invalid_images")
+        from .server import validate_publish_media, _grant_published_media
+        from .services import publish_user_work
+        payload=validate_publish_media(db,user,{
+            "title":title.strip(),"prompt":prompt,"images":urls,
+            "styles":[],"layout":"","price":0,
+            "requestId":"history-pub-"+history_id,
+        })
+        if len(payload.get("images") or []) != len(urls):
+            raise ServiceError("有部分图片不可发布",status=403,code="media_not_publishable")
+        result=publish_user_work(db,user,payload)
+        _grant_published_media(db,user,payload,target_type="topic",target_id=str(result.get("topicId") or ""))
+        wid=str(result["workId"])
+        with db.transaction() as tx:
+            tx.execute("INSERT OR IGNORE INTO skill_history_publications "
+                       "(user_id,source,history_id,work_id,created_at) VALUES(?,?,?,?,?)",
+                       (uid,source,history_id,wid,utc_now_iso()))
+        return {"ok":True,"workId":wid,"url":result.get("url"),"alreadyPublished":False}
 
 def notification_list(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dict[str, Any]:
     uid=int(user["id"])
@@ -441,6 +527,8 @@ def handle_post(handler: Any, path: str, body: dict[str,Any]) -> bool:
         # Import only when explicitly requested; never auto-publish to works.
         from .server import save_data_url_upload
         handler._send_json(import_history(handler.db,_user(handler),body,save_data_url_upload))
+    elif (m:=re.fullmatch(r"/api/v1/me/generations/([^/]+)/publish",path)):
+        handler._send_json(publish_history(handler.db,_user(handler),m[1],body))
     elif (m:=re.fullmatch(r"/api/v1/works/([^/]+)/likes",path)):
         handler._send_json(social_like(handler.db,_user(handler),m[1],body))
     elif (m:=re.fullmatch(r"/api/v1/works/([^/]+)/comments",path)):
