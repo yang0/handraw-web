@@ -7574,14 +7574,14 @@
     const pageItems = filtered.slice((curPage - 1) * PAGE_SIZE, curPage * PAGE_SIZE);
 
     DOM.historyStage.innerHTML = `
-      <div class="ic-pv-topbar">
+      <div class="ic-pv-topbar ic-history-topbar">
         <div style="display:flex;align-items:center;gap:10px;min-width:0;">
           <button type="button" class="btn btn-sm" id="hist-back-creation" style="font-weight:800;">← 返回创作</button>
           <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">🕒 生图历史 (${allHist.length})</span>
-          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">按生成任务归档，可查找参数、再次创作或下载</span>
+          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">当前加载最近 ${allHist.length} 条记录，支持查找、恢复与下载</span>
         </div>
 
-        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+        <div class="ic-history-controls">
           <div class="ic-view-seg">
             <button type="button" class="ic-view-seg-btn ${filterMode === "all" ? "is-active" : ""}" data-hist-filter="all">全部</button>
             <button type="button" class="ic-view-seg-btn ${filterMode === "quick" ? "is-active" : ""}" data-hist-filter="quick">做图</button>
@@ -7594,14 +7594,20 @@
             class="hw-input"
             id="hist-search-inp"
             value="${esc(CS.historyQuery || "")}"
-            placeholder="搜索工作流、参数或提示词…"
+            placeholder="搜索日期、名称、画风、图型或比例…"
+            aria-label="搜索生图历史"
             style="width:220px;height:32px;padding:4px 10px;font-size:12.5px;"
           />
-          ${
-            allHist.length
-              ? `<button type="button" class="btn btn-sm" id="hist-clear-all" style="color:#dc2626;font-weight:750;">🗑️ 清空记录</button>`
-              : ""
-          }
+          <select id="hist-status-filter" class="hw-input" aria-label="生成状态筛选" style="height:32px;font-size:12px;">
+            <option value="all" ${statusFilter === "all" ? "selected" : ""}>所有状态</option>
+            <option value="success" ${statusFilter === "success" ? "selected" : ""}>生成成功</option>
+            <option value="active" ${statusFilter === "active" ? "selected" : ""}>进行中</option>
+            <option value="failed" ${statusFilter === "failed" ? "selected" : ""}>失败</option>
+          </select>
+          <select id="hist-sort" class="hw-input" aria-label="历史记录排序" style="height:32px;font-size:12px;">
+            <option value="newest" ${CS.historySort !== "oldest" ? "selected" : ""}>最新优先</option>
+            <option value="oldest" ${CS.historySort === "oldest" ? "selected" : ""}>最早优先</option>
+          </select>
         </div>
       </div>
 
@@ -7637,13 +7643,15 @@
                               <span class="ic-node-badge ${h.kind === "loop" ? "ic-badge-loop" : "ic-badge-output-ctrl"}">${esc(h.modeLabel || "生成记录")}</span>
                               ${h.demoMode || h.engine === "demo" ? '<span class="ic-node-badge" style="background:#fff4d6;color:#8a5a00;border:1px solid #e8c46a;">🧪 演示样图</span>' : ""}
                               <strong style="font-size:14.5px;font-weight:850;color:var(--ic-ink);">${esc(h.subject || h.title || h.tabTitle || "画布工作流")}</strong>
+                              <span class="ic-hist-status is-${historyStatusCategory(h)}">${historyStatusCategory(h) === "success" ? "生成成功" : historyStatusCategory(h) === "active" ? "进行中" : "未完成"}</span>
+                              <span style="font-size:12px;color:var(--ic-muted);">${(h.items || []).length} 张</span>
                               <span style="font-size:12px;color:var(--ic-muted);font-family:var(--font-mono);">${esc(h.createdAt || "")}</span>
                               <span style="font-size:12px;color:var(--ic-muted);">· ${esc(h.recipeSummary || "自由生图")}</span>
                             </div>
 
                             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
                               ${h.recipeId ? `<button type="button" class="btn btn-sm btn-primary" data-hist-redo-recipe="${esc(h.recipeId)}" style="font-weight:800;">再做一次</button>` : `<button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">↩ 恢复到画布</button>`}
-                              <button type="button" class="btn btn-sm" data-hist-zip="${esc(h.id)}" style="color:#1f6f4a;border-color:rgba(31,111,74,0.35);font-weight:750;">📦 下载 ZIP</button>
+                              <button type="button" class="btn btn-sm" data-hist-zip="${esc(h.id)}" ${!(h.items || []).some((it) => it.imageUrl) ? "disabled" : ""} style="color:#1f6f4a;border-color:rgba(31,111,74,0.35);font-weight:750;">📦 下载 ZIP</button>
                               <button type="button" class="btn btn-sm" data-hist-del="${esc(h.id)}" style="color:#dc2626;" title="删除此条历史记录">🗑️ 删除</button>
                             </div>
                           </div>
@@ -7661,6 +7669,7 @@
                                     <img data-hw-src="${esc(it.imageUrl)}" alt="${esc(it.title || `成图 ${iIdx + 1}`)}" loading="lazy" />
                                     ${it.ratio ? `<span class="ic-hist-img-badge">${esc(it.ratio)}</span>` : ""}
                                     <div class="ic-hist-img-caption">${esc(it.title || `成图 #${iIdx + 1}`)}</div>
+                                    <a href="${esc(it.imageUrl)}" class="ic-hist-img-download" data-hist-image-download download="handraw-${iIdx + 1}.webp" aria-label="下载第 ${iIdx + 1} 张图片">↓ 下载</a>
                                   </div>
                                 `
                               )
@@ -7725,6 +7734,8 @@
       </div>
     `;
 
+    const scBeforeFocus = DOM.historyStage.querySelector("#hist-page-scroll");
+    if (scBeforeFocus && prevScrollTop) scBeforeFocus.scrollTop = prevScrollTop;
     if (wasSearchFocused) {
       const inp = DOM.historyStage.querySelector("#hist-search-inp");
       if (inp) {
@@ -7756,31 +7767,27 @@
         renderHistoryStage();
       };
     }
-
-    const clearBtn = DOM.historyStage.querySelector("#hist-clear-all");
-    if (clearBtn) {
-      clearBtn.onclick = async () => {
-        if (typeof window.confirm === "function" && !window.confirm("清空生图历史将删除生成记录，并可能使关联的公开作品下架。此操作不可恢复，确定继续吗？")) return;
-        clearBtn.disabled = true;
-        try {
-          await deleteCloudHistory("", true);
-          CS.generationHistory = [];
-          CS.historyExpandedPromptIds = {};
-          CS.historySelectedPreview = {};
-          CS.historyPage = 1;
-          writeJsonStorage(HISTORY_STORAGE_KEY, []);
-          renderTopAndBottomDocks();
-          toast("🗑️ 已清空生成历史记录");
-        } catch (err) {
-          toast(`删除历史失败：${err.message || err}`);
-        } finally {
-          clearBtn.disabled = false;
-        }
-      };
-    }
+    const statusSelect = DOM.historyStage.querySelector("#hist-status-filter");
+    if (statusSelect) statusSelect.onchange = () => {
+      CS.historyStatusFilter = statusSelect.value;
+      CS.historyPage = 1;
+      renderHistoryStage();
+    };
+    const sortSelect = DOM.historyStage.querySelector("#hist-sort");
+    if (sortSelect) sortSelect.onchange = () => {
+      CS.historySort = sortSelect.value;
+      CS.historyPage = 1;
+      renderHistoryStage();
+    };
+    DOM.historyStage.querySelectorAll("[data-hist-image-download]").forEach((el) => {
+      el.onclick = (event) => event.stopPropagation();
+    });
 
     DOM.historyStage.querySelectorAll("[data-hist-restore]").forEach((btn) => {
-      btn.onclick = () => restoreHistoryEntryToCanvas(btn.getAttribute("data-hist-restore"));
+      btn.onclick = () => {
+        if (typeof window.confirm === "function" && !window.confirm("将历史图片恢复到当前画布的输出节点，可能替换已有内容（可撤销）。确定继续吗？")) return;
+        restoreHistoryEntryToCanvas(btn.getAttribute("data-hist-restore"));
+      };
     });
 
     DOM.historyStage.querySelectorAll("[data-hist-redo-recipe]").forEach((btn) => {
