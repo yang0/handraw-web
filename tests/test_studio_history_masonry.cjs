@@ -109,12 +109,18 @@ assert.ok(stage.innerHTML.includes('data-hist-restore="canvas"'));
 state.historyFilter = "all";
 assert.ok(styles.includes("--ic-library-max-width: none"), "History/workflow must not have a competing fixed width cap");
 assert.ok(styles.includes("--ic-library-side-gap: var(--hw-page-gutter, 24px)"), "Library must inherit navigation page gutter");
-assert.match(styles, /\.ic-hist-masonry-grid\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/s,
-  "Desktop must use explicit three-column grid tracks, not CSS multicol balancing");
-assert.ok(styles.includes(".ic-hist-masonry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }"),
-  "Tablet history must use two grid tracks");
-assert.ok(styles.includes(".ic-hist-masonry-grid { grid-template-columns: minmax(0, 1fr); }"),
-  "Phone history must use one grid track");
+const feedStyles = fs.readFileSync("demo/assets/mixed-feed.css", "utf8");
+assert.match(styles, /\\.ic-hist-masonry-grid\\s*\\{[^}]*display:\\s*grid;[^}]*grid-template-columns:\\s*repeat\\(5, minmax\\(0, 1fr\\)\\)/s,
+  "History must use five explicit grid tracks on wide screens, matching the homepage");
+for (const [breakpoint, columns] of [[1400, 4], [1100, 3], [760, 2], [350, 1]]) {
+  const track = columns === 1 ? "minmax(0, 1fr)" : "repeat(" + columns + ", minmax(0, 1fr))";
+  assert.ok(styles.includes("@media (max-width: " + breakpoint + "px)"), "Missing history breakpoint " + breakpoint);
+  assert.ok(styles.includes(".ic-hist-masonry-grid { grid-template-columns: " + track + ";"),
+    "Missing history " + columns + " column layout");
+  assert.ok(feedStyles.includes("@media (max-width: " + breakpoint + "px)"),
+    "Homepage and history breakpoints must remain in sync: " + breakpoint);
+}
+assert.ok(feedStyles.includes("column-count: 5"), "Homepage desktop feed uses five columns");
 assert.ok(!styles.includes("column-count: 3"),
   "Regression: multicol auto-balancing can stack two history cards in the first column");
 // Workflow library: one shared top-level nav, no duplicate canvas/workflow bars.
