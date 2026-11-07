@@ -493,64 +493,6 @@ def sync_generation_visibility(
             automated=True,
         )
 
-def backfill_historical_generations(
-    conn: sqlite3.Connection,
-    *,
-    batch_size: int = 50,
-    cursor: str | None = None,
-) -> dict[str, Any]:
-    """Batch-backfill existing public generations into works idempotently.
-
-    Supports resumption with cursor and returns detailed counts.
-    """
-    query = """
-        SELECT *
-        FROM studio_generations
-        WHERE status = 'success'
-          AND visibility = 'public'
-          AND COALESCE(deleted_at, '') = ''
-          AND items_json IS NOT NULL
-          AND items_json != ''
-          AND items_json != '[]'
-          AND engine != 'demo'
-    """
-    params: list[Any] = []
-    if cursor:
-        query += " AND (created_at < ? OR (created_at = ? AND id < ?))"
-        # cursor format: iso_time:id
-        parts = cursor.split("::", 1)
-        if len(parts) == 2:
-            params.extend([parts[0], parts[0], parts[1]])
-
-    query += " ORDER BY created_at DESC, id DESC LIMIT ?"
-    params.append(batch_size + 1)
-
-    rows = conn.execute(query, params).fetchall()
-
-    has_more = len(rows) > batch_size
-    batch_rows = rows[:batch_size]
-
-    total_scanned = len(batch_rows)
-    projected_count = 0
-    next_cursor = None
-
-    for row in batch_rows:
-        wids = project_generation_to_works(conn, row)
-        projected_count += len(wids)
-
-    if has_more and batch_rows:
-        last = batch_rows[-1]
-        next_cursor = f"{last['created_at']}::{last['id']}"
-
-    return {
-        "ok": True,
-        "scanned": total_scanned,
-        "projected": projected_count,
-        "hasMore": has_more,
-        "nextCursor": next_cursor,
-    }
-
-
 def get_work_generation_provenance(
     conn: sqlite3.Connection, work_id: str,
 ) -> dict[str, Any] | None:
