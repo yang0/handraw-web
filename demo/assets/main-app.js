@@ -2990,12 +2990,11 @@
         </section>
 
         <!-- Standalone Profile Section Tabs -->
-        <div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
+        ${UI.profileTab !== "collections" ? `<div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
           <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品${UI.profileWorksUser === prof.username && UI.profileWorksTotal !== null ? ` (${UI.profileWorksTotal})` : ""}</button>
           <button type="button" class="hw-pill ${UI.profileTab === "resources" ? "is-active" : ""}" data-ptab="resources" role="tab" aria-selected="${UI.profileTab === "resources"}">🎨 创作资源 (${prof.styles.length + prof.layouts.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 社区动态 (${prof.topics.length})</button>
-        </div>
-        ${UI.profileTab === "collections" && isMe ? `` : ""}
+        </div>` : ""}
         <div id="profile-tab-stage">
           ${tabBodyHtml}
         </div>
