@@ -94,7 +94,7 @@ def _sqlite_type(t: str, *, generated: bool = False) -> str:
     return "TEXT"
 
 
-def inspect_schema(conn, tables):
+def inspect_schema(conn, tables, *, allow_omitting_nonunique_expressions=False):
     columns, foreign_keys, unique_indexes, identity = {}, [], [], {}
     for table in tables:
         cols = _table_columns(conn, table)
@@ -122,6 +122,10 @@ def inspect_schema(conn, tables):
                 # expression must be reviewed rather than silently discarded.
                 if table == "works" and index_name == "idx_works_popular_v3":
                     unique_indexes.append((table, index_name, [], "", False))
+                    continue
+                if allow_omitting_nonunique_expressions and not index["unique"]:
+                    # Fresh-schema bootstrap may omit SQLite-only *performance*
+                    # expression indexes. Never skip a uniqueness constraint.
                     continue
                 raise ValueError("Expression index requires explicit PostgreSQL port: " + index_name)
             index_ddl_row = conn.execute(
