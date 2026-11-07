@@ -1567,6 +1567,14 @@ def _serialize_work(
         stamps = {}
 
     row_keys = row.keys() if hasattr(row, "keys") else row
+    cover_url = ""
+    if conn is not None and "cover_media_id" in row_keys and row["cover_media_id"]:
+        cover = conn.execute(
+            "SELECT storage_key FROM media_assets WHERE id=?",
+            (row["cover_media_id"],),
+        ).fetchone()
+        if cover:
+            cover_url = str(cover["storage_key"] or "")
     batch_id = row["batch_id"] if "batch_id" in row_keys else None
     batch_total = int(row["batch_total"]) if "batch_total" in row_keys and row["batch_total"] is not None else 1
     batch_index = int(row["batch_rank"]) if "batch_rank" in row_keys and row["batch_rank"] is not None else (
@@ -1584,6 +1592,7 @@ def _serialize_work(
         "publishedAtMs": int(row["published_at_ms"]),
         "cheers": int(row["cheers"]),
         "images": json.loads(row["images_json"] or "[]"),
+        "coverUrl": cover_url,
         "styles": json.loads(row["styles_json"] or "[]"),
         "layout": row["layout_code"] or None,
         "sc021Type": row["sc021_type"] or "",
