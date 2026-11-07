@@ -2666,34 +2666,43 @@
     }
   }
 
+  // Detail navigation opens in a separate browser tab, keeping list state intact.
+  function openDetailInNewTab(url) {
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  // Apply the same rule to native href links while retaining keyboard/modifier clicks.
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("click", (event) => {
+      const anchor = event.target?.closest?.("a[href]");
+      if (!anchor || anchor.hasAttribute("download") || event.defaultPrevented) return;
+      try {
+        const dest = new URL(anchor.href, window.location.href);
+        const detail = /^\/t\/[^/]+\/?$/.test(dest.pathname) ||
+          ["topic", "asset", "work"].includes(dest.searchParams.get("view"));
+        if (!detail) return;
+        anchor.setAttribute("target", "_blank");
+        anchor.setAttribute("rel", "noopener noreferrer");
+      } catch (_) { /* Invalid or non-HTTP href. */ }
+    }, true);
+  }
+
   function goToAssetPage(assetId, subTab = "") {
     closeModal();
     const id = String(assetId || "").trim().toUpperCase().replace(/^#/, "");
-    if (id) window.location.href = channelUrl("main", {view:"asset", id, tab:subTab});
+    if (id) openDetailInNewTab(channelUrl("main", {view:"asset", id, tab:subTab}));
   }
 
   function goToWorkPage(workId, focusComment = false) {
     closeModal();
     const id = String(workId || "").trim();
-    if (!id) return;
-    const disc = (App.state && App.state.discussions && App.state.discussions[id]) || null;
-    const tid = disc ? disc.topicId : null;
-    if (tid) {
-      goToTopicPage(tid);
-    } else {
-      window.location.href = `/t/work-${encodeURIComponent(id)}${focusComment ? "?focus=comment" : ""}`;
-    }
+    if (id) openDetailInNewTab(channelUrl("main", {view:"work", id, focus:focusComment ? "comment" : ""}));
   }
 
   function goToTopicPage(topicId) {
     closeModal();
-    const tid = String(topicId || "").trim();
-    if (!tid) return;
-    if (App.channel === "forum" && typeof window.HANDRAW_FORUM_OPEN_TOPIC === "function") {
-      window.HANDRAW_FORUM_OPEN_TOPIC(tid, 0);
-      return;
-    }
-    window.location.href = channelUrl("forum", { view: "topic", id: tid });
+    const id = String(topicId || "").trim();
+    if (id) openDetailInNewTab(channelUrl("main", {view:"work", id}));
   }
 
   function goToSkillPage() {
@@ -3737,7 +3746,7 @@
       return;
     }
     if (targetType === "asset") goToAssetPage(targetId, "report");
-    else if (targetType === "work") window.location.href=channelUrl('main',{view:'work',id:targetId,panel:'report'});
+    else if (targetType === "work") openDetailInNewTab(channelUrl('main',{view:'work',id:targetId,panel:'report'}));
     else if (targetType === "topic") goToTopicPage(targetId);
   }
 
@@ -5286,6 +5295,7 @@
     goToCreatorProfile,
     goToAccountPage,
     goToAssetPage,
+    openDetailInNewTab,
     goToWorkPage,
     goToTopicPage,
     goToSkillPage,

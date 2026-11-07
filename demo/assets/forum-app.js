@@ -2762,7 +2762,7 @@
       btn.onclick = () => S.goToCreatorProfile(btn.getAttribute("data-open-creator"));
     });
     root.querySelectorAll("[data-switch-topic]").forEach((btn) => {
-      btn.onclick = () => openTopicPage(btn.getAttribute("data-switch-topic"), 0);
+      btn.onclick = () => S.goToTopicPage(btn.getAttribute("data-switch-topic"));
     });
     root.querySelectorAll("[data-reply-asset]").forEach((btn) => {
       btn.onclick = () => S.goToAssetPage(btn.getAttribute("data-reply-asset"));
@@ -4215,10 +4215,10 @@
       card.querySelectorAll("[data-open-topic-img]").forEach((thumb) => {
         thumb.onclick = (e) => {
           e.stopPropagation();
-          openTopicPage(tid, Number(thumb.getAttribute("data-open-topic-img")) || 0);
+          S.goToTopicPage(tid);
         };
       });
-      card.onclick = () => openTopicPage(tid, 0);
+      card.onclick = () => S.goToTopicPage(tid);
     });
   }
 

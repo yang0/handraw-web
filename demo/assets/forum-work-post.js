@@ -58,18 +58,18 @@
   }
 
   function collectAssets(ids, kindHint, resourceMap, acc) {
-    for (const id of Array.isArray(ids) ? ids : (ids ? [ids] : [])) {
-      if (!id || acc.ids.has(id)) continue;
+    for (const raw of Array.isArray(ids) ? ids : (ids ? [ids] : [])) {
+      const candidate = typeof raw === "object" && raw ? (raw.code || raw.id || "") : raw;
+      const id = String(candidate || "").trim().toUpperCase().replace(/^#/, "");
+      if (!/^(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+$/.test(id) || acc.ids.has(id)) continue;
       const item = resourceMapGet(resourceMap, id);
-      if (!item || !item.id) continue;
-      const kind = item.kind;
-      if (!['style','layout'].includes(kind)) continue;
-      if (kindHint && kind !== kindHint) continue;
+      // Standalone detail may load before the catalog; preserve real recorded IDs.
+      const kind = item?.kind || kindHint || (/^(?:SC|IG|SB|PO|IP|EC|LAY|USR-L)-/.test(id) ? "layout" : "style");
+      if (!["style", "layout"].includes(kind) || (kindHint && kindHint !== kind)) continue;
       acc.ids.add(id);
       acc.list.push({
-        kind,
-        id: String(item.id),
-        label: S.resourceLabel(item), image:safeImageUrl(item.image || '')
+        kind, id, label: item ? S.resourceLabel(item) : id,
+        image: safeImageUrl(item?.image || "")
       });
     }
   }
@@ -304,22 +304,27 @@
   }
 
   function renderAssets(assets, model) {
-    if (!assets || !assets.length) return "";
-    const items = assets.map((a) => {
+    if ((!assets || !assets.length) && model.source !== "work") return "";
+    const items = (assets || []).map((a) => {
       const href = safeHref(assetHref(a));
       const label = esc(String(a.label || (a.kind === "layout" ? "图型参考" : "画风参考")));
       const inner = `${a.image ? `<img data-hw-src="${esc(safeImageUrl(a.image))}" alt="${label}" loading="lazy">` : ''}<span class="fwp-asset-kind">${esc(a.kind === "layout" ? "图型" : "画风")}</span>
     <span class="fwp-asset-name">${label}</span>
     <span class="fwp-asset-id">${esc(a.id)}</span>`;
       return href
-        ? `<a class="fwp-asset" href="${esc(href)}">${inner}</a>`
+        ? `<a class="fwp-asset" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
         : `<span class="fwp-asset">${inner}</span>`;
     }).join("");
     const listLinks = model.source === 'work' ? ['style','layout'].filter(kind=>assets.some(a=>a.kind===kind)).map(kind=>`<a href="${esc(S.channelUrl('forum',{view:'related',kind:'work',id:model.sourceId,tab:kind==='style'?'styles':'layouts'}))}">全部${kind==='style'?'画风':'图型'} →</a>`).join(' ') : '';
+    const missing = model.source === "work"
+      ? ["style", "layout"].filter(kind => !(assets || []).some(a => a.kind === kind))
+          .map(kind => `<p class="fwp-missing">${kind === "style" ? "画风" : "图型"}：原始生成记录未提供相关信息</p>`).join("")
+      : "";
     return `<div class="fwp-assets">
   <h3 class="fwp-assets-title">使用的画风与图型</h3>
   <div class="fwp-asset-links">${listLinks}</div>
   <div class="fwp-asset-list">${items}</div>
+  ${missing}
 </div>`;
   }
 

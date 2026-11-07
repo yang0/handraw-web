@@ -411,13 +411,7 @@
   function openWorkPage(workId, imgIndex = 0, focusComment = false) {
     const wid = String(workId || "").trim();
     if (!wid) return;
-    const disc = (App.state && App.state.discussions && App.state.discussions[wid]) || null;
-    const tid = disc ? disc.topicId : null;
-    if (tid) {
-      window.location.href = channelUrl("forum", { view: "topic", id: tid, ...(focusComment ? { focus: "comment" } : {}) });
-    } else {
-      S.goToWorkPage(wid, focusComment);
-    }
+    S.goToWorkPage(wid, focusComment);
   }
 
   function formatArticleUpdated(ms) {
