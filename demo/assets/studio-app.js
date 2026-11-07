@@ -15199,7 +15199,7 @@
     updateSavedState(hasEditorContent() ? "saved" : "empty");
 
     // Local template plan fallback
-    const applyLocalTemplatePlan = () => {
+    const applyLocalTemplatePlan = async () => {
       CS.articlePlanError = null;
       CS.articleDocReplacedNotice = false;
       const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
@@ -15215,8 +15215,16 @@
       }
       const built = E.buildArticlePlanData(draft.markdown || "", tmpCtrl, tmpGraph, Catalog);
       const templateCards = (built.cards || []).map((c) =>
-        Object.assign({}, c, { planSource: "template" })
+        Object.assign({}, c, {
+          planSource: "template",
+          purpose: c.purpose || (c.role === "cover" ? "确立整篇文章的视觉主旨" : "在章节间提供阅读提示")
+        })
       );
+      const review = await window.HandrawArticleReview.reviewPlan(templateCards, {
+        source: "template", articleType: "knowledge",
+        existingCards: draft.cards || target?.planNode?.data?.cards || target?.art?.cards || []
+      });
+      if (!review.approved || !isCurrentEditor()) return;
       const oldCardsBackup = JSON.parse(
         JSON.stringify(target?.planNode?.data?.cards || target?.art?.cards || [])
       );
@@ -15232,9 +15240,9 @@
         }
       }, 10000);
 
-      planUnifiedArticleDraft(draft, { aiCards: templateCards });
+      planUnifiedArticleDraft(draft, { aiCards: review.cards });
       renderFullPreviewStage();
-      const inlineCount = templateCards.filter((c) => c.role !== "cover").length;
+      const inlineCount = review.cards.filter((c) => c.role !== "cover").length;
       toast(`AI 暂不可用，已按章节模板规划 ${inlineCount} 张插图`);
       speakArt(`AI 暂不可用，已按章节模板规划 ${inlineCount} 张插图`);
     };
