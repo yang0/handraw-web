@@ -1931,9 +1931,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         # contract a bounded allowance for a few 15 MiB photos. The regular
         # website's 20 MiB JSON limit remains unchanged.
         target_path = unquote(urlparse(self.path).path)
-        body_limit = (64 * 1024 * 1024) if (
+        authenticated = self._current_user(required=False) if (
             self.command == "POST" and target_path == "/api/v1/me/generations"
-        ) else MAX_JSON_BODY_BYTES
+        ) else None
+        body_limit = (64 * 1024 * 1024) if authenticated else MAX_JSON_BODY_BYTES
         if length > body_limit:
             raise ServiceError("请求体过大；请分批同步生图历史", status=413, code="payload_too_large")
         if length <= 0:
