@@ -5431,7 +5431,7 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?, ?, ?)
                 """,
                 (hid, uid, user["username"], *values, json.dumps({"creationSource": creation_source}), now_iso, req_id, clean_subj, fork_gen_id, fork_item_id,
-                 "private" if env_flag("HANDRAW_PRIVATE_GENERATION_HISTORY_V1", False) else "public"),
+                 "public"),
             )
             try:
                 from .generation_works import project_generation_to_works
@@ -6135,7 +6135,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 prompt_ready,
                 recipe_id,
                 user_subject,
-                "private" if env_flag("HANDRAW_PRIVATE_GENERATION_HISTORY_V1", False) else "public",
+                "public",
                 fork_gen_target,
                 fork_item_target,
             ),
