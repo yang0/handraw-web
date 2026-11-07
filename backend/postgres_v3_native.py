@@ -15,6 +15,9 @@ ALTER TABLE works ADD CONSTRAINT fk_works_cover_v3
     FOREIGN KEY (cover_media_id) REFERENCES media_assets(id)
     ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE;
 
+ALTER TABLE works ADD CONSTRAINT chk_work_cover_author_choice_v3
+    CHECK (cover_selected_by_author IN (0,1));
+
 ALTER TABLE generation_runs ADD CONSTRAINT chk_run_source_v3
     CHECK (source IN ('web','skill','api'));
 ALTER TABLE generation_runs ADD CONSTRAINT chk_run_count_v3
