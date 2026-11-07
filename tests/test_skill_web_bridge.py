@@ -373,9 +373,12 @@ class SkillWebHttpScopeTests(SkillWebBridgeTests):
         self.base = "http://127.0.0.1:" + str(self.httpd.server_port)
         self.thread = threading.Thread(target=self.httpd.serve_forever,daemon=True)
         self.thread.start()
-        self.addCleanup(self.httpd.shutdown)
+        # unittest cleanups run in LIFO order. Stop the server before
+        # joining its thread; the old order waited a full five seconds for
+        # every inherited HTTP test even though nothing was wrong.
+        self.addCleanup(lambda: self.thread.join(timeout=5))
         self.addCleanup(self.httpd.server_close)
-        self.addCleanup(lambda: self.thread.join(5))
+        self.addCleanup(self.httpd.shutdown)
 
     def token(self, scopes):
         secret = "hwt_fixture_" + uuid.uuid4().hex
