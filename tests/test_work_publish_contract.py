@@ -199,7 +199,7 @@ class EntryContractTests(unittest.TestCase):
         with patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"}):
             status, payload = self._request(
                 "/api/entries",
-                {"entry": self._entry("skill-req-many", images=[IMG] * 10)},
+                {"entry": self._entry("skill-req-many", images=[IMG] * 13)},
                 token,
             )
         self.assertEqual(status, 400, payload)
