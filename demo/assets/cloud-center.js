@@ -129,13 +129,13 @@
       data.historyCursor = response.hasMore ? response.nextCursor : null;
       renderLists(shell, data);
     }
-    async function run(work) {
+    async function run(work, successMessage = "已同步。所有个人定义默认私有。") {
       if (data.isBusy) return;
       data.isBusy = true;
       status("正在处理…");
       try {
         await work();
-        status("已同步。所有个人定义默认私有。");
+        status(successMessage);
       } catch (error) {
         status(error && error.message ? error.message : "网络暂时不可用，请重试。", true);
       } finally {
@@ -176,8 +176,7 @@
           item.canPublish = false;
           item.publishedWorkId = response.workId;
           renderLists(shell, data);
-          status("发布成功。作品已进入公开作品广场。");
-        });
+        }, "作品发布成功，可在个人主页和作品广场查看。");
       }
     });
     shell.querySelector("[data-cloud-more-resources]").addEventListener("click", () => run(() => loadResources(true)));
