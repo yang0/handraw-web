@@ -805,7 +805,9 @@ def _repair_existing_public_generation_works(conn: Any) -> None:
     if failures:
         log.warning("%s legacy public generations remain unprojected; use admin audit/reconcile", failures)
 
-POST_MIGRATION_HOOKS[97] = _repair_existing_public_generation_works
+# V3 projection inserts works.generation_batch_key, created by migration 098.
+# Run the reconciliation only AFTER that column and its unique index exist.
+POST_MIGRATION_HOOKS[98] = _repair_existing_public_generation_works
 
 # Ensure migrations execute in strictly ascending numerical order
 MIGRATIONS.sort(key=lambda m: m[0])
