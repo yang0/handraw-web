@@ -6542,6 +6542,23 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
         else:
             collected.append(entry)
 
+    # Private user-created definitions are exposed only to their owner.
+    # Skill's existing GET /studio/api/library + /assets/<id>/content flow can
+    # therefore restore a cloud-created style without a second client parser.
+    for personal in conn.execute(
+        """SELECT id,kind,name,version FROM skill_personal_resources
+           WHERE user_id=? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 200""",
+        (uid,),
+    ).fetchall():
+        owned.append({
+            "id": "mine:" + personal["id"], "ref": personal["id"],
+            "title": personal["name"], "name": personal["name"],
+            "kind": personal["kind"], "version": personal["version"],
+            "collected": False, "unlocked": True, "source": "personal",
+            "author": {"username": uname, "name": user.get("display_name") or uname},
+            "content_url": f"/studio/api/assets/{personal['id']}/content",
+        })
+
     # Also expose favorited official catalog items
     handled_official_refs = {item["ref"] for item in official}
     cat_file = CONTENT_DIR / "catalog.json"
@@ -6594,6 +6611,31 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
 
 
 def build_skill_asset_content(db: Database, user: dict[str, Any], code: str) -> dict[str, Any]:
+    # Owner-only bridge for Skill personal definitions. Hash matches the
+    # existing personal_library.import_definition canonical JSON contract.
+    try:
+        personal_uid = str(uuid.UUID(str(code)))
+    except (ValueError, AttributeError, TypeError):
+        personal_uid = ""
+    if personal_uid:
+        row = db.get_conn().execute(
+            """SELECT * FROM skill_personal_resources
+               WHERE id=? AND user_id=? AND deleted_at IS NULL""",
+            (personal_uid, int(user["id"])),
+        ).fetchone()
+        if not row:
+            raise ServiceError("资源不存在或无权访问", status=404, code="not_found")
+        definition = json.loads(row["definition_json"])
+        resource = {
+            "kind": row["kind"], "name": row["name"],
+            "prompt_zh": definition["zh"], "prompt_en": definition["en"],
+            "license": row["license"], "version": row["version"],
+        }
+        digest = hashlib.sha256(
+            json.dumps(resource, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return {"resource": resource, "sha256": digest}
+
     clean_code = (code or "").strip().upper()
     if not is_demo_mode() and clean_code in seed_ids("assets"):
         raise ServiceError(f"未找到资源编号：{clean_code}", status=404, code="seed_content_hidden")
