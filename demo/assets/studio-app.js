@@ -1334,11 +1334,11 @@
                   <div style="font-size:16px;font-weight:850;color:var(--ic-ink);margin-bottom:6px;">${
                     allWf.length === 0 ? "暂无已保存的工作流" : "没有匹配搜索词的工作流"
                   }</div>
-                  <div style="font-size:13px;color:var(--ic-muted);">可在「高级画布」中保存工作流，或使用上方按钮导入 JSON 工作流。</div>
+                  <div style="font-size:13px;color:var(--ic-muted);">可在「画布」中保存工作流，或使用上方按钮导入 JSON 工作流。</div>
                 </div>
               `
               : `
-                <div style="display:flex;flex-direction:column;gap:12px;" id="wf-saved-list-box">
+                <div class="ic-wf-card-grid" id="wf-saved-list-box">
                   ${filtered
                     .map((wf) => {
                       const nodes = wf.graph?.nodes || [];
@@ -1353,24 +1353,25 @@
 
                       return `
                         <article class="ic-wf-entry-card" data-wf-id="${esc(wf.id)}">
-                          <div style="display:flex;flex-direction:column;gap:7px;min-width:0;flex:1;">
-                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                              ${
-                                wf.scenarioBadge
-                                  ? `<span class="ic-node-badge ${wf.blueprint === "loop_100" || wf.blueprint === "style_ab" ? "ic-badge-loop" : wf.blueprint === "omnimedia" ? "ic-badge-bridge" : "ic-badge-output-ctrl"}">${esc(wf.scenarioBadge)}</span>`
-                                  : ""
-                              }
-                              <strong style="font-size:15px;font-weight:850;color:var(--ic-ink);">${esc(wf.title || "未命名工作流")}</strong>
-                              <span style="font-size:12px;color:var(--ic-muted);">${esc(wf.updatedAt || "已保存")} · ${nodes.length} 个节点 · ${edges.length} 条连线</span>
+                          <div class="ic-wf-card-content">
+                            <div class="ic-wf-card-heading">
+                              ${wf.scenarioBadge
+                                ? `<span class="ic-node-badge ${wf.blueprint === "loop_100" || wf.blueprint === "style_ab" ? "ic-badge-loop" : wf.blueprint === "omnimedia" ? "ic-badge-bridge" : "ic-badge-output-ctrl"}">${esc(wf.scenarioBadge)}</span>`
+                                : `<span class="ic-wf-card-type">工作流</span>`}
+                              <strong class="ic-wf-card-title">${esc(wf.title || "未命名工作流")}</strong>
                             </div>
-                            ${wf.scenarioDesc ? `<div style="font-size:12.4px;color:var(--ic-muted);line-height:1.55;">${esc(wf.scenarioDesc)}</div>` : ""}
-                            ${typePills ? `<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><span style="font-size:11px;color:var(--ic-muted);font-weight:750;">按需分配节点：</span>${typePills}</div>` : ""}
+                            <div class="ic-wf-card-meta">
+                              <span>${nodes.length} 个节点</span>
+                              <span>${edges.length} 条连线</span>
+                              <span>${esc(wf.updatedAt || "已保存")}</span>
+                            </div>
+                            ${wf.scenarioDesc ? `<p class="ic-wf-card-description">${esc(wf.scenarioDesc)}</p>` : ""}
+                            ${typePills ? `<div class="ic-wf-card-tags">${typePills}</div>` : ""}
                           </div>
-
-                          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-                            <button type="button" class="btn btn-sm btn-primary" data-wf-open="${esc(wf.id)}" style="min-width:82px;font-weight:850;">打开体验</button>
-                            <button type="button" class="btn btn-sm" data-wf-dl="${esc(wf.id)}" style="font-weight:750;">导出 JSON</button>
-                            <button type="button" class="btn btn-sm" data-wf-rm="${esc(wf.id)}" style="color:#dc2626;font-weight:750;">删除</button>
+                          <div class="ic-wf-card-actions">
+                            <button type="button" class="btn btn-sm btn-primary" data-wf-open="${esc(wf.id)}">打开</button>
+                            <button type="button" class="btn btn-sm" data-wf-dl="${esc(wf.id)}">导出 JSON</button>
+                            <button type="button" class="btn btn-sm" data-wf-rm="${esc(wf.id)}" title="删除此工作流">删除</button>
                           </div>
                         </article>
                       `;
@@ -7594,7 +7595,7 @@
                   <div style="font-size:16px;font-weight:850;color:var(--ic-ink);margin-bottom:6px;">${
                     allHist.length === 0 ? "暂无生成历史记录" : "没有匹配当前筛选条件的历史记录"
                   }</div>
-                  <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">在做图、批量、文章配图或高级画布生成后，可以在此查找历史记录。</div>
+                  <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">在做图、批量、文章配图或画布生成后，可以在此查找历史记录。</div>
                 </div>
               `
               : `
@@ -12098,7 +12099,7 @@
           mobileBanner.id = "canvas-mobile-prompt-banner";
           mobileBanner.className = "canvas-mobile-prompt-banner";
           mobileBanner.innerHTML = `
-            <p>请在电脑上使用高级画布</p>
+            <p>请在电脑上使用画布</p>
             <button type="button" class="btn btn-primary btn-sm" id="canvas-mobile-go-make">用做图打开</button>
           `;
           DOM.canvasStage.prepend(mobileBanner);
@@ -15853,7 +15854,7 @@
       <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
       <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
       <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
-      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">高级画布</button>
+      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布</button>
     </div><div class="qc-entry-actions"><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
 
     const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
@@ -16142,7 +16143,7 @@
     })));
     const extra = p ? [p.skill.data.style2 ? `角色与场景画风：${[p.skill.data.style1, p.skill.data.style2].join(" + ")}` : "",
       CS.resourceEntryWarning || "",
-      CS.graph.nodes.some(n => n.type === "asset") ? "已保留参考图片，可在高级画布中调整" : "",
+      CS.graph.nodes.some(n => n.type === "asset") ? "已保留参考图片，可在画布中调整" : "",
       new URLSearchParams(window.location.search).get("purpose") || ""].filter(Boolean).join(" · ") : "";
     window.HandrawQuickCreate.render(DOM.quickStage, {
       available: Boolean(p), busy, loggedIn: Boolean(App.state?.loggedIn), engineMode: CS.engineMode,

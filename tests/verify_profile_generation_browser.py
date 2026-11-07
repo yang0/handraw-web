@@ -195,6 +195,9 @@ def run_browser_verification():
             assert page.locator(".ic-hist-cover-download").count() > 0, "Cover images need a direct download action"
             assert page.locator("#hist-back-creation").count() == 0
             assert page.locator(".ic-hist-cover").count() == 3, "One cover per generation task"
+            history_bar_box = page.locator(".ic-history-topbar").bounding_box()
+            history_body_box = page.locator(".ic-hist-page-inner").bounding_box()
+            assert history_bar_box is not None and history_body_box is not None
             assert page.locator('[data-hist-filter="all"]').inner_text().endswith("(6)")
             page.locator('[data-hist-expand-batch="gen_leo_003"]').click()
             assert page.locator('[data-hist-img-toggle="gen_leo_003"]').count() == 2
@@ -230,6 +233,16 @@ def run_browser_verification():
             assert page.locator("#studio-mode-workflows").is_visible()
             assert page.locator("#wf-import-file-inp").count() == 1
             assert page.locator("#wf-saved-list-box").count() == 1
+            assert page.locator("#wf-saved-list-box.ic-wf-card-grid").count() == 1
+            assert page.locator(".ic-wf-entry-card").count() >= 1
+            assert page.locator("#studio-mode-canvas").inner_text().strip() == "画布"
+            workflow_bar_box = page.locator(".ic-wf-minimal-tools").bounding_box()
+            workflow_body_box = page.locator(".ic-wf-page-inner").bounding_box()
+            for key in ("x", "width"):
+                assert abs(workflow_bar_box[key] - history_bar_box[key]) <= 2, f"Library toolbar {key} misaligned"
+                assert abs(workflow_body_box[key] - history_body_box[key]) <= 2, f"Library content {key} misaligned"
+            workflow_columns = page.locator("#wf-saved-list-box").evaluate("(el) => getComputedStyle(el).gridTemplateColumns.split(/\\s+/).length")
+            assert workflow_columns == 3, f"Desktop workflow grid expected 3 columns, got {workflow_columns}"
             assert not page.locator("#ic-workbench-bar").is_visible(), "Canvas tab navigation must be hidden"
             assert page.locator("#wf-back-canvas").count() == 0
             assert page.locator("#wf-restore-presets").count() == 0
@@ -245,7 +258,15 @@ def run_browser_verification():
             page.wait_for_selector(".ic-hist-masonry-grid", timeout=6000)
             columns = page.locator(".ic-hist-masonry-grid").evaluate("(el) => getComputedStyle(el).columnCount")
             assert columns == "1", f"Mobile history should use one column: {columns}"
+            mobile_history_bar = page.locator(".ic-history-topbar").bounding_box()
             page.screenshot(path=str(MOBILE_SCREENSHOT), full_page=False)
+            page.goto(f"{BASE_URL}/studio/?view=workflows", wait_until="networkidle")
+            page.wait_for_selector("#wf-saved-list-box", timeout=6000)
+            mobile_workflow_bar = page.locator(".ic-wf-minimal-tools").bounding_box()
+            assert abs(mobile_workflow_bar["width"] - mobile_history_bar["width"]) <= 2
+            assert abs(mobile_workflow_bar["x"] - mobile_history_bar["x"]) <= 2
+            mobile_workflow_cols = page.locator("#wf-saved-list-box").evaluate("(el) => getComputedStyle(el).gridTemplateColumns.split(/\\s+/).length")
+            assert mobile_workflow_cols == 1, f"Mobile workflow grid expected 1 column, got {mobile_workflow_cols}"
 
             # -----------------------------------------------------------
             browser.close()
