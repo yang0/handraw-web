@@ -166,15 +166,16 @@ def main() -> int:
             # -------------------------------------------------------------
             # Scenario 2: Profile articles list delete
             # -------------------------------------------------------------
-            print("\n--- Scenario 2: Profile List Delete ---")
+            print("\n--- Scenario 2: Studio Article List via Legacy Profile Link ---")
             profile_url = f"{BASE_URL}/?view=profile&user=su_editorial&ptab=articles"
             page.goto(profile_url, wait_until="networkidle")
-            page.wait_for_selector('[data-prof-article="art_test_profile"]', timeout=8000)
+            page.wait_for_selector('[data-del-art-id="art_test_profile"]', timeout=8000)
+            assert "/studio/" in page.url and "view=articles-all" in page.url
             page.screenshot(path=str(SCREENSHOT_DIR / "04_profile_articles_before.png"))
             print("✓ Screenshot saved: 04_profile_articles_before.png")
 
             # Click delete button on the profile card
-            page.click('[data-prof-del-article="art_test_profile"]')
+            page.click('[data-del-art-id="art_test_profile"]')
             page.wait_for_selector("#hw-active-modal", timeout=5000)
             page.screenshot(path=str(SCREENSHOT_DIR / "05_profile_delete_modal.png"))
             print("✓ Screenshot saved: 05_profile_delete_modal.png")
@@ -187,7 +188,7 @@ def main() -> int:
             page.screenshot(path=str(SCREENSHOT_DIR / "06_profile_after_deleted.png"))
             print("✓ Screenshot saved: 06_profile_after_deleted.png")
 
-            profile_cards = page.locator('[data-prof-article="art_test_profile"]').count()
+            profile_cards = page.locator('[data-del-art-id="art_test_profile"]').count()
             assert profile_cards == 0, "Article card was not removed in real time!"
             print("✓ Scenario 2 passed: Profile delete confirmed and card removed in real time.")
 
