@@ -286,7 +286,9 @@ console.log("\n--- Test 2: 个人主页公开栏目收敛与旧链接兼容 ---"
   }
   assert.match(root.innerHTML, /data-ptab="resources"[^>]*>🎨 创作资源 \(3\)/);
   assert.match(root.innerHTML, /data-ptab="topics"[^>]*>💬 社区动态 \(1\)/);
-  assert.ok(root.innerHTML.includes('id="prof-go-studio-btn"'), "Owner must have a studio shortcut");
+  assert.ok(!root.innerHTML.includes('id="prof-go-studio-btn"'), "Redundant studio shortcut removed");
+  assert.ok(!root.innerHTML.includes('id="prof-go-compose-btn"'), "Forum compose shortcut removed");
+  assert.ok(!root.innerHTML.includes('id="prof-back-btn"'), "Redundant profile breadcrumb removed");
   assert.ok(root.innerHTML.includes('id="prof-go-collections-btn"'), "Collection shortcut must be separate from public tabs");
   assert.ok(root.innerHTML.includes('data-prof-resource-filter="all"'));
   assert.ok(root.innerHTML.includes('data-prof-resource-filter="styles"'));
@@ -359,6 +361,7 @@ console.log("\n--- Test 5: 收藏夹功能迁入主页 (切换、移除、批量
 
   context.window.HANDRAW_MAIN_OPEN_PROFILE("creator_leo", "collections");
   assert.ok(root.innerHTML.includes("🎨 收藏画风"), "Must render 收藏画风 pill");
+  assert.ok(!root.innerHTML.includes('class="hw-pills-row hw-profile-tabs"'), "Collections should show only its own navigation");
   assert.ok(root.innerHTML.includes("📐 收藏图型"), "Must render 收藏图型 pill");
   assert.ok(root.innerHTML.includes("🖼️ 收藏作品"), "Must render 收藏作品 pill");
   assert.ok(root.innerHTML.includes("💬 收藏帖子"), "Must render 收藏帖子 pill");
