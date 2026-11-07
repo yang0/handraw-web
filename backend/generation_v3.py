@@ -677,8 +677,8 @@ def set_work_cover(db: Any, user: dict[str, Any], work_id: str, image_url: str) 
         )
     # The home scene API caches cards for 120 seconds; author edits must be
     # visible immediately rather than showing the previously chosen cover.
-    from .home_scenarios import invalidate_home_scenarios_cache
-    invalidate_home_scenarios_cache()
+    from .home_scenarios import invalidate_scenarios_cache
+    invalidate_scenarios_cache()
     return {"ok": True, "workId": work_id, "coverUrl": url, "coverMediaId": media["media_id"]}
 
 
