@@ -230,126 +230,13 @@ def ensure_user_uploads_synced(
     *,
     non_blocking: bool = False,
 ) -> bool:
-    """Backfill missing sync fields on existing user uploads in non-blocking batches.
+    """V3 fresh schema: no legacy user-upload migration or SQLite lock polling.
 
-    If multiple active rows share the same sha256, only the first row is assigned the sha256;
-    subsequent duplicate rows retain sha256 = NULL to comply with the unique index while syncing normally.
-    File reads and SHA256 computations are executed outside the write transaction to avoid blocking writers.
-    When non_blocking=True, skips backfill immediately if the database write lock is held.
+    New uploads have their immutable asset UID, SHA and change sequence at
+    creation time. Nothing is read or rewritten on list/sync requests. This
+    keeps PostgreSQL and SQLite on the same behavior and avoids filesystem
+    scans inside API requests. The parameters remain for existing callers.
     """
-    is_db = isinstance(db_or_conn, Database)
-
-    while True:
-        # Step 1: Read unsynced rows in batches of 50 using read connection
-        if is_db:
-            read_conn = db_or_conn.get_conn()
-        else:
-            read_conn = db_or_conn
-
-        rows = read_conn.execute(
-            """
-            SELECT id, file_path, created_at, asset_uid, change_seq, sha256
-            FROM user_uploads
-            WHERE user_id = ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other')) AND (asset_uid IS NULL OR asset_uid = '' OR change_seq IS NULL)
-            LIMIT 50
-            """,
-            (user_id,),
-        ).fetchall()
-
-        if not rows:
-            break
-
-        # Step 2: Compute hashes and UIDs outside write transaction
-        prepared = []
-        for r in rows:
-            uid = r["asset_uid"] or str(uuid.uuid4())
-            existing_sha = r["sha256"]
-            computed_sha = existing_sha
-            if not computed_sha:
-                fpath = str(r["file_path"] or "")
-                if fpath and Path(fpath).is_file():
-                    try:
-                        computed_sha = hashlib.sha256(Path(fpath).read_bytes()).hexdigest()
-                    except Exception:
-                        computed_sha = None
-            prepared.append({
-                "id": r["id"],
-                "uid": uid,
-                "change_seq": r["change_seq"],
-                "created_at": r["created_at"],
-                "computed_sha": computed_sha,
-            })
-
-        # Step 3: Write back in a short transaction
-        def _apply_batch(tx: sqlite3.Connection) -> None:
-            active_rows = tx.execute(
-                """
-                SELECT id, sha256 FROM user_uploads
-                WHERE user_id = ? AND deleted_at IS NULL AND sha256 IS NOT NULL AND sha256 <> '' AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other'))
-                """,
-                (user_id,),
-            ).fetchall()
-            active_shas = {r["sha256"]: r["id"] for r in active_rows}
-            seen_in_batch: set[str] = set()
-
-            for item in prepared:
-                rid = item["id"]
-                c_sha = item["computed_sha"]
-                assigned_sha = None
-                if c_sha:
-                    existing_owner = active_shas.get(c_sha)
-                    if (existing_owner is None or existing_owner == rid) and (c_sha not in seen_in_batch):
-                        assigned_sha = c_sha
-                        active_shas[c_sha] = rid
-                        seen_in_batch.add(c_sha)
-                    else:
-                        assigned_sha = None
-
-                seq = item["change_seq"] or next_change_seq(tx)
-                updated_at = item["created_at"] or utc_now_iso_ms()
-                tx.execute(
-                    """
-                    UPDATE user_uploads
-                    SET asset_uid = ?, change_seq = ?, sha256 = ?, updated_at = COALESCE(updated_at, ?), origin = COALESCE(origin, 'web')
-                    WHERE id = ?
-                    """,
-                    (item["uid"], seq, assigned_sha, updated_at, rid),
-                )
-
-        if is_db:
-            if non_blocking:
-                acquired = db_or_conn._write_lock.acquire(blocking=False)
-                if not acquired:
-                    logger.info("Database write lock is busy; skipping non-blocking backfill for user %s", user_id)
-                    return False
-                try:
-                    conn = db_or_conn.get_conn()
-                    conn.execute("PRAGMA busy_timeout=50;")
-                    try:
-                        conn.execute("BEGIN IMMEDIATE;")
-                        try:
-                            _apply_batch(conn)
-                            conn.execute("COMMIT;")
-                        except Exception:
-                            conn.execute("ROLLBACK;")
-                            raise
-                    except sqlite3.OperationalError as exc:
-                        if "locked" in str(exc).lower() or "busy" in str(exc).lower():
-                            logger.info("Database locked/busy, skipping non-blocking backfill for user %s", user_id)
-                            return False
-                        raise
-                    finally:
-                        conn.execute("PRAGMA busy_timeout=10000;")
-                finally:
-                    db_or_conn._write_lock.release()
-            else:
-                with db_or_conn.transaction() as tx:
-                    _apply_batch(tx)
-        else:
-            _apply_batch(db_or_conn)
-
-        if len(rows) < 50:
-            break
     return True
 
 
