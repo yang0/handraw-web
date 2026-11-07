@@ -2445,7 +2445,8 @@
     } finally {
       if (UI.profileWorksUser === username) {
         UI.profileWorksLoading = false;
-        if (App.view === "profile" && UI.profileUser === username && UI.profileTab === "works") renderMain();
+        const visibleUser = UI.profileUser || (App.state.loggedIn && App.state.user?.username) || "";
+        if (App.view === "profile" && visibleUser === username && UI.profileTab === "works") renderMain();
       }
     }
   }
