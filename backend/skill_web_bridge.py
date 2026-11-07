@@ -339,10 +339,15 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
             media=json.loads(row["images_json"] or "[]")
         except (ValueError,TypeError):
             media=[]
+        published=conn.execute(
+            "SELECT work_id FROM skill_history_publications "
+            "WHERE user_id=? AND source=? AND history_id=?",
+            (uid,row["origin"],row["id"])).fetchone()
         result.append({"id":row["id"],"originClient":row["origin"],"externalRunId":row["external_run_id"],
                        "originalRequest":row["original_request"],"images":media,
                        "status":row["status"],"visibility":row["visibility"],
-                       "canPublish":row["status"]=="success" and row["visibility"]=="private",
+                       "canPublish":row["status"]=="success" and row["visibility"]=="private" and not published,
+                       "publishedWorkId":published["work_id"] if published else None,
                        "createdAt":row["created_at"]})
     return {"ok": True,"items":result,"hasMore":len(rows)>limit,
             "nextCursor":str(offset+limit) if len(rows)>limit else None}
@@ -381,6 +386,12 @@ def publish_history(db: Any, user: dict[str, Any], history_id: str, body: dict[s
             return {"ok":True,"workId":previous["work_id"],"alreadyPublished":True}
         if row["status"]!="success" or row["visibility"]!="private":
             raise ServiceError("只能发布未公开的成功创作历史",status=409,code="not_private_history")
+        if source=="web":
+            legacy=conn.execute(
+                "SELECT work_id FROM generation_works WHERE generation_id=? LIMIT 1",
+                (history_id,)).fetchone()
+            if legacy:
+                raise ServiceError("该网站生成记录已关联旧版公开作品，不能再次创建",status=409,code="legacy_work_exists")
         try:
             originals=json.loads(row["images_json"] or "[]")
         except (ValueError,TypeError):
@@ -415,6 +426,17 @@ def publish_history(db: Any, user: dict[str, Any], history_id: str, body: dict[s
             raise ServiceError("有部分图片不可发布",status=403,code="media_not_publishable")
         result=publish_user_work(db,user,payload)
         _grant_published_media(db,user,payload,target_type="topic",target_id=str(result.get("topicId") or ""))
+        # A successful work row is not enough: public media must have a durable
+        # grant, otherwise the gallery would show broken images. Retry is safe
+        # because requestId is stable and publish_user_work is idempotent.
+        for media_url in urls:
+            if media_url.startswith(("/uploads/","/generated/")):
+                granted=conn.execute(
+                    "SELECT 1 FROM media_public_grants WHERE media_url=? AND revoked_at IS NULL LIMIT 1",
+                    (media_url.split("?",1)[0],)).fetchone()
+                if not granted:
+                    raise ServiceError("作品已创建但图片公开授权尚未完成，请重试",status=503,
+                                       code="media_grant_pending")
         wid=str(result["workId"])
         with db.transaction() as tx:
             tx.execute("INSERT OR IGNORE INTO skill_history_publications "
