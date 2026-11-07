@@ -2108,32 +2108,12 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     work_filter, work_ids = _seed_filter("w.id", "works")
     work_rows = conn.execute(
         f"""
-        WITH scoped_works AS (
-            SELECT
-                w.*,
-                COALESCE(gw.generation_id, 'work_' || w.id) AS batch_id,
-                COALESCE(gw.rowid, 0) AS gen_rowid
-            FROM works w
-            LEFT JOIN generation_works gw ON gw.work_id = w.id
-            WHERE w.status = 'published'
+        SELECT w.* FROM works w
+        WHERE w.status = 'published'
               AND w.images_json IS NOT NULL
               AND TRIM(w.images_json) NOT IN ('', '[]', 'null')
               AND json_valid(w.images_json) = 1
               AND {work_filter}
-        ),
-        ranked_works AS (
-            SELECT
-                sw.*,
-                ROW_NUMBER() OVER (
-                    PARTITION BY sw.batch_id
-                    ORDER BY sw.gen_rowid ASC, sw.published_at_ms ASC, sw.id ASC
-                ) AS batch_rank,
-                COUNT(*) OVER (
-                    PARTITION BY sw.batch_id
-                ) AS batch_total
-            FROM scoped_works sw
-        )
-        SELECT * FROM ranked_works
         ORDER BY featured DESC, published_at_ms DESC, id DESC
         """,
         work_ids,
@@ -5119,29 +5099,21 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "batchIndex": int(r["batch_index"] or 0) if "batch_index" in r_keys else 0,
             "batchTotal": int(r["batch_total"] or 1) if "batch_total" in r_keys else 1,
         }
-        if hist_entry["batchId"]:
-            batch_key = f"{uid}:{hist_entry['batchId']}"
-            batch_work = conn.execute(
-                "SELECT id FROM works WHERE generation_batch_key=?", (batch_key,)
-            ).fetchone()
-            if batch_work:
-                hist_entry["workId"] = batch_work["id"]
-                for it in items:
-                    it["workId"] = batch_work["id"]
-        try:
-            mapped_rows = conn.execute(
-                "SELECT item_key, work_id FROM generation_works WHERE generation_id = ?",
-                (r["id"],),
-            ).fetchall()
-            if mapped_rows:
-                # A generation run has one work with all successful images.
-                # Every image opens the same canonical work detail.
-                work_id = mapped_rows[0]["work_id"]
-                for it in items:
-                    it["workId"] = work_id
-                hist_entry["workId"] = work_id
-        except Exception:
-            pass
+        # Link the history item to the single work of its canonical run.
+        # Its image slots do not have separate work IDs.
+        logical_key = hist_entry["batchId"] or str(r["id"])
+        canonical_work = conn.execute(
+            """
+            SELECT w.id FROM generation_runs gr
+            JOIN works w ON w.run_id=gr.id
+            WHERE gr.user_id=? AND gr.source='web' AND gr.external_run_id=?
+            """,
+            (uid, logical_key),
+        ).fetchone()
+        if canonical_work:
+            hist_entry["workId"] = canonical_work["id"]
+            for item in items:
+                item["workId"] = canonical_work["id"]
         if snap:
             hist_entry["recipeSnapshot"] = snap
         if was_masked:
