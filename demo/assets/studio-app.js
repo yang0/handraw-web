@@ -13080,15 +13080,11 @@
         reader.onload = async (evt) => {
           const dataUrl = evt.target.result;
           try {
-            // Keep the result recoverable until the user explicitly approves it.
+            // Import directly into a new editor without a review/approval step.
+            // A completed task remains recoverable if the user navigated away.
             const res = await window.HandrawTaskJourney.submitImport(file.name, dataUrl, async () => false);
             if (!DOM.previewStage?.querySelector("#portal-file-input")) return;
             fileInput.disabled = false;
-            const confirmed = await window.HandrawTaskJourney.reviewDocument(res, {
-              fileName: file.name, replacing: false
-            });
-            if (!confirmed) { toast("已保留原页面，文档未导入编辑器"); return; }
-            if (!DOM.previewStage?.querySelector("#portal-file-input")) return;
 
             ensureMyArticlesInitialized();
             const now = Date.now();
@@ -15402,11 +15398,8 @@
           try {
             const res = await window.HandrawTaskJourney.submitImport(file.name, evt.target.result, async () => false);
             if (!isCurrentEditor()) return;
-            const confirmed = await window.HandrawTaskJourney.reviewDocument(res, {
-              fileName: file.name, replacing: true,
-              currentTitle: savedSnapshot.title, currentMarkdown: savedSnapshot.markdown
-            });
-            if (!confirmed) { toast("已保留原稿，本次替换已取消"); return; }
+            // No review modal: a successful import replaces the current
+            // editor's title and Markdown immediately, then autosaves.
             if (!isCurrentEditor()) { toast("编辑器已切换，未覆盖其他文章"); return; }
             const okTitle = res && typeof res.title === "string" ? res.title : savedSnapshot.title;
             const okMarkdown = res && typeof res.markdown === "string" ? res.markdown : savedSnapshot.markdown;
