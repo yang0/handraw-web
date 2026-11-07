@@ -232,25 +232,37 @@ def ensure_run(
     if not external_run_id or not 1 <= expected_count <= 1000:
         raise ValueError("Invalid run identity or expected count")
     run_id = _stable_id("run", user_id, source, external_run_id)
-    existing = tx.execute(
-        "SELECT id,expected_count,request_id FROM generation_runs WHERE id=?",
-        (run_id,),
-    ).fetchone()
-    if existing:
-        if int(existing["expected_count"]) != expected_count:
-            raise ValueError("Run size changed during retry")
-        if request_id and existing["request_id"] and existing["request_id"] != request_id:
-            raise ValueError("Run request key changed during retry")
-        return run_id
     now = _now()
+    # Atomic insert-or-read: two PostgreSQL workers may reserve the same
+    # logical run concurrently. A separate SELECT-before-INSERT is racy.
     tx.execute(
         """
         INSERT INTO generation_runs
-          (id,user_id,source,external_run_id,request_id,expected_count,status,created_at,updated_at)
+          (id,user_id,source,external_run_id,request_id,expected_count,
+           status,created_at,updated_at)
         VALUES (?,?,?,?,?,?,'running',?,?)
+        ON CONFLICT(id) DO NOTHING
         """,
-        (run_id, user_id, source, external_run_id, request_id, expected_count, now, now),
+        (run_id, user_id, source, external_run_id, request_id,
+         expected_count, now, now),
     )
+    existing = tx.execute(
+        """
+        SELECT user_id,source,external_run_id,expected_count,request_id
+        FROM generation_runs WHERE id=?
+        """,
+        (run_id,),
+    ).fetchone()
+    if not existing or (
+        int(existing["user_id"]) != user_id or
+        str(existing["source"]) != source or
+        str(existing["external_run_id"]) != external_run_id
+    ):
+        raise ValueError("Run identity collision")
+    if int(existing["expected_count"]) != expected_count:
+        raise ValueError("Run size changed during retry")
+    if request_id and existing["request_id"] and existing["request_id"] != request_id:
+        raise ValueError("Run request key changed during retry")
     return run_id
 
 
