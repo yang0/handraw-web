@@ -7643,7 +7643,7 @@
                 </div>
               `
               : `
-                <div style="display:flex;flex-direction:column;gap:14px;" id="hist-records-list">
+                <div class="ic-hist-masonry-grid" id="hist-records-list">
                   ${pageItems
                     .map((h) => {
                       const promptExpanded = Boolean(CS.historyExpandedPromptIds[h.id]);
@@ -7652,6 +7652,10 @@
                       const selImgItem =
                         selImgIdx >= 0 && (h.items || [])[selImgIdx] ? (h.items || [])[selImgIdx] : null;
                       const cleanPromptOneLine = String(S.filterDisplayPrompt ? S.filterDisplayPrompt(h.prompt || "") : (h.prompt || "")).replace(/\s+/g, " ").trim();
+                      const coverIdx = (h.items || []).findIndex((it) => it && it.imageUrl);
+                      const coverItem = coverIdx < 0 ? null : h.items[coverIdx];
+                      const imageCount = historyImageCount(h);
+                      const batchExpanded = Boolean(CS.historyExpandedBatchIds[h.id]);
 
                       return `
                         <article class="ic-hist-entry-card" data-hist-id="${esc(h.id)}">
@@ -7673,7 +7677,21 @@
                             </div>
                           </div>
 
-                          <div class="ic-hist-gallery">
+                          ${coverItem ? `
+                            <div class="ic-hist-cover">
+                              <button type="button" class="ic-hist-cover-button"
+                                ${imageCount > 1
+                                  ? `data-hist-expand-batch="${esc(h.id)}" aria-expanded="${batchExpanded}" aria-label="${batchExpanded ? "收起" : "展开"}全部 ${imageCount} 张图片"`
+                                  : `data-hist-img-toggle="${esc(h.id)}" data-hist-img-idx="${coverIdx}" aria-label="预览生成图片"`}
+                              >
+                                <img data-hw-src="${esc(coverItem.imageUrl)}" alt="${esc(coverItem.title || h.subject || "生成图片")}" loading="lazy" />
+                                ${imageCount > 1 ? `<span class="ic-hist-cover-count">${imageCount} 张 · ${batchExpanded ? "收起图片" : "查看全部"}</span>` : ""}
+                              </button>
+                              <a href="${esc(coverItem.imageUrl)}" class="ic-hist-cover-download" data-hist-image-download download="handraw-history.webp" aria-label="下载封面或首张生成图片">↓ 下载</a>
+                            </div>
+                          ` : `<div class="ic-hist-no-image">暂无可预览的图片</div>`}
+                          ${batchExpanded && imageCount > 1 ? `
+                          <div class="ic-hist-gallery ic-hist-expanded-gallery">
                             ${(h.items || [])
                               .map(
                                 (it, iIdx) => `
@@ -7692,7 +7710,7 @@
                               )
                               .join("")}
                           </div>
-
+                          ` : ""}
                           ${
                             selImgItem
                               ? `
@@ -7850,6 +7868,14 @@
           toast(`删除历史失败：${err.message || err}`);
           btn.disabled = false;
         }
+      };
+    });
+
+    DOM.historyStage.querySelectorAll("[data-hist-expand-batch]").forEach((btn) => {
+      btn.onclick = () => {
+        const hid = btn.getAttribute("data-hist-expand-batch");
+        CS.historyExpandedBatchIds[hid] = !CS.historyExpandedBatchIds[hid];
+        renderHistoryStage();
       };
     });
 
