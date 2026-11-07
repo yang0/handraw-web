@@ -539,7 +539,7 @@ class UserLibrarySyncTests(unittest.TestCase):
         self.assertEqual(item["cat"], "props")
 
     def test_11_migration_064_safety_and_idempotence(self):
-        """Test that Migration 064 is idempotent and backfills legacy rows without corruption."""
+        """Fresh V3 never mutates malformed pre-launch legacy rows on GET."""
         # 1. Calling db.migrate() again is safe and returns empty list (nothing unapplied)
         applied = self.db.migrate()
         self.assertEqual(applied, [])
@@ -554,19 +554,29 @@ class UserLibrarySyncTests(unittest.TestCase):
                 (self.user_a["id"],),
             )
 
-        # Reading assets triggers ensure_user_uploads_synced
+        # V3 is fresh-only: the GET path never performs hidden legacy backfills.
         s_list, l_res, _ = self._request("GET", "/api/library/assets", cookie=self.cookie_a)
         self.assertEqual(s_list, 200)
-        old_item = next((it for it in l_res["items"] if it["name"] == "Old Scene"), None)
-        self.assertIsNotNone(old_item)
-        self.assertTrue(len(old_item["uid"]) > 0)
-        self.assertEqual(old_item["cat"], "scenes")
-        self.assertEqual(old_item["bytes"], 500)
-
-        # Verify DB row has change_seq backfilled
-        old_row = self.db.get_conn().execute("SELECT * FROM user_uploads WHERE id = 'UPL-legacy-001'").fetchone()
-        self.assertIsNotNone(old_row["change_seq"])
-        self.assertEqual(old_row["asset_uid"], old_item["uid"])
+        self.assertFalse(any(it["name"] == "Old Scene" for it in l_res["items"]))
+        old_row = self.db.get_conn().execute(
+            "SELECT asset_uid,change_seq FROM user_uploads WHERE id='UPL-legacy-001'"
+        ).fetchone()
+        self.assertIsNone(old_row["asset_uid"])
+        self.assertIsNone(old_row["change_seq"])
+        # A proper V3 write must receive complete metadata immediately.
+        d, sha, _ = _make_data_url(color=(40, 50, 60))
+        uid = _uid("fresh_v3_asset")
+        status, _, _ = self._request(
+            "PUT", f"/api/library/assets/{uid}",
+            {"name": "New Scene", "dataUrl": d}, cookie=self.cookie_a,
+        )
+        self.assertEqual(status, 201)
+        row = self.db.get_conn().execute(
+            "SELECT asset_uid,change_seq,sha256 FROM user_uploads WHERE asset_uid=?",
+            (uid,),
+        ).fetchone()
+        self.assertEqual(row["sha256"], sha)
+        self.assertGreater(row["change_seq"], 0)
 
     def test_12_put_tombstone_quota_and_expiry_enforcement(self):
         """Test that PUT on tombstones enforces 500-quota, 30-day expiry, and baseRevision."""
@@ -696,7 +706,12 @@ class UserLibrarySyncTests(unittest.TestCase):
 
         s2, res2, _ = self._request("PUT", f"/api/library/assets/{u_rep}", {"baseRevision": 1, "dataUrl": d2}, cookie=self.cookie_a)
         self.assertEqual(s2, 200)
-        # Old file should now be deleted because it is unreferenced
+        # Old media remains until the durable GC queue is drained.
+        self.assertTrue(fpath1.exists())
+        from backend.media_gc import drain_media_gc
+        with self.db.transaction() as tx:
+            tx.execute("UPDATE media_gc_jobs SET next_attempt_at=0, claim_until=0")
+        self.assertGreaterEqual(drain_media_gc(self.db)["deleted"], 1)
         self.assertFalse(fpath1.exists())
         row2 = self.db.get_conn().execute("SELECT file_path, image_url FROM user_uploads WHERE asset_uid = ?", (u_rep,)).fetchone()
         fpath2 = Path(row2["file_path"])
@@ -741,6 +756,10 @@ class UserLibrarySyncTests(unittest.TestCase):
 
         cleaned_old = cleanup_expired_library_tombstones(self.db, max_age_days=30)
         self.assertEqual(cleaned_old, 1)
+        self.assertTrue(fpath2.exists())
+        with self.db.transaction() as tx:
+            tx.execute("UPDATE media_gc_jobs SET next_attempt_at=0, claim_until=0")
+        drain_media_gc(self.db)
         self.assertFalse(fpath2.exists())
         check_row = self.db.get_conn().execute("SELECT 1 FROM user_uploads WHERE asset_uid = ?", (u_rep,)).fetchone()
         self.assertIsNone(check_row)
