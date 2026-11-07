@@ -1250,9 +1250,12 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
             ensure_topic(tx, "work", target_id, res_work, initial_origin="submission")
 
     # Traceable snapshot per revision (table optional; guarded).
-    snap_exists = tx.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'curation_publish_snapshots'"
-    ).fetchone()
+    snapshot_query = (
+        "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='curation_publish_snapshots'"
+        if getattr(tx, "dialect", "") == "postgresql"
+        else "SELECT 1 FROM sqlite_master WHERE type='table' AND name='curation_publish_snapshots'"
+    )
+    snap_exists = tx.execute(snapshot_query).fetchone()
     if snap_exists:
         tx.execute(
             """
