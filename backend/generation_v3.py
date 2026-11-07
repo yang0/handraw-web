@@ -506,3 +506,46 @@ def work_images(tx: sqlite3.Connection, work_id: str) -> list[str]:
             (work_id,),
         )
     ]
+
+
+def set_work_cover(db: Any, user: dict[str, Any], work_id: str, image_url: str) -> dict[str, Any]:
+    """Author-only cover selection without changing a work's image order or ID.
+
+    The cover must already be one of the completed media items of the work.
+    Non-generated community submissions keep their own cover editing workflow.
+    """
+    from .services import ServiceError
+    work_id = str(work_id or "").strip()
+    try:
+        url = _storage_url(image_url)
+    except ValueError as error:
+        raise ServiceError("封面图片地址无效", status=400, code="invalid_cover") from error
+    if not work_id:
+        raise ServiceError("作品编号不能为空", status=400, code="work_required")
+    with db.transaction() as tx:
+        work = tx.execute(
+            "SELECT id,run_id,author_username,status FROM works WHERE id=?",
+            (work_id,),
+        ).fetchone()
+        if not work or work["status"] == "deleted":
+            raise ServiceError("作品不存在", status=404, code="work_not_found")
+        if not work["run_id"]:
+            raise ServiceError("该作品不支持修改生成封面", status=400, code="cover_not_generated")
+        if not user or str(work["author_username"]).casefold() != str(user.get("username", "")).casefold():
+            raise ServiceError("只有作品作者可以更换封面", status=403, code="cover_forbidden")
+        media = tx.execute(
+            """
+            SELECT wm.media_id FROM work_media wm
+            JOIN media_assets m ON m.id=wm.media_id
+            JOIN generation_runs r ON r.id=?
+            WHERE wm.work_id=? AND m.storage_key=? AND m.owner_user_id=r.user_id
+            """,
+            (work["run_id"], work_id, url),
+        ).fetchone()
+        if not media:
+            raise ServiceError("只能选择本作品中已成功生成的图片作为封面", status=400, code="cover_not_in_work")
+        tx.execute(
+            "UPDATE works SET cover_media_id=?,updated_at=? WHERE id=?",
+            (media["media_id"], _now(), work_id),
+        )
+    return {"ok": True, "workId": work_id, "coverUrl": url, "coverMediaId": media["media_id"]}
