@@ -19,7 +19,7 @@ Skill 开发 PR：https://github.com/yang0/handraw-style/pull/12 。两个仓库
 - backend/skill_cloud_routes.py：v1 服务端 API，包括 owner-only 个人资源、revision/409、增量拉取、完整定义访问、私有生图历史、评论/点赞/通知。
 - backend/server.py：路由注册和精确设备令牌 scope，私有 Skill 图片所有者校验。
 - backend/services.py：生产环境新生成历史默认 private；已发布作品与历史链接不改；本人私有画风/图型加入旧版 Skill 资源清单及完整定义读取。
-- demo/assets/main-app.js：本人账号个人主页可查看和编辑私有画风/图型；增加本人私有创作历史，区分公开作品。
+- demo/assets/main-app.js：本人账号个人主页可新建、查看、编辑、软删除私有画风/图型；增加本人私有创作历史，区分公开作品。历史项提供主动发布入口，用户确认所选图片、公开标题及说明后调用既有 POST /api/works；不默认公开私有原始指令。
 - tests/test_skill_cloud_v1.py：隔离数据库 HTTP 合同测试。
 
 ## API 合同（对齐 Skill 分支 handraw_cloud.py）
