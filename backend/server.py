@@ -845,7 +845,10 @@ def _is_published_media(db: Database, media_url: str) -> bool:
                           AND m.storage_key=g.media_url
                       ))
                 ))
-                OR (g.target_type NOT IN ('work','topic'))
+                OR (g.target_type='asset' AND EXISTS (
+                    SELECT 1 FROM catalog_assets a
+                    WHERE a.code=g.target_id AND a.status='published'
+                ))
               )
             LIMIT 1
             """,
