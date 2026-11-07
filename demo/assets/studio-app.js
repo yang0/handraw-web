@@ -7526,7 +7526,8 @@
     if (["loop", "series", "batch"].includes(kind) || ["series", "batch"].includes(mode) ||
         /循环批量|批量|套图/.test(String(h.modeLabel || ""))) return "batch";
     if (kind === "cover" || /封面图|独立封面/.test(label) ||
-        (Array.isArray(h.items) && h.items.length === 1 && h.items[0]?.role === "cover")) return "article";
+        (Array.isArray(h.items) && h.items.length === 1 &&
+          (h.items[0]?.role === "cover" || /封面/.test(String(h.items[0]?.title || ""))))) return "article";
     if (h.recipeId || h.tabTitle === "做图配方") return "quick";
     return "canvas";
   }
