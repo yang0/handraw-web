@@ -345,19 +345,23 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
     def test_legacy_history_route_and_notification_redirects(self):
         root = Path(__file__).resolve().parent.parent
 
-        # 1. Verify studio-app.js redirects ?view=history to profile generations tab
+        # 1. Legacy studio history stays in studio; profile history links resolve to works.
         studio_app = (root / "demo" / "assets" / "studio-app.js").read_text(encoding="utf-8")
+        main_app = (root / "demo" / "assets" / "main-app.js").read_text(encoding="utf-8")
         self.assertIn('viewParam === "history"', studio_app)
-        self.assertIn('ptab: "generations"', studio_app)
-        self.assertIn("window.location.replace", studio_app)
+        self.assertIn('CS.stageView = "history"', studio_app)
+        self.assertIn('function returnFromHistoryPage()', studio_app)
+        self.assertNotIn('ptab: "generations"', studio_app)
+        self.assertIn('reqTab === "generations"', main_app)
+        self.assertNotIn('data-ptab="generations"', main_app)
 
-        # 2. Verify account-tools.js notification link updated
+        # 2. Notification links retain their old profile URL for compatibility.
         account_tools = (root / "demo" / "assets" / "account-tools.js").read_text(encoding="utf-8")
         self.assertIn('item.target_type==="generation"', account_tools)
         self.assertIn('ptab: "generations"', account_tools)
         self.assertNotIn('{view:"history"}', account_tools)
 
-        # 3. Verify messaging.js notification link updated
+        # 3. The profile router canonicalizes old notification links to works.
         messaging = (root / "demo" / "assets" / "messaging.js").read_text(encoding="utf-8")
         self.assertIn('n.target_type === "generation"', messaging)
         self.assertIn('ptab: "generations"', messaging)
