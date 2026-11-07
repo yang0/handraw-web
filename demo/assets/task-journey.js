@@ -77,7 +77,7 @@
       ${task.warning ? `<p class="hw-task-note">${escapeHtml(task.warning)}</p>` : ""}
       ${failed ? `<p class="hw-task-note is-error">${escapeHtml(task.error || "请重试；原有文章未更改。")}</p>` : ""}
       ${complete && task.recoverable ? `<div class="hw-task-recovery-actions">
-        ${recoveredImportHandler ? '<button class="hw-task-action" data-task-apply type="button">审校并打开编辑器</button>' : ""}
+        ${recoveredImportHandler ? '<button class="hw-task-action" data-task-apply type="button">打开编辑器</button>' : ""}
         <button class="hw-task-action hw-task-secondary" data-task-recover type="button">下载 Markdown</button>
       </div>` : ""}
       ${!complete && !failed ? '<p class="hw-task-footnote">后台仍在处理；关闭此面板不会停止任务，刷新页面可以恢复查看。</p>' : ""}
@@ -98,14 +98,11 @@
       const button = el.querySelector("[data-task-apply]");
       if (button) { button.disabled = true; button.textContent = "正在打开编辑器…"; }
       try {
-        const confirmed = await reviewDocument(task.result, {replacing:false});
-        if (confirmed) {
-          const applied = await recoveredImportHandler(task.result);
-          if (applied !== false) {
-            task.recoverable = false;
-            storage.clear();
-            draw(task);
-          }
+        const applied = await recoveredImportHandler(task.result);
+        if (applied !== false) {
+          task.recoverable = false;
+          storage.clear();
+          draw(task);
         }
       } catch (error) {
         task.warning = "恢复文章失败，结果仍可下载：" + (error?.message || "请重试");
