@@ -16349,7 +16349,9 @@
         id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn
       })));
       let statusText = busy
-        ? "正在生成，可以稍后回到历史记录查看。"
+        ? "正在生成，可点击「停止等待」结束当前页面的生成流程；已提交云端的任务可能继续执行或计费。"
+        : p?.ctrl.data.status === "stopped"
+        ? "上次生成已解除本地等待；云端任务可能仍在运行或计费。请先在生图历史确认结果，再决定是否重新生成。"
         : p?.ctrl.data.status === "error"
         ? "生成失败，可检查提示词后点击生成重试；任务与费用以服务端结果为准。"
         : results.length
