@@ -4997,10 +4997,39 @@
     return true;
   }
 
+  function cancelledTaskWaitError() {
+    const error = new Error("已停止本地等待；已提交的任务可能仍在云端执行");
+    error.name = "AbortError";
+    return error;
+  }
+
+  // The poll delay itself must be abortable. Otherwise Stop is stuck waiting
+  // for the next 2.2-second interval even though the HTTP signal was aborted.
+  function waitForCloudPollInterval(ms, signal) {
+    if (signal?.aborted) return Promise.reject(cancelledTaskWaitError());
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      const onAbort = () => {
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener("abort", onAbort);
+        reject(cancelledTaskWaitError());
+      };
+      timer = setTimeout(() => {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      }
+    });
+  }
+
   async function pollCloudTask(taskId = "", { requestId = "", immediate = false, signal } = {}) {
     if (!taskId && !requestId) throw new Error("缺少 taskId 或 requestId");
     for (let attempt = 0; attempt < 45; attempt++) {
-      if (!(immediate && attempt === 0)) await new Promise((r) => setTimeout(r, 2200));
+      if (signal?.aborted) throw cancelledTaskWaitError();
+      if (!(immediate && attempt === 0)) await waitForCloudPollInterval(2200, signal);
       const params = new URLSearchParams();
       if (taskId) params.set("id", String(taskId));
       if (requestId) params.set("requestId", requestId);
