@@ -25,6 +25,7 @@ from backend.services import (
     register_user,
     record_user_studio_history,
     delete_user_studio_history,
+    delete_all_user_studio_history,
     toggle_user_like,
     toggle_user_collection,
     publish_forum_topic_post,
@@ -216,6 +217,67 @@ class TestGenerationWorksSync(unittest.TestCase):
         with self.assertRaises(ServiceError) as ctx_cmt:
             comment(self.db, self.user_reader, "work", wid, "读者评论")
         self.assertEqual(ctx_cmt.exception.status, 404)
+
+    def test_history_deletion_and_public_work_sync_are_atomic(self):
+        """Single and bulk history deletion roll back on projected-work sync failures."""
+        conn = self.db.get_conn()
+        for index in (1, 2):
+            gen_id = f"gen_atomic_{index}"
+            conn.execute(
+                """
+                INSERT INTO studio_generations (
+                    id, user_id, username, tab_title, mode, prompt,
+                    items_json, status, created_at, visibility
+                ) VALUES (?, ?, 'author_yang', '图文', 'graphic-text', 'p',
+                          ?, 'success', ?, 'public')
+                """,
+                (
+                    gen_id,
+                    self.user_author["id"],
+                    json.dumps([{"id": f"atomic_image_{index}", "imageUrl": f"/atomic_{index}.webp"}]),
+                    f"2026-11-01T10:00:0{index}Z",
+                ),
+            )
+            self.assertEqual(len(project_generation_to_works(conn, gen_id)), 1)
+        conn.commit()
+
+        with self.assertRaises(ServiceError) as unauthorized:
+            delete_user_studio_history(self.db, self.user_other, "gen_atomic_1")
+        self.assertEqual(unauthorized.exception.status, 403)
+
+        with patch("backend.generation_works.sync_generation_visibility", side_effect=RuntimeError("sync failed")):
+            with self.assertRaisesRegex(RuntimeError, "sync failed"):
+                delete_user_studio_history(self.db, self.user_author, "gen_atomic_1")
+            with self.assertRaisesRegex(RuntimeError, "sync failed"):
+                delete_all_user_studio_history(self.db, self.user_author)
+
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM studio_generations WHERE id LIKE 'gen_atomic_%' AND deleted_at IS NULL"
+            ).fetchone()[0],
+            2,
+            "History deletion must roll back on sync failure",
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM generation_works gw JOIN works w ON w.id = gw.work_id "
+                "WHERE gw.generation_id LIKE 'gen_atomic_%' AND w.status = 'published'"
+            ).fetchone()[0],
+            2,
+            "Linked public works must remain visible after a rolled-back delete",
+        )
+
+        delete_user_studio_history(self.db, self.user_author, "gen_atomic_1")
+        self.assertIsNotNone(
+            conn.execute("SELECT deleted_at FROM studio_generations WHERE id = 'gen_atomic_1'").fetchone()[0]
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM generation_works gw JOIN works w ON w.id = gw.work_id "
+                "WHERE gw.generation_id = 'gen_atomic_1' AND w.status = 'published'"
+            ).fetchone()[0],
+            0,
+        )
 
     def test_identical_timestamp_keyset_traversal(self):
         """含相同时间戳的 100 件作品以每页 7 件遍历，无重复、无遗漏"""
