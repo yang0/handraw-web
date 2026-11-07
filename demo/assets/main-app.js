@@ -39,6 +39,13 @@
     profileUser: "",
     profileTab: "works", // public content tabs only
     profileResourceFilter: "all", // all | styles | layouts
+    personalCloudUser: "",
+    personalResources: null,
+    personalGenerations: null,
+    personalResourcesLoading: false,
+    personalGenerationsLoading: false,
+    personalResourcesError: "",
+    personalGenerationsError: "",
     profileWorksUser: "",
     profileWorkRows: null,
     profileWorksLoading: false,
@@ -239,7 +246,7 @@
           window.history.replaceState({ view: "profile" }, "", `${window.location.pathname}?${nextP.toString()}`);
         } catch (_) {}
       }
-      UI.profileTab = ["works", "resources", "topics", "collections", "articles"].includes(reqTab) ? reqTab : "works";
+      UI.profileTab = ["works", "resources", "topics", "collections", "articles", "history"].includes(reqTab) ? reqTab : "works";
       return {};
     }
 
@@ -446,7 +453,7 @@
     if (["styles", "layouts", "works"].includes(App.view)) {
       UI.lastPrimaryView = App.view;
     }
-    let cleanTab = ["works", "resources", "topics", "articles", "collections"].includes(ptab) ? ptab : "works";
+    let cleanTab = ["works", "resources", "topics", "articles", "collections", "history"].includes(ptab) ? ptab : "works";
     if (["assets", "styles", "layouts"].includes(ptab)) {
       cleanTab = "resources";
       UI.profileResourceFilter = ptab === "layouts" ? "layouts" : "styles";
@@ -458,7 +465,7 @@
       window.location.href = channelUrl("studio", { view: "articles-all", page: 1 });
       return;
     }
-    if (!isMe && ["collections", "account", "articles"].includes(cleanTab)) {
+    if (!isMe && ["collections", "account", "articles", "history"].includes(cleanTab)) {
       cleanTab = "works";
     }
     const isEntering = App.view !== "profile" || UI.profileUser !== targetUser || UI.profileTab !== cleanTab;
@@ -2448,6 +2455,44 @@
     }
   }
 
+  async function loadPersonalProfileCloud(username, section) {
+    const isResources = section === "resources";
+    const loadingKey = isResources ? "personalResourcesLoading" : "personalGenerationsLoading";
+    const errorKey = isResources ? "personalResourcesError" : "personalGenerationsError";
+    const dataKey = isResources ? "personalResources" : "personalGenerations";
+    if (UI[loadingKey] || UI.personalCloudUser !== username) return;
+    UI[loadingKey] = true;
+    UI[errorKey] = "";
+    try {
+      const all = [];
+      let cursor = "";
+      for (let page = 0; page < 20; page += 1) {
+        const q = new URLSearchParams({ limit: "100" });
+        if (cursor) q.set(isResources ? "since" : "cursor", cursor);
+        const url = isResources ? "/api/v1/me/resources" : "/api/v1/me/generations";
+        const res = await S.apiJson(url + "?" + q.toString());
+        if (!res || res.ok === false || !Array.isArray(res.items)) throw new Error("云端数据无法加载");
+        if (UI.personalCloudUser !== username) return;
+        all.push(...res.items.filter((it) => !it.deletedAt));
+        if (!res.hasMore) break;
+        if (!res.nextCursor || res.nextCursor === cursor) throw new Error("分页状态异常");
+        cursor = res.nextCursor;
+      }
+      if (UI.personalCloudUser === username) UI[dataKey] = all;
+    } catch (_) {
+      if (UI.personalCloudUser === username) {
+        UI[dataKey] = [];
+        UI[errorKey] = "个人云端数据加载失败，可以重试。";
+      }
+    } finally {
+      if (UI.personalCloudUser === username) {
+        UI[loadingKey] = false;
+        if (App.view === "profile" && UI.profileUser === username
+            && UI.profileTab === section) renderMain();
+      }
+    }
+  }
+
   function renderCreatorProfilePage(root) {
     const fallbackUser = App.state.loggedIn && App.state.user ? App.state.user.username : "";
     const targetUser = (UI.profileUser || fallbackUser || "").trim();
@@ -2459,11 +2504,27 @@
 
     const prof = S.getCreatorProfile(targetUser);
     const isMe = Boolean(App.state.loggedIn && App.state.user && App.state.user.username === prof.username);
+    if (isMe && UI.personalCloudUser !== prof.username) {
+      UI.personalCloudUser = prof.username;
+      UI.personalResources = null;
+      UI.personalGenerations = null;
+      UI.personalResourcesError = "";
+      UI.personalGenerationsError = "";
+      UI.personalResourcesLoading = false;
+      UI.personalGenerationsLoading = false;
+    }
+    if (isMe && ["resources", "history"].includes(UI.profileTab)) {
+      const dataKey = UI.profileTab === "resources" ? "personalResources" : "personalGenerations";
+      const loadingKey = UI.profileTab === "resources" ? "personalResourcesLoading" : "personalGenerationsLoading";
+      if (UI[dataKey] === null && !UI[loadingKey]) {
+        void loadPersonalProfileCloud(prof.username, UI.profileTab);
+      }
+    }
     if (UI.profileTab === "articles" && isMe) {
       window.location.replace(channelUrl("studio", { view: "articles-all", page: 1 }));
       return;
     }
-    if (!isMe && ["collections", "account", "articles"].includes(UI.profileTab)) {
+    if (!isMe && ["collections", "account", "articles", "history"].includes(UI.profileTab)) {
       UI.profileTab = "works";
       syncUrl(false);
     }
@@ -2563,6 +2624,81 @@
             `), "standard")
           : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂无公开的${type === "all" ? "创作资源" : type === "styles" ? "共创画风" : "共创图型"}。</div>`}
       `;
+      if (isMe) {
+        const mine = (UI.personalResources || []).filter((it) =>
+          type === "all" || (it.kind === "style" ? "styles" : "layouts") === type);
+        const cards = mine.map((it) => `
+          <article class="hw-detail-section-card" style="padding:18px;">
+            <span class="hw-card-code">🔒 私有${it.kind === "style" ? "画风" : "图型"} · v${esc(it.version || "1.0.0")}</span>
+            <h3 style="margin:8px 0;">${esc(it.name)}</h3>
+            <p style="font-size:12px;color:var(--ink-muted);">仅本人可见 · ${esc(it.license || "")}</p>
+            <pre style="white-space:pre-wrap;font:inherit;font-size:12px;max-height:130px;overflow:auto;">${esc(it.definition?.zh || "")}</pre>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm" data-copy-private-resource="${esc(it.id)}">复制完整定义</button>
+              <button type="button" class="btn btn-sm" data-edit-private-resource="${esc(it.id)}">编辑</button>
+            </div>
+          </article>`).join("");
+        tabBodyHtml = `
+          <section class="hw-detail-section-card" style="margin-bottom:20px;">
+            <h3 style="margin:0 0 8px;">我的私有画风与图型</h3>
+            <p style="font-size:12px;color:var(--ink-muted);">Skill 同步的资源默认私有，不会自动公开或成为官方编号资源。</p>
+            <button type="button" id="create-private-resource" class="btn btn-sm" style="margin:5px 0 15px;">＋ 新建私有画风/图型</button>
+            <form id="private-resource-editor" hidden style="padding:14px;border:1px solid var(--border, #ddd);border-radius:12px;margin-bottom:16px;">
+              <h4 id="private-resource-form-title" style="margin:0 0 12px;">新建个人资源</h4>
+              <input type="hidden" name="resourceId" />
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+                <label>类型<select name="kind" required class="form-control" style="width:100%;"><option value="style">画风</option><option value="layout">图型</option></select></label>
+                <label>名称<input name="name" required maxlength="120" class="form-control" style="width:100%;" /></label>
+              </div>
+              <label style="display:block;margin-top:10px;">中文完整定义<textarea name="zh" required maxlength="30000" rows="4" class="form-control" style="width:100%;"></textarea></label>
+              <label style="display:block;margin-top:10px;">英文完整定义<textarea name="en" required maxlength="30000" rows="4" class="form-control" style="width:100%;"></textarea></label>
+              <label style="display:block;margin-top:10px;">许可说明<input name="license" required maxlength="1000" class="form-control" style="width:100%;" value="个人使用" /></label>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
+                <button type="submit" class="btn btn-primary">保存到个人云端（私有）</button>
+                <button type="button" id="cancel-private-resource" class="btn">取消</button>
+                <button type="button" id="delete-private-resource" class="btn" hidden>删除</button>
+              </div>
+              <p id="private-resource-form-error" role="alert" style="color:var(--vermilion);font-size:12px;"></p>
+            </form>
+            ${UI.personalResourcesLoading || UI.personalResources === null
+              ? "<p>正在加载个人云端资源…</p>" :
+                UI.personalResourcesError
+                ? `<p role="alert">${esc(UI.personalResourcesError)} <button id="retry-personal-resources" type="button" class="btn btn-sm">重试</button></p>`
+                : cards || "<p>还没有私有画风或图型；在 Skill 创建后同步到网站即可查看。</p>"}
+          </section>` + tabBodyHtml;
+      }
+    } else if (UI.profileTab === "history" && isMe) {
+      const list = (UI.personalGenerations || []).map((item) => {
+        const first = (item.images || [])[0];
+        const cover = typeof first === "string" ? first : (first?.url || first?.imageUrl || "");
+        return `<article class="hw-detail-section-card" style="padding:16px;">
+          ${cover ? `<img src="${esc(cover)}" alt="生图结果" loading="lazy"
+            style="max-height:230px;max-width:100%;border-radius:10px;object-fit:contain;" />` : ""}
+          <div class="hw-card-code">🔒 ${esc(item.originClient === "skill" ? "Skill 生图" : "网站生图")} · ${esc(item.status || "")}</div>
+          <div style="font-size:12px;color:var(--ink-muted);">${esc(item.createdAt || "")}</div>
+          <p style="font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc((item.originalRequest || "创作记录").slice(0, 160))}</p>
+          ${item.status === "success" && cover ? `
+            <button type="button" class="btn btn-sm" data-publish-history="${esc(item.id)}">发布到作品广场…</button>
+            <form hidden data-history-publish-form="${esc(item.id)}" style="margin-top:12px;">
+              <label style="display:block;margin-bottom:8px;">公开作品标题<input name="title" required maxlength="100" class="form-control" style="width:100%;" value="我的新作品" /></label>
+              <label style="display:block;margin-bottom:8px;">公开的提示词 / 说明<textarea name="prompt" maxlength="4000" class="form-control" style="width:100%;" rows="4" placeholder="仅填写你愿意公开的内容；不会默认公开私有原始指令" required></textarea></label>
+              <div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px;">从本次记录选择前 9 张图片发布，原始历史继续私有。请确认图片版权和公开范围。</div>
+              <button type="submit" class="btn btn-sm btn-primary">确认并公开发布</button>
+              <button type="button" class="btn btn-sm" data-cancel-history-publish>取消</button>
+              <p class="hw-history-publish-error" role="alert"></p>
+            </form>` : ""}
+        </article>`;
+      }).join("");
+      tabBodyHtml = `<section class="hw-detail-section-card" style="margin-bottom:18px;">
+        <h3 style="margin:0 0 6px;">我的私有创作历史</h3>
+        <p style="color:var(--ink-muted);font-size:12px;">网站与 Skill 的生图历史仅本人可见。生成成功不等于发布作品；公开作品需单独确认发布。</p>
+        ${UI.personalGenerationsLoading || UI.personalGenerations === null ? "<p>正在加载私有历史…</p>"
+          : UI.personalGenerationsError
+            ? `<p role="alert">${esc(UI.personalGenerationsError)} <button id="retry-personal-history" type="button" class="btn btn-sm">重试</button></p>`
+            : list
+              ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">${list}</div>`
+              : "<p>还没有保存到云端的创作历史。</p>"}
+      </section>`;
     } else if (UI.profileTab === "topics") {
       tabBodyHtml = prof.topics.length
         ? `<div style="display:flex;flex-direction:column;gap:12px;">
@@ -2994,6 +3130,7 @@
           <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品${UI.profileWorksUser === prof.username && UI.profileWorksTotal !== null ? ` (${UI.profileWorksTotal})` : ""}</button>
           <button type="button" class="hw-pill ${UI.profileTab === "resources" ? "is-active" : ""}" data-ptab="resources" role="tab" aria-selected="${UI.profileTab === "resources"}">🎨 创作资源 (${prof.styles.length + prof.layouts.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 社区动态 (${prof.topics.length})</button>
+          ${isMe ? `<button type="button" class="hw-pill ${UI.profileTab === "history" ? "is-active" : ""}" data-ptab="history" role="tab" aria-selected="${UI.profileTab === "history"}">🔒 创作历史</button>` : ""}
         </div>` : ""}
         <div id="profile-tab-stage">
           ${tabBodyHtml}
@@ -3016,6 +3153,141 @@
       };
     });
 
+    const resourceEditor = root.querySelector("#private-resource-editor");
+    if (resourceEditor) {
+      const field = (key) => resourceEditor.elements.namedItem(key);
+      const openEditor = (item) => {
+        resourceEditor.hidden = false;
+        field("resourceId").value = item?.id || "";
+        field("kind").value = item?.kind || "style";
+        field("name").value = item?.name || "";
+        field("zh").value = item?.definition?.zh || "";
+        field("en").value = item?.definition?.en || "";
+        field("license").value = item?.license || "个人使用";
+        root.querySelector("#private-resource-form-title").textContent = item ? "编辑个人资源" : "新建个人资源";
+        root.querySelector("#delete-private-resource").hidden = !item;
+        root.querySelector("#private-resource-form-error").textContent = "";
+        resourceEditor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      };
+      root.querySelector("#create-private-resource").onclick = () => openEditor(null);
+      root.querySelectorAll("[data-edit-private-resource]").forEach((btn) => {
+        btn.onclick = () => {
+          const item = (UI.personalResources || []).find((it) => it.id === btn.dataset.editPrivateResource);
+          if (item) openEditor(item);
+        };
+      });
+      root.querySelector("#cancel-private-resource").onclick = () => { resourceEditor.hidden = true; };
+      const editorError = root.querySelector("#private-resource-form-error");
+      resourceEditor.onsubmit = async (event) => {
+        event.preventDefault();
+        const id = field("resourceId").value || crypto.randomUUID();
+        const existing = (UI.personalResources || []).find((it) => it.id === id);
+        const body = {
+          id, kind: field("kind").value, name: field("name").value.trim(),
+          definition: { zh: field("zh").value.trim(), en: field("en").value.trim() },
+          license: field("license").value.trim(), examples: existing?.examples || [],
+          version: existing?.version || "1.0.0", origin: existing?.origin || null,
+          visibility: "private", schemaVersion: 1
+        };
+        if (existing) body.baseRevision = existing.revision;
+        const submitButton = resourceEditor.querySelector('[type="submit"]');
+        submitButton.disabled = true;
+        editorError.textContent = "";
+        try {
+          const result = await S.apiJson("/api/v1/me/resources/" + encodeURIComponent(id), { method: "PUT", body });
+          const updated = result.resource;
+          UI.personalResources = [...(UI.personalResources || []).filter((it) => it.id !== updated.id), updated];
+          toast("已保存到私有云端；Skill 可同步最新版本");
+          renderMain();
+        } catch (error) {
+          editorError.textContent = error.status === 409 ? "资源已在另一设备更新，请刷新后再编辑。" : (error.message || "保存失败");
+        } finally { submitButton.disabled = false; }
+      };
+      root.querySelector("#delete-private-resource").onclick = async () => {
+        const id = field("resourceId").value;
+        const existing = (UI.personalResources || []).find((it) => it.id === id);
+        if (!existing || !window.confirm("确定从云端删除这份私有资源？已同步的本地副本不会自动删除。")) return;
+        try {
+          await S.apiJson("/api/v1/me/resources/" + encodeURIComponent(id)
+            + "?baseRevision=" + encodeURIComponent(existing.revision), { method: "DELETE" });
+          UI.personalResources = (UI.personalResources || []).filter((it) => it.id !== id);
+          toast("资源已从个人云端删除");
+          renderMain();
+        } catch (error) {
+          editorError.textContent = error.status === 409 ? "版本已更新，请刷新后重试。" : (error.message || "删除失败");
+        }
+      };
+    }
+
+    root.querySelectorAll("[data-copy-private-resource]").forEach((btn) => {
+      btn.onclick = async () => {
+        const item = (UI.personalResources || []).find((it) => it.id === btn.dataset.copyPrivateResource);
+        if (!item) return;
+        try {
+          await navigator.clipboard.writeText([item.definition?.zh, item.definition?.en].filter(Boolean).join("\n\n"));
+          toast("已复制个人资源定义");
+        } catch (_) { toast("复制失败，请检查剪贴板权限"); }
+      };
+    });
+    const retryPersonalResources = root.querySelector("#retry-personal-resources");
+    if (retryPersonalResources) retryPersonalResources.onclick = () => {
+      UI.personalResources = null;
+      UI.personalResourcesError = "";
+      renderMain();
+    };
+    root.querySelectorAll("[data-publish-history]").forEach((btn) => {
+      btn.onclick = () => {
+        const form = root.querySelector('[data-history-publish-form="' + btn.dataset.publishHistory + '"]');
+        if (form) { form.hidden = false; form.querySelector('[name="title"]').focus(); }
+      };
+    });
+    root.querySelectorAll("[data-history-publish-form]").forEach((form) => {
+      const id = form.getAttribute("data-history-publish-form");
+      const cancel = form.querySelector("[data-cancel-history-publish]");
+      if (cancel) cancel.onclick = () => { form.hidden = true; };
+      form.onsubmit = async (event) => {
+        event.preventDefault();
+        const item = (UI.personalGenerations || []).find((row) => row.id === id);
+        if (!item || item.status !== "success") return;
+        const urls = (item.images || []).map((im) =>
+          typeof im === "string" ? im : (im?.url || im?.imageUrl || ""))
+          .filter((url) => typeof url === "string" && url.startsWith("/") && !url.startsWith("//"))
+          .slice(0, 9);
+        if (!urls.length) { form.querySelector(".hw-history-publish-error").textContent = "没有可发布的本站图片"; return; }
+        const title = form.elements.namedItem("title").value.trim();
+        const prompt = form.elements.namedItem("prompt").value.trim();
+        if (!title || !prompt) return;
+        if (prompt.replace(/\s+/g, "").length < 8) {
+          form.querySelector(".hw-history-publish-error").textContent = "公开创作说明至少需要 8 个字";
+          return;
+        }
+        if (!window.confirm("即将向所有访客公开 " + urls.length + " 张图片及你填写的公开说明，是否确定发布？")) return;
+        const submit = form.querySelector('[type="submit"]');
+        submit.disabled = true;
+        const errorEl = form.querySelector(".hw-history-publish-error");
+        errorEl.textContent = "";
+        try {
+          const result = await S.apiJson("/api/works", { method: "POST", body: {
+            title, prompt, notes: prompt, images: urls, origin: "web",
+            requestId: "web-history-" + id
+          } });
+          if (!result || result.ok === false || !result.workId) throw new Error("发布结果尚未确认");
+          toast("作品已发布到广场");
+          UI.profileWorkRows = null;
+          UI.profileWorksUser = "";
+          openProfilePage(prof.username, "works");
+        } catch (error) {
+          errorEl.textContent = "发布失败或结果尚未确认：" + (error.message || "请先查看作品广场，避免重复发布");
+        } finally { submit.disabled = false; }
+      };
+    });
+
+    const retryPersonalHistory = root.querySelector("#retry-personal-history");
+    if (retryPersonalHistory) retryPersonalHistory.onclick = () => {
+      UI.personalGenerations = null;
+      UI.personalGenerationsError = "";
+      renderMain();
+    };
     const collectionsBtn = root.querySelector("#prof-go-collections-btn");
     if (collectionsBtn) collectionsBtn.onclick = () => openProfilePage(prof.username, "collections");
     root.querySelectorAll("[data-prof-resource-filter]").forEach((btn) => {

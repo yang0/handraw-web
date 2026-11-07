@@ -339,7 +339,7 @@ def get_works_feed(
     if current_user:
         uid = int(current_user["id"])
         liked_rows = conn.execute(
-            "SELECT target_id FROM interactions WHERE user_id = ? AND target_type = 'work'",
+            "SELECT target_id FROM interactions WHERE user_id = ? AND target_type IN ('work', 'like_work') AND COALESCE(stamp_label,'')=''",
             (uid,),
         ).fetchall()
         liked_ids = {r["target_id"] for r in liked_rows}
@@ -597,7 +597,7 @@ def get_work_by_id(
     if current_user:
         uid = int(current_user["id"])
         liked = conn.execute(
-            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type = 'work' AND target_id = ?",
+            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type IN ('work', 'like_work') AND target_id = ? AND COALESCE(stamp_label,'')=''",
             (uid, wid),
         ).fetchone()
         w_dict["liked"] = bool(liked)

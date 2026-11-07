@@ -781,6 +781,13 @@ def _media_owner(db: Database, media_url: str) -> int | None:
             media_row = None
         if media_row:
             return int(media_row["user_id"])
+        # Skill cloud imports remain private until a separate publish action.
+        skill_media = conn.execute(
+            "SELECT user_id FROM skill_generation_media WHERE media_url=? LIMIT 1",
+            (target,),
+        ).fetchone()
+        if skill_media:
+            return int(skill_media["user_id"])
         for row in conn.execute("SELECT user_id, items_json FROM studio_generations WHERE user_id IS NOT NULL"):
             try:
                 items = json.loads(row["items_json"] or "[]")
@@ -1972,10 +1979,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 "/api/works",
             ):
                 return
+            if method == "POST" and re.fullmatch(r"/api/v1/works/[^/]+/(likes|comments)", req_path):
+                return
 
         # 3. 'library' scope: personal library read endpoints and collection toggle
         if "library" in scopes:
             if method == "GET":
+                # Scoped Skill bearer tokens can read their own imported private
+                # media; _private_media_access still enforces actual ownership.
+                if re.fullmatch(r"/generated/skill_[a-f0-9]{32}\.(?:png|jpg|webp)", req_path):
+                    return
+                if req_path in ("/api/v1/me/resources", "/api/v1/me/generations",
+                                "/api/v1/me/collection-items", "/api/v1/me/notifications"):
+                    return
+                if re.fullmatch(r"/api/v1/resources/[^/]+/download", req_path):
+                    return
+                if re.fullmatch(r"/api/v1/works/[^/]+/comments", req_path):
+                    return
                 if req_path.startswith("/api/resources/"):
                     return
                 if req_path in ("/studio/api/library", "/api/skill/library", "/api/library/assets", "/api/collections/generations"):
@@ -1985,14 +2005,20 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 if re.fullmatch(r"^/api/library/assets/[^/]+/image$", req_path):
                     return
             elif method == "POST":
+                if req_path == "/api/v1/me/generations":
+                    return
                 if req_path == "/api/collections/toggle":
                     return
                 if re.fullmatch(r"^/api/library/assets/[^/]+/restore$", req_path):
                     return
             elif method == "PUT":
+                if re.fullmatch(r"^/api/v1/me/resources/[^/]+$", req_path):
+                    return
                 if re.fullmatch(r"^/api/library/assets/[^/]+$", req_path):
                     return
             elif method == "DELETE":
+                if re.fullmatch(r"^/api/v1/me/resources/[^/]+$", req_path):
+                    return
                 if re.fullmatch(r"^/api/library/assets/[^/]+$", req_path):
                     return
 
@@ -2030,6 +2056,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._enforce_write_origin()
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        from .skill_cloud_routes import handle_delete as skill_cloud_delete
+        if skill_cloud_delete(self, req_path, parse_qs(parsed.query, keep_blank_values=True)):
+            return
         m_wf = re.match(r"^/api/studio/workflows/([^/]+)$", req_path)
         if m_wf:
             user = self._current_user(required=True)
@@ -2105,6 +2134,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 self._cors_headers()
                 self.end_headers()
                 return
+
+        from .skill_cloud_routes import handle_get as skill_cloud_get
+        if skill_cloud_get(self, req_path, qs):
+            return
 
         # Optional feature modules load lazily and degrade to "no route" when a
         # partial checkout omits them, so the rest of the server still boots.
@@ -2731,6 +2764,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._enforce_write_origin()
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        from .skill_cloud_routes import handle_put as skill_cloud_put
+        if req_path.startswith("/api/v1/me/resources/"):
+            if skill_cloud_put(self, req_path, self._read_json_body()):
+                return
         if req_path.startswith("/api/studio/recipes"):
             from .recipe_routes import handle_recipe_put
             body = self._read_json_body()
@@ -2759,6 +2796,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             record_client_error(self, self._read_json_body())
             return
         body = self._read_json_body()
+        from .skill_cloud_routes import handle_post as skill_cloud_post
+        if skill_cloud_post(self, req_path, body):
+            return
         ua = self.headers.get("User-Agent") or ""
         ip_addr = self.client_address[0] if self.client_address else ""
 

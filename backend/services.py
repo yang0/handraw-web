@@ -20,7 +20,7 @@ logger = logging.getLogger("backend.services")
 from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
 from .db import Database, local_today_str, utc_now_iso
 from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
-from .runtime_policy import sanitize_media_url, sanitize_plain_text, sanitize_rich_html
+from .runtime_policy import sanitize_media_url, sanitize_plain_text, sanitize_rich_html, env_flag
 from .work_schema import deduplicate_generation_history
 from .security import (
     generate_api_key,
@@ -5293,6 +5293,12 @@ def list_user_studio_articles(db: Database, user: dict[str, Any]) -> dict[str, A
     return {"ok": True, "items": items, "total": len(items)}
 
 
+def _new_generation_visibility() -> str:
+    """New generations are private. Demo fixtures and explicit legacy rollout
+    opt-in preserve old auto-publication behaviour without changing old rows."""
+    return "public" if (is_demo_mode() or env_flag("HANDRAW_LEGACY_AUTO_PUBLISH_GENERATIONS", False)) else "private"
+
+
 def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
     if "visibility" in entry:
         raise ServiceError("当前暂不支持设置可见性", status=400, code="visibility_not_allowed")
@@ -5427,10 +5433,10 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 INSERT INTO studio_generations (
                     id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
                     prompt, visible_prompt, prompt_masked, markdown, items_json, system_append_json, engine, cost_type, credits_spent, status, created_at, request_id,
-                    subject, fork_generation_id, fork_item_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?, ?)
+                    subject, fork_generation_id, fork_item_id, visibility
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?, ?, ?)
                 """,
-                (hid, uid, user["username"], *values, json.dumps({"creationSource": creation_source}), now_iso, req_id, clean_subj, fork_gen_id, fork_item_id),
+                (hid, uid, user["username"], *values, json.dumps({"creationSource": creation_source}), now_iso, req_id, clean_subj, fork_gen_id, fork_item_id, _new_generation_visibility()),
             )
             try:
                 from .generation_works import project_generation_to_works
@@ -6113,7 +6119,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 status, error_msg, request_id, reservation_date, created_at, fork_work_id,
                 prompt_ready, recipe_id, subject, visibility,
                 fork_generation_id, fork_item_id
-            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?, 'public', ?, ?)
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 gen_id,
@@ -6134,6 +6140,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 prompt_ready,
                 recipe_id,
                 user_subject,
+                _new_generation_visibility(),
                 fork_gen_target,
                 fork_item_target,
             ),
@@ -6421,6 +6428,15 @@ def grant_studio_media_public(
         ).fetchone()
         owner_id = int(media["user_id"]) if media else None
         resolved_generation_id = generation_id or (media["generation_id"] if media else None)
+        if owner_id is None and url.startswith("/generated/"):
+            # Skill imports remain private until their owner explicitly
+            # publishes an image in a real public work/topic.
+            imported = tx.execute(
+                "SELECT user_id FROM skill_generation_media WHERE media_url=? LIMIT 1",
+                (url,),
+            ).fetchone()
+            if imported:
+                owner_id = int(imported["user_id"])
         if owner_id is None and url.startswith("/uploads/"):
             upload = tx.execute(
                 "SELECT user_id FROM user_uploads WHERE image_url = ? OR file_path = ? LIMIT 1",
@@ -6526,6 +6542,23 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
         else:
             collected.append(entry)
 
+    # Private user-created definitions are exposed only to their owner.
+    # Skill's existing GET /studio/api/library + /assets/<id>/content flow can
+    # therefore restore a cloud-created style without a second client parser.
+    for personal in conn.execute(
+        """SELECT id,kind,name,version FROM skill_personal_resources
+           WHERE user_id=? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 200""",
+        (uid,),
+    ).fetchall():
+        owned.append({
+            "id": "mine:" + personal["id"], "ref": personal["id"],
+            "title": personal["name"], "name": personal["name"],
+            "kind": personal["kind"], "version": personal["version"],
+            "collected": False, "unlocked": True, "source": "personal",
+            "author": {"username": uname, "name": user.get("display_name") or uname},
+            "content_url": f"/studio/api/assets/{personal['id']}/content",
+        })
+
     # Also expose favorited official catalog items
     handled_official_refs = {item["ref"] for item in official}
     cat_file = CONTENT_DIR / "catalog.json"
@@ -6578,6 +6611,31 @@ def build_skill_library_payload(db: Database, user: dict[str, Any]) -> dict[str,
 
 
 def build_skill_asset_content(db: Database, user: dict[str, Any], code: str) -> dict[str, Any]:
+    # Owner-only bridge for Skill personal definitions. Hash matches the
+    # existing personal_library.import_definition canonical JSON contract.
+    try:
+        personal_uid = str(uuid.UUID(str(code)))
+    except (ValueError, AttributeError, TypeError):
+        personal_uid = ""
+    if personal_uid:
+        row = db.get_conn().execute(
+            """SELECT * FROM skill_personal_resources
+               WHERE id=? AND user_id=? AND deleted_at IS NULL""",
+            (personal_uid, int(user["id"])),
+        ).fetchone()
+        if not row:
+            raise ServiceError("资源不存在或无权访问", status=404, code="not_found")
+        definition = json.loads(row["definition_json"])
+        resource = {
+            "kind": row["kind"], "name": row["name"],
+            "prompt_zh": definition["zh"], "prompt_en": definition["en"],
+            "license": row["license"], "version": row["version"],
+        }
+        digest = hashlib.sha256(
+            json.dumps(resource, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return {"resource": resource, "sha256": digest}
+
     clean_code = (code or "").strip().upper()
     if not is_demo_mode() and clean_code in seed_ids("assets"):
         raise ServiceError(f"未找到资源编号：{clean_code}", status=404, code="seed_content_hidden")
