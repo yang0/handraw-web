@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import uuid
+from contextlib import contextmanager
 from typing import Any
 
 from .db import utc_now_iso
@@ -276,6 +277,55 @@ def _publish_skill_run_images(
     return [work_id]
 
 
+@contextmanager
+def _skill_run_upload_guard(db: Any, user_id: int, external_id: str):
+    """Serialize retries of ONE Skill run across PostgreSQL web workers.
+
+    A thread RLock only protects SQLite development and cannot serialize
+    multiple PostgreSQL processes. A PG session advisory lock spans the
+    deliberate short transactions and the durable object upload. Different
+    runs are independent and may upload in parallel.
+    """
+    conn = db.get_conn()
+    if getattr(conn, "dialect", "") != "postgresql":
+        with db._write_lock:
+            yield
+        return
+
+    token = hashlib.sha256(
+        f"handraw:skill-run:{user_id}:{external_id}".encode("utf-8")
+    ).digest()
+    lock_id = int.from_bytes(token[:8], "big", signed=True)
+    try:
+        acquired_row = conn.execute(
+            "SELECT pg_try_advisory_lock(?)", (lock_id,),
+        ).fetchone()
+    except Exception as error:
+        raise ServiceError(
+            "上传任务协调暂不可用，请重试", status=503,
+            code="upload_lock_unavailable",
+        ) from error
+    if not acquired_row or not acquired_row[0]:
+        raise ServiceError(
+            "这批图片正在上传，请稍后重试", status=409,
+            code="upload_in_progress",
+        )
+    try:
+        yield
+    finally:
+        try:
+            released = conn.execute(
+                "SELECT pg_advisory_unlock(?)", (lock_id,),
+            ).fetchone()
+            if not released or not released[0]:
+                raise RuntimeError("Skill upload advisory lock was not released")
+        except Exception:
+            # A failed unlock must never leave a locked session in the pool.
+            conn.close()
+            db.close_thread_conn()
+            raise
+
+
 def import_history(
     db: Any, user: dict[str, Any], body: dict[str, Any], image_store: Any,
 ) -> dict[str, Any]:
@@ -299,7 +349,7 @@ def import_history(
     uid = int(user["id"])
     request_id = str(body["requestId"])
 
-    with db._write_lock:
+    with _skill_run_upload_guard(db, uid, external_id):
         with db.transaction() as tx:
             try:
                 run_id = reserve_skill_run(
