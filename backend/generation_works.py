@@ -347,11 +347,9 @@ def project_generation_to_works(
         if status != "published" and source == "generation":
             from .services import set_work_visibility
             set_work_visibility(conn, wid, "published", now, automated=True)
-        # Multiple images become ONE work, including when a retried run gains images.
-        conn.execute(
-            "UPDATE works SET images_json = ?, updated_at = ? WHERE id = ?",
-            (images_json, now, wid),
-        )
+        # The V3 media persistence below atomically refreshes work_media and
+        # its denormalized feed cache. Do not update images_json in advance:
+        # the DB guard rejects a cache that disagrees with the linked media.
     else:
         wid = f"work_{uuid.uuid4().hex}"
         title = resolve_work_title(row, first_item)
