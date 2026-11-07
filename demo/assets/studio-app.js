@@ -141,6 +141,8 @@
     historyPage: 1,
     historyFilter: "all",
     historyQuery: "",
+    historyReturnStage: "quick",
+    historyReturnUrl: "",
     historyExpandedPromptIds: {},
     historySelectedPreview: {},
     workflowQuery: "",
@@ -251,6 +253,8 @@
     CS.historyPage = 1;
     CS.historyFilter = "all";
     CS.historyQuery = "";
+    CS.historyReturnStage = "quick";
+    CS.historyReturnUrl = "";
     _activeBatchRun = null;
     CS.activeBatchRun = null;
     return true;
@@ -3056,12 +3060,11 @@
     } else if (viewParam === "my-articles") {
       openMyArticlesPage({ renderNow: false });
     } else if (viewParam === "history") {
-      const curUser = (App.state && App.state.loggedIn && App.state.user && App.state.user.username) ? App.state.user.username : "";
-      const targetUrl = (curUser && curUser !== "guest")
-        ? channelUrl("main", { view: "profile", user: curUser, ptab: "generations" })
-        : channelUrl("main", { view: "auth", redirect: channelUrl("main", { view: "profile", user: "", ptab: "generations" }) });
-      window.location.replace(targetUrl);
-      return;
+      // Keep the old deep link, but render the studio's own task history.
+      ensureQuickTab();
+      CS.historyReturnStage = "quick";
+      CS.historyReturnUrl = window.location.pathname + "?entry=quick";
+      CS.stageView = "history";
     } else if (viewParam === "workflows") {
       CS.stageView = "workflows";
     }
@@ -7315,13 +7318,24 @@
   }
 
   function openHistoryPage() {
+    if (CS.stageView === "history") return;
     flushUnifiedArticleEditor();
-    const curUser = (App.state && App.state.loggedIn && App.state.user && App.state.user.username) ? App.state.user.username : "";
-    if (curUser && curUser !== "guest") {
-      window.location.href = channelUrl("main", { view: "profile", user: curUser, ptab: "generations" });
-    } else {
-      window.location.href = channelUrl("main", { view: "auth", redirect: channelUrl("main", { view: "profile", user: "", ptab: "generations" }) });
-    }
+    CS.historyReturnStage = CS.stageView;
+    CS.historyReturnUrl = window.location.pathname + window.location.search;
+    CS.stageView = "history";
+    const url = new URL(window.location.href);
+    url.search = "?view=history";
+    window.history.replaceState(null, "", url.pathname + url.search);
+    renderTopAndBottomDocks();
+  }
+
+  function returnFromHistoryPage() {
+    if (CS.stageView !== "history") return;
+    CS.stageView = ["quick", "batch", "canvas", "preview", "article", "workflows"].includes(CS.historyReturnStage)
+      ? (CS.historyReturnStage === "article" ? "preview" : CS.historyReturnStage)
+      : "quick";
+    window.history.replaceState(null, "", CS.historyReturnUrl || (window.location.pathname + "?entry=quick"));
+    renderTopAndBottomDocks();
   }
 
   function openHistoryModal() {
@@ -7493,6 +7507,15 @@
     return data;
   }
 
+  function historyRecordCategory(h) {
+    // Group legacy records by today's four creation modes without rewriting history.
+    if (h.mode === "article-illust" || h.kind === "article") return "article";
+    if (h.kind === "loop" || h.kind === "series" || h.mode === "series" || h.mode === "batch" ||
+        /循环批量|批量|套图/.test(String(h.modeLabel || ""))) return "batch";
+    if (h.recipeId || h.tabTitle === "做图配方") return "quick";
+    return "canvas";
+  }
+
   function renderHistoryStage() {
     if (!DOM.historyStage) return;
     if (CS.stageView !== "history") {
@@ -7508,19 +7531,7 @@
     const q = String(CS.historyQuery || "").trim().toLowerCase();
 
     const filtered = allHist.filter((h) => {
-      if (filterMode === "loop" && h.kind !== "loop") return false;
-      if (filterMode === "article" && h.mode !== "article-illust" && h.kind !== "article") return false;
-      if (filterMode === "series" && h.mode !== "series" && h.kind !== "series") return false;
-      if (
-        filterMode === "single" &&
-        (h.mode === "article-illust" ||
-          h.kind === "article" ||
-          h.mode === "series" ||
-          h.kind === "series" ||
-          h.kind === "loop")
-      ) {
-        return false;
-      }
+      if (filterMode !== "all" && historyRecordCategory(h) !== filterMode) return false;
       if (q) {
         const hay = `${h.subject || ""} ${h.title || ""} ${h.tabTitle || ""} ${h.modeLabel || ""} ${h.recipeSummary || ""} ${h.prompt || ""} ${(h.items || [])
           .map((it) => `${it.title || ""} ${it.subject || ""}`)
@@ -7540,18 +7551,18 @@
     DOM.historyStage.innerHTML = `
       <div class="ic-pv-topbar">
         <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-          <button type="button" class="btn btn-sm" id="hist-back-canvas" style="font-weight:800;">← 返回画布</button>
-          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">🕒 生成历史记录 (${allHist.length})</span>
-          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">每次运行生成的图片与图文包均自动归档，支持恢复到画布或打包下载</span>
+          <button type="button" class="btn btn-sm" id="hist-back-creation" style="font-weight:800;">← 返回创作</button>
+          <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">🕒 生图历史 (${allHist.length})</span>
+          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">按生成任务归档，可查找参数、再次创作或下载</span>
         </div>
 
         <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
           <div class="ic-view-seg">
             <button type="button" class="ic-view-seg-btn ${filterMode === "all" ? "is-active" : ""}" data-hist-filter="all">全部</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "loop" ? "is-active" : ""}" data-hist-filter="loop">🔁 循环批量</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "single" ? "is-active" : ""}" data-hist-filter="single">图文海报</button>
-            <button type="button" class="ic-view-seg-btn ${filterMode === "series" ? "is-active" : ""}" data-hist-filter="series">套图</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "quick" ? "is-active" : ""}" data-hist-filter="quick">做图</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "batch" ? "is-active" : ""}" data-hist-filter="batch">批量</button>
             <button type="button" class="ic-view-seg-btn ${filterMode === "article" ? "is-active" : ""}" data-hist-filter="article">文章配图</button>
+            <button type="button" class="ic-view-seg-btn ${filterMode === "canvas" ? "is-active" : ""}" data-hist-filter="canvas">画布</button>
           </div>
           <input
             type="search"
@@ -7579,8 +7590,8 @@
                   <div style="font-size:16px;font-weight:850;color:var(--ic-ink);margin-bottom:6px;">${
                     allHist.length === 0 ? "暂无生成历史记录" : "没有匹配当前筛选条件的历史记录"
                   }</div>
-                  <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">在无限画布的「输出控制」节点点击「⚡ 运行」，或对文章执行批量生图后将自动归档于此。</div>
-                  <button type="button" class="btn btn-primary" id="hist-empty-go-canvas">🎨 返回无限画布创作</button>
+                  <div style="font-size:13px;color:var(--ic-muted);margin-bottom:18px;">在做图、批量、文章配图或高级画布生成后，可以在此查找历史记录。</div>
+                  <button type="button" class="btn btn-primary" id="hist-empty-back-creation">返回创作</button>
                 </div>
               `
               : `
@@ -7698,13 +7709,11 @@
       }
     }
 
-    const goBackCanvas = () => switchCreationStage("canvas");
+    const backBtn = DOM.historyStage.querySelector("#hist-back-creation");
+    if (backBtn) backBtn.onclick = returnFromHistoryPage;
 
-    const backBtn = DOM.historyStage.querySelector("#hist-back-canvas");
-    if (backBtn) backBtn.onclick = goBackCanvas;
-
-    const emptyGoBtn = DOM.historyStage.querySelector("#hist-empty-go-canvas");
-    if (emptyGoBtn) emptyGoBtn.onclick = goBackCanvas;
+    const emptyGoBtn = DOM.historyStage.querySelector("#hist-empty-back-creation");
+    if (emptyGoBtn) emptyGoBtn.onclick = returnFromHistoryPage;
 
     DOM.historyStage.querySelectorAll("[data-hist-filter]").forEach((btn) => {
       btn.onclick = () => {
@@ -7726,6 +7735,7 @@
     const clearBtn = DOM.historyStage.querySelector("#hist-clear-all");
     if (clearBtn) {
       clearBtn.onclick = async () => {
+        if (typeof window.confirm === "function" && !window.confirm("清空生图历史将删除生成记录，并可能使关联的公开作品下架。此操作不可恢复，确定继续吗？")) return;
         clearBtn.disabled = true;
         try {
           await deleteCloudHistory("", true);
@@ -7781,6 +7791,8 @@
     DOM.historyStage.querySelectorAll("[data-hist-del]").forEach((btn) => {
       btn.onclick = async () => {
         const hid = btn.getAttribute("data-hist-del");
+        if (!hid) return;
+        if (typeof window.confirm === "function" && !window.confirm("删除本次生成记录后，关联的公开作品可能同步下架，确定继续吗？")) return;
         btn.disabled = true;
         try {
           await deleteCloudHistory(hid, false);
@@ -15817,8 +15829,8 @@
       <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
       <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
       <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
-      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布</button>
-    </div><button type="button" class="btn btn-sm qc-mode-history" id="studio-mode-history" title="查看生图历史记录">生图历史</button>`;
+      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">高级画布</button>
+    </div><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button>`;
 
     const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
     if (btnQuick) btnQuick.onclick = () => { switchCreationStage("quick"); };
@@ -16827,10 +16839,7 @@
   window.HANDRAW_STUDIO.getBatchParts = getBatchParts;
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   window.HANDRAW_STUDIO.resolveShareTitle = resolveShareTitle;
-  window.HANDRAW_STUDIO.openHistoryStage = () => {
-    CS.stageView = "history";
-    renderHistoryStage();
-  };
+  window.HANDRAW_STUDIO.openHistoryStage = openHistoryPage;
   window.HANDRAW_STUDIO.getHistory = () => CS.generationHistory;
   window.HANDRAW_STUDIO.setHistory = (list) => {
     CS.generationHistory = list;

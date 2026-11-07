@@ -271,45 +271,48 @@ function createTestEnv(initialUrl = "http://localhost:3080/?view=profile&user=cr
 }
 
 // ============================================================================
-// Test 2: 拆标签 ptab=styles / layouts 与改名
+// Test 2: 公开主页保留三大 Tab，旧资源分类通过筛选兼容
 // ============================================================================
-console.log("\n--- Test 2: 标签拆分 (画风/图型) 与改名 (论坛帖/收藏夹) ---");
+console.log("\n--- Test 2: 个人主页公开栏目收敛与旧链接兼容 ---");
 {
   const env = createTestEnv("http://localhost:3080/?view=profile&user=creator_leo&ptab=styles", "creator_leo");
   const { context, root } = env;
-
-  // Trigger openProfilePage to styles tab
   context.window.HANDRAW_MAIN_OPEN_PROFILE("creator_leo", "styles");
-  assert.ok(root.innerHTML.includes('data-ptab="styles"'), "Must contain data-ptab=styles button");
-  assert.ok(root.innerHTML.includes('data-ptab="layouts"'), "Must contain data-ptab=layouts button");
-  assert.ok(!root.innerHTML.includes('data-ptab="assets"'), "data-ptab=assets must be removed");
-
-  // Check tab labels and counts
-  assert.match(root.innerHTML, /data-ptab="styles"[^>]*>🎨 画风 \(2\)/, "Styles tab must display '🎨 画风 (2)'");
-  assert.match(root.innerHTML, /data-ptab="layouts"[^>]*>📐 图型 \(1\)/, "Layouts tab must display '📐 图型 (1)'");
-  assert.match(root.innerHTML, /data-ptab="topics"[^>]*>💬 论坛帖 \(1\)/, "Topics tab must be renamed to '💬 论坛帖 (N)'");
-  assert.match(root.innerHTML, /data-ptab="collections"[^>]*>♥ 收藏夹</, "Collections tab must be renamed to '♥ 收藏夹'");
-
-  // Check styles tab content: only styles, no layouts
-  assert.ok(root.innerHTML.includes("FA-001"), "Styles tab must render FA-001");
-  assert.ok(root.innerHTML.includes("FA-002"), "Styles tab must render FA-002");
-  assert.ok(!root.innerHTML.includes("SC-001"), "Styles tab must NOT render layout SC-001");
-  assert.ok(root.innerHTML.includes("✨ 共创画风"), "Styles tab cards must have badge '✨ 共创画风'");
-
-  // Switch to layouts tab
+  assert.ok(root.innerHTML.includes('data-ptab="works"'));
+  assert.ok(root.innerHTML.includes('data-ptab="resources"'));
+  assert.ok(root.innerHTML.includes('data-ptab="topics"'));
+  for (const oldTab of ["generations", "styles", "layouts", "articles", "collections"]) {
+    assert.ok(!root.innerHTML.includes(`data-ptab="${oldTab}"`), `Obsolete public tab ${oldTab} remains`);
+  }
+  assert.match(root.innerHTML, /data-ptab="resources"[^>]*>🎨 创作资源 \(3\)/);
+  assert.match(root.innerHTML, /data-ptab="topics"[^>]*>💬 社区动态 \(1\)/);
+  assert.ok(root.innerHTML.includes('id="prof-go-studio-btn"'), "Owner must have a studio shortcut");
+  assert.ok(root.innerHTML.includes('id="prof-go-collections-btn"'), "Collection shortcut must be separate from public tabs");
+  assert.ok(root.innerHTML.includes('data-prof-resource-filter="all"'));
+  assert.ok(root.innerHTML.includes('data-prof-resource-filter="styles"'));
+  assert.ok(root.innerHTML.includes('data-prof-resource-filter="layouts"'));
+  assert.ok(root.innerHTML.includes("FA-001") && root.innerHTML.includes("FA-002"));
+  assert.ok(!root.innerHTML.includes("SC-001"), "Legacy styles route must filter resources to styles");
   context.window.HANDRAW_MAIN_OPEN_PROFILE("creator_leo", "layouts");
-  assert.ok(root.innerHTML.includes("SC-001"), "Layouts tab must render SC-001");
-  assert.ok(!root.innerHTML.includes("FA-001"), "Layouts tab must NOT render style FA-001");
-  assert.ok(!root.innerHTML.includes("FA-002"), "Layouts tab must NOT render style FA-002");
-  assert.ok(root.innerHTML.includes("✨ 共创图型"), "Layouts tab cards must have badge '✨ 共创图型'");
-
-  // Legacy ptab=assets must redirect to ptab=styles via replaceState
+  assert.ok(root.innerHTML.includes("SC-001"));
+  assert.ok(!root.innerHTML.includes("FA-001"));
+  context.window.HANDRAW_MAIN_OPEN_PROFILE("creator_leo", "resources");
+  assert.ok(root.innerHTML.includes("FA-001") && root.innerHTML.includes("SC-001"), "All resources should be shown together");
   context.window.HANDRAW_MAIN_OPEN_PROFILE("creator_leo", "assets");
-  assert.equal(context.window.location.search, "?view=profile&user=creator_leo&ptab=styles", "ptab=assets must replace to ptab=styles");
-  assert.ok(root.innerHTML.includes("FA-001"), "Styles must be shown after ptab=assets redirect");
+  assert.equal(context.window.location.search, "?view=profile&user=creator_leo&ptab=resources");
+  assert.ok(root.innerHTML.includes("FA-001") && !root.innerHTML.includes("SC-001"));
 }
-console.log("✓ Test 2 Passed: Tabs split to styles/layouts with correct counts and renamed labels.");
+console.log("✓ Test 2 Passed: Public tabs consolidated and legacy resource links preserved.");
 
+// ============================================================================
+// Test 2b: 历史公开主页链接回退到作品栏目
+// ============================================================================
+{
+  const env = createTestEnv("http://localhost:3080/?view=profile&user=creator_leo&ptab=generations", "creator_leo");
+  assert.ok(!env.context.window.location.search.includes("ptab=generations"));
+  assert.ok(env.root.innerHTML.includes('data-ptab="works"'));
+  assert.ok(!env.root.innerHTML.includes('data-ptab="generations"'));
+}
 // ============================================================================
 // Test 3: ?view=collections 替换跳转
 // ============================================================================

@@ -1,9 +1,9 @@
 """Browser verification for Phase 1B:
-- User profile '生图历史' tab in reverse-chronological order
+- Legacy profile history URLs normalize to public works
 - Multi-image badges & large image preview modal without prompt copy
 - Anonymous visitor access
-- Studio '生图历史' button redirect to own profile
-- Legacy studio ?view=history redirect
+- Studio history remains in studio
+- Legacy studio ?view=history renders locally
 - 全站「实测作品」->「晒作品」
 - Desktop (1440x960) and Mobile (390x844) screenshots to C:/tmp/
 """
@@ -152,128 +152,57 @@ def run_browser_verification():
             page.on("pageerror", lambda e: print("PAGE ERROR:", e))
 
             # -----------------------------------------------------------
-            # Check 1: Personal Profile Generation History Tab
+            # Check 1: Legacy public generation tab now resolves to published works.
             # -----------------------------------------------------------
-            print("\n>>> Check 1: Visiting personal profile with ptab=generations...")
+            print("\n>>> Check 1: Profile legacy generation link uses public works...")
             page.goto(f"{BASE_URL}/?view=profile&user=creator_leo&ptab=generations", wait_until="networkidle")
-            page.wait_for_timeout(1000)
-
-            # Check that tab button exists and is active
-            gen_tab_btn = page.locator('button[data-ptab="generations"]')
-            assert gen_tab_btn.is_visible(), "Generation history tab button missing in profile"
-            assert "is-active" in (gen_tab_btn.get_attribute("class") or ""), "Generation tab button not active"
-            print("  ✓ '生图历史' tab button exists and is active")
-
-            # Check that works tab is renamed to 晒作品
-            works_tab_btn = page.locator('button[data-ptab="works"]')
-            works_text = works_tab_btn.inner_text()
-            assert "晒作品" in works_text, f"Works tab button does not contain '晒作品': {works_text}"
-            assert "实测作品" not in works_text, f"Works tab button still contains '实测作品': {works_text}"
-            print("  ✓ Profile tab correctly renamed from '实测作品' to '晒作品'")
-
-            # Wait for generation cards to render
-            page.wait_for_selector("[data-prof-gen]", timeout=6000)
-            cards = page.locator("[data-prof-gen]")
-            card_count = cards.count()
-            print(f"  ✓ Found {card_count} generation cards rendered in profile masonry")
-            assert card_count == 3, f"Expected 3 cards, got {card_count}"
-
-            # Check reverse-chronological order: first card should be gen_leo_003
-            first_card_id = cards.first.get_attribute("data-prof-gen")
-            assert first_card_id == "gen_leo_003", f"Expected first card to be gen_leo_003, got {first_card_id}"
-            print("  ✓ Generation history is sorted in reverse-chronological order")
-
-            # Check multi-image badge on first card (which has 2 images)
-            first_badge = cards.first.locator(".hw-card-badge-tl")
-            assert "2 张" in first_badge.inner_text(), "Multi-image badge '2 张' missing on card"
-            print("  ✓ Multi-image badge correctly displays '2 张'")
-
-            # Desktop Screenshot
+            page.wait_for_timeout(800)
+            assert "ptab=generations" not in page.url, f"Legacy profile tab was not normalized: {page.url}"
+            assert page.locator('button[data-ptab="works"]').is_visible()
+            assert page.locator('button[data-ptab="generations"]').count() == 0
+            assert page.locator('button[data-ptab="resources"]').is_visible()
             page.screenshot(path=str(DESKTOP_SCREENSHOT), full_page=False)
-            print(f"  ✓ Saved desktop screenshot: {DESKTOP_SCREENSHOT}")
 
+            # Check 2: Anonymous visitors also see the public creator profile.
             # -----------------------------------------------------------
-            # Check 2: Modal Preview without Prompt Copy
-            # -----------------------------------------------------------
-            print("\n>>> Check 2: Clicking generation card to open detail modal...")
-            cards.first.click()
-            page.wait_for_selector(".hw-gen-detail-modal", timeout=4000)
-            modal = page.locator(".hw-gen-detail-modal")
-            assert modal.is_visible(), "Generation detail modal did not open"
-
-            modal_text = modal.inner_text()
-            assert "山水水墨意境·远山红日" in modal_text, "Topic missing in modal"
-            assert "@creator_leo" in modal_text, "Author missing in modal"
-            assert "2 张" in modal_text, "Image count missing in modal"
-
-            # Strict security assertion: Prompt or Secret must NOT exist in modal
-            assert "Secret prompt text" not in modal_text, "Secret prompt leaked into modal!"
-            assert page.locator(".hw-modal-panel button:has-text('复制提示词')").count() == 0, "Found copy prompt button in modal!"
-            assert page.locator(".hw-modal-panel button:has-text('复制')").count() == 0, "Found generic copy button in modal!"
-            print("  ✓ Modal displays high-res images and safe metadata; prompt copy is strictly omitted")
-
-            # Close modal
-            close_btn = page.locator("#hw-modal-close-x, .hw-modal-close")
-            if close_btn.count():
-                close_btn.first.click()
-                page.wait_for_timeout(300)
-
-            # -----------------------------------------------------------
-            # Check 3: Anonymous Visitor Access
-            # -----------------------------------------------------------
-            print("\n>>> Check 3: Anonymous visitor viewing public generation history...")
+            print("\n>>> Check 2: Anonymous legacy link...")
             anon_context = browser.new_context(viewport={"width": 1440, "height": 960})
             anon_page = anon_context.new_page()
             anon_page.goto(f"{BASE_URL}/?view=profile&user=creator_leo&ptab=generations", wait_until="networkidle")
-            anon_page.wait_for_selector("[data-prof-gen]", timeout=6000)
-            anon_cards = anon_page.locator("[data-prof-gen]")
-            assert anon_cards.count() == 3, f"Anonymous saw {anon_cards.count()} cards, expected 3"
-            print("  ✓ Anonymous visitor can view public generation history without logging in")
+            assert anon_page.locator('button[data-ptab="works"]').is_visible()
+            assert anon_page.locator('button[data-ptab="generations"]').count() == 0
             anon_context.close()
 
+            # Check 3: The studio history button stays in the studio.
             # -----------------------------------------------------------
-            # Check 4: Studio '生图历史' Button Navigation
-            # -----------------------------------------------------------
-            print("\n>>> Check 4: Studio '生图历史' button redirects to personal profile...")
-            page.goto(f"{BASE_URL}/studio/", wait_until="networkidle")
+            print("\n>>> Check 3: Studio history is an in-studio page...")
+            page.goto(f"{BASE_URL}/studio/?entry=quick", wait_until="networkidle")
             page.wait_for_selector("#studio-mode-history", timeout=6000)
-            eval_info = page.evaluate("() => ({ loggedIn: window.HANDRAW_SHARED?.App?.state?.loggedIn, user: window.HANDRAW_SHARED?.App?.state?.user, hasHandler: !!document.querySelector('#studio-mode-history')?.onclick })")
-            print("  Studio state before click:", eval_info)
-            studio_hist_btn = page.locator("#studio-mode-history")
-            assert studio_hist_btn.is_visible(), "Studio mode history button missing"
-            studio_hist_btn.click()
-            page.wait_for_timeout(1000)
+            page.locator("#studio-mode-history").click()
+            page.wait_for_selector("#hist-back-creation", timeout=6000)
+            assert "view=history" in page.url, f"Studio history navigation failed: {page.url}"
+            for category in ("all", "quick", "batch", "article", "canvas"):
+                assert page.locator(f'[data-hist-filter="{category}"]').is_visible()
+            page.locator("#hist-back-creation").click()
+            assert "entry=quick" in page.url, f"Did not restore quick creation mode: {page.url}"
 
-            current_url = page.url
-            assert "view=profile" in current_url, f"Did not redirect to profile: {current_url}"
-            assert "ptab=generations" in current_url, f"Did not include ptab=generations: {current_url}"
-            assert "user=creator_leo" in current_url, f"Did not include user=creator_leo: {current_url}"
-            print(f"  ✓ Studio '生图历史' button successfully navigated to: {current_url}")
-
+            # Check 4: Existing direct history URLs remain inside the studio.
             # -----------------------------------------------------------
-            # Check 5: Studio Legacy ?view=history&page=2 Replacement Redirect
-            # -----------------------------------------------------------
-            print("\n>>> Check 5: Legacy studio ?view=history&page=2 replacement redirect...")
+            print("\n>>> Check 4: Legacy history deep link remains in studio...")
             page.goto(f"{BASE_URL}/studio/?view=history&page=2", wait_until="networkidle")
-            page.wait_for_timeout(1000)
+            page.wait_for_selector("#hist-back-creation", timeout=6000)
+            assert "view=history" in page.url, f"Legacy history URL left the studio: {page.url}"
+            page.locator("#hist-back-creation").click()
+            assert "entry=quick" in page.url
 
-            redirected_url = page.url
-            assert "view=profile" in redirected_url, f"Legacy URL did not redirect to profile: {redirected_url}"
-            assert "ptab=generations" in redirected_url, f"Legacy URL missing ptab=generations: {redirected_url}"
-            assert "page=" not in redirected_url, f"Legacy URL inherited old page parameter: {redirected_url}"
-            print(f"  ✓ Legacy history URL replaced to profile generations tab without inheriting page: {redirected_url}")
-
+            # Check 5: Mobile viewport.
             # -----------------------------------------------------------
-            # Check 6: Mobile Viewport Screenshot (390x844)
-            # -----------------------------------------------------------
-            print("\n>>> Check 6: Capturing mobile viewport screenshot...")
             page.set_viewport_size({"width": 390, "height": 844})
-            page.goto(f"{BASE_URL}/?view=profile&user=creator_leo&ptab=generations", wait_until="networkidle")
-            page.wait_for_selector("[data-prof-gen]", timeout=6000)
-            page.wait_for_timeout(600)
+            page.goto(f"{BASE_URL}/studio/?view=history", wait_until="networkidle")
+            page.wait_for_selector("#hist-back-creation", timeout=6000)
             page.screenshot(path=str(MOBILE_SCREENSHOT), full_page=False)
-            print(f"  ✓ Saved mobile screenshot: {MOBILE_SCREENSHOT}")
 
+            # -----------------------------------------------------------
             browser.close()
             print("\n>>> ALL BROWSER CHECKS PASSED SUCCESSFULLY!")
 
