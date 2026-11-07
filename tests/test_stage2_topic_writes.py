@@ -62,7 +62,7 @@ class Stage2TopicWritesTests(unittest.TestCase):
         self.assertEqual(topic_cnt, 1)
 
     def test_generation_projection_prebuilds_topic_per_image_and_replay_is_idempotent(self) -> None:
-        """Generating 2 public images creates 2 works and 2 prebuilt topics with listed_at_ms=NULL."""
+        """Two public images form ONE work and ONE prebuilt discussion topic."""
         conn = self.db.get_conn()
         gen_id = "gen_test_batch_2"
         now_iso = "2026-11-01T10:00:00Z"
@@ -83,7 +83,7 @@ class Stage2TopicWritesTests(unittest.TestCase):
         with self.db.transaction() as tx:
             wids = project_generation_to_works(tx, gen_id)
 
-        self.assertEqual(len(wids), 2)
+        self.assertEqual(len(wids), 1)
         for wid in wids:
             t = conn.execute("SELECT * FROM forum_topics WHERE work_id = ?", (wid,)).fetchone()
             self.assertIsNotNone(t, f"Work {wid} must have a pre-built topic")
