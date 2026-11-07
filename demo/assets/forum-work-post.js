@@ -74,6 +74,23 @@
     }
   }
 
+  function mapImageAssets(work, resourceMap) {
+    if (!work || !Array.isArray(work.imageAssets)) return [];
+    return work.imageAssets.map((snapshot) => {
+      if (!snapshot || typeof snapshot !== "object") return null;
+      const url = safeImageUrl(snapshot.url);
+      if (!url) return null;
+      const acc = { ids: new Set(), list: [] };
+      collectAssets(snapshot.styles || [], "style", resourceMap, acc);
+      collectAssets(snapshot.layout || [], "layout", resourceMap, acc);
+      return {
+        url,
+        scope: ["image", "group", "missing"].includes(snapshot.scope) ? snapshot.scope : "missing",
+        assets: acc.list
+      };
+    }).filter(Boolean);
+  }
+
   function formatWorkPrompt(work, topic) {
     if (!work || typeof work !== "object") return "";
     const rawSubject = typeof work.subject === "string" ? work.subject.trim() : "";
@@ -217,6 +234,7 @@
       locked,
       notes,
       assets: acc.list,
+      imageAssets: mapImageAssets(work, resourceMap),
       forkUrl,
       canFork,
       unavailableText,
@@ -227,7 +245,7 @@
 
   function assetHref(asset) {
     if (!asset || (asset.kind !== "style" && asset.kind !== "layout") || !asset.id) return "";
-    return S.channelUrl("main", { view: "asset", id: asset.id });
+    return `/t/${encodeURIComponent(asset.id)}`;
   }
 
   function renderGallery(images, model) {
@@ -303,29 +321,45 @@
 </div>`;
   }
 
-  function renderAssets(assets, model) {
-    if ((!assets || !assets.length) && model.source !== "work") return "";
-    const items = (assets || []).map((a) => {
+  function renderAssetContents(model, currentUrl) {
+    const snapshot = (model.imageAssets || []).find((item) => item.url === currentUrl);
+    // A snapshot belongs to the selected media only. Never borrow the first
+    // image's style or layout for a different image in the same V3 work.
+    const assets = snapshot ? snapshot.assets : (model.assets || []);
+    const scope = snapshot ? snapshot.scope : "work";
+    const multiple = Array.isArray(model.images) && model.images.length > 1;
+    const note = scope === "image"
+      ? "当前图片的生成记录"
+      : scope === "group"
+        ? "该图片所属生成步骤的共用参数（未记录更细的逐图差异）"
+        : scope === "missing"
+          ? "当前图片的生成记录缺少画风与图型信息"
+          : multiple
+            ? "仅保存了整组作品的参数，无法确认每张图片的独立配置"
+            : "";
+    const items = assets.map((a) => {
       const href = safeHref(assetHref(a));
       const label = esc(String(a.label || (a.kind === "layout" ? "图型参考" : "画风参考")));
-      const inner = `${a.image ? `<img data-hw-src="${esc(safeImageUrl(a.image))}" alt="${label}" loading="lazy">` : ''}<span class="fwp-asset-kind">${esc(a.kind === "layout" ? "图型" : "画风")}</span>
+      const inner = `${a.image ? `<img data-hw-src="${esc(safeImageUrl(a.image))}" alt="${label}" loading="lazy">` : ""}<span class="fwp-asset-kind">${esc(a.kind === "layout" ? "图型" : "画风")}</span>
     <span class="fwp-asset-name">${label}</span>
     <span class="fwp-asset-id">${esc(a.id)}</span>`;
       return href
         ? `<a class="fwp-asset" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
         : `<span class="fwp-asset">${inner}</span>`;
     }).join("");
-    const listLinks = model.source === 'work' ? ['style','layout'].filter(kind=>assets.some(a=>a.kind===kind)).map(kind=>`<a href="${esc(S.channelUrl('forum',{view:'related',kind:'work',id:model.sourceId,tab:kind==='style'?'styles':'layouts'}))}">全部${kind==='style'?'画风':'图型'} →</a>`).join(' ') : '';
-    const missing = model.source === "work"
-      ? ["style", "layout"].filter(kind => !(assets || []).some(a => a.kind === kind))
-          .map(kind => `<p class="fwp-missing">${kind === "style" ? "画风" : "图型"}：原始生成记录未提供相关信息</p>`).join("")
-      : "";
-    return `<div class="fwp-assets">
-  <h3 class="fwp-assets-title">使用的画风与图型</h3>
-  <div class="fwp-asset-links">${listLinks}</div>
+    const missing = ["style", "layout"]
+      .filter((kind) => !assets.some((a) => a.kind === kind))
+      .map((kind) => `<p class="fwp-missing">${kind === "style" ? "画风" : "图型"}：${scope === "missing" ? "当前图片未记录" : "没有可展示的信息"}</p>`)
+      .join("");
+    return `<h3 class="fwp-assets-title">${multiple ? "当前图片的画风与图型" : "使用的画风与图型"}</h3>
+  ${note ? `<p class="fwp-asset-scope-note" style="font-size:12px;color:var(--ink-muted);margin:0 0 10px;">${esc(note)}</p>` : ""}
   <div class="fwp-asset-list">${items}</div>
-  ${missing}
-</div>`;
+  ${missing}`;
+  }
+
+  function renderAssets(model, currentUrl) {
+    if (model.source !== "work" && !(model.assets || []).length) return "";
+    return `<div class="fwp-assets" data-fwp-assets>${renderAssetContents(model, currentUrl)}</div>`;
   }
 
   function render(model) {
@@ -334,7 +368,11 @@
     const gallery = renderGallery(model.images, model);
     const prompt = renderPrompt(model);
     const notes = renderNotes(model.notes);
-    const assets = renderAssets(model.assets, model);
+    const cover = model.coverUrl && model.images.some((img) =>
+      (typeof img === "string" ? img : img && img.url) === model.coverUrl) ? model.coverUrl : "";
+    const first = model.images[0];
+    const initialUrl = cover || (typeof first === "string" ? first : first && first.url) || "";
+    const assets = renderAssets(model, initialUrl);
     return `<section class="fwp" aria-label="作品详情">
   ${gallery}
   ${prompt}
@@ -429,6 +467,8 @@
             if (tag) main.setAttribute("alt", tag);
             const dlBtn = stage.querySelector(".fwp-download-btn");
             if (dlBtn) dlBtn.setAttribute("href", src);
+            const assetsPanel = scope.querySelector("[data-fwp-assets]");
+            if (assetsPanel) assetsPanel.innerHTML = renderAssetContents(model, src);
             refreshCoverButton();
             if (window.HandrawImageLoader && window.HandrawImageLoader.scan) {
               window.HandrawImageLoader.scan(stage);
