@@ -85,4 +85,22 @@ ui.updateProgress({
   activeIndex:null,activeIndices:[],busy:false,isStopping:false
 });
 assert.equal(ui.progressState.isStopping,false,"Final local result clears Stop state");
-console.log("batch Stop: abort, idempotence, isolation, billing and sticky UI OK");
+// Waiting for the next cloud polling tick is part of the active operation:
+// aborting must settle it immediately rather than waiting another 2200 ms.
+const sleepStart = studio.indexOf("  function cancelledTaskWaitError() {");
+const sleepEnd = studio.indexOf("  async function pollCloudTask(", sleepStart);
+assert.ok(sleepStart > 0 && sleepEnd > sleepStart, "Abortable poll delay must exist");
+const sleep = vm.runInNewContext(
+  studio.slice(sleepStart, sleepEnd) + "\nwaitForCloudPollInterval",
+  {setTimeout,clearTimeout,Promise,Error}
+);
+(async () => {
+  const controller = new AbortController();
+  const waiting = sleep(10000, controller.signal);
+  controller.abort();
+  await assert.rejects(waiting, (err) => err && err.name === "AbortError");
+  console.log("batch Stop: abort, idempotence, isolation, billing, polling and sticky UI OK");
+})().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
