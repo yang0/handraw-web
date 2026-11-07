@@ -61,6 +61,10 @@
         ${links.length ? '<div style="display:flex;gap:8px;overflow-x:auto;">' +
           links.map((url) => '<img loading="lazy" alt="生成结果" src="' + escapeHtml(url) +
             '" style="width:80px;height:80px;object-fit:cover;border-radius:8px;" />').join("") + '</div>' : ""}
+        ${run.canPublish ? '<button type="button" class="btn btn-primary btn-sm" style="margin-top:10px;" data-cloud-publish="' +
+           escapeHtml(run.id) + '">选择并发布到作品广场</button>' : ""}
+        ${run.publishedWorkId ? '<a class="btn btn-sm" style="margin-top:10px;" href="/?view=work&id=' +
+          encodeURIComponent(run.publishedWorkId) + '">查看已发布作品</a>' : ""}
       </article>`;
     }).join("") : '<p style="color:var(--ink-muted);">暂无云端生成历史。</p>';
     container.querySelector("[data-cloud-more-history]").hidden = !data.historyCursor;
@@ -148,6 +152,32 @@
       if (edit) {
         const resource = data.resources.find((r) => r.id === edit.dataset.cloudEdit);
         if (resource) editor(resource);
+        return;
+      }
+      const publish = event.target.closest("[data-cloud-publish]");
+      if (publish) {
+        const item = data.history.find((r) => r.id === publish.dataset.cloudPublish);
+        if (!item || !item.canPublish || data.isBusy) return;
+        const title = window.prompt("请输入作品标题（将对所有访客公开）", "我的 Handraw 作品");
+        if (title === null || !title.trim()) return;
+        const prompt = window.prompt("请编辑并确认即将公开的提示词。不要包含隐私或商业机密。", item.originalRequest || "");
+        if (prompt === null || !prompt.trim()) return;
+        const images = Array.isArray(item.images) ? item.images : [];
+        const count = Math.min(images.length, 9);
+        if (!count || !window.confirm(
+          "即将公开标题、你确认的提示词和前 " + count + " 张图片。发布后其他用户可查看，确定继续吗？"
+        )) return;
+        run(async () => {
+          const response = await api(
+            "/api/v1/me/generations/" + encodeURIComponent(item.id) + "/publish",
+            { method: "POST", body: { title: title.trim(), prompt, confirmed: true,
+              indices: Array.from({ length: count }, (_, i) => i) } }
+          );
+          item.canPublish = false;
+          item.publishedWorkId = response.workId;
+          renderLists(shell, data);
+          status("发布成功。作品已进入公开作品广场。");
+        });
       }
     });
     shell.querySelector("[data-cloud-more-resources]").addEventListener("click", () => run(() => loadResources(true)));
