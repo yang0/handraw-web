@@ -6,6 +6,7 @@ This module never publishes uploaded generations or private definitions.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -241,7 +242,7 @@ def _history_payload(body: dict[str, Any]) -> tuple[str, str, list[dict[str, Any
         # Validate before writing ANY image, including media hash and per-item size.
         try:
             raw = base64.b64decode(image_str.split(",", 1)[1], validate=True)
-        except (ValueError, IndexError):
+        except (ValueError, IndexError, binascii.Error):
             raise ServiceError("图片编码无效", status=400, code="invalid_image") from None
         if not raw or len(raw) > 15 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != item["sha256"].lower():
             raise ServiceError("图片大小或 SHA256 不匹配", status=400, code="image_checksum_mismatch")
@@ -257,8 +258,14 @@ def _history_payload(body: dict[str, Any]) -> tuple[str, str, list[dict[str, Any
 
 
 def import_history(db: Any, user: dict[str, Any], body: dict[str, Any], image_store: Any) -> dict[str, Any]:
+    """Store private media incrementally and resume interrupted uploads by run ID.
+
+    A partially uploaded run is not visible in history and is never promoted to
+    a public work. Retrying the same request reuses committed image references.
+    """
     rid, original, images, fingerprint = _history_payload(body)
     uid = int(user["id"])
+    now = utc_now_iso()
     with db._write_lock:
         old = db.get_conn().execute(
             "SELECT * FROM skill_generation_runs WHERE user_id=? AND (external_run_id=? OR request_id=?)",
@@ -266,23 +273,34 @@ def import_history(db: Any, user: dict[str, Any], body: dict[str, Any], image_st
         if old:
             if old["external_run_id"] != rid or old["request_hash"] != fingerprint:
                 raise ServiceError("重复请求内容不一致", status=409, code="idempotency_conflict")
-            return {"ok": True, "id": old["id"], "visibility": "private", "deduped": True}
-        saved: list[dict[str, Any]] = []
-        for index, item in enumerate(images):
-            # This category is private and excluded from personal asset gallery.
+            if old["status"] == "success":
+                return {"ok": True, "id": old["id"], "visibility": "private", "deduped": True}
+            new_id = old["id"]
+            saved = json.loads(old["images_json"] or "[]")
+            if len(saved) > len(images) or any(
+                saved[idx]["sha256"] != item["sha256"] for idx, item in enumerate(saved)
+            ):
+                raise ServiceError("云端上传进度与图片不一致", status=409, code="upload_state_conflict")
+        else:
+            new_id = "skillgen_" + uuid.uuid4().hex
+            saved = []
+            with db.transaction() as tx:
+                tx.execute("""INSERT INTO skill_generation_runs
+                    (id,user_id,external_run_id,request_id,request_hash,original_request,images_json,
+                     status,visibility,created_at) VALUES(?,?,?,?,?,?,?,'uploading','private',?)""",
+                    (new_id, uid, rid, body["requestId"], fingerprint, original, "[]", now))
+        for index in range(len(saved), len(images)):
+            item = images[index]
             result = image_store(db, user, item["dataUrl"],
                                  name_zh=f"Skill 创作历史 {index + 1}", cat="skill_history")
             saved.append({"url": result["url"], "sha256": item["sha256"]})
-        new_id = "skillgen_" + uuid.uuid4().hex
-        now = utc_now_iso()
+            with db.transaction() as tx:
+                tx.execute("UPDATE skill_generation_runs SET images_json=? WHERE id=? AND user_id=?",
+                           (json.dumps(saved, ensure_ascii=False), new_id, uid))
         with db.transaction() as tx:
-            tx.execute("""INSERT INTO skill_generation_runs
-                (id,user_id,external_run_id,request_id,request_hash,original_request,images_json,
-                 status,visibility,created_at) VALUES(?,?,?,?,?,?,?,'success','private',?)""",
-                (new_id,uid,rid,body["requestId"],fingerprint,original,
-                 json.dumps(saved,ensure_ascii=False),now))
+            tx.execute("UPDATE skill_generation_runs SET status='success' WHERE id=? AND user_id=?",
+                       (new_id, uid))
     return {"ok": True, "id": new_id, "visibility": "private", "deduped": False}
-
 
 def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dict[str, Any]:
     uid = int(user["id"])
@@ -297,7 +315,7 @@ def list_history(db: Any, user: dict[str, Any], qs: dict[str, list[str]]) -> dic
     # Both website and Skill histories are private owner-scoped reads.
     rows = conn.execute("""
         SELECT id, created_at, status, 'skill' AS origin, external_run_id, original_request,
-               images_json FROM skill_generation_runs WHERE user_id=?
+               images_json FROM skill_generation_runs WHERE user_id=? AND status='success'
         UNION ALL
         SELECT id, created_at, status, 'web' AS origin, '' AS external_run_id, prompt,
                items_json FROM studio_generations
