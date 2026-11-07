@@ -80,5 +80,20 @@ SKILL_WEB_MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS idx_skill_work_items_owner
             ON skill_generation_work_items(user_id, run_id, image_index);
     """),
+    (98, "098_v3_generation_batches", """
+        -- The UI's parallel image requests are children of ONE logical run.
+        ALTER TABLE studio_generations ADD COLUMN batch_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE studio_generations ADD COLUMN batch_index INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE studio_generations ADD COLUMN batch_total INTEGER NOT NULL DEFAULT 1;
+        CREATE INDEX IF NOT EXISTS idx_studio_gen_user_batch
+            ON studio_generations(user_id,batch_id,batch_index,created_at)
+            WHERE batch_id <> '';
+
+        -- Unique work identity for the entire batch, not for each async slot.
+        ALTER TABLE works ADD COLUMN generation_batch_key TEXT NOT NULL DEFAULT '';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_works_generation_batch_key
+            ON works(generation_batch_key) WHERE generation_batch_key <> '';
+    """),
+
 ]
 
