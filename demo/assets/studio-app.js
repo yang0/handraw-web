@@ -11464,6 +11464,45 @@
       };
     });
 
+    // Reuse personal generation history without submitting a paid image job.
+    sheetEl.querySelectorAll("[data-plan-use-history]").forEach((btn) => {
+      btn.onclick = async (event) => {
+        event.stopPropagation();
+        const card = (planNode.data.cards || []).find(c => c.id === btn.dataset.planUseHistory);
+        if (!card || card.status === "generating") return;
+        ensureGenerationHistoryInitialized();
+        const picked = await window.HandrawArticleWorkbench.chooseHistory(CS.generationHistory || []);
+        if (!picked) return;
+        if (card.imageUrl && card.imageUrl !== picked.url)
+          window.HandrawArticleWorkbench.pushVariant(card, card.imageUrl, "之前的成图");
+        card.imageUrl = picked.url;
+        card.status = "done";
+        card.errorText = "";
+        card.imageSource = "my-history";
+        card.historyImageTitle = picked.title;
+        const t = resolveArticleTarget(planNode);
+        commitArticleTargetChanges(t, {bumpTime:true});
+        renderFullPreviewStage();
+        toast("已从个人生图历史插入图片，未产生生成费用");
+      };
+    });
+    sheetEl.querySelectorAll("[data-plan-variants]").forEach((btn) => {
+      btn.onclick = async (event) => {
+        event.stopPropagation();
+        const card = (planNode.data.cards || []).find(c => c.id === btn.dataset.planVariants);
+        if (!card || card.status === "generating") return;
+        const selected = await window.HandrawArticleWorkbench.chooseVariant(card);
+        if (!selected || !selected.imageUrl || selected.imageUrl === card.imageUrl) return;
+        window.HandrawArticleWorkbench.pushVariant(card, card.imageUrl, "之前使用的图片");
+        card.imageUrl = selected.imageUrl;
+        card.status = "done";
+        const t = resolveArticleTarget(planNode);
+        commitArticleTargetChanges(t, {bumpTime:true});
+        renderFullPreviewStage();
+        toast("已切换图片版本，其他候选仍然保留");
+      };
+    });
+
     // 2. Single card generation
     sheetEl.querySelectorAll("[data-plan-gen-one]").forEach((btn) => {
       btn.onclick = (e) => {
@@ -13911,6 +13950,8 @@
                 data-plan-edit="${esc(card.id)}"
                 aria-label="调整封面的提示词"
               >调提示词</button>
+            <button type="button" class="btn btn-sm" data-plan-use-history="${esc(card.id)}" ${status === "generating" ? "disabled" : ""} title="从我的历史图片选一张插入">用历史图</button>
+            ${card.imageUrl && Array.isArray(card.variants) && card.variants.length ? `<button type="button" class="btn btn-sm" data-plan-variants="${esc(card.id)}">版本对比</button>` : ""}
               <button
                 type="button"
                 class="ic-art-btn-del"
@@ -13996,6 +14037,8 @@
               data-plan-edit="${esc(card.id)}"
               aria-label="调整插图 ${inlineNo} 的提示词"
             >调提示词</button>
+            <button type="button" class="btn btn-sm" data-plan-use-history="${esc(card.id)}" ${status === "generating" ? "disabled" : ""} title="从我的历史图片选一张插入">用历史图</button>
+            ${card.imageUrl && Array.isArray(card.variants) && card.variants.length ? `<button type="button" class="btn btn-sm" data-plan-variants="${esc(card.id)}">版本对比</button>` : ""}
             <button
               type="button"
               class="ic-art-btn-del"
@@ -14949,18 +14992,6 @@
     if (syncRetryBtn) syncRetryBtn.onclick = () => {
       if (_articlesCloudConflict) {
         restoreArticleConflictBackup();
-        return;
-        const md = String(draft.markdown || "");
-        const blob = new Blob([md], {type:"text/markdown;charset=utf-8"});
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = String(draft.title || "本地文章").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + "-本地冲突备份.md";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-        toast("本地稿已下载。请刷新页面获取最新云端文章，再人工合并。");
         return;
       }
       scheduleCloudArticlesSync();
