@@ -1567,7 +1567,8 @@
             seed,
             count: Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6)),
             layoutMode: currentMode,
-            fixedLayout: skill.data.layout || "",
+            // Never leak the previously selected fixed layout into AI recommendations.
+            fixedLayout: currentMode === "fixed" ? (skill.data.layout || "") : "",
             layoutRequirement: loop.data.batchLayoutReq || "",
             styleId: skill.data.style1 || ""
           };
