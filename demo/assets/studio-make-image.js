@@ -629,7 +629,11 @@
           const field = kind === "style1" ? "style1" : kind === "style2" ? "style2" : kind === "layout" ? "layout" : "colors";
           const currentId = kind === "color" ? (sd.colors?.[0] || "") : (sd[field] || "");
 
-          this.actions?.openAssetPicker({
+          if (typeof this.actions?.openAssetPicker !== "function") {
+            global.HANDRAW_SHARED?.toast?.("资源选择器尚未就绪，请刷新创作台重试");
+            return;
+          }
+          this.actions.openAssetPicker({
             field,
             kind,
             currentId,
