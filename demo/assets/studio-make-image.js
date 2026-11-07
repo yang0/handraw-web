@@ -296,7 +296,6 @@
       const sc022Pinyin = sd.sc022Pinyin || "";
 
       const topicText = td.text || "";
-      const subjectHint = td.subjectHint || "";
 
       const currentMode = cd.mode === "pure-image" ? "pure" : (cd.mode || "graphic-text");
       const currentRatio = cd.ratio || "3:4";
@@ -366,7 +365,6 @@
 
               <!-- Row 3: Topic / Subject Input -->
               <div class="make-image-field-wrap">
-                ${subjectHint ? `<div class="make-image-subject-banner" role="note">换成你的主题 · 原作主题：${esc(subjectHint)}</div>` : ""}
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                   <label for="make-image-subject" class="make-image-field-label" style="margin-bottom:0;">创作主题</label>
                   <button type="button" class="btn btn-sm" id="make-image-clear-subject" style="font-size:11.5px;padding:2px 8px;color:var(--ink-muted);${topicText ? "" : "display:none;"}">清空主题</button>
