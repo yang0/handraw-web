@@ -139,34 +139,30 @@
   }
 
   function unpackWorkCandidates(works) {
-    const candidates = [];
-    for (const w of works || []) {
+    // One published work gets exactly one gallery card, regardless of its
+    // number of media items. The detail view owns the full media collection.
+    return (works || []).flatMap(w => {
       const imgs = imagesFor(w);
-      if (!imgs.length) continue;
-      const resCodes = normalizeResourceCodes(w);
+      if (!imgs.length) return [];
       const author = String(w.author || w.author_username || w.authorName || w.user || "").trim();
-      imgs.forEach((imgUrl, imgIdx) => {
-        const ar = parseAspectRatio(w, imgIdx);
-        candidates.push({
-          itemKey: `${w.id}_${imgIdx}`,
-          workId: String(w.id),
-          author: author,
-          authorUsername: author,
-          imgIndex: imgIdx,
-          totalImages: imgs.length,
-          imageUrl: imgUrl,
-          aspectRatio: ar,
-          work: w,
-          batchId: w.batchId,
-          batchTotal: w.batchTotal || 1,
-          batchIndex: w.batchIndex || 1,
-          resourceCodes: resCodes,
-          styles: Array.isArray(w.styles) ? w.styles : [],
-          layout: w.layout || ""
-        });
-      });
-    }
-    return candidates;
+      return [{
+        itemKey: `${w.id}_cover`,
+        workId: String(w.id),
+        author,
+        authorUsername: author,
+        imgIndex: 0,
+        totalImages: imgs.length,
+        imageUrl: imgs[0],
+        aspectRatio: parseAspectRatio(w, 0),
+        work: w,
+        batchId: w.batchId,
+        batchTotal: 1,
+        batchIndex: 1,
+        resourceCodes: normalizeResourceCodes(w),
+        styles: Array.isArray(w.styles) ? w.styles : [],
+        layout: w.layout || ""
+      }];
+    });
   }
 
   function layoutWorksMasonry(newCandidates, options) {
