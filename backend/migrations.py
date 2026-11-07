@@ -774,5 +774,26 @@ except ImportError:  # pragma: no cover - compatibility for staged rollouts
 from .skill_web_schema import SKILL_WEB_MIGRATIONS
 MIGRATIONS.extend(SKILL_WEB_MIGRATIONS)
 
+def _repair_existing_public_generation_works(conn: Any) -> None:
+    """One-time, idempotent repair of already-public histories after migration 097.
+
+    Existing private, deleted, unfinished and demo records are never promoted.
+    An unexpected projection error aborts the migration instead of recording a
+    false success; rerunning the migration can safely resume.
+    """
+    from .generation_works import backfill_historical_generations
+    cursor = None
+    while True:
+        page = backfill_historical_generations(conn, batch_size=100, cursor=cursor)
+        if not page["hasMore"]:
+            break
+        next_cursor = page["nextCursor"]
+        if not next_cursor or next_cursor == cursor:
+            raise RuntimeError("historical public work repair cursor did not advance")
+        cursor = next_cursor
+
+
+POST_MIGRATION_HOOKS[97] = _repair_existing_public_generation_works
+
 # Ensure migrations execute in strictly ascending numerical order
 MIGRATIONS.sort(key=lambda m: m[0])
