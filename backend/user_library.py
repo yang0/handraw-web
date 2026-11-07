@@ -595,13 +595,12 @@ def cleanup_expired_library_tombstones(db: Database, max_age_days: int = 30) -> 
         rid = row["id"]
 
         with db.transaction() as tx:
-            referenced = is_media_referenced(tx, url, fpath_str, exclude_upload_id=rid)
-            if not referenced and fpath_str:
-                try:
-                    Path(fpath_str).unlink(missing_ok=True)
-                except Exception:
-                    pass
+            # Library retention ends here; the actual private object is
+            # deleted later after ALL other references have disappeared.
             tx.execute("DELETE FROM user_uploads WHERE id = ?", (rid,))
+            if str(url or "").startswith(("/uploads/", "/generated/")):
+                from .media_gc import queue_media_cleanup
+                queue_media_cleanup(tx, str(url))
             cleaned_count += 1
 
     return cleaned_count
