@@ -1255,7 +1255,7 @@
       const ar = item.aspectRatio || (B.parseAspectRatio ? B.parseAspectRatio(w, imgIdx) : 1.0);
       const disc = (App.state && App.state.discussions && App.state.discussions[id]) || null;
       const tid = disc ? disc.topicId : (w.topicId || null);
-      const href = tid ? channelUrl("forum", { view: "topic", id: tid }) : channelUrl("main", { view: "work", id });
+      const href = channelUrl("main", { view: "work", id });
       const liked = Boolean(S.isLiked && S.isLiked("work", id));
       const likeCnt = (S.getLikeCount && S.getLikeCount("work", w)) ?? Number(w.likes || 0);
       const collected = Boolean(S.isCollected && S.isCollected("works", id));
@@ -1268,20 +1268,11 @@
       );
       const marginStyle = (item.extraMargin && item.extraMargin > 0) ? `margin-top:${item.extraMargin}px;` : "";
 
-      const batchTotal = Number(item.batchTotal || w.batchTotal || 1);
-      const batchIdx = Number(item.batchIndex || w.batchIndex || 1);
-      const isSearchMode = Boolean(String(UI.workQuery || (filters && filters.query) || "").trim());
-
-      let badgeHtml = "";
-      if (batchTotal > 1) {
-        if (isSearchMode) {
-          badgeHtml = `<span class="hw-wb-batch-badge" title="同批第 ${batchIdx}/${batchTotal} 张">同批第 ${batchIdx}/${batchTotal} 张</span>`;
-        } else {
-          badgeHtml = `<span class="hw-wb-batch-badge" title="同批 ${batchTotal} 件作品">同批 ${batchTotal} 件</span>`;
-        }
-      } else if (totalImgs > 1) {
-        badgeHtml = `<span class="hw-wb-img-badge">图 ${imgIdx + 1}/${totalImgs}</span>`;
-      }
+      // The gallery shows only the cover. The count refers to media inside
+      // this work, not to sibling works from a historical batch.
+      const badgeHtml = totalImgs > 1
+        ? `<span class="hw-wb-img-badge" aria-label="共 ${totalImgs} 张图片">🖼️ ${totalImgs} 张</span>`
+        : "";
 
       return `
         <article class="hw-wb-card" data-wb-work="${esc(id)}" data-wb-card-key="${esc(itemKey)}" data-wb-author="${esc(item.author || item.authorUsername || w.author || w.author_username || "")}" style="${marginStyle}">
@@ -2402,23 +2393,11 @@
   }
 
   function groupProfilePublishedWorks(rows) {
-    // Feed groups by generation; this also deduplicates older hydrated work rows.
-    const byBatch = new Map();
-    for (const w of Array.isArray(rows) ? rows : []) {
-      if (!w || !w.id || !Array.isArray(w.images) || !w.images.length) continue;
-      const bid = String(w.batchId || "").trim();
-      const key = bid && bid !== `work_${w.id}` ? `batch:${bid}` : `work:${w.id}`;
-      if (!byBatch.has(key)) byBatch.set(key, { works: new Map() });
-      byBatch.get(key).works.set(String(w.id), w);
-    }
-    return [...byBatch.values()].map((group) => {
-      const members = [...group.works.values()].sort((a, b) =>
-        (Number(a.batchIndex) || 1) - (Number(b.batchIndex) || 1));
-      const cover = members[0];
-      const total = Math.max(members.length, ...members.map((w) => Number(w.batchTotal) || 1), ...members.map((w) => w.images.length));
-      const thumbnails = members.flatMap((w) => w.images).filter(Boolean).slice(0, 3);
-      return { cover, total, thumbnails };
-    });
+    // One generation run is one work. Grouping images again at render time can
+    // incorrectly duplicate cards and break server-side pagination counts.
+    return (Array.isArray(rows) ? rows : [])
+      .filter(w => w && w.id && Array.isArray(w.images) && w.images.length)
+      .map(w => ({ cover: w, total: w.images.length }));
   }
 
   async function loadProfilePublishedWorks(username, cursor = "", append = false) {
@@ -2517,18 +2496,17 @@
         tabBodyHtml = `<div class="hw-detail-section-card" role="status" style="padding:44px;text-align:center;color:var(--ink-muted);">正在加载公开作品…</div>`;
       } else {
         tabBodyHtml = groups.length
-          ? S.renderMasonry(groups.map(({ cover, total, thumbnails }) => `
+          ? S.renderMasonry(groups.map(({ cover, total }) => `
               <article class="hw-card hw-profile-work-group" data-prof-work="${esc(cover.id)}" tabindex="0" role="button" aria-label="查看作品：${esc(cover.title)}${total > 1 ? `，共 ${total} 张` : ""}" style="cursor:pointer;">
                 <div class="hw-card-media">
-                  <img data-hw-src="${esc(thumbnails[0] || cover.images[0])}" alt="${esc(cover.title)}" loading="lazy" />
-                  ${total > 1 && thumbnails.length > 1 ? `<div class="hw-profile-batch-strip" aria-hidden="true">${thumbnails.slice(1, 3).map((image) => `<img data-hw-src="${esc(image)}" alt="" loading="lazy" />`).join("")}</div>` : ""}
-                  ${total > 1 ? `<span class="hw-card-badge-tl hw-profile-batch-count">🖼️ ${total} 张 · 作品组</span>` : ""}
+                  <img data-hw-src="${esc(cover.images[0])}" alt="${esc(cover.title)}" loading="lazy" />
+                  ${total > 1 ? `<span class="hw-card-badge-tl hw-profile-batch-count">🖼️ ${total} 张</span>` : ""}
                 </div>
                 <div class="hw-card-body">
                   <h3 class="hw-card-title">${esc(cover.title)}</h3>
                   <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;gap:8px;align-items:center;">
                     <span>${esc(cover.createdAt || "近期")}</span>
-                    <span>${total > 1 ? "查看整组作品" : `👏 ${cover.cheers ?? 0} · 💬 ${(cover.comments || []).length}`}</span>
+                    <span>${total > 1 ? "查看全部图片" : `👏 ${cover.cheers ?? 0} · 💬 ${(cover.comments || []).length}`}</span>
                   </div>
                 </div>
               </article>
