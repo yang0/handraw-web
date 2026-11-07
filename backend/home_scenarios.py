@@ -849,8 +849,12 @@ def admin_pin_scenario_work(
 
         tx.execute(
             """
-            INSERT OR REPLACE INTO scenario_pinned_works (scenario_key, work_id, sort_order, created_by, created_at)
+            INSERT INTO scenario_pinned_works (scenario_key, work_id, sort_order, created_by, created_at)
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(scenario_key, work_id)
+            DO UPDATE SET sort_order=excluded.sort_order,
+                          created_by=excluded.created_by,
+                          created_at=excluded.created_at
             """,
             (scenario_key, work_id, sort_order, actor_name, now_iso),
         )
