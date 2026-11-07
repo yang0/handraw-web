@@ -198,6 +198,14 @@ def run_browser_verification():
             history_bar_box = page.locator(".ic-history-topbar").bounding_box()
             history_body_box = page.locator(".ic-hist-page-inner").bounding_box()
             assert history_bar_box is not None and history_body_box is not None
+            # Compare against the actual top navigation content gutter rather than a guessed fixed width.
+            navigation_gutter = page.locator(".hw-topbar").evaluate(
+                "(el) => parseFloat(getComputedStyle(el).paddingLeft)"
+            )
+            assert abs(history_bar_box["x"] - navigation_gutter) <= 2, "History toolbar must align with main navigation"
+            assert abs(history_body_box["x"] - navigation_gutter) <= 2, "History cards must align with main navigation"
+            assert abs(history_bar_box["width"] - (1440 - 2 * navigation_gutter)) <= 2
+            assert abs(history_body_box["width"] - (1440 - 2 * navigation_gutter)) <= 2
             assert page.locator('[data-hist-filter="all"]').inner_text().endswith("(6)")
             page.locator('[data-hist-expand-batch="gen_leo_003"]').click()
             assert page.locator('[data-hist-img-toggle="gen_leo_003"]').count() == 2
