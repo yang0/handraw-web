@@ -6428,6 +6428,15 @@ def grant_studio_media_public(
         ).fetchone()
         owner_id = int(media["user_id"]) if media else None
         resolved_generation_id = generation_id or (media["generation_id"] if media else None)
+        if owner_id is None and url.startswith("/generated/"):
+            # Skill imports remain private until their owner explicitly
+            # publishes an image in a real public work/topic.
+            imported = tx.execute(
+                "SELECT user_id FROM skill_generation_media WHERE media_url=? LIMIT 1",
+                (url,),
+            ).fetchone()
+            if imported:
+                owner_id = int(imported["user_id"])
         if owner_id is None and url.startswith("/uploads/"):
             upload = tx.execute(
                 "SELECT user_id FROM user_uploads WHERE image_url = ? OR file_path = ? LIMIT 1",
