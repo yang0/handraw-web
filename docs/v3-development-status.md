@@ -58,3 +58,14 @@ python -m ops.bootstrap_postgres_v3 --apply
 核心原则不变：每个逻辑生成任务最多一件多图公开作品；广场和主页只显示一张封面；Web/Skill 共用统一任务和媒体实体；不迁移任何旧数据。
 
 暂缓范围：按用户要求，当前没有运行 CI、Python/Node 测试、真实 PostgreSQL/Redis/S3 集成测试、浏览器 E2E 或生产部署。功能代码是否完全正确尚待后续独立验收。
+
+## 2026-11-07 · 封面一致性与多实例缓存（Issue #84 追加开发）
+
+代码已直接提交 Web `main`，**未运行测试、CI 或部署验收**：
+
+1. `backend/server.py`：服务端 SEO 作品目录和作品详情 Open Graph 图，优先读取 `works.cover_media_id -> media_assets.storage_key`，仅当图片确实属于作品时使用；GIF 在目录和分享图使用静帧缩略图，不更改详情原始 GIF。
+2. `backend/home_scenarios.py`：首页场景推荐、人工置顶及管理预览采用作者选择的封面，不再默认首张图。
+3. 首页推荐缓存使用 Redis 共享 revision；封面编辑和场景管理修改会通知其他进程淘汰旧缓存。Redis 不可用时不提供可能过期的进程内缓存；SQLite 单进程本地开发仍可缓存。
+4. 缓存命中时再核对公开作品当前审核状态和所选封面，防止多进程事务提交时序及审核隐藏后展示旧缓存卡片。
+
+**仍未完成的验收与架构工作**：Web 全量 Python/Node/浏览器测试，Skill ↔ Web 实际 E2E，PostgreSQL 全业务端到端运行，Redis 与对象存储故障恢复/多进程并发验收，以及进一步审计底层 `studio_generations` 的职责收敛。未把这些标记为完成；Issue 继续保持 Open。
