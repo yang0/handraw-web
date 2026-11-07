@@ -300,7 +300,7 @@ class SkillWebBridgeTests(unittest.TestCase):
 
     def test_migration_repair_maps_only_existing_public_history(self):
         from backend.migrations import POST_MIGRATION_HOOKS
-        self.assertIn(97, POST_MIGRATION_HOOKS)
+        self.assertIn(98, POST_MIGRATION_HOOKS)
         with self.db.transaction() as tx:
             for hid, visibility, path in (
                 ("public_missing_work", "public", "/images/individual/FA/FA-013.webp"),
@@ -314,8 +314,8 @@ class SkillWebBridgeTests(unittest.TestCase):
                      "graphic-text","一张铅笔风格插画",json.dumps([path]),
                      "2026-11-07T00:00:00Z",visibility))
         with self.db.transaction() as tx:
-            POST_MIGRATION_HOOKS[97](tx)
-            POST_MIGRATION_HOOKS[97](tx)
+            POST_MIGRATION_HOOKS[98](tx)
+            POST_MIGRATION_HOOKS[98](tx)
         public_count=self.db.get_conn().execute(
             "SELECT COUNT(*) FROM generation_works WHERE generation_id='public_missing_work'"
         ).fetchone()[0]
