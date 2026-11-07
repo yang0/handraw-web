@@ -243,8 +243,8 @@ class HistoryBoundaryTests(unittest.TestCase):
 
         item = get_public_generation_history(self.db, "gen_legacy_001")
         self.assertIsNotNone(item)
-        self.assertEqual(item["topic"], "手绘创作")
-        self.assertEqual(item["title"], "手绘创作")
+        self.assertEqual(item["topic"], "未命名作品")
+        self.assertEqual(item["title"], "未命名作品")
         self.assertNotIn("这是一段很长", str(item))
         self.assertNotIn("prompt", item)
 
