@@ -2499,7 +2499,7 @@
           ? S.renderMasonry(groups.map(({ cover, total }) => `
               <article class="hw-card hw-profile-work-group" data-prof-work="${esc(cover.id)}" tabindex="0" role="button" aria-label="查看作品：${esc(cover.title)}${total > 1 ? `，共 ${total} 张` : ""}" style="cursor:pointer;">
                 <div class="hw-card-media">
-                  <img data-hw-src="${esc(cover.images[0])}" alt="${esc(cover.title)}" loading="lazy" />
+                  <img data-hw-src="${esc(cover.coverUrl && cover.images.includes(cover.coverUrl) ? cover.coverUrl : cover.images[0])}" alt="${esc(cover.title)}" loading="lazy" />
                   ${total > 1 ? `<span class="hw-card-badge-tl hw-profile-batch-count">🖼️ ${total} 张</span>` : ""}
                 </div>
                 <div class="hw-card-body">
