@@ -4966,7 +4966,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
     pending_tasks = []
     history_filter, history_ids = _seed_filter("id", "generations")
     for r in conn.execute(
-        f"SELECT * FROM studio_generations WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT 40",
+        f"SELECT * FROM studio_generations WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT 400",
         (uid, *history_ids),
     ).fetchall():
         r_keys = r.keys() if hasattr(r, "keys") else r
@@ -5059,7 +5059,19 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "error": sanitize_client_error_msg(r["error_msg"], r["status"]),
             "recipeId": r["recipe_id"] if "recipe_id" in r_keys else "",
             "creationSource": creation_source,
+            "batchId": str(r["batch_id"] or "") if "batch_id" in r_keys else "",
+            "batchIndex": int(r["batch_index"] or 0) if "batch_index" in r_keys else 0,
+            "batchTotal": int(r["batch_total"] or 1) if "batch_total" in r_keys else 1,
         }
+        if hist_entry["batchId"]:
+            batch_key = f"{uid}:{hist_entry['batchId']}"
+            batch_work = conn.execute(
+                "SELECT id FROM works WHERE generation_batch_key=?", (batch_key,)
+            ).fetchone()
+            if batch_work:
+                hist_entry["workId"] = batch_work["id"]
+                for it in items:
+                    it["workId"] = batch_work["id"]
         try:
             mapped_rows = conn.execute(
                 "SELECT item_key, work_id FROM generation_works WHERE generation_id = ?",
@@ -5094,6 +5106,52 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             if was_masked:
                 pending_entry["promptMasked"] = True
             pending_tasks.append(pending_entry)
+
+    # Multiple parallel cloud requests are execution slots of ONE logical run.
+    # Collapse them only after collecting their individual pending task records.
+    batch_groups: dict[str, dict[str, Any]] = {}
+    history_runs: list[dict[str, Any]] = []
+    for entry in hist:
+        bid = entry.get("batchId") or ""
+        if not bid:
+            history_runs.append(entry)
+            continue
+        if bid not in batch_groups:
+            group = dict(entry)
+            group["id"] = bid
+            group["items"] = []
+            group["_slots"] = []
+            group["_requests"] = []
+            group["kind"] = "multi" if group["batchTotal"] > 1 else entry["kind"]
+            batch_groups[bid] = group
+            history_runs.append(group)
+        group = batch_groups[bid]
+        group["_slots"].append((entry["batchIndex"], entry["items"]))
+        group["_requests"].append((entry["batchIndex"], entry["requestId"]))
+        if entry.get("workId") and not group.get("workId"):
+            group["workId"] = entry["workId"]
+        if entry.get("promptMasked"):
+            group["promptMasked"] = True
+            group["prompt"] = ""
+        if entry["status"] == "success":
+            group["status"] = "success"
+    for group in batch_groups.values():
+        seen_images: set[str] = set()
+        for _, slot_items in sorted(group.pop("_slots"), key=lambda pair: pair[0]):
+            for item in slot_items:
+                url = str(item.get("imageUrl") or "").strip()
+                if not url or url in seen_images:
+                    continue
+                seen_images.add(url)
+                if group.get("workId"):
+                    item["workId"] = group["workId"]
+                group["items"].append(item)
+        request_ids = sorted(group.pop("_requests"), key=lambda pair: pair[0])
+        group["requestId"] = request_ids[0][1] if request_ids else ""
+        group["imageCount"] = len(group["items"])
+        if group.get("promptMasked"):
+            group["prompt"] = ""
+    hist = history_runs[:40]
 
     uploads = [
         {
