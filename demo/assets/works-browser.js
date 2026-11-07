@@ -130,7 +130,7 @@
         authorUsername: author,
         imgIndex: 0,
         totalImages: imgs.length,
-        imageUrl: imgs[0],
+        imageUrl: imgs.includes(w.coverUrl) ? w.coverUrl : imgs[0],
         aspectRatio: parseAspectRatio(w, 0),
         work: w,
         batchId: w.batchId,
