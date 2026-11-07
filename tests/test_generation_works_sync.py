@@ -248,7 +248,16 @@ class TestGenerationWorksSync(unittest.TestCase):
         with patch("backend.generation_works.sync_generation_visibility", side_effect=RuntimeError("sync failed")):
             with self.assertRaisesRegex(RuntimeError, "sync failed"):
                 delete_user_studio_history(self.db, self.user_author, "gen_atomic_1")
-            with self.assertRaisesRegex(RuntimeError, "sync failed"):
+
+        sync_calls = [0]
+        def fail_during_bulk(tx, gid, visibility, *, is_deleted=False):
+            sync_calls[0] += 1
+            if sync_calls[0] == 2:
+                raise RuntimeError("second sync failed")
+            return sync_generation_visibility(tx, gid, visibility, is_deleted=is_deleted)
+
+        with patch("backend.generation_works.sync_generation_visibility", side_effect=fail_during_bulk):
+            with self.assertRaisesRegex(RuntimeError, "second sync failed"):
                 delete_all_user_studio_history(self.db, self.user_author)
 
         self.assertEqual(
