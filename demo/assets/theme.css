@@ -3874,10 +3874,31 @@ img[data-hw-src].hw-img-failed {
 .hw-personal-gallery-intro label { cursor:pointer; flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; min-height:40px; white-space:nowrap; }
 .hw-personal-gallery-controls { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:8px 18px; margin:12px 0 18px; }
 .hw-personal-gallery-controls [data-gallery-message] { color:var(--ink-muted); font-size:12px; }
-.hw-personal-gallery-grid { column-count:5; column-gap:17px; width:100%; min-width:0; }
+.hw-personal-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-flow: row dense;
+  grid-auto-rows: 8px;
+  gap: 8px 17px;
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+}
 /* Empty/list-filter states must occupy one full-width panel, never be fragmented across masonry columns. */
-.hw-personal-gallery-grid.is-empty { column-count:1; }
-.hw-personal-gallery-card { display:inline-block; width:100%; overflow:hidden; vertical-align:top; break-inside:avoid; -webkit-column-break-inside:avoid; margin:0 0 15px; background:var(--paper-card); border:1px solid var(--line-soft); border-radius:12px; box-sizing:border-box; }
+.hw-personal-gallery-grid.is-empty { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
+.hw-personal-gallery-card {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: max-content;
+  align-self: start;
+  overflow: hidden;
+  margin: 0;
+  background: var(--paper-card);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  box-sizing: border-box;
+}
 .hw-personal-gallery-image img { display:block; width:100%; height:auto; object-fit:contain; }
 .hw-personal-gallery-image span { display:block; padding:52px 10px; text-align:center; color:var(--ink-muted); }
 .hw-personal-gallery-card-body { display:flex; flex-direction:column; gap:6px; padding:10px; min-width:0; }
@@ -3887,10 +3908,10 @@ img[data-hw-src].hw-img-failed {
 .hw-personal-gallery-actions .btn { font-size:11px; min-height:30px; padding:4px 9px; }
 .hw-personal-gallery-empty { display:flex; align-items:center; justify-content:center; width:100%; max-width:100%; min-height:124px; padding:32px 18px; text-align:center; overflow-wrap:anywhere; box-sizing:border-box; }
 .hw-personal-gallery-footer { display:flex; justify-content:center; margin:22px 0; }
-@media(max-width:1400px) { .hw-personal-gallery-grid { column-count:4; } }
-@media(max-width:1100px) { .hw-personal-gallery-grid { column-count:3; } }
-@media(max-width:760px) { .hw-personal-gallery-grid { column-count:2; } }
-@media(max-width:350px) { .hw-personal-gallery-grid { column-count:1; } }
+@media(max-width:1400px) { .hw-personal-gallery-grid:not(.is-empty) { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+@media(max-width:1100px) { .hw-personal-gallery-grid:not(.is-empty) { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:760px) { .hw-personal-gallery-grid:not(.is-empty) { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 10px; } }
+@media(max-width:350px) { .hw-personal-gallery-grid:not(.is-empty) { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:560px) {
   .hw-personal-gallery-intro label { width:100%; }
   .hw-personal-gallery-controls .hw-pills-row { width:100%; flex-wrap:wrap; }
@@ -3898,24 +3919,26 @@ img[data-hw-src].hw-img-failed {
 }
 
 
-/* Issue #98: Profile resources and community feed follow homepage card density.
-   CSS columns keep heterogeneous card heights Pinterest-like without the
-   fixed DOM columns used by the older generic waterfall helper. */
+/* Issue #114: row-first measured Grid masonry, not vertically filled CSS columns. */
 .hw-profile-feed {
-  column-count: 5;
-  column-gap: 17px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-flow: row dense;
+  grid-auto-rows: 8px;
+  gap: 8px 17px;
+  align-items: start;
   width: 100%;
   min-width: 0;
 }
 .hw-profile-feed > .hw-card,
 .hw-profile-feed > .hw-profile-topic-card {
-  display: inline-block;
+  display: block;
   width: 100%;
+  min-width: 0;
+  height: max-content;
+  align-self: start;
   box-sizing: border-box;
-  vertical-align: top;
-  margin: 0 0 17px;
-  break-inside: avoid;
-  -webkit-column-break-inside: avoid;
+  margin: 0;
   border-radius: 13px;
   overflow: hidden;
 }
@@ -3958,14 +3981,14 @@ img[data-hw-src].hw-img-failed {
 .hw-profile-topic-card h2 { font-size: 14px !important; overflow-wrap: anywhere; }
 .hw-profile-topic-card p { font-size: 12px !important; }
 .hw-profile-topic-card .forum-format-badge { font-size: 10px; }
-@media (max-width: 1400px) { .hw-profile-feed { column-count: 4; } }
-@media (max-width: 1100px) { .hw-profile-feed { column-count: 3; } }
+@media (max-width: 1400px) { .hw-profile-feed { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .hw-profile-feed { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
-  .hw-profile-feed { column-count: 2; column-gap: 10px; }
+  .hw-profile-feed { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
   .hw-profile-feed > .hw-card,
-  .hw-profile-feed > .hw-profile-topic-card { margin-bottom: 10px; border-radius: 9px; }
+  .hw-profile-feed > .hw-profile-topic-card { border-radius: 9px; }
 }
-@media (max-width: 350px) { .hw-profile-feed { column-count: 1; } }
+@media (max-width: 350px) { .hw-profile-feed { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .hw-profile-topic-feed .hw-profile-topic-card { transition: none; } }
 
 
