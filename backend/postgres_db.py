@@ -237,11 +237,31 @@ class PostgresDatabase:
         conn = self.get_conn()
         with conn._db.cursor() as cursor:
             cursor.execute(
-                "SELECT to_regclass('public.schema_migrations'), to_regclass('public.users')"
+                """SELECT to_regclass('public.schema_migrations'),
+                          to_regclass('public.users'),
+                          to_regclass('public.generation_runs'),
+                          to_regclass('public.generation_items'),
+                          to_regclass('public.media_assets'),
+                          to_regclass('public.work_media')"""
             )
-            versions, users = cursor.fetchone()
-            if not versions or not users:
-                raise RuntimeError("PostgreSQL schema not imported; initialize and validate staging first")
+            required_tables = cursor.fetchone()
+            if not all(required_tables):
+                raise RuntimeError(
+                    "PostgreSQL V3 schema is missing. Initialize an EMPTY "
+                    "database with python -m ops.bootstrap_postgres_v3 --apply"
+                )
+            cursor.execute("SELECT 1 FROM schema_migrations WHERE version=99 LIMIT 1")
+            if not cursor.fetchone():
+                raise RuntimeError("Missing native V3 schema baseline (migration 099)")
+            cursor.execute(
+                """SELECT COUNT(*) FROM pg_trigger
+                   WHERE tgname IN ('v3_run_immutable','v3_media_immutable',
+                                    'v3_work_run_owner','v3_work_media_owner',
+                                    'v3_work_cover','v3_work_images_cache')
+                     AND NOT tgisinternal"""
+            )
+            if int(cursor.fetchone()[0]) != 6:
+                raise RuntimeError("Native V3 integrity triggers are missing")
             cursor.execute("""
                 CREATE OR REPLACE FUNCTION json_valid(t text) RETURNS integer AS $func$
                 BEGIN
