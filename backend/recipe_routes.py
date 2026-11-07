@@ -569,8 +569,19 @@ def preview_recipe_prompt(db: Database, user: dict[str, Any], recipe_id: str) ->
     return {"ok": True, "prompt": generated_prompt, "revision": current_revision + 1, "source": source}, 200
 
 
-def draft_recipe_from_work(db: Database, user: dict[str, Any], work_id: str) -> dict[str, Any]:
-    """Build a non-persisted recipe draft from a visible published work."""
+def draft_recipe_from_work(
+    db: Database,
+    user: dict[str, Any],
+    work_id: str,
+    image_index: int | None = None,
+) -> dict[str, Any]:
+    """Build a form draft from the selected image in a visible public work.
+
+    A V3 work may contain multiple images with different recipes. Use the
+    canonical image order and its matching generation snapshot, never the
+    first image/cover's styles for a different image. The response contains
+    only public resource codes and a sanitized subject, never a black-box prompt.
+    """
     conn = db.get_conn()
     work = resolve_resource(conn, "work", work_id)
     if not work:
@@ -581,20 +592,63 @@ def draft_recipe_from_work(db: Database, user: dict[str, Any], work_id: str) -> 
 
     unlocked_set = _unlocked(db, user)
     serialized = _serialize_work(work, {}, unlocked_set, user)
+    run_id = str(work.get("run_id") or "")
+    if run_id:
+        from .generation_v3 import work_images
+        image_urls = work_images(conn, work_id)
+    else:
+        raw_images = serialized.get("images") or []
+        image_urls = [
+            str(img if isinstance(img, str) else (img.get("url") or ""))
+            for img in raw_images if isinstance(img, (str, dict))
+        ]
+        image_urls = [url for url in image_urls if url]
+
+    if image_index is not None and (image_index < 0 or image_index >= len(image_urls)):
+        raise ServiceError("所选作品图片不存在", status=400, code="invalid_fork_image")
+
+    if image_index is None:
+        image_index = 0
+        if run_id and work.get("cover_media_id"):
+            cover = conn.execute(
+                "SELECT storage_key FROM media_assets WHERE id=?",
+                (work["cover_media_id"],),
+            ).fetchone()
+            if cover and str(cover["storage_key"]) in image_urls:
+                image_index = image_urls.index(str(cover["storage_key"]))
 
     subject_hint = str(serialized.get("subject") or "").strip()[:80]
     if not subject_hint and not serialized.get("promptMasked"):
         raw_prompt = str(serialized.get("prompt") or "").strip()
-        sentences = [s.strip() for s in re.split(r"[。！？\n.!?]", raw_prompt) if s.strip()]
+        sentences = [part.strip() for part in re.split(r"[。！？\n.!?]", raw_prompt) if part.strip()]
         subject_hint = sentences[0][:80] if sentences else ""
+    if not subject_hint:
+        # A public work title is safe and more useful than an empty theme.
+        subject_hint = str(serialized.get("title") or "").strip()[:80]
 
-    styles_raw = work.get("styles_json") or "[]"
-    style_ids = json.loads(styles_raw) if isinstance(styles_raw, str) else list(styles_raw)
+    raw_styles = work.get("styles_json") or "[]"
+    try:
+        style_ids = json.loads(raw_styles) if isinstance(raw_styles, str) else list(raw_styles)
+    except (ValueError, TypeError):
+        style_ids = []
+    style_ids = [str(code) for code in style_ids if isinstance(code, str)]
     layout_code = str(work.get("layout_code") or "")
+
+    asset_scope = "work"
+    if run_id and image_urls:
+        from .generation_works import generation_image_assets
+        snapshots = generation_image_assets(conn, work, image_urls)
+        if snapshots:
+            selected = snapshots[image_index]
+            asset_scope = selected.get("scope") or "missing"
+            # A recorded, but empty, per-image snapshot is explicitly missing;
+            # it must not inherit the first picture's work-level metadata.
+            style_ids = selected.get("styles") or []
+            layout_code = str(selected.get("layout") or "")
+
     color_code = str(work.get("color_code") or "")
     tone_code = str(work.get("tone_code") or "")
     mood = str(work.get("mood") or "")
-
     return {
         "ok": True,
         "draft": {
@@ -613,6 +667,13 @@ def draft_recipe_from_work(db: Database, user: dict[str, Any], work_id: str) -> 
             "prompt": "",
             "promptCustomized": False,
             "promptStale": False,
+            "source": {
+                "workId": work_id,
+                "author": str(serialized.get("author") or ""),
+                "authorName": str(serialized.get("authorName") or ""),
+                "imageIndex": image_index,
+                "assetScope": asset_scope,
+            },
         },
     }
 
@@ -624,7 +685,14 @@ def handle_recipe_get(handler: Any, req_path: str, query: dict[str, list[str]]) 
     if m_from_work:
         user = handler._current_user(required=True)
         work_id = m_from_work.group(1)
-        res = draft_recipe_from_work(handler.db, user, work_id)
+        index_values = query.get("image", [])
+        image_index = None
+        if index_values:
+            raw_index = str(index_values[0]).strip()
+            if not re.fullmatch(r"0|[1-9][0-9]{0,5}", raw_index):
+                raise ServiceError("无效的作品图片序号", status=400, code="invalid_fork_image")
+            image_index = int(raw_index)
+        res = draft_recipe_from_work(handler.db, user, work_id, image_index=image_index)
         handler._send_json(res)
         return True
 
