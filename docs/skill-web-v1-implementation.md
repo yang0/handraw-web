@@ -1,81 +1,45 @@
-# Handraw Skill ↔ Web v1 服务端实现与联调交接
+# Skill × Web v1 实施与联调说明（公开作品规则）
 
-> 更新：2026-11-07  
-> 功能分支：`feat/skill-web-backend-v1-20261107`（仅开发，不代表已部署）  
-> Web 仓库（私有）：https://github.com/yang0/handraw-web  
-> Skill 仓库（公开）：https://github.com/yang0/handraw-style  
-> Skill 联动 PR：https://github.com/yang0/handraw-style/pull/12  
-> Web 本期 PR：https://github.com/yang0/handraw-web/pull/83  
-> 正式决策基线：https://github.com/yang0/handraw-web/blob/main/docs/skill-web-unification-v1.md
+> 更新：2026-11-07；正式决策以 `docs/skill-web-unification-v1.md` 顶部最新补充为准。  
+> Web 代码：`yang0/handraw-web@main`；Skill 代码：`yang0/handraw-style@feature/skill-web-unification-v1-20261107`。
 
-## 本期 Web 实现
+## 一、最新公开规则
 
-- `backend/skill_web_schema.py`：三个**增量**迁移（094–096），不修改或删除既有表、历史 works 记录。
-- `backend/skill_web_bridge.py`：个人私有画风/图型及授权读取、Skill 私有历史、手动发布、互动与通知。
-- `backend/server.py`：统一路由，按现有 Token scopes 控制访问；上传 `share` 和 `skill_history` 单独归类，不混入普通图库。
-- `backend/resource_discussions.py`：对 Skill 评论提供同事务幂等，复用既有 forum_replies。
-- `backend/services.py`：`HANDRAW_PRIVATE_GENERATION_HISTORY_V1` 灰度开关。
-- `demo/assets/cloud-center.js`、`main-app.js`、`demo/index.html`：网站「账号设置 → 个人云空间」，展示本人自建画风/图型、私有图库、完整收藏状态与云端历史，可新建、编辑个人资源，并在显式确认后选择私有历史图片发布到作品广场。
-- `tests/test_skill_web_bridge.py`：SQLite/HTTP 契约测试、跨账号隔离、授权范围、冲突、评论/历史幂等、发布意愿、媒体验证与只读审计。
+**网站生成成功、Skill 用户主动执行作品上传，都直接公开，不再存在“发布到作品广场”的第二步。**
 
-## 与 Skill CLI 对齐的可调用接口
+- 网站：`record_user_studio_history` 和 `prepare_cloud_generation` 的**新记录**固定 `visibility='public'`；`complete_cloud_generation` 成功后自动投影 `studio_generations → generation_works → works`，每张图片有独立作品。投影异常不再仅记警告、同时返回成功，而应回滚相关事务。失败/未完成、无图片、模拟引擎、删除及管理员下架不公开。
+- Skill：`history record` 只在本地保存；用户明确执行 `history upload --run-id` 后，向 `POST /api/v1/me/generations` 提交 `originClient=skill`、`visibility=public`、`status=success`、原始指令、每张图片 SHA256/Base64、稳定 `externalRunId` 和 `requestId`。**上传本身就是公开提交**，服务端立刻为每张图片创建 `works.status=published` 的作品，返回 `workIds`。无须单独发布按钮。
+- Skill 图片作品关联持久记录在增量迁移 **097** 的 `skill_generation_work_items`；作品发布使用网站统一的 `publish_user_work`、媒体归属检查及 `media_public_grants`，防止无效图片、越权和重试产生重复作品。
+- Skill 上传要求 Device Token 具有 `publish` scope，历史查询使用 `library` scope；Skill 客户端绑定默认申请二者。**旧版只带 private 的客户端请求会被拒绝，不会偷偷公开。**
+- `/api/v1/me/generations/{id}/publish` 不再提供，账号中心不再显示「发布到作品广场」按钮。已有独立 `community-share publish --draft` 是直接创建作品的历史兼容入口，不是图片生成后的二次发布步骤。
 
-| 路由 | Scope | 关键行为 |
+## 二、历史数据和安全边界
+
+- **不会将旧私有历史自动公开。** 既有 `studio_generations.visibility='private'`、旧 `skill_generation_runs.visibility='private'` 与个人角色/道具/场景、个人画风/图型继续受现有私有权限保护。
+- 迁移 **097 的一次性 post-migration hook** 会对已经明确标记 `public`、成功、未删除且非演示的旧网站历史重新做**幂等**作品映射，以修复“历史有图片但个人主页作品为 0”的旧记录问题。不会改变历史记录 visibility，尊重管理员对作品的隐藏状态。
+- 若部分旧公开历史仍无法映射，可在备份后用管理员只读 `GET /api/admin/skill-bridge/audit` 审计，并通过明确确认的管理员补录接口 `POST /api/admin/skill-bridge/reconcile` 小批量处理。绝不直接给 private 历史改 public。
+- Skill 的上传历史可断点续传；原图最大 15 MiB，受控请求体最大 64 MiB、账号生图历史存储上限 1 GiB。大批量超出请求体限制需要未来两端的预上传/分批协议；失败保留本地文件，并可通过同一 `runId` 幂等重试。提示词会随作品公开，上传前必须确认无私人信息、商业秘密或未授权素材；服务端对已知受保护文本执行拦截。
+
+## 三、同一用户和接口
+
+| 能力 | 关键路由/服务 | 结果 |
 | --- | --- | --- |
-| `GET /api/auth/me` 与现有 Device Authorization | Device token | 直接复用既有逻辑 |
-| `GET /api/library/assets?since=...`、`PUT /api/library/assets/{uid}` | library | 已有素材 UUID、SHA256、revision、软删除 |
-| `GET /api/skill/library` 和已有受控资源内容 API | library | 收藏及已授权完整定义 |
-| `GET /api/v1/me/resources?limit=100&since=cursor` | library | 私有 owned 画风/图型；`items`、`nextCursor`、`hasMore` |
-| `PUT /api/v1/me/resources/{uuid}` | library | `visibility=private`、`baseRevision`、409 当前版本 |
-| `DELETE /api/v1/me/resources/{uuid}?baseRevision=N` | library | 软删除、保留墓碑供增量同步 |
-| `GET /api/v1/me/collection-items` | library | 可同步的资源授权状态；未授权不返回完整定义 |
-| `GET /api/v1/resources/{id}/download` | library | 个人自有定义或现有可授权下载的目录资源 |
-| `POST /api/v1/me/generations` | library | `externalRunId`、`requestId`，生成历史默认私有、失败可续传、不建公开作品 |
-| `GET /api/v1/me/generations?limit=100` | library | Skill + 网站的本人历史，带 `canPublish`、`publishedWorkId` |
-| `POST /api/v1/me/generations/{id}/publish` | publish | 要求 `confirmed:true`、title、公开 prompt、可选 indices，幂等生成作品和媒体公开授权 |
-| `POST /api/entries`、`POST /api/uploads` | publish | 兼容 Skill 已有草稿分享发布 |
-| `POST /api/v1/works/{id}/likes` | publish | `liked` 布尔，复用既有点赞和奖励计算 |
-| `POST /api/v1/works/{id}/comments` | publish | `text`、`requestId`，同事务去重并进入网站真实讨论 |
-| `GET /api/v1/works/{id}/comments` | library | 复用网站公开评论读取 |
-| `GET /api/v1/me/notifications` | library | 仅本人通知，支持 before 游标 |
-| `POST /api/collections/toggle` | library | 已有收藏 set/unset，与网页相同 |
-| `GET /api/works/feed` 和 `GET /api/works/{id}` | 无需 token | 现有公开作品查询 |
+| 统一账号 | `/api/auth/device`、`/api/auth/device/token`、`/api/auth/me` | 复用设备码授权 |
+| 个人图片图库 | `/api/library/assets` | 私有、UUID/revision、增量游标 |
+| 自建画风/图型 | `/api/v1/me/resources` | 私有、乐观锁及软删除 |
+| 获取授权资源 | `/api/skill/library`、`/api/v1/me/collection-items` | 受许可与解锁权限控制 |
+| 网站成功生图 | `studio_generations → works` | 自动公开 |
+| Skill 上传作品 | `POST /api/v1/me/generations` | 自动公开、返回 workIds |
+| 本人生成历史 | `GET /api/v1/me/generations` | 包括既有私有记录，返回公开作品关联 |
+| 个人主页作品 | `GET /api/works/feed?author=用户名` | 只显示 published 作品 |
+| 社区互动 | `/api/v1/works/{id}/likes`、`.../comments`、`/api/v1/me/notifications` | 复用已有点赞、论坛评论及通知 |
 
-以上采用网站现有 `user_id` 作为归属，返回不含其他用户私有素材、私有定义或未授权资源明文。无效令牌、不足 scope、409 版本冲突均应明确失败。
+## 四、验证步骤与风险
 
-### 审计与补录（管理员，不能由 Skill 令牌调用）
+1. 完整备份数据库和媒体，再在隔离环境执行数据库迁移 097 和一次性公开历史修复；检查旧 private 记录数、已发布作品数、公开媒体 grants 是否符合预期。
+2. 网站生成两张真实图片：`studio_generations.status=success,visibility=public`，`generation_works` 有两条映射，个人主页出现对应图片，匿名查看图片成功。
+3. Skill `history record` 不应创建云端作品；执行 `history upload` 后返回 `visibility=public,workIds`，个人主页立即可见且媒体可公开访问；同一 runId 重试不增加作品条数。
+4. Skill 旧私有记录保持私有；只持有 library scope 不能公开上传；错误图片哈希、跨账号图片、包含受保护内容的提示词必须被拒绝。
+5. 对存在缺失 works 映射的旧公开历史执行一次性修复后应恢复展示；管理员隐藏作品不应重新公开。
 
-- `GET /api/admin/skill-bridge/audit`：统计已有 **public** 成功历史及无映射 works 的数量，纯只读。
-- `POST /api/admin/skill-bridge/reconcile`：提交 `{"confirmed":true,"batchSize":50,"cursor":null}`；只对旧数据明确标识为 public 的生成记录，调用已有幂等投影进行小批量修复。**不会扫描私有历史作公开补录。**
-
-## 产品迁移边界
-
-- 现有网站的 `studio_generations` 自动投影公开作品行为保留为兼容路径，以防原数据和老客户端受影响。
-- 当操作人员在测试库验证完整链路后，可设置 `HANDRAW_PRIVATE_GENERATION_HISTORY_V1=1`，使**新产生**的网站生成记录默认私有；已经公开的旧作品完全不回写、不下架。
-- `works` 主键、社区评论、收藏与旧公开链接均沿用。不要直接删除旧表或批量更改历史可见性。
-- 私有 Skill 历史来自新 `skill_generation_runs`，不会因上传或成功而出现在公开主页。用户明确点选图片、提供可公开标题/提示词且确认，才创建作品。
-- 生产环境部署前务必备份数据库与现存媒体，使用明确提交号部署；数据库迁移仅增量，回滚应用时不回滚迁移。
-
-## 未经生产验收的限制和后续合同
-
-1. **历史上传体积限制**：全站普通 JSON 请求仍为 20 MiB，仅已登录用户的 `POST /api/v1/me/generations` 为适配 Skill Base64 编码提升到 **64 MiB**。每张原图最大 15 MiB，账号私有历史存储限额 1 GiB，并受设备令牌限流。该上限不能承载任意 12 张 15 MiB 大图的一次性请求，多图超过时明确返回 413。大批量仍须跨仓库协同升级为预上传媒体 + 分次确认或受控分片协议，不能无限放大内存请求。
-2. **OS/浏览器的实际生产登录**：需要真实站点 Device Token、个人素材、授权收藏、完整分享发布和媒体显示的端到端测试；现有 SQLite/离线代码覆盖不等于生产环境已验收。
-3. **CI 环境**：本仓库主分支和开发分支的 Actions 持续出现所有 job 立即 failure、步骤列表为空、日志跳转 404 BlobNotFound 的现象。需要先恢复/排查 runner 或组织 Actions 策略，不能凭这些失败归因本变更，也不能把测试写成通过。
-4. **跨数据库运行时**：如生产环境使用 PostgreSQL/Redis 兼容层，增量迁移及异步操作必须在隔离 staging 验证并监控性能；该分支尚未通过此验收。
-5. **资源公开到社区**：当前个人资源同步只支持私有；真正将自建画风/图型作为社区资产发布，仍需走独立的投稿/审核与版权许可流程，不应该因私有同步而自动公开。
-6. **通知**：从网站既有 notifications 单表读取；不另造通知记录。对作品讨论的通知需在真实数据库中验证评论触发器和消息投递。
-
-## 上线前验收清单
-
-- [ ] 全套后端测试与前端语法、HTTP 契约测试真实通过（含现有回归）
-- [ ] Skill 与网站使用真实测试账号完成 Device Authorization 和令牌撤销
-- [ ] 角色素材 A→网站→B 恢复，403 越权、409 冲突、软删除均按设计
-- [ ] Skill owned 风格/布局 → 网站账号云空间 → Skill 另设备恢复
-- [ ] 未解锁完整资源不能导出、已授权可用
-- [ ] Skill 私有历史上传后，公开作品列表不变
-- [ ] 手动确认发布后网页可见图片、正确作者与公开文案；重试无重复
-- [ ] 点赞、评论、收藏、通知与网站共享事实来源
-- [ ] 灰度开关关闭下既有公开生成链路回归；打开后新历史默认私有
-- [ ] 生产备份、准入检查和回滚方案完成
-
-**状态**：开发分支待审查和联调；**尚未合并 main，也未部署**。
+**当前验收状态**：Skill 原分支离线 CI 已通过；Web 私有仓库 GitHub Actions 因没有 Runner 分配仍无法运行，未完成 Web 端真实测试及生产部署。**修改 Web `main` 并不代表网站服务器已更新或数据库已执行迁移。**
