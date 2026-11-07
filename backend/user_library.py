@@ -735,6 +735,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
     resp_payload: dict[str, Any] | None = None
     resp_status: int = 200
     file_to_unlink: str | None = None
+    file_to_unlink_url: str | None = None
     newly_created_file: Path | None = None
 
     try:
@@ -790,7 +791,8 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                                 uploads_dir.mkdir(parents=True, exist_ok=True)
                                 fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                                 fpath = uploads_dir / fname
-                                fpath.write_bytes(raw_bytes)
+                                from .media_storage import persist_media_bytes
+                                persist_media_bytes(f"/uploads/{fname}", raw_bytes)
                                 newly_created_file = fpath
                                 image_url = f"/uploads/{fname}"
                                 file_path_str = str(fpath)
@@ -800,6 +802,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                                 if old_file_path and old_file_path != file_path_str:
                                     if not is_media_referenced(tx, old_image_url, old_file_path, exclude_upload_id=existing["id"]):
                                         file_to_unlink = old_file_path
+                                        file_to_unlink_url = old_image_url
                             else:
                                 image_url = existing["image_url"]
                                 file_path_str = existing["file_path"]
@@ -955,7 +958,8 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                             uploads_dir.mkdir(parents=True, exist_ok=True)
                             fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                             fpath = uploads_dir / fname
-                            fpath.write_bytes(raw_bytes)
+                            from .media_storage import persist_media_bytes
+                            persist_media_bytes(f"/uploads/{fname}", raw_bytes)
                             newly_created_file = fpath
                             image_url = f"/uploads/{fname}"
                             file_path_str = str(fpath)
@@ -966,6 +970,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                             if old_file_path and old_file_path != file_path_str:
                                 if not is_media_referenced(tx, old_image_url, old_file_path, exclude_upload_id=existing["id"]):
                                     file_to_unlink = old_file_path
+                                    file_to_unlink_url = old_image_url
                         else:
                             image_url = existing["image_url"]
                             file_path_str = existing["file_path"]
@@ -1062,7 +1067,8 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                         uploads_dir.mkdir(parents=True, exist_ok=True)
                         fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                         fpath = uploads_dir / fname
-                        fpath.write_bytes(raw_bytes)
+                        from .media_storage import persist_media_bytes
+                        persist_media_bytes(f"/uploads/{fname}", raw_bytes)
                         newly_created_file = fpath
                         image_url = f"/uploads/{fname}"
 
@@ -1095,6 +1101,10 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                         res_asset = format_asset(new_row)
                         resp_payload = {"ok": True, "deduped": False, "item": res_asset, **res_asset}
                         resp_status = 201
+            if file_to_unlink_url:
+                # Must commit cleanup intent atomically with the asset update.
+                from .media_gc import queue_media_cleanup
+                queue_media_cleanup(tx, file_to_unlink_url)
     except Exception:
         if newly_created_file is not None:
             try:
@@ -1103,12 +1113,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                 pass
         raise
 
-    # Cleanup old file if marked for unlinking (only executed if commit succeeded!)
-    if file_to_unlink:
-        try:
-            Path(file_to_unlink).unlink(missing_ok=True)
-        except Exception:
-            pass
+    # Old media is reclaimed asynchronously only after its references vanish.
 
     # Send response AFTER transaction has committed
     if resp_payload is not None:
