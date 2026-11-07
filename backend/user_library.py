@@ -740,6 +740,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
     file_to_unlink: str | None = None
     file_to_unlink_url: str | None = None
     newly_created_file: Path | None = None
+    newly_created_url: str | None = None
 
     try:
         with handler.db.transaction() as tx:
@@ -797,6 +798,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                                 from .media_storage import persist_media_bytes
                                 persist_media_bytes(f"/uploads/{fname}", raw_bytes)
                                 newly_created_file = fpath
+                                newly_created_url = f"/uploads/{fname}"
                                 image_url = f"/uploads/{fname}"
                                 file_path_str = str(fpath)
                                 bytes_count = len(raw_bytes)
@@ -964,6 +966,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                             from .media_storage import persist_media_bytes
                             persist_media_bytes(f"/uploads/{fname}", raw_bytes)
                             newly_created_file = fpath
+                            newly_created_url = f"/uploads/{fname}"
                             image_url = f"/uploads/{fname}"
                             file_path_str = str(fpath)
                             bytes_count = len(raw_bytes)
@@ -1073,6 +1076,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                         from .media_storage import persist_media_bytes
                         persist_media_bytes(f"/uploads/{fname}", raw_bytes)
                         newly_created_file = fpath
+                        newly_created_url = f"/uploads/{fname}"
                         image_url = f"/uploads/{fname}"
 
                         name = str(body.get("name") or body.get("nameZh") or "").strip()[:60] or "自建资产"
@@ -1109,11 +1113,11 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                 from .media_gc import queue_media_cleanup
                 queue_media_cleanup(tx, file_to_unlink_url)
     except Exception:
-        if newly_created_file is not None:
-            try:
-                newly_created_file.unlink(missing_ok=True)
-            except Exception:
-                pass
+        if newly_created_url:
+            from .media_storage import discard_uncommitted_media
+            discard_uncommitted_media(handler.db, newly_created_url)
+        elif newly_created_file is not None:
+            newly_created_file.unlink(missing_ok=True)
         raise
 
     # Old media is reclaimed asynchronously only after its references vanish.
