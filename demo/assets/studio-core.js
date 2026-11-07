@@ -270,7 +270,7 @@
       const position = Number(item.position);
       if (!Number.isInteger(position) || position < 0) continue;
       const slot = Number(item.slotIndex ?? item.batchIndex ??
-        (run?.source === "web" && position >= 1000 ? Math.floor(position / 1000) : position));
+        (run?.source === "web" ? Math.floor(position / 1000) : position));
       if (!Number.isInteger(slot) || slot < 0 || (expected && slot >= expected)) continue;
       if (!bySlot.has(slot)) bySlot.set(slot, []);
       bySlot.get(slot).push(item);
