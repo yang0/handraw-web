@@ -3136,6 +3136,16 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        m_work_cover = re.match(r"^/api/works/([^/]+)/cover/?$", req_path)
+        if m_work_cover:
+            user = self._current_user(required=True)
+            from .generation_v3 import set_work_cover
+            self._send_json(set_work_cover(
+                self.db, user, m_work_cover.group(1),
+                str(body.get("imageUrl") or body.get("url") or ""),
+            ))
+            return
+
         m_work_comment = re.match(r"^/api/works/([^/]+)/comments$", req_path)
         if m_work_comment:
             user = self._current_user(required=True)
