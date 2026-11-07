@@ -14,6 +14,9 @@ assert.match(source, /\/api\/v1\/me\/generations/, "private generation endpoint"
 assert.match(source, /UI\.profileTab === "history" && isMe/, "history must be owner only");
 assert.match(source, /\["collections", "account", "articles", "history"\]\.includes\(UI\.profileTab\)/);
 assert.match(source, /private-resource-editor/, "private style editor");
+assert.match(source, /data-history-publish-form/, "private history must request explicit publish confirmation");
+assert.match(source, /window\.confirm\("即将向所有访客公开/, "publishing requires user confirmation");
+assert.match(source, /S\.apiJson\("\/api\/works", \{ method: "POST"/, "use canonical website publishing endpoint");
 assert.match(source, /data-edit-private-resource/, "owner resource editor controls");
 assert.match(source, /baseRevision: /g.test(source) ? /baseRevision: / : /body\.baseRevision = existing\.revision/, "optimistic concurrency");
 assert.match(source, /visibility: "private"/, "resource writes must remain private");
