@@ -5147,14 +5147,42 @@ def delete_user_studio_workflow(db: Database, user: dict[str, Any], wf_id: str) 
 
 
 def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Atomically sync up to 50 articles with optional optimistic concurrency.
+
+    New clients include baseUpdatedAtMs from the last confirmed server revision.
+    A conflict aborts the entire batch, preserving both the remote article and
+    the local draft. Legacy clients lacking a base remain supported.
+    """
     uid = int(user["id"])
     now_ms = int(time.time() * 1000)
+    versions: dict[str, int] = {}
     with db.transaction() as tx:
         for art in (articles or [])[:50]:
             if not isinstance(art, dict) or not art.get("id"):
                 continue
             aid = str(art["id"])
-            # Skip static read-only seed articles unless modified
+            existing = tx.execute(
+                "SELECT user_id, updated_at_ms, deleted_at FROM studio_articles WHERE id = ?",
+                (aid,),
+            ).fetchone()
+            if existing:
+                if int(existing["user_id"] or 0) != uid:
+                    raise ServiceError("无权修改其他用户的文章", status=403, code="article_forbidden")
+                if str(existing["deleted_at"] or "").strip():
+                    raise ServiceError("文章已经删除，请将本地内容另存为新文章", status=409, code="article_deleted")
+            if "baseUpdatedAtMs" in art:
+                try:
+                    base = int(art["baseUpdatedAtMs"])
+                except (ValueError, TypeError) as exc:
+                    raise ServiceError("文章基准版本无效", status=400, code="invalid_article_version") from exc
+                current = int(existing["updated_at_ms"] or 0) if existing else 0
+                if base != current:
+                    raise ServiceError(
+                        "文章在其他窗口或设备已更新，当前本地修改未覆盖云端；请备份后重新加载",
+                        status=409, code="article_version_conflict",
+                    )
+            # Never rely on the browser clock to establish server revision.
+            next_version = max(now_ms, (int(existing["updated_at_ms"] or 0) + 1) if existing else 1)
             tx.execute(
                 """
                 INSERT INTO studio_articles (id, user_id, article_title, markdown, cards_json, style1, layout_code, status, run_count, created_at_ms, updated_at_ms)
@@ -5171,8 +5199,7 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
                 WHERE studio_articles.user_id = excluded.user_id AND COALESCE(studio_articles.deleted_at, '') = ''
                 """,
                 (
-                    aid,
-                    uid,
+                    aid, uid,
                     str(art.get("articleTitle") or "未命名文章")[:140],
                     str(art.get("markdown") or ""),
                     json.dumps(art.get("cards") or [], ensure_ascii=False),
@@ -5181,10 +5208,11 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
                     str(art.get("status") or "ready"),
                     int(art.get("runCount") or 0),
                     int(art.get("createdAtMs") or now_ms),
-                    int(art.get("updatedAtMs") or now_ms),
+                    next_version,
                 ),
             )
-    return {"ok": True}
+            versions[aid] = next_version
+    return {"ok": True, "versions": versions}
 
 
 def delete_user_studio_article(db: Database, user: dict[str, Any], article_id: str) -> dict[str, Any]:
