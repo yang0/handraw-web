@@ -1,4 +1,4 @@
-"""Tests for Stage 4: Backend Work-Topic redirects and batchWorks siblings."""
+"""Tests for Stage 4: Backend Work-Topic redirects and canonical multi-image works."""
 from __future__ import annotations
 
 import json
@@ -123,7 +123,7 @@ class Stage4BackendRedirectsTests(unittest.TestCase):
 
         # Project generation to 4 works
         work_ids = project_generation_to_works(self.conn, gen_row)
-        self.assertEqual(len(work_ids), 4)
+        self.assertEqual(len(work_ids), 1)
 
         # Check detail for first work's topic
         w1_id = work_ids[0]
@@ -141,14 +141,8 @@ class Stage4BackendRedirectsTests(unittest.TestCase):
             mount = resp["mount"]
             self.assertEqual(mount["kind"], "work")
             work = mount["work"]
-            self.assertIn("batchWorks", work)
-            bw = work["batchWorks"]
-            self.assertEqual(len(bw), 4)
-            self.assertEqual(bw[0]["isCurrent"], True)
-            self.assertEqual(bw[1]["isCurrent"], False)
-            self.assertEqual(bw[0]["total"], 4)
-            self.assertEqual(bw[0]["workId"], w1_id)
-            self.assertEqual(bw[0]["topicId"], t1_id)
+            self.assertEqual(work["batchWorks"], [])
+            self.assertEqual(len(work["images"]), 4)
 
 
 if __name__ == "__main__":
