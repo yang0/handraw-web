@@ -26,7 +26,7 @@ V3_MIGRATIONS = [
             original_request TEXT NOT NULL DEFAULT '',
             expected_count INTEGER NOT NULL CHECK(expected_count >= 1),
             status TEXT NOT NULL DEFAULT 'running'
-                CHECK(status IN ('pending','uploading','running','partial','success','failed')),
+                CHECK(status IN ('pending','uploading','running','partial','success','failed','cancelled')),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, source, external_run_id)
