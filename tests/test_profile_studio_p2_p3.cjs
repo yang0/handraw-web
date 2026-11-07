@@ -51,7 +51,9 @@ assert.ok(!hay.includes("secret_internal_prompt"), "masked prompt must not enter
 assert.equal(category(record), "article");
 assert.equal(category({ kind: "series" }), "batch");
 assert.equal(category({ recipeId: "rcp_1" }), "quick");
-assert.equal(category({ kind: "single" }), "canvas");
+assert.equal(category({ kind: "single" }), "other", "Missing source must not default to canvas");
+assert.equal(category({ kind: "single", creationSource: "quick" }), "quick");
+assert.equal(category({ kind: "single", creationSource: "canvas" }), "canvas");
 assert.equal(status({ status: "queued" }), "active");
 assert.equal(status({ status: "failed" }), "failed");
 assert.equal(status(record), "success");
