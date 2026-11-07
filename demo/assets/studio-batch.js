@@ -1084,7 +1084,13 @@
         }
         this.activeBatchId = incomingBatchId;
       }
-      this.progressState = { completedCount, failedCount, totalCount, activeIndex, activeIndices, busy, isStopping, batchId: this.activeBatchId };
+      // Once the user clicks Stop, late concurrent progress messages must
+      // never re-enable the button or hide the stopping state.
+      const stopping = Boolean(isStopping ||
+        (busy && this.progressState?.batchId === this.activeBatchId && this.progressState?.isStopping));
+      this.progressState = { completedCount, failedCount, totalCount, activeIndex, activeIndices,
+        busy, isStopping: stopping, batchId: this.activeBatchId };
+      isStopping = stopping;
       const host = this.hostElement;
       if (!host) return;
 
@@ -2119,9 +2125,10 @@
       const btnStop = root.querySelector("#batch-btn-stop");
       if (btnStop) {
         btnStop.onclick = () => {
-          self.setStopping();
           if (self.actions?.cancel) {
-            self.actions.cancel();
+            // Do not lock the UI if there is no active local batch to stop.
+            const cancelled = self.actions.cancel();
+            if (cancelled !== false) self.setStopping();
           } else {
             const S = global.HANDRAW_SHARED;
             if (S?.toast) S.toast("当前操作不可用（缺少 action: cancel）");
