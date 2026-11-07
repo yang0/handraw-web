@@ -329,6 +329,15 @@ def _project_generation_impl(
             "SELECT id FROM generation_runs WHERE id=? FOR UPDATE",
             (canonical_run_id,),
         ).fetchone()
+    # The author/admin may have deleted this work after a successful run.
+    # Never resurrect it on gateway retries, even when the original work row
+    # was physically removed and no longer has a moderation status.
+    tombstone = conn.execute(
+        "SELECT publication_deleted_at FROM generation_runs WHERE id=?",
+        (canonical_run_id,),
+    ).fetchone()
+    if tombstone and str(tombstone["publication_deleted_at"] or ""):
+        return []
     mapping = conn.execute(
         "SELECT id AS work_id FROM works WHERE run_id=?",
         (canonical_run_id,),
