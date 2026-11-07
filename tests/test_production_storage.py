@@ -128,6 +128,19 @@ class PostgresSnapshotTests(unittest.TestCase):
             )
         self.tool = load_stage_tool()
 
+    def _install_native_v3_guards_on_staging(self, dsn):
+        """Explicitly install V3 rules for legacy snapshot *parity* exercises.
+
+        The snapshot importer intentionally does not grant production readiness.
+        PostgreSQL runtime rejects that raw staging schema until the native
+        ownership, moderation and media triggers are installed.
+        Fresh production databases use ops.bootstrap_postgres_v3 instead.
+        """
+        import psycopg
+        from backend.postgres_v3_native import NATIVE_V3_SQL
+        with psycopg.connect(dsn) as pg:
+            pg.execute(NATIVE_V3_SQL)
+
     def tearDown(self):
         import gc
         gc.collect()
@@ -266,6 +279,7 @@ class PostgresSnapshotTests(unittest.TestCase):
         info = self.tool.stage(file, parity_dsn, True)
         self.assertTrue(info["staged"])
         self.assertGreater(info["tables"], 40)
+        self._install_native_v3_guards_on_staging(parity_dsn)
         pg = PostgresDatabase(parity_dsn)
         try:
             pg.migrate()
@@ -353,39 +367,83 @@ class PostgresSnapshotTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
     def test_batch_post_and_work_details_on_postgresql(self):
+        """Real fresh-V3 bootstrap: one generated work, three ordered images."""
+        import json
         import uuid
         import psycopg
         from psycopg import sql
         from psycopg.conninfo import make_conninfo
-        from backend.db import Database
+        from types import SimpleNamespace
+        from backend.services import register_user
         from backend.postgres_db import PostgresDatabase
-        from tests.test_batch_detail_order import seed_batch_detail, assert_batch_detail_order
-        snapshot = Path(self.tmp.name) / 'batch_detail.db'
-        source = Database(snapshot)
-        with patch.dict(os.environ, {'HANDRAW_DEMO_MODE': '0'}):
-            try:
-                source.migrate()
-                seed_batch_detail(source)
-            finally:
-                source.close()
-            admin_dsn = os.environ['HANDRAW_PG_STAGING_URL']
-            name = 'handraw_batch_' + uuid.uuid4().hex[:12]
-            with psycopg.connect(admin_dsn, autocommit=True) as admin:
-                admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
-            pg = None
-            try:
-                dsn = make_conninfo(admin_dsn, dbname=name)
-                self.tool.stage(snapshot, dsn, True)
+        from backend.generation_works import project_generation_to_works
+        from backend.works_feed import get_work_by_id
+        from backend.post_routes import _handle_detail
+        from ops.bootstrap_postgres_v3 import bootstrap
+
+        images = [
+            "/images/individual/FA/FA-013.webp",
+            "/images/individual/FA/FA-014.webp",
+            "/images/individual/FA/FA-015.webp",
+        ]
+        admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
+        name = "handraw_v3_batch_" + uuid.uuid4().hex[:12]
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        pg = None
+        try:
+            dsn = make_conninfo(admin_dsn, dbname=name)
+            with patch.dict(os.environ, {"HANDRAW_ALLOW_PG_BOOTSTRAP": "YES", "HANDRAW_DEMO_MODE": "0"}):
+                report = bootstrap(dsn=dsn, apply=True)
+                self.assertTrue(report["created"])
                 pg = PostgresDatabase(dsn)
                 pg.migrate()
-                # These routes must remain reads, including on a real PG connection.
-                pg.get_conn()._db.execute('SET default_transaction_read_only=on')
-                assert_batch_detail_order(self, pg)
-            finally:
-                if pg:
-                    pg.close()
-                with psycopg.connect(admin_dsn, autocommit=True) as admin:
-                    admin.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(name)))
+                author, _ = register_user(pg, "batch_order_author", "IsolatedBatchPassword!")
+                with pg.transaction() as tx:
+                    tx.execute(
+                        """
+                        INSERT INTO studio_generations
+                           (id,user_id,username,tab_title,mode,prompt,visible_prompt,
+                            items_json,engine,status,created_at,visibility)
+                        VALUES ('pg_order_v3',?,?,?,?,?,?,?,'live','success',?,'public')
+                        """,
+                        (
+                            author["id"], author["username"], "三张插画",
+                            "graphic-text", "春日主题", "春日主题",
+                            json.dumps([{"id": str(i), "imageUrl": image}
+                                        for i, image in enumerate(images)]),
+                            "2026-11-07T00:00:00Z",
+                        ),
+                    )
+                    work_ids = project_generation_to_works(tx, "pg_order_v3")
+                self.assertEqual(len(work_ids), 1)
+                work_id = work_ids[0]
+                # A post-detail GET must be strictly read-only.
+                pg.get_conn()._db.execute("SET default_transaction_read_only=on")
+                work = get_work_by_id(pg, work_id)
+                self.assertEqual(work["images"], images)
+                self.assertEqual(work["batchTotal"], 1)
+                conn = pg.get_conn()
+                topic = conn.execute(
+                    "SELECT id FROM forum_topics WHERE work_id=?", (work_id,),
+                ).fetchone()
+                self.assertIsNotNone(topic)
+                replies = []
+                handler = SimpleNamespace(
+                    db=pg,
+                    _current_user=lambda required=False: None,
+                    _send_json=replies.append,
+                )
+                self.assertTrue(_handle_detail(handler, topic["id"]))
+                self.assertEqual(replies[-1]["mount"]["work"]["images"], images)
+                self.assertEqual(conn.execute(
+                    "SELECT COUNT(*) FROM work_media WHERE work_id=?", (work_id,),
+                ).fetchone()[0], 3)
+        finally:
+            if pg:
+                pg.close()
+            with psycopg.connect(admin_dsn, autocommit=True) as admin:
+                admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
 
     @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
     def test_messaging_lifecycle_on_postgresql(self):
@@ -419,6 +477,7 @@ class PostgresSnapshotTests(unittest.TestCase):
         try:
             dsn = make_conninfo(admin_dsn, dbname=name)
             self.tool.stage(snapshot, dsn, True)
+            self._install_native_v3_guards_on_staging(dsn)
             pg = PostgresDatabase(dsn)
             pg.migrate()
             sender, recipient, outsider = users
