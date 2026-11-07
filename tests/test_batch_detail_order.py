@@ -42,9 +42,12 @@ class BatchDetailOrderTests(unittest.TestCase):
                     author["id"], author["username"], "手绘三张插画",
                     "graphic-text", "春日主题", "春日主题",
                     json.dumps([
-                        {"id": "z_first", "imageUrl": IMAGES[0]},
-                        {"id": "b_second", "imageUrl": IMAGES[1]},
-                        {"id": "a_third", "imageUrl": IMAGES[2]},
+                        {"id": "z_first", "imageUrl": IMAGES[0],
+                         "recipeSnapshot": {"style1": "FA-011", "layout": "SC-001"}},
+                        {"id": "b_second", "imageUrl": IMAGES[1],
+                         "recipeSnapshot": {"style1": "FB-022", "layout": "IG-006"}},
+                        {"id": "a_third", "imageUrl": IMAGES[2],
+                         "recipeSnapshot": {"style1": "FC-033", "layout": "SB-003"}},
                     ]),
                     "2026-11-07T00:00:00Z",
                 ),
@@ -60,6 +63,14 @@ class BatchDetailOrderTests(unittest.TestCase):
     def test_ordered_media_on_work_and_post_detail(self):
         work = get_work_by_id(self.db, self.work_id)
         self.assertEqual(work["images"], IMAGES)
+        self.assertEqual(
+            [(item["styles"], item["layout"]) for item in work["imageAssets"]],
+            [
+                (["FA-011"], "SC-001"),
+                (["FB-022"], "IG-006"),
+                (["FC-033"], "SB-003"),
+            ],
+        )
         self.assertEqual(work["batchTotal"], 1)
         conn = self.db.get_conn()
         topic = conn.execute(
@@ -77,6 +88,10 @@ class BatchDetailOrderTests(unittest.TestCase):
         self.assertEqual(output[-1]["mount"]["kind"], "work")
         detail = output[-1]["mount"]["work"]
         self.assertEqual(detail["images"], IMAGES)
+        self.assertEqual(
+            [(item["url"], item["layout"]) for item in detail["imageAssets"]],
+            list(zip(IMAGES, ["SC-001", "IG-006", "SB-003"])),
+        )
         self.assertEqual(detail["batchWorks"], [])
         self.assertEqual(conn.execute(
             "SELECT COUNT(*) FROM work_media WHERE work_id=?", (self.work_id,),
