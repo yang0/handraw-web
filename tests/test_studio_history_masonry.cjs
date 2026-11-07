@@ -17,7 +17,7 @@ const records = [
   { id: "quick", mode: "poster", recipeId: "rcp_a", kind: "single", items: [
     { imageUrl: "/quick1.webp" }, { imageUrl: "/quick2.webp" }
   ], status: "success" },
-  { id: "canvas", mode: "graphic-text", ctrlId: "ctrl_existing_01", kind: "single", items: [
+  { id: "canvas", mode: "graphic-text", creationSource: "canvas", ctrlId: "ctrl_existing_01", kind: "single", items: [
     { imageUrl: "/canvas1.webp" }, { imageUrl: "/canvas2.webp" }
   ], status: "success" },
 ];
@@ -92,8 +92,8 @@ assert.equal(app.historyRecordCategory(sampleForm), "quick");
 assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "batch" }), "batch");
 assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "article" }), "article");
 assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "canvas" }), "canvas");
-assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "" }), "other",
-  "Unknown legacy form images must not be mislabelled as canvas");
+assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "", ctrlId: "graph_ctrl" }), "other",
+  "Unknown legacy form images must not be mislabelled as canvas just because they used an internal node");
 state.generationHistory.push(sampleForm);
 state.historyFilter = "quick";
 app.renderHistoryStage();
