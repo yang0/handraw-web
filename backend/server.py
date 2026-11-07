@@ -434,6 +434,7 @@ class GenerationReconciler:
             lookup_id = task_id or str(row["request_id"] or "").strip()
             if not lookup_id:
                 continue
+            cached_urls_for_task: list[str] = []
             try:
                 result = gateway_request(f"/api/image-tasks?ids={urllib.parse.quote(lookup_id)}", timeout=12)
                 items = result.get("items") or []
@@ -460,6 +461,7 @@ class GenerationReconciler:
                         local_url = _cache_gateway_item_image(image_item, f"{actual_id}_{idx}")
                         if local_url:
                             local_urls.append(local_url)
+                            cached_urls_for_task.append(local_url)
                     # A download/validation exception keeps the row pending so
                     # the next pass can retry; do not mark success with a
                     # missing private artifact.
@@ -473,6 +475,18 @@ class GenerationReconciler:
                     )
                     handled += 1
             except Exception:
+                # This attempt may already have downloaded private files even
+                # when its DB completion failed. Do not delete synchronously:
+                # an earlier callback may have referenced the same content.
+                if cached_urls_for_task:
+                    try:
+                        from .media_gc import queue_media_cleanup
+                        with self.db.transaction() as tx:
+                            for url in set(cached_urls_for_task):
+                                if url.startswith(("/generated/", "/uploads/")):
+                                    queue_media_cleanup(tx, url, delay_seconds=86400)
+                    except Exception:
+                        logger.exception("worker=media-gc could not queue gateway orphan")
                 # Network errors, 404s and malformed gateway responses are
                 # unknown state. Keep the original charge and retry later.
                 logger.warning("worker=generation-reconciler generation_id=%s polling failed; will retry", generation_id, exc_info=True)
