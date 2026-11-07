@@ -37,6 +37,9 @@ class Element {
   setAttribute(name, val) { this.attributes[name] = val; }
 }
 const cards = new Element(), more = new Element(), file = new Element(), status = new Element(), retry = new Element();
+const form = new Element(), uploadName = new Element(), uploadCategory = new Element();
+const uploadSubmit = new Element(), uploadCancel = new Element(), selectedFile = new Element();
+form.hidden = true;
 retry.hidden = true;
 const categories = ["all", "characters", "props", "scenes", "other"].map(cat => {
   const el = new Element(); el.dataset.galleryCategory = cat; return el;
@@ -44,7 +47,11 @@ const categories = ["all", "characters", "props", "scenes", "other"].map(cat => 
 const elements = new Map([
   ["[data-gallery-cards]", cards], ["[data-gallery-more]", more],
   ["[data-gallery-file]", file], ["[data-gallery-message]", status],
-  ["[data-gallery-retry]", retry]
+  ["[data-gallery-retry]", retry],
+  ["[data-gallery-upload-form]", form], ["[data-gallery-name]", uploadName],
+  ["[data-gallery-upload-category]", uploadCategory],
+  ["[data-gallery-selected-file]", selectedFile],
+  ["[data-gallery-submit]", uploadSubmit], ["[data-gallery-cancel]", uploadCancel]
 ]);
 const root = new Element();
 root.querySelector = selector => elements.get(selector) || null;
@@ -114,10 +121,25 @@ vm.runInNewContext(source,ctx);
   assert.ok(calls.some(c=>c.init?.method==="DELETE" && c.path.includes("baseRevision=1")));
 
   file.files=[{name:"新人设.png",size:120,type:"image/png"}];
-  failNextPut = true;
   await file.callbacks.change();
+  assert.equal(uploads.length,0,"Selecting a file must not immediately upload");
+  assert.equal(form.hidden,false,"The review form opens after file selection");
+  assert.equal(uploadName.value,"新人设","Suggest original filename without extension");
+  assert.equal(uploadCategory.value,"characters","Current filter is only a preselection");
+  uploadName.value = "手绘少女原型";
+  uploadCategory.value = "props";
+  uploadName.value = " ";
+  await form.callbacks.submit({preventDefault(){}});
+  assert.equal(uploads.length,0,"Blank names must not call API");
+  assert.match(status.textContent,/请填写/);
+  uploadName.value = "手绘少女原型";
+  failNextPut = true;
+  await form.callbacks.submit({preventDefault(){}});
   assert.equal(uploads.length, 0, "Failed upload must not add an empty card");
   assert.equal(retry.hidden, false, "Retry must be available after a server failure");
+  assert.equal(form.hidden,false,"Failure must preserve the edit form");
+  assert.equal(uploadName.value,"手绘少女原型");
+  assert.equal(uploadCategory.value,"props");
   assert.match(status.textContent, /服务器保存失败/);
   assert.match(status.textContent, /60c109fd85ff4b4ab20a7084bc4c1560/);
   const failedPut = calls.filter(c => c.init?.method === "PUT").at(-1);
@@ -126,9 +148,10 @@ vm.runInNewContext(source,ctx);
   assert.equal(failedPut.path, successfulPut.path, "Retry must reuse the same asset UID");
   assert.equal(retry.hidden, true, "Retry must hide after a successful upload");
   assert.equal(uploads.length,1);
-  assert.equal(uploads[0].name,"新人设");
-  assert.ok(calls.some(c=>c.init?.method==="PUT" && c.init.body.cat==="characters"));
-  assert.match(cards.innerHTML,/新人设/);
+  assert.equal(uploads[0].name,"手绘少女原型");
+  assert.ok(calls.some(c=>c.init?.method==="PUT" && c.init.body.cat==="props"));
+  assert.match(cards.innerHTML,/手绘少女原型/);
+  assert.equal(form.hidden,true,"Successful upload closes review form");
   assert.equal(cards.classes.has("is-empty"), false, "Uploading restores masonry mode");
   console.log("profile gallery: owner-scoped API, private image URLs, categories, add/delete OK");
 })().catch(err=>{console.error(err);process.exitCode=1;});
