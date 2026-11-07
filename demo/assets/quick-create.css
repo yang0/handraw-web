@@ -1026,7 +1026,7 @@
   .qc-mode-workflows { min-height: 44px; padding: 6px 10px; font-size: 12px; }
 }
 
-/* Align the global creation nav with the 1140px history/workflow content rail. */
+/* Use the same responsive content gutters as the site-wide navigation. */
 .qc-entry-bar {
-  padding-inline: max(var(--hw-page-gutter, 16px), calc((100% - 1140px) / 2));
+  padding-inline: var(--hw-page-gutter);
 }
