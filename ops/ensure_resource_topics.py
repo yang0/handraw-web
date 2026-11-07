@@ -203,8 +203,8 @@ def apply(
         created_topic_ids.append(tid)
 
     try:
-        from backend.generation_works import backfill_work_topics
-        backfill_work_topics(conn)
+        from backend.generation_works import reconcile_work_topics
+        reconcile_work_topics(conn)
     except Exception:
         pass
 
