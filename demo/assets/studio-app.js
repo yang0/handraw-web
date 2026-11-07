@@ -7623,7 +7623,7 @@
     });
     if (CS.historySort === "oldest") filtered.reverse();
 
-    const PAGE_SIZE = 6;
+    const PAGE_SIZE = 72;
     const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     if (CS.historyPage > totalPages) CS.historyPage = totalPages;
     if (CS.historyPage < 1) CS.historyPage = 1;
