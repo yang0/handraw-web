@@ -13,9 +13,11 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import sqlite3
 import time
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -223,9 +225,45 @@ SCENARIOS_CACHE_TTL_SECONDS = 120
 _SCENARIOS_CACHE: dict[str, tuple[dict[str, Any], str, float]] = {}
 
 
+@lru_cache(maxsize=4)
+def _scenario_redis_client(redis_url: str):
+    import redis
+    return redis.Redis.from_url(
+        redis_url, socket_connect_timeout=2, socket_timeout=2,
+        decode_responses=True,
+    )
+
+
+def _scenario_revision_key() -> str:
+    prefix = os.environ.get("HANDRAW_REDIS_PREFIX", "handraw:prod").strip()
+    if not re.fullmatch(r"[a-zA-Z0-9:_-]{1,100}", prefix):
+        raise ValueError("Unsafe Redis scenario cache namespace")
+    return prefix + ":home-scenarios:revision"
+
+
+def _scenario_cache_key(date_key: str) -> str | None:
+    redis_url = os.environ.get("HANDRAW_REDIS_URL", "").strip()
+    if not redis_url:
+        return date_key
+    try:
+        revision = _scenario_redis_client(redis_url).get(_scenario_revision_key()) or "0"
+        return f"{date_key}:{revision}"
+    except Exception:
+        # Multi-worker mode cannot safely serve a stale per-process cache
+        # if the shared revision is unreachable.
+        logger.warning("Home-scenario Redis cache revision unavailable; bypassing local cache")
+        return None
+
+
 def invalidate_scenarios_cache() -> None:
-    """Clear server-side in-memory scenarios cache."""
+    """Invalidate home-scene cards in this worker and other Redis workers."""
     _SCENARIOS_CACHE.clear()
+    redis_url = os.environ.get("HANDRAW_REDIS_URL", "").strip()
+    if redis_url:
+        try:
+            _scenario_redis_client(redis_url).incr(_scenario_revision_key())
+        except Exception:
+            logger.warning("Home-scenario Redis invalidation failed; peers will bypass cache if Redis is down")
 
 
 # ---------------------------------------------------------------------------
@@ -303,11 +341,6 @@ def get_scenario_match_clause_by_key(
     return build_scenario_match_clause(rules, table_alias=table_alias)
 
 
-def invalidate_home_scenarios_cache() -> None:
-    """Drop cached scene cards when the author updates a canonical work cover."""
-    _SCENARIOS_CACHE.clear()
-
-
 def _extract_first_image(images_json: str | None) -> str:
     """Safely extract the first valid image URL from images_json."""
     if not images_json:
@@ -366,13 +399,15 @@ def get_public_home_scenarios(
         date_key = _now_iso()[:10]
 
     now_mono = time.monotonic()
-    cache_entry = _SCENARIOS_CACHE.get(date_key)
+    cache_key = _scenario_cache_key(date_key)
+    cache_entry = _SCENARIOS_CACHE.get(cache_key) if cache_key is not None else None
     if cache_entry is not None:
         payload, etag, expires_at = cache_entry
         if now_mono < expires_at:
             return payload, etag
         else:
-            _SCENARIOS_CACHE.pop(date_key, None)
+            if cache_key is not None:
+                _SCENARIOS_CACHE.pop(cache_key, None)
 
     # Evict any other entries to prevent memory inflation from variable date queries
     _SCENARIOS_CACHE.clear()
@@ -582,7 +617,10 @@ def get_public_home_scenarios(
     raw_json = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     etag = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()[:16]
 
-    _SCENARIOS_CACHE[date_key] = (payload, etag, time.monotonic() + SCENARIOS_CACHE_TTL_SECONDS)
+    if cache_key is not None:
+        _SCENARIOS_CACHE[cache_key] = (
+            payload, etag, time.monotonic() + SCENARIOS_CACHE_TTL_SECONDS,
+        )
     return payload, etag
 
 
