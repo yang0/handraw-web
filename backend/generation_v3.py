@@ -555,7 +555,27 @@ def record_public_work(
         (cover_id, json.dumps([e[2] for e in entries], ensure_ascii=False),
          now, work_id),
     )
-    run_status = "success" if len(entries) >= expected_count else "partial"
+    # A partially generated batch is still RUNNING until all expected slots
+    # reach a terminal state. "partial" means finished with some failures,
+    # not merely "the first of five images has arrived".
+    states = tx.execute(
+        "SELECT position,status FROM generation_items WHERE run_id=?",
+        (run_id,),
+    ).fetchall()
+    terminal = {"success", "failed", "cancelled"}
+    slot_states: dict[int, set[str]] = {}
+    for item in states:
+        slot = int(item["position"]) // 1000 if source == "web" else int(item["position"])
+        slot_states.setdefault(slot, set()).add(str(item["status"]))
+    completed = len(slot_states) >= expected_count and all(
+        statuses <= terminal for statuses in slot_states.values()
+    )
+    if not completed:
+        run_status = "running"
+    elif all("success" in statuses for statuses in slot_states.values()):
+        run_status = "success"
+    else:
+        run_status = "partial"
     tx.execute(
         "UPDATE generation_runs SET status=?,updated_at=? WHERE id=?",
         (run_status, now, run_id),
