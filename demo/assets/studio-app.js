@@ -6339,22 +6339,39 @@
         activeLoopNode.data.failedCount = 0;
       }
 
-      for (let i = 0; i < plan.specs.length; i++) {
-        if (isStaleScope(runEpoch, runScope)) return false;
-        if (batchRun.cancelled) break;
+      // Bounded worker pool: all requests share a logical batch, but each
+      // slot has an independent id and stable output position.
+      const runningIndices = new Set();
+      const submittedSlots = new Set();
+      let stopLaunching = false;
+      const requestedConcurrency = Number(activeLoopNode?.data?.batchConcurrency || ctrl.data.batchConcurrency || 3);
+      const concurrency = resolvedOnlyIdx !== null ? 1 : Math.max(1,
+        Math.min(4, Number.isFinite(requestedConcurrency) ? requestedConcurrency : 3));
+      const slotIndexes = resolvedOnlyIdx === null ? plan.specs.map((_, i) => i) : [resolvedOnlyIdx];
+      if (resolvedOnlyIdx !== null) {
+        for (let i = 0; i < plan.specs.length; i++) {
+          if (i === resolvedOnlyIdx) continue;
+          const dn = isBatchGallery ? dispNodes[0] : dispNodes[i];
+          const old = isBatchGallery ? dn?.data?.items?.[i] : dn?.data?.items?.[0];
+          if (!old) continue;
+          allItems.push(old);
+          const key = plan.specs[i].slotKey || String(i);
+          if (old.imageUrl) completedSlots.add(key);
+          else if (old.failed) failedSlots.add(key);
+        }
+        completedCount = completedSlots.size;
+        failedCount = failedSlots.size;
+      }
+      let nextSlotToLaunch = 0;
+      async function runSlot(i) {
+        if (batchRun.cancelled || stopLaunching || isStaleScope(runEpoch, runScope)) return;
+        runningIndices.add(i);
+        let currentSlotKey = "", currentReqId = "";
+        try {
+        if (isStaleScope(runEpoch, runScope)) return;
+        if (batchRun.cancelled) return;
         const sp = plan.specs[i];
         const dn = isBatchGallery ? dispNodes[0] : dispNodes[i];
-        const prevItem = isBatchGallery ? dn?.data?.items?.[i] || null : dn?.data?.items?.[0] || null;
-
-        if (resolvedOnlyIdx !== null && i !== resolvedOnlyIdx && prevItem) {
-          allItems.push(prevItem);
-          if (prevItem.imageUrl) {
-            completedSlots.add(sp.slotKey || String(i));
-            completedCount = completedSlots.size;
-          }
-          continue;
-        }
-
         if (activeLoopNode && resolvedOnlyIdx === null) {
           activeLoopNode.data.currentStep = completedCount;
           activeLoopNode.data.totalSteps = plan.specs.length;
@@ -6362,7 +6379,7 @@
           activeLoopNode.data.failedCount = failedCount;
           const progTxt = DOM.world && DOM.world.querySelector(`[data-loop-prog-text="${activeLoopNode.id}"]`);
           const progBar = DOM.world && DOM.world.querySelector(`[data-loop-prog-bar="${activeLoopNode.id}"]`);
-          if (progTxt) progTxt.textContent = `⏳ 已完成 ${completedCount} / ${plan.specs.length} 张 · 正在生成：${sp.title || ""}`;
+          if (progTxt) progTxt.textContent = `⏳ 已完成 ${completedCount} / ${plan.specs.length} 张 · 并行生成中 ${runningIndices.size} 张`;
           if (progBar) progBar.style.width = `${Math.round(((completedCount + 0.5) / Math.max(1, plan.specs.length)) * 100)}%`;
         }
         if (isBatchGallery && dn) {
@@ -6375,6 +6392,7 @@
             failedCount,
             totalCount: plan.specs.length,
             activeIndex: i,
+            activeIndices: Array.from(runningIndices),
             busy: true,
             batchId
           });
@@ -6413,6 +6431,7 @@
           }
         }
         currentReqId = requestId;
+        persistOpenTabs(); // Request can be recovered after refresh.
         if (dn) {
           dn.data.pendingRequestIds = dn.data.pendingRequestIds || {};
           dn.data.pendingRequestIds[slotKey] = requestId;
@@ -6435,6 +6454,7 @@
             const cloudPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "cloud", sp);
             const effectiveAssets = Array.isArray(sp.assetItems) ? sp.assetItems : rec.assetItems;
             const refImages = effectiveAssets.map((a) => a.image).filter(Boolean);
+            submittedSlots.add(slotKey);
             const resp = await fetch("/api/studio/generate", {
               method: "POST",
               credentials: "include",
@@ -6463,7 +6483,7 @@
               })
             });
             const data = await resp.json();
-            if (isStaleScope(runEpoch, runScope)) return false;
+            if (isStaleScope(runEpoch, runScope)) return;
             if (!resp.ok || !data.ok) {
               const err = new Error(data.error || `HTTP ${resp.status}`);
               err.status = resp.status;
@@ -6482,6 +6502,8 @@
               if (dn) {
                 if (data.taskId) dn.data.pendingTaskId = data.taskId;
                 dn.data.pendingRequestId = activeReqId;
+                dn.data.pendingTasksBySlot = dn.data.pendingTasksBySlot || {};
+                dn.data.pendingTasksBySlot[slotKey] = { taskId: data.taskId || "", requestId: activeReqId };
                 dn.data.pendingSpec = dn.data.pendingSpec || {};
                 if (!dn.data.pendingSpec[activeReqId]) {
                   dn.data.pendingSpec[activeReqId] = dn.data.pendingSpec[requestId] || {
@@ -6502,7 +6524,7 @@
                 requestId: activeReqId,
                 signal: controller ? controller.signal : undefined
               });
-              if (isStaleScope(runEpoch, runScope)) return false;
+              if (isStaleScope(runEpoch, runScope)) return;
               imgUrl = (imgs && imgs[0]) || "";
             } else {
               throw new Error("云端未返回任务编号或图片");
@@ -6513,7 +6535,7 @@
           } else {
             const stepDelay = plan.specs.length > 25 ? 10 : plan.specs.length > 6 ? 35 : plan.specs.length > 1 ? 110 : 240;
             await new Promise((r) => setTimeout(r, stepDelay));
-            if (isStaleScope(runEpoch, runScope)) return false;
+            if (isStaleScope(runEpoch, runScope)) return;
             if (sp.sampleImg && currentRunCount === 1 && resolvedOnlyIdx === null && plan.specs.length <= 6) {
               imgUrl = sp.sampleImg;
             } else {
@@ -6523,8 +6545,8 @@
             }
           }
         } catch (itemErr) {
-          if (isStaleScope(runEpoch, runScope)) return false;
-          if (batchRun.cancelled) break;
+          if (isStaleScope(runEpoch, runScope)) return;
+          if (batchRun.cancelled) return;
           itemFailed = true;
           itemErrorMsg = itemErr?.message || "生成失败";
           itemIsTerminal = Boolean(itemErr?.terminal);
@@ -6535,8 +6557,8 @@
           }
         }
 
-        if (isStaleScope(runEpoch, runScope) || batchRun.cancelled) return false;
-        if (ctrl.data.activeBatchId && ctrl.data.activeBatchId !== batchId) return false;
+        if (isStaleScope(runEpoch, runScope) || batchRun.cancelled) return;
+        if (ctrl.data.activeBatchId && ctrl.data.activeBatchId !== batchId) return;
 
         if (itemFailed) {
           failedSlots.add(currentSlotKey);
@@ -6554,8 +6576,10 @@
             nodeId: dn?.id
           };
           if (dn) {
-            delete dn.data.pendingTaskId;
-            delete dn.data.pendingRequestId;
+            if (dn.data.pendingTasksBySlot) delete dn.data.pendingTasksBySlot[slotKey];
+            const nextPending = Object.values(dn.data.pendingTasksBySlot || {})[0];
+            dn.data.pendingTaskId = nextPending?.taskId || "";
+            dn.data.pendingRequestId = nextPending?.requestId || "";
             if (itemIsTerminal) {
               if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[currentSlotKey];
               if (dn.data.pendingSpec) {
@@ -6570,16 +6594,22 @@
               );
               if (existIdx >= 0) {
                 dn.data.items[existIdx] = failedItem;
-              } else if (dn.data.items.length <= i) {
-                dn.data.items[i] = failedItem;
               } else {
-                dn.data.items.push(failedItem);
+
+                dn.data.items[i] = failedItem;
+
               }
             } else {
               dn.data.status = "error";
               dn.data.error = itemErrorMsg;
               dn.data.items = [failedItem];
             }
+          }
+          runningIndices.delete(i);
+          if (activeLoopNode && resolvedOnlyIdx === null) {
+            activeLoopNode.data.currentStep = completedCount;
+            activeLoopNode.data.completedCount = completedCount;
+            activeLoopNode.data.failedCount = failedCount;
           }
           markActiveTabDirty();
           persistOpenTabs();
@@ -6590,16 +6620,17 @@
               completedCount,
               failedCount,
               totalCount: plan.specs.length,
-              activeIndex: (!isGlobalError && i + 1 < plan.specs.length && !batchRun.cancelled) ? i + 1 : null,
-              busy: !isGlobalError && !batchRun.cancelled && i + 1 < plan.specs.length,
+              activeIndex: null,
+              activeIndices: Array.from(runningIndices),
+              busy: true,
               batchId
             });
           }
           if (isGlobalError) {
+            stopLaunching = true;
             if (!silent) toast(`批量生成中断：${itemErrorMsg}`, "error");
-            break;
           }
-          continue;
+          return;
         }
 
         if (!completedSlots.has(currentSlotKey)) {
@@ -6628,8 +6659,10 @@
         };
 
         if (dn) {
-          delete dn.data.pendingTaskId;
-          delete dn.data.pendingRequestId;
+          if (dn.data.pendingTasksBySlot) delete dn.data.pendingTasksBySlot[slotKey];
+          const nextPending = Object.values(dn.data.pendingTasksBySlot || {})[0];
+          dn.data.pendingTaskId = nextPending?.taskId || "";
+          dn.data.pendingRequestId = nextPending?.requestId || "";
           if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[currentSlotKey];
           if (dn.data.pendingSpec) {
             delete dn.data.pendingSpec[requestId];
@@ -6642,10 +6675,10 @@
             );
             if (existIdx >= 0) {
               dn.data.items[existIdx] = builtItem;
-            } else if (dn.data.items.length <= i) {
-              dn.data.items[i] = builtItem;
             } else {
-              dn.data.items.push(builtItem);
+
+              dn.data.items[i] = builtItem;
+
             }
             dn.data.markdown = plan.markdown || "";
             dn.data.updatedAt = nowStr;
@@ -6673,6 +6706,12 @@
           allItems.push(builtItem);
         }
 
+        runningIndices.delete(i);
+        if (activeLoopNode && resolvedOnlyIdx === null) {
+          activeLoopNode.data.currentStep = completedCount;
+          activeLoopNode.data.completedCount = completedCount;
+          activeLoopNode.data.failedCount = failedCount;
+        }
         markActiveTabDirty();
         persistOpenTabs();
 
@@ -6683,18 +6722,35 @@
             completedCount,
             failedCount,
             totalCount: plan.specs.length,
-            activeIndex: (i + 1 < plan.specs.length && !batchRun.cancelled) ? i + 1 : null,
+            activeIndex: null,
+            activeIndices: Array.from(runningIndices),
             busy: true,
             batchId
           });
         }
+
+        } finally {
+          runningIndices.delete(i);
+        }
       }
+      async function worker() {
+        while (nextSlotToLaunch < slotIndexes.length && !batchRun.cancelled && !stopLaunching) {
+          const i = slotIndexes[nextSlotToLaunch++];
+          await runSlot(i);
+        }
+      }
+      await Promise.all(Array.from({length: Math.min(concurrency, slotIndexes.length)}, () => worker()));
+      if (isStaleScope(runEpoch, runScope)) return false;
+      const slotPositions = new Map(plan.specs.map((sp, i) => [sp.slotKey || String(i), i]));
+      allItems.sort((x, y) =>
+        (slotPositions.get(x.slotKey) ?? 9999) - (slotPositions.get(y.slotKey) ?? 9999)
+      );
 
       if (batchRun.cancelled) {
         if (useLiveApi) {
           const notSubmitted = plan.specs
             .map((sp, i) => ({i, key: sp.slotKey || String(i)}))
-            .filter(({key}) => !completedSlots.has(key) && !failedSlots.has(key))
+            .filter(({key}) => !completedSlots.has(key) && !failedSlots.has(key) && !submittedSlots.has(key))
             .map(({i}) => i);
           if (notSubmitted.length) {
             try {
