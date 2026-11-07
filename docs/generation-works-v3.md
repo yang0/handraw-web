@@ -1,5 +1,7 @@
 # Handraw V3 · 统一任务、媒体与公开多图作品
 
+> **本轮开发进展（2026-11-07）**：封面编辑、文章批量归并、图片槽位重试/安全取消、GIF 静帧、S3/R2/MinIO 私有媒体、Redis 多实例租约、PostgreSQL 全新空库初始化与 Skill 封面回执已提交代码。最新开发与配置说明以 [V3 开发状态](v3-development-status.md) 为准。下文早期 P1 段落如仍将这些项列为“待开发”，以本注释和状态文件为准；真实运行验证仍未进行。
+
 > 设计决策日期：2026-11-07 · 追踪：[Issue #84](https://github.com/yang0/handraw-web/issues/84)  
 > 适用仓库：Web **https://github.com/yang0/handraw-web**（`main`）与 Skill **https://github.com/yang0/handraw-style**（`feature/skill-web-unification-v1-20261107`）。  
 > **明确前提：网站尚未上线，没有需保留的用户旧数据。V3 采用全新数据库初始化，不做历史数据兼容、旧历史补录或旧图片迁移。** 任何实际重建/删除数据库仍需操作人员确认本机环境，本工程不会自动清库。
