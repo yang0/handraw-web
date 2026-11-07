@@ -514,7 +514,7 @@ def save_data_url_upload(
 
     raw_cat = str(cat or "other").strip().lower()
     PUBLIC_CATS = ("characters", "props", "scenes", "other")
-    INTERNAL_CATS = ("forum",)          # 仅由论坛/投稿发布写入，原样保留
+    INTERNAL_CATS = ("forum", "skill_history")          # 仅由论坛/投稿发布写入，原样保留
     if raw_cat in PUBLIC_CATS or raw_cat in INTERNAL_CATS:
         safe_cat = raw_cat
     else:
@@ -1973,6 +1973,29 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             ):
                 return
 
+        # Skill v1 contract: only a library token can sync private data.
+        if "library" in scopes:
+            if method == "GET" and (
+                req_path in (
+                    "/api/v1/me/resources", "/api/v1/me/collection-items",
+                    "/api/v1/me/generations", "/api/v1/me/notifications"
+                )
+                or re.fullmatch(r"^/api/v1/resources/[^/]+/download$", req_path)
+                or re.fullmatch(r"^/api/v1/works/[^/]+/comments$", req_path)
+            ):
+                return
+            if method == "PUT" and re.fullmatch(r"^/api/v1/me/resources/[^/]+$", req_path):
+                return
+            if method == "DELETE" and re.fullmatch(r"^/api/v1/me/resources/[^/]+$", req_path):
+                return
+            if method == "POST" and req_path == "/api/v1/me/generations":
+                return
+        # Publishing scope covers the explicitly user-requested social writes.
+        if "publish" in scopes and method == "POST" and re.fullmatch(
+            r"^/api/v1/works/[^/]+/(likes|comments)$", req_path
+        ):
+            return
+
         # 3. 'library' scope: personal library read endpoints and collection toggle
         if "library" in scopes:
             if method == "GET":
@@ -2030,6 +2053,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._enforce_write_origin()
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        from .skill_web_bridge import handle_delete as skill_web_delete
+        if skill_web_delete(self, req_path, parse_qs(parsed.query, keep_blank_values=True)):
+            return
         m_wf = re.match(r"^/api/studio/workflows/([^/]+)$", req_path)
         if m_wf:
             user = self._current_user(required=True)
@@ -2141,6 +2167,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         except ImportError:  # pragma: no cover
             device_auth_get = None
         if device_auth_get and device_auth_get(self, req_path, qs):
+            return
+
+        from .skill_web_bridge import handle_get as skill_web_get
+        if skill_web_get(self, req_path, qs):
             return
 
         try:
@@ -2731,6 +2761,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._enforce_write_origin()
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        if req_path.startswith("/api/v1/me/resources/"):
+            from .skill_web_bridge import handle_put as skill_web_put
+            if skill_web_put(self, req_path, self._read_json_body()):
+                return
         if req_path.startswith("/api/studio/recipes"):
             from .recipe_routes import handle_recipe_put
             body = self._read_json_body()
@@ -2759,6 +2793,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             record_client_error(self, self._read_json_body())
             return
         body = self._read_json_body()
+        if req_path.startswith("/api/v1/"):
+            from .skill_web_bridge import handle_post as skill_web_post
+            if skill_web_post(self, req_path, body):
+                return
         ua = self.headers.get("User-Agent") or ""
         ip_addr = self.client_address[0] if self.client_address else ""
 
