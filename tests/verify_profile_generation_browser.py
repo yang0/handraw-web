@@ -198,6 +198,13 @@ def run_browser_verification():
             history_bar_box = page.locator(".ic-history-topbar").bounding_box()
             history_body_box = page.locator(".ic-hist-page-inner").bounding_box()
             assert history_bar_box is not None and history_body_box is not None
+            # Homepage and history share the same responsive card count at 1440px.
+            history_columns = page.locator(".ic-hist-masonry-grid").evaluate(
+                "(el) => getComputedStyle(el).gridTemplateColumns.split(/\\s+/).length"
+            )
+            assert history_columns == 4, (
+                f"History at 1440px should be four columns like homepage, got {history_columns}"
+            )
             # Compare against the actual top navigation content gutter rather than a guessed fixed width.
             navigation_gutter = page.locator(".hw-topbar").evaluate(
                 "(el) => parseFloat(getComputedStyle(el).paddingLeft)"
@@ -264,8 +271,10 @@ def run_browser_verification():
             page.set_viewport_size({"width": 390, "height": 844})
             page.goto(f"{BASE_URL}/studio/?view=history", wait_until="networkidle")
             page.wait_for_selector(".ic-hist-masonry-grid", timeout=6000)
-            columns = page.locator(".ic-hist-masonry-grid").evaluate("(el) => getComputedStyle(el).columnCount")
-            assert columns == "1", f"Mobile history should use one column: {columns}"
+            columns = page.locator(".ic-hist-masonry-grid").evaluate(
+                "(el) => getComputedStyle(el).gridTemplateColumns.split(/\\s+/).length"
+            )
+            assert columns == 2, f"History at 390px should use two columns like homepage: {columns}"
             mobile_history_bar = page.locator(".ic-history-topbar").bounding_box()
             page.screenshot(path=str(MOBILE_SCREENSHOT), full_page=False)
             page.goto(f"{BASE_URL}/studio/?view=workflows", wait_until="networkidle")
