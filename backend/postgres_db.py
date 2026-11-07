@@ -88,6 +88,24 @@ def _rewrite(query: str) -> str:
             q = q.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
     if re.search(r"\bINSERT\s+OR\s+REPLACE\b", q, re.I):
         raise ValueError("INSERT OR REPLACE requires an explicit UPSERT before PG deployment")
+    # The development schema uses SQLite's built-in NOCASE collation. On PG,
+    # make explicit case-insensitive comparisons rather than requiring a
+    # non-portable ICU collation installed by the database administrator.
+    case_cmp = re.compile(
+        r"\\b([A-Za-z_][A-Za-z0-9_.]*)\\s*(=|!=|<>)\\s*(%s)\\s+COLLATE\\s+NOCASE\\b",
+        re.I,
+    )
+    q = case_cmp.sub(
+        lambda m: f"lower({m.group(1)}::text) {m.group(2)} lower({m.group(3)}::text)", q,
+    )
+    case_column = re.compile(
+        r"\\b([A-Za-z_][A-Za-z0-9_.]*)\\s+COLLATE\\s+NOCASE\\s*(=|!=|<>)\\s*(%s)",
+        re.I,
+    )
+    q = case_column.sub(
+        lambda m: f"lower({m.group(1)}::text) {m.group(2)} lower({m.group(3)}::text)", q,
+    )
+    q = re.sub(r"\\s+COLLATE\\s+NOCASE\\b", "", q, flags=re.I)
     # SQLite expression compatibility for frequently used time literals.
     q = re.sub(r"\bstrftime\(\s*'%s'\s*,\s*'now'\s*\)",
                "floor(extract(epoch from now()))::bigint", q, flags=re.I)
