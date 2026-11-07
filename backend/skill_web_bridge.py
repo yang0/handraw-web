@@ -398,7 +398,7 @@ def list_history(
     conn = db.get_conn()
     rows = conn.execute(
         """
-        SELECT r.*, w.id AS work_id, w.cover_media_id
+        SELECT r.*, w.id AS work_id, w.cover_media_id, w.status AS work_status
         FROM generation_runs r
         LEFT JOIN works w ON w.run_id=r.id
         WHERE r.user_id=?
@@ -426,6 +426,8 @@ def list_history(
             if item["status"] == "success" and item["storage_key"]
         ]
         wid = str(row["work_id"]) if row["work_id"] else ""
+        moderation = str(row["work_status"] or "") if wid else ""
+        is_public = bool(wid and moderation == "published")
         output.append({
             "id": row["id"],
             "originClient": row["source"],
@@ -443,7 +445,11 @@ def list_history(
                 for item in image_rows
             ],
             "status": row["status"],
-            "visibility": "public" if wid else "private",
+            # A completed run may still have a hidden/withdrawn work. Only a
+            # currently published work is publicly visible; preserve workId
+            # for the author's private history and moderation explanation.
+            "visibility": "public" if is_public else "private",
+            "workStatus": moderation or None,
             "workIds": [wid] if wid else [],
             "publishedWorkId": wid or None,
             "workId": wid or None,
