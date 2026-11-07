@@ -322,7 +322,7 @@ def _calibrate_seed_period_horizons(db: Database) -> None:
                 (pub_ms, lbl, is_new, code),
             )
         tx.execute(
-            "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('seed_period_horizons_v3', '{\"calibrated\":true}', 'system', ?)",
+            "INSERT INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('seed_period_horizons_v3', '{\"calibrated\":true}', 'system', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
             (now_iso,),
         )
 
@@ -352,7 +352,7 @@ def _seed_default_forum_moderators(db: Database) -> None:
                     (int(urow["id"]), urow["username"], cat, title, note, now_iso),
                 )
         tx.execute(
-            "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('seed_forum_moderators_v1', '{\"seeded\":true}', 'system', ?)",
+            "INSERT INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('seed_forum_moderators_v1', '{\"seeded\":true}', 'system', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
             (now_iso,),
         )
 
@@ -391,7 +391,7 @@ def _seed_default_asset_social(db: Database) -> None:
     with db.transaction() as tx:
         for code, blikes, bfavs in base_metrics:
             tx.execute(
-                "INSERT OR REPLACE INTO asset_social_seeds (asset_code, base_likes, base_favorites) VALUES (?, ?, ?)",
+                "INSERT INTO asset_social_seeds (asset_code, base_likes, base_favorites) VALUES (?, ?, ?) ON CONFLICT(asset_code) DO UPDATE SET base_likes=excluded.base_likes, base_favorites=excluded.base_favorites",
                 (code, blikes, bfavs),
             )
         for cid, code, kind, uname, aname, txt, tlabel in sample_comments:
@@ -403,7 +403,7 @@ def _seed_default_asset_social(db: Database) -> None:
                 (cid, code, kind, uname, aname, txt, tlabel, now_iso),
             )
         tx.execute(
-            "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('seed_asset_social_v1', '{\"seeded\":true}', 'system', ?)",
+            "INSERT INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('seed_asset_social_v1', '{\"seeded\":true}', 'system', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
             (now_iso,),
         )
 
