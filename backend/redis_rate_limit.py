@@ -23,6 +23,7 @@ _LIMITS = {
     "oauth_unlink": (5, 900),
     "funnel": (100, 60),
     "device": (10, 300),
+    "skill_token": (1200, 3600),
 }
 
 # Redis executes the increment + expiry decision atomically.
