@@ -359,10 +359,23 @@ def import_history(
                 code="publication_incomplete",
             )
 
+    cover = db.get_conn().execute(
+        """SELECT w.cover_media_id,m.storage_key AS cover_url
+           FROM works w LEFT JOIN media_assets m ON m.id=w.cover_media_id
+           WHERE w.id=? AND w.run_id=?""",
+        (works[0], run_id),
+    ).fetchone()
+    if not cover or not cover["cover_media_id"]:
+        raise ServiceError(
+            "整批图片的公开封面尚未建立，请重试",
+            status=503, code="cover_incomplete",
+        )
     return {
         "ok": True, "id": run_id, "visibility": "public",
         "workId": works[0], "workIds": works,
         "imageCount": len(saved),
+        "coverMediaId": str(cover["cover_media_id"]),
+        "coverUrl": str(cover["cover_url"] or ""),
         "deduped": prior_status == "success",
     }
 
@@ -385,7 +398,7 @@ def list_history(
     conn = db.get_conn()
     rows = conn.execute(
         """
-        SELECT r.*, w.id AS work_id
+        SELECT r.*, w.id AS work_id, w.cover_media_id
         FROM generation_runs r
         LEFT JOIN works w ON w.run_id=r.id
         WHERE r.user_id=?
@@ -434,6 +447,7 @@ def list_history(
             "workIds": [wid] if wid else [],
             "publishedWorkId": wid or None,
             "workId": wid or None,
+            "coverMediaId": str(row["cover_media_id"] or "") if "cover_media_id" in row.keys() else "",
             "createdAt": row["created_at"],
         })
     return {
