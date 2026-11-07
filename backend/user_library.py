@@ -460,7 +460,7 @@ def is_media_referenced(
         # 2. Check media public grants (any grant row means image was shared)
         if _check_query(
             "media_public_grants",
-            "SELECT 1 FROM media_public_grants WHERE media_url = ? LIMIT 1",
+            "SELECT 1 FROM media_public_grants WHERE media_url = ? AND revoked_at IS NULL LIMIT 1",
             (clean_url,),
         ):
             return True
