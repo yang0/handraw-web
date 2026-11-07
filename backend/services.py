@@ -5055,7 +5055,9 @@ def _canonical_studio_history(
         entry["createdAtISO"] = str(run["created_at"])
         entry["imageCount"] = len(completed)
         entry["outputSlots"] = output_slots
-        entry["workId"] = work_id or entry.get("workId", "")
+        # A work removed by moderation must not leave a stale workId cached
+        # in the gateway snapshot; works.run_id is the only source of truth.
+        entry["workId"] = work_id
         entry["source"] = source
         result.append(entry)
     return result[:40]
