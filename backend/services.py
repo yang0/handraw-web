@@ -5453,11 +5453,10 @@ def delete_user_studio_history(db: Database, user: dict[str, Any], history_id: s
         if row["deleted_at"]:
             return {"ok": True, "id": hid, "deleted": False}
         tx.execute("UPDATE studio_generations SET deleted_at = ? WHERE id = ? AND user_id = ?", (utc_now_iso(), hid, uid))
-        try:
-            from .generation_works import sync_generation_visibility
-            sync_generation_visibility(tx, hid, "private", is_deleted=True)
-        except Exception as e:
-            logger.warning("Sync generation %s delete to works failed: %s", hid, e)
+        # A history deletion must not commit unless all associated public works
+        # were hidden in the same transaction.
+        from .generation_works import sync_generation_visibility
+        sync_generation_visibility(tx, hid, "private", is_deleted=True)
     return {"ok": True, "id": hid, "deleted": True}
 
 
@@ -5482,12 +5481,10 @@ def delete_all_user_studio_history(db: Database, user: dict[str, Any]) -> dict[s
             (now_iso, uid),
         )
         deleted = int(cur.rowcount or 0)
-        try:
-            from .generation_works import sync_generation_visibility
-            for gid in gen_ids:
-                sync_generation_visibility(tx, str(gid), "private", is_deleted=True)
-        except Exception as e:
-            logger.warning("Sync all generations delete for user %s failed: %s", uid, e)
+        # Roll back the whole operation if a linked public work cannot be hidden.
+        from .generation_works import sync_generation_visibility
+        for gid in gen_ids:
+            sync_generation_visibility(tx, str(gid), "private", is_deleted=True)
         deleted = int(cur.rowcount or 0)
     return {"ok": True, "deleted": deleted}
 

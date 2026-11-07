@@ -39,6 +39,13 @@
     profileUser: "",
     profileTab: "works", // public content tabs only
     profileResourceFilter: "all", // all | styles | layouts
+    profileWorksUser: "",
+    profileWorkRows: null,
+    profileWorksLoading: false,
+    profileWorksError: "",
+    profileWorksCursor: "",
+    profileWorksHasMore: false,
+    profileWorksTotal: null,
     accountSection: "profile", // profile | email | security | devices | privacy
     profGenerations: null,
     profGenUser: "",
@@ -2389,6 +2396,61 @@
     S.bindAccountSettingsForm(root, () => renderMain());
   }
 
+  function groupProfilePublishedWorks(rows) {
+    // Feed groups by generation; this also deduplicates older hydrated work rows.
+    const byBatch = new Map();
+    for (const w of Array.isArray(rows) ? rows : []) {
+      if (!w || !w.id || !Array.isArray(w.images) || !w.images.length) continue;
+      const bid = String(w.batchId || "").trim();
+      const key = bid && bid !== `work_${w.id}` ? `batch:${bid}` : `work:${w.id}`;
+      if (!byBatch.has(key)) byBatch.set(key, { works: new Map() });
+      byBatch.get(key).works.set(String(w.id), w);
+    }
+    return [...byBatch.values()].map((group) => {
+      const members = [...group.works.values()].sort((a, b) =>
+        (Number(a.batchIndex) || 1) - (Number(b.batchIndex) || 1));
+      const cover = members[0];
+      const total = Math.max(members.length, ...members.map((w) => Number(w.batchTotal) || 1), ...members.map((w) => w.images.length));
+      const thumbnails = members.flatMap((w) => w.images).filter(Boolean).slice(0, 3);
+      return { cover, total, thumbnails };
+    });
+  }
+
+  async function loadProfilePublishedWorks(username, cursor = "", append = false) {
+    if (UI.profileWorksLoading || UI.profileWorksUser !== username) return;
+    UI.profileWorksLoading = true;
+    UI.profileWorksError = "";
+    try {
+      const q = new URLSearchParams({ author: username, sort: "newest", limit: "100" });
+      if (cursor) q.set("cursor", cursor);
+      const res = await S.apiJson(`/api/works/feed?${q}`);
+      if (UI.profileWorksUser !== username) return;
+      if (!res || res.ok === false || !Array.isArray(res.items)) throw new Error("作品加载失败");
+      const existing = append ? (UI.profileWorkRows || []) : [];
+      const merged = new Map(existing.map((w) => [String(w.id), w]));
+      res.items.forEach((w) => merged.set(String(w.id), w));
+      UI.profileWorkRows = [...merged.values()];
+      UI.profileWorksCursor = res.nextCursor || "";
+      UI.profileWorksHasMore = Boolean(res.hasMore && res.nextCursor);
+      UI.profileWorksTotal = typeof res.total === "number" ? res.total : null;
+      // Keep the shared work cache usable for existing detail navigation.
+      res.items.forEach((w) => {
+        const idx = App.state.works.findIndex((item) => String(item.id) === String(w.id));
+        if (idx >= 0) App.state.works[idx] = w;
+        else App.state.works.push(w);
+      });
+    } catch (err) {
+      if (UI.profileWorksUser !== username) return;
+      UI.profileWorksError = "公开作品暂时加载失败，请重试。";
+    } finally {
+      if (UI.profileWorksUser === username) {
+        UI.profileWorksLoading = false;
+        const visibleUser = UI.profileUser || (App.state.loggedIn && App.state.user?.username) || "";
+        if (App.view === "profile" && visibleUser === username && UI.profileTab === "works") renderMain();
+      }
+    }
+  }
+
   function renderCreatorProfilePage(root) {
     const fallbackUser = App.state.loggedIn && App.state.user ? App.state.user.username : "";
     const targetUser = (UI.profileUser || fallbackUser || "").trim();
@@ -2431,46 +2493,49 @@
 
     let tabBodyHtml = "";
     if (UI.profileTab === "works") {
-      if (typeof S.apiJson === "function" && UI._loadedProfileWorkUser !== prof.username) {
-        UI._loadedProfileWorkUser = prof.username;
-        S.apiJson(`/api/works/feed?author=${encodeURIComponent(prof.username)}&limit=100`)
-          .then((res) => {
-            if (res && res.items && res.items.length) {
-              res.items.forEach((item) => {
-                const idx = App.state.works.findIndex((w) => String(w.id) === String(item.id));
-                if (idx >= 0) App.state.works[idx] = item;
-                else App.state.works.push(item);
-              });
-              if (App.view === "profile" && UI.profileUser === prof.username && UI.profileTab === "works") {
-                renderMain();
-              }
-            }
-          })
-          .catch(() => {});
+      const serverBacked = Boolean(App.state.serverBacked && typeof S.apiJson === "function");
+      if (serverBacked && UI.profileWorksUser !== prof.username) {
+        UI.profileWorksUser = prof.username;
+        UI.profileWorkRows = null;
+        UI.profileWorksCursor = "";
+        UI.profileWorksHasMore = false;
+        UI.profileWorksTotal = null;
+        UI.profileWorksLoading = false;
+        UI.profileWorksError = "";
       }
-      tabBodyHtml = prof.works.length
-        ? S.renderMasonry(
-            prof.works.map(
-              (w) => `
-                <article class="hw-card" data-prof-work="${esc(w.id)}" style="cursor:pointer;">
-                  <div class="hw-card-media">
-                    <img data-hw-src="${esc(w.images[0])}" alt="${esc(w.title)}" loading="lazy" />
+      if (serverBacked && UI.profileWorkRows === null && !UI.profileWorksLoading && !UI.profileWorksError) {
+        loadProfilePublishedWorks(prof.username);
+      }
+      const rows = serverBacked ? UI.profileWorkRows : prof.works;
+      const groups = groupProfilePublishedWorks(rows);
+      if (rows === null) {
+        tabBodyHtml = `<div class="hw-detail-section-card" role="status" style="padding:44px;text-align:center;color:var(--ink-muted);">正在加载公开作品…</div>`;
+      } else {
+        tabBodyHtml = groups.length
+          ? S.renderMasonry(groups.map(({ cover, total, thumbnails }) => `
+              <article class="hw-card hw-profile-work-group" data-prof-work="${esc(cover.id)}" tabindex="0" role="button" aria-label="查看作品：${esc(cover.title)}${total > 1 ? `，共 ${total} 张` : ""}" style="cursor:pointer;">
+                <div class="hw-card-media">
+                  <img data-hw-src="${esc(thumbnails[0] || cover.images[0])}" alt="${esc(cover.title)}" loading="lazy" />
+                  ${total > 1 && thumbnails.length > 1 ? `<div class="hw-profile-batch-strip" aria-hidden="true">${thumbnails.slice(1, 3).map((image) => `<img data-hw-src="${esc(image)}" alt="" loading="lazy" />`).join("")}</div>` : ""}
+                  ${total > 1 ? `<span class="hw-card-badge-tl hw-profile-batch-count">🖼️ ${total} 张 · 作品组</span>` : ""}
+                </div>
+                <div class="hw-card-body">
+                  <h3 class="hw-card-title">${esc(cover.title)}</h3>
+                  <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;gap:8px;align-items:center;">
+                    <span>${esc(cover.createdAt || "近期")}</span>
+                    <span>${total > 1 ? "查看整组作品" : `👏 ${cover.cheers ?? 0} · 💬 ${(cover.comments || []).length}`}</span>
                   </div>
-                  <div class="hw-card-body">
-                    <h3 class="hw-card-title">${esc(w.title)}</h3>
-                    <div style="font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;align-items:center;">
-                      <span>${esc(w.createdAt || "近期")}</span>
-                      <span>👏 ${w.cheers ?? 0} · 💬 ${(w.comments || []).length}</span>
-                    </div>
-                  </div>
-                </article>
-              `
-            ),
-            "standard"
-          )
-        : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">
-            暂无公开作品。${isMe ? `去 <a href="${esc(channelUrl("studio"))}" style="color:var(--vermilion);font-weight:800;">无限画布创作台 ↗</a> 创作第一幅作品吧！` : ""}
-          </div>`;
+                </div>
+              </article>
+            `), "standard")
+          : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂无公开作品。${isMe ? `去 <a href="${esc(channelUrl("studio", { entry: "quick" }))}" style="color:var(--vermilion);font-weight:800;">创作台 ↗</a> 开始创作吧！` : ""}</div>`;
+        if (serverBacked && UI.profileWorksHasMore) {
+          tabBodyHtml += `<div style="text-align:center;padding:18px 0;"><button type="button" class="btn" id="prof-work-loadmore-btn" ${UI.profileWorksLoading ? "disabled" : ""}>${UI.profileWorksLoading ? "加载中…" : "加载更多作品"}</button></div>`;
+        }
+      }
+      if (serverBacked && UI.profileWorksError) {
+        tabBodyHtml += `<div class="hw-detail-section-card" role="alert" style="text-align:center;padding:14px;"><span>${esc(UI.profileWorksError)}</span><button type="button" class="btn btn-sm" id="prof-work-retry-btn">重试加载</button></div>`;
+      }
     } else if (UI.profileTab === "resources") {
       const resourceOptions = [{ value: "all", label: "全部" }, { value: "styles", label: "画风" }, { value: "layouts", label: "图型" }];
       const type = ["styles", "layouts"].includes(UI.profileResourceFilter) ? UI.profileResourceFilter : "all";
@@ -2943,7 +3008,7 @@
 
         <!-- Standalone Profile Section Tabs -->
         <div class="hw-pills-row hw-profile-tabs" role="tablist" aria-label="创作者主页分类标签">
-          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品 (${prof.works.length})</button>
+          <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品${UI.profileWorksUser === prof.username && UI.profileWorksTotal !== null ? ` (${UI.profileWorksTotal})` : ""}</button>
           <button type="button" class="hw-pill ${UI.profileTab === "resources" ? "is-active" : ""}" data-ptab="resources" role="tab" aria-selected="${UI.profileTab === "resources"}">🎨 创作资源 (${prof.styles.length + prof.layouts.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 社区动态 (${prof.topics.length})</button>
         </div>
@@ -2997,8 +3062,23 @@
     const staffBannerBtn = root.querySelector("#prof-staff-manage-banner-btn");
     if (staffBannerBtn) staffBannerBtn.onclick = () => window.open(channelUrl("admin", { module: "users", q: prof.username }), "_blank");
 
+    const workLoadmoreBtn = root.querySelector("#prof-work-loadmore-btn");
+    if (workLoadmoreBtn) workLoadmoreBtn.onclick = () => {
+      if (UI.profileWorksCursor) loadProfilePublishedWorks(prof.username, UI.profileWorksCursor, true);
+    };
+    const workRetryBtn = root.querySelector("#prof-work-retry-btn");
+    if (workRetryBtn) workRetryBtn.onclick = () => {
+      UI.profileWorksError = "";
+      loadProfilePublishedWorks(prof.username, UI.profileWorksCursor, Boolean(UI.profileWorkRows));
+    };
     root.querySelectorAll("[data-prof-work]").forEach((el) => {
       el.onclick = () => openWorkPage(el.getAttribute("data-prof-work"), 0, false);
+      el.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          el.click();
+        }
+      };
     });
     root.querySelectorAll("[data-prof-asset]").forEach((el) => {
       el.onclick = () => openAssetPage(el.getAttribute("data-prof-asset"));

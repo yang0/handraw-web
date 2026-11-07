@@ -3684,3 +3684,68 @@ body.ic-studio-body .hw-topbar {
 @media (hover: none) {
   .ic-hist-art-delete { opacity: 1; visibility: visible; }
 }
+
+/* P2: History task filters and per-image actions (studio only). */
+.ic-history-stage .ic-history-topbar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px 20px;
+}
+.ic-history-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.ic-history-controls .ic-view-seg { flex-wrap: wrap; }
+.ic-history-controls .hw-input { min-width: 0; }
+.ic-hist-status {
+  display: inline-block;
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 750;
+  color: var(--ic-muted);
+  background: var(--ic-surface);
+}
+.ic-hist-status.is-success { color: #176142; background: rgba(34, 139, 89, .1); }
+.ic-hist-status.is-active { color: #825500; background: rgba(211, 151, 38, .12); }
+.ic-hist-status.is-failed { color: #a52828; background: rgba(206, 52, 52, .1); }
+.ic-hist-img-download {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: rgba(22, 27, 24, .8);
+  color: #fff !important;
+  font-weight: 800;
+  font-size: 11px;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.ic-hist-img-tile:hover .ic-hist-img-download,
+.ic-hist-img-tile:focus-within .ic-hist-img-download { opacity: 1; }
+.ic-hist-img-download:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--vermilion);
+}
+@media (hover: none) { .ic-hist-img-download { opacity: 1; } }
+@media (max-width: 768px) {
+  .ic-history-stage .ic-history-topbar { padding: 10px 12px; }
+  .ic-history-heading { flex-wrap: wrap; }
+  .ic-history-controls { align-items: stretch; gap: 8px; }
+  .ic-history-controls .ic-view-seg { width: 100%; }
+  .ic-history-controls #hist-search-inp { flex: 1 1 100%; width: 100% !important; }
+  .ic-history-controls select { flex: 1 1 140px; }
+  .ic-hist-page-scroll { padding: 12px 12px 30px; }
+  .ic-hist-entry-card { padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ic-hist-img-download { transition: none; }
+}

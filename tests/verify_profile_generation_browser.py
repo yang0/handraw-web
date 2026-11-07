@@ -32,6 +32,7 @@ from playwright.sync_api import sync_playwright
 
 from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME, init_database
 from backend.services import register_user
+from backend.generation_works import project_generation_to_works
 
 PORT = 3097
 BASE_URL = f"http://127.0.0.1:{PORT}"
@@ -46,7 +47,7 @@ def seed_test_generations(db, user_id: int, username: str):
             "id": "gen_leo_003",
             "subject": "山水水墨意境·远山红日",
             "created_at": "2026-11-02T08:30:00Z",
-            "items": ["https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=800", "https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800"],
+            "items": ["/images/poster-demo-autumn-equinox.webp", "/images/A_001-016.webp"],
             "recipe_summary": "#FA-001 / #SC-021",
             "mode": "preset",
             "tab_title": "3:4",
@@ -55,7 +56,7 @@ def seed_test_generations(db, user_id: int, username: str):
             "id": "gen_leo_002",
             "subject": "复古海报·秋分丰收节",
             "created_at": "2026-11-01T14:20:00Z",
-            "items": ["https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=800"],
+            "items": ["/images/graphic-text-mode-demo.webp"],
             "recipe_summary": "#FB-002",
             "mode": "preset",
             "tab_title": "1:1",
@@ -64,7 +65,7 @@ def seed_test_generations(db, user_id: int, username: str):
             "id": "gen_leo_001",
             "subject": "城市夜景与霓虹微光",
             "created_at": "2026-10-31T20:10:00Z",
-            "items": ["https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=800", "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800", "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800"],
+            "items": ["/images/layouts/infographics/IG-005.webp", "/images/layouts/social-cards/SC-021.webp", "/images/B_036-048.webp"],
             "recipe_summary": "#FC-003 / #IG-002",
             "mode": "preset",
             "tab_title": "16:9",
@@ -93,6 +94,7 @@ def seed_test_generations(db, user_id: int, username: str):
                     json.dumps([{"imageUrl": u} for u in r["items"]]),
                 ),
             )
+            project_generation_to_works(tx, r["id"])
 
 
 def run_browser_verification():
@@ -161,6 +163,10 @@ def run_browser_verification():
             assert page.locator('button[data-ptab="works"]').is_visible()
             assert page.locator('button[data-ptab="generations"]').count() == 0
             assert page.locator('button[data-ptab="resources"]').is_visible()
+            page.wait_for_selector(".hw-profile-work-group", timeout=6000)
+            assert page.locator(".hw-profile-work-group").count() == 3, "3 generations should show 3 grouped cards, not 6 pictures"
+            assert page.locator(".hw-profile-batch-count:has-text('2 张')").count() == 1
+            assert page.locator(".hw-profile-batch-count:has-text('3 张')").count() == 1
             page.screenshot(path=str(DESKTOP_SCREENSHOT), full_page=False)
 
             # Check 2: Anonymous visitors also see the public creator profile.
@@ -183,8 +189,24 @@ def run_browser_verification():
             assert "view=history" in page.url, f"Studio history navigation failed: {page.url}"
             for category in ("all", "quick", "batch", "article", "canvas"):
                 assert page.locator(f'[data-hist-filter="{category}"]').is_visible()
+            assert page.locator("#hist-status-filter").is_visible()
+            assert page.locator("#hist-sort").is_visible()
+            assert page.locator("#hist-clear-all").count() == 0
+            assert page.locator(".ic-hist-img-download").count() > 0, "Images need a direct download action"
+            page.locator("#hist-search-inp").fill("山水")
+            page.wait_for_timeout(300)
+            assert page.locator('[data-hist-id="gen_leo_003"]').count() == 1
+            assert page.locator('[data-hist-id="gen_leo_001"]').count() == 0
+            page.locator("#hist-search-inp").fill("")
+            page.locator("#hist-status-filter").select_option("success")
+            page.locator("#hist-sort").select_option("oldest")
+            assert page.locator('[data-hist-id="gen_leo_003"]').count() == 1
             page.locator("#hist-back-creation").click()
             assert "entry=quick" in page.url, f"Did not restore quick creation mode: {page.url}"
+            page.goto(f"{BASE_URL}/studio/?entry=batch", wait_until="networkidle")
+            page.locator("#studio-mode-history").click()
+            page.locator("#hist-back-creation").click()
+            assert "entry=batch" in page.url, f"Did not restore batch creation mode: {page.url}"
 
             # Check 4: Existing direct history URLs remain inside the studio.
             # -----------------------------------------------------------
