@@ -27,6 +27,7 @@ MAX_RESOURCE_TEXT = 30000
 MAX_REQUEST_TEXT = 60000
 MAX_RUN_IMAGES = 12
 MAX_TOTAL_PRIVATE_BYTES = 1024 * 1024 * 1024
+MAX_PERSONAL_RESOURCES = 500
 UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 WORK_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
@@ -163,6 +164,12 @@ def put_resource(db: Any, user: dict, resource_id: str, body: dict) -> dict:
         else:
             if body.get("baseRevision") not in (None, 0):
                 raise ServiceError("新建资源的版本错误", status=409, code="conflict")
+            count = tx.execute(
+                "SELECT COUNT(*) FROM skill_personal_resources WHERE user_id=? AND deleted_at IS NULL",
+                (uid,),
+            ).fetchone()[0]
+            if int(count) >= MAX_PERSONAL_RESOURCES:
+                raise ServiceError("个人画风与图型数量超过上限", status=413, code="quota_exceeded")
             seq = _seq(tx)
             tx.execute(
                 """INSERT INTO skill_personal_resources
@@ -319,11 +326,6 @@ def import_generation(db: Any, user: dict, body: dict) -> dict:
             raise ServiceError("历史 ID 的内容与已保存记录不一致", status=409, code="conflict")
         return {"ok": True, "id": existing["id"], "visibility": "private", "deduped": True}
     total_new = sum(len(x[0]) for x in verified)
-    used = db.get_conn().execute(
-        "SELECT COALESCE(SUM(bytes),0) FROM skill_generation_media WHERE user_id=?", (uid,)
-    ).fetchone()[0]
-    if int(used) + total_new > MAX_TOTAL_PRIVATE_BYTES:
-        raise ServiceError("私有生图历史存储超过容量上限", status=413, code="quota_exceeded")
     from .config import get_generated_dir
     target_dir = get_generated_dir()
     target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -352,6 +354,15 @@ def import_generation(db: Any, user: dict, body: dict) -> dict:
                 run_id = prior["id"]
                 deduped = True
             else:
+                # Count and insertion must share the same write transaction,
+                # otherwise simultaneous imports may exceed per-user quota.
+                used = tx.execute(
+                    "SELECT COALESCE(SUM(bytes),0) FROM skill_generation_media WHERE user_id=?",
+                    (uid,),
+                ).fetchone()[0]
+                if int(used) + total_new > MAX_TOTAL_PRIVATE_BYTES:
+                    raise ServiceError("私有生图历史存储超过容量上限",
+                                       status=413, code="quota_exceeded")
                 tx.execute(
                     """INSERT INTO skill_generation_runs
                        (id,user_id,external_run_id,origin_client,status,original_request,
