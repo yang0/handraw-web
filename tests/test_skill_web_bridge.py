@@ -257,6 +257,33 @@ class SkillWebBridgeTests(unittest.TestCase):
             "SELECT visibility FROM studio_generations WHERE id='private_audit_only'"
         ).fetchone()[0], "private")
 
+    def test_migration_repair_maps_only_existing_public_history(self):
+        from backend.migrations import POST_MIGRATION_HOOKS
+        self.assertIn(97, POST_MIGRATION_HOOKS)
+        with self.db.transaction() as tx:
+            for hid, visibility, path in (
+                ("public_missing_work", "public", "/images/individual/FA/FA-013.webp"),
+                ("private_preserved", "private", "/images/individual/FA/FA-014.webp"),
+            ):
+                tx.execute("""INSERT INTO studio_generations
+                    (id,user_id,username,tab_title,mode,prompt,items_json,status,
+                     created_at,visibility,engine)
+                    VALUES (?,?,?,?,?, ?, ?, 'success', ?, ?, 'sample')""",
+                    (hid,self.owner["id"],self.owner["username"],hid,
+                     "graphic-text","一张铅笔风格插画",json.dumps([path]),
+                     "2026-11-07T00:00:00Z",visibility))
+        with self.db.transaction() as tx:
+            POST_MIGRATION_HOOKS[97](tx)
+            POST_MIGRATION_HOOKS[97](tx)
+        public_count=self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM generation_works WHERE generation_id='public_missing_work'"
+        ).fetchone()[0]
+        private_count=self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM generation_works WHERE generation_id='private_preserved'"
+        ).fetchone()[0]
+        self.assertEqual(public_count,1)
+        self.assertEqual(private_count,0)
+
     def test_notifications_scoped_to_owner(self):
         with self.db.transaction() as tx:
             tx.execute("INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at)"
