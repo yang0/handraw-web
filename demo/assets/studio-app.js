@@ -6431,7 +6431,14 @@
           }
         }
         currentReqId = requestId;
-        persistOpenTabs(); // Request can be recovered after refresh.
+        if (dn) {
+          dn.data.pendingTasksBySlot = dn.data.pendingTasksBySlot || {};
+          dn.data.pendingTasksBySlot[slotKey] = {
+            taskId: dn.data.pendingTasksBySlot[slotKey]?.taskId || "", requestId
+          };
+          dn.data.pendingRequestId = requestId;
+        }
+        persistOpenTabs(); // Each slot survives refresh, including pending POST.
         if (dn) {
           dn.data.pendingRequestIds = dn.data.pendingRequestIds || {};
           dn.data.pendingRequestIds[slotKey] = requestId;
@@ -6439,6 +6446,7 @@
           dn.data.pendingSpec[requestId] = {
             batchId,
             slotKey,
+            index: i,
             role: sp.role || "image",
             title: sp.title || `图片 #${i + 1}`,
             anchorHeading: sp.anchorHeading || "",
@@ -6509,6 +6517,7 @@
                   dn.data.pendingSpec[activeReqId] = dn.data.pendingSpec[requestId] || {
                     batchId,
                     slotKey,
+                    index: i,
                     role: sp.role || "image",
                     title: sp.title || `图片 #${i + 1}`,
                     anchorHeading: sp.anchorHeading || "",
