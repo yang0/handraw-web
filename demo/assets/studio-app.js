@@ -4313,11 +4313,16 @@
     ensureMyArticlesInitialized();
     writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
     if (_articlesCloudConflict) {
-      // Changes made after detecting a conflict must also survive a reload.
+      // Keep entries omitted from the hydrated workspace; merge later edits
+      // without deleting the offline versions saved before rehydration.
+      const existing = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
+      const byId = new Map((existing?.articles || []).map(a => [a.id, a]));
+      (CS.myArticles || []).forEach((a) => {
+        if (a && byId.has(a.id)) byId.set(a.id, JSON.parse(JSON.stringify(a)));
+      });
       writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
-        createdAt: Date.now(),
-        articles: JSON.parse(JSON.stringify(CS.myArticles || [])),
-        activeId: CS.activeArticleId || ""
+        createdAt: Date.now(), articles: [...byId.values()],
+        activeId: CS.activeArticleId || existing?.activeId || ""
       });
     }
     scheduleCloudArticlesSync();
@@ -12743,6 +12748,53 @@
     return targetArt;
   }
 
+  function restoreArticleConflictBackup() {
+    const saved = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
+    const items = Array.isArray(saved?.articles) ? saved.articles.filter(a => a && a.id) : [];
+    if (!items.length) { toast("暂无需要恢复的本地文章备份"); return; }
+    S.openModal({
+      title: "恢复本地文章备份",
+      sizeClass: "modal-medium",
+      html: `<div style="display:flex;flex-direction:column;gap:10px;">
+        <p style="font-size:13px;line-height:1.65;">以下是云端版本冲突或离线编辑时保留的文章。选择一篇作为新文章恢复，原云端文章不会被覆盖。</p>
+        ${items.map((a,i) => `<button type="button" class="btn" data-restore-conflict="${i}"
+          style="text-align:left;white-space:normal;padding:12px;">
+          ${esc(a.articleTitle || a.title || "未命名文章")} · ${String(a.markdown || "").length} 字符</button>`).join("")}
+        <button type="button" class="btn" id="art-conflict-close">稍后处理</button>
+      </div>`,
+      onMount(root) {
+        root.querySelector("#art-conflict-close").onclick = () => S.closeModal();
+        root.querySelectorAll("[data-restore-conflict]").forEach(button => {
+          button.onclick = () => {
+            const index = Number(button.getAttribute("data-restore-conflict"));
+            const source = items[index];
+            if (!source) return;
+            ensureMyArticlesInitialized();
+            const copy = JSON.parse(JSON.stringify(source));
+            copy.id = E.uid("art");
+            copy.articleTitle = (copy.articleTitle || copy.title || "未命名文章") + " · 恢复副本";
+            copy.title = copy.articleTitle;
+            copy.linkedTabId = null;
+            copy.linkedPlanNodeId = null;
+            copy.isNewDraft = false;
+            copy.createdAtMs = Date.now();
+            copy.updatedAtMs = Date.now();
+            CS.myArticles.unshift(copy);
+            const remaining = items.filter((a) => a.id !== source.id);
+            writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, remaining.length ? {
+              createdAt: Date.now(), articles: remaining, activeId: remaining[0].id
+            } : null);
+            _articlesCloudConflict = remaining.length > 0;
+            S.closeModal();
+            persistMyArticles();
+            openUnifiedArticleEditor(copy.id, {renderNow:true});
+            toast("已恢复为独立新文章，原云端文章保持不变");
+          };
+        });
+      }
+    });
+  }
+
   function renderArticlePortalPage(sortedArticles) {
     DOM.previewStage.innerHTML = `
       <div class="ic-pv-topbar">
@@ -12760,6 +12812,8 @@
 
         <div class="ic-pv-main-scroll" style="display:flex;align-items:center;justify-content:center;">
           <div style="max-width:820px;width:100%;padding:40px 24px;">
+            ${readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null)?.articles?.length
+              ? '<div class="hw-article-conflict-reminder" role="status">发现尚未恢复的本地文章备份。<button type="button" id="portal-restore-conflicts" class="btn btn-sm">查看并恢复</button></div>' : ""}
             <div style="text-align:center;margin-bottom:38px;">
               <div style="font-size:44px;margin-bottom:12px;">📰</div>
               <h1 style="font-size:24px;font-weight:850;color:var(--ic-ink);margin:0 0 10px;">文章模式：为文章配置插图与封面图</h1>
@@ -12807,6 +12861,7 @@
 
     const backBtn = DOM.previewStage.querySelector("#portal-back-canvas");
     if (backBtn) backBtn.onclick = () => switchCreationStage("canvas");
+    DOM.previewStage.querySelector("#portal-restore-conflicts")?.addEventListener("click", restoreArticleConflictBackup);
 
     const fileInput = DOM.previewStage.querySelector("#portal-file-input");
     const uploadCard = DOM.previewStage.querySelector("#portal-card-upload");
@@ -14869,26 +14924,8 @@
     const syncRetryBtn = DOM.previewStage.querySelector("#editor-sync-retry");
     if (syncRetryBtn) syncRetryBtn.onclick = () => {
       if (_articlesCloudConflict) {
-        const backup = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
-        const source = (backup?.articles || []).find(a => a.id === draft.id);
-        if (source) {
-          ensureMyArticlesInitialized();
-          const copy = JSON.parse(JSON.stringify(source));
-          copy.id = E.uid("art");
-          copy.articleTitle = (copy.articleTitle || "未命名文章") + " · 冲突恢复副本";
-          copy.title = copy.articleTitle;
-          copy.linkedTabId = null;
-          copy.linkedPlanNodeId = null;
-          copy.createdAtMs = Date.now();
-          copy.updatedAtMs = Date.now();
-          CS.myArticles.unshift(copy);
-          _articlesCloudConflict = false;
-          writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
-          persistMyArticles();
-          openUnifiedArticleEditor(copy.id, {renderNow: true});
-          toast("已作为新文章恢复本地版本，原云端文章保持不变");
-          return;
-        }
+        restoreArticleConflictBackup();
+        return;
         const md = String(draft.markdown || "");
         const blob = new Blob([md], {type:"text/markdown;charset=utf-8"});
         const url = URL.createObjectURL(blob);
