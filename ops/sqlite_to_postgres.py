@@ -139,6 +139,8 @@ def inspect_schema(conn, tables, *, allow_omitting_nonunique_expressions=False):
                     raise ValueError("Cannot translate SQLite partial index " + index_name)
                 partial = matched.group(1).strip()
                 if re.search(r"strftime|json_extract|julianday|datetime\s*\(", partial, re.I):
+                    if allow_omitting_nonunique_expressions and not index["unique"]:
+                        continue
                     raise ValueError("SQLite-only unique index: " + index_name)
             unique_indexes.append((table, index_name, real_cols, partial, bool(index["unique"])))
     return columns, foreign_keys, unique_indexes, identity
