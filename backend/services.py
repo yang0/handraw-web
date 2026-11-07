@@ -6272,8 +6272,13 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     raise ServiceError("所选资源系统说明超过 4000 字上限，请精简所选资源", status=400, code="prompt_too_long")
                 raise ServiceError("提示词加上系统说明后超过 4000 字上限，请精简提示词", status=400, code="prompt_too_long")
 
-        # 2. Enforce daily free quota -> automatic credit fallback.
-        w = tx.execute("SELECT * FROM wallets WHERE user_id = ?", (uid,)).fetchone()
+        # 2. Lock the wallet through the entire free-quota decision. Without
+        # FOR UPDATE, two PostgreSQL workers can both spend the same daily
+        # quota slot and overwrite each other's counter.
+        wallet_query = "SELECT * FROM wallets WHERE user_id = ?"
+        if getattr(tx, "dialect", "") == "postgresql":
+            wallet_query += " FOR UPDATE"
+        w = tx.execute(wallet_query, (uid,)).fetchone()
         used = int(w["free_quota_used"]) if (w and w["free_quota_date"] == today) else 0
         if used < max_free:
             tx.execute(
