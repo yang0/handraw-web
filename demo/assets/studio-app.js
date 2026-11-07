@@ -2870,52 +2870,51 @@
         CS.activeTabId = created.id;
       }
     } else if (forkId) {
-      // Phase 3b-1: Open in "做图" directly via recipes/from-work, never create a new tab!
+      // A V3 work can have different recipes for each image. Retain the image
+      // selector until the server confirms the draft was applied; failed
+      // requests stay retryable by refreshing the deep link.
       CS.stageView = "quick";
-      const cleanUrl = new URL(window.location.href);
-      cleanUrl.searchParams.delete("fork");
-      cleanUrl.searchParams.set("entry", "quick");
-      window.history.replaceState(null, "", cleanUrl.pathname + cleanUrl.search);
-
+      const forkImage = params.get("image");
+      let forkStarted = false;
       const executeFork = async () => {
+        if (forkStarted) return;
         if (!App.state?.loggedIn) {
-          window.__pendingForkId = forkId;
           S.openLoginModal("做同款请先登录账号", () => {
-            if (App.state?.loggedIn && window.__pendingForkId) {
-              const fid = window.__pendingForkId;
-              window.__pendingForkId = null;
-              fetch(`/api/studio/recipes/from-work/${encodeURIComponent(fid)}`, { credentials: "include" })
-                .then((r) => {
-                  if (r.status === 404 || !r.ok) {
-                    toast("这件作品不可用");
-                    return null;
-                  }
-                  return r.json();
-                })
-                .then((data) => {
-                  if (data && data.draft && window.HandrawMakeImage) {
-                    window.HandrawMakeImage.applyForkDraft(data.draft);
-                  }
-                })
-                .catch(() => toast("这件作品不可用"));
-            }
+            if (App.state?.loggedIn) executeFork();
           });
           return;
         }
+        forkStarted = true;
         try {
-          const resp = await fetch(`/api/studio/recipes/from-work/${encodeURIComponent(forkId)}`, {
+          const query = forkImage === null ? "" : "?image=" + encodeURIComponent(forkImage);
+          const resp = await fetch(`/api/studio/recipes/from-work/${encodeURIComponent(forkId)}${query}`, {
             credentials: "include"
           });
-          if (resp.status === 404 || !resp.ok) {
-            toast("这件作品不可用");
-            return;
+          if (!resp.ok) {
+            let detail = "";
+            try {
+              const errorData = await resp.json();
+              detail = errorData.message || errorData.error || "";
+            } catch (_) {}
+            throw new Error(detail || (resp.status === 404 ? "作品不存在或已不可见" : "无法读取作品配方"));
           }
           const data = await resp.json();
-          if (data && data.draft && window.HandrawMakeImage) {
-            window.HandrawMakeImage.applyForkDraft(data.draft);
-          }
-        } catch (_) {
-          toast("这件作品不可用");
+          if (!data || !data.draft) throw new Error("作品缺少可使用的配方参数");
+          CS.stageView = "quick";
+          // Use the real active graph, not the MakeImage singleton's transient
+          // context which may still be empty during initial tab hydration.
+          applyForkDraftToQuickNodes(data.draft);
+          if (!getQuickParts()) throw new Error("创作台尚未准备好，请刷新重试");
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete("fork");
+          cleanUrl.searchParams.delete("image");
+          cleanUrl.searchParams.set("entry", "quick");
+          window.history.replaceState(null, "", cleanUrl.pathname + cleanUrl.search);
+          renderQuickStart();
+          toast("已载入同款参数，可继续调整画风、图型和主题");
+        } catch (error) {
+          forkStarted = false;
+          toast("做同款参数载入失败：" + (error.message || error));
         }
       };
       executeFork();
@@ -12851,7 +12850,10 @@
     sd.colors = Array.isArray(draft.colors) ? [...draft.colors] : [];
     sd.tones = Array.isArray(draft.tones) ? [...draft.tones] : [];
     sd.moods = (Array.isArray(draft.moods) ? draft.moods : []).map(normalizeMoodLabel).filter(Boolean);
+    sd.customMood = draft.customMood || "";
     sd.whitespace = draft.whitespace || "";
+    sd.audience = draft.audience || "";
+    sd.businessScene = draft.businessScene || "";
 
     let extractedTheme = String(draft.subjectHint || draft.subject || "").trim();
     if (!extractedTheme && draft.prompt) {
