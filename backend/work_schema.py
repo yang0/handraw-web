@@ -913,6 +913,14 @@ def audit_and_deduplicate_work_topics(conn: sqlite3.Connection) -> list[dict[str
     return manifest
 
 
+FORUM_TOPICS_LISTED_AT_SQL = """
+-- Dedicated listing timestamp: separate original publish time from moderation
+-- and user-facing feed placement. Keep nullable for non-published topics.
+ALTER TABLE forum_topics ADD COLUMN listed_at_ms INTEGER;
+"""
+
+
+
 FORUM_TOPICS_WORK_UNIQUE_SQL = """
 -- Defensive deduplication in case migration was executed without python hooks
 UPDATE forum_topics
