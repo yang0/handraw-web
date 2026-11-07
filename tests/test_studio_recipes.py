@@ -605,6 +605,22 @@ class StudioRecipesTests(unittest.TestCase):
         self.assertEqual(st2, 200)
         self.assertEqual(res2["draft"]["subjectHint"], "第一句这是原提示词首句")
 
+        # Image-scoped deep links select a canonical media index; malformed
+        # or out-of-range indices fail explicitly instead of silently cloning
+        # the first picture's recipe.
+        st_zero, zero = self._req(
+            "GET", f"/api/studio/recipes/from-work/{work_id}?image=0", cookie=self.cookie_a,
+        )
+        self.assertEqual(st_zero, 200)
+        self.assertEqual(zero["draft"]["source"]["imageIndex"], 0)
+        self.assertEqual(zero["draft"]["styleIds"], ["FA-001"])
+        for bad in ("image=not-an-index", "image=-1", "image=1", "image=9999999"):
+            status, failed = self._req(
+                "GET", f"/api/studio/recipes/from-work/{work_id}?{bad}", cookie=self.cookie_a,
+            )
+            self.assertEqual(status, 400, bad)
+            self.assertEqual(failed.get("code"), "invalid_fork_image")
+
         # Test non-existent work returns 404
         st_404, _ = self._req("GET", "/api/studio/recipes/from-work/nonexistent_id", cookie=self.cookie_a)
         self.assertEqual(st_404, 404)
