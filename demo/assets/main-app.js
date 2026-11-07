@@ -2418,7 +2418,7 @@
     UI.profileWorksLoading = true;
     UI.profileWorksError = "";
     try {
-      const q = new URLSearchParams({ author: username, sort: "newest", limit: "100" });
+      const q = new URLSearchParams({ author: username, sort: "newest", limit: "24" });
       if (cursor) q.set("cursor", cursor);
       const res = await S.apiJson(`/api/works/feed?${q}`);
       if (UI.profileWorksUser !== username) return;
