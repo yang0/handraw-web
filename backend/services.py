@@ -5169,7 +5169,11 @@ def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list
                 if int(existing["user_id"] or 0) != uid:
                     raise ServiceError("无权修改其他用户的文章", status=403, code="article_forbidden")
                 if str(existing["deleted_at"] or "").strip():
-                    raise ServiceError("文章已经删除，请将本地内容另存为新文章", status=409, code="article_deleted")
+                    if "baseUpdatedAtMs" in art:
+                        raise ServiceError("文章已经删除，请将本地内容另存为新文章", status=409, code="article_deleted")
+                    # Compatibility with legacy clients: never resurrect a
+                    # previously deleted article, and do not fail the batch.
+                    continue
             if "baseUpdatedAtMs" in art:
                 try:
                     base = int(art["baseUpdatedAtMs"])
