@@ -21,7 +21,6 @@ from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
 from .db import Database, local_today_str, utc_now_iso
 from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
 from .runtime_policy import sanitize_media_url, sanitize_plain_text, sanitize_rich_html, env_flag
-from .work_schema import deduplicate_generation_history
 from .security import (
     generate_api_key,
     generate_session_token,
@@ -4517,72 +4516,30 @@ def get_public_generation_history(
     *,
     limit: int = 40,
 ) -> dict[str, Any] | list[dict[str, Any]] | None:
-    with db.transaction() as tx:
-        deduplicate_generation_history(tx)
+    """Global public generated works, never raw gateway executions."""
     conn = db.get_conn()
+    query = """
+        SELECT r.id AS run_id,r.user_id,r.source,r.external_run_id,r.created_at,
+               w.id AS work_id,w.title AS work_title,w.author_username
+        FROM generation_runs r JOIN works w ON w.run_id=r.id
+        WHERE w.status='published'
+    """
+    params: list[Any] = []
     if history_id:
-        row = conn.execute(
-            "SELECT * FROM studio_generations WHERE id = ? AND COALESCE(deleted_at, '') = ''",
-            (history_id,),
-        ).fetchone()
-        if not row:
-            return None
-        res = serialize_public_generation_history(row, conn)
-        attach_generation_social_counts(conn, [res], viewer=None)
-        return res
-    history_filter, history_ids = _seed_filter("id", "generations")
-    rows = conn.execute(
-        f"SELECT * FROM studio_generations WHERE COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT ?",
-        (*history_ids, max(1, min(100, limit))),
-    ).fetchall()
-    items = [serialize_public_generation_history(r, conn) for r in rows]
-    attach_generation_social_counts(conn, items, viewer=None)
-    return items
-
-
-def _merge_public_generation_batch_images(
-    conn: sqlite3.Connection, row: sqlite3.Row | dict[str, Any], item: dict[str, Any],
-) -> None:
-    """Attach all successful public image slots to one creator-history entry."""
-    keys = row.keys() if hasattr(row, "keys") else row
-    batch_id = str(row["batch_id"] or "") if "batch_id" in keys else ""
-    if not batch_id:
-        return
-    rows = conn.execute(
-        """
-        SELECT items_json FROM studio_generations
-        WHERE user_id=? AND batch_id=? AND status='success'
-          AND visibility='public' AND COALESCE(deleted_at,'')=''
-          AND engine!='demo'
-        ORDER BY batch_index ASC, created_at ASC, id ASC
-        """,
-        (int(row["user_id"]), batch_id),
-    ).fetchall()
-    urls: list[str] = []
-    seen: set[str] = set()
-    for source in rows:
         try:
-            images = json.loads(source["items_json"] or "[]")
-        except (ValueError, TypeError):
-            images = []
-        if not isinstance(images, list):
-            continue
-        for media in images:
-            if isinstance(media, dict) and str(media.get("status") or "").lower() in (
-                "failed", "error", "refunded", "cancelled",
-            ):
-                continue
-            url = (
-                media.strip() if isinstance(media, str)
-                else str(media.get("imageUrl") or media.get("url") or "").strip()
-                if isinstance(media, dict) else ""
-            )
-            if url and url not in seen:
-                seen.add(url)
-                urls.append(url)
-    item["images"] = urls
-    item["imageCount"] = len(urls)
-    item["batchId"] = batch_id
+            wid = _generation_work_id(conn, history_id)
+        except ServiceError:
+            return None
+        query += " AND w.id=?"
+        params.append(wid)
+    query += " ORDER BY r.created_at DESC,r.id DESC LIMIT ?"
+    params.append(1 if history_id else max(1, min(100, int(limit))))
+    rows = conn.execute(query, tuple(params)).fetchall()
+    if history_id and not rows:
+        return None
+    items = [_serialize_public_run_work(conn, row) for row in rows]
+    attach_generation_social_counts(conn, items, viewer=None)
+    return items[0] if history_id else items
 
 
 def _serialize_public_run_work(
