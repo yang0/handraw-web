@@ -29,7 +29,7 @@ for (const [width, count] of [[1400,4],[1100,3],[760,2],[350,1]]) {
 }
 assert.match(css, /\.hw-profile-topic-card \.forum-card-split\s*\{[^}]*flex-direction:\s*column-reverse/,
   "One-image posts must stack the media above text in narrow cards");
-assert.match(css, /\\.hw-personal-gallery-grid\\s*\\{[^}]*column-count:\\s*5;/s,
+assert.match(css, /\.hw-personal-gallery-grid\s*\{[^}]*column-count:\s*5;/s,
   "Private gallery cards must match the homepage's wide-screen density");
 for (const [width,count] of [[1400,4],[1100,3],[760,2],[350,1]]) {
   assert.ok(css.includes("@media(max-width:" + width + "px) { .hw-personal-gallery-grid { column-count:" + count + "; }"),
