@@ -309,12 +309,19 @@ def _project_generation_impl(
     urls = [url for _, url, _ in valid_items]
     images_json = json.dumps(urls, ensure_ascii=False)
 
-    # One work is linked directly to its canonical run. No separate mapping
-    # table is needed; batches and individual requests use the same key.
-    from .generation_v3 import _stable_id
-    canonical_run_id = _stable_id(
-        "run", int(row["user_id"]), "web", batch_id or gen_id,
+    # Reserve and lock the logical run before looking for its work. Two
+    # out-of-order gateway callbacks must never race into two new works.
+    from .generation_v3 import ensure_run
+    canonical_run_id = ensure_run(
+        conn, user_id=int(row["user_id"]), source="web",
+        external_run_id=batch_id or gen_id,
+        expected_count=int(row["batch_total"] or 1) if batch_id else 1,
     )
+    if getattr(conn, "dialect", "") == "postgresql":
+        conn.execute(
+            "SELECT id FROM generation_runs WHERE id=? FOR UPDATE",
+            (canonical_run_id,),
+        ).fetchone()
     mapping = conn.execute(
         "SELECT id AS work_id FROM works WHERE run_id=?",
         (canonical_run_id,),
@@ -337,7 +344,10 @@ def _project_generation_impl(
         # its denormalized feed cache. Do not update images_json in advance:
         # the DB guard rejects a cache that disagrees with the linked media.
     else:
-        wid = f"work_{uuid.uuid4().hex}"
+        # Stable work ID makes an interrupted callback safe to retry and
+        # prevents duplicate gallery identities even across worker restarts.
+        from .generation_v3 import _stable_id
+        wid = _stable_id("work", canonical_run_id)
         title = resolve_work_title(row, first_item)
         styles, layout = extract_generation_styles_and_layout(conn, row, first_item)
         ratio = str((first_item.get("ratio") if first_item else "") or "3:4")
