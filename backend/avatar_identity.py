@@ -72,22 +72,45 @@ def save_avatar(db: Any, user: dict[str, Any], data_url: str) -> dict[str, Any]:
     folder = avatar_dir()
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / filename
-    target.write_bytes(encoded)
     url = f"/avatars/{filename}"
+    from .media_storage import persist_media_bytes
+    persist_media_bytes(url, encoded, mime="image/webp")
     try:
         with db.transaction() as tx:
+            existing = tx.execute("SELECT avatar_url FROM users WHERE id=?", (uid,)).fetchone()
             updated = tx.execute("UPDATE users SET avatar_url=? WHERE id=? AND status='active'", (url, uid))
             if updated.rowcount != 1:
                 raise ServiceError("登录账号无效", status=403)
+            previous = str(existing["avatar_url"] or "") if existing else ""
+            if previous.startswith("/avatars/") and previous != url:
+                from .media_gc import queue_media_cleanup
+                queue_media_cleanup(tx, previous)
     except Exception:
         target.unlink(missing_ok=True)
+        try:
+            from .object_storage import delete_private_object
+            delete_private_object(url)
+        except Exception:
+            # Preserve a retryable cleanup intent if the remote delete fails.
+            try:
+                with db.transaction() as tx:
+                    from .media_gc import queue_media_cleanup
+                    queue_media_cleanup(tx, url, delay_seconds=60)
+            except Exception:
+                pass
         raise
     return {"ok": True, "avatarUrl": url}
 
 
 def reset_avatar(db: Any, user: dict[str, Any]) -> dict[str, Any]:
     with db.transaction() as tx:
-        updated = tx.execute("UPDATE users SET avatar_url='' WHERE id=? AND status='active'", (int(user["id"]),))
+        uid = int(user["id"])
+        previous_row = tx.execute("SELECT avatar_url FROM users WHERE id=?", (uid,)).fetchone()
+        updated = tx.execute("UPDATE users SET avatar_url='' WHERE id=? AND status='active'", (uid,))
         if updated.rowcount != 1:
             raise ServiceError("登录账号无效", status=403)
+        previous = str(previous_row["avatar_url"] or "") if previous_row else ""
+        if previous.startswith("/avatars/"):
+            from .media_gc import queue_media_cleanup
+            queue_media_cleanup(tx, previous)
     return {"ok": True, "avatarUrl": AVATAR_DEFAULT_URL}
