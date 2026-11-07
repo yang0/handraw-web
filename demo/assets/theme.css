@@ -3874,7 +3874,7 @@ img[data-hw-src].hw-img-failed {
 .hw-personal-gallery-intro label { cursor:pointer; flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; min-height:40px; white-space:nowrap; }
 .hw-personal-gallery-controls { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:8px 18px; margin:12px 0 18px; }
 .hw-personal-gallery-controls [data-gallery-message] { color:var(--ink-muted); font-size:12px; }
-.hw-personal-gallery-grid { column-count:4; column-gap:15px; width:100%; min-width:0; }
+.hw-personal-gallery-grid { column-count:5; column-gap:17px; width:100%; min-width:0; }
 /* Empty/list-filter states must occupy one full-width panel, never be fragmented across masonry columns. */
 .hw-personal-gallery-grid.is-empty { column-count:1; }
 .hw-personal-gallery-card { display:inline-block; width:100%; overflow:hidden; vertical-align:top; break-inside:avoid; -webkit-column-break-inside:avoid; margin:0 0 15px; background:var(--paper-card); border:1px solid var(--line-soft); border-radius:12px; box-sizing:border-box; }
@@ -3887,9 +3887,10 @@ img[data-hw-src].hw-img-failed {
 .hw-personal-gallery-actions .btn { font-size:11px; min-height:30px; padding:4px 9px; }
 .hw-personal-gallery-empty { display:flex; align-items:center; justify-content:center; width:100%; max-width:100%; min-height:124px; padding:32px 18px; text-align:center; overflow-wrap:anywhere; box-sizing:border-box; }
 .hw-personal-gallery-footer { display:flex; justify-content:center; margin:22px 0; }
-@media(max-width:1050px) { .hw-personal-gallery-grid { column-count:3; } }
+@media(max-width:1400px) { .hw-personal-gallery-grid { column-count:4; } }
+@media(max-width:1100px) { .hw-personal-gallery-grid { column-count:3; } }
 @media(max-width:760px) { .hw-personal-gallery-grid { column-count:2; } }
-@media(max-width:420px) { .hw-personal-gallery-grid { column-count:1; } }
+@media(max-width:350px) { .hw-personal-gallery-grid { column-count:1; } }
 @media(max-width:560px) {
   .hw-personal-gallery-intro label { width:100%; }
   .hw-personal-gallery-controls .hw-pills-row { width:100%; flex-wrap:wrap; }
