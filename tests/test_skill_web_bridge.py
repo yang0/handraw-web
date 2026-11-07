@@ -161,6 +161,46 @@ class SkillWebBridgeTests(unittest.TestCase):
                                   save_data_url_upload)
         self.assertEqual(error.exception.status, 409)
 
+    def test_skill_multi_image_run_creates_one_public_work(self):
+        from backend.server import save_data_url_upload
+        images = []
+        for index in range(3):
+            picture = Image.new("RGB", (4, 4), (index * 50, 90, 110))
+            buffer = io.BytesIO()
+            picture.save(buffer, format="PNG")
+            raw = buffer.getvalue()
+            images.append({
+                "name": f"frame_{index}.png",
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "dataUrl": "data:image/png;base64," + base64.b64encode(raw).decode(),
+            })
+        rid = str(uuid.uuid4())
+        payload = {
+            "externalRunId": rid, "originClient": "skill", "visibility": "public",
+            "status": "success", "requestId": "skill-history-" + rid,
+            "originalRequest": "三张同画风插画", "images": images,
+        }
+        before = self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0]
+        first = bridge.import_history(self.db, self.owner, payload, save_data_url_upload)
+        repeat = bridge.import_history(self.db, self.owner, payload, save_data_url_upload)
+        self.assertEqual(first["workIds"], repeat["workIds"])
+        self.assertEqual(first["imageCount"], 3)
+        self.assertEqual(len(first["workIds"]), 1)
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0], before + 1)
+        work = self.db.get_conn().execute(
+            "SELECT images_json FROM works WHERE id=?", (first["workId"],)
+        ).fetchone()
+        urls = json.loads(work["images_json"])
+        self.assertEqual(len(urls), 3)
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM generation_works WHERE generation_id=?", (first["id"],)
+        ).fetchone()[0], 1)
+        for url in urls:
+            self.assertTrue(self.db.get_conn().execute(
+                "SELECT 1 FROM media_public_grants WHERE media_url=? AND target_type='work' "
+                "AND target_id=? AND revoked_at IS NULL", (url, first["workId"])
+            ).fetchone())
+
     def test_history_upload_resumes_after_interruption_without_duplicate_media(self):
         rid=str(uuid.uuid4())
         a,b=b"image-one",b"image-two"
@@ -189,11 +229,12 @@ class SkillWebBridgeTests(unittest.TestCase):
             self.assertEqual(data_url,images[1]["dataUrl"])
             saved.append(data_url)
             return {"url":"/uploads/saved-two.png"}
-        with patch.object(bridge, "_publish_skill_run_images", return_value=["work_a", "work_b"]):
+        with patch.object(bridge, "_publish_skill_run_images", return_value=["work_a"]):
             completed=bridge.import_history(self.db,self.owner,payload,resume_store)
             self.assertEqual(completed["visibility"],"public")
-            self.assertEqual(completed["workIds"],["work_a","work_b"])
+            self.assertEqual(completed["workIds"],["work_a"])
             self.assertEqual(len(saved),2)
+            self.assertEqual(completed["imageCount"], 2)
             self.assertTrue(bridge.import_history(self.db,self.owner,payload,resume_store)["deduped"])
         self.assertEqual(self.db.get_conn().execute(
             "SELECT COUNT(*) FROM skill_generation_runs WHERE user_id=? AND external_run_id=?",
