@@ -189,6 +189,50 @@ class TestGenerationWorksSync(unittest.TestCase):
         works = get_works_feed(self.db, {"author": uname, "sort": "newest", "limit": 20})
         self.assertEqual(len([w for w in works["items"] if w["id"] == work_ids[0]]), 1)
 
+    def test_deleting_one_batch_slot_keeps_other_images_public(self):
+        conn = self.db.get_conn()
+        uid, uname = self.user_author["id"], self.user_author["username"]
+        for index in range(3):
+            conn.execute("""
+                INSERT INTO studio_generations (
+                    id,user_id,username,tab_title,mode,prompt,visible_prompt,
+                    items_json,status,created_at,visibility,engine,
+                    batch_id,batch_index,batch_total
+                ) VALUES (?,?,?,?,?,?,?,?,'success',?,'public','live',?,?,?)
+            """, (
+                f"removal_slot_{index}", uid, uname, "三张一件作品",
+                "graphic-text", "batch", "batch",
+                json.dumps([f"/generated/removal_{index}.webp"]),
+                "2026-11-07T00:00:00Z", "removal_batch", index, 3,
+            ))
+            works = project_generation_to_works(conn, f"removal_slot_{index}")
+        conn.commit()
+        self.assertEqual(len(works), 1)
+        wid = works[0]
+        conn.execute(
+            "UPDATE studio_generations SET deleted_at=? WHERE id=?",
+            ("2026-11-07T01:00:00Z", "removal_slot_0"),
+        )
+        sync_generation_visibility(conn, "removal_slot_0", "private", is_deleted=True)
+        images = json.loads(conn.execute(
+            "SELECT images_json FROM works WHERE id=?", (wid,)
+        ).fetchone()[0])
+        self.assertEqual(images, ["/generated/removal_1.webp", "/generated/removal_2.webp"])
+        self.assertEqual(conn.execute(
+            "SELECT status FROM works WHERE id=?", (wid,)
+        ).fetchone()[0], "published")
+        for idx in (1, 2):
+            conn.execute(
+                "UPDATE studio_generations SET deleted_at=? WHERE id=?",
+                ("2026-11-07T01:00:00Z", f"removal_slot_{idx}"),
+            )
+            sync_generation_visibility(
+                conn, f"removal_slot_{idx}", "private", is_deleted=True
+            )
+        self.assertNotEqual(conn.execute(
+            "SELECT status FROM works WHERE id=?", (wid,)
+        ).fetchone()[0], "published")
+
     def test_invisibility_of_failed_private_and_deleted_results(self):
         """失败、无图、私密、软删除结果公开接口均不可见；直接访问和互动入口同样检查权限"""
         conn = self.db.get_conn()
