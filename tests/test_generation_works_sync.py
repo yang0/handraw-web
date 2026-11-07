@@ -49,7 +49,7 @@ class TestGenerationWorksSync(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_idempotent_projection_and_backfill(self):
-        """同一成功结果重复同步、回填各执行三次，每个图片项始终只有一个作品"""
+        """同一生成任务可包含多张图片，但重复同步与回填始终只有一件作品"""
         conn = self.db.get_conn()
         now_iso = "2026-10-01T10:00:00Z"
         gen_id = "gen_test_idempotent_01"
@@ -75,17 +75,20 @@ class TestGenerationWorksSync(unittest.TestCase):
         wids_2 = project_generation_to_works(conn, gen_id)
         wids_3 = project_generation_to_works(conn, gen_id)
 
-        self.assertEqual(len(wids_1), 2)
+        self.assertEqual(len(wids_1), 1)
         self.assertEqual(wids_1, wids_2)
         self.assertEqual(wids_2, wids_3)
 
         # Check mapping table count
         m_count = conn.execute("SELECT COUNT(*) FROM generation_works WHERE generation_id = ?", (gen_id,)).fetchone()[0]
-        self.assertEqual(m_count, 2)
+        self.assertEqual(m_count, 1)
 
         # Check works table count
         w_count = conn.execute("SELECT COUNT(*) FROM works WHERE origin = 'generation'").fetchone()[0]
-        self.assertEqual(w_count, 2)
+        self.assertEqual(w_count, 1)
+
+        self.assertEqual(json.loads(conn.execute("SELECT images_json FROM works WHERE id=?",
+            (wids_1[0],)).fetchone()[0]), ["/uploads/art_01.webp", "/uploads/art_02.webp"])
 
         # Verify title does not leak tabTitle '图文模式'
         work_rows = conn.execute("SELECT id, title, subject, published_at_ms FROM works WHERE origin = 'generation'").fetchall()
@@ -98,54 +101,47 @@ class TestGenerationWorksSync(unittest.TestCase):
         b2 = backfill_historical_generations(conn)
         b3 = backfill_historical_generations(conn)
 
-        self.assertEqual(b1["projected"], 2)
-        self.assertEqual(b2["projected"], 2)
-        self.assertEqual(b3["projected"], 2)
+        self.assertEqual(b1["projected"], 1)
+        self.assertEqual(b2["projected"], 1)
+        self.assertEqual(b3["projected"], 1)
 
-        # Still strictly 2 works in works table and generation_works
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM generation_works WHERE generation_id = ?", (gen_id,)).fetchone()[0], 2)
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM works WHERE origin = 'generation'").fetchone()[0], 2)
+        # Still strictly 1 work for the run, containing both images
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM generation_works WHERE generation_id = ?", (gen_id,)).fetchone()[0], 1)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM works WHERE origin = 'generation'").fetchone()[0], 1)
 
-    def test_a_shared_picture_is_not_projected_twice(self):
-        """A picture shared before the projection existed is adopted, not copied.
-
-        This is the reported bug: generate a picture, share it (which creates a
-        work), and the projection then created a second work for the same file,
-        so the square showed that picture twice.
-        """
+    def test_multi_image_run_keeps_cover_and_single_gallery_work(self):
+        """Five outputs are one work; blank and duplicate results are not published."""
         conn = self.db.get_conn()
+        uid = self.user_author["id"]
         uname = self.user_author["username"]
-        image = "/generated/shared_once.png"
-
+        urls = [f"/generated/scene_{i}.webp" for i in range(5)]
+        items = ([{"id": f"image_{i}", "imageUrl": url} for i, url in enumerate(urls)]
+                 + [{"id": "failed", "imageUrl": "", "status": "failed"},
+                    {"id": "duplicate", "imageUrl": urls[0]}])
         conn.execute(
             """
-            INSERT INTO works (id, author_username, author_name, title, prompt, images_json,
-                               status, origin, published_at_ms, created_at, updated_at)
-            VALUES ('work_shared', ?, ?, '开始工作了', 'p', ?, 'published', 'web', 1000, '刚刚', '刚刚')
+            INSERT INTO studio_generations
+                (id,user_id,username,tab_title,mode,prompt,visible_prompt,items_json,
+                 status,created_at,visibility,engine)
+            VALUES ('gen_multi_v3',?,?,?,?,?,?,?, 'success',?, 'public','live')
             """,
-            (uname, uname, json.dumps([image])),
-        )
-        conn.execute(
-            """
-            INSERT INTO studio_generations (
-                id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
-                prompt, visible_prompt, prompt_masked, markdown, items_json, engine, cost_type,
-                credits_spent, status, created_at, request_id, subject, visibility
-            ) VALUES ('gen_shared', ?, ?, '图文模式', 'graphic-text', '图文创作', 'single', '画风 #FA-001',
-                      'p', 'p', 0, '', ?, 'live', 'free', 0, 'success', '2026-10-01T10:00:00Z', 'req_s', '', 'public')
-            """,
-            (self.user_author["id"], uname, json.dumps([{"id": "it_s", "imageUrl": image}])),
+            (uid, uname, "五张作品", "graphic-text", "手绘小镇", "手绘小镇",
+             json.dumps(items), "2026-10-02T10:00:00Z"),
         )
         conn.commit()
-
-        project_generation_to_works(conn, "gen_shared")
+        for _ in range(3):
+            work_ids = project_generation_to_works(conn, "gen_multi_v3")
+            self.assertEqual(len(work_ids), 1)
         conn.commit()
-
-        rows = conn.execute(
-            "SELECT id FROM works WHERE status='published' AND images_json LIKE ?", (f"%{image}%",)
-        ).fetchall()
-        self.assertEqual(len(rows), 1, f"one picture must be one work, got {[r['id'] for r in rows]}")
-        self.assertEqual(rows[0]["id"], "work_shared", "the existing work is adopted, not replaced")
+        work = conn.execute("SELECT images_json FROM works WHERE id=?", (work_ids[0],)).fetchone()
+        self.assertEqual(json.loads(work["images_json"]), urls)
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM generation_works WHERE generation_id='gen_multi_v3'"
+        ).fetchone()[0], 1)
+        feed = get_works_feed(self.db, {"author": uname, "sort": "newest", "limit": 10})
+        matching = [w for w in feed["items"] if w["id"] == work_ids[0]]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["images"], urls)
 
     def test_invisibility_of_failed_private_and_deleted_results(self):
         """失败、无图、私密、软删除结果公开接口均不可见；直接访问和互动入口同样检查权限"""
