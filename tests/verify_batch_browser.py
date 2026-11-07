@@ -28,6 +28,7 @@ Tests:
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -234,16 +235,28 @@ def main() -> int:
             assert page.locator(".batch-edit-table").is_visible(), "Row table must be visible in AI mode"
             assert page.locator("#batch-btn-add-row").is_visible(), "Add row button must be visible"
 
-            # Trigger AI Planning in AI mode
+            # Stub only the API response for UI verification; server AI behavior
+            # is tested in tests/test_batch_plan.py with mocked model responses.
+            ai_requests = []
+            def mock_ai_batch_plan(route):
+                request_body = route.request.post_data_json
+                ai_requests.append(request_body)
+                count = int(request_body.get("count") or 6)
+                items = [{"subject": f"当前母题的第{i+1}张专属画面", "layout": "SC-021"}
+                         for i in range(count)]
+                route.fulfill(status=200, content_type="application/json",
+                              body=json.dumps({"ok": True, "items": items, "source": "model"}))
+            page.route("**/api/studio/batch-plan", mock_ai_batch_plan)
+
             print("Clicking AI 规划这套图 in AI mode...")
             page.click("#batch-btn-plan")
-            page.wait_for_timeout(1200)
-
-            # Check that table has planned rows and template notice is displayed
+            page.wait_for_function(
+                "() => document.querySelectorAll('.batch-edit-row').length >= 6", timeout=10000)
             row_count = page.locator(".batch-edit-row").count()
-            print(f"Planned row count: {row_count}")
-            assert row_count >= 1, "Planned rows must be populated into table"
-            assert page.locator(".batch-plan-notice").is_visible(), "Template fallback notice must be visible"
+            assert row_count >= 6, "AI plan must populate batch editing rows"
+            assert ai_requests and ai_requests[-1]["layoutMode"] == "ai"
+            assert ai_requests[-1]["fixedLayout"] == "", "AI requests must not inherit a previous fixed layout"
+            page.unroute("**/api/studio/batch-plan", mock_ai_batch_plan)
 
             # Verify Fission removal from batch create
             assert page.locator("#batch-btn-fission").count() == 0, "#batch-btn-fission must be removed"
