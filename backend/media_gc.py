@@ -53,6 +53,10 @@ def _still_referenced(conn: Any, url: str) -> bool:
     ).fetchone()
     if row:
         return True
+    if url.startswith("/avatars/") and conn.execute(
+        "SELECT 1 FROM users WHERE avatar_url=? LIMIT 1", (url,),
+    ).fetchone():
+        return True
     return is_media_referenced(conn, url, str(local_path_for_url(url)))
 
 
