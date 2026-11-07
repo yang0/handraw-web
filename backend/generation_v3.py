@@ -440,8 +440,18 @@ def record_public_work(
     # that a new cover belongs to this work.
     tx.execute("UPDATE works SET run_id=?, cover_media_id=NULL WHERE id=?", (run_id, work_id))
     tx.execute("DELETE FROM work_media WHERE work_id=?", (work_id,))
-    tx.execute("DELETE FROM generation_items WHERE run_id=?", (run_id,))
+    # Replace successful snapshots, but do not erase failed/pending slots that
+    # belong to the same logical batch. A retried successful position overrides
+    # that position's earlier failure, while other failures remain auditable.
+    tx.execute(
+        "DELETE FROM generation_items WHERE run_id=? AND status='success'",
+        (run_id,),
+    )
     for rank, (position, media_id, _) in enumerate(entries):
+        tx.execute(
+            "DELETE FROM generation_items WHERE run_id=? AND position=?",
+            (run_id, position),
+        )
         tx.execute(
             """
             INSERT INTO generation_items
