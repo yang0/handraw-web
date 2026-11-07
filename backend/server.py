@@ -1927,8 +1927,15 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError as exc:
             raise ServiceError("Content-Length 无效", status=400, code="invalid_content_length") from exc
-        if length > MAX_JSON_BODY_BYTES:
-            raise ServiceError("请求体过大", status=413, code="payload_too_large")
+        # Skill embeds private images as Base64. Give only this authenticated
+        # contract a bounded allowance for a few 15 MiB photos. The regular
+        # website's 20 MiB JSON limit remains unchanged.
+        target_path = unquote(urlparse(self.path).path)
+        body_limit = (64 * 1024 * 1024) if (
+            self.command == "POST" and target_path == "/api/v1/me/generations"
+        ) else MAX_JSON_BODY_BYTES
+        if length > body_limit:
+            raise ServiceError("请求体过大；请分批同步生图历史", status=413, code="payload_too_large")
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
