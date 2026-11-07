@@ -2527,17 +2527,18 @@
         tabBodyHtml += `<div class="hw-detail-section-card" role="alert" style="text-align:center;padding:14px;"><span>${esc(UI.profileWorksError)}</span><button type="button" class="btn btn-sm" id="prof-work-retry-btn">重试加载</button></div>`;
       }
     } else if (UI.profileTab === "resources") {
-      const resourceOptions = [{ value: "all", label: "全部" }, { value: "styles", label: "画风" }, { value: "layouts", label: "图型" }];
-      const type = ["styles", "layouts"].includes(UI.profileResourceFilter) ? UI.profileResourceFilter : "all";
+      const resourceOptions = [{ value: "all", label: "全部" }, { value: "styles", label: "画风" }, { value: "layouts", label: "图型" },
+        ...(isMe ? [{ value: "gallery", label: "我的图库" }] : [])];
+      const type = [...(isMe ? ["gallery"] : []), "styles", "layouts"].includes(UI.profileResourceFilter) ? UI.profileResourceFilter : "all";
       const resources = [
         ...prof.styles.map((it) => ({ ...it, _profileResourceType: "styles" })),
         ...prof.layouts.map((it) => ({ ...it, _profileResourceType: "layouts" }))
       ].filter((it) => type === "all" || type === it._profileResourceType);
       tabBodyHtml = `
         <div class="hw-pills-row hw-profile-resource-filters" role="group" aria-label="创作资源分类" style="margin:0 0 16px;">
-          ${resourceOptions.map((opt) => `<button type="button" class="hw-pill ${type === opt.value ? "is-active" : ""}" data-prof-resource-filter="${opt.value}" aria-pressed="${type === opt.value}">${opt.label} (${opt.value === "all" ? prof.styles.length + prof.layouts.length : opt.value === "styles" ? prof.styles.length : prof.layouts.length})</button>`).join("")}
+          ${resourceOptions.map((opt) => `<button type="button" class="hw-pill ${type === opt.value ? "is-active" : ""}" data-prof-resource-filter="${opt.value}" aria-pressed="${type === opt.value}">${opt.label}${opt.value === "gallery" ? " · 私有" : ` (${opt.value === "all" ? prof.styles.length + prof.layouts.length : opt.value === "styles" ? prof.styles.length : prof.layouts.length})`}</button>`).join("")}
         </div>
-        ${resources.length
+        ${type === "gallery" && isMe ? '<div id="hw-profile-private-gallery" aria-live="polite">正在加载我的图库…</div>' : resources.length
           ? S.renderMasonry(resources.map((it) => `
               <article class="hw-card" data-prof-asset="${esc(it.id)}" style="cursor:pointer;">
                 <div class="hw-card-media">
@@ -3017,6 +3018,14 @@
         renderMain();
       };
     });
+    if (isMe && UI.profileTab === "resources" && UI.profileResourceFilter === "gallery") {
+      const galleryRoot = root.querySelector("#hw-profile-private-gallery");
+      if (galleryRoot && window.HandrawCloudCenter?.mountGallery) {
+        window.HandrawCloudCenter.mountGallery(galleryRoot, S.apiJson);
+      } else if (galleryRoot) {
+        galleryRoot.textContent = "图库模块暂时不可用，请刷新后重试。";
+      }
+    }
     const goAccBtn = root.querySelector("#prof-go-account-btn");
     if (goAccBtn) goAccBtn.onclick = () => switchView("account");
     const goWalBtn = root.querySelector("#prof-go-wallet-btn");
