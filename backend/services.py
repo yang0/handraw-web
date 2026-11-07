@@ -6465,6 +6465,7 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) ->
                 VALUES (?, ?, ?, 'failed',NULL,'gateway_failed',?,?)
                 ON CONFLICT(run_id,position) DO UPDATE SET
                     status='failed',media_id=NULL,error_code='gateway_failed',updated_at=excluded.updated_at
+                WHERE generation_items.status <> 'success'
                 """,
                 (_stable_id("item", canonical_run_id, position),
                  canonical_run_id, position, now_iso, now_iso),
