@@ -149,16 +149,15 @@ def _stable_id(prefix: str, *segments: object) -> str:
 
 def _storage_url(value: str) -> str:
     url = str(value or "").strip().split("?", 1)[0]
-    # The upstream generation/upload endpoint authenticates media ownership.
-    # Normalize here but refuse traversal, protocol-relative and bare paths.
-    if not url or (url.startswith("/") and not url.startswith("//")
-                   and ".." not in url.split("/") and "\\x00" not in url):
-        pass
-    elif url.startswith(("https://", "http://")):
-        pass
-    else:
+    # Upstream generation/upload authenticates media ownership. This layer
+    # still rejects traversal, protocol-relative URLs and malformed paths.
+    if not url or "\x00" in url or ".." in url.split("/"):
         raise ValueError("Invalid generated media URL")
-    return url
+    if url.startswith("/") and not url.startswith("//"):
+        return url
+    if url.startswith(("https://", "http://")):
+        return url
+    raise ValueError("Invalid generated media URL")
 
 
 def ensure_run(
