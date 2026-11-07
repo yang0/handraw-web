@@ -143,6 +143,46 @@ class TestGenerationWorksSync(unittest.TestCase):
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0]["images"], urls)
 
+    def test_parallel_cloud_slots_share_one_batch_work(self):
+        """Cloud requests finish out of order but remain one ordered work."""
+        conn = self.db.get_conn()
+        uid = self.user_author["id"]
+        uname = self.user_author["username"]
+        work_ids = []
+        # Slot 1 finishes before slot 0; the eventual cover must be slot 0.
+        for index in (1, 0):
+            gid = f"gen_batch_slot_{index}"
+            conn.execute("""
+                INSERT INTO studio_generations (
+                    id,user_id,username,tab_title,mode,prompt,visible_prompt,
+                    items_json,status,created_at,visibility,engine,
+                    batch_id,batch_index,batch_total
+                ) VALUES (?,?,?,?,?,?,?,?,'success',?,'public','live',?,?,?)
+            """, (
+                gid, uid, uname, "两张作品", "graphic-text", "春日小镇",
+                "春日小镇", json.dumps([f"/generated/out_{index}.webp"]),
+                f"2026-10-02T10:0{index}:00Z", "batch_unique_v3", index, 2,
+            ))
+            work_ids.extend(project_generation_to_works(conn, gid))
+        conn.commit()
+        self.assertEqual(work_ids[0], work_ids[1])
+        rows = conn.execute(
+            "SELECT id,images_json,generation_batch_key FROM works "
+            "WHERE generation_batch_key=?",
+            (f"{uid}:batch_unique_v3",),
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(json.loads(rows[0]["images_json"]),
+                         ["/generated/out_0.webp", "/generated/out_1.webp"])
+        for _ in range(2):
+            project_generation_to_works(conn, "gen_batch_slot_0")
+            project_generation_to_works(conn, "gen_batch_slot_1")
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM generation_works WHERE work_id=?", (work_ids[0],)
+        ).fetchone()[0], 1)
+        works = get_works_feed(self.db, {"author": uname, "sort": "newest", "limit": 20})
+        self.assertEqual(len([w for w in works["items"] if w["id"] == work_ids[0]]), 1)
+
     def test_invisibility_of_failed_private_and_deleted_results(self):
         """失败、无图、私密、软删除结果公开接口均不可见；直接访问和互动入口同样检查权限"""
         conn = self.db.get_conn()
