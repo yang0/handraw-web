@@ -2677,6 +2677,16 @@
           <div class="hw-card-code">🔒 ${esc(item.originClient === "skill" ? "Skill 生图" : "网站生图")} · ${esc(item.status || "")}</div>
           <div style="font-size:12px;color:var(--ink-muted);">${esc(item.createdAt || "")}</div>
           <p style="font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc((item.originalRequest || "创作记录").slice(0, 160))}</p>
+          ${item.status === "success" && cover ? `
+            <button type="button" class="btn btn-sm" data-publish-history="${esc(item.id)}">发布到作品广场…</button>
+            <form hidden data-history-publish-form="${esc(item.id)}" style="margin-top:12px;">
+              <label style="display:block;margin-bottom:8px;">公开作品标题<input name="title" required maxlength="100" class="form-control" style="width:100%;" value="我的新作品" /></label>
+              <label style="display:block;margin-bottom:8px;">公开的提示词 / 说明<textarea name="prompt" maxlength="4000" class="form-control" style="width:100%;" rows="4" placeholder="仅填写你愿意公开的内容；不会默认公开私有原始指令" required></textarea></label>
+              <div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px;">从本次记录选择前 9 张图片发布，原始历史继续私有。请确认图片版权和公开范围。</div>
+              <button type="submit" class="btn btn-sm btn-primary">确认并公开发布</button>
+              <button type="button" class="btn btn-sm" data-cancel-history-publish>取消</button>
+              <p class="hw-history-publish-error" role="alert"></p>
+            </form>` : ""}
         </article>`;
       }).join("");
       tabBodyHtml = `<section class="hw-detail-section-card" style="margin-bottom:18px;">
@@ -3225,6 +3235,52 @@
       UI.personalResourcesError = "";
       renderMain();
     };
+    root.querySelectorAll("[data-publish-history]").forEach((btn) => {
+      btn.onclick = () => {
+        const form = root.querySelector('[data-history-publish-form="' + btn.dataset.publishHistory + '"]');
+        if (form) { form.hidden = false; form.querySelector('[name="title"]').focus(); }
+      };
+    });
+    root.querySelectorAll("[data-history-publish-form]").forEach((form) => {
+      const id = form.getAttribute("data-history-publish-form");
+      const cancel = form.querySelector("[data-cancel-history-publish]");
+      if (cancel) cancel.onclick = () => { form.hidden = true; };
+      form.onsubmit = async (event) => {
+        event.preventDefault();
+        const item = (UI.personalGenerations || []).find((row) => row.id === id);
+        if (!item || item.status !== "success") return;
+        const urls = (item.images || []).map((im) =>
+          typeof im === "string" ? im : (im?.url || im?.imageUrl || ""))
+          .filter((url) => typeof url === "string" && url.startsWith("/") && !url.startsWith("//"))
+          .slice(0, 9);
+        if (!urls.length) { form.querySelector(".hw-history-publish-error").textContent = "没有可发布的本站图片"; return; }
+        const title = form.elements.namedItem("title").value.trim();
+        const prompt = form.elements.namedItem("prompt").value.trim();
+        if (!title || !prompt) return;
+        if (!window.confirm("即将向所有访客公开 " + urls.length + " 张图片及你填写的公开说明，是否确定发布？")) return;
+        const submit = form.querySelector('[type="submit"]');
+        submit.disabled = true;
+        const errorEl = form.querySelector(".hw-history-publish-error");
+        errorEl.textContent = "";
+        try {
+          const result = await S.apiJson("/api/entries", { method: "POST", body: {
+            entry: {
+              kind: "work", title, cover_url: urls[0],
+              content: { prompt, examples: urls.slice(1).map((image, idx) => ({ theme: "作品" + (idx + 2), image })) },
+              requestId: "web-history-" + id
+            }
+          } });
+          if (!result || result.ok === false || !result.id) throw new Error("发布结果尚未确认");
+          toast("作品已发布到广场");
+          UI.profileWorkRows = null;
+          UI.profileWorksUser = "";
+          openProfilePage(prof.username, "works");
+        } catch (error) {
+          errorEl.textContent = "发布失败或结果尚未确认：" + (error.message || "请先查看作品广场，避免重复发布");
+        } finally { submit.disabled = false; }
+      };
+    });
+
     const retryPersonalHistory = root.querySelector("#retry-personal-history");
     if (retryPersonalHistory) retryPersonalHistory.onclick = () => {
       UI.personalGenerations = null;
