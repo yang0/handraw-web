@@ -3876,3 +3876,14 @@ body.ic-studio-body .hw-topbar {
   .ic-history-stage .ic-history-topbar { width: calc(100% - 20px); padding: 10px; margin-top: 10px; }
   .ic-hist-masonry-grid .ic-hist-entry-card { margin-bottom: 12px; }
 }
+
+.ic-hist-category-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--ic-surface);
+  border: 1px solid var(--ic-border);
+  color: var(--ic-ink);
+  font-size: 11px;
+  font-weight: 800;
+}
