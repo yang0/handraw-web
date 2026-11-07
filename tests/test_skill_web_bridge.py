@@ -117,7 +117,9 @@ class SkillWebBridgeTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["visibility"], "public")
         mapped = self.db.get_conn().execute(
-            "SELECT work_id FROM generation_works WHERE generation_id='web_hist_public'"
+            """SELECT w.id AS work_id FROM works w
+               JOIN generation_runs r ON r.id=w.run_id
+               WHERE r.source='web' AND r.external_run_id='web_hist_public'"""
         ).fetchone()
         self.assertIsNotNone(mapped)
         own = bridge.list_history(self.db, self.owner, {})
