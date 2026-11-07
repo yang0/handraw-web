@@ -1582,6 +1582,16 @@ def _validate_official_asset_image(db: Database, actor: dict[str, Any], raw_imag
         fpath = get_uploads_dir() / rel
 
     if not fpath.is_file():
+        # Files are private objects, not guaranteed to be cached on every
+        # application instance. Ownership has already been checked above.
+        from .object_storage import ensure_local_copy
+        try:
+            ensure_local_copy(image, fpath)
+        except Exception as exc:
+            raise ServiceError(
+                "官方图片私有存储暂时不可用", status=503, code="media_storage_unavailable",
+            ) from exc
+    if not fpath.is_file():
         raise ServiceError("封面图片文件不存在", status=400, code="image_invalid")
 
     try:
