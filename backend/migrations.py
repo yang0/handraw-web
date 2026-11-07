@@ -770,5 +770,9 @@ try:
 except ImportError:  # pragma: no cover - compatibility for staged rollouts
     SCENARIOS_MIGRATIONS = []
 
+# Private Skill/Web client resources and generation history (v1).
+from .skill_cloud_schema import SKILL_CLOUD_MIGRATIONS
+MIGRATIONS.extend(SKILL_CLOUD_MIGRATIONS)
+
 # Ensure migrations execute in strictly ascending numerical order
 MIGRATIONS.sort(key=lambda m: m[0])
