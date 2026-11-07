@@ -929,6 +929,15 @@ def admin_moderate_work(
                 (title, price, json.dumps(styles, ensure_ascii=False), layout, mood, prompt, prompt_has_sec, notes, subject, now_iso, wid),
             )
         elif act == "delete":
+            if w["run_id"]:
+                # Keep the logical run and billing events, but make this
+                # deletion irreversible for delayed gateway callbacks.
+                tx.execute(
+                    """UPDATE generation_runs
+                       SET publication_deleted_at=?,updated_at=?
+                       WHERE id=? AND publication_deleted_at=''""",
+                    (now_iso, now_iso, str(w["run_id"])),
+                )
             old_media_urls = [r["storage_key"] for r in tx.execute(
                 """SELECT m.storage_key FROM work_media wm
                    JOIN media_assets m ON m.id=wm.media_id
