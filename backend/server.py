@@ -828,10 +828,22 @@ def _is_published_media(db: Database, media_url: str) -> bool:
                 (g.target_type='work' AND EXISTS (
                     SELECT 1 FROM works w
                     WHERE w.id=g.target_id AND w.status='published'
+                      AND (w.run_id IS NULL OR EXISTS (
+                        SELECT 1 FROM work_media wm
+                        JOIN media_assets m ON m.id=wm.media_id
+                        WHERE wm.work_id=w.id AND m.storage_key=g.media_url
+                      ))
                 ))
                 OR (g.target_type='topic' AND EXISTS (
                     SELECT 1 FROM forum_topics t
                     WHERE t.id=g.target_id AND t.status='published'
+                      AND (t.work_id IS NULL OR EXISTS (
+                        SELECT 1 FROM works w
+                        JOIN work_media wm ON wm.work_id=w.id
+                        JOIN media_assets m ON m.id=wm.media_id
+                        WHERE w.id=t.work_id AND w.status='published'
+                          AND m.storage_key=g.media_url
+                      ))
                 ))
                 OR (g.target_type NOT IN ('work','topic'))
               )
