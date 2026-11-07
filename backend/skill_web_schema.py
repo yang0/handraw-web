@@ -53,10 +53,6 @@ SKILL_WEB_MIGRATIONS = [
             ON studio_generations(user_id,batch_id,batch_index,created_at)
             WHERE batch_id <> '';
 
-        -- Unique work identity for the entire batch, not for each async slot.
-        ALTER TABLE works ADD COLUMN generation_batch_key TEXT NOT NULL DEFAULT '';
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_works_generation_batch_key
-            ON works(generation_batch_key) WHERE generation_batch_key <> '';
     """),
 
 ]
