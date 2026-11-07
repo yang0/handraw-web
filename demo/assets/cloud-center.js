@@ -238,7 +238,7 @@
   // API as Skill synchronization and Account > 个人云空间.
   async function mountGallery(container, api) {
     if (!container || typeof api !== "function") return;
-    let items = [], cursor = null, category = "all", busy = false;
+    let items = [], cursor = null, category = "all", busy = false, pendingFile = null, pendingUid = null;
     const cats = [["all","全部素材"],["characters","角色"],["props","道具"],["scenes","场景"],["other","其他"]];
     const catNames = Object.fromEntries(cats);
     container.innerHTML =
@@ -252,13 +252,15 @@
             return '<button type="button" class="hw-pill" data-gallery-category="' + c[0] +
               '">' + c[1] + '</button>';
           }).join("") +
-          '</div><span data-gallery-message role="status" aria-live="polite"></span></div>' +
+          '</div><span data-gallery-message role="status" aria-live="polite"></span>' +
+          '<button type="button" class="btn btn-sm" data-gallery-retry hidden>重试上传</button></div>' +
         '<div class="hw-personal-gallery-grid" data-gallery-cards></div>' +
         '<div class="hw-personal-gallery-footer"><button type="button" class="btn btn-sm" data-gallery-more hidden>加载更多素材</button></div>' +
       '</section>';
     const cards = container.querySelector("[data-gallery-cards]");
     const more = container.querySelector("[data-gallery-more]");
     const fileInput = container.querySelector("[data-gallery-file]");
+    const retryUpload = container.querySelector("[data-gallery-retry]");
     function message(msg, error) {
       const node = container.querySelector("[data-gallery-message]");
       if (node) {
@@ -353,20 +355,31 @@
         render();
       }
     });
-    fileInput.addEventListener("change", async function () {
-      const file = fileInput.files && fileInput.files[0];
-      fileInput.value = "";
-      if (!file || busy) return;
-      if (!["image/png","image/jpeg","image/webp"].includes(file.type) ||
-          file.size > 15 * 1024 * 1024) {
-        message("只支持 15 MB 以内的 PNG、JPEG、WebP 图片", true);
-        return;
-      }
-      const uid = window.crypto && window.crypto.randomUUID && window.crypto.randomUUID();
-      if (!uid) { message("浏览器不支持安全素材 ID，请更新浏览器", true); return; }
+    function uploadErrorText(err) {
+      const status = Number(err && err.status) || 0;
+      const code = String((err && err.code) || "");
+      const id = /[a-f0-9]{32}/i.exec(String((err && err.message) || ""));
+      const suffix = id ? "（问题编号：" + id[0] + "）" : "";
+      if (status === 401 || status === 403) return "登录失效或没有上传权限，请重新登录";
+      if (status === 413 || code === "image_too_large" || code === "payload_too_large")
+        return "图片过大，单张最多 15 MB、4000 万像素";
+      if (code === "invalid_image" || code === "invalid_image_upload")
+        return "图片损坏或格式不支持，请更换 PNG、JPEG 或 WebP";
+      if (status === 409) return "图片已存在或素材冲突，请刷新图库";
+      if (status === 429) return "操作太频繁，请稍后重试";
+      if (status >= 500) return "服务器保存失败，可重试同一张图" + suffix;
+      return String((err && err.message) || "未知错误");
+    }
+    async function uploadPending() {
+      if (!pendingFile || busy) return;
+      const file = pendingFile;
+      pendingUid = pendingUid || (window.crypto && window.crypto.randomUUID && window.crypto.randomUUID());
+      if (!pendingUid) { message("浏览器无法生成安全 ID，请更新浏览器", true); return; }
+      const uid = pendingUid;
       busy = true;
       fileInput.disabled = true;
-      message("正在上传私人素材…");
+      if (retryUpload) retryUpload.hidden = true;
+      message("正在读取「" + file.name + "」…");
       try {
         const dataUrl = await new Promise(function (resolve, reject) {
           const reader = new FileReader();
@@ -374,22 +387,48 @@
           reader.onerror = function () { reject(new Error("图片读取失败")); };
           reader.readAsDataURL(file);
         });
-        await api("/api/library/assets/" + uid, {method:"PUT",body:{
+        message("正在保存「" + file.name + "」到私人图库…");
+        const result = await api("/api/library/assets/" + uid, {method:"PUT",body:{
           uid: uid, cat: category === "all" ? "other" : category,
-          name: file.name.replace(/\.[^.]+$/, "") || "我的素材",
+          name: file.name.replace(/\\.[^.]+$/, "") || "我的素材",
           dataUrl: dataUrl, origin: "web"
         }});
+        const saved = result && (result.item || (result.uid ? result : null));
+        if (saved && saved.uid) {
+          const byId = new Map(items.map(function (row) { return [row.uid, row]; }));
+          byId.set(saved.uid, saved);
+          items = Array.from(byId.values());
+        }
+        pendingFile = null;
+        pendingUid = null;
         busy = false;
         await load(false);
-        message("添加成功，Skill 同步后即可使用");
+        message(result && result.deduped ? "图片已存在，已为你显示" : "添加成功，Skill 同步后即可使用");
       } catch (err) {
-        message("添加失败：" + (err.message || "请重试"), true);
+        message("添加失败：" + uploadErrorText(err), true);
+        if (retryUpload) retryUpload.hidden = false;
       } finally {
         busy = false;
         fileInput.disabled = false;
         render();
       }
+    }
+    fileInput.addEventListener("change", function () {
+      const file = fileInput.files && fileInput.files[0];
+      fileInput.value = "";
+      if (!file || busy) return;
+      pendingFile = file;
+      pendingUid = null;
+      if (retryUpload) retryUpload.hidden = true;
+      if (!["image/png","image/jpeg","image/webp"].includes(file.type) ||
+          !file.size || file.size > 15 * 1024 * 1024) {
+        pendingFile = null;
+        message("只支持 15 MB 以内的 PNG、JPEG、WebP 图片", true);
+        return;
+      }
+      return uploadPending();
     });
+    if (retryUpload) retryUpload.addEventListener("click", uploadPending);
     await load(false);
   }
   window.HandrawCloudCenter = { mount, mountGallery };
