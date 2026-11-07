@@ -33,6 +33,11 @@ for (const [width, count] of [[1400,4],[1100,3],[760,2],[350,1]]) {
 }
 assert.match(css, /\.hw-profile-topic-card \.forum-card-split\s*\{[^}]*flex-direction:\s*column-reverse/,
   "One-image posts must stack the media above text in narrow cards");
+assert.match(css, /\.hw-profile-topic-card \.forum-split-thumb\s*\{[^}]*aspect-ratio:\s*auto;/s,
+  "Single portrait images must retain their native aspect ratio, avoiding side padding");
+assert.match(css, /\.hw-profile-topic-card \.forum-split-thumb img\s*\{[^}]*height:\s*auto;/s,
+  "Single-image profile posts must not stretch into fixed landscape frames");
+
 assert.match(css, /\.hw-personal-gallery-grid\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\);/s,
   "Private gallery must use a left-to-right five-track grid");
 for (const [width,count] of [[1400,4],[1100,3],[760,2],[350,1]]) {
