@@ -123,8 +123,16 @@ def _rewrite(query: str) -> str:
     q = re.sub(r"\browid\b", "id", q, flags=re.I)
     # SQLite MAX(x,y) is scalar; PostgreSQL MAX() is an aggregate.
     # The site uses MAX(0, counter - n) for atomic nonnegative decrements.
-    q = re.sub(r"\bMAX\(\s*0\s*,", "GREATEST(0,", q, flags=re.I)
-    q = re.sub(r"\bMIN\(\s*0\s*,", "LEAST(0,", q, flags=re.I)
+    # SQLite also accepts MAX(column, literal) as a scalar function, while
+    # PostgreSQL reserves MAX(column) for aggregate calculations.
+    q = re.sub(
+        r"\bMAX\(\s*([A-Za-z_][A-Za-z_0-9.]*|[-+]?\d+)\s*,",
+        lambda m: "GREATEST(" + m.group(1) + ",", q, flags=re.I,
+    )
+    q = re.sub(
+        r"\bMIN\(\s*([A-Za-z_][A-Za-z_0-9.]*|[-+]?\d+)\s*,",
+        lambda m: "LEAST(" + m.group(1) + ",", q, flags=re.I,
+    )
     if re.search(r"\b(strftime|julianday|json_extract|datetime\s*\()\s*\(", q, re.I):
         raise ValueError("SQLite SQL expression needs explicit PostgreSQL port")
     return q
