@@ -10,6 +10,8 @@ from unittest.mock import patch
 from backend.db import Database
 from backend.generation_works import project_generation_to_works
 from backend.post_routes import _handle_detail
+from backend.recipe_routes import draft_recipe_from_work
+from backend.services import ServiceError
 from backend.services import register_user
 from backend.works_feed import get_work_by_id
 
@@ -99,6 +101,37 @@ class BatchDetailOrderTests(unittest.TestCase):
         self.assertEqual(json.loads(conn.execute(
             "SELECT images_json FROM forum_topics WHERE id=?", (topic["id"],),
         ).fetchone()[0]), IMAGES)
+
+    def test_fork_draft_uses_selected_image_recipe_not_first_image(self):
+        first = draft_recipe_from_work(self.db, self.author, self.work_id, 0)["draft"]
+        second = draft_recipe_from_work(self.db, self.author, self.work_id, 1)["draft"]
+        third = draft_recipe_from_work(self.db, self.author, self.work_id, 2)["draft"]
+        self.assertEqual((first["styleIds"], first["layoutId"]), (["FA-011"], "SC-001"))
+        self.assertEqual((second["styleIds"], second["layoutId"]), (["FB-022"], "IG-006"))
+        self.assertEqual((third["styleIds"], third["layoutId"]), (["FC-033"], "SB-003"))
+        self.assertEqual(second["source"]["imageIndex"], 1)
+        self.assertEqual(second["source"]["assetScope"], "image")
+        self.assertEqual(second["prompt"], "")
+        self.assertNotIn("recipeSnapshot", json.dumps(second))
+        with self.assertRaises(ServiceError) as error:
+            draft_recipe_from_work(self.db, self.author, self.work_id, 3)
+        self.assertEqual(error.exception.status, 400)
+
+    def test_fork_default_tracks_selected_cover_not_first_media(self):
+        conn = self.db.get_conn()
+        with self.db.transaction() as tx:
+            row = tx.execute(
+                "SELECT media_id FROM work_media WHERE work_id=? AND position=1",
+                (self.work_id,),
+            ).fetchone()
+            tx.execute(
+                "UPDATE works SET cover_media_id=?,cover_selected_by_author=1 WHERE id=?",
+                (row["media_id"], self.work_id),
+            )
+        draft = draft_recipe_from_work(self.db, self.author, self.work_id)["draft"]
+        self.assertEqual(draft["source"]["imageIndex"], 1)
+        self.assertEqual(draft["styleIds"], ["FB-022"])
+        self.assertEqual(draft["layoutId"], "IG-006")
 
     def test_replay_keeps_one_work_and_one_cover(self):
         with self.db.transaction() as tx:
