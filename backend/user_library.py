@@ -392,18 +392,28 @@ def is_media_referenced(
         ):
             return True
 
-        # 8. Check studio generations
+        # 8. The gateway ledger is not the V3 image authority. Once a
+        # generation is settled, its old URL is merely an execution log and
+        # must not prevent replacement media from being garbage-collected.
+        # Protect still-in-flight gateway downloads; completed published
+        # images are protected by generation_items and work_media instead.
         if _check_query(
             "studio_generations",
-            "SELECT 1 FROM studio_generations WHERE items_json LIKE ? OR markdown LIKE ? LIMIT 1",
+            """SELECT 1 FROM studio_generations
+               WHERE (items_json LIKE ? OR markdown LIKE ?)
+                 AND status IN ('queued','running','pending') LIMIT 1""",
             (url_like, url_like),
         ):
             return True
 
-        # 9. Check studio generation media
+        # 9. A private gateway upload is not a public media reference once
+        # its execution settles. Live executions remain protected.
         if _check_query(
             "studio_generation_media",
-            "SELECT 1 FROM studio_generation_media WHERE media_url = ? OR storage_path = ? LIMIT 1",
+            """SELECT 1 FROM studio_generation_media gm
+               JOIN studio_generations g ON g.id=gm.generation_id
+               WHERE (gm.media_url=? OR gm.storage_path=?)
+                 AND g.status IN ('queued','running','pending') LIMIT 1""",
             (clean_url, clean_path),
         ):
             return True
