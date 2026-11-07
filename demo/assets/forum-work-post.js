@@ -349,7 +349,7 @@
     }).join("");
     const missing = ["style", "layout"]
       .filter((kind) => !assets.some((a) => a.kind === kind))
-      .map((kind) => `<p class="fwp-missing">${kind === "style" ? "画风" : "图型"}：${scope === "missing" ? "当前图片未记录" : "没有可展示的信息"}</p>`)
+      .map((kind) => `<p class="fwp-missing">${kind === "style" ? "画风" : "图型"}：${scope === "missing" ? "当前图片未记录" : scope === "work" && !assets.length ? "原始生成记录未提供相关信息" : "没有可展示的信息"}</p>`)
       .join("");
     return `<h3 class="fwp-assets-title">${multiple ? "当前图片的画风与图型" : "使用的画风与图型"}</h3>
   ${note ? `<p class="fwp-asset-scope-note" style="font-size:12px;color:var(--ink-muted);margin:0 0 10px;">${esc(note)}</p>` : ""}
