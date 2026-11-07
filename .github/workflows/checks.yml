@@ -18,18 +18,43 @@ jobs:
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
       - run: python -m unittest discover -s tests -p 'test_article_versions.py' -v
-  portable-client:
+  # Keep the complete unittest suite, but run each module on exactly one
+  # worker. Historical timings balance slow HTTP/integration modules.
+  python-full:
+    name: python-full (shard ${{ matrix.shard }} / 6)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
       - run: python -m pip install -r requirements.txt
+      - name: Full Python unittest suite (balanced shard)
+        run: python ops/ci_python_shard.py --shards 6 --shard ${{ matrix.shard }}
+
+  # A stable single check for PR rules. No shard can fail unnoticed.
+  python-full-suite:
+    if: always()
+    needs: [python-full]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every full-suite shard to pass
+        run: test "${{ needs.python-full.result }}" = "success"
+
+  # Node/bash/release checks run concurrently with the Python matrix.
+  # Preserve the old job name for any existing branch protection rules.
+  portable-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: python -m unittest discover -s tests -v
       - run: node --check demo/assets/cloud-center.js
       - run: node --check demo/assets/error-boundary.js && node tests/test_error_boundary.cjs
       - run: node --check demo/assets/task-journey.js && node tests/test_task_journey.cjs
@@ -45,7 +70,7 @@ jobs:
       - run: node --check plugin/public/image-loader.js && node tests/test_image_loader.cjs
       - run: bash -n ops/server-deploy.sh ops/preview-server.sh ops/setup-preview.sh ops/test-server.sh
       - name: Check tracked files
-        run: python ops/check_release.py
+        run: python3 ops/check_release.py
   feed-ui-regression:
     runs-on: ubuntu-latest
     steps:
@@ -62,6 +87,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_progressive_thumbnails.py' -v
   account-identity-regression:
@@ -71,6 +97,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_account_identity.py' -v
       - run: python -m unittest discover -s tests -p 'test_v2_account_features.py' -v
@@ -89,6 +116,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
       - run: python -m pip install -r requirements.txt
       - name: Canonical run, single-work feed, Skill and history contracts
         run: |
@@ -124,5 +152,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_production_storage.py' -v
