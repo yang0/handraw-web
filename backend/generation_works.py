@@ -498,146 +498,42 @@ def get_work_generation_provenance(
         "engine": row["source"],
     }
 
-def backfill_work_topics(conn: sqlite3.Connection, *, batch_size: int = 100) -> dict[str, Any]:
-    """Backfill missing topics for all published works (generations, web, legacy) and preserve listed states.
+def reconcile_work_topics(conn: sqlite3.Connection, *, batch_size: int = 100) -> dict[str, Any]:
+    """Repair missing discussion links for current published works only.
 
-    Idempotent and safe:
-      1. Preserves existing topics: ID, replies, moderation status, counters.
-      2. Backfills listed_at_ms only if a historical published topic has a published reply.
-         Hidden/archived topics remain unlisted (listed_at_ms = NULL).
-      3. Prebuilds unique topics for missing works across all origins with listed_at_ms = NULL.
-      4. Records audit events in audit_logs so subsequent runs will never accidentally set listed_at_ms
-         on unlisted works.
-      5. Second execution produces 0 new topics and 0 listed status mutations.
+    Fresh V3 has no historical topic migration. Each new work creates its
+    discussion in the publication transaction; this optional operator action
+    only fixes an interrupted current-generation linking operation. It never
+    modifies existing topic moderation, listing timestamps or replies.
+    Works under PostgreSQL and SQLite, including when called inside a write
+    transaction.
     """
     from .resource_discussions import ensure_topic
-
-    now_iso = utc_now_iso()
-    in_tx = getattr(conn, "in_transaction", False)
-    if not in_tx:
-        conn.execute("BEGIN IMMEDIATE;")
-
+    limit = max(1, min(1000, int(batch_size)))
+    rows = conn.execute(
+        """SELECT w.* FROM works w
+           WHERE w.status='published' AND NOT EXISTS (
+               SELECT 1 FROM forum_topics t WHERE t.work_id=w.id
+           ) ORDER BY w.created_at,w.id LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    savepoint = f"v3_topics_{uuid.uuid4().hex[:12]}"
+    conn.execute(f"SAVEPOINT {savepoint}")
+    created: list[dict[str, str]] = []
     try:
-        # 1. Backfill listed_at_ms on historical published topics (excluding unlisted prebuilds)
-        legacy_candidates = conn.execute(
-            """
-            SELECT t.id, t.status, t.published_at_ms, t.created_at, t.listed_at_ms, t.work_id,
-                   m.target_id AS mapped_work_id
-            FROM forum_topics t
-            LEFT JOIN curation_resource_topics m ON m.kind = 'work' AND m.topic_id = t.id
-            WHERE ((t.work_id IS NOT NULL AND t.work_id <> '') OR m.target_id IS NOT NULL)
-              AND t.status = 'published'
-              AND t.listed_at_ms IS NULL
-              -- Work discussions become listed only after the first published
-              -- reply; do not resurrect empty unlisted topics during backfill.
-              AND EXISTS (
-                  SELECT 1 FROM forum_replies r
-                  WHERE r.topic_id = t.id AND r.status = 'published'
-              )
-              AND t.id NOT IN (
-                  SELECT target_id FROM audit_logs WHERE action = 'work.prebuild_unlisted_topic'
-              )
-            """
-        ).fetchall()
-
-        listed_backfilled = 0
-        for t in legacy_candidates:
-            wid = str(t["work_id"] or t["mapped_work_id"] or "").strip()
-            w_cur = conn.execute("SELECT status FROM works WHERE id = ?", (wid,)).fetchone()
-            if w_cur and str(w_cur["status"]) == "published":
-                pub_ms = int(t["published_at_ms"] or 0)
-                if pub_ms <= 0 and t["created_at"]:
-                    try:
-                        dt = datetime.fromisoformat(str(t["created_at"]).replace("Z", "+00:00"))
-                        pub_ms = int(dt.timestamp() * 1000)
-                    except Exception:
-                        pub_ms = int(time.time() * 1000)
-                if pub_ms <= 0:
-                    pub_ms = int(time.time() * 1000)
-
-                conn.execute(
-                    "UPDATE forum_topics SET listed_at_ms = ? WHERE id = ? AND listed_at_ms IS NULL",
-                    (pub_ms, t["id"]),
-                )
-                listed_backfilled += 1
-
-        # 2. Iterate all published works (from all sources: generation, web, legacy)
-        works = conn.execute(
-            "SELECT w.* FROM works w WHERE w.status = 'published' ORDER BY w.published_at_ms ASC, w.id ASC"
-        ).fetchall()
-
-        created_topics: list[dict[str, Any]] = []
-        already_had_topics = 0
-
-        for w in works:
-            wid = str(w["id"])
-            t_row = conn.execute(
-                "SELECT id, status, listed_at_ms FROM forum_topics WHERE work_id = ?",
-                (wid,),
-            ).fetchone()
-            if not t_row:
-                m_row = conn.execute(
-                    "SELECT topic_id FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?",
-                    (wid,),
-                ).fetchone()
-                if m_row:
-                    t_row = conn.execute(
-                        "SELECT id, status, listed_at_ms FROM forum_topics WHERE id = ?",
-                        (m_row["topic_id"],),
-                    ).fetchone()
-
-            if t_row:
-                already_had_topics += 1
-                conn.execute(
-                    "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
-                    (wid, t_row["id"], now_iso),
-                )
-                conn.execute(
-                    "UPDATE forum_topics SET work_id = ? WHERE id = ? AND (work_id IS NULL OR work_id = '')",
-                    (wid, t_row["id"]),
-                )
-            else:
-                # Prebuild unlisted topic
-                tid = ensure_topic(conn, "work", wid, dict(w), initial_origin="submission", listed_at_ms=None)
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO audit_logs (
-                            actor_id, actor_username, actor_role, action, target_type, target_id,
-                            reason, details_json, created_at
-                        ) VALUES (NULL, 'system', 'system', 'work.prebuild_unlisted_topic', 'topic', ?, ?, ?, ?)
-                        """,
-                        (
-                            tid,
-                            f"Prebuilt unlisted topic {tid} for work {wid}",
-                            json.dumps({"work_id": wid, "topic_id": tid}, ensure_ascii=False),
-                            now_iso,
-                        ),
-                    )
-                except Exception as audit_err:
-                    logger.warning("Failed to record audit log for prebuilt topic %s: %s", tid, audit_err)
-
-                created_topics.append(
-                    {
-                        "work_id": wid,
-                        "topic_id": tid,
-                        "origin": str(w["origin"] if "origin" in w.keys() else "legacy"),
-                        "title": str(w["title"] if "title" in w.keys() else ""),
-                    }
-                )
-
-        if not in_tx:
-            conn.execute("COMMIT;")
-    except Exception:
-        if not in_tx and getattr(conn, "in_transaction", False):
-            conn.execute("ROLLBACK;")
+        for work in rows:
+            work_id = str(work["id"])
+            topic_id = ensure_topic(
+                conn, "work", work_id, dict(work),
+                initial_origin="generation" if work["run_id"] else "submission",
+            )
+            created.append({"work_id": work_id, "topic_id": str(topic_id)})
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+    except BaseException:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         raise
+    return {"ok": True, "created_topics_count": len(created),
+            "created_manifest": created, "hasMore": len(rows) >= limit}
 
-    return {
-        "ok": True,
-        "total_published_works": len(works),
-        "already_had_topics": already_had_topics,
-        "created_topics_count": len(created_topics),
-        "listed_backfilled_count": listed_backfilled,
-        "created_manifest": created_topics,
-    }
+
