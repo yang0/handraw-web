@@ -143,6 +143,42 @@ class GenerationV3Tests(unittest.TestCase):
                     ordered_images=[(0, "/generated/ok.webp", "")], expected_count=2,
                 )
 
+    def test_author_selected_cover_survives_earlier_async_result(self):
+        from backend.generation_v3 import set_work_cover
+        wid = self._new_work()
+        with self.db.transaction() as tx:
+            record_public_work(
+                tx, user_id=self.owner_id, source="web",
+                external_run_id="author_cover_batch", work_id=wid,
+                ordered_images=[(1000, "/generated/second.webp", "")],
+                expected_count=2,
+            )
+        receipt = set_work_cover(
+            self.db, self.creator, wid, "/generated/second.webp",
+        )
+        self.assertEqual(receipt["coverUrl"], "/generated/second.webp")
+        with self.db.transaction() as tx:
+            record_public_work(
+                tx, user_id=self.owner_id, source="web",
+                external_run_id="author_cover_batch", work_id=wid,
+                ordered_images=[
+                    (0, "/generated/first.webp", ""),
+                    (1000, "/generated/second.webp", ""),
+                ],
+                expected_count=2,
+            )
+        row = self.db.get_conn().execute(
+            """SELECT w.cover_selected_by_author,m.storage_key
+               FROM works w JOIN media_assets m ON m.id=w.cover_media_id
+               WHERE w.id=?""", (wid,),
+        ).fetchone()
+        self.assertEqual(int(row[0]), 1)
+        self.assertEqual(row[1], "/generated/second.webp")
+        self.assertEqual(
+            work_images(self.db.get_conn(), wid),
+            ["/generated/first.webp", "/generated/second.webp"],
+        )
+
     def test_unique_work_per_run_and_owner_guard(self):
         wid = self._new_work()
         other = self._new_work("work_v3_duplicate")
