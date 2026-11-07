@@ -3833,3 +3833,23 @@ img[data-hw-src].hw-img-failed {
   padding: 3px 8px;
   font-weight: 800;
 }
+
+.hw-profile-work-group .hw-card-media { position: relative; }
+.hw-profile-batch-strip {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  display: flex;
+  gap: 5px;
+  border-radius: 7px;
+  padding: 5px;
+  background: rgba(25, 21, 16, .65);
+  pointer-events: none;
+}
+.hw-profile-batch-strip img {
+  width: 46px;
+  height: 46px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, .75);
+}
