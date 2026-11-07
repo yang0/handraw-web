@@ -105,7 +105,8 @@ state.historyFilter = "canvas";
 app.renderHistoryStage();
 assert.ok(stage.innerHTML.includes('data-hist-restore="canvas"'));
 state.historyFilter = "all";
-assert.ok(styles.includes("max-width: 1140px"), "Toolbar must be contained");
+assert.match(styles, /--ic-library-max-width:\\s*none;/, "History/workflow must not be capped at 1140px");
+assert.match(styles, /--ic-library-side-gap:\\s*6px;/, "History/workflow should use the navigation's narrow side gutters");
 assert.match(styles, /\.ic-hist-masonry-grid\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/s,
   "Desktop must use explicit three-column grid tracks, not CSS multicol balancing");
 assert.ok(styles.includes(".ic-hist-masonry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }"),
@@ -136,7 +137,8 @@ const sharedShellStyle = [
   ".ic-workflows-stage .ic-wf-minimal-tools",
   ".ic-history-stage .ic-hist-page-inner,",
   ".ic-workflows-stage .ic-wf-page-inner",
-  "--ic-library-max-width: 1140px"
+  "--ic-library-max-width: none",
+  "--ic-library-side-gap: 6px"
 ];
 for (const fragment of sharedShellStyle) {
   assert.ok(styles.includes(fragment), "Shared history/workflow alignment missing: " + fragment);
@@ -190,4 +192,4 @@ for (const action of ["data-wf-open", "data-wf-dl", "data-wf-rm"]) {
 assert.ok(workflowStage.innerHTML.includes("2 个节点"), "Card should show node count");
 assert.ok(workflowStage.innerHTML.includes("1 条连线"), "Card should show edge count");
 
-console.log("Studio history and workflows: aligned 1140px layout, responsive cards, renamed canvas and actions passed");
+console.log("Studio history and workflows: full-width navigation alignment, responsive cards, renamed canvas and actions passed");
