@@ -4959,6 +4959,108 @@ def fork_generation_recipe(
     }
 
 
+def _canonical_studio_history(
+    conn: sqlite3.Connection, user_id: int, legacy_ui_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Use generation_runs/items as the only logical task/media truth.
+
+    studio_generations contains gateway executions, reservation receipts and
+    recipe snapshots, but not independent user-facing generation histories.
+    A batch's output order, success/failure state, and work ownership all
+    come from the V3 run/items tables. No legacy data migration is performed.
+    """
+    by_web_key = {
+        str(entry.get("batchId") or entry.get("id") or ""): entry
+        for entry in legacy_ui_entries
+    }
+    runs = conn.execute(
+        """
+        SELECT r.*, w.id AS work_id
+        FROM generation_runs r
+        LEFT JOIN works w ON w.run_id=r.id
+        WHERE r.user_id=?
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT 120
+        """,
+        (user_id,),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for run in runs:
+        source = str(run["source"])
+        key = str(run["external_run_id"])
+        # The legacy UI entry still provides the Web recipe canvas snapshot.
+        # Do not resurrect generations deleted by their owner.
+        existing = by_web_key.get(key) if source == "web" else None
+        if source == "web" and not existing:
+            continue
+        if source not in ("web", "skill", "api"):
+            continue
+        work_id = str(run["work_id"] or "")
+        slots = conn.execute(
+            """
+            SELECT i.id, i.position, i.status, i.error_code,
+                   m.storage_key AS image_url
+            FROM generation_items i
+            LEFT JOIN media_assets m ON m.id=i.media_id
+            WHERE i.run_id=?
+            ORDER BY i.position ASC
+            """,
+            (run["id"],),
+        ).fetchall()
+        original_by_url = {
+            str(item.get("imageUrl") or ""): item
+            for item in (existing or {}).get("items", [])
+            if isinstance(item, dict) and item.get("imageUrl")
+        }
+        completed: list[dict[str, Any]] = []
+        output_slots: list[dict[str, Any]] = []
+        for slot in slots:
+            url = str(slot["image_url"] or "")
+            state = str(slot["status"])
+            public_slot = {
+                "id": str(slot["id"]),
+                "position": int(slot["position"]),
+                "status": state,
+                "imageUrl": url if state == "success" else "",
+                "errorCode": str(slot["error_code"] or ""),
+            }
+            output_slots.append(public_slot)
+            if state == "success" and url:
+                img = dict(original_by_url.get(url, {}))
+                img.update(public_slot)
+                if work_id:
+                    img["workId"] = work_id
+                completed.append(img)
+        if existing:
+            entry = dict(existing)
+            entry["items"] = completed
+        else:
+            safe_topic, masked = sanitize_prompt_for_client(
+                str(run["original_request"] or ""), conn,
+            )
+            entry = {
+                "id": str(run["id"]), "tabTitle": "Skill 手绘创作" if source == "skill" else "生成作品",
+                "topic": safe_topic or "手绘创作",
+                "mode": source, "modeLabel": "外部创作" if source != "web" else "生成",
+                "kind": "multi" if int(run["expected_count"]) > 1 else "single",
+                "recipeSummary": "", "prompt": safe_topic, "markdown": "",
+                "items": completed, "engine": "upload" if source == "skill" else source,
+                "taskId": "", "requestId": str(run["request_id"] or ""),
+                "error": "", "recipeId": "", "creationSource": source,
+                "promptMasked": bool(masked),
+            }
+        entry["runId"] = str(run["id"])
+        entry["status"] = str(run["status"])
+        entry["createdAt"] = format_short_time(run["created_at"])
+        entry["createdAtISO"] = str(run["created_at"])
+        entry["imageCount"] = len(completed)
+        entry["outputSlots"] = output_slots
+        entry["workId"] = work_id or entry.get("workId", "")
+        entry["source"] = source
+        result.append(entry)
+    return result[:40]
+
+
 def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
     conn = db.get_conn()
     presets = [
@@ -5188,7 +5290,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
         group["imageCount"] = len(group["items"])
         if group.get("promptMasked"):
             group["prompt"] = ""
-    hist = history_runs[:40]
+    hist = _canonical_studio_history(conn, uid, history_runs)
 
     uploads = [
         {
