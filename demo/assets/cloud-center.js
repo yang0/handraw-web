@@ -8,7 +8,10 @@
   const printable = (value) => escapeHtml(value).replace(/\n/g, "<br>");
   const safeImage = (item) => {
     const url = typeof item === "string" ? item : (item && (item.url || item.imageUrl));
-    return typeof url === "string" && /^\/(?:uploads|generated|images)\/[a-z0-9/_\.%-]+$/i.test(url) ? url : "";
+    return typeof url === "string" && (
+      /^\/api\/library\/assets\/[0-9a-f-]{36}\/image$/i.test(url) ||
+      /^\/(?:uploads|generated|images)\/[a-z0-9/_\.%-]+$/i.test(url)
+    ) ? url : "";
   };
   const state = () => ({
     resources: [], history: [], assets: [], collections: [],
@@ -230,5 +233,162 @@
       await Promise.all([loadResources(), loadHistory(), loadAssets(), loadCollections()]);
     });
   }
-  window.HandrawCloudCenter = { mount };
+
+  // Profile > 创作资源 > 我的图库: private user-owned assets from the same
+  // API as Skill synchronization and Account > 个人云空间.
+  async function mountGallery(container, api) {
+    if (!container || typeof api !== "function") return;
+    let items = [], cursor = null, category = "all", busy = false;
+    const cats = [["all","全部素材"],["characters","角色"],["props","道具"],["scenes","场景"],["other","其他"]];
+    const catNames = Object.fromEntries(cats);
+    container.innerHTML =
+      '<section class="hw-personal-gallery" aria-label="我的图库">' +
+        '<div class="hw-personal-gallery-intro"><div><h3>我的图库</h3>' +
+          '<p>私人素材仅自己可见。与 Skill 自建图库双向同步，也可以在这里直接添加图片。</p></div>' +
+          '<label class="btn btn-primary btn-sm">添加图片' +
+            '<input data-gallery-file type="file" accept="image/png,image/jpeg,image/webp" hidden /></label></div>' +
+        '<div class="hw-personal-gallery-controls"><div class="hw-pills-row" aria-label="图库分类">' +
+          cats.map(function (c) {
+            return '<button type="button" class="hw-pill" data-gallery-category="' + c[0] +
+              '">' + c[1] + '</button>';
+          }).join("") +
+          '</div><span data-gallery-message role="status" aria-live="polite"></span></div>' +
+        '<div class="hw-personal-gallery-grid" data-gallery-cards></div>' +
+        '<div class="hw-personal-gallery-footer"><button type="button" class="btn btn-sm" data-gallery-more hidden>加载更多素材</button></div>' +
+      '</section>';
+    const cards = container.querySelector("[data-gallery-cards]");
+    const more = container.querySelector("[data-gallery-more]");
+    const fileInput = container.querySelector("[data-gallery-file]");
+    function message(msg, error) {
+      const node = container.querySelector("[data-gallery-message]");
+      if (node) {
+        node.textContent = msg;
+        node.style.color = error ? "var(--vermilion)" : "var(--ink-muted)";
+      }
+    }
+    function render() {
+      if (!container.isConnected) return;
+      container.querySelectorAll("[data-gallery-category]").forEach(function (btn) {
+        const selected = btn.dataset.galleryCategory === category;
+        btn.classList.toggle("is-active", selected);
+        btn.setAttribute("aria-pressed", String(selected));
+      });
+      const visible = items.filter(function (item) {
+        return category === "all" || item.cat === category;
+      });
+      cards.innerHTML = visible.length ? visible.map(function (item) {
+        // The scoped image endpoint checks the logged-in owner's identity.
+        const img = safeImage(item.imageUrl);
+        return '<article class="hw-personal-gallery-card">' +
+          '<div class="hw-personal-gallery-image">' +
+            (img ? '<img loading="lazy" src="' + escapeHtml(img) +
+              '" alt="' + escapeHtml(item.name || "我的图片") + '" />'
+              : '<span>暂无预览</span>') + '</div>' +
+          '<div class="hw-personal-gallery-card-body"><strong>' +
+            escapeHtml(item.name || "未命名素材") + '</strong>' +
+            '<small>' + escapeHtml(catNames[item.cat] || "其他") + ' · ' +
+              (item.origin === "skill" ? "Skill 同步" : "网站素材") + '</small>' +
+            '<div class="hw-personal-gallery-actions">' +
+              (img ? '<a class="btn btn-sm" href="' + escapeHtml(img) +
+                '" target="_blank" rel="noopener noreferrer">查看原图</a>' : '') +
+              '<button class="btn btn-sm" type="button" data-gallery-delete="' +
+                escapeHtml(item.uid) + '">删除</button>' +
+            '</div></div></article>';
+      }).join("") : '<div class="hw-detail-section-card hw-personal-gallery-empty">' +
+        (items.length ? "此分类暂无素材" : "图库暂无图片。可从 Skill 自建图库同步，或点击「添加图片」。") +
+        '</div>';
+      more.hidden = !cursor;
+      more.disabled = busy;
+    }
+    async function load(append) {
+      if (busy) return;
+      busy = true;
+      message("正在加载素材…");
+      try {
+        const res = await api("/api/library/assets?limit=100" +
+          (append && cursor ? "&since=" + encodeURIComponent(cursor) : ""));
+        if (!container.isConnected) return;
+        const byId = new Map((append ? items : []).map(function (row) { return [row.uid, row]; }));
+        (res.items || []).forEach(function (row) {
+          if (row.deletedAt) byId.delete(row.uid);
+          else byId.set(row.uid, row);
+        });
+        items = Array.from(byId.values());
+        cursor = res.hasMore ? res.nextCursor : null;
+        message("已加载 " + items.length + " 张私人素材");
+      } catch (err) {
+        message("图库加载失败：" + (err.message || "请重试"), true);
+      } finally {
+        busy = false;
+        render();
+      }
+    }
+    container.querySelectorAll("[data-gallery-category]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        category = btn.dataset.galleryCategory || "all";
+        render();
+      });
+    });
+    more.addEventListener("click", function () { load(true); });
+    cards.addEventListener("click", async function (event) {
+      const button = event.target.closest("[data-gallery-delete]");
+      if (!button || busy) return;
+      const found = items.find(function (i) { return i.uid === button.dataset.galleryDelete; });
+      if (!found) return;
+      if (typeof window.confirm === "function" &&
+          !window.confirm("删除素材「" + (found.name || "未命名") + "」？这会同步删除状态到 Skill。")) return;
+      busy = true;
+      button.disabled = true;
+      try {
+        await api("/api/library/assets/" + encodeURIComponent(found.uid) +
+          "?baseRevision=" + encodeURIComponent(found.revision), {method:"DELETE"});
+        items = items.filter(function (i) { return i.uid !== found.uid; });
+        message("已删除素材");
+      } catch (err) {
+        message("删除失败：" + (err.message || "请重试"), true);
+      } finally {
+        busy = false;
+        render();
+      }
+    });
+    fileInput.addEventListener("change", async function () {
+      const file = fileInput.files && fileInput.files[0];
+      fileInput.value = "";
+      if (!file || busy) return;
+      if (!["image/png","image/jpeg","image/webp"].includes(file.type) ||
+          file.size > 15 * 1024 * 1024) {
+        message("只支持 15 MB 以内的 PNG、JPEG、WebP 图片", true);
+        return;
+      }
+      const uid = window.crypto && window.crypto.randomUUID && window.crypto.randomUUID();
+      if (!uid) { message("浏览器不支持安全素材 ID，请更新浏览器", true); return; }
+      busy = true;
+      fileInput.disabled = true;
+      message("正在上传私人素材…");
+      try {
+        const dataUrl = await new Promise(function (resolve, reject) {
+          const reader = new FileReader();
+          reader.onload = function () { resolve(reader.result); };
+          reader.onerror = function () { reject(new Error("图片读取失败")); };
+          reader.readAsDataURL(file);
+        });
+        await api("/api/library/assets/" + uid, {method:"PUT",body:{
+          uid: uid, cat: category === "all" ? "other" : category,
+          name: file.name.replace(/\.[^.]+$/, "") || "我的素材",
+          dataUrl: dataUrl, origin: "web"
+        }});
+        busy = false;
+        await load(false);
+        message("添加成功，Skill 同步后即可使用");
+      } catch (err) {
+        message("添加失败：" + (err.message || "请重试"), true);
+      } finally {
+        busy = false;
+        fileInput.disabled = false;
+        render();
+      }
+    });
+    await load(false);
+  }
+  window.HandrawCloudCenter = { mount, mountGallery };
 })();
