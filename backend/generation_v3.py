@@ -266,6 +266,38 @@ def ensure_run(
     return run_id
 
 
+def _local_media_metadata(url: str) -> tuple[str, int | None, int | None, int | None]:
+    """Best-effort byte identity and dimensions for a verified private file.
+
+    This never downloads unauthenticated remote URLs or reads arbitrary paths.
+    Content validation and object upload already happened in the caller.
+    """
+    from .config import get_generated_dir, get_uploads_dir
+
+    roots = (("/generated/", get_generated_dir()), ("/uploads/", get_uploads_dir()))
+    for prefix, root in roots:
+        if not url.startswith(prefix):
+            continue
+        root = root.resolve()
+        candidate = (root / url[len(prefix):]).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            return "", None, None, None
+        size = candidate.stat().st_size
+        if size < 1 or size > 32 * 1024 * 1024:
+            raise ValueError("Generated media has an invalid stored size")
+        with candidate.open("rb") as file:
+            checksum = hashlib.file_digest(file, "sha256").hexdigest()
+        width = height = None
+        try:
+            from PIL import Image
+            with Image.open(candidate) as img:
+                width, height = int(img.width), int(img.height)
+        except (OSError, ValueError):
+            pass
+        return checksum, width, height, size
+    return "", None, None, None
+
+
 def _upsert_media(
     tx: sqlite3.Connection,
     *,
@@ -278,21 +310,38 @@ def _upsert_media(
     if digest and (len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
         raise ValueError("Invalid media sha256")
     media_id = _stable_id("media", owner_id, url)
-    exists = tx.execute("SELECT sha256 FROM media_assets WHERE id=?", (media_id,)).fetchone()
+    exists = tx.execute(
+        "SELECT sha256 FROM media_assets WHERE id=?", (media_id,),
+    ).fetchone()
+    local_digest, width, height, file_bytes = _local_media_metadata(url)
+    if local_digest and digest and local_digest != digest:
+        raise ValueError("Media checksum does not match the uploaded content")
+    digest = local_digest or digest
     if exists and digest and exists["sha256"] and exists["sha256"] != digest:
         raise ValueError("Media storage key changed content")
     if not exists:
         tx.execute(
             """
             INSERT INTO media_assets
-              (id,owner_user_id,storage_key,sha256,mime_type,created_at)
-            VALUES (?,?,?,?,?,?)
+              (id,owner_user_id,storage_key,sha256,mime_type,width,height,size_bytes,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
             """,
             (media_id, owner_id, url, digest,
-             mimetypes.guess_type(url)[0] or "application/octet-stream", _now()),
+             mimetypes.guess_type(url)[0] or "application/octet-stream",
+             width, height, file_bytes, _now()),
         )
-    elif digest and not exists["sha256"]:
-        tx.execute("UPDATE media_assets SET sha256=? WHERE id=?", (digest, media_id))
+    else:
+        tx.execute(
+            """
+            UPDATE media_assets
+            SET sha256=CASE WHEN sha256='' THEN ? ELSE sha256 END,
+                width=COALESCE(width,?),
+                height=COALESCE(height,?),
+                size_bytes=COALESCE(size_bytes,?)
+            WHERE id=?
+            """,
+            (digest, width, height, file_bytes, media_id),
+        )
     return media_id
 
 
