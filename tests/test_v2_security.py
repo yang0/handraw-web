@@ -200,7 +200,7 @@ class SecurityHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200, raw)
         status, headers, _ = self.request("GET", upload_url)
         self.assertEqual(status, 200)
-        self.assertEqual(headers.get("Cache-Control"), "public, max-age=86400")
+        self.assertEqual(headers.get("Cache-Control"), "public, max-age=60, must-revalidate")
 
     def test_task_poll_requires_login_and_owner(self) -> None:
         uid = self.db.get_conn().execute("SELECT id FROM users WHERE username='su_editorial'").fetchone()["id"]
@@ -251,7 +251,7 @@ class SecurityHTTPTests(unittest.TestCase):
             self.assertEqual(GenerationReconciler(self.db).reconcile_once(), 1)
         row = self.db.get_conn().execute("SELECT status,items_json FROM studio_generations WHERE id='gen-reconcile'").fetchone()
         self.assertEqual(row["status"], "success")
-        self.assertIn("/generated/known-task_0.png", row["items_json"])
+        self.assertRegex(row["items_json"], r"/generated/known-task_0-[0-9a-f]+\\.png")
 
         with self.db.transaction() as tx:
             tx.execute("UPDATE studio_generations SET status='queued' WHERE id='gen-reconcile'")
