@@ -42,6 +42,16 @@ class ArticleVersionTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "article_version_conflict")
         self.assertEqual(self.current("v_a")["markdown"], "Version two")
 
+    def test_noop_workspace_sync_does_not_advance_revision(self):
+        initial = sync_user_studio_articles(self.db, self.alice, [
+            {"id":"noop", "articleTitle":"No-op", "markdown":"same", "baseUpdatedAtMs":0}
+        ])["versions"]["noop"]
+        again = sync_user_studio_articles(self.db, self.alice, [
+            {"id":"noop", "articleTitle":"No-op", "markdown":"same", "baseUpdatedAtMs":initial}
+        ])["versions"]["noop"]
+        self.assertEqual(again, initial)
+        self.assertEqual(self.current("noop")["markdown"], "same")
+
     def test_conflict_rolls_back_earlier_batch_writes(self):
         versions = sync_user_studio_articles(
             self.db, self.alice, [
