@@ -1025,3 +1025,8 @@
   .qc-entry-actions { gap: 6px; }
   .qc-mode-workflows { min-height: 44px; padding: 6px 10px; font-size: 12px; }
 }
+
+/* Align the global creation nav with the 1140px history/workflow content rail. */
+.qc-entry-bar {
+  padding-inline: max(var(--hw-page-gutter, 16px), calc((100% - 1140px) / 2));
+}
