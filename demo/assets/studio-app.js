@@ -7496,7 +7496,7 @@
     if (["loop", "series", "batch"].includes(kind) || ["series", "batch"].includes(mode) ||
         /循环批量|批量|套图/.test(label)) return "batch";
     if (h.recipeId || h.tabTitle === "做图配方" || /^rcp_/.test(String(h.requestId || ""))) return "quick";
-    if (h.ctrlId || h.dispId) return "canvas";
+    // A node ID is not proof of canvas origin: quick/batch forms also run graph nodes.
     return "other";
   }
 
