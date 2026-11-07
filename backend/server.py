@@ -536,9 +536,8 @@ def save_data_url_upload(
 
     if user:
         user_id = int(user["id"])
-        # Ensure historical uploads are backfilled so deduplication can match them
-        from .user_library import check_user_upload_quota, ensure_user_uploads_synced, next_change_seq
-        ensure_user_uploads_synced(db, user_id)
+        # Fresh V3 users have complete asset metadata on first write.
+        from .user_library import check_user_upload_quota, next_change_seq
 
         new_file_path: Path | None = None
         try:
