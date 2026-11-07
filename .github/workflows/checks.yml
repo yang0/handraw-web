@@ -89,6 +89,7 @@ jobs:
           node tests/test_studio_picker_interactions.cjs
           node tests/test_quick_stale_generation.cjs
           node tests/test_profile_private_gallery.cjs
+          node tests/test_profile_masonry_parity.cjs
           node tests/test_studio_batch.cjs
           node tests/test_batch_progress_incremental.cjs
           node tests/test_batch_concurrency_contract.cjs
