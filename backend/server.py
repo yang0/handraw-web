@@ -244,16 +244,9 @@ def cache_generated_image_bytes(raw_bytes: bytes, mime: str, filename_stem: str)
     gen_dir.mkdir(parents=True, exist_ok=True)
     # Content-addressed names protect immutable media identities on retries.
     out_name = f"{_safe_generated_stem(filename_stem)}-{hashlib.sha256(payload).hexdigest()[:16]}{ext}"
-    out_path = gen_dir / out_name
-    with out_path.open("wb") as fp:
-        fp.write(payload)
     public_url = f"/generated/{out_name}"
-    try:
-        from .object_storage import put as store_private_object
-        store_private_object(public_url, payload, mime=mime)
-    except Exception:
-        out_path.unlink(missing_ok=True)
-        raise  # never complete a generation if durable object upload failed
+    from .media_storage import persist_media_bytes
+    persist_media_bytes(public_url, payload, mime=mime)
     return public_url
 
 
@@ -574,15 +567,10 @@ def save_data_url_upload(
                 up_id = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
                 fname = f"{up_id}{ext}"
                 fpath = uploads_dir / fname
-                try:
-                    with fpath.open("xb") as fp:
-                        fp.write(raw_bytes)
-                except FileExistsError as exc:
-                    raise ServiceError("上传文件名冲突，请重试", status=503, code="upload_collision") from exc
-                new_file_path = fpath
                 public_url = f"/uploads/{fname}"
-                from .object_storage import put as store_private_object
-                store_private_object(public_url, raw_bytes)
+                from .media_storage import persist_media_bytes
+                persist_media_bytes(public_url, raw_bytes)
+                new_file_path = fpath
 
                 asset_uid = str(uuid.uuid4())
                 now_iso = utc_now_iso()
@@ -640,18 +628,9 @@ def save_data_url_upload(
     up_id = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
     fname = f"{up_id}{ext}"
     fpath = uploads_dir / fname
-    try:
-        with fpath.open("xb") as fp:
-            fp.write(raw_bytes)
-    except FileExistsError as exc:
-        raise ServiceError("上传文件名冲突，请重试", status=503, code="upload_collision") from exc
     public_url = f"/uploads/{fname}"
-    try:
-        from .object_storage import put as store_private_object
-        store_private_object(public_url, raw_bytes)
-    except Exception:
-        fpath.unlink(missing_ok=True)
-        raise
+    from .media_storage import persist_media_bytes
+    persist_media_bytes(public_url, raw_bytes)
     return {
         "id": up_id,
         "url": public_url,
