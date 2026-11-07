@@ -3966,3 +3966,68 @@ img[data-hw-src].hw-img-failed {
 }
 @media (max-width: 350px) { .hw-profile-feed { column-count: 1; } }
 @media (prefers-reduced-motion: reduce) { .hw-profile-topic-feed .hw-profile-topic-card { transition: none; } }
+
+
+/* Issue #98: private gallery upload review before any network request. */
+.hw-personal-gallery-upload-form {
+  padding: 16px;
+  margin: 0 0 18px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-card);
+  border-radius: 12px;
+  display: grid;
+  gap: 14px;
+  max-width: 780px;
+  box-sizing: border-box;
+}
+.hw-personal-gallery-upload-form[hidden] { display: none !important; }
+.hw-personal-gallery-upload-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px 14px;
+}
+.hw-personal-gallery-upload-head strong { font-size: 15px; }
+.hw-personal-gallery-upload-head span { color: var(--ink-muted); font-size: 12px; overflow-wrap: anywhere; }
+.hw-personal-gallery-upload-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(150px, 1fr);
+  gap: 12px;
+}
+.hw-personal-gallery-upload-fields label {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-body);
+}
+.hw-personal-gallery-upload-fields input,
+.hw-personal-gallery-upload-fields select {
+  min-width: 0;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-main);
+  border: 1px solid var(--line-strong);
+  background: var(--paper-bg);
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+.hw-personal-gallery-upload-fields input:focus-visible,
+.hw-personal-gallery-upload-fields select:focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: 2px;
+}
+.hw-personal-gallery-upload-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 620px) {
+  .hw-personal-gallery-upload-form { padding: 12px; }
+  .hw-personal-gallery-upload-fields { grid-template-columns: minmax(0, 1fr); }
+}
