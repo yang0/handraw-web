@@ -3923,8 +3923,8 @@ body.ic-studio-body .hw-topbar {
 /* Shared visual alignment for history and workflow library views. */
 .ic-history-stage,
 .ic-workflows-stage {
-  /* Same centered 1140px content rail as .qc-entry-bar in quick-create.css. */
-  --ic-library-max-width: 1140px;
+  /* Match site-wide navigation and other responsive non-canvas pages. */
+  --ic-library-max-width: none;
   --ic-library-side-gap: var(--hw-page-gutter, 24px);
 }
 .ic-history-stage .ic-history-topbar,
