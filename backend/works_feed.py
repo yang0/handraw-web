@@ -572,6 +572,8 @@ def get_work_by_id(
         # thumbnail cache, never the source for the full detail response.
         from .generation_v3 import work_images
         w_dict["images"] = work_images(conn, wid)
+        from .generation_works import generation_image_assets
+        w_dict["imageAssets"] = generation_image_assets(conn, row, w_dict["images"])
     # V3: one work already represents the whole generation. There are no
     # sibling per-image works to look up or fold.
     run = conn.execute(
