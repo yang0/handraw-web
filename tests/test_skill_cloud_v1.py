@@ -132,6 +132,26 @@ class SkillCloudV1Tests(unittest.TestCase):
         self.assertEqual(status, 200, downloaded)
         self.assertEqual(downloaded["resource"]["definition"]["zh"], "水彩材质与柔和光影")
 
+    def test_existing_skill_personal_library_can_download_owned_cloud_resource(self):
+        rid = str(uuid.uuid4())
+        status, saved = self.req("PUT", "/api/v1/me/resources/" + rid,
+                                 self.resource(rid), self.library_token)
+        self.assertEqual(status, 200, saved)
+        status, index = self.req("GET", "/studio/api/library", token=self.library_token)
+        self.assertEqual(status, 200, index)
+        record = next(it for it in index["owned"] if it["ref"] == rid)
+        self.assertEqual(record["id"], "mine:" + rid)
+        self.assertTrue(record["unlocked"])
+        self.assertEqual(record["content_url"], "/studio/api/assets/" + rid + "/content")
+        status, full = self.req("GET", record["content_url"], token=self.library_token)
+        self.assertEqual(status, 200, full)
+        canonical = json.dumps(full["resource"], ensure_ascii=False,
+                               separators=(",", ":")).encode()
+        self.assertEqual(hashlib.sha256(canonical).hexdigest(), full["sha256"])
+        self.assertEqual(full["resource"]["prompt_zh"], "水彩材质与柔和光影")
+        status, denied = self.req("GET", record["content_url"], token=self.bob_token)
+        self.assertEqual(status, 404, denied)
+
     def test_resource_tombstones_and_incremental_cursor(self):
         rid = str(uuid.uuid4())
         url = "/api/v1/me/resources/" + rid
@@ -236,12 +256,19 @@ class SkillCloudV1Tests(unittest.TestCase):
         self.req("POST", "/api/v1/works/"+wid+"/likes", {"liked": True}, self.publish_token)
         self.assertEqual(self.db.get_conn().execute(
             "SELECT likes FROM works WHERE id=?", (wid,)).fetchone()[0], 1)
+        comment_request = {"text": "很棒的作品！",
+                           "requestId": "skill-comment-" + uuid.uuid4().hex}
         status, comment = self.req("POST", "/api/v1/works/"+wid+"/comments",
-            {"text": "很棒的作品！", "requestId": "skill-comment-" + uuid.uuid4().hex}, self.publish_token)
+                                   comment_request, self.publish_token)
         self.assertEqual(status, 200, comment)
+        status, repeat = self.req("POST", "/api/v1/works/"+wid+"/comments",
+                                  comment_request, self.publish_token)
+        self.assertEqual(status, 200, repeat)
+        self.assertTrue(repeat["deduped"])
+        self.assertEqual(repeat["replyId"], comment["replyId"])
         status, read = self.req("GET", "/api/v1/works/"+wid+"/comments")
         self.assertEqual(status, 200, read)
-        self.assertTrue(isinstance(read["comments"], list))
+        self.assertEqual(sum(c["id"] == comment["replyId"] for c in read["comments"]), 1)
 
 
 if __name__ == "__main__":
