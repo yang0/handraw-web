@@ -151,7 +151,7 @@ def next_change_seq(conn: sqlite3.Connection) -> int:
     conn.execute(
         """
         INSERT INTO library_change_counter (id, current_seq) VALUES (1, 1)
-        ON CONFLICT(id) DO UPDATE SET current_seq = current_seq + 1;
+        ON CONFLICT(id) DO UPDATE SET current_seq = library_change_counter.current_seq + 1;
         """
     )
     row = conn.execute("SELECT current_seq FROM library_change_counter WHERE id = 1").fetchone()
