@@ -789,34 +789,6 @@ def zero_reply_publish_credits_hook(conn: sqlite3.Connection) -> None:
             pass
 
 
-GENERATION_WORKS_MAPPING_SQL = """
-CREATE TABLE IF NOT EXISTS generation_works (
-    generation_id TEXT NOT NULL,
-    item_key TEXT NOT NULL,
-    work_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (generation_id, item_key),
-    UNIQUE (work_id),
-    FOREIGN KEY (work_id) REFERENCES works(id)
-);
-CREATE INDEX IF NOT EXISTS idx_gen_works_work_id ON generation_works(work_id);
-CREATE INDEX IF NOT EXISTS idx_gen_works_gen_id ON generation_works(generation_id);
-"""
-
-
-def backfill_generation_works_hook(conn: sqlite3.Connection) -> None:
-    """Backfill existing successful public generations into works idempotently."""
-    try:
-        from .generation_works import backfill_historical_generations
-        backfill_historical_generations(conn)
-    except Exception as e:
-        logger.warning("Generation works backfill hook failed: %s", e)
-
-
-FORUM_TOPICS_LISTED_AT_SQL = """
-ALTER TABLE forum_topics ADD COLUMN listed_at_ms INTEGER DEFAULT NULL;
-"""
-
 
 def audit_and_deduplicate_work_topics(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Audit and deduplicate duplicate work_id associations in forum_topics idempotently.
@@ -1000,7 +972,6 @@ WORK_POST_MIGRATION_HOOKS: dict[int, Any] = {
     69: deduplicate_generation_history,
     75: zero_topic_publish_credits_hook,
     77: zero_reply_publish_credits_hook,
-    79: backfill_generation_works_hook,
     80: audit_and_deduplicate_work_topics,
     82: backfill_work_topics_hook,
 }
@@ -1035,7 +1006,6 @@ WORK_MIGRATIONS: list[tuple[int, str, str]] = [
     (75, "075_zero_topic_publish_credits", ZERO_TOPIC_PUBLISH_CREDITS_SQL),
     (77, "077_zero_reply_publish_credits", ZERO_REPLY_PUBLISH_CREDITS_SQL),
     (78, "078_popular_index_v3", POPULAR_INDEX_V3_SQL),
-    (79, "079_generation_works_mapping", GENERATION_WORKS_MAPPING_SQL),
     (80, "080_forum_topics_listed_at_ms", FORUM_TOPICS_LISTED_AT_SQL),
     (81, "081_forum_topics_work_unique", FORUM_TOPICS_WORK_UNIQUE_SQL),
     (82, "082_work_topics_backfill", FORUM_TOPICS_BACKFILL_SQL),
