@@ -39,6 +39,13 @@
     profileUser: "",
     profileTab: "works", // public content tabs only
     profileResourceFilter: "all", // all | styles | layouts
+    personalCloudUser: "",
+    personalResources: null,
+    personalGenerations: null,
+    personalResourcesLoading: false,
+    personalGenerationsLoading: false,
+    personalResourcesError: "",
+    personalGenerationsError: "",
     profileWorksUser: "",
     profileWorkRows: null,
     profileWorksLoading: false,
@@ -239,7 +246,7 @@
           window.history.replaceState({ view: "profile" }, "", `${window.location.pathname}?${nextP.toString()}`);
         } catch (_) {}
       }
-      UI.profileTab = ["works", "resources", "topics", "collections", "articles"].includes(reqTab) ? reqTab : "works";
+      UI.profileTab = ["works", "resources", "topics", "collections", "articles", "history"].includes(reqTab) ? reqTab : "works";
       return {};
     }
 
@@ -2448,6 +2455,44 @@
     }
   }
 
+  async function loadPersonalProfileCloud(username, section) {
+    const isResources = section === "resources";
+    const loadingKey = isResources ? "personalResourcesLoading" : "personalGenerationsLoading";
+    const errorKey = isResources ? "personalResourcesError" : "personalGenerationsError";
+    const dataKey = isResources ? "personalResources" : "personalGenerations";
+    if (UI[loadingKey] || UI.personalCloudUser !== username) return;
+    UI[loadingKey] = true;
+    UI[errorKey] = "";
+    try {
+      const all = [];
+      let cursor = "";
+      for (let page = 0; page < 20; page += 1) {
+        const q = new URLSearchParams({ limit: "100" });
+        if (cursor) q.set(isResources ? "since" : "cursor", cursor);
+        const url = isResources ? "/api/v1/me/resources" : "/api/v1/me/generations";
+        const res = await S.apiJson(url + "?" + q.toString());
+        if (!res || res.ok === false || !Array.isArray(res.items)) throw new Error("云端数据无法加载");
+        if (UI.personalCloudUser !== username) return;
+        all.push(...res.items.filter((it) => !it.deletedAt));
+        if (!res.hasMore) break;
+        if (!res.nextCursor || res.nextCursor === cursor) throw new Error("分页状态异常");
+        cursor = res.nextCursor;
+      }
+      if (UI.personalCloudUser === username) UI[dataKey] = all;
+    } catch (_) {
+      if (UI.personalCloudUser === username) {
+        UI[dataKey] = [];
+        UI[errorKey] = "个人云端数据加载失败，可以重试。";
+      }
+    } finally {
+      if (UI.personalCloudUser === username) {
+        UI[loadingKey] = false;
+        if (App.view === "profile" && UI.profileUser === username
+            && UI.profileTab === section) renderMain();
+      }
+    }
+  }
+
   function renderCreatorProfilePage(root) {
     const fallbackUser = App.state.loggedIn && App.state.user ? App.state.user.username : "";
     const targetUser = (UI.profileUser || fallbackUser || "").trim();
@@ -2459,11 +2504,27 @@
 
     const prof = S.getCreatorProfile(targetUser);
     const isMe = Boolean(App.state.loggedIn && App.state.user && App.state.user.username === prof.username);
+    if (isMe && UI.personalCloudUser !== prof.username) {
+      UI.personalCloudUser = prof.username;
+      UI.personalResources = null;
+      UI.personalGenerations = null;
+      UI.personalResourcesError = "";
+      UI.personalGenerationsError = "";
+      UI.personalResourcesLoading = false;
+      UI.personalGenerationsLoading = false;
+    }
+    if (isMe && ["resources", "history"].includes(UI.profileTab)) {
+      const dataKey = UI.profileTab === "resources" ? "personalResources" : "personalGenerations";
+      const loadingKey = UI.profileTab === "resources" ? "personalResourcesLoading" : "personalGenerationsLoading";
+      if (UI[dataKey] === null && !UI[loadingKey]) {
+        void loadPersonalProfileCloud(prof.username, UI.profileTab);
+      }
+    }
     if (UI.profileTab === "articles" && isMe) {
       window.location.replace(channelUrl("studio", { view: "articles-all", page: 1 }));
       return;
     }
-    if (!isMe && ["collections", "account", "articles"].includes(UI.profileTab)) {
+    if (!isMe && ["collections", "account", "articles", "history"].includes(UI.profileTab)) {
       UI.profileTab = "works";
       syncUrl(false);
     }
@@ -2563,6 +2624,50 @@
             `), "standard")
           : `<div class="hw-detail-section-card" style="text-align:center;padding:42px 20px;color:var(--ink-muted);">暂无公开的${type === "all" ? "创作资源" : type === "styles" ? "共创画风" : "共创图型"}。</div>`}
       `;
+      if (isMe) {
+        const mine = (UI.personalResources || []).filter((it) =>
+          type === "all" || (it.kind === "style" ? "styles" : "layouts") === type);
+        const cards = mine.map((it) => `
+          <article class="hw-detail-section-card" style="padding:18px;">
+            <span class="hw-card-code">🔒 私有${it.kind === "style" ? "画风" : "图型"} · v${esc(it.version || "1.0.0")}</span>
+            <h3 style="margin:8px 0;">${esc(it.name)}</h3>
+            <p style="font-size:12px;color:var(--ink-muted);">仅本人可见 · ${esc(it.license || "")}</p>
+            <pre style="white-space:pre-wrap;font:inherit;font-size:12px;max-height:130px;overflow:auto;">${esc(it.definition?.zh || "")}</pre>
+            <button type="button" class="btn btn-sm" data-copy-private-resource="${esc(it.id)}">复制完整定义</button>
+          </article>`).join("");
+        tabBodyHtml = `
+          <section class="hw-detail-section-card" style="margin-bottom:20px;">
+            <h3 style="margin:0 0 8px;">我的私有画风与图型</h3>
+            <p style="font-size:12px;color:var(--ink-muted);">Skill 同步的资源默认私有，不会自动公开或成为官方编号资源。</p>
+            ${UI.personalResourcesLoading || UI.personalResources === null
+              ? "<p>正在加载个人云端资源…</p>" :
+                UI.personalResourcesError
+                ? `<p role="alert">${esc(UI.personalResourcesError)} <button id="retry-personal-resources" type="button" class="btn btn-sm">重试</button></p>`
+                : cards || "<p>还没有私有画风或图型；在 Skill 创建后同步到网站即可查看。</p>"}
+          </section>` + tabBodyHtml;
+      }
+    } else if (UI.profileTab === "history" && isMe) {
+      const list = (UI.personalGenerations || []).map((item) => {
+        const first = (item.images || [])[0];
+        const cover = typeof first === "string" ? first : (first?.url || first?.imageUrl || "");
+        return `<article class="hw-detail-section-card" style="padding:16px;">
+          ${cover ? `<img src="${esc(cover)}" alt="生图结果" loading="lazy"
+            style="max-height:230px;max-width:100%;border-radius:10px;object-fit:contain;" />` : ""}
+          <div class="hw-card-code">🔒 ${esc(item.originClient === "skill" ? "Skill 生图" : "网站生图")} · ${esc(item.status || "")}</div>
+          <div style="font-size:12px;color:var(--ink-muted);">${esc(item.createdAt || "")}</div>
+          <p style="font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc((item.originalRequest || "创作记录").slice(0, 160))}</p>
+        </article>`;
+      }).join("");
+      tabBodyHtml = `<section class="hw-detail-section-card" style="margin-bottom:18px;">
+        <h3 style="margin:0 0 6px;">我的私有创作历史</h3>
+        <p style="color:var(--ink-muted);font-size:12px;">网站与 Skill 的生图历史仅本人可见。生成成功不等于发布作品；公开作品需单独确认发布。</p>
+        ${UI.personalGenerationsLoading || UI.personalGenerations === null ? "<p>正在加载私有历史…</p>"
+          : UI.personalGenerationsError
+            ? `<p role="alert">${esc(UI.personalGenerationsError)} <button id="retry-personal-history" type="button" class="btn btn-sm">重试</button></p>`
+            : list
+              ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">${list}</div>`
+              : "<p>还没有保存到云端的创作历史。</p>"}
+      </section>`;
     } else if (UI.profileTab === "topics") {
       tabBodyHtml = prof.topics.length
         ? `<div style="display:flex;flex-direction:column;gap:12px;">
@@ -2994,6 +3099,7 @@
           <button type="button" class="hw-pill ${UI.profileTab === "works" ? "is-active" : ""}" data-ptab="works" role="tab" aria-selected="${UI.profileTab === "works"}">🖼️ 作品${UI.profileWorksUser === prof.username && UI.profileWorksTotal !== null ? ` (${UI.profileWorksTotal})` : ""}</button>
           <button type="button" class="hw-pill ${UI.profileTab === "resources" ? "is-active" : ""}" data-ptab="resources" role="tab" aria-selected="${UI.profileTab === "resources"}">🎨 创作资源 (${prof.styles.length + prof.layouts.length})</button>
           <button type="button" class="hw-pill ${UI.profileTab === "topics" ? "is-active" : ""}" data-ptab="topics" role="tab" aria-selected="${UI.profileTab === "topics"}">💬 社区动态 (${prof.topics.length})</button>
+          ${isMe ? `<button type="button" class="hw-pill ${UI.profileTab === "history" ? "is-active" : ""}" data-ptab="history" role="tab" aria-selected="${UI.profileTab === "history"}">🔒 创作历史</button>` : ""}
         </div>` : ""}
         <div id="profile-tab-stage">
           ${tabBodyHtml}
@@ -3016,6 +3122,28 @@
       };
     });
 
+    root.querySelectorAll("[data-copy-private-resource]").forEach((btn) => {
+      btn.onclick = async () => {
+        const item = (UI.personalResources || []).find((it) => it.id === btn.dataset.copyPrivateResource);
+        if (!item) return;
+        try {
+          await navigator.clipboard.writeText([item.definition?.zh, item.definition?.en].filter(Boolean).join("\n\n"));
+          toast("已复制个人资源定义");
+        } catch (_) { toast("复制失败，请检查剪贴板权限"); }
+      };
+    });
+    const retryPersonalResources = root.querySelector("#retry-personal-resources");
+    if (retryPersonalResources) retryPersonalResources.onclick = () => {
+      UI.personalResources = null;
+      UI.personalResourcesError = "";
+      renderMain();
+    };
+    const retryPersonalHistory = root.querySelector("#retry-personal-history");
+    if (retryPersonalHistory) retryPersonalHistory.onclick = () => {
+      UI.personalGenerations = null;
+      UI.personalGenerationsError = "";
+      renderMain();
+    };
     const collectionsBtn = root.querySelector("#prof-go-collections-btn");
     if (collectionsBtn) collectionsBtn.onclick = () => openProfilePage(prof.username, "collections");
     root.querySelectorAll("[data-prof-resource-filter]").forEach((btn) => {
