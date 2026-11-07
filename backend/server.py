@@ -855,18 +855,7 @@ def _is_published_media(db: Database, media_url: str) -> bool:
         row = None
     if row:
         return True
-    # Operators may temporarily retain pre-grant data while migrating an old
-    # local database, but this is opt-in and never the production default.
-    if not env_flag("HANDRAW_LEGACY_PUBLIC_MEDIA_INFERENCE", False):
-        return False
-    for table in ("works", "forum_topics"):
-        for row in conn.execute(f"SELECT images_json FROM {table} WHERE status = 'published'"):
-            try:
-                values = json.loads(row["images_json"] or "[]")
-            except Exception:
-                continue
-            if any(item.split("?", 1)[0] == target for item in _iter_media_values(values)):
-                return True
+    # V3 has no legacy data. Never infer public access from JSON references.
     return False
 
 
