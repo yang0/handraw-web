@@ -5139,18 +5139,39 @@
 
     // Direct output nodes persist the task/spec pair so a refresh can finish
     // the already-submitted request without creating a second charge.
+    // An output gallery is a shared node, but each concurrent slot has an
+    // independent recoverable request. Never silently drop earlier slots.
+    const clearPendingSlot = (data, slotKey) => {
+      if (data.pendingTasksBySlot) delete data.pendingTasksBySlot[slotKey];
+      const another = Object.values(data.pendingTasksBySlot || {})[0];
+      data.pendingTaskId = another?.taskId || "";
+      data.pendingRequestId = another?.requestId || "";
+    };
     const pendingDisplays = [];
     for (const tab of CS.tabs || []) {
       const graph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
       for (const node of graph?.nodes || []) {
-        if (node.type !== "output_display" || (!node.data?.pendingTaskId && !node.data?.pendingRequestId)) continue;
-        pendingDisplays.push({ tab, nodeId: node.id, node });
+        if (node.type !== "output_display") continue;
+        const slots = Object.entries(node.data?.pendingTasksBySlot || {});
+        if (slots.length) {
+          slots.forEach(([slotKey, pending]) => {
+            if (pending?.taskId || pending?.requestId) {
+              pendingDisplays.push({
+                tab, nodeId: node.id, node, slotKey,
+                taskId: pending.taskId || "", requestId: pending.requestId || ""
+              });
+            }
+          });
+        } else if (node.data?.pendingTaskId || node.data?.pendingRequestId) {
+          pendingDisplays.push({
+            tab, nodeId: node.id, node, slotKey: "",
+            taskId: node.data.pendingTaskId || "", requestId: node.data.pendingRequestId || ""
+          });
+        }
       }
     }
     await Promise.allSettled(
-      pendingDisplays.map(async ({ tab, nodeId, node: initialNode }) => {
-        const taskId = initialNode.data?.pendingTaskId || "";
-        const requestId = initialNode.data?.pendingRequestId || "";
+      pendingDisplays.map(async ({ tab, nodeId, node: initialNode, taskId, requestId, slotKey }) => {
         try {
           const images = await pollCloudTask(taskId, {
             requestId,
@@ -5164,8 +5185,7 @@
 
           // Verify batch identity: stale batch responses must not overwrite a newer batch
           if (targetNode.data?.activeBatchId && spec.batchId && targetNode.data.activeBatchId !== spec.batchId) {
-            delete targetNode.data.pendingTaskId;
-            delete targetNode.data.pendingRequestId;
+            clearPendingSlot(targetNode.data, slotKey || spec.slotKey || requestId);
             if (targetNode.data.pendingRequestIds) delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
             if (targetNode.data.pendingSpec) {
               delete targetNode.data.pendingSpec[requestId];
@@ -5200,6 +5220,8 @@
             );
             if (existIdx >= 0) {
               targetNode.data.items[existIdx] = item;
+            } else if (Number.isInteger(spec.index) && spec.index >= 0 && spec.index < 200) {
+              targetNode.data.items[spec.index] = item;
             } else {
               targetNode.data.items.push(item);
             }
@@ -5208,15 +5230,16 @@
             targetNode.data.items = item.imageUrl ? [item] : [];
             targetNode.data.status = item.imageUrl ? "done" : "error";
           }
-          delete targetNode.data.pendingTaskId;
-          delete targetNode.data.pendingRequestId;
+          clearPendingSlot(targetNode.data, slotKey || spec.slotKey || requestId);
           if (targetNode.data.pendingRequestIds) delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
           if (targetNode.data.pendingSpec) {
             delete targetNode.data.pendingSpec[requestId];
             if (taskId) delete targetNode.data.pendingSpec[taskId];
           }
+          const hasPending = Object.keys(targetNode.data.pendingTasksBySlot || {}).length > 0;
+          if (hasPending) targetNode.data.status = "generating";
           const ctrlNode = targetNode.data.sourceNodeId ? currentGraph?.nodes?.find((n) => n.id === targetNode.data.sourceNodeId) : null;
-          if (ctrlNode && ctrlNode.data && ctrlNode.data.status === "generating") {
+          if (ctrlNode && ctrlNode.data && ctrlNode.data.status === "generating" && !hasPending) {
             ctrlNode.data.status = item.imageUrl ? "done" : "error";
           }
           persistOpenTabs();
@@ -5231,8 +5254,7 @@
           const spec = targetNode.data?.pendingSpec?.[requestId] || (taskId ? targetNode.data?.pendingSpec?.[taskId] : null) || initialNode.data?.pendingSpec?.[requestId] || {};
 
           if (targetNode.data?.activeBatchId && spec.batchId && targetNode.data.activeBatchId !== spec.batchId) {
-            delete targetNode.data.pendingTaskId;
-            delete targetNode.data.pendingRequestId;
+            clearPendingSlot(targetNode.data, slotKey || spec.slotKey || requestId);
             if (targetNode.data.pendingRequestIds) delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
             if (targetNode.data.pendingSpec) {
               delete targetNode.data.pendingSpec[requestId];
@@ -5243,8 +5265,7 @@
           }
           targetNode.data.status = "error";
           targetNode.data.error = err.message || String(err);
-          delete targetNode.data.pendingTaskId;
-          delete targetNode.data.pendingRequestId;
+          clearPendingSlot(targetNode.data, slotKey || spec.slotKey || requestId);
           if (err.terminal) {
             if (targetNode.data.pendingRequestIds) {
               delete targetNode.data.pendingRequestIds[spec.slotKey || requestId];
@@ -5254,8 +5275,10 @@
             delete targetNode.data.pendingSpec[requestId];
             if (taskId) delete targetNode.data.pendingSpec[taskId];
           }
+          const hasPending = Object.keys(targetNode.data.pendingTasksBySlot || {}).length > 0;
+          if (hasPending) targetNode.data.status = "generating";
           const ctrlNode = targetNode.data.sourceNodeId ? currentGraph?.nodes?.find((n) => n.id === targetNode.data.sourceNodeId) : null;
-          if (ctrlNode && ctrlNode.data && ctrlNode.data.status === "generating") {
+          if (ctrlNode && ctrlNode.data && ctrlNode.data.status === "generating" && !hasPending) {
             ctrlNode.data.status = "error";
           }
           persistOpenTabs();
