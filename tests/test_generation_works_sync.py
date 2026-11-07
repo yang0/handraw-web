@@ -349,7 +349,7 @@ class TestGenerationWorksSync(unittest.TestCase):
 
         self.assertEqual(
             conn.execute(
-                "SELECT COUNT(*) FROM studio_generations WHERE id LIKE 'gen_atomic_%' AND deleted_at IS NULL"
+                "SELECT COUNT(*) FROM studio_generations WHERE id LIKE 'gen_atomic_%' AND COALESCE(deleted_at,'')=''"
             ).fetchone()[0],
             2,
             "History deletion must roll back on sync failure",
