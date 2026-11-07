@@ -929,6 +929,11 @@ def admin_moderate_work(
                 (title, price, json.dumps(styles, ensure_ascii=False), layout, mood, prompt, prompt_has_sec, notes, subject, now_iso, wid),
             )
         elif act == "delete":
+            old_media_urls = [r["storage_key"] for r in tx.execute(
+                """SELECT m.storage_key FROM work_media wm
+                   JOIN media_assets m ON m.id=wm.media_id
+                   WHERE wm.work_id=?""", (wid,),
+            ).fetchall()]
             tx.execute("DELETE FROM work_comments WHERE work_id = ?", (wid,))
             tx.execute("DELETE FROM collections WHERE bucket = 'works' AND target_id = ?", (wid,))
             # The thread must go dark with the work: hiding it before dropping the
@@ -950,11 +955,23 @@ def admin_moderate_work(
                     source="author" if is_author and not (is_admin or is_operator) else "moderator",
                     reason="作品已删除", actor_role=actor_role, automated=True,
                 )
-            tx.execute("UPDATE forum_topics SET status = 'deleted' WHERE work_id = ?", (wid,))
+            tx.execute(
+                "UPDATE forum_topics SET status='deleted',images_json='[]' WHERE work_id=?",
+                (wid,),
+            )
             tx.execute("DELETE FROM curation_resource_topics WHERE kind = 'work' AND target_id = ?", (wid,))
             # Removing the work cascades its work_media links; run provenance
             # stays as the creator's execution history.
+            tx.execute(
+                """UPDATE media_public_grants SET revoked_at=?
+                   WHERE target_type='work' AND target_id=? AND revoked_at IS NULL""",
+                (now_iso, wid),
+            )
             tx.execute("DELETE FROM works WHERE id = ?", (wid,))
+            from .media_gc import queue_media_cleanup
+            for old_url in old_media_urls:
+                if old_url.startswith(("/generated/", "/uploads/")):
+                    queue_media_cleanup(tx, old_url)
         else:
             raise ServiceError(f"不支持的作品审核动作：{act}")
 
