@@ -27,6 +27,9 @@ V3_MIGRATIONS = [
             expected_count INTEGER NOT NULL CHECK(expected_count >= 1),
             status TEXT NOT NULL DEFAULT 'running'
                 CHECK(status IN ('pending','uploading','running','partial','success','failed','cancelled')),
+            -- Permanent V3 publication tombstone: a deleted work cannot be
+            -- recreated when a delayed gateway callback replays the run.
+            publication_deleted_at TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, source, external_run_id)
@@ -528,6 +531,11 @@ def record_public_work(
         tx, user_id=user_id, source=source, external_run_id=external_run_id,
         expected_count=expected_count, request_id=request_id,
     )
+    if tx.execute(
+        "SELECT 1 FROM generation_runs WHERE id=? AND publication_deleted_at<>''",
+        (run_id,),
+    ).fetchone():
+        raise ValueError("Deleted generation work cannot be republished")
     work = tx.execute(
         "SELECT id,run_id,author_username,cover_media_id FROM works WHERE id=?", (work_id,),
     ).fetchone()
