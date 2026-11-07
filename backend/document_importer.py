@@ -399,10 +399,9 @@ def save_uploaded_image_bytes(
     fname = f"{up_id}{ext}"
     fpath = uploads_dir / fname
 
-    with fpath.open("xb") as fp:
-        fp.write(payload)
-
     public_url = f"/uploads/{fname}"
+    from .media_storage import persist_media_bytes
+    persist_media_bytes(public_url, payload, mime=mime)
     try:
         with db.transaction() as tx:
             tx.execute(
@@ -440,10 +439,9 @@ def _cleanup_job_media(db: Database, user_id: int, image_urls: list[str]) -> Non
                     (user_id, url),
                 ).fetchone()
                 if row:
-                    p = Path(row["file_path"])
-                    if p.is_file():
-                        p.unlink(missing_ok=True)
                     tx.execute("DELETE FROM user_uploads WHERE id = ?", (row["id"],))
+                    from .media_gc import queue_media_cleanup
+                    queue_media_cleanup(tx, url, delay_seconds=60)
         except Exception:
             pass
 
@@ -503,15 +501,10 @@ def cleanup_unreferenced_import_media(db: Database, max_age_hours: int = 24) -> 
             ).fetchone()
 
         if not ref_art and not ref_job:
-            try:
-                p = Path(path_str)
-                if p.is_file():
-                    p.unlink(missing_ok=True)
-            except Exception as e:
-                logger.warning("Failed to delete orphaned file %s: %s", path_str, e)
-
             with db.transaction() as tx:
                 tx.execute("DELETE FROM user_uploads WHERE id = ?", (row["id"],))
+                from .media_gc import queue_media_cleanup
+                queue_media_cleanup(tx, url, delay_seconds=60)
             cleaned_count += 1
 
     return cleaned_count
