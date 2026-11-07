@@ -11,10 +11,10 @@ import os
 import tempfile
 from pathlib import Path
 
-from .config import get_generated_dir, get_uploads_dir
+from .config import get_generated_dir, get_uploads_dir, get_storage_root
 from .object_storage import put as put_private_object
 
-_ROOTS = {"/generated/": get_generated_dir, "/uploads/": get_uploads_dir}
+_ROOTS = {"/generated/": get_generated_dir, "/uploads/": get_uploads_dir, "/avatars/": lambda: get_storage_root() / "avatars"}
 
 
 def local_path_for_url(url: str) -> Path:
