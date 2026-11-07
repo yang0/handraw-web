@@ -1,4 +1,4 @@
-"""Tests for Stage 3: Backfill and Forum Listing Filtering (Issue #60)."""
+"""Current V3 work-topic creation, forum listing, and comment promotion."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.db import Database
-from backend.generation_works import backfill_work_topics
 from backend.resource_discussions import (
     ensure_topic,
     record_atomic_reply_and_listing,
@@ -68,115 +67,64 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
         self.conn.commit()
         return dict(self.conn.execute("SELECT * FROM works WHERE id = ?", (wid,)).fetchone())
 
-    def test_backfill_63_works_and_idempotency(self) -> None:
-        """Test full backfill on 63 published works:
+    def _ensure_current_work_topics(self, *work_ids: str) -> list[str]:
+        """Current writes attach topics explicitly; V3 never backfills old data."""
+        result = []
+        for wid in work_ids:
+            row = self.conn.execute(
+                "SELECT * FROM works WHERE id=?", (wid,),
+            ).fetchone()
+            self.assertIsNotNone(row)
+            result.append(ensure_topic(
+                self.conn, "work", wid, dict(row),
+                initial_origin="submission", listed_at_ms=None,
+            ))
+        self.conn.commit()
+        return result
 
-        - 17 works already have topics (15 published, 2 hidden).
-        - 46 works lack topics across generation, web, legacy origins.
-        - Backfill creates exactly 46 topics with listed_at_ms = NULL.
-        - Historical 15 published topics have listed_at_ms backfilled.
-        - Historical 2 hidden topics remain unlisted.
-        - Second run produces 0 topics and 0 listed mutations.
-        """
+    def test_ensure_topics_for_63_current_works_is_idempotent(self) -> None:
+        """One current public work has at most one discussion topic."""
         now_ms = int(time.time() * 1000)
-
-        # 1. Create 63 works: 20 generation, 20 web, 23 legacy
-        works = []
         for i in range(1, 64):
-            if i <= 20:
-                origin = "generation"
-            elif i <= 40:
-                origin = "web"
-            else:
-                origin = "legacy"
-            pub_ms = now_ms - (100 - i) * 1000
-            w = self._create_work(f"work_{i:03d}", origin, pub_ms)
-            works.append(w)
-
-        self.assertEqual(len(works), 63)
-
-        # 2. Attach topics to 17 works (work_001 .. work_017)
-        # Topics 1..15 are published; Topics 16..17 are hidden
-        for i in range(1, 18):
             wid = f"work_{i:03d}"
-            w = works[i - 1]
-            st = "published" if i <= 15 else "hidden"
-            tid = ensure_topic(self.conn, "work", wid, w, initial_origin="submission", listed_at_ms=None)
-            if st == "hidden":
-                self.conn.execute("UPDATE forum_topics SET status = 'hidden' WHERE id = ?", (tid,))
-            else:
-                # Historical published work threads are listed only after a
-                # genuine published reply; merely existing is not enough.
-                self.conn.execute(
-                    "INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, status, created_at) "
-                    "VALUES (?, ?, 'historic_reader', '历史读者', '历史真实回复', 'published', ?)",
-                    (f"historic_reply_{i:03d}", tid, utc_now_iso()),
+            self._create_work(
+                wid, "generation" if i <= 20 else "web",
+                now_ms - (100 - i) * 1000,
+            )
+            ids = self._ensure_current_work_topics(wid)
+            self.assertEqual(len(ids), 1)
+            if i <= 15:
+                record_atomic_reply_and_listing(
+                    self.conn, ids[0], self.bob, "当前作品下的真实讨论",
                 )
-            self.conn.commit()
-
-        # Pre-check counts
-        topics_pre = self.conn.execute("SELECT COUNT(*) FROM forum_topics WHERE work_id <> ''").fetchone()[0]
-        self.assertEqual(topics_pre, 17)
-
-        # 3. First execution of backfill_work_topics
-        res1 = backfill_work_topics(self.conn)
-        self.assertTrue(res1["ok"])
-        self.assertEqual(res1["total_published_works"], 63)
-        self.assertEqual(res1["already_had_topics"], 17)
-        self.assertEqual(res1["created_topics_count"], 46)
-        self.assertEqual(res1["listed_backfilled_count"], 15)
-
-        # Verify all 63 works now have unique topics
-        topics_post = self.conn.execute("SELECT COUNT(*) FROM forum_topics WHERE work_id <> ''").fetchone()[0]
-        self.assertEqual(topics_post, 63)
-
-        # Check the 15 historical published topics: listed_at_ms IS NOT NULL
-        listed_historical = self.conn.execute(
-            """
-            SELECT COUNT(*) FROM forum_topics
-            WHERE work_id IN (SELECT id FROM works WHERE id BETWEEN 'work_001' AND 'work_015')
-              AND listed_at_ms IS NOT NULL
-            """
-        ).fetchone()[0]
-        self.assertEqual(listed_historical, 15)
-
-        # Check the 2 hidden historical topics: listed_at_ms IS NULL
-        hidden_historical = self.conn.execute(
-            """
-            SELECT COUNT(*) FROM forum_topics
-            WHERE work_id IN ('work_016', 'work_017')
-              AND listed_at_ms IS NULL
-            """
-        ).fetchone()[0]
-        self.assertEqual(hidden_historical, 2)
-
-        # Check the 46 newly created topics: listed_at_ms IS NULL
-        unlisted_new = self.conn.execute(
-            """
-            SELECT COUNT(*) FROM forum_topics
-            WHERE work_id IN (SELECT id FROM works WHERE id BETWEEN 'work_018' AND 'work_063')
-              AND listed_at_ms IS NULL
-            """
-        ).fetchone()[0]
-        self.assertEqual(unlisted_new, 46)
-
-        # 4. Second execution of backfill_work_topics (IDEMPOTENCY)
-        res2 = backfill_work_topics(self.conn)
-        self.assertTrue(res2["ok"])
-        self.assertEqual(res2["total_published_works"], 63)
-        self.assertEqual(res2["already_had_topics"], 63)
-        self.assertEqual(res2["created_topics_count"], 0)
-        self.assertEqual(res2["listed_backfilled_count"], 0)
-
-        # Total topic count MUST remain exactly 63
-        topics_post2 = self.conn.execute("SELECT COUNT(*) FROM forum_topics WHERE work_id <> ''").fetchone()[0]
-        self.assertEqual(topics_post2, 63)
-
-        # Unlisted count MUST still be 46 (+2 hidden = 48)
-        unlisted_post2 = self.conn.execute(
-            "SELECT COUNT(*) FROM forum_topics WHERE listed_at_ms IS NULL"
-        ).fetchone()[0]
-        self.assertEqual(unlisted_post2, 48)
+            if i in (16, 17):
+                self.conn.execute(
+                    "UPDATE forum_topics SET status='hidden' WHERE id=?",
+                    (ids[0],),
+                )
+        self.conn.commit()
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM forum_topics WHERE work_id<>''",
+        ).fetchone()[0], 63)
+        self.assertEqual(self.conn.execute(
+            """SELECT COUNT(*) FROM forum_topics
+               WHERE work_id BETWEEN 'work_001' AND 'work_015'
+                 AND listed_at_ms IS NOT NULL""",
+        ).fetchone()[0], 15)
+        self.assertEqual(self.conn.execute(
+            """SELECT COUNT(*) FROM forum_topics
+               WHERE work_id IN ('work_016','work_017')
+                 AND listed_at_ms IS NULL""",
+        ).fetchone()[0], 2)
+        # Idempotent API: no second topic, no promotion of unlisted works.
+        for i in range(1, 64):
+            self._ensure_current_work_topics(f"work_{i:03d}")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM forum_topics WHERE work_id<>''",
+        ).fetchone()[0], 63)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM forum_topics WHERE listed_at_ms IS NULL",
+        ).fetchone()[0], 48)
 
     def test_forum_listing_filters_unlisted_and_shows_listed(self) -> None:
         """Verify forum list only contains listed topics, while discussions map contains all works."""
@@ -186,8 +134,8 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
         w_listed = self._create_work("w_listed", "web", now_ms - 2000)
         w_unlisted = self._create_work("w_unlisted", "generation", now_ms - 1000)
 
-        # Backfill
-        backfill_work_topics(self.conn)
+        # Attach one discussion to each just-created work.
+        self._ensure_current_work_topics("w_listed", "w_unlisted")
 
         # Set listed work's listed_at_ms
         self.conn.execute("UPDATE forum_topics SET listed_at_ms = ? WHERE work_id = 'w_listed'", (now_ms - 2000,))
@@ -239,7 +187,7 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
         """Verify unlisted works are accessible directly by ID/ref, and commenting atomically lists them."""
         now_ms = int(time.time() * 1000)
         w = self._create_work("w_secret", "web", now_ms)
-        backfill_work_topics(self.conn)
+        self._ensure_current_work_topics("w_secret")
 
         # Topic is unlisted
         t_row = self.conn.execute("SELECT * FROM forum_topics WHERE work_id = 'w_secret'").fetchone()
@@ -302,8 +250,8 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
         w2 = self._create_work("w_sort_2", "legacy", t2_ms)
         w3 = self._create_work("w_sort_3", "legacy", t3_ms)
 
-        # Backfill: all 3 topics created
-        backfill_work_topics(self.conn)
+        # Each work has its one canonical discussion upon publication.
+        self._ensure_current_work_topics("w_sort_1", "w_sort_2", "w_sort_3")
 
         # Make w1, w2, w3 listed at their published times
         self.conn.execute("UPDATE forum_topics SET listed_at_ms = ? WHERE work_id = 'w_sort_1'", (t1_ms,))
@@ -318,7 +266,7 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
 
         # Now an old unlisted work (published long ago at 5000) gets commented on right now
         w_old = self._create_work("w_sort_old", "generation", 5000)
-        backfill_work_topics(self.conn)
+        self._ensure_current_work_topics("w_sort_old")
 
         tid_old = self.conn.execute("SELECT id FROM forum_topics WHERE work_id = 'w_sort_old'").fetchone()["id"]
         # Comment triggers listing now
