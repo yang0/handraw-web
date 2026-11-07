@@ -90,6 +90,7 @@ jobs:
           node --check demo/assets/studio-make-image.js
           node --check demo/assets/studio-core.js
           node tests/test_studio_core.cjs
+          node tests/test_studio_canvas_incremental.cjs
           node tests/test_studio_picker_interactions.cjs
           node tests/test_quick_stale_generation.cjs
           node tests/test_profile_private_gallery.cjs
