@@ -1652,11 +1652,11 @@ def publish_work_direct(
         raise ServiceError("发布作品需要填写提示词", status=400, code="prompt_required")
 
     raw_images = body.get("images") or ([body["image"]] if body.get("image") else [])
-    if isinstance(raw_images, (list, tuple)) and len(raw_images) > 9:
+    if isinstance(raw_images, (list, tuple)) and len(raw_images) > 12:
         # Checked before cleaning: ``_clean_images`` dedupes and drops unsafe
         # entries, so a length test afterwards would silently truncate instead
         # of telling the caller (the skill contract forbids silent image loss).
-        raise ServiceError("一次最多 9 张图片，请分批发布", status=400, code="too_many_images")
+        raise ServiceError("一次最多 12 张图片，请分批发布", status=400, code="too_many_images")
     images = _clean_images(raw_images)
     if not images:
         raise ServiceError("发布作品需要至少一张图片", status=400, code="image_required")
