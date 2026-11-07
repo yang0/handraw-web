@@ -20,7 +20,7 @@
 | 接口 | 核心行为 |
 | --- | --- |
 | `POST /api/studio/generate` | 一个画布批次共享 `batchId`，每张网关请求单独有 `requestId`、`batchIndex`、`batchTotal` |
-| `POST /api/v1/me/generations` | Skill 主动上传整批图片，服务器返回 `workId`、`workIds: [workId]`、`imageCount` |
+| `POST /api/v1/me/generations` | Skill 主动上传整批图片，服务器返回 `workId`、`workIds: [workId]`、`imageCount`、`coverMediaId`、`coverUrl` |
 | `GET /api/v1/me/generations` | 根据 `generation_runs` 分页，网站和 Skill 合并为一个逻辑任务历史，带图片和失败槽位 |
 | `GET /api/works/feed` | 直接对 `works` 分页，一件作品一行/一张卡 |
 | 作品详情/讨论主题 | 读取同一作品的全部图片，作品详情的权威图片顺序来自 `work_media JOIN media_assets` |
