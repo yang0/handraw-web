@@ -32,6 +32,7 @@ from playwright.sync_api import sync_playwright
 
 from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME, init_database
 from backend.services import register_user
+from backend.generation_works import project_generation_to_works
 
 PORT = 3097
 BASE_URL = f"http://127.0.0.1:{PORT}"
@@ -93,6 +94,7 @@ def seed_test_generations(db, user_id: int, username: str):
                     json.dumps([{"imageUrl": u} for u in r["items"]]),
                 ),
             )
+            project_generation_to_works(tx, r["id"])
 
 
 def run_browser_verification():
@@ -161,6 +163,10 @@ def run_browser_verification():
             assert page.locator('button[data-ptab="works"]').is_visible()
             assert page.locator('button[data-ptab="generations"]').count() == 0
             assert page.locator('button[data-ptab="resources"]').is_visible()
+            page.wait_for_selector(".hw-profile-work-group", timeout=6000)
+            assert page.locator(".hw-profile-work-group").count() == 3, "3 generations should show 3 grouped cards, not 6 pictures"
+            assert page.locator(".hw-profile-batch-count:has-text('2 张')").count() == 1
+            assert page.locator(".hw-profile-batch-count:has-text('3 张')").count() == 1
             page.screenshot(path=str(DESKTOP_SCREENSHOT), full_page=False)
 
             # Check 2: Anonymous visitors also see the public creator profile.
@@ -183,8 +189,24 @@ def run_browser_verification():
             assert "view=history" in page.url, f"Studio history navigation failed: {page.url}"
             for category in ("all", "quick", "batch", "article", "canvas"):
                 assert page.locator(f'[data-hist-filter="{category}"]').is_visible()
+            assert page.locator("#hist-status-filter").is_visible()
+            assert page.locator("#hist-sort").is_visible()
+            assert page.locator("#hist-clear-all").count() == 0
+            assert page.locator(".ic-hist-img-download").count() > 0, "Images need a direct download action"
+            page.locator("#hist-search-inp").fill("山水")
+            page.wait_for_timeout(300)
+            assert page.locator('[data-hist-id="gen_leo_003"]').count() == 1
+            assert page.locator('[data-hist-id="gen_leo_001"]').count() == 0
+            page.locator("#hist-search-inp").fill("")
+            page.locator("#hist-status-filter").select_option("success")
+            page.locator("#hist-sort").select_option("oldest")
+            assert page.locator('[data-hist-id="gen_leo_003"]').count() == 1
             page.locator("#hist-back-creation").click()
             assert "entry=quick" in page.url, f"Did not restore quick creation mode: {page.url}"
+            page.goto(f"{BASE_URL}/studio/?entry=batch", wait_until="networkidle")
+            page.locator("#studio-mode-history").click()
+            page.locator("#hist-back-creation").click()
+            assert "entry=batch" in page.url, f"Did not restore batch creation mode: {page.url}"
 
             # Check 4: Existing direct history URLs remain inside the studio.
             # -----------------------------------------------------------
