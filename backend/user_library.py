@@ -1027,7 +1027,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
     except Exception as exc:
         # Request IDs are emitted by the HTTP error boundary. Log the affected
         # asset and operation, never the Base64 image or user-provided content.
-        logger.exception("event=library_asset_save_failed user_id=%s uid=%s", user_id, uid)
+        logger.exception("event=library_asset_save_failed request_id=%s user_id=%s uid=%s", getattr(handler, "_request_id", ""), user_id, uid)
         try:
             if newly_created_url:
                 from .media_storage import discard_uncommitted_media
