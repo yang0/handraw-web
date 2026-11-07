@@ -17,7 +17,7 @@ const records = [
   { id: "quick", mode: "poster", recipeId: "rcp_a", kind: "single", items: [
     { imageUrl: "/quick1.webp" }, { imageUrl: "/quick2.webp" }
   ], status: "success" },
-  { id: "canvas", mode: "graphic-text", kind: "single", items: [
+  { id: "canvas", mode: "graphic-text", ctrlId: "ctrl_existing_01", kind: "single", items: [
     { imageUrl: "/canvas1.webp" }, { imageUrl: "/canvas2.webp" }
   ], status: "success" },
 ];
@@ -39,13 +39,15 @@ const stage = {
 };
 const compile = new Function(
   "DOM", "CS", "S", "esc", "ensureGenerationHistoryInitialized", "document", "window", "toast",
-  "renderTopAndBottomDocks", "deleteCloudHistory", "restoreHistoryEntryToCanvas", "exportZipFromPayload",
+  "renderTopAndBottomDocks", "deleteCloudHistory", "restoreHistoryEntryToCanvas", "exportZipFromPayload", "switchCreationStage",
   studio.slice(start, end) + "\nreturn { historyRecordCategory, historyImageCount, renderHistoryStage };"
 );
+const switchedModes = [];
 const app = compile(
   { historyStage: stage }, state, { filterDisplayPrompt: (x) => x },
   (x) => String(x ?? ""), () => {}, { activeElement: null },
-  { history: { replaceState() {} }, confirm: () => true }, () => {}, () => {}, () => {}, () => {}, () => {}
+  { history: { replaceState() {} }, confirm: () => true }, () => {}, () => {}, () => {}, () => {}, () => {},
+  (mode) => switchedModes.push(mode)
 );
 const sums = { quick: 0, batch: 0, article: 0, canvas: 0 };
 for (const record of records) sums[app.historyRecordCategory(record)] += app.historyImageCount(record);
@@ -82,6 +84,27 @@ assert.ok(stage.innerHTML.includes('data-hist-id="cover_legacy"'));
 assert.ok(!stage.innerHTML.includes('data-hist-id="batch"'));
 assert.match(stage.innerHTML, /生图历史 · 9 张/, "Total count must be unchanged by a category filter");
 
+const sampleForm = {
+  id: "quick_form", creationSource: "quick", mode: "3:4", kind: "single",
+  items: [{ imageUrl: "/form.webp", title: "一张表单图" }]
+};
+assert.equal(app.historyRecordCategory(sampleForm), "quick");
+assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "batch" }), "batch");
+assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "article" }), "article");
+assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "canvas" }), "canvas");
+assert.equal(app.historyRecordCategory({ ...sampleForm, creationSource: "" }), "other",
+  "Unknown legacy form images must not be mislabelled as canvas");
+state.generationHistory.push(sampleForm);
+state.historyFilter = "quick";
+app.renderHistoryStage();
+assert.ok(stage.innerHTML.includes('data-hist-id="quick_form"'));
+assert.ok(stage.innerHTML.includes('data-hist-open-mode="quick"'));
+assert.ok(!stage.innerHTML.includes('data-hist-restore="quick_form"'),
+  "Form-created images must not offer recovery into an unrelated canvas");
+state.historyFilter = "canvas";
+app.renderHistoryStage();
+assert.ok(stage.innerHTML.includes('data-hist-restore="canvas"'));
+state.historyFilter = "all";
 assert.ok(styles.includes("max-width: 1140px"), "Toolbar must be contained");
 assert.ok(styles.includes(".ic-hist-masonry-grid") && styles.includes("column-count: 3"));
 assert.ok(styles.includes("column-count: 2") && styles.includes("column-count: 1"));
