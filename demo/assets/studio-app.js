@@ -350,8 +350,47 @@
     return Boolean(response.approved);
   }
 
+  function reconcileDetachedBatchState(parts) {
+    if (!parts?.ctrl || !parts?.loop) return false;
+    const ctrlId = parts.ctrl.id;
+    // Persisted node flags and recovered remote requests do not own a local
+    // submission queue. Only its live owner can expose a Stop action.
+    if (_activeBatchRun?.ctrlId === ctrlId ||
+        (quickBusy?.id === ctrlId && quickBusy.scope === activeCacheScope)) return false;
+    const displays = getDownstreamDisplayNodes(ctrlId);
+    const stale = parts.ctrl.data.status === "generating" ||
+      parts.loop.data.status === "running" ||
+      displays.some((node) => node.data?.status === "generating");
+    if (!stale) return false;
+    const items = displays.flatMap((node) => node.data?.items || []);
+    const pending = displays.some((node) => node.data?.pendingTaskId || node.data?.pendingRequestId ||
+      Object.keys(node.data?.pendingTasksBySlot || {}).length) ||
+      (CS.pendingTasks || []).some((task) => task.ctrlId === ctrlId || task.tabId === CS.activeTabId);
+    parts.ctrl.data.status = pending ? "stopped" : items.some((item) => item?.imageUrl) ? "done" : "idle";
+    parts.loop.data.status = "idle";
+    delete parts.loop.data.isStopping;
+    for (const node of displays) {
+      if (node.data?.status === "generating") {
+        node.data.status = (node.data.items || []).some((item) => item?.imageUrl) ? "done" : "idle";
+      }
+    }
+    // Recovery IDs, results, and billing records stay intact. Reconciliation
+    // releases only the abandoned page controls, never a cloud reservation.
+    if (window.HandrawBatchCreate) window.HandrawBatchCreate.progressState = null;
+    persistOpenTabs();
+    return true;
+  }
+
   function cancelActiveBatchGeneration(expectedCtrlId = null) {
     const run = _activeBatchRun;
+    if (!run && expectedCtrlId) {
+      const parts = getBatchParts();
+      if (parts?.ctrl.id === expectedCtrlId && reconcileDetachedBatchState(parts)) {
+        renderQuickStart();
+        toast("已清除页面残留的运行状态；云端任务仍可在生图历史查看。");
+        return false;
+      }
+    }
     // A stale pending remote task must not masquerade as a locally running
     // batch, and a batch button must never cancel a different workstream.
     if (!run || run.cancelled || (expectedCtrlId && run.ctrlId !== expectedCtrlId)) {
@@ -16111,15 +16150,13 @@
       if (window.HandrawBatchCreate && bp) {
         const isBatchCurrentBusy = () => {
           if (!bp) return false;
-          if (bp.ctrl.data.status === "generating" || bp.loop.data.status === "running") return true;
+          reconcileDetachedBatchState(bp);
+          if (_activeBatchRun?.ctrlId === bp.ctrl.id) return true;
           if (quickBusy?.id === bp.ctrl.id && quickBusy.scope === activeCacheScope) return true;
           // Stopping the local transport does not clear remote reservations.
           // Keep them recoverable, but don't trap the user in a stale
           // generating spinner or leave the Stop button permanently visible.
           if (bp.ctrl.data.status === "stopped") return false;
-          const downstream = getDownstreamDisplayNodes(bp.ctrl.id);
-          if (downstream.some((d) => d.data?.status === "generating" || d.data?.pendingTaskId || d.data?.pendingRequestId)) return true;
-          if (Array.isArray(CS.pendingTasks) && CS.pendingTasks.some((t) => t.ctrlId === bp.ctrl.id || t.tabId === CS.activeTabId)) return true;
           return false;
         };
         const busy = isBatchCurrentBusy();

@@ -249,6 +249,75 @@ class BatchPlanRoutesTests(unittest.TestCase):
         self.assertEqual(st, 502)
         self.assertEqual(res.get("code"), "batch_plan_ai_invalid")
 
+    def test_gateway_escape_envelope_is_validated_as_model_plan(self) -> None:
+        payload = json.dumps({"items": [{"subject": "秋日咖啡香", "layout": "SC-021"}]})
+        for response in (payload, f"```json\n{payload}\n```", f"<escape>{payload}</escape>",
+                         f"<escape>```json\n{payload}\n```</escape>"):
+            with self.subTest(response=response), patch(
+                "backend.batch_plan_routes.chat", return_value=(response, {"ok": True})
+            ) as model:
+                st, res = self._req("POST", "/api/studio/batch-plan", {
+                    "seed": "秋日咖啡", "count": 1, "layoutMode": "ai",
+                }, cookie=self.cookie)
+                self.assertEqual(st, 200)
+                self.assertEqual(res["source"], "model")
+                self.assertEqual(res["items"], json.loads(payload)["items"])
+                self.assertTrue(model.call_args.kwargs["json_mode"])
+
+    def test_wrapped_invalid_layout_still_fails(self) -> None:
+        response = '<escape>{"items":[{"subject":"秋日咖啡香","layout":"NOT_A_LAYOUT"}]}</escape>'
+        with patch("backend.batch_plan_routes.chat", return_value=(response, {"ok": True})), \
+             self.assertLogs("backend.batch_plan_routes", level="WARNING") as logs:
+            st, res = self._req("POST", "/api/studio/batch-plan", {
+                "seed": "秋日咖啡", "count": 1, "layoutMode": "ai",
+            }, cookie=self.cookie)
+        self.assertEqual(st, 502)
+        self.assertEqual(res["code"], "batch_plan_ai_invalid")
+        self.assertIn("stage=invalid_items", "\n".join(logs.output))
+        self.assertNotIn("NOT_A_LAYOUT", "\n".join(logs.output))
+
+    def test_catalog_label_requires_matching_code_and_name(self) -> None:
+        catalog = {"USR-L074": "生活方式场景图"}
+        for label, expected in (("USR-L074：生活方式场景图", 200),
+                                ("usr-l074: 生活方式场景图", 200),
+                                ("USR-L074：另一个图型的名字", 502),
+                                ("UNKNOWN：生活方式场景图", 502)):
+            response = "<escape>" + json.dumps({"items": [{"subject": "咖啡馆", "layout": label}]}) + "</escape>"
+            with self.subTest(label=label), patch("backend.batch_plan_routes.get_valid_layout_map", return_value=catalog), \
+                 patch("backend.batch_plan_routes.chat", return_value=(response, {"ok": True})):
+                st, res = self._req("POST", "/api/studio/batch-plan", {
+                    "seed": "秋日咖啡", "count": 1, "layoutMode": "ai",
+                }, cookie=self.cookie)
+                self.assertEqual(st, expected)
+                if st == 200:
+                    self.assertEqual(res["items"][0]["layout"], "USR-L074")
+
+    def test_malformed_output_logs_stage_without_private_content(self) -> None:
+        response = "private-model-response-do-not-log"
+        with patch("backend.batch_plan_routes.chat", return_value=(response, {"ok": True})), \
+             self.assertLogs("backend.batch_plan_routes", level="WARNING") as logs:
+            st, res = self._req("POST", "/api/studio/batch-plan", {
+                "seed": "private-input-do-not-log", "count": 1, "layoutMode": "ai",
+            }, cookie=self.cookie)
+        self.assertEqual(st, 502)
+        self.assertIn("格式无法解析", res["error"])
+        self.assertTrue(res.get("requestId"))
+        logged = "\n".join(logs.output)
+        self.assertIn("stage=invalid_json", logged)
+        self.assertNotIn(response, logged)
+        self.assertNotIn("private-input-do-not-log", logged)
+
+    def test_upstream_timeout_has_distinct_message(self) -> None:
+        with patch("backend.batch_plan_routes.chat", return_value=("", {"ok": False, "reason": "timeout"})), \
+             self.assertLogs("backend.batch_plan_routes", level="WARNING") as logs:
+            st, res = self._req("POST", "/api/studio/batch-plan", {
+                "seed": "秋日咖啡", "count": 1, "layoutMode": "ai",
+            }, cookie=self.cookie)
+        self.assertEqual(st, 503)
+        self.assertEqual(res["code"], "batch_plan_ai_unavailable")
+        self.assertIn("响应超时", res["error"])
+        self.assertIn("stage=upstream reason=timeout", "\n".join(logs.output))
+
     def test_05_daily_quota_limit(self) -> None:
         """5. Daily quota limit 50 requests/day per user triggers 429."""
         from backend.db import local_today_str

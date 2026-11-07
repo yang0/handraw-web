@@ -19,6 +19,7 @@ Provides:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -26,6 +27,8 @@ from .ai_client import chat
 from .config import CONTENT_DIR
 from .db import Database
 from .services import ServiceError, consume_daily_usage
+
+logger = logging.getLogger(__name__)
 
 TEMPLATE_THEME_VARIATIONS = [
     "序章初探 · 晨光微熹与环境空镜",
@@ -167,6 +170,22 @@ def generate_template_batch_plan(
     return items
 
 
+def parse_batch_plan_response(response_text: str) -> Any:
+    """Unwrap the configured gateway's envelope, then parse the model JSON.
+
+    Do not search arbitrary prose for an object: the complete final response
+    must be JSON, optionally in the gateway's escape tag or a Markdown fence.
+    """
+    clean_json = response_text.strip()
+    wrapped = re.fullmatch(r"<escape>\s*([\s\S]*?)\s*</escape>", clean_json)
+    if wrapped:
+        clean_json = wrapped.group(1).strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)\s*```", clean_json, flags=re.IGNORECASE)
+    if fenced:
+        clean_json = fenced.group(1).strip()
+    return json.loads(clean_json)
+
+
 def execute_batch_plan(
     db: Database,
     user: dict[str, Any],
@@ -242,6 +261,7 @@ def execute_batch_plan(
         "1. 只输出 JSON 对象；顶层只有 items 数组，每条仅有 subject 和 layout 字段。禁止附加示例。\n"
         f"2. 必须恰好返回 {cnt} 条 items，主题不重复、紧扣本次母题；每条不超过120字，无编号。\n"
         "3. layout 必须来自完整目录，按每条主题的画面内容、信息密度及叙事需求匹配。\n"
+        "layout 字段只写图型编号，不得附带名称、冒号或描述。\n"
         f"4. {'固定模式全部使用用户指定的图型。' if norm_mode == 'fixed' else 'AI 模式允许语义合理重复，禁止轮换固定编号。'}\n"
         "5. 不使用历史示例、few-shot、默认图型或预设搭配。只输出合法 JSON。"
     )
@@ -251,20 +271,24 @@ def execute_batch_plan(
         {"role": "user", "content": user_prompt},
     ]
 
-    response_text, meta = chat(messages, temperature=0.7, timeout=30.0)
+    response_text, meta = chat(messages, temperature=0.7, timeout=30.0, json_mode=True)
 
-    if norm_mode == "ai" and (not meta.get("ok") or not response_text):
-        raise ServiceError("AI 图型推荐不可用，请检查 AI 服务配置后重试", status=503, code="batch_plan_ai_unavailable")
+    if not meta.get("ok") or not response_text:
+        reason = str(meta.get("reason") or "empty")
+        if not re.fullmatch(r"(?:no_key|timeout|network|empty|too_large|invalid_json|http_\d{3})", reason):
+            reason = "unknown"
+        logger.warning("event=batch_plan_failed stage=upstream reason=%s mode=%s count=%d", reason, norm_mode, cnt)
+        if norm_mode == "ai":
+            message = "AI 规划服务响应超时，请稍后重试" if reason == "timeout" else (
+                "AI 图型推荐不可用，请检查 AI 服务配置后重试" if reason == "no_key" else
+                "AI 规划服务暂时不可用，请稍后重试"
+            )
+            raise ServiceError(message, status=503, code="batch_plan_ai_unavailable")
 
     items: list[dict[str, str]] = []
     if meta.get("ok") and response_text:
         try:
-            clean_json = response_text.strip()
-            if "```" in clean_json:
-                match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", clean_json)
-                if match:
-                    clean_json = match.group(1).strip()
-            parsed = json.loads(clean_json)
+            parsed = parse_batch_plan_response(response_text)
             raw_items = parsed.get("items") if isinstance(parsed, dict) else None
             if not isinstance(raw_items, list):
                 raise ValueError("items must be an array")
@@ -277,7 +301,17 @@ def execute_batch_plan(
                 if not subj or subj in seen_subjects:
                     raise ValueError("missing or duplicate subject")
                 seen_subjects.add(subj)
-                cand_lyt = str(raw_it.get("layout") or "").strip().upper()
+                raw_layout = str(raw_it.get("layout") or "").strip()
+                cand_lyt = raw_layout.upper()
+                # Some gateways return the catalog's "code: name" label.
+                # Accept it only when BOTH identities match; never guess a
+                # code from a name or hide an ID/name conflict.
+                if norm_mode == "ai" and cand_lyt not in valid_layouts:
+                    labelled = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_-]*)\s*[:：]\s*(.+)", raw_layout)
+                    if labelled:
+                        code, name = labelled.group(1).upper(), labelled.group(2).strip()
+                        if code in valid_layouts and name.casefold() == valid_layouts[code].strip().casefold():
+                            cand_lyt = code
                 if norm_mode == "fixed":
                     lyt = norm_fixed_layout
                 elif cand_lyt in valid_layouts:
@@ -287,9 +321,20 @@ def execute_batch_plan(
                 items.append({"subject": subj[:120], "layout": lyt})
             if len(items) != cnt:
                 raise ValueError("wrong item count")
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError) as exc:
+            stage = "invalid_json" if isinstance(exc, json.JSONDecodeError) else "invalid_items"
+            reason = {
+                "items must be an array": "items_not_array", "invalid item": "item_not_object",
+                "missing or duplicate subject": "invalid_subject",
+                "model returned an unavailable layout": "invalid_layout", "wrong item count": "wrong_count",
+            }.get(str(exc), stage)
+            logger.warning(
+                "event=batch_plan_failed stage=%s reason=%s mode=%s count=%d response_chars=%d error_type=%s",
+                stage, reason, norm_mode, cnt, len(response_text), type(exc).__name__,
+            )
             if norm_mode == "ai":
-                raise ServiceError("AI 推荐结果不完整或包含无效图型，请重试", status=502, code="batch_plan_ai_invalid")
+                message = "AI 返回的规划格式无法解析，请重试" if stage == "invalid_json" else "AI 推荐结果不完整或包含无效图型，请重试"
+                raise ServiceError(message, status=502, code="batch_plan_ai_invalid") from None
             items = []
 
     if items:

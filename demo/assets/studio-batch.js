@@ -1594,7 +1594,9 @@
                 }));
             const data = await resp.json();
             if (!resp.ok || !data.ok) {
-              throw new Error(data.error || `HTTP ${resp.status}`);
+              const requestId = String(data.requestId || resp.headers?.get("X-Request-ID") || "");
+              const incident = /^[a-f0-9]{32}$/i.test(requestId) ? `（问题编号：${requestId}）` : "";
+              throw new Error((data.error || `HTTP ${resp.status}`) + incident);
             }
 
             const items = Array.isArray(data.items) ? data.items : [];
