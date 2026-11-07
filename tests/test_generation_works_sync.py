@@ -174,6 +174,12 @@ class TestGenerationWorksSync(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(json.loads(rows[0]["images_json"]),
                          ["/generated/out_0.webp", "/generated/out_1.webp"])
+        discussion = conn.execute(
+            "SELECT images_json FROM forum_topics WHERE work_id=?", (work_ids[0],)
+        ).fetchone()
+        self.assertIsNotNone(discussion)
+        self.assertEqual(json.loads(discussion["images_json"]),
+                         ["/generated/out_0.webp", "/generated/out_1.webp"])
         for _ in range(2):
             project_generation_to_works(conn, "gen_batch_slot_0")
             project_generation_to_works(conn, "gen_batch_slot_1")
