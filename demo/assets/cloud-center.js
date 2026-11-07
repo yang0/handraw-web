@@ -320,8 +320,10 @@
         items = Array.from(byId.values());
         cursor = res.hasMore ? res.nextCursor : null;
         message("已加载 " + items.length + " 张私人素材");
+        return true;
       } catch (err) {
         message("图库加载失败：" + (err.message || "请重试"), true);
+        return false;
       } finally {
         busy = false;
         render();
@@ -402,8 +404,10 @@
         pendingFile = null;
         pendingUid = null;
         busy = false;
-        await load(false);
-        message(result && result.deduped ? "图片已存在，已为你显示" : "添加成功，Skill 同步后即可使用");
+        const refreshed = await load(false);
+        message(refreshed
+          ? (result && result.deduped ? "图片已存在，已为你显示" : "添加成功，Skill 同步后即可使用")
+          : "图片已保存，但列表刷新失败；请刷新页面查看", !refreshed);
       } catch (err) {
         message("添加失败：" + uploadErrorText(err), true);
         if (retryUpload) retryUpload.hidden = false;
