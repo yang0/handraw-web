@@ -20,7 +20,7 @@ logger = logging.getLogger("backend.services")
 from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
 from .db import Database, local_today_str, utc_now_iso
 from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
-from .runtime_policy import sanitize_media_url, sanitize_plain_text, sanitize_rich_html
+from .runtime_policy import sanitize_media_url, sanitize_plain_text, sanitize_rich_html, env_flag
 from .work_schema import deduplicate_generation_history
 from .security import (
     generate_api_key,
@@ -5293,6 +5293,12 @@ def list_user_studio_articles(db: Database, user: dict[str, Any]) -> dict[str, A
     return {"ok": True, "items": items, "total": len(items)}
 
 
+def _new_generation_visibility() -> str:
+    """New generations are private. Demo fixtures and explicit legacy rollout
+    opt-in preserve old auto-publication behaviour without changing old rows."""
+    return "public" if (is_demo_mode() or env_flag("HANDRAW_LEGACY_AUTO_PUBLISH_GENERATIONS", False)) else "private"
+
+
 def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
     if "visibility" in entry:
         raise ServiceError("当前暂不支持设置可见性", status=400, code="visibility_not_allowed")
@@ -5427,10 +5433,10 @@ def record_user_studio_history(db: Database, user: dict[str, Any], entry: dict[s
                 INSERT INTO studio_generations (
                     id, user_id, username, tab_title, mode, mode_label, kind, recipe_summary,
                     prompt, visible_prompt, prompt_masked, markdown, items_json, system_append_json, engine, cost_type, credits_spent, status, created_at, request_id,
-                    subject, fork_generation_id, fork_item_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?, ?)
+                    subject, fork_generation_id, fork_item_id, visibility
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sample', 'free', 0, 'success', ?, ?, ?, ?, ?, ?)
                 """,
-                (hid, uid, user["username"], *values, json.dumps({"creationSource": creation_source}), now_iso, req_id, clean_subj, fork_gen_id, fork_item_id),
+                (hid, uid, user["username"], *values, json.dumps({"creationSource": creation_source}), now_iso, req_id, clean_subj, fork_gen_id, fork_item_id, _new_generation_visibility()),
             )
             try:
                 from .generation_works import project_generation_to_works
@@ -6113,7 +6119,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 status, error_msg, request_id, reservation_date, created_at, fork_work_id,
                 prompt_ready, recipe_id, subject, visibility,
                 fork_generation_id, fork_item_id
-            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?, 'public', ?, ?)
+            ) VALUES (?, ?, ?, '云端生图', ?, '云端直出', 'single', ?, ?, ?, ?, ?, '', '[]', 'live', ?, ?, '', 'running', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 gen_id,
@@ -6134,6 +6140,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 prompt_ready,
                 recipe_id,
                 user_subject,
+                _new_generation_visibility(),
                 fork_gen_target,
                 fork_item_target,
             ),
