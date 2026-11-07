@@ -119,7 +119,11 @@ def check_token_rate_limit(
     limit: int = TOKEN_RATE_LIMIT_PER_HOUR,
     window_seconds: float = TOKEN_RATE_LIMIT_WINDOW_SECONDS,
 ) -> bool:
-    """Sliding window rate limiter: 1200 requests per token per hour with 10000 key hard cap."""
+    """Shared Redis token quota in production; bounded local mode for development."""
+    from .redis_rate_limit import check_limit
+    distributed = check_limit("skill_token", str(token_key))
+    if distributed is not None:
+        return distributed
     now = time.time()
     with _token_rate_limit_lock:
         cutoff = now - window_seconds
@@ -729,8 +733,8 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
     if data_url:
         raw_bytes, ext, computed_sha = _validate_image_and_sha256(data_url, provided_sha)
 
-    # Perform lazy sync backfill outside the write transaction to avoid blocking writers
-    ensure_user_uploads_synced(handler.db, user_id)
+    # Fresh V3 accounts always create fully populated asset metadata.
+    # No compatibility/backfill pass is needed in the request path.
 
     resp_payload: dict[str, Any] | None = None
     resp_status: int = 200
