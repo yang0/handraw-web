@@ -88,6 +88,22 @@ def _pending_submission_resource(conn, kind, target_norm, viewer=None):
 
 
 
+def _sync_work_topic_media(tx, topic_id, work_id, work):
+    """Keep a discussion's image gallery consistent with its canonical work.
+
+    A work gains images as the parallel generation slots complete. Creating a
+    topic on the first image must not permanently freeze the topic at one image.
+    """
+    images = json.loads(work.get("images_json") or "[]")
+    urls = [sanitize_media_url(i.get("url", "") if isinstance(i, dict) else str(i or ""))
+            for i in images]
+    urls = [url for url in urls if url][:12]
+    tx.execute(
+        "UPDATE forum_topics SET images_json=?, updated_at=? WHERE id=? AND work_id=?",
+        (json.dumps(urls, ensure_ascii=False), S.utc_now_iso(), topic_id, work_id),
+    )
+
+
 def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission', listed_at_ms: int | None = None):
     if kind in ('style', 'layout', 'asset'):
         target = str(target or '').strip().upper().lstrip('#')
@@ -102,6 +118,8 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
     else:
         row = tx.execute('SELECT topic_id, origin FROM curation_resource_topics WHERE kind=? AND target_id=?', (kind, target)).fetchone()
     if row:
+        if kind == 'work':
+            _sync_work_topic_media(tx, str(row['topic_id']), target, resource)
         return str(row['topic_id'])
 
     # 2. For works, check if a topic already exists for this work_id (in any status)
@@ -113,6 +131,7 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
                 'INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
                 (kind, target, tid, initial_origin, now),
             )
+            _sync_work_topic_media(tx, tid, target, resource)
             return tid
 
     tid = 'topic_' + uuid.uuid4().hex
@@ -123,7 +142,7 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
         name = chinese[:18] if re.search(r'[\u3400-\u9fff]', chinese) else label
     images = json.loads(resource.get('images_json') or '[]') if kind == 'work' else [resource.get('image_url') or resource.get('image')]
     images = [sanitize_media_url(i.get('url', '') if isinstance(i, dict) else str(i or '')) for i in images]
-    images = [i for i in images if i][:9]
+    images = [i for i in images if i][:12]
 
     category = 'showcase' if kind == 'work' else 'assets'
     category_label = '🎨 作品讨论' if kind == 'work' else '画风与图型专区'
