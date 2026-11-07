@@ -251,7 +251,7 @@ class SecurityHTTPTests(unittest.TestCase):
             self.assertEqual(GenerationReconciler(self.db).reconcile_once(), 1)
         row = self.db.get_conn().execute("SELECT status,items_json FROM studio_generations WHERE id='gen-reconcile'").fetchone()
         self.assertEqual(row["status"], "success")
-        self.assertRegex(row["items_json"], r"/generated/known-task_0-[0-9a-f]+\\.png")
+        self.assertRegex(row["items_json"], r"/generated/known-task_0-[0-9a-f]+\.png")
 
         with self.db.transaction() as tx:
             tx.execute("UPDATE studio_generations SET status='queued' WHERE id='gen-reconcile'")
