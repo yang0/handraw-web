@@ -426,6 +426,26 @@ def project_generation_to_works(
             (gen_id, wid, now),
         )
 
+    # Canonical V3 persistence: the gateway's subrequest rows are only
+    # execution/billing events; the logical batch owns exactly one run and work.
+    # This is in the same DB transaction as the media grants and work update.
+    from .generation_v3 import record_public_work
+    normalized_images = []
+    by_source = {str(s["id"]): s for s in source_rows}
+    per_source_count = {}
+    for _, url, owner_generation_id in valid_items:
+        source_row = by_source[owner_generation_id]
+        source_index = int(source_row["batch_index"] or 0) if batch_id else 0
+        subindex = per_source_count.get(owner_generation_id, 0)
+        per_source_count[owner_generation_id] = subindex + 1
+        normalized_images.append((source_index * 1000 + subindex, url, ""))
+    record_public_work(
+        conn, user_id=int(row["user_id"]), source="web",
+        external_run_id=batch_id or gen_id, work_id=wid,
+        ordered_images=normalized_images,
+        expected_count=int(row["batch_total"] or 1) if batch_id else 1,
+    )
+
     # The work's images are all publicly readable; their source library remains
     # independently permissioned. Create media grants for every linked image.
     for _, url, owner_generation_id in valid_items:
