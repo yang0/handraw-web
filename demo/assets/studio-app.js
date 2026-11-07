@@ -141,6 +141,8 @@
     historyPage: 1,
     historyFilter: "all",
     historyQuery: "",
+    historyReturnStage: "quick",
+    historyReturnUrl: "",
     historyExpandedPromptIds: {},
     historySelectedPreview: {},
     workflowQuery: "",
@@ -251,6 +253,8 @@
     CS.historyPage = 1;
     CS.historyFilter = "all";
     CS.historyQuery = "";
+    CS.historyReturnStage = "quick";
+    CS.historyReturnUrl = "";
     _activeBatchRun = null;
     CS.activeBatchRun = null;
     return true;
@@ -3056,12 +3060,11 @@
     } else if (viewParam === "my-articles") {
       openMyArticlesPage({ renderNow: false });
     } else if (viewParam === "history") {
-      const curUser = (App.state && App.state.loggedIn && App.state.user && App.state.user.username) ? App.state.user.username : "";
-      const targetUrl = (curUser && curUser !== "guest")
-        ? channelUrl("main", { view: "profile", user: curUser, ptab: "generations" })
-        : channelUrl("main", { view: "auth", redirect: channelUrl("main", { view: "profile", user: "", ptab: "generations" }) });
-      window.location.replace(targetUrl);
-      return;
+      // Keep the old deep link, but render the studio's own task history.
+      ensureQuickTab();
+      CS.historyReturnStage = "quick";
+      CS.historyReturnUrl = window.location.pathname + "?entry=quick";
+      CS.stageView = "history";
     } else if (viewParam === "workflows") {
       CS.stageView = "workflows";
     }
@@ -7315,13 +7318,24 @@
   }
 
   function openHistoryPage() {
+    if (CS.stageView === "history") return;
     flushUnifiedArticleEditor();
-    const curUser = (App.state && App.state.loggedIn && App.state.user && App.state.user.username) ? App.state.user.username : "";
-    if (curUser && curUser !== "guest") {
-      window.location.href = channelUrl("main", { view: "profile", user: curUser, ptab: "generations" });
-    } else {
-      window.location.href = channelUrl("main", { view: "auth", redirect: channelUrl("main", { view: "profile", user: "", ptab: "generations" }) });
-    }
+    CS.historyReturnStage = CS.stageView;
+    CS.historyReturnUrl = window.location.pathname + window.location.search;
+    CS.stageView = "history";
+    const url = new URL(window.location.href);
+    url.search = "?view=history";
+    window.history.replaceState(null, "", url.pathname + url.search);
+    renderTopAndBottomDocks();
+  }
+
+  function returnFromHistoryPage() {
+    if (CS.stageView !== "history") return;
+    CS.stageView = ["quick", "batch", "canvas", "preview", "article", "workflows"].includes(CS.historyReturnStage)
+      ? (CS.historyReturnStage === "article" ? "preview" : CS.historyReturnStage)
+      : "quick";
+    window.history.replaceState(null, "", CS.historyReturnUrl || (window.location.pathname + "?entry=quick"));
+    renderTopAndBottomDocks();
   }
 
   function openHistoryModal() {
@@ -7698,13 +7712,11 @@
       }
     }
 
-    const goBackCanvas = () => switchCreationStage("canvas");
+    const backBtn = DOM.historyStage.querySelector("#hist-back-creation");
+    if (backBtn) backBtn.onclick = returnFromHistoryPage;
 
-    const backBtn = DOM.historyStage.querySelector("#hist-back-canvas");
-    if (backBtn) backBtn.onclick = goBackCanvas;
-
-    const emptyGoBtn = DOM.historyStage.querySelector("#hist-empty-go-canvas");
-    if (emptyGoBtn) emptyGoBtn.onclick = goBackCanvas;
+    const emptyGoBtn = DOM.historyStage.querySelector("#hist-empty-back-creation");
+    if (emptyGoBtn) emptyGoBtn.onclick = returnFromHistoryPage;
 
     DOM.historyStage.querySelectorAll("[data-hist-filter]").forEach((btn) => {
       btn.onclick = () => {
@@ -16827,10 +16839,7 @@
   window.HANDRAW_STUDIO.getBatchParts = getBatchParts;
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   window.HANDRAW_STUDIO.resolveShareTitle = resolveShareTitle;
-  window.HANDRAW_STUDIO.openHistoryStage = () => {
-    CS.stageView = "history";
-    renderHistoryStage();
-  };
+  window.HANDRAW_STUDIO.openHistoryStage = openHistoryPage;
   window.HANDRAW_STUDIO.getHistory = () => CS.generationHistory;
   window.HANDRAW_STUDIO.setHistory = (list) => {
     CS.generationHistory = list;
