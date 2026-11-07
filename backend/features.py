@@ -538,11 +538,11 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
         from .security import hash_session_token
         current = hash_session_token(str(user.get("_session_token") or "")) if user.get("_session_token") else ""
         rows = handler.db.get_conn().execute(
-            "SELECT id AS session_id, token, user_agent, created_at, expires_at FROM sessions WHERE user_id=? AND expires_at>? ORDER BY created_at DESC LIMIT 30",
+            "SELECT token, user_agent, created_at, expires_at FROM sessions WHERE user_id=? AND expires_at>? ORDER BY created_at DESC LIMIT 30",
             (user["id"], int(time.time())),
         ).fetchall()
         handler._send_json({"ok": True, "items": [
-            {"id": r["session_id"], "device": (r["user_agent"] or "未知设备")[:160],
+            {"id": hashlib.sha256(str(r["token"]).encode("utf-8")).hexdigest()[:24], "device": (r["user_agent"] or "未知设备")[:160],
              "createdAt": r["created_at"], "current": bool(current and r["token"] == current)}
             for r in rows
         ]});return True
