@@ -183,7 +183,10 @@ class HistoryBoundaryTests(unittest.TestCase):
         history_list = data.get("history", [])
         self.assertTrue(len(history_list) >= 1)
 
-        target = next((h for h in history_list if h["id"] == gen_id), None)
+        target = next(
+            (h for h in history_list if h.get("sourceGenerationId") == gen_id),
+            None,
+        )
         self.assertIsNotNone(target)
 
         # Check whitelist fields present
@@ -210,7 +213,8 @@ class HistoryBoundaryTests(unittest.TestCase):
         data_single = json.loads(raw_single.decode("utf-8"))
         self.assertTrue(data_single.get("ok"))
         single_item = data_single.get("history")
-        self.assertEqual(single_item["id"], gen_id)
+        self.assertEqual(single_item["id"], target["id"])
+        self.assertEqual(single_item["workId"], target["workId"])
         for field in FORBIDDEN_FIELDS:
             self.assertNotIn(field, single_item)
 
@@ -225,13 +229,17 @@ class HistoryBoundaryTests(unittest.TestCase):
                     status, error_msg, request_id, reservation_date, created_at, fork_work_id,
                     prompt_ready, subject
                 ) VALUES (
-                    'gen_legacy_001', ?, 'legacy_user', '3:4', 'graphic-text', '云端直出', 'single', '#FA-001',
+                    'gen_legacy_001', ?, ?, '3:4', 'graphic-text', '云端直出', 'single', '#FA-001',
                     '这是一段很长且包含高度私密定义的历史提示词', '', 0, '{}', '', '["/images/legacy.webp"]', 'live', 'free_quota', 0, 't_1',
                     'success', '', 'req_legacy', '2026-01-01', '2026-01-01T00:00:00Z', '', 1, ''
                 )
                 """,
-                (self.user["id"],),
+                (self.user["id"], self.user["username"]),
             )
+            # V3 never backfills old rows. Explicitly project the current
+            # successful execution into its one canonical run and work.
+            from backend.generation_works import project_generation_to_works
+            self.assertEqual(len(project_generation_to_works(tx, "gen_legacy_001")), 1)
 
         item = get_public_generation_history(self.db, "gen_legacy_001")
         self.assertIsNotNone(item)
