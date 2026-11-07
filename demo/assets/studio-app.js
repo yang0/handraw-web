@@ -41,6 +41,8 @@
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
   let _articlesSyncVersion = 0;
+  const _articleCloudBases = new Map();
+  let _articlesCloudConflict = false;
   let _articlesSyncedVersion = 0;
   let _articlesSyncInFlight = false;
   let _articlesSyncStatus = "idle";
@@ -176,6 +178,8 @@
 
     cacheScopeEpoch += 1;
     _articlesSyncVersion = 0;
+    _articleCloudBases.clear();
+    _articlesCloudConflict = false;
     _articlesSyncedVersion = 0;
     _articlesSyncInFlight = false;
     _articlesSyncStatus = "idle";
@@ -595,6 +599,10 @@
       return;
     }
     _articlesSyncVersion += 1;
+    if (_articlesCloudConflict) {
+      setArticlesSyncStatus("conflict");
+      return;
+    }
     setArticlesSyncStatus("pending");
     if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
     const requestScope = activeCacheScope;
@@ -605,23 +613,45 @@
       if (_articlesSyncInFlight) return; // The running request will send newer changes afterward.
       _articlesSyncInFlight = true;
       const sentVersion = _articlesSyncVersion;
-      const payload = { articles: CS.myArticles || [] };
+      const payload = {
+        articles: (CS.myArticles || []).map((art) => ({
+          ...art,
+          baseUpdatedAtMs: _articleCloudBases.get(String(art.id)) ?? 0
+        }))
+      };
       setArticlesSyncStatus("syncing");
       let response = null;
+      let httpStatus = 0;
       try {
-        response = await studioApiPost("/api/studio/articles", payload, { requestScope, requestEpoch });
+        const resp = await fetch("/api/studio/articles", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        httpStatus = resp.status;
+        response = await resp.json().catch(() => ({}));
+      } catch (_) {
+        response = null;
       } finally {
-        // Never let an older account's response update the current editor.
         if (requestScope !== activeCacheScope || requestEpoch !== cacheScopeEpoch) return;
         _articlesSyncInFlight = false;
       }
-      if (response && response.ok !== false) {
+      if (httpStatus === 409 && (response?.code === "article_version_conflict" || response?.code === "article_deleted")) {
+        _articlesCloudConflict = true;
+        setArticlesSyncStatus("conflict");
+        toast("云端文章版本冲突：已停止自动覆盖，浏览器内的修改仍保留。请下载本地稿并重新加载。");
+        return;
+      }
+      if (httpStatus >= 200 && httpStatus < 300 && response?.ok) {
+        Object.entries(response.versions || {}).forEach(([id, version]) => {
+          _articleCloudBases.set(id, Number(version));
+        });
         _articlesSyncedVersion = Math.max(_articlesSyncedVersion, sentVersion);
         if (_articlesSyncVersion === sentVersion) setArticlesSyncStatus("synced");
       } else {
         setArticlesSyncStatus("failed");
       }
-      if (_articlesSyncVersion > sentVersion) {
+      if (_articlesSyncVersion > sentVersion && !_articlesCloudConflict) {
         if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
         _articlesSyncTimer = setTimeout(send, 200);
       }
@@ -685,6 +715,7 @@
           const artMap = new Map();
           ws.articles.forEach((ra) => {
             if (!ra || !ra.id) return;
+            _articleCloudBases.set(String(ra.id), Number(ra.updatedAtMs) || 0);
             const prev = (CS.myArticles || []).find((a) => a.id === ra.id);
             artMap.set(ra.id, {
               ...(prev || {}),
@@ -14776,10 +14807,14 @@
       if (!el) return;
       const retry = DOM.previewStage.querySelector("#editor-sync-retry");
       const remote = Boolean(App.state?.serverBacked && App.state?.loggedIn);
-      if (retry) retry.hidden = !remote || _articlesSyncStatus !== "failed";
+      if (retry) {
+        retry.hidden = !remote || !["failed", "conflict"].includes(_articlesSyncStatus);
+        retry.textContent = _articlesSyncStatus === "conflict" ? "下载本地稿" : "重试云端同步";
+      }
       if (state === "dirty") el.textContent = "本地保存中…";
       else if (state === "empty") el.textContent = "未填写";
       else if (!remote || _articlesSyncStatus === "local") el.textContent = "已保存到此浏览器";
+      else if (_articlesSyncStatus === "conflict") el.textContent = "版本冲突 · 本地稿已保留，云端未覆盖";
       else if (_articlesSyncStatus === "failed") el.textContent = "本地已保存 · 云端同步失败";
       else if (_articlesSyncStatus === "pending" || _articlesSyncStatus === "syncing") el.textContent = "本地已保存 · 正在同步云端…";
       else if (_articlesSyncStatus === "synced") el.textContent = "已同步到云端";
@@ -14787,6 +14822,20 @@
     };
     const syncRetryBtn = DOM.previewStage.querySelector("#editor-sync-retry");
     if (syncRetryBtn) syncRetryBtn.onclick = () => {
+      if (_articlesCloudConflict) {
+        const md = String(draft.markdown || "");
+        const blob = new Blob([md], {type:"text/markdown;charset=utf-8"});
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = String(draft.title || "本地文章").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + "-本地冲突备份.md";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        toast("本地稿已下载。请刷新页面获取最新云端文章，再人工合并。");
+        return;
+      }
       scheduleCloudArticlesSync();
       updateSavedState("saved");
     };
