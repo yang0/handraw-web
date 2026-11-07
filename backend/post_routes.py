@@ -325,6 +325,8 @@ def _handle_detail(handler: Any, topic_id: str) -> bool:
         if w_row["run_id"]:
             from .generation_v3 import work_images
             work_res["images"] = work_images(conn, m_target)
+            from .generation_works import generation_image_assets
+            work_res["imageAssets"] = generation_image_assets(conn, w_row, work_res["images"])
             if w_row["cover_media_id"]:
                 cover = conn.execute(
                     "SELECT storage_key FROM media_assets WHERE id=?",
