@@ -729,6 +729,20 @@
             if (!ra || !ra.id) return;
             _articleCloudBases.set(String(ra.id), Number(ra.updatedAtMs) || 0);
             const prev = (CS.myArticles || []).find((a) => a.id === ra.id);
+            // A newer local/offline draft must be recoverable before the
+            // cloud workspace replaces its in-memory representation.
+            if (prev && Number(prev.updatedAtMs || 0) > Number(ra.updatedAtMs || 0) &&
+                (String(prev.markdown || "") !== String(ra.markdown || "") ||
+                 JSON.stringify(prev.cards || []) !== JSON.stringify(ra.cards || []))) {
+              const saved = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
+              const copy = saved?.articles?.length ? saved.articles.filter((a) => a.id !== prev.id) : [];
+              copy.push(JSON.parse(JSON.stringify(prev)));
+              writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
+                createdAt: Date.now(), articles: copy, activeId: prev.id
+              });
+              _articlesCloudConflict = true;
+              setArticlesSyncStatus("conflict");
+            }
             artMap.set(ra.id, {
               ...(prev || {}),
               id: ra.id,
@@ -745,9 +759,21 @@
             });
           });
           (CS.myArticles || []).forEach((a) => {
-            if (a && a.id && a.isNewDraft && !serverIds.has(a.id)) {
+            if (!a || !a.id || serverIds.has(a.id)) return;
+            if (a.isNewDraft) {
               artMap.set(a.id, a);
+              return;
             }
+            // Could be an offline-created article or one deleted remotely.
+            // Preserve a private recoverable copy; never resurrect it silently.
+            const saved = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
+            const copies = (saved?.articles || []).filter((b) => b.id !== a.id);
+            copies.push(JSON.parse(JSON.stringify(a)));
+            writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
+              createdAt: Date.now(), articles: copies, activeId: a.id
+            });
+            _articlesCloudConflict = true;
+            setArticlesSyncStatus("conflict");
           });
           CS.myArticles = [...artMap.values()];
           writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
