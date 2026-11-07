@@ -292,12 +292,28 @@ def record_atomic_reply_and_listing(
     return rid, cur_bal
 
 
-def comment(db,user,kind,target_id,text):
+def comment(db,user,kind,target_id,text,request_id=None):
     target=str(target_id).strip().upper().lstrip('#') if kind!='work' else str(target_id).strip()
     clean=sanitize_plain_text(str(text or '').strip(), max_chars=3000)
     if not clean:
         raise S.ServiceError('请输入评论内容')
     with db.transaction() as tx:
+        # Deduplication receipt and forum reply share the same transaction.
+        receipt_hash = None
+        if request_id:
+            if kind != 'work':
+                raise S.ServiceError('幂等评论仅支持作品', status=400, code='invalid_request')
+            import hashlib
+            receipt_hash = hashlib.sha256((target + '\n' + clean).encode('utf-8')).hexdigest()
+            old = tx.execute(
+                'SELECT work_id,body_hash,response_json FROM skill_comment_receipts '
+                'WHERE user_id=? AND request_id=?',
+                (int(user['id']), request_id)
+            ).fetchone()
+            if old:
+                if old['work_id'] != target or old['body_hash'] != receipt_hash:
+                    raise S.ServiceError('重复请求内容不一致', status=409, code='idempotency_conflict')
+                return json.loads(old['response_json'])
         resource=resolve_resource(tx,kind,target)
         if not resource:
             raise S.ServiceError('资源不存在或尚未收录',status=404)
@@ -334,17 +350,22 @@ def comment(db,user,kind,target_id,text):
             user,
             clean,
         )
-
-    return {
-        "ok": True,
-        "topicId": tid,
-        "replyId": rid,
-        "rewarded": 0,
-        "credits": cur_bal,
-        "assetCode": target if kind != 'work' else None,
-        "assetKind": kind,
-        "comment": {"id": rid, "user": user["username"], "name": user["display_name"], "text": clean, "time": "刚刚"},
-    }
+        result = {
+            "ok": True, "topicId": tid, "replyId": rid, "rewarded": 0,
+            "credits": cur_bal, "assetCode": target if kind != 'work' else None,
+            "assetKind": kind,
+            "comment": {"id": rid, "user": user["username"], "name": user["display_name"],
+                        "text": clean, "time": "刚刚"},
+        }
+        if request_id:
+            tx.execute(
+                'INSERT INTO skill_comment_receipts'
+                '(user_id,request_id,work_id,body_hash,response_json,created_at)'
+                ' VALUES(?,?,?,?,?,?)',
+                (int(user['id']), request_id, target, receipt_hash,
+                 json.dumps(result, ensure_ascii=False), S.utc_now_iso())
+            )
+    return result
 
 
 def _activity(conn,replies,fallback):

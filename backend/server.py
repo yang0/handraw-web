@@ -514,7 +514,7 @@ def save_data_url_upload(
 
     raw_cat = str(cat or "other").strip().lower()
     PUBLIC_CATS = ("characters", "props", "scenes", "other")
-    INTERNAL_CATS = ("forum",)          # 仅由论坛/投稿发布写入，原样保留
+    INTERNAL_CATS = ("forum", "share", "skill_history")          # 仅由论坛/投稿发布写入，原样保留
     if raw_cat in PUBLIC_CATS or raw_cat in INTERNAL_CATS:
         safe_cat = raw_cat
     else:
@@ -1927,8 +1927,16 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError as exc:
             raise ServiceError("Content-Length 无效", status=400, code="invalid_content_length") from exc
-        if length > MAX_JSON_BODY_BYTES:
-            raise ServiceError("请求体过大", status=413, code="payload_too_large")
+        # Skill embeds private images as Base64. Give only this authenticated
+        # contract a bounded allowance for a few 15 MiB photos. The regular
+        # website's 20 MiB JSON limit remains unchanged.
+        target_path = unquote(urlparse(self.path).path)
+        authenticated = self._current_user(required=False) if (
+            self.command == "POST" and target_path == "/api/v1/me/generations"
+        ) else None
+        body_limit = (64 * 1024 * 1024) if authenticated else MAX_JSON_BODY_BYTES
+        if length > body_limit:
+            raise ServiceError("请求体过大；请分批同步生图历史", status=413, code="payload_too_large")
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
@@ -1972,6 +1980,33 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 "/api/works",
             ):
                 return
+
+        # Skill v1 contract: only a library token can sync private data.
+        if "library" in scopes:
+            # Media access still checks ownership or an explicit public grant.
+            if method == "GET" and req_path.startswith(("/uploads/", "/generated/")):
+                return
+            if method == "GET" and (
+                req_path in (
+                    "/api/v1/me/resources", "/api/v1/me/collection-items",
+                    "/api/v1/me/generations", "/api/v1/me/notifications"
+                )
+                or re.fullmatch(r"^/api/v1/resources/[^/]+/download$", req_path)
+                or re.fullmatch(r"^/api/v1/works/[^/]+/comments$", req_path)
+            ):
+                return
+            if method == "PUT" and re.fullmatch(r"^/api/v1/me/resources/[^/]+$", req_path):
+                return
+            if method == "DELETE" and re.fullmatch(r"^/api/v1/me/resources/[^/]+$", req_path):
+                return
+            if method == "POST" and req_path == "/api/v1/me/generations":
+                return
+        # Publishing scope covers the explicitly user-requested social writes.
+        if "publish" in scopes and method == "POST" and (
+            re.fullmatch(r"^/api/v1/works/[^/]+/(likes|comments)$", req_path)
+            or re.fullmatch(r"^/api/v1/me/generations/[^/]+/publish$", req_path)
+        ):
+            return
 
         # 3. 'library' scope: personal library read endpoints and collection toggle
         if "library" in scopes:
@@ -2030,6 +2065,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._enforce_write_origin()
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        from .skill_web_bridge import handle_delete as skill_web_delete
+        if skill_web_delete(self, req_path, parse_qs(parsed.query, keep_blank_values=True)):
+            return
         m_wf = re.match(r"^/api/studio/workflows/([^/]+)$", req_path)
         if m_wf:
             user = self._current_user(required=True)
@@ -2141,6 +2179,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         except ImportError:  # pragma: no cover
             device_auth_get = None
         if device_auth_get and device_auth_get(self, req_path, qs):
+            return
+
+        from .skill_web_bridge import handle_get as skill_web_get
+        if skill_web_get(self, req_path, qs):
             return
 
         try:
@@ -2731,6 +2773,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self._enforce_write_origin()
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        if req_path.startswith("/api/v1/me/resources/"):
+            from .skill_web_bridge import handle_put as skill_web_put
+            if skill_web_put(self, req_path, self._read_json_body()):
+                return
         if req_path.startswith("/api/studio/recipes"):
             from .recipe_routes import handle_recipe_put
             body = self._read_json_body()
@@ -2759,6 +2805,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             record_client_error(self, self._read_json_body())
             return
         body = self._read_json_body()
+        if req_path.startswith("/api/v1/"):
+            from .skill_web_bridge import handle_post as skill_web_post
+            if skill_web_post(self, req_path, body):
+                return
         ua = self.headers.get("User-Agent") or ""
         ip_addr = self.client_address[0] if self.client_address else ""
 
