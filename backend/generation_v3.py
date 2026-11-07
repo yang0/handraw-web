@@ -549,3 +549,96 @@ def set_work_cover(db: Any, user: dict[str, Any], work_id: str, image_url: str) 
             (media["media_id"], _now(), work_id),
         )
     return {"ok": True, "workId": work_id, "coverUrl": url, "coverMediaId": media["media_id"]}
+
+
+def cancel_unsubmitted_web_slots(
+    db: Any, user: dict[str, Any], batch_id: str, positions: list[Any],
+) -> dict[str, Any]:
+    """Cancel ONLY slots that have not reached the model gateway.
+
+    Never claim to cancel a remote task or refund it. In-flight submissions
+    are explicitly reported as skipped. Billing of an accepted task remains
+    governed by authoritative gateway success/failure reconciliation.
+    """
+    import re
+    from .services import ServiceError
+
+    uid = int(user["id"])
+    batch_id = str(batch_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", batch_id):
+        raise ServiceError("批次 ID 无效", status=400, code="invalid_batch_id")
+    if not isinstance(positions, list) or len(positions) > 200:
+        raise ServiceError("取消图片索引无效", status=400, code="invalid_cancel_positions")
+    if any(type(p) is not int or p < 0 for p in positions):
+        raise ServiceError("取消图片索引必须为非负整数", status=400, code="invalid_cancel_positions")
+    with db.transaction() as tx:
+        query = (
+            "SELECT id,expected_count FROM generation_runs "
+            "WHERE user_id=? AND source='web' AND external_run_id=?"
+        )
+        if getattr(tx, "dialect", "") == "postgresql":
+            query += " FOR UPDATE"
+        run = tx.execute(query, (uid, batch_id)).fetchone()
+        if not run:
+            raise ServiceError("找不到属于你的生成批次", status=404, code="run_not_found")
+        if any(p >= int(run["expected_count"]) for p in positions):
+            raise ServiceError("取消索引超出任务范围", status=400, code="invalid_cancel_positions")
+
+        cancelled: list[int] = []
+        skipped: list[int] = []
+        now = _now()
+        for pos in sorted(set(positions)):
+            # Queued/running/success tasks have been submitted; the client
+            # cannot honestly cancel them by closing a dialog.
+            gateway = tx.execute(
+                """
+                SELECT 1 FROM studio_generations
+                WHERE user_id=? AND batch_id=? AND batch_index=?
+                  AND status IN ('queued','running','success')
+                LIMIT 1
+                """,
+                (uid, batch_id, pos),
+            ).fetchone()
+            existing = tx.execute(
+                "SELECT status FROM generation_items WHERE run_id=? AND position=?",
+                (run["id"], pos * 1000),
+            ).fetchone()
+            if gateway or (existing and existing["status"] == "success"):
+                skipped.append(pos)
+                continue
+            tx.execute(
+                """
+                INSERT INTO generation_items
+                    (id,run_id,position,status,media_id,error_code,created_at,updated_at)
+                VALUES (?, ?, ?, 'cancelled', NULL, '', ?, ?)
+                ON CONFLICT(run_id,position) DO UPDATE SET
+                    status='cancelled',media_id=NULL,error_code='',updated_at=excluded.updated_at
+                WHERE generation_items.status <> 'success'
+                """,
+                (_stable_id("item", run["id"], pos * 1000),
+                 run["id"], pos * 1000, now, now),
+            )
+            cancelled.append(pos)
+
+        statuses = tx.execute(
+            "SELECT status FROM generation_items WHERE run_id=?", (run["id"],)
+        ).fetchall()
+        finished = len(statuses) >= int(run["expected_count"])
+        if finished and all(s["status"] in ("success", "failed", "cancelled") for s in statuses):
+            success_count = sum(s["status"] == "success" for s in statuses)
+            status = (
+                "success" if success_count == int(run["expected_count"])
+                else "partial" if success_count
+                else "cancelled" if all(s["status"] == "cancelled" for s in statuses)
+                else "failed"
+            )
+            tx.execute(
+                "UPDATE generation_runs SET status=?,updated_at=? WHERE id=?",
+                (status, now, run["id"]),
+            )
+    return {
+        "ok": True, "runId": run["id"], "batchId": batch_id,
+        "cancelledPositions": cancelled,
+        "alreadySubmittedPositions": skipped,
+        "remoteTasksCancelled": False,
+    }
