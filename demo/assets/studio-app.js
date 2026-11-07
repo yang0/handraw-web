@@ -11789,9 +11789,7 @@
     DOM.previewStage.innerHTML = `
       <div class="ic-pv-topbar">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;">
-          <button type="button" class="btn btn-sm" id="pv-all-back-detail" style="font-weight:850;">← 返回文章模式</button>
-          <button type="button" class="btn btn-sm" id="pv-all-back-canvas">🎨 返回画布</button>
-          <span style="font-size:13.5px;font-weight:850;color:var(--ic-ink);margin-left:6px;">📚 全部历史文章分页 (${filtered.length})</span>
+          <button type="button" class="btn btn-sm" id="pv-all-back-detail" style="font-weight:850;">← 返回编辑模式</button>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <button type="button" class="btn btn-sm btn-primary" id="pv-all-new-article" style="font-weight:800;">＋ 新建文章</button>
@@ -11930,10 +11928,6 @@
       allNewArtBtn.onclick = () => {
         openUnifiedArticleEditor(null, { createNew: true });
       };
-    };
-
-    DOM.previewStage.querySelector("#pv-all-back-canvas").onclick = () => {
-      switchCreationStage("canvas");
     };
 
     DOM.previewStage.querySelectorAll("[data-art-filter]").forEach((btn) => {
@@ -12676,6 +12670,7 @@
                             }
                           </div>
                         </div>
+                        <button type="button" class="ic-hist-art-delete" data-sidebar-del-art-id="${esc(a.id)}" title="删除此历史文章" aria-label="删除文章：${esc(a.articleTitle || "未命名文章")}">🗑</button>
                       </div>
                     `;
                   })
@@ -12711,6 +12706,13 @@
         }
       };
     }
+    container.querySelectorAll("[data-sidebar-del-art-id]").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const aid = btn.getAttribute("data-sidebar-del-art-id");
+        if (aid) deleteArticle(aid);
+      };
+    });
     container.querySelectorAll("[data-hist-art-id]").forEach((rowEl) => {
       rowEl.onclick = () => {
         const aid = rowEl.getAttribute("data-hist-art-id");
@@ -13820,13 +13822,14 @@
         <header class="ic-wechat-topbar" id="wechat-topbar">
           <div style="display:flex;align-items:center;gap:10px;">
             <button type="button" class="btn btn-sm" id="preview-btn-list" style="font-weight:750;padding:3px 10px;height:28px;box-sizing:border-box;">← 文章列表</button>
+
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
             <div class="ic-article-segmented-switch" id="preview-switch-group" role="group" aria-label="模式切换">
               <button type="button" class="ic-article-seg-btn" id="preview-switch-editor">编辑</button>
               <button type="button" class="ic-article-seg-btn is-active" id="preview-switch-preview">预览</button>
             </div>
-            <span style="font-size:11px;color:var(--ic-muted);background:var(--ic-surface,#f0f2f5);padding:2px 7px;border-radius:4px;">微信公众号排版</span>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;"></div>
         </header>
 
         <div class="ic-wechat-body">
@@ -14752,11 +14755,7 @@
         <header class="ic-wechat-topbar" id="wechat-topbar">
           <div style="display:flex;align-items:center;gap:10px;">
             <button type="button" class="btn btn-sm" id="editor-btn-back" style="font-weight:750;padding:3px 10px;height:28px;box-sizing:border-box;">← 文章列表</button>
-            <div class="ic-article-segmented-switch" id="editor-switch-group" role="group" aria-label="模式切换">
-              <button type="button" class="ic-article-seg-btn is-active" id="editor-switch-editor">编辑</button>
-              <button type="button" class="ic-article-seg-btn" id="editor-switch-preview">预览</button>
-            </div>
-            <span style="font-size:11px;color:var(--ic-muted);background:var(--ic-surface,#f0f2f5);padding:2px 7px;border-radius:4px;">微信公众号排版</span>
+
           </div>
 
           <!-- Mode / Formatting Tools -->
@@ -14786,7 +14785,10 @@
               导入/替换文档
               <input type="file" id="editor-file-replace-inp" accept=".md,.markdown,.txt,.doc,.docx,.pdf" hidden />
             </label>
-            <button type="button" class="btn btn-sm btn-danger" id="editor-btn-delete-article" style="padding:3px 10px;font-size:12px;font-weight:750;color:#dc2626;border-color:rgba(220,38,38,0.3);background:#fff;" title="删除当前文章">🗑️ 删除文章</button>
+            <div class="ic-article-segmented-switch" id="editor-switch-group" role="group" aria-label="模式切换">
+              <button type="button" class="ic-article-seg-btn is-active" id="editor-switch-editor">编辑</button>
+              <button type="button" class="ic-article-seg-btn" id="editor-switch-preview">预览</button>
+            </div>
           </div>
         </header>
 
@@ -14911,15 +14913,6 @@
     if (backBtn) {
       backBtn.onclick = () => {
         openMyArticlesPage({ subView: "all-list" });
-      };
-    }
-
-    const delArtBtn = DOM.previewStage.querySelector("#editor-btn-delete-article");
-    if (delArtBtn) {
-      delArtBtn.onclick = () => {
-        const aid = draft.id || CS.activeArticleId;
-        if (!aid) return;
-        deleteArticle(aid);
       };
     }
 
