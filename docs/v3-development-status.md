@@ -41,3 +41,20 @@ python -m ops.bootstrap_postgres_v3 --apply
 - PostgreSQL 全业务方言/触发器的实际运行验收、媒体存储恢复与 Redis 故障恢复验证，以及部署验证。
 
 这些都是合并上线前的**验证门槛**，本轮不把它们算作已通过。Issue #84 保持 open，代码已提交不代表功能已上线。
+
+## 2026-11-07 · 后续架构开发收敛（按要求暂不处理 CI/测试）
+
+以下是代码提交状态，不等于已在真实环境验收：
+
+1. 清除旧 SQLite 回填：个人素材库不再扫描旧文件或使用 PRAGMA / BEGIN IMMEDIATE 修复旧上传；新数据在写入时设置身份和变化序号。作品讨论帖回填已改成手工运行、PostgreSQL/SQLite 通用的当前作品关联修复。
+2. 统一任务状态：generation_v3.refresh_run_status 只依赖 generation_items，Web 成功、失败退款、部分成功、取消都调用同一套逻辑，避免三份重复状态。
+3. 批次历史删除：用户删除历史时支持 run ID、batch ID 和单次网关执行 ID，并在同一个事务中标记整个批次、隐藏关联作品；账单和退款轨迹保留。
+4. 取消后的迟到请求：网关提交前锁定 run、检查已取消槽位；普通迟到提交返回 409，只有 UI 明确选择重试时允许 retryCancelled 解除取消状态。
+5. 媒体回收：已结算的执行日志不再永久占用旧图片；替换图片时撤销作品和论坛旧授权，媒体 GC 通过权威 media_assets/work_media/generation_items 和仍有效的授权判断是否可以回收。
+6. PostgreSQL SQL 适配：钱包免费额度选择时使用 FOR UPDATE；Seed 中 INSERT OR REPLACE 替换为 ON CONFLICT；资源管理的 sqlite_master 表检测改用 PostgreSQL information_schema；会话展示 ID 改为 token 不可逆哈希而非不存在的 id/SQLite rowid。
+7. 安全读取：启动时绑定当前主数据库，prompt 黑盒安全扫描和画风目录查询不会在 PostgreSQL 模式误连到另一个 SQLite DB；移除旧黑盒历史 backfill 线程。
+8. 空结果处理：上游即使宣称生成 success，若没有保存一张有效图，也进入失败和退款流程，避免成功任务空作品。
+
+核心原则不变：每个逻辑生成任务最多一件多图公开作品；广场和主页只显示一张封面；Web/Skill 共用统一任务和媒体实体；不迁移任何旧数据。
+
+暂缓范围：按用户要求，当前没有运行 CI、Python/Node 测试、真实 PostgreSQL/Redis/S3 集成测试、浏览器 E2E 或生产部署。功能代码是否完全正确尚待后续独立验收。
