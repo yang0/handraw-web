@@ -11,7 +11,6 @@ import uuid
 
 from .db import Database
 from .media_dims import image_size
-from .generation_works import sort_generation_batch_works
 from .ranking import WORK_POPULAR_EXPR, normalize_sort
 from .services import (
     _seed_filter,
@@ -560,30 +559,15 @@ def get_work_by_id(
             )
 
     w_dict = _serialize_work(row, {wid: comments}, unlocked_set, current_user, conn=conn)
-    gw_row = conn.execute(
-        "SELECT generation_id FROM generation_works WHERE work_id = ?", (wid,)
-    ).fetchone()
-    if gw_row and gw_row["generation_id"]:
-        gen_id = str(gw_row["generation_id"])
-        siblings = conn.execute(
-            """
-            SELECT gw.work_id, gw.item_key, gw.created_at AS mapped_at
-            FROM generation_works gw
-            JOIN works w ON w.id = gw.work_id
-            WHERE gw.generation_id = ? AND w.status = 'published'
-            ORDER BY gw.created_at ASC, gw.item_key ASC, gw.work_id ASC
-            """,
-            (gen_id,),
-        ).fetchall()
-        siblings = sort_generation_batch_works(conn, gen_id, siblings)
-        w_dict["batchId"] = gen_id
-        w_dict["batchTotal"] = len(siblings)
-        w_idx = next((i + 1 for i, s in enumerate(siblings) if s["work_id"] == wid), 1)
-        w_dict["batchIndex"] = w_idx
-    else:
-        w_dict["batchId"] = f"work_{wid}"
-        w_dict["batchTotal"] = 1
-        w_dict["batchIndex"] = 1
+    # V3: one work already represents the whole generation. There are no
+    # sibling per-image works to look up or fold.
+    run = conn.execute(
+        "SELECT external_run_id FROM generation_runs WHERE id=?",
+        (row["run_id"],),
+    ).fetchone() if row["run_id"] else None
+    w_dict["batchId"] = str(run["external_run_id"]) if run else f"work_{wid}"
+    w_dict["batchTotal"] = 1
+    w_dict["batchIndex"] = 1
 
     if current_user:
         uid = int(current_user["id"])
