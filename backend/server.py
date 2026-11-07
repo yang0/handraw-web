@@ -1975,6 +1975,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         # Skill v1 contract: only a library token can sync private data.
         if "library" in scopes:
+            # Media access still checks ownership or an explicit public grant.
+            if method == "GET" and req_path.startswith(("/uploads/", "/generated/")):
+                return
             if method == "GET" and (
                 req_path in (
                     "/api/v1/me/resources", "/api/v1/me/collection-items",
