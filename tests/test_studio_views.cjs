@@ -1,0 +1,13 @@
+"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const src = fs.readFileSync("demo/assets/studio-app.js", "utf8");
+assert.ok(src.includes('id="studio-mode-simple"'),"Two views must expose simple editor");
+assert.ok(src.includes('id="studio-mode-canvas"'),"Two views must expose canvas editor");
+assert.ok(src.includes('if (next === "simple")'),"View switch should check representability");
+assert.ok(src.includes("getQuickParts(CS.graph)"),"Simple form requires a safely editable graph");
+assert.ok(src.includes("getBatchParts(CS.graph)"),"Series form requires a safely editable graph");
+assert.ok(src.includes("当前工作流包含简洁模式无法安全编辑的节点"),"Complex graph must be preserved");
+assert.ok(src.includes("lastStudioTaskView"),"Canvas retains its originating creation task");
+assert.ok(src.includes('p.ctrl.data.ratioSource = "user"'),"Explicit ratio must survive mode changes");
+console.log("studio2 navigation and view switching safety contract passes");

@@ -1022,7 +1022,10 @@
         quickStart: t.quickStart === true,
         batchStart: t.batchStart === true
       }));
-    writeJsonStorage(OPEN_TABS_KEY, { activeTabId: CS.activeTabId, tabs: slimTabs });
+    writeJsonStorage(OPEN_TABS_KEY, {
+      activeTabId: CS.activeTabId, tabs: slimTabs,
+      lastStudioTaskView: CS.lastStudioTaskView || ""
+    });
   }
 
   function createWorkflowTab({
@@ -2886,6 +2889,8 @@
     const layoutParam = params.get("layout");
 
     const storedOpen = readJsonStorage(OPEN_TABS_KEY, null);
+    CS.lastStudioTaskView = ["quick","batch","article"].includes(storedOpen?.lastStudioTaskView)
+      ? storedOpen.lastStudioTaskView : "";
     if (storedOpen && Array.isArray(storedOpen.tabs) && storedOpen.tabs.length > 0) {
       CS.tabs = storedOpen.tabs
         // Older builds saved the article workspace as a tab; drop it so the
@@ -12868,7 +12873,11 @@
     const skills = nodes.filter((n) => n.type === "skill_params");
     const texts = nodes.filter((n) => n.type === "text_input");
     const assets = nodes.filter((n) => n.type === "asset");
-    if (controls.length !== 1 || loops.length !== 1 || skills.length !== 1) return null;
+    // An advanced graph must never be silently rewritten by the Batch form.
+    const supported = new Set(["output_control","loop","skill_params","text_input","asset","output_display"]);
+    if (nodes.some(n => !supported.has(n.type))
+        || controls.length !== 1 || loops.length !== 1 || skills.length !== 1
+        || texts.length > 1 || assets.length > 1) return null;
     const ctrl = controls[0];
     const loop = loops[0];
     const skill = skills[0];
@@ -12932,16 +12941,19 @@
     } else if (field === "ratio") {
       if (!/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(String(value)) || String(value).split(":").some((x) => Number(x) <= 0)) return;
       p.ctrl.data.ratio = String(value);
+      p.ctrl.data.ratioSource = "user";
     } else if (field === "mode") {
       const mode = value === "pure-image" ? "pure" : value;
       if (["graphic-text", "pure", "pure-image", "poster", "series"].includes(value)) {
-        p.ctrl.data.mode = mode;
-        const defaultRatio = mode === "poster" ? "9:16" : (mode === "graphic-text" || mode === "pure" || mode === "pure-image") ? "3:4" : p.ctrl.data.ratio;
-        p.ctrl.data.ratio = defaultRatio;
+        if (window.HandrawStudioCore) {
+          window.HandrawStudioCore.setMode(p.ctrl.data, mode);
+        } else {
+          p.ctrl.data.mode = mode;
+        }
       }
     } else if (field === "fusion") {
       p.skill.data.fusion = Boolean(value);
-      if (!p.skill.data.fusion) p.skill.data.style2 = "";
+      // Secondary style remains a disabled draft selection when fusion is off.
     } else if (field === "style1") {
       p.skill.data.style1 = String(value || "");
     } else if (field === "style2") {
@@ -13009,6 +13021,7 @@
     td.subjectHint = draft.subjectHint || extractedTheme || "";
 
     cd.ratio = draft.ratio || "3:4";
+    cd.ratioSource = draft.ratio ? "user" : "default";
     const forkMode = draft.mode === "pure-image" ? "pure" : (draft.mode || "graphic-text");
     cd.mode = ["graphic-text", "pure", "poster", "series"].includes(forkMode) ? forkMode : "graphic-text";
     cd.count = 1;
@@ -16237,6 +16250,22 @@
   }
 
   function switchCreationStage(next) {
+    if (next === "simple") {
+      const desired = CS.lastStudioTaskView ||
+        (getBatchParts(CS.graph) ? "batch" : "quick");
+      const canEdit = desired === "batch" ? Boolean(getBatchParts(CS.graph))
+        : desired === "article" ? isArticleGraph(CS.graph)
+        : Boolean(getQuickParts(CS.graph));
+      if (!canEdit) {
+        toast("当前工作流包含简洁模式无法安全编辑的节点。原画布已完整保留，请继续在画布中编辑；也可新建普通作图项目。");
+        return;
+      }
+      next = desired;
+    }
+    if (next === "canvas" && ["quick","batch","article"].includes(CS.stageView)) {
+      CS.lastStudioTaskView = CS.stageView;
+    }
+    if (["quick","batch","article"].includes(next)) CS.lastStudioTaskView = next;
     if (next !== "article") flushUnifiedArticleEditor();
     if (next === "article") {
       switchIntoArticleMode();
@@ -16281,10 +16310,11 @@
   function renderCreationModeBar() {
     if (!DOM.entryBar) return;
     DOM.entryBar.hidden = false;
-    const quick = CS.stageView === "quick";
-    const batch = CS.stageView === "batch";
     const canvas = CS.stageView === "canvas";
-    const article = CS.stageView === "preview" || CS.stageView === "article";
+    const quick = CS.stageView === "quick" || (canvas && CS.lastStudioTaskView === "quick");
+    const batch = CS.stageView === "batch" || (canvas && CS.lastStudioTaskView === "batch");
+    const article = CS.stageView === "preview" || CS.stageView === "article"
+      || (canvas && CS.lastStudioTaskView === "article");
     const history = CS.stageView === "history";
     const workflows = CS.stageView === "workflows";
     const historyCount = (CS.generationHistory || []).length;
@@ -16292,6 +16322,9 @@
       <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
       <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
       <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
+    </div><div class="qc-view-switch" role="group" aria-label="编辑视图">
+      <span class="qc-view-label">编辑方式</span>
+      <button type="button" class="btn btn-sm${!canvas ? " btn-primary" : ""}" id="studio-mode-simple" aria-pressed="${!canvas}">简洁编辑</button>
       <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布</button>
     </div><div class="qc-entry-actions"><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
 
@@ -16301,6 +16334,8 @@
     if (btnBatch) btnBatch.onclick = () => { switchCreationStage("batch"); };
     const btnArticle = DOM.entryBar.querySelector("#studio-mode-article");
     if (btnArticle) btnArticle.onclick = () => { switchCreationStage("article"); };
+    const btnSimple = DOM.entryBar.querySelector("#studio-mode-simple");
+    if (btnSimple) btnSimple.onclick = () => { switchCreationStage("simple"); };
     const btnCanvas = DOM.entryBar.querySelector("#studio-mode-canvas");
     if (btnCanvas) btnCanvas.onclick = () => { switchCreationStage("canvas"); };
     const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
