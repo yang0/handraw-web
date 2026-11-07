@@ -551,8 +551,9 @@
                   ${this.renderCostHtml()}
                 </div>
                 <div class="make-image-btn-wrap">
-                  ${busy ? `<span class="make-image-busy-hint">任务处理中，暂不能清空或再次生成</span>` : ""}
+                  ${busy ? `<span class="make-image-busy-hint">生成中 · 停止仅中断本地等待；已提交云端的任务可能继续执行或计费</span>` : ""}
                   <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
+                  ${busy ? '<button type="button" class="btn btn-sm" id="make-image-btn-stop">停止等待</button>' : ""}
                   <button type="button" class="btn btn-primary make-image-btn-run" id="make-image-btn-run" ${busy ? "disabled" : ""}>
                     ${busy ? "正在生成中…" : "开始生成 (1张)"}
                   </button>
@@ -1040,6 +1041,19 @@
           }
 
           this.actions?.markDirtyAndRender();
+        };
+      }
+
+      // Active quick jobs can be stopped locally without claiming that an
+      // already-accepted cloud request has been cancelled or refunded.
+      const stopBtn = root.querySelector("#make-image-btn-stop");
+      if (stopBtn) {
+        stopBtn.onclick = () => {
+          const cancelled = this.actions?.cancel?.();
+          if (cancelled !== false) {
+            stopBtn.disabled = true;
+            stopBtn.textContent = "正在停止…";
+          }
         };
       }
 
