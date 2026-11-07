@@ -22,5 +22,10 @@ assert.match(routes, /def import_generation\(/, "Skill generation import");
 assert.match(routes, /"visibility": "private"/, "private default");
 assert.match(server, /skill_generation_media WHERE media_url/, "private media ownership");
 assert.match(server, /skill_cloud_get\(self, req_path, qs\)/, "server GET mount");
+const getBlock = server.slice(server.indexOf("    def _handle_get(self)"), server.indexOf("    def _handle_put(self)"));
+const putBlock = server.slice(server.indexOf("    def _handle_put(self)"), server.indexOf("    def _handle_post(self)"));
+assert.doesNotMatch(getBlock, /skill_cloud_put\(/, "PUT action cannot be mounted in GET");
+assert.match(putBlock, /skill_cloud_put\(self, req_path, self\._read_json_body\(\)\)/,
+             "resource PUT must be mounted within HTTP PUT handler");
 assert.match(server, /skill_cloud_post\(self, req_path, body\)/, "server POST mount");
 console.log("Skill/Web private profile and API wiring: PASS");
