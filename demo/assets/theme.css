@@ -3863,3 +3863,27 @@ img[data-hw-src].hw-img-failed {
   .hw-collections-tabs { flex-basis:auto; }
   .hw-collections-toolbar > #prof-col-batch-unfav-btn { margin-left:0; align-self:flex-end; }
 }
+
+
+/* Owner-only personal gallery nested under Profile > Creative Resources. */
+.hw-personal-gallery { min-width: 0; }
+.hw-personal-gallery-intro { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; margin:0 0 16px; }
+.hw-personal-gallery-intro h3 { font-size:17px; margin:0 0 5px; }
+.hw-personal-gallery-intro p { color:var(--ink-muted); font-size:12.5px; line-height:1.65; margin:0; }
+.hw-personal-gallery-intro label { cursor:pointer; flex-shrink:0; }
+.hw-personal-gallery-controls { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:8px 18px; margin:12px 0 18px; }
+.hw-personal-gallery-controls [data-gallery-message] { color:var(--ink-muted); font-size:12px; }
+.hw-personal-gallery-grid { column-count:4; column-gap:15px; width:100%; }
+.hw-personal-gallery-card { display:inline-block; width:100%; overflow:hidden; vertical-align:top; break-inside:avoid; -webkit-column-break-inside:avoid; margin:0 0 15px; background:var(--paper-card); border:1px solid var(--line-soft); border-radius:12px; box-sizing:border-box; }
+.hw-personal-gallery-image img { display:block; width:100%; height:auto; object-fit:contain; }
+.hw-personal-gallery-image span { display:block; padding:52px 10px; text-align:center; color:var(--ink-muted); }
+.hw-personal-gallery-card-body { display:flex; flex-direction:column; gap:6px; padding:10px; min-width:0; }
+.hw-personal-gallery-card-body strong { font-size:13px; overflow-wrap:anywhere; }
+.hw-personal-gallery-card-body small { font-size:11.5px; color:var(--ink-muted); }
+.hw-personal-gallery-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:5px; }
+.hw-personal-gallery-actions .btn { font-size:11px; min-height:30px; padding:4px 9px; }
+.hw-personal-gallery-empty { padding:32px 18px; text-align:center; }
+.hw-personal-gallery-footer { display:flex; justify-content:center; margin:22px 0; }
+@media(max-width:1050px) { .hw-personal-gallery-grid { column-count:3; } }
+@media(max-width:760px) { .hw-personal-gallery-grid { column-count:2; } }
+@media(max-width:420px) { .hw-personal-gallery-grid { column-count:1; } }
