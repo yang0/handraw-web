@@ -622,6 +622,19 @@ def handle_library_get(handler: Any, req_path: str, qs: dict[str, list[str]]) ->
     return False
 
 
+def _persist_library_image(url: str, payload: bytes) -> None:
+    """Map storage provider failures to an actionable gallery API response."""
+    from .media_storage import persist_media_bytes
+    try:
+        persist_media_bytes(url, payload)
+    except Exception as exc:
+        logger.exception("event=library_media_persist_failed url=%s", url)
+        raise ServiceError(
+            "私人图库图片存储暂时不可用，请重试",
+            status=503, code="library_storage_unavailable",
+        ) from exc
+
+
 def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> bool:
     """Handle PUT /api/library/assets/{uid}."""
     m = re.fullmatch(r"^/api/library/assets/([^/]+)$", req_path)
@@ -708,8 +721,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                                 fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                                 fpath = uploads_dir / fname
                                 newly_created_url = f"/uploads/{fname}"
-                                from .media_storage import persist_media_bytes
-                                persist_media_bytes(newly_created_url, raw_bytes)
+                                _persist_library_image(newly_created_url, raw_bytes)
                                 newly_created_file = fpath
                                 image_url = f"/uploads/{fname}"
                                 file_path_str = str(fpath)
@@ -986,8 +998,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
                         fname = f"UPL-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}{ext}"
                         fpath = uploads_dir / fname
                         newly_created_url = f"/uploads/{fname}"
-                        from .media_storage import persist_media_bytes
-                        persist_media_bytes(newly_created_url, raw_bytes)
+                        _persist_library_image(newly_created_url, raw_bytes)
                         newly_created_file = fpath
                         image_url = f"/uploads/{fname}"
 
