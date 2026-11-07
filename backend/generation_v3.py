@@ -191,6 +191,21 @@ V3_MIGRATIONS = [
             SELECT RAISE(ABORT,'media_identity_is_immutable');
         END;
     """),
+    (100, "100_private_media_gc_queue", """
+        -- Retryable, never-public file reclamation. A media key must not be
+        -- physically deleted until all current database references are gone.
+        CREATE TABLE IF NOT EXISTS media_gc_jobs (
+            media_url TEXT PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            next_attempt_at INTEGER NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+            claim_until INTEGER NOT NULL DEFAULT 0,
+            claim_token TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_media_gc_due
+            ON media_gc_jobs(next_attempt_at,claim_until);
+    """),
 ]
 
 
