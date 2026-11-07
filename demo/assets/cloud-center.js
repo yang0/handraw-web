@@ -478,6 +478,7 @@
       if (!["image/png","image/jpeg","image/webp"].includes(file.type) ||
           !file.size || file.size > 15 * 1024 * 1024) {
         pendingFile = null;
+        showUploadForm();
         message("只支持 15 MB 以内的 PNG、JPEG、WebP 图片", true);
         return;
       }
