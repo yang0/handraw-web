@@ -6,6 +6,10 @@ const vm = require("node:vm");
 
 const main = fs.readFileSync("demo/assets/main-app.js", "utf8");
 const source = fs.readFileSync("demo/assets/cloud-center.js", "utf8");
+const theme = fs.readFileSync("demo/assets/theme.css", "utf8");
+assert.match(theme, /\.hw-personal-gallery-grid\.is-empty\s*\{\s*column-count:\s*1\s*;/, "Empty gallery must be one column");
+assert.match(theme, /\.hw-personal-gallery-empty\s*\{[^}]*width:\s*100%/, "Empty gallery card must fill the gallery width");
+assert.match(source, /cards\.classList\.toggle\("is-empty", visible\.length === 0\)/, "Empty state must toggle masonry off");
 assert.match(main, /label: "我的图库"/, "Creative Resources must contain My Gallery");
 assert.match(main, /type === "gallery" && isMe/, "Gallery is only shown to its owner");
 assert.match(main, /if \(isMe && UI\.profileTab === "resources" && UI\.profileResourceFilter === "gallery"\)/);
@@ -23,7 +27,11 @@ class Element {
     this.style = {};
     this.callbacks = {};
     this.attributes = {};
-    this.classList = {toggle() {}};
+    this.classes = new Set();
+    this.classList = {toggle: (name, force) => {
+      const enabled = force === undefined ? !this.classes.has(name) : force;
+      if (enabled) this.classes.add(name); else this.classes.delete(name);
+    }};
   }
   addEventListener(name, fn) { this.callbacks[name] = fn; }
   setAttribute(name, val) { this.attributes[name] = val; }
@@ -80,14 +88,19 @@ vm.runInNewContext(source,ctx);
   assert.match(cards.innerHTML,/\/api\/library\/assets\/11111111-1111-4111-8111-111111111111\/image/);
   assert.doesNotMatch(cards.innerHTML,/should-not-be-used\.webp/);
   assert.equal(status.textContent,"已加载 1 张私人素材");
+  assert.equal(cards.classes.has("is-empty"), false, "Loaded gallery keeps masonry enabled");
 
   categories.find(x=>x.dataset.galleryCategory==="props").callbacks.click();
   assert.match(cards.innerHTML,/此分类暂无素材/);
+  assert.equal(cards.classes.has("is-empty"), true, "Empty category uses one full-width panel");
   categories.find(x=>x.dataset.galleryCategory==="characters").callbacks.click();
   assert.match(cards.innerHTML,/私家角色/);
+  assert.equal(cards.classes.has("is-empty"), false, "Returning to populated category restores masonry");
 
   await cards.callbacks.click({target:{closest:()=>({dataset:{galleryDelete:uid}})}});
   assert.equal(uploads.length,0);
+  assert.match(cards.innerHTML,/图库暂无图片/);
+  assert.equal(cards.classes.has("is-empty"), true, "Deleting final item switches to single empty panel");
   assert.ok(calls.some(c=>c.init?.method==="DELETE" && c.path.includes("baseRevision=1")));
 
   file.files=[{name:"新人设.png",size:120,type:"image/png"}];
@@ -96,5 +109,6 @@ vm.runInNewContext(source,ctx);
   assert.equal(uploads[0].name,"新人设");
   assert.ok(calls.some(c=>c.init?.method==="PUT" && c.init.body.cat==="characters"));
   assert.match(cards.innerHTML,/新人设/);
+  assert.equal(cards.classes.has("is-empty"), false, "Uploading restores masonry mode");
   console.log("profile gallery: owner-scoped API, private image URLs, categories, add/delete OK");
 })().catch(err=>{console.error(err);process.exitCode=1;});

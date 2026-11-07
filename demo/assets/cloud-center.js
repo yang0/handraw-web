@@ -276,6 +276,8 @@
       const visible = items.filter(function (item) {
         return category === "all" || item.cat === category;
       });
+      // A lone empty-state card must not flow through the multi-column masonry layout.
+      cards.classList.toggle("is-empty", visible.length === 0);
       cards.innerHTML = visible.length ? visible.map(function (item) {
         // The scoped image endpoint checks the logged-in owner's identity.
         const img = safeImage(item.imageUrl);
