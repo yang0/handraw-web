@@ -5870,7 +5870,8 @@
             ...(card.batchId ? {
               batchId: card.batchId,
               batchIndex: card.batchIndex || 0,
-              batchTotal: card.batchTotal || 1
+              batchTotal: card.batchTotal || 1,
+              retryCancelled: card.status === "cancelled" || card.status === "error"
             } : {}),
             requestId,
             clientRequestId: requestId,
@@ -6451,6 +6452,7 @@
                 batchId,
                 batchIndex: i,
                 batchTotal: plan.specs.length,
+                retryCancelled: resolvedOnlyIdx !== null,
                 requestId,
                 clientRequestId: requestId,
                 confirmCost: true,
