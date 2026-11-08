@@ -710,7 +710,7 @@
   }
 
   async function reviewAction(entry, actionName, extra = {}) {
-    const reason = prompt("请填写审核理由（至少五个字，会保留记录）");
+    const reason = await window.HandrawDialogs.prompt("请填写审核理由（至少五个字，会保留记录）");
     if (reason === null) return;
     await api(`/entries/${entry.id}/review`, {
       method: "POST",
@@ -839,7 +839,7 @@
           button(
             "确认退款",
             async () => {
-              const reason = prompt("请填写退款原因（至少五个字）");
+              const reason = await window.HandrawDialogs.prompt("请填写退款原因（至少五个字）");
               if (reason === null) return;
               await api(`/unlocks/${sale.id}/refund`, {
                 method: "POST",
