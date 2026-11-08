@@ -48,11 +48,11 @@ jobs:
       # #127: use actual installed Chrome on the GitHub runner. Capture
       # first render/drag+zoom frame p95/DOM/heap/IME focus at 10–300 nodes.
       - run: python -m pip install "playwright>=1.50,<2"
+      - run: python tests/smoke_studio_series_browser_108.py
       - run: python tests/benchmark_studio_canvas.py --output artifacts/canvas-127.json --require-browser
       - run: python tests/smoke_studio_canvas_browser.py --screenshots artifacts/canvas-127-screen
       - run: python tests/smoke_studio_runtime_browser_119.py
       - run: python tests/smoke_studio_make_image_browser_128.py
-      - run: python tests/smoke_studio_series_browser_108.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
