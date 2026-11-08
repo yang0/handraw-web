@@ -149,6 +149,46 @@ class OfficialCatalogParity11(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mismatchedKind"):
             self.check()
 
+    def test_same_code_but_different_public_name_is_not_parity(self):
+        # Without a name guard, Web could show a completely different
+        # resource under an ID that appears in both official catalogs.
+        self.styles[0]["generation_name"] = "被误替换的官方画风"
+        with self.assertRaisesRegex(ValueError, "mismatchedName"):
+            self.check()
+        self.styles[0]["generation_name"] = "已发布画风"
+        self.layouts[0]["name"] = "不相同的图型"
+        with self.assertRaisesRegex(ValueError, "mismatchedName"):
+            self.check()
+
+    def test_dynamic_approved_db_name_matches_skill_not_just_code(self):
+        db_style = [{"number": "FB-099", "generation_name": "网站已经发布的资源"}]
+        self.styles.append({"number": "FB-099", "generation_name": "Skill 同号另一个资源"})
+        with self.assertRaisesRegex(ValueError, "mismatchedName"):
+            self.check(with_db=True, dynamic_styles=db_style)
+        self.styles[-1]["generation_name"] = db_style[0]["generation_name"]
+        report = self.check(with_db=True, dynamic_styles=db_style)
+        self.assertEqual(report["mismatchedName"], [])
+        self.assertEqual(report["knownPending"], ["FG-025"])
+        self.assertFalse(report["readyForRelease"])  # FG-025 remains awaiting approval
+
+    def test_distinct_pending_skill_only_resources_are_pinned(self):
+        row = {"number": "FF-018", "generation_name": "Low Poly Art",
+               "group": "FF 3D / 3D Clay", "reference": "低多边形艺术"}
+        self.styles.append(row)
+        self.pending["pendingSkillOnly"].append({
+            "code": "FF-018", "kind": "style", "name": "Low Poly Art",
+            "sha256": _sha(row), "issue": 11, "reason": "Await website editorial approval",
+        })
+        report = self.check()
+        self.assertEqual(report["knownPending"], ["FF-018", "FG-025"])
+        self.assertEqual(report["skillOnly"], ["FF-018", "FG-025"])
+        self.assertFalse(report["readyForRelease"])
+        with self.assertRaisesRegex(ValueError, "FF-018"):
+            self.check(strict=True, with_db=True)
+        self.styles[-1]["reference"] = "another resource content"
+        with self.assertRaisesRegex(ValueError, "alteredPending"):
+            self.check()
+
     def test_cross_category_collision_fails(self):
         self.layouts.append({"id": "FA-001", "name": "Wrong class"})
         with self.assertRaisesRegex(ValueError, "duplicate Skill code"):
