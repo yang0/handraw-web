@@ -970,8 +970,8 @@
           if(prior && prior.getAttribute("src")===img.getAttribute("src"))img.replaceWith(prior);
         });
       }
-      if (typeof host.querySelectorAll === "function") {
-        this.bindEvents(host, p, iterations);
+      if (typeof this.hostElement.querySelectorAll === "function") {
+        this.bindEvents(this.hostElement, p, iterations);
         this.bindSeriesWorkspace(p);
       }
       if(editorRestore){
