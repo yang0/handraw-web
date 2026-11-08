@@ -8,12 +8,15 @@ import tempfile
 import threading
 from pathlib import Path
 from unittest.mock import patch
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from backend.generation_v3 import _upsert_media, ensure_run, refresh_run_status
 from backend.server import SESSION_COOKIE_NAME, create_channel_server, init_database
 from backend.services import register_user
-
-ROOT = Path(__file__).resolve().parent.parent
 
 
 def main():
