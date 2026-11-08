@@ -39,6 +39,16 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_project_http.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_pagination.py' -v
       - run: python -m unittest discover -s tests -p 'test_pg_studio_project_migration.py' -v
+      # #127: use actual installed Chrome on the GitHub runner. Capture
+      # first render/drag+zoom frame p95/DOM/heap/IME focus at 10–300 nodes.
+      - run: python -m pip install "playwright>=1.50,<2"
+      - run: python tests/benchmark_studio_canvas.py --output artifacts/canvas-127.json --require-browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio2-canvas-127-benchmark
+          path: artifacts/canvas-127.json
+          if-no-files-found: ignore
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
   python-full:
@@ -115,6 +125,7 @@ jobs:
           node tests/test_studio_make_image_integration.cjs
           node --check demo/assets/studio-series-plan.js
           node tests/test_studio_series_plan_integration.cjs
+          node --check demo/assets/studio-canvas-renderer.js
           node tests/test_studio_canvas_incremental.cjs
           node tests/test_studio_views.cjs
           node --check demo/assets/studio-views.js
