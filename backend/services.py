@@ -5918,6 +5918,17 @@ def _cloud_generation_result(
         "reservationDate": row["reservation_date"] or "",
         "model": str(settings.get("gateway", {}).get("model", "gpt-image-2")),
     }
+    # The V3 logical Run is the only source for status, result count and
+    # media ownership. Return its opaque ID without making the client derive
+    # it from a gateway genId or a user-specific hash.
+    logical_key = str(row["batch_id"] or "") if "batch_id" in row_keys else ""
+    logical_key = logical_key or str(row["id"])
+    run_row = conn.execute(
+        "SELECT id FROM generation_runs WHERE user_id=? AND source='web' AND external_run_id=?",
+        (uid, logical_key),
+    ).fetchone()
+    if run_row:
+        res["runId"] = str(run_row["id"])
     if was_masked:
         res["promptMasked"] = True
     if "fork_generation_id" in row_keys and row["fork_generation_id"]:
