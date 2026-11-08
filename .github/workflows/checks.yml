@@ -25,6 +25,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_view_authority.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_resource_refs.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_plan_slot_access.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_http.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_pagination.py' -v
       - run: python -m unittest discover -s tests -p 'test_pg_studio_project_migration.py' -v
