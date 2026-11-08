@@ -6942,8 +6942,11 @@
               batchId: card.batchId,
               batchIndex: card.batchIndex || 0,
               batchTotal: card.batchTotal || 1,
-              retryCancelled: card.status === "cancelled" || card.status === "error"
+              retryCancelled: card.status === "cancelled" || card.status === "error",
+              retryFailed: card.status === "error" || card.status === "failed",
+              slotId: String(card.id || "")
             } : {}),
+            idempotencyKey: requestId,
             requestId,
             clientRequestId: requestId,
             confirmCost: true
