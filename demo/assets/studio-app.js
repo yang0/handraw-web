@@ -6956,6 +6956,16 @@
         if (S.renderChrome) S.renderChrome();
         const activeReqId = data.requestId || requestId;
         const activeGenId = data.genId || "";
+        // Persist server-minted Run ID and stable card identity BEFORE any
+        // async task polling. Reload/reconnect must query this same Run,
+        // never reserve a second paid generation.
+        if (data.runId) {
+          card.runId = String(data.runId);
+          card.slotId = card.slotId || card.id;
+          if (!Number.isInteger(card.batchIndex)) card.batchIndex = 0;
+          if (ctrl) ctrl.data.runId = String(data.runId);
+          commitArticleTargetChanges(target, { bumpTime:false });
+        }
         card.genId = activeGenId;
         card.requestId = activeReqId;
         if (data.imageUrl) {
@@ -15321,6 +15331,7 @@
 
   function renderUnifiedArticleCardsHtml(draft) {
     const target = resolveArticleTarget(draft.id);
+    resumeArticleCardRuns(draft.id,target,draft);
     const cards = sortPlanCardsInDocOrder(target?.planNode?.data?.cards || []);
     const blocks = E.parseArticleReadonlyBlocks(draft.markdown || "");
     const blockIndexes = blocks.map((b) => b.idx).sort((a, b) => a - b);
@@ -16023,6 +16034,86 @@
       target.art.cards = cards;
     }
     commitArticleTargetChanges(target, { bumpTime: false });
+  }
+
+  // Article generation recovery is a read-only view of the V3 ledger.
+  // Each generated card owns a stable slotId/runId; the server owns item/media
+  // and authorization. No second submit, project publish or anchor rewriting.
+  const articleRunReads = new Map();
+  function resumeArticleCardRuns(articleId, target, draft) {
+    if (!App.state?.loggedIn || !articleId || !target) return;
+    const cards = target.planNode?.data?.cards || target.art?.cards || [];
+    const runIds = [...new Set(cards.map(c=>String(c?.runId||"")).filter(Boolean))];
+    if (!runIds.length) return;
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const documentToken = window.HandrawStudioIntegration?.documentToken(draft);
+    for (const runId of runIds) {
+      const key = scope + ":" + runId;
+      const previous = articleRunReads.get(key);
+      if (previous?.loading || previous?.done || previous && Date.now() - previous.started < 5000) continue;
+      const entry = {loading:true,started:Date.now(),done:false};
+      articleRunReads.set(key,entry);
+      fetch("/api/studio/runs/" + encodeURIComponent(runId), {
+        credentials:"include"
+      }).then(async response => {
+        const payload = await response.json();
+        if (!response.ok || !payload?.ok || !payload.run || !Array.isArray(payload.items) ||
+            String(payload.run.id || payload.run.runId || "") !== runId)
+          throw new Error("run_read_failed");
+        return payload;
+      }).then(payload => {
+        if (scope !== activeCacheScope || epoch !== cacheScopeEpoch ||
+            articleRunReads.get(key) !== entry || CS.activeArticleId !== articleId) return;
+        const live = CS.articleEditorDraft?.id === articleId ? CS.articleEditorDraft : null;
+        if (documentToken && !window.HandrawStudioIntegration.sameDocument(documentToken,live)) return;
+        const currentTarget = resolveArticleTarget(articleId);
+        const currentCards = currentTarget?.planNode?.data?.cards || currentTarget?.art?.cards || [];
+        let changed = false;
+        for (const card of currentCards) {
+          if (!card || String(card.runId || "") !== runId) continue;
+          const slotIndex = Number.isInteger(card.batchIndex) ? card.batchIndex : 0;
+          const candidates = payload.items.filter(item =>
+            Number(item.slotIndex) === slotIndex);
+          const item = candidates.find(it => it.status === "success" && it.mediaId && it.imageUrl);
+          if (item && (!card.imageUrl || card.imageUrl === item.imageUrl)) {
+            if (card.imageUrl !== item.imageUrl || card.runItemId !== item.id ||
+                card.mediaId !== item.mediaId || card.status !== "done") {
+              card.imageUrl = item.imageUrl;
+              card.runItemId = item.id;
+              card.mediaId = item.mediaId;
+              card.status = "done";
+              changed = true;
+            }
+          } else if (!card.imageUrl && candidates.length && candidates.every(it =>
+            it.status === "failed" || it.status === "cancelled")) {
+            if (card.status !== "error") {card.status = "error";changed=true;}
+          }
+        }
+        entry.done = payload.items.length > 0 && payload.items.every(it =>
+          ["success","failed","cancelled"].includes(it.status));
+        if (changed) {
+          // Modify only the selected card's result, never markdown, anchor,
+          // plan version or unrelated cards.
+          if (live?.cards) {
+            for (const local of live.cards) {
+              const authoritative = currentCards.find(c=>c.id === local.id);
+              if (authoritative && authoritative !== local && authoritative.runId === local.runId) {
+                local.imageUrl = authoritative.imageUrl;
+                local.runItemId = authoritative.runItemId;
+                local.mediaId = authoritative.mediaId;
+                local.status = authoritative.status;
+              }
+            }
+          }
+          commitArticleTargetChanges(currentTarget,{bumpTime:false});
+          if (CS.stageView === "preview" && CS.articleSubView === "editor")
+            renderFullPreviewStage();
+        }
+      }).catch(error => {
+        if (scope === activeCacheScope && epoch === cacheScopeEpoch)
+          entry.error = String(error?.message || error);
+      }).finally(() => {entry.loading=false;});
+    }
   }
 
   function renderArticleEditorPage(sortedArticles) {
