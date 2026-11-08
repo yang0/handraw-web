@@ -29,6 +29,34 @@
   const ViewModel = typeof window !== "undefined" ? window.HandrawStudioViews
     : typeof require === "function" ? require("./studio-views.js") : null;
 
+  function authorityPatch(tab, snapshot) {
+    if (tab.projectAuthority !== "spec") return draftPatch(tab, snapshot);
+    if (snapshot.authority === "spec") {
+      const patch = [
+        {op:"set",path:"/creationSpec",value:snapshot.draft.creationSpec},
+        {op:"set",path:"/activeView",value:"simple"}
+      ];
+      if (snapshot.draft.plan) patch.push({op:"set",path:"/plan",value:snapshot.draft.plan});
+      if (snapshot.draft.editorLayout) {
+        patch.push({op:"set",path:"/editorLayout",value:snapshot.draft.editorLayout});
+      }
+      patch.push({op:"set",path:"/title",value:snapshot.title || "未命名创作"});
+      return patch;
+    }
+    if (snapshot.authority === "graph" && snapshot.draft.graph) {
+      // Switch source atomically under the same baseRevision; the server
+      // refuses graph writes while Spec is still the sole authority.
+      return [
+        {op:"set",path:"/authority",value:"graph"},
+        {op:"set",path:"/graph",value:snapshot.draft.graph},
+        {op:"set",path:"/activeView",value:"canvas"},
+        {op:"set",path:"/editorLayout",value:snapshot.draft.editorLayout || {}},
+        {op:"set",path:"/title",value:snapshot.title || "未命名创作"}
+      ];
+    }
+    throw new Error("invalid_authority_transition");
+  }
+
   function draftPatch(tab, snapshot) {
     const patches = [];
     const graph = snapshot.draft.graph;
@@ -86,7 +114,7 @@
         : {
             baseRevision: Number(tab.projectRevision),
             idempotencyKey: key,
-            patch: draftPatch(tab, snapshot)
+            patch: authorityPatch(tab, snapshot)
           };
       tab.projectPending = {
         method: Number(tab.projectRevision || 0) < 1 ? "POST" : "PATCH",
@@ -95,7 +123,8 @@
           : "/api/studio/projects/" + encodeURIComponent(tab.projectId) + "/draft",
         payload,
         atEditRevision: Number(tab.editRevision || 0),
-        confirmedGraph: clone(snapshot.draft.graph || null)
+        confirmedGraph: clone(snapshot.draft.graph || null),
+        confirmedAuthority: snapshot.authority || "graph"
       };
       tab.projectSaveState = "local_only";
       return tab.projectPending;
@@ -114,6 +143,7 @@
           // Responses acknowledge exactly the frozen payload, not edits that
           // arrived while it was running.
           tab.projectRevision = Number(result.revision);
+          tab.projectAuthority = pending.confirmedAuthority || tab.projectAuthority || "graph";
           if (pending.confirmedGraph) tab.projectSyncedGraph = clone(pending.confirmedGraph);
           tab.projectPending = null;
           tab.projectSaveState = Number(tab.editRevision || 0) > pending.atEditRevision
@@ -147,7 +177,8 @@
         tab.projectCopyPending = {
           path: "/api/studio/projects/" + encodeURIComponent(tab.projectId) + "/copy",
           payload: {
-            newProjectId: idFactory("prj"), localDraft, authority: "graph",
+            newProjectId: idFactory("prj"), localDraft,
+            authority: tab.projectAuthority || "graph",
             title: tab.title || "本机创作",
             idempotencyKey: idFactory("copy")
           }
