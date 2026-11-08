@@ -48,7 +48,7 @@ async function suite() {
   const CS={tabs:[],closedProjectDrafts:[],activeTabId:null,graph:{nodes:[],edges:[]},cloudProjects:[],
     projectCenterLoading:false,projectCenterError:"",projectQuery:"",stageView:"projects",
     projectOpeningId:""};
-  const opened=[],toasts=[],created=[],paths=[],getCalls=[];
+  const opened=[],toasts=[],created=[],paths=[],getCalls=[],entryCalls=[];
   let resolver = async id => ({
     ok:true,project:{id,kind:"image",title:"云端春景",authority:"graph",
       revision:2,draft:{activeView:"simple",graph:{blueprint:"single",
@@ -78,12 +78,21 @@ async function suite() {
     persistOpenTabs:()=>{},writeJsonStorage:()=>{},scheduleProjectAutoSave:()=>{},
     CLOSED_PROJECT_DRAFTS_KEY:"closed",
     fullRenderCanvas:()=>{},
-    openWorkflowsPage:()=>{},switchCreationStage:()=>{},buildForkGraphFromWork:()=>{},
-    E:{},URL,document:{activeElement:null},S:{openLoginModal:()=>{}},
+    openWorkflowsPage:()=>entryCalls.push("workflow"),
+    switchCreationStage:name=>entryCalls.push(name),
+    buildForkGraphFromWork:()=>({blueprint:"single",nodes:[{id:"new"}],edges:[]}),
+    E:{
+      uid:(type)=>type+"-"+created.length+"-"+Math.random().toString(36).slice(2),
+      makeSkillParamsNode:()=>({id:"sp-1",type:"skill_params",data:{}}),
+      makeTextInputNode:()=>({id:"txt-1",type:"text_input",data:{text:""}}),
+      makeAssetNode:()=>({id:"asset-1",type:"asset",data:{items:[]}}),
+      makeLoopNode:()=>({id:"loop-1",type:"loop",data:{}}),
+      makeOutputControlNode:()=>({id:"ctrl-1",type:"output_control",data:{}})
+    },URL,document:{activeElement:null},S:{openLoginModal:()=>{}},
     isArticleTab:()=>false,
   };
   vm.createContext(sandbox);
-  vm.runInContext(fragment+"\nglobalThis.center={openCloudProject,openProjectCenter,refreshProjectCenter,renderProjectCenterStage};",sandbox);
+  vm.runInContext(fragment+"\nglobalThis.center={openCloudProject,openProjectCenter,refreshProjectCenter,renderProjectCenterStage,createProjectFromCenter};",sandbox);
   const c=sandbox.center;
   // Cloud restore is a real operation, not a second generation.
   await c.openCloudProject("prj-01");
@@ -143,6 +152,23 @@ async function suite() {
     revision:1,draft:{graph:{nodes:[{id:"foreign"}],edges:[]}}}});
   await pending;
   assert.equal(CS.tabs.length,count,"Stale account request cannot create a tab");
+  // Each task entry must create a fresh editable project, never reuse the
+  // previous cloud project or accidentally start image generation.
+  const beforeNew=CS.tabs.length;
+  c.createProjectFromCenter("image");
+  assert.equal(CS.tabs.length,beforeNew+1);
+  assert.equal(CS.stageView,"quick");
+  assert.equal(CS.tabs.at(-1).projectSaveState,"local_only");
+  assert.equal(CS.tabs.at(-1).projectId,undefined);
+  c.createProjectFromCenter("series");
+  assert.equal(CS.tabs.length,beforeNew+2);
+  assert.equal(CS.stageView,"batch");
+  assert.equal(CS.tabs.at(-1).graph.edges.length,6);
+  assert.equal(CS.tabs.at(-1).batchStart,true);
+  c.createProjectFromCenter("workflow");
+  c.createProjectFromCenter("article");
+  assert.deepEqual(entryCalls,["workflow","article"]);
+
   console.log("Studio2 Project Center tests pass: navigation, escaping, safe local/remote recovery, scope");
 }
 suite().catch(err=>{console.error(err);process.exitCode=1});
