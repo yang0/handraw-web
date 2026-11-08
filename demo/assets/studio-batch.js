@@ -131,6 +131,10 @@
       this.isPlanning = false;
       this.progressState = null;
       this.lastSummary = "";
+      this.seriesView = "cards";
+      this.seriesFilter = "all";
+      this.seriesControlId = null;
+      this.seriesPersistTimer = null;
     }
 
     getParts() {
@@ -317,6 +321,19 @@
       if (context) this.context = context;
       if (actions) this.actions = actions;
       if (!this.hostElement) return;
+      const editorActive=typeof document!=="undefined" ? document.activeElement : null;
+      const wasEditing=editorActive?.getAttribute?.("data-series-subject");
+      const editorRestore=wasEditing && this.hostElement.contains?.(editorActive)
+        ? {slotId:wasEditing,value:editorActive.value,
+          start:editorActive.selectionStart,end:editorActive.selectionEnd,
+          scroll:editorActive.scrollTop} : null;
+      const mediaNodes=new Map();
+      if (typeof this.hostElement.querySelectorAll==="function") {
+        this.hostElement.querySelectorAll("img.series108-image[data-series-media]").forEach(img=>{
+          const id=img.getAttribute("data-series-media");
+          if(id&&!mediaNodes.has(id))mediaNodes.set(id,img);
+        });
+      }
 
       const p = this.getParts();
       if (p?.ctrl?.data?.activeBatchId) {
@@ -944,13 +961,228 @@
         </div>
       `;
 
+      if (typeof this.hostElement.querySelector==="function" &&
+          typeof document!=="undefined" && global.HandrawSeriesBoard108) {
+        this.mountSeriesWorkspace(p,plan,candidateCount,remote,busy);
+        // Retain the exact decoded HTMLImageElement across a live Run poll.
+        this.hostElement.querySelectorAll("img.series108-image[data-series-media]").forEach(img=>{
+          const id=img.getAttribute("data-series-media"),prior=mediaNodes.get(id);
+          if(prior && prior.getAttribute("src")===img.getAttribute("src"))img.replaceWith(prior);
+        });
+      }
       if (typeof host.querySelectorAll === "function") {
         this.bindEvents(host, p, iterations);
+        this.bindSeriesWorkspace(p);
+      }
+      if(editorRestore){
+        const editor=[...this.hostElement.querySelectorAll?.("[data-series-subject]")||[]]
+          .find(el=>el.getAttribute("data-series-subject")===editorRestore.slotId);
+        if(editor){
+          editor.value=editorRestore.value;
+          editor.focus({preventScroll:true});
+          try{
+            if(Number.isInteger(editorRestore.start))editor.setSelectionRange(
+              editorRestore.start,editorRestore.end);
+          }catch(_){}
+          editor.scrollTop=editorRestore.scroll;
+        }
       }
 
       if (global.HANDRAW_SHARED?.triggerImageLoaders) {
         global.HANDRAW_SHARED.triggerImageLoaders(this.hostElement);
       }
+    }
+
+
+    mountSeriesWorkspace(parts,plan,candidateCount,remote,busy){
+      const Board=global.HandrawSeriesBoard108;
+      const container=this.hostElement?.querySelector(".batch-container");
+      const form=container?.querySelector(".make-image-form");
+      const grid=form?.querySelector(".make-image-main-grid");
+      if(!Board||!form||!grid||!plan)return;
+      if(this.seriesControlId!==parts.ctrl.id){
+        this.seriesControlId=parts.ctrl.id;
+        this.seriesView="cards";
+        this.seriesFilter="all";
+      }
+      const layout=document.createElement("div");
+      layout.className="series108-layout";
+      const settings=document.createElement("section");
+      settings.className="series108-settings";
+      settings.setAttribute("aria-label","系列统一设置");
+      const workspace=document.createElement("section");
+      workspace.className="series108-workspace";
+      workspace.setAttribute("aria-label","系列方案板");
+      const board=document.createElement("div");
+      board.className="series108-board";
+      board.innerHTML=Board.render({plan,projection:remote,
+        snapshot:parts.ctrl.data.studio2RunSnapshot||null,
+        candidateCount,intent:parts.loop.data.studio2SeriesIntent||"story-series",
+        globalSpec:this.context?.effectiveCreationSpec||null,
+        catalog:this.context?.catalog,
+        busy,filter:this.seriesFilter,view:this.seriesView});
+      const preview=grid.querySelector(".batch-preview-section");
+      const action=grid.querySelector(".batch-action-bar");
+      form.insertBefore(layout,grid);
+      settings.appendChild(grid);
+      layout.appendChild(settings);
+      layout.appendChild(workspace);
+      workspace.appendChild(board);
+      if(preview)workspace.appendChild(preview);
+      if(action)form.appendChild(action);
+      container.setAttribute("data-series-view",this.seriesView);
+    }
+
+    bindSeriesWorkspace(parts){
+      const board=this.hostElement?.querySelector(".series108-board");
+      if(!board)return;
+      const Series=this.getSeries(),loop=parts.loop;
+      const notify=msg=>global.HANDRAW_SHARED?.toast?.(msg);
+      const commit=()=>this.actions?.markDirtyAndRender?.();
+      const persist=()=>this.actions?.persistDraft?.();
+      const slotIndex=id=>Series?.read(loop).slots.findIndex(s=>s.slotId===id)??-1;
+      const getOutput=(slotId,idx)=>{
+        const snap=parts.ctrl.data.studio2RunSnapshot;
+        const slot=Series?.read(loop).slots.find(s=>s.slotId===slotId);
+        return global.HandrawSeriesBoard108?.outputsFor(slot||{slotId},snap,
+          this.context?.runProjection).find(o=>o.outputIndex===idx);
+      };
+      board.querySelectorAll("[data-series-subject]").forEach(input=>{
+        const slotId=input.getAttribute("data-series-subject");
+        const slot=Series?.read(loop).slots.find(s=>s.slotId===slotId);
+        if(slot?.lockedFields?.includes("subject")){
+          input.readOnly=true;
+          input.title="本槽位主题已锁定，可从逐张参数解锁";
+          return;
+        }
+        input.oninput=()=>{
+          try{
+            Series.patchSlot(loop,slotId,{subject:input.value});
+            if(this.seriesPersistTimer)clearTimeout(this.seriesPersistTimer);
+            this.seriesPersistTimer=setTimeout(()=>{this.seriesPersistTimer=null;persist();},350);
+          }catch(err){notify("主题未保存："+(err.code||err.message));}
+        };
+        input.onblur=()=>{
+          if(this.seriesPersistTimer){clearTimeout(this.seriesPersistTimer);this.seriesPersistTimer=null;}
+          persist();
+        };
+      });
+      board.onclick=e=>{
+        const view=e.target.closest("[data-series-view]");
+        if(view){
+          this.seriesView=view.getAttribute("data-series-view")==="table"?"table":"cards";
+          this.render();
+          return;
+        }
+        const filter=e.target.closest("[data-series-filter]");
+        if(filter){this.seriesFilter=filter.getAttribute("data-series-filter");this.render();return;}
+        const kind=e.target.closest("[data-series-kind]");
+        if(kind){
+          const requested=kind.getAttribute("data-series-kind");
+          if(!global.HandrawSeriesBoard108.KINDS.some(k=>k.id===requested))return;
+          loop.data.studio2SeriesIntent=requested;
+          commit();return;
+        }
+        const button=e.target.closest("[data-series-action]");
+        if(!button)return;
+        const action=button.getAttribute("data-series-action");
+        const slotId=button.getAttribute("data-series-slot")||"";
+        const idx=slotIndex(slotId);
+        const slot=idx>=0?Series.read(loop).slots[idx]:null;
+        const outputIndex=Number(button.getAttribute("data-series-output"));
+        if(action==="add"){
+          try{Series.add(loop,"");commit();}
+          catch(err){notify("无法新增图卡："+(err.code||err.message));}
+          return;
+        }
+        if(action==="paste"){
+          const shared=global.HANDRAW_SHARED;
+          if(!shared?.openModal){notify("批量添加功能暂不可用");return;}
+          shared.openModal({title:"批量追加图卡",sizeClass:"modal-medium",
+            html:'<p style="font-size:12px;color:var(--ink-muted)">每行一张。只追加，不覆盖既有图卡、用户锁定字段或成功媒体。</p>'+
+              '<textarea id="series108-paste-input" class="make-image-textarea" rows="8" placeholder="每行一个新画面主题"></textarea>'+
+              '<div class="series108-modal-actions"><button type="button" class="btn btn-sm" id="series108-paste-cancel">取消</button>'+
+              '<button type="button" class="btn btn-primary btn-sm" id="series108-paste-save">追加图卡</button></div>',
+            onMount:root=>{
+              root.querySelector("#series108-paste-cancel").onclick=()=>shared.closeModal();
+              root.querySelector("#series108-paste-save").onclick=()=>{
+                const themes=root.querySelector("#series108-paste-input").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+                if(!themes.length){notify("请至少输入一行主题");return;}
+                if(Series.read(loop).slots.length+themes.length>200){notify("最多允许 200 个方案槽位");return;}
+                for(const theme of themes)Series.add(loop,theme);
+                shared.closeModal();commit();
+              };
+            }});
+          return;
+        }
+        if(action==="ratios"){
+          const ratios=["3:4","1:1","9:16","16:9","2.35:1","4:3"];
+          let changed=0;
+          try{
+            for(const [i,item] of Series.read(loop).slots.entries()){
+              if(item.lockedFields?.includes("ratio")||item.userOverrides?.includes("ratio")||
+                 item.overrides?.ratio)continue;
+              Series.patchSlot(loop,item.slotId,{overrides:{ratio:ratios[i%ratios.length]}});
+              changed++;
+            }
+            if(changed)commit();
+            notify("已为 "+changed+" 张未覆盖比例的图卡填入平台比例，原人工比例保持不变");
+          }catch(err){notify("平台比例无法应用："+(err.code||err.message));}
+          return;
+        }
+        if(!slot)return;
+        if(action==="edit"){this.openSlotOptions(idx);return;}
+        if(action==="refs"){
+          this.actions?.openReferencePicker?.({
+            items:slot.referenceMedia||[],currentRefs:slot.referenceMedia||[],
+            maxCount:6,title:"第 "+(idx+1)+" 张参考图",
+            onConfirm:refs=>{
+              if(this.patchSlotByIndex(idx,{referenceMedia:refs}))commit();
+            }});
+          return;
+        }
+        if(action==="copy"||action==="up"){
+          try{
+            if(action==="copy")Series.duplicate(loop,slotId);
+            else if(idx>0)Series.move(loop,slotId,idx-1);
+            commit();
+          }catch(err){notify("方案操作失败："+(err.code||err.message));}
+          return;
+        }
+        if(action==="delete"){
+          const shared=global.HANDRAW_SHARED;
+          if(!shared?.openModal){
+            notify("删除需要确认，当前确认弹层不可用");return;
+          }
+          shared.openModal({title:"移除方案图卡",sizeClass:"modal-medium",
+            html:'<p>只移除本项目的下一版方案槽位。任何已提交 Run、历史结果与公开作品仍保留。</p>'+
+              '<div class="series108-modal-actions"><button type="button" id="series108-cancel-remove" class="btn btn-sm">取消</button>'+
+              '<button type="button" id="series108-confirm-remove" class="btn btn-sm btn-primary">确认移除</button></div>',
+            onMount:root=>{
+              root.querySelector("#series108-cancel-remove").onclick=()=>shared.closeModal();
+              root.querySelector("#series108-confirm-remove").onclick=()=>{
+                Series.remove(loop,slotId);shared.closeModal();commit();
+              };
+            }});
+          return;
+        }
+        if(!Number.isInteger(outputIndex)||outputIndex<0)return;
+        const output=getOutput(slotId,outputIndex);
+        if(!output)return;
+        if(action==="view"&&output.imageUrl){
+          this.actions?.openImageLightbox?.(output.imageUrl,"候选 "+(Number(output.candidateIndex||0)+1));
+        }else if(action==="download"&&output.imageUrl){
+          const link=document.createElement("a");
+          link.href=output.imageUrl;link.rel="noopener";
+          link.download="handraw-series-"+String(idx+1).padStart(2,"0")+".webp";
+          link.click();
+        }else if(action==="retry"){
+          const remote=this.context?.runProjection;
+          if(remote?.isTerminal&&output.status==="failed"){
+            this.actions?.runSingleRow?.(outputIndex);
+          }else notify("只有服务端确认失败的候选可以原位重试");
+        }
+      };
     }
 
     getItemResult(rowIndex, displays, isBatchGallery) {
