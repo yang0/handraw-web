@@ -15,6 +15,7 @@ jobs:
           node-version: '24'
       - run: node --check demo/assets/task-journey.js && node --check demo/assets/studio-app.js && node --check demo/assets/studio-batch.js
       - run: node --check demo/assets/studio-canvas-ui.js && node tests/test_studio_canvas_ui_129.cjs
+      - run: node --check demo/assets/studio-core.js && node --check demo/assets/studio-app.js && node tests/test_studio_runtime_119.cjs
       - run: node tests/test_task_journey.cjs
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
@@ -22,6 +23,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_workflow_versions.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_image_plan.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_run_read.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_runtime_119.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_quick_run_contract.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_series_run_contract.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_series_reference_preflight.py' -v
@@ -32,6 +34,7 @@ jobs:
       # This HTTP journey goes through login -> curation bootstrap, which
       # imports Pillow; lighter unit tests above deliberately avoid it.
       - run: python -m pip install "Pillow>=10.0"
+      - run: python -m unittest discover -s tests -p 'test_studio_runtime_http_119.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_article_http_e2e.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_ai_plan.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_ai_plan_http.py' -v
@@ -45,6 +48,7 @@ jobs:
       - run: python -m pip install "playwright>=1.50,<2"
       - run: python tests/benchmark_studio_canvas.py --output artifacts/canvas-127.json --require-browser
       - run: python tests/smoke_studio_canvas_browser.py --screenshots artifacts/canvas-127-screen
+      - run: python tests/smoke_studio_runtime_browser_119.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -52,6 +56,7 @@ jobs:
           path: |
             artifacts/canvas-127.json
             artifacts/canvas-127-screen/**
+            artifacts/canvas-119-screen/**
           if-no-files-found: ignore
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
