@@ -45,6 +45,13 @@ assert.match(expanded,/data-disp-retry-slot="disp" data-slot="2"/);
 assert.match(expanded,/data-disp-reference="disp"/);
 assert.match(expanded,/handraw-1.webp/);
 assert.match(expanded,/收起结果/);
+assert.match(expanded,/data-disp-variant="disp" data-slot="0"/,
+  "variant must carry the exact source slot, never a malformed attr");
+assert.deepEqual(UI.toggleCompare("disp",0),[0]);
+assert.deepEqual(UI.toggleCompare("disp",1),[0,1]);
+assert.deepEqual(UI.selectedForCompare("disp"),[0,1]);
+assert.match(UI.galleryHtml(display,projection),/对比选中（2）/);
+assert.deepEqual(UI.toggleCompare("disp",0),[1]);
 UI.toggleGallery("disp");
 const graph={nodes:[{id:"c",type:"output_control",data:{runId:"run-123"}}]};
 const summaries=UI.summarize(graph,()=>({runId:"run-123",viewStatus:"partial",total:6,
@@ -60,6 +67,11 @@ assert.match(app,/CanvasUI\.renderWorkspace\(/);
 assert.match(app,/CanvasUI\.galleryHtml\(n,cloudRun\)/);
 assert.match(app,/CanvasUI\.slotSummary\(payload\.items, projection\.total/);
 assert.match(app,/function renderCanvasProductUI\(\)/);
+assert.match(app,/function copyCanvasNodes\(\)/);
+assert.match(app,/function pasteCanvasNodes\(\)/);
+assert.match(app,/function newCanvasVisualAnnotation\(kind\)/);
+assert.match(app,/data-disp-compare-view/);
+assert.match(app,/onEdit:\(nodeId,field,raw\)=>/);
 assert.match(app,/safeCount > 1/);
 assert.match(app,/data-shelf-tab="templates"/);
 assert.match(app,/e\.target\.closest\("\[data-canvas-no-zoom\], input, textarea, select/);
