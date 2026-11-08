@@ -176,6 +176,7 @@
     if(idx<0)throw err("unknown_slot_id");
     if(!Number.isInteger(to)||to<0||to>=p.slots.length)throw err("invalid_slot_order");
     p.slots.splice(to,0,p.slots.splice(idx,1)[0]);
+    p.slots.forEach((slot,index)=>{slot.order=index;});
     p.revision++;return sync(loop,p);
   }
   function duplicate(loop,slotId) {
@@ -183,6 +184,7 @@
     if(idx<0)throw err("unknown_slot_id");
     const cloned=copy(p.slots[idx]);cloned.slotId=newId();
     cloned.lockedFields=[];p.slots.splice(idx+1,0,cloned);
+    p.slots.forEach((slot,index)=>{slot.order=index;});
     p.revision++;return sync(loop,p);
   }
   function remove(loop,slotId) {
