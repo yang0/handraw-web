@@ -2385,7 +2385,7 @@
       // 7.8. Reset Form Button
       const btnReset = root.querySelector("#batch-btn-reset");
       if (btnReset) {
-        btnReset.onclick = () => {
+        btnReset.onclick = async () => {
           const currentBusy = typeof self.actions?.isBusy === "function"
             ? self.actions.isBusy()
             : Boolean(self.context?.busy || self.progressState?.busy);
@@ -2394,9 +2394,9 @@
             if (S?.toast) S.toast("任务处理中，暂不能清空或再次生成");
             return;
           }
-          const ok = typeof window.confirm === "function"
-            ? window.confirm("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？")
-            : true;
+          const ok = await global.HANDRAW_SHARED?.confirmAction?.(
+            "清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？",
+            { title: "清空批量创作设置", danger: true, confirmText: "清空" });
           if (!ok) return;
 
           if (typeof self.actions?.isBusy === "function" && self.actions.isBusy()) {
