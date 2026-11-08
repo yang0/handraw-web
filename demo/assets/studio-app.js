@@ -18350,6 +18350,18 @@
 
     libEl.innerHTML = `
       <div class="ic-tmpl-lib-wrap">
+        <div class="ic129-first-start">
+          <h2>描述画面，直接开始</h2>
+          <p>输入主题后创建已连接的单图工作流；需要时可继续增加画风与参考素材。</p>
+          <form id="canvas-129-first-form">
+            <input name="subject" maxlength="4000" aria-label="单图主题" placeholder="例如：秋日桂花树下的猫" required />
+            <button type="submit">开始单图</button>
+          </form>
+          <div class="ic129-first-actions">
+            <button type="button" id="canvas-129-first-asset">添加素材</button>
+            <button type="button" id="canvas-129-first-template">应用模板</button>
+          </div>
+        </div>
         <div class="ic-tmpl-lib-head">
           <h2 class="ic-tmpl-lib-title">工作流模板库</h2>
           <p class="ic-tmpl-lib-desc">选择一个典型场景模板快速开始创作，或从空白画布自由编排节点工作流。</p>
@@ -18373,6 +18385,28 @@
       </div>
     `;
 
+    libEl.querySelector("#canvas-129-first-form").onsubmit=e=>{
+      e.preventDefault();
+      const subject=libEl.querySelector('[name="subject"]').value.trim();
+      if(!subject)return;
+      const tab=createWorkflowTab({title:subject.slice(0,25),blueprint:"single",
+        makeActive:true,autoFit:true,switchToCanvas:true});
+      const txt=tab.graph.nodes.find(n=>n.type==="text_input");
+      if(txt)txt.data.text=subject;
+      const current=CS.graph.nodes.find(n=>n.id===txt?.id);
+      if(current)current.data.text=subject;
+      markActiveTabDirty();persistOpenTabs();libEl.remove();fullRenderCanvas();
+    };
+    libEl.querySelector("#canvas-129-first-asset").onclick=()=>{
+      createWorkflowTab({title:"素材创作",blueprint:"single",
+        makeActive:true,autoFit:true,switchToCanvas:true});
+      libEl.remove();fullRenderCanvas();
+      const asset=CS.graph.nodes.find(n=>n.type==="asset")||spawnShelfItem({kind:"asset"});
+      if(asset)openAssetPickerModal(asset);
+    };
+    libEl.querySelector("#canvas-129-first-template").onclick=()=>{
+      libEl.querySelector(".ic-tmpl-grid")?.scrollIntoView({behavior:"smooth",block:"nearest"});
+    };
     libEl.querySelectorAll("[data-tmpl-bp]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
