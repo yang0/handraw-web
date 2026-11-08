@@ -1493,7 +1493,7 @@
       card.querySelectorAll("[data-wb-mod]").forEach((b) => {
         b.onclick = async () => {
           const action = b.getAttribute("data-wb-mod");
-          if (action === "delete" && !confirm("确定删除这件作品？此操作不可撤销。")) return;
+          if (action === "delete" && !await window.HandrawDialogs.confirm("确定删除这件作品？此操作不可撤销。")) return;
           b.disabled = true;
           try {
             const res = await S.apiJson(`/api/works/${encodeURIComponent(b.getAttribute("data-wb-id"))}/moderate`, { method: "POST", body: { action } });
@@ -1540,7 +1540,7 @@
     root.querySelectorAll("[data-wb-mod]").forEach((b) => {
       b.onclick = async () => {
         const action = b.getAttribute("data-wb-mod");
-        if (action === "delete" && !confirm("确定删除这件作品？此操作不可撤销。")) return;
+        if (action === "delete" && !await window.HandrawDialogs.confirm("确定删除这件作品？此操作不可撤销。")) return;
         b.disabled = true;
         try {
           const res = await S.apiJson(`/api/works/${encodeURIComponent(b.getAttribute("data-wb-id"))}/moderate`, { method: "POST", body: { action } });
@@ -3111,10 +3111,10 @@
     });
     const batchUnfavBtn = root.querySelector("#prof-col-batch-unfav-btn");
     if (batchUnfavBtn) {
-      batchUnfavBtn.onclick = () => {
+      batchUnfavBtn.onclick = async () => {
         const list = [...(App.state?.collections?.[UI.favTab] || [])];
         if (!list.length) return;
-        if (!window.confirm(`确定要移除当前分类下的全部 ${list.length} 个收藏项吗？`)) return;
+        if (!window.await window.HandrawDialogs.confirm(`确定要移除当前分类下的全部 ${list.length} 个收藏项吗？`)) return;
         list.forEach((id) => {
           S.toggleCollect(UI.favTab, id, id);
         });
