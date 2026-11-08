@@ -2031,7 +2031,26 @@
       const project = response.project;
       if (!project || project.id !== projectId) throw new Error("项目编号不匹配");
       if (project.authority === "article") {
-        toast("文章正文仍由文章编辑器管理；画布文档联动将在 #124 接入");
+        if (!ArticleProject109) throw new Error("文章项目适配模块未加载");
+        ensureMyArticlesInitialized();
+        const documentId = project.draft?.article?.documentId;
+        const local = (CS.myArticles || []).find(a =>
+          a.projectId === projectId || (a.id === documentId && a.projectPending));
+        if (local && (local.projectPending ||
+            ["dirty","local_only","saving","error","conflict"].includes(local.projectSaveState))) {
+          openUnifiedArticleEditor(local.id);
+          toast("已打开本机待同步文章，云端未覆盖正文或图卡");
+          return;
+        }
+        const restored = ArticleProject109.hydrate(project,local);
+        restored.linkedPlanNodeId = null;
+        restored.linkedTabId = null;
+        CS.myArticles = [restored,...(CS.myArticles || []).filter(a =>
+          a.id !== restored.id && a.projectId !== projectId)];
+        writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+        CS.activeArticleId = restored.id;
+        openUnifiedArticleEditor(restored.id);
+        toast("已恢复云端文章项目 · 版本 " + project.revision);
         return;
       }
       if (!["graph","spec"].includes(project.authority)) {
@@ -4138,6 +4157,9 @@
         (resumeTab.projectPending || ["dirty", "local_only", "error"].includes(resumeTab.projectSaveState))) {
       scheduleProjectAutoSave(resumeTab);
     }
+    // Project-owned article outbox is persisted alongside the private document.
+    if ((CS.myArticles || []).some(a => a?.projectPending))
+      scheduleArticleProjectAutosave();
   }
 
   /* ======================== LOOP NODE PICKER & BATCH LIST EDITOR MODALS ======================== */
@@ -19624,6 +19646,9 @@
           void saveActiveProject(tab);
         }
       }
+      if ((CS.myArticles || []).some(a => a?.projectPending ||
+          (a?._articleProjectDirty && a.projectSaveState !== "conflict")))
+        scheduleArticleProjectAutosave();
     });
   }
 
