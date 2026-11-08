@@ -13901,13 +13901,24 @@
       if (!response.ok || !payload?.ok || !payload.run || !Array.isArray(payload.items) ||
           String(payload.run.id || payload.run.runId || "") !== runId)
         throw new Error("run_read_failed");
-      const projection = window.HandrawStudioCore.selectRunProjection(payload.run,payload.items);
+      const projection = window.HandrawStudioCore.selectRunProjection(
+        payload.run,payload.items,{authoritativeSlots:payload.slots}
+      );
       // The owner-scoped GET is the only source of confirmed item/media URLs.
       // Keep each result linked to its original control, slot and V3 Item;
       // rendering this read-only projection must not mutate Graph or publish.
       const outputs = control?.data?.studio2RunSnapshot?.outputs || [];
-      const slots = CanvasUI.slotSummary(payload.items, projection.total, payload.run.source || "web");
-      return {...projection,slots,items:payload.items.filter(item=>item.status==="success" &&
+      const slots = Array.isArray(payload.slots) ? payload.slots.map(slot=>({
+        index:slot.slotIndex,status:slot.viewStatus,
+        imageUrl:slot.viewStatus==="success"?slot.imageUrl:"",
+        mediaId:slot.viewStatus==="success"?slot.mediaId:"",
+        runItemId:slot.itemId,error:slot.errorCode,
+        retryAllowed:slot.retryAllowed
+      })) : CanvasUI.slotSummary(payload.items, projection.total, payload.run.source || "web");
+      return {...projection,slots,
+        attempts:payload.attempts||[],billing:payload.billing||{},
+        recoveryRequired:Boolean(payload.projection?.recoveryRequired),
+        items:payload.items.filter(item=>item.status==="success" &&
         item.mediaId && typeof item.imageUrl==="string" && item.imageUrl &&
         ((item.imageUrl.startsWith("/") && !item.imageUrl.startsWith("//")) ||
           item.imageUrl.startsWith("https://")))
@@ -13990,7 +14001,7 @@
     }).then(async response=>{
       const data=await response.json();
       if(!response.ok||!data.ok)throw Error(data.error||"run_read_failed");
-      return api.project(snap,data.run,data.items);
+      return api.project(snap,data.run,data.items,data.slots||[]);
     }).then(model=>{
       if(scope!==activeCacheScope||epoch!==cacheScopeEpoch||
          batchRunModels.get(key)!==entry)return;
