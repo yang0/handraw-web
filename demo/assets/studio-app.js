@@ -18425,11 +18425,128 @@
     });
   }
 
+
+  // #129: annotations are CanvasDocument presentation metadata, not Graph
+  // nodes, executable edges, Run facts or media; preserve on simple switch.
+  function canvasVisualAnnotations(){
+    const tab=CS.tabs.find(t=>t.id===CS.activeTabId);
+    if(!tab)return null;
+    tab.editorLayout=tab.editorLayout||{};
+    if(!Array.isArray(tab.editorLayout.visualAnnotations))
+      tab.editorLayout.visualAnnotations=[];
+    return tab.editorLayout.visualAnnotations;
+  }
+  function newCanvasVisualAnnotation(kind){
+    const annotations=canvasVisualAnnotations();
+    if(!annotations)return;
+    const vRect=DOM.viewport.getBoundingClientRect();
+    const world=screenToWorld(vRect.left+vRect.width*.45,vRect.top+vRect.height*.44);
+    const selected=(CS.graph.selectedIds||[]).filter(id=>getNodeById(id));
+    if(kind==="group"&&selected.length<2){
+      toast("请先按住 Shift 选择至少两个节点，再创建视觉分组");
+      return;
+    }
+    const visual={id:E.uid("canvas-note"),kind,
+      text:kind==="group"?"视觉分组":"双击添加说明",
+      x:snapVal(world.x),y:snapVal(world.y),w:230,h:150,
+      nodeIds:kind==="group"?selected:[]};
+    annotations.push(visual);
+    markActiveTabDirty();persistOpenTabs();
+    renderCanvasAnnotations();
+  }
+  function renderCanvasAnnotations(){
+    if(!DOM.world)return;
+    let layer=DOM.world.querySelector("#canvas-129-visual-layer");
+    if(!layer){
+      layer=document.createElement("div");
+      layer.id="canvas-129-visual-layer";
+      DOM.world.appendChild(layer);
+    }
+    if(CS.stageView!=="canvas"){
+      layer.hidden=true;return;
+    }
+    layer.hidden=false;
+    const annotations=canvasVisualAnnotations()||[];
+    const snapshot=JSON.stringify(annotations.map(n=>({
+      id:n.id,kind:n.kind,x:n.x,y:n.y,w:n.w,h:n.h,text:n.text,
+      members:n.nodeIds?.map(id=>{
+        const node=getNodeById(id);
+        return node?[node.x,node.y,node.w,node.h]:null;
+      })||[]
+    })));
+    if(layer.dataset.snapshot===snapshot)return;
+    layer.dataset.snapshot=snapshot;
+    const getFrame=a=>{
+      const members=(a.nodeIds||[]).map(getNodeById).filter(Boolean);
+      if(a.kind==="group"&&members.length){
+        const x=Math.min(...members.map(n=>n.x))-28;
+        const y=Math.min(...members.map(n=>n.y))-48;
+        const right=Math.max(...members.map(n=>n.x+(n.w||340)))+28;
+        const bottom=Math.max(...members.map(n=>n.y+(n.h||260)))+28;
+        return {x,y,w:right-x,h:bottom-y};
+      }
+      return {x:a.x,y:a.y,w:a.w||230,h:a.h||150};
+    };
+    layer.innerHTML=annotations.map(note=>{
+      const p=getFrame(note);
+      return '<div class="ic129-visual-note '+(note.kind==="group"?'ic129-visual-group':'ic129-visual-sticky')+
+        '" data-visual-note="'+esc(note.id)+'" style="left:'+p.x+'px;top:'+p.y+
+        'px;width:'+p.w+'px;height:'+p.h+'px">'+
+        '<div class="ic129-visual-header" data-visual-move="'+esc(note.id)+'">'+
+          (note.kind==="group"?'视觉分组（不影响执行）':'便签')+
+          '<button type="button" data-visual-delete="'+esc(note.id)+'" title="删除这条视觉标注">×</button>'+
+        '</div>'+
+        '<textarea data-visual-text="'+esc(note.id)+'" data-canvas-no-zoom aria-label="视觉便签内容">'+
+          esc(note.text||"")+'</textarea></div>';
+    }).join("");
+    const resolve=id=>annotations.find(n=>n.id===id);
+    layer.querySelectorAll("[data-visual-delete]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.preventDefault();e.stopPropagation();
+        const idx=annotations.findIndex(n=>n.id===btn.dataset.visualDelete);
+        if(idx<0)return;
+        annotations.splice(idx,1);
+        markActiveTabDirty();persistOpenTabs();renderCanvasAnnotations();
+      };
+    });
+    layer.querySelectorAll("[data-visual-text]").forEach(inp=>{
+      inp.onpointerdown=e=>e.stopPropagation();
+      inp.oninput=()=>{
+        const note=resolve(inp.dataset.visualText);
+        if(note){note.text=inp.value;markActiveTabDirty();persistOpenTabs();}
+      };
+      inp.onchange=()=>{renderCanvasAnnotations();};
+    });
+    layer.querySelectorAll("[data-visual-move]").forEach(bar=>{
+      const note=resolve(bar.dataset.visualMove);
+      if(!note||note.kind==="group")return;
+      let origin=null;
+      bar.onpointerdown=e=>{
+        if(e.target.closest("button")||e.button!==0)return;
+        e.preventDefault();e.stopPropagation();
+        origin={x:e.clientX,y:e.clientY,nx:note.x,ny:note.y};
+        bar.setPointerCapture(e.pointerId);
+      };
+      bar.onpointermove=e=>{
+        if(!origin)return;
+        note.x=snapVal(origin.nx+(e.clientX-origin.x)/CS.vk);
+        note.y=snapVal(origin.ny+(e.clientY-origin.y)/CS.vk);
+        const parent=bar.closest(".ic129-visual-note");
+        parent.style.left=note.x+"px";parent.style.top=note.y+"px";
+      };
+      bar.onpointerup=e=>{
+        if(!origin)return;origin=null;
+        markActiveTabDirty();persistOpenTabs();renderCanvasAnnotations();
+      };
+    });
+  }
+
   // #129: one project, one Graph and server-backed Run projection for both views.
   function renderCanvasProductUI(){
     if(!CanvasUI||!DOM.canvasStage)return;
     const tab=CS.tabs.find(t=>t.id===CS.activeTabId)||null;
     const runs=CanvasUI.summarize(CS.graph,getCanvasRunProjection);
+    renderCanvasAnnotations();
     CanvasUI.renderWorkspace({
       stage:DOM.canvasStage,isCanvas:CS.stageView==="canvas",
       graph:CS.graph,activeTab:tab,saveText:projectStatusText(tab),runs,
@@ -18457,6 +18574,8 @@
         else if(action==="simple")switchCreationStage("simple");
         else if(action==="undo")undoGraph();
         else if(action==="redo")redoGraph();
+        else if(action==="note")newCanvasVisualAnnotation("note");
+        else if(action==="group")newCanvasVisualAnnotation("group");
         else if(action==="run"){
           if(node?.type==="output_control")void runOutputControlNode(node.id);
           else void runAllOutputControls();
