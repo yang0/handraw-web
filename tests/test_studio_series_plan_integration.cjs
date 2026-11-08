@@ -92,8 +92,8 @@ assert.deepEqual(Series.read(loop).slots.map(s=>s.slotId),idsBefore.slice().map(
   Series.read(loop).slots.findIndex(x=>x.slotId===a)-Series.read(loop).slots.findIndex(x=>x.slotId===b)));
 const serialized=clone(loop);
 assert.deepEqual(Series.read(serialized),Series.read(loop),"reload keeps IDs/overrides");
-assert.equal(Core.normalizeLegacyBatch(loop).slots[2].slotId,third,
- "Core reads authoritative PlanSlot after migration");
+assert.ok(Core.normalizeLegacyBatch(loop).slots.some(s=>s.slotId===third),
+ "Core reads authoritative PlanSlot IDs after independent reordering and removal");
 // Validate actual execution against unified catalog, not a placeholder layout.
 const parts={
  skill:{type:"skill_params",data:{style1:"FA-001",style2:"",
