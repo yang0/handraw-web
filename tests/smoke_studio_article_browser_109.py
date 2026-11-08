@@ -199,6 +199,48 @@ def main():
                 assert plan_cloud["article"]["markdown"]==plan["markdown"]
                 print("109 PlanSlot anchors and article fidelity: PASS",flush=True)
 
+                # Move a real inline image card to another chapter via its
+                # editor handle. The stable anchorId must not be reminted.
+                move_handle=page.locator(".ic-art-handle[data-plan-drag]").first
+                move_handle.wait_for(timeout=15000)
+                moved_slot_id=move_handle.get_attribute("data-plan-drag")
+                original_pos=next(c["pos"] for c in plan["cards"]
+                    if c["id"]==moved_slot_id)
+                move_handle.click()
+                options=page.locator("[data-move-to-pos]")
+                options.first.wait_for(timeout=15000)
+                destinations=options.evaluate_all("""nodes=>
+                  nodes.map(el=>Number(el.dataset.moveToPos))""")
+                new_position=next((p for p in destinations if p!=original_pos),None)
+                assert new_position is not None,(destinations,original_pos)
+                page.locator(f"[data-move-to-pos='{new_position}']").click()
+                page.wait_for_function("""arg=>{
+                  const d=window.CS.articleEditorDraft;
+                  const a=window.CS.myArticles.find(x=>x.id===d.id);
+                  return a.cards.find(c=>c.id===arg.id)?.afterBlockIdx===arg.pos;
+                }""",arg={"id":moved_slot_id,"pos":new_position},timeout=12000)
+                moved=article_state(page)
+                assert [c["anchorId"] for c in moved["cards"]]==anchors
+                wait_synced(page)
+                cloud_after_move=get_project(page,project_id)["body"]["project"]["draft"]
+                assert any(x["slotId"]==moved_slot_id and
+                    x["afterBlockIdx"]==new_position
+                    for x in cloud_after_move["plan"]["slots"])
+                print("109 drag-handle anchor relocation persisted to CAS: PASS",flush=True)
+
+                # Article/Canvas are separate editors over one Project model.
+                # A view switch must not rewrite editor Markdown/anchors.
+                page.locator("#studio-mode-canvas").click()
+                page.wait_for_function("""()=>window.CS?.stageView==='canvas'""",
+                    timeout=15000)
+                page.locator("#studio-mode-article").click()
+                page.locator(".ic-art-seg-ta").first.wait_for(timeout=15000)
+                view_restored=article_state(page)
+                assert "保留我的正文" in view_restored["markdown"],view_restored
+                assert [c["anchorId"] for c in view_restored["cards"]]==anchors
+                print("109 Article/Canvas switch preserves document and anchors: PASS",
+                    flush=True)
+
                 # A slow AI proposal must not lock the article or clobber a
                 # newer document. Hold a real browser fetch and then respond
                 # using the old captured revision after a concurrent edit.
@@ -323,6 +365,29 @@ def main():
                     assert "旧窗口的冲突稿" in md
                     assert any(n.startswith("images/") for n in names),names
                 print("109 preview, partial result + ZIP export: PASS",flush=True)
+
+                # #130 narrow-screen editor: cards and body remain usable
+                # without clipping off the right edge.
+                mobile_ctx=browser.new_context(viewport={"width":390,"height":844})
+                mobile_ctx.add_cookies([{"name":SESSION_COOKIE_NAME,
+                    "value":token,"url":base}])
+                mobile=mobile_ctx.new_page()
+                mobile.add_init_script("window.__HANDRAW_TESTING__ = true")
+                mobile.goto(base+"/studio/?view=projects",wait_until="networkidle",
+                    timeout=45000)
+                mobile.locator(f"[data-pc-open='{copied['projectId']}']").click()
+                mobile.locator(".ic-art-seg-ta").first.wait_for(timeout=15000)
+                geometry=mobile.locator(".ic-art-seg-ta").first.evaluate("""el=>{
+                  const r=el.getBoundingClientRect();
+                  return {left:r.left,right:r.right,width:r.width,viewport:innerWidth};
+                }""")
+                assert geometry["width"]>160,geometry
+                assert geometry["right"]<=geometry["viewport"]+3,geometry
+                mobile_out=ROOT/"artifacts"/"article-109-screen"
+                mobile_out.mkdir(parents=True,exist_ok=True)
+                mobile.screenshot(path=str(mobile_out/"mobile-editor.png"),
+                    animations="disabled",full_page=False)
+                print("109 narrow-screen article editor: PASS",flush=True)
 
                 ctx.clear_cookies()
                 ctx.add_cookies([{"name":SESSION_COOKIE_NAME,"value":other,"url":base}])
