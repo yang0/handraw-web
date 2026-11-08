@@ -46,15 +46,18 @@ assert.ok(begin>0 && end>begin, "Extract Project Center bindings for functional 
 const fragment=source.slice(begin,end);
 async function suite() {
   const CS={tabs:[],closedProjectDrafts:[],activeTabId:null,graph:{nodes:[],edges:[]},cloudProjects:[],
-    projectCenterLoading:false,projectCenterError:"",projectQuery:"",stageView:"projects",
+    projectCenterLoading:false,projectCenterLoadingMore:false,projectHasMore:false,
+    projectPageCursor:"",projectListRequestVersion:0,projectCenterError:"",projectQuery:"",stageView:"projects",
     projectOpeningId:""};
   const opened=[],toasts=[],created=[],paths=[],getCalls=[],entryCalls=[];
+  let listResolver = async () => ({ok:true,projects,hasMore:false,nextCursor:""});
+  const listCalls=[];
   let resolver = async id => ({
     ok:true,project:{id,kind:"image",title:"云端春景",authority:"graph",
       revision:2,draft:{activeView:"simple",graph:{blueprint:"single",
         nodes:[{id:"server-node"}],edges:[]}}}
   });
-  const ProjectClient={list:async()=>({ok:true,projects}),get:async id=>{
+  const ProjectClient={list:async options=>{listCalls.push(options);return listResolver(options);},get:async id=>{
     getCalls.push(id);return resolver(id);
   }};
   const win={HANDRAW_STUDIO_PROJECT_UNUSED:true,HandrawStudioProjectCenter:PC,
@@ -92,7 +95,7 @@ async function suite() {
     isArticleTab:()=>false,
   };
   vm.createContext(sandbox);
-  vm.runInContext(fragment+"\nglobalThis.center={openCloudProject,openProjectCenter,refreshProjectCenter,renderProjectCenterStage,createProjectFromCenter};",sandbox);
+  vm.runInContext(fragment+"\nglobalThis.center={openCloudProject,openProjectCenter,refreshProjectCenter,loadMoreProjects,renderProjectCenterStage,createProjectFromCenter};",sandbox);
   const c=sandbox.center;
   // Cloud restore is a real operation, not a second generation.
   await c.openCloudProject("prj-01");
@@ -168,6 +171,25 @@ async function suite() {
   c.createProjectFromCenter("workflow");
   c.createProjectFromCenter("article");
   assert.deepEqual(entryCalls,["workflow","article"]);
+
+  CS.projectQuery="春天";
+  listResolver=async options => {
+    if (options.cursor === "cursor-first") {
+      return {ok:true,projects:[{id:"cloud2",title:"春天二",kind:"image"},
+        {id:"cloud1",title:"春天一",kind:"image"}],hasMore:false,nextCursor:""};
+    }
+    return {ok:true,projects:[{id:"cloud1",title:"春天一",kind:"image"}],
+      hasMore:true,nextCursor:"cursor-first"};
+  };
+  await c.refreshProjectCenter();
+  assert.equal(CS.cloudProjects.length,1);
+  assert.equal(CS.projectHasMore,true);
+  assert.equal(CS.projectPageCursor,"cursor-first");
+  assert.equal(listCalls.at(-1).query,"春天");
+  await c.loadMoreProjects();
+  assert.equal(CS.cloudProjects.length,2,"No duplicates between pages");
+  assert.equal(CS.projectHasMore,false);
+  assert.equal(listCalls.at(-1).cursor,"cursor-first");
 
   console.log("Studio2 Project Center tests pass: navigation, escaping, safe local/remote recovery, scope");
 }
