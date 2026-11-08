@@ -523,11 +523,11 @@ def record_public_work(
     expected_count: int,
     request_id: str = "",
 ) -> str:
-    """Atomically make a run, its output media and its ONE public work agree.
+    """Atomically project one immutable successful media per run/position.
 
-    Caller must already have stored/authorized all media, and must execute this
-    within its transaction. No file IO or external network calls happen here.
-    The snapshot is replaced, so deleted/retried slots cannot leave stale media.
+    Confirmed media wins over a delayed callback or newly charged attempt.
+    Rebuild Work links only from authoritative stored successes, never solely
+    from a possibly incomplete callback. The gateway ledger remains auditable.
     """
     if not ordered_images:
         raise ValueError("Cannot publish an empty work")
@@ -535,6 +535,8 @@ def record_public_work(
         tx, user_id=user_id, source=source, external_run_id=external_run_id,
         expected_count=expected_count, request_id=request_id,
     )
+    if getattr(tx, "dialect", "") == "postgresql":
+        tx.execute("SELECT id FROM generation_runs WHERE id=? FOR UPDATE", (run_id,)).fetchone()
     if tx.execute(
         "SELECT 1 FROM generation_runs WHERE id=? AND publication_deleted_at<>''",
         (run_id,),
@@ -575,53 +577,61 @@ def record_public_work(
 
     now = _now()
     previous_media_urls = work_images(tx, work_id) if work["run_id"] else []
-    # Unlink cover before replacing the ordered collection; DB triggers enforce
-    # that a new cover belongs to this work.
-    tx.execute("UPDATE works SET run_id=?, cover_media_id=NULL WHERE id=?", (run_id, work_id))
-    tx.execute("DELETE FROM work_media WHERE work_id=?", (work_id,))
-    # Replace successful snapshots, but do not erase failed/pending slots that
-    # belong to the same logical batch. A retried successful position overrides
-    # that position's earlier failure, while other failures remain auditable.
-    tx.execute(
-        "DELETE FROM generation_items WHERE run_id=? AND status='success'",
-        (run_id,),
-    )
-    for rank, (position, media_id, _) in enumerate(entries):
-        tx.execute(
-            "DELETE FROM generation_items WHERE run_id=? AND position=?",
-            (run_id, position),
-        )
+
+    # A late or out-of-order callback may provide only a subset of the work.
+    # Persist its new slots without ever overwriting an already successful
+    # media_id. A new attempt is billed separately, but cannot change a
+    # previously confirmed image in the same logical slot.
+    for position, media_id, _ in entries:
         tx.execute(
             """
             INSERT INTO generation_items
               (id,run_id,position,status,media_id,created_at,updated_at)
             VALUES (?,?,?,'success',?,?,?)
+            ON CONFLICT(run_id,position) DO UPDATE SET
+                status='success',media_id=excluded.media_id,
+                error_code='',updated_at=excluded.updated_at
+            WHERE generation_items.status <> 'success'
             """,
             (_stable_id("item", run_id, position), run_id, position, media_id, now, now),
         )
+
+    actual_rows = tx.execute(
+        """SELECT i.position,i.media_id,m.storage_key
+           FROM generation_items i JOIN media_assets m ON m.id=i.media_id
+           WHERE i.run_id=? AND i.status='success'
+           ORDER BY i.position""", (run_id,),
+    ).fetchall()
+    actual = [(int(row["position"]), str(row["media_id"]), str(row["storage_key"]))
+              for row in actual_rows]
+    # Only the canonical RunItems may appear in a public Work. Never demote a
+    # successful item merely because a later attempt lacks that media.
+    tx.execute("UPDATE works SET run_id=?, cover_media_id=NULL WHERE id=?", (run_id, work_id))
+    tx.execute("DELETE FROM work_media WHERE work_id=?", (work_id,))
+    for rank, (_, media_id, _) in enumerate(actual):
         tx.execute(
             "INSERT INTO work_media(work_id,media_id,position) VALUES (?,?,?)",
             (work_id, media_id, rank),
         )
     previous_cover = str(work["cover_media_id"] or "")
-    valid_media_ids = {entry[1] for entry in entries}
+    valid_media_ids = {entry[1] for entry in actual}
     # The default cover follows the first successful *planned* slot even if
     # responses arrive out of order. Only an explicit author choice is sticky.
     keep_author_cover = bool(work["cover_selected_by_author"]) and (
         previous_cover in valid_media_ids
     )
-    cover_id = previous_cover if keep_author_cover else entries[0][1]
+    cover_id = previous_cover if keep_author_cover else actual[0][1]
     tx.execute(
         """UPDATE works SET cover_media_id=?,cover_selected_by_author=?,
                   images_json=?,updated_at=? WHERE id=?""",
         (cover_id, int(keep_author_cover),
-         json.dumps([e[2] for e in entries], ensure_ascii=False),
+         json.dumps([e[2] for e in actual], ensure_ascii=False),
          now, work_id),
     )
     refresh_run_status(tx, run_id)
     # Replaced media must immediately lose this work's public grant. Physical
     # deletion happens only after a delayed, durable DB-reference check.
-    removed_urls = set(previous_media_urls) - {entry[2] for entry in entries}
+    removed_urls = set(previous_media_urls) - {entry[2] for entry in actual}
     for removed in removed_urls:
         tx.execute(
             """UPDATE media_public_grants SET revoked_at=?
