@@ -54,7 +54,8 @@ async function suite(){
   assert.deepEqual(plan.dependencies.a,[]);
   assert.deepEqual(plan.dependencies.z,[]);
   assert.deepEqual(plan.dependencies.b,["a"]);
-  assert.deepEqual(plan.controls,["a","b","z"]);
+  assert.deepEqual(new Set(plan.controls),new Set(["a","b","z"]));
+  assert.ok(plan.order.indexOf("a") < plan.order.indexOf("b"));
   const pool=DAG.makeSharedPool({globalLimit:2,userLimit:2,gatewayLimit:2,modelLimit:1});
   const events=[],updates=[];
   let active=0,max=0;

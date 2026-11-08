@@ -214,8 +214,8 @@ for(const name of ["studio-core","studio-resources","studio-views",
 assert.ok(html.indexOf("studio-normalization.js")<html.indexOf("studio-quick-spec.js"));
 assert.ok(html.indexOf("studio-quick-spec.js")<html.indexOf("studio-make-image.js"));
 const app=fs.readFileSync("demo/assets/studio-app.js","utf8");
-assert.match(app,/const executionGraph = previousRunSnapshot\?\.executionGraph[\s\S]*?cloneGraph\(previousRunSnapshot\.executionGraph\) : cloneGraph\(CS\.graph\)/,
- "Run uses cloned draft for first submission or frozen original Graph for explicit retry");
+assert.match(app,/const executionGraph = previousRunSnapshot\?\.executionGraph[\s\S]*?cloneGraph\(previousRunSnapshot\.executionGraph\) : cloneGraph\(executionGraphOverride \|\| CS\.graph\)/,
+ "Run uses frozen DAG Graph or current draft for new execution; explicit retry keeps old frozen Graph");
 assert.match(app,/E\.assembleControlPrompt\(executionGraph, executionCtrl, Catalog, "cloud", sp\)/);
 assert.match(app,/HandrawQuickSpec\.setAssets\(p,ast\.data\.items\)/);
 assert.match(app,/\/api\/studio\/runs\//);
