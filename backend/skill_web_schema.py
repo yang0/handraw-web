@@ -55,5 +55,28 @@ SKILL_WEB_MIGRATIONS = [
 
     """),
 
+
+    (103, "103_author_private_resource_projection", """
+        -- #21: user_resources is a derived READ MODEL of the pre-existing
+        -- skill_personal_resources CAS authority. Never write it directly.
+        -- A resource is private until explicitly submitted for publication via
+        -- the existing moderated community curation workflow.
+        CREATE TABLE IF NOT EXISTS user_resources (
+            id TEXT PRIMARY KEY REFERENCES skill_personal_resources(id),
+            code TEXT NOT NULL UNIQUE,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id),
+            kind TEXT NOT NULL CHECK(kind IN ('style','layout')),
+            name TEXT NOT NULL,
+            definition TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            cover_url TEXT NOT NULL DEFAULT '',
+            revision INTEGER NOT NULL DEFAULT 1,
+            deleted_at TEXT,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_resources_owner
+            ON user_resources(owner_user_id,kind,deleted_at,updated_at);
+    """),
+
 ]
 
