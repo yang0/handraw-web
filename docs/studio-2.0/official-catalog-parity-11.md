@@ -22,7 +22,7 @@ Skill: https://github.com/yang0/handraw-style (`feature/skill-web-unification-v1
 
 **发布 / Issue 关闭严格审计**：
 
-`python ops/check_official_catalog_parity.py --skill-root external/handraw-style-catalog/skills/handdraw-style-prompter --strict`
+`python ops/check_official_catalog_parity.py --skill-root external/handraw-style-catalog/skills/handdraw-style-prompter --approved-export-dir /private/reviewed-web-official --strict`
 
 在 FG-025 未网站审定、未同步一致并移除待审例外前必然返回 2。不能使用普通 CI 全绿取代此项。
 
@@ -38,3 +38,31 @@ Skill: https://github.com/yang0/handraw-style (`feature/skill-web-unification-v1
 3. 保留专项测试、14/14 工程 CI 和真实受控 Web→Skill 导出证据；验收通过才在 GitHub 关闭 #11/Skill #17。
 
 **本工程切片只实现防漂移、审计与发布阻断，不变更任何已批准的官方资源，也不宣称已经完成发布。**
+
+
+## 2026-11-09 · 发布版官网 DB 官方资源核对与只读导出补强
+
+`catalog.json` 是静态官网目录，**并不包括网站数据库里管理员后来批准的 `source_type=official` 条目**。仅比较它与 Skill 会出现静态一致但生产官网 DB 仍缺 Skill 编号的假阳性。现在 `ops/check_official_catalog_parity.py` 支持 `--approved-export-dir` 同时读取官网 DB 已发布官方资源两份 JSON；合并静态 catalog 后，拒绝静态与动态重复编号、动态内部同号异类、Web-only、Skill-only 和未审 FG-025。报告增加 `approvedExportChecked`、`webDynamicApprovedCount`、`dbAuditRequired`；未提交 DB 导出时普通 CI 仍可完成编码漂移审计，但 `readyForRelease=false`，且 `--strict` **必须失败**。报告的“静态目录编号一致”不再自动等于“生产发布已通过”。
+
+官网→Skill 导出器 `ops/export_official_assets.py` 同时支持：
+- 开发用 SQLite：`--db /private/approved-website.db`，以 SQLite `mode=ro` 打开，不执行迁移。
+- 正式 PG17：`--pg-dsn-env HANDRAW_OFFICIAL_EXPORT_PG_URL`，**从私有环境变量**读取有只读权限的 DSN，不在命令行/日志展示连接串；显式开启 `REPEATABLE READ READ ONLY` 快照，无写操作。
+- 两者统一只读 `catalog_assets.source_type='official' AND status='published'`；未发布/隐藏/待审条目**绝不导出**。导出目标必须是**新的空目录**，阻断旧导出残留隐藏资源；即使 DB 新增官方记录为 0，也产生受审计的空 `styles.json` 与 `layouts.json`。
+
+授权操作员在隔离环境的操作示例（**不含真实凭据/业务媒体**）：
+
+```bash
+# 由 DB 权限管理员事先配置 HANDRAW_OFFICIAL_EXPORT_PG_URL
+python ops/export_official_assets.py \
+  --pg-dsn-env HANDRAW_OFFICIAL_EXPORT_PG_URL \
+  --skill-root /private/reviewed-handraw-style/skills/handdraw-style-prompter \
+  --out /private/reviewed-web-official
+
+# 不会写 Web/Skill，只作严格只读对账
+python ops/check_official_catalog_parity.py \
+  --skill-root /private/reviewed-handraw-style/skills/handdraw-style-prompter \
+  --approved-export-dir /private/reviewed-web-official \
+  --strict
+```
+
+必须先人工确认原始数据库确为已批准的、与对应部署 SHA/Skill 基线匹配的权威源；本工具不能验证数据库凭据或运营审批真实性，也不能自行合并导出到 Skill。复核导出结果、图片授权及付费定义保护后由维护者在 Skill **独立分支**审阅并同步。FG-025 仍未官网审批，不得自动导入官网；因此本轮工程代码验收即使全绿也必须保持 #11 Open、`--strict` 未通过、生产 NO-GO、PR #131 Draft。真实 PostgreSQL、跨仓现场签核仍属于 D 级证据，不能用本地 SQLite/CI 代替。
