@@ -387,6 +387,7 @@ function createFakeDom() {
 console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
 // ==========================================
+async function runTests() {
 // Requirement 1: 固定图型 (Fixed Layout)
 // 主题文本框 -> promptListText，图型取控制节点；生成的 specs 与改前逐项一致
 // ==========================================
@@ -1305,7 +1306,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 // ==========================================
 // Requirement 18: Form Reset (清空表单) in Batch and Make-Image
 // ==========================================
-(async () => {
+{
   // 1. Batch Form Reset
   const fakeHost = createFakeDom();
   const graph = createTestBatchGraph({
@@ -1418,7 +1419,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   assert.ok(makeImageSource.includes("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？"), "studio-make-image.js must check confirmation");
 
   console.log("✓ Requirement 18 Passed: Form Reset (清空表单) in Batch and Make-Image verified");
-})().catch((error) => { console.error(error); process.exitCode = 1; });
+}
 
 // ==========================================
 // Requirement 19: Batch Iteration Thumbnail Clean Semantics
@@ -1578,3 +1579,6 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 console.log("\n==========================================");
 console.log("All 19 Studio Batch tests passed successfully!");
 console.log("==========================================");
+
+}
+runTests().catch((error) => { console.error(error); process.exitCode = 1; });
