@@ -27,7 +27,7 @@ const context = {
   window:{HandrawBatchCreate:{setStopping:()=>{stopping++;}}}
 };
 const stop = vm.runInNewContext(
-  "let _activeBatchRun = run;\nconst CS = state;\n" + handler + "\ncancelActiveBatchGeneration",
+  "let _activeBatchRun = run;\nconst _activeControlRuns=new Map();\nlet _dagAbortController=null;\nconst CS = state;\n" + handler + "\ncancelActiveBatchGeneration",
   context
 );
 assert.equal(stop("not_this_ctrl"), false, "Must not stop an unrelated job");
@@ -48,7 +48,7 @@ const empty = {
   controller:{signal:{aborted:false},abort(){this.signal.aborted=true;}}
 };
 const emptyStop=vm.runInNewContext(
-  "let _activeBatchRun = run;\nconst CS = state;\n" + handler + "\ncancelActiveBatchGeneration",
+  "let _activeBatchRun = run;\nconst _activeControlRuns=new Map();\nlet _dagAbortController=null;\nconst CS = state;\n" + handler + "\ncancelActiveBatchGeneration",
   {...context,run:empty}
 );
 assert.equal(emptyStop("ctrl_batch"),true);
