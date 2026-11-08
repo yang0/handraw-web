@@ -17059,17 +17059,15 @@
   }
 
   function switchCreationStage(next) {
+    const beforeView = CS.stageView === "canvas" ? "canvas" :
+      ["quick","batch","article","preview"].includes(CS.stageView) ? "simple" : null;
     if (next === "simple") {
+      // Never create/activate a fresh blank workflow when returning from
+      // Canvas: partial/read-only is a safe projection of THIS same Project.
       const desired = CS.lastStudioTaskView ||
-        (getBatchParts(CS.graph) ? "batch" : "quick");
-      const canEdit = desired === "batch" ? Boolean(getBatchParts(CS.graph))
-        : desired === "article" ? isArticleGraph(CS.graph)
-        : Boolean(getQuickParts(CS.graph));
-      if (!canEdit) {
-        toast("当前工作流包含简洁模式无法安全编辑的节点。原画布已完整保留，请继续在画布中编辑；也可新建普通作图项目。");
-        return;
-      }
-      next = desired;
+        (getBatchParts(CS.graph) || (CS.graph?.nodes || []).some(n => n.type === "loop")
+          ? "batch" : "quick");
+      next = desired === "article" && isArticleGraph(CS.graph) ? "article" : desired;
     }
     if (next === "canvas" && ["quick","batch","article"].includes(CS.stageView)) {
       CS.lastStudioTaskView = CS.stageView;
@@ -17088,7 +17086,9 @@
         }
         delete CS.articleReturnTab;
       }
-      ensureQuickTab();
+      if (CS.stageView !== "canvas" || !CS.activeTabId || getQuickParts(CS.graph)) {
+        ensureQuickTab();
+      }
       CS.stageView = "quick";
     } else if (next === "batch") {
       if (CS.stageView === "preview" || CS.stageView === "article" || isArticleGraph(CS.graph)) {
@@ -17098,7 +17098,9 @@
         }
         delete CS.articleReturnTab;
       }
-      ensureBatchTab();
+      if (CS.stageView !== "canvas" || !CS.activeTabId || getBatchParts(CS.graph)) {
+        ensureBatchTab();
+      }
       CS.stageView = "batch";
     } else {
       CS.stageView = next;
@@ -17113,7 +17115,23 @@
     url.searchParams.set("entry", next === "quick" ? "quick" : next === "batch" ? "batch" : next === "article" ? "article" : "canvas");
     window.history.replaceState(null, "", url.pathname + url.search);
     fullRenderCanvas();
-    if (next === "canvas") requestAnimationFrame(() => fitView());
+    // View transitions update only project editor metadata; they never
+    // call the generation endpoints or modify the Run ledger.
+    const current = CS.tabs.find(t => t.id === CS.activeTabId);
+    const view = CS.stageView === "canvas" ? "canvas" :
+      ["quick","batch"].includes(CS.stageView) ? "simple" : null;
+    if (current && view && beforeView !== view) {
+      current.projectActiveView = view;
+      current.editRevision = Number(current.editRevision || 0) + 1;
+      syncCurrentTabSnapshot();
+      // No project is auto-created merely because someone switched views.
+      if (current.projectId) {
+        if (current.projectSaveState !== "conflict") current.projectSaveState = "local_only";
+        scheduleProjectAutoSave(current);
+      }
+      persistOpenTabs();
+      updateProjectStatusIndicator();
+    }
   }
 
   function renderCreationModeBar() {
@@ -17162,6 +17180,46 @@
     if (btnWorkflows) btnWorkflows.onclick = () => { openWorkflowsPage(); };
   }
 
+  function renderGraphSummaryInSimpleView() {
+    const projection = StudioViews?.classify(CS.graph);
+    const mode = projection?.mode || "read-only-summary";
+    const editable = mode === "partial-editable" && projection.nodeIds?.text;
+    const textNode = (CS.graph.nodes || []).find(n => n.id === projection?.nodeIds?.text);
+    const message = mode === "partial-editable"
+      ? "复杂项目：仅摘要/局部可编辑。所有分支、素材和输出设置保持在画布中。"
+      : "复杂项目：仅摘要。当前节点或连线不能安全映射到简洁表单，画布内容不会被覆盖。";
+    DOM.quickStage.innerHTML = '<section class="qc-form" style="max-width:740px;margin:28px auto">' +
+      '<h3>复杂项目 · 安全编辑</h3>' +
+      '<p role="status" class="qc-help">' + esc(message) + '</p>' +
+      '<p>节点：' + (CS.graph.nodes || []).length +
+      ' · 连线：' + (CS.graph.edges || []).length +
+      ' · 输出分支：' + (CS.graph.nodes || []).filter(n => n.type === "output_control").length + '</p>' +
+      (editable ? '<label for="studio-shared-subject">公共主题（仅更新文本节点）</label>' +
+        '<textarea id="studio-shared-subject" rows="3" style="width:100%">' +
+        esc(String(textNode?.data?.text || '')) + '</textarea>' +
+        '<button type="button" class="btn btn-sm btn-primary" id="studio-shared-save">保存公共主题</button>' : '') +
+      '<button type="button" class="btn btn-sm" id="studio-complex-canvas">返回画布编辑其余内容</button>' +
+      '</section>';
+    const back = DOM.quickStage.querySelector("#studio-complex-canvas");
+    if (back) back.onclick = () => switchCreationStage("canvas");
+    const submit = DOM.quickStage.querySelector("#studio-shared-save");
+    if (submit) submit.onclick = () => {
+      try {
+        const field = DOM.quickStage.querySelector("#studio-shared-subject");
+        const proposed = StudioViews.patchNode(CS.graph, {
+          nodeId: projection.nodeIds.text, field:"text",
+          value:field.value, baseRevision:Number(CS.graph.revision || 0)
+        });
+        CS.graph = proposed;
+        markActiveTabDirty();
+        persistOpenTabs();
+        fullRenderCanvas();
+      } catch (_) {
+        toast("公共主题已发生变化，请返回画布核对");
+      }
+    };
+  }
+
   let isRenderingQuickStart = false;
   function renderQuickStart() {
     if (isRenderingQuickStart) return;
@@ -17173,6 +17231,10 @@
       DOM.quickStage.style.display = (isQuick || isBatch) ? "block" : "none";
       renderCreationModeBar();
       if (!isQuick && !isBatch) return;
+      if (isQuick && !getQuickParts(CS.graph) || isBatch && !getBatchParts(CS.graph)) {
+        renderGraphSummaryInSimpleView();
+        return;
+      }
 
     if (isBatch) {
       let bp = getBatchParts();
