@@ -312,7 +312,7 @@
       }
       return {...o,status:item?.status||"pending",
         imageUrl:item?.status==="success"&&item.mediaId?item.imageUrl||"":"",
-        mediaId:item?.status==="success"?item.mediaId||"",
+        mediaId:item?.status==="success" ? (item.mediaId||"") : "",
         itemId:item?.id||"",errorCode:item?.errorCode||""};
     });
     return {...raw,runId:run?.id||snapshot.runId,slotCount:snapshot.slotCount,
