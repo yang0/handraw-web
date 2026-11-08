@@ -211,26 +211,37 @@
   function confirmDifferences(report,{title="审阅 AI 方案差异"}={}){
     // Nothing in the model payload is ever placed into innerHTML unescaped.
     // Conflicts are opt-in; a locked field cannot be enabled even by review.
-    if(!report.conflicts.length)return Promise.resolve({approved:true,keys:[]});
     if(typeof document==="undefined")return Promise.resolve({approved:false,keys:[]});
     return new Promise(resolve=>{
       const overlay=document.createElement("div");
       overlay.className="hw-article-plan-review-overlay";
+      const candidates=report.source.creationSpecPatch.candidates||{};
+      const candidateLabel=list=>(Array.isArray(list)?list:[]).map(item=>
+        String(item.id||"")+" "+String(item.name||"")).join(" · ");
       overlay.innerHTML=`<section class="hw-article-plan-review" role="dialog"
         aria-modal="true" aria-labelledby="hw-ai-review-title">
-        <header><div class="hw-art-review-kicker">HANDRAW · AI 方案差异</div>
+        <header><div class="hw-art-review-kicker">HANDRAW · 可审阅 AI 方案</div>
           <h2 id="hw-ai-review-title">${esc(title)}</h2>
-          <p>不改动锁定项；已有人工设置默认保留。可以逐项勾选接受冲突建议。</p></header>
-        <div class="hw-art-review-list" role="group" aria-label="AI 方案差异">
+          <p>共 ${report.accepted.length} 项安全建议、${report.conflicts.length} 项人工冲突。
+          不改动锁定项；对已有人工设置默认保留。确认应用前不会触发生图或扣费。</p>
+          <small>候选画风：${esc(candidateLabel(candidates.style)||"以已授权目录为准")}</small>
+          <small>候选图型：${esc(candidateLabel(candidates.layout)||"以已授权目录为准")}</small></header>
+        <div class="hw-art-review-list" role="group" aria-label="AI 字段级规划建议">
+          ${report.accepted.map(c=>`<div class="hw-art-review-choice">
+            <span class="hw-art-review-main"><strong>${esc(c.key)}</strong>
+              <small>当前：${esc(display(c.from))} → AI 建议：${esc(display(c.to))}</small>
+              <span class="hw-art-review-purpose"><b>推荐理由</b> ${esc(c.reason||"AI 建议")}</span>
+            </span></div>`).join("")}
           ${report.conflicts.map((c,i)=>`<label class="hw-art-review-choice">
             <input type="checkbox" data-ai-conflict="${i}" ${c.locked?"disabled":""} />
             <span class="hw-art-review-main"><strong>${esc(c.key)}</strong>
               <small>当前：${esc(display(c.from))} → 建议：${esc(display(c.to))}</small>
               <span class="hw-art-review-purpose"><b>推荐理由</b> ${esc(c.reason||"AI 建议")}</span>
-              ${c.locked?"<small>用户已锁定，不可覆盖</small>":""}
+              ${c.locked?"<small>用户已锁定，不可覆盖</small>":
+                "<small>已有人工修改；不勾选则保留原值</small>"}
             </span></label>`).join("")}
         </div>
-        <footer><button type="button" data-ai-cancel>暂不应用</button>
+        <footer><button type="button" data-ai-cancel>保持原方案</button>
           <button type="button" class="hw-art-review-apply" data-ai-confirm>应用安全项与勾选项</button></footer>
       </section>`;
       const prior=document.activeElement;
