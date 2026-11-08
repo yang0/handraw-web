@@ -98,7 +98,13 @@ class PlanSlotAccessTests(unittest.TestCase):
         blocked = {"id": "USR-HIDDEN", "kind": "style", "source": "private",
                    "canUse": False, "access": {"canUse": False},
                    "_raw_row": {"revision": 4}}
-        with patch("backend.resource_registry.resolve", return_value=blocked):
+        from backend import resource_registry
+        original_resolve = resource_registry.resolve
+
+        def resolve_with_private_deny(tx, ident, **kwargs):
+            return blocked if ident == "USR-HIDDEN" else original_resolve(tx, ident, **kwargs)
+
+        with patch("backend.resource_registry.resolve", side_effect=resolve_with_private_deny):
             with self.assertRaises(ServiceError) as context:
                 self.create([self.slot(overrides={"style": private_ref})])
         self.assertEqual(context.exception.code, "resource_forbidden")
