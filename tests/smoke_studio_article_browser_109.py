@@ -45,8 +45,20 @@ def main():
             fixture="article109-fixture.webp"
             Image.new("RGB",(240,160),(222,205,176)).save(root/"generated"/fixture,"WEBP")
             with db.transaction() as tx:
-                media_id=_upsert_media(tx,owner_id=int(alice["id"]),
+                uid=int(alice["id"])
+                media_id=_upsert_media(tx,owner_id=uid,
                     url="/generated/"+fixture,sha256="")
+                # Both V3 MediaAsset identity and the legacy URL ownership
+                # mapping are needed: export-zip resolves private file bytes
+                # through the existing secured /generated route.
+                now="2026-11-08T00:00:00Z"
+                tx.execute("INSERT INTO studio_generations (id,user_id,created_at) VALUES (?,?,?)",
+                    ("article109-gen-fixture",uid,now))
+                tx.execute("""INSERT INTO studio_generation_media
+                    (id,generation_id,user_id,media_url,created_at)
+                    VALUES (?,?,?,?,?)""",
+                    ("article109-media-fixture","article109-gen-fixture",uid,
+                     "/generated/"+fixture,now))
             server=create_channel_server(0,"main",db)
             server.allow_demo_routes=True
             thread=threading.Thread(target=server.serve_forever,daemon=True)
@@ -275,7 +287,10 @@ def main():
                 page.goto(base+"/studio/?view=projects",wait_until="networkidle",timeout=45000)
                 assert get_project(page,project_id)["status"]==404
                 assert get_project(page,copied["projectId"])["status"]==404
-                print("109 private article ACL and account switch: PASS",flush=True)
+                private_read=page.evaluate("""async()=>await fetch(
+                  '/generated/article109-fixture.webp',{credentials:'include'}).then(r=>r.status)""")
+                assert private_read==404,private_read
+                print("109 private article/media ACL and account switch: PASS",flush=True)
                 assert not paid,paid
                 assert not errors,errors
                 out=ROOT/"artifacts"/"article-109-screen"
