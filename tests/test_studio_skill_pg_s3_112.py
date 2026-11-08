@@ -451,8 +451,24 @@ class SkillPostgresS3Journey112(unittest.TestCase):
                         token=self.other_publisher)[0], 403)
                     self.assertEqual(json.loads(local.read_text(
                         encoding="utf-8"))["workId"], work_id)
-        print("ISSUE #84 actual pinned Skill CLI local record, explicit 1/5 "
-              "image upload, replay single Work, PG17/S3 bytes and ACL PASS")
+                # A malformed GIF is rejected by the real Web content
+                # validator; the local Skill record stays unpublished.
+                invalid = root / "invalid.gif"
+                invalid.write_bytes(b"not a valid GIF")
+                note = root / "invalid-gif.txt"
+                note.write_text("无效动图测试", encoding="utf-8")
+                invalid_run = str(uuid.uuid4())
+                invoke("history", "record", "--run-id", invalid_run,
+                       "--original-request-file", str(note),
+                       "--image", str(invalid))
+                with self.assertRaises(cloud.CloudError) as failure:
+                    invoke("history", "upload", "--run-id", invalid_run)
+                self.assertEqual(failure.exception.status, 400)
+                record_file = root / "generation-history" / invalid_run / "record.json"
+                self.assertEqual(json.loads(record_file.read_text(
+                    encoding="utf-8"))["cloudState"], "local_only")
+        print("ISSUE #84 pinned real Skill CLI 1/5 PNG + animated GIF "
+              "HTTP PG17/S3 emulation, idempotent single Work, ACL PASS")
 
 
 if __name__ == "__main__":
