@@ -221,7 +221,7 @@ def main():
                     page.keyboard.press("Escape")
                     page.wait_for_function("()=>!document.querySelector('dialog.hw-confirm-action-dialog')")
                     assert page.evaluate("()=>window.qa87Mutations") == 0
-                    page.evaluate("()=>window.qa87DangerAction()")
+                    page.evaluate("()=>{ window.qa87DangerAction(); }")
                     page.locator("dialog.hw-confirm-action-dialog button").last.click()
                     page.wait_for_function("()=>window.qa87Mutations===1",timeout=8000)
                     assert not native_dialogs,native_dialogs
