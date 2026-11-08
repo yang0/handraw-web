@@ -27,8 +27,10 @@ class OwnedCustomResources21(unittest.TestCase):
         self.db = Database(Path(self.tmp.name) / "custom.db")
         self.db.migrate()
         self.addCleanup(self.db.close)
-        self.owner, _ = register_user(self.db, "custom21_owner", "StrongPass123!")
-        self.other, _ = register_user(self.db, "custom21_other", "StrongPass123!")
+        self.owner, self.owner_session = register_user(
+            self.db, "custom21_owner", "StrongPass123!")
+        self.other, self.other_session = register_user(
+            self.db, "custom21_other", "StrongPass123!")
 
     def payload(self, rid, kind="style", **overrides):
         body = {
@@ -139,6 +141,65 @@ class OwnedCustomResources21(unittest.TestCase):
         with self.assertRaises(ServiceError) as deleted_again:
             bridge.put_resource(self.db, self.owner, rid, {**payload, "baseRevision": 2})
         self.assertEqual(deleted_again.exception.status, 409)
+
+    def test_actual_web_http_writes_and_skill_http_pulls_same_private_revision(self):
+        """Web cookie PUT -> Skill library GET -> signed-in owner-only Web boot."""
+        import json
+        import os
+        import threading
+        import urllib.error
+        import urllib.request
+        from unittest.mock import patch
+        from backend.server import create_channel_server, SESSION_COOKIE_NAME
+
+        rid = str(uuid.uuid4())
+        body = self.payload(rid, "style")
+        with patch.dict(os.environ, {
+            "HANDRAW_DEMO_MODE": "0",
+            "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"
+        }):
+            server = create_channel_server(0, "main", self.db)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+                def req(method, path, session, payload=None):
+                    raw = json.dumps(payload).encode("utf-8") if payload is not None else None
+                    request = urllib.request.Request(
+                        base + path, data=raw, method=method,
+                        headers={
+                            "Origin": "http://trusted.test",
+                            "Cookie": SESSION_COOKIE_NAME + "=" + session,
+                            "Content-Type": "application/json",
+                        })
+                    try:
+                        response = urllib.request.urlopen(request, timeout=20)
+                    except urllib.error.HTTPError as error:
+                        response = error
+                    with response:
+                        return response.status, json.loads(response.read().decode("utf-8"))
+                created_status, created = req(
+                    "PUT", "/api/v1/me/resources/" + rid, self.owner_session, body)
+                self.assertEqual(created_status, 200, created)
+                code = created["resource"]["code"]
+                self.assertEqual(code, "USR-S" + rid.replace("-", "").upper())
+                status, listed = req(
+                    "GET", "/api/v1/me/resources?limit=20", self.owner_session)
+                self.assertEqual(status, 200, listed)
+                self.assertEqual(len([x for x in listed["items"] if x["code"] == code]), 1)
+                denied_status, denied = req(
+                    "GET", "/api/v1/me/resources?limit=20", self.other_session)
+                self.assertEqual(denied_status, 200, denied)
+                self.assertFalse(any(x.get("code") == code for x in denied["items"]))
+                stale_status, stale = req(
+                    "PUT", "/api/v1/me/resources/" + rid, self.owner_session,
+                    {**body, "name": "过期版本的覆盖", "baseRevision": 0})
+                self.assertEqual(stale_status, 409, stale)
+                self.assertEqual(stale["code"], "conflict")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(5)
 
     def test_id_validation_and_cross_account_id_collision(self):
         rid = str(uuid.uuid4())
