@@ -17,7 +17,15 @@
   const text = (value) => String(value == null ? "" : value);
   const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
   const resource = (id, type) => id ? { id: text(id), type } : null;
-  const refs = (list, type) => (Array.isArray(list) ? list : []).filter(Boolean).map(id => resource(id, type));
+  const typedRef = (id, type, stored) => {
+    // A ResourceRef is a verified catalog identity with source+version. Legacy
+    // node strings remain readable until the user reselects a definition.
+    if (!id) return null;
+    if (stored && !Array.isArray(stored) && stored.id === id && stored.type === type) return clone(stored);
+    return resource(id, type);
+  };
+  const refs = (list, type, stored) => (Array.isArray(list) ? list : []).filter(Boolean)
+    .map(id => typedRef(id, type, (Array.isArray(stored) ? stored : []).find(x => x?.id === id)));
   const modeOf = (mode) => mode === "pure-image" ? "pure" : (MODES.has(mode) ? mode : "graphic-text");
 
   function normalizeMedia(items) {
@@ -43,17 +51,18 @@
     const ratioSource = cd.ratioSource === "user" || cd.ratioExplicit === true
       || (!has(cd, "ratioSource") && Boolean(cd.ratio) && cd.ratio !== MODE_RATIO[outputMode])
       ? "user" : "default";
+    const rr = sd.resourceRefs || {};
     const spec = {
       schemaVersion: VERSION,
       revision: Math.max(0, Number(options.revision) || 0),
       subject: text(td.text),
       outputMode,
-      style: resource(sd.style1, "style"),
-      secondaryStyle: resource(sd.style2, "style"),
+      style: typedRef(sd.style1, "style", rr.style),
+      secondaryStyle: typedRef(sd.style2, "style", rr.secondaryStyle),
       fusionEnabled: Boolean(sd.fusion),
-      layout: resource(sd.layout, "layout"),
-      colors: refs(sd.colors, "color"),
-      tones: refs(sd.tones, "tone"),
+      layout: typedRef(sd.layout, "layout", rr.layout),
+      colors: refs(sd.colors, "color", rr.colors),
+      tones: refs(sd.tones, "tone", rr.tones),
       moods: clone(Array.isArray(sd.moods) ? sd.moods : []),
       customMood: text(sd.customMood),
       whitespace: text(sd.whitespace),
@@ -86,6 +95,15 @@
     sd.layout = spec.layout?.id || "";
     sd.colors = (spec.colors || []).map(r => r.id);
     sd.tones = (spec.tones || []).map(r => r.id);
+    // Keep the original Graph as the only mutable execution definition, with
+    // normalized catalog identity metadata embedded in the SAME node.
+    sd.resourceRefs = {
+      style: spec.style ? clone(spec.style) : null,
+      secondaryStyle: spec.secondaryStyle ? clone(spec.secondaryStyle) : null,
+      layout: spec.layout ? clone(spec.layout) : null,
+      colors: clone(spec.colors || []),
+      tones: clone(spec.tones || [])
+    };
     sd.moods = clone(spec.moods || []);
     sd.customMood = text(spec.customMood);
     sd.whitespace = text(spec.whitespace);
