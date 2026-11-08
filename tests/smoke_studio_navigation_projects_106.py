@@ -38,8 +38,8 @@ def main():
         db = server = thread = None
         try:
             db = init_database(root / "navigation106.sqlite")
-            _, token = register_user(db, "browser_nav_106", "Pass12345!")
-            user_id = db.fetchone("SELECT id FROM users WHERE username=?", ("browser_nav_106",))["id"]
+            alice, token = register_user(db, "browser_nav_106", "Pass12345!")
+            user_id = alice["id"]
             with db.transaction() as tx:
                 for index in range(46):
                     # Seed only Project metadata. These are not generated
@@ -87,7 +87,7 @@ def main():
 
                 def stage(expected):
                     page.wait_for_function("(v) => window.CS?.stageView === v",
-                                           expected, timeout=20000)
+                                           arg=expected, timeout=20000)
 
                 visit("view=projects")
                 stage("projects")

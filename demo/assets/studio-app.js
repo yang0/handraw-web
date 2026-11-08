@@ -18244,9 +18244,10 @@
           id="studio-mode-projects" aria-pressed="${projects}">项目中心</button>
         ${editing ? `<div class="qc-project-identity" aria-label="当前项目">
           <strong title="${esc(title)}">${esc(title)}</strong>
-          <span class="qc-project-save-label" role="status">${esc(article && !canvas
-            ? (articleDraft?.projectSaveState === "synced" ? "云端已保存" : "文章草稿 · 本机")
-            : projectState)}</span>
+          ${article && !canvas ? `<span class="qc-project-save-label" role="status">${esc(
+          articleDraft?.projectSaveState === "synced" ? "云端已保存" : "文章草稿 · 本机"
+          )}</span>` : `<button type="button" class="qc-project-save-label" id="studio-project-status"
+          title="点击查看云端保存状态或手动同步">${esc(projectState)}</button>`}
           </div>` : `<strong class="qc-project-identity">我的创作空间</strong>`}
         <button type="button" id="studio-mobile-nav-toggle" class="btn btn-sm qc-mobile-nav-toggle"
           aria-expanded="false" aria-controls="studio-navigation-panel" aria-label="展开创作导航">菜单</button>
@@ -18289,6 +18290,7 @@
     bind("studio-mode-simple", () => switchCreationStage("simple"));
     bind("studio-mode-canvas", () => switchCreationStage("canvas"));
     bind("studio-mode-projects", () => openProjectCenter());
+    bind("studio-project-status", () => handleProjectStatusClick());
     bind("studio-mode-from-workflow", () => openWorkflowsPage());
     bind("studio-mode-history", () => openHistoryPage());
     bind("studio-mode-workflows", () => openWorkflowsPage());

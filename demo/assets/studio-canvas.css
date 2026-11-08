@@ -4192,3 +4192,7 @@ a.ic-hist-cover-button { cursor: pointer; }
  .ic-pc-workflow-start {align-items:stretch;flex-direction:column;}
  .ic-pc-workflow-start .btn {width:100%;}
 }
+
+.qc-entry-bar.qc-studio-navigation .qc-project-save-label {display:inline-flex;border:0;background:transparent;cursor:pointer;color:var(--ic-muted,#777);text-align:left;padding:0;font:inherit;font-size:11px;}
+.qc-entry-bar.qc-studio-navigation span.qc-project-save-label {cursor:default;}
+.qc-entry-bar.qc-studio-navigation #studio-project-status:focus-visible {outline:2px solid var(--vermilion);outline-offset:2px;}
