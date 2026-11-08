@@ -132,6 +132,37 @@ def main():
                             page.screenshot(path=str(out/f"{view}-{width}.png"),
                                             animations="disabled",full_page=True)
                             records.append({"view":view,"viewport":width,"geometry":measurement})
+                    # #87 genuine in-page confirmation, not browser-native
+                    # alert()/confirm()/prompt(): cancellation must preserve
+                    # state and approval must be an explicit button gesture.
+                    def open_confirm():
+                        page.evaluate("""() => {
+                          window.qaLegacyConfirmOutcome='pending';
+                          window.HANDRAW_SHARED.confirmAction(
+                            '不可撤销的敏感操作', {title:'确认操作',danger:true,
+                            confirmText:'执行操作'}
+                          ).then(v=>window.qaLegacyConfirmOutcome=v);
+                        }""")
+                        page.locator("dialog.hw-confirm-action-dialog").wait_for(
+                            state="visible",timeout=12000)
+
+                    native_dialogs=[]
+                    page.on("dialog",lambda dlg:(native_dialogs.append(dlg.type),
+                                                 dlg.dismiss()))
+                    open_confirm()
+                    page.locator("dialog.hw-confirm-action-dialog button").first.click()
+                    page.wait_for_function(
+                        "()=>window.qaLegacyConfirmOutcome===false",timeout=8000)
+                    open_confirm()
+                    page.locator("dialog.hw-confirm-action-dialog").press("Escape")
+                    page.wait_for_function(
+                        "()=>window.qaLegacyConfirmOutcome===false",timeout=8000)
+                    open_confirm()
+                    page.locator("dialog.hw-confirm-action-dialog button").last.click()
+                    page.wait_for_function(
+                        "()=>window.qaLegacyConfirmOutcome===true",timeout=8000)
+                    assert not native_dialogs,native_dialogs
+                    assert page.locator("dialog.hw-confirm-action-dialog").count()==0
                     assert not failures,failures
                     (out/"geometry.json").write_text(json.dumps({
                         "issue":[86,87],"result":"PASS",
