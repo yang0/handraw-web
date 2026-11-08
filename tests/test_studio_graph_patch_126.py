@@ -228,6 +228,8 @@ class GraphPatch126Tests(unittest.TestCase):
     def test_ai_exposes_only_graph_structure_not_private_source_data(self):
         observed = []
         def chat(messages, **kwargs):
+            self.assertFalse(self.db.get_conn().in_transaction,
+                             "LLM request must not hold a DB write transaction")
             observed.append(json.dumps(messages, ensure_ascii=False))
             return (json.dumps({"operations": [
                 {"op": "addNode", "node": {
@@ -245,6 +247,26 @@ class GraphPatch126Tests(unittest.TestCase):
         self.assertNotIn("secretBlackboxPrompt", observed[0])
         self.assertEqual(get_project(self.db, self.user, PROJECT)
                          ["project"]["revision"], 1)
+
+
+    def test_ai_stale_result_after_parallel_project_edit_is_rejected(self):
+        def chat(messages, **kwargs):
+            self.assertFalse(self.db.get_conn().in_transaction)
+            patch_project(self.db, self.user, PROJECT, {
+                "baseRevision": 1, "idempotencyKey": "ai-midflight-other-editor",
+                "patch": {"op": "set", "path": "/activeView", "value": "simple"},
+            })
+            return (json.dumps({"operations": [{"op": "addNode", "node": {
+                "id": "stale_ai_text", "type": "text_input",
+                "data": {"text": "stale suggestion"}}}]}), {"ok": True})
+        with patch("backend.ai_client.chat", side_effect=chat):
+            with self.assertRaises(ServiceError) as error:
+                self.call_preview(mode="ai", instruction="添加新的输入节点")
+        self.assertEqual(error.exception.code, "project_revision_conflict")
+        self.assertEqual(get_project(self.db, self.user, PROJECT)
+                         ["project"]["revision"], 2)
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM studio_graphpatch_reviews").fetchone()[0], 0)
 
 
 if __name__ == "__main__":
