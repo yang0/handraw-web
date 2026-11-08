@@ -21,6 +21,7 @@
   const PREFS_STORAGE_KEY = "handraw_canvas_prefs_v10";
   const SAVED_WORKFLOWS_KEY = "handraw_saved_workflows_v10";
   const OPEN_TABS_KEY = "handraw_open_tabs_v10";
+  const CLOSED_PROJECT_DRAFTS_KEY = "handraw_closed_project_drafts_v1";
   const HISTORY_STORAGE_KEY = "handraw_gen_history_v4";
   const MY_ARTICLES_STORAGE_KEY = "handraw_my_articles_v1";
   const ARTICLE_CONFLICT_BACKUP_KEY = "handraw_article_conflict_backup_v1";
@@ -31,6 +32,7 @@
     CUSTOM_ASSET_CATS_KEY,
     SAVED_WORKFLOWS_KEY,
     OPEN_TABS_KEY,
+    CLOSED_PROJECT_DRAFTS_KEY,
     HISTORY_STORAGE_KEY,
     MY_ARTICLES_STORAGE_KEY,
     ARTICLE_CONFLICT_BACKUP_KEY,
@@ -156,6 +158,7 @@
     workflowQuery: "",
     projectQuery: "",
     cloudProjects: [],
+    closedProjectDrafts: [],
     projectCenterLoading: false,
     projectCenterError: "",
     projectOpeningId: "",
@@ -232,6 +235,7 @@
     CS.customUploads = readJsonStorage(UPLOAD_STORAGE_KEY, []);
     CS.customAssetCats = readJsonStorage(CUSTOM_ASSET_CATS_KEY, []);
     CS.savedWorkflows = readJsonStorage(SAVED_WORKFLOWS_KEY, null);
+    CS.closedProjectDrafts = readJsonStorage(CLOSED_PROJECT_DRAFTS_KEY, []) || [];
     CS.cloudProjects = [];
     CS.projectCenterLoading = false;
     CS.projectCenterError = "";
@@ -1279,10 +1283,44 @@
     }
   }
 
+  function archiveClosedProjectDraft(tab) {
+    if (!tab) return true;
+    const unsynced = tab.projectPending || tab.projectCopyPending ||
+      ["local_only", "saving", "error", "conflict"].includes(tab.projectSaveState);
+    if (!unsynced) return true;
+    const backup = {
+      id: tab.id, title: tab.title, blueprint: tab.blueprint,
+      graph: cloneGraph(tab.graph), projectId: tab.projectId || null,
+      projectRevision: Number(tab.projectRevision || 0),
+      projectSaveState: tab.projectSaveState || "local_only",
+      projectPending: tab.projectPending || null,
+      projectCopyPending: tab.projectCopyPending || null,
+      projectRemoteRevision: Number(tab.projectRemoteRevision || 0),
+      projectError: tab.projectError || "",
+      editRevision: Number(tab.editRevision || 0),
+      quickStart: tab.quickStart === true, batchStart: tab.batchStart === true,
+      vx: tab.vx, vy: tab.vy, vk: tab.vk,
+      closed: true
+    };
+    const list = [backup, ...(CS.closedProjectDrafts || []).filter(x => x.id !== backup.id)].slice(0, 20);
+    // Closing a tab is destructive; unlike generic best-effort cache writes,
+    // only close after its recovery copy has definitely reached storage.
+    try {
+      localStorage.setItem(scopedStorageKey(CLOSED_PROJECT_DRAFTS_KEY), JSON.stringify(list));
+    } catch (_) {
+      toast("本机空间不足，未能保存待同步草稿：请保持标签打开或先清理存储");
+      return false;
+    }
+    CS.closedProjectDrafts = list;
+    return true;
+  }
+
   function closeWorkflowTab(tabId) {
     const idx = CS.tabs.findIndex((t) => t.id === tabId);
     if (idx < 0) return;
     const closing = CS.tabs[idx];
+    if (closing.id === CS.activeTabId) syncCurrentTabSnapshot();
+    if (!archiveClosedProjectDraft(closing)) return;
     if (closing.id === CS.activeTabId && closing.savedId && closing.dirty) {
       // Capture the latest graph before closing; an in-flight provider request
       // cannot be trusted as an acknowledgement of subsequent edits.
@@ -1671,6 +1709,7 @@
 
   function openProjectCenter({fetchCloud = true, replaceUrl = true} = {}) {
     if (CS.activeTabId) syncCurrentTabSnapshot();
+    flushUnifiedArticleEditor();
     CS.stageView = "projects";
     if (replaceUrl) {
       try { window.history.replaceState(null, "", "?view=projects"); } catch (_) {}
@@ -1706,6 +1745,13 @@
     }
     if (CS.projectOpeningId) return;
     const existing = CS.tabs.find(t => t.projectId === projectId);
+    const closedDraft = (CS.closedProjectDrafts || []).find(t => t.projectId === projectId &&
+      ProjectCenter?.isLocallyUnsynced(t));
+    if (closedDraft) {
+      restoreClosedProjectDraft(closedDraft.id);
+      toast("已恢复关闭前的本机未同步草稿，未使用云端版本覆盖");
+      return;
+    }
     // This check MUST precede the remote read: a stale cloud response is
     // never allowed to replace offline edits or an unresolved 409.
     if (existing && (ProjectCenter?.isLocallyUnsynced(existing) || existing.dirty)) {
@@ -1815,6 +1861,31 @@
     // edit is acknowledged. Don't auto-create empty projects merely on visit.
   }
 
+  function restoreClosedProjectDraft(draftId) {
+    const stored = (CS.closedProjectDrafts || []).find(x => x.id === draftId);
+    if (!stored?.graph || !Array.isArray(stored.graph.nodes)) return false;
+    const tab = createWorkflowTab({
+      title: stored.title || "恢复的草稿",
+      blueprint: stored.blueprint || stored.graph.blueprint || "single",
+      graph: cloneGraph(stored.graph), makeActive: false
+    });
+    // Restoration is a move, not another Project creation. Retain the
+    // original idempotency key / expected revision to safely replay uploads.
+    for (const key of [
+      "projectId", "projectRevision", "projectSaveState", "projectPending",
+      "projectCopyPending", "projectRemoteRevision", "projectError",
+      "editRevision", "quickStart", "batchStart", "vx", "vy", "vk"
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(stored,key)) tab[key] = stored[key];
+    }
+    tab.dirty = true;
+    CS.closedProjectDrafts = CS.closedProjectDrafts.filter(x => x.id !== draftId);
+    writeJsonStorage(CLOSED_PROJECT_DRAFTS_KEY,CS.closedProjectDrafts);
+    activateProjectTab(tab);
+    if (tab.projectSaveState !== "conflict") scheduleProjectAutoSave(tab);
+    return true;
+  }
+
   function renderProjectCenterStage() {
     if (!DOM.projectsStage) return;
     if (CS.stageView !== "projects") {
@@ -1828,7 +1899,7 @@
     }
     const focus = document.activeElement?.id === "pc-project-search";
     DOM.projectsStage.innerHTML = ProjectCenter.render({
-      projects: CS.cloudProjects, tabs: CS.tabs, query: CS.projectQuery,
+      projects: CS.cloudProjects, tabs: CS.tabs.concat(CS.closedProjectDrafts || []), query: CS.projectQuery,
       loading: CS.projectCenterLoading, error: CS.projectCenterError,
       loggedIn: Boolean(App.state?.serverBacked && App.state?.loggedIn)
     });
@@ -1851,8 +1922,10 @@
     });
     DOM.projectsStage.querySelectorAll("[data-pc-local]").forEach(btn => {
       btn.onclick = () => {
-        const tab = CS.tabs.find(t => t.id === btn.getAttribute("data-pc-local"));
+        const draftId = btn.getAttribute("data-pc-local");
+        const tab = CS.tabs.find(t => t.id === draftId);
         if (tab) activateProjectTab(tab);
+        else restoreClosedProjectDraft(draftId);
       };
     });
     DOM.projectsStage.querySelectorAll("[data-pc-open]").forEach(btn => {
@@ -8187,7 +8260,7 @@
 
   function returnFromHistoryPage() {
     if (CS.stageView !== "history") return;
-    CS.stageView = ["quick", "batch", "canvas", "preview", "article", "workflows"].includes(CS.historyReturnStage)
+    CS.stageView = ["quick", "batch", "canvas", "preview", "article", "workflows", "projects"].includes(CS.historyReturnStage)
       ? (CS.historyReturnStage === "article" ? "preview" : CS.historyReturnStage)
       : "quick";
     window.history.replaceState(null, "", CS.historyReturnUrl || (window.location.pathname + "?entry=quick"));
