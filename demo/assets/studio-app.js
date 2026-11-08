@@ -16185,7 +16185,9 @@
 
     // Construct #art-plan-summary HTML
     let summaryHtml = "";
-    const showUndo = Boolean(CS.articlePlanUndoState && CS.articlePlanUndoState.expireAt > Date.now());
+    const showUndo = Boolean(CS.articlePlanUndoState &&
+      (CS.articlePlanUndoState.ai === true ||
+       CS.articlePlanUndoState.expireAt > Date.now()));
     const undoButtonHtml = showUndo
       ? '<button type="button" class="btn btn-sm" id="art-plan-undo" style="margin-left:auto;text-decoration:underline;background:none;border:none;cursor:pointer;color:var(--ink-strong,#1f1b16);font-weight:700;">撤销</button>'
       : "";
@@ -17284,17 +17286,18 @@
         const oldCardsBackup = JSON.parse(
           JSON.stringify(draft.cards || target?.planNode?.data?.cards || target?.art?.cards || [])
         );
-        CS.articlePlanUndoState = {
-          cards: oldCardsBackup,
-          expireAt: Date.now() + 10000
+        // Undo is a compensating editor change, not a rolling timeout or a
+        // rollback that could silently destroy a later hand edit / Run result.
+        const articleAiBefore={
+          cards:oldCardsBackup,styleId:draft.styleId||"",
+          layoutId:draft.layoutId||"",coverRatio:draft.coverRatio||""
         };
-        setTimeout(() => {
-          if (CS.articlePlanUndoState && Date.now() >= CS.articlePlanUndoState.expireAt) {
-            CS.articlePlanUndoState = null;
-            const undoEl = DOM.previewStage?.querySelector("#art-plan-undo");
-            if (undoEl) undoEl.remove();
-          }
-        }, 10000);
+        const articleAIUndoSignature=()=>JSON.stringify({
+          articleId:draft.id,markdown:draft.markdown||"",
+          title:draft.title||"",cards:draft.cards||[],
+          styleId:draft.styleId||"",layoutId:draft.layoutId||"",
+          coverRatio:draft.coverRatio||""
+        });
 
         // Mark entrance animation for newly planned cards
         const approvedCards=review.cards;
@@ -17313,6 +17316,10 @@
 
         draft.cards = approvedCards;
         planUnifiedArticleDraft(draft, { aiCards: approvedCards });
+        CS.articlePlanUndoState={
+          ai:true,articleId:draft.id,
+          ...articleAiBefore,afterSignature:articleAIUndoSignature()
+        };
 
         const coverCards = approvedCards.filter((c) => c.role === "cover");
         const inlines = approvedCards.filter((c) => c.role !== "cover");
@@ -17439,11 +17446,27 @@
     if (undoBtn) {
       undoBtn.onclick = () => {
         if (!CS.articlePlanUndoState) return;
-        const restored = JSON.parse(JSON.stringify(CS.articlePlanUndoState.cards || []));
-        CS.articlePlanUndoState = null;
-        if (target?.planNode) target.planNode.data.cards = restored;
-        if (target?.art) target.art.cards = restored;
-        draft.cards = restored;
+        const undo=CS.articlePlanUndoState;
+        if(undo.ai){
+          const current=JSON.stringify({
+            articleId:draft.id,markdown:draft.markdown||"",
+            title:draft.title||"",cards:draft.cards||[],
+            styleId:draft.styleId||"",layoutId:draft.layoutId||"",
+            coverRatio:draft.coverRatio||""
+          });
+          if(undo.articleId!==draft.id||current!==undo.afterSignature){
+            toast("AI 方案应用后已有新的文章或配图编辑，无法安全撤销");
+            CS.articlePlanUndoState=null;renderFullPreviewStage();return;
+          }
+          draft.styleId=undo.styleId;
+          draft.layoutId=undo.layoutId;
+          draft.coverRatio=undo.coverRatio;
+        }
+        const restored=JSON.parse(JSON.stringify(undo.cards||[]));
+        CS.articlePlanUndoState=null;
+        if(target?.planNode)target.planNode.data.cards=restored;
+        if(target?.art)target.art.cards=restored;
+        draft.cards=restored;
         commitArticleTargetChanges(target, { bumpTime: true });
         renderFullPreviewStage();
         toast("已恢复原来的配图位");
