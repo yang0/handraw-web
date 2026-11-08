@@ -181,6 +181,41 @@ class ProviderReconciliation112(unittest.TestCase):
         with self.assertRaises(BadEvidence):
             reconcile(p, h)
 
+    def test_provider_terminal_conflicts_with_callback(self):
+        p, h = clean_statements()
+        h["callbacks"][0]["state"] = "failed"
+        self.assertIn("callback_provider_terminal_conflict", anomaly_codes(p, h))
+
+    def test_same_v3_slot_successful_twice_after_retry_blocks(self):
+        p, h = clean_statements()
+        p["tasks"].append({**p["tasks"][0], "request_id": "retry-request",
+                           "provider_task_id": "retry-task"})
+        p["events"].append({**p["events"][0], "request_id": "retry-request",
+                            "provider_task_id": "retry-task", "event_id": "retry-charge"})
+        h["attempts"].append({**h["attempts"][0], "request_id": "retry-request",
+                              "provider_task_id": "retry-task"})
+        h["ledger_events"].append({**h["ledger_events"][0],
+                                   "request_id": "retry-request", "event_key": "retry-wallet"})
+        h["callbacks"].append({**h["callbacks"][0], "request_id": "retry-request",
+                               "provider_task_id": "retry-task",
+                               "callback_event_id": "retry-callback"})
+        self.assertIn("multiple_successful_paid_attempts_per_slot", anomaly_codes(p, h))
+
+    def test_empty_statements_never_masquerade_as_reconciled(self):
+        p, h = clean_statements()
+        p["tasks"] = []
+        p["events"] = []
+        h["attempts"] = []
+        h["ledger_events"] = []
+        h["callbacks"] = []
+        self.assertIn("empty_internal_statement", anomaly_codes(p, h))
+
+    def test_malformed_status_containers_do_not_leak_traceback(self):
+        p, h = clean_statements()
+        p["tasks"][0]["state"] = ["succeeded"]
+        with self.assertRaises(BadEvidence):
+            reconcile(p, h)
+
     def test_cli_refuses_world_readable_evidence_and_does_not_replace_reports(self):
         p, h = clean_statements()
         with tempfile.TemporaryDirectory() as td:
