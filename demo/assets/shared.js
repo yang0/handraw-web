@@ -4651,7 +4651,7 @@
               btn.innerHTML = (OAUTH_ICONS[provider.id] || "") + "<span>解绑 " + provider.title + "</span>";
               btn.onclick = async () => {
                 if (!pw.value) { socialStatus.textContent = "请输入当前密码后再解绑"; pw.focus(); return; }
-                if (!window.confirm("解除绑定后将无法用 " + provider.title + " 登录。确定继续吗？")) return;
+                if (!await window.HandrawDialogs.confirm("解除绑定后将无法用 " + provider.title + " 登录。确定继续吗？")) return;
                 btn.disabled = true;
                 try {
                   await apiJson("/api/auth/" + provider.id + "/unlink",
@@ -4702,7 +4702,7 @@
       const pwInput = formEl.querySelector("#acc-session-password");
       const status = formEl.querySelector("#acc-session-feedback");
       if (!pwInput.value) { status.textContent = "请输入当前密码后再继续"; pwInput.focus(); return; }
-      if (!window.confirm("确认退出其他所有浏览器登录会话？当前浏览器将保持登录。")) return;
+      if (!await window.HandrawDialogs.confirm("确认退出其他所有浏览器登录会话？当前浏览器将保持登录。")) return;
       revokeBtn.disabled = true;
       status.textContent = "正在撤销其他登录会话…";
       try {
@@ -5001,7 +5001,7 @@
         btn.onclick = async () => {
           const tid = btn.getAttribute("data-rep-hide");
           const ttype = btn.getAttribute("data-rep-type");
-          if (!confirm(`确定要违规下架该内容 [${tid}] 吗？`)) return;
+          if (!await window.HandrawDialogs.confirm(`确定要违规下架该内容 [${tid}] 吗？`)) return;
           try {
             if (App.state && App.state.serverBacked) {
               if (ttype === "work" || ttype === "作品") {
