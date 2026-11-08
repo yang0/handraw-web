@@ -739,13 +739,13 @@ def cancel_unsubmitted_web_slots(
         skipped: list[int] = []
         now = _now()
         for pos in sorted(set(positions)):
-            # Queued/running/success tasks have been submitted; the client
-            # cannot honestly cancel them by closing a dialog.
+            # Any gateway ledger row (including failed/cancelled attempts)
+            # proves an execution may have been submitted. Never rewrite it as
+            # an unsubmitted cancel: that would erase real failure/billing facts.
             gateway = tx.execute(
                 """
                 SELECT 1 FROM studio_generations
                 WHERE user_id=? AND batch_id=? AND batch_index=?
-                  AND status IN ('queued','running','success')
                 LIMIT 1
                 """,
                 (uid, batch_id, pos),
@@ -754,7 +754,10 @@ def cancel_unsubmitted_web_slots(
                 "SELECT status FROM generation_items WHERE run_id=? AND position=?",
                 (run["id"], pos * 1000),
             ).fetchone()
-            if gateway or (existing and existing["status"] == "success"):
+            if existing and existing["status"] == "cancelled":
+                cancelled.append(pos)  # idempotent replay, not a new cancellation
+                continue
+            if gateway or (existing and existing["status"] != "pending"):
                 skipped.append(pos)
                 continue
             tx.execute(
@@ -764,7 +767,7 @@ def cancel_unsubmitted_web_slots(
                 VALUES (?, ?, ?, 'cancelled', NULL, '', ?, ?)
                 ON CONFLICT(run_id,position) DO UPDATE SET
                     status='cancelled',media_id=NULL,error_code='',updated_at=excluded.updated_at
-                WHERE generation_items.status <> 'success'
+                WHERE generation_items.status = 'pending'
                 """,
                 (_stable_id("item", run["id"], pos * 1000),
                  run["id"], pos * 1000, now, now),
