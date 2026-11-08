@@ -41,6 +41,25 @@ STUDIO_PROJECT_MIGRATIONS = [
             PRIMARY KEY (user_id,project_id,idempotency_key)
         );
     """),
+    (102, "102_studio_graphpatch_reviews", """
+        CREATE TABLE IF NOT EXISTS studio_graphpatch_reviews (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            project_id TEXT NOT NULL REFERENCES studio_projects(id),
+            base_revision INTEGER NOT NULL,
+            graph_revision INTEGER NOT NULL,
+            before_graph_json TEXT NOT NULL,
+            operations_json TEXT NOT NULL,
+            preview_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending','applied','reverted')),
+            applied_revision INTEGER,
+            response_json TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_studio_graphpatch_owner
+          ON studio_graphpatch_reviews(user_id,project_id,created_at);
+    """),
 ]
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{4,100}$")
