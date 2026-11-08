@@ -366,17 +366,17 @@ class SkillPostgresS3Journey112(unittest.TestCase):
                     "token": self.publisher, "scopes": ["publish"],
                     "user": {"username": self.owner["username"]},
                 })
-                for count in (1, 5):
+                for count, image_kind in ((1, "png"), (5, "png"), (1, "gif")):
                     names = []
                     originals = []
                     for i in range(count):
-                        filename = root / f"skill-{count}-{i}.png"
+                        filename = root / f"skill-{count}-{i}.{image_kind}"
                         Image.new("RGB", (16, 20), (
                             31 + i * 25, 67, 155 - i * 13)).save(
                                 filename, format="PNG")
                         names.append(filename)
                         originals.append(filename.read_bytes())
-                    prompt = root / f"request-{count}.txt"
+                    prompt = root / f"request-{image_kind}-{count}.txt"
                     prompt.write_text(f"Skill CLI 跨仓库 {count} 图验证", encoding="utf-8")
                     external = str(uuid.uuid4())
                     args = ["history", "record", "--run-id", external,
