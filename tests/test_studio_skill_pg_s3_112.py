@@ -90,6 +90,7 @@ class SkillPostgresS3Journey112(unittest.TestCase):
         cls.owner_cookie = f"{SESSION_COOKIE_NAME}={owner_cookie}"
         cls.other_cookie = f"{SESSION_COOKIE_NAME}={other_cookie}"
         cls.publisher = cls.create_token(int(cls.owner["id"]), ["publish"])
+        cls.reader = cls.create_token(int(cls.owner["id"]), ["library"])
         cls.other_publisher = cls.create_token(int(cls.other["id"]), ["publish"])
         cls.server = create_channel_server(
             0, "main", cls.db, host="127.0.0.1", demo_mode=False)
@@ -312,7 +313,7 @@ class SkillPostgresS3Journey112(unittest.TestCase):
         # The original owner may still read private history, but the
         # published square must not expose a hidden work.
         status, history, _ = self.request(
-            "GET", path, token=self.publisher)
+            "GET", path, token=self.reader)
         self.assertEqual(status, 200)
         record = next(x for x in history["items"] if x["id"] == run["id"])
         self.assertEqual(record["workStatus"], "hidden")
