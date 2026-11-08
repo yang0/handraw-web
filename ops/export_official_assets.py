@@ -44,7 +44,7 @@ def main() -> None:
     conn.row_factory = sqlite3.Row
     try:
         official_assets = conn.execute(
-            "SELECT * FROM catalog_assets WHERE source_type = 'official' ORDER BY code ASC"
+            "SELECT * FROM catalog_assets WHERE source_type = 'official' AND status = 'published' ORDER BY code ASC"
         ).fetchall()
     finally:
         conn.close()
@@ -105,6 +105,13 @@ def main() -> None:
     exported_styles: list[dict[str, Any]] = []
     exported_layouts: list[dict[str, Any]] = []
     layout_prompts: dict[str, str] = {}
+    # A release artifact must not silently retain assets from an older export.
+    # In particular, a newly hidden/unapproved resource must never survive in
+    # an existing directory and be mistakenly published to Skill.
+    if args.out.is_symlink() or (args.out.exists() and
+                                   (not args.out.is_dir() or any(args.out.iterdir()))):
+        print("拒绝导出：目标必须是新的空目录，禁止覆盖旧发布包", file=sys.stderr)
+        sys.exit(2)
     out_dir = args.out.resolve()
 
     for row in official_assets:
