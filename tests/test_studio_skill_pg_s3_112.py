@@ -371,9 +371,18 @@ class SkillPostgresS3Journey112(unittest.TestCase):
                     originals = []
                     for i in range(count):
                         filename = root / f"skill-{count}-{i}.{image_kind}"
-                        Image.new("RGB", (16, 20), (
-                            31 + i * 25, 67, 155 - i * 13)).save(
-                                filename, format="PNG")
+                        if image_kind == "gif":
+                            frames = [
+                                Image.new("RGB", (8, 8), (255, 50, 40)),
+                                Image.new("RGB", (8, 8), (40, 50, 255)),
+                            ]
+                            frames[0].save(filename, format="GIF", save_all=True,
+                                           append_images=frames[1:],
+                                           duration=[100, 150], loop=0)
+                        else:
+                            Image.new("RGB", (16, 20), (
+                                31 + i * 25, 67, 155 - i * 13)).save(
+                                    filename, format="PNG")
                         names.append(filename)
                         originals.append(filename.read_bytes())
                     prompt = root / f"request-{image_kind}-{count}.txt"
