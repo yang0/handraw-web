@@ -6,6 +6,7 @@ running postgres:17 GitHub Actions service to avoid local client version skew.
 """
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -129,6 +130,9 @@ class RealPgBackupRestore112(unittest.TestCase):
                 self.assertGreater(result["archiveBytes"],512)
                 self.assertGreaterEqual(result["rowCounts"]["users"],1)
                 self.assertGreaterEqual(result["rowCounts"]["ledgers"],2)
+                evidence=Path(__file__).resolve().parents[1]/"artifacts"/"studio-112-pg-backup-report.json"
+                evidence.parent.mkdir(parents=True,exist_ok=True)
+                evidence.write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
                 self.assertEqual(archive.stat().st_mode & 0o077,0,
                                  "backup must remain owner-readable only")
                 with psycopg.connect(rollback_dsn) as c:
