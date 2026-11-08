@@ -10398,6 +10398,8 @@
                         </div>
                         <div style="display:flex;gap:6px;">
                           <a class="btn btn-sm" href="${esc(it.imageUrl)}" download="handraw-output.webp" style="flex:1;text-align:center;">下载</a>
+                          <button type="button" class="btn btn-sm" data-disp-reference="${esc(n.id)}" data-slot="0">作为参考</button>
+                          <button type="button" class="btn btn-sm" data-disp-variant="${esc(n.id)}" data-slot="0">派生变体</button>
                         </div>
                       </div>
                     `
@@ -11269,40 +11271,69 @@
         void runOutputControlNode(parent.id,{onlyItemIdx:index});
       };
     });
+    function resolveOwnedResultSlot(display,index){
+      if(!display||!Number.isInteger(index)||index<0)return null;
+      const upstream=getNodeById(display.data?.sourceNodeId);
+      const projection=upstream?getCanvasRunProjection(upstream):null;
+      const slot=projection?.slots?.[index];
+      if(slot?.status!=="success"||!slot.mediaId||!CanvasUI.mediaUrl(slot.imageUrl))
+        return null;
+      return {mediaId:String(slot.mediaId),imageUrl:CanvasUI.mediaUrl(slot.imageUrl)};
+    }
+    function spawnResultReference(display,index,reference){
+      if(!reference)return null;
+      const asset=spawnShelfItem({kind:"asset"},
+        {x:display.x+(display.w||340)+60,y:display.y+55},display.id);
+      if(!asset)return null;
+      asset.data.items=[{id:reference.mediaId,assetUid:reference.mediaId,
+        mediaId:reference.mediaId,image:reference.imageUrl,
+        name:"生成结果参考 #"+(index+1),cat:"other",source:"private"}];
+      markActiveTabDirty();persistOpenTabs();fullRenderCanvas();
+      return asset;
+    }
     root.querySelectorAll("[data-disp-variant]").forEach(btn=>{
       btn.onclick=e=>{
         e.stopPropagation();
         const disp=getNodeById(btn.getAttribute("data-disp-variant"));
         if(!disp)return;
-        const created=spawnShelfItem({kind:"output_control"},
-          {x:disp.x+(disp.w||340)+100,y:disp.y+30},disp.id);
-        if(created){
-          // Execution edge is explicit and owned by Graph; a result card is not a visual note.
-          pushUndo();ensureEdge(disp.id,created.id);
-          fullRenderCanvas();persistOpenTabs();
-          toast("已派生新的生成分支，请检查参数后手动运行");
+        const slotAttr=btn.getAttribute("data-slot");
+        const index=slotAttr!==null?Number(slotAttr):0;
+        const isGroup=disp.data?.kind==="batch_gallery";
+        if(isGroup){
+          const ref=resolveOwnedResultSlot(disp,index);
+          if(!ref){
+            toast("该槽位需要先有服务端确认的成图，才能独立派生变体");
+            return;
+          }
+          const asset=spawnResultReference(disp,index,ref);
+          if(!asset)return;
+          const ctrl=spawnShelfItem({kind:"output_control"},
+            {x:asset.x+(asset.w||340)+110,y:asset.y+20},asset.id);
+          if(!ctrl)return;
+          pushUndo();ensureEdge(asset.id,ctrl.id);
+          markActiveTabDirty();fullRenderCanvas();persistOpenTabs();
+        }else{
+          const ctrl=spawnShelfItem({kind:"output_control"},
+            {x:disp.x+(disp.w||340)+100,y:disp.y+30},disp.id);
+          if(!ctrl)return;
+          pushUndo();ensureEdge(disp.id,ctrl.id);
+          markActiveTabDirty();fullRenderCanvas();persistOpenTabs();
         }
+        toast("已派生该图片的独立分支，检查参数后可手动运行");
       };
     });
     root.querySelectorAll("[data-disp-reference]").forEach(btn=>{
       btn.onclick=e=>{
         e.stopPropagation();
-        const display=getNodeById(btn.getAttribute("data-disp-reference"));
+        const disp=getNodeById(btn.getAttribute("data-disp-reference"));
         const index=Number(btn.getAttribute("data-slot")||0);
-        const item=display?.data?.items?.[index];
-        const url=CanvasUI.mediaUrl(item?.imageUrl);
-        const mediaId=item?.mediaId||item?.assetUid;
-        if(!url||!mediaId){
-          toast("此结果缺少受控媒体 ID，不能直接添加为参考；请通过我的图库选择授权素材");
+        const reference=resolveOwnedResultSlot(disp,index);
+        if(!reference){
+          toast("此结果缺少已确认的受控媒体 ID，请先通过我的图库选择授权素材");
           return;
         }
-        const asset=spawnShelfItem({kind:"asset"},{x:display.x-120,y:display.y+360});
-        if(!asset)return;
-        asset.data.items=[{id:String(mediaId),assetUid:String(mediaId),
-          mediaId:String(mediaId),image:url,name:"生成结果参考 #"+(index+1),
-          cat:"other",source:"private"}];
-        markActiveTabDirty();fullRenderCanvas();persistOpenTabs();
-        toast("已作为项目参考素材添加；生成前仍须通过服务端素材授权校验");
+        const asset=spawnResultReference(disp,index,reference);
+        if(asset)toast("已添加该槽位的受控参考素材；生成前仍须通过服务端资源授权校验");
       };
     });
 
