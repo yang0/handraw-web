@@ -111,7 +111,10 @@
         if(byId.get(p).type==="output_control") controls.add(p);
         for(const ancestor of incoming.get(p))pending.push(ancestor);
       }
-      return [...controls].filter(x=>chosen.includes(x));
+      // Keep ALL ancestors, even when this is a partial run. The runner
+      // must reject a target whose required Control was not selected rather
+      // than silently treating missing upstream outputs as ready.
+      return [...controls];
     }
     for(const id of chosen)dependencies[id]=upstreamControlIds(id);
     const nodeNames={};
@@ -235,7 +238,9 @@
       }catch(err){
         if(signal?.aborted || err?.code==="cancelled")throw err;
         const status=Number(err?.status||err?.httpStatus||0);
-        const transient=RETRYABLE.has(status) || (err?.transient===true);
+        const transient=RETRYABLE.has(status) || err?.transient===true ||
+          err?.name==="TimeoutError" ||
+          ["ETIMEDOUT","ECONNRESET","EAI_AGAIN"].includes(err?.code);
         if(!transient)throw err;
         breaker?.fail(key);
         if(attempt>=attempts)throw err;

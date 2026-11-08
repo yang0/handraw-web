@@ -54,6 +54,10 @@ async function suite(){
   assert.deepEqual(plan.dependencies.a,[]);
   assert.deepEqual(plan.dependencies.z,[]);
   assert.deepEqual(plan.dependencies.b,["a"]);
+  const partial=DAG.compile(graph,{targets:["b"]});
+  await assert.rejects(DAG.run(partial,async()=>true),
+    e=>e.code==="target_missing_dependency",
+    "A partial run may not bypass an unselected upstream Control");
   assert.deepEqual(new Set(plan.controls),new Set(["a","b","z"]));
   assert.ok(plan.order.indexOf("a") < plan.order.indexOf("b"));
   const pool=DAG.makeSharedPool({globalLimit:2,userLimit:2,gatewayLimit:2,modelLimit:1});
@@ -172,6 +176,16 @@ async function suite(){
   now=6001;assert.doesNotThrow(()=>br.check("same"));
   br.success("same");
   assert.equal(br.state("same").open,false);
+  // Ambiguous timeout is retryable only with the exact same billed identity.
+  const timeoutIds=[];
+  const timeoutResult=await DAG.retryTransient(async ({attempt,requestId})=>{
+    timeoutIds.push(requestId);
+    if(attempt===1)throw Object.assign(new Error("timeout"),{
+      name:"TimeoutError",code:"ETIMEDOUT"});
+    return "recovered";
+  },{requestId:"run120-timeout",maxAttempts:2,baseMs:1,sleep:async()=>{}});
+  assert.equal(timeoutResult,"recovered");
+  assert.deepEqual(timeoutIds,["run120-timeout","run120-timeout"]);
   // No retry for client validation / authentication / exhausted credit errors.
   let nonRetry=0;
   await assert.rejects(DAG.retryTransient(async()=>{nonRetry++;throw Object.assign(new Error("bad"),{status:400})},
