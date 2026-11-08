@@ -30,7 +30,7 @@ def validate() -> dict:
     yaml_text = WORKFLOW.read_text(encoding="utf-8")
     assert matrix["issue"] == 112 and matrix["schema_version"] == 1
     assert set(matrix["stages"]) == REQUIRED_STAGES
-    jobs = set(re.findall(r"^  ([a-z][a-z0-9-]+):\\s*$", yaml_text, re.M))
+    jobs = set(re.findall(r"^  ([a-z][a-z0-9-]+):\s*$", yaml_text, re.M))
     assert REQUIRED_JOBS <= jobs, f"Missing CI jobs: {REQUIRED_JOBS - jobs}"
     assert "shard: [0, 1, 2, 3, 4, 5]" in yaml_text
     assert "ops/ci_python_shard.py --shards 6 --shard" in yaml_text
