@@ -377,8 +377,7 @@
       if (!button || busy) return;
       const found = items.find(function (i) { return i.uid === button.dataset.galleryDelete; });
       if (!found) return;
-      if (typeof window.confirm === "function" &&
-          !window.confirm("删除素材「" + (found.name || "未命名") + "」？这会同步删除状态到 Skill。")) return;
+      if (!await window.HandrawDialogs.confirm("删除素材「" + (found.name || "未命名") + "」？这会同步删除状态到 Skill。")) return;
       busy = true;
       button.disabled = true;
       try {
