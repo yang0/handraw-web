@@ -13671,6 +13671,44 @@
 
   // Quick-create shares the canvas graph and the existing guarded task runner.
   let quickBusy = null;
+  // Read-only projection from owner-scoped V3 Run and RunItems.
+  // A local display status is never the successful billing/media count.
+  const quickRunModels = new Map();
+  function getQuickRunProjection(parts) {
+    const runId=String(parts?.ctrl?.data?.runId||"");
+    const api=window.HandrawQuickSpec;
+    if(!runId||!api?.projectRun||!App.state?.loggedIn)return null;
+    const key=activeCacheScope+":"+runId, now=Date.now();
+    const previous=quickRunModels.get(key);
+    if(previous?.loading||previous?.model?.isTerminal||
+       (previous&&now-previous.requestedAt<5000))return previous?.model||null;
+    const entry={requestedAt:now,loading:true,model:previous?.model||null};
+    quickRunModels.set(key,entry);
+    const scope=activeCacheScope,epoch=cacheScopeEpoch;
+    fetch("/api/studio/runs/"+encodeURIComponent(runId),{
+      credentials:"include"
+    }).then(async response=>{
+      const data=await response.json();
+      if(!response.ok||!data.ok)throw new Error(data?.error||"run_read_failed");
+      return api.projectRun(data);
+    }).then(model=>{
+      if(scope!==activeCacheScope||epoch!==cacheScopeEpoch||
+         quickRunModels.get(key)!==entry)return;
+      entry.model=model;
+      if(CS.stageView==="quick"&&parts.ctrl.data.runId===runId)renderQuickStart();
+      if(!model.isTerminal)setTimeout(()=>{
+        if(scope===activeCacheScope&&epoch===cacheScopeEpoch&&
+           CS.stageView==="quick"&&parts.ctrl.data.runId===runId)
+          renderQuickStart();
+      },5200);
+    }).catch(error=>{
+      if(scope!==activeCacheScope||epoch!==cacheScopeEpoch)return;
+      entry.error=String(error?.message||error);
+      // Network uncertainty is not a remote cancellation or refund.
+      if(CS.stageView==="quick")renderQuickStart();
+    }).finally(()=>{entry.loading=false});
+    return entry.model;
+  }
 
   function generationCostText(count) {
     const qty = count != null && Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : null;
@@ -13868,6 +13906,15 @@
     ensureQuickTab();
     const p = getQuickParts();
     if (!p) return;
+    const adapter=typeof window!=="undefined"?window.HandrawQuickSpec:null;
+    if(adapter?.fork) {
+      // #100 resolved selected media and source; do not fetch first/cover.
+      adapter.fork(p,draft);
+      markActiveTabDirty();
+      persistOpenTabs();
+      if(CS.stageView==="quick")renderQuickStart();
+      return;
+    }
     const sd = p.skill.data;
     const td = p.text.data;
     const cd = p.ctrl.data;
@@ -17508,6 +17555,7 @@
         } else {
           ast.data.items = items || [];
         }
+        if(window.HandrawQuickSpec)window.HandrawQuickSpec.setAssets(p,ast.data.items);
         markDirtyAndRender();
       };
 
@@ -17524,9 +17572,14 @@
         results,
         busy,
         statusText,
-        forkSource: CS.forkGenerationSource
+        forkSource: CS.forkGenerationSource,
+        runProjection: getQuickRunProjection(p),
+        localBusy: isCurrentBusy(),
+        pendingCloud: displays.some(d=>d.data?.pendingTaskId ||
+          d.data?.pendingRequestId || Object.keys(d.data?.pendingRequestIds||{}).length)
       }, {
         isBusy: isCurrentBusy,
+        isUnlocked: (id,item) => S.isUnlocked(id,item),
         cancel: () => {
           const stopped = cancelActiveBatchGeneration(p.ctrl.id);
           if (stopped) {
@@ -17616,9 +17669,9 @@
             if (typeof onSelect === "function") {
               openSkillFieldPickerModal(p.skill, targetField, {
                 current: currentId,
-                onPick: (id) => {
+                onPick: (id, ref) => {
                   if (!CS.graph.nodes.includes(p.skill)) return;
-                  onSelect(id);
+                  onSelect(id, ref);
                 }
               });
             } else {
