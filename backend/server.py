@@ -1226,6 +1226,50 @@ def resolve_local_ref_image(
     return {"b64_json": base64.b64encode(raw_bytes).decode("ascii"), "mime_type": mime}
 
 
+
+def preflight_generation_references(
+    body: dict[str, Any],
+    resolve_one: Callable[[str], dict[str, str] | None],
+) -> list[dict[str, str]]:
+    """Resolve all user-selected references before a charge/reservation.
+
+    An inaccessible private media URL, deleted file, unsupported blob: preview
+    or invalid data-image must NEVER turn into a billable request with silently
+    omitted references. Caller supplies an owner-scoped resolve_one closure;
+    reusable across quick, series and canvas generation.
+    """
+    from .services import ServiceError
+
+    raw = body.get("refImages") or []
+    if not isinstance(raw, list) or len(raw) > 6:
+        raise ServiceError(
+            "参考素材最多选择 6 张，请重新选择",
+            status=400, code="invalid_generation_references",
+        )
+    custom = body.get("customRefImg")
+    refs = ([custom] if custom else []) + raw
+    if len(refs) > 7:
+        raise ServiceError(
+            "参考素材超过数量上限",
+            status=400, code="invalid_generation_references",
+        )
+    out: list[dict[str, str]] = []
+    for value in refs:
+        if not isinstance(value, str) or not value.strip():
+            raise ServiceError(
+                "参考素材格式不合法，请重新选择",
+                status=400, code="invalid_generation_reference",
+            )
+        resolved = resolve_one(value)
+        if not resolved:
+            raise ServiceError(
+                "参考素材不存在、已失效或无权访问；未扣费也未提交任务",
+                status=403, code="generation_reference_forbidden",
+            )
+        out.append(resolved)
+    return out
+
+
 def build_export_zip_package(
     body: dict[str, Any],
     db: Database | None = None,
@@ -3568,6 +3612,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 return
 
             user = self._current_user(required=True)
+            # Validate real media owner/access before reserving wallet quota.
+            # Preserve decoded bytes to avoid decoding large data images twice.
+            validated_refs = preflight_generation_references(
+                body,
+                lambda image: resolve_local_ref_image(image, db=self.db, user=user),
+            )
             prep = prepare_cloud_generation(self.db, user, body)
             gen_id = prep["genId"]
             submitted = False
@@ -3651,15 +3701,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     resolved = resolve_local_ref_image("/images/characters/CH-001.webp", db=self.db, user=user)
                     if resolved:
                         refs.append(resolved)
-                if custom_ref:
-                    resolved = resolve_local_ref_image(custom_ref, db=self.db, user=user)
-                    if resolved:
-                        refs.append(resolved)
-                if isinstance(ref_images, list):
-                    for r_str in ref_images[:6]:
-                        resolved = resolve_local_ref_image(str(r_str), db=self.db, user=user)
-                        if resolved:
-                            refs.append(resolved)
+                refs.extend(validated_refs)
 
                 grow = self.db.get_conn().execute(
                     "SELECT prompt FROM studio_generations WHERE id = ?", (gen_id,)
