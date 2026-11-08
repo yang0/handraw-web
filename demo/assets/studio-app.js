@@ -40,7 +40,10 @@
   let activeCacheScope = "guest";
   let cacheScopeEpoch = 0;
   let _workflowAutoSaveTimer = null;
+  let _projectAutoSaveTimer = null;
   const WORKFLOW_AUTO_SAVE_DELAY_MS = 1200;
+  const PROJECT_AUTO_SAVE_DELAY_MS = 1600;
+  const ProjectClient = window.HandrawStudioProjectSync?.createClient() || null;
   let _workspaceHydrationController = null;
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
@@ -189,6 +192,10 @@
     if (_workflowAutoSaveTimer) {
       clearTimeout(_workflowAutoSaveTimer);
       _workflowAutoSaveTimer = null;
+    }
+    if (_projectAutoSaveTimer) {
+      clearTimeout(_projectAutoSaveTimer);
+      _projectAutoSaveTimer = null;
     }
     _articlesSyncVersion = 0;
     _articleCloudBases.clear();
@@ -1033,6 +1040,13 @@
         blueprint: t.blueprint,
         dirty: Boolean(t.dirty),
         savedId: t.savedId || null,
+        projectId: t.projectId || null,
+        projectRevision: Number(t.projectRevision || 0),
+        projectSaveState: t.projectSaveState || "",
+        projectPending: t.projectPending || null,
+        projectError: t.projectError || "",
+        projectRemoteRevision: Number(t.projectRemoteRevision || 0),
+        editRevision: Number(t.editRevision || 0),
         vx: t.vx,
         vy: t.vy,
         vk: t.vk,
@@ -1298,12 +1312,121 @@
     }, WORKFLOW_AUTO_SAVE_DELAY_MS);
   }
 
+  function currentProjectSnapshot(tab) {
+    const graph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
+    const blueprint = String(graph?.blueprint || tab.blueprint || "");
+    return {
+      kind: ["series", "xhs", "loop_100", "ip_story", "loop", "style_ab", "omnimedia"].includes(blueprint)
+        ? "series" : "image",
+      // Existing form UI still edits the SAME Graph directly. Until #124
+      // switches it to true Spec/Plan authority, store Graph as the single
+      // authoritative draft. Never maintain a second writable Spec copy.
+      authority: "graph",
+      title: tab.title || "未命名创作",
+      draft: {
+        graph: cloneGraph(graph),
+        activeView: CS.stageView === "canvas" ? "canvas" : "simple"
+      }
+    };
+  }
+
+  function projectStatusText(tab) {
+    if (!App.state?.serverBacked || !App.state?.loggedIn) return "仅本机草稿";
+    switch (tab?.projectSaveState) {
+      case "saving": return "项目同步中…";
+      case "synced": return "项目已云端保存";
+      case "conflict": return "项目冲突 · 保留副本";
+      case "error": return tab.projectError === "project_media_upload_required"
+        ? "请先上传本地图片" : "项目同步失败 · 重试";
+      case "local_only": return "项目待同步";
+      default: return "保存云端项目";
+    }
+  }
+
+  function updateProjectStatusIndicator() {
+    const btn = DOM.bottomRight?.querySelector("#bl-save-project");
+    if (!btn) return;
+    const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
+    btn.textContent = projectStatusText(tab);
+    btn.disabled = tab?.projectSaveState === "saving";
+    btn.title = tab?.projectSaveState === "conflict"
+      ? "云端项目已被其他标签更新；点击保留本机修改为新项目，不覆盖远端"
+      : "项目自动保存到云端，点击可立即同步；与「工作流模板保存」相互独立";
+  }
+
+  async function saveActiveProject(tab = CS.tabs.find((t) => t.id === CS.activeTabId)) {
+    if (!ProjectClient || !tab || isArticleTab(tab)) return false;
+    if (!App.state?.serverBacked || !App.state?.loggedIn) {
+      tab.projectSaveState = "local_only";
+      persistOpenTabs();
+      updateProjectStatusIndicator();
+      return false;
+    }
+    if (tab.projectSaveState === "conflict") {
+      updateProjectStatusIndicator();
+      return false;
+    }
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const callback = () => {
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      persistOpenTabs();
+      updateProjectStatusIndicator();
+    };
+    const result = await ProjectClient.flush(tab, currentProjectSnapshot(tab), callback);
+    if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return false;
+    if (result?.needsSave && CS.activeTabId === tab.id) {
+      scheduleProjectAutoSave(tab);
+    }
+    return Boolean(result?.ok);
+  }
+
+  function scheduleProjectAutoSave(tab = CS.tabs.find((t) => t.id === CS.activeTabId)) {
+    if (_projectAutoSaveTimer) clearTimeout(_projectAutoSaveTimer);
+    _projectAutoSaveTimer = null;
+    if (!ProjectClient || !tab || isArticleTab(tab) || tab.projectSaveState === "conflict") return;
+    const tabId = tab.id, scope = activeCacheScope, epoch = cacheScopeEpoch;
+    _projectAutoSaveTimer = setTimeout(() => {
+      _projectAutoSaveTimer = null;
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      const current = CS.tabs.find((t) => t.id === tabId);
+      if (current && (current.projectSaveState !== "synced" || current.projectPending)) {
+        void saveActiveProject(current);
+      }
+    }, PROJECT_AUTO_SAVE_DELAY_MS);
+  }
+
+  async function copyConflictedProject(tab) {
+    if (!ProjectClient || !tab || tab.projectSaveState !== "conflict") return;
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const changedAt = Number(tab.editRevision || 0);
+    try {
+      const snapshot = currentProjectSnapshot(tab);
+      await ProjectClient.copyConflict(tab, snapshot.draft, () => {
+        if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+        persistOpenTabs();
+        updateProjectStatusIndicator();
+      });
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      if (Number(tab.editRevision || 0) > changedAt) {
+        tab.projectSaveState = "local_only";
+        scheduleProjectAutoSave(tab);
+      }
+      toast("已保留本机修改为新的云端项目，原项目未被覆盖");
+    } catch (error) {
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      toast("保留副本失败：本机草稿未删除，请稍后重试");
+    }
+  }
+
   function markActiveTabDirty() {
     const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
     if (cur) {
       cur.dirty = true;
       cur.editRevision = Number(cur.editRevision || 0) + 1;
+      if (cur.projectSaveState !== "conflict") cur.projectSaveState = "local_only";
       scheduleWorkflowAutoSave();
+      scheduleProjectAutoSave(cur);
+      updateProjectStatusIndicator();
     }
   }
 
