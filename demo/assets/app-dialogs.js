@@ -5,7 +5,7 @@
 (function (global) {
   "use strict";
   if (global.HandrawDialogs) return;
-  const CSS = \`
+  const CSS = `
 .hw-app-dialog-backdrop{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;background:rgba(15,23,42,.52);padding:20px;box-sizing:border-box}
 .hw-app-dialog{box-sizing:border-box;width:min(440px,100%);max-height:min(85vh,720px);overflow:auto;border-radius:16px;padding:23px 24px 20px;background:var(--hw-surface,#fff);color:var(--hw-text,#1c2430);box-shadow:0 18px 70px rgba(0,0,0,.24);font:inherit}
 .hw-app-dialog h2{font-size:18px;line-height:1.4;margin:0 0 12px;font-weight:650}
@@ -17,7 +17,7 @@
 .hw-app-dialog-actions button:focus-visible,.hw-app-dialog input:focus-visible{outline:3px solid #7fa8f6;outline-offset:2px}
 .hw-app-notice{position:fixed;right:18px;bottom:18px;z-index:2147483001;max-width:min(440px,calc(100vw - 36px));padding:13px 18px;border-radius:10px;background:#202e42;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);font:14px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}
 @media(max-width:480px){.hw-app-dialog{padding:20px 16px}.hw-app-dialog-actions button{flex:1}}
-\`;
+`;
   function ensureCss() {
     if (document.getElementById("hw-app-dialog-css")) return;
     const sheet = document.createElement("style");
