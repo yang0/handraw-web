@@ -22,6 +22,34 @@ const loop={id:"loop-series-123",type:"loop",data:{
   loopMode:"prompts",batchLayoutMode:"fixed",batchCount:6,batchConcurrency:4,
   promptListText:"封面\n城市清晨\n咖啡\n街头花店\n落日\n尾声",
   batchRows:[]}};
+// Legacy fixed-mode tabs can carry hidden AI rows and reference overrides.
+// First import must preserve those, even though text lines are active.
+const legacyHidden={id:"legacy-hidden",data:{
+  loopMode:"prompts",batchLayoutMode:"fixed",
+  promptListText:"春分\n江南",studio2SlotIds:["legacy-fixed-A","legacy-fixed-B"],
+  batchRows:[
+    {slotId:"legacy-fixed-A",theme:"春分",layout:"SC-022",
+      userOverrides:["layout"],lockedFields:["layout"],
+      assetItems:[{id:"legacy-owned",mediaId:"legacy-owned",image:"/uploads/ref.webp"}],
+      skipGlobalRefs:true},
+    {slotId:"legacy-fixed-B",theme:"江南",layout:"SC-021"}
+  ]
+}};
+const migrated=Series.read(legacyHidden);
+assert.equal(migrated.slots.length,2);
+assert.equal(migrated.slots[0].slotId,"legacy-fixed-A");
+assert.equal(migrated.slots[0].overrides.layout.id,"SC-022");
+assert.equal(migrated.slots[0].referenceMedia[0].mediaId,"legacy-owned");
+assert.equal(migrated.slots[0].skipGlobalRefs,true);
+assert.ok(migrated.slots[0].lockedFields.includes("layout"));
+assert.equal(migrated.slots[1].suggestedLayout,"SC-021");
+assert.equal(migrated.slots[1].overrides.layout,undefined,
+ "unlocked AI recommendation is dormant during fixed-mode import");
+Series.switchMode(legacyHidden,"ai");
+assert.equal(Series.read(legacyHidden).slots[0].slotId,"legacy-fixed-A");
+assert.equal(Series.read(legacyHidden).slots[0].overrides.layout.id,"SC-022");
+Series.switchMode(legacyHidden,"fixed");
+assert.equal(Series.read(legacyHidden).slots[0].referenceMedia[0].mediaId,"legacy-owned");
 const first=Series.read(loop);
 assert.equal(first.slots.length,6);
 assert.equal(new Set(first.slots.map(s=>s.slotId)).size,6);
@@ -197,6 +225,8 @@ assert.match(app,/slotId:sp\.slotId\|\|""/);
 assert.match(app,/studio2RunSnapshot=\{/);
 assert.match(app,/previousRunSnapshot\.executionGraph/);
 assert.match(app,/getBatchRunProjection\(bp\)/);
+assert.match(app,/delete node\.data\.studio2RunSnapshot/,
+ "Next run must not recursively embed previous frozen RunSnapshots");
 assert.match(app,/\/api\/studio\/runs\//);
 assert.match(app,/retryCancelled: resolvedOnlyIdx !== null/);
 assert.match(app,/batchTotal: plan\.specs\.length/);
@@ -205,5 +235,7 @@ assert.match(UI,/data-row-options-idx/);
 assert.match(UI,/data-row-copy-idx/);
 assert.match(UI,/data-row-up-idx/);
 assert.match(UI,/id="batch-candidates"/);
+assert.match(UI,/runSnapshot\.outputs\.find\(o=>o\.slotId===slotId&&/,
+ "Old generated images must follow stable slot identity after draft row reorder");
 assert.match(UI,/getSeries\(\)\.mergeAI/);
 console.log("Issue #123: 6 PlanSlots, 12 outputs, IDs/overrides/locks, fixed-AI roundtrips, LCS insert/reorder/clone, V3 3+2+1 and retry PASS");
