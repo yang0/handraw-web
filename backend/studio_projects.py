@@ -365,7 +365,6 @@ def _patch_graph_node(draft: dict[str, Any], tokens: list[str],
     if not isinstance(node.get("data"), dict):
         node["data"] = {}
     node["data"][field] = deepcopy(item["value"])
-    graph["revision"] = max(0, int(graph.get("revision", 0) or 0)) + 1
 
 
 def _apply_patch(project: dict[str, Any], patch: Any) -> dict[str, Any]:
@@ -373,6 +372,7 @@ def _apply_patch(project: dict[str, Any], patch: Any) -> dict[str, Any]:
     if not patches or len(patches) > 32:
         _fail("一次修改不能超过 32 个字段", code="invalid_project_patch")
     updated = deepcopy(project)
+    graph_node_patched = False
     for item in patches:
         if not isinstance(item, dict) or item.get("op") not in ("set", "remove"):
             _fail("仅支持 set/remove 字段修改", code="invalid_project_patch")
@@ -404,6 +404,7 @@ def _apply_patch(project: dict[str, Any], patch: Any) -> dict[str, Any]:
                   code="editor_authority_conflict")
         if root == "graph" and len(tokens) > 1 and tokens[1] == "nodesById":
             _patch_graph_node(draft, tokens, item)
+            graph_node_patched = True
             continue
         node = draft
         for segment in tokens[:-1]:
@@ -426,6 +427,10 @@ def _apply_patch(project: dict[str, Any], patch: Any) -> dict[str, Any]:
             if "value" not in item:
                 _fail("字段修改缺少 value", code="invalid_project_patch")
             node[last] = deepcopy(item["value"])
+    if graph_node_patched:
+        graph = updated["draft"]["graph"]
+        previous = project["draft"].get("graph") or {}
+        graph["revision"] = max(0, int(previous.get("revision", 0) or 0)) + 1
     # A view switch changes activeView/editorLayout, never authority. Once a
     # user edits Graph, an unchecked return to Spec would expose a second
     # writable source; explicit future migration must validate reversibility.
