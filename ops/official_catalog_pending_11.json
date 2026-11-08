@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "pendingSkillOnly": [
+    {
+      "code": "FG-025",
+      "kind": "style",
+      "name": "Perler Bead Pixel Art",
+      "sha256": "1044e1d628f2b2cf51cae3b64112e3a614effef80976a4163d3b675118844815",
+      "issue": 11,
+      "reason": "Skill-side style added before website official catalog review; candidate NOT public on Web and NOT approved for reverse import.",
+      "state": "awaiting_website_editorial_review"
+    }
+  ]
+}
