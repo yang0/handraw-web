@@ -16,6 +16,12 @@ from ops.migrate_pg_studio_projects import (
 
 
 class FakeCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
     def __init__(self, *, base=True, applied=False, partial=False, wrong_name=False):
         self.base = base
         self.applied = applied
