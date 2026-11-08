@@ -181,16 +181,16 @@ def _clean_data(node_type: str, field: str, value: Any, tx: Any,
             _error("graphpatch_invalid_count", "生成数量只允许 1–200")
         return value
     if field == "ratio":
-        if value not in _RATIOS:
+        if not isinstance(value, str) or value not in _RATIOS:
             _error("graphpatch_invalid_ratio", "画幅比例不在允许范围内")
         return value
     if field == "ratios":
         if not isinstance(value, list) or not 1 <= len(value) <= 6 or \
-                any(r not in _RATIOS for r in value):
+                any(not isinstance(r, str) or r not in _RATIOS for r in value):
             _error("graphpatch_invalid_ratio", "多平台画幅无效")
         return deepcopy(value)
     if field == "mode":
-        if value not in {"graphic-text", "series", "article-illust", "photo"}:
+        if not isinstance(value, str) or value not in {"graphic-text", "series", "article-illust", "photo"}:
             _error("graphpatch_invalid_mode", "生成模式无效")
         return value
     if not isinstance(value, str) or len(value) > (2000 if field == "text" else 200):
@@ -224,8 +224,8 @@ def _protected_result(node: dict[str, Any]) -> bool:
         return True
     data = node.get("data") or {}
     return any(k in data for k in ("runId", "requestId", "studio2RunSnapshot",
-                                  "items", "artifactId", "mediaId", "status",
-                                  "generationId", "runSnapshot"))
+                                  "items", "artifactId", "mediaId",
+                                  "generationId", "runSnapshot")) or            data.get("status") in {"running", "generating", "success", "partial"}
 
 
 def _candidate(graph: dict[str, Any], operations: Any, tx: Any,
@@ -636,3 +636,13 @@ def undo(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
                 "projectId": review["project_id"], "projectRevision": next_rev,
                 "graphRevision": prior["revision"], "graph": prior,
                 "chargedNow": False, "generationStarted": False}
+
+
+def list_styles(db: Any, user: dict[str, Any]) -> dict[str, Any]:
+    """Only public/authorized identities and display names, never recipes."""
+    _owner(user)
+    from .studio_ai_plan import _user_catalog
+    authorized = _user_catalog(db, user)
+    return {"ok": True, "styles": [
+        {"id": s["id"], "name": s["name"]} for s in authorized["style"]
+    ]}
