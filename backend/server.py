@@ -408,6 +408,9 @@ class GenerationReconciler:
         self.interval_seconds = max(5, min(120, configured))
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # Prevent a stuck gateway from flooding logs every 15 seconds.
+        # The durable reservation remains authoritative across restarts.
+        self._next_unconfirmed_warning_at = 0.0
 
     def reconcile_once(self, lease=None) -> int:
         cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -460,12 +463,15 @@ class GenerationReconciler:
                         datetime.now(timezone.utc)
                         - timedelta(minutes=RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES)
                     ):
-                        logger.warning(
-                            "worker=generation-reconciler phase=unconfirmed-task "
-                            "generation_id=%s age_over_minutes=%s "
-                            "action=manual-provider-ledger-reconciliation-required",
-                            generation_id, RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES,
-                        )
+                        now_monotonic = time.monotonic()
+                        if now_monotonic >= self._next_unconfirmed_warning_at:
+                            logger.warning(
+                                "worker=generation-reconciler phase=unconfirmed-task "
+                                "generation_id=%s age_over_minutes=%s "
+                                "action=manual-provider-ledger-reconciliation-required",
+                                generation_id, RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES,
+                            )
+                            self._next_unconfirmed_warning_at = now_monotonic + 900
                     continue
                 item = items[0] if isinstance(items[0], dict) else {}
                 actual_id = str(item.get("id") or lookup_id)
