@@ -66,7 +66,7 @@ class RealPgBackupRestore112(unittest.TestCase):
     def test_pg17_dump_restore_rollback_all_rows_exact(self):
         import psycopg
         from psycopg import sql
-        from psycopg.conninfo import make_conninfo
+        from urllib.parse import urlsplit, urlunsplit
         from backend.postgres_db import PostgresDatabase
         from backend.services import apply_wallet_delta, register_user
         from ops.bootstrap_postgres_v3 import bootstrap
@@ -82,9 +82,13 @@ class RealPgBackupRestore112(unittest.TestCase):
             for name in names:
                 conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
         try:
-            source_dsn=make_conninfo(admin,dbname=source)
-            restore_dsn=make_conninfo(admin,dbname=restore)
-            rollback_dsn=make_conninfo(admin,dbname=rollback)
+            def target_url(name):
+                parsed=urlsplit(admin)
+                return urlunsplit((parsed.scheme,parsed.netloc,"/"+name,
+                                   parsed.query,parsed.fragment))
+            source_dsn=target_url(source)
+            restore_dsn=target_url(restore)
+            rollback_dsn=target_url(rollback)
             with patch.dict(os.environ,{"HANDRAW_ALLOW_PG_BOOTSTRAP":"YES"}):
                 report=bootstrap(dsn=source_dsn,apply=True)
             self.assertTrue(report["created"])
