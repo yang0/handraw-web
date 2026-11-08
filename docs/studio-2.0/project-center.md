@@ -6,7 +6,7 @@ A single Project Center at /studio/?view=projects exposes cloud-saved Projects a
 
 Navigation presents 图片创作 / 系列创作 / 文章配图, an explicit 简洁编辑 / 画布 switch, then 项目中心 / 生图历史 / 工作流 as separate destinations. Existing entry=quick|batch|article|canvas, view=history|workflows, and fork/prefill links retain their original routes.
 
-The Project Center calls GET /api/studio/projects and GET /api/studio/projects/{id} using authenticated web sessions. The rendering contract resides in demo/assets/studio-project-center.js; remote project text is escaped rather than interpolated as trusted HTML. The Studio router and state owner remain demo/assets/studio-app.js.
+The Project Center calls GET /api/studio/projects?q={text}&limit=40&cursor={token} and GET /api/studio/projects/{id} using authenticated web sessions. The list API applies an owner predicate, literal-escaped title search and a stable (updatedAt,id) cursor; the response includes nextCursor/hasMore. The UI loads pages on demand and debounces server search so it does not silently miss projects after the first page. The rendering contract resides in demo/assets/studio-project-center.js; remote project text is escaped rather than interpolated as trusted HTML. The Studio router and state owner remain demo/assets/studio-app.js.
 
 A ?project={id} URL deep-links to a project. Cloud drafts whose authority is graph can be restored into a supported canvas or simple editor. Spec/article authority drafts show 待编辑器接入 until #121/#124 provide the corresponding single-writer editor. No flattening to a legacy Graph is allowed.
 
@@ -35,6 +35,8 @@ A new project is persisted to cloud only after the first edit or an explicit sav
 - tests/test_studio_project_center.cjs covers escaping, navigation, empty state, cloud restoration, local conflict precedence, account isolation, and task entry.
 - tests/test_studio_closed_project.cjs covers frozen idempotency request recovery, archive quota protection, no eviction, and synced-tab handling.
 - Existing Project CAS HTTP/server/client tests remain in the CI gate.
+- tests/test_studio_project_pagination.py covers 113 projects, literal search with percent/underscore, cursor ordering and owner separation. HTTP and transport tests cover encoded query/cursor values.
+
 
 These automated tests are not a substitute for actual signed-in browser screenshots or multi-tab network/offline acceptance tests.
 
