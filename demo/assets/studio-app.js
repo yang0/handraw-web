@@ -4146,7 +4146,9 @@
       CS.stageView = "projects";
       CS.pendingProjectDeepLink = params.get("project") || "";
     }
-    if (!viewParam && !tabParam) {
+    // A direct ?project=id is not a default Quick entry. Never override
+    // the Project Center stage before boot can restore the requested ID.
+    if (!viewParam && !tabParam && !params.get("project")) {
       const entryParam = params.get("entry");
       if (entryParam === "canvas") {
         CS.stageView = "canvas";
