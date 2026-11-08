@@ -20,9 +20,9 @@ from backend.server import SESSION_COOKIE_NAME,create_channel_server,init_databa
 from backend.services import register_user
 
 
-def measure(page,stage,width):
+def measure(page,stage,width,base):
     page.set_viewport_size({"width":width,"height":850})
-    page.goto(page.context._qa_base + "/studio/?view=" + stage,
+    page.goto(base + "/studio/?view=" + stage,
               wait_until="domcontentloaded",timeout=45000)
     page.locator("#ic-entry-bar").wait_for(timeout=20000)
     page.wait_for_function("(name) => window.CS?.stageView === name",arg=stage,timeout=20000)
@@ -107,7 +107,6 @@ def main():
                 browser=pw.chromium.launch(**opts)
                 try:
                     context=browser.new_context(viewport={"width":1440,"height":850})
-                    context._qa_base=base
                     context.add_cookies([{"name":SESSION_COOKIE_NAME,"value":token,"url":base}])
                     page=context.new_page()
                     page.add_init_script("window.__HANDRAW_TESTING__=true")
@@ -120,7 +119,7 @@ def main():
                     for name in ("history","workflows"):
                         positions[name]={}
                         for width in (1440,1360,1200,900,390):
-                            metrics=measure(page,name,width)
+                            metrics=measure(page,name,width,base)
                             positions[name][str(width)]=metrics
                             if width in (1440,390):
                                 page.screenshot(path=str(output/f"{name}-{width}.png"),
