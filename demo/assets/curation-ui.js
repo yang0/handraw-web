@@ -1746,7 +1746,7 @@
         if (!guard(epoch, username)) return;
         renderAdmin(root);
       }).catch(function (err) {
-        alert("处理失败：" + ((err && err.message) || "请重试"));
+        window.HandrawDialogs.notice("处理失败：" + ((err && err.message) || "请重试"));
         buttons.forEach(function (b) { b.disabled = false; });
       });
     }
