@@ -51,6 +51,7 @@ jobs:
       # first render/drag+zoom frame p95/DOM/heap/IME focus at 10–300 nodes.
       - run: python -m pip install "playwright>=1.50,<2"
       - run: python tests/smoke_studio_article_browser_109.py
+      - run: python tests/smoke_studio_picker_browser_105.py
       - run: python tests/smoke_studio_project_reliability_103.py
       - run: python tests/smoke_studio_series_browser_108.py
       - run: python tests/benchmark_studio_canvas.py --output artifacts/canvas-127.json --require-browser
@@ -167,6 +168,8 @@ jobs:
           node tests/test_studio_project_center.cjs
           node --check demo/assets/studio-resources.js
           node tests/test_studio_resources.cjs
+          node --check demo/assets/studio-article-picker-105.js
+          node tests/test_studio_article_picker_105.cjs
           node tests/test_studio_project_center_ime.cjs
           node tests/test_studio_closed_project.cjs
           node tests/test_studio_picker_interactions.cjs

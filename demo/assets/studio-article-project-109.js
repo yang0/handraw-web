@@ -60,16 +60,20 @@
     });
     const styleId=str(art.style1 || art.styleId || "");
     const layoutId=str(art.layout || art.layoutId || "");
+    // Article owns the same typed ResourceRefs; old Project drafts may only
+    // contain the IDs, which the server re-resolves on the next CAS write.
+    const typed=(id,ref,type)=>id?(ref?clone(ref):{id,type}):null;
     const creationSpec = {
       schemaVersion:1,revision:int(art.specRevision),
       subject:str(art.articleTitle || art.title),
       outputMode:"article-illust",
-      style:styleId?{id:styleId,type:"style"}:null,
-      layout:layoutId?{id:layoutId,type:"layout"}:null,
+      style:typed(styleId,art.styleRef,"style"),
+      layout:typed(layoutId,art.layoutRef,"layout"),
       ratio:art.inlineRatio || "4:3",
       ratioSource:"user",
       fusionEnabled:false,
-      colors:[],tones:[],moods:[],referenceMedia:[],
+      colors:[],tones:[],moods:[],
+      referenceMedia:clone(art.referenceMedia || []),
       lockedFields:clone(art.lockedFields || [])
     };
     return {kind:"article",authority:"article",
@@ -118,6 +122,9 @@
       title,articleTitle:title,markdown:str(article.markdown),
       cards,style1:creationSpec?.style?.id || previous?.style1 || "",
       layout:creationSpec?.layout?.id || previous?.layout || "",
+      styleRef:clone(creationSpec?.style || null),
+      layoutRef:clone(creationSpec?.layout || null),
+      referenceMedia:clone(creationSpec?.referenceMedia || []),
       inlineRatio:creationSpec?.ratio || previous?.inlineRatio || "4:3",
       coverRatio:cards.find(c=>c.role==="cover")?.ratio || previous?.coverRatio || "2.35:1",
       documentRevision:int(article.revision),planRevision:int(plan?.revision),
@@ -137,6 +144,9 @@
     return JSON.stringify(cardsOf(before)) !== JSON.stringify(cardsOf(after)) ||
       str(before?.style1) !== str(after?.style1) ||
       str(before?.layout) !== str(after?.layout) ||
+      JSON.stringify(before?.styleRef||null) !== JSON.stringify(after?.styleRef||null) ||
+      JSON.stringify(before?.layoutRef||null) !== JSON.stringify(after?.layoutRef||null) ||
+      JSON.stringify(before?.referenceMedia||[]) !== JSON.stringify(after?.referenceMedia||[]) ||
       str(before?.coverRatio) !== str(after?.coverRatio) ||
       str(before?.inlineRatio) !== str(after?.inlineRatio);
   }

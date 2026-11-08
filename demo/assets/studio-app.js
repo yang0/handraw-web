@@ -7227,6 +7227,23 @@
 
     if (target.isActiveCanvas && ctrl && !checkExclusiveGateForControl(ctrl)) return false;
 
+    // Shared catalog and owner MediaRef preflight, before any billable request.
+    const articlePicker = window.HandrawStudioArticlePicker105;
+    if (articlePicker && target.art) {
+      const valid=articlePicker.validateForExecution({
+        styleId:card.styleId||target.art.style1,
+        layoutId:card.layoutId||target.art.layout,
+        styleRef:card.styleRef||(!card.styleId?target.art.styleRef:null),
+        layoutRef:card.layoutRef||(!card.layoutId?target.art.layoutRef:null),
+        referenceMedia:card.referenceMedia||target.art.referenceMedia||[]
+      },Catalog,{isUnlocked:(id,item)=>S.isUnlocked(id,item)});
+      if(!valid.ok){
+        if(!silent)toast("配图资源不可用："+valid.message+
+          (valid.id?" · "+valid.id:"")+"，请重新选择");
+        return false;
+      }
+    }
+
     const useLiveApi = isLiveGenerationEnabled();
     const useDemo = isDemoGenerationEnabled();
     if (!useLiveApi && !useDemo) {
@@ -7285,9 +7302,9 @@
       const uniquePool = [...new Set(fallbackPool)];
 
       let imgUrl = "";
-      const cardS1 = rec?.style1Id || target.art?.style1 || "";
+      const cardS1 = card.styleId || target.art?.style1 || rec?.style1Id || "";
       const cardS2 = rec?.style2Id || "";
-      const cardLay = card.layoutId || rec?.layoutId || target.art?.layout || "";
+      const cardLay = card.layoutId || target.art?.layout || rec?.layoutId || "";
       const cardS1Res = cardS1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS1) || rec?.style1Res) : rec?.style1Res;
       const cardS2Res = cardS2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS2) || rec?.style2Res) : rec?.style2Res;
       const cardLayRes = cardLay && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardLay) || rec?.layoutRes) : rec?.layoutRes;
@@ -7304,7 +7321,11 @@
       };
 
       if (useLiveApi) {
-        const refImages = (rec?.assetItems || []).map((a) => a.image).filter(Boolean);
+        const articleRefImages = (target.art?.referenceItems || [])
+          .filter(x=>x?.image&&(x.source==="official"||(x.source==="private"&&x.mediaId)))
+          .map(x=>x.image);
+        const refImages=[...new Set([...articleRefImages,
+          ...(rec?.assetItems||[]).map(x=>x.image).filter(Boolean)])];
         const requestId = card.requestId = ensureStableRequestId(card.requestId, `article_${card.id || "card"}`);
         card.taskId = "";
         commitArticleTargetChanges(target, { bumpTime: false });
@@ -15012,6 +15033,8 @@
       articleTitle:targetArt.articleTitle,markdown:targetArt.markdown,
       cards:JSON.parse(JSON.stringify(targetArt.cards || [])),
       style1:targetArt.style1,layout:targetArt.layout,
+      styleRef:targetArt.styleRef,layoutRef:targetArt.layoutRef,
+      referenceMedia:targetArt.referenceMedia,
       coverRatio:targetArt.coverRatio,inlineRatio:targetArt.inlineRatio
     } : null;
 
@@ -15036,7 +15059,9 @@
         linkedTabId: null,
         linkedPlanNodeId: null,
         style1: draft.styleId || "FA-001",
-        layout: "IG-001",
+        layout: draft.layoutId || "IG-001",
+        styleRef:draft.styleRef||null,layoutRef:draft.layoutRef||null,
+        referenceItems:draft.referenceItems||[],referenceMedia:draft.referenceMedia||[],
         coverRatio: draft.coverRatio || "2.35:1",
         inlineRatio: draft.inlineRatio || "4:3",
         runCount: 0,
@@ -15053,6 +15078,10 @@
         targetArt.cards = draft.cards;
       }
       targetArt.style1 = draft.styleId || targetArt.style1 || "FA-001";
+      targetArt.layout = draft.layoutId || targetArt.layout || "IG-001";
+      targetArt.styleRef=draft.styleRef||null;targetArt.layoutRef=draft.layoutRef||null;
+      targetArt.referenceItems=draft.referenceItems||[];
+      targetArt.referenceMedia=draft.referenceMedia||[];
       targetArt.coverRatio = draft.coverRatio || targetArt.coverRatio || "2.35:1";
       targetArt.inlineRatio = draft.inlineRatio || targetArt.inlineRatio || "4:3";
       if (bumpTime) {
@@ -15803,6 +15832,9 @@
       markdown: "",
       cards: [],
       styleId: "FA-001",
+      layoutId: "IG-001",
+      styleRef:null, layoutRef:null,
+      referenceItems:[], referenceMedia:[],
       coverRatio: "2.35:1",
       inlineRatio: "4:3",
       isNewDraft: true
@@ -15817,6 +15849,10 @@
       markdown: art.markdown || "",
       cards: Array.isArray(art.cards) ? JSON.parse(JSON.stringify(art.cards)) : [],
       styleId: art.style1 || art.styleId || "FA-001",
+      layoutId: art.layout || art.layoutId || "IG-001",
+      styleRef:art.styleRef||null,layoutRef:art.layoutRef||null,
+      referenceItems:JSON.parse(JSON.stringify(art.referenceItems||[])),
+      referenceMedia:JSON.parse(JSON.stringify(art.referenceMedia||[])),
       coverRatio: art.coverRatio || "2.35:1",
       inlineRatio: art.inlineRatio || "4:3",
       isNewDraft: false,
@@ -16892,10 +16928,13 @@
     const planDisabled = isGenerating || isPlanning;
 
     const styleObj = Catalog.resourceMap?.get(draft.styleId) || {
-      id: draft.styleId || "FA-001",
-      name: "手绘钢笔淡彩",
-      image: "/images/individual/FA/FA-001.webp"
+      id:draft.styleId || "未选择",name:"资源不可用，请重新选择",image:""
     };
+    const layoutObj = Catalog.resourceMap?.get(draft.layoutId) || {
+      id:draft.layoutId || "未选择",name:"资源不可用，请重新选择"
+    };
+    const articleResourceCheck = window.HandrawStudioArticlePicker105
+      ?.validateForExecution(draft,Catalog,{isUnlocked:(id,item)=>S.isUnlocked(id,item)});
 
     if (!draft._editorToken) {
       draft._editorToken = E.uid("ed");
@@ -17241,6 +17280,19 @@
                 </button>
               </div>
 
+              <!-- #105: shared catalog and reference Pickers -->
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">图型:</span>
+                <button type="button" class="btn btn-sm" id="editor-layout-picker" aria-label="选择文章配图图型">
+                  <span id="editor-layout-id">${esc(layoutObj.id)}</span> · <span id="editor-layout-name">${esc(layoutObj.name||layoutObj.id)}</span> ▾
+                </button>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <button type="button" class="btn btn-sm" id="editor-reference-picker" aria-label="选择文章参考素材">
+                  参考图 <span id="editor-reference-count">${(draft.referenceItems||draft.referenceMedia||[]).length}</span> / 6 ▾
+                </button>
+              </div>
+              ${articleResourceCheck && !articleResourceCheck.ok ? '<span id="editor-resource-warning" role="alert" style="font-size:11px;color:#b42318;">'+esc(articleResourceCheck.message)+' · '+esc(articleResourceCheck.id||"请修复选择")+'</span>' : ""}
               <!-- Cover Aspect Ratio Selector -->
               <div style="display:flex;align-items:center;gap:6px;">
                 <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">封面画幅:</span>
@@ -17315,6 +17367,8 @@
     const coverSel = DOM.previewStage.querySelector("#editor-cover-ratio");
     const inlineSel = DOM.previewStage.querySelector("#editor-inline-ratio");
     const stylePickerBtn = DOM.previewStage.querySelector("#editor-style-picker");
+    const layoutPickerBtn = DOM.previewStage.querySelector("#editor-layout-picker");
+    const referencePickerBtn = DOM.previewStage.querySelector("#editor-reference-picker");
     const replaceInp = DOM.previewStage.querySelector("#editor-file-replace-inp");
     const planBtn = DOM.previewStage.querySelector("#editor-btn-plan");
     const togglePreviewBtn = DOM.previewStage.querySelector("#editor-switch-preview, #editor-btn-toggle-preview");
@@ -17645,29 +17699,58 @@
       };
     });
 
-    if (stylePickerBtn) {
-      stylePickerBtn.onclick = () => {
-        S.openAssetPickerModal({
-          kind: "style",
-          currentId: draft.styleId || "FA-001",
-          onSelect: (id) => {
-            if (!isCurrentEditor()) return;
-            draft.styleId = id;
-            syncArticleEditorDraftToHistory(draft);
-            const res = Catalog.resourceMap?.get(id);
-            const thumbEl = DOM.previewStage.querySelector("#editor-style-thumb");
-            const idEl = DOM.previewStage.querySelector("#editor-style-id");
-            const nameEl = DOM.previewStage.querySelector("#editor-style-name");
-            if (thumbEl && res?.image) {
-              thumbEl.src = res.image;
-              thumbEl.style.display = "block";
+    const selectArticleResource = (field) => {
+      const adapter=window.HandrawStudioArticlePicker105;
+      if(!adapter){toast("统一资源选择器未加载，请刷新后重试");return;}
+      try {
+        openSkillFieldPickerModal(null,field,{
+          current:field==="style1"?draft.styleId:draft.layoutId,
+          title:field==="style1"?"文章画风 · 统一资源目录":"文章图型 · 统一资源目录",
+          onPick:(id,ref)=>{
+            if(!isCurrentEditor())return;
+            const result=adapter.applyResource(draft,field,id,ref);
+            if(!result.ok){toast(result.message+"，请选择有效画风/图型");return;}
+            commitSync({bumpTime:true});
+            const res=Catalog.resourceMap?.get(id);
+            if(field==="style1"){
+              const thumb=DOM.previewStage.querySelector("#editor-style-thumb");
+              if(thumb){thumb.src=res?.image||"";thumb.style.display=res?.image?"block":"none";}
+              const idEl=DOM.previewStage.querySelector("#editor-style-id");
+              const nameEl=DOM.previewStage.querySelector("#editor-style-name");
+              if(idEl)idEl.textContent="#"+id;
+              if(nameEl)nameEl.textContent=res?.name||id;
+            }else{
+              const idEl=DOM.previewStage.querySelector("#editor-layout-id");
+              const nameEl=DOM.previewStage.querySelector("#editor-layout-name");
+              if(idEl)idEl.textContent=id;
+              if(nameEl)nameEl.textContent=res?.name||id;
             }
-            if (idEl) idEl.textContent = `#${id}`;
-            if (nameEl) nameEl.textContent = res?.name || id;
+            DOM.previewStage.querySelector("#editor-resource-warning")?.remove();
           }
         });
-      };
-    }
+      }catch(error){console.error("Article shared Picker",error);
+        toast("统一资源选择器暂不可用，请刷新后重试");}
+    };
+    if(stylePickerBtn)stylePickerBtn.onclick=()=>selectArticleResource("style1");
+    if(layoutPickerBtn)layoutPickerBtn.onclick=()=>selectArticleResource("layout");
+    if(referencePickerBtn)referencePickerBtn.onclick=()=>{
+      const adapter=window.HandrawStudioArticlePicker105;
+      if(!adapter){toast("参考素材选择器未加载");return;}
+      openAssetPickerModal({
+        currentRefs:draft.referenceItems||[],maxCount:6,
+        title:"文章参考素材（我的图库 / 官方示例 / 上传）",
+        onConfirm:(items)=>{
+          if(!isCurrentEditor())return;
+          const result=adapter.normalizeAssetSelection(items);
+          if(!result.ok){toast(result.message+"；私人图片须先上传并确认归属");return;}
+          draft.referenceItems=result.referenceItems;
+          draft.referenceMedia=result.referenceMedia;
+          commitSync({bumpTime:true});
+          const count=DOM.previewStage.querySelector("#editor-reference-count");
+          if(count)count.textContent=String(result.referenceItems.length);
+        }
+      });
+    };
 
     if (replaceInp) {
       replaceInp.onchange = async (e) => {
