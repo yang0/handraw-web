@@ -178,6 +178,31 @@ def main():
                 assert "workflow=" in page.url
                 steps.append("workflow deep link retains identity")
 
+                # ?project=id is a direct reopen contract, not just a library
+                # link. Persist a valid graph without invoking generation.
+                project = page.evaluate("""async () => {
+                    const response = await fetch('/api/studio/projects', {
+                        method: 'POST', credentials: 'include',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            projectId: 'nav106-direct', kind: 'image',
+                            authority: 'graph', title: '106 云端直达项目',
+                            idempotencyKey: 'nav106-create-direct-once',
+                            draft: {graph: window.CS.graph, activeView: 'canvas'}
+                        })
+                    });
+                    return {status: response.status, payload: await response.json()};
+                }""")
+                assert project["status"] == 200, project
+                visit("project=nav106-direct")
+                stage("canvas")
+                page.wait_for_function("""() => window.CS?.tabs?.some(t =>
+                    t.id===window.CS.activeTabId &&
+                    t.projectId==='nav106-direct' &&
+                    t.projectSaveState==='synced')""", timeout=20000)
+                assert "project=nav106-direct" in page.url
+                steps.append("direct cloud Project deep link and ID preservation")
+
                 # Only this same-origin recipe is mocked: no third-party calls,
                 # no live generation. The UI must show the selected work's spec.
                 def remix_route(route):

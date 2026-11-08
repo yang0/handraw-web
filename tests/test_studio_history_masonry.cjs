@@ -172,8 +172,8 @@ assert.ok(styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
   "Tablet workflow list needs two cards across");
 assert.ok(styles.includes("grid-template-columns: minmax(0, 1fr)"),
   "Mobile workflow list needs a single card column");
-assert.ok(studio.includes('id="studio-mode-canvas"') && studio.includes('>画布</button>'),
-  "Global canvas button should be named 画布");
+assert.ok(studio.includes('id="studio-mode-canvas"') && studio.includes('>画布编辑</button>'),
+  "Studio2 #106 explicitly names the in-project second view 画布编辑");
 assert.ok(!studio.includes("高级画布"), "Studio UI must not keep the old canvas label");
 
 const workflowStage = {
