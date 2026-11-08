@@ -6586,13 +6586,15 @@
     return parts.join(" · ");
   }
 
-  function recordGenerationHistory(ctrlNode, items = [], kind = "single", markdown = "", creationSource = "") {
+  function recordGenerationHistory(ctrlNode, items = [], kind = "single", markdown = "", creationSource = "", snapshot = null) {
     ensureGenerationHistoryInitialized();
     if (!ctrlNode || !Array.isArray(items) || !items.length) return;
     const isRecipe = Boolean(ctrlNode.styleIds || ctrlNode.style_ids || (typeof ctrlNode.id === "string" && ctrlNode.id.startsWith("rcp_")));
     const recipeId = isRecipe ? (ctrlNode.id || "") : (ctrlNode.recipeId || "");
     const mode = isRecipe ? (ctrlNode.mode || "graphic-text") : (ctrlNode.data?.mode || "graphic-text");
-    const rec = isRecipe ? null : E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
+    const runGraph = snapshot?.graph || CS.graph;
+    const forkSource = snapshot?.forkSource || CS.forkGenerationSource;
+    const rec = isRecipe ? null : E.resolveControlRecipe(runGraph, ctrlNode, Catalog);
     const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
     const now = new Date();
     const timeShort = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -6690,13 +6692,14 @@
         ? (ctrlNode.prompt || ctrlNode.subject || "")
         : isLoopBatch
           ? items.map((it, idx) => `【第 ${idx + 1} 轮】${it.prompt || it.theme || ""}`).join("\n\n")
-          : E.assembleControlPrompt(CS.graph, ctrlNode, Catalog, "skill"),
+          : E.assembleControlPrompt(runGraph, ctrlNode, Catalog, "skill"),
       markdown: markdown || "",
       items: resolvedItems,
-      ...(CS.forkGenerationSource?.generationId ? {
-        forkGenerationId: CS.forkGenerationSource.generationId,
-        forkItemId: CS.forkGenerationSource.itemId || ""
-      } : {})
+      ...(forkSource?.generationId ? {
+        forkGenerationId: forkSource.generationId,
+        forkItemId: forkSource.itemId || ""
+      } : {}),
+      ...(forkSource?.workId ? { forkWorkId:forkSource.workId } : {})
     };
 
     CS.generationHistory = upsertHistoryEntry(CS.generationHistory, entry, { isServer: false });
@@ -7353,7 +7356,8 @@
     const batchRun = { id: batchId, ctrlId: ctrl.id, cancelled: false, controller,
       submittedSlots, executionGraph,
       projectId: CS.tabs.find(t => t.id === CS.activeTabId)?.projectId || "",
-      projectRevision: CS.tabs.find(t => t.id === CS.activeTabId)?.projectRevision || 0 };
+      projectRevision: CS.tabs.find(t => t.id === CS.activeTabId)?.projectRevision || 0,
+      forkSource: CS.forkGenerationSource ? cloneGraph(CS.forkGenerationSource) : null };
     if (controller) _generationControllers.add(controller);
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
@@ -7552,12 +7556,12 @@
                 requestId,
                 clientRequestId: requestId,
                 confirmCost: true,
-                ...(CS.forkGenerationSource?.workId ? {
-                  forkOf: CS.forkGenerationSource.workId
+                ...(batchRun.forkSource?.workId ? {
+                  forkOf: batchRun.forkSource.workId
                 } : {}),
-                ...(CS.forkGenerationSource?.generationId ? {
-                  forkGenerationId: CS.forkGenerationSource.generationId,
-                  forkItemId: CS.forkGenerationSource.itemId || ""
+                ...(batchRun.forkSource?.generationId ? {
+                  forkGenerationId: batchRun.forkSource.generationId,
+                  forkItemId: batchRun.forkSource.itemId || ""
                 } : {})
               })
             });
@@ -7866,7 +7870,8 @@
           activeLoopNode.data.totalSteps = plan.specs.length;
         }
         if (allItems.length > 0) {
-          recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown, creationSource);
+          recordGenerationHistory(executionCtrl, allItems, plan.kind, plan.markdown,
+            creationSource, {graph:executionGraph, forkSource:batchRun.forkSource});
         }
         markActiveTabDirty();
         persistOpenTabs();
@@ -7909,7 +7914,8 @@
         activeLoopNode.data.totalSteps = plan.specs.length;
       }
       if (allItems.length > 0) {
-        recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown, creationSource);
+        recordGenerationHistory(executionCtrl, allItems, plan.kind, plan.markdown,
+            creationSource, {graph:executionGraph, forkSource:batchRun.forkSource});
       }
       markActiveTabDirty();
       persistOpenTabs();
