@@ -302,14 +302,15 @@ jobs:
           ref: dad8dad2d2af25bd9df45971a03a499461a723db
           path: external/handraw-style
           persist-credentials: false
-      # #11 has TWO deliberate inputs: a pinned, reproducible Skill CLI
-      # for cross-repo tests and the latest Skill *references* for drift detection.
-      # This second checkout is read as JSON data only, never executed.
-      - name: '#11 checkout latest Skill official reference catalog (data only)'
+      # #11 uses TWO deliberate inputs: a pinned, reproducible Skill CLI
+      # for cross-repo execution and ACTUAL Skill main reference catalog for
+      # release drift detection. This second checkout is JSON data only,
+      # never executable code. Record the SHA because main is mutable.
+      - name: '#11 checkout actual Skill main reference catalog (data only)'
         uses: actions/checkout@v4
         with:
           repository: yang0/handraw-style
-          ref: feature/skill-web-unification-v1-20261107
+          ref: main
           path: external/handraw-style-catalog
           persist-credentials: false
       - name: '#11 official Web-authoritative code parity, no reverse publish'
