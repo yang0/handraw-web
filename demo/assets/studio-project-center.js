@@ -66,8 +66,9 @@
       x(KINDS[p.kind]||"项目")+"</span><h3>"+x(p.title||"未命名创作")+"</h3>"+
       "<p>更新于 "+x(safeDate(p.updatedAt))+"</p><div class='ic-pc-card-foot'>"+
       "<span>版本 "+x(p.revision||1)+" · "+x(authority)+"</span>"+
-      "<button type='button' class='btn btn-sm btn-primary' data-pc-open='"+x(p.id)+
-      "'>"+(editable?"继续编辑":"查看详情")+"</button></div></article>";
+      (editable ? "<button type='button' class='btn btn-sm btn-primary' data-pc-open='"+x(p.id)+
+      "'>继续编辑</button>" : "<span title='等待文章/结构化方案编辑器接入'>待编辑器接入</span>")+
+      "</div></article>";
   }
   function render(state) {
     const s=model(state),x=escapeText;
