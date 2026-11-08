@@ -98,6 +98,29 @@ async function main() {
     "simple edit must not replace an entire multi-branch graph");
   assert.deepEqual(tab.projectSyncedGraph,patched);
   assert.deepEqual(calls[0].patch.find(x=>x.path==="/editorLayout").value,state.editorLayout);
+
+  // Spec Projects save only their structured authority until Canvas adoption.
+  const authorityCalls=[];
+  const transport=createClient({fetchImpl:async (_url,init)=>{
+    authorityCalls.push(JSON.parse(init.body));
+    return {ok:true,status:200,json:async()=>({ok:true,projectId:"project-spec-A",
+      revision:2+authorityCalls.length})};
+  },idFactory:()=> "idempotent-spec-107"});
+  const specTab={projectId:"project-spec-A",projectRevision:2,
+    projectAuthority:"spec",editRevision:2};
+  const compiledSpec=Views.specFromGraph(compiled).spec;
+  await transport.flush(specTab,{kind:"image",authority:"spec",title:"仅 Spec 可写",
+    draft:{creationSpec:compiledSpec,activeView:"simple",editorLayout:{camera:{vx:12,vy:40,vk:.82}}}});
+  assert.equal(specTab.projectAuthority,"spec");
+  assert.ok(authorityCalls[0].patch.some(x=>x.path==="/creationSpec"));
+  assert.ok(!authorityCalls[0].patch.some(x=>x.path==="/graph"));
+  specTab.editRevision++;
+  await transport.flush(specTab,{kind:"image",authority:"graph",title:"进入画布",
+    draft:{graph:compiled,activeView:"canvas",editorLayout:{camera:{vx:12,vy:40,vk:.82}}}});
+  assert.deepEqual(authorityCalls[1].patch.slice(0,2).map(x=>x.path),
+    ["/authority","/graph"],"atomic transition must precede Graph write");
+  assert.equal(specTab.projectAuthority,"graph");
+
   console.log("Studio #107 compile/partial/read-only, 10 switches, no Run, scoped CAS patches OK");
 }
 main().catch(err=>{console.error(err);process.exitCode=1;});
