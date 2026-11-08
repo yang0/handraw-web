@@ -1913,6 +1913,25 @@
         };
       }
 
+      // UI index is only a locator: every PlanSlot operation uses slotId.
+      root.querySelectorAll("[data-row-options-idx]").forEach(btn=>{
+        btn.onclick=()=>self.openSlotOptions(Number(btn.getAttribute("data-row-options-idx")));
+      });
+      root.querySelectorAll("[data-row-copy-idx]").forEach(btn=>{
+        btn.onclick=()=>{
+          const idx=Number(btn.getAttribute("data-row-copy-idx")),api=self.getSeries();
+          const slot=self.readPlan()?.slots?.[idx];
+          if(api&&slot){api.duplicate(loop,slot.slotId);markDirty();}
+        };
+      });
+      root.querySelectorAll("[data-row-up-idx]").forEach(btn=>{
+        btn.onclick=()=>{
+          const idx=Number(btn.getAttribute("data-row-up-idx")),api=self.getSeries();
+          const slot=self.readPlan()?.slots?.[idx];
+          if(idx>0&&api&&slot){api.move(loop,slot.slotId,idx-1);markDirty();}
+        };
+      });
+
       // 5. Ratio Buttons & Inline Input (Defect 3 Fixed: /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/)
       root.querySelectorAll("[data-set-ratio]").forEach((btn) => {
         btn.onclick = () => {
@@ -2577,6 +2596,82 @@
       }
     }
 
+    openSlotOptions(idx) {
+      const api=this.getSeries(),p=this.getParts(),S=global.HANDRAW_SHARED;
+      if(!api||!p?.loop||!S?.openModal)return;
+      const slot=api.read(p.loop).slots[idx];
+      if(!slot)return;
+      const current=slot.overrides||{},catalog=this.context?.catalog||{};
+      const options=(kind,selected)=>{
+        const pool=kind==="style"?catalog.styles:catalog.layouts;
+        const list=Array.isArray(pool)?pool:[];
+        const missing=selected&&!list.some(it=>it.id===selected);
+        return '<option value="">跟随全局</option>'+
+          (missing?'<option value="'+esc(selected)+'" selected>原资源失效：'+esc(selected)+'</option>':"")+
+          list.filter(it=>it?.id).map(it=>
+            '<option value="'+esc(it.id)+'" '+(selected===it.id?'selected':'')+'>'+
+            esc(it.id)+' · '+esc(it.name_zh||it.name||it.id)+'</option>').join("");
+      };
+      const isLocked=field=>slot.lockedFields?.includes(field);
+      const html=[
+        '<div style="display:grid;gap:12px;padding:4px 0;">',
+        '<p style="font-size:12px;color:var(--ink-muted)">仅修改当前 PlanSlot（'+esc(slot.slotId)+'）；其他图片及已提交任务不受影响。</p>',
+        '<label>画风 <select class="hw-input" id="slot-style">'+options("style",current.style?.id||"")+'</select></label>',
+        '<label>图型 <select class="hw-input" id="slot-layout">'+options("layout",current.layout?.id||"")+'</select></label>',
+        '<label>画幅 <input class="hw-input" id="slot-ratio" value="'+esc(current.ratio||"")+'" placeholder="留空继承全局，如 2.35:1" /></label>',
+        '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;">',
+        ...["subject","style","layout","ratio"].map(k=>'<label><input type="checkbox" id="slot-lock-'+k+'" '+(isLocked(k)?"checked":"")+' /> 锁定'+({subject:"主题",style:"画风",layout:"图型",ratio:"画幅"}[k])+'</label>'),
+        '</div>',
+        '<button type="button" class="btn btn-sm" id="slot-pick-refs">本张参考素材（已选 '+(slot.referenceMedia?.length||0)+' 张）</button>',
+        '<div style="display:flex;justify-content:flex-end;gap:8px">',
+        '<button type="button" class="btn btn-sm" id="slot-cancel">取消</button>',
+        '<button type="button" class="btn btn-primary" id="slot-save">保存独立参数</button>',
+        '</div></div>'
+      ].join("");
+      S.openModal({
+        title:"第 "+(idx+1)+" 张 · 独立参数 / 锁定",
+        sizeClass:"modal-medium",html,
+        onMount:root=>{
+          root.querySelector("#slot-cancel").onclick=()=>S.closeModal();
+          root.querySelector("#slot-pick-refs").onclick=()=>{
+            if(!this.actions?.openReferencePicker)return;
+            this.actions.openReferencePicker({
+              items:slot.referenceMedia||[],maxCount:6,
+              title:"第 "+(idx+1)+" 张参考素材",
+              onConfirm:refs=>{
+                if(this.patchSlotByIndex(idx,{referenceMedia:refs}))
+                  this.actions?.markDirtyAndRender?.();
+              }
+            });
+          };
+          root.querySelector("#slot-save").onclick=()=>{
+            const read=id=>root.querySelector(id);
+            const style=read("#slot-style").value;
+            const layout=read("#slot-layout").value;
+            const ratio=read("#slot-ratio").value.trim();
+            if(ratio&&!global.HandrawStudioCore?.validateRatio(ratio).ok){
+              S.toast?.("画幅比例无效，请输入如 2.35:1");return;
+            }
+            const locks=["subject","style","layout","ratio"].filter(k=>read("#slot-lock-"+k).checked);
+            for(const k of slot.lockedFields||[]){
+              if(!["subject","style","layout","ratio"].includes(k))locks.push(k);
+            }
+            const overrides={};
+            if(style!==(current.style?.id||""))overrides.style=style||null;
+            if(layout!==(current.layout?.id||""))overrides.layout=layout||null;
+            if(ratio!==(current.ratio||""))overrides.ratio=ratio||null;
+            try{
+              api.patchSlot(p.loop,slot.slotId,
+                {lockedFields:locks,...(Object.keys(overrides).length?{overrides}:{})},
+                {catalog,isUnlocked:this.actions?.isUnlocked,unlock:true});
+              S.closeModal();
+              this.actions?.markDirtyAndRender?.();
+            }catch(err){S.toast?.("当前槽位无法保存："+(err.code||err.message));}
+          };
+        }
+      });
+    }
+
     openThemeEditModal(idx, source = "row") {
       const self = this;
       const S = global.HANDRAW_SHARED;
@@ -2690,7 +2785,9 @@
             const newTheme = ta.value;
             if (newTheme.length > MAX_CHARS) return;
 
-            if (isAiMode && Array.isArray(loop.data.batchRows) && loop.data.batchRows[idx]) {
+            if (self.getSeries()) {
+              if(!self.patchSlotByIndex(idx,{subject:newTheme}))return;
+            } else if (isAiMode && Array.isArray(loop.data.batchRows) && loop.data.batchRows[idx]) {
               loop.data.batchRows[idx].theme = newTheme;
               loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
             } else {
