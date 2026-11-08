@@ -81,7 +81,25 @@ def main():
                 page.on("request",lambda req:paid.append(req.url)
                     if req.method=="POST" and "/api/studio/generate" in req.url else None)
                 page.goto(base+"/studio/?entry=batch",wait_until="networkidle",timeout=45000)
-                page.locator(".series108-board").wait_for(timeout=20000)
+                try:
+                    page.locator(".series108-board").wait_for(timeout=12000)
+                except Exception:
+                    debug=page.evaluate("""()=>{
+                      const stage=document.querySelector('.ic-quick-stage');
+                      const batch=document.querySelector('.batch-container');
+                      return {url:location.href,stageView:window.CS?.stageView,
+                        stageDisplay:stage&&getComputedStyle(stage).display,
+                        batchCount:document.querySelectorAll('.batch-container').length,
+                        quickCount:document.querySelectorAll('.make-image-container').length,
+                        boardCount:document.querySelectorAll('.series108-board').length,
+                        boardScript:typeof window.HandrawSeriesBoard108,
+                        batchScript:typeof window.HandrawBatchCreate,
+                        body:document.body.innerText.slice(0,1400),
+                        root:document.querySelector('#studio-app-root')?.innerHTML.slice(0,500)};
+                    }""")
+                    print("SERIES108 BOOT DEBUG:",json.dumps(debug,ensure_ascii=False),
+                        "PAGE_ERRORS:",errors,flush=True)
+                    raise
                 assert page.locator(".series108-layout").count()==1
                 assert page.locator(".series108-card").count()>=3
                 assert page.locator(".batch-action-bar").count()==1
