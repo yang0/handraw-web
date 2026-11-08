@@ -18641,6 +18641,11 @@
   }
 
   function fullRenderCanvas() {
+    // A first-use template changes from zero tabs to an active Graph without
+    // remounting the shell. Restore the hidden shelf on that exact transition.
+    if(CS.stageView==="canvas"&&CS.tabs?.length&&DOM.shelf&&
+       (DOM.shelf.style.display==="none"||!DOM.shelf.querySelector("#ic-shelf-grid-box")))
+      renderShelfDrawer();
     syncAllDownstreamArticlePlans();
     if (CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length)) {
       if (DOM.nodesLayer) DOM.nodesLayer.innerHTML = "";
