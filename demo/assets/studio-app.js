@@ -10497,18 +10497,21 @@
 
     const {dirtyNodes,stats}=patchStudioCanvasDom(DOM.nodesLayer,cardsHtml,datalistsHtml);
 
-    // Sync actual rendered DOM heights back to node.h so port positions, wires, minimap & fitView are pixel-accurate!
-    const elById = new Map();
-    DOM.nodesLayer.querySelectorAll(".ic-node[data-node-id]").forEach((el) => {
-      const nid = el.getAttribute("data-node-id");
-      elById.set(nid, el);
-      const n = getNodeById(nid);
-      if (n && el.offsetHeight > 20) {
-        n.h = el.offsetHeight;
-        n.w = el.offsetWidth;
+    // Only measure new/changed nodes; remote progress must not force
+    // layout reads on every unaffected image and input card.
+    const elById=new Map();
+    let sizeChanged=Boolean(stats.inserted||stats.removed);
+    for(const el of dirtyNodes){
+      const id=el.getAttribute('data-node-id');
+      elById.set(id,el);
+      const n=getNodeById(id);
+      if(n&&el.offsetHeight>20){
+        const h=el.offsetHeight,w=el.offsetWidth;
+        if(h!==n.h||w!==n.w)sizeChanged=true;
+        n.h=h;n.w=w;
       }
-    });
-
+    }
+    if(sizeChanged)DOM.nodesLayer.querySelectorAll('.ic-node[data-node-id]').forEach(el=>elById.set(el.getAttribute('data-node-id'),el));
     // Prevent vertical collisions when a variable-height node (e.g. 风格参数 enabling 双画风融合 or multi-select chips) expands!
     const sortedByY = [...(CS.graph.nodes || [])].sort((a, b) => a.y - b.y || a.x - b.x);
     for (let i = 0; i < sortedByY.length; i++) {
