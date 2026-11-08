@@ -39,8 +39,14 @@
         editableFields: [], nodeIds: {}, graphRevision: Number(graph?.revision || 0) };
     }
     const inbound = id => new Set(edges.filter(e => e.to === id).map(e => e.from));
+    const hasLoop = loops.length === 1;
+    // The legacy series blueprint sends subject -> Loop -> output_control.
+    // Recognize only that explicit typed path; never simplify arbitrary
+    // disconnected inputs, multiple loops or extra branch dependencies.
     const allInputs = controls.every(c => inbound(c.id).has(skills[0].id) &&
-      inbound(c.id).has(texts[0].id));
+      (inbound(c.id).has(texts[0].id) ||
+       (hasLoop && inbound(c.id).has(loops[0].id) &&
+        inbound(loops[0].id).has(texts[0].id))));
     const shared = controls.length > 1 && allInputs && loops.length === 0;
     const one = controls.length === 1 && allInputs;
     const allCtrlEdgesKnown = controls.every(c => {
@@ -54,7 +60,6 @@
       return { mode: "read-only-summary", reason: "graph_not_reversible",
         editableFields: [], nodeIds: {}, graphRevision: Number(graph?.revision || 0) };
     }
-    const hasLoop = loops.length === 1;
     if (hasLoop && !edges.some(e => e.from === loops[0].id && e.to === controls[0].id)) {
       return { mode: "read-only-summary", reason: "unmapped_loop",
         editableFields: [], nodeIds: {}, graphRevision: Number(graph?.revision || 0) };
