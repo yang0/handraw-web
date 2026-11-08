@@ -470,7 +470,8 @@
   }
 
   function cancelActiveBatchGeneration(expectedCtrlId = null) {
-    if (!expectedCtrlId && _dagAbortController && !_dagAbortController.signal.aborted) {
+    // Stopping any Control in a DAG stops its siblings and queued dependents.
+    if (_dagAbortController && !_dagAbortController.signal.aborted) {
       _dagAbortController.abort();
     }
     const run = expectedCtrlId
@@ -7190,7 +7191,7 @@
     if (CS.stageView === "history") renderHistoryStage();
   }
 
-  async function generateSinglePlanCard(planNodeOrArtId, cardId, { silent = false, skipHistory = false, skipCostConfirmation = false, batchId = "", batchIndex = 0, batchTotal = 1 } = {}) {
+  async function generateSinglePlanCard(planNodeOrArtId, cardId, { silent = false, skipHistory = false, skipCostConfirmation = false, batchId = "", batchIndex = 0, batchTotal = 1, slotPermitHeld = false } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const target = resolveArticleTarget(planNodeOrArtId);
@@ -7247,6 +7248,16 @@
       : false;
     card.status = "generating";
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let releaseSlotPermit = null;
+    if (!slotPermitHeld && window.HandrawStudioDAG120?.defaultPool) {
+      try {
+        releaseSlotPermit = await window.HandrawStudioDAG120.defaultPool.acquire({
+          signal: controller?.signal,user:activeCacheScope,
+          gateway:String(CS.serverCfg?.generationGateway || "default"),
+          model:String(CS.serverCfg?.generationModel || "default")
+        });
+      } catch (error) { if (!silent) toast("等待生图容量失败："+(error.message||error)); return false; }
+    }
     if (controller) _generationControllers.add(controller);
     commitArticleTargetChanges(target, { bumpTime: false });
     renderFullPreviewStage();
@@ -7416,6 +7427,7 @@
       if (!silent) toast(`⚠️ 配图生成失败：${err.message || err}`);
       return false;
     } finally {
+      if (releaseSlotPermit) releaseSlotPermit();
       if (controller) _generationControllers.delete(controller);
       if (!isStaleScope(runEpoch, runScope)) {
         commitArticleTargetChanges(target, { bumpTime: false });
@@ -7432,13 +7444,14 @@
     }
   }
 
-  async function generateBatchPlanCards(planNodeOrArtId, { onlyPending = true, silent = false } = {}) {
+  async function generateBatchPlanCards(planNodeOrArtId, { onlyPending = true, silent = false,
+    sharedPool = null, runtimeSignal = null } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const target = resolveArticleTarget(planNodeOrArtId);
     const planNode = target?.planNode || null;
     if (!planNode || planNode.type !== "article_plan" || planNode.data.status === "generating") return false;
-    if (_activeBatchRun) {
+    if (_activeBatchRun && !runtimeSignal) {
       if (!silent) toast("另一批图片正在生成，请等待完成或停止后再操作");
       return false;
     }
@@ -7508,7 +7521,19 @@
     });
     const batchRun = { id: resolvedBatchId, cancelled: false,
       total: effectiveTargets.length, completed: 0, failed: 0, running: 0,
-      parallel: selection.parallel, startedAt: Date.now(), ids: effectiveTargets.map(x=>x.id) };
+      parallel: selection.parallel, startedAt: Date.now(), ids: effectiveTargets.map(x=>x.id),
+      controller: new AbortController() };
+    const abortArticleRun = () => {
+      batchRun.cancelled = true;
+      if (!batchRun.controller.signal.aborted) batchRun.controller.abort();
+    };
+    runtimeSignal?.addEventListener("abort", abortArticleRun, {once:true});
+    const articleSlotPool = sharedPool || window.HandrawStudioDAG120?.defaultPool;
+    const articleSlotMeta = {
+      user: activeCacheScope, gateway: String(CS.serverCfg?.generationGateway || "default"),
+      model: String(CS.serverCfg?.generationModel || "default"),
+      signal: batchRun.controller.signal
+    };
     CS.lastArticleBatchSummary = null;
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
@@ -7526,10 +7551,13 @@
           if (isStaleScope(runEpoch, runScope) || batchRun.cancelled) return false;
           batchRun.running += 1;
           try {
-            return await generateSinglePlanCard(targetRefId, c.id, {
+            const invoke = () => generateSinglePlanCard(targetRefId, c.id, {
               silent: true, skipHistory: true, skipCostConfirmation: true,
-              batchId: c.batchId, batchIndex: c.batchIndex, batchTotal: c.batchTotal
+              batchId: c.batchId, batchIndex: c.batchIndex, batchTotal: c.batchTotal,
+              slotPermitHeld: true
             });
+            return articleSlotPool
+              ? await articleSlotPool.withPermit(invoke, articleSlotMeta) : await invoke();
           } finally {
             batchRun.running = Math.max(0,batchRun.running-1);
           }
@@ -7572,11 +7600,12 @@
       if (!silent) {
         toast(`批量完成：成功 ${okCount} 张，失败 ${batchRun.failed} 张，跳过 ${allCards.length-effectiveTargets.length} 张；失败项可以单独重试。`);
       }
-      return okCount > 0;
+      return runtimeSignal ? okCount === effectiveTargets.length : okCount > 0;
     } finally {
+      runtimeSignal?.removeEventListener("abort",abortArticleRun);
       if (_activeBatchRun === batchRun) {
-        _activeBatchRun = null;
-        CS.activeBatchRun = null;
+        _activeBatchRun = [..._activeControlRuns.values()].at(-1) || null;
+        CS.activeBatchRun = _activeBatchRun;
       }
       if (!isStaleScope(runEpoch, runScope)) {
         planNode.data.status = "ready";
@@ -7630,7 +7659,8 @@
         requestAnimationFrame(() => fitView());
       }
       try {
-        const ok = await generateBatchPlanCards(planNode.id, { onlyPending: false, silent });
+        const ok = await generateBatchPlanCards(planNode.id, { onlyPending: false, silent,
+          runtimeSignal, sharedPool });
         ctrl.data.status = ok ? "done" : "idle";
         return ok;
       } finally {
@@ -8455,7 +8485,9 @@
           toast(`批量出图未全部完成：${parts.join(" · ")}`, "error");
         }
       }
-      return completedCount > 0;
+      // A dependent Control may only run after *all* source slots succeed.
+      return runtimeSignal ? (completedCount === plan.specs.length && failedCount === 0)
+        : completedCount > 0;
     } catch (err) {
       if (isStaleScope(runEpoch, runScope)) return false;
       ctrl.data.status = "error";
