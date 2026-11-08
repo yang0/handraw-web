@@ -14,7 +14,7 @@ Provides:
   Requires login, rate limit 50/day per user (scope="batch_plan"), hwt_ tokens disallowed.
   Calls backend.ai_client.chat outside DB transaction.
   Validates layout codes against official catalog.json and DB catalog_assets.
-  Falls back to deterministic template generation when model is unconfigured or fails.
+  Fixed-layout mode alone may fall back to template; AI mode never invents a recommendation.
 """
 from __future__ import annotations
 
@@ -271,7 +271,33 @@ def execute_batch_plan(
         {"role": "user", "content": user_prompt},
     ]
 
-    response_text, meta = chat(messages, temperature=0.7, timeout=30.0, json_mode=True)
+    try:
+        response_text, meta = chat(messages, temperature=0.7, timeout=30.0, json_mode=True)
+    except Exception as exc:
+        # A gateway transport error must not become an accidental 500 or expose
+        # confidential prompts, model output, API keys or exception strings.
+        logger.warning(
+            "event=batch_plan_failed stage=upstream reason=exception mode=%s count=%d error_type=%s",
+            norm_mode, cnt, type(exc).__name__,
+        )
+        response_text, meta = "", {"ok": False, "reason": "network"}
+    if not isinstance(meta, dict):
+        logger.warning(
+            "event=batch_plan_failed stage=upstream reason=bad_meta mode=%s count=%d",
+            norm_mode, cnt,
+        )
+        meta = {"ok": False, "reason": "unknown"}
+    if not isinstance(response_text, str):
+        logger.warning(
+            "event=batch_plan_failed stage=invalid_json reason=not_text mode=%s count=%d",
+            norm_mode, cnt,
+        )
+        if norm_mode == "ai" and meta.get("ok"):
+            raise ServiceError(
+                "AI 返回的规划格式无法解析，请重试", status=502,
+                code="batch_plan_ai_invalid",
+            ) from None
+        response_text = ""
 
     if not meta.get("ok") or not response_text:
         reason = str(meta.get("reason") or "empty")
