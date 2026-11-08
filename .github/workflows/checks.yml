@@ -43,6 +43,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_ai_plan.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_ai_plan_http.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_resource_refs.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_security_negative_112.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_plan_slot_access.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_http.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_pagination.py' -v
