@@ -4,6 +4,8 @@ No live database required. Every execution path is asserted to be non-
 destructive; SQL failures are handled by the driver's surrounding transaction.
 """
 import os
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
@@ -76,6 +78,13 @@ class FakeConnection:
         return self.cur
 
 
+def fake_driver(connection):
+    """Unit-test driver without installing a live PostgreSQL dependency."""
+    fake = types.ModuleType("psycopg")
+    fake.connect = lambda *args, **kwargs: connection
+    return patch.dict(sys.modules, {"psycopg": fake})
+
+
 class ExistingPostgresProjectMigrationTests(unittest.TestCase):
     dsn = "postgresql://localhost/handraw_project_migration_test"
 
@@ -98,7 +107,7 @@ class ExistingPostgresProjectMigrationTests(unittest.TestCase):
     def test_dry_run_uses_only_selects_and_transaction_settings(self):
         c = FakeCursor()
         conn = FakeConnection(c)
-        with patch("psycopg.connect", return_value=conn), \
+        with fake_driver(conn), \
                 patch.dict(os.environ, {ALLOW_ENV: ""}):
             r = migrate(dsn=self.dsn, apply=False)
         self.assertTrue(r["dryRun"])
@@ -109,7 +118,7 @@ class ExistingPostgresProjectMigrationTests(unittest.TestCase):
 
     def test_apply_refuses_without_explicit_operator_approval(self):
         c = FakeCursor()
-        with patch("psycopg.connect", return_value=FakeConnection(c)), \
+        with fake_driver(FakeConnection(c)), \
                 patch.dict(os.environ, {ALLOW_ENV: ""}):
             with self.assertRaisesRegex(RuntimeError, ALLOW_ENV):
                 migrate(dsn=self.dsn, apply=True)
@@ -117,7 +126,7 @@ class ExistingPostgresProjectMigrationTests(unittest.TestCase):
 
     def test_atomic_apply_and_repeat_is_noop(self):
         c = FakeCursor()
-        with patch("psycopg.connect", return_value=FakeConnection(c)), \
+        with fake_driver(FakeConnection(c)), \
                 patch.dict(os.environ, {ALLOW_ENV: "YES"}):
             result = migrate(dsn=self.dsn, apply=True)
         self.assertTrue(result["applied"])
@@ -125,7 +134,7 @@ class ExistingPostgresProjectMigrationTests(unittest.TestCase):
         self.assertTrue(any("CREATE TABLE public.studio_projects" in q for q, _ in c.commands))
         self.assertTrue(any("INSERT INTO public.schema_migrations" in q for q, _ in c.commands))
         c.commands.clear()
-        with patch("psycopg.connect", return_value=FakeConnection(c)), \
+        with fake_driver(FakeConnection(c)), \
                 patch.dict(os.environ, {ALLOW_ENV: "YES"}):
             already = migrate(dsn=self.dsn, apply=True)
         self.assertTrue(already["alreadyApplied"])
@@ -136,7 +145,7 @@ class ExistingPostgresProjectMigrationTests(unittest.TestCase):
                         {"applied":True,"wrong_name":True}):
             with self.subTest(options=options):
                 c = FakeCursor(**options)
-                with patch("psycopg.connect", return_value=FakeConnection(c)), \
+                with fake_driver(FakeConnection(c)), \
                         patch.dict(os.environ, {ALLOW_ENV: "YES"}):
                     with self.assertRaises(RuntimeError):
                         migrate(dsn=self.dsn, apply=True)
