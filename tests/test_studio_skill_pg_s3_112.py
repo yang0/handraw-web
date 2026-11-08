@@ -379,6 +379,8 @@ class SkillPostgresS3Journey112(unittest.TestCase):
                             frames[0].save(filename, format="GIF", save_all=True,
                                            append_images=frames[1:],
                                            duration=[100, 150], loop=0)
+                            with Image.open(filename) as animated:
+                                self.assertEqual(animated.n_frames, 2)
                         else:
                             Image.new("RGB", (16, 20), (
                                 31 + i * 25, 67, 155 - i * 13)).save(
