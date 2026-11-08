@@ -200,11 +200,12 @@ def main():
                     assert len(initial["types"]) == 5, initial
 
                     # Real Canvas click and zoom, rather than an isolated DOM benchmark.
-                    first = page.locator('#ic-nodes-layer [data-node-id="g00-0"]')
-                    first.scroll_into_view_if_needed(timeout=15000)
-                    box = first.bounding_box()
-                    assert box, "Cannot locate actual canvas card"
-                    page.mouse.click(box["x"] + 25, box["y"] + 16)
+                    header = page.locator(
+                        '#ic-nodes-layer [data-node-id="g00-0"] .ic-node-header-above')
+                    header.click(position={"x": 42, "y": 12}, timeout=20000)
+                    page.wait_for_function(
+                        "() => window.CS?.graph?.selectedIds?.includes('g00-0')",
+                        timeout=10000)
                     assert page.locator("#ic-nodes-layer .ic-node.is-selected").count() >= 1
                     measurements = []
                     for _ in range(5):
