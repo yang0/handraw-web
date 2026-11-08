@@ -14,6 +14,7 @@ jobs:
         with:
           node-version: '24'
       - run: node --check demo/assets/task-journey.js && node --check demo/assets/studio-app.js && node --check demo/assets/studio-batch.js
+      - run: node --check demo/assets/studio-canvas-ui.js && node tests/test_studio_canvas_ui_129.cjs
       - run: node tests/test_task_journey.cjs
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
