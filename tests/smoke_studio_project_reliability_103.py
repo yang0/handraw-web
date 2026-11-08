@@ -210,7 +210,8 @@ def main():
                   projectIds:window.CS.tabs.map(t=>t.projectId).filter(Boolean),
                   localIds:(window.CS.closedProjectDrafts||[]).map(t=>t.projectId)
                 })""")
-                assert page_a.evaluate("() => window.App?.state?.loggedIn === true"), bob_ids
+                # App is module-private; the authenticated owner-scoped HTTP response
+                # is the authority for account identity, not a window.App guess.
                 bob_projects = page_a.evaluate("""async () => {
                   const r=await fetch('/api/studio/projects',{credentials:'include'});
                   return {status:r.status,body:await r.json()};
