@@ -1745,8 +1745,9 @@
           const currentRow = loop.data.batchRows[idx];
           const curLayout = currentRow.layout || "";
 
-          const onPick = (pickedId) => {
+          const onPick = (pickedId, ref) => {
             currentRow.layout = pickedId || "";
+            currentRow.layoutRef = ref || null;
             markDirty();
           };
 
