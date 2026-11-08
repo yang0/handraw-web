@@ -7552,6 +7552,9 @@
                 requestId,
                 clientRequestId: requestId,
                 confirmCost: true,
+                ...(CS.forkGenerationSource?.workId ? {
+                  forkOf: CS.forkGenerationSource.workId
+                } : {}),
                 ...(CS.forkGenerationSource?.generationId ? {
                   forkGenerationId: CS.forkGenerationSource.generationId,
                   forkItemId: CS.forkGenerationSource.itemId || ""
