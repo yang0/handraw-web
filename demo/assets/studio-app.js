@@ -48,6 +48,8 @@
   const WORKFLOW_AUTO_SAVE_DELAY_MS = 1200;
   const PROJECT_AUTO_SAVE_DELAY_MS = 1600;
   const ProjectClient = window.HandrawStudioProjectSync?.createClient() || null;
+  const ArticleProject109 = window.HandrawStudioArticle109 || null;
+  let _articleProjectTimer = null;
   const StudioViews = window.HandrawStudioViews || null;
   let _workspaceHydrationController = null;
   const _generationControllers = new Set();
@@ -215,6 +217,10 @@
     if (_projectAutoSaveTimer) {
       clearTimeout(_projectAutoSaveTimer);
       _projectAutoSaveTimer = null;
+    }
+    if (_articleProjectTimer) {
+      clearTimeout(_articleProjectTimer);
+      _articleProjectTimer = null;
     }
     if (_projectSearchTimer) {
       clearTimeout(_projectSearchTimer);
@@ -755,7 +761,7 @@
       _articlesSyncInFlight = true;
       const sentVersion = _articlesSyncVersion;
       const payload = {
-        articles: (CS.myArticles || []).map((art) => ({
+        articles: (CS.myArticles || []).filter(art => !art.projectId && !art.projectPending).map((art) => ({
           ...art,
           baseUpdatedAtMs: _articleCloudBases.get(String(art.id)) ?? 0
         }))
@@ -888,6 +894,10 @@
             if (!ra || !ra.id) return;
             _articleCloudBases.set(String(ra.id), Number(ra.updatedAtMs) || 0);
             const prev = (CS.myArticles || []).find((a) => a.id === ra.id);
+            if (prev?.projectId || prev?.projectPending) {
+              artMap.set(ra.id,prev);
+              return; // Legacy workspace cannot overwrite a CAS ArticleDocument.
+            }
             // A newer local/offline draft must be recoverable before the
             // cloud workspace replaces its in-memory representation.
             if (prev && Number(prev.updatedAtMs || 0) > Number(ra.updatedAtMs || 0) &&
@@ -919,7 +929,7 @@
           });
           (CS.myArticles || []).forEach((a) => {
             if (!a || !a.id || serverIds.has(a.id)) return;
-            if (a.isNewDraft) {
+            if (a.isNewDraft || a.projectId || a.projectPending) {
               artMap.set(a.id, a);
               return;
             }
@@ -5358,9 +5368,84 @@
     }
   }
 
+  function markArticleProjectChanged(art, {document=false,plan=false}={}) {
+    if (!art) return;
+    if (document) art.documentRevision = Number(art.documentRevision || 0) + 1;
+    if (plan) art.planRevision = Number(art.planRevision || 0) + 1;
+    art.editRevision = Number(art.editRevision || 0) + 1;
+    art.projectAuthority = "article";
+    if (art.projectSaveState !== "conflict") art.projectSaveState = "local_only";
+    art._articleProjectDirty = true;
+  }
+
+  async function flushArticleProject109(art) {
+    if (!ProjectClient || !ArticleProject109 || !art || !App.state?.loggedIn ||
+        !App.state?.serverBacked || art.projectSaveState === "conflict") return false;
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const notify = () => {
+      if (isStaleScope(epoch,scope)) return;
+      writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+      if (CS.activeArticleId === art.id)
+        setArticlesSyncStatus(art.projectSaveState === "synced" ? "synced" :
+          art.projectSaveState === "conflict" ? "conflict" :
+          art.projectSaveState === "error" ? "failed" : "syncing");
+    };
+    try {
+      const result = await ProjectClient.flush(art,ArticleProject109.snapshot(art),notify);
+      if (isStaleScope(epoch,scope)) return false;
+      if (result?.needsSave) {
+        art._articleProjectDirty = true;
+        scheduleArticleProjectAutosave();
+      }
+      return Boolean(result?.ok);
+    } catch (error) {
+      if (!isStaleScope(epoch,scope)) {
+        art.projectSaveState = "error";
+        art.projectError = String(error?.message || error);
+        notify();
+      }
+      return false;
+    }
+  }
+
+  function scheduleArticleProjectAutosave() {
+    if (_articleProjectTimer) clearTimeout(_articleProjectTimer);
+    const scope = activeCacheScope,epoch = cacheScopeEpoch;
+    _articleProjectTimer = setTimeout(() => {
+      _articleProjectTimer = null;
+      if (isStaleScope(epoch,scope) || !App.state?.serverBacked ||
+          !App.state?.loggedIn) return;
+      (CS.myArticles || []).filter(a => a && (a.projectPending ||
+        (a._articleProjectDirty && a.projectSaveState !== "conflict")))
+        .forEach(a => void flushArticleProject109(a));
+    }, 900);
+  }
+
   function persistMyArticles() {
     ensureMyArticlesInitialized();
-    writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
+    // Stage a frozen #103 request before local write. Offline and refreshing
+    // tabs replay the SAME idempotency key; no phantom cloud acknowledgements.
+    if (App.state?.loggedIn && App.state?.serverBacked &&
+        ProjectClient && ArticleProject109) {
+      for (const art of CS.myArticles) {
+        if (!art?._articleProjectDirty || art.projectSaveState === "conflict") continue;
+        try {
+          ProjectClient.stage(art,ArticleProject109.snapshot(art));
+          art._articleProjectDirty = false;
+        } catch (error) {
+          art.projectSaveState = "error";
+          art.projectError = String(error?.message || error);
+        }
+      }
+    }
+    if (!writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles)) {
+      setArticlesSyncStatus("failed");
+      toast("文章本机存储失败，请勿关闭页面；请检查浏览器存储空间");
+      return;
+    }
+    if ((CS.myArticles || []).some(a => a?.projectPending ||
+        (a?._articleProjectDirty && a.projectSaveState !== "conflict")))
+      scheduleArticleProjectAutosave();
     if (_articlesCloudConflict) {
       // Keep entries omitted from the hydrated workspace; merge later edits
       // without deleting the offline versions saved before rehydration.
@@ -5374,7 +5459,10 @@
         activeId: CS.activeArticleId || existing?.activeId || ""
       });
     }
-    scheduleCloudArticlesSync();
+    // Project-owned documents have one remote authority. Legacy workspace
+    // remains only for pre-Project articles during migration.
+    if ((CS.myArticles || []).some(a => !a.projectId && !a.projectPending))
+      scheduleCloudArticlesSync();
   }
 
   function isArticleGenerating(art) {
