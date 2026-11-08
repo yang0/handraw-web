@@ -1156,9 +1156,11 @@
       const runBtn = root.querySelector("#make-image-btn-run");
       if (runBtn) {
         runBtn.onclick = () => {
-          const currentBusy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
-          if (currentBusy) {
-            global.HANDRAW_SHARED?.toast?.("任务处理中，暂不能清空或再次生成");
+          const currentBusy = typeof this.actions?.isBusy === "function" ?
+            this.actions.isBusy():Boolean(this.context?.busy);
+          const remote=this.context?.runProjection;
+          if (currentBusy || (remote?.ok && !remote.isTerminal)) {
+            global.HANDRAW_SHARED?.toast?.("服务器仍在处理上一个任务，请查看当前状态后再生成");
             return;
           }
           this.actions?.run();
@@ -1207,6 +1209,11 @@
       const againBtn = root.querySelector("#make-image-btn-again");
       if (againBtn) {
         againBtn.onclick = () => {
+          if(this.actions?.isBusy?.() ||
+              (this.context?.runProjection?.ok && !this.context.runProjection.isTerminal)){
+            global.HANDRAW_SHARED?.toast?.("请先确认当前云端任务已结束");
+            return;
+          }
           this.actions?.run();
         };
       }
@@ -1214,7 +1221,7 @@
       const newThemeBtn = root.querySelector("#make-image-btn-new-theme");
       if (newThemeBtn) {
         newThemeBtn.onclick = () => {
-          td.text = "";
+          if(!this.patchSpec({subject:""},()=>{td.text=""}))return;
           td.subjectHint = "";
           this.actions?.markDirtyAndRender();
           const input = this.hostElement?.querySelector("#make-image-subject");
