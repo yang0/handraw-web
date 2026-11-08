@@ -80,7 +80,7 @@
     if(typeof document==="undefined")return null;
     if(active?.root?.isConnected) active.destroy();
     const state={root:null,options,review:null,baseline:null,applied:null,
-      busy:false,styles:[],mode:"platforms",closed:false};
+      busy:false,committing:false,styles:[],mode:"platforms",closed:false};
     const backdrop=document.createElement("div");
     backdrop.id="gp126-backdrop";
     backdrop.className="gp126-backdrop";
@@ -193,7 +193,7 @@
         message("项目版本已变化，必须重新审阅才能应用。",true);
         reset();return;
       }
-      state.busy=true;update();message("正在向服务端确认并执行 CAS 应用…");
+      state.busy=true;state.committing=true;update();message("正在向服务端确认并执行 CAS 应用…");
       try{
         const result=await api("POST","/apply",{
           reviewId:state.review.reviewId,confirmed:true});
@@ -211,11 +211,11 @@
       }catch(err){
         if(!state.closed)message(errorText(err)+"。请重新生成差异预览。",true);
         state.review=null;
-      }finally{state.busy=false;update();}
+      }finally{state.busy=false;state.committing=false;update();}
     }
     async function revert(){
       if(state.busy||!state.applied)return;
-      state.busy=true;update();message("正在撤销云端补丁，不覆盖其他标签的修改…");
+      state.busy=true;state.committing=true;update();message("正在撤销云端补丁，不覆盖其他标签的修改…");
       try{
         const result=await api("POST","/undo",{
           reviewId:state.applied.reviewId,confirmed:true});
@@ -232,10 +232,14 @@
         state.applied=null;state.review=null;
       }catch(err){
         if(!state.closed)message(errorText(err),true);
-      }finally{state.busy=false;update();}
+      }finally{state.busy=false;state.committing=false;update();}
     }
     function close(){
       if(state.closed)return;
+      if(state.committing){
+        message("正在确认云端写入，完成前不能关闭，避免本地画布与服务器版本分叉。",true);
+        return;
+      }
       state.closed=true;backdrop.remove();
       document.removeEventListener("keydown",onKey);
       if(previousFocus&&previousFocus.isConnected)previousFocus.focus();
