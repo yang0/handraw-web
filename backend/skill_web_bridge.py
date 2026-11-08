@@ -205,6 +205,14 @@ def delete_resource(db: Any, user: dict[str, Any], rid: str, body_revision: str)
             tx.execute("UPDATE skill_personal_resources SET change_seq=? WHERE id=?", (event.lastrowid,rid))
         current=tx.execute("SELECT * FROM skill_personal_resources WHERE id=?", (rid,)).fetchone()
         _sync_web_read_model(tx, current)
+        if current["deleted_at"]:
+            # A deleted private definition must not leave an unusable stale
+            # favorite in its owner's personal selector.
+            tx.execute(
+                "DELETE FROM collections WHERE user_id=? AND target_id=? "
+                "AND bucket IN ('styles','layouts')",
+                (uid, owned_resource_code(rid, current["kind"])),
+            )
     return {"ok": True, "resource": _resource(current)}
 
 
