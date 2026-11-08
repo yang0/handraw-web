@@ -2442,6 +2442,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(get_owned_studio_run(self.db, user, m_run.group(1)))
             return
 
+        # #126: authorized style identities only; no protected prompt content.
+        if req_path == "/api/studio/graph-patch/styles":
+            user = self._current_user(required=True)
+            from .studio_graph_patch import list_styles
+            self._send_json(list_styles(self.db, user))
+            return
+
         if req_path == "/api/studio/projects":
             user = self._current_user(required=True)
             from .studio_projects import list_projects
