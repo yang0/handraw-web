@@ -65,12 +65,13 @@ def _count(value: object, where: str, *, positive: bool = False) -> int:
     return value
 
 
-def _attempt_key(row: dict, where: str) -> tuple[str, int]:
+def _attempt_key(row: dict, where: str) -> tuple[str, str, int]:
+    owner = _ident(row["owner_key"], where)
     rid = _ident(row["request_id"], where)
     number = _count(row["attempt"], where, positive=True)
     if number > 10000:
         raise BadEvidence("attempt outside supported bounds")
-    return rid, number
+    return owner, rid, number
 
 
 def _window(raw: object, provider: bool) -> dict:
@@ -138,13 +139,13 @@ def reconcile(provider: object, handraw: object) -> dict:
     if not isinstance(p["currency"], str) or not re.fullmatch(r"[A-Z]{3}", p["currency"]):
         raise BadEvidence("invalid provider currency")
     issues: list[dict] = []
-    attempts: dict[tuple[str, int], dict] = {}
-    ordinal: dict[tuple[str, int], int] = {}
-    task_ids: dict[str, tuple[str, int]] = {}
+    attempts: dict[tuple[str, str, int], dict] = {}
+    ordinal: dict[tuple[str, str, int], int] = {}
+    task_ids: dict[str, tuple[str, str, int]] = {}
     for pos, row in enumerate(_rows(h["attempts"], "handraw.attempts"), 1):
-        row = _object(row, {"request_id", "attempt", "run_id", "item_id", "slot_key",
+        row = _object(row, {"owner_key", "request_id", "attempt", "run_id", "item_id", "slot_key",
                             "provider_task_id", "submitted", "status", "cost_type"},
-                      {"request_id", "attempt", "run_id", "item_id", "slot_key",
+                      {"owner_key", "request_id", "attempt", "run_id", "item_id", "slot_key",
                        "provider_task_id", "submitted", "status", "cost_type"}, "attempt")
         key = _attempt_key(row, "handraw attempt")
         for field in ("run_id", "item_id", "slot_key"):
@@ -162,10 +163,10 @@ def reconcile(provider: object, handraw: object) -> dict:
         else:
             attempts[key], ordinal[key] = row, pos
 
-    tasks: dict[tuple[str, int], dict] = {}
+    tasks: dict[tuple[str, str, int], dict] = {}
     for row in _rows(p["tasks"], "provider.tasks"):
-        row = _object(row, {"request_id", "attempt", "provider_task_id", "state"},
-                      {"request_id", "attempt", "provider_task_id", "state"}, "provider task")
+        row = _object(row, {"owner_key", "request_id", "attempt", "provider_task_id", "state"},
+                      {"owner_key", "request_id", "attempt", "provider_task_id", "state"}, "provider task")
         key = _attempt_key(row, "provider task")
         tid = _ident(row["provider_task_id"], "provider task ID")
         if type(row["state"]) is not str or row["state"] not in PROVIDER_STATES:
@@ -176,12 +177,12 @@ def reconcile(provider: object, handraw: object) -> dict:
             tasks[key] = row
             task_ids[tid] = key
 
-    event_groups: dict[tuple[str, int], dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+    event_groups: dict[tuple[str, str, int], dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
     event_ids: set[str] = set()
     for row in _rows(p["events"], "provider.events"):
-        row = _object(row, {"event_id", "request_id", "attempt", "provider_task_id",
+        row = _object(row, {"event_id", "owner_key", "request_id", "attempt", "provider_task_id",
                             "kind", "currency", "amount_minor", "occurred_at_utc"},
-                      {"event_id", "request_id", "attempt", "provider_task_id",
+                      {"event_id", "owner_key", "request_id", "attempt", "provider_task_id",
                        "kind", "currency", "amount_minor", "occurred_at_utc"}, "provider event")
         key = _attempt_key(row, "provider event")
         event_id = _ident(row["event_id"], "provider event ID")
@@ -197,12 +198,12 @@ def reconcile(provider: object, handraw: object) -> dict:
         if key not in tasks or tasks[key]["provider_task_id"] != tid:
             _issue(issues, "provider_event_without_matching_task", ordinal.get(key))
 
-    ledger_groups: dict[tuple[str, int], dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+    ledger_groups: dict[tuple[str, str, int], dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
     ledger_ids: set[str] = set()
     for row in _rows(h["ledger_events"], "handraw.ledger_events"):
-        row = _object(row, {"event_key", "request_id", "attempt", "kind",
+        row = _object(row, {"event_key", "owner_key", "request_id", "attempt", "kind",
                             "delta_credits", "occurred_at_utc"},
-                      {"event_key", "request_id", "attempt", "kind",
+                      {"event_key", "owner_key", "request_id", "attempt", "kind",
                        "delta_credits", "occurred_at_utc"}, "handraw ledger event")
         key = _attempt_key(row, "handraw ledger event")
         event_id = _ident(row["event_key"], "handraw ledger ID")
@@ -222,9 +223,9 @@ def reconcile(provider: object, handraw: object) -> dict:
 
     callback_ids: dict[str, dict] = {}
     for row in _rows(h["callbacks"], "handraw.callbacks"):
-        row = _object(row, {"callback_event_id", "request_id", "attempt",
+        row = _object(row, {"callback_event_id", "owner_key", "request_id", "attempt",
                             "provider_task_id", "state", "occurred_at_utc"},
-                      {"callback_event_id", "request_id", "attempt",
+                      {"callback_event_id", "owner_key", "request_id", "attempt",
                        "provider_task_id", "state", "occurred_at_utc"}, "callback")
         key = _attempt_key(row, "callback")
         cbid = _ident(row["callback_event_id"], "callback event ID")
@@ -251,10 +252,10 @@ def reconcile(provider: object, handraw: object) -> dict:
 
     # Multiple successful *paid* remote attempts for one canonical V3 output
     # slot can indicate double-billing even when requestId differs on retry.
-    successes_by_slot: dict[tuple[str, str, str], list[tuple[str, int]]] = defaultdict(list)
+    successes_by_slot: dict[tuple[str, str, str, str], list[tuple[str, str, int]]] = defaultdict(list)
     for key, row in attempts.items():
         if row["status"] == "success":
-            successes_by_slot[(row["run_id"], row["item_id"], row["slot_key"])].append(key)
+            successes_by_slot[(row["owner_key"], row["run_id"], row["item_id"], row["slot_key"])].append(key)
     for completed in successes_by_slot.values():
         if len(completed) > 1:
             for key in completed:
