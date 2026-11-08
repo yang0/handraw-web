@@ -20,7 +20,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 VERSION = 101
 NAME = "101_studio_project_drafts"
@@ -70,6 +70,11 @@ def validate_database_name(dsn: str) -> None:
         raise RuntimeError("必须提供完整的 postgresql://host/database URL") from exc
     if not database or "/" in database or database.lower() in ("postgres", "template0", "template1"):
         raise RuntimeError("拒绝操作默认 PostgreSQL 系统数据库")
+    # libpq permits query parameters overriding the URI's database/host.
+    # Never inspect one target and write into another on --apply.
+    overrides = {"dbname", "host", "hostaddr", "service", "servicefile", "options"}
+    if any(key.lower() in overrides for key, _ in parse_qsl(parsed.query, keep_blank_values=True)):
+        raise RuntimeError("迁移地址禁止通过 query 参数覆盖数据库、主机或服务配置")
 
 
 def inspect_state(cur: Any) -> dict[str, Any]:
