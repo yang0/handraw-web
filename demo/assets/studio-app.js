@@ -14,6 +14,7 @@
 (function () {
   const S = window.HANDRAW_SHARED;
   const E = window.HANDRAW_CANVAS_ENGINE;
+  const CanvasUI = window.HandrawCanvasUI;
   const { App, esc, toast, channelUrl } = S;
 
   const UPLOAD_STORAGE_KEY = "handraw_canvas_uploads_v3";
@@ -4855,7 +4856,7 @@
 
     // Smart Single-Node Batch Gallery: when generating > 6 images (e.g. 12, 50, 100+),
     // converge into 1 paginated "🗂️ 批量图集" node instead of exploding the canvas into 100 nodes!
-    if (safeCount > BATCH_GALLERY_THRESHOLD || (existing[0] && existing[0].data?.kind === "batch_gallery" && !onlyDispNodeId && onlyItemIdx === null)) {
+    if ((safeCount > 1 && (existing.length <= 1 || existing[0]?.data?.kind === "batch_gallery")) || (existing[0]?.data?.kind === "batch_gallery" && !onlyDispNodeId && onlyItemIdx === null)) {
       let galNode = existing[0] || null;
       let createdCount = 0;
       const spawnY = snapVal(Math.max(48, ctrlNode.y - 24));
@@ -9349,6 +9350,7 @@
     window.HandrawCanvasRenderer.updateSelection(DOM.nodesLayer,
       sets.selSet,sets.relNodeIds);
     renderEdgesSvg();
+    renderCanvasProductUI();
   }
 
   function renderWorldNodes() {
@@ -10355,76 +10357,14 @@
             (Number(dd.totalTarget) || 0) > BATCH_GALLERY_THRESHOLD;
 
           if (isGallery) {
-            const pageSize = 9;
-            const totalPages = Math.max(1, Math.ceil(Math.max(1, items.length) / pageSize));
-            const curPage = Math.min(totalPages, Math.max(1, Math.round(Number(dd.page) || 1)));
-            const sliceStart = (curPage - 1) * pageSize;
-            const pageItems = items.slice(sliceStart, sliceStart + pageSize);
-
-            return `
-              <div class="ic-node ic-node-output_display ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
-                <div class="ic-node-header-above">
-                  <span>批量图集</span>
-                  <span class="ic-node-badge ic-badge-output-disp">${
-                    dd.status === "generating" ? "批量生成中" : `共 ${items.length} 张`
-                  }</span>
-                </div>
-
-                <div class="ic-v4-card" style="position:relative;">
-                  ${
-                    dd.status === "generating"
-                      ? `
-                      <div style="padding:24px 14px;border-radius:10px;background:rgba(31,111,74,0.06);border:1px dashed rgba(31,111,74,0.38);text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px;">
-                        <div style="font-size:12.5px;font-weight:850;color:#1f6f4a;" data-gal-prog-for="${esc(n.id)}">
-                          正在批量出图 ${items.length} / ${dd.totalTarget || items.length || 100} 张…
-                        </div>
-                        <div style="font-size:10.8px;color:var(--ic-muted);">所有成图自动汇聚于此节点，无需堆叠百个显示框</div>
-                      </div>
-                    `
-                      : items.length > 0
-                        ? `
-                        <div class="ic-disp-gallery-grid">
-                          ${pageItems
-                            .map((gIt, gIdx) => {
-                              const absIdx = sliceStart + gIdx;
-                              return `
-                                <div class="ic-disp-gal-cell" data-disp-zoom="${esc(gIt.imageUrl)}" data-disp-title="${esc(gIt.title || `成图 #${absIdx + 1}`)}" title="第 ${absIdx + 1} 张 · ${esc(gIt.title || "")}">
-                                  <img data-hw-src="${esc(gIt.imageUrl)}" alt="${esc(gIt.title || "")}" loading="lazy" />
-                                  <span class="ic-disp-gal-idx">#${String(absIdx + 1).padStart(2, "0")}</span>
-                                  ${gIt.demoMode ? '<span style="position:absolute;right:4px;top:4px;padding:1px 4px;border-radius:4px;background:#fff0bf;color:#7a4d00;font-size:9px;font-weight:900;">演示</span>' : ""}
-                                </div>
-                              `;
-                            })
-                            .join("")}
-                        </div>
-                        <div class="ic-disp-gal-pager">
-                          <button type="button" class="ic-opt-pill" data-disp-gal-page="${esc(n.id)}" data-delta="-1" ${curPage <= 1 ? "disabled" : ""} style="padding:2px 8px;font-size:10.8px;">‹ 上页</button>
-                          <span>第 ${curPage} / ${totalPages} 页 · 共 ${items.length} 张</span>
-                          <button type="button" class="ic-opt-pill" data-disp-gal-page="${esc(n.id)}" data-delta="1" ${curPage >= totalPages ? "disabled" : ""} style="padding:2px 8px;font-size:10.8px;">下页 ›</button>
-                        </div>
-                        <div class="ic-disp-deliverable-bar">
-                          <div style="display:flex;gap:6px;">
-                            <button type="button" class="btn btn-sm" data-disp-open-gal="${esc(n.id)}" style="flex:1.18;font-weight:800;">百图画廊</button>
-                            <button type="button" class="btn btn-sm" data-disp-zip="${esc(n.id)}" style="flex:1;">ZIP</button>
-                          </div>
-                        </div>
-                      `
-                        : `
-                        <div style="padding:28px 14px;border-radius:10px;background:var(--ic-surface);border:1px dashed var(--ic-border);text-align:center;font-size:11.5px;color:var(--ic-muted);">
-                          等待上游批量运行出图（成图将自动分页收纳于此）…
-                        </div>
-                      `
-                  }
-                </div>
-
-                <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="来自左侧「生成设置」节点">
-                  <span class="ic-port-dot">+</span>
-                </div>
-                <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="可将图集首图连入下游新的「生成设置」节点">
-                  <span class="ic-port-dot">+</span>
-                </div>
-              </div>
-            `;
+            const cloudRun = upParentId ? getCanvasRunProjection(getNodeById(upParentId)) : null;
+            return '<div class="ic-node ic-node-output_display '+(isSel?'is-selected ':'')+(isRel?'is-related':'')+
+              '" data-node-id="'+esc(n.id)+'" style="'+posStyle+'">'+
+              '<div class="ic-node-header-above"><span>系列结果组</span>'+
+              '<span class="ic-node-badge ic-badge-output-disp">共 '+(dd.totalTarget||items.length)+' 张</span></div>'+
+              '<div class="ic-v4-card ic129-gallery-card">'+CanvasUI.galleryHtml(n,cloudRun)+'</div>'+
+              '<div class="ic-port-zone is-in" data-port-node="'+esc(n.id)+'" data-port-dir="in"><span class="ic-port-dot">+</span></div>'+
+              '<div class="ic-port-zone is-out" data-port-node="'+esc(n.id)+'" data-port-dir="out"><span class="ic-port-dot">+</span></div></div>';
           }
 
           return `
@@ -11303,6 +11243,66 @@
       btn.onclick = (e) => {
         e.stopPropagation();
         openArticlePlanWidePage(btn.getAttribute("data-plan-open-wide"));
+      };
+    });
+
+    // #129: result gallery actions are UI-only except explicit user-triggered retry/branch.
+    root.querySelectorAll("[data-disp-toggle]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        CanvasUI.toggleGallery(btn.getAttribute("data-disp-toggle"));
+        renderWorldNodes();
+      };
+    });
+    root.querySelectorAll("[data-disp-retry-slot]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const display=getNodeById(btn.getAttribute("data-disp-retry-slot"));
+        const index=Number(btn.getAttribute("data-slot"));
+        const parent=getNodeById(display?.data?.sourceNodeId);
+        const projection=parent?getCanvasRunProjection(parent):null;
+        const state=CanvasUI.galleryState(display,projection);
+        if(!Number.isInteger(index)||!CanvasUI.mayRetry(state.slots[index],projection)){
+          toast("只有服务端确认失败且运行结束的槽位才可以单张重试");
+          return;
+        }
+        void runOutputControlNode(parent.id,{onlyItemIdx:index});
+      };
+    });
+    root.querySelectorAll("[data-disp-variant]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const disp=getNodeById(btn.getAttribute("data-disp-variant"));
+        if(!disp)return;
+        const created=spawnShelfItem({kind:"output_control"},
+          {x:disp.x+(disp.w||340)+100,y:disp.y+30});
+        if(created){
+          // Execution edge is explicit and owned by Graph; a result card is not a visual note.
+          pushUndo();ensureEdge(disp.id,created.id);
+          fullRenderCanvas();persistOpenTabs();
+          toast("已派生新的生成分支，请检查参数后手动运行");
+        }
+      };
+    });
+    root.querySelectorAll("[data-disp-reference]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const display=getNodeById(btn.getAttribute("data-disp-reference"));
+        const index=Number(btn.getAttribute("data-slot")||0);
+        const item=display?.data?.items?.[index];
+        const url=CanvasUI.mediaUrl(item?.imageUrl);
+        const mediaId=item?.mediaId||item?.assetUid;
+        if(!url||!mediaId){
+          toast("此结果缺少受控媒体 ID，不能直接添加为参考；请通过我的图库选择授权素材");
+          return;
+        }
+        const asset=spawnShelfItem({kind:"asset"},{x:display.x-120,y:display.y+360});
+        if(!asset)return;
+        asset.data.items=[{id:String(mediaId),assetUid:String(mediaId),
+          mediaId:String(mediaId),image:url,name:"生成结果参考 #"+(index+1),
+          cat:"other",source:"private"}];
+        markActiveTabDirty();fullRenderCanvas();persistOpenTabs();
+        toast("已作为项目参考素材添加；生成前仍须通过服务端素材授权校验");
       };
     });
 
@@ -13744,7 +13744,8 @@
       // Keep each result linked to its original control, slot and V3 Item;
       // rendering this read-only projection must not mutate Graph or publish.
       const outputs = control?.data?.studio2RunSnapshot?.outputs || [];
-      return {...projection,items:payload.items.filter(item=>item.status==="success" &&
+      const slots = CanvasUI.slotSummary(payload.items, projection.total, payload.run.source || "web");
+      return {...projection,slots,items:payload.items.filter(item=>item.status==="success" &&
         item.mediaId && typeof item.imageUrl==="string" && item.imageUrl &&
         ((item.imageUrl.startsWith("/") && !item.imageUrl.startsWith("//")) ||
           item.imageUrl.startsWith("https://")))
@@ -18343,6 +18344,71 @@
     });
   }
 
+  // #129: one project, one Graph and server-backed Run projection for both views.
+  function renderCanvasProductUI(){
+    if(!CanvasUI||!DOM.canvasStage)return;
+    const tab=CS.tabs.find(t=>t.id===CS.activeTabId)||null;
+    const runs=CanvasUI.summarize(CS.graph,getCanvasRunProjection);
+    CanvasUI.renderWorkspace({
+      stage:DOM.canvasStage,isCanvas:CS.stageView==="canvas",
+      graph:CS.graph,activeTab:tab,saveText:projectStatusText(tab),runs,
+      onStart:subject=>{
+        // Upgrade an existing blank Project in place; never spawn a parallel tab.
+        const wasBlank=!(CS.graph.nodes||[]).length;
+        if(!wasBlank)return;
+        pushUndo();
+        CS.graph=E.createBlueprintGraph("single",Catalog,window.HANDRAW_MOCK);
+        const textNode=CS.graph.nodes.find(n=>n.type==="text_input");
+        if(textNode)textNode.data.text=String(subject||"").trim();
+        CS.graph.selectedIds=textNode?[textNode.id]:[];
+        markActiveTabDirty();persistOpenTabs();fullRenderCanvas();fitView();
+      },
+      onStop:controlId=>{
+        if(!cancelActiveBatchGeneration(controlId)){
+          toast("未找到可停止的本地队列；已提交远端的任务仍需从运行记录核实");
+        }else{
+          toast("已请求停止未提交槽位；上游已接收任务仍可能完成或计费");
+          fullRenderCanvas();
+        }
+      },
+      onAction:(action,node)=>{
+        if(action==="save")handleProjectStatusClick();
+        else if(action==="simple")switchCreationStage("simple");
+        else if(action==="undo")undoGraph();
+        else if(action==="redo")redoGraph();
+        else if(action==="run"){
+          if(node?.type==="output_control")void runOutputControlNode(node.id);
+          else void runAllOutputControls();
+        }else if(action==="edit"&&node?.type==="text_input")openTextEditModal(node.id);
+        else if(action==="style"&&node?.type==="skill_params")openSkillFieldPickerModal(node,"style1");
+        else if(action==="layout"&&node?.type==="skill_params")openSkillFieldPickerModal(node,"layout");
+        else if(action==="asset"&&node?.type==="asset")openAssetPickerModal(node);
+        else if(action==="add-asset"){
+          // An asset-only start must still have a valid single-image Graph.
+          if(!(CS.graph.nodes||[]).length){
+            const form=DOM.canvasStage.querySelector("#canvas-129-quick-form");
+            form?.dispatchEvent(new Event("submit",{cancelable:true,bubbles:true}));
+            if(!(CS.graph.nodes||[]).length){
+              // The subject form is optional for adding a reference.
+              const g=E.createBlueprintGraph("single",Catalog,window.HANDRAW_MOCK);
+              pushUndo();CS.graph=g;markActiveTabDirty();persistOpenTabs();fullRenderCanvas();
+            }
+          }
+          const asset=CS.graph.nodes.find(n=>n.type==="asset");
+          if(asset)openAssetPickerModal(asset);
+        }else if(action==="template"){
+          if(!(CS.graph.nodes||[]).length){
+            pushUndo();CS.graph=E.createBlueprintGraph("single",Catalog,window.HANDRAW_MOCK);
+            markActiveTabDirty();persistOpenTabs();fullRenderCanvas();fitView();
+          }else{
+            const btn=DOM.workbenchBar?.querySelector("#tb-new-wf");
+            if(btn)btn.click();
+          }
+        }
+      }
+    });
+  }
+
   function fullRenderCanvas() {
     syncAllDownstreamArticlePlans();
     if (CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length)) {
@@ -18356,6 +18422,7 @@
       renderFloatingOverlays();
     }
     renderTopAndBottomDocks();
+    renderCanvasProductUI();
     renderMinimap();
     if (CS.stageView === "quick" || CS.stageView === "batch") {
       renderQuickStart();
@@ -18369,7 +18436,7 @@
     vp.addEventListener(
       "wheel",
       (e) => {
-        if (e.target.closest("[data-canvas-no-zoom]")) return;
+        if (e.target.closest("[data-canvas-no-zoom], input, textarea, select, [contenteditable], .ic-node, .ic129-inspector-info")) return;
         e.preventDefault();
         closeContextMenu();
         zoomAroundPoint(e.clientX, e.clientY, e.deltaY < 0 ? 1.11 : 1 / 1.11);
