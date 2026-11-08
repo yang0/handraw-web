@@ -381,5 +381,109 @@ class PaidGatewayHttpZeroDarkCharge112(unittest.TestCase):
             (gid,owner_id)).fetchone()[0],0)
 
 
+
+class GatewayTransportSecurity112(unittest.TestCase):
+    """Real local HTTP transport proves gateway Bearer never follows redirects."""
+
+    def test_credentials_never_follow_cross_origin_302(self):
+        import os
+        import threading
+        import urllib.error
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from unittest.mock import patch
+        from backend.server import gateway_request
+
+        seen = {"origin_auth": "", "sink_requests": 0, "sink_auth": ""}
+        class Sink(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen["sink_requests"] += 1
+                seen["sink_auth"] = self.headers.get("Authorization") or ""
+                self.send_response(200)
+                self.end_headers()
+            def log_message(self, *args):
+                pass
+        sink = ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+
+        class Origin(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen["origin_auth"] = self.headers.get("Authorization") or ""
+                self.send_response(302)
+                self.send_header(
+                    "Location",
+                    f"http://127.0.0.1:{sink.server_port}/capture",
+                )
+                self.end_headers()
+            def log_message(self, *args):
+                pass
+        origin = ThreadingHTTPServer(("127.0.0.1", 0), Origin)
+        threads = [
+            threading.Thread(target=server.serve_forever, daemon=True)
+            for server in (origin, sink)
+        ]
+        for thread in threads:
+            thread.start()
+        try:
+            canary = "QA112_TEST_ONLY_BEARER_CANARY"
+            cfg = {"base_url": f"http://127.0.0.1:{origin.server_port}",
+                   "key": canary}
+            with patch.dict(os.environ, {
+                "NO_PROXY": "127.0.0.1,localhost",
+                "no_proxy": "127.0.0.1,localhost",
+            }), patch("backend.server.load_image_service_config", return_value=cfg):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    gateway_request("/api/image-tasks?ids=qa112")
+            self.assertEqual(error.exception.code, 302)
+            self.assertEqual(seen["origin_auth"], "Bearer " + canary)
+            self.assertEqual(seen["sink_requests"], 0)
+            self.assertEqual(seen["sink_auth"], "")
+        finally:
+            for server in (origin, sink):
+                server.shutdown()
+                server.server_close()
+            for thread in threads:
+                thread.join(3)
+
+    def test_oversized_and_non_object_gateway_json_fail_closed(self):
+        import os
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from unittest.mock import patch
+        from backend.server import gateway_request
+
+        class Gateway(BaseHTTPRequestHandler):
+            def do_GET(self):
+                payload = (
+                    b'{"oversized":"' + b"x" * (4 * 1024 * 1024) + b'"}'
+                    if self.path == "/large" else b'["not-an-object"]'
+                )
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Gateway)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with patch.dict(os.environ, {
+                "NO_PROXY": "127.0.0.1,localhost",
+                "no_proxy": "127.0.0.1,localhost",
+            }), patch("backend.server.load_image_service_config",
+                     return_value={
+                         "base_url": f"http://127.0.0.1:{server.server_port}",
+                         "key": "CI_TEST_ONLY_KEY",
+                     }):
+                with self.assertRaisesRegex(ValueError, "4MB"):
+                    gateway_request("/large")
+                with self.assertRaisesRegex(ValueError, "必须是对象"):
+                    gateway_request("/array")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(3)
+
+
 if __name__ == "__main__":
     unittest.main()
