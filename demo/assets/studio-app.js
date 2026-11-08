@@ -16858,6 +16858,7 @@
       || (canvas && CS.lastStudioTaskView === "article");
     const history = CS.stageView === "history";
     const workflows = CS.stageView === "workflows";
+    const projects = CS.stageView === "projects";
     const showProjectSave = CS.stageView === "quick" || CS.stageView === "batch";
     const activeProjectTab = CS.tabs.find((t) => t.id === CS.activeTabId);
     const historyCount = (CS.generationHistory || []).length;
@@ -16871,7 +16872,7 @@
       <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布</button>
     </div><div class="qc-entry-actions">${showProjectSave
       ? `<button type="button" class="btn btn-sm" id="studio-project-status" title="保存当前项目至云端">${projectStatusText(activeProjectTab)}</button>`
-      : ""}<button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
+      : ""}<button type="button" class="btn btn-sm qc-mode-projects${projects ? " btn-primary" : ""}" id="studio-mode-projects" aria-pressed="${projects}" title="从云端或本机恢复项目">项目中心</button><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
 
     const btnProjectSave = DOM.entryBar.querySelector("#studio-project-status");
     if (btnProjectSave) btnProjectSave.onclick = handleProjectStatusClick;
@@ -16885,6 +16886,8 @@
     if (btnSimple) btnSimple.onclick = () => { switchCreationStage("simple"); };
     const btnCanvas = DOM.entryBar.querySelector("#studio-mode-canvas");
     if (btnCanvas) btnCanvas.onclick = () => { switchCreationStage("canvas"); };
+    const btnProjects = DOM.entryBar.querySelector("#studio-mode-projects");
+    if (btnProjects) btnProjects.onclick = () => { openProjectCenter(); };
     const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
     if (btnHistory) btnHistory.onclick = () => { openHistoryPage(); };
     const btnWorkflows = DOM.entryBar.querySelector("#studio-mode-workflows");
@@ -18032,6 +18035,7 @@
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   window.HANDRAW_STUDIO.resolveShareTitle = resolveShareTitle;
   window.HANDRAW_STUDIO.openHistoryStage = openHistoryPage;
+  window.HANDRAW_STUDIO.openProjectCenter = openProjectCenter;
   window.HANDRAW_STUDIO.getHistory = () => CS.generationHistory;
   window.HANDRAW_STUDIO.setHistory = (list) => {
     CS.generationHistory = list;
