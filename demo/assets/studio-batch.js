@@ -1542,14 +1542,13 @@
       if (btnStratFixed) {
         btnStratFixed.onclick = () => {
           if (loop.data.batchLayoutMode === "fixed") return;
-          // Strategy is a view policy; never destroy per-slot layout/reference
-          // overrides when switching to a uniform layout. They are restored
-          // when the user returns to per-slot (AI) mode.
-          const rows = Array.isArray(loop.data.batchRows) ? loop.data.batchRows : [];
-          if (rows.length > 0) {
-            loop.data.promptListText = rows.map((r) => r.theme).filter(Boolean).join("\n");
+          const api=self.getSeries();
+          if(api)api.switchMode(loop,"fixed");
+          else {
+            const rows=Array.isArray(loop.data.batchRows)?loop.data.batchRows:[];
+            if(rows.length)loop.data.promptListText=rows.map(r=>r.theme).filter(Boolean).join("\n");
+            loop.data.batchLayoutMode="fixed";
           }
-          loop.data.batchLayoutMode = "fixed";
           markDirty();
         };
         btnStratFixed.onkeydown = (e) => {
@@ -1565,26 +1564,17 @@
       if (btnStratAi) {
         btnStratAi.onclick = () => {
           if (loop.data.batchLayoutMode === "ai") return;
-          // Switching from Fixed to AI: split promptListText lines into rows
-          loop.data.batchLayoutMode = "ai";
-          const rawText = typeof loop.data.promptListText === "string" ? loop.data.promptListText : "";
-          const lines = rawText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-          const previous = Array.isArray(loop.data.batchRows) ? loop.data.batchRows : [];
-          const slotIds = Array.isArray(loop.data.studio2SlotIds) ? loop.data.studio2SlotIds : [];
-          if (lines.length > 0) {
-            loop.data.batchRows = lines.map((line, i) => ({
-              ...(previous[i] || {}), theme: line,
-              slotId: previous[i]?.slotId || slotIds[i] || "",
-              // A missing layout follows global; do not invent a selection.
-              layout: previous[i]?.layout || ""
-            }));
-          } else {
-            const cnt = Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6));
-            loop.data.batchRows = Array.from({ length: cnt }, (_, i) => ({
-              ...(previous[i] || {}), theme: previous[i]?.theme || "",
-              slotId: previous[i]?.slotId || slotIds[i] || "",
-              layout: previous[i]?.layout || ""
-            }));
+          const api=self.getSeries();
+          if(api){
+            api.switchMode(loop,"ai");
+            if(api.read(loop).slots.length===0){
+              const count=Math.max(1,Math.min(20,Number(loop.data.batchCount)||6));
+              for(let i=0;i<count;i++)api.add(loop);
+            }
+          }else{
+            loop.data.batchLayoutMode="ai";
+            const lines=String(loop.data.promptListText||"").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+            loop.data.batchRows=lines.map((theme,i)=>({theme,layout:"",slotId:loop.data.studio2SlotIds?.[i]||""}));
           }
           markDirty();
         };
@@ -1647,6 +1637,7 @@
             promptListText: loop.data.promptListText || "",
             batchRows: JSON.parse(JSON.stringify(loop.data.batchRows || [])),
             studio2SlotIds: [...(loop.data.studio2SlotIds || [])],
+            studio2Plan:JSON.parse(JSON.stringify(loop.data.studio2Plan||null)),
             planRevision: loop.data.planRevision || 0
           } : null;
           // Prevent late AI responses from overwriting edits made while
@@ -1726,12 +1717,18 @@
               // Replan undo is an inline affordance, not a disruptive dialog.
               self.planNotice = "规划已更新，可点击撤销恢复原列表";
             }
-            if (global.HandrawStudioCore) {
-              const merged = global.HandrawStudioCore.mergeLegacyPlanRows(loop, items, currentMode);
-              loop.data.promptListText = merged.promptListText;
-              loop.data.batchRows = merged.batchRows;
-              loop.data.studio2SlotIds = merged.studio2SlotIds;
-              loop.data.planRevision = merged.planRevision;
+            if(self.getSeries()) {
+              self.getSeries().mergeAI(loop,items,currentMode,{
+                baseRevision:loop.data.planRevision,
+                catalog:self.context?.catalog,
+                isUnlocked:self.actions?.isUnlocked
+              });
+            }else if (global.HandrawStudioCore) {
+              const merged=global.HandrawStudioCore.mergeLegacyPlanRows(loop,items,currentMode);
+              loop.data.promptListText=merged.promptListText;
+              loop.data.batchRows=merged.batchRows;
+              loop.data.studio2SlotIds=merged.studio2SlotIds;
+              loop.data.planRevision=merged.planRevision;
             } else if (currentMode === "fixed") {
               loop.data.promptListText = items.map(it => it.subject).join("\n");
             } else {
@@ -1771,12 +1768,19 @@
       const promptsInput = root.querySelector("#batch-prompts-input");
       if (promptsInput) {
         promptsInput.oninput = () => {
-          loop.data.promptListText = promptsInput.value;
-          // Keep hidden AI-mode row overrides for reversible strategy switches.
+          if(self.getSeries()) {
+            try {self.getSeries().updateText(loop,promptsInput.value);}
+            catch(err) {global.HANDRAW_SHARED?.toast?.("主题编辑未保存："+(err.code||err.message));return;}
+          } else loop.data.promptListText=promptsInput.value;
           self.updatePreviewAndCost(root);
         };
         promptsInput.onblur = () => {
-          loop.data.promptListText = promptsInput.value;
+          if(self.getSeries()) {
+            if(loop.data.promptListText!==promptsInput.value){
+              try{self.getSeries().updateText(loop,promptsInput.value);}
+              catch(err){global.HANDRAW_SHARED?.toast?.("主题编辑失败："+(err.code||err.message));return;}
+            }
+          }else loop.data.promptListText=promptsInput.value;
           markDirty();
         };
       }
