@@ -269,6 +269,16 @@
 
   function normalizeLegacyBatch(loop, options = {}) {
     const ld = loop?.data || {};
+    // After #123 the existing Loop's PlanSlot is the ONLY writable plan.
+    // promptListText and batchRows are compatibility projections, not rival
+    // sources. Older tabs without this field still import through the legacy
+    // normalization below and pin their identities once.
+    if (ld.studio2Plan?.slots) {
+      const p=clone(ld.studio2Plan);
+      if (!Array.isArray(p.slots) || new Set(p.slots.map(s=>s.slotId)).size!==p.slots.length)
+        throw new Error("duplicate_slot_id");
+      return p;
+    }
     const rows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
     const mode = ld.batchLayoutMode || (rows.length ? "ai" : "fixed");
     const titles = text(ld.promptListText).split(/\r?\n/).map(t => t.trim()).filter(Boolean);
