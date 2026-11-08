@@ -23,6 +23,7 @@ const run = {
 const state = {activeBatchRun:null};
 const context = {
   run, state,
+  getBatchParts:()=>null, // No detached Project in this isolated stop-harness test.
   toast:message=>messages.push(message),
   window:{HandrawBatchCreate:{setStopping:()=>{stopping++;}}}
 };
