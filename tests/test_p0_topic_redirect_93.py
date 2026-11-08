@@ -56,7 +56,7 @@ class _RedirectChecks:
             orphan = tx.execute(
                 "SELECT COUNT(*) FROM forum_topics "
                 "WHERE id NOT IN (SELECT topic_id FROM curation_resource_topics) "
-                "AND title LIKE '%画风讨论%'").fetchone()[0]
+                "AND title LIKE ?", ("%画风讨论%",)).fetchone()[0]
         return [x["topic_id"] for x in mappings], orphan
 
     def test_first_visit_and_repeat_redirect_without_savepoint_500(self):
