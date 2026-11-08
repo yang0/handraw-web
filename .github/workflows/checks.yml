@@ -52,6 +52,7 @@ jobs:
       - run: python tests/smoke_studio_canvas_browser.py --screenshots artifacts/canvas-127-screen
       - run: python tests/smoke_studio_runtime_browser_119.py
       - run: python tests/smoke_studio_make_image_browser_128.py
+      - run: python tests/smoke_studio_series_browser_108.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -61,6 +62,7 @@ jobs:
             artifacts/canvas-127-screen/**
             artifacts/canvas-119-screen/**
             artifacts/quick-128-screen/**
+            artifacts/series-108-screen/**
           if-no-files-found: ignore
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
