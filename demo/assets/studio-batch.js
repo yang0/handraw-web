@@ -399,6 +399,10 @@
       const iterations = this.resolveIterations();
       const totalCount = Math.min(200, iterations.length * perIterCount);
       const remote=this.context?.runProjection;
+      const runSnapshot=cd.studio2RunSnapshot||null;
+      // The previous Run can have a different order or candidate count
+      // from the draft currently being edited.
+      const displayCandidateCount=runSnapshot?.candidateCount||candidateCount;
       const localBusy=Boolean(this.context?.localBusy??this.context?.busy);
       const busy=localBusy||Boolean(remote&&!remote.isTerminal);
       const displays = Array.isArray(this.context?.displays) ? this.context.displays : [];
@@ -411,9 +415,8 @@
         : (Array.isArray(this.context?.results) ? this.context.results : []);
 
       const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
-      // The displayed slot results are the source of truth. Node progress can
-      // be stale (0/2) after a re-render even while both images are visible.
-      const slotResults = iterations.map((_, index) => this.getItemResult(index, displays, isBatchGallery));
+      // Legacy display rows are fallback only. The V3 projection (when
+      // available) is authoritative for both success count and ownership.
       const progress = this.progressState?.batchId === this.activeBatchId ? this.progressState : null;
       const currentStep = ld.currentStep || 0;
       const totalSteps = ld.totalSteps || totalCount;
@@ -782,27 +785,39 @@
                           <td colspan="4" class="batch-table-empty">暂无待批量生成的项，请在上方规划主题或添加条目</td>
                         </tr>
                       ` : iterations.map((iter, idx) => {
-                        const outputIndices=Array.from({length:candidateCount},(_,sub)=>idx*candidateCount+sub);
-                        const perOutput=outputIndices.map(outputIndex=>{
-                          const v=remote?.outputs?.[outputIndex];
-                          const item=this.getItemResult(outputIndex, displays, isBatchGallery);
-                          return v||{
-                            outputIndex,slotId:iter.slotId||iter.itemKey,
-                            imageUrl:item?.imageUrl||"",
-                            status:item?.imageUrl?"success":item?.failed?"failed":"pending",
-                            errorCode:item?.error||""
-                          };
+                        const slotId=iter.slotId||iter.itemKey||plan?.slots?.[idx]?.slotId||"";
+                        const outputIndices=Array.from({length:displayCandidateCount},(_,candidateIndex)=>{
+                          if(!runSnapshot?.outputs?.length)return idx*displayCandidateCount+candidateIndex;
+                          const pinned=runSnapshot.outputs.find(o=>o.slotId===slotId&&
+                            o.candidateIndex===candidateIndex);
+                          return pinned?.outputIndex??-1;
+                        });
+                        const perOutput=outputIndices.map((outputIndex,candidateIndex)=>{
+                          const server=remote?.outputs?.find(o=>
+                            o.slotId===slotId&&o.candidateIndex===candidateIndex);
+                          if(remote)return server||{slotId,candidateIndex,outputIndex:-1,
+                            status:"pending",imageUrl:""};
+                          const local=outputIndex>=0
+                            ?this.getItemResult(outputIndex,displays,isBatchGallery):null;
+                          return {slotId,candidateIndex,outputIndex,
+                            imageUrl:local?.imageUrl||"",
+                            status:local?.imageUrl?"success":local?.failed?"failed":"pending",
+                            errorCode:local?.error||""};
                         });
                         const rowSuccess=perOutput.filter(x=>x.imageUrl).length;
                         const rowFailed=perOutput.filter(x=>x.status==="failed").length;
-                        const itemResult=this.getItemResult(outputIndices.find(i=>
-                          this.getItemResult(i,displays,isBatchGallery)?.imageUrl)??outputIndices[0],
-                          displays,isBatchGallery);
-                        const rowStatus=candidateCount===1
-                          ? this.getRowStatus(idx,busy,currentStep,itemResult,activeIndex)
-                          : {key:rowSuccess===candidateCount?"done":rowFailed?"failed":busy?"generating":"waiting",
-                            label:rowSuccess+"/"+candidateCount+" 成功"+(rowFailed?" · 失败"+rowFailed:""),
-                            className:rowSuccess===candidateCount?"is-done":rowFailed?"is-failed":busy?"is-generating":"is-waiting"};
+                        const successOutput=perOutput.find(o=>o.imageUrl);
+                        const itemResult=successOutput?.imageUrl?successOutput:null;
+                        const physicalBusy=perOutput.some(o=>activeIndices.includes(o.outputIndex));
+                        const rowStatus=remote||displayCandidateCount>1
+                          ? {key:rowSuccess===displayCandidateCount?"done":rowFailed?"failed":
+                              busy&&physicalBusy?"generating":"waiting",
+                            label:rowSuccess+"/"+displayCandidateCount+" 成功"+
+                              (rowFailed?" · 失败"+rowFailed:""),
+                            className:rowSuccess===displayCandidateCount?"is-done":rowFailed?"is-failed":
+                              busy&&physicalBusy?"is-generating":"is-waiting"}
+                          : this.getRowStatus(idx,busy,currentStep,
+                              this.getItemResult(outputIndices[0],displays,isBatchGallery),activeIndex);
                         const iterLayoutId = iter.layout || (batchLayoutMode === "fixed" ? (sd.layout || "") : "");
                         const catalog = this.context?.catalog;
                         const rMap = (catalog && catalog.resourceMap) || new Map();
