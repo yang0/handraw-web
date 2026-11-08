@@ -283,5 +283,9 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_production_storage.py' -v
+      - name: 'Issue #112 isolated PG17 + S3 emulation six-image Skill interruption and resume'
+        run: |
+          python -m pip install "moto[s3]>=5.0,<6"
+          python -m unittest discover -s tests -p 'test_studio_skill_pg_s3_112.py' -v
       - name: 'P0 #93 isolated PostgreSQL 17 first topic, concurrent race and rollback'
         run: python -m unittest discover -s tests -p 'test_p0_topic_redirect_93.py' -v
