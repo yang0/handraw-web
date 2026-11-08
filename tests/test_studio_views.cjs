@@ -7,7 +7,10 @@ assert.ok(src.includes('id="studio-mode-canvas"'),"Two views must expose canvas 
 assert.ok(src.includes('if (next === "simple")'),"View switch should check representability");
 assert.ok(src.includes("getQuickParts(CS.graph)"),"Simple form requires a safely editable graph");
 assert.ok(src.includes("getBatchParts(CS.graph)"),"Series form requires a safely editable graph");
-assert.ok(src.includes("当前工作流包含简洁模式无法安全编辑的节点"),"Complex graph must be preserved");
+assert.ok(src.includes("复杂项目：仅摘要/局部可编辑"),"Complex graph has safe partial summary");
+assert.ok(src.includes("renderGraphSummaryInSimpleView"),"Complex graph must not create a blank workflow");
+assert.ok(src.includes("current.projectActiveView = view"),"View changes only edit Project metadata");
+assert.ok(!/function switchCreationStage\(next\)[\s\S]*?function renderCreationModeBar\(\)/.exec(src)[0].includes("generateSingleImage("),"View transition never sends a new generation");
 assert.ok(src.includes("lastStudioTaskView"),"Canvas retains its originating creation task");
 assert.ok(src.includes('p.ctrl.data.ratioSource = "user"'),"Explicit ratio must survive mode changes");
 console.log("studio2 navigation and view switching safety contract passes");
