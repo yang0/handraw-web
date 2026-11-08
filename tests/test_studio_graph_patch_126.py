@@ -170,6 +170,31 @@ class GraphPatch126Tests(unittest.TestCase):
                                       "confirmed": True})
         self.assertEqual(ctx.exception.code, "graphpatch_locked_field")
 
+    def test_scope_restricts_mutations_to_selected_subgraph(self):
+        with self.assertRaises(ServiceError) as err:
+            self.call_preview(mode="operations", scope="selection",
+                              selectedIds=["gp_text"], operations=[
+                {"op": "setNodeData", "id": "gp_control",
+                 "field": "count", "value": 3}])
+        self.assertEqual(err.exception.code, "graphpatch_scope_forbidden")
+        with self.assertRaises(ServiceError) as err:
+            self.call_preview(mode="operations", scope="selection",
+                              operations=[
+                {"op": "setNodeData", "id": "gp_text",
+                 "field": "text", "value": "new"}])
+        self.assertEqual(err.exception.code, "graphpatch_selection_required")
+        report = self.call_preview(mode="operations", scope="selection",
+                                   selectedIds=["gp_text"], operations=[
+            {"op": "setNodeData", "id": "gp_text", "field": "text",
+             "value": "new protected user intent"}])
+        self.assertTrue(report["canApply"])
+        self.assertEqual(report["scope"], "selection")
+        committed = apply(self.db, self.user, {
+            "reviewId": report["reviewId"], "confirmed": True})
+        self.assertEqual(next(n for n in committed["graph"]["nodes"]
+                              if n["id"] == "gp_text")["data"]["text"],
+                         "new protected user intent")
+
     def test_media_owner_and_resource_auth_no_leak(self):
         with self.db.transaction() as tx:
             tx.execute("""INSERT INTO user_uploads
