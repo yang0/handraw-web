@@ -5305,6 +5305,9 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "name_zh": r["name_zh"],
             "desc_zh": r["desc_zh"],
             "image": r["image_url"],
+            # A private upload's stable MediaRef is asset_uid, NOT the old
+            # user_uploads row ID. Never send a public reference capability.
+            "assetUid": r["asset_uid"] or None,
             "custom": True,
         }
         for r in conn.execute("SELECT * FROM user_uploads WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", (uid,)).fetchall()
