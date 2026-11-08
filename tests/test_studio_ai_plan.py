@@ -167,6 +167,32 @@ class AIPlanContractTests(unittest.TestCase):
                      "afterBlockIdx":99,"role":"illustration"}]}))
         self.assertEqual(ctx.exception.code,"ai_anchor_invalid")
 
+    def test_incoming_selected_resource_must_be_authorized(self):
+        calls_before=self.calls
+        with self.assertRaises(ServiceError) as ctx:
+            self.run_plan({"current":{"styleId":"PRIVATE-NOT-AUTHORIZED"}})
+        self.assertEqual(ctx.exception.code,"ai_resource_not_found")
+        self.assertEqual(calls_before,self.calls,
+                         "invalid selected ID is rejected before any gateway call")
+
+    def test_bad_article_role_is_invalid_schema(self):
+        eligible=_user_catalog(self.db,self.user)
+        style=eligible["style"][0]["id"]
+        layout=eligible["layout"][0]["id"]
+        base={"styleId":style,"layoutId":layout,"ratio":"3:4",
+            "reasons":{"style":"一致性","layout":"图文顺序","ratio":"竖向阅读"}}
+        blocks=[{"idx":1,"kind":"p","text":"第一段"}]
+        invalid_slots=[
+            {"subject":"cover","layoutId":layout,"ratio":"3:4","reason":"配图理由",
+             "role":"illustration","afterBlockIdx":-1},
+            {"subject":"paragraph","layoutId":layout,"ratio":"3:4","reason":"配图理由",
+             "role":"illustration","afterBlockIdx":1},
+        ]
+        with self.assertRaises(ServiceError) as err:
+            self.run_plan({"kind":"article","count":2,"blocks":blocks},
+                          response=json.dumps({**base,"slots":invalid_slots}))
+        self.assertEqual(err.exception.code,"ai_schema_invalid")
+
     def test_project_revision_cas_and_no_run(self):
         from backend.studio_projects import create_project,patch_project
         create_project(self.db,self.user,{"projectId":"plan-revision-125",
