@@ -76,19 +76,19 @@ def validate() -> dict:
 
     assert all(len(v) >= 3 for v in per_stage.values()), per_stage
     assert any(
-        "smoke_studio_make_image_browser_128.py" in c["tests"]
+        "tests/smoke_studio_make_image_browser_128.py" in c["tests"]
         for c in matrix["cases"] if c["stage"] == "M1"
     )
     assert any(
-        "smoke_studio_series_browser_108.py" in c["tests"]
+        "tests/smoke_studio_series_browser_108.py" in c["tests"]
         for c in matrix["cases"] if c["stage"] == "M2"
     )
     assert any(
-        "smoke_studio_article_browser_109.py" in c["tests"]
+        "tests/smoke_studio_article_browser_109.py" in c["tests"]
         for c in matrix["cases"] if c["stage"] == "M3"
     )
     assert any(
-        "benchmark_studio_canvas.py" in c["tests"]
+        "tests/benchmark_studio_canvas.py" in c["tests"]
         for c in matrix["cases"] if c["stage"] == "M3"
     )
     try:
