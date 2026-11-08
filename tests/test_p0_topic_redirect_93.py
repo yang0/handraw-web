@@ -163,17 +163,17 @@ class PostgreSQLTopicRedirect93(_RedirectChecks, unittest.TestCase):
         cls.db = PostgresDatabase(dsn)
         cls.db.migrate()
         cls.addClassCleanup(cls.db.close)
-        cls.instance = cls()
-        cls.instance.db = cls.db
-        cls.instance.setup_http()
-        cls.addClassCleanup(cls.instance.stop_http)
-
-    def setUp(self):
-        self.db = self.__class__.db
-        self.server = self.__class__.instance.server
-        self.thread = self.__class__.instance.thread
-        self.base = self.__class__.instance.base
-        self.opener = self.__class__.instance.opener
+        cls.server = create_channel_server(0, "main", cls.db,
+                                           host="127.0.0.1", demo_mode=False)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_port}"
+        cls.opener = urllib.request.build_opener(_NoRedirect)
+        def close_server():
+            cls.server.shutdown()
+            cls.server.server_close()
+            cls.thread.join(timeout=5)
+        cls.addClassCleanup(close_server)
 
     @classmethod
     def drop_database(cls):
