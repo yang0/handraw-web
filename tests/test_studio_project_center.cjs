@@ -129,7 +129,7 @@ async function suite() {
   await c.openCloudProject("prj-01");
   assert.equal(created.length,1);
   assert.equal(CS.graph.nodes[0].id,"LOCAL");
-  assert.ok(toasts.some(x=>x.includes("旧画布不能安全恢复")));
+  assert.ok(toasts.some(x=>x.includes("文章正文仍由文章编辑器管理")));
 
   // Previously closed offline drafts take precedence over stale cloud data.
   CS.closedProjectDrafts=[{id:"closed-1",title:"关闭前的草稿",blueprint:"single",
