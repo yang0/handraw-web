@@ -10123,6 +10123,7 @@
           const curCount = Math.max(1, Math.min(200, Math.round(Number(cd.count) || (curMode === "series" ? 4 : 1))));
           const rec = E.resolveControlRecipe(CS.graph, n, Catalog);
           const plan = buildExecutionPlanForControl(n);
+          const cloudRun = getCanvasRunProjection(n);
           const downPlan = curMode === "article-illust" ? getDownstreamArticlePlanNode(n) : null;
           const planSlotCount = downPlan?.data?.cards?.length ?? plan.specs.length;
           const hasBridgeUp = CS.graph.edges.some((e) => e.to === n.id && getNodeById(e.from)?.type === "bridge");
@@ -10163,7 +10164,11 @@
                   }
                 </div>
 
-                <!-- 5 Modes Grid (文章封面+插图已合并为统一的「文章配图」) -->
+                ${cloudRun ? `<div role="status" class="ic-v4-run-status" style="font-size:11px;padding:6px 8px;">
+                   云端 Run：已确认 ${cloudRun.succeeded}/${cloudRun.total} 张成功${cloudRun.failed ? " · 失败 "+cloudRun.failed+" 张" : ""}
+                   ${cloudRun.isTerminal ? " · 已结束" : " · 仍在执行（可刷新恢复）"}
+                 </div>` : cd.runId ? `<div role="status" class="ic-v4-run-status" style="font-size:11px;padding:6px 8px;">云端状态待核对 · 不自动重新提交任务</div>` : ""}
+                 <!-- 5 Modes Grid (文章封面+插图已合并为统一的「文章配图」) -->
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head"><span>输出模式</span></div>
                   <div class="ic-ctrl-mode-grid">
@@ -13739,6 +13744,43 @@
     });
   }
 
+  // Canvas and simple editors read the same owner-scoped server Run/Items.
+  // View switches never call POST /generate, including multi-output graphs.
+  const canvasRunModels = new Map();
+  function getCanvasRunProjection(control) {
+    const runId = String(control?.data?.runId || control?.data?.studio2RunSnapshot?.runId || "");
+    if (!runId || !App.state?.loggedIn || !window.HandrawStudioCore) return null;
+    const key = activeCacheScope + ":" + runId, now = Date.now();
+    const previous = canvasRunModels.get(key);
+    if (previous?.loading || previous?.model?.isTerminal ||
+        (previous && now - previous.requestedAt < 5000)) return previous?.model || null;
+    const entry = {requestedAt:now,loading:true,model:previous?.model || null};
+    canvasRunModels.set(key,entry);
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    fetch("/api/studio/runs/" + encodeURIComponent(runId), {
+      credentials:"include"
+    }).then(async response => {
+      const payload = await response.json();
+      if (!response.ok || !payload?.ok || !payload.run || !Array.isArray(payload.items) ||
+          String(payload.run.id || payload.run.runId || "") !== runId)
+        throw new Error("run_read_failed");
+      return window.HandrawStudioCore.selectRunProjection(payload.run,payload.items);
+    }).then(model => {
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch ||
+          canvasRunModels.get(key) !== entry) return;
+      entry.model = model;
+      if (CS.stageView === "canvas") fullRenderCanvas();
+      if (!model.isTerminal) setTimeout(() => {
+        if (scope === activeCacheScope && epoch === cacheScopeEpoch &&
+            CS.stageView === "canvas") fullRenderCanvas();
+      },5200);
+    }).catch(error => {
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      entry.error = String(error?.message || error);
+    }).finally(() => { entry.loading = false; });
+    return entry.model;
+  }
+
   // Quick-create shares the canvas graph and the existing guarded task runner.
   let quickBusy = null;
   // Read-only projection from owner-scoped V3 Run and RunItems.
@@ -16871,11 +16913,17 @@
           purpose: c.purpose || (c.role === "cover" ? "确立整篇文章的视觉主旨" : "在章节间提供阅读提示")
         })
       );
+      const templateDocument = window.HandrawStudioIntegration?.documentToken(draft);
       const review = await window.HandrawArticleReview.reviewPlan(templateCards, {
         source: "template", articleType: "knowledge",
         existingCards: draft.cards || target?.planNode?.data?.cards || target?.art?.cards || []
       });
       if (!review.approved || !isCurrentEditor()) return;
+      const live = CS.articleEditorDraft?.id === draft.id ? CS.articleEditorDraft : draft;
+      if (templateDocument && !window.HandrawStudioIntegration.sameDocument(templateDocument,live)) {
+        toast("正文已更新，旧章节模板未应用；原有图卡及锚点保持不变");
+        return;
+      }
       const oldCardsBackup = JSON.parse(
         JSON.stringify(target?.planNode?.data?.cards || target?.art?.cards || [])
       );
@@ -16904,6 +16952,22 @@
       CS.articleDocReplacedNotice = false;
       CS.articleIsPlanning = true;
       const reqArticleId = draft.id;
+      const articleBridge = window.HandrawStudioIntegration;
+      const planDocumentAtStart = articleBridge?.documentToken(draft);
+      const isPlanDocumentCurrent = () => {
+        const live = CS.articleEditorDraft?.id === reqArticleId
+          ? CS.articleEditorDraft : draft;
+        return !articleBridge || articleBridge.sameDocument(planDocumentAtStart, live);
+      };
+      const rejectStalePlan = () => {
+        if (isPlanDocumentCurrent()) return false;
+        CS.articlePlanError = {
+          text:"文章正文在规划过程中已修改，旧方案未应用；请按当前正文重新规划",
+          canRetry:true,canTemplate:false
+        };
+        toast("正文已更新，旧规划结果已丢弃；已有图卡和锚点未改动");
+        return true;
+      };
       const controller = new AbortController();
       CS.articlePlanAbortController = controller;
       const timeoutId = setTimeout(() => {
@@ -17027,6 +17091,8 @@
         }
 
         const data = await resp.json();
+        // Remote AI output never overwrites a newer ArticleDocument.
+        if (rejectStalePlan()) { renderFullPreviewStage(); return; }
 
         const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
           withPresetAssets: false
@@ -17059,6 +17125,7 @@
           return;
         }
         if (CS.activeArticleId !== reqArticleId || !isCurrentEditor()) return;
+        if (rejectStalePlan()) { renderFullPreviewStage(); return; }
         const oldCardsBackup = JSON.parse(
           JSON.stringify(draft.cards || target?.planNode?.data?.cards || target?.art?.cards || [])
         );
