@@ -6490,6 +6490,44 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 "SELECT status FROM generation_items WHERE run_id=? AND position=?",
                 (canonical_run_id, slot_position),
             ).fetchone()
+            previous_attempts = tx.execute(
+                """SELECT id,request_id,status,system_append_json
+                   FROM studio_generations
+                   WHERE user_id=? AND batch_id=? AND batch_index=?
+                   ORDER BY created_at,id""",
+                (uid, batch_id, batch_index),
+            ).fetchall()
+            # Re-delivery of the SAME requestId was returned from the
+            # idempotency lookup before charging. A new requestId is another
+            # billed attempt, only permitted after the old attempt terminates.
+            if (prior_slot and prior_slot["status"] == "success") or any(
+                str(a["status"]) == "success" for a in previous_attempts
+            ):
+                raise ServiceError(
+                    "该槽位已有确认成图，不允许覆盖；请派生新分支",
+                    status=409, code="generation_slot_completed",
+                )
+            if any(str(a["status"]) in ("queued", "running") for a in previous_attempts):
+                raise ServiceError(
+                    "原请求仍在上游执行或待核实，请先重新检查，避免重复计费",
+                    status=409, code="generation_slot_unconfirmed",
+                )
+            if previous_attempts and body.get("retryFailed") is not True and body.get("retryCancelled") is not True:
+                raise ServiceError(
+                    "再次生成会产生新的计费事实，请明确重试失败槽位",
+                    status=409, code="generation_retry_confirmation_required",
+                )
+            for previous in previous_attempts:
+                try:
+                    old_meta = json.loads(previous["system_append_json"] or "{}")
+                    frozen = old_meta.get("runtimeSnapshot") or {}
+                except (ValueError, TypeError):
+                    frozen = {}
+                if frozen.get("slotId") and slot_id and frozen["slotId"] != slot_id:
+                    raise ServiceError(
+                        "原运行槽位与重试槽位不一致",
+                        status=409, code="generation_slot_identity_conflict",
+                    )
             if prior_slot and prior_slot["status"] == "cancelled":
                 if body.get("retryCancelled") is not True:
                     raise ServiceError(
@@ -6501,7 +6539,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     (canonical_run_id, slot_position),
                 )
         tx.execute(
-            "UPDATE generation_runs SET original_request=? WHERE id=?",
+            "UPDATE generation_runs SET original_request=? WHERE id=? AND original_request=''",
             (user_subject, canonical_run_id),
         )
 
