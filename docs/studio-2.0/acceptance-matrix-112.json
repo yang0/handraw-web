@@ -65,11 +65,12 @@
       "concern": "Private media, resource identity and unauthorized references",
       "tests": [
         "tests/test_studio_resource_refs.py",
-        "tests/test_v3_media_visibility.py"
+        "tests/test_v3_media_visibility.py",
+        "tests/test_studio_security_negative_112.py"
       ],
       "ci_scope": "deterministic-mock-local-browser-or-contract",
       "live_gate": "PENDING",
-      "live_evidence_required": "External browser IDOR audit and protected prompt/secret log scan"
+      "live_evidence_required": "CI now covers two authenticated owner/stranger real HTTP sessions for private Article, Run and MediaRef; still requires deployed multi-tenant IDOR, protected prompt/secret logs and external media URL audit."
     },
     {
       "id": "M1-01",
