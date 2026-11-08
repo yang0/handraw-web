@@ -10,7 +10,7 @@ assert.ok(start>0 && end>start, "Project Center rendering function is extractabl
 const fragment=src.slice(start,end);
 const CS={
   stageView:"projects",cloudProjects:[],tabs:[],closedProjectDrafts:[],
-  projectQuery:"旧",projectCenterLoading:false,projectCenterError:"",
+  projectQuery:"未选择 文字",projectCenterLoading:false,projectCenterError:"",
   projectHasMore:true,projectCenterLoadingMore:false,projectListRequestVersion:10
 };
 let calls=0, refreshes=0, timerSeq=0;
