@@ -122,7 +122,11 @@
   function writeJsonStorage(key, val) {
     try {
       localStorage.setItem(scopedStorageKey(key), JSON.stringify(val));
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      // A failed local write must not be mistaken for an offline backup.
+      return false;
+    }
   }
 
   const savedPrefs = readJsonStorage(PREFS_STORAGE_KEY, {});
@@ -1105,10 +1109,23 @@
         quickStart: t.quickStart === true,
         batchStart: t.batchStart === true
       }));
-    writeJsonStorage(OPEN_TABS_KEY, {
+    const written = writeJsonStorage(OPEN_TABS_KEY, {
       activeTabId: CS.activeTabId, tabs: slimTabs,
       lastStudioTaskView: CS.lastStudioTaskView || ""
     });
+    if (!written) {
+      const current = CS.tabs.find(t => t.id === CS.activeTabId);
+      if (current && !["synced", "conflict", "saving"].includes(current.projectSaveState)) {
+        current.projectSaveState = "dirty";
+      }
+      if (!CS.localDraftStorageWarning) {
+        CS.localDraftStorageWarning = true;
+        toast("本机空间不足或存储不可用，草稿未安全落盘；请勿关闭页面");
+      }
+    } else {
+      CS.localDraftStorageWarning = false;
+    }
+    return written;
   }
 
   function createWorkflowTab({
@@ -1486,6 +1503,7 @@
   function projectStatusText(tab) {
     if (!App.state?.serverBacked || !App.state?.loggedIn) return "仅本机草稿";
     switch (tab?.projectSaveState) {
+      case "dirty": return "本机未保存 · 请勿关闭";
       case "saving": return "项目同步中…";
       case "synced": return "项目已云端保存";
       case "conflict": return "项目冲突 · 保留副本";
@@ -1506,7 +1524,7 @@
       btn.textContent = projectStatusText(tab);
       btn.disabled = tab?.projectSaveState === "saving";
       btn.title = tab?.projectSaveState === "conflict"
-        ? "云端项目已被其他标签更新；点击保留本机修改为新项目，不覆盖远端"
+        ? "云端版本冲突：点击查看本地与云端差异、保留副本或恢复云端"
         : "项目自动保存到云端，点击可立即同步；与「工作流模板保存」相互独立";
     }
   }
@@ -1515,7 +1533,7 @@
     const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
     if (!tab) return;
     if (tab.projectSaveState === "conflict") {
-      void copyConflictedProject(tab);
+      void reviewConflictedProject(tab);
     } else if (!App.state?.loggedIn) {
       toast("登录后可将项目保存至云端，本机草稿仍会保留");
     } else {
@@ -1562,6 +1580,92 @@
         void saveActiveProject(current);
       }
     }, PROJECT_AUTO_SAVE_DELAY_MS);
+  }
+
+  // #103: a 409 never becomes an automatic overwrite. The user first sees
+  // an owner-scoped side-by-side comparison and explicitly chooses a resolution.
+  async function reviewConflictedProject(tab) {
+    if (!ProjectClient || !tab?.projectId || tab.projectSaveState !== "conflict") return;
+    if (!S?.openModal) { toast("无法打开冲突比较面板，本机修改仍已保留"); return; }
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const id = tab.projectId;
+    const editAtOpen = Number(tab.editRevision || 0);
+    let remote;
+    try {
+      const result = await ProjectClient.get(id);
+      if (isStaleScope(epoch, scope) || tab.projectId !== id ||
+          tab.projectSaveState !== "conflict") return;
+      remote = result.project;
+      if (!remote || remote.id !== id) throw new Error("invalid_remote_project");
+    } catch (err) {
+      if (!isStaleScope(epoch, scope)) toast("读取云端差异失败，本机草稿未被覆盖：" + (err.message || "网络错误"));
+      return;
+    }
+    const snapshot = currentProjectSnapshot(tab);
+    const preview = value => esc(JSON.stringify(value || {}, null, 2).slice(0, 9000));
+    S.openModal({
+      title: "项目版本冲突 · 查看差异",
+      sizeClass: "modal-wide",
+      html: '<p>本机草稿与云端版本不一致。云端版本 '+esc(remote.revision)+
+        ' · 本机基线版本 '+esc(tab.projectRevision)+
+        '。以下是只读对比；不会自动合并或重新生图。</p>'+
+        '<div class="studio103-diff" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;">'+
+        '<section><strong>本机未同步修改</strong><pre style="white-space:pre-wrap;overflow:auto;max-height:280px;">'+
+        preview(snapshot.draft)+'</pre></section>'+
+        '<section><strong>云端当前版本</strong><pre style="white-space:pre-wrap;overflow:auto;max-height:280px;">'+
+        preview(remote.draft)+'</pre></section></div>'+
+        '<p>保留副本会创建新的私有项目，不修改原云端项目。放弃本机修改后不可通过此草稿恢复。</p>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">'+
+        '<button type="button" class="btn btn-sm" id="studio103-conflict-cancel">暂不处理</button>'+
+        '<button type="button" class="btn btn-sm" id="studio103-conflict-copy">另存为新项目副本</button>'+
+        '<button type="button" class="btn btn-sm btn-primary" id="studio103-conflict-discard">放弃本地修改并恢复云端</button></div>',
+      onMount: root => {
+        root.querySelector("#studio103-conflict-cancel").onclick = () => S.closeModal();
+        root.querySelector("#studio103-conflict-copy").onclick = () => {
+          S.closeModal();
+          void copyConflictedProject(tab);
+        };
+        root.querySelector("#studio103-conflict-discard").onclick = () => {
+          if (isStaleScope(epoch, scope) || tab.projectId !== id ||
+              tab.projectSaveState !== "conflict") return;
+          if (Number(tab.editRevision || 0) !== editAtOpen) {
+            toast("比较期间草稿已有新修改，请重新查看差异后选择");
+            S.closeModal();
+            return;
+          }
+          const rawGraph = remote.authority === "spec"
+            ? StudioViews?.compile(remote.draft?.creationSpec,remote.draft?.plan,{projectId:id})
+            : remote.draft?.graph;
+          if (!rawGraph || !Array.isArray(rawGraph.nodes)) {
+            toast("云端版本不能安全恢复，本机草稿保持不变");
+            return;
+          }
+          const graph = normalizeGraphSchema(rawGraph);
+          tab.graph = cloneGraph(graph);
+          if (tab.id === CS.activeTabId) CS.graph = cloneGraph(graph);
+          tab.title = remote.title || tab.title;
+          tab.projectRevision = Number(remote.revision);
+          tab.projectAuthority = remote.authority;
+          tab.projectSyncedGraph = remote.authority === "graph" ? cloneGraph(graph) : null;
+          tab.projectSpec = remote.authority === "spec" ? cloneGraph(remote.draft?.creationSpec || {}) : null;
+          tab.projectPlan = remote.authority === "spec" ? cloneGraph(remote.draft?.plan || null) : null;
+          tab.projectActiveView = remote.draft?.activeView || "canvas";
+          tab.editorLayout = cloneGraph(remote.draft?.editorLayout || {});
+          tab.projectPending = null;
+          tab.projectCopyPending = null;
+          tab.projectRemoteRevision = 0;
+          tab.projectError = "";
+          tab.projectSaveState = "synced";
+          tab.dirty = false;
+          tab.editRevision = 0;
+          S.closeModal();
+          persistOpenTabs();
+          activateProjectTab(tab, remote);
+          updateProjectStatusIndicator();
+          toast("已按明确选择恢复云端版本，本机冲突修改已放弃");
+        };
+      }
+    });
   }
 
   async function copyConflictedProject(tab) {
@@ -1639,12 +1743,17 @@
     // rewrite another tab's revision without explicit user intervention.
     const conflicted = !asNew && savedTarget.cloudSaveState === "conflict";
     savedTarget.cloudSaveState = conflicted ? "conflict" : "local";
-    writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-    persistOpenTabs();
+    const workflowStored = writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
+    const tabsStored = persistOpenTabs();
     renderTopAndBottomDocks();
+    if (!workflowStored || !tabsStored) {
+      cur.dirty = true;
+      if (!silent) toast("本机空间不足，工作流未安全保存，请勿关闭页面");
+      return false;
+    }
 
     if (!App.state?.serverBacked || !App.state?.loggedIn) {
-      cur.dirty = false; // Local confirmation only, not a cloud revision.
+      cur.dirty = false; // Confirmed local write only, not a cloud revision.
       if (!silent) toast("已保存到本机，尚未同步云端");
       return true;
     }
@@ -1743,17 +1852,13 @@
       updatedAt: `导入于 ${nowStr}`,
       updatedAtMs: nowMs,
       blueprint: normGraph.blueprint || "single",
-      graph: cloneGraph(normGraph)
+      graph: cloneGraph(normGraph),
+      cloudSaveState: "local", serverUpdatedAtMs: 0
     };
     CS.savedWorkflows.unshift(importedWf);
-    writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-    studioApiPost("/api/studio/workflows", {
-      id: importedWf.id,
-      title: importedWf.title,
-      blueprint: importedWf.blueprint,
-      graph: importedWf.graph,
-      updatedAtMs: nowMs
-    });
+    if (!writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows)) {
+      toast("导入工作流未能写入本机存储，请勿关闭当前页面");
+    }
 
     CS.stageView = "canvas";
     try {
@@ -1771,7 +1876,10 @@
       autoFit: true,
       switchToCanvas: true
     });
-    toast(`🎉 已导入并打开工作流《${title}》！`);
+    // Import is an explicit template creation. Route it through the same
+    // acknowledged CAS writer instead of the old fire-and-forget POST.
+    void saveCurrentWorkflow(false, {silent:true});
+    toast(`已导入并打开工作流《${title}》，云端状态以服务端回执为准`);
   }
 
   /* ======================== STUDIO2 PROJECT CENTER · #106 ======================== */
