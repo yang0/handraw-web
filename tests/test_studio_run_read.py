@@ -38,6 +38,27 @@ class StudioRunReadTests(unittest.TestCase):
         self.assertEqual(response["items"][0]["status"], "failed")
         self.assertEqual(response["run"]["workId"], "")
 
+    def test_six_slot_run_owner_read_has_one_authoritative_position_per_slot(self):
+        # Canvas #129 groups six UI outputs without inventing six parallel
+        # jobs or changing the server Run/RunItem authority.
+        with self.db.transaction() as tx:
+            run_id = ensure_run(tx, user_id=self.alice["id"], source="web",
+                                external_run_id="canvas-six-group", expected_count=6)
+            for index in range(6):
+                tx.execute(
+                    """INSERT INTO generation_items
+                       (id,run_id,position,status,media_id,error_code,created_at,updated_at)
+                       VALUES (?,?,?,?,NULL,'','2026-11-08','2026-11-08')""",
+                    (f"canvas-six-{index}", run_id, index * 1000,
+                     "failed" if index == 2 else "pending"),
+                )
+        response = get_owned_studio_run(self.db, self.alice, run_id)
+        self.assertEqual(response["run"]["expectedCount"], 6)
+        self.assertEqual([it["slotIndex"] for it in response["items"]], list(range(6)))
+        self.assertEqual(response["items"][2]["status"], "failed")
+        with self.assertRaises(ServiceError):
+            get_owned_studio_run(self.db, self.bob, run_id)
+
     def test_cannot_read_other_users_run(self):
         with self.assertRaises(ServiceError) as ctx:
             get_owned_studio_run(self.db, self.bob, self.run_id)
