@@ -1831,7 +1831,7 @@
       (tab.batchStart || tab.quickStart ? "simple" : "canvas");
     const asBatch = preferred === "simple" && kind === "series" && Boolean(getBatchParts(graph));
     const asQuick = preferred === "simple" && kind === "image" && Boolean(getQuickParts(graph));
-    const mapped = StudioViews?.classify(graph);
+    const mapped = window.HandrawStudioViews?.classify(graph);
     const safeComplex = preferred === "simple" && mapped?.mode !== "simple-editable";
     const stage = asBatch ? "batch" : asQuick ? "quick" :
       safeComplex ? (kind === "series" ? "batch" : "quick") : "canvas";
