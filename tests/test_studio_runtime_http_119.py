@@ -132,15 +132,15 @@ class RuntimeHttp119Tests(unittest.TestCase):
             "requestId":"attempt-1","idempotencyKey":"attempt-1",
             "simulateGateway":"fail","confirmCost":True,
         }
-        status, failure = self._request("POST", endpoint, payload, self.cookie)
+        status, failure = self._request("POST", endpoint, payload, self.other_cookie)
         self.assertEqual(status, 502, failure)
         self.assertTrue(failure.get("refunded"), failure)
         before = self.db.get_conn().execute(
             "SELECT COUNT(*) FROM studio_generations WHERE user_id=? AND batch_id=?",
-            (int(self.owner["id"]),batch)).fetchone()[0]
+            (int(self.stranger["id"]),batch)).fetchone()[0]
         self.assertEqual(before,1)
         # An identical request is a replay of the SAME reservation.
-        status, replay = self._request("POST",endpoint,payload,self.cookie)
+        status, replay = self._request("POST",endpoint,payload,self.other_cookie)
         self.assertEqual(status,200,replay)
         self.assertTrue(replay.get("idempotent"))
         self.assertEqual(replay["status"],"refunded")
@@ -150,12 +150,12 @@ class RuntimeHttp119Tests(unittest.TestCase):
 
         retry = {**payload,"simulateGateway":"ok","requestId":"attempt-2",
                  "idempotencyKey":"attempt-2","retryFailed":True}
-        status, success = self._request("POST",endpoint,retry,self.cookie)
+        status, success = self._request("POST",endpoint,retry,self.other_cookie)
         self.assertEqual(status,200,success)
         self.assertEqual(success["status"],"success")
         self.assertTrue(success["runId"])
         status, owner_read = self._request("GET",
-            "/api/studio/runs/"+success["runId"],cookie=self.cookie)
+            "/api/studio/runs/"+success["runId"],cookie=self.other_cookie)
         self.assertEqual(status,200,owner_read)
         self.assertEqual(owner_read["projection"]["succeeded"],1)
         self.assertEqual(owner_read["projection"]["total"],1)
@@ -165,7 +165,7 @@ class RuntimeHttp119Tests(unittest.TestCase):
         self.assertEqual(owner_read["run"]["workId"]!="",True)
 
         duplicate = {**retry}
-        status, repeated = self._request("POST",endpoint,duplicate,self.cookie)
+        status, repeated = self._request("POST",endpoint,duplicate,self.other_cookie)
         self.assertEqual(status,200,repeated)
         self.assertTrue(repeated.get("idempotent"))
         self.assertEqual(self.db.get_conn().execute(
@@ -175,7 +175,7 @@ class RuntimeHttp119Tests(unittest.TestCase):
         # A THIRD request under another ID may charge again in a new Run,
         # but must never overwrite a successful slot of the current Run.
         changed = {**retry,"requestId":"attempt-3","idempotencyKey":"attempt-3"}
-        status, blocked = self._request("POST",endpoint,changed,self.cookie)
+        status, blocked = self._request("POST",endpoint,changed,self.other_cookie)
         self.assertEqual(status,409,blocked)
         self.assertEqual(blocked.get("code"),"generation_slot_completed")
         self.assertEqual(self.db.get_conn().execute(
