@@ -11275,7 +11275,7 @@
         const disp=getNodeById(btn.getAttribute("data-disp-variant"));
         if(!disp)return;
         const created=spawnShelfItem({kind:"output_control"},
-          {x:disp.x+(disp.w||340)+100,y:disp.y+30});
+          {x:disp.x+(disp.w||340)+100,y:disp.y+30},disp.id);
         if(created){
           // Execution edge is explicit and owned by Graph; a result card is not a visual note.
           pushUndo();ensureEdge(disp.id,created.id);
@@ -11765,9 +11765,10 @@
     DOM.shelf.classList.toggle("is-collapsed", !CS.shelfOpen);
     DOM.shelf.innerHTML = `
       <div style="padding:10px 12px;border-bottom:1px solid var(--ic-border);display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:12.5px;font-weight:850;color:var(--ic-ink);">节点工具箱</span>
+        <span style="font-size:12.5px;font-weight:850;color:var(--ic-ink);">创作资源</span>
         <button type="button" class="ic-icon-btn" id="ic-shelf-collapse-btn" title="收拢左侧节点箱" style="padding:2px 6px;font-size:11px;">«</button>
       </div>
+      <div class="ic129-shelf-tabs" role="tablist" aria-label="画布侧栏"><button type="button" data-shelf-tab="assets">素材</button><button type="button" data-shelf-tab="nodes">节点</button><button type="button" data-shelf-tab="templates">模板</button></div>
       <div class="ic-shelf-grid" id="ic-shelf-grid-box" data-canvas-no-zoom style="grid-template-columns:1fr;padding:10px 10px 14px;gap:8px;"></div>
     `;
 
@@ -11778,6 +11779,12 @@
       renderTopAndBottomDocks();
     };
 
+    DOM.shelf.querySelectorAll("[data-shelf-tab]").forEach(btn=>{
+      const tab=CS.canvasShelfTab||"nodes";
+      btn.classList.toggle("is-active",btn.dataset.shelfTab===tab);
+      btn.setAttribute("aria-selected",String(btn.dataset.shelfTab===tab));
+      btn.onclick=()=>{CS.canvasShelfTab=btn.dataset.shelfTab;renderShelfDrawer();};
+    });
     renderShelfGridOnly();
   }
 
@@ -11787,6 +11794,46 @@
 
     const flatSpecs = [];
     const htmlBlocks = [];
+    const activeShelfTab=CS.canvasShelfTab||"nodes";
+    if(activeShelfTab==="assets"){
+      gridBox.innerHTML='<p class="ic129-shelf-help">官方画风、图型与私有素材统一从已有授权选择器进入。</p>'+
+        '<button type="button" class="ic129-shelf-action" data-shelf-resource="assets">参考图 / 我的图库</button>'+
+        '<button type="button" class="ic129-shelf-action" data-shelf-resource="style">选择画风</button>'+
+        '<button type="button" class="ic129-shelf-action" data-shelf-resource="layout">选择图型</button>';
+      gridBox.querySelectorAll("[data-shelf-resource]").forEach(btn=>{
+        btn.onclick=()=>{
+          const resource=btn.dataset.shelfResource;
+          if(resource==="assets"){
+            let node=CS.graph.nodes.find(n=>n.type==="asset");
+            if(!node)node=spawnShelfItem({kind:"asset"});
+            openAssetPickerModal(node);
+          }else{
+            let node=CS.graph.nodes.find(n=>n.type==="skill_params");
+            if(!node)node=spawnShelfItem({kind:"skill_params"});
+            openSkillFieldPickerModal(node,resource==="style"?"style1":"layout");
+          }
+        };
+      });
+      return;
+    }
+    if(activeShelfTab==="templates"){
+      const options=[["single","单图起步"],["ip_story","角色系列"],
+        ["style_ab","多画风横评"],["omnimedia","多尺寸输出"]];
+      gridBox.innerHTML='<p class="ic129-shelf-help">模板会带入合法连接；不会自动执行收费生成。</p>'+
+        options.map(p=>'<button type="button" class="ic129-shelf-action" data-shelf-template="'+p[0]+'">'+p[1]+'</button>').join("");
+      gridBox.querySelectorAll("[data-shelf-template]").forEach(btn=>{
+        btn.onclick=()=>{
+          const blueprint=btn.dataset.shelfTemplate;
+          if(!CS.graph.nodes.length){
+            pushUndo();CS.graph=E.createBlueprintGraph(blueprint,Catalog,window.HANDRAW_MOCK);
+            markActiveTabDirty();fullRenderCanvas();persistOpenTabs();fitView();
+          }else{
+            createWorkflowTab({title:btn.textContent,blueprint,makeActive:true,autoFit:true,switchToCanvas:true});
+          }
+        };
+      });
+      return;
+    }
 
     for (const grp of NODE_TOOLBOX_GROUPS) {
       if (!grp.items.length) continue;
