@@ -17265,6 +17265,17 @@
           tmpCtrl.data.inlineRatio = draft.inlineRatio || "4:3";
         }
 
+        // Card prompts are derived from the *effective reviewed* recipe,
+        // never from a sample blueprint's default FA-001 / IG-001 options.
+        const selectedPatch=AI.approvedDelta(report,decision.keys).spec;
+        const selectedStyle=selectedPatch.style?.id||draft.styleId||"";
+        const selectedLayout=selectedPatch.layout?.id||draft.layoutId||"";
+        const tmpSkill=tmpGraph.nodes.find(n=>n.type==="skill_params");
+        if(tmpSkill){
+          tmpSkill.data=tmpSkill.data||{};
+          tmpSkill.data.style1=selectedStyle;
+          tmpSkill.data.layout=selectedLayout;
+        }
         const suggestedCards=E.buildArticlePlanFromAi(legacyPlan,{
           ctrlNode:tmpCtrl,graph:tmpGraph,catalog:Catalog,
           coverRatio:draft.coverRatio||"2.35:1",
