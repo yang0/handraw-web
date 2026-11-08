@@ -41,7 +41,7 @@ def resolve(
       1. catalog_assets (published, withdrawn, hidden, paused, etc.)
       2. catalog.json (official static definitions)
       3. curation_submissions (latest revision of pending/changes_requested/withdrawn)
-      4. user_resources (private authored items; placeholder for 13b)
+      4. user_resources (private authored read model; Skill CAS is authoritative)
 
     Returns a dict with resource metadata, viewer access rules, and action permissions.
     """
@@ -186,6 +186,7 @@ def resolve(
                         (clean_code, clean_code),
                     ).fetchone()
                     if ur_row:
+                        raw_db_row = dict(ur_row)
                         item_kind = ur_row["kind"]
                         source_type = "private"
                         status = "private"
