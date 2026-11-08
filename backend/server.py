@@ -28,7 +28,7 @@ from pathlib import Path
 import logging
 
 logger = logging.getLogger("backend.server")
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .admin_services import (
