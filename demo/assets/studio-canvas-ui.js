@@ -195,9 +195,14 @@
         '<p>类型：'+htmlEscape(selected.type)+' · 已选 '+(graph.selectedIds||[]).length+' 个</p>';
       if(selected.type==="text_input")inspectorHtml+='<p>主题：'+htmlEscape(String(d.text||"").slice(0,200)||"未填写")+'</p><button type="button" data-c129="edit">编辑文案</button>';
       else if(selected.type==="skill_params")inspectorHtml+='<p>画风：'+htmlEscape(d.style1||"待选")+' · 图型：'+htmlEscape(d.layout||"待选")+'</p>'+
-        '<button type="button" data-c129="style">选择画风</button><button type="button" data-c129="layout">选择图型</button>';
+        '<button type="button" data-c129="style">选择画风</button><button type="button" data-c129="layout">选择图型</button>'+
+        '<label class="ic129-inspector-field">目标受众<input type="text" data-c129-edit="audience" value="'+htmlEscape(d.audience||"")+'" /></label>'+
+        '<label class="ic129-inspector-field">业务场景<input type="text" data-c129-edit="businessScene" value="'+htmlEscape(d.businessScene||"")+'" /></label>';
       else if(selected.type==="asset")inspectorHtml+='<p>参考素材：'+(d.items?.length||0)+' 张</p><button type="button" data-c129="asset">选择素材</button>';
-      else if(selected.type==="output_control")inspectorHtml+='<p>比例：'+htmlEscape(d.ratio||"默认")+' · 数量：'+htmlEscape(d.count||"按方案")+'</p><button type="button" data-c129="run">运行此分支</button>';
+      else if(selected.type==="output_control")inspectorHtml+='<p>比例：'+htmlEscape(d.ratio||"默认")+' · 数量：'+htmlEscape(d.count||"按方案")+'</p>'+
+        '<label class="ic129-inspector-field">生成张数（1–200）<input type="number" min="1" max="200" data-c129-edit="count" value="'+htmlEscape(d.count||1)+'" /></label>'+
+        '<label class="ic129-inspector-field">画幅比例<input type="text" data-c129-edit="ratio" value="'+htmlEscape(d.ratio||"3:4")+'" placeholder="宽:高" /></label>'+
+        '<button type="button" data-c129="run">运行此分支</button>';
       else if(selected.type==="output_display")inspectorHtml+='<p>输出图像会保留原始媒体引用与上游运行记录，不在此面板重写。</p>';
       inspectorHtml+='</div>';
     }else{
@@ -251,6 +256,12 @@
       });
     };
     bind(top);bind(side);bind(bottom);if(isEmpty)bind(empty);
+    side.querySelectorAll("[data-c129-edit]").forEach(inp=>{
+      inp.onchange=()=>{
+        if(!selected)return;
+        options.onEdit?.(selected.id,inp.getAttribute("data-c129-edit"),inp.value);
+      };
+    });
   }
   let inspectorOpen=true,inspectorTab="props",taskExpanded=false;
 
