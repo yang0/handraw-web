@@ -4112,6 +4112,8 @@ a.ic-hist-cover-button { cursor: pointer; }
 .ic-pc-card-foot {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:auto;}
 .ic-pc-card-foot > span {color:var(--ink-muted,#777);font-size:11px;}
 .ic-pc-card-foot .btn {flex-shrink:0;}
+.ic-pc-more {display:flex;justify-content:center;padding:22px 0 10px;}
+.ic-pc-more .btn {min-width:150px;}
 .ic-pc-empty {padding:40px 24px;text-align:center;background:var(--ic-panel-solid,#fff);
   border:1px dashed var(--ic-border,#ddd);border-radius:14px;}
 .ic-pc-empty strong {display:block;font-size:16px;margin-bottom:8px;}
