@@ -12,6 +12,7 @@
 .gp126-modes button[aria-pressed=true]{border-color:#ad573d;background:#fff1e9;color:#923922}
 .gp126-style-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:10px 0}
 .gp126-style-options[hidden],#gp126-ai-options[hidden]{display:none}
+.gp126-body #gp126-scope{display:block;width:100%;box-sizing:border-box;background:var(--ic-surface,#fff);color:inherit;border:1px solid var(--ic-border,#d7d0c8);padding:9px;border-radius:9px;margin:5px 0 11px;font:inherit;font-size:12px}
 .gp126-style-options label{font-size:11px;font-weight:700}
 .gp126-style-options select,.gp126-body textarea{font-family:inherit;display:block;width:100%;box-sizing:border-box;border-radius:9px;border:1px solid var(--ic-border,#d7d0c8);background:var(--ic-surface,#fff);color:inherit;padding:9px;font-size:12px;line-height:1.5;margin-top:5px}
 .gp126-note{font-size:11px;line-height:1.7;color:var(--ic-muted,#69645e);margin:11px 0}
