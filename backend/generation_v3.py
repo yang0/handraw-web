@@ -604,7 +604,54 @@ def record_public_work(
     ).fetchall()
     actual = [(int(row["position"]), str(row["media_id"]), str(row["storage_key"]))
               for row in actual_rows]
-    # Only the canonical RunItems may appear in a public Work. Never demote a
+    if source == "web":
+        # Canonical successes remain durable even after the author deliberately
+        # deletes/hides ONE generated image. Public work_media is a visibility
+        # projection, *not* the history of successful gateway executions.
+        # This also ensures a late callback cannot resurrect a deleted image.
+        execution_rows = tx.execute(
+            """SELECT id,batch_index,items_json,visibility,deleted_at,engine
+               FROM studio_generations
+               WHERE user_id=? AND status='success'
+                 AND ((batch_id=? AND batch_id<>'')
+                   OR (id=? AND COALESCE(batch_id,'')=''))""",
+            (user_id, external_run_id, external_run_id),
+        ).fetchall()
+        known_positions: set[int] = set()
+        allowed_by_position: dict[int, set[str]] = {}
+        for execution in execution_rows:
+            slot_index = int(execution["batch_index"] or 0)
+            try:
+                raw_images = json.loads(execution["items_json"] or "[]")
+            except (TypeError, ValueError):
+                raw_images = []
+            if not isinstance(raw_images, list):
+                continue
+            for image_index, raw in enumerate(raw_images):
+                url = (raw if isinstance(raw, str) else
+                       raw.get("imageUrl") or raw.get("url") or ""
+                       if isinstance(raw, dict) else "")
+                if not isinstance(url, str) or not url.strip():
+                    continue
+                try:
+                    storage_key = _storage_url(url)
+                except (TypeError, ValueError):
+                    continue
+                position = slot_index * 1000 + image_index
+                known_positions.add(position)
+                if (str(execution["visibility"] or "public") == "public"
+                    and not execution["deleted_at"]
+                    and str(execution["engine"] or "") != "demo"):
+                    allowed_by_position.setdefault(position, set()).add(storage_key)
+        actual = [
+            (position, media_id, storage_key)
+            for position, media_id, storage_key in actual
+            if position not in known_positions
+            or storage_key in allowed_by_position.get(position, set())
+        ]
+    if not actual:
+        raise ValueError("No publicly visible media remains in this work")
+    # Only authorized canonical RunItems may appear in a public Work. Never demote a
     # successful item merely because a later attempt lacks that media.
     tx.execute("UPDATE works SET run_id=?, cover_media_id=NULL WHERE id=?", (run_id, work_id))
     tx.execute("DELETE FROM work_media WHERE work_id=?", (work_id,))
