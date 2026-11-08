@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "pendingSkillOnly": [
     {
+      "code": "FF-018",
+      "kind": "style",
+      "name": "Low Poly Art",
+      "sha256": "46743528837a25533e5ddac0b0f706c33d84f3c7a4f3cbb60853ee1212060ad3",
+      "issue": 11,
+      "reason": "Skill main added Low Poly Art before website official approval; metadata hash pinned for drift detection. NOT published or approved for Web reverse import.",
+      "state": "awaiting_website_editorial_review"
+    },
+    {
       "code": "FG-025",
       "kind": "style",
       "name": "Perler Bead Pixel Art",
