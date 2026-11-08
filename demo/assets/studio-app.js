@@ -18669,6 +18669,29 @@
         CS.graph.selectedIds=textNode?[textNode.id]:[];
         markActiveTabDirty();persistOpenTabs();fullRenderCanvas();fitView();
       },
+      onEdit:(nodeId,field,raw)=>{
+        const node=getNodeById(nodeId);
+        if(!node||!node.data)return;
+        const allowed=node.type==="output_control"?["ratio","count"]:
+          node.type==="skill_params"?["audience","businessScene"]:[];
+        if(!allowed.includes(field))return;
+        let value=String(raw||"").trim();
+        if(field==="ratio"){
+          value=normalizeRatioInput(value);
+          if(!isValidRatioInput(value)){
+            toast("画幅比例请使用宽:高格式，如 3:4、16:9");return;
+          }
+        }else if(field==="count"){
+          value=Math.max(1,Math.min(200,Math.round(Number(value)||1)));
+        }else{
+          value=value.slice(0,200);
+        }
+        if(node.data[field]===value)return;
+        pushUndo();
+        node.data[field]=value;
+        markActiveTabDirty();
+        persistOpenTabs();fullRenderCanvas();
+      },
       onStop:controlId=>{
         if(!cancelActiveBatchGeneration(controlId)){
           toast("未找到可停止的本地队列；已提交远端的任务仍需从运行记录核实");
