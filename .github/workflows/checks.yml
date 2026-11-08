@@ -93,7 +93,6 @@ jobs:
             artifacts/canvas-127.json
             artifacts/studio-112-matrix.json
             artifacts/studio-112-100-node/**
-            artifacts/studio-112-pg-backup-report.json
             artifacts/graphpatch-126/**
             artifacts/ai-110-offline-eval.json
             artifacts/p0-masonry-114/**
@@ -315,3 +314,13 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_pg_backup_restore_112.py' -v
       - name: 'P0 #93 isolated PostgreSQL 17 first topic, concurrent race and rollback'
         run: python -m unittest discover -s tests -p 'test_p0_topic_redirect_93.py' -v
+      # Artifacts are job-local. The PG audit is produced in THIS job, not in
+      # interaction-journey-regression. Never attach the physical .dump backup.
+      - name: '#112 upload redacted PostgreSQL backup/restore audit (no database archive)'
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio2-pg112-backup-restore-audit
+          path: artifacts/studio-112-pg-backup-report.json
+          if-no-files-found: ignore
+          retention-days: 30
