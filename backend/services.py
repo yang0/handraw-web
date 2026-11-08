@@ -6494,8 +6494,9 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 """SELECT id,request_id,status,system_append_json
                    FROM studio_generations
                    WHERE user_id=? AND batch_id=? AND batch_index=?
+                     AND id<>?
                    ORDER BY created_at,id""",
-                (uid, batch_id, batch_index),
+                (uid, batch_id, batch_index, gen_id),
             ).fetchall()
             # Re-delivery of the SAME requestId was returned from the
             # idempotency lookup before charging. A new requestId is another
