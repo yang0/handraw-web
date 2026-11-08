@@ -60,12 +60,15 @@ jobs:
       - run: python tests/smoke_studio_make_image_browser_128.py
       - run: python tests/smoke_studio_navigation_projects_106.py
       - run: python tests/smoke_studio_dag_browser_120.py
+      - name: '#112 M0-M3 acceptance matrix and CI wiring guard'
+        run: python ops/check_studio_acceptance_112.py --output artifacts/studio-112-matrix.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: studio2-canvas-127-benchmark
           path: |
             artifacts/canvas-127.json
+            artifacts/studio-112-matrix.json
             artifacts/canvas-127-screen/**
             artifacts/canvas-119-screen/**
             artifacts/quick-128-screen/**
