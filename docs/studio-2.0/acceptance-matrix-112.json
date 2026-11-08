@@ -199,11 +199,12 @@
       "concern": "100-node canvas focus, image DOM reuse and perf baseline",
       "tests": [
         "tests/benchmark_studio_canvas.py",
-        "tests/test_studio_canvas_incremental.cjs"
+        "tests/test_studio_canvas_incremental.cjs",
+        "tests/smoke_studio_native_100_graph_112.py"
       ],
       "ci_scope": "deterministic-mock-local-browser-or-contract",
       "live_gate": "PENDING",
-      "live_evidence_required": "Full 100-node production Graph with large real images on target hardware"
+      "live_evidence_required": "Local native Studio 100-node Graph with real decoded repo WebP and 50 edges now CI-covered; still require deployed customer-like heavy 100-node Graph, live multi-device networks and target hardware."
     },
     {
       "id": "M3-04",
