@@ -139,15 +139,25 @@
           ]
         },
         "source": {
-          "type": "string"
+          "enum": [
+            "official",
+            "community",
+            "override",
+            "private",
+            "pending",
+            "exclusive"
+          ]
         },
         "version": {
           "anyOf": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
             },
             {
-              "type": "integer"
+              "type": "integer",
+              "minimum": 1
             }
           ]
         }
@@ -285,7 +295,19 @@
           "uniqueItems": true
         },
         "layoutParams": {
-          "type": "object"
+          "type": "object",
+          "properties": {
+            "sc021Type": {
+              "type": "string"
+            },
+            "sc022Name": {
+              "type": "string"
+            },
+            "sc022Pinyin": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
         },
         "userNotes": {
           "type": "string"
@@ -335,6 +357,9 @@
           "items": {
             "$ref": "#/$defs/media"
           }
+        },
+        "skipGlobalRefs": {
+          "type": "boolean"
         }
       },
       "additionalProperties": true
@@ -369,6 +394,14 @@
           "items": {
             "$ref": "#/$defs/slot"
           }
+        },
+        "documentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "documentRevision": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": true
