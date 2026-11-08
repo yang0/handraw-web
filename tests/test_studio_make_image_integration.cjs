@@ -219,9 +219,13 @@ assert.match(app,/E\.assembleControlPrompt\(executionGraph, executionCtrl, Catal
 assert.match(app,/HandrawQuickSpec\.setAssets\(p,ast\.data\.items\)/);
 assert.match(app,/\/api\/studio\/runs\//);
 assert.match(app,/onSelect\(id, ref\)/);
-assert.match(app,/forkOf: CS\.forkGenerationSource\.workId/,
- "Public work fork must retain original-author Work identity");
-assert.match(app,/forkItemId: CS\.forkGenerationSource\.itemId/,
- "Generated image fork must retain selected-item lineage");
+assert.match(app,/forkOf: batchRun\.forkSource\.workId/,
+ "Public work fork must retain original-author Work identity captured before execution");
+assert.match(app,/forkItemId: batchRun\.forkSource\.itemId/,
+ "Selected image fork lineage must not change while the Run executes");
+assert.match(app,/E\.assembleControlPrompt\(runGraph, ctrlNode, Catalog, "skill"\)/,
+ "History must use the frozen execution graph instead of a newly edited draft");
+assert.match(app,/recordGenerationHistory\(executionCtrl, allItems, plan\.kind/,
+ "Execution history is recorded with the frozen control and origin");
 assert.match(app,/retry:\s*async \(\)/);
 console.log("Studio #122 Make Image integration: atomic patches, catalog refs, ratio, fork, Run, frozen snapshot and DOM events PASS");
