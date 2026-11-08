@@ -377,7 +377,7 @@
       if (!button || busy) return;
       const found = items.find(function (i) { return i.uid === button.dataset.galleryDelete; });
       if (!found) return;
-      if (!await global.HANDRAW_SHARED?.confirmAction?.(
+      if (!await window.HANDRAW_SHARED?.confirmAction?.(
           "删除素材「" + (found.name || "未命名") + "」？这会同步删除状态到 Skill。",
           { title: "删除私有素材", danger: true, confirmText: "删除素材" })) return;
       busy = true;
