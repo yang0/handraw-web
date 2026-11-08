@@ -158,9 +158,10 @@ def main(argv: list[str] | None = None) -> int:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(serialized + "\n", encoding="utf-8")
     if result["knownPending"]:
-        print("ATTENTION: reviewed Skill-only proposal is NOT website-approved; "
-              "Issue #11 remains open and production parity is NO-GO.",
-              file=sys.stderr)
+        print("ATTENTION: pending Skill-only official code(s): " +
+              ", ".join(result["knownPending"]) +
+              "; NOT website-approved; Issue #11 remains open and "
+              "production parity is NO-GO.", file=sys.stderr)
     return 0
 
 
