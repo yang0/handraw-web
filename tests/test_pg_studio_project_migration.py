@@ -109,6 +109,11 @@ class ExistingPostgresProjectMigrationTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(RuntimeError):
                 validate_database_name("postgresql://localhost/" + name)
         validate_database_name(self.dsn)
+        validate_database_name(self.dsn + "?sslmode=require")
+        for suffix in ("?dbname=postgres", "?host=other-host",
+                       "?service=unexpected", "?options=-c%20search_path%3Devil"):
+            with self.subTest(suffix=suffix), self.assertRaises(RuntimeError):
+                validate_database_name(self.dsn + suffix)
 
     def test_dry_run_uses_only_selects_and_transaction_settings(self):
         c = FakeCursor()
