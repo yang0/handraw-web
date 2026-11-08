@@ -243,6 +243,21 @@ class OfficialCatalogParity11(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(main(args + ["--approved-export-dir", str(exported)]), 2)
 
+    def test_ci_audits_actual_skill_main_not_stale_development_branch(self):
+        workflow = (Path(__file__).resolve().parents[1]
+                    / ".github/workflows/checks.yml").read_text(encoding="utf-8")
+        catalog_checkout = workflow.split(
+            "- name: '#11 checkout actual Skill main reference catalog (data only)'", 1
+        )[1].split("- name: '#11 official Web-authoritative code parity", 1)[0]
+        self.assertIn("repository: yang0/handraw-style", catalog_checkout)
+        self.assertIn("ref: main", catalog_checkout)
+        self.assertIn("path: external/handraw-style-catalog", catalog_checkout)
+        self.assertIn("persist-credentials: false", catalog_checkout)
+        # The independently pinned Skill CLI remains separate, executable tests
+        # must never silently switch to running arbitrary Skill-main scripts.
+        self.assertIn("ref: dad8dad2d2af25bd9df45971a03a499461a723db", workflow)
+        self.assertIn("HANDRAW_REAL_SKILL_EXPECTED_SHA:", workflow)
+
     def test_cli_read_only_pending_and_strict_policy(self):
         with tempfile.TemporaryDirectory(prefix="catalog11-") as root:
             root = Path(root)
