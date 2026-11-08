@@ -5797,6 +5797,12 @@
       return;
     }
     if (target.art) {
+      // In-flight RunItem callbacks should update the canonical Article and
+      // the visible editor, never leave the previous card clone on screen.
+      if (CS.articleEditorDraft?.id === target.art.id) {
+        CS.articleEditorDraft.cards = cloneGraph(target.art.cards || []);
+        CS.articleEditorDraft.planRevision = Number(target.art.planRevision || 0);
+      }
       markArticleProjectChanged(target.art, {plan:true});
       if (bumpTime) {
         const now = Date.now();
@@ -7067,19 +7073,18 @@
     const hasLiveCards = readyCards.some((c) => c && (c.generationMode === "live" || c.engine === "live"));
     const isLive = isLiveGenerationEnabled() || hasLiveCards;
 
-    const articleTitle = String(planNode.data?.articleTitle || "").trim();
-    const isManualTitle = Boolean(
-      planNode.data?.articleTitleSource === "manual" ||
-      planNode.data?.titleSource === "manual"
-    );
-    const artSubject = articleTitle || (readyCards[0]?.subject) || (readyCards[0]?.recipeSnapshot?.subject) || "";
+    // ArticleDocument markdown, title and derived subjects stay private
+    // until the user explicitly publishes an article (separate flow).
+    const articleTitle = "";
+    const isManualTitle = false;
+    const artSubject = "文章配图";
 
     const entry = {
       id: planNode.data.generationId || E.uid("hist_art"),
       requestId: planNode.data.requestId || "",
       createdAt: dateFull,
       timeShort,
-      tabTitle: curTab ? curTab.title : "文章配图方案",
+      tabTitle: "文章配图方案",
       subject: artSubject,
       articleTitle: articleTitle,
       title: isManualTitle ? articleTitle : "",
@@ -7093,7 +7098,7 @@
       kind: "article",
       engine: isLive ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
-      recipeSummary: rec && ctrlNode ? buildRecipeSummaryText(rec, ctrlNode) : `文章配图方案 · ${readyCards.length} 张`,
+      recipeSummary: `文章配图方案 · ${readyCards.length} 张`,
       // Full article-derived prompts may embed private source paragraphs.
       prompt: "文章插图",
       // Public generation history is NOT a publication of ArticleDocument.
@@ -7103,9 +7108,9 @@
         genId: c.genId || "",
         requestId: c.requestId || "",
         role: c.role || "inline",
-        title: c.title || "配图",
-        subject: c.subject || artSubject,
-        articleTitle: articleTitle,
+        title: `配图 ${idx + 1}`,
+        subject: "文章插图",
+        articleTitle: "",
         ratio: c.ratio || "4:3",
         prompt: "文章插图",
         imageUrl: c.imageUrl
@@ -7140,6 +7145,9 @@
     const card = (planNode.data.cards || []).find((c) => c.id === cardId);
     if (!card || card.status === "generating") return false;
     const previousImageUrl = card.imageUrl || "";
+    // Capture the previous RunItem state before setting "generating";
+    // otherwise retryFailed/retryCancelled are always falsely disabled.
+    const previousStatus = card.status;
     if (batchId) {
       card.batchId = batchId;
       card.batchIndex = batchIndex;
@@ -7256,8 +7264,8 @@
               batchId: card.batchId,
               batchIndex: card.batchIndex || 0,
               batchTotal: card.batchTotal || 1,
-              retryCancelled: card.status === "cancelled" || card.status === "error",
-              retryFailed: card.status === "error" || card.status === "failed",
+              retryCancelled: previousStatus === "cancelled" || previousStatus === "error",
+              retryFailed: previousStatus === "error" || previousStatus === "failed",
               slotId: String(card.id || "")
             } : {}),
             idempotencyKey: requestId,
