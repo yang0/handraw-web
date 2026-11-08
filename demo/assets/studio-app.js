@@ -1044,6 +1044,7 @@
         projectRevision: Number(t.projectRevision || 0),
         projectSaveState: t.projectSaveState || "",
         projectPending: t.projectPending || null,
+        projectCopyPending: t.projectCopyPending || null,
         projectError: t.projectError || "",
         projectRemoteRevision: Number(t.projectRemoteRevision || 0),
         editRevision: Number(t.editRevision || 0),
