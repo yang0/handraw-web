@@ -6337,6 +6337,14 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             from . import resource_registry
             res = resource_registry.resolve(tx, code, viewer=user, purpose="generate")
             if not res:
+                # #21: an owned-only UUID code cannot be silently ignored;
+                # otherwise another user would pay for an image created
+                # WITHOUT the style they thought they had selected.
+                if re.fullmatch(r"USR-[SL][A-F0-9]{32}", str(code).upper()):
+                    raise ServiceError(
+                        "自建画风/图型不存在或无权使用",
+                        status=403, code="private_resource_forbidden",
+                    )
                 continue
             if not res.get("canUse"):
                 hidden_by = (res.get("access") or {}).get("hiddenBy")
