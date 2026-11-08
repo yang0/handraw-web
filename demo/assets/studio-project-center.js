@@ -40,14 +40,15 @@
     }
     return "refresh-confirmed";
   }
-  function model({projects=[], tabs=[], query="", loading=false, error="", loggedIn=false}={}) {
+  function model({projects=[], tabs=[], query="", loading=false, error="", loggedIn=false,
+                  hasMore=false, loadingMore=false}={}) {
     const needle = String(query).trim().toLowerCase();
     const includes = item => !needle || [item.title, KINDS[item.kind], item.projectId].some(
       v => String(v || "").toLowerCase().includes(needle));
     const drafts = localDrafts(tabs).filter(includes);
     const cloud = (Array.isArray(projects) ? projects : [])
       .filter(p => p && p.id && includes({title:p.title, kind:p.kind, projectId:p.id}));
-    return {drafts,cloud,query:String(query),loading,error,loggedIn};
+    return {drafts,cloud,query:String(query),loading,error,loggedIn,hasMore,loadingMore};
   }
   function localCard(d) {
     const x=escapeText;
@@ -96,8 +97,10 @@
       content+="<div class='ic-pc-empty' role='alert'><strong>云端项目读取失败</strong>"+
         "<p>"+x(s.error)+"</p><button type='button' class='btn btn-sm' data-pc-refresh>重试</button></div>";
     } else if (s.cloud.length) {
-      content+="<div class='ic-pc-subtitle'>云端项目 · "+s.cloud.length+
-        "</div><div class='ic-pc-grid'>"+s.cloud.map(cloudCard).join("")+"</div>";
+      content+="<div class='ic-pc-subtitle'>已加载云端项目 · "+s.cloud.length+
+        "</div><div class='ic-pc-grid'>"+s.cloud.map(cloudCard).join("")+"</div>"+
+        (s.hasMore ? "<div class='ic-pc-more'><button type='button' class='btn btn-sm' data-pc-more"+
+         (s.loadingMore?" disabled":"")+">"+(s.loadingMore?"加载中…":"加载更多项目")+"</button></div>" : "");
     } else if (!s.drafts.length) {
       content+="<div class='ic-pc-empty' role='status'><strong>"+
         (s.query?"没有匹配的项目":"还没有云端项目")+
