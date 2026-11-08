@@ -632,6 +632,20 @@ class TestOfficialAssets(unittest.TestCase):
                 (now, now, now, now),
             )
 
+        # An unapproved/hidden official entry must NEVER be exported.
+        # Also catch reopening the same directory after a previous release.
+        with self.db.transaction() as tx:
+            tx.execute(
+                """INSERT INTO catalog_assets
+                    (code, name, kind, source_type, group_name, description,
+                     definition, unlock_cost, tier, image_url, status,
+                     published_at_ms, created_at, updated_at)
+                VALUES ('FE-071', '隐藏敏感定义', 'style', 'official', 'FE',
+                        '内部仅审查', 'SECRET_HIDDEN_PROMPT_NEVER_EXPORT',
+                        0, 'free', '', 'hidden', 1000, ?, ?)""",
+                (now, now),
+            )
+
         # Setup mock skill repo
         mock_skill = self.root / "mock_skill"
         (mock_skill / "references").mkdir(parents=True, exist_ok=True)
@@ -677,8 +691,15 @@ class TestOfficialAssets(unittest.TestCase):
         if export_out.exists():
             self.assertEqual(len(list(export_out.iterdir())), 0)
 
-        # 11c: Clean collision and export successfully
+        # 11c: Never overwrite a nonempty old export folder (hidden assets
+        # could otherwise remain in the stale artifact after a later release).
         (mock_skill / "references" / "styles.json").write_text(json.dumps(styles_data, ensure_ascii=False), encoding="utf-8")
+        export_out.mkdir(exist_ok=True)
+        (export_out / "stale-definition.txt").write_text("DONT_REUSE_OLD_RELEASE")
+        res_stale = subprocess.run(cmd_collision, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(res_stale.returncode, 2)
+        (export_out / "stale-definition.txt").unlink()
+        # 11d: Clean empty destination and export successfully.
         res_ok = subprocess.run(cmd_collision, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(res_ok.returncode, 0, f"Failed export:\n{res_ok.stdout}\n{res_ok.stderr}")
 
@@ -690,6 +711,9 @@ class TestOfficialAssets(unittest.TestCase):
         item_070 = next((s for s in exported_styles if s["number"] == "FE-070"), None)
         self.assertIsNotNone(item_069)
         self.assertIsNotNone(item_070)
+        self.assertNotIn("FE-071", json.dumps(exported_styles, ensure_ascii=False))
+        self.assertNotIn("SECRET_HIDDEN_PROMPT_NEVER_EXPORT",
+                         (export_out / "styles.json").read_text(encoding="utf-8"))
 
         # Free asset has definition
         self.assertEqual(item_069.get("definition"), "免费官方定义")
