@@ -17739,6 +17739,11 @@
         },
         run: async () => {
           if (!p || isCurrentBusy()) return;
+          const remote=getQuickRunProjection(p);
+          if(remote?.ok && !remote.isTerminal) {
+            toast("服务器仍在处理上一个任务，请等待状态确认，避免重复提交");
+            return;
+          }
           const topic = String(p.text.data.text || "").trim();
           if (!topic) {
             toast("请先填写创作主题");
