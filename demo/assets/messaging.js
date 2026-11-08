@@ -496,10 +496,10 @@
   }
 
   // Abuse Report Modal for DM Message
-  function openReportModal(messageId) {
-    const reason = window.prompt("请输入举报原因（例如：垃圾广告、骚扰辱骂、诈骗违规）：", "违规私信内容");
+  async function openReportModal(messageId) {
+    const reason = await window.HandrawDialogs.prompt("请输入举报原因（例如：垃圾广告、骚扰辱骂、诈骗违规）：", "违规私信内容");
     if (reason === null) return;
-    const detail = window.prompt("可补充详细说明（选填）：", "");
+    const detail = await window.HandrawDialogs.prompt("可补充详细说明（选填）：", "");
     apiJson("/api/reports", {
       method: "POST",
       body: {
@@ -509,9 +509,9 @@
         detail: (detail || "").trim(),
       }
     }).then(() => {
-      alert("举报已提交，平台将尽快审核处理。");
+      window.HandrawDialogs.notice("举报已提交，平台将尽快审核处理。");
     }).catch(err => {
-      alert("举报提交失败：" + (err.message || "请稍后重试"));
+      window.HandrawDialogs.notice("举报提交失败：" + (err.message || "请稍后重试"));
     });
   }
 
@@ -864,12 +864,12 @@
         area.querySelectorAll(".btn-bc-withdraw").forEach(btn => {
           btn.onclick = async () => {
             const bcId = btn.dataset.bcId;
-            if (!confirm("确定要撤回该公告吗？撤回后所有用户正文将被隐藏，未读数将被移除。")) return;
+            if (!await window.HandrawDialogs.confirm("确定要撤回该公告吗？撤回后所有用户正文将被隐藏，未读数将被移除。")) return;
             try {
               await apiJson(`/api/admin/message-broadcasts/${bcId}/withdraw`, { method: "POST" });
               openBroadcastConversation(container);
             } catch (err) {
-              alert("撤回失败：" + (err.message || "请稍后重试"));
+              window.HandrawDialogs.notice("撤回失败：" + (err.message || "请稍后重试"));
             }
           };
         });
@@ -935,15 +935,15 @@
         const body = modalBackdrop.querySelector("#hw-bc-body-input").value.trim();
 
         if (title.length < 4 || title.length > 80) {
-          alert("公告标题长度须在 4–80 个字之间");
+          window.HandrawDialogs.notice("公告标题长度须在 4–80 个字之间");
           return;
         }
         if (body.length < 1 || body.length > 5000) {
-          alert("公告正文长度须在 1–5000 个字之间");
+          window.HandrawDialogs.notice("公告正文长度须在 1–5000 个字之间");
           return;
         }
         if (/<[a-zA-Z\/][^>]*>/.test(body)) {
-          alert("公告正文暂不支持 HTML 内容");
+          window.HandrawDialogs.notice("公告正文暂不支持 HTML 内容");
           return;
         }
 
@@ -993,13 +993,13 @@
             body: { title, body, requestId: reqId }
           });
           if (res && res.ok) {
-            alert("公告发布成功！");
+            window.HandrawDialogs.notice("公告发布成功！");
             modalBackdrop.remove();
             openBroadcastConversation(container);
             fetchUnreadCounts();
           }
         } catch (err) {
-          alert("发布失败：" + (err.message || "请稍后再试"));
+          window.HandrawDialogs.notice("发布失败：" + (err.message || "请稍后再试"));
           sendBtn.disabled = false;
           sendBtn.textContent = "向全部现有用户发送";
         }
@@ -1068,7 +1068,7 @@
       // Block/Unblock button
       chatPane.querySelector("#hw-dm-block-btn").onclick = async () => {
         const isBlocked = conv.isBlocked;
-        if (!isBlocked && !confirm(`确定要拉黑用户 @${conv.peer.username} 吗？拉黑后双方无法互发私信。`)) return;
+        if (!isBlocked && !await window.HandrawDialogs.confirm(`确定要拉黑用户 @${conv.peer.username} 吗？拉黑后双方无法互发私信。`)) return;
         try {
           if (isBlocked) {
             await apiJson(`/api/dm/blocks/${conv.peer.id}`, { method: "DELETE" });
@@ -1077,7 +1077,7 @@
           }
           openConversation(container, convId);
         } catch (err) {
-          alert("操作失败：" + (err.message || "请稍后重试"));
+          window.HandrawDialogs.notice("操作失败：" + (err.message || "请稍后重试"));
         }
       };
 
@@ -1121,15 +1121,15 @@
           const text = input.value.trim();
           const nonWsLen = text.replace(/\s+/g, "").length;
           if (nonWsLen < 1) {
-            alert("请输入私信内容（不能全为空白字符）");
+            window.HandrawDialogs.notice("请输入私信内容（不能全为空白字符）");
             return;
           }
           if (nonWsLen > 2000) {
-            alert("私信内容过长（最多 2000 个非空白字符）");
+            window.HandrawDialogs.notice("私信内容过长（最多 2000 个非空白字符）");
             return;
           }
           if (/<[a-zA-Z\/][^>]*>/.test(text)) {
-            alert("首版私信暂不支持 HTML 内容");
+            window.HandrawDialogs.notice("首版私信暂不支持 HTML 内容");
             return;
           }
 
@@ -1157,7 +1157,7 @@
               fetchUnreadCounts();
             }
           } catch (err) {
-            alert("发送失败：" + (err.message || "请稍后再试"));
+            window.HandrawDialogs.notice("发送失败：" + (err.message || "请稍后再试"));
           } finally {
             isSending = false;
             sendBtn.disabled = false;
@@ -1221,7 +1221,7 @@
       const text = input.value.trim();
       const nonWsLen = text.replace(/\s+/g, "").length;
       if (nonWsLen < 1 || nonWsLen > 2000) {
-        alert("请输入 1–2000 个非空白字符的私信内容");
+        window.HandrawDialogs.notice("请输入 1–2000 个非空白字符的私信内容");
         return;
       }
       sendBtn.disabled = true;
@@ -1239,7 +1239,7 @@
           await loadConversationList(container, targetUsername);
         }
       } catch (err) {
-        alert("发送失败：" + (err.message || "请稍后重试"));
+        window.HandrawDialogs.notice("发送失败：" + (err.message || "请稍后重试"));
         sendBtn.disabled = false;
         sendBtn.textContent = "发送";
       }
@@ -1255,12 +1255,12 @@
   }
 
   // Open New Conversation Dialog
-  function openNewConversationModal() {
-    const username = window.prompt("请输入要发私信的用户账号 ID / 用户名（例如：momo_design）：");
+  async function openNewConversationModal() {
+    const username = await window.HandrawDialogs.prompt("请输入要发私信的用户账号 ID / 用户名（例如：momo_design）：");
     if (!username || !username.trim()) return;
     const clean = username.trim();
     if (getApp()?.state?.user && clean.toLowerCase() === getApp().state.user.username.toLowerCase()) {
-      alert("不能给自己发送私信");
+      window.HandrawDialogs.notice("不能给自己发送私信");
       return;
     }
     const container = document.querySelector("#hw-dm-container");
