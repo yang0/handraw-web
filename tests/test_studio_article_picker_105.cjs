@@ -55,6 +55,8 @@ assert.doesNotMatch(bridge,/S\.openAssetPickerModal\(/);
 assert.match(app,/id="editor-layout-picker"/);
 assert.match(app,/id="editor-reference-picker"/);
 assert.match(app,/articlePicker\.validateForExecution/);
+assert.doesNotMatch(app,/const justUnlocked = !proLocked/, "Picker click scope must not reference render-only proLocked");
+assert.match(app,/const justUnlocked = resObj\?\.tier !== "pro_credit"/);
 assert.match(app,/const articleRefImages =/);
 const html=fs.readFileSync("demo/studio.html","utf8");
 assert.ok(html.indexOf("studio-resources.js")<html.indexOf("studio-article-picker-105.js"));

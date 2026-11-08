@@ -3126,7 +3126,7 @@
 
               // A real picker result is an authorized ResourceRef, not an
               // arbitrary label/string. The server independently verifies it.
-              const justUnlocked = !proLocked || S.isUnlocked(id, resObj);
+              const justUnlocked = resObj?.tier !== "pro_credit" || S.isUnlocked(id, resObj);
               if (!checked(id, justUnlocked).ok) return;
               if (isMulti) {
                 if (selectedSet.has(id)) selectedSet.delete(id);
