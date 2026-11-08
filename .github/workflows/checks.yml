@@ -28,6 +28,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_view_authority.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_article_integration.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_article_http_e2e.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_resource_refs.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_plan_slot_access.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_http.py' -v
