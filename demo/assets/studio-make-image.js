@@ -163,6 +163,41 @@
       return this.context?.parts || null;
     }
 
+    // The legacy nodes are the only writable truth. #121 normalizes them
+    // on read and #122 writes back only the changed fields.
+    getSpec() {
+      const parts=this.getParts();
+      const bridge=global.HandrawQuickSpec;
+      return bridge && parts ? bridge.read(parts).spec : null;
+    }
+
+    patchSpec(delta, fallback) {
+      const bridge=global.HandrawQuickSpec;
+      if (!bridge) {
+        if (typeof fallback === "function") fallback();
+        return true;
+      }
+      try {
+        bridge.apply(this.getParts(),delta,{
+          catalog:this.context?.catalog,
+          isUnlocked:this.actions?.isUnlocked
+        });
+        return true;
+      } catch(err) {
+        const r=global.HandrawStudioResources;
+        const detail=r?.formatError?.({code:err.code})||"";
+        global.HANDRAW_SHARED?.toast?.(
+          err.code === "locked_field" ? "该参数已被用户锁定，无法自动覆盖" :
+          err.code === "invalid_ratio" ? "画幅比例格式无效" :
+          err.code === "invalid_output_mode" ? "该创作模式不可用" :
+          err.code?.startsWith("resource_") || err.code?.startsWith("invalid_resource")
+            ? detail+"（"+(err.field||"所选资源")+"）" :
+          "创作参数修改失败："+(err.code||err.message)
+        );
+        return false;
+      }
+    }
+
     getGraph() {
       return this.context?.graph || null;
     }
@@ -625,17 +660,17 @@
       const btnSingle = root.querySelector("#make-image-mode-single");
       if (btnSingle) {
         btnSingle.onclick = () => {
-          sd.fusion = false;
-          // Keep the secondary selection as disabled draft data: switching
-          // fusion on again should not force a needless re-selection.
-          this.actions?.markDirtyAndRender();
+          if (this.patchSpec({fusionEnabled:false},()=>{sd.fusion=false})) {
+            // The second style remains stored, but is not sent in a Run.
+            this.actions?.markDirtyAndRender();
+          }
         };
       }
       const btnFusion = root.querySelector("#make-image-mode-fusion");
       if (btnFusion) {
         btnFusion.onclick = () => {
-          sd.fusion = true;
-          this.actions?.markDirtyAndRender();
+          if (this.patchSpec({fusionEnabled:true},()=>{sd.fusion=true}))
+            this.actions?.markDirtyAndRender();
         };
       }
 
@@ -656,14 +691,14 @@
             kind,
             currentId,
             onSelect: (id, ref) => {
-              if (kind === "color") sd.colors = id ? [id] : [];
-              else sd[field] = id || "";
-              // The Make Image form and canvas edit the SAME skill_params node.
-              // Preserve the selected catalog identity alongside its legacy ID.
-              const keys = {style1:"style",style2:"secondaryStyle",layout:"layout",colors:"colors"};
-              sd.resourceRefs = {...(sd.resourceRefs || {}),
-                [keys[field]]: kind === "color" ? (ref ? [ref] : []) : (ref || null)};
-              this.actions?.markDirtyAndRender();
+              const names={style1:"style",style2:"secondaryStyle",layout:"layout",colors:"colors"};
+              const key=names[field];
+              if (this.patchSpec({[key]:kind==="color"?(id?[ref||id]:[]):(ref||id||null)},()=>{
+                if (kind==="color") sd.colors=id?[id]:[];
+                else sd[field]=id||"";
+                sd.resourceRefs={...(sd.resourceRefs||{}),
+                  [key]:kind==="color"?(ref?[ref]:[]):(ref||null)};
+              })) this.actions?.markDirtyAndRender();
             }
           });
         };
@@ -679,11 +714,12 @@
         btn.onclick = (e) => {
           e.stopPropagation();
           const kind = btn.getAttribute("data-clear-kind");
-          if (kind === "style1") sd.style1 = "";
-          else if (kind === "style2") sd.style2 = "";
-          else if (kind === "layout") sd.layout = "";
-          else if (kind === "color") sd.colors = [];
-          this.actions?.markDirtyAndRender();
+          const field={style1:"style",style2:"secondaryStyle",layout:"layout",color:"colors"}[kind];
+          if (field && this.patchSpec({[field]:field==="colors"?[]:null},()=>{
+            if(kind==="color") sd.colors=[];
+            else sd[kind]="";
+            if(sd.resourceRefs)sd.resourceRefs[field]=field==="colors"?[]:null;
+          }))this.actions?.markDirtyAndRender();
         };
       });
 
@@ -712,7 +748,7 @@
         activeSubjectFlush = flushPersist;
         ensureBeforeUnloadHandler();
         subjInput.oninput = () => {
-          td.text = subjInput.value;
+          this.patchSpec({subject:subjInput.value},()=>{td.text=subjInput.value});
           this.syncPromptPreview();
           updateClearSubjBtn();
           if (debounceTimer) clearTimeout(debounceTimer);
@@ -722,7 +758,7 @@
           }, 350);
         };
         subjInput.onchange = () => {
-          td.text = subjInput.value;
+          this.patchSpec({subject:subjInput.value},()=>{td.text=subjInput.value});
           this.syncPromptPreview();
           updateClearSubjBtn();
           flushPersist();
@@ -735,7 +771,7 @@
       // Clear subject button
       if (clearSubjBtn) {
         clearSubjBtn.onclick = () => {
-          td.text = "";
+          if(!this.patchSpec({subject:""},()=>{td.text=""}))return;
           td.subjectHint = "";
           this.actions?.markDirtyAndRender();
           const input = this.hostElement?.querySelector("#make-image-subject");
@@ -747,26 +783,25 @@
       root.querySelectorAll("[data-set-mode]").forEach((btn) => {
         btn.onclick = () => {
           const mode = btn.getAttribute("data-set-mode");
-          if (global.HandrawStudioCore) {
-            global.HandrawStudioCore.setMode(cd, mode);
-          } else {
-            const oldMode = cd.mode;
-            const oldDefault = OUTPUT_MODE_OPTIONS.find(m => m.id === oldMode)?.defaultRatio || "3:4";
-            const explicit = cd.ratioSource === "user" || (cd.ratio && cd.ratio !== oldDefault);
-            cd.mode = mode;
-            if (!explicit) cd.ratio = OUTPUT_MODE_OPTIONS.find(m => m.id === mode)?.defaultRatio || "3:4";
-            cd.ratioSource = explicit ? "user" : "default";
-          }
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({outputMode:mode},()=>{
+            if(global.HandrawStudioCore) global.HandrawStudioCore.setMode(cd,mode);
+            else {
+              const oldDefault=OUTPUT_MODE_OPTIONS.find(m=>m.id===cd.mode)?.defaultRatio||"3:4";
+              const explicit=cd.ratioSource==="user" || (cd.ratio && cd.ratio!==oldDefault);
+              cd.mode=mode;
+              if(!explicit)cd.ratio=OUTPUT_MODE_OPTIONS.find(m=>m.id===mode)?.defaultRatio||"3:4";
+              cd.ratioSource=explicit?"user":"default";
+            }
+          }))this.actions?.markDirtyAndRender();
         };
       });
 
       // 5. Ratio buttons
       root.querySelectorAll("[data-set-ratio]").forEach((btn) => {
         btn.onclick = () => {
-          cd.ratio = btn.getAttribute("data-set-ratio");
-          cd.ratioSource = "user";
-          this.actions?.markDirtyAndRender();
+          const ratio=btn.getAttribute("data-set-ratio");
+          if(this.patchSpec({ratio},()=>{cd.ratio=ratio;cd.ratioSource="user"}))
+            this.actions?.markDirtyAndRender();
         };
       });
 
@@ -776,8 +811,7 @@
         ratioInput.oninput = () => {
           const val = ratioInput.value.trim();
           if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
-            cd.ratio = val;
-            cd.ratioSource = "user";
+            if(!this.patchSpec({ratio:val},()=>{cd.ratio=val;cd.ratioSource="user"}))return;
             root.querySelectorAll("[data-set-ratio]").forEach((b) => {
               const match = b.getAttribute("data-set-ratio") === val;
               b.classList.toggle("btn-primary", match);
@@ -790,9 +824,8 @@
         ratioInput.onchange = () => {
           const val = ratioInput.value.trim();
           if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
-            cd.ratio = val;
-            cd.ratioSource = "user";
-            this.actions?.markDirtyAndRender();
+            if(this.patchSpec({ratio:val},()=>{cd.ratio=val;cd.ratioSource="user"}))
+              this.actions?.markDirtyAndRender();
           } else {
             ratioInput.value = cd.ratio || "3:4";
           }
@@ -825,8 +858,8 @@
         btn.onclick = (e) => {
           e.stopPropagation();
           const tid = btn.getAttribute("data-del-tone");
-          sd.tones = (sd.tones || []).filter((x) => x !== tid);
-          this.actions?.markDirtyAndRender();
+          const tones=(sd.tones||[]).filter(x=>x!==tid);
+          if(this.patchSpec({tones},()=>{sd.tones=tones}))this.actions?.markDirtyAndRender();
         };
       });
 
@@ -848,8 +881,9 @@
         const applyMoods = (triggerRender = false) => {
           const presetSet = this.getKnownPresetMoods();
           const parsed = parseMoodsText(moodsInput.value, presetSet);
-          sd.moods = parsed.moods;
-          sd.customMood = parsed.customMood;
+          if(!this.patchSpec({moods:parsed.moods,customMood:parsed.customMood},()=>{
+            sd.moods=parsed.moods;sd.customMood=parsed.customMood;
+          }))return;
           if (triggerRender) {
             this.actions?.markDirtyAndRender();
           } else {
@@ -868,8 +902,9 @@
       // Whitespace
       root.querySelectorAll("[data-set-ws]").forEach((btn) => {
         btn.onclick = () => {
-          sd.whitespace = btn.getAttribute("data-set-ws") || "";
-          this.actions?.markDirtyAndRender();
+          const whitespace=btn.getAttribute("data-set-ws")||"";
+          if(this.patchSpec({whitespace},()=>{sd.whitespace=whitespace}))
+            this.actions?.markDirtyAndRender();
         };
       });
 
@@ -877,12 +912,12 @@
       const audInput = root.querySelector("#make-image-audience");
       if (audInput) {
         audInput.oninput = () => {
-          sd.audience = audInput.value.trim();
+          this.patchSpec({audience:audInput.value.trim()},()=>{sd.audience=audInput.value.trim()});
           this.syncPromptPreview();
         };
         audInput.onchange = () => {
-          sd.audience = audInput.value.trim();
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({audience:audInput.value.trim()},()=>{sd.audience=audInput.value.trim()}))
+            this.actions?.markDirtyAndRender();
         };
       }
 
@@ -890,12 +925,12 @@
       const sceneInput = root.querySelector("#make-image-business-scene");
       if (sceneInput) {
         sceneInput.oninput = () => {
-          sd.businessScene = sceneInput.value.trim();
+          this.patchSpec({businessScene:sceneInput.value.trim()},()=>{sd.businessScene=sceneInput.value.trim()});
           this.syncPromptPreview();
         };
         sceneInput.onchange = () => {
-          sd.businessScene = sceneInput.value.trim();
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({businessScene:sceneInput.value.trim()},()=>{sd.businessScene=sceneInput.value.trim()}))
+            this.actions?.markDirtyAndRender();
         };
       }
 
@@ -903,8 +938,8 @@
       const sc021Select = root.querySelector("#make-image-sc021-select");
       if (sc021Select) {
         sc021Select.onchange = () => {
-          sd.sc021Type = sc021Select.value;
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({layoutParams:{sc021Type:sc021Select.value}},
+            ()=>{sd.sc021Type=sc021Select.value}))this.actions?.markDirtyAndRender();
         };
       }
 
@@ -912,23 +947,23 @@
       const sc022NameInput = root.querySelector("#make-image-sc022-name");
       if (sc022NameInput) {
         sc022NameInput.oninput = () => {
-          sd.sc022Name = sc022NameInput.value.trim();
+          this.patchSpec({layoutParams:{sc022Name:sc022NameInput.value.trim()}},()=>{sd.sc022Name=sc022NameInput.value.trim()});
           this.syncPromptPreview();
         };
         sc022NameInput.onchange = () => {
-          sd.sc022Name = sc022NameInput.value.trim();
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({layoutParams:{sc022Name:sc022NameInput.value.trim()}},()=>{sd.sc022Name=sc022NameInput.value.trim()}))
+            this.actions?.markDirtyAndRender();
         };
       }
       const sc022PinyinInput = root.querySelector("#make-image-sc022-pinyin");
       if (sc022PinyinInput) {
         sc022PinyinInput.oninput = () => {
-          sd.sc022Pinyin = sc022PinyinInput.value.trim();
+          this.patchSpec({layoutParams:{sc022Pinyin:sc022PinyinInput.value.trim()}},()=>{sd.sc022Pinyin=sc022PinyinInput.value.trim()});
           this.syncPromptPreview();
         };
         sc022PinyinInput.onchange = () => {
-          sd.sc022Pinyin = sc022PinyinInput.value.trim();
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({layoutParams:{sc022Pinyin:sc022PinyinInput.value.trim()}},()=>{sd.sc022Pinyin=sc022PinyinInput.value.trim()}))
+            this.actions?.markDirtyAndRender();
         };
       }
 
