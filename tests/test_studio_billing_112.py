@@ -120,6 +120,47 @@ class ZeroDarkChargeAudit112(unittest.TestCase):
         ).fetchone()[0], 0)
         self.audit()
 
+
+    def test_old_empty_gateway_result_never_credits_unconfirmed_paid_generation(self):
+        """#112: 45-minute missing lookup is not definitive provider failure."""
+        from datetime import datetime, timezone, timedelta
+        from unittest.mock import patch
+        from backend.server import GenerationReconciler
+
+        first, cost = self.reserve_paid()
+        gid = first["genId"]
+        self.assertTrue(claim_cloud_generation_submission(
+            self.db, self.owner, gid)["claimed"])
+        old = (datetime.now(timezone.utc) - timedelta(minutes=45)).strftime(
+            "%Y-%m-%d %H:%M:%S")
+        with self.db.transaction() as tx:
+            tx.execute(
+                "UPDATE studio_generations SET created_at=? WHERE id=?",
+                (old, gid))
+
+        worker = GenerationReconciler(self.db)
+        with patch("backend.server.gateway_request", return_value={"items": []}) as gateway:
+            self.assertEqual(worker.reconcile_once(), 0)
+            self.assertEqual(worker.reconcile_once(), 0)
+        self.assertEqual(gateway.call_count, 2)
+        self.assertEqual(self.balance(), self.base - cost)
+        self.assertEqual([x["kind"] for x in self.ledger()], ["studio_gen"])
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT status FROM studio_generations WHERE id=?", (gid,)
+        ).fetchone()[0], "queued")
+        self.audit()
+
+        # A confirmed provider terminal cancellation *does* settle and refund.
+        provider_id = str(first["requestId"])
+        with patch("backend.server.gateway_request", return_value={
+            "items": [{"id": provider_id, "status": "cancelled"}]
+        }):
+            self.assertEqual(worker.reconcile_once(), 1)
+        self.assertEqual(self.balance(), self.base)
+        self.assertEqual([x["kind"] for x in self.ledger()],
+                         ["studio_gen", "studio_refund"])
+        self.audit()
+
     def test_success_duplicate_callbacks_are_immutable_and_no_refund(self):
         first, cost = self.reserve_paid()
         gid = first["genId"]
