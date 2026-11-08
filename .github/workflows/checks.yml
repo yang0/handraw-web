@@ -27,6 +27,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_cancel_pending.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_view_authority.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_article_integration.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_resource_refs.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_plan_slot_access.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_http.py' -v
@@ -112,6 +113,8 @@ jobs:
           node tests/test_studio_views.cjs
           node --check demo/assets/studio-views.js
           node tests/test_studio_view_authority.cjs
+          node --check demo/assets/studio-article-integration.js
+          node tests/test_studio_article_integration.cjs
           node tests/test_studio_workflow_autosave.cjs
           node tests/test_studio_workflow_delete.cjs
           node --check demo/assets/studio-project-sync.js
