@@ -6,6 +6,7 @@ work table. Current Web execution remains on the V3 run/item ledger.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -237,7 +238,7 @@ def _project_page_cursor(raw: str) -> tuple[str, str]:
                 or not re.fullmatch(r"[0-9]{4}-[0-9TZ:.-]+", stamp)):
             raise ValueError("invalid timestamp")
         return stamp, _id(ident)
-    except (ValueError, UnicodeError, TypeError, OverflowError):
+    except (ValueError, UnicodeError, TypeError, OverflowError, binascii.Error):
         _fail("项目分页游标无效", code="invalid_project_cursor")
 
 
