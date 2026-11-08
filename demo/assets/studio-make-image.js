@@ -928,11 +928,12 @@
         e.preventDefault();zone.classList.remove("is-dragging");
         if(e.dataTransfer?.files?.length)this.actions?.uploadReferenceFiles?.([...e.dataTransfer.files]);
       });
-      root.addEventListener("paste",e=>{
+      // Re-renders share the same host: assign once instead of stacking handlers.
+      root.onpaste=e=>{
         const files=[...(e.clipboardData?.items||[])].filter(i=>i.kind==="file"&&i.type.startsWith("image/"))
           .map(i=>i.getAsFile()).filter(Boolean);
         if(files.length){e.preventDefault();this.actions?.uploadReferenceFiles?.(files);}
-      });
+      };
     }
 
     bindEvents(root) {
