@@ -53,6 +53,13 @@ const edited=clone(fixed.graph);
 edited.nodes.find(n=>n.type==="loop").data.promptListText="封面改名\n西湖\n龙井茶园\n青团与茶\n路线\n总结";
 assert.deepEqual(N.normalizeLegacyGraph(edited,{projectId:"p-series"}).projection.plan.slots.map(s=>s.slotId),
   fixedPlan.slots.map(s=>s.slotId));
+const legacyWire={
+ schemaVersion:1,project:{id:"p-series-legacy",kind:"series",revision:1,authority:"graph"},
+ creationSpec:fixed.projection.spec,graph:fixed.graph
+};
+const persisted=N.normalizeDocument(legacyWire,{strict:true});
+assert.deepEqual(N.reload(N.serializeDocument(persisted)).wire.graph,fixed.graph,
+ "legacy loop IDs must survive Project save/reload");
 assert.deepEqual(N.normalizeLegacyGraph(JSON.parse(JSON.stringify(fixed.graph)),
   {projectId:"p-series"}).projection.plan,fixedPlan);
 const ai=N.normalizeLegacyGraph(series.legacyAI,{projectId:"p-series"});
@@ -109,7 +116,7 @@ const updated=N.patchDocument(simple,[
  {op:"set",path:"/creationSpec/ratio",value:"1:1"},
  {op:"set",path:"/plan/slotsById/slot-2/overrides/ratio",value:"9:16"}],rev);
 assert.equal(updated.wire.creationSpec.ratio,"1:1");
-assert.equal(updated.wire.creationSpec.ratioSource,"default");
+assert.equal(updated.wire.creationSpec.ratioSource,"user");
 assert.equal(updated.wire.plan.slots[1].overrides.ratio,"9:16");
 assert.deepEqual(simple.wire,N.normalizeDocument(series.wire,{strict:true}).wire);
 assert.equal(N.reload(N.serializeDocument(updated)).wire.plan.slots[1].slotId,"slot-2");
