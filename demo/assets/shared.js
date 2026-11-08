@@ -707,6 +707,9 @@
     st.assetSeedMetrics = st.assetSeedMetrics && typeof st.assetSeedMetrics === "object" ? st.assetSeedMetrics : {};
     st.assetLiveLikes = st.assetLiveLikes && typeof st.assetLiveLikes === "object" ? st.assetLiveLikes : {};
     st.assetLiveFavorites = st.assetLiveFavorites && typeof st.assetLiveFavorites === "object" ? st.assetLiveFavorites : {};
+    st.assetLiveCheers = st.assetLiveCheers && typeof st.assetLiveCheers === "object" ? st.assetLiveCheers : {};
+    st.assetLiveStamps = st.assetLiveStamps && typeof st.assetLiveStamps === "object" ? st.assetLiveStamps : {};
+    st.assetLiveTips = st.assetLiveTips && typeof st.assetLiveTips === "object" ? st.assetLiveTips : {};
   }
 
   function applyBootState(boot) {
@@ -2146,8 +2149,21 @@
         : Number(item.replyCount || 0);
       return replies + Number(item.likes || 0) + 2 * Number(item.favorites || 0);
     }
-    // styles and layouts: how many published works reference them
-    return Number(item.usageCount || 0);
+    // #25: ranking.py publishes the weights in /api/boot. The fallback is
+    // only for local/demo data before boot arrives; parity tests pin both.
+    const weights = (App.state && App.state.assetRankingWeights) || {
+      usage: 10, likes: 1, favorites: 2, cheers: 1, stamps: 1, tips: 2
+    };
+    const metric = (name, alternate) => {
+      const raw = item[name] != null ? item[name] : (alternate && item[alternate]);
+      return Math.max(0, Number(raw || 0));
+    };
+    return metric("usageCount", "usage_count") * weights.usage +
+      metric("likes") * weights.likes +
+      metric("favorites") * weights.favorites +
+      metric("cheers") * weights.cheers +
+      metric("stamps", "stampCount") * weights.stamps +
+      metric("tips", "tipCount") * weights.tips;
   }
 
   function getWorkCompositeScore(work, statsMap, period = "feed") {
@@ -2177,7 +2193,6 @@
 
   function getRankedAssets(limit = 12, period = "all") {
     const normPeriod = period === "week" || period === "month" ? period : "all";
-    const statsMap = getCreatorStatsMap();
     const allWorks = (App.state && App.state.works) || [];
     const periodWorks = normPeriod === "all" ? allWorks : allWorks.filter((w) => isWithinRankPeriod(w, normPeriod));
 
@@ -2196,18 +2211,17 @@
         const totalWorkCnt = getAssetWorkCount(a.id);
         const pWorkCnt = normPeriod === "all" ? totalWorkCnt : periodCountByAsset.get(a.id) || 0;
         const isPeriodCoCreated = a.sourceType === "community" && isWithinRankPeriod(a, normPeriod);
-        let rankScore = 0;
-        if (normPeriod === "all") {
-          const prof = a.author ? statsMap.get(a.author) : null;
-          const boost = prof ? prof.honor.boost : 1.0;
-          const commBonus = a.sourceType === "community" ? 42 : a.sourceType === "exclusive" ? 55 : 0;
-          rankScore = Math.round((totalWorkCnt * 36 + commBonus) * boost);
-        } else {
-          rankScore =
-            pWorkCnt * 52 +
-            (isPeriodCoCreated ? 70 : 0) +
-            (isFreshRelease(a) ? 45 : 0);
-        }
+        const assetKind = a.kind === "layout" || App.layouts.includes(a) ? "layout" : "style";
+        const rankScore = popularScore(assetKind, {
+          usageCount: pWorkCnt,
+          likes: getLikeCount(assetKind, a.id),
+          favorites: getFavoriteCount(assetKind, a.id),
+          // Keep official and community signals on identical event semantics.
+          // catalog_assets.cheers includes a +3 bonus per tip, so exclude it.
+          cheers: Number(App.state?.assetLiveCheers?.[a.id] || 0),
+          stamps: Number(App.state?.assetLiveStamps?.[a.id] || 0),
+          tips: Number(App.state?.assetLiveTips?.[a.id] || 0)
+        });
         return {
           asset: a,
           totalWorkCnt,
@@ -2218,11 +2232,11 @@
       })
       .filter((entry) =>
         normPeriod === "all"
-          ? entry.asset.sourceType === "community" || entry.totalWorkCnt > 0
+          ? entry.asset.sourceType === "community" || entry.rankScore > 0
           : entry.periodWorkCnt > 0 || entry.isPeriodCoCreated
       );
 
-    candidates.sort((a, b) => b.rankScore - a.rankScore || b.totalWorkCnt - a.totalWorkCnt);
+    candidates.sort((a, b) => b.rankScore - a.rankScore || b.periodWorkCnt - a.periodWorkCnt || String(a.asset.id).localeCompare(String(b.asset.id)));
     return candidates.slice(0, limit);
   }
 
