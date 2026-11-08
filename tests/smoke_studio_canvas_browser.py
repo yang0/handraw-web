@@ -62,7 +62,44 @@ def main():
             page.goto(base+"/studio/?entry=canvas",wait_until="networkidle",timeout=30000)
             page.evaluate("localStorage.clear();sessionStorage.clear()")
             page.goto(base+"/studio/?entry=canvas",wait_until="networkidle",timeout=30000)
+            # #129: first use offers theme, assets, template without manual edges.
+            assert page.locator("#canvas-129-first-form input[name=subject]").count()==1
+            assert page.locator("#canvas-129-first-asset").count()==1
+            assert page.locator("#canvas-129-first-template").count()==1
             page.locator('.ic-tmpl-card-btn[data-tmpl-bp="single"]').click(timeout=15000)
+            page.locator("#canvas-129-topbar").wait_for(timeout=15000)
+            assert page.locator("#canvas-129-topbar").is_visible()
+            assert page.locator("#canvas-129-inspector").is_visible()
+            assert page.locator("#canvas-129-taskbar").is_visible()
+            assert page.locator('[data-shelf-tab="assets"]').count()==1
+            assert page.locator('[data-shelf-tab="templates"]').count()==1
+            assert page.locator("#canvas-129-topbar [data-c129=run]").is_enabled()
+            # Six-image gallery markup in a real browser must collapse, expand,
+            # expose only the failed third slot for retry, and keep real images.
+            gallery=page.evaluate("""() => {
+              const ui=window.HandrawCanvasUI;
+              const items=Array.from({length:6},(_,i)=>({
+                id:'i'+i,position:i*1000,slotIndex:i,
+                status:i===2?'failed':'success',
+                mediaId:i===2?'':'media'+i,
+                imageUrl:i===2?'':'/images/poster-demo-autumn-equinox.webp'
+              }));
+              const slots=ui.slotSummary(items,6,'web');
+              const node={id:'smoke-gallery',data:{totalTarget:6,kind:'batch_gallery',
+                status:'done',items:items.map(i=>i.imageUrl?{imageUrl:i.imageUrl}:null)}};
+              const projection={runId:'run-smoke',total:6,isTerminal:true,
+                canRetry:true,slots};
+              const before=ui.galleryHtml(node,projection);
+              ui.toggleGallery('smoke-gallery');
+              const after=ui.galleryHtml(node,projection);
+              ui.toggleGallery('smoke-gallery');
+              return {collapsed:before.includes('展开全部槽位'),
+                expanded:after.includes('收起结果'),
+                failedRetry:after.includes('data-slot="2"'),
+                imageCount:(after.match(/data-disp-zoom=/g)||[]).length};
+            }""")
+            assert gallery["collapsed"] and gallery["expanded"] and gallery["failedRetry"],gallery
+            assert gallery["imageCount"]==5,gallery
             page.locator("#ic-nodes-layer .ic-node").first.wait_for(timeout=15000)
             ids=page.locator("#ic-nodes-layer .ic-node").evaluate_all(
                 "(nodes)=>nodes.map(n=>n.dataset.nodeId)")
@@ -93,6 +130,14 @@ def main():
             page.locator("#bl-zoom-in").click()
             zoom=page.locator("#bl-zoom-pct").inner_text()
             assert "%" in zoom,zoom
+            # Scrolling an editor input must not zoom the graph behind it.
+            editor=page.locator("#ic-nodes-layer .ic-node input, #ic-nodes-layer .ic-node textarea").first
+            if editor.count():
+                editor.hover()
+                previous_zoom=page.locator("#bl-zoom-pct").inner_text()
+                page.mouse.wheel(0,325)
+                page.wait_for_timeout(80)
+                assert page.locator("#bl-zoom-pct").inner_text()==previous_zoom, "input wheel zoomed canvas"
             page.locator("#bl-arrange").click()
             page.locator("#bc-undo").click()
             page.locator("#bc-redo").click()
