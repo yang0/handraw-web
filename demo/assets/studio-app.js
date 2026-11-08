@@ -5731,9 +5731,9 @@
     persistOpenTabs();
   }
 
-  function buildExecutionPlanForControl(ctrlNode) {
+  function buildExecutionPlanForControl(ctrlNode, executionGraph = CS.graph) {
     const cd = ctrlNode.data || {};
-    const rec = E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
+    const rec = E.resolveControlRecipe(executionGraph, ctrlNode, Catalog);
     const mode = cd.mode === "xhs-batch" ? "series" : cd.mode || "graphic-text";
 
     function attachRecipeSnapshots(specsList) {
@@ -5742,7 +5742,7 @@
       specsList.forEach((sp) => {
         if (!sp.recipeSnapshot) {
           const s1 = sp.style1 || rec.style1Id || "";
-          const s2 = rec.style2Id || "";
+          const s2 = rec.fusionToggleOn ? (rec.style2Id || "") : "";
           const lay = sp.layout || rec.layoutId || "";
           const s1Res = s1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s1) || rec.style1Res) : rec.style1Res;
           const s2Res = s2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s2) || rec.style2Res) : rec.style2Res;
@@ -5812,7 +5812,7 @@
     }
 
     if (rec.loopNode) {
-      const loopIters = E.resolveLoopIterations(CS.graph, rec.loopNode, rec, Catalog);
+      const loopIters = E.resolveLoopIterations(executionGraph, rec.loopNode, rec, Catalog);
       if (!loopIters.length) {
         return {
           kind: "loop-empty",
@@ -7247,7 +7247,11 @@
       return false;
     }
 
-    const plan = buildExecutionPlanForControl(ctrl);
+    // Freeze the execution definition before asynchronous generation. Editing
+    // the current Graph cannot mutate this queued Run's prompt or snapshot.
+    const executionGraph = cloneGraph(CS.graph);
+    const executionCtrl = executionGraph.nodes.find(n => n.id === ctrlId);
+    const plan = buildExecutionPlanForControl(executionCtrl, executionGraph);
     if (plan.kind === "loop-empty") {
       const lp = getNodeById(plan.loopNodeId);
       const lm = lp?.data?.loopMode || "prompts";
@@ -7346,7 +7350,10 @@
     const startedAt = Date.now();
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     const submittedSlots = new Set();
-    const batchRun = { id: batchId, ctrlId: ctrl.id, cancelled: false, controller, submittedSlots };
+    const batchRun = { id: batchId, ctrlId: ctrl.id, cancelled: false, controller,
+      submittedSlots, executionGraph,
+      projectId: CS.tabs.find(t => t.id === CS.activeTabId)?.projectId || "",
+      projectRevision: CS.tabs.find(t => t.id === CS.activeTabId)?.projectRevision || 0 };
     if (controller) _generationControllers.add(controller);
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
@@ -7366,7 +7373,7 @@
     let currentReqId = "";
 
     try {
-      const rec = E.resolveControlRecipe(CS.graph, ctrl, Catalog);
+      const rec = E.resolveControlRecipe(executionGraph, executionCtrl, Catalog);
       if (rec.audience) recordRecentFieldValue("audience", rec.audience);
       if (rec.businessScene) recordRecentFieldValue("businessScene", rec.businessScene);
       const fallbackPool = [
@@ -7457,7 +7464,7 @@
           });
         }
 
-        const skillPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "skill", sp);
+        const skillPrompt = E.assembleControlPrompt(executionGraph, executionCtrl, Catalog, "skill", sp);
         let imgUrl = "";
         let activeReqId = "";
         let activeGenId = "";
@@ -7520,7 +7527,7 @@
 
         try {
           if (useLiveApi) {
-            const cloudPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "cloud", sp);
+            const cloudPrompt = E.assembleControlPrompt(executionGraph, executionCtrl, Catalog, "cloud", sp);
             const effectiveAssets = Array.isArray(sp.assetItems) ? sp.assetItems : rec.assetItems;
             const refImages = effectiveAssets.map((a) => a.image).filter(Boolean);
             submittedSlots.add(slotKey);
@@ -7533,7 +7540,7 @@
                 prompt: cloudPrompt,
                 ratio: sp.ratio || "3:4",
                 style1: sp.style1 || rec.style1Id || "",
-                style2: rec.style2Id || "",
+                style2: rec.fusionToggleOn ? (rec.style2Id || "") : "",
                 layout: sp.layout || rec.layoutId || "",
                 refImages,
                 recipeSnapshot: sp.recipeSnapshot,
@@ -7563,6 +7570,16 @@
             if (S.renderChrome) S.renderChrome();
             activeReqId = data.requestId || requestId;
             activeGenId = data.genId || "";
+            // Only the server can allocate a V3 logical Run identity.
+            if (data.runId) {
+              ctrl.data.runId = data.runId;
+              if (dn) {
+                dn.data.runId = data.runId;
+                if (dn.data.pendingSpec?.[requestId])
+                  dn.data.pendingSpec[requestId].runId = data.runId;
+              }
+              persistOpenTabs();
+            }
             if (data.imageUrl) {
               imgUrl = data.imageUrl;
             } else if (Array.isArray(data.images) && data.images.length) {
