@@ -67,6 +67,9 @@
     }
   }
   let _activeBatchRun = null;
+  // #120: independent controls own distinct live queues; no singleton overwrite.
+  const _activeControlRuns = new Map();
+  let _dagAbortController = null;
 
   function isExplicitDemoMode() {
     const queryMode = new URLSearchParams(window.location.search || "").get("demo_mode");
@@ -316,6 +319,10 @@
     CS.historyReturnStage = "quick";
     CS.historyReturnUrl = "";
     _activeBatchRun = null;
+    _activeControlRuns.clear();
+    if (_dagAbortController && !_dagAbortController.signal.aborted) _dagAbortController.abort();
+    _dagAbortController = null;
+    CS.dagProgress = null;
     CS.activeBatchRun = null;
     return true;
   }
@@ -463,7 +470,12 @@
   }
 
   function cancelActiveBatchGeneration(expectedCtrlId = null) {
-    const run = _activeBatchRun;
+    if (!expectedCtrlId && _dagAbortController && !_dagAbortController.signal.aborted) {
+      _dagAbortController.abort();
+    }
+    const run = expectedCtrlId
+      ? (_activeControlRuns.get(expectedCtrlId) || (_activeBatchRun?.ctrlId === expectedCtrlId ? _activeBatchRun : null))
+      : _activeBatchRun;
     if (!run && expectedCtrlId) {
       const parts = getBatchParts();
       if (parts?.ctrl.id === expectedCtrlId && reconcileDetachedBatchState(parts)) {
@@ -6290,8 +6302,8 @@
     return defaultPlan;
   }
 
-  function checkExclusiveGateForControl(ctrlNode) {
-    const rec = E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
+  function checkExclusiveGateForControl(ctrlNode, sourceGraph = CS.graph) {
+    const rec = E.resolveControlRecipe(sourceGraph, ctrlNode, Catalog);
     const refs = window.HandrawStudioResources;
     if (refs) {
       const selections = [
@@ -7588,7 +7600,9 @@
   }
 
   // CRITICAL AUTO-RULE #2: Multi-image output automatically connects multiple 1-image "图片显示" nodes!
-  async function runOutputControlNode(ctrlId, { onlyItemIdx = null, onlyDispNodeId = null, silent = false } = {}) {
+  async function runOutputControlNode(ctrlId, { onlyItemIdx = null, onlyDispNodeId = null,
+    silent = false, executionGraphOverride = null, runtimeSignal = null,
+    sharedPool = null, onSlotProgress = null } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const creationSource = CS.stageView === "batch" ? "batch" : CS.stageView === "quick" ? "quick" : CS.stageView === "preview" || CS.stageView === "article" ? "article" : "canvas";
@@ -7600,7 +7614,9 @@
       return false;
     }
 
-    if (!checkExclusiveGateForControl(ctrl)) return false;
+    const frozenControl = executionGraphOverride?.nodes?.find(n => n.id === ctrlId);
+    if (!checkExclusiveGateForControl(frozenControl || ctrl, executionGraphOverride || CS.graph)) return false;
+    if (runtimeSignal?.aborted) return false;
 
     if (ctrl.data.mode === "article-illust") {
       const { node: planNode, createdNew } = ensureArticlePlanNodeForControl(ctrl);
@@ -7642,7 +7658,7 @@
     // Explicit retry compiles the original submitted definition, never the
     // editable next-revision Graph whose slot order may have changed.
     const executionGraph = previousRunSnapshot?.executionGraph
-      ? cloneGraph(previousRunSnapshot.executionGraph) : cloneGraph(CS.graph);
+      ? cloneGraph(previousRunSnapshot.executionGraph) : cloneGraph(executionGraphOverride || CS.graph);
     // Do not recursively serialize the previous RunSnapshot inside the next
     // frozen Graph. Output display/gallery nodes contain historical images,
     // not prompt inputs; only the current batch's upstream graph is needed.
@@ -7684,7 +7700,7 @@
     }
 
     const activeLoopNode = plan.kind === "loop" ? getNodeById(plan.loopNodeId) : null;
-    if (activeLoopNode && activeLoopNode.data.status === "running") {
+    if (!runtimeSignal && activeLoopNode && activeLoopNode.data.status === "running") {
       if (!silent) toast("已有批量任务正在运行中，请等待完成或停止后再开始新批次");
       return false;
     }
@@ -7785,6 +7801,12 @@
       projectRevision: CS.tabs.find(t => t.id === CS.activeTabId)?.projectRevision || 0,
       forkSource: CS.forkGenerationSource ? cloneGraph(CS.forkGenerationSource) : null };
     if (controller) _generationControllers.add(controller);
+    const abortFromDAG = () => {
+      batchRun.cancelled = true;
+      if (controller && !controller.signal.aborted) controller.abort();
+    };
+    if (runtimeSignal) runtimeSignal.addEventListener("abort", abortFromDAG, {once:true});
+    _activeControlRuns.set(ctrl.id,batchRun);
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
     const timer = setInterval(() => {
@@ -7841,8 +7863,17 @@
       const runningIndices = new Set();
       let stopLaunching = false;
       const requestedConcurrency = Number(activeLoopNode?.data?.batchConcurrency || ctrl.data.batchConcurrency || 3);
+      // Local worker count only controls demand; the global shared pool owns
+      // every in-flight slot across ALL controls and their branches.
       const concurrency = resolvedOnlyIdx !== null ? 1 : Math.max(1,
         Math.min(4, Number.isFinite(requestedConcurrency) ? requestedConcurrency : 3));
+      const dagEngine = window.HandrawStudioDAG120;
+      const slotPool = sharedPool || dagEngine?.defaultPool;
+      const slotMeta = {
+        signal: controller?.signal || runtimeSignal || undefined,
+        user: activeCacheScope, gateway: String(CS.serverCfg?.generationGateway || "default"),
+        model: String(CS.serverCfg?.generationModel || "default")
+      };
       const slotIndexes = resolvedOnlyIdx === null ? plan.specs.map((_, i) => i) : [resolvedOnlyIdx];
       if (resolvedOnlyIdx !== null) {
         for (let i = 0; i < plan.specs.length; i++) {
@@ -7964,7 +7995,9 @@
             const effectiveAssets = Array.isArray(sp.assetItems) ? sp.assetItems : rec.assetItems;
             const refImages = effectiveAssets.map((a) => a.image).filter(Boolean);
             submittedSlots.add(slotKey);
-            const resp = await fetch("/api/studio/generate", {
+            // Retry only the same frozen POST and request ID; never invent a
+            // new paid slot after a 429/502 or an ambiguous gateway response.
+            const generateRequest = () => fetch("/api/studio/generate", {
               method: "POST",
               credentials: "include",
               signal: controller ? controller.signal : undefined,
@@ -7998,6 +8031,26 @@
                 } : {})
               })
             });
+            const dagEngineRetry = window.HandrawStudioDAG120;
+            const resp = dagEngineRetry?.retryTransient
+              ? await dagEngineRetry.retryTransient(async () => {
+                  const response = await generateRequest();
+                  if ([429,500,502,503,504].includes(response.status)) {
+                    const body = await response.clone().json().catch(() => ({}));
+                    const error = new Error(body.error || "HTTP " + response.status);
+                    error.status = response.status;
+                    throw error;
+                  }
+                  return response;
+                }, {
+                  signal: controller?.signal, requestId, maxAttempts: 3,
+                  key: slotMeta.gateway + ":" + slotMeta.model,
+                  onRetry: ({attempt,status,wait}) => {
+                    if (!silent) toast("网关 HTTP " + status + " · 使用原请求编号第 " +
+                      (attempt+1) + " 次尝试（退避 " + wait + "ms）");
+                  }
+                })
+              : await generateRequest();
             const data = await resp.json();
             if (isStaleScope(runEpoch, runScope)) return;
             if (!resp.ok || !data.ok) {
@@ -8272,9 +8325,19 @@
         }
       }
       async function worker() {
-        while (nextSlotToLaunch < slotIndexes.length && !batchRun.cancelled && !stopLaunching) {
+        while (nextSlotToLaunch < slotIndexes.length && !batchRun.cancelled &&
+               !stopLaunching && !runtimeSignal?.aborted) {
           const i = slotIndexes[nextSlotToLaunch++];
-          await runSlot(i);
+          try {
+            if (slotPool) await slotPool.withPermit(() => runSlot(i),slotMeta);
+            else await runSlot(i);
+          } catch (error) {
+            if (batchRun.cancelled || runtimeSignal?.aborted || error?.code==="cancelled") break;
+            throw error;
+          }
+          if (typeof onSlotProgress==="function") onSlotProgress({
+            total: slotIndexes.length,succeeded: completedCount,failed: failedCount
+          });
         }
       }
       await Promise.all(Array.from({length: Math.min(concurrency, slotIndexes.length)}, () => worker()));
@@ -8414,10 +8477,12 @@
       toast(`⚠️ 生成异常：${err.message || err}`);
       return false;
     } finally {
+      if (_activeControlRuns.get(ctrl.id) === batchRun) _activeControlRuns.delete(ctrl.id);
       if (_activeBatchRun === batchRun) {
-        _activeBatchRun = null;
-        CS.activeBatchRun = null;
+        _activeBatchRun = [..._activeControlRuns.values()].at(-1) || null;
+        CS.activeBatchRun = _activeBatchRun;
       }
+      if (runtimeSignal) runtimeSignal.removeEventListener("abort",abortFromDAG);
       if (controller) _generationControllers.delete(controller);
       clearInterval(timer);
       if (!isStaleScope(runEpoch, runScope)) fullRenderCanvas();
@@ -8482,11 +8547,9 @@
       }
     }
 
-    let anyOk = false;
-    for (const c of ctrls) {
-      const ok = await runOutputControlNode(c.id, { silent: ctrls.length > 1 });
-      if (ok) anyOk = true;
-    }
+    // #120: run sibling controls concurrently under ONE shared slot budget.
+    const result = await runDAGOutputControls({targets:ctrls.map(c=>c.id)});
+    const anyOk = Boolean(result?.succeeded);
     if (ctrls.length > 1 && anyOk) {
       toast(`🔁 已完成全部 ${ctrls.length} 组下游输出控制的循环批量出图！`);
     }
@@ -8512,18 +8575,105 @@
     return false;
   }
 
-  async function runAllOutputControls() {
-    const ctrls = CS.graph.nodes.filter((n) => n.type === "output_control" && n.data.status !== "generating");
-    if (!ctrls.length) {
-      toast("当前画布暂无「输出控制」节点，请从左侧拖入一个");
+  function renderDAGPanel() {
+    if (!DOM.dagPanel) return;
+    const summary=CS.dagProgress;
+    const active=CS.stageView==="canvas" && (CS.graph?.nodes||[]).some(n=>n.type==="output_control");
+    DOM.dagPanel.style.display=active?"":"none";
+    if (!active) return;
+    if (!summary) {
+      DOM.dagPanel.innerHTML='<span class="ic-dag-label">DAG 运行策略</span> '+
+        '<select id="ic-dag-fail-policy" aria-label="分支失败策略">'+
+        '<option value="continue">其他独立分支继续</option>'+
+        '<option value="fail-fast">失败时停止新调度</option></select>'+
+        '<span class="ic-dag-tip">所有生成设置共享全局并发上限 3</span>';
+      const selector=DOM.dagPanel.querySelector("#ic-dag-fail-policy");
+      if(selector) {
+        selector.value=CS.dagFailurePolicy||"continue";
+        selector.onchange=()=>{CS.dagFailurePolicy=selector.value;};
+      }
       return;
     }
-    for (const c of ctrls) {
-      await runOutputControlNode(c.id, { silent: ctrls.length > 1 });
+    const fmt=s=>s.status==="waiting" && s.blockedBy.length
+      ? "等待中 · 阻塞于 "+s.blockedBy.map(id=>summary.nodes.find(x=>x.id===id)?.name||id).join("、")
+      : s.status==="blocked" ? "前置失败 · "+s.blockedBy.join("、")
+      : s.status==="running" ? "运行中" : s.status==="success" ? "已成功"
+      : s.status==="failed" ? "失败" : s.status==="cancelled" ? "已取消" : "等待中";
+    DOM.dagPanel.innerHTML='<div class="ic-dag-summary" role="status" aria-live="polite">'+
+      'Graph Revision '+Number(summary.revision)+' · 分支 '+Number(summary.succeeded)+' / '+
+      Number(summary.total)+' · 运行 '+Number(summary.running)+' · 失败 '+Number(summary.failed)+
+      ' · 等待 '+Number(summary.waiting)+' · 槽位完成 '+Number(summary.slots?.succeeded||0)+
+      ' / '+Number(summary.slots?.total||0)+' · 全局占用 '+
+      Number(summary.pool?.running||0)+' / '+Number(summary.pool?.limit||3)+'</div>'+
+      '<div class="ic-dag-branches">'+summary.nodes.map(s=>
+        '<span class="ic-dag-branch"><strong>'+esc(s.name||s.id)+'</strong> · '+
+        esc(fmt(s))+'</span>').join('')+'</div>'+
+      (_dagAbortController && !_dagAbortController.signal.aborted
+        ? '<button type="button" class="btn btn-sm" id="ic-dag-cancel">取消未提交任务</button>' : '');
+    const button=DOM.dagPanel.querySelector("#ic-dag-cancel");
+    if(button)button.onclick=()=>{_dagAbortController?.abort();cancelActiveBatchGeneration();};
+  }
+
+  async function runDAGOutputControls({targets=null}={}) {
+    const scheduler=window.HandrawStudioDAG120;
+    if (!scheduler) { toast("DAG 调度器未加载，请刷新后重试"); return null; }
+    if (_dagAbortController && !_dagAbortController.signal.aborted) {
+      toast("已有 DAG 正在运行，先停止当前批次");return null;
     }
-    if (ctrls.length > 1) {
-      toast(`🎉 已完成全部 ${ctrls.length} 个输出控制节点的运行！`);
+    const tab=CS.tabs.find(t=>t.id===CS.activeTabId);
+    let compiled;
+    try {
+      compiled=scheduler.compile(CS.graph,{
+        targets,revision:Number(tab?.editRevision||0),
+        references:{projectId:tab?.projectId||"",projectRevision:tab?.projectRevision||0}
+      });
+    }catch(e) {
+      toast("工作流不能运行："+(e.message||e)+" · "+(e.nodeId||""),"error");
+      return null;
     }
+    const controller=new AbortController();
+    _dagAbortController=controller;
+    const capturedOutputs=new Map();
+    const failurePolicy=CS.dagFailurePolicy || CS.serverCfg?.dagFailurePolicy || "continue";
+    try {
+      const result=await scheduler.run(compiled,async ({id,graph,signal,pool,report})=>{
+        if (signal?.aborted) return false;
+        // Freeze all editable inputs at dispatch; only confirmed upstream
+        // output-display media can enrich a downstream invocation.
+        const runGraph=cloneGraph(graph);
+        for(const item of runGraph.nodes||[]) {
+          const ready=capturedOutputs.get(item.id);
+          if (ready && item.type==="output_display") item.data={...item.data,items:cloneGraph(ready)};
+        }
+        const ok=await runOutputControlNode(id,{
+          silent:true,executionGraphOverride:runGraph,
+          runtimeSignal:signal,sharedPool:pool,onSlotProgress:report
+        });
+        if (ok && !signal?.aborted) {
+          for(const display of getDownstreamDisplayNodes(id))
+            capturedOutputs.set(display.id,cloneGraph(display.data?.items||[]));
+        }
+        return ok;
+      },{
+        signal:controller.signal,policy:failurePolicy,
+        pool:scheduler.defaultPool,
+        onUpdate:summary=>{CS.dagProgress=summary;renderDAGPanel();}
+      });
+      CS.dagProgress=result;
+      if (result.failed || result.blocked)
+        toast("DAG 结束：成功 "+result.succeeded+"，失败 "+
+          result.failed+"，阻塞 "+result.blocked,"error");
+      else if (result.cancelled)toast("DAG 已停止：尚未提交的槽位不会继续发出");
+      else toast("DAG 运行完成：成功 "+result.succeeded+" 个分支");
+      return result;
+    }finally {
+      if (_dagAbortController===controller) _dagAbortController=null;
+      renderDAGPanel();
+    }
+  }
+
+  async function runAllOutputControls() {
+    return runDAGOutputControls();
   }
 
   /* ======================== ZIP PACKAGE EXPORT & GENERATION HISTORY MODAL ======================== */
@@ -8725,9 +8875,7 @@
       const allCtrls = CS.graph.nodes.filter((n) => n.type === "output_control");
       if (allCtrls.length) {
         toast("⚡ 正在自动运行并打包下载 ZIP…");
-        for (const c of allCtrls) {
-          await runOutputControlNode(c.id, { silent: true });
-        }
+        await runDAGOutputControls();
         const planAfter = CS.graph.nodes.find((n) => n.type === "article_plan" && (n.data.cards || []).some((c) => c.imageUrl));
         if (planAfter) {
           const payload = buildArticlePlanExportPayload(planAfter);
@@ -14001,6 +14149,7 @@
     }
 
     renderCreationModeBar();
+    renderDAGPanel();
     renderWorkbenchBar();
     renderCanvasToolstrip();
     renderFullPreviewStage();
@@ -19894,6 +20043,7 @@
     DOM.root = document.getElementById("studio-app-root");
     DOM.root.innerHTML = `
       <div class="qc-entry-bar" id="ic-entry-bar"></div>
+      <div class="ic-dag-panel" id="ic-dag-panel" role="region" aria-label="DAG 执行状态"></div>
       <header class="ic-workbench-bar" id="ic-workbench-bar"></header>
       <div class="ic-stage-wrap" id="ic-stage-wrap">
         <section class="ic-quick-stage" id="ic-quick-stage" style="display:none;"></section>
@@ -19919,6 +20069,7 @@
     `;
 
     DOM.entryBar = document.getElementById("ic-entry-bar");
+    DOM.dagPanel = document.getElementById("ic-dag-panel");
     DOM.quickStage = document.getElementById("ic-quick-stage");
     DOM.workbenchBar = document.getElementById("ic-workbench-bar");
     DOM.stageWrap = document.getElementById("ic-stage-wrap");
@@ -20062,6 +20213,7 @@
   window.HANDRAW_STUDIO = window.HANDRAW_STUDIO || {};
   window.HANDRAW_STUDIO.clearControlWorkspaceResults = clearControlWorkspaceResults;
   window.HANDRAW_STUDIO.cancelActiveBatchGeneration = cancelActiveBatchGeneration;
+  window.HANDRAW_STUDIO.runDAGOutputControls = runDAGOutputControls;
   window.HANDRAW_STUDIO.getCacheScope = () => activeCacheScope;
   window.HANDRAW_STUDIO.getEngineMode = () => CS.engineMode;
   window.HANDRAW_STUDIO.openReferenceAssetPickerModal = openAssetPickerModal;

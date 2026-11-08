@@ -4196,3 +4196,15 @@ a.ic-hist-cover-button { cursor: pointer; }
 .qc-entry-bar.qc-studio-navigation .qc-project-save-label {display:inline-flex;border:0;background:transparent;cursor:pointer;color:var(--ic-muted,#777);text-align:left;padding:0;font:inherit;font-size:11px;}
 .qc-entry-bar.qc-studio-navigation span.qc-project-save-label {cursor:default;}
 .qc-entry-bar.qc-studio-navigation #studio-project-status:focus-visible {outline:2px solid var(--vermilion);outline-offset:2px;}
+
+/* #120 DAG activity and dependency explanation. Read-only view over #119 Runs. */
+.ic-dag-panel{flex:0 0 auto;display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap;padding:6px var(--hw-page-gutter,24px);background:var(--ic-panel-solid,#fff);border-bottom:1px solid var(--ic-border,#ddd);font-size:11px;color:var(--ic-muted,#777);}
+.ic-dag-panel .ic-dag-label{font-weight:750;color:var(--ic-text,#222)}
+.ic-dag-panel select{border:1px solid var(--ic-border,#ddd);background:var(--ic-surface,#faf9f6);color:var(--ic-text,#222);border-radius:7px;min-height:32px;padding:4px 8px;max-width:100%;font-size:12px;}
+.ic-dag-panel .ic-dag-tip{margin-left:auto;}
+.ic-dag-panel .ic-dag-summary{font-weight:650;color:var(--ic-text,#222);}
+.ic-dag-panel .ic-dag-branches{display:flex;gap:6px;min-width:0;flex:1 1 350px;flex-wrap:wrap;}
+.ic-dag-panel .ic-dag-branch{display:inline-flex;border:1px solid var(--ic-border,#ddd);background:var(--ic-surface,#faf9f6);border-radius:6px;padding:5px 7px;white-space:normal;overflow-wrap:anywhere;}
+.ic-dag-panel .ic-dag-branch strong{margin-right:3px;}
+.ic-dag-panel #ic-dag-cancel{min-height:38px;white-space:nowrap;}
+@media(max-width:768px){.ic-dag-panel{padding:8px 12px;max-height:128px;overflow:auto;gap:6px;}.ic-dag-panel .ic-dag-tip{margin-left:0;}.ic-dag-panel .ic-dag-branches{flex-basis:100%;}}
