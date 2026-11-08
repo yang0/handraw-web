@@ -733,6 +733,23 @@ class TestOfficialAssets(unittest.TestCase):
         # Paid asset has definition stripped per #21a
         self.assertNotIn("definition", item_070)
 
+        # No approved official rows is still an explicit, auditable empty
+        # catalog snapshot. It must not re-export hidden/pending definitions.
+        with self.db.transaction() as tx:
+            tx.execute(
+                "UPDATE catalog_assets SET status = 'hidden' "
+                "WHERE source_type = 'official' AND code IN ('FE-069', 'FE-070')"
+            )
+        empty_out = self.root / "empty_approved_db_export"
+        empty_cmd = [str(empty_out) if part == str(export_out) else part
+                     for part in cmd_collision]
+        empty_res = subprocess.run(
+            empty_cmd, capture_output=True, text=True, encoding="utf-8"
+        )
+        self.assertEqual(empty_res.returncode, 0, empty_res.stderr)
+        self.assertEqual(json.loads((empty_out / "styles.json").read_text()), [])
+        self.assertEqual(json.loads((empty_out / "layouts.json").read_text()), [])
+
     def test_12_refresh_content_script(self) -> None:
         """12. Refresh script (ops/refresh_content.py):
         - Fails when new unaccepted IDs exist in skill repo.
