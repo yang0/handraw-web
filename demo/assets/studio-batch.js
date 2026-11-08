@@ -640,6 +640,9 @@
                                 </div>
                               </td>
                               <td style="text-align:center;">
+                                <button type="button" class="btn btn-sm" data-row-options-idx="${idx}" title="逐张画风、画幅、锁定">参数</button>
+                                <button type="button" class="btn btn-sm" data-row-copy-idx="${idx}" title="复制此槽位">复制</button>
+                                <button type="button" class="btn btn-sm" data-row-up-idx="${idx}" title="向上移动">↑</button>
                                 <button type="button" class="btn btn-sm btn-ghost batch-row-del-btn" data-del-row-idx="${idx}" title="删除此张">删除</button>
                               </td>
                             </tr>
@@ -779,8 +782,27 @@
                           <td colspan="4" class="batch-table-empty">暂无待批量生成的项，请在上方规划主题或添加条目</td>
                         </tr>
                       ` : iterations.map((iter, idx) => {
-                        const itemResult = this.getItemResult(idx, displays, isBatchGallery);
-                        const rowStatus = this.getRowStatus(idx, busy, currentStep, itemResult, activeIndex);
+                        const outputIndices=Array.from({length:candidateCount},(_,sub)=>idx*candidateCount+sub);
+                        const perOutput=outputIndices.map(outputIndex=>{
+                          const v=remote?.outputs?.[outputIndex];
+                          const item=this.getItemResult(outputIndex, displays, isBatchGallery);
+                          return v||{
+                            outputIndex,slotId:iter.slotId||iter.itemKey,
+                            imageUrl:item?.imageUrl||"",
+                            status:item?.imageUrl?"success":item?.failed?"failed":"pending",
+                            errorCode:item?.error||""
+                          };
+                        });
+                        const rowSuccess=perOutput.filter(x=>x.imageUrl).length;
+                        const rowFailed=perOutput.filter(x=>x.status==="failed").length;
+                        const itemResult=this.getItemResult(outputIndices.find(i=>
+                          this.getItemResult(i,displays,isBatchGallery)?.imageUrl)??outputIndices[0],
+                          displays,isBatchGallery);
+                        const rowStatus=candidateCount===1
+                          ? this.getRowStatus(idx,busy,currentStep,itemResult,activeIndex)
+                          : {key:rowSuccess===candidateCount?"done":rowFailed?"failed":busy?"generating":"waiting",
+                            label:rowSuccess+"/"+candidateCount+" 成功"+(rowFailed?" · 失败"+rowFailed:""),
+                            className:rowSuccess===candidateCount?"is-done":rowFailed?"is-failed":busy?"is-generating":"is-waiting"};
                         const iterLayoutId = iter.layout || (batchLayoutMode === "fixed" ? (sd.layout || "") : "");
                         const catalog = this.context?.catalog;
                         const rMap = (catalog && catalog.resourceMap) || new Map();
@@ -826,15 +848,19 @@
                                 <button type="button" class="batch-iter-label-btn" data-iter-theme-idx="${idx}" title="点击编辑主题" aria-label="编辑第 ${idx + 1} 张主题">
                                   <span class="batch-iter-label" data-iter-theme-idx="${idx}">${esc(iter.shortLabel || iter.title || iter.theme)}</span>
                                 </button>
+                                <button type="button" class="btn btn-sm" data-row-options-idx="${idx}" title="逐张参数编辑">逐张参数</button>
+                                <button type="button" class="btn btn-sm" data-row-copy-idx="${idx}" title="复制本槽位">复制</button>
+                                <button type="button" class="btn btn-sm" data-row-up-idx="${idx}" title="上移">↑</button>
+                                ${plan?.slots?.[idx]?.lockedFields?.length?`<span class="batch-slot-lock">已锁定 ${plan.slots[idx].lockedFields.join("、")}</span>`:""}
                               </div>
                             </td>
                             <td class="batch-col-status">
                               <span class="batch-status-badge is-${esc(rowStatus.key)}">${esc(rowStatus.label)}</span>
                             </td>
                             <td class="batch-col-action">
-                              ${rowStatus.key === "failed" ? `
-                                <button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${idx}">重试</button>
-                              ` : ""}
+                              ${rowStatus.key === "failed" ? perOutput.filter(o=>o.status==="failed").map(o=>`
+                                <button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${o.outputIndex}">重试候选 ${(o.candidateIndex??0)+1}</button>
+                              `).join("") : ""}
                               ${rowStatus.key === "done" && itemResult?.imageUrl ? `
                                 <div class="batch-row-actions">
                                   <a href="${esc(itemResult.imageUrl)}" download="batch-${idx + 1}.webp" class="btn btn-sm batch-btn-dl" title="下载此图">下载</a>
