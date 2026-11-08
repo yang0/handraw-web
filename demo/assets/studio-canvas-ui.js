@@ -122,7 +122,7 @@
         if(slot.imageUrl){
           out+='<img loading="lazy" src="'+htmlEscape(slot.imageUrl)+'" alt="第'+(slot.index+1)+'张成图" data-disp-zoom="'+htmlEscape(slot.imageUrl)+'" />'+
             '<div class="ic129-result-actions"><a href="'+htmlEscape(slot.imageUrl)+'" download="handraw-'+(slot.index+1)+'.webp">下载</a>'+
-            '<button type="button" data-disp-variant="'+htmlEscape(node.id)+'">生成变体</button>'+
+            '<button type="button" data-disp-variant="'+htmlEscape(node.id)+' data-slot="'+slot.index+'">生成变体</button>'+
             '<button type="button" data-disp-reference="'+htmlEscape(node.id)+'" data-slot="'+slot.index+'">作为参考</button></div>';
         }else{
           out+='<div class="ic129-slot-placeholder">'+htmlEscape(slot.error||label(slot.status))+'</div>';
