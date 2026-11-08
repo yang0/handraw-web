@@ -811,7 +811,7 @@
           '" alt="'+safeValue(selected.title||"生成图片")+'" />'+
           '</div><figcaption><strong>版本 '+(selectedIndex+1)+'</strong>'+
           '<span>'+safeValue(selected.title||"生成图片")+'</span>'+
-          (selected.runId?'<small>Run '+safeValue(String(selected.runId).slice(0,18))+'</small>':"")+'</figcaption></figure>'+
+          (selected.runId?'<small>Run '+safeValue(String(selected.runId).slice(0,18))+'</small>':"")+'</figcaption></figure>':
           '<div class="make-image-empty-result" role="status"><strong>'+(busy?"任务已提交，正在等待生成结果":"创作结果将在这里出现")+
           '</strong><p>'+(busy?"旧版本会继续保留；可在左侧准备下一次创作。":"输入主题，选择画风与图型，然后生成第一张图片。")+'</p></div>')+
         (selected?'<div class="make-image-result-toolbar" aria-label="当前图片操作">'+
