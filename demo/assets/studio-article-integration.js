@@ -51,7 +51,8 @@
         afterBlockIdx:Number.isInteger(card.afterBlockIdx) ? card.afterBlockIdx : -1});
     }
     return {documentId:draft.documentId || draft.id,
-      revision:Number.isInteger(draft.documentRevision) ? draft.documentRevision : 0,
+      revision:Number.isInteger(draft.documentRevision) ? draft.documentRevision :
+        Number.isInteger(draft.revision) ? draft.revision : 0,
       markdown:String(draft.markdown || ""),anchors};
   }
   function articlePlan(article, cards, {planId, revision = 0} = {}) {
