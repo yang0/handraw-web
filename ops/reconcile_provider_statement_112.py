@@ -107,6 +107,8 @@ def _meta(raw: object, *, provider: bool) -> tuple[dict, dict]:
         raise BadEvidence("unsupported schema")
     if root["source"] != source or root["environment"] not in ("preproduction", "production"):
         raise BadEvidence("untrusted evidence origin or environment")
+    if type(root["environment"]) is not str:
+        raise BadEvidence("invalid environment")
     if not isinstance(root["release_sha"], str) or not SHA_RE.fullmatch(root["release_sha"]):
         raise BadEvidence("release SHA must be a full git commit hash")
     return root, _window(root["window"], provider)
@@ -148,7 +150,8 @@ def reconcile(provider: object, handraw: object) -> dict:
         for field in ("run_id", "item_id", "slot_key"):
             _ident(row[field], "handraw." + field)
         task = _ident(row["provider_task_id"], "handraw.provider_task_id", optional=True)
-        if type(row["submitted"]) is not bool or row["status"] not in INTERNAL_STATES:
+        if (type(row["submitted"]) is not bool or type(row["status"]) is not str
+                or row["status"] not in INTERNAL_STATES):
             raise BadEvidence("invalid internal attempt status")
         if row["cost_type"] != "credits":
             raise BadEvidence("only actual paid-credit attempts are supported; free quota is a separate gate")
@@ -165,7 +168,7 @@ def reconcile(provider: object, handraw: object) -> dict:
                       {"request_id", "attempt", "provider_task_id", "state"}, "provider task")
         key = _attempt_key(row, "provider task")
         tid = _ident(row["provider_task_id"], "provider task ID")
-        if row["state"] not in PROVIDER_STATES:
+        if type(row["state"]) is not str or row["state"] not in PROVIDER_STATES:
             raise BadEvidence("invalid provider state")
         if key in tasks or (tid in task_ids and task_ids[tid] != key):
             _issue(issues, "duplicate_or_conflicting_provider_task", ordinal.get(key))
@@ -184,7 +187,7 @@ def reconcile(provider: object, handraw: object) -> dict:
         event_id = _ident(row["event_id"], "provider event ID")
         tid = _ident(row["provider_task_id"], "provider event task ID")
         _in_period(row["occurred_at_utc"], pw, "provider event")
-        if row["kind"] not in KINDS or row["currency"] != p["currency"]:
+        if type(row["kind"]) is not str or row["kind"] not in KINDS or row["currency"] != p["currency"]:
             raise BadEvidence("provider currency/kind mismatch")
         amount = _count(row["amount_minor"], "provider money minor units", positive=True)
         if event_id in event_ids:
@@ -204,7 +207,7 @@ def reconcile(provider: object, handraw: object) -> dict:
         key = _attempt_key(row, "handraw ledger event")
         event_id = _ident(row["event_key"], "handraw ledger ID")
         _in_period(row["occurred_at_utc"], hw, "handraw ledger event")
-        if row["kind"] not in ("studio_gen", "studio_refund"):
+        if type(row["kind"]) is not str or row["kind"] not in ("studio_gen", "studio_refund"):
             raise BadEvidence("only dedicated studio ledger events allowed")
         delta = _count(row["delta_credits"], "handraw credit delta")
         if (row["kind"] == "studio_gen" and delta >= 0 or
@@ -227,7 +230,7 @@ def reconcile(provider: object, handraw: object) -> dict:
         cbid = _ident(row["callback_event_id"], "callback event ID")
         _ident(row["provider_task_id"], "callback provider task ID")
         _in_period(row["occurred_at_utc"], hw, "callback")
-        if row["state"] not in TERMINAL:
+        if type(row["state"]) is not str or row["state"] not in TERMINAL:
             raise BadEvidence("callback must have authoritative terminal status")
         if cbid in callback_ids and callback_ids[cbid] != row:
             _issue(issues, "conflicting_replayed_callback", ordinal.get(key))
@@ -237,9 +240,25 @@ def reconcile(provider: object, handraw: object) -> dict:
         elif (not attempts[key]["submitted"] or
               attempts[key]["provider_task_id"] != row["provider_task_id"]):
             _issue(issues, "callback_task_mismatch", ordinal.get(key))
+        if key in tasks and tasks[key]["state"] in TERMINAL and row["state"] != tasks[key]["state"]:
+            _issue(issues, "callback_provider_terminal_conflict", ordinal.get(key))
         if (row["state"] == "succeeded" and key in attempts
                 and attempts[key]["status"] == "refunded"):
             _issue(issues, "late_success_after_refund_requires_investigation", ordinal.get(key))
+
+    if not attempts:
+        _issue(issues, "empty_internal_statement")
+
+    # Multiple successful *paid* remote attempts for one canonical V3 output
+    # slot can indicate double-billing even when requestId differs on retry.
+    successes_by_slot: dict[tuple[str, str, str], list[tuple[str, int]]] = defaultdict(list)
+    for key, row in attempts.items():
+        if row["status"] == "success":
+            successes_by_slot[(row["run_id"], row["item_id"], row["slot_key"])].append(key)
+    for completed in successes_by_slot.values():
+        if len(completed) > 1:
+            for key in completed:
+                _issue(issues, "multiple_successful_paid_attempts_per_slot", ordinal[key])
 
     for key, row in attempts.items():
         ref = ordinal[key]
