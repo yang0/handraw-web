@@ -120,9 +120,22 @@ def main():
                 assert saved["id"]==first_id,saved
                 assert saved["text"]==saved["projection"]=="第 1 张：杭州春日旅行",saved
                 # Manual add/duplicate/order must not rewrite the stable original id.
-                while page.locator(".series108-card").count()<6:
-                    page.locator('[data-series-action="add"]').click()
-                assert page.locator(".series108-card").count()==6
+                counts=[]
+                for _ in range(6):
+                    count=page.locator(".series108-card").count()
+                    counts.append(count)
+                    if count>=6:
+                        break
+                    page.locator('[data-series-action="add"]').click(timeout=5000)
+                assert page.locator(".series108-card").count()==6, {
+                    "cardCounts":counts,
+                    "plan":page.evaluate("""()=>{
+                      const loop=window.CS.graph.nodes.find(n=>n.type==='loop');
+                      return {slots:loop.data.studio2Plan?.slots?.length,
+                        rows:loop.data.batchRows?.length,stage:window.CS.stageView};
+                    }"""),
+                    "errors":errors
+                }
                 page.locator('[data-series-action="copy"][data-series-slot="'+first_id+'"]').click()
                 assert page.locator(".series108-card").count()==7
                 page.locator('[data-series-action="up"]').nth(1).click()
