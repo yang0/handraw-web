@@ -64,7 +64,7 @@ S.App.styles = [
   { id:'FX-001', kind:'style', sourceType:'community', author:'ordinary', honorBoost:1 }
 ];
 S.App.layouts = [];
-assert.deepEqual(S.getRankedAssets(2, 'all').map(x => x.asset.id), ['FA-001','FX-001'],
+assert.equal(S.getRankedAssets(2, 'all').map(x => x.asset.id).join(','), 'FA-001,FX-001',
   'equal authentic engagement means equal scoring irrespective of asset source or honor');
 S.App.state.assetLiveLikes['FX-001'] = 20;
 assert.equal(S.getRankedAssets(2, 'all')[0].asset.id, 'FX-001',
