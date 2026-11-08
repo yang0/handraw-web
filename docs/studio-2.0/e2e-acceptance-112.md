@@ -140,3 +140,41 @@ CI 新增以上 Python HTTP 套件与真实 Chromium 冒烟（`interaction-journ
 - **审计依据**：`tests/test_studio_skill_pg_s3_112.py::test_z_actual_skill_cli_record_upload_retry_across_http_pg_and_s3`，GitHub Actions 的 `#84/#112 real Skill CLI -> local HTTP -> PG17 + S3 emulation` 步骤；本轮独立验证分支 [Actions #42511614919](https://github.com/yang0/handraw-web/actions/runs/42511614919) 已实际 14/14 SUCCESS（此后如更改文档，仍以最终同 SHA 的 CI 为准）。
 
 **依然阻断生产发布的 D 级事项**：远程机器上运行实际 Skill 安装包指向正式部署地址；R2/MinIO/AWS 真实桶私有权限、跨实例和 CDN 缓存吊销、网络中断与对象垃圾回收；真实网关计费/退款/重复回调，正式 PG 迁移备份和恢复、Redis 故障演练、账号/媒体 IDOR 与日志脱敏，Firefox/WebKit/触屏与弱网。**#84、#112 均保持 OPEN，发布 NO-GO；PR #131 必须保持 Draft。**
+
+
+## 11. 第五轮：积分扣费零暗扣账本 + PostgreSQL 17 备份/恢复/回滚（#112）
+
+本轮不重新实现已有 `apply_wallet_delta`、`studio_quota_reservations` 或网关的 408/502 未知状态处理，而是追加**可重复的账本级核验**与缺失的真实 PG 物理恢复演练。所有变更在独立 `studio2-issue112-billing-pg-restore-20261109` 上验证，`main` 禁止改动，PR #131 保持 Draft。
+
+### 11.1 严格零暗扣（Web 真正积分/免费额度 + 受控 Mock 图像任务供应商）
+
+- `tests/test_studio_billing_112.py`：真实数据库事务及 Web HTTP，强制耗尽当日免费额度以走**真实积分扣款**路径；验证 idempotencyKey / requestId 重放、唯一扣费流水 `gen_spend_<genId>`、upstream submit claim 一次、429 已有在途任务不产生新扣款、网关未知超时 / 502 不可盲目退款、供应商确认取消或失败后精确释放一次 `gen_refund_<genId>`、迟到成功回调不能把退款任务复活为作品或再次消耗额度。
+- 每条测试按交易链逐项核对：`wallet.balance = 初始余额 + SUM(本任务 studio_gen/studio_refund ledger.delta)`；各事件 `event_key` 唯一；每一流水的 `balance_after` 与交易序列一致；重复回调不改变既有成图、费用或任务。异常、跨账号调用不触发暗扣。
+- 修复 `backend/services.py::complete_cloud_generation` 的状态保护：当记录不存在、已 `refunded` 或已 `success` 时，任何迟到、重复 callback 都在数据库事务内**立即返回**，不能重写成功媒体、篡改 taskId、把 refund 后 quota 标记 `consumed`、重复生成作品/统计。
+- 保留现有 `tests/test_gen_timeout_refund.py` 的真实 HTTP 408/502/Timeout 和 Reconciler 路径；新版进一步核对**积分**而非仅免费 quota。Mock 测试不会调用用户付费供应商，不能证明真实商业支付网关或实际模型消费账单已核实。
+
+### 11.2 真实 PostgreSQL 17 物理备份、恢复与回滚
+
+- 脚本：`ops/pg_release_restore_drill_112.py`。使用 PG17 `pg_dump --format=custom` 生成 **0600 私有备份**；执行 `pg_restore --exit-on-error` 到**预先创建且无业务表**的两个 `handraw_restore_drill_*` 隔离数据库。原库始终只读，**从不清空、删除、覆盖原数据库**。
+- 严格参数门禁：`HANDRAW_ALLOW_PG_RESTORE_DRILL=YES`；source / primary restore / rollback 三个明确、各不相同的 DSN；拒绝系统数据库、query dbname/host 覆盖、跨实例、非预留前缀、非空目标和已存在归档。
+- 通过只读 `REPEATABLE READ` 快照，为 schema_migrations、users、wallets、ledgers、generation_runs/items、media_assets、work_media、works、studio_generations、studio_projects/requests 逐行计算 SHA256（**仅输出数量与哈希，不输出用户字段或密码**）；比对源库、恢复库、回滚副本全部一致。额外在恢复副本注入事务型 DDL 失败，验证 PostgreSQL 原子回滚，再从同一归档恢复另一空数据库实现备份级回退验证。
+- `tests/test_pg_backup_restore_112.py` 实际对 CI PostgreSQL 17 服务创建随机独立三库、引导真实 V3 Schema、写入一名测试用户和配平的 studio_gen/studio_refund 流水，通过容器自带 PG17 `pg_dump/pg_restore` 完成物理恢复；结束自动删除**仅由测试创建**的三个临时库。不会访问付费模型，不使用生产用户数据。
+- `.github/workflows/checks.yml` 将真正账本测试纳入 `v3-core-regression`，真实 PG17 恢复测试纳入现有 `production-storage-integration`，**保持原 14 个 Job**。CI 仅上传脱敏 `artifacts/studio-112-pg-backup-report.json` 审计报告，**绝不上传含用户数据的数据库备份本体**。
+
+可在人工维护的隔离/预发布 PG 环境复用以下安全操作（必须先由操作员创建两个**空**的、命名合规的恢复库，并确认仅具备授权凭证；不要指向正在提供服务的恢复目标）：
+
+```bash
+export HANDRAW_ALLOW_PG_RESTORE_DRILL=YES
+export HANDRAW_PG_DRILL_SOURCE_URL='postgresql://USER:PASS@HOST/staging_source'
+export HANDRAW_PG_DRILL_RESTORE_URL='postgresql://USER:PASS@HOST/handraw_restore_drill_verify'
+export HANDRAW_PG_DRILL_ROLLBACK_URL='postgresql://USER:PASS@HOST/handraw_restore_drill_rollback'
+python -m ops.pg_release_restore_drill_112 \
+  --archive /private/handraw-pg112-snapshot.dump \
+  --report /private/handraw-pg112-audit.json
+```
+
+### 11.3 证据等级与剩余发布阻断
+
+本轮 PostgreSQL 17 是 CI 中**真实数据库 + 原生 pg_dump/pg_restore**，有真正的二次恢复和 SHA 对账；但源库数据为人工构造的测试数据（含测试用户及模拟积分），不是生产大小/负载/权限与真实时间窗。测试使用的 S3 仍是 Moto；计费端是可控 Mock 图像网关并非真实商业支付通道。因此本轮证据为 **C 级受控真实组件验收**，不能冒充 D 级生产验收、声称已有正式备份 RTO/RPO 或付款成功。
+
+后续必须完成：真实图像供应商的费用/回调/退款/取消逐单核算；正式生产类数据库快照与实际部署步骤下的备份/恢复测时和回滚切流；R2/S3/MinIO、Redis 多实例及私有媒体 ACL、物理移动端/弱网、双账号 IDOR 与密钥日志审计、灰度及发布负责人签核。**#112 保持 Open、全站生产 NO-GO、PR #131 始终 Draft，不允许合入 main。**
