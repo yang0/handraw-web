@@ -136,6 +136,11 @@ def put_resource(db: Any, user: dict[str, Any], rid: str, body: dict[str, Any]) 
         row = tx.execute("SELECT * FROM skill_personal_resources WHERE id=? AND user_id=?", (rid, uid)).fetchone()
         if row and row["deleted_at"]:
             raise ServiceError("资源已删除，请先恢复", status=409, code="resource_deleted")
+        if row and row["kind"] != body["kind"]:
+            # #21: changing kind changes the stable USR-S/L code and could
+            # silently invalidate Studio recipes and saved favorites.
+            raise ServiceError("资源类别不可修改，请新建资源", status=409,
+                               code="resource_kind_immutable")
         if row:
             if body.get("baseRevision") is None:
                 raise ServiceError("修改需携带 baseRevision", status=400, code="base_revision_required")
