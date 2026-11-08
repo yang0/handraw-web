@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "issue": 112,
+  "repo": "yang0/handraw-web",
+  "branch_base": "0d54811a6c815e9646ab5f6bf3a88ad32890a3e0",
+  "evidence_policy": "CI/local Chromium can validate deterministic behavior; never imply live paid-gateway, deployed object storage, cross-device or production billing was exercised.",
+  "stages": [
+    "M0",
+    "M1",
+    "M2",
+    "M3"
+  ],
+  "cases": [
+    {
+      "id": "M0-01",
+      "stage": "M0",
+      "concern": "V3 single Run/Work/media and out-of-order callbacks",
+      "tests": [
+        "tests/test_generation_v3.py",
+        "tests/test_studio_series_run_contract.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Real provider billing/refund ledger and late webhook reconciliation"
+    },
+    {
+      "id": "M0-02",
+      "stage": "M0",
+      "concern": "Legacy picker no-op / locked resources #95 #105",
+      "tests": [
+        "tests/test_studio_picker_interactions.cjs",
+        "tests/smoke_studio_picker_browser_105.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Physical touch/keyboard and authenticated private gallery on deployed site"
+    },
+    {
+      "id": "M0-03",
+      "stage": "M0",
+      "concern": "Stale busy after restart and cancellability #96",
+      "tests": [
+        "tests/test_quick_stale_generation.cjs",
+        "tests/smoke_studio_runtime_browser_119.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Provider-side cancellation truth and abrupt server restart"
+    },
+    {
+      "id": "M0-04",
+      "stage": "M0",
+      "concern": "AI non-JSON, invalid recommendations and gateway errors #88 #90",
+      "tests": [
+        "tests/test_studio_ai_plan.py",
+        "tests/test_studio_ai_plan_http.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Real provider 429/502 and recommendation quality sampling"
+    },
+    {
+      "id": "M0-05",
+      "stage": "M0",
+      "concern": "Private media, resource identity and unauthorized references",
+      "tests": [
+        "tests/test_studio_resource_refs.py",
+        "tests/test_v3_media_visibility.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "External browser IDOR audit and protected prompt/secret log scan"
+    },
+    {
+      "id": "M1-01",
+      "stage": "M1",
+      "concern": "Quick create settings -> result -> versions and fork",
+      "tests": [
+        "tests/smoke_studio_make_image_browser_128.py",
+        "tests/test_studio_quick_run_contract.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Paid single-image response with media upload/download and ledger"
+    },
+    {
+      "id": "M1-02",
+      "stage": "M1",
+      "concern": "Run recovery, cancel-pending and idempotent retry",
+      "tests": [
+        "tests/test_studio_runtime_http_119.py",
+        "tests/test_studio_cancel_pending.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Provider attempt identifiers, refund and repeated callback on real gateway"
+    },
+    {
+      "id": "M1-03",
+      "stage": "M1",
+      "concern": "Project two-tab CAS, offline outbox, reload and account scope",
+      "tests": [
+        "tests/smoke_studio_project_reliability_103.py",
+        "tests/test_studio_project_http.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Cross-device network partitions and production DB recovery"
+    },
+    {
+      "id": "M1-04",
+      "stage": "M1",
+      "concern": "Shared picker on all four entries and typed refs",
+      "tests": [
+        "tests/smoke_studio_picker_browser_105.py",
+        "tests/test_studio_article_picker_105.cjs"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Production private media ACL and physical touch/browser matrix"
+    },
+    {
+      "id": "M2-01",
+      "stage": "M2",
+      "concern": "Series six-slot editing / reorder / overrides",
+      "tests": [
+        "tests/smoke_studio_series_browser_108.py",
+        "tests/test_studio_series_plan_integration.cjs"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Real six-slot generated media and export files"
+    },
+    {
+      "id": "M2-02",
+      "stage": "M2",
+      "concern": "3 success + 2 failure + 1 pending out-of-order projection",
+      "tests": [
+        "tests/test_studio_runtime_119.py",
+        "tests/test_studio_series_run_contract.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Provider webhook timing and per-item billing settlement"
+    },
+    {
+      "id": "M2-03",
+      "stage": "M2",
+      "concern": "Stop, retry failed slot only, 429 backoff and shared capacity",
+      "tests": [
+        "tests/test_batch_stop.cjs",
+        "tests/test_studio_dag_scheduler_120.cjs",
+        "tests/smoke_studio_dag_browser_120.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Real provider 429 throttle, gateway retry and refund reconciliation"
+    },
+    {
+      "id": "M2-04",
+      "stage": "M2",
+      "concern": "One public work card / N media and Skill bridge contract",
+      "tests": [
+        "tests/test_generation_v3.py",
+        "tests/test_stage5_plaza_batch_folding.py",
+        "tests/test_skill_web_bridge.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Deployed Skill-to-Web upload, resume and CDN/object storage"
+    },
+    {
+      "id": "M3-01",
+      "stage": "M3",
+      "concern": "Article import -> PlanSlot anchor -> CAS -> retry -> ZIP",
+      "tests": [
+        "tests/smoke_studio_article_browser_109.py",
+        "tests/test_studio_article_project_109.cjs"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Real document formats, unstable network, paid image generation and export"
+    },
+    {
+      "id": "M3-02",
+      "stage": "M3",
+      "concern": "Complex Graph safe simple/canvas roundtrip",
+      "tests": [
+        "tests/test_studio_view_authority.cjs",
+        "tests/smoke_studio_canvas_browser.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Multi-device complex project with concurrent remote Run"
+    },
+    {
+      "id": "M3-03",
+      "stage": "M3",
+      "concern": "100-node canvas focus, image DOM reuse and perf baseline",
+      "tests": [
+        "tests/benchmark_studio_canvas.py",
+        "tests/test_studio_canvas_incremental.cjs"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Full 100-node production Graph with large real images on target hardware"
+    },
+    {
+      "id": "M3-04",
+      "stage": "M3",
+      "concern": "Runtime / article confidentiality across public display",
+      "tests": [
+        "tests/test_studio_article_http_e2e.py",
+        "tests/test_studio_resource_refs.py"
+      ],
+      "ci_scope": "deterministic-mock-local-browser-or-contract",
+      "live_gate": "PENDING",
+      "live_evidence_required": "Production tracing and security log review for secrets / hidden prompts"
+    }
+  ]
+}
