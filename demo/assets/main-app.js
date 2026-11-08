@@ -3114,7 +3114,7 @@
       batchUnfavBtn.onclick = async () => {
         const list = [...(App.state?.collections?.[UI.favTab] || [])];
         if (!list.length) return;
-        if (!window.await window.HandrawDialogs.confirm(`确定要移除当前分类下的全部 ${list.length} 个收藏项吗？`)) return;
+        if (!await window.HandrawDialogs.confirm(`确定要移除当前分类下的全部 ${list.length} 个收藏项吗？`)) return;
         list.forEach((id) => {
           S.toggleCollect(UI.favTab, id, id);
         });
