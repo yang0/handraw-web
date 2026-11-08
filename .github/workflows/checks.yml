@@ -43,11 +43,14 @@ jobs:
       # first render/drag+zoom frame p95/DOM/heap/IME focus at 10–300 nodes.
       - run: python -m pip install "playwright>=1.50,<2"
       - run: python tests/benchmark_studio_canvas.py --output artifacts/canvas-127.json --require-browser
+      - run: python tests/smoke_studio_canvas_browser.py --screenshots artifacts/canvas-127-screen
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: studio2-canvas-127-benchmark
-          path: artifacts/canvas-127.json
+          path: |
+            artifacts/canvas-127.json
+            artifacts/canvas-127-screen/**
           if-no-files-found: ignore
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
