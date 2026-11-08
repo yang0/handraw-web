@@ -224,11 +224,12 @@ class SkillPostgresS3Journey112(unittest.TestCase):
             (self.owner["id"],)), 3)
         self.assertEqual(self.db_count("works", "run_id=?", (run["id"],)), 0)
         partial = self.db.get_conn().execute(
-            "SELECT image_url FROM user_uploads WHERE user_id=? AND "
-            "cat='skill_history' ORDER BY created_at",
-            (self.owner["id"],)).fetchall()
+            "SELECT m.storage_key FROM generation_items i "
+            "JOIN media_assets m ON m.id=i.media_id "
+            "WHERE i.run_id=? ORDER BY i.position",
+            (run["id"],)).fetchall()
         self.assertEqual(len(partial), 3)
-        private_url = partial[0]["image_url"]
+        private_url = partial[0]["storage_key"]
         # Unpublished uploads are private, despite the object already being
         # durably stored in the bucket and a guessable /uploads/ URL.
         self.assertEqual(self.request("GET", private_url)[0], 404)
