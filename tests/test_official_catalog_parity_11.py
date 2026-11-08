@@ -171,6 +171,38 @@ class OfficialCatalogParity11(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid official ID"):
             self.check()
 
+    def test_strict_cli_requires_approved_db_export_files_even_when_static_syncs(self):
+        self.catalog["resources"].append({
+            "id": "FG-025", "kind": "style", "name": "Perler Bead Pixel Art"})
+        self.pending["pendingSkillOnly"] = []
+        with tempfile.TemporaryDirectory(prefix="web-db-export-11-") as td:
+            root = Path(td)
+            skill_root = root / "skill"
+            refs = skill_root / "references"
+            refs.mkdir(parents=True)
+            (refs / "styles.json").write_text(json.dumps(self.styles), encoding="utf-8")
+            (refs / "layouts.json").write_text(json.dumps(self.layouts), encoding="utf-8")
+            catalog = root / "catalog.json"
+            pending = root / "pending.json"
+            catalog.write_text(json.dumps(self.catalog), encoding="utf-8")
+            pending.write_text(json.dumps(self.pending), encoding="utf-8")
+            args = ["--catalog", str(catalog), "--pending", str(pending),
+                    "--skill-root", str(skill_root), "--strict"]
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main(args), 2)
+            exported = root / "reviewed-db"
+            exported.mkdir()
+            (exported / "styles.json").write_text("[]", encoding="utf-8")
+            (exported / "layouts.json").write_text("[]", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(args + ["--approved-export-dir", str(exported)]), 0)
+            (exported / "styles.json").write_text(
+                json.dumps([{"number":"FE-099", "generation_name":"网站已发布但未同步"}]),
+                encoding="utf-8",
+            )
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main(args + ["--approved-export-dir", str(exported)]), 2)
+
     def test_cli_read_only_pending_and_strict_policy(self):
         with tempfile.TemporaryDirectory(prefix="catalog11-") as root:
             root = Path(root)
