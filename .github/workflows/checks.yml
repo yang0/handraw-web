@@ -21,6 +21,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_workflow_versions.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_image_plan.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_run_read.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_quick_run_contract.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_cancel_pending.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_view_authority.py' -v
@@ -101,6 +102,8 @@ jobs:
           node tests/test_studio_core.cjs
           node --check demo/assets/studio-normalization.js
           node tests/test_studio_normalization.cjs
+          node --check demo/assets/studio-quick-spec.js
+          node tests/test_studio_make_image_integration.cjs
           node tests/test_studio_canvas_incremental.cjs
           node tests/test_studio_views.cjs
           node --check demo/assets/studio-views.js
