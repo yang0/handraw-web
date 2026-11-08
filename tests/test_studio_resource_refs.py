@@ -48,9 +48,9 @@ class ResourceRefProjectTests(unittest.TestCase):
     def test_invalid_kind_source_version_or_missing_code_rejected(self):
         for ref,expected in [
             (self.ref("SC-021","style"),"resource_not_found"),
-            (self.ref("FA-001","layout"),"resource_not_found"),
+            (self.ref("FA-001","layout"),"resource_type_mismatch"),
             (self.ref("NOT-FOUND-999","style"),"resource_not_found"),
-            (self.ref("C-01","tone"),"resource_not_found"),
+            (self.ref("C-01","tone"),"resource_type_mismatch"),
             (self.ref("FA-001","style","private"),"resource_source_mismatch"),
             (self.ref("C-01","color","official",899),"resource_version_conflict"),
             ({"id":"FA-001","type":"style","secret":"prompt"},"invalid_resource_ref"),
