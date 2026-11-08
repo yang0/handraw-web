@@ -1092,6 +1092,9 @@
         projectRemoteRevision: Number(t.projectRemoteRevision || 0),
         editRevision: Number(t.editRevision || 0),
         projectSyncedGraph: t.projectSyncedGraph || null,
+        projectAuthority: t.projectAuthority || "graph",
+        projectSpec: t.projectSpec || null,
+        projectPlan: t.projectPlan || null,
         projectActiveView: t.projectActiveView || null,
         editorLayout: t.editorLayout || null,
         vx: t.vx,
@@ -1340,6 +1343,9 @@
       projectError: tab.projectError || "",
       editRevision: Number(tab.editRevision || 0),
       projectSyncedGraph: tab.projectSyncedGraph || null,
+      projectAuthority: tab.projectAuthority || "graph",
+      projectSpec: tab.projectSpec || null,
+      projectPlan: tab.projectPlan || null,
       projectActiveView: tab.projectActiveView || null,
       editorLayout: tab.editorLayout || null,
       quickStart: tab.quickStart === true, batchStart: tab.batchStart === true,
@@ -1429,6 +1435,32 @@
         const result = refs.syncLegacyRefs(node.data, Catalog);
         node.data.resourceRefs = result.data.resourceRefs;
       }
+    }
+    if (tab.projectAuthority === "spec" && tab.projectActiveView !== "canvas") {
+      const projection = StudioViews?.specFromGraph(savedGraph);
+      if (!projection?.spec || projection.mode === "read-only-summary") {
+        throw new Error("spec_graph_not_expressible");
+      }
+      const compiledSpec = {...cloneGraph(tab.projectSpec || {}),...projection.spec};
+      compiledSpec.revision = Number(tab.projectSpec?.revision || 0) + 1;
+      let plan = tab.projectPlan ? cloneGraph(tab.projectPlan) : null;
+      const loop = (savedGraph.nodes || []).find(n => n.type === "loop");
+      if (loop && window.HandrawStudioCore) {
+        const current = window.HandrawStudioCore.normalizeLegacyBatch(loop);
+        const originals = new Map((plan?.slots || []).map(slot => [slot.slotId,slot]));
+        plan = {...(plan || {}),...current,slots:current.slots.map(slot => {
+          const before = originals.get(slot.slotId) || {};
+          return {...before,...slot,overrides:{...(before.overrides || {}),...slot.overrides},
+            anchorId:before.anchorId || slot.anchorId || null,
+            lockedFields:before.lockedFields || slot.lockedFields};
+        })};
+      }
+      return {
+        kind:plan?.slots?.length ? "series" : "image",
+        authority:"spec", title:tab.title || "未命名创作",
+        draft:{creationSpec:compiledSpec,...(plan ? {plan} : {}),
+          activeView:"simple",editorLayout:cloneGraph(tab.editorLayout || {})}
+      };
     }
     return {
       kind: ["series", "xhs", "loop_100", "ip_story", "loop", "style_ab", "omnimedia"].includes(blueprint)
@@ -1876,13 +1908,22 @@
       if (isStaleScope(epoch, scope) || CS.stageView !== stageAtOpen) return;
       const project = response.project;
       if (!project || project.id !== projectId) throw new Error("项目编号不匹配");
-      if (project.authority !== "graph") {
-        toast("该项目目前由" + (project.authority === "article" ? "文章文档" : "结构化方案") +
-          "管理；旧画布不能安全恢复，待统一编辑器接入");
+      if (project.authority === "article") {
+        toast("文章正文仍由文章编辑器管理；画布文档联动将在 #124 接入");
         return;
       }
-      if (!project.draft || !project.draft.graph || !Array.isArray(project.draft.graph.nodes)) {
-        throw new Error("云端草稿缺少可用的画布图形");
+      if (!["graph","spec"].includes(project.authority)) {
+        throw new Error("不支持的项目权威");
+      }
+      // A Spec Project is mapped to a transient view Graph. It is not yet
+      // another persisted write source; Canvas promotion is atomic on save.
+      const rawGraph = project.authority === "spec"
+        ? StudioViews?.compile(project.draft?.creationSpec,project.draft?.plan,{
+            projectId:project.id
+          })
+        : project.draft?.graph;
+      if (!rawGraph || !Array.isArray(rawGraph.nodes)) {
+        throw new Error("云端草稿缺少可安全编译的创作内容");
       }
       const decision = ProjectCenter?.classifyRestore(existing, project) || "open-cloud";
       if (decision === "keep-local" || decision === "activate-local") {
@@ -1890,7 +1931,7 @@
         if (decision === "keep-local") toast("已优先打开本机草稿，未覆盖未同步内容");
         return;
       }
-      const cloudGraph = normalizeGraphSchema(project.draft.graph);
+      const cloudGraph = normalizeGraphSchema(rawGraph);
       let target = existing;
       if (target) {
         // The active tab is snapshotted in activateWorkflowTab: update CS.graph
@@ -1907,8 +1948,14 @@
       target.title = project.title || target.title;
       target.projectId = project.id;
       target.projectRevision = Number(project.revision);
-      target.projectSyncedGraph = cloneGraph(cloudGraph);
-      target.projectActiveView = project.draft?.activeView || "canvas";
+      target.projectSyncedGraph = project.authority === "graph" ? cloneGraph(cloudGraph) : null;
+      target.projectAuthority = project.authority;
+      target.projectSpec = project.authority === "spec"
+        ? cloneGraph(project.draft?.creationSpec || {}) : null;
+      target.projectPlan = project.authority === "spec"
+        ? cloneGraph(project.draft?.plan || null) : null;
+      target.projectActiveView = project.authority === "spec" ? "simple"
+        : project.draft?.activeView || "canvas";
       target.editorLayout = cloneGraph(project.draft?.editorLayout || target.editorLayout || {});
       const cam = target.editorLayout.camera || {};
       if (Number.isFinite(cam.vx)) target.vx = cam.vx;
@@ -1995,8 +2042,8 @@
     for (const key of [
       "projectId", "projectRevision", "projectSaveState", "projectPending",
       "projectCopyPending", "projectRemoteRevision", "projectError",
-      "editRevision", "projectSyncedGraph", "projectActiveView",
-      "editorLayout", "quickStart", "batchStart", "vx", "vy", "vk"
+      "editRevision", "projectSyncedGraph", "projectAuthority", "projectSpec",
+      "projectPlan", "projectActiveView", "editorLayout", "quickStart", "batchStart", "vx", "vy", "vk"
     ]) {
       if (Object.prototype.hasOwnProperty.call(stored,key)) tab[key] = stored[key];
     }
