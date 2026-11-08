@@ -218,7 +218,7 @@
   function projectRun(payload,{cancelRequested=false}={}) {
     if(!payload?.run || !Array.isArray(payload.items))
       return {ok:false,viewStatus:"unknown",completed:0,items:[],runId:""};
-    const p=Core.selectRunProjection(payload.run,payload.items,{cancelRequested});
+    const p=Core.selectRunProjection(payload.run,payload.items,{cancelRequested,authoritativeSlots:payload.slots});
     const results=payload.items.filter(item=>item.status==="success" &&
       item.mediaId && item.imageUrl);
     return {...p,ok:true,completed:p.succeeded,runId:payload.run.id,
