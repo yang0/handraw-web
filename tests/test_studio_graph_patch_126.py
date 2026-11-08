@@ -240,6 +240,9 @@ class GraphPatch126Tests(unittest.TestCase):
         self.assertNotIn(SENTINEL, observed[0])
         self.assertNotIn("old-run-stable", observed[0])
         self.assertNotIn("bear-and-bird.webp", observed[0])
+        self.assertIn("authorizedResources", observed[0])
+        self.assertIn("FA-001", observed[0])
+        self.assertNotIn("secretBlackboxPrompt", observed[0])
         self.assertEqual(get_project(self.db, self.user, PROJECT)
                          ["project"]["revision"], 1)
 
