@@ -137,7 +137,7 @@ class P0GalleryHTTP91(unittest.TestCase):
         data_url, _ = image_data("PNG", (85, 12, 205))
         for body, code in [
             ({"name": "no image"}, "missing_data_url"),
-            ({"name": "truncated", "dataUrl": "data:image/png;base64,AA=="}, "invalid_image"),
+            ({"name": "truncated", "dataUrl": "data:image/png;base64,AA=="}, "invalid_image_upload"),
             ({"name": "wrong sha", "dataUrl": data_url, "sha256": "0" * 64}, "sha256_mismatch"),
         ]:
             with self.subTest(case=body["name"]):
