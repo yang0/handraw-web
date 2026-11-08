@@ -71,8 +71,9 @@ def main() -> None:
             sys.exit(2)
 
     if not official_assets:
-        print("未找到 source_type='official' 的官方新增资产。")
-        sys.exit(0)
+        # A verified empty official DB is still evidence: write two explicit
+        # [] snapshots for the strict parity release gate, not no files.
+        print("数据库中无已发布的新增官方资源；将导出两份空列表供严格审计。")
 
     # 2. Collision check (同号防护)
     skill_styles = json.loads(skill_styles_file.read_text(encoding="utf-8"))
