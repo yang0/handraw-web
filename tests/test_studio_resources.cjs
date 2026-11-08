@@ -84,4 +84,32 @@ assert.match(batch,/currentRow\.layoutRef = ref \|\| null/);
 assert.match(code,/gridEl\.innerHTML = list\s*\.map\(\(it\)/,
   "Unified catalog Picker must not silently hide resources after item 180");
 
-console.log("Studio2 ResourceRef + CreationSpec roundtrip and Picker bridge tests passed");
+const wrongSource=JSON.parse(JSON.stringify(spec));
+wrongSource.style.source="private";
+assert.ok(Core.validateSpec(wrongSource,{catalog}).errors.some(x=>x.code==="resource_source_mismatch"));
+
+const wrongVersion=JSON.parse(JSON.stringify(spec));
+wrongVersion.style.version=999;
+assert.ok(Core.validateSpec(wrongVersion,{catalog}).errors.some(x=>x.code==="resource_version_conflict"));
+
+const missingSecond=JSON.parse(JSON.stringify(spec));
+missingSecond.fusionEnabled=true;
+missingSecond.secondaryStyle=null;
+assert.ok(Core.validateSpec(missingSecond,{catalog}).errors.some(x=>x.code==="missing_secondary_style"));
+
+const deniedCatalog={...catalog,resourceMap:new Map(catalog.resourceMap)};
+deniedCatalog.resourceMap.set("FA-001",{...catalog.resourceMap.get("FA-001"),
+  canUse:false,access:{canUse:false}});
+assert.ok(Core.validateSpec(spec,{catalog:deniedCatalog}).errors.some(x=>x.code==="resource_forbidden"));
+
+const servicesSource=fs.readFileSync("backend/services.py","utf8");
+assert.match(servicesSource,/"assetUid": r\["asset_uid"\] or None/,
+  "Private workspace must expose actual media UID, never reuse upload row ID");
+assert.match(code,/assetUid: ru\.assetUid \|\| null/,
+  "Gallery sync persists owner-only media UID");
+assert.match(code,/mediaId: picked\.mediaId \|\| undefined/,
+  "Only confirmed private media is serialized as MediaRef");
+assert.match(code,/markActiveTabDirty\(\);\s*fullRenderCanvas\(\);\s*persistOpenTabs\(\);/,
+  "Asset picker edits should enter Project autosave");
+
+console.log("Studio2 ResourceRef + CreationSpec/media roundtrip, entitlement, Picker bridge tests passed");
