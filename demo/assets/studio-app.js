@@ -15,6 +15,7 @@
   const S = window.HANDRAW_SHARED;
   const E = window.HANDRAW_CANVAS_ENGINE;
   const CanvasUI = window.HandrawCanvasUI;
+  const GraphPatchUI = window.HandrawStudioGraphPatch;
   const { App, esc, toast, channelUrl } = S;
 
   const UPLOAD_STORAGE_KEY = "handraw_canvas_uploads_v3";
@@ -19621,6 +19622,66 @@
     }
   }
 
+  // #126: review/confirmation is fully server-authoritative. Never mark the
+  // old Graph dirty before approval or race ProjectClient.flush against CAS.
+  function openCanvasGraphPatch126(){
+    const tab=CS.tabs.find(t=>t.id===CS.activeTabId);
+    if(!GraphPatchUI){toast("GraphPatch 编辑器未加载，请刷新页面");return;}
+    if(!App.state?.serverBacked||!App.state?.loggedIn){
+      toast("登录后才能使用 AI 画布结构修改");return;
+    }
+    if(!tab?.projectId||tab.projectAuthority!=="graph"||
+      tab.projectSaveState!=="synced"||tab.projectPending){
+      toast("请先将当前画布保存为已确认的云端 Graph 项目，再审阅 AI 补丁");
+      if(tab&&!tab.projectPending&&tab.projectSaveState!=="saving"&&
+         tab.projectSaveState!=="conflict")void saveActiveProject(tab);
+      return;
+    }
+    const scope=activeCacheScope,epoch=cacheScopeEpoch,tabId=tab.id,projectId=tab.projectId;
+    const getContext=()=>{
+      const live=CS.tabs.find(t=>t.id===CS.activeTabId);
+      if(isStaleScope(epoch,scope)||!live||live.id!==tabId||
+         live.projectId!==projectId)return null;
+      return {projectId:live.projectId,
+        baseRevision:Number(live.projectRevision||0),
+        graphRevision:Number(CS.graph.revision||0),
+        saveState:live.projectSaveState,
+        selectedIds:[...(CS.graph.selectedIds||[])]};
+    };
+    GraphPatchUI.open({
+      getContext,
+      onApplied:(response,expected)=>{
+        const live=CS.tabs.find(t=>t.id===CS.activeTabId);
+        const ctx=getContext();
+        if(!live||!ctx||ctx.projectId!==response.projectId||
+           ctx.baseRevision!==Number(expected?.baseRevision)||
+           ctx.graphRevision!==Number(expected?.graphRevision)||
+           ctx.saveState!=="synced"||!response.graph)return false;
+        // Authoritative response retains existing RunSnapshot/Artifact nodes;
+        // invalidate ephemeral browser Undo snapshots and rely on the durable
+        // CAS-guarded Review rollback, never a competing unsynced local patch.
+        CS.graph=normalizeGraphSchema(response.graph);
+        live.graph=cloneGraph(CS.graph);
+        live.projectSyncedGraph=cloneGraph(CS.graph);
+        live.projectRevision=Number(response.projectRevision);
+        live.projectAuthority="graph";
+        live.projectActiveView="canvas";
+        live.projectSaveState="synced";
+        live.projectPending=null;
+        live.projectCopyPending=null;
+        live.projectError="";
+        live.projectRemoteRevision=0;
+        live.editRevision=0;
+        live.dirty=false;
+        CS.undoStack=[];CS.redoStack=[];
+        persistOpenTabs();fullRenderCanvas();updateProjectStatusIndicator();
+        toast(response.phase==="reverted"?"GraphPatch 已撤销并云端保存":
+          "GraphPatch 已确认应用 · 没有启动付费生图");
+        return true;
+      }
+    });
+  }
+
   // #129: one project, one Graph and server-backed Run projection for both views.
   function renderCanvasProductUI(){
     if(!CanvasUI||!DOM.canvasStage)return;
@@ -19674,7 +19735,8 @@
         }
       },
       onAction:(action,node)=>{
-        if(action==="save")handleProjectStatusClick();
+        if(action==="graphpatch")openCanvasGraphPatch126();
+        else if(action==="save")handleProjectStatusClick();
         else if(action==="simple")switchCreationStage("simple");
         else if(action==="undo")undoGraph();
         else if(action==="redo")redoGraph();
