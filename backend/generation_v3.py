@@ -821,7 +821,7 @@ def get_owned_studio_run(db: Any, user: dict[str, Any], run_id: str) -> dict[str
              ON m.id=i.media_id AND m.owner_user_id=?
            WHERE i.run_id=? ORDER BY i.position""", (uid, str(run_id)),
     ).fetchall()
-    return {
+    result = {
         "ok": True,
         "run": {
             "id": str(run["id"]), "source": str(run["source"]),
@@ -844,4 +844,27 @@ def get_owned_studio_run(db: Any, user: dict[str, Any], run_id: str) -> dict[str
             for i in items
         ],
     }
+    # The owner-scoped gateway ledger links retry attempts to logical slots
+    # without becoming a second work/media truth table.
+    if str(run["source"]) == "web":
+        attempt_rows = conn.execute(
+            """SELECT id,batch_index,request_id,task_id,status,credits_spent,
+                      cost_type,created_at,system_append_json
+               FROM studio_generations
+               WHERE user_id=? AND (
+                 (batch_id=? AND COALESCE(batch_id,'')<>'')
+                 OR (id=? AND COALESCE(batch_id,'')='')
+               )
+               ORDER BY batch_index,created_at,id""",
+            (uid, str(run["external_run_id"]), str(run["external_run_id"])),
+        ).fetchall()
+    else:
+        attempt_rows = []
+    from .studio_runtime_projection import project_studio_run
+    read_model = project_studio_run(
+        result["run"], result["items"], [dict(row) for row in attempt_rows],
+    )
+    # "unknown" and "cancel_requested" are never persisted into V3 CHECKs.
+    result.update(read_model)
+    return result
 
