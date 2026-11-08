@@ -1746,7 +1746,7 @@
         if (!guard(epoch, username)) return;
         renderAdmin(root);
       }).catch(function (err) {
-        alert("处理失败：" + ((err && err.message) || "请重试"));
+        S.toast("处理失败：" + ((err && err.message) || "请重试"), "error");
         buttons.forEach(function (b) { b.disabled = false; });
       });
     }
