@@ -1629,6 +1629,19 @@
       const undoPlan = root.querySelector("#batch-undo-plan");
       if (undoPlan) undoPlan.onclick = () => {
         if (!self.lastPlanUndo) return;
+        if(self.lastPlanUndo.studio2AIUndo){
+          try{
+            global.HandrawStudioAIPlan.undo(self.lastPlanUndo.studio2AIUndo,{
+              parts:p,loop
+            });
+            self.lastPlanUndo=null;
+            self.planDetails=null;
+            self.planNotice="已撤销 AI 规划，不影响历史生成任务";
+            markDirty();self.render();
+          }catch(err){global.HANDRAW_SHARED?.toast?.(
+            global.HandrawStudioAIPlan.message(err.code));}
+          return;
+        }
         loop.data.promptListText = self.lastPlanUndo.promptListText;
         loop.data.batchRows = self.lastPlanUndo.batchRows;
         loop.data.studio2SlotIds = self.lastPlanUndo.studio2SlotIds || [];
@@ -1653,141 +1666,91 @@
       const btnPlan = root.querySelector("#batch-btn-plan");
       if (btnPlan) {
         btnPlan.onclick = async () => {
-          const currentMode = loop.data.batchLayoutMode || "fixed";
-          const hasExisting = currentMode === "fixed"
-            ? Boolean(loop.data.promptListText && loop.data.promptListText.trim())
-            : (Array.isArray(loop.data.batchRows) && loop.data.batchRows.some((r) => r.theme && r.theme.trim()));
-
-          // Direct action: no confirmation modal. Preserve the existing
-          // planning data so a user can undo an accidental re-plan.
-          const priorPlan = hasExisting ? {
-            promptListText: loop.data.promptListText || "",
-            batchRows: JSON.parse(JSON.stringify(loop.data.batchRows || [])),
-            studio2SlotIds: [...(loop.data.studio2SlotIds || [])],
-            studio2Plan:JSON.parse(JSON.stringify(loop.data.studio2Plan||null)),
-            planRevision: loop.data.planRevision || 0
-          } : null;
-          // Prevent late AI responses from overwriting edits made while
-          // planning; inputs remain editable and each request is versioned.
-          const planningRevision = JSON.stringify({
-            promptListText: loop.data.promptListText || "",
-            batchRows: loop.data.batchRows || [],
-            studio2SlotIds: loop.data.studio2SlotIds || [],
-            batchSeed: loop.data.batchSeed || "",
-            batchCount: loop.data.batchCount || 6,
-            styleId: skill.data.style1 || "",
-            layoutMode: currentMode
-          });
-
-          const seed = String(loop.data.batchSeed || text?.data?.text || "").trim();
-          if (!seed) {
-            const S = global.HANDRAW_SHARED;
-            if (S?.toast) S.toast("请先填写母题（例如：都市慢生活与手绘手账）");
-            const seedEl = root.querySelector("#batch-seed-input");
-            if (seedEl) seedEl.focus();
-            return;
+          const AI=global.HandrawStudioAIPlan,Quick=global.HandrawQuickSpec;
+          const Series=self.getSeries();
+          if(!AI||!Quick||!Series){
+            global.HANDRAW_SHARED?.toast?.("AI 规划模块尚未就绪");return;
           }
-
-          const reqBody = {
-            seed,
-            count: Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6)),
-            layoutMode: currentMode,
-            // Never leak the previously selected fixed layout into AI recommendations.
-            fixedLayout: currentMode === "fixed" ? (skill.data.layout || "") : "",
-            layoutRequirement: loop.data.batchLayoutReq || "",
-            styleId: skill.data.style1 || ""
+          const seed=String(loop.data.batchSeed||text?.data?.text||"").trim();
+          if(!seed){global.HANDRAW_SHARED?.toast?.("请先填写创作母题");return;}
+          if(btnPlan.disabled)return;
+          const baseSpec=Quick.read(p).spec,plan=Series.read(loop);
+          const baseRevision=baseSpec.revision,planRevision=plan.revision;
+          const currentMode=loop.data.batchLayoutMode||"fixed";
+          const signature=()=>JSON.stringify({parts:{
+            skill:p.skill.data,text:p.text?.data,ctrl:p.ctrl.data},
+            loop:loop.data});
+          const starting=signature(),S=global.HANDRAW_SHARED;
+          const stage=text=>{
+            self.planNotice=text;
+            const status=root.querySelector(".batch-plan-notice");
+            if(status)status.textContent=text;
           };
-
-          btnPlan.disabled = true;
-          const labelSpan = btnPlan.querySelector("span");
-          if (labelSpan) labelSpan.textContent = "AI 规划中…";
-          else btnPlan.textContent = "AI 规划中…";
-
+          btnPlan.disabled=true;
+          stage("正在检索全部已授权画风和图型，并请求 AI…");
+          const span=btnPlan.querySelector("span");
+          if(span)span.textContent="AI 规划中…";
+          else btnPlan.textContent="AI 规划中…";
           try {
-            const resp = await (global.HandrawTaskJourney?.withActivity
-              ? global.HandrawTaskJourney.withActivity("AI 正在规划这套图", () => fetch("/api/studio/batch-plan", {
-                  method: "POST",
-                  credentials: "include",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(reqBody)
-                }))
-              : fetch("/api/studio/batch-plan", {
-                  method: "POST",
-                  credentials: "include",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(reqBody)
-                }));
-            const data = await resp.json();
-            if (!resp.ok || !data.ok) {
-              const requestId = String(data.requestId || resp.headers?.get("X-Request-ID") || "");
-              const incident = /^[a-f0-9]{32}$/i.test(requestId) ? `（问题编号：${requestId}）` : "";
-              throw new Error((data.error || `HTTP ${resp.status}`) + incident);
+            const payload={
+              kind:"series",subject:seed,baseRevision,
+              count:Math.max(1,Math.min(20,Number(loop.data.batchCount)||6)),
+              planRevision,current:{styleId:p.skill.data.style1||"",
+                layoutId:currentMode==="fixed"?p.skill.data.layout||"":"",
+                ratio:p.ctrl.data.ratioSource==="user"?p.ctrl.data.ratio:""},
+              lockedFields:baseSpec.lockedFields||[],
+              currentSlots:plan.slots.map(x=>({slotId:x.slotId}))
+            };
+            const resp=await (global.HandrawTaskJourney?.withActivity
+              ? global.HandrawTaskJourney.withActivity("AI 正在规划这套图",
+                  ()=>fetch("/api/studio/ai-plan",{
+                    method:"POST",credentials:"include",
+                    headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify(payload)}))
+              : fetch("/api/studio/ai-plan",{
+                  method:"POST",credentials:"include",
+                  headers:{"Content-Type":"application/json"},
+                  body:JSON.stringify(payload)}));
+            const data=await resp.json();
+            if(!resp.ok||!data?.ok)throw Object.assign(new Error(data?.error||"规划失败"),
+              {code:data?.code||"ai_unavailable"});
+            if(signature()!==starting)throw Object.assign(
+              new Error("ai_revision_conflict"),{code:"ai_revision_conflict"});
+            stage("AI 已返回，正在校验结构化图卡、资源权限和人工锁定…");
+            const report=AI.review(data,{kind:"series",baseRevision,planRevision,
+              currentSpec:baseSpec,currentPlan:plan,catalog:self.context?.catalog,
+              isUnlocked:self.actions?.isUnlocked});
+            const decision=await AI.confirmDifferences(report,{title:"审阅批量规划差异"});
+            if(!decision.approved){stage("已保留当前方案");return;}
+            if(signature()!==starting)throw Object.assign(
+              new Error("ai_revision_conflict"),{code:"ai_revision_conflict"});
+            const result=AI.apply(report,{parts:p,loop,
+              catalog:self.context?.catalog,isUnlocked:self.actions?.isUnlocked,
+              approvedKeys:decision.keys});
+            if(!result.undo){stage("没有需要应用的合法差异");return;}
+            // When no fixed layout was manually selected, a theme-only plan
+            // must display each recommended layout instead of fake fixed mode.
+            if(currentMode==="fixed"&&!p.skill.data.layout){
+              loop.data.batchLayoutMode="ai";
+              result.undo.after=JSON.stringify({skill:p.skill.data,text:p.text?.data,
+                ctrl:p.ctrl.data,loop:loop.data});
             }
-
-            const latestRevision = JSON.stringify({
-              promptListText: loop.data.promptListText || "",
-              batchRows: loop.data.batchRows || [],
-              studio2SlotIds: loop.data.studio2SlotIds || [],
-              batchSeed: loop.data.batchSeed || "",
-              batchCount: loop.data.batchCount || 6,
-              styleId: skill.data.style1 || "",
-              layoutMode: loop.data.batchLayoutMode || "fixed"
-            });
-            if (latestRevision !== planningRevision) {
-              self.planNotice = "规划返回时方案已被修改，已保留最新草稿；可重新规划";
-              markDirty();
-              return;
-            }
-            const items = Array.isArray(data.items) ? data.items : [];
-            if (priorPlan) {
-              self.lastPlanUndo = priorPlan;
-              // Replan undo is an inline affordance, not a disruptive dialog.
-              self.planNotice = "规划已更新，可点击撤销恢复原列表";
-            }
-            if(self.getSeries()) {
-              self.getSeries().mergeAI(loop,items,currentMode,{
-                baseRevision:loop.data.planRevision,
-                catalog:self.context?.catalog,
-                isUnlocked:self.actions?.isUnlocked
-              });
-            }else if (global.HandrawStudioCore) {
-              const merged=global.HandrawStudioCore.mergeLegacyPlanRows(loop,items,currentMode);
-              loop.data.promptListText=merged.promptListText;
-              loop.data.batchRows=merged.batchRows;
-              loop.data.studio2SlotIds=merged.studio2SlotIds;
-              loop.data.planRevision=merged.planRevision;
-            } else if (currentMode === "fixed") {
-              loop.data.promptListText = items.map(it => it.subject).join("\n");
-            } else {
-              loop.data.batchRows = items.map(it => ({ theme: it.subject, layout: it.layout || "" }));
-              loop.data.promptListText = items.map(it => it.subject).join("\n");
-            }
-
-            if (data.source === "template") {
-              self.planNotice = priorPlan ? "模板规划已更新，可撤销" : "未使用 AI 规划，已按模板生成";
-            } else if (!priorPlan) {
-              self.planNotice = "";
-            }
-
-            if (data.defaultLayoutUsed && items.length > 0 && items[0].layout) {
-              const defLayout = items[0].layout;
-              if (skill?.data) {
-                skill.data.layout = defLayout;
-              }
-              const defaultMsg = `未选图型，已使用默认图型 ${defLayout}`;
-              self.planNotice = self.planNotice ? `${self.planNotice}（${defaultMsg}）` : defaultMsg;
-            }
-
+            self.lastPlanUndo={studio2AIUndo:result.undo};
+            self.planDetails=data.creationSpecPatch.reasons;
+            stage("AI 已规划 "+data.planPatch.slots.length+
+              " 张 · 画风："+data.creationSpecPatch.reasons.style+
+              " · 图型："+data.creationSpecPatch.reasons.layout+
+              " · 可撤销，无扣费");
             markDirty();
-          } catch (err) {
-            const S = global.HANDRAW_SHARED;
-            if (S?.toast) S.toast(`规划失败：${err.message || err}`);
-          } finally {
-            btnPlan.disabled = false;
-            const labelSpan = btnPlan.querySelector("span");
-            if (labelSpan) labelSpan.textContent = "AI 规划这套图";
-            else btnPlan.textContent = "AI 规划这套图";
+          }catch(err){
+            stage("AI 规划失败："+AI.message(err.code||err.message));
+            S?.toast?.(self.planNotice);
+          }finally{
+            btnPlan.disabled=false;
+            if(span)span.textContent="AI 规划这套图";
+            else btnPlan.textContent="AI 规划这套图";
           }
+
         };
       }
 
