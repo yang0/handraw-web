@@ -55,6 +55,19 @@
     return getS().App || window.App || {};
   }
 
+
+  // Status and errors remain in-app and never block the JS event loop.
+  function notice(message, type = "info") {
+    const shared = getS();
+    if (typeof shared.toast === "function") return shared.toast(message, type);
+    const node = document.createElement("div");
+    node.setAttribute("role", "status");
+    node.style.cssText = "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:999999;max-width:90vw;padding:12px 18px;border-radius:9px;background:#28231f;color:white;";
+    node.textContent = String(message);
+    document.body.appendChild(node);
+    setTimeout(() => node.remove(), 4200);
+  }
+
   // State
   let unreadState = { notifications: 0, direct: 0, broadcasts: 0, total: 0 };
   let pollUnreadTimer = null;
@@ -496,10 +509,11 @@
   }
 
   // Abuse Report Modal for DM Message
-  function openReportModal(messageId) {
-    const reason = window.prompt("请输入举报原因（例如：垃圾广告、骚扰辱骂、诈骗违规）：", "违规私信内容");
+  async function openReportModal(messageId) {
+    const reason = await getS().promptAction?.("请输入举报原因（例如：垃圾广告、骚扰辱骂、诈骗违规）：", { title: "举报私信", defaultValue: "违规私信内容", required: true });
     if (reason === null) return;
-    const detail = window.prompt("可补充详细说明（选填）：", "");
+    const detail = await getS().promptAction?.("可补充详细说明（选填）：", { title: "补充举报说明", multiline: true });
+    if (detail == null) return;
     apiJson("/api/reports", {
       method: "POST",
       body: {
@@ -509,9 +523,9 @@
         detail: (detail || "").trim(),
       }
     }).then(() => {
-      alert("举报已提交，平台将尽快审核处理。");
+      notice("举报已提交，平台将尽快审核处理。");
     }).catch(err => {
-      alert("举报提交失败：" + (err.message || "请稍后重试"));
+      notice("举报提交失败：" + (err.message || "请稍后重试"));
     });
   }
 
@@ -864,12 +878,12 @@
         area.querySelectorAll(".btn-bc-withdraw").forEach(btn => {
           btn.onclick = async () => {
             const bcId = btn.dataset.bcId;
-            if (!confirm("确定要撤回该公告吗？撤回后所有用户正文将被隐藏，未读数将被移除。")) return;
+            if (!await getS().confirmAction?.("确定要撤回该公告吗？撤回后所有用户正文将被隐藏，未读数将被移除。", { danger: true, confirmText: "撤回公告" })) return;
             try {
               await apiJson(`/api/admin/message-broadcasts/${bcId}/withdraw`, { method: "POST" });
               openBroadcastConversation(container);
             } catch (err) {
-              alert("撤回失败：" + (err.message || "请稍后重试"));
+              notice("撤回失败：" + (err.message || "请稍后重试"));
             }
           };
         });
@@ -935,15 +949,15 @@
         const body = modalBackdrop.querySelector("#hw-bc-body-input").value.trim();
 
         if (title.length < 4 || title.length > 80) {
-          alert("公告标题长度须在 4–80 个字之间");
+          notice("公告标题长度须在 4–80 个字之间");
           return;
         }
         if (body.length < 1 || body.length > 5000) {
-          alert("公告正文长度须在 1–5000 个字之间");
+          notice("公告正文长度须在 1–5000 个字之间");
           return;
         }
         if (/<[a-zA-Z\/][^>]*>/.test(body)) {
-          alert("公告正文暂不支持 HTML 内容");
+          notice("公告正文暂不支持 HTML 内容");
           return;
         }
 
@@ -993,13 +1007,13 @@
             body: { title, body, requestId: reqId }
           });
           if (res && res.ok) {
-            alert("公告发布成功！");
+            notice("公告发布成功！");
             modalBackdrop.remove();
             openBroadcastConversation(container);
             fetchUnreadCounts();
           }
         } catch (err) {
-          alert("发布失败：" + (err.message || "请稍后再试"));
+          notice("发布失败：" + (err.message || "请稍后再试"));
           sendBtn.disabled = false;
           sendBtn.textContent = "向全部现有用户发送";
         }
@@ -1068,7 +1082,7 @@
       // Block/Unblock button
       chatPane.querySelector("#hw-dm-block-btn").onclick = async () => {
         const isBlocked = conv.isBlocked;
-        if (!isBlocked && !confirm(`确定要拉黑用户 @${conv.peer.username} 吗？拉黑后双方无法互发私信。`)) return;
+        if (!isBlocked && !await getS().confirmAction?.(`确定要拉黑用户 @${conv.peer.username} 吗？拉黑后双方无法互发私信。`, { danger: true, confirmText: "确认拉黑" })) return;
         try {
           if (isBlocked) {
             await apiJson(`/api/dm/blocks/${conv.peer.id}`, { method: "DELETE" });
@@ -1077,7 +1091,7 @@
           }
           openConversation(container, convId);
         } catch (err) {
-          alert("操作失败：" + (err.message || "请稍后重试"));
+          notice("操作失败：" + (err.message || "请稍后重试"));
         }
       };
 
@@ -1121,15 +1135,15 @@
           const text = input.value.trim();
           const nonWsLen = text.replace(/\s+/g, "").length;
           if (nonWsLen < 1) {
-            alert("请输入私信内容（不能全为空白字符）");
+            notice("请输入私信内容（不能全为空白字符）");
             return;
           }
           if (nonWsLen > 2000) {
-            alert("私信内容过长（最多 2000 个非空白字符）");
+            notice("私信内容过长（最多 2000 个非空白字符）");
             return;
           }
           if (/<[a-zA-Z\/][^>]*>/.test(text)) {
-            alert("首版私信暂不支持 HTML 内容");
+            notice("首版私信暂不支持 HTML 内容");
             return;
           }
 
@@ -1157,7 +1171,7 @@
               fetchUnreadCounts();
             }
           } catch (err) {
-            alert("发送失败：" + (err.message || "请稍后再试"));
+            notice("发送失败：" + (err.message || "请稍后再试"));
           } finally {
             isSending = false;
             sendBtn.disabled = false;
@@ -1221,7 +1235,7 @@
       const text = input.value.trim();
       const nonWsLen = text.replace(/\s+/g, "").length;
       if (nonWsLen < 1 || nonWsLen > 2000) {
-        alert("请输入 1–2000 个非空白字符的私信内容");
+        notice("请输入 1–2000 个非空白字符的私信内容");
         return;
       }
       sendBtn.disabled = true;
@@ -1239,7 +1253,7 @@
           await loadConversationList(container, targetUsername);
         }
       } catch (err) {
-        alert("发送失败：" + (err.message || "请稍后重试"));
+        notice("发送失败：" + (err.message || "请稍后重试"));
         sendBtn.disabled = false;
         sendBtn.textContent = "发送";
       }
@@ -1255,12 +1269,12 @@
   }
 
   // Open New Conversation Dialog
-  function openNewConversationModal() {
-    const username = window.prompt("请输入要发私信的用户账号 ID / 用户名（例如：momo_design）：");
+  async function openNewConversationModal() {
+    const username = await getS().promptAction?.("请输入要发私信的用户账号 ID / 用户名（例如：momo_design）：", { title: "新建私信", required: true });
     if (!username || !username.trim()) return;
     const clean = username.trim();
     if (getApp()?.state?.user && clean.toLowerCase() === getApp().state.user.username.toLowerCase()) {
-      alert("不能给自己发送私信");
+      notice("不能给自己发送私信");
       return;
     }
     const container = document.querySelector("#hw-dm-container");
