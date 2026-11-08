@@ -1223,6 +1223,16 @@
         }
       }
 
+      // Multiple candidates share one PLAN row but have independent
+      // OUTPUT indices. Recompose the 6 plan rows from their ordered outputs
+      // rather than treating output #7 as nonexistent plan row #7.
+      if(this.getSeries() && this.getSeries().candidateCount(this.getParts()?.loop)>1){
+        if(itemResult?.imageUrl && updatedIndex!=null)
+          this.appendResultCard(itemResult,updatedIndex);
+        this.render();
+        return;
+      }
+
       // 3. Update specific completed or failed row
       if (updatedIndex !== null && updatedIndex !== undefined) {
         const row = host.querySelector(`tr[data-batch-row="${updatedIndex}"]`);
