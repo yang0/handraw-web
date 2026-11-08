@@ -144,7 +144,13 @@
 
     return {
       stage, flush, copyConflict,
-      list: () => request("GET", "/api/studio/projects"),
+      list: ({query = "", cursor = "", limit = 40} = {}) => {
+        const params = new URLSearchParams();
+        if (query) params.set("q", String(query));
+        if (cursor) params.set("cursor", String(cursor));
+        params.set("limit", String(limit));
+        return request("GET", "/api/studio/projects?" + params.toString());
+      },
       get: id => request("GET", "/api/studio/projects/" + encodeURIComponent(id)),
       newId: idFactory
     };
