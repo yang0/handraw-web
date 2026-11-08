@@ -43,6 +43,7 @@
   let cacheScopeEpoch = 0;
   let _workflowAutoSaveTimer = null;
   let _projectAutoSaveTimer = null;
+  let _projectSearchTimer = null;
   const WORKFLOW_AUTO_SAVE_DELAY_MS = 1200;
   const PROJECT_AUTO_SAVE_DELAY_MS = 1600;
   const ProjectClient = window.HandrawStudioProjectSync?.createClient() || null;
@@ -160,6 +161,10 @@
     cloudProjects: [],
     closedProjectDrafts: [],
     projectCenterLoading: false,
+    projectCenterLoadingMore: false,
+    projectHasMore: false,
+    projectPageCursor: "",
+    projectListRequestVersion: 0,
     projectCenterError: "",
     projectOpeningId: "",
     activePlanNodeId: null,
@@ -205,6 +210,10 @@
       clearTimeout(_projectAutoSaveTimer);
       _projectAutoSaveTimer = null;
     }
+    if (_projectSearchTimer) {
+      clearTimeout(_projectSearchTimer);
+      _projectSearchTimer = null;
+    }
     _articlesSyncVersion = 0;
     _articleCloudBases.clear();
     _articlesCloudConflict = false;
@@ -239,6 +248,10 @@
     CS.closedProjectDrafts = Array.isArray(locallyClosed) ? locallyClosed : [];
     CS.cloudProjects = [];
     CS.projectCenterLoading = false;
+    CS.projectCenterLoadingMore = false;
+    CS.projectHasMore = false;
+    CS.projectPageCursor = "";
+    CS.projectListRequestVersion = 0;
     CS.projectCenterError = "";
     CS.projectQuery = "";
     CS.projectOpeningId = "";
@@ -1684,28 +1697,68 @@
   const ProjectCenter = window.HandrawStudioProjectCenter || null;
 
   async function refreshProjectCenter() {
+    const version = ++CS.projectListRequestVersion;
     if (!ProjectClient || !App.state?.loggedIn || !App.state?.serverBacked) {
       CS.cloudProjects = [];
       CS.projectCenterError = "";
       CS.projectCenterLoading = false;
+      CS.projectCenterLoadingMore = false;
+      CS.projectHasMore = false;
+      CS.projectPageCursor = "";
       renderProjectCenterStage();
       return;
     }
     const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const query = CS.projectQuery;
     CS.projectCenterLoading = true;
+    CS.projectCenterLoadingMore = false;
     CS.projectCenterError = "";
+    CS.projectHasMore = false;
+    CS.projectPageCursor = "";
     renderProjectCenterStage();
     try {
-      const result = await ProjectClient.list();
-      if (isStaleScope(epoch, scope)) return;
+      const result = await ProjectClient.list({query,limit:40});
+      if (isStaleScope(epoch,scope) || version !== CS.projectListRequestVersion) return;
       CS.cloudProjects = Array.isArray(result.projects) ? result.projects : [];
+      CS.projectHasMore = Boolean(result.hasMore && result.nextCursor);
+      CS.projectPageCursor = String(result.nextCursor || "");
       CS.projectCenterError = "";
     } catch (_) {
-      if (isStaleScope(epoch, scope)) return;
+      if (isStaleScope(epoch,scope) || version !== CS.projectListRequestVersion) return;
       CS.projectCenterError = "请检查网络或重新登录后再试，本机草稿不会丢失。";
     } finally {
-      if (!isStaleScope(epoch, scope)) {
+      if (!isStaleScope(epoch,scope) && version === CS.projectListRequestVersion) {
         CS.projectCenterLoading = false;
+        renderProjectCenterStage();
+      }
+    }
+  }
+
+  async function loadMoreProjects() {
+    if (!ProjectClient || CS.projectCenterLoading || CS.projectCenterLoadingMore ||
+        !CS.projectHasMore || !CS.projectPageCursor) return;
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const version = CS.projectListRequestVersion;
+    const cursor = CS.projectPageCursor, query = CS.projectQuery;
+    CS.projectCenterLoadingMore = true;
+    renderProjectCenterStage();
+    try {
+      const result = await ProjectClient.list({query,cursor,limit:40});
+      if (isStaleScope(epoch,scope) || version !== CS.projectListRequestVersion) return;
+      const seen = new Set(CS.cloudProjects.map(x => x.id));
+      for (const p of result.projects || []) {
+        if (p && p.id && !seen.has(p.id)) {
+          CS.cloudProjects.push(p);
+          seen.add(p.id);
+        }
+      }
+      CS.projectHasMore = Boolean(result.hasMore && result.nextCursor);
+      CS.projectPageCursor = String(result.nextCursor || "");
+    } catch (_) {
+      if (!isStaleScope(epoch,scope)) toast("更多项目加载失败，请检查网络后重试");
+    } finally {
+      if (!isStaleScope(epoch,scope) && version === CS.projectListRequestVersion) {
+        CS.projectCenterLoadingMore = false;
         renderProjectCenterStage();
       }
     }
@@ -1907,13 +1960,23 @@
     DOM.projectsStage.innerHTML = ProjectCenter.render({
       projects: CS.cloudProjects, tabs: CS.tabs.concat(CS.closedProjectDrafts || []), query: CS.projectQuery,
       loading: CS.projectCenterLoading, error: CS.projectCenterError,
-      loggedIn: Boolean(App.state?.serverBacked && App.state?.loggedIn)
+      loggedIn: Boolean(App.state?.serverBacked && App.state?.loggedIn),
+      hasMore: CS.projectHasMore, loadingMore: CS.projectCenterLoadingMore
     });
     const queryInput = DOM.projectsStage.querySelector("#pc-project-search");
     if (queryInput) {
       queryInput.oninput = () => {
         CS.projectQuery = queryInput.value;
+        CS.projectListRequestVersion += 1; // Invalidate responses from old search.
+        if (_projectSearchTimer) clearTimeout(_projectSearchTimer);
         renderProjectCenterStage();
+        const scope = activeCacheScope, epoch = cacheScopeEpoch;
+        _projectSearchTimer = setTimeout(() => {
+          _projectSearchTimer = null;
+          if (!isStaleScope(epoch,scope) && CS.stageView === "projects") {
+            void refreshProjectCenter();
+          }
+        }, 300);
       };
       if (focus) {
         queryInput.focus();
@@ -1922,6 +1985,9 @@
     }
     DOM.projectsStage.querySelectorAll("[data-pc-refresh]").forEach(btn => {
       btn.onclick = () => { void refreshProjectCenter(); };
+    });
+    DOM.projectsStage.querySelectorAll("[data-pc-more]").forEach(btn => {
+      btn.onclick = () => { void loadMoreProjects(); };
     });
     DOM.projectsStage.querySelectorAll("[data-pc-new]").forEach(btn => {
       btn.onclick = () => createProjectFromCenter(btn.getAttribute("data-pc-new"));
