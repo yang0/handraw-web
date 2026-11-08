@@ -1304,7 +1304,9 @@
       closed: true
     };
     const previous = Array.isArray(CS.closedProjectDrafts) ? CS.closedProjectDrafts : [];
-    const list = [backup, ...previous.filter(x => x && x.id !== backup.id)].slice(0, 20);
+    // Never silently evict an older unsynced draft to make room. The storage
+    // write either succeeds for every archived draft or refuses the close.
+    const list = [backup, ...previous.filter(x => x && x.id !== backup.id)];
     // Closing a tab is destructive; unlike generic best-effort cache writes,
     // only close after its recovery copy has definitely reached storage.
     try {
