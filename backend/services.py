@@ -1802,6 +1802,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     conn = db.get_conn()
     settings = get_site_settings(conn)
     asset_counts, total_works_count, total_cheers_count, public_creators = compute_public_asset_counts_and_creators(conn)
+    from .ranking import ASSET_POPULAR_WEIGHTS
 
     unlocked_set: set[str] = set()
     collections: dict[str, list[str]] = {"styles": [], "layouts": [], "works": [], "topics": [], "generations": []}
@@ -2213,6 +2214,34 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         ).fetchall()
     }
 
+    # #25: only authoritative interaction/tip_request rows, never the mixed
+    # catalog_assets.cheers cache (+3 per tip on community assets). Official
+    # and community resource codes follow one canonical normalization path.
+    asset_live_cheers = {
+        r["code"]: int(r["cnt"])
+        for r in conn.execute(
+            f"SELECT UPPER(target_id) AS code, COUNT(*) AS cnt FROM interactions "
+            f"WHERE target_type = 'asset' AND stamp_label = '' AND {live_asset_filter} "
+            "GROUP BY UPPER(target_id)", live_asset_ids,
+        ).fetchall()
+    }
+    asset_live_stamps = {
+        r["code"]: int(r["cnt"])
+        for r in conn.execute(
+            f"SELECT UPPER(target_id) AS code, COUNT(*) AS cnt FROM interactions "
+            f"WHERE target_type = 'asset' AND stamp_label <> '' AND {live_asset_filter} "
+            "GROUP BY UPPER(target_id)", live_asset_ids,
+        ).fetchall()
+    }
+    asset_live_tips = {
+        r["code"]: int(r["cnt"])
+        for r in conn.execute(
+            f"SELECT UPPER(target_id) AS code, COUNT(*) AS cnt FROM tip_requests "
+            f"WHERE target_type = 'asset' AND {live_asset_filter} "
+            "GROUP BY UPPER(target_id)", live_asset_ids,
+        ).fetchall()
+    }
+
     # Active Forum Board Moderators (publicly displayed on boards & author badges)
     if is_demo_mode():
         moderator_seed_clause, moderator_seed_params = "1 = 1", ()
@@ -2398,6 +2427,10 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         "assetSeedMetrics": asset_seed_metrics,
         "assetLiveLikes": asset_live_likes,
         "assetLiveFavorites": asset_live_favorites,
+        "assetLiveCheers": asset_live_cheers,
+        "assetLiveStamps": asset_live_stamps,
+        "assetLiveTips": asset_live_tips,
+        "assetRankingWeights": ASSET_POPULAR_WEIGHTS.copy(),
         "ledger": ledger_list,
         "siteSettings": {
             "announcement": settings.get("announcement", {}),
