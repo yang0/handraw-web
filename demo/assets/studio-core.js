@@ -330,7 +330,10 @@
         : (rows[index] || {});
       const lockedFields = Array.isArray(prior.lockedFields) ? prior.lockedFields : [];
       const proposedTheme = text(item?.subject || item?.theme);
-      const stableParentId = text(ld.planId || ld.id || loop?.id || "legacy-import");
+      const stableParentId = text(ld.planId || ld.id || loop?.id);
+      if (!stableParentId && !prior.slotId && !suggestedId && !ids[index]) {
+        throw new Error("missing_plan_identity");
+      }
       const slotId = prior.slotId || suggestedId || ids[index]
         || ("slot-" + stableHash([stableParentId, index, proposedTheme].join("|")));
       return {
