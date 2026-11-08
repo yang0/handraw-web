@@ -79,7 +79,10 @@ def fingerprint(dsn: str) -> dict[str, Any]:
     import psycopg
     hashes: dict[str, str] = {}
     counts: dict[str, int] = {}
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as pg:
+    # Named/server-side cursors require a transaction: keep one consistent
+    # read-only MVCC snapshot throughout all key-table fingerprints.
+    with psycopg.connect(dsn, autocommit=False, connect_timeout=5) as pg:
+        pg.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         for table in FINGERPRINT_TABLES:
             with pg.cursor() as cur:
                 cur.execute("SELECT to_regclass(%s)", ("public." + table,))
