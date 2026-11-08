@@ -14,8 +14,8 @@ Verifies:
    - Request without requestId: generated client_task_id is recorded in DB before call,
      retrievable via /api/studio/tasks.
 3. GenerationReconciler:
-   - Gateway returns empty items and created_at > 30 mins: refunds once with "网关未收到任务，已退还".
-     Running twice does not double-refund.
+   - Gateway returns empty items even after 30 mins: no automatic refund without provider proof.
+     Running twice does not mutate the wallet.
    - Gateway returns empty items and created_at < 30 mins: does not refund.
    - Gateway query raises exception: does not refund.
 """
@@ -595,8 +595,8 @@ class ReconcilerUnreceivedTaskRefundTests(unittest.TestCase):
         self.db.close()
         self.temp.cleanup()
 
-    def test_reconciler_refunds_unreceived_task_older_than_30_minutes_once(self):
-        """Gateway returns empty items & task created > 30 mins ago -> refund once, running twice does not duplicate."""
+    def test_reconciler_holds_unconfirmed_task_older_than_30_minutes(self):
+        """Empty gateway lookup after 30 minutes cannot authorize a refund."""
         conn = self.db.get_conn()
         today = local_today_str()
         # Seed user wallet: 1 free quota used today
@@ -622,19 +622,19 @@ class ReconcilerUnreceivedTaskRefundTests(unittest.TestCase):
             )
 
         reconciler = GenerationReconciler(self.db)
-        # Pass 1: gateway returns empty items -> should refund
+        # Pass 1: an empty lookup is unconfirmed, not a definitive failure.
         with patch("backend.server.gateway_request", return_value={"items": []}):
             handled_first = reconciler.reconcile_once()
 
-        self.assertEqual(handled_first, 1)
+        self.assertEqual(handled_first, 0)
 
         row = conn.execute("SELECT status, error_msg FROM studio_generations WHERE id = 'gen_old_35m'").fetchone()
-        self.assertEqual(row["status"], "refunded")
-        self.assertEqual(row["error_msg"], "网关未收到任务，已退还")
+        self.assertEqual(row["status"], "queued")
+        self.assertNotEqual(row["error_msg"], "网关未收到任务，已退还")
 
-        # Quota should be released back to 0 used
+        # Pending reservation stays held until authoritative confirmation.
         wallet = conn.execute("SELECT free_quota_used, balance FROM wallets WHERE user_id = ?", (self.uid,)).fetchone()
-        self.assertEqual(wallet["free_quota_used"], 0)
+        self.assertEqual(wallet["free_quota_used"], 1)
 
         # Pass 2: running again must be idempotent and not process or refund again
         with patch("backend.server.gateway_request", return_value={"items": []}):
@@ -642,7 +642,7 @@ class ReconcilerUnreceivedTaskRefundTests(unittest.TestCase):
 
         self.assertEqual(handled_second, 0)
         wallet2 = conn.execute("SELECT free_quota_used, balance FROM wallets WHERE user_id = ?", (self.uid,)).fetchone()
-        self.assertEqual(wallet2["free_quota_used"], 0)
+        self.assertEqual(wallet2["free_quota_used"], 1)
 
     def test_reconciler_does_not_refund_task_under_30_minutes(self):
         """Gateway returns empty items & task created < 30 mins ago -> keep queued, do NOT refund."""
