@@ -165,6 +165,65 @@ def main():
                     page.locator("dialog.hw-confirm-action-dialog button").last.click()
                     page.wait_for_function(
                         "()=>window.qaLegacyConfirmOutcome===true",timeout=8000)
+                    # Input dialogs: invalid input cannot submit; cancel and
+                    # Escape must resolve null and restore keyboard focus.
+                    def open_prompt():
+                        page.evaluate("""() => {
+                            let trigger=document.getElementById('qa87-input-trigger');
+                            if(!trigger){
+                                trigger=document.createElement('button');
+                                trigger.id='qa87-input-trigger';
+                                trigger.textContent='审核理由';
+                                document.body.appendChild(trigger);
+                            }
+                            trigger.focus();
+                            window.qa87PromptResult='pending';
+                            window.HANDRAW_SHARED.promptAction('请填写审核理由', {
+                                title:'审核理由',multiline:true,minLength:5,required:true
+                            }).then(v=>window.qa87PromptResult=v);
+                        }""")
+                        page.locator("dialog.hw-prompt-action-dialog").wait_for(
+                            state="visible",timeout=8000)
+                    open_prompt()
+                    page.locator("dialog.hw-prompt-action-dialog textarea").fill("abc")
+                    page.locator("dialog.hw-prompt-action-dialog button").last.click()
+                    assert page.locator("dialog.hw-prompt-action-dialog").is_visible()
+                    assert "至少填写" in page.locator(
+                        "dialog.hw-prompt-action-dialog [role=alert]").inner_text()
+                    page.locator("dialog.hw-prompt-action-dialog button").first.click()
+                    page.wait_for_function(
+                        "()=>window.qa87PromptResult===null",timeout=8000)
+                    assert page.evaluate(
+                        "()=>document.activeElement?.id==='qa87-input-trigger'")
+                    open_prompt()
+                    page.keyboard.press("Escape")
+                    page.wait_for_function(
+                        "()=>window.qa87PromptResult===null",timeout=8000)
+                    open_prompt()
+                    page.locator("dialog.hw-prompt-action-dialog textarea").fill("至少五字的审核理由")
+                    page.locator("dialog.hw-prompt-action-dialog button").last.click()
+                    page.wait_for_function(
+                        "()=>window.qa87PromptResult==='至少五字的审核理由'",timeout=8000)
+
+                    # A real async calling site must never execute its mutation
+                    # until the explicit positive click, including after Escape.
+                    page.evaluate("""() => {
+                        window.qa87Mutations=0;
+                        window.qa87DangerAction=async()=> {
+                            if(await window.HANDRAW_SHARED.confirmAction(
+                              '不可撤销的敏感操作',{danger:true}))
+                                window.qa87Mutations++;
+                        };
+                        window.qa87DangerAction();
+                    }""")
+                    page.locator("dialog.hw-confirm-action-dialog").wait_for(
+                        state="visible",timeout=8000)
+                    page.keyboard.press("Escape")
+                    page.wait_for_function("()=>!document.querySelector('dialog.hw-confirm-action-dialog')")
+                    assert page.evaluate("()=>window.qa87Mutations") == 0
+                    page.evaluate("()=>window.qa87DangerAction()")
+                    page.locator("dialog.hw-confirm-action-dialog button").last.click()
+                    page.wait_for_function("()=>window.qa87Mutations===1",timeout=8000)
                     assert not native_dialogs,native_dialogs
                     assert page.locator("dialog.hw-confirm-action-dialog").count()==0
                     assert not failures,failures
