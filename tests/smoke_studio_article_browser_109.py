@@ -199,6 +199,33 @@ def main():
                 assert plan_cloud["article"]["markdown"]==plan["markdown"]
                 print("109 PlanSlot anchors and article fidelity: PASS",flush=True)
 
+                # A slow AI proposal must not lock the article or clobber a
+                # newer document. Hold a real browser fetch and then respond
+                # using the old captured revision after a concurrent edit.
+                pending_proposals=[]
+                page.unroute("**/api/studio/ai-plan",mock_ai_plan)
+                page.route("**/api/studio/ai-plan",
+                    lambda route: pending_proposals.append(route))
+                page.locator("#editor-btn-plan").click()
+                for _ in range(60):
+                    if pending_proposals:break
+                    page.wait_for_timeout(100)
+                assert pending_proposals,"Expected pending AI planning HTTP request"
+                editing=page.locator(".ic-art-seg-ta").first
+                assert not editing.evaluate("(el)=>el.readOnly"),"Planning must not lock body"
+                latest=editing.input_value()+"\\n\\n异步规划期间新增正文。"
+                editing.fill(latest)
+                editing.evaluate("(el)=>el.blur()")
+                mock_ai_plan(pending_proposals.pop())
+                page.locator("#article109-stale-keep").wait_for(timeout=20000)
+                page.locator("#article109-stale-keep").click()
+                assert "异步规划期间新增正文" in article_state(page)["markdown"]
+                assert [c["anchorId"] for c in article_state(page)["cards"]]==anchors
+                page.unroute("**/api/studio/ai-plan")
+                page.route("**/api/studio/ai-plan",mock_ai_plan)
+                wait_synced(page)
+                print("109 stale AI response rejected without locking editor: PASS",flush=True)
+
                 # Offline editing writes frozen private CAS outbox and reload
                 # replays the same project, not a duplicate public Work.
                 ctx.set_offline(True)
@@ -253,6 +280,8 @@ def main():
                 # Simulate one successful RunItem and one failed slot with an
                 # actual owner MediaAsset fixture, then check preview + ZIP.
                 # No provider request is sent and completed slots are retained.
+                # Shared article-generation guard selects only failed/pending
+                # slots for a retry; completed cover must never be resent.
                 page.evaluate("""media => {
                   const d=window.CS.articleEditorDraft;
                   const art=window.CS.myArticles.find(a=>a.id===d.id);
@@ -263,6 +292,14 @@ def main():
                   d.cards=cards;
                   window.renderFullPreviewStage();
                 }""",media_id)
+                pending_ids=page.evaluate("""()=>{
+                  const d=window.CS.articleEditorDraft;
+                  const a=window.CS.myArticles.find(x=>x.id===d.id);
+                  return window.HandrawArticleGenerationGuard.pendingCards(a.cards)
+                    .map(c=>c.id);
+                }""")
+                visible_cards=article_state(page)["cards"]
+                assert pending_ids==[visible_cards[1]["id"]] if len(visible_cards)>1 else not pending_ids
                 page.locator("#editor-switch-preview").click()
                 page.locator(".ic-article-preview-sheet").wait_for(timeout=15000)
                 assert page.locator(".ic-article-preview-sheet img").count()>=1
