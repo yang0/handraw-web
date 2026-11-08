@@ -67,14 +67,16 @@
       secondaryStyle:normalizeRef(spec.secondaryStyle,"style"),
       fusionEnabled:spec.fusionEnabled === true,
       layout:normalizeRef(spec.layout,"layout"),
-      colors:Array.isArray(spec.colors)?spec.colors.map(r=>normalizeRef(r,"color")):[],
-      tones:Array.isArray(spec.tones)?spec.tones.map(r=>normalizeRef(r,"tone")):[],
-      moods:Array.isArray(spec.moods)?clone(spec.moods):[],
+      colors:spec.colors===undefined?[]:
+        Array.isArray(spec.colors)?spec.colors.map(r=>normalizeRef(r,"color")):clone(spec.colors),
+      tones:spec.tones===undefined?[]:
+        Array.isArray(spec.tones)?spec.tones.map(r=>normalizeRef(r,"tone")):clone(spec.tones),
+      moods:spec.moods===undefined?[]:clone(spec.moods),
       customMood:spec.customMood ?? "",
       whitespace:spec.whitespace ?? "",ratio,ratioSource,
-      referenceMedia:Array.isArray(spec.referenceMedia)?clone(spec.referenceMedia):[],
-      layoutParams:data(spec.layoutParams)?clone(spec.layoutParams):{},
-      lockedFields:Array.isArray(spec.lockedFields)?clone(spec.lockedFields):[]
+      referenceMedia:spec.referenceMedia===undefined?[]:clone(spec.referenceMedia),
+      layoutParams:spec.layoutParams===undefined?{}:clone(spec.layoutParams),
+      lockedFields:spec.lockedFields===undefined?[]:clone(spec.lockedFields)
     };
   }
 
@@ -101,6 +103,8 @@
     if (p.kind === "article") {
       if (!article || !Array.isArray(article.anchors)) fail("article_document_required","/article");
       const anchors=new Set(article.anchors.map(a=>a?.anchorId));
+      if (anchors.size !== article.anchors.length || anchors.has(undefined))
+        fail("duplicate_article_anchor","/article/anchors");
       for (const slot of p.slots) {
         if (!slot.anchorId || !anchors.has(slot.anchorId))
           fail("invalid_article_anchor",slot.slotId);
@@ -164,6 +168,12 @@
         add("/creationSpec/ratioSource","invalid_ratio_source");
       if (!Core.validateRatio(spec.ratio).ok) add("/creationSpec/ratio","invalid_ratio");
       if (!Array.isArray(spec.referenceMedia)) add("/creationSpec/referenceMedia","invalid_media");
+      if (!Array.isArray(spec.colors)||!Array.isArray(spec.tones))
+        add("/creationSpec","invalid_resource_list");
+      if (!Array.isArray(spec.moods)) add("/creationSpec/moods","invalid_moods");
+      if (!Array.isArray(spec.lockedFields)||new Set(spec.lockedFields).size!==spec.lockedFields.length)
+        add("/creationSpec/lockedFields","invalid_locks");
+      if (!data(spec.layoutParams)) add("/creationSpec/layoutParams","invalid_layout_params");
       if (spec.style!=null && !data(spec.style)) add("/creationSpec/style","invalid_resource");
       for (const [field,type] of Object.entries(STYLE_FIELDS)) {
         const many=field==="colors" || field==="tones";
@@ -173,7 +183,7 @@
             add("/creationSpec/"+field,"invalid_resource_ref");
         }
       }
-      for (const [idx,m] of (spec.referenceMedia||[]).entries()) {
+      for (const [idx,m] of (Array.isArray(spec.referenceMedia)?spec.referenceMedia:[]).entries()) {
         if (!data(m)||typeof m.mediaId!=="string"||!m.mediaId ||
             !MEDIA_ROLES.has(m.role)) add("/creationSpec/referenceMedia/"+idx,"invalid_media_ref");
       }
@@ -290,9 +300,12 @@
 
   function validateForExecution(spec,{catalog,verifyMediaOwner}={}) {
     const errors=[];
+    errors.push(...Core.validateSpec(spec,{catalog}).errors);
     if (!catalog) errors.push({field:"catalog",code:"resource_authorization_required"});
-    else errors.push(...Core.validateSpec(spec,{catalog}).errors);
-    for (const [index,ref] of (spec?.referenceMedia||[]).entries()) {
+    if (spec?.referenceMedia != null && !Array.isArray(spec.referenceMedia)) {
+      errors.push({field:"referenceMedia",code:"invalid_project_media"});
+    }
+    for (const [index,ref] of (Array.isArray(spec?.referenceMedia)?spec.referenceMedia:[]).entries()) {
       if (!data(ref)||typeof ref.mediaId!=="string"||!ref.mediaId||
           !MEDIA_ROLES.has(ref.role)) {
         errors.push({field:"referenceMedia",index,code:"invalid_project_media"});
