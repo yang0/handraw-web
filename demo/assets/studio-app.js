@@ -10538,10 +10538,10 @@
   }
 
   function bindNodeInteriorActions(root = DOM.nodesLayer) {
-    if (!DOM.nodesLayer) return;
+    if (!root) return;
 
     /* --- 1. Skill Params Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-sp-fusion]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-fusion]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-fusion"));
@@ -10553,7 +10553,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-pick]").forEach((el) => {
+    root.querySelectorAll("[data-sp-pick]").forEach((el) => {
       el.onclick = (e) => {
         if (e.target.closest("[data-sp-clear-field]")) return;
         e.stopPropagation();
@@ -10563,7 +10563,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-clear-field]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-clear-field]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-clear-field"));
@@ -10576,7 +10576,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-rm-arr]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-rm-arr]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-rm-arr"));
@@ -10590,7 +10590,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-ws]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-ws]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-ws"));
@@ -10602,7 +10602,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-aud]").forEach((inp) => {
+    root.querySelectorAll("[data-sp-aud]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-sp-aud"));
         if (n) {
@@ -10628,7 +10628,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-scene]").forEach((inp) => {
+    root.querySelectorAll("[data-sp-scene]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-sp-scene"));
         if (n) {
@@ -10654,7 +10654,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-sc021]").forEach((sel) => {
+    root.querySelectorAll("[data-sp-sc021]").forEach((sel) => {
       sel.onchange = () => {
         const n = getNodeById(sel.getAttribute("data-sp-sc021"));
         if (n) {
@@ -10664,21 +10664,21 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-sc022-name]").forEach((inp) => {
+    root.querySelectorAll("[data-sp-sc022-name]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-sp-sc022-name"));
         if (n) n.data.sc022Name = inp.value;
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-sc022-py]").forEach((inp) => {
+    root.querySelectorAll("[data-sp-sc022-py]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-sp-sc022-py"));
         if (n) n.data.sc022Pinyin = inp.value;
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-reset-all]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-reset-all]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-reset-all"));
@@ -10704,7 +10704,7 @@
     });
 
     /* --- 2. Asset Node Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-ast-open]").forEach((el) => {
+    root.querySelectorAll("[data-ast-open]").forEach((el) => {
       el.onclick = (e) => {
         if (e.target.closest("[data-ast-clear]")) return;
         e.stopPropagation();
@@ -10713,7 +10713,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ast-clear]").forEach((btn) => {
+    root.querySelectorAll("[data-ast-clear]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-ast-clear"));
@@ -10726,7 +10726,7 @@
     });
 
     /* --- 3. Text Input + File Attachment Actions (Click textarea opens clean single-button modal!) --- */
-    DOM.nodesLayer.querySelectorAll("[data-txt-ta]").forEach((ta) => {
+    root.querySelectorAll("[data-txt-ta]").forEach((ta) => {
       ta.onclick = (e) => {
         e.stopPropagation();
         const nid = ta.getAttribute("data-txt-ta");
@@ -10734,7 +10734,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-txt-file]").forEach((inp) => {
+    root.querySelectorAll("[data-txt-file]").forEach((inp) => {
       inp.onchange = (e) => {
         const f = e.target.files && e.target.files[0];
         const n = getNodeById(inp.getAttribute("data-txt-file"));
@@ -10754,7 +10754,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-txt-clear-file]").forEach((btn) => {
+    root.querySelectorAll("[data-txt-clear-file]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-txt-clear-file"));
@@ -10794,7 +10794,7 @@
       }
     };
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-seed]").forEach((inp) => {
+    root.querySelectorAll("[data-fis-seed]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-fis-seed"));
         if (n) {
@@ -10818,7 +10818,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-strat]").forEach((btn) => {
+    root.querySelectorAll("[data-fis-strat]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-fis-strat"));
@@ -10831,7 +10831,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-custom-strat]").forEach((inp) => {
+    root.querySelectorAll("[data-fis-custom-strat]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-fis-custom-strat"));
         if (n) {
@@ -10855,7 +10855,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-cnt-step]").forEach((btn) => {
+    root.querySelectorAll("[data-fis-cnt-step]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-fis-cnt-step"));
@@ -10868,7 +10868,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-cnt-inp]").forEach((inp) => {
+    root.querySelectorAll("[data-fis-cnt-inp]").forEach((inp) => {
       inp.onchange = () => {
         const n = getNodeById(inp.getAttribute("data-fis-cnt-inp"));
         if (!n) return;
@@ -10884,7 +10884,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-gen]").forEach((btn) => {
+    root.querySelectorAll("[data-fis-gen]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-fis-gen"));
@@ -10894,7 +10894,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-open-modal]").forEach((el) => {
+    root.querySelectorAll("[data-fis-open-modal]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         openFissionListModal(el.getAttribute("data-fis-open-modal"));
@@ -10902,7 +10902,7 @@
     });
 
     /* --- 3.5. Bridge Node Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-bridge-add-ctrl]").forEach((btn) => {
+    root.querySelectorAll("[data-bridge-add-ctrl]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         spawnDownstreamControlFromBridge(btn.getAttribute("data-bridge-add-ctrl"));
@@ -10910,7 +10910,7 @@
     });
 
     /* --- 3.6. Loop Batch Node Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-loop-mode]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-mode]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-mode"));
@@ -10923,7 +10923,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-ta]").forEach((ta) => {
+    root.querySelectorAll("[data-loop-ta]").forEach((ta) => {
       ta.oninput = () => {
         const n = getNodeById(ta.getAttribute("data-loop-ta"));
         if (!n) return;
@@ -10959,14 +10959,14 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-open-prompts]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-open-prompts]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         openLoopPromptsModal(btn.getAttribute("data-loop-open-prompts"));
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-clear-prompts]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-clear-prompts]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-clear-prompts"));
@@ -10980,7 +10980,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-fill-demo]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-fill-demo]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-fill-demo"));
@@ -10995,7 +10995,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-pick]").forEach((el) => {
+    root.querySelectorAll("[data-loop-pick]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(el.getAttribute("data-loop-pick"));
@@ -11004,7 +11004,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-rand]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-rand]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-rand"));
@@ -11028,7 +11028,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-rm-item]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-rm-item]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-rm-item"));
@@ -11046,7 +11046,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-clear-arr]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-clear-arr]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-clear-arr"));
@@ -11060,7 +11060,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-setup-assets]").forEach((el) => {
+    root.querySelectorAll("[data-loop-setup-assets]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(el.getAttribute("data-loop-setup-assets"));
@@ -11079,7 +11079,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-add-ctrl]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-add-ctrl]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         spawnDownstreamControlFromLoop(btn.getAttribute("data-loop-add-ctrl"));
@@ -11087,7 +11087,7 @@
     });
 
     /* --- 4. Output Control Node Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-mode]").forEach((btn) => {
+    root.querySelectorAll("[data-ctrl-mode]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const ctrl = getNodeById(btn.getAttribute("data-ctrl-mode"));
@@ -11096,7 +11096,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-count-step]").forEach((btn) => {
+    root.querySelectorAll("[data-ctrl-count-step]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const ctrl = getNodeById(btn.getAttribute("data-ctrl-count-step"));
@@ -11110,7 +11110,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-count-inp]").forEach((inp) => {
+    root.querySelectorAll("[data-ctrl-count-inp]").forEach((inp) => {
       inp.oninput = () => {
         const ctrl = getNodeById(inp.getAttribute("data-ctrl-count-inp"));
         if (!ctrl) return;
@@ -11138,7 +11138,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-mix-lay]").forEach((chk) => {
+    root.querySelectorAll("[data-ctrl-mix-lay]").forEach((chk) => {
       chk.onchange = () => {
         const ctrl = getNodeById(chk.getAttribute("data-ctrl-mix-lay"));
         if (!ctrl) return;
@@ -11148,7 +11148,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-ratio]").forEach((btn) => {
+    root.querySelectorAll("[data-ctrl-ratio]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const ctrl = getNodeById(btn.getAttribute("data-ctrl-ratio"));
@@ -11160,7 +11160,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-ratio-inp]").forEach((inp) => {
+    root.querySelectorAll("[data-ctrl-ratio-inp]").forEach((inp) => {
       inp.oninput = () => {
         const ctrl = getNodeById(inp.getAttribute("data-ctrl-ratio-inp"));
         if (!ctrl) return;
@@ -11171,7 +11171,7 @@
           markActiveTabDirty();
           const isPreset = E.RATIO_PRESETS.includes(norm);
           if (wrap) wrap.classList.toggle("is-custom-active", !isPreset);
-          DOM.nodesLayer.querySelectorAll(`[data-ctrl-ratio="${ctrl.id}"]`).forEach((b) => {
+          root.querySelectorAll(`[data-ctrl-ratio="${ctrl.id}"]`).forEach((b) => {
             b.classList.toggle("is-active", b.getAttribute("data-val") === norm);
           });
         }
@@ -11207,7 +11207,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-inc-cover]").forEach((chk) => {
+    root.querySelectorAll("[data-ctrl-inc-cover]").forEach((chk) => {
       chk.onchange = () => {
         const ctrl = getNodeById(chk.getAttribute("data-ctrl-inc-cover"));
         if (!ctrl) return;
@@ -11228,7 +11228,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-cov-ratio]").forEach((inp) => {
+    root.querySelectorAll("[data-ctrl-cov-ratio]").forEach((inp) => {
       inp.oninput = () => {
         const ctrl = getNodeById(inp.getAttribute("data-ctrl-cov-ratio"));
         if (!ctrl) return;
@@ -11260,7 +11260,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-inl-ratio]").forEach((inp) => {
+    root.querySelectorAll("[data-ctrl-inl-ratio]").forEach((inp) => {
       inp.oninput = () => {
         const ctrl = getNodeById(inp.getAttribute("data-ctrl-inl-ratio"));
         if (!ctrl) return;
@@ -11292,14 +11292,14 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-run]").forEach((btn) => {
+    root.querySelectorAll("[data-ctrl-run]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         runOutputControlNode(btn.getAttribute("data-ctrl-run"));
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-plan-open-wide]").forEach((btn) => {
+    root.querySelectorAll("[data-plan-open-wide]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         openArticlePlanWidePage(btn.getAttribute("data-plan-open-wide"));
@@ -11307,21 +11307,21 @@
     });
 
     /* --- 5. Image Display Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-disp-zoom]").forEach((el) => {
+    root.querySelectorAll("[data-disp-zoom]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         openImageLightbox(el.getAttribute("data-disp-zoom"), el.getAttribute("data-disp-title") || "输出大图");
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-regen-node]").forEach((btn) => {
+    root.querySelectorAll("[data-disp-regen-node]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         regenerateDisplayNode(btn.getAttribute("data-disp-regen-node"));
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-gal-page]").forEach((btn) => {
+    root.querySelectorAll("[data-disp-gal-page]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const disp = getNodeById(btn.getAttribute("data-disp-gal-page"));
@@ -11338,14 +11338,14 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-open-gal]").forEach((btn) => {
+    root.querySelectorAll("[data-disp-open-gal]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         openBatchGalleryModal(btn.getAttribute("data-disp-open-gal"));
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-zip]").forEach((btn) => {
+    root.querySelectorAll("[data-disp-zip]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         exportZipPackage(btn.getAttribute("data-disp-zip"));
