@@ -237,5 +237,7 @@ assert.match(UI,/data-row-up-idx/);
 assert.match(UI,/id="batch-candidates"/);
 assert.match(UI,/runSnapshot\.outputs\.find\(o=>o\.slotId===slotId&&/,
  "Old generated images must follow stable slot identity after draft row reorder");
-assert.match(UI,/getSeries\(\)\.mergeAI/);
+assert.match(UI,/HandrawStudioAIPlan/, "Studio #125 must use the shared authorized AI adapter");
+assert.match(UI,/AI\.review\(data/, "Every AI PlanSlot must pass through conflict review");
+assert.doesNotMatch(UI,/\/api\/studio\/batch-plan/, "Studio2 never uses the legacy fallback AI endpoint");
 console.log("Issue #123: 6 PlanSlots, 12 outputs, IDs/overrides/locks, fixed-AI roundtrips, LCS insert/reorder/clone, V3 3+2+1 and retry PASS");
