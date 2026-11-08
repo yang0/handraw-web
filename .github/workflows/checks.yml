@@ -100,6 +100,8 @@ jobs:
           node tests/test_studio_workflow_delete.cjs
           node --check demo/assets/studio-project-sync.js
           node tests/test_studio_project_sync.cjs
+          node --check demo/assets/studio-project-center.js
+          node tests/test_studio_project_center.cjs
           node tests/test_studio_picker_interactions.cjs
           node tests/test_quick_stale_generation.cjs
           node tests/test_profile_private_gallery.cjs
