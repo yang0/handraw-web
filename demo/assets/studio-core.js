@@ -245,11 +245,13 @@
     for (const [field, value] of Object.entries(slot?.overrides || {})) {
       if (!PATCH_FIELDS.has(field)) throw new Error("invalid_override_field:" + field);
       // Locked user choices are not subject to AI or slot-plan overrides.
-      if ((globalSpec?.lockedFields || []).includes(field) ||
-          (slot?.lockedFields || []).includes(field)) {
-        if (JSON.stringify(result[field]) !== JSON.stringify(value)) throw new Error("locked_field:" + field);
+      if ((globalSpec?.lockedFields || []).includes(field)) {
+        if (JSON.stringify(result[field]) !== JSON.stringify(value))
+          throw new Error("locked_field:" + field);
         continue;
       }
+      // A slot lock protects its OWN explicitly saved override from subsequent
+      // patches/replans; it must not suppress that value at execution time.
       result[field] = clone(value);
     }
     // A disabled secondary style is a draft-only preference. Never put it
