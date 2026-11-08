@@ -118,6 +118,10 @@ class OwnedCustomResources21(unittest.TestCase):
             {**payload, "name": "作者更新后名称", "baseRevision": 1})["resource"]
         self.assertEqual(changed["revision"], 2)
         self.assertEqual(changed["code"], code)
+        with self.assertRaises(ServiceError) as invalid_kind:
+            bridge.put_resource(self.db, self.owner, rid,
+                                self.payload(rid, kind="layout", baseRevision=2))
+        self.assertEqual(invalid_kind.exception.code, "resource_kind_immutable")
         with self.assertRaises(ServiceError) as clash:
             bridge.put_resource(
                 self.db, self.owner, rid,
