@@ -408,7 +408,7 @@
       isTerminal, isStopping, canRetry: totals.failed + totals.cancelled > 0,
       viewStatus: isStopping && !isTerminal ? "cancel_requested"
         : totals.unknown ? "unknown" : isTerminal
-        ? totals.succeeded === total ? "success"
+        ? totals.succeeded === total && !partialOutputs ? "success"
           : totals.succeeded ? "partial" : totals.failed ? "failed" : "cancelled"
         : totals.generating ? "running" : "pending"
     };
