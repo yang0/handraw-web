@@ -134,7 +134,12 @@ assert.equal(done.isTerminal,true);
 console.log("studio2 core: fixtures, legacy adapter, ratio, patches, resource validation, stable slots and Run projection pass");
 
 // Fixed strategy must not accidentally execute hidden AI layout overrides.
-const E = require("../demo/assets/studio-prompt-engine.js");
+// The canvas engine exposes a browser global, not CommonJS exports.
+const previousWindow = global.window;
+global.window = global.window || {};
+require("../demo/assets/studio-prompt-engine.js");
+const E = global.window.HANDRAW_CANVAS_ENGINE;
+
 assert.ok(typeof E.resolveLoopIterations === "function");
 const g={nodes:[
  {id:"l",type:"loop",data:{loopMode:"prompts",batchLayoutMode:"fixed",batchRows:[{slotId:"stable-1",theme:"第一张",layout:"SC-021"}],promptListText:"第一张"}},
