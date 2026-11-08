@@ -6046,7 +6046,7 @@
         throw err;
       }
     }
-    throw new Error("等待时间较长，生成结果出来后会出现在生图历史里；如果最终没有生成，额度或积分会自动退还。");
+    throw new Error("等待上游结果超时，任务状态仍待核实；请点击重新检查。超时或取消本地等待不代表云端停止，也不保证退款。");
   }
 
   function applyDurableTaskResult(task, images, errorMessage = "") {
@@ -7615,6 +7615,10 @@
                 batchIndex: i,
                 batchTotal: plan.specs.length,
                 retryCancelled: resolvedOnlyIdx !== null,
+                retryFailed: resolvedOnlyIdx !== null,
+                slotId: String(sp.slotId || ""),
+                planRevision: Number(ctrl.data.studio2RunSnapshot?.revision || 0),
+                idempotencyKey: requestId,
                 requestId,
                 clientRequestId: requestId,
                 confirmCost: true,
