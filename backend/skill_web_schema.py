@@ -76,6 +76,17 @@ SKILL_WEB_MIGRATIONS = [
         );
         CREATE INDEX IF NOT EXISTS idx_user_resources_owner
             ON user_resources(owner_user_id,kind,deleted_at,updated_at);
+        -- Upgrade previously synced owned resources without changing CAS
+        -- revisions or publishing anything. Derived code is deterministic.
+        INSERT OR IGNORE INTO user_resources
+            (id,code,owner_user_id,kind,name,definition,description,cover_url,
+             revision,deleted_at,updated_at)
+        SELECT id,
+               (CASE kind WHEN 'style' THEN 'USR-S' ELSE 'USR-L' END) ||
+                   UPPER(REPLACE(id,'-','')),
+               user_id,kind,name,COALESCE(json_extract(definition_json,'$.zh'),''),
+               '', '',revision,deleted_at,updated_at
+        FROM skill_personal_resources;
     """),
 
 ]
