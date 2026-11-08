@@ -49,7 +49,7 @@ function harness() {
     ensureDefaultSavedWorkflows: () => {},
     cloneGraph: (value) => JSON.parse(JSON.stringify(value)),
     writeJsonStorage: (key, value) => { writes.push({ key, value: JSON.stringify(value) }); return true; },
-    persistOpenTabs: () => {},
+    persistOpenTabs: () => true,
     renderTopAndBottomDocks: () => {},
     toast: (msg) => messages.push(msg),
     fetch: (url, options) => {
