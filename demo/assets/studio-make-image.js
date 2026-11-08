@@ -157,6 +157,11 @@
       this.actions = null;
       this.moreSettingsOpen = false;
       this.promptPreviewOpen = false;
+      this.settingsCollapsed = false;
+      this.compareOpen = false;
+      this.recipeOpen = false;
+      this.previewVersionKey = null;
+      this.lastControlId = null;
     }
 
     getParts() {
@@ -296,6 +301,13 @@
       if (actions) this.actions = actions;
       if (!this.hostElement) return;
 
+      const priorImage = this.hostElement.querySelector?.("#make-image-primary-media");
+      const preservedImage = priorImage?.getAttribute("src") ? priorImage : null;
+      const focused = typeof document !== "undefined" ? document.activeElement : null;
+      const restore = focused?.id && this.hostElement.contains?.(focused) ? {
+        id: focused.id, start: focused.selectionStart, end: focused.selectionEnd,
+        scroll: focused.scrollTop
+      } : null;
       const p = this.getParts();
       if (!p) {
         this.hostElement.innerHTML = `
@@ -660,7 +672,267 @@
         </div>
       `;
 
+      this.upgradeWorkspace(this.hostElement);
+      if (preservedImage) {
+        const fresh = this.hostElement.querySelector("#make-image-primary-media");
+        if (fresh && fresh.getAttribute("src") === preservedImage.getAttribute("src")) {
+          fresh.replaceWith(preservedImage);
+        }
+      }
       this.bindEvents(this.hostElement);
+      this.bindWorkspaceEvents(this.hostElement);
+      if (restore) {
+        const target = this.hostElement.querySelector("#" + restore.id);
+        if (target && typeof target.focus === "function") {
+          target.focus({preventScroll:true});
+          try {
+            if (Number.isInteger(restore.start) && typeof target.setSelectionRange === "function")
+              target.setSelectionRange(restore.start,restore.end);
+          } catch (_) {}
+          target.scrollTop = restore.scroll;
+        }
+      }
+    }
+
+
+    // Reorganize existing controls without recreating field logic or pickers.
+    // Moving real DOM nodes is deliberate: all legacy SC-021/022 and fusion
+    // inputs remain present and their old bindEvents handlers stay active.
+    upgradeWorkspace(root) {
+      const p=this.getParts();
+      if (!p) return;
+      const ctrl=p.ctrl.data;
+      if (this.lastControlId!==p.ctrl.id) {
+        this.previewVersionKey=null;
+        this.compareOpen=false;
+        this.recipeOpen=false;
+        this.settingsCollapsed=false;
+        this.lastControlId=p.ctrl.id;
+      }
+      const grid=root.querySelector(".make-image-main-grid");
+      const form=root.querySelector(".make-image-form");
+      const result=root.querySelector(".make-image-results-section");
+      if (!grid||!form||!result) return;
+      const advanced=root.querySelector(".make-image-more-list");
+      const subject=root.querySelector(".make-image-field-wrap");
+      const mode=root.querySelector(".make-image-top-row");
+      const pickerRow=root.querySelector(".make-image-pickers-row");
+      const color=root.querySelector('[data-pick-kind="color"]');
+      if(subject) grid.insertBefore(subject,grid.firstChild);
+      if(advanced&&mode)advanced.insertBefore(mode,advanced.firstChild);
+      if(advanced&&color)advanced.insertBefore(color,advanced.children[1]||null);
+      const refs=root.querySelector("#make-image-open-ref-picker")?.closest(".make-image-more-row");
+      if(refs){
+        const refPanel=document.createElement("div");
+        refPanel.className="make-image-quick-references";
+        refPanel.innerHTML='<div class="make-image-ref-heading"><strong>参考素材</strong><span>支持多图、粘贴及拖放 · 仅选用，不自动生成</span></div>'+
+          '<div id="make-image-ref-dropzone" class="make-image-ref-dropzone" tabindex="0" aria-label="粘贴或拖放参考图片">'+
+          '<button type="button" class="btn btn-sm" id="make-image-ref-upload">＋ 上传多张图片</button>'+
+          '<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden id="make-image-ref-files" />'+
+          '<span>或将图片拖入此处 / Ctrl+V 粘贴</span></div>';
+        refPanel.appendChild(refs);
+        if(advanced?.parentNode?.parentNode)grid.insertBefore(refPanel,grid.querySelector(".make-image-ratio-row"));
+        const items=Array.isArray(p.asset?.data?.items)?p.asset.data.items:[];
+        refs.querySelectorAll("[data-ref-card]").forEach(card=>{
+          const i=Number(card.getAttribute("data-ref-card"));
+          const entry=items[i];
+          const chooser=document.createElement("select");
+          chooser.className="make-image-ref-role";
+          chooser.setAttribute("data-ref-role",String(i));
+          chooser.setAttribute("aria-label","参考图用途");
+          const roles=[["other","通用参考"],["character","人物/角色"],["scene","场景"],["object","道具/物品"],["composition","构图"]];
+          chooser.innerHTML=roles.map(pair=>'<option value="'+pair[0]+'"'+(entry?.role===pair[0]?' selected':'')+'>'+pair[1]+'</option>').join("");
+          card.appendChild(chooser);
+        });
+      }
+      const layout=document.createElement("div");
+      layout.className="make-image-workspace-layout";
+      const settings=document.createElement("section");
+      settings.className="make-image-settings-panel";
+      const toggle=document.createElement("button");
+      toggle.type="button";
+      toggle.id="make-image-settings-collapse";
+      toggle.className="make-image-settings-collapse";
+      toggle.setAttribute("aria-expanded",String(!this.settingsCollapsed));
+      toggle.textContent=this.settingsCollapsed?"展开创作设置":"收起创作设置";
+      settings.appendChild(toggle);
+      grid.parentNode.insertBefore(layout,grid);
+      settings.appendChild(grid);
+      layout.appendChild(settings);
+      layout.appendChild(result);
+      if(this.settingsCollapsed)settings.classList.add("is-collapsed");
+
+      const V=global.HandrawQuickVersions;
+      const remote=this.context?.runProjection;
+      const live=Array.isArray(this.context?.results)?this.context.results:[];
+      const remoteItems=remote?.ok ? (remote.results||[]).map(it=>({
+        id:it.id,mediaId:it.mediaId,runId:remote.runId,
+        imageUrl:it.imageUrl,title:"生成图片",item:{...it,runId:remote.runId}
+      })) : [];
+      const prior=Array.isArray(ctrl.quickVersionHistory)?ctrl.quickVersionHistory:[];
+      const versions=V?V.merge(prior,[...live,...remoteItems],{
+        runId:remote?.runId||ctrl.runId||"",
+        runSpec:ctrl.quickLastSubmittedSpec||null
+      }):prior;
+      if(V&&JSON.stringify(prior)!==JSON.stringify(versions)){
+        ctrl.quickVersionHistory=versions;
+        this.actions?.persistDraft?.();
+      }
+      this.visibleVersions=versions;
+      const selected=V?.select(versions,this.previewVersionKey);
+      const selectedIndex=selected?versions.findIndex(v=>v.key===selected.key):-1;
+      const other=selectedIndex>0?versions[selectedIndex-1]:
+        selectedIndex===0&&versions.length>1?versions[1]:null;
+      const state=remote?.ok?(remote.viewStatus||remote.persistedStatus||"unknown"):
+        this.context?.localBusy?"running":ctrl.status==="stopped"?"cancel_requested":
+        ctrl.status==="error"?"failed":this.context?.pendingCloud?"unknown":"idle";
+      const statusMap={
+        idle:"可以开始创作",pending:"已提交 · 等待服务器确认",queued:"排队中",
+        running:"生成中 · 可以继续编辑左侧下一版草稿",uploading:"素材上传中",
+        success:"本次生成成功",partial:"部分完成",failed:"生成失败 · 旧版本仍可使用",
+        cancel_requested:"已停止本地等待 · 云端仍可能继续执行",
+        cancelled:"服务端确认取消",unknown:"状态待核对 · 请勿重复提交"
+      };
+      const busy=Boolean(this.context?.localBusy || (remote?.ok&&!remote.isTerminal) || this.context?.pendingCloud);
+      if(versions.length)layout.classList.add("has-results");
+      const safeValue=v=>esc(v==null?"":v);
+      const snapshot=selected?.recipeSnapshot||null;
+      const snapText=snapshot?JSON.stringify(snapshot,null,2):"这张历史图片没有可验证的 CreationSpec 快照；不会用当前草稿冒充本次配方。";
+      result.innerHTML='<header class="make-image-result-header"><div><small>图片创作 · 结果工作台</small>'+
+        '<h2>当前结果 <span>'+versions.length+' 个版本</span></h2></div>'+
+        '<button type="button" class="btn btn-sm" data-quick-action="compare" '+(versions.length<2?'disabled':'')+'>'+
+        (this.compareOpen?"关闭对比":"版本对比")+'</button></header>'+
+        '<div class="make-image-run-status" role="status" aria-live="polite"><span class="make-image-status-dot '+safeValue(state)+'"></span>'+
+        '<span>'+safeValue(statusMap[state]||"正在核对任务状态")+'</span>'+
+        (remote?.runId?'<code>Run '+safeValue(String(remote.runId).slice(0,18))+'</code>':"")+'</div>'+
+        (selected?
+          '<figure class="make-image-current-result"><div class="make-image-current-image">'+
+          '<img id="make-image-primary-media" src="'+safeValue(selected.imageUrl)+'" data-version-key="'+safeValue(selected.key)+
+          '" alt="'+safeValue(selected.title||"生成图片")+'" />'+
+          '</div><figcaption><strong>版本 '+(selectedIndex+1)+'</strong>'+
+          '<span>'+safeValue(selected.title||"生成图片")+'</span>'+
+          (selected.runId?'<small>Run '+safeValue(String(selected.runId).slice(0,18))+'</small>':"")+'</figcaption></figure>'+
+          '<div class="make-image-empty-result" role="status"><strong>'+(busy?"任务已提交，正在等待生成结果":"创作结果将在这里出现")+
+          '</strong><p>'+(busy?"旧版本会继续保留；可在左侧准备下一次创作。":"输入主题，选择画风与图型，然后生成第一张图片。")+'</p></div>')+
+        (selected?'<div class="make-image-result-toolbar" aria-label="当前图片操作">'+
+          '<button type="button" class="btn btn-sm" data-quick-action="view">放大</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="download">原图下载</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="again" '+(busy?'disabled':'')+'>同配方再来一张</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="reference">作为参考</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="variant">生成变体</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="recipe">真实配方</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="series">进入系列</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="canvas">进入画布</button>'+
+          '</div>':"")+
+        (selected&&this.recipeOpen?'<pre class="make-image-recipe-snapshot">'+safeValue(snapText)+'</pre>':"")+
+        (versions.length?'<div class="make-image-version-section"><h3>创作版本 · 选择缩略图查看</h3>'+
+          '<div class="make-image-version-strip" role="list">'+versions.map((v,i)=>
+            '<button type="button" role="listitem" class="make-image-version-tile '+(selected?.key===v.key?"is-selected":"")+
+            '" data-quick-version="'+safeValue(v.key)+'" aria-label="选择版本 '+(i+1)+'" aria-pressed="'+(selected?.key===v.key)+'">'+
+            '<img src="'+safeValue(v.imageUrl)+'" alt="" loading="lazy" /><small>V'+(i+1)+'</small></button>'
+          ).join("")+'</div></div>':"")+
+        (this.compareOpen&&selected&&other?
+          '<div class="make-image-comparison"><h3>版本并排比较</h3><div class="make-image-compare-grid">'+
+          [other,selected].map(v=>'<figure><img src="'+safeValue(v.imageUrl)+'" alt="'+safeValue(v.title)+'" />'+
+            '<figcaption>'+safeValue(v.mediaId)+(v.recipeSnapshot?
+              '<pre>'+safeValue(JSON.stringify({style:v.recipeSnapshot.style?.id,layout:v.recipeSnapshot.layout?.id,
+                ratio:v.recipeSnapshot.ratio,subject:v.recipeSnapshot.subject},null,2))+'</pre>':
+              '<small>配方快照不可用</small>')+'</figcaption></figure>').join("")+
+          '</div></div>':"");
+      const aiReview=this.context?.aiReview;
+      if(aiReview?.changes?.length){
+        const anchor=grid.querySelector(".make-image-action-bar");
+        const card=document.createElement("div");
+        card.className="make-image-ai-review";
+        card.innerHTML='<h3>AI 辅助设计建议 · 审阅后采纳</h3><p>只建议已授权资源；不会自动生成或扣费。原有人工选择默认保留。</p>'+
+          aiReview.changes.map((c,i)=>'<label class="make-image-ai-choice">'+
+            '<input type="checkbox" data-quick-ai-choice="'+i+'" '+(c.locked?'disabled':c.conflict?'':'checked')+' />'+
+            '<span><strong>'+safeValue(c.field)+'</strong> '+safeValue(c.from?.id||c.from||"未选")+
+            ' → '+safeValue(c.to?.id||c.to||"未选")+
+            '<small>'+safeValue(c.reason||"")+(c.locked?" · 已锁定，不能覆盖":c.conflict?" · 人工设置，需明确勾选":"")+'</small></span></label>').join("")+
+          '<div class="make-image-ai-review-actions"><button type="button" class="btn btn-sm" data-quick-ai="discard">保留原方案</button>'+
+          '<button type="button" class="btn btn-primary btn-sm" data-quick-ai="accept">采纳选中建议</button></div>';
+        grid.insertBefore(card,anchor||null);
+      }
+    }
+
+    bindWorkspaceEvents(root) {
+      const p=this.getParts();
+      if(!p)return;
+      const versions=this.visibleVersions||[];
+      const selected=()=>versions.find(v=>v.key===this.previewVersionKey)||versions[versions.length-1]||null;
+      const toast=msg=>global.HANDRAW_SHARED?.toast?.(msg);
+      root.querySelector("#make-image-settings-collapse")?.addEventListener("click",()=>{
+        this.settingsCollapsed=!this.settingsCollapsed;this.render();
+      });
+      root.querySelectorAll("[data-quick-version]").forEach(btn=>btn.addEventListener("click",()=>{
+        this.previewVersionKey=btn.getAttribute("data-quick-version");
+        this.compareOpen=false;this.render();
+      }));
+      root.querySelectorAll("[data-quick-action]").forEach(btn=>btn.addEventListener("click",()=>{
+        const v=selected();
+        const action=btn.getAttribute("data-quick-action");
+        if(action==="compare"){this.compareOpen=!this.compareOpen;this.render();return;}
+        if(!v)return;
+        if(action==="view")return this.actions?.openImageLightbox?.(v.imageUrl,v.title);
+        if(action==="download"){
+          const a=document.createElement("a");a.href=v.imageUrl;a.download="handraw-"+v.mediaId+".webp";
+          a.rel="noopener";a.click();return;
+        }
+        if(action==="recipe"){this.recipeOpen=!this.recipeOpen;this.render();return;}
+        if(action==="canvas")return this.actions?.openCanvas?.(v);
+        if(action==="series")return this.actions?.openSeries?.(v);
+        if(action==="reference"||action==="variant"){
+          this.actions?.addResultAsReference?.({imageUrl:v.imageUrl,title:v.title,item:{mediaId:v.mediaId}});
+          if(action==="variant"){
+            toast("已将选中版本加入参考；请描述希望保留及修改的内容，再生成变体");
+            this.hostElement?.querySelector("#make-image-subject")?.focus();
+          }return;
+        }
+        if(action==="again"){
+          const spec=v.recipeSnapshot;
+          if(!spec){toast("历史结果缺少真实配方快照，不能冒充同配方生成；请使用当前设置生成");return;}
+          const delta={};
+          for(const field of ["subject","style","secondaryStyle","layout","colors","tones",
+            "moods","customMood","whitespace","audience","businessScene",
+            "outputMode","ratio","fusionEnabled","layoutParams"]){
+            if(Object.prototype.hasOwnProperty.call(spec,field))delta[field]=spec[field];
+          }
+          if(!this.patchSpec(delta))return;
+          this.actions?.persistDraft?.();
+          this.actions?.run?.();
+        }
+      }));
+      root.querySelectorAll("[data-quick-ai]").forEach(btn=>btn.addEventListener("click",()=>{
+        const report=this.context?.aiReview;
+        if(btn.getAttribute("data-quick-ai")==="discard")return this.actions?.discardPlan?.();
+        const approved=[...root.querySelectorAll("[data-quick-ai-choice]:checked")].map(input=>
+          report?.changes?.[Number(input.getAttribute("data-quick-ai-choice"))]?.key).filter(Boolean);
+        this.actions?.applyPlan?.(approved);
+      }));
+      root.querySelectorAll("[data-ref-role]").forEach(select=>select.addEventListener("change",()=>{
+        const idx=Number(select.getAttribute("data-ref-role"));
+        const items=(p.asset?.data?.items||[]).map((v,i)=>i===idx?{...v,role:select.value}:v);
+        this.actions?.ensureAssetItems?.(items);
+      }));
+      const fileInput=root.querySelector("#make-image-ref-files");
+      root.querySelector("#make-image-ref-upload")?.addEventListener("click",()=>fileInput?.click());
+      fileInput?.addEventListener("change",()=>{
+        if(fileInput.files?.length)this.actions?.uploadReferenceFiles?.([...fileInput.files]);
+        fileInput.value="";
+      });
+      const zone=root.querySelector("#make-image-ref-dropzone");
+      zone?.addEventListener("dragover",e=>{e.preventDefault();zone.classList.add("is-dragging");});
+      zone?.addEventListener("dragleave",()=>zone.classList.remove("is-dragging"));
+      zone?.addEventListener("drop",e=>{
+        e.preventDefault();zone.classList.remove("is-dragging");
+        if(e.dataTransfer?.files?.length)this.actions?.uploadReferenceFiles?.([...e.dataTransfer.files]);
+      });
+      root.addEventListener("paste",e=>{
+        const files=[...(e.clipboardData?.items||[])].filter(i=>i.kind==="file"&&i.type.startsWith("image/"))
+          .map(i=>i.getAsFile()).filter(Boolean);
+        if(files.length){e.preventDefault();this.actions?.uploadReferenceFiles?.(files);}
+      });
     }
 
     bindEvents(root) {
