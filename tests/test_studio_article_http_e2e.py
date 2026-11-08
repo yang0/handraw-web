@@ -34,6 +34,10 @@ class StudioArticleHttpE2E(unittest.TestCase):
         })
         self.env.start()
         self.db = init_database(root / "studio124.db")
+        # Demo seed already contains public showcase works; only assert that
+        # article draft patches and Run GET created no additional work.
+        self.initial_work_count = self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM works").fetchone()[0]
         self.owner, _ = register_user(self.db, "studio124_http_owner", "password123")
         self.other, _ = register_user(self.db, "studio124_http_other", "password123")
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
@@ -131,7 +135,8 @@ class StudioArticleHttpE2E(unittest.TestCase):
         status,_,hidden_project=self.request("GET",
             "/api/studio/projects/studio124-http-project",cookie=self.foreign_cookie)
         self.assertEqual(status,404,str(hidden_project))
-        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],0)
+        self.assertEqual(self.db.get_conn().execute("SELECT COUNT(*) FROM works").fetchone()[0],
+                         self.initial_work_count)
 
 
 if __name__ == "__main__":
