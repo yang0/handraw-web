@@ -1867,7 +1867,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Vary", "Origin")
         if origin and origin_allowed(origin):
             self.send_header("Access-Control-Allow-Origin", origin.rstrip("/"))
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
             self.send_header(
                 "Access-Control-Allow-Headers",
                 "Content-Type, Authorization, X-Handraw-Token, Api-Key, User-Api-Key, Api-Username, X-CSRF-Token",
@@ -2387,6 +2387,19 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(get_owned_studio_run(self.db, user, m_run.group(1)))
             return
 
+        if req_path == "/api/studio/projects":
+            user = self._current_user(required=True)
+            from .studio_projects import list_projects
+            self._send_json(list_projects(self.db, user))
+            return
+
+        m_project = re.fullmatch(r"/api/studio/projects/([A-Za-z0-9_-]{4,100})", req_path)
+        if m_project:
+            user = self._current_user(required=True)
+            from .studio_projects import get_project
+            self._send_json(get_project(self.db, user, m_project.group(1)))
+            return
+
         if req_path == "/api/studio/workspace":
             user = self._current_user(required=False)
             self._send_json(get_studio_workspace(self.db, user))
@@ -2873,6 +2886,20 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self._dispatch_request(self._handle_post)
 
+    def do_PATCH(self) -> None:
+        self._dispatch_request(self._handle_patch)
+
+    def _handle_patch(self) -> None:
+        self._enforce_write_origin()
+        req_path = unquote(urlparse(self.path).path)
+        match = re.fullmatch(r"/api/studio/projects/([A-Za-z0-9_-]{4,100})/draft", req_path)
+        if match:
+            user = self._current_user(required=True)
+            from .studio_projects import patch_project
+            self._send_json(patch_project(self.db, user, match.group(1), self._read_json_body()))
+            return
+        self._send_json({"ok": False, "error": "Not Found"}, status=404)
+
     def do_PUT(self) -> None:
         self._dispatch_request(self._handle_put)
 
@@ -3300,6 +3327,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/forum/moderate":
             user = self._current_user(required=True)
             self._send_json(forum_moderator_action(self.db, user, body))  # type: ignore[arg-type]
+            return
+
+        # Studio 2.0 canonical, versioned project drafts. The V3 Run ledger
+        # remains separate; saving a project never triggers paid generation.
+        if req_path == "/api/studio/projects":
+            user = self._current_user(required=True)
+            from .studio_projects import create_project
+            self._send_json(create_project(self.db, user, body))
+            return
+
+        m_project_copy = re.fullmatch(
+            r"/api/studio/projects/([A-Za-z0-9_-]{4,100})/copy", req_path
+        )
+        if m_project_copy:
+            user = self._current_user(required=True)
+            from .studio_projects import copy_project
+            self._send_json(copy_project(self.db, user, m_project_copy.group(1), body))
             return
 
         # Studio Cloud Persistence, Generation & ZIP Export
