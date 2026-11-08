@@ -18156,6 +18156,7 @@
         forkSource: CS.forkGenerationSource,
         aiPhase: CS.quickAIPhase || "",
         aiProposal: CS.quickAIProposal || null,
+        aiReview: CS.quickAIPending?.ctrlId === p.ctrl.id ? CS.quickAIPending.report : null,
         planUndoAvailable: Boolean(CS.quickAIUndo?.ctrlId === p.ctrl.id),
         runProjection: remoteModel,
         localBusy: isCurrentBusy(),
@@ -18178,7 +18179,54 @@
         persistDraft,
         ensureAssetItems: (items) => ensureAssetNode(items),
         openImageLightbox: (url, title) => openImageLightbox(url, title),
-        openCanvas: () => switchCreationStage("canvas"),
+        openCanvas: (version) => {
+          if (version?.mediaId && version?.imageUrl) {
+            const old=Array.isArray(p.asset?.data?.items)?p.asset.data.items:[];
+            if (!old.some(x=>x.mediaId===version.mediaId))
+              ensureAssetNode([...old,{id:version.mediaId,mediaId:version.mediaId,
+                name:version.title||"当前生成结果",image:version.imageUrl,
+                role:"result",source:"generated",cat:"other"}]);
+          }
+          switchCreationStage("canvas");
+        },
+        openSeries: (version) => {
+          const spec=version?.recipeSnapshot;
+          if(!version?.mediaId || !spec) {
+            toast("没有可验证的媒体与配方快照，无法从此图建立系列");
+            return;
+          }
+          // A separate Graph is intentional. Never overwrite an existing Series.
+          const sd={
+            style1:spec.style?.id||"",style2:spec.secondaryStyle?.id||"",
+            fusion:Boolean(spec.fusionEnabled),layout:spec.layout?.id||"",
+            colors:(spec.colors||[]).map(x=>x.id||x),
+            tones:(spec.tones||[]).map(x=>x.id||x),
+            moods:spec.moods||[],customMood:spec.customMood||"",
+            whitespace:spec.whitespace||"",audience:spec.audience||"",
+            businessScene:spec.businessScene||"",
+            ...spec.layoutParams
+          };
+          const sp=E.makeSkillParamsNode(64,56,sd);
+          const txt=E.makeTextInputNode(64,480,{text:spec.subject||""});
+          const ast=E.makeAssetNode(64,760,{items:[{
+            id:version.mediaId,mediaId:version.mediaId,role:"result",
+            name:"系列起点",image:version.imageUrl,source:"generated",cat:"other"
+          }]});
+          const lp=E.makeLoopNode(468,200,{loopMode:"prompts",
+            promptListText:spec.subject||"",maxIterations:200});
+          const ctrl=E.makeOutputControlNode(880,200,{mode:spec.outputMode||"graphic-text",
+            count:1,ratio:spec.ratio||"3:4",ratioSource:"user"});
+          const nodes=[sp,txt,ast,lp,ctrl];
+          const links=[[sp,lp],[sp,ctrl],[txt,lp],[ast,lp],[ast,ctrl],[lp,ctrl]];
+          const graph={blueprint:"loop_100",nodes,edges:links.map(([a,b])=>({
+            id:E.uid("edge"),from:a.id,to:b.id})),selectedIds:[]};
+          const tab=createWorkflowTab({title:"从图片开始的系列",
+            blueprint:"loop_100",graph,makeActive:false});
+          tab.batchStart=true;
+          activateWorkflowTab(tab.id);
+          switchCreationStage("batch");
+          toast("已建立独立系列草稿，继承当前结果与可见配方；请继续规划各张图片");
+        },
         plan: async () => {
           const subject=String(p.text.data.text||"").trim();
           if(!subject)return toast("请先填写主题");
@@ -18218,22 +18266,46 @@
             const report=AI.review(data,{kind:"image",baseRevision,
               currentSpec:snapshot,catalog:Catalog,
               isUnlocked:(id,item)=>S.isUnlocked(id,item)});
-            updatePhase(report.hasConflicts?"等待审阅与人工锁定项相关的建议…":"正在应用无冲突方案…");
-            const decision=await AI.confirmDifferences(report,{title:"审阅作图 AI 方案"});
-            if(!decision.approved)return;
-            if(signature()!==before)throw Object.assign(
-              new Error("ai_revision_conflict"),{code:"ai_revision_conflict"});
-            const result=AI.apply(report,{parts:p,catalog:Catalog,
-              isUnlocked:(id,item)=>S.isUnlocked(id,item),approvedKeys:decision.keys});
-            CS.quickAIUndo=result.undo?{ctrlId:p.ctrl.id,token:result.undo}:null;
+            // #128: review the structured patch in the editing pane. Neither
+            // request completion nor display of suggestions may trigger a Run.
+            CS.quickAIPending={ctrlId:p.ctrl.id,report,signature:before};
             CS.quickAIProposal=data.creationSpecPatch;
-            updatePhase("AI 规划完成，未触发生成或扣费");
+            updatePhase("AI 规划已就绪，等待用户审阅采纳；未触发生成或扣费");
             markDirtyAndRender();
-            toast("已完成 AI 画风/图型/画幅方案，支持撤销；没有发起生图");
           }catch(err){
             updatePhase("");
             toast("AI 规划失败："+AI.message(err.code||err.message));
           }
+        },
+        applyPlan: (keys=[]) => {
+          const pending=CS.quickAIPending,AI=window.HandrawStudioAIPlan;
+          if(!pending||pending.ctrlId!==p.ctrl.id||!AI)return;
+          const current=JSON.stringify({graphId:CS.activeTabId,
+            graphRevision:CS.graph.revision,subject:p.text.data.text,
+            spec:window.HandrawQuickSpec.read(p).spec});
+          if(current!==pending.signature){
+            CS.quickAIPending=null;CS.quickAIPhase="";
+            renderQuickStart();
+            toast("草稿在 AI 审阅期间已改变；建议已失效，请重新规划");
+            return;
+          }
+          try {
+            const result=AI.apply(pending.report,{parts:p,catalog:Catalog,
+              isUnlocked:(id,item)=>S.isUnlocked(id,item),approvedKeys:keys});
+            CS.quickAIUndo=result.undo?{ctrlId:p.ctrl.id,token:result.undo}:null;
+            CS.quickAIPending=null;
+            CS.quickAIPhase="已采纳可用建议；未触发生图";
+            markDirtyAndRender();
+            toast("AI 方案已采纳，可继续微调后再生成图片");
+          }catch(err){
+            toast("AI 方案采纳失败："+AI.message(err.code||err.message));
+          }
+        },
+        discardPlan: () => {
+          CS.quickAIPending=null;
+          CS.quickAIPhase="";
+          CS.quickAIProposal=null;
+          renderQuickStart();
         },
         undoPlan: () => {
           const token=CS.quickAIUndo;
@@ -18289,13 +18361,41 @@
           }
         },
         openReferencePicker: ({ currentRefs, onConfirm }) => {
-          if (!p || isCurrentBusy()) return;
+          if (!p) return;
           openAssetPickerModal({
             currentRefs,
             onConfirm: (selectedItems) => {
               ensureAssetNode(selectedItems);
             }
           });
+        },
+        uploadReferenceFiles: async (files) => {
+          if(!p||!Array.isArray(files)||!files.length)return;
+          const allowed=new Set(["image/jpeg","image/png","image/webp","image/gif"]);
+          const items=Array.isArray(p.asset?.data?.items)?[...p.asset.data.items]:[];
+          for(const file of files) {
+            if(items.length>=6){toast("参考图最多 6 张，请先移除部分图片");break;}
+            if(!allowed.has(file.type)){toast("不支持的图片格式："+file.name);continue;}
+            if(file.size>10*1024*1024){toast("图片超过 10 MB："+file.name);continue;}
+            try{
+              const dataUrl=await new Promise((resolve,reject)=>{
+                const reader=new FileReader();
+                reader.onerror=()=>reject(new Error("本地文件读取失败"));
+                reader.onload=()=>resolve(String(reader.result||""));
+                reader.readAsDataURL(file);
+              });
+              const uploaded=await studioApiPost("/api/studio/uploads",{
+                dataUrl,nameZh:file.name.replace(/\.[^.]+$/,""),
+                descZh:"做图 2.0 参考素材",cat:"other"
+              });
+              if(!uploaded?.ok||!uploaded.image||!uploaded.id)
+                throw new Error(uploaded?.error||"上传后没有取得可用素材");
+              items.push({id:uploaded.id,name:file.name,image:uploaded.image,
+                cat:"other",role:"other",custom:true,builtin:false,
+                mediaId:uploaded.mediaId||undefined,source:"upload"});
+              ensureAssetNode([...items]);
+            }catch(err){toast("参考图上传失败："+file.name+" · "+String(err.message||err));}
+          }
         },
         retry: async () => {
           if(!p || isCurrentBusy())return;
@@ -18358,6 +18458,9 @@
               rr?.formatError?.(error)||"创作参数不完整，请检查后重试");
             return;
           }
+          // Freeze the submitted normalized spec before the editable next draft
+          // can change. This is display metadata, not a second Run authority.
+          p.ctrl.data.quickLastSubmittedSpec=JSON.parse(JSON.stringify(validated.spec));
           // Strictly 1 image per brief
           p.ctrl.data.count = 1;
           const scope = activeCacheScope;
