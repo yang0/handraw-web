@@ -16089,8 +16089,8 @@
             if (card.status !== "error") {card.status = "error";changed=true;}
           }
         }
-        entry.done = payload.items.length > 0 && payload.items.every(it =>
-          ["success","failed","cancelled"].includes(it.status));
+        entry.done = window.HandrawStudioCore.selectRunProjection(
+          payload.run,payload.items).isTerminal;
         if (changed) {
           // Modify only the selected card's result, never markdown, anchor,
           // plan version or unrelated cards.
