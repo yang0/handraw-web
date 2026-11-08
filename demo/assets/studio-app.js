@@ -5539,6 +5539,13 @@
       }
     }
     if (!writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles)) {
+      for (const art of CS.myArticles || []) {
+        if (art && (art.projectPending || art._articleProjectDirty ||
+            ["local_only","error","saving","dirty"].includes(art.projectSaveState))) {
+          if (art.projectSaveState !== "conflict") art.projectSaveState = "dirty";
+          art.projectError = "local_draft_storage_failed";
+        }
+      }
       setArticlesSyncStatus("failed");
       toast("文章本机存储失败，请勿关闭页面；请检查浏览器存储空间");
       return;
@@ -7078,9 +7085,13 @@
     const articleTitle = "";
     const isManualTitle = false;
     const artSubject = "文章配图";
+    // All single image completions and failed-only retries belong to one
+    // article history / public Work identity, including after a page reload.
+    const historyId = planNode.data.generationId ||
+      (planNode.data.generationId = E.uid("hist_art"));
 
     const entry = {
-      id: planNode.data.generationId || E.uid("hist_art"),
+      id: historyId,
       requestId: planNode.data.requestId || "",
       createdAt: dateFull,
       timeShort,

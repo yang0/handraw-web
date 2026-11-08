@@ -36,6 +36,10 @@
       planId:str(art.planId || "article-plan-" + art.id),
       revision:int(art.planRevision)
     });
+    // Public Work identity is private Article Project metadata; it must
+    // survive refresh and cross-device restoration, never be regenerated for
+    // another single-card retry.
+    if (art.generationId) plan.generationId = str(art.generationId);
     // PlanSlot is canonical; retain card-specific delivery fields so another
     // device can restore completed images without requiring an old Graph.
     plan.slots = plan.slots.map((slot,i) => {
@@ -118,6 +122,7 @@
       coverRatio:cards.find(c=>c.role==="cover")?.ratio || previous?.coverRatio || "2.35:1",
       documentRevision:int(article.revision),planRevision:int(plan?.revision),
       planId:plan?.planId || "article-plan-" + article.documentId,
+      generationId:str(plan?.generationId || previous?.generationId || ""),
       projectId:project.id,projectRevision:int(project.revision),
       projectAuthority:"article",projectSaveState:"synced",
       projectPending:null,projectCopyPending:null,projectError:"",

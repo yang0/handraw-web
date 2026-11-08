@@ -9,6 +9,7 @@ async function main() {
   const art={id:"article-109",articleTitle:"茶与山",title:"茶与山",
     markdown:"# 茶与山\n\n龙井茶园。\n\n## 云间茶事\n\n溪流。",
     documentRevision:7,planRevision:3,planId:"article-plan-109",
+    generationId:"history-one-work-109",
     style1:"FA-001",layout:"SC-021",coverRatio:"2.35:1",inlineRatio:"4:3",
     cards:[{id:"slot-cover",slotId:"slot-cover",role:"cover",
       anchorId:"anchor-cover",afterBlockIdx:-1,subject:"茶园封面",
@@ -28,6 +29,7 @@ async function main() {
   assert.equal(snapshot.draft.article.markdown,art.markdown);
   assert.equal(snapshot.draft.plan.kind,"article");
   assert.equal(snapshot.draft.plan.documentRevision,7);
+  assert.equal(snapshot.draft.plan.generationId,"history-one-work-109");
   assert.deepEqual(snapshot.draft.plan.slots.map(s=>s.anchorId),
     snapshot.draft.article.anchors.map(a=>a.anchorId));
   assert.deepEqual(snapshot.draft.plan.slots.map(s=>s.slotId),
@@ -40,6 +42,9 @@ async function main() {
     title:"茶与山",revision:12,draft:snapshot.draft});
   assert.equal(hydrated.markdown,art.markdown);
   assert.equal(hydrated.projectRevision,12);
+  assert.equal(hydrated.generationId,"history-one-work-109");
+  assert.equal(Article.snapshot(hydrated).draft.plan.generationId,
+    "history-one-work-109","Single-card retries must reuse one Work identity");
   assert.equal(hydrated.cards[1].afterBlockIdx,3);
   assert.equal(hydrated.cards[1].anchorId,"anchor-para-4");
   assert.equal(hydrated.cards[0].imageUrl,"/generated/cover109.webp");
