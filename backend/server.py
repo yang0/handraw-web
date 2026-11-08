@@ -1260,7 +1260,18 @@ def preflight_generation_references(
                 "参考素材格式不合法，请重新选择",
                 status=400, code="invalid_generation_reference",
             )
-        resolved = resolve_one(value)
+        try:
+            resolved = resolve_one(value)
+        except OSError:
+            # A disk/object-store read failure happens BEFORE any reservation
+            # or gateway submit. Preserve the original API's 502/refunded
+            # contract while making clear that no wallet debit occurred.
+            logger.warning("Reference image preflight read failed; request not reserved", exc_info=True)
+            raise ServiceError(
+                "参考素材读取失败，未提交生成且未扣费；请稍后重试",
+                status=502, code="generation_reference_read_failed",
+                extra={"refunded": True},
+            ) from None
         if not resolved:
             raise ServiceError(
                 "参考素材不存在、已失效或无权访问；未扣费也未提交任务",
