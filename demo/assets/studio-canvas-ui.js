@@ -9,7 +9,7 @@
 })(typeof window!=="undefined"?window:globalThis,function(){
   "use strict";
   const STATUS_LABELS=Object.freeze({
-    pending:"排队中",running:"生成中",success:"已完成",failed:"失败",
+    pending:"排队中",generating:"生成中",running:"生成中",success:"已完成",failed:"失败",
     partial:"部分完成",cancel_requested:"正在停止",cancelled:"已取消",
     unknown:"远端待核实"
   });
@@ -82,6 +82,7 @@
     // Server-owned RunItem rows always win over optimistic/local slot state.
     if(Array.isArray(projection?.slots)){
       for(const s of projection.slots)if(Number.isInteger(s.index)&&s.index<expected&&s.index>=0){
+        if((s.status==="pending"||s.status==="unknown")&&slots[s.index].imageUrl)continue;
         slots[s.index]={
           index:s.index,status:s.status,
           imageUrl:s.status==="success"?mediaUrl(s.imageUrl):"",
