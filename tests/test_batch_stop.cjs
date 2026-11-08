@@ -53,7 +53,7 @@ const emptyStop=vm.runInNewContext(
 );
 assert.equal(emptyStop("ctrl_batch"),true);
 assert.match(messages.at(-1),/尚未提交的图片不会计费/);
-assert.match(studio, /const batchRun = \{ id: batchId, ctrlId: ctrl\.id, cancelled: false, controller, submittedSlots \}/);
+assert.match(studio, /const batchRun = \{ id: batchId, ctrlId: ctrl\.id, cancelled: false, controller,[\s\S]*?submittedSlots,[\s\S]*?executionGraph/, "Run retains submitted slots and frozen execution Graph");
 assert.match(studio, /signal: controller \? controller\.signal : undefined/);
 assert.match(studio, /if \(batchRun\.cancelled\) return;/);
 assert.match(studio,/ctrl\.data\.status = "stopped"/);
