@@ -65,7 +65,7 @@ let visible=Canvas.galleryState(group,{
 assert.equal(visible.slots[0].imageUrl,"");
 assert.equal(visible.counts.success,0);
 assert.equal(visible.counts.unknown,1);
-assert.equal(visible.counts.pending+visible.counts.gating,undefined); // no synthetic successes
+assert.equal(visible.counts.pending,5); // no synthetic completed items
 assert.equal(typeof Quick.projectRun,"function");
 assert.equal(typeof Series.project,"function");
 const quick=Quick.projectRun({ok:true,run,items,slots});
