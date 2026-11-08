@@ -20,7 +20,7 @@
   }
   function isLocallyUnsynced(tab) {
     return Boolean(tab && (tab.projectPending || tab.projectCopyPending ||
-      ["local_only", "error", "conflict", "saving"].includes(tab.projectSaveState)));
+      ["dirty", "local_only", "error", "conflict", "saving"].includes(tab.projectSaveState)));
   }
   function localDrafts(tabs) {
     return (Array.isArray(tabs) ? tabs : [])

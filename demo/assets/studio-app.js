@@ -1348,7 +1348,7 @@
   function archiveClosedProjectDraft(tab) {
     if (!tab) return true;
     const unsynced = tab.projectPending || tab.projectCopyPending ||
-      ["local_only", "saving", "error", "conflict"].includes(tab.projectSaveState);
+      ["dirty", "local_only", "saving", "error", "conflict"].includes(tab.projectSaveState);
     if (!unsynced) return true;
     const backup = {
       id: tab.id, title: tab.title, blueprint: tab.blueprint,
@@ -1561,8 +1561,11 @@
     };
     const result = await ProjectClient.flush(tab, currentProjectSnapshot(tab), callback);
     if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return false;
-    if (result?.needsSave && CS.activeTabId === tab.id) {
-      scheduleProjectAutoSave(tab);
+    if (result?.needsSave) {
+      // An in-flight save can finish after navigation to another tab.
+      // Do not strand the newer local draft until that tab is reopened.
+      if (CS.activeTabId === tab.id) scheduleProjectAutoSave(tab);
+      else void saveActiveProject(tab);
     }
     return Boolean(result?.ok);
   }
@@ -4122,7 +4125,7 @@
     // Project IDs and pending requests are stored in account-scoped local tabs.
     const resumeTab = CS.tabs.find((t) => t.id === CS.activeTabId);
     if (resumeTab && resumeTab.projectId && !isArticleTab(resumeTab) &&
-        (resumeTab.projectPending || ["local_only", "error"].includes(resumeTab.projectSaveState))) {
+        (resumeTab.projectPending || ["dirty", "local_only", "error"].includes(resumeTab.projectSaveState))) {
       scheduleProjectAutoSave(resumeTab);
     }
   }
@@ -19483,7 +19486,7 @@
         tab.dirty = true;
         scheduleWorkflowAutoSave();
       }
-      if (tab.projectPending || ["local_only", "error"].includes(tab.projectSaveState)) {
+      if (tab.projectPending || ["dirty", "local_only", "error"].includes(tab.projectSaveState)) {
         scheduleProjectAutoSave(tab);
       }
     });

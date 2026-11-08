@@ -100,6 +100,19 @@ async function test() {
   assert.equal(conflicted.projectSaveState, "synced");
   assert.equal(conflicted.projectPending, null);
   assert.notEqual(conflicted.projectId, "prj-existing");
+  // A malformed 200 response cannot silently acknowledge a local draft.
+  let invalidRequests=0;
+  const incomplete=apiWith(async () => {
+    invalidRequests++;
+    return {ok:true,status:200,json:async()=>({ok:true,revision:1})};
+  });
+  const invalidTab={editRevision:2};
+  const invalid=await incomplete.flush(invalidTab,snapshot("ack missing ID"));
+  assert.equal(invalid.ok,false);
+  assert.equal(invalidTab.projectSaveState,"error");
+  assert.ok(invalidTab.projectPending,"Missing acknowledgement retains outbox");
+  assert.equal(invalidTab.projectRevision,undefined);
+  assert.equal(invalidRequests,1);
   // Search and cursors must be encoded as URL parameters, never interpolated.
   let requested="";
   const searching=createClient({fetchImpl:async (path,init)=>{

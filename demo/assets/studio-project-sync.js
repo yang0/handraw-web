@@ -140,6 +140,12 @@
       const promise = (async () => {
         try {
           const result = await request(pending.method, pending.path, pending.payload);
+          // HTTP 200 alone is not a durable CAS acknowledgement.
+          if (!Number.isSafeInteger(Number(result.revision)) ||
+              Number(result.revision) < 1 ||
+              String(result.projectId || "") !== String(tab.projectId || "")) {
+            throw new Error("invalid_project_save_ack");
+          }
           // Responses acknowledge exactly the frozen payload, not edits that
           // arrived while it was running.
           tab.projectRevision = Number(result.revision);
@@ -187,6 +193,10 @@
       }
       const pending = tab.projectCopyPending;
       const response = await request("POST", pending.path, pending.payload);
+      if (!Number.isSafeInteger(Number(response.revision)) || Number(response.revision) < 1 ||
+          String(response.projectId || "") !== pending.payload.newProjectId) {
+        throw new Error("invalid_project_copy_ack");
+      }
       tab.projectId = pending.payload.newProjectId;
       tab.projectRevision = Number(response.revision);
       tab.projectPending = null;
