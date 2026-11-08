@@ -10167,6 +10167,11 @@
                 ${cloudRun ? `<div role="status" class="ic-v4-run-status" style="font-size:11px;padding:6px 8px;">
                    云端 Run：已确认 ${cloudRun.succeeded}/${cloudRun.total} 张成功${cloudRun.failed ? " · 失败 "+cloudRun.failed+" 张" : ""}
                    ${cloudRun.isTerminal ? " · 已结束" : " · 仍在执行（可刷新恢复）"}
+                   ${cloudRun.items?.length ? `<div class="ic-v4-run-items" style="display:flex;gap:6px;overflow:auto;margin-top:5px;">
+                     ${cloudRun.items.map(item=>`<img src="${esc(item.imageUrl)}" alt="已恢复生成结果" loading="lazy"
+                       data-run-id="${esc(cloudRun.runId)}" data-item-id="${esc(item.id)}"
+                       data-slot-id="${esc(item.slotId)}" style="width:64px;height:64px;object-fit:cover;border-radius:5px;">`).join("")}
+                   </div>` : ""}
                  </div>` : cd.runId ? `<div role="status" class="ic-v4-run-status" style="font-size:11px;padding:6px 8px;">云端状态待核对 · 不自动重新提交任务</div>` : ""}
                  <!-- 5 Modes Grid (文章封面+插图已合并为统一的「文章配图」) -->
                 <div class="ic-v4-section">
@@ -13764,7 +13769,16 @@
       if (!response.ok || !payload?.ok || !payload.run || !Array.isArray(payload.items) ||
           String(payload.run.id || payload.run.runId || "") !== runId)
         throw new Error("run_read_failed");
-      return window.HandrawStudioCore.selectRunProjection(payload.run,payload.items);
+      const projection = window.HandrawStudioCore.selectRunProjection(payload.run,payload.items);
+      // The owner-scoped GET is the only source of confirmed item/media URLs.
+      // Keep each result linked to its original control, slot and V3 Item;
+      // rendering this read-only projection must not mutate Graph or publish.
+      const outputs = control?.data?.studio2RunSnapshot?.outputs || [];
+      return {...projection,items:payload.items.filter(item=>item.status==="success" &&
+        item.mediaId && typeof item.imageUrl==="string" && item.imageUrl &&
+        (/^\\/(?!\\/)/.test(item.imageUrl) || /^https:\\/\\//i.test(item.imageUrl)))
+        .map(item=>({...item,slotId:outputs[Number(item.slotIndex)]?.slotId ||
+          outputs[Number(item.slotIndex)]?.outputId || ""}))};
     }).then(model => {
       if (scope !== activeCacheScope || epoch !== cacheScopeEpoch ||
           canvasRunModels.get(key) !== entry) return;
