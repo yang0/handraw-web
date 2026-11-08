@@ -66,7 +66,7 @@ def _parse_response(value: Any) -> dict[str, Any]:
 def evaluate(corpus: dict[str, Any], samples: list[dict[str, Any]],
              allowlist: dict[str, Any], *, min_fit: float = 0.85,
              min_diversity: float = 0.65,
-             min_consistency: float = 0.80) -> dict[str, Any]:
+             min_consistency: float = 0.90) -> dict[str, Any]:
     """Audit quality independently of any provider.
 
     Whitelist MUST come from an authorization-aware snapshot, e.g.
@@ -130,9 +130,11 @@ def evaluate(corpus: dict[str, Any], samples: list[dict[str, Any]],
                     normalized["layout"] not in allowed["layout"]:
                 raise ValueError("kind mismatch or unauthorized style/layout")
             for kind in ("style", "layout"):
-                if not all(_id(x) in allowed[kind]
-                           for x in normalized["candidates"][kind]):
+                candidate_ids = [_id(x) for x in normalized["candidates"][kind]]
+                if not all(x in allowed[kind] for x in candidate_ids):
                     raise ValueError("unauthorized alternative " + kind)
+                if normalized[kind] not in candidate_ids:
+                    raise ValueError("selected resource absent from alternatives: " + kind)
             if normalized["ratio"] not in ("1:1", "3:4", "4:3", "9:16",
                                            "16:9", "2.35:1"):
                 raise ValueError("unknown ratio")
