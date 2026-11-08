@@ -18667,6 +18667,79 @@
     });
   }
 
+  // #119: a recheck is a read/poll, never another charged POST /generate.
+  // An abandoned browser lock is not proof that the upstream was cancelled.
+  async function recheckStudioControl(controlId) {
+    const ctrl=getNodeById(controlId);
+    if(!ctrl || ctrl.type!=="output_control")return false;
+    if(_activeBatchRun && _activeBatchRun.ctrlId===controlId &&
+       !_activeBatchRun.cancelled){
+      toast("本页仍有运行中的提交队列，请使用停止按钮终止未提交槽位");
+      return false;
+    }
+    const runId=String(ctrl.data?.runId||ctrl.data?.studio2RunSnapshot?.runId||"");
+    // No remote identity: clear only a detached local busy marker; keep any
+    // frozen pendingRequestIds so an accepted upstream job remains auditable.
+    if(ctrl.data.status==="generating" && (!_activeBatchRun||_activeBatchRun.ctrlId!==controlId)){
+      ctrl.data.status="stopped";
+      for(const display of getDownstreamDisplayNodes(controlId)){
+        if(display.data.status==="generating")display.data.status="idle";
+      }
+      persistOpenTabs();
+    }
+    if(!runId){
+      fullRenderCanvas();
+      toast("已解除失效的本地忙状态；暂无可核实的服务器 Run 编号，未声称任务取消或退款");
+      return false;
+    }
+    const scope=activeCacheScope,epoch=cacheScopeEpoch;
+    const runKey=scope+":"+runId;
+    try{
+      const resp=await fetch("/api/studio/runs/"+encodeURIComponent(runId),{
+        credentials:"include",cache:"no-store"
+      });
+      if(!resp.ok)throw new Error("owner_run_read_failed");
+      const payload=await resp.json();
+      if(!payload?.ok||payload.run?.id!==runId||!Array.isArray(payload.slots))
+        throw new Error("run_read_invalid");
+      if(isStaleScope(epoch,scope))return false;
+      // Reconcile only the latest submitted attempt of each slot. The
+      // existing owner-scoped task GET uses the gateway's real taskId.
+      const toPoll=payload.slots.filter(slot=>slot.needsRecheck&&slot.taskId)
+        .slice(0,12);
+      for(const slot of toPoll){
+        if(isStaleScope(epoch,scope))return false;
+        try{
+          const params=new URLSearchParams({id:String(slot.taskId)});
+          await fetch("/api/studio/tasks?"+params.toString(),{
+            credentials:"include",cache:"no-store"
+          });
+        }catch(error){
+          console.warn("Studio Run remote reconciliation uncertain",error);
+        }
+      }
+      if(isStaleScope(epoch,scope))return false;
+      canvasRunModels.delete(runKey);
+      quickRunModels.delete(runKey);
+      batchRunModels.delete(runKey);
+      if(CS.stageView==="canvas")fullRenderCanvas();
+      else if(["quick","batch"].includes(CS.stageView))renderQuickStart();
+      toast(toPoll.length
+        ?"已向上游重新核实已提交槽位；未完成结果仍按服务器事实显示，取消不保证退款"
+        :"已从服务器重新读取运行状态；无可轮询任务的槽位保持待核实，不会重新计费");
+      return true;
+    }catch(error){
+      if(!isStaleScope(epoch,scope)){
+        canvasRunModels.delete(runKey);
+        quickRunModels.delete(runKey);
+        batchRunModels.delete(runKey);
+        fullRenderCanvas();
+        toast("暂时无法联系运行服务，已清除本地失效锁；上游任务仍可能执行或计费");
+      }
+      return false;
+    }
+  }
+
   // #129: one project, one Graph and server-backed Run projection for both views.
   function renderCanvasProductUI(){
     if(!CanvasUI||!DOM.canvasStage)return;
@@ -18710,6 +18783,7 @@
         markActiveTabDirty();
         persistOpenTabs();fullRenderCanvas();
       },
+      onRecheck:controlId=>{void recheckStudioControl(controlId);},
       onStop:controlId=>{
         if(!cancelActiveBatchGeneration(controlId)){
           toast("未找到可停止的本地队列；已提交远端的任务仍需从运行记录核实");
@@ -19171,6 +19245,13 @@
       updateTabScrollButtons();
     });
     window.addEventListener("online", () => {
+      // A network transition invalidates stale Run read caches, not the
+      // paid request identity or its immutable RunSnapshot.
+      canvasRunModels.clear();
+      quickRunModels.clear();
+      batchRunModels.clear();
+      if(CS.stageView==="canvas")fullRenderCanvas();
+      else if(["quick","batch"].includes(CS.stageView))renderQuickStart();
       // Uncertain network writes replay the same frozen outbox. A 409 stays
       // blocked until the user explicitly preserves a conflict copy.
       const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
