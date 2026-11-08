@@ -120,6 +120,22 @@ def main():
                 assert saved["id"]==first_id,saved
                 assert saved["text"]==saved["projection"]=="第 1 张：杭州春日旅行",saved
                 # Manual add/duplicate/order must not rewrite the stable original id.
+                page.evaluate("""()=>{
+                  window.__series108ClickLog=[];
+                  const board=document.querySelector('.series108-board');
+                  board.addEventListener('click',e=>window.__series108ClickLog.push({
+                    event:e.type,action:e.target.closest('[data-series-action]')?.getAttribute('data-series-action')||''
+                  }),{capture:true});
+                  const ctrl=window.HandrawBatchCreate;
+                  const previous=ctrl.actions?.markDirtyAndRender;
+                  if(typeof previous==='function')ctrl.actions.markDirtyAndRender=()=>{
+                    const loop=window.CS.graph.nodes.find(n=>n.type==='loop');
+                    window.__series108BeforeCommit=loop.data.studio2Plan?.slots?.length;
+                    const out=previous();
+                    window.__series108AfterCommit=loop.data.studio2Plan?.slots?.length;
+                    return out;
+                  };
+                }""")
                 counts=[]
                 for _ in range(6):
                     count=page.locator(".series108-card").count()
@@ -141,7 +157,10 @@ def main():
                         actionHandler:typeof controller?.actions?.markDirtyAndRender,
                         boundLoop:bound?.id,activeLoop:loop.id,
                         sameLoop:bound===loop,visibleButtons:document.querySelectorAll(
-                          '[data-series-action="add"]').length};
+                          '[data-series-action="add"]').length,
+                        clicks:window.__series108ClickLog,
+                        beforeCommit:window.__series108BeforeCommit,
+                        afterCommit:window.__series108AfterCommit};
                     }"""),
                     "errors":errors
                 }
