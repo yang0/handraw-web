@@ -318,6 +318,88 @@ class BatchPlanRoutesTests(unittest.TestCase):
         self.assertIn("响应超时", res["error"])
         self.assertIn("stage=upstream reason=timeout", "\n".join(logs.output))
 
+    def test_gateway_throw_is_sanitized_and_fixed_mode_falls_back(self) -> None:
+        """#90: a raised exception must never become 500 or leak model text."""
+        secret = "PRIVATE-PROMPT-NEVER-LOG"
+        before = self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM studio_generations").fetchone()[0]
+        with patch("backend.batch_plan_routes.chat",
+                   side_effect=RuntimeError(secret)), \
+             self.assertLogs("backend.batch_plan_routes", level="WARNING") as logs:
+            status, ai = self._req("POST", "/api/studio/batch-plan", {
+                "seed": secret, "count": 2, "layoutMode": "ai",
+            }, cookie=self.cookie)
+        self.assertEqual(status, 503, ai)
+        self.assertEqual(ai["code"], "batch_plan_ai_unavailable")
+        self.assertTrue(ai.get("requestId"))
+        self.assertNotIn(secret, str(ai))
+        logged = "\n".join(logs.output)
+        self.assertIn("stage=upstream reason=exception", logged)
+        self.assertNotIn(secret, logged)
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM studio_generations").fetchone()[0], before)
+        with patch("backend.batch_plan_routes.chat",
+                   side_effect=RuntimeError(secret)):
+            status, fixed = self._req("POST", "/api/studio/batch-plan", {
+                "seed": "固定图型的主题", "count": 2,
+                "layoutMode": "fixed", "fixedLayout": "SC-021",
+            }, cookie=self.cookie)
+        self.assertEqual(status, 200, fixed)
+        self.assertEqual(fixed["source"], "template")
+        self.assertEqual([item["layout"] for item in fixed["items"]],
+                         ["SC-021", "SC-021"])
+
+    def test_gateway_bad_meta_or_nonstr_response_never_returns_500(self) -> None:
+        """#90: defensive API envelope validation, no invented AI plan."""
+        cases = [
+            (("{}", None), 503, "batch_plan_ai_unavailable"),
+            (({"items": []}, {"ok": True}), 502, "batch_plan_ai_invalid"),
+            (("", {"ok": True}), 503, "batch_plan_ai_unavailable"),
+            (("This is not JSON", {"ok": True}), 502, "batch_plan_ai_invalid"),
+            (("", {"ok": False, "reason": "http_502"}), 503,
+             "batch_plan_ai_unavailable"),
+        ]
+        for model_return, status_expected, code_expected in cases:
+            with self.subTest(model_return=model_return), \
+                 patch("backend.batch_plan_routes.chat", return_value=model_return):
+                code, body = self._req("POST", "/api/studio/batch-plan", {
+                    "seed": "极简城市生态信息图", "count": 1, "layoutMode": "ai",
+                }, cookie=self.cookie)
+                self.assertEqual(code, status_expected, body)
+                self.assertEqual(body.get("code"), code_expected, body)
+                self.assertTrue(body.get("requestId"), body)
+
+    def test_ai_separate_slot_layouts_are_not_overridden_by_fixed_default(self) -> None:
+        """#88: semantic per-slot IDs, not SC-001/SC-006 / first-N defaults."""
+        layout_catalog = {f"USR-{i:03d}": f"信息与布局主题 {i}"
+                          for i in range(120)}
+        response = json.dumps({"items": [
+            {"subject": "花瓣脉络的微观观察", "layout": "USR-119"},
+            {"subject": "花期时间轴的先后关系", "layout": "USR-060"},
+            {"subject": "野外植物分布示意", "layout": "USR-011"},
+        ]})
+        captured = []
+        def model(messages, **kwargs):
+            captured.extend(messages)
+            self.assertTrue(kwargs["json_mode"])
+            return response, {"ok": True}
+        with patch("backend.batch_plan_routes.get_valid_layout_map",
+                   return_value=layout_catalog), \
+             patch("backend.batch_plan_routes.chat", side_effect=model):
+            status, result = self._req("POST", "/api/studio/batch-plan", {
+                "seed": "植物科学三段学习", "count": 3,
+                "layoutMode": "ai", "fixedLayout": "SC-021",
+            }, cookie=self.cookie)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["source"], "model")
+        self.assertEqual([i["layout"] for i in result["items"]],
+                         ["USR-119", "USR-060", "USR-011"])
+        self.assertIn("USR-000", captured[1]["content"])
+        self.assertIn("USR-119", captured[1]["content"])
+        self.assertNotIn("SC-001", captured[1]["content"])
+        self.assertNotIn("SC-006", captured[1]["content"])
+        self.assertNotIn("例如", captured[1]["content"])
+
     def test_05_daily_quota_limit(self) -> None:
         """5. Daily quota limit 50 requests/day per user triggers 429."""
         from backend.db import local_today_str
