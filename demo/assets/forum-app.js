@@ -3156,7 +3156,7 @@
       btn.onclick = async () => {
         const op = btn.getAttribute("data-mod-op");
         if (op === "delete") {
-          if (!confirm("确定要彻底删除该帖子吗？此操作将一并删除所有楼层回复，不可撤销。")) return;
+          if (!await window.HandrawDialogs.confirm("确定要彻底删除该帖子吗？此操作将一并删除所有楼层回复，不可撤销。")) return;
         }
         try {
           await S.apiJson("/api/forum/moderate", {
@@ -3183,7 +3183,7 @@
     const authorDelBtn = root.querySelector("#topic-page-author-delete");
     if (authorDelBtn) {
       authorDelBtn.onclick = async () => {
-        if (!confirm("确定要删除您发布的这篇帖子吗？此操作不可撤销。")) return;
+        if (!await window.HandrawDialogs.confirm("确定要删除您发布的这篇帖子吗？此操作不可撤销。")) return;
         try {
           await S.apiJson("/api/forum/moderate", {
             method: "POST",
@@ -3221,14 +3221,14 @@
 
     const arbitrateBtn = root.querySelector("#topic-mod-arbitrate-bounty");
     if (arbitrateBtn) {
-      arbitrateBtn.onclick = () => {
+      arbitrateBtn.onclick = async () => {
         const reps = [..._activeTopicDetail.replies, ..._activeTopicDetail.pendingReplies];
         if (!reps.length) {
           toast("该悬赏帖暂无回复可供仲裁采纳", "warning");
           return;
         }
         const repSummary = reps.map((r, i) => `#${i + 1}楼 @${r.name || r.user || r.author}: ${(r.text || "").slice(0, 30)}`).join("\n");
-        const chosenStr = prompt(`请输入要采纳的楼层编号(1 到 ${reps.length})：\n\n${repSummary}`, "1");
+        const chosenStr = await window.HandrawDialogs.prompt(`请输入要采纳的楼层编号(1 到 ${reps.length})：\n\n${repSummary}`, "1");
         if (!chosenStr) return;
         const floorIdx = parseInt(chosenStr, 10) - 1;
         if (isNaN(floorIdx) || floorIdx < 0 || floorIdx >= reps.length) {
@@ -3236,7 +3236,7 @@
           return;
         }
         const chosenReply = reps[floorIdx];
-        if (!confirm(`确定要代表社区运营将 ${topic.bounty} 悬赏积分仲裁结算给 @${chosenReply.name || chosenReply.user || chosenReply.author} 吗？`)) return;
+        if (!await window.HandrawDialogs.confirm(`确定要代表社区运营将 ${topic.bounty} 悬赏积分仲裁结算给 @${chosenReply.name || chosenReply.user || chosenReply.author} 吗？`)) return;
         S.apiJson(`/api/admin/topics/${topic.id}/moderate`, {
           method: "POST",
           body: { action: "settle_bounty", replyId: chosenReply.id, reason: "管理人员前台仲裁采纳悬赏" }
@@ -3446,7 +3446,7 @@
 
       const delRid = btn.getAttribute("data-del-reply");
       if (delRid) {
-        if (!confirm("确定要删除这条回复吗？此操作不可撤销。")) return;
+        if (!await window.HandrawDialogs.confirm("确定要删除这条回复吗？此操作不可撤销。")) return;
         try {
           await S.apiJson("/api/forum/moderate", {
             method: "POST",
@@ -4195,7 +4195,7 @@
         const tid = b.getAttribute("data-topic-id");
         const op = b.getAttribute("data-card-mod-op");
         if (op === "delete") {
-          if (!confirm("确定要删除这篇帖子吗？此操作不可撤销。")) return;
+          if (!await window.HandrawDialogs.confirm("确定要删除这篇帖子吗？此操作不可撤销。")) return;
         }
         try {
           await S.apiJson("/api/forum/moderate", {
