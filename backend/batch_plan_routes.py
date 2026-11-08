@@ -277,8 +277,14 @@ def execute_batch_plan(
         reason = str(meta.get("reason") or "empty")
         if not re.fullmatch(r"(?:no_key|timeout|network|empty|too_large|invalid_json|http_\d{3})", reason):
             reason = "unknown"
-        logger.warning("event=batch_plan_failed stage=upstream reason=%s mode=%s count=%d", reason, norm_mode, cnt)
+        stage = "upstream_format" if reason in ("invalid_json", "too_large") else "upstream"
+        logger.warning("event=batch_plan_failed stage=%s reason=%s mode=%s count=%d", stage, reason, norm_mode, cnt)
         if norm_mode == "ai":
+            if reason in ("invalid_json", "too_large"):
+                raise ServiceError(
+                    "AI 上游返回格式异常，请稍后重试", status=502,
+                    code="batch_plan_ai_invalid",
+                )
             message = "AI 规划服务响应超时，请稍后重试" if reason == "timeout" else (
                 "AI 图型推荐不可用，请检查 AI 服务配置后重试" if reason == "no_key" else
                 "AI 规划服务暂时不可用，请稍后重试"
