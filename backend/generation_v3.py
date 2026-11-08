@@ -754,10 +754,13 @@ def cancel_unsubmitted_web_slots(
                 "SELECT status FROM generation_items WHERE run_id=? AND position=?",
                 (run["id"], pos * 1000),
             ).fetchone()
+            if gateway:
+                skipped.append(pos)
+                continue
             if existing and existing["status"] == "cancelled":
                 cancelled.append(pos)  # idempotent replay, not a new cancellation
                 continue
-            if gateway or (existing and existing["status"] != "pending"):
+            if existing and existing["status"] != "pending":
                 skipped.append(pos)
                 continue
             tx.execute(
