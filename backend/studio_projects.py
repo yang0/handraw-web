@@ -5,6 +5,7 @@ work table. Current Web execution remains on the V3 run/item ledger.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -223,15 +224,59 @@ def get_project(db: Any, user: dict[str, Any], project_id: str) -> dict[str, Any
     return {"ok": True, "project": _row_to_project(row)}
 
 
-def list_projects(db: Any, user: dict[str, Any]) -> dict[str, Any]:
+def _project_page_cursor(raw: str) -> tuple[str, str]:
+    if not isinstance(raw, str) or not 0 < len(raw) <= 300:
+        _fail("项目分页游标无效", code="invalid_project_cursor")
+    try:
+        decoded = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+        parts = json.loads(decoded.decode("utf-8"))
+        if not isinstance(parts, list) or len(parts) != 2:
+            raise ValueError("invalid cursor")
+        stamp, ident = parts
+        if (not isinstance(stamp, str) or len(stamp) > 48
+                or not re.fullmatch(r"[0-9]{4}-[0-9TZ:.-]+", stamp)):
+            raise ValueError("invalid timestamp")
+        return stamp, _id(ident)
+    except (ValueError, UnicodeError, TypeError, OverflowError):
+        _fail("项目分页游标无效", code="invalid_project_cursor")
+
+
+def _cursor_for(row: Any) -> str:
+    raw = _canonical([str(row["updated_at"]), str(row["id"])]).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def list_projects(db: Any, user: dict[str, Any], *,
+                  query: str = "", cursor: str = "", limit: int = 40) -> dict[str, Any]:
     uid = int(user["id"])
-    rows = db.get_conn().execute(
-        """SELECT id,kind,title,authority,revision,created_at,updated_at
-           FROM studio_projects WHERE user_id=?
-           ORDER BY updated_at DESC,id DESC LIMIT 100""",
-        (uid,),
-    ).fetchall()
-    return {"ok": True, "projects": [_row_to_project(row, include_draft=False) for row in rows]}
+    if not isinstance(query, str) or len(query) > 120:
+        _fail("项目搜索关键词过长", code="invalid_project_query")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        _fail("项目列表每页数量无效", code="invalid_project_limit")
+    sql = """SELECT id,kind,title,authority,revision,created_at,updated_at
+             FROM studio_projects WHERE user_id=?"""
+    args: list[Any] = [uid]
+    if query.strip():
+        # Escape SQL wildcard characters so search means literal text; the
+        # owner predicate is never removed, even on arbitrary cursor input.
+        literal = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        sql += " AND title LIKE ? ESCAPE '\\'"
+        args.append("%" + literal + "%")
+    if cursor:
+        stamp, item_id = _project_page_cursor(cursor)
+        sql += " AND (updated_at < ? OR (updated_at = ? AND id < ?))"
+        args.extend([stamp, stamp, item_id])
+    sql += " ORDER BY updated_at DESC,id DESC LIMIT ?"
+    args.append(limit + 1)
+    rows = db.get_conn().execute(sql, tuple(args)).fetchall()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    return {
+        "ok": True,
+        "projects": [_row_to_project(row, include_draft=False) for row in page],
+        "hasMore": has_more,
+        "nextCursor": _cursor_for(page[-1]) if has_more and page else "",
+    }
 
 
 def _pointer_tokens(path: Any) -> list[str]:
