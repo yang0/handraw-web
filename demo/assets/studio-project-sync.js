@@ -116,16 +116,25 @@
       if (!tab?.projectId || tab.projectSaveState !== "conflict") {
         throw new Error("项目没有待处理的云端冲突");
       }
-      const newProjectId = idFactory("prj");
-      const response = await request("POST",
-        "/api/studio/projects/" + encodeURIComponent(tab.projectId) + "/copy", {
-          newProjectId, localDraft, authority: "graph",
-          title: tab.title || "本机创作",
-          idempotencyKey: idFactory("copy")
-        });
-      tab.projectId = newProjectId;
+      // A lost copy response is as ambiguous as a lost patch response:
+      // preserve the new ID and key so Retry does not create duplicate copies.
+      if (!tab.projectCopyPending) {
+        tab.projectCopyPending = {
+          path: "/api/studio/projects/" + encodeURIComponent(tab.projectId) + "/copy",
+          payload: {
+            newProjectId: idFactory("prj"), localDraft, authority: "graph",
+            title: tab.title || "本机创作",
+            idempotencyKey: idFactory("copy")
+          }
+        };
+        onChange(tab);
+      }
+      const pending = tab.projectCopyPending;
+      const response = await request("POST", pending.path, pending.payload);
+      tab.projectId = pending.payload.newProjectId;
       tab.projectRevision = Number(response.revision);
       tab.projectPending = null;
+      tab.projectCopyPending = null;
       tab.projectRemoteRevision = 0;
       tab.projectSaveState = "synced";
       tab.projectError = "";
