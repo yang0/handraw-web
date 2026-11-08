@@ -1351,14 +1351,28 @@
   }
 
   function updateProjectStatusIndicator() {
-    const btn = DOM.bottomRight?.querySelector("#bl-save-project");
-    if (!btn) return;
     const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
-    btn.textContent = projectStatusText(tab);
-    btn.disabled = tab?.projectSaveState === "saving";
-    btn.title = tab?.projectSaveState === "conflict"
-      ? "云端项目已被其他标签更新；点击保留本机修改为新项目，不覆盖远端"
-      : "项目自动保存到云端，点击可立即同步；与「工作流模板保存」相互独立";
+    for (const btn of [DOM.bottomRight?.querySelector("#bl-save-project"),
+                       DOM.entryBar?.querySelector("#studio-project-status")]) {
+      if (!btn) continue;
+      btn.textContent = projectStatusText(tab);
+      btn.disabled = tab?.projectSaveState === "saving";
+      btn.title = tab?.projectSaveState === "conflict"
+        ? "云端项目已被其他标签更新；点击保留本机修改为新项目，不覆盖远端"
+        : "项目自动保存到云端，点击可立即同步；与「工作流模板保存」相互独立";
+    }
+  }
+
+  function handleProjectStatusClick() {
+    const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
+    if (!tab) return;
+    if (tab.projectSaveState === "conflict") {
+      void copyConflictedProject(tab);
+    } else if (!App.state?.loggedIn) {
+      toast("登录后可将项目保存至云端，本机草稿仍会保留");
+    } else {
+      void saveActiveProject(tab);
+    }
   }
 
   async function saveActiveProject(tab = CS.tabs.find((t) => t.id === CS.activeTabId)) {
@@ -11463,6 +11477,12 @@
       const commitRename = () => {
         if (targetTab && renameInp.value.trim()) {
           targetTab.title = renameInp.value.trim();
+          targetTab.editRevision = Number(targetTab.editRevision || 0) + 1;
+          targetTab.dirty = true;
+          if (targetTab.projectSaveState !== "conflict") {
+            targetTab.projectSaveState = "local_only";
+            void saveActiveProject(targetTab);
+          }
           persistOpenTabs();
         }
         CS.renamingTabId = null;
@@ -12870,17 +12890,7 @@
         DOM.zoomPctBtn = DOM.bottomRight.querySelector("#bl-zoom-pct");
 
         DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(cloudSaveState === "conflict");
-        DOM.bottomRight.querySelector("#bl-save-project").onclick = () => {
-          const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
-          if (!tab) return;
-          if (tab.projectSaveState === "conflict") {
-            void copyConflictedProject(tab);
-          } else if (!App.state?.loggedIn) {
-            toast("登录后可将项目保存至云端，本机草稿仍会保留");
-          } else {
-            void saveActiveProject(tab);
-          }
-        };
+        DOM.bottomRight.querySelector("#bl-save-project").onclick = handleProjectStatusClick;
         DOM.bottomRight.querySelector("#bl-minimap").onclick = () => {
           CS.minimapOpen = !CS.minimapOpen;
           savePrefs();
@@ -16605,6 +16615,8 @@
       || (canvas && CS.lastStudioTaskView === "article");
     const history = CS.stageView === "history";
     const workflows = CS.stageView === "workflows";
+    const showProjectSave = CS.stageView === "quick" || CS.stageView === "batch";
+    const activeProjectTab = CS.tabs.find((t) => t.id === CS.activeTabId);
     const historyCount = (CS.generationHistory || []).length;
     DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作任务">
       <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
@@ -16614,8 +16626,12 @@
       <span class="qc-view-label">编辑方式</span>
       <button type="button" class="btn btn-sm${!canvas ? " btn-primary" : ""}" id="studio-mode-simple" aria-pressed="${!canvas}">简洁编辑</button>
       <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布</button>
-    </div><div class="qc-entry-actions"><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
+    </div><div class="qc-entry-actions">${showProjectSave
+      ? `<button type="button" class="btn btn-sm" id="studio-project-status" title="保存当前项目至云端">${projectStatusText(activeProjectTab)}</button>`
+      : ""}<button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
 
+    const btnProjectSave = DOM.entryBar.querySelector("#studio-project-status");
+    if (btnProjectSave) btnProjectSave.onclick = handleProjectStatusClick;
     const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
     if (btnQuick) btnQuick.onclick = () => { switchCreationStage("quick"); };
     const btnBatch = DOM.entryBar.querySelector("#studio-mode-batch");
