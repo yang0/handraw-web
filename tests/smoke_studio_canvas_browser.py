@@ -14,10 +14,13 @@ import tempfile
 import threading
 from pathlib import Path
 from unittest.mock import patch
-
-from backend.server import create_channel_server, init_database
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.server import create_channel_server, init_database
 
 
 def main():
