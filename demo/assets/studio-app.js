@@ -17744,6 +17744,14 @@
             toast("服务器仍在处理上一个任务，请等待状态确认，避免重复提交");
             return;
           }
+          const unconfirmed=getDownstreamDisplayNodes(p.ctrl.id).some(d=>
+            d.data?.pendingTaskId || d.data?.pendingRequestId ||
+            Object.keys(d.data?.pendingRequestIds||{}).length ||
+            Object.keys(d.data?.pendingTasksBySlot||{}).length);
+          if(unconfirmed) {
+            toast("仍有待核对的云端请求，已保留请求 ID，请先从生图历史恢复结果");
+            return;
+          }
           const topic = String(p.text.data.text || "").trim();
           if (!topic) {
             toast("请先填写创作主题");
