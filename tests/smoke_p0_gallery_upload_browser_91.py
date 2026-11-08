@@ -164,6 +164,45 @@ def main():
                     output.mkdir(parents=True,exist_ok=True)
                     page.screenshot(path=str(output/"gallery-upload-1440.png"),
                                     animations="disabled")
+                    # #98: real 390px viewport, real upload form, no premature
+                    # network call, explicit name/category and private DB check.
+                    page.set_viewport_size({"width":390,"height":900})
+                    select_file.set_input_files({
+                        "name":"mobile-category.webp","mimeType":"image/webp",
+                        "buffer":image("WEBP",(120,90,190)),
+                    })
+                    mobile_name = "手机端自定义名称"
+                    assert name.input_value() == "mobile-category"
+                    name.fill(mobile_name)
+                    category.select_option("props")
+                    assert host.locator("[data-gallery-upload-form]").is_visible()
+                    assert db.get_conn().execute(
+                        "SELECT COUNT(*) FROM user_uploads WHERE user_id=?",
+                        (int(user["id"]),)
+                    ).fetchone()[0] == 3, "Selecting must not auto-upload"
+                    confirm.click()
+                    page.wait_for_function("""() => document.querySelectorAll(
+                        '#qa91-library [data-gallery-cards] article.hw-personal-gallery-card'
+                    ).length===4""",timeout=20000)
+                    row=db.get_conn().execute(
+                        "SELECT name_zh,cat FROM user_uploads WHERE user_id=? "
+                        "AND name_zh=?", (int(user["id"]),mobile_name)
+                    ).fetchone()
+                    assert row and row["cat"] == "props"
+                    mobile=page.evaluate("""() => {
+                      const g=document.querySelector('#qa91-library [data-gallery-cards]');
+                      const b=g.getBoundingClientRect();
+                      const cards=[...g.children].map(el=>el.getBoundingClientRect());
+                      return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,
+                        columns:getComputedStyle(g).gridTemplateColumns.split(' ').filter(Boolean).length,
+                        x:b.x,right:b.right,
+                        cards:cards.map(r=>({x:r.x,right:r.right}))};
+                    }""")
+                    assert mobile["width"]==390 and mobile["scrollWidth"]<=392,mobile
+                    assert mobile["columns"]==2,mobile
+                    assert all(c["x"]>=-1 and c["right"]<=391 for c in mobile["cards"]),mobile
+                    page.screenshot(path=str(output/"gallery-upload-390.png"),
+                                    animations="disabled")
                     (output/"browser-summary.json").write_text(
                         json.dumps({"issue":91,"result":"PASS",
                             "scope":"live-owner-Cookie-HTTP-Chromium-temporary-SQLite",
@@ -171,6 +210,8 @@ def main():
                             "storageFailureInjected":True,
                             "retrySameUid":True,
                             "persistedCount":len(stored),
+                            "mobileNewUploadVerified":True,
+                            "mobileViewport":mobile,
                             "productionRequestIdRootCauseVerified":False,
                             "browser":browser.version},ensure_ascii=False,indent=2)+"\n",
                         encoding="utf-8")
