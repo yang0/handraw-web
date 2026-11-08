@@ -600,6 +600,7 @@
                   <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy || this.context?.pendingCloud ? "disabled" : ""}>清空表单</button>
                   ${localBusy ? '<button type="button" class="btn btn-sm" id="make-image-btn-stop">停止等待</button>' : ""}
                   <button type="button" class="btn btn-sm" id="make-image-btn-ai-plan" ${this.isPlanning ? 'disabled' : ''} title="根据主题和实际可用画风、图型规划，不触发付费生图">${this.isPlanning ? 'AI 正在规划…' : 'AI 辅助设计'}</button>
+                   ${this.context?.planUndoAvailable ? '<button type="button" class="btn btn-sm" id="make-image-btn-ai-undo">撤销 AI 规划</button>' : ''}
                   ${authoritative?.canRetry && !busy ? '<button type="button" class="btn btn-sm" id="make-image-btn-retry">重试失败项</button>' : ""}
                   <button type="button" class="btn btn-primary make-image-btn-run" id="make-image-btn-run" ${busy ? "disabled" : ""}>
                     ${busy ? "正在生成中…" : "开始生成 (1张)"}
@@ -607,6 +608,13 @@
                 </div>
               </div>
 
+               ${this.context?.aiPhase?'<p id="make-image-ai-status" role="status" aria-live="polite" style="font-size:12px;">'+esc(this.context.aiPhase)+'</p>':''}
+               ${this.context?.aiProposal?.reasons?`<div class="make-image-ai-reasons" aria-label="AI 字段推荐理由" style="font-size:12px;padding:10px 0;line-height:1.7">
+                 <strong>AI 推荐理由</strong>
+                 <div>画风：${esc(this.context.aiProposal.reasons.style||"")}</div>
+                 <div>图型：${esc(this.context.aiProposal.reasons.layout||"")}</div>
+                 <div>画幅：${esc(this.context.aiProposal.reasons.ratio||"")}</div>
+               </div>`:""}
               <!-- Status text -->
               ${statusText ? `<div class="make-image-status" role="status">${esc(statusText)}</div>` : ""}
 
@@ -1152,6 +1160,9 @@
         }
       };
 
+      const aiUndo = root.querySelector("#make-image-btn-ai-undo");
+      if(aiUndo)aiUndo.onclick=()=>this.actions?.undoPlan?.();
+ 
       // 9. Run button
       const runBtn = root.querySelector("#make-image-btn-run");
       if (runBtn) {
