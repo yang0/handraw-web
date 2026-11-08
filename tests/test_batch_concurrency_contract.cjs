@@ -22,8 +22,8 @@ assert.match(studio, /slotPositions\.get\(x\.slotKey\)/);
 assert.match(studio, /dn\.data\.items\[i\] = builtItem/, "Out-of-order image belongs at its slot index");
 assert.match(studio, /dn\.data\.items\[i\] = failedItem/);
 assert.match(studio, /activeLoopNode\.data\.completedCount = completedCount/);
-assert.match(batch, /slotResults\.filter\(\(item\) => item\?\.imageUrl\)\.length/,
-  "Visible images must be authoritative, not stale node completedCount");
+assert.match(batch, /const completedCount = remote\s*\? remote\.succeeded\s*: Math\.max\(displays\.flatMap/,
+  "V3 Run success count takes precedence; local recovery uses visible images, not stale node completedCount");
 
 const queueFactory = vm.runInNewContext(
   "(async function(slotIndexes, concurrency, batchRun, onSlot) {\n" +
