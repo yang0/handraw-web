@@ -490,6 +490,40 @@ def _selected(graph: dict[str, Any], value: Any) -> list[str]:
     return list(dict.fromkeys(value))
 
 
+def _scope(operations: Any, graph: dict[str, Any], selected: list[str],
+           scope: Any) -> str:
+    """Constrain existing-node mutations to the explicitly selected subgraph."""
+    if scope not in ("project", "selection"):
+        _error("graphpatch_invalid_scope", "GraphPatch 作用域必须是项目或选中子图", 400)
+    if scope == "project":
+        return scope
+    if not selected:
+        _error("graphpatch_selection_required", "请先选择子图节点，或改用整个项目作用域", 400)
+    existing = {n["id"] for n in graph["nodes"]}
+    new_ids = {o.get("node", {}).get("id") for o in operations
+               if isinstance(o, dict) and o.get("op") == "addNode"
+               and isinstance(o.get("node"), dict)}
+    edge_by_id = {e["id"]: e for e in graph["edges"]}
+    for op in operations:
+        if not isinstance(op, dict):
+            _error("graphpatch_invalid_ops", "补丁操作无效")
+        kind = op.get("op")
+        if kind in {"removeNode", "setNodeData"} and op.get("id") not in selected:
+            _error("graphpatch_scope_forbidden", "此操作超出所选节点范围", 403)
+        if kind == "removeEdge":
+            e = edge_by_id.get(op.get("id"))
+            if e and e["from"] not in selected and e["to"] not in selected:
+                _error("graphpatch_scope_forbidden", "不能删除所选子图外的连线", 403)
+        if kind == "addEdge":
+            e = op.get("edge")
+            if isinstance(e, dict) and not (
+                e.get("from") in selected or e.get("to") in selected or
+                e.get("from") in new_ids or e.get("to") in new_ids
+            ):
+                _error("graphpatch_scope_forbidden", "连线修改超出所选子图范围", 403)
+    return scope
+
+
 def preview(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
     uid = _owner(user)
     if not isinstance(body, dict):
@@ -531,6 +565,7 @@ def preview(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, An
             _error("graphpatch_revision_conflict", "Graph 版本已变化，请重新预览", 409)
         _check_graph(graph)
         selected = _selected(graph, body.get("selectedIds"))
+        scope = body.get("scope", "project")
         if mode == "preset":
             ops = _preset(graph, body.get("preset"), selected, body, tx, user)
         elif mode == "ai":
@@ -539,6 +574,7 @@ def preview(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, An
             ops = body.get("operations")
         else:
             _error("graphpatch_invalid_mode", "请选择 AI 或预置的结构化操作", 400)
+        scope = _scope(ops, graph, selected, scope)
         after, diffs, conflicts = _candidate(graph, ops, tx, user)
         next_draft = deepcopy(json.loads(row["draft_json"]))
         next_draft["graph"] = after
@@ -547,6 +583,7 @@ def preview(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, An
         _validate_draft(next_draft, tx, uid)
         impact = _impact(graph, after, db)
         preview_data = {"operations": len(ops), "diffs": diffs,
+                        "scope": scope, "selectedIds": selected,
                         "summary": {"nodesAdded": sum(o["op"] == "addNode" for o in ops),
                                     "nodesRemoved": sum(o["op"] == "removeNode" for o in ops),
                                     "fieldsChanged": sum(o["op"] == "setNodeData" for o in ops),
@@ -607,6 +644,9 @@ def apply(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]
                 _canonical(before) != review["before_graph_json"]:
             _error("graphpatch_revision_conflict", "画布已修改，请重新预览", 409)
         ops = json.loads(review["operations_json"])
+        reviewed_context = json.loads(review["preview_json"])
+        _scope(ops, before, reviewed_context.get("selectedIds", []),
+               reviewed_context.get("scope", "project"))
         next_graph, _, conflicts = _candidate(before, ops, tx, user)
         if conflicts:
             _error("graphpatch_locked_field", "存在锁定节点/字段，必须先解决冲突", 409,
