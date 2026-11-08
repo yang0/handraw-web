@@ -4,7 +4,7 @@ const assert=require("node:assert/strict");
 const fs=require("node:fs");
 const Board=require("../demo/assets/studio-series-board-108.js");
 const Series=require("../demo/assets/studio-series-plan.js");
-const controller=require("../demo/assets/studio-batch.js");
+const vm=require("node:vm");
 const plan={slots:Array.from({length:6},(_,i)=>({
   slotId:"slot-108-"+(i+1),order:i,
   subject:i===0?'<script>alert("boom")</script>':"分镜 "+(i+1),
@@ -72,5 +72,8 @@ assert.match(app,/persistDraft: \(\) => \{ markActiveTabDirty\(\); persistOpenTa
 assert.match(css,/\.series108-layout\s*\{/);
 assert.match(css,/@media\(max-width:460px\)/);
 assert.equal(typeof Series.patchSlot,"function");
-assert.equal(typeof controller.BatchCreateController,"function");
+const sandbox={window:{},console,Map,Set,Array,Number,Math,JSON,Date};
+vm.runInNewContext(source,sandbox);
+assert.equal(typeof sandbox.window.HandrawBatchCreate.render,"function");
+assert.equal(typeof sandbox.window.HandrawBatchCreate.mountSeriesWorkspace,"function");
 console.log("Studio #108 PlanSlot cards, V3 status, filters, XSS, compact fallback & UI adapters PASS");
