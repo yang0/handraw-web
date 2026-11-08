@@ -154,7 +154,7 @@ def main():
                     page.wait_for_function(
                         "()=>window.qaLegacyConfirmOutcome===false",timeout=8000)
                     open_confirm()
-                    page.locator("dialog.hw-confirm-action-dialog").press("Escape")
+                    page.keyboard.press("Escape")
                     page.wait_for_function(
                         "()=>window.qaLegacyConfirmOutcome===false",timeout=8000)
                     open_confirm()
