@@ -76,7 +76,9 @@ jobs:
       - run: python tests/smoke_studio_navigation_projects_106.py
       - name: 'Legacy #86/#87 real Chromium history/workflow navigation widths (1440/1200/390)'
         run: python tests/smoke_legacy_library_alignment_86_87.py
-      - name: 'P0 #91 real Chromium gallery upload/error/retry'
+      - name: '#92/#97 true Chromium 1440/390 history and work detail interactions'
+        run: python tests/smoke_legacy_ui_92_97_98.py
+      - name: '#91/#98 Chromium 1440/390 gallery metadata/edit/upload/retry'
         run: python tests/smoke_p0_gallery_upload_browser_91.py
       - name: 'P0 #114 real Chromium profile/gallery masonry at 1440/390'
         run: python tests/smoke_p0_profile_gallery_masonry_114.py
@@ -95,6 +97,7 @@ jobs:
             artifacts/ai-110-offline-eval.json
             artifacts/p0-masonry-114/**
             artifacts/p0-gallery-91/**
+            artifacts/ui-92-97-98/**
             artifacts/canvas-127-screen/**
             artifacts/canvas-119-screen/**
             artifacts/quick-128-screen/**
