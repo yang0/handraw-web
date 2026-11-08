@@ -180,6 +180,8 @@ def main():
 
                 # ?project=id is a direct reopen contract, not just a library
                 # link. Persist a valid graph without invoking generation.
+                visit("entry=quick")
+                page.locator("#make-image-subject").wait_for(timeout=20000)
                 project = page.evaluate("""async () => {
                     const response = await fetch('/api/studio/projects', {
                         method: 'POST', credentials: 'include',
@@ -188,14 +190,27 @@ def main():
                             projectId: 'nav106-direct', kind: 'image',
                             authority: 'graph', title: '106 云端直达项目',
                             idempotencyKey: 'nav106-create-direct-once',
-                            draft: {graph: window.CS.graph, activeView: 'canvas'}
+                            draft: {graph: window.CS.graph, activeView: 'simple'}
                         })
                     });
                     return {status: response.status, payload: await response.json()};
                 }""")
                 assert project["status"] == 200, project
                 visit("project=nav106-direct")
-                stage("canvas")
+                try:
+                    stage("quick")
+                except Exception as exc:
+                    detail = page.evaluate("""() => ({
+                        stage: window.CS?.stageView, pending: window.CS?.pendingProjectDeepLink,
+                        opening: window.CS?.projectOpeningId,
+                        tabs: window.CS?.tabs?.map(t=>({
+                            id:t.id,projectId:t.projectId,
+                            saveState:t.projectSaveState,activeView:t.projectActiveView
+                        })),
+                        url:location.href,
+                        pageText:document.body?.innerText?.slice(-600)
+                    })""")
+                    raise AssertionError({"directProject":project,"browserState":detail}) from exc
                 page.wait_for_function("""() => window.CS?.tabs?.some(t =>
                     t.id===window.CS.activeTabId &&
                     t.projectId==='nav106-direct' &&
