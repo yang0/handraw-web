@@ -789,8 +789,16 @@
         : [];
       if (ws.loggedIn) {
         ensureDefaultSavedWorkflows();
-        if (Array.isArray(ws.workflows) && ws.workflows.length) {
-          const byId = new Map((CS.savedWorkflows || []).map((w) => [w.id, w]));
+        if (Array.isArray(ws.workflows)) {
+          const remoteIds = new Set(ws.workflows.filter((w) => w?.id).map((w) => w.id));
+          const byId = new Map((CS.savedWorkflows || [])
+            .filter((w) => w && (
+              w.isOfficialPreset || remoteIds.has(w.id) || w.cloudSaveState !== "synced"
+            ))
+            .map((w) => [w.id, w]));
+          // A missing remote workflow is a confirmed deletion only for local
+          // copies that had been acknowledged as synced. Unconfirmed local
+          // drafts must survive even when the cloud list is empty.
           ws.workflows.forEach((rw) => {
             if (!rw || !rw.id || !rw.graph) return;
             const normG = normalizeGraphSchema(rw.graph);
