@@ -495,11 +495,12 @@ def _scope(operations: Any, graph: dict[str, Any], selected: list[str],
     """Constrain existing-node mutations to the explicitly selected subgraph."""
     if scope not in ("project", "selection"):
         _error("graphpatch_invalid_scope", "GraphPatch 作用域必须是项目或选中子图", 400)
+    if not isinstance(operations, list) or not 1 <= len(operations) <= _MAX_OPS:
+        _error("graphpatch_invalid_ops", "GraphPatch 操作数量无效")
     if scope == "project":
         return scope
     if not selected:
         _error("graphpatch_selection_required", "请先选择子图节点，或改用整个项目作用域", 400)
-    existing = {n["id"] for n in graph["nodes"]}
     new_ids = {o.get("node", {}).get("id") for o in operations
                if isinstance(o, dict) and o.get("op") == "addNode"
                and isinstance(o.get("node"), dict)}
