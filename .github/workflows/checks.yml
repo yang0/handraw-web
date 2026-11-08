@@ -44,6 +44,8 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_article_http_e2e.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_ai_plan.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_ai_plan_http.py' -v
+      - name: '#110 offline AI quality + diversity / consistency evaluator'
+        run: python -m unittest discover -s tests -p 'test_studio_ai_quality_110.py' -v
       - name: '#126 GraphPatch schema/permissions/DAG/CAS/undo'
         run: python -m unittest discover -s tests -p 'test_studio_graph_patch_126.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_resource_refs.py' -v
@@ -80,6 +82,7 @@ jobs:
             artifacts/studio-112-matrix.json
             artifacts/studio-112-100-node/**
             artifacts/graphpatch-126/**
+            artifacts/ai-110-offline-eval.json
             artifacts/canvas-127-screen/**
             artifacts/canvas-119-screen/**
             artifacts/quick-128-screen/**
