@@ -312,6 +312,9 @@ class SkillPostgresS3Journey112(unittest.TestCase):
                                           cookie=self.other_cookie)[0], 404)
         # The original owner may still read private history, but the
         # published square must not expose a hidden work.
+        self.assertEqual(self.request(
+            "GET", path, token=self.publisher)[0], 403,
+            "A publish-only token must not read private run history")
         status, history, _ = self.request(
             "GET", path, token=self.reader)
         self.assertEqual(status, 200)
