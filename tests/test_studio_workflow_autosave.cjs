@@ -32,6 +32,7 @@ function harness() {
   let nextTimer = 0;
   const sandbox = {
     CS,
+    DOM: { bottomRight: null, entryBar: null },
     App: { state: { serverBacked: true, loggedIn: true } },
     E: { uid: () => "new-workflow-1" },
     activeCacheScope: "user-1",
