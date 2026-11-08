@@ -17936,6 +17936,9 @@
         busy,
         statusText,
         forkSource: CS.forkGenerationSource,
+        aiPhase: CS.quickAIPhase || "",
+        aiProposal: CS.quickAIProposal || null,
+        planUndoAvailable: Boolean(CS.quickAIUndo?.ctrlId === p.ctrl.id),
         runProjection: remoteModel,
         localBusy: isCurrentBusy(),
         pendingCloud: displays.some(d=>d.data?.pendingTaskId ||
@@ -17959,67 +17962,71 @@
         openImageLightbox: (url, title) => openImageLightbox(url, title),
         openCanvas: () => switchCreationStage("canvas"),
         plan: async () => {
-          const subject = String(p.text.data.text || "").trim();
-          if (!subject) return toast("请先填写主题");
-          const sd = p.skill.data, cd = p.ctrl.data;
-          const signature = () => JSON.stringify({
-            subject: p.text.data.text, style: sd.style1, layout: sd.layout,
-            ratio: cd.ratio, ratioSource: cd.ratioSource
+          const subject=String(p.text.data.text||"").trim();
+          if(!subject)return toast("请先填写主题");
+          const AI=window.HandrawStudioAIPlan,Quick=window.HandrawQuickSpec;
+          if(!AI||!Quick)return toast("AI 规划模块未加载，请刷新");
+          const snapshot=Quick.read(p).spec;
+          const baseRevision=snapshot.revision;
+          const signature=()=>JSON.stringify({
+            graphId:CS.activeTabId,graphRevision:CS.graph.revision,
+            subject:p.text.data.text,spec:Quick.read(p).spec
           });
-          const base = signature();
-          let payload = null;
-          try {
-            const resp = await fetch("/api/studio/image-plan", {
-              method: "POST", credentials: "include",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                subject, selectedStyleId: sd.style1 || "",
-                selectedLayoutId: sd.layout || "",
-                ratio: cd.ratioSource === "user" ? cd.ratio : "",
-                lockedFields: [
-                  ...(sd.style1 ? ["style"] : []),
-                  ...(sd.layout ? ["layout"] : []),
-                  ...(cd.ratioSource === "user" ? ["ratio"] : [])
-                ]
-              })
+          const before=signature();
+          const updatePhase=label=>{
+            CS.quickAIPhase=label;
+            const status=DOM.quickStage?.querySelector("#make-image-ai-status");
+            if(status)status.textContent=label;
+          };
+          updatePhase("正在检索已授权资源并请求 AI 结构化规划…");
+          try{
+            const resp=await fetch("/api/studio/ai-plan",{
+              method:"POST",credentials:"include",
+              headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({kind:"image",subject,baseRevision,count:1,
+                current:{styleId:p.skill.data.style1||"",
+                  layoutId:p.skill.data.layout||"",
+                  ratio:p.ctrl.data.ratioSource==="user"?p.ctrl.data.ratio:""},
+                lockedFields:snapshot.lockedFields||[]})
             });
-            payload = await resp.json();
-            if (!resp.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${resp.status}`);
-          } catch (err) {
-            toast(`AI 规划失败：${err.message || "服务暂不可用"}`);
-            return;
-          }
-          if (!CS.graph.nodes.includes(p.skill) || signature() !== base) {
-            toast("AI 规划返回时参数已修改，已保留你的最新设置，请重新规划");
-            return;
-          }
-          const proposal = payload.proposal || {};
-          try {
-            if(window.HandrawQuickSpec) {
-              const suggestions={};
-              if(!sd.style1 && proposal.styleId)suggestions.style=proposal.styleId;
-              if(!sd.layout && proposal.layoutId)suggestions.layout=proposal.layoutId;
-              if(cd.ratioSource!=="user" && proposal.ratio) {
-                suggestions.ratio=proposal.ratio;
-                suggestions.ratioSource="default";
-              }
-              if(Object.keys(suggestions).length)window.HandrawQuickSpec.apply(p,suggestions,{
-                catalog:Catalog,isUnlocked:(id,item)=>S.isUnlocked(id,item)
-              });
-            } else {
-              if (!sd.style1 && proposal.styleId) sd.style1 = proposal.styleId;
-              if (!sd.layout && proposal.layoutId) sd.layout = proposal.layoutId;
-              if (cd.ratioSource !== "user" && proposal.ratio) {
-                cd.ratio = proposal.ratio;
-                cd.ratioSource = "default";
-              }
+            const data=await resp.json();
+            if(!resp.ok||!data?.ok){
+              const error=new Error(AI.message(data?.code)||data?.error||"规划失败");
+              error.code=data?.code;throw error;
             }
-          } catch(err) {
-            toast("AI 推荐的资源不可用："+(err.code||err.message)+"；已保留原设置");
-            return;
+            if(signature()!==before)throw Object.assign(
+              new Error("ai_revision_conflict"),{code:"ai_revision_conflict"});
+            updatePhase("正在校验方案资源和字段级差异…");
+            const report=AI.review(data,{kind:"image",baseRevision,
+              currentSpec:snapshot,catalog:Catalog,
+              isUnlocked:(id,item)=>S.isUnlocked(id,item)});
+            updatePhase(report.hasConflicts?"等待审阅与人工锁定项相关的建议…":"正在应用无冲突方案…");
+            const decision=await AI.confirmDifferences(report,{title:"审阅作图 AI 方案"});
+            if(!decision.approved)return;
+            if(signature()!==before)throw Object.assign(
+              new Error("ai_revision_conflict"),{code:"ai_revision_conflict"});
+            const result=AI.apply(report,{parts:p,catalog:Catalog,
+              isUnlocked:(id,item)=>S.isUnlocked(id,item),approvedKeys:decision.keys});
+            CS.quickAIUndo=result.undo?{ctrlId:p.ctrl.id,token:result.undo}:null;
+            CS.quickAIProposal=data.creationSpecPatch;
+            updatePhase("AI 规划完成，未触发生成或扣费");
+            markDirtyAndRender();
+            toast("已完成 AI 画风/图型/画幅方案，支持撤销；没有发起生图");
+          }catch(err){
+            updatePhase("");
+            toast("AI 规划失败："+AI.message(err.code||err.message));
           }
-          markDirtyAndRender();
-          toast("AI 已推荐合法画风、图型和画幅；可调整后再生成，不会自动扣费");
+        },
+        undoPlan: () => {
+          const token=CS.quickAIUndo;
+          if(!token||token.ctrlId!==p.ctrl.id)return;
+          try{
+            window.HandrawStudioAIPlan.undo(token.token,{parts:p});
+            CS.quickAIUndo=null;
+            CS.quickAIProposal=null;
+            markDirtyAndRender();
+            toast("已撤销 AI 方案，不影响历史图片和 Run");
+          }catch(err){toast(window.HandrawStudioAIPlan.message(err.code));}
         },
         addResultAsReference: (result) => {
           if (!p || !result?.imageUrl) return;
