@@ -96,7 +96,8 @@ class FakeReader {
     this.onload();
   }
 }
-const win = {confirm:()=>true, crypto:{randomUUID:()=>anotherUid}};
+let approveDelete = false;
+const win = {HandrawDialogs:{confirm:async()=>approveDelete}, crypto:{randomUUID:()=>anotherUid}};
 const ctx = {window:win, document:{}, FileReader:FakeReader, Map, Object, Array, String, console};
 vm.runInNewContext(source,ctx);
 (async()=>{
@@ -115,6 +116,10 @@ vm.runInNewContext(source,ctx);
   assert.match(cards.innerHTML,/私家角色/);
   assert.equal(cards.classes.has("is-empty"), false, "Returning to populated category restores masonry");
 
+  await cards.callbacks.click({target:{closest:()=>({dataset:{galleryDelete:uid}})}});
+  assert.equal(uploads.length,1,"Canceling the in-app dialog must not delete the item");
+  assert.equal(calls.filter(c=>c.init?.method==="DELETE").length,0);
+  approveDelete = true;
   await cards.callbacks.click({target:{closest:()=>({dataset:{galleryDelete:uid}})}});
   assert.equal(uploads.length,0);
   assert.match(cards.innerHTML,/图库暂无图片/);
