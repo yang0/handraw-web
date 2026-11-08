@@ -1389,6 +1389,17 @@
   function currentProjectSnapshot(tab) {
     const graph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
     const blueprint = String(graph?.blueprint || tab.blueprint || "");
+    // Project authority is still the Graph. Attach *derived identity metadata*
+    // on the saved Graph node, not a second writable CreationSpec snapshot.
+    const savedGraph = cloneGraph(graph);
+    const refs = typeof window !== "undefined" ? window.HandrawStudioResources : null;
+    if (refs) {
+      for (const node of savedGraph.nodes || []) {
+        if (node?.type !== "skill_params" || !node.data) continue;
+        const result = refs.syncLegacyRefs(node.data, Catalog);
+        node.data.resourceRefs = result.data.resourceRefs;
+      }
+    }
     return {
       kind: ["series", "xhs", "loop_100", "ip_story", "loop", "style_ab", "omnimedia"].includes(blueprint)
         ? "series" : "image",
@@ -1398,7 +1409,7 @@
       authority: "graph",
       title: tab.title || "未命名创作",
       draft: {
-        graph: cloneGraph(graph),
+        graph: savedGraph,
         activeView: CS.stageView === "canvas" ? "canvas" : "simple"
       }
     };
@@ -1411,7 +1422,9 @@
       case "synced": return "项目已云端保存";
       case "conflict": return "项目冲突 · 保留副本";
       case "error": return tab.projectError === "project_media_upload_required"
-        ? "请先上传本地图片" : "项目同步失败 · 重试";
+        ? "请先上传本地图片" :
+        /^(invalid_resource|resource_|project_media_forbidden)/.test(tab.projectError || "")
+          ? "项目资源无效 · 请重新选择" : "项目同步失败 · 重试";
       case "local_only": return "项目待同步";
       default: return "保存云端项目";
     }
@@ -5801,6 +5814,40 @@
 
   function checkExclusiveGateForControl(ctrlNode) {
     const rec = E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
+    const refs = window.HandrawStudioResources;
+    if (refs) {
+      const selections = [
+        ["style1", rec.style1Id],
+        ...(rec.fusionToggleOn ? [["style2", rec.style2Id]] : []),
+        ["layout", rec.layoutId],
+        ...(rec.colorIds || []).map(id => ["colors", id]),
+        ...(rec.toneIds || []).map(id => ["tones", id])
+      ];
+      for (const loop of rec.loopNodes || []) {
+        const ld = loop?.data || {};
+        if (ld.loopMode === "styles") {
+          (ld.styleIds || []).forEach(id => selections.push(["style1",id]));
+        }
+        if (ld.loopMode === "layouts") {
+          (ld.layoutIds || []).forEach(id => selections.push(["layout",id]));
+        }
+        for (const row of ld.batchRows || []) {
+          if (row?.layout) selections.push(["layout", row.layout]);
+          if (row?.style1) selections.push(["style1", row.style1]);
+        }
+      }
+      for (const [field,id] of selections) {
+        if (!id) continue;
+        const valid = refs.resolveSelection(Catalog, field, id, {
+          isUnlocked: (code, item) => S.isUnlocked(code,item)
+        });
+        if (!valid.ok) {
+          toast(refs.formatError(valid) + " · " + id +
+            "。请重新选择后生成，原有选择已保留。");
+          return false;
+        }
+      }
+    }
     const rMap = Catalog.resourceMap || new Map();
     const extraLoopRes = [];
     if (rec.loopNode && rec.loopNode.data) {
