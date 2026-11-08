@@ -67,11 +67,40 @@
     if(loop.data.studio2Plan?.slots) {
       return N.normalizePlan(loop.data.studio2Plan);
     }
-    const old=Core.normalizeLegacyBatch(loop,{planId:loop.data.planId||loop.id});
-    old.slots.forEach(s=>{
-      s.userOverrides=[];
-      if(s.overrides.layout && loop.data.batchLayoutMode==="ai")
-        s.suggestedLayout=s.overrides.layout.id;
+    const ld=loop.data;
+    const old=Core.normalizeLegacyBatch(loop,{planId:ld.planId||loop.id});
+    // Import hidden AI rows even when the currently displayed legacy mode
+    // is Fixed. Old UI kept those rows across mode changes: discarding them
+    // here would destroy manual layout/reference edits on first migration.
+    const savedRows=Array.isArray(ld.batchRows)?ld.batchRows:[];
+    const oldAi=ld.batchLayoutMode==="fixed"&&savedRows.length
+      ? Core.normalizeLegacyBatch({id:loop.id,data:{...ld,batchLayoutMode:"ai"}},
+          {planId:ld.planId||loop.id})
+      : null;
+    const byId=new Map((oldAi?.slots||[]).map(s=>[s.slotId,s]));
+    old.slots.forEach((slot,index)=>{
+      const source=oldAi ? (byId.get(slot.slotId)||oldAi.slots[index]) : slot;
+      const row=savedRows.find(r=>r?.slotId===slot.slotId)||savedRows[index]||{};
+      if(source&&source!==slot) {
+        slot.overrides={...copy(source.overrides||{}),...copy(slot.overrides||{})};
+        slot.referenceMedia=copy(source.referenceMedia||[]);
+        slot.skipGlobalRefs=Boolean(source.skipGlobalRefs);
+        slot.lockedFields=copy(source.lockedFields||[]);
+      }
+      slot.userOverrides=copy(Array.isArray(row.userOverrides)?row.userOverrides:[]);
+      slot.lockedFields=copy(Array.isArray(row.lockedFields)
+        ? row.lockedFields : slot.lockedFields||[]);
+      // A legacy AI recommendation is not a manually locked per-slot
+      // layout. Fixed mode inherits global, but stores recommendation for
+      // switching back to AI; explicit user overrides stay active.
+      if(slot.overrides.layout) {
+        slot.suggestedLayout=slot.overrides.layout.id;
+        if(ld.batchLayoutMode==="fixed"&&!slot.userOverrides.includes("layout"))
+          delete slot.overrides.layout;
+      }
+      if(Array.isArray(row.assetItems)&&row.assetItems.length &&
+          !slot.referenceMedia?.length)slot.referenceMedia=copy(row.assetItems);
+      if(row.skipGlobalRefs)slot.skipGlobalRefs=true;
     });
     return sync(loop,old);
   }
