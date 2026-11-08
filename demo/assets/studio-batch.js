@@ -1677,6 +1677,7 @@
           const baseSpec=Quick.read(p).spec,plan=Series.read(loop);
           const baseRevision=baseSpec.revision,planRevision=plan.revision;
           const currentMode=loop.data.batchLayoutMode||"fixed";
+          const hadFixedLayout=Boolean(p.skill.data.layout);
           const signature=()=>JSON.stringify({parts:{
             skill:p.skill.data,text:p.text?.data,ctrl:p.ctrl.data},
             loop:loop.data});
@@ -1730,7 +1731,7 @@
             if(!result.undo){stage("没有需要应用的合法差异");return;}
             // When no fixed layout was manually selected, a theme-only plan
             // must display each recommended layout instead of fake fixed mode.
-            if(currentMode==="fixed"&&!p.skill.data.layout){
+            if(currentMode==="fixed"&&!hadFixedLayout){
               loop.data.batchLayoutMode="ai";
               result.undo.after=JSON.stringify({skill:p.skill.data,text:p.text?.data,
                 ctrl:p.ctrl.data,loop:loop.data});
