@@ -94,7 +94,7 @@ async function main() {
       {id:"item-a",slotIndex:0,position:2,status:"success",mediaId:"media-a"}]});
   const recovered=await promise;
   assert.equal(recovered["out-a"].projection.succeeded,1);
-  assert.equal(recovered["out-a"].projection.viewStatus,"success");
+  assert.equal(recovered["out-a"].projection.viewStatus,"partial");
   assert.equal(recovered["out-b"].projection.succeeded,1);
   assert.equal(recovered["out-a"].outputs[0].items[2].id,"item-a");
   assert.equal(recovered["out-b"].outputs[0].slotId,"b");
