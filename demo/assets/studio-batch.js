@@ -137,6 +137,28 @@
       return this.context?.parts || null;
     }
 
+    getSeries() { return global.HandrawStudioSeries || null; }
+    readPlan() {
+      const api=this.getSeries(),loop=this.getParts()?.loop;
+      return api&&loop?api.read(loop):null;
+    }
+    patchSlotByIndex(index,delta) {
+      const api=this.getSeries(),loop=this.getParts()?.loop;
+      if(!api||!loop)return false;
+      const slot=api.read(loop).slots[index];
+      if(!slot)return false;
+      try{
+        api.patchSlot(loop,slot.slotId,delta,{
+          catalog:this.context?.catalog,
+          isUnlocked:this.actions?.isUnlocked
+        });
+        return true;
+      }catch(e){
+        global.HANDRAW_SHARED?.toast?.("逐张参数修改失败："+(e.code||e.message));
+        return false;
+      }
+    }
+
     getGraph() {
       return this.context?.graph || null;
     }
@@ -311,6 +333,9 @@
         return;
       }
 
+      const series=this.getSeries();
+      const plan=series?series.read(p.loop):null;
+      const candidateCount=series?series.candidateCount(p.loop):1;
       const sd = p.skill.data || {};
       const td = p.text?.data || {};
       const cd = p.ctrl.data || {};
@@ -370,13 +395,20 @@
       const globalAssetItems = Array.isArray(p.asset?.data?.items) ? p.asset.data.items : [];
 
       // M1: Single truth - each iteration generates 1 image in batch set planning
-      const perIterCount = 1;
+      const perIterCount = candidateCount;
       const iterations = this.resolveIterations();
       const totalCount = Math.min(200, iterations.length * perIterCount);
-
-      const busy = Boolean(this.context?.busy);
+      const remote=this.context?.runProjection;
+      const localBusy=Boolean(this.context?.localBusy??this.context?.busy);
+      const busy=localBusy||Boolean(remote&&!remote.isTerminal);
       const displays = Array.isArray(this.context?.displays) ? this.context.displays : [];
-      const results = Array.isArray(this.context?.results) ? this.context.results : [];
+      const results = remote?.results
+        ? remote.results.map(r=>({
+            id:r.itemId||r.outputId,imageUrl:r.imageUrl,
+            title:"第"+(r.slotOrder+1)+"张 · 候选"+(r.candidateIndex+1),
+            index:r.outputIndex,item:r
+          }))
+        : (Array.isArray(this.context?.results) ? this.context.results : []);
 
       const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
       // The displayed slot results are the source of truth. Node progress can
@@ -385,10 +417,14 @@
       const progress = this.progressState?.batchId === this.activeBatchId ? this.progressState : null;
       const currentStep = ld.currentStep || 0;
       const totalSteps = ld.totalSteps || totalCount;
-      const completedCount = Math.max(slotResults.filter((item) => item?.imageUrl).length,
-        progress?.completedCount || 0);
-      const failedCount = Math.max(slotResults.filter((item) => item?.failed && !item?.imageUrl).length,
-        progress?.failedCount || 0);
+      const completedCount = remote
+        ? remote.succeeded
+        : Math.max(displays.flatMap(d=>d.data?.items||[]).filter(i=>i?.imageUrl).length,
+          progress?.completedCount || 0);
+      const failedCount = remote
+        ? remote.failed
+        : Math.max(displays.flatMap(d=>d.data?.items||[]).filter(i=>i?.failed&&!i?.imageUrl).length,
+          progress?.failedCount || 0);
       const isStopping = Boolean(progress?.isStopping || ld.isStopping);
       const activeIndices = Array.isArray(progress?.activeIndices) ? progress.activeIndices : [];
       const activeIndex = activeIndices.length ? activeIndices[0]
@@ -402,6 +438,11 @@
               <h1 class="make-image-title">批量</h1>
               <p class="make-image-lede">套图规划批量出图：统一画风与母题，AI 规划每张主题与图型，支持自由微调。</p>
             </div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;">每张候选
+              <select class="hw-input" id="batch-candidates" aria-label="每个计划槽位生成候选数" ${busy ? "disabled" : ""}>
+                ${[1,2,3,4].map(n=>`<option value="${n}" ${candidateCount===n?"selected":""}>${n} 张</option>`).join("")}
+              </select>
+            </label>
             <label style="display:flex;align-items:center;gap:8px;font-size:12px;">同时生成
               <select class="hw-input" id="batch-concurrency" aria-label="批量生图并发数量" ${busy ? "disabled" : ""}>
                 ${[1,2,3,4].map((n) => `<option value="${n}" ${Number(ld.batchConcurrency || 3) === n ? "selected" : ""}>${n} 张</option>`).join("")}
@@ -814,17 +855,18 @@
               <!-- Bottom Bar: Cost + Action (Defect 2 Fixed) -->
               <div class="batch-action-bar">
                 <div class="batch-cost-wrap">
+                  <span class="batch-output-count" data-slot-count="${iterations.length}" data-output-count="${totalCount}">计划 ${iterations.length} 张 × 候选 ${candidateCount} = ${totalCount} 个实际输出</span>
                   ${this.renderCostHtml(totalCount)}
                   ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
                 </div>
 
                 <div class="batch-btn-wrap">
-                  ${busy ? `<span class="batch-busy-hint">任务处理中，暂不能清空或再次生成</span>` : ""}
-                  <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
-                  ${busy ? `
-                    <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止"}</button>
+                  ${busy ? `<span class="batch-busy-hint">${localBusy?"停止只中断本地排队/等待，已提交上游可能继续计费":"云端仍在执行，刷新可恢复状态；停止并不保证取消或退款"}</span>` : ""}
+                  <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy || this.context?.pendingCloud ? "disabled" : ""}>清空表单</button>
+                  ${localBusy ? `
+                    <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止本地等待"}</button>
                   ` : `
-                    <button type="button" class="make-image-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>开始批量生成</button>
+                    <button type="button" class="make-image-run-btn" id="batch-btn-start" ${busy || totalCount === 0 ? "disabled" : ""}>开始批量生成</button>
                   `}
                 </div>
               </div>
