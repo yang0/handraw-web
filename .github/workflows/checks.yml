@@ -78,6 +78,8 @@ jobs:
         run: python tests/smoke_p0_gallery_upload_browser_91.py
       - name: 'P0 #114 real Chromium profile/gallery masonry at 1440/390'
         run: python tests/smoke_p0_profile_gallery_masonry_114.py
+      - name: 'Historical P0 #86/#87 real Chromium stage alignment and cancel-safe dialog'
+        run: python tests/smoke_legacy_library_dialogs_86_87.py
       - run: python tests/smoke_studio_dag_browser_120.py
       - name: '#112 M0-M3 acceptance matrix and CI wiring guard'
         run: python ops/check_studio_acceptance_112.py --output artifacts/studio-112-matrix.json
@@ -93,6 +95,7 @@ jobs:
             artifacts/ai-110-offline-eval.json
             artifacts/p0-masonry-114/**
             artifacts/p0-gallery-91/**
+            artifacts/legacy-86-87/**
             artifacts/canvas-127-screen/**
             artifacts/canvas-119-screen/**
             artifacts/quick-128-screen/**
@@ -164,6 +167,8 @@ jobs:
           node-version: '24'
       - run: node --check demo/assets/main-app.js && node --check demo/assets/mixed-feed.js && node --check demo/assets/image-loader.js
       - run: node tests/test_mixed_feed.cjs && node tests/test_main_image_loader.cjs && node tests/test_progressive_image_loader.cjs && node tests/test_masonry_flow.cjs && node tests/test_profile_studio_p2_p3.cjs && node tests/test_studio_history_masonry.cjs && node tests/test_forum_work_assets.cjs && node tests/test_image_asset_detail.cjs && node tests/test_work_fork_hydration.cjs && node tests/test_fork_subject_single_field.cjs
+      - name: 'Historical P0 #87 no native browser dialog in first-party UI'
+        run: node tests/test_native_dialogs_87.cjs
       - name: Private gallery, batch parallel UI and progress regression
         run: |
           node --check demo/assets/cloud-center.js
