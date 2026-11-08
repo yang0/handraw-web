@@ -141,7 +141,7 @@ def reconcile(provider: object, handraw: object) -> dict:
     issues: list[dict] = []
     attempts: dict[tuple[str, str, int], dict] = {}
     ordinal: dict[tuple[str, str, int], int] = {}
-    task_ids: dict[str, tuple[str, str, int]] = {}
+    task_ids: dict[tuple[str, str], tuple[str, str, int]] = {}
     for pos, row in enumerate(_rows(h["attempts"], "handraw.attempts"), 1):
         row = _object(row, {"owner_key", "request_id", "attempt", "run_id", "item_id", "slot_key",
                             "provider_task_id", "submitted", "status", "cost_type"},
@@ -171,14 +171,15 @@ def reconcile(provider: object, handraw: object) -> dict:
         tid = _ident(row["provider_task_id"], "provider task ID")
         if type(row["state"]) is not str or row["state"] not in PROVIDER_STATES:
             raise BadEvidence("invalid provider state")
-        if key in tasks or (tid in task_ids and task_ids[tid] != key):
+        scoped_tid = (key[0], tid)
+        if key in tasks or (scoped_tid in task_ids and task_ids[scoped_tid] != key):
             _issue(issues, "duplicate_or_conflicting_provider_task", ordinal.get(key))
         else:
             tasks[key] = row
-            task_ids[tid] = key
+            task_ids[scoped_tid] = key
 
     event_groups: dict[tuple[str, str, int], dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
-    event_ids: set[str] = set()
+    event_ids: set[tuple[str, str]] = set()
     for row in _rows(p["events"], "provider.events"):
         row = _object(row, {"event_id", "owner_key", "request_id", "attempt", "provider_task_id",
                             "kind", "currency", "amount_minor", "occurred_at_utc"},
@@ -191,15 +192,15 @@ def reconcile(provider: object, handraw: object) -> dict:
         if type(row["kind"]) is not str or row["kind"] not in KINDS or row["currency"] != p["currency"]:
             raise BadEvidence("provider currency/kind mismatch")
         amount = _count(row["amount_minor"], "provider money minor units", positive=True)
-        if event_id in event_ids:
+        if (key[0], event_id) in event_ids:
             _issue(issues, "duplicate_provider_event", ordinal.get(key))
-        event_ids.add(event_id)
+        event_ids.add((key[0], event_id))
         event_groups[key][row["kind"]].append(amount)
         if key not in tasks or tasks[key]["provider_task_id"] != tid:
             _issue(issues, "provider_event_without_matching_task", ordinal.get(key))
 
     ledger_groups: dict[tuple[str, str, int], dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
-    ledger_ids: set[str] = set()
+    ledger_ids: set[tuple[str, str]] = set()
     for row in _rows(h["ledger_events"], "handraw.ledger_events"):
         row = _object(row, {"event_key", "owner_key", "request_id", "attempt", "kind",
                             "delta_credits", "occurred_at_utc"},
@@ -214,14 +215,14 @@ def reconcile(provider: object, handraw: object) -> dict:
         if (row["kind"] == "studio_gen" and delta >= 0 or
                 row["kind"] == "studio_refund" and delta <= 0):
             _issue(issues, "invalid_internal_ledger_direction", ordinal.get(key))
-        if event_id in ledger_ids:
+        if (key[0], event_id) in ledger_ids:
             _issue(issues, "duplicate_internal_ledger_event", ordinal.get(key))
-        ledger_ids.add(event_id)
+        ledger_ids.add((key[0], event_id))
         ledger_groups[key][row["kind"]].append(delta)
         if key not in attempts:
             _issue(issues, "orphan_internal_ledger_event")
 
-    callback_ids: dict[str, dict] = {}
+    callback_ids: dict[tuple[str, str], dict] = {}
     for row in _rows(h["callbacks"], "handraw.callbacks"):
         row = _object(row, {"callback_event_id", "owner_key", "request_id", "attempt",
                             "provider_task_id", "state", "occurred_at_utc"},
@@ -233,9 +234,10 @@ def reconcile(provider: object, handraw: object) -> dict:
         _in_period(row["occurred_at_utc"], hw, "callback")
         if type(row["state"]) is not str or row["state"] not in TERMINAL:
             raise BadEvidence("callback must have authoritative terminal status")
-        if cbid in callback_ids and callback_ids[cbid] != row:
+        scoped_cbid = (key[0], cbid)
+        if scoped_cbid in callback_ids and callback_ids[scoped_cbid] != row:
             _issue(issues, "conflicting_replayed_callback", ordinal.get(key))
-        callback_ids[cbid] = row
+        callback_ids[scoped_cbid] = row
         if key not in attempts:
             _issue(issues, "orphan_callback")
         elif (not attempts[key]["submitted"] or
