@@ -1978,6 +1978,30 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
                 },
             })
 
+        # #21: surface only the signed-in owner's private custom definitions.
+        # Skill's versioned personal resource table is authoritative; this
+        # user_resources read model is updated in the same CAS transaction.
+        # Never include these records in anonymous boot or public catalogs.
+        private_rows = conn.execute(
+            "SELECT code,kind,name,definition,revision FROM user_resources "
+            "WHERE owner_user_id=? AND deleted_at IS NULL ORDER BY updated_at DESC",
+            (uid,),
+        ).fetchall()
+        for own in private_rows:
+            code = str(own["code"])
+            my_resources.append({
+                "id": code, "code": code, "kind": own["kind"],
+                "name": own["name"], "sourceType": "private", "source": "private",
+                "status": "private", "image": "", "cover": "",
+                "description": "", "definition": own["definition"],
+                "unlockCost": 0, "revision": int(own["revision"]),
+                "author": current_user.get("username") or "",
+                "authorName": current_user.get("display_name") or
+                              current_user.get("username") or "",
+                "isMine": True, "canUse": True, "canCollect": True,
+                "access": {"canRead": True, "canUse": True, "hiddenBy": None},
+            })
+
         fav_codes = set(collections.get("styles", [])) | set(collections.get("layouts", []))
         my_codes = {r["code"] for r in my_resources}
         published_codes = {r["code"] for r in cat_rows}
