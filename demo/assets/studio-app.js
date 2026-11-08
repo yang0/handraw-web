@@ -10495,7 +10495,7 @@
       </datalist>
     `;
 
-    patchStudioCanvasDom(DOM.nodesLayer, cardsHtml, datalistsHtml);
+    const {dirtyNodes,stats}=patchStudioCanvasDom(DOM.nodesLayer,cardsHtml,datalistsHtml);
 
     // Sync actual rendered DOM heights back to node.h so port positions, wires, minimap & fitView are pixel-accurate!
     const elById = new Map();
