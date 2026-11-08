@@ -45,7 +45,7 @@ const end = source.indexOf("  function openWorkflowsPage(", begin);
 assert.ok(begin>0 && end>begin, "Extract Project Center bindings for functional tests");
 const fragment=source.slice(begin,end);
 async function suite() {
-  const CS={tabs:[],activeTabId:null,graph:{nodes:[],edges:[]},cloudProjects:[],
+  const CS={tabs:[],closedProjectDrafts:[],activeTabId:null,graph:{nodes:[],edges:[]},cloudProjects:[],
     projectCenterLoading:false,projectCenterError:"",projectQuery:"",stageView:"projects",
     projectOpeningId:""};
   const opened=[],toasts=[],created=[],paths=[],getCalls=[];
@@ -75,7 +75,8 @@ async function suite() {
     createWorkflowTab:args=>{const tab={id:"tab-new-"+(created.length+1),title:args.title,
       graph:args.graph,blueprint:args.blueprint,dirty:false};
       created.push(tab);CS.tabs.push(tab);return tab;},
-    persistOpenTabs:()=>{},
+    persistOpenTabs:()=>{},writeJsonStorage:()=>{},scheduleProjectAutoSave:()=>{},
+    CLOSED_PROJECT_DRAFTS_KEY:"closed",
     fullRenderCanvas:()=>{},
     openWorkflowsPage:()=>{},switchCreationStage:()=>{},buildForkGraphFromWork:()=>{},
     E:{},URL,document:{activeElement:null},S:{openLoginModal:()=>{}},
@@ -117,6 +118,20 @@ async function suite() {
   assert.equal(created.length,1);
   assert.equal(CS.graph.nodes[0].id,"LOCAL");
   assert.ok(toasts.some(x=>x.includes("旧画布不能安全恢复")));
+
+  // Previously closed offline drafts take precedence over stale cloud data.
+  CS.closedProjectDrafts=[{id:"closed-1",title:"关闭前的草稿",blueprint:"single",
+    graph:{blueprint:"single",nodes:[{id:"unsynced"}],edges:[]},
+    projectId:"prj-closed",projectRevision:5,projectSaveState:"error",
+    projectPending:{method:"PATCH",payload:{idempotencyKey:"stable-replay-1"}}}];
+  const readsBefore=getCalls.length;
+  await c.openCloudProject("prj-closed");
+  assert.equal(getCalls.length,readsBefore,"Closed draft takes precedence over cloud read");
+  const recovered=CS.tabs.find(t=>t.projectId==="prj-closed");
+  assert.ok(recovered);
+  assert.equal(recovered.graph.nodes[0].id,"unsynced");
+  assert.equal(recovered.projectPending.payload.idempotencyKey,"stable-replay-1");
+  assert.equal(CS.closedProjectDrafts.length,0,"Recovered draft moves to open tabs");
 
   // Switching account mid-request must discard the old session's response.
   const count=CS.tabs.length;
