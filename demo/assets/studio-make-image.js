@@ -314,9 +314,8 @@
       const ad = p.asset?.data || {};
       // A read-only canonical projection: legacy nodes stay the only writable
       // draft until the Project API is migrated (#121/#122).
-      if (global.HandrawStudioCore) {
-        this.context.effectiveCreationSpec = global.HandrawStudioCore.normalizeLegacyParts(p).spec;
-      }
+      const effectiveSpec=this.getSpec();
+      if(effectiveSpec)this.context.effectiveCreationSpec=effectiveSpec;
 
       const isFusion = Boolean(sd.fusion);
       const style1Id = sd.style1 || "";
@@ -348,9 +347,17 @@
       const colorObj = selectedColors[0] ? this.getResourceInfo(selectedColors[0], "colors") : null;
 
       const currentPrompt = this.getPromptPreview();
-      const results = Array.isArray(this.context?.results) ? this.context.results : [];
-      const busy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
-      const statusText = this.context?.statusText || "";
+      const authoritative=this.context?.runProjection;
+      const localBusy=typeof this.actions?.isBusy==="function"
+        ? Boolean(this.actions.isBusy()):Boolean(this.context?.localBusy);
+      const remoteBusy=Boolean(authoritative?.ok && !authoritative.isTerminal);
+      const busy=localBusy||remoteBusy;
+      const results=authoritative?.ok
+        ? authoritative.results.map((it,i)=>({id:it.id||"run-"+i,
+            imageUrl:it.imageUrl,title:"生成结果 #"+(i+1),
+            item:{mediaId:it.mediaId,runId:authoritative.runId}}))
+        : (Array.isArray(this.context?.results)?this.context.results:[]);
+      const statusText=this.context?.statusText||"";
       const forkSource = this.context?.forkSource || this.forkSource || null;
 
       this.hostElement.innerHTML = `
@@ -589,10 +596,11 @@
                   ${this.renderCostHtml()}
                 </div>
                 <div class="make-image-btn-wrap">
-                  ${busy ? `<span class="make-image-busy-hint">生成中 · 停止仅中断本地等待；已提交云端的任务可能继续执行或计费</span>` : ""}
-                  <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
-                  ${busy ? '<button type="button" class="btn btn-sm" id="make-image-btn-stop">停止等待</button>' : ""}
+                  ${busy ? `<span class="make-image-busy-hint">${localBusy?"正在提交/本地等待；停止不能保证取消已提交任务或退款":"服务端任务仍在进行，可刷新恢复并查看历史"}</span>` : ""}
+                  <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy || this.context?.pendingCloud ? "disabled" : ""}>清空表单</button>
+                  ${localBusy ? '<button type="button" class="btn btn-sm" id="make-image-btn-stop">停止等待</button>' : ""}
                   <button type="button" class="btn btn-sm" id="make-image-btn-ai-plan" ${this.isPlanning ? 'disabled' : ''} title="根据主题和实际可用画风、图型规划，不触发付费生图">${this.isPlanning ? 'AI 正在规划…' : 'AI 辅助设计'}</button>
+                  ${authoritative?.canRetry && !busy ? '<button type="button" class="btn btn-sm" id="make-image-btn-retry">重试失败项</button>' : ""}
                   <button type="button" class="btn btn-primary make-image-btn-run" id="make-image-btn-run" ${busy ? "disabled" : ""}>
                     ${busy ? "正在生成中…" : "开始生成 (1张)"}
                   </button>
@@ -634,7 +642,7 @@
                   <div class="make-image-empty-result" role="status">
                     <div class="make-image-empty-result-icon" aria-hidden="true">▧</div>
                     <strong>${busy ? "图片正在生成中…" : "创作结果将在这里显示"}</strong>
-                    <p>${busy ? "可以停止本地等待；已提交的云端任务仍可能完成。" : "左侧输入主题并选择画风，生成成功后可查看大图、下载或继续创作。"}</p>
+                    <p>${remoteBusy?"服务器正在执行已提交的任务，刷新不会遗失请求编号。":busy?"停止只结束本地等待，云端任务以服务器为准。":"左侧输入主题并选择画风，生成成功后可查看大图、下载或继续创作。"}</p>
                   </div>
               `}
               </div>
@@ -1020,8 +1028,9 @@
       if (resetBtn) {
         resetBtn.onclick = () => {
           const currentBusy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
-          if (currentBusy) {
-            global.HANDRAW_SHARED?.toast?.("任务处理中，暂不能清空或再次生成");
+          if (currentBusy || this.context?.pendingCloud ||
+              (this.context?.runProjection?.ok && !this.context.runProjection.isTerminal)) {
+            global.HANDRAW_SHARED?.toast?.("存在云端未确认任务，请先在生图历史查看结果，避免丢失恢复编号");
             return;
           }
           const ok = typeof window.confirm === "function"
@@ -1155,6 +1164,12 @@
           this.actions?.run();
         };
       }
+
+      const retryBtn=root.querySelector("#make-image-btn-retry");
+      if(retryBtn)retryBtn.onclick=()=>{
+        if(this.actions?.isBusy?.())return;
+        this.actions?.retry?.();
+      };
 
       // 9. Results Actions
       root.querySelectorAll("[data-action='download']").forEach((btn) => {
