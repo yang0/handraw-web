@@ -5281,6 +5281,67 @@
     return "";
   }
 
+  // #87: in-app, cancellable confirmation dialog. Never use native
+  // confirm(), and never treat missing dialog support as user approval.
+  // The destructive action runs only after the positive user gesture.
+  function confirmAction(message, { title = "请确认操作", confirmText = "确认", danger = false } = {}) {
+    if (typeof document === "undefined" || !document.body ||
+        typeof document.createElement !== "function") return Promise.resolve(false);
+    const dialog = document.createElement("dialog");
+    if (typeof dialog.showModal !== "function") {
+      toast("当前浏览器不支持此确认操作，请使用更新的浏览器");
+      return Promise.resolve(false);
+    }
+    dialog.className = "hw-confirm-action-dialog";
+    dialog.setAttribute("aria-label", title);
+    dialog.style.cssText = "width:min(420px,calc(100vw - 32px));max-width:100%;box-sizing:border-box;padding:24px;border:1px solid var(--line,#dedbd5);border-radius:16px;background:var(--paper,#fff);color:var(--ink,#222);box-shadow:0 20px 80px rgba(0,0,0,.22);";
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+    heading.style.cssText = "margin:0 0 14px;font-size:18px;font-weight:750;";
+    heading.id = "hw-confirm-action-heading";
+    dialog.setAttribute("aria-labelledby", heading.id);
+    const description = document.createElement("p");
+    description.textContent = String(message || "确定继续吗？");
+    description.style.cssText = "margin:0 0 24px;white-space:pre-wrap;line-height:1.65;font-size:14px;";
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn";
+    cancel.textContent = "取消";
+    const proceed = document.createElement("button");
+    proceed.type = "button";
+    proceed.className = danger ? "btn btn-danger" : "btn btn-primary";
+    proceed.textContent = confirmText;
+    if (danger) proceed.style.cssText = "background:#b42318;border-color:#b42318;color:#fff;";
+    actions.append(cancel, proceed);
+    dialog.append(heading, description, actions);
+    let finished = false;
+    return new Promise((resolve) => {
+      const settle = (value) => {
+        if (finished) return;
+        finished = true;
+        try { if (dialog.open) dialog.close(); } catch (_) {}
+        dialog.remove();
+        resolve(value);
+      };
+      cancel.addEventListener("click", () => settle(false));
+      proceed.addEventListener("click", () => settle(true));
+      dialog.addEventListener("cancel", (event) => {
+        event.preventDefault();
+        settle(false);
+      });
+      dialog.addEventListener("close", () => settle(false));
+      document.body.appendChild(dialog);
+      try {
+        dialog.showModal();
+        cancel.focus();
+      } catch (_) {
+        settle(false);
+      }
+    });
+  }
+
   window.HANDRAW_SHARED = {
     filterDisplayPrompt,
     PLACEHOLDER_TOPIC_TITLES,
@@ -5302,6 +5363,7 @@
     resourceGroupLabel,
     visibleResourceGroups,
     toast,
+    confirmAction,
     apiJson,
     channelUrl,
     layoutProfileMasonry,
