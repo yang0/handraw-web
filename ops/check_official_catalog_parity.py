@@ -79,10 +79,12 @@ def audit(catalog: dict[str, Any], styles: Any, layouts: Any,
         raise ValueError("approved official DB export collision: " +
                          str(sorted(set(db_collision + static_overlap))))
     web = dict(web_static)
-    web.update({code: {"id": code, "kind": "style"}
-                for code in db_style})
-    web.update({code: {"id": code, "kind": "layout"}
-                for code in db_layout})
+    web.update({code: {"id": code, "kind": "style",
+                       "name": row.get("generation_name") or row.get("name") or ""}
+                for code, row in db_style.items()})
+    web.update({code: {"id": code, "kind": "layout",
+                       "name": row.get("name") or ""}
+                for code, row in db_layout.items()})
     skill_style = _index(styles, label="Skill styles", id_field="number")
     skill_layout = _index(layouts, label="Skill layouts", id_field="id")
     duplicate = set(skill_style) & set(skill_layout)
@@ -95,6 +97,15 @@ def audit(catalog: dict[str, Any], styles: Any, layouts: Any,
     skill_only = sorted(set(skill) - set(web))
     mismatched_kind = sorted(
         c for c in set(web) & set(skill) if web[c]["kind"] != skill[c][0])
+    # Same code + kind but a different public name can refer to a different
+    # resource. Keep the report ID-only, never leak paid/private definitions.
+    mismatched_name = sorted(
+        c for c in set(web) & set(skill)
+        if web[c]["kind"] == skill[c][0]
+        and str(web[c].get("name") or "").strip()
+        != str(skill[c][1].get("generation_name")
+               or skill[c][1].get("name") or "").strip()
+    )
 
     if exceptions.get("schemaVersion") != 1 or not isinstance(
             exceptions.get("pendingSkillOnly"), list):
@@ -127,7 +138,7 @@ def audit(catalog: dict[str, Any], styles: Any, layouts: Any,
             altered.append(code)
 
     report = {
-        "status": "in_sync" if not skill_only and not web_only and not mismatched_kind
+        "status": "in_sync" if not (skill_only or web_only or mismatched_kind or mismatched_name)
                   else "pending_review",
         "webCount": len(web),
         "webStaticCount": len(web_static),
@@ -141,10 +152,13 @@ def audit(catalog: dict[str, Any], styles: Any, layouts: Any,
         "unexpectedSkillOnly": unexpected,
         "staleExceptions": stale_exceptions,
         "mismatchedKind": mismatched_kind,
+        "mismatchedName": mismatched_name,
         "alteredPending": altered,
-        "readyForRelease": db_checked and not (web_only or skill_only or mismatched_kind or stale_exceptions),
+        "readyForRelease": db_checked and not (
+            web_only or skill_only or mismatched_kind or mismatched_name
+            or stale_exceptions or altered),
     }
-    bad = bool(web_only or unexpected or stale_exceptions or mismatched_kind or altered)
+    bad = bool(web_only or unexpected or stale_exceptions or mismatched_kind or mismatched_name or altered)
     if strict and (skill_only or not db_checked):
         bad = True
     if bad:
