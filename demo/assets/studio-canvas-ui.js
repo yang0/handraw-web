@@ -185,6 +185,7 @@
       '<button type="button" data-c129="simple">简洁编辑</button>'+
       '<button type="button" data-c129="undo">撤销</button>'+
       '<button type="button" data-c129="redo">重做</button>'+ 
+      '<button type="button" data-c129="graphpatch">AI 修改画布</button>'+ 
       '<button type="button" data-c129="note">便签</button>'+ 
       '<button type="button" data-c129="group"'+((graph.selectedIds||[]).length<2?' disabled':'')+'>视觉分组</button>'+
       '<button type="button" class="ic129-primary" data-c129="run">▶ '+(selected?.type==="output_control"?"运行选中分支":"运行画布")+'</button>'+
@@ -192,8 +193,10 @@
     if(top.innerHTML!==topHtml)top.innerHTML=topHtml;
     let inspectorHtml='<div class="ic129-inspector-title"><strong>属性</strong><button type="button" data-c129="ai" aria-pressed="'+(inspectorTab==="ai")+'">AI 建议</button></div>';
     if(inspectorTab==="ai"){
-      inspectorHtml+='<div class="ic129-inspector-info"><h3>AI 创作导演</h3><p>此处提供当前项目和选中节点的创作提示。结构化 GraphPatch 审阅与应用由 #126 实现；不会在这里直接修改执行图或自动发起收费生成。</p>'+
-        '<p>可先调整主题、画风与素材，再运行明确选择的分支。</p></div>';
+      inspectorHtml+='<div class="ic129-inspector-info"><h3>AI 创作导演</h3>'+
+        '<p>基于当前 Project 与选中节点提出 GraphPatch，先检查差异、授权、费用影响和锁定冲突。</p>'+
+        '<button type="button" data-c129="graphpatch">打开 GraphPatch 差异审阅</button>'+
+        '<p>须明确确认才会保存新的 Graph 版本。预览与撤销都不会触发生图计费。</p></div>';
     }else if(selected){
       const d=selected.data||{};
       inspectorHtml+='<div class="ic129-inspector-info"><h3>'+htmlEscape(selected.title||selected.type)+'</h3>'+
