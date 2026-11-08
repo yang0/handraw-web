@@ -104,3 +104,14 @@ CI 失败必须区分代码失败、Runner 失败、环境依赖与额度限制�
 **Go 候选**：M0–M3 关键 CI/浏览器覆盖通过 + 发布必需 D 级真实联测完成 + 关键安全/计费断言全部通过 + 可执行的备份/回滚 + 发布负责人明确签署。P2 #126 GraphPatch 可延期，但不得在 UI 中假装已提供。
 
 **操作边界**：所有变更先有 Issue #112；先在 `studio2-issue112-ci` 验证。仅当该分支同 SHA 全部 14 项 CI 成功后，才以 `force=false` 和预期旧 HEAD 快进 `studio2`，再核对其 Push/PR CI。**PR #131 始终 Draft，严禁合入 main。** #112 保持 Open，直到全部上线阻断项有可审计证据。
+
+## 8. 追加实测：M0 权限负向与 M3 原生 Studio 100 节点（#112 第二轮）
+
+针对第一轮仍然没有覆盖的真实业务壳，新增**本地受控、可重复**的两类 CI 测试。两项均不使用付费 AI 接口、不读取任何真实用户文章或私有图片，不能取代 D 级生产准入。
+
+1. `tests/test_studio_security_negative_112.py`：通过真实 HTTP Handler、两个独立账号与匿名调用，验证私有 ArticleDocument、其 PlanSlot 锚点、Project GET/PATCH/COPY、V3 Run 所属权限；越权响应不返回私有正文标记、项目标题、正文 ID 或 CAS revision；模拟 Alice/Bob 私有图库的 MediaRef 交叉引用，创建草稿被 403 拒绝，成功项目 revision 不变；失败操作不得留下额外项目记录。
+2. `tests/smoke_studio_native_100_graph_112.py`：把 **100 个实际 Studio 节点类型（文本参数、画风参数、图片参数、生成设置、成图展示）+ 50 条 Graph 连线**，作为真实账户的云端 Project 经后端 API 保存，再用真实 Chromium 登录并通过 `?project=` 进入完整 Studio 画布；验证 40 张本仓库 WebP 图在 Canvas 原生节点成功解码、100 个 node ID 唯一、owner 项目与图片 DOM 身份、选中与连续缩放不丢图或丢卡，且未触发任何收费 `/api/studio/generate`；保留首屏实测耗时、缩放耗时、节点 DOM 数量、浏览器版本和截图到 `artifacts/studio-112-100-node/`。
+
+**证据边界说明：** 本项相比 #127 的合成 Canvas DOM，更进一步运行了真实 Studio 业务渲染器、原生 Graph、Project API 与本地真实 WebP 解码。但图像仍是仓库测试样本，Graph 是受控构造的业务形态，不是实际客户作品，更没有生产图像尺寸分布/网络抖动/收费任务。首屏耗时仅记录为 CI Runner 的观察值，不设置未经真实硬件校准的性能 SLA。真实业务/生产 100 节点、跨设备弱网、隐私日志/URL 和外部供应商计费仍为 **PENDING / NO-GO**。
+
+CI 新增以上 Python HTTP 套件与真实 Chromium 冒烟（`interaction-journey-regression`），验收矩阵在 `M0-05`、`M3-03` 中引用；`ops/check_studio_acceptance_112.py` 检查其不会脱离 CI。**本节只描述新增测试及预期断言；PASS 必须以最终同 SHA 的 GitHub Actions Job 日志为准**。
