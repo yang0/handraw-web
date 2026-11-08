@@ -7617,6 +7617,7 @@
             // Only the server can allocate a V3 logical Run identity.
             if (data.runId) {
               quickRunModels.delete(runScope+":"+data.runId);
+              batchRunModels.delete(runScope+":"+data.runId);
               ctrl.data.runId = data.runId;
               if (ctrl.data.studio2RunSnapshot?.batchId===batchId)
                 ctrl.data.studio2RunSnapshot.runId=data.runId;
@@ -13761,6 +13762,45 @@
       entry.error=String(error?.message||error);
       // Network uncertainty is not a remote cancellation or refund.
       if(CS.stageView==="quick")renderQuickStart();
+    }).finally(()=>{entry.loading=false});
+    return entry.model;
+  }
+
+  // #123: batch RunProjection reads the same V3 Run/Items as quick creation.
+  // No second state machine or speculative completion counter is allowed.
+  const batchRunModels=new Map();
+  function getBatchRunProjection(parts) {
+    const api=window.HandrawStudioSeries;
+    const snap=parts?.ctrl?.data?.studio2RunSnapshot;
+    const runId=String(parts?.ctrl?.data?.runId||snap?.runId||"");
+    if(!api||!snap?.outputs?.length||!runId||!App.state?.loggedIn)return null;
+    const key=activeCacheScope+":"+runId,now=Date.now();
+    const previous=batchRunModels.get(key);
+    if(previous?.loading||previous?.model?.isTerminal||
+       (previous&&now-previous.requestedAt<5000))return previous?.model||null;
+    const entry={requestedAt:now,loading:true,model:previous?.model||null};
+    batchRunModels.set(key,entry);
+    const scope=activeCacheScope,epoch=cacheScopeEpoch;
+    fetch("/api/studio/runs/"+encodeURIComponent(runId),{
+      credentials:"include"
+    }).then(async response=>{
+      const data=await response.json();
+      if(!response.ok||!data.ok)throw Error(data.error||"run_read_failed");
+      return api.project(snap,data.run,data.items);
+    }).then(model=>{
+      if(scope!==activeCacheScope||epoch!==cacheScopeEpoch||
+         batchRunModels.get(key)!==entry)return;
+      entry.model=model;
+      if(CS.stageView==="batch"&&parts.ctrl.data.runId===runId)renderQuickStart();
+      if(!model.isTerminal)setTimeout(()=>{
+        if(scope===activeCacheScope&&epoch===cacheScopeEpoch&&
+           CS.stageView==="batch"&&parts.ctrl.data.runId===runId)
+          renderQuickStart();
+      },5200);
+    }).catch(error=>{
+      if(scope!==activeCacheScope||epoch!==cacheScopeEpoch)return;
+      entry.error=String(error?.message||error);
+      if(CS.stageView==="batch")renderQuickStart();
     }).finally(()=>{entry.loading=false});
     return entry.model;
   }
