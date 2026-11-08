@@ -1068,7 +1068,9 @@
         };
       });
       board.onclick=e=>{
-        const view=e.target.closest("[data-series-view]");
+        // The ancestor .batch-container also carries data-series-view for CSS.
+        // Only explicit view toggle buttons may consume a board click.
+        const view=e.target.closest("button[data-series-view]");
         if(view){
           this.seriesView=view.getAttribute("data-series-view")==="table"?"table":"cards";
           this.render();

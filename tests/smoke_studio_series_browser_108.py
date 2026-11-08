@@ -120,50 +120,24 @@ def main():
                 assert saved["id"]==first_id,saved
                 assert saved["text"]==saved["projection"]=="第 1 张：杭州春日旅行",saved
                 # Manual add/duplicate/order must not rewrite the stable original id.
-                page.evaluate("""()=>{
-                  window.__series108ClickLog=[];
-                  const board=document.querySelector('.series108-board');
-                  board.addEventListener('click',e=>window.__series108ClickLog.push({
-                    event:e.type,action:e.target.closest('[data-series-action]')?.getAttribute('data-series-action')||''
-                  }),{capture:true});
-                  const ctrl=window.HandrawBatchCreate;
-                  const previous=ctrl.actions?.markDirtyAndRender;
-                  if(typeof previous==='function')ctrl.actions.markDirtyAndRender=()=>{
-                    const loop=window.CS.graph.nodes.find(n=>n.type==='loop');
-                    window.__series108BeforeCommit=loop.data.studio2Plan?.slots?.length;
-                    const out=previous();
-                    window.__series108AfterCommit=loop.data.studio2Plan?.slots?.length;
-                    return out;
-                  };
-                }""")
+                # A parent data-series-view marker is for CSS only: clicking
+                # the board's action must add exactly one real PlanSlot.
                 counts=[]
-                for _ in range(6):
+                for expected in range(4,7):
+                    page.locator('[data-series-action="add"]').click(timeout=5000)
                     count=page.locator(".series108-card").count()
                     counts.append(count)
-                    if count>=6:
-                        break
-                    page.locator('[data-series-action="add"]').click(timeout=5000)
-                assert page.locator(".series108-card").count()==6, {
-                    "cardCounts":counts,
-                    "plan":page.evaluate("""()=>{
-                      const loop=window.CS.graph.nodes.find(n=>n.type==='loop');
-                      const controller=window.HandrawBatchCreate;
-                      const bound=controller?.getParts?.()?.loop;
-                      const board=document.querySelector('.series108-board');
-                      return {slots:loop.data.studio2Plan?.slots?.length,
-                        rows:loop.data.batchRows?.length,stage:window.CS.stageView,
-                        boardHandler:typeof board?.onclick,
-                        planAPI:typeof window.HandrawStudioSeries?.add,
-                        actionHandler:typeof controller?.actions?.markDirtyAndRender,
-                        boundLoop:bound?.id,activeLoop:loop.id,
-                        sameLoop:bound===loop,visibleButtons:document.querySelectorAll(
-                          '[data-series-action="add"]').length,
-                        clicks:window.__series108ClickLog,
-                        beforeCommit:window.__series108BeforeCommit,
-                        afterCommit:window.__series108AfterCommit};
-                    }"""),
-                    "errors":errors
-                }
+                    assert count==expected, {
+                        "cardCounts":counts,
+                        "plan":page.evaluate("""()=>{
+                          const loop=window.CS.graph.nodes.find(n=>n.type==='loop');
+                          const board=document.querySelector('.series108-board');
+                          return {slots:loop.data.studio2Plan?.slots?.length,
+                            rows:loop.data.batchRows?.length,
+                            ancestorView:board.closest('[data-series-view]')?.getAttribute('data-series-view'),
+                            handler:typeof board.onclick};}"""),
+                        "errors":errors
+                    }
                 page.locator('[data-series-action="copy"][data-series-slot="'+first_id+'"]').click()
                 assert page.locator(".series108-card").count()==7
                 page.locator('[data-series-action="up"]').nth(1).click()
