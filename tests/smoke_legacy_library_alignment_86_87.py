@@ -126,7 +126,11 @@ def main():
                                 assert measurement["columns"]==expected,(width,view,measurement)
                                 if len(measurement["cards"])>=3:
                                     first,second,third=measurement["cards"]
-                                    assert first["x"]<second["x"],(width,view,measurement)
+                                    if expected>=2:
+                                        assert first["x"]<second["x"],(width,view,measurement)
+                                    else:
+                                        assert abs(first["x"]-second["x"])<2,(width,view,measurement)
+                                        assert first["y"]<second["y"]<third["y"],(width,view,measurement)
                                     if expected>=3:
                                         assert second["x"]<third["x"],(width,view,measurement)
                             page.screenshot(path=str(out/f"{view}-{width}.png"),
