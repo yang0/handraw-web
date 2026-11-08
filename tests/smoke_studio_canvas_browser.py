@@ -144,6 +144,13 @@ def main():
             new_ids=page.locator("#ic-nodes-layer .ic-node").evaluate_all(
                 "(nodes)=>nodes.map(n=>n.dataset.nodeId)")
             assert set(new_ids)==set(ids),(ids,new_ids)
+            # Visual notes are project editor metadata, never executable Graph nodes.
+            page.locator('#canvas-129-topbar [data-c129="note"]').click()
+            note=page.locator('#canvas-129-visual-layer [data-visual-note]').first
+            note.wait_for(timeout=5000)
+            note.locator('textarea').fill("这个框是视觉便签，不是执行节点")
+            assert page.locator("#ic-nodes-layer .ic-node").count()==len(ids)
+            assert page.locator("#canvas-129-visual-layer .ic129-visual-sticky").count()==1
             assert not errors,errors
             out=ROOT/args.screenshots
             out.mkdir(parents=True,exist_ok=True)
