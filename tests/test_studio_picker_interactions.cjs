@@ -23,7 +23,8 @@ const quickBridge = bridge(
 );
 assert.doesNotMatch(batchBridge, /isBatchCurrentBusy\(\)/, "Pending batches must not silently lock resource selection");
 assert.doesNotMatch(quickBridge, /isCurrentBusy\(\)/, "Pending image jobs must not silently lock resource selection");
-assert.match(quickBridge, /onPick:\s*\(id\)\s*=>/, "Selection must propagate through the caller callback");
+assert.match(quickBridge, /onPick:\s*\(id,\s*ref\)\s*=>/, "Selection must propagate catalog ResourceRef");
+assert.match(quickBridge, /onSelect\(id,\s*ref\)/, "Picker must forward verified source and version, not only ID");
 assert.match(batchBridge, /catch\s*\(err\)/, "Picker failures must be visible");
 
 function load(file, name) {
