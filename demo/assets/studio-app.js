@@ -9667,8 +9667,8 @@
     });
 
     DOM.historyStage.querySelectorAll("[data-hist-restore]").forEach((btn) => {
-      btn.onclick = () => {
-        if (typeof window.confirm === "function" && !window.confirm("将历史图片恢复到当前画布的输出节点，可能替换已有内容（可撤销）。确定继续吗？")) return;
+      btn.onclick = async () => {
+        if (!await window.HandrawDialogs.confirm("将历史图片恢复到当前画布的输出节点，可能替换已有内容（可撤销）。确定继续吗？")) return;
         restoreHistoryEntryToCanvas(btn.getAttribute("data-hist-restore"));
       };
     });
@@ -9707,7 +9707,7 @@
       btn.onclick = async () => {
         const hid = btn.getAttribute("data-hist-del");
         if (!hid) return;
-        if (typeof window.confirm === "function" && !window.confirm("删除本次生成记录后，关联的公开作品可能同步下架，确定继续吗？")) return;
+        if (!await window.HandrawDialogs.confirm("删除本次生成记录后，关联的公开作品可能同步下架，确定继续吗？")) return;
         btn.disabled = true;
         try {
           await deleteCloudHistory(hid, false);
