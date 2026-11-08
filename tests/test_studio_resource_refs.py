@@ -46,17 +46,18 @@ class ResourceRefProjectTests(unittest.TestCase):
         self.assertEqual(saved["authority"],"spec")
 
     def test_invalid_kind_source_version_or_missing_code_rejected(self):
-        for ref,expected in [
-            (self.ref("SC-021","style"),"resource_not_found"),
-            (self.ref("FA-001","layout"),"resource_type_mismatch"),
-            (self.ref("NOT-FOUND-999","style"),"resource_not_found"),
-            (self.ref("C-01","tone"),"resource_type_mismatch"),
-            (self.ref("FA-001","style","private"),"resource_source_mismatch"),
-            (self.ref("C-01","color","official",899),"resource_version_conflict"),
-            ({"id":"FA-001","type":"style","secret":"prompt"},"invalid_resource_ref"),
+        for field,ref,expected in [
+            ("style",self.ref("SC-021","style"),"resource_not_found"),
+            ("style",self.ref("FA-001","layout"),"resource_type_mismatch"),
+            ("style",self.ref("NOT-FOUND-999","style"),"resource_not_found"),
+            ("style",self.ref("C-01","tone"),"resource_type_mismatch"),
+            ("style",self.ref("FA-001","style","private"),"resource_source_mismatch"),
+            ("colors",self.ref("C-01","color","official",899),"resource_version_conflict"),
+            ("style",{"id":"FA-001","type":"style","secret":"prompt"},"invalid_resource_ref"),
         ]:
-            with self.subTest(ref=ref), self.assertRaises(ServiceError) as error:
-                self.create({"creationSpec":{"style":ref}})
+            with self.subTest(field=field,ref=ref), self.assertRaises(ServiceError) as error:
+                value = [ref] if field in ("colors", "tones") else ref
+                self.create({"creationSpec":{field:value}})
             self.assertEqual(error.exception.code,expected)
 
     def test_server_enforces_resource_unlock_and_private_ownership(self):
