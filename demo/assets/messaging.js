@@ -511,7 +511,7 @@
   // Abuse Report Modal for DM Message
   async function openReportModal(messageId) {
     const reason = await getS().promptAction?.("请输入举报原因（例如：垃圾广告、骚扰辱骂、诈骗违规）：", { title: "举报私信", defaultValue: "违规私信内容", required: true });
-    if (reason === null) return;
+    if (reason == null) return;
     const detail = await getS().promptAction?.("可补充详细说明（选填）：", { title: "补充举报说明", multiline: true });
     if (detail == null) return;
     apiJson("/api/reports", {
