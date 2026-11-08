@@ -68,7 +68,10 @@
       return {slotId,anchorId,order,subject:String(card.subject || card.title || ""),
         lockedFields:copy(card.lockedFields || []),
         overrides:{...(card.ratio ? {ratio:card.ratio} : {}),
-          ...(card.layoutRef ? {layout:copy(card.layoutRef)} : {})},
+          ...(card.layoutRef || card.layoutId ? {layout:copy(card.layoutRef ||
+            {id:card.layoutId,type:"layout"})} : {}),
+          ...(card.styleRef || card.styleId ? {style:copy(card.styleRef ||
+            {id:card.styleId,type:"style"})} : {})},
         referenceMedia:copy(card.referenceMedia || []),
         ...(card.mediaId ? {resultMediaId:card.mediaId} : {})};
     });
@@ -111,8 +114,10 @@
   async function recoverGraphRuns(graph, fetchRun, {scope = ""} = {}) {
     if (!Core?.selectRunProjection || typeof fetchRun !== "function")
       throw new Error("run_reader_required");
-    const refs = graphRunRefs(graph), pending = new Map(), result = {};
-    for (const ref of refs) {
+    const refs = graphRunRefs(graph), pending = new Map();
+    // All output controls recover concurrently. Multiple controls referring
+    // to one Run share the same authorized GET and never start a new task.
+    const pairs = await Promise.all(refs.map(async ref => {
       const key = scope + ":" + ref.runId;
       if (!pending.has(key)) pending.set(key, Promise.resolve().then(() => fetchRun(ref.runId)));
       const payload = await pending.get(key);
@@ -121,15 +126,15 @@
         throw new Error("unverified_run_response");
       const projection = Core.selectRunProjection(payload.run,payload.items,
         {expectedCount:ref.slots.length || undefined});
-      result[ref.nodeId] = {runId:ref.runId,projection,
+      return [ref.nodeId,{runId:ref.runId,projection,
         outputs:ref.slots.map((slot,index) => {
           const matched = payload.items.filter(item =>
             Number(item.slotIndex ?? Math.floor(Number(item.position)/1000)) === index);
           return {slotId:slot.slotId || slot.outputId,outputId:slot.outputId,
             items:copy(matched)};
-        })};
-    }
-    return result;
+        })}];
+    }));
+    return Object.fromEntries(pairs);
   }
   function safeGraphView(graph) {
     return Views?.classify(graph) || {mode:"read-only-summary",editableFields:[]};
