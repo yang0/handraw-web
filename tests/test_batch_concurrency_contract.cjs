@@ -28,6 +28,7 @@ assert.match(batch, /const completedCount = remote\s*\? remote\.succeeded\s*: Ma
 const queueFactory = vm.runInNewContext(
   "(async function(slotIndexes, concurrency, batchRun, onSlot) {\n" +
   "let nextSlotToLaunch = 0;\nlet stopLaunching = false;\n" +
+  "const runtimeSignal=null,slotPool=null,slotMeta={},onSlotProgress=null;\n" +
   "async function runSlot(i) { await onSlot(i); }\n" +
   scheduler + "\n})",
   {console}
