@@ -72,12 +72,16 @@
   function galleryState(node,projection){
     const local=Array.isArray(node?.data?.items)?node.data.items:[];
     const expected=Math.max(1,Math.min(200,Number(node?.data?.totalTarget)||local.length||1));
+    const hasAuthority=Boolean(projection?.runId&&Array.isArray(projection?.slots));
     const slots=Array.from({length:expected},(_,index)=>{
       const it=local[index];
-      const url=mediaUrl(it?.imageUrl);
-      return {index,status:url?"success":it?.failed?"failed":
+      // Once an owner-scoped Run has been read, local placeholders cannot
+      // contribute successful/failed/busy counts. Missing slots stay pending.
+      const url=hasAuthority?"":mediaUrl(it?.imageUrl);
+      return {index,status:hasAuthority?"pending":
+        url?"success":it?.failed?"failed":
         node?.data?.status==="generating"?"generating":"pending",
-        imageUrl:url,error:String(it?.error||"")};
+        imageUrl:url,error:hasAuthority?"":String(it?.error||"")};
     });
     // Server-owned RunItem rows always win over optimistic/local slot state.
     if(Array.isArray(projection?.slots)){
