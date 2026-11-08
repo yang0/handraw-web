@@ -204,6 +204,13 @@ def execute_ai_plan(db: Database, user: dict[str, Any], body: dict[str, Any]) ->
     authorized = _user_catalog(db, user, subject)
     if not authorized["style"] or not authorized["layout"]:
         fail("ai_catalog_empty", "当前没有可用于 AI 规划的已授权画风和图型")
+    # Existing selections are also capabilities. Never echo an unverified
+    # private/expired resource ID from a client draft into a model prompt.
+    for key, kind_name in (("styleId", "style"), ("layoutId", "layout")):
+        if selected[key]:
+            selected[key] = _ref(db, user, selected[key], kind_name, authorized)["id"]
+    if selected["ratio"] and selected["ratio"] not in RATIOS:
+        fail("ai_schema_invalid", "当前草稿画幅无效，请先修正再规划")
     if not consume_daily_usage(db, user["id"], "studio_ai_plan", limit=50):
         fail("rate_limited", "今日 AI 规划次数已达上限", 429)
     prompt = {
@@ -256,6 +263,14 @@ def execute_ai_plan(db: Database, user: dict[str, Any], body: dict[str, Any]) ->
     for order, entry in enumerate(raw_slots):
         if not isinstance(entry, dict) or set(entry) - SLOT_KEYS:
             fail("ai_schema_invalid", "AI 返回的槽位字段无效")
+        if kind == "article":
+            expected_role = "cover" if order == 0 else "illustration"
+            if entry.get("role") != expected_role:
+                fail("ai_schema_invalid", "AI 文章图卡的封面/插图角色无效")
+            if "afterBlockIdx" not in entry:
+                fail("ai_anchor_invalid", "AI 文章图卡缺少原文锚点")
+        elif set(entry) - {"subject", "layoutId", "ratio", "reason"}:
+            fail("ai_schema_invalid", "系列图卡出现了文章专属字段")
         title = entry.get("subject")
         if not isinstance(title, str) or not title.strip() or len(title) > 120:
             fail("ai_cannot_recommend", "AI 未能给每张图规划有效主题")
