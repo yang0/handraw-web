@@ -13,6 +13,9 @@ assert.ok(source.includes('const unsynced = prev && ["local", "saving", "error",
 assert.ok(source.includes('prev.remoteUpdatedAtMs = Number(rw.updatedAtMs) || 0;'),
   "A remote concurrent version must be recorded without adopting its revision");
 assert.ok(source.includes('data-wf-copy='), "Conflicting local workflow should offer Save as Copy");
+assert.ok(source.includes('if (Array.isArray(ws.workflows))') &&
+  source.includes('w.cloudSaveState !== "synced"'),
+  "Cloud hydration must handle an empty remote workflow list without dropping pending local drafts");
 
 function harness() {
   const timers = new Map();
