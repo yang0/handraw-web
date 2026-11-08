@@ -94,6 +94,7 @@ jobs:
           node tests/test_studio_canvas_incremental.cjs
           node tests/test_studio_views.cjs
           node tests/test_studio_workflow_autosave.cjs
+          node tests/test_studio_workflow_delete.cjs
           node tests/test_studio_picker_interactions.cjs
           node tests/test_quick_stale_generation.cjs
           node tests/test_profile_private_gallery.cjs
