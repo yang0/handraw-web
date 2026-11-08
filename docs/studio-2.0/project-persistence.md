@@ -74,3 +74,28 @@ Saving is debounced; switching tabs flushes unsynced active edits. On reconnect 
 2. Migrate quick/series to authoritative Spec/Plan, and article to a single ArticleDocument writer; ensure no competing writable Graph or article state (#121/#124).
 3. Real browser E2E: offline, second tab, refresh, account switch, close tab, private uploads, generation in progress; measure any autosave-induced render/focus regressions.
 4. Live PostgreSQL migration plan for existing instances and storage-limit/operator observability.
+
+
+## Incremental migration for existing PostgreSQL installations (101)
+
+**Do not run the fresh bootstrap against a database with any existing users.** New PostgreSQL installations initialized from the latest fresh V3 schema already include migration 101. An *existing* V3 PostgreSQL database, however, must be upgraded before starting code that uses \`/api/studio/projects\`; application startup now fails closed with a migration hint if 101 is missing.
+
+Take an independently verified database backup / PITR snapshot first, and have the operator review both the dry-run report and the SQL in \`ops/migrate_pg_studio_projects.py\`.
+
+Dry-run (SELECT-only project-schema inspection; advisory lock + transaction settings, **no user-data changes**):
+
+\`\`\`bash
+HANDRAW_DATABASE_URL='postgresql://...' python -m ops.migrate_pg_studio_projects
+\`\`\`
+
+After reviewing the backup and output, explicitly apply:
+
+\`\`\`bash
+HANDRAW_ALLOW_PG_STUDIO_MIGRATION=YES \
+HANDRAW_DATABASE_URL='postgresql://...' \
+python -m ops.migrate_pg_studio_projects --apply
+\`\`\`
+
+The migration is atomic and additive: create only \`studio_projects\`, its owner/update index, and \`studio_project_requests\`, then record \`101_studio_project_drafts\` in \`schema_migrations\`. Re-running it against a complete 101 schema returns a no-op. It **refuses** unknown/partial Project tables, incomplete 101 records, an invalid native V3 baseline, default system databases, and missing explicit operator authorization. No \`DROP\`, \`TRUNCATE\`, \`UPDATE\`, import, account reset, or reinterpretation of existing works is performed.
+
+A no-op dry-run is not a substitute for genuine PostgreSQL integration tests or an operator-verified backup. Enforce a maintenance/change window when appropriate, because PostgreSQL catalog DDL can still obtain short-lived locks.
