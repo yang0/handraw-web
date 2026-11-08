@@ -96,6 +96,10 @@
       '<button data-gp126-mode="platforms" type="button">多平台尺寸</button>'+
       '<button data-gp126-mode="style_compare" type="button">双画风横评</button>'+
       '<button data-gp126-mode="ai" type="button">自由 AI 指令</button></div>'+
+      '<label class="gp126-label" for="gp126-scope">修改作用域</label>'+
+      '<select id="gp126-scope" aria-label="GraphPatch 修改作用域">'+
+      '<option value="project">整个当前项目</option>'+
+      '<option value="selection">仅选中节点 / 子图</option></select>'+
       '<div id="gp126-style-options" class="gp126-style-options" hidden>'+
       '<label>画风 A<select id="gp126-style-a" aria-label="横评画风 A"></select></label>'+
       '<label>画风 B<select id="gp126-style-b" aria-label="横评画风 B"></select></label></div>'+
@@ -159,7 +163,8 @@
       }
       const payload={projectId:current.projectId,
         baseRevision:current.baseRevision,graphRevision:current.graphRevision,
-        selectedIds:current.selectedIds,mode:state.mode==="ai"?"ai":"preset"};
+        selectedIds:current.selectedIds,scope:node("#gp126-scope").value,
+        mode:state.mode==="ai"?"ai":"preset"};
       if(state.mode==="ai"){
         payload.instruction=node("#gp126-instruction").value.trim();
         if(payload.instruction.length<2){message("请先填写 AI 修改说明。",true);return;}
@@ -264,6 +269,7 @@
     previewBtn.onclick=()=>void generatePreview();
     applyBtn.onclick=()=>void confirmApply();
     undoBtn.onclick=()=>void revert();
+    node("#gp126-scope").onchange=reset;
     node("#gp126-style-a").onchange=reset;
     node("#gp126-style-b").onchange=reset;
     node("#gp126-instruction").oninput=reset;
