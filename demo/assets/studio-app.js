@@ -16048,7 +16048,7 @@
     const scope = activeCacheScope, epoch = cacheScopeEpoch;
     const documentToken = window.HandrawStudioIntegration?.documentToken(draft);
     for (const runId of runIds) {
-      const key = scope + ":" + runId;
+      const key = scope + ":" + articleId + ":" + runId;
       const previous = articleRunReads.get(key);
       if (previous?.loading || previous?.done || previous && Date.now() - previous.started < 5000) continue;
       const entry = {loading:true,started:Date.now(),done:false};
@@ -16091,6 +16091,11 @@
         }
         entry.done = window.HandrawStudioCore.selectRunProjection(
           payload.run,payload.items).isTerminal;
+        if (entry.done && currentTarget?.planNode?.data?.status === "generating" &&
+            currentCards.every(c => c.status !== "generating")) {
+          currentTarget.planNode.data.status = "ready";
+          changed = true;
+        }
         if (changed) {
           // Modify only the selected card's result, never markdown, anchor,
           // plan version or unrelated cards.
