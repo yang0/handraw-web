@@ -18470,7 +18470,7 @@
         CS.selectedEdgeId = edgeHit.getAttribute("data-edge-hit");
         CS.selectedEdgePt = { x: e.clientX, y: e.clientY - 18 };
         CS.graph.selectedIds = [];
-        renderEdgesSvg();
+        refreshCanvasSelection();
         renderFloatingOverlays();
         return;
       }
@@ -18514,7 +18514,7 @@
         try {
           vp.setPointerCapture(e.pointerId);
         } catch (_) {}
-        renderWorldNodes();
+        refreshCanvasSelection();
         renderFloatingOverlays();
         return;
       }
@@ -18534,7 +18534,7 @@
       } else {
         if (!e.shiftKey && CS.graph.selectedIds.length) {
           CS.graph.selectedIds = [];
-          renderWorldNodes();
+          refreshCanvasSelection();
           renderFloatingOverlays();
         }
         vp.classList.add("is-panning");
@@ -18653,7 +18653,7 @@
           CS.graph.selectedIds = CS.graph.nodes
             .filter((n) => n.x + (n.w || 320) >= w1.x && n.x <= w2.x && n.y + (n.h || 240) >= w1.y && n.y <= w2.y)
             .map((n) => n.id);
-          renderWorldNodes();
+          refreshCanvasSelection();
           renderFloatingOverlays();
         }
       } else if (ctx.mode === "wiring" && CS.wiring) {
