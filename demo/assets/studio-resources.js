@@ -44,8 +44,9 @@
         !(type === "color" && declaredType === "palette")) {
       throw Object.assign(new Error("资源类型与所选分类不匹配"), { code: "resource_type_mismatch" });
     }
-    const source = String(item.source || item.sourceType || item.source_type ||
+    const rawSource = String(item.source || item.sourceType || item.source_type ||
       (item.private ? "private" : item.custom ? "private" : "official"));
+    const source = rawSource === "official_override" ? "override" : rawSource;
     if (!SOURCE_TYPES.has(source)) {
       throw Object.assign(new Error("资源来源未被认可"), { code: "invalid_resource_source" });
     }
@@ -87,10 +88,14 @@
       } else {
         if (!current.includes(resolved.id)) current.push(resolved.id);
         skillData[field] = current;
-        refs[cfg.key] = current.map(id => {
+        const mapped = current.map(id => {
           const found = (refs[cfg.key] || []).find(r => r.id === id);
-          return id === resolved.id ? clone(resolved.ref) : found || {id,type:cfg.type,source:"official",version:"current"};
+          return id === resolved.id ? clone(resolved.ref) : found || null;
         });
+        // Missing historical metadata is NOT proof of official ownership.
+        // The catalog-aware syncLegacyRefs() will resolve it when saving.
+        if (mapped.every(Boolean)) refs[cfg.key] = mapped;
+        else delete refs[cfg.key];
       }
     } else {
       skillData[field] = resolved.id;
