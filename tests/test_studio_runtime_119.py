@@ -140,7 +140,7 @@ class RuntimeDatabaseTests(unittest.TestCase):
         run_id = self._make([(0, "/generated/one.webp", ""),
                              (1000, "/generated/two.webp", ""),
                              (2000, "/generated/three.webp", "")])
-        now = "2026-11-08T12:00:00Z"
+        now = "2026-01-01T12:00:00Z"
         with self.db.transaction() as tx:
             for n in (3, 4):
                 tx.execute(
