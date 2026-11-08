@@ -655,12 +655,14 @@
             field,
             kind,
             currentId,
-            onSelect: (id) => {
-              if (kind === "color") {
-                sd.colors = id ? [id] : [];
-              } else {
-                sd[field] = id || "";
-              }
+            onSelect: (id, ref) => {
+              if (kind === "color") sd.colors = id ? [id] : [];
+              else sd[field] = id || "";
+              // The Make Image form and canvas edit the SAME skill_params node.
+              // Preserve the selected catalog identity alongside its legacy ID.
+              const keys = {style1:"style",style2:"secondaryStyle",layout:"layout",colors:"colors"};
+              sd.resourceRefs = {...(sd.resourceRefs || {}),
+                [keys[field]]: kind === "color" ? (ref ? [ref] : []) : (ref || null)};
               this.actions?.markDirtyAndRender();
             }
           });
