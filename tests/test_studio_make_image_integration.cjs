@@ -219,5 +219,9 @@ assert.match(app,/E\.assembleControlPrompt\(executionGraph, executionCtrl, Catal
 assert.match(app,/HandrawQuickSpec\.setAssets\(p,ast\.data\.items\)/);
 assert.match(app,/\/api\/studio\/runs\//);
 assert.match(app,/onSelect\(id, ref\)/);
+assert.match(app,/forkOf: CS\.forkGenerationSource\.workId/,
+ "Public work fork must retain original-author Work identity");
+assert.match(app,/forkItemId: CS\.forkGenerationSource\.itemId/,
+ "Generated image fork must retain selected-item lineage");
 assert.match(app,/retry:\s*async \(\)/);
 console.log("Studio #122 Make Image integration: atomic patches, catalog refs, ratio, fork, Run, frozen snapshot and DOM events PASS");
