@@ -16194,7 +16194,7 @@
       summaryHtml = `
         <div id="art-plan-summary" class="ic-art-summary-loading" role="status" tabindex="-1">
           <span class="art-spinner ic-art-spin-icon" style="margin-right:4px;"></span>
-          <span>正在调用手绘 Skill 分析文章结构，约 10–30 秒…</span>
+          <span>正在检索已授权资源并请求 AI 可审阅方案（不会在此步骤扣费生图）…</span>
           <button type="button" class="btn btn-sm" id="art-plan-cancel" style="margin-left:auto;">取消</button>
         </div>
       `;
@@ -17148,20 +17148,42 @@
         }));
         const charCount = String(draft.markdown || "").length;
 
-        const resp = await fetch("/api/studio/article-plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            articleId: draft.id || CS.activeArticleId || "",
-            title: draft.title || "",
-            blocks: reqBlocks,
-            charCount,
-            styleId: draft.styleId || "FA-001",
-            coverRatio: draft.coverRatio || "2.35:1",
-            inlineRatio: draft.inlineRatio || "4:3",
-            includeCover: true
+        const AI=window.HandrawStudioAIPlan;
+        if(!AI)throw Object.assign(new Error("ai_unavailable"),{code:"ai_unavailable"});
+        const oldCards=draft.cards||target?.planNode?.data?.cards||target?.art?.cards||[];
+        const candidateBlocks=reqBlocks.filter(x=>
+          ["p","h2","h3","ul","blockquote"].includes(x.kind)&&String(x.text||"").trim());
+        const planCount=Math.min(7,Math.max(2,
+          Math.min(candidateBlocks.length+1,Math.ceil(charCount/1000)+2)));
+        const baseRevision=Number.isInteger(draft.documentRevision)?draft.documentRevision:
+          Number.isInteger(draft.revision)?draft.revision:0;
+        const planRevision=Number(target?.planNode?.data?.planRevision||0);
+        const aiCurrentSpec={
+          style:draft.styleId?{id:draft.styleId,type:"style"}:null,
+          layout:draft.layoutId?{id:draft.layoutId,type:"layout"}:null,
+          ratio:draft.coverRatio||"2.35:1",ratioSource:draft.coverRatioSource||"default",
+          lockedFields:draft.lockedFields||[],userOverrides:draft.userOverrides||[]
+        };
+        const aiCurrentPlan={slots:oldCards.map((c,i)=>({
+          slotId:c.slotId||c.id,order:i,subject:c.subject||"",
+          overrides:{...(c.layoutId?{layout:{id:c.layoutId,type:"layout"}}:{}),
+            ...(c.ratio?{ratio:c.ratio}:{})},
+          lockedFields:c.lockedFields||[],userOverrides:c.userOverrides||[],
+          referenceMedia:c.referenceMedia||[]
+        }))};
+        const resp=await fetch("/api/studio/ai-plan",{
+          method:"POST",credentials:"include",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            kind:"article",subject:draft.title||draft.markdown?.slice(0,160)||"",
+            title:draft.title||"",count:planCount,
+            baseRevision,planRevision,blocks:reqBlocks,
+            currentSlots:aiCurrentPlan.slots.map(c=>({slotId:c.slotId})),
+            current:{styleId:draft.styleId||"",layoutId:draft.layoutId||"",
+              ratio:draft.coverRatio||""},
+            lockedFields:aiCurrentSpec.lockedFields
           }),
-          signal: controller.signal
+          signal:controller.signal
         });
         clearTimeout(timeoutId);
 
@@ -17206,17 +17228,28 @@
           }
 
           CS.articlePlanError = {
-            text: `规划失败：${errMsg || resp.status}，正文和配图位都没有改动`,
+            text: `规划失败：${AI.message(errCode) || errMsg || resp.status}，正文和配图位都没有改动`,
             canRetry: true,
-            canTemplate: true
+            canTemplate: false
           };
           renderFullPreviewStage();
           return;
         }
 
         const data = await resp.json();
-        // Remote AI output never overwrites a newer ArticleDocument.
+        // A model response cannot overwrite a later ArticleDocument.
         if (rejectStalePlan()) { renderFullPreviewStage(); return; }
+        const progress=DOM.previewStage?.querySelector("#art-plan-summary span:nth-child(2)");
+        if(progress)progress.textContent="正在验证图卡、原文段落锚点和已锁定参数…";
+        const report=AI.review(data,{kind:"article",baseRevision,planRevision,
+          currentSpec:aiCurrentSpec,currentPlan:aiCurrentPlan,catalog:Catalog,
+          isUnlocked:(id,item)=>S.isUnlocked(id,item)});
+        const decision=await AI.confirmDifferences(report,{title:"审阅文章 AI 方案差异"});
+        if(!decision.approved || rejectStalePlan()){renderFullPreviewStage();return;}
+        if(Number(target?.planNode?.data?.planRevision||0)!==planRevision){
+          toast("审阅期间文章方案已经变化，未覆盖原图卡");return;
+        }
+        const legacyPlan=AI.articleLegacy(report);
 
         const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
           withPresetAssets: false
@@ -17230,17 +17263,15 @@
           tmpCtrl.data.inlineRatio = draft.inlineRatio || "4:3";
         }
 
-        const aiCards = E.buildArticlePlanFromAi(data, {
-          ctrlNode: tmpCtrl,
-          graph: tmpGraph,
-          catalog: Catalog,
-          coverRatio: draft.coverRatio || "2.35:1",
-          inlineRatio: draft.inlineRatio || "4:3"
+        const suggestedCards=E.buildArticlePlanFromAi(legacyPlan,{
+          ctrlNode:tmpCtrl,graph:tmpGraph,catalog:Catalog,
+          coverRatio:draft.coverRatio||"2.35:1",
+          inlineRatio:draft.inlineRatio||"4:3"
         });
+        const aiCards=AI.mergeArticleCards(report,oldCards,suggestedCards,decision.keys);
 
         const review = await window.HandrawArticleReview.reviewPlan(aiCards, {
-          source: data.source, articleType: data.articleType,
-          existingCards: draft.cards || target?.planNode?.data?.cards || target?.art?.cards || []
+          source:"model",articleType:"knowledge",existingCards:oldCards
         });
         if (!review.approved) {
           CS.articleIsPlanning = false;
@@ -17266,7 +17297,16 @@
         }, 10000);
 
         // Mark entrance animation for newly planned cards
-        const approvedCards = review.cards;
+        const approvedCards=review.cards;
+        for(const prior of oldCards){
+          if(!approvedCards.some(c=>c.id===prior.id))
+            approvedCards.push(JSON.parse(JSON.stringify(prior)));
+        }
+        const specDelta=AI.approvedDelta(report,decision.keys).spec;
+        if(specDelta.style)draft.styleId=specDelta.style.id;
+        if(specDelta.layout)draft.layoutId=specDelta.layout.id;
+        if(specDelta.ratio && !(draft.lockedFields||[]).includes("ratio"))
+          draft.coverRatio=specDelta.ratio;
         approvedCards.forEach((c) => {
           c.isNewEntrance = true;
         });
