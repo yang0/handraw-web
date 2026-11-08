@@ -2648,12 +2648,12 @@
                 : [])
     );
 
-    const checked = (id, isJustUnlocked = false) => {
+    const checked = (id, isJustUnlocked = false, quiet = false) => {
       if (!ResourceRefs?.FIELDS[field]) return {ok:true,id,ref:null};
       const result = ResourceRefs.resolveSelection(Catalog, field, id, {
         isUnlocked: (code, item) => isJustUnlocked || S.isUnlocked(code, item)
       });
-      if (!result.ok) toast(ResourceRefs.formatError(result) + (result.id ? " · " + result.id : ""));
+      if (!result.ok && !quiet) toast(ResourceRefs.formatError(result) + (result.id ? " · " + result.id : ""));
       return result;
     };
     const choose = (id, isJustUnlocked = false) => {
@@ -2728,7 +2728,7 @@
           const pool = kind === "style" ? Catalog.styles : kind === "layout" ? Catalog.layouts
             : kind === "color" ? Catalog.colors : kind === "tone" ? Catalog.tones : [];
           const choices = pool.filter(it => it.tier !== "pro_credit" || S.isUnlocked(it.id, it))
-            .filter(it => checked(it.id).ok);
+            .filter(it => checked(it.id, false, true).ok);
           if (!choices.length) { toast("没有可使用的资源，请先解锁或更换分类"); return; }
           const picked = choices[Math.floor(Math.random() * choices.length)];
           if (isMulti) {
