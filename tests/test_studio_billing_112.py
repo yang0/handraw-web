@@ -180,5 +180,164 @@ class ZeroDarkChargeAudit112(unittest.TestCase):
         self.audit()
 
 
+class PaidGatewayHttpZeroDarkCharge112(unittest.TestCase):
+    """Real HTTP login/session, gateway MOCK and real paid ledger state."""
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        import os
+        import threading
+        from unittest.mock import patch
+        from backend.server import create_channel_server, init_database, SESSION_COOKIE_NAME
+        cls.tmp=tempfile.TemporaryDirectory(prefix="paid-http112-")
+        root=Path(cls.tmp.name)
+        config=root/"image-service.json"
+        config.write_text(json.dumps({
+            "key":"CI_ONLY_FAKE_KEY","base_url":"http://127.0.0.1:9999"
+        }))
+        cls.environment=patch.dict(os.environ,{
+            "HANDRAW_DB_PATH":str(root/"billing.sqlite"),
+            "HANDRAW_UPLOADS_DIR":str(root/"uploads"),
+            "HANDRAW_GENERATED_DIR":str(root/"generated"),
+            "HANDRAW_PRIVATE_STORAGE":str(root/"private"),
+            "HANDRAW_IMAGE_CONFIG":str(config),
+            "HANDRAW_DEMO_MODE":"0",
+            "HANDRAW_ALLOWED_ORIGINS":"http://trusted.test",
+        })
+        cls.environment.start()
+        try:
+            cls.db=init_database(root/"billing.sqlite")
+            cls.owner,session=register_user(
+                cls.db,"paid_http112_owner","StrongPass123!")
+            cls.cookie=SESSION_COOKIE_NAME+"="+session
+            cls.uid=int(cls.owner["id"])
+            max_free=int(get_site_settings(
+                cls.db.get_conn())["economy"]["daily_free_quota"])
+            with cls.db.transaction() as tx:
+                tx.execute(
+                    "UPDATE wallets SET balance=70,free_quota_date=?,free_quota_used=? "
+                    "WHERE user_id=?",(local_today_str(),max_free,cls.uid))
+            cls.server=create_channel_server(0,"main",cls.db)
+            cls.thread=threading.Thread(
+                target=cls.server.serve_forever,daemon=True)
+            cls.thread.start()
+            cls.base=f"http://127.0.0.1:{cls.server.server_port}"
+        except Exception:
+            cls.environment.stop()
+            cls.tmp.cleanup()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(5)
+        cls.db.close_thread_conn()
+        cls.db.close()
+        cls.environment.stop()
+        cls.tmp.cleanup()
+
+    def request(self, method, path, body=None):
+        import json
+        import urllib.error
+        import urllib.request
+        headers={"Origin":"http://trusted.test","Cookie":self.cookie,
+                 "Content-Type":"application/json"}
+        data=json.dumps(body).encode() if body is not None else None
+        req=urllib.request.Request(self.base+path,data=data,
+                                   headers=headers,method=method)
+        try:
+            res=urllib.request.urlopen(req,timeout=20)
+        except urllib.error.HTTPError as error:
+            res=error
+        with res:
+            return res.status,json.loads(res.read().decode())
+
+    def test_paid_http_timeout_duplicate_submit_confirmed_cancel_and_refund(self):
+        from unittest.mock import patch
+        owner_id=self.uid
+        def wallet():
+            conn=self.db.get_conn()
+            rows=conn.execute(
+                "SELECT delta,kind,event_key FROM ledgers "
+                "WHERE user_id=? AND kind IN ('studio_gen','studio_refund') "
+                "ORDER BY id",(owner_id,)).fetchall()
+            balance=int(conn.execute(
+                "SELECT balance FROM wallets WHERE user_id=?",
+                (owner_id,)).fetchone()[0])
+            return balance,rows
+
+        body={"prompt":"真实 HTTP 模拟网关，账本零暗扣",
+              "promptFromSkill":True,
+              "requestId":"http-billing112-"+uuid.uuid4().hex}
+        with patch("backend.server.gateway_request",
+                   side_effect=TimeoutError("upstream state unknown")) as fake:
+            status,result=self.request("POST","/api/studio/generate",body)
+        self.assertEqual(status,200,result)
+        self.assertTrue(result["confirming"])
+        self.assertEqual(fake.call_count,1)
+        cost=int(result["creditsSpent"])
+        self.assertGreater(cost,0)
+        gid=result["genId"]
+        task=result["taskId"]
+        self.assertTrue(task)
+        balance,rows=wallet()
+        self.assertEqual(balance,70-cost)
+        self.assertEqual([(x["kind"],int(x["delta"])) for x in rows],
+                         [("studio_gen",-cost)])
+
+        # Re-submit identical request while upstream state is unknown:
+        # 0 calls to the gateway, 0 new debits.
+        with patch("backend.server.gateway_request",
+                   side_effect=AssertionError("must not re-submit")) as not_called:
+            retry_status,retry=self.request("POST","/api/studio/generate",body)
+        not_called.assert_not_called()
+        self.assertIn(retry_status,(200,202))
+        self.assertTrue(retry["idempotent"])
+        self.assertEqual(retry["genId"],gid)
+        self.assertEqual(wallet()[0],70-cost)
+        self.assertEqual(len(wallet()[1]),1)
+
+        # Another request while an unknown paid task exists is refused.
+        other={**body,"requestId":"http-billing112-other-"+uuid.uuid4().hex}
+        limited_status,_=self.request("POST","/api/studio/generate",other)
+        self.assertEqual(limited_status,429)
+        self.assertEqual(len(wallet()[1]),1)
+
+        # Only a CONFIRMED gateway cancellation releases the charge.
+        with patch("backend.server.gateway_request",return_value={
+            "items":[{"id":task,"status":"cancelled"}]
+        }) as gateway:
+            poll_status,poll=self.request("GET","/api/studio/tasks?id="+task)
+        self.assertEqual(poll_status,200,poll)
+        self.assertEqual(poll["status"],"cancelled")
+        self.assertEqual(gateway.call_count,1)
+        self.assertEqual(wallet()[0],70)
+        events=wallet()[1]
+        self.assertEqual([int(x["delta"]) for x in events],[-cost,cost])
+        self.assertEqual(len({x["event_key"] for x in events}),2)
+
+        # Duplicate callback/poll is served from persisted terminal state.
+        with patch("backend.server.gateway_request",
+                   side_effect=AssertionError("must not re-poll terminal")) as no_poll:
+            poll2_status,poll2=self.request("GET","/api/studio/tasks?id="+task)
+        self.assertEqual(poll2_status,200)
+        self.assertEqual(poll2["status"],"refunded")
+        no_poll.assert_not_called()
+        refund_failed_cloud_generation(self.db,gid,"duplicate cancellation callback")
+        complete_cloud_generation(
+            self.db,gid,"late-paid-success",
+            ["/images/poster-demo-autumn-equinox.webp"])
+        self.assertEqual(wallet()[0],70)
+        self.assertEqual(len(wallet()[1]),2)
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT status FROM studio_generations WHERE id=?",
+            (gid,)).fetchone()[0],"refunded")
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM works WHERE run_id=?",
+            (result["runId"],)).fetchone()[0],0)
+
+
 if __name__ == "__main__":
     unittest.main()
