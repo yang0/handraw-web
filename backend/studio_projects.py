@@ -114,12 +114,13 @@ def _validate_draft(draft: Any, tx: Any, user_id: int) -> str:
     encoded = _canonical(draft)
     if len(encoded.encode("utf-8")) > _MAX_DRAFT_BYTES:
         _fail("项目草稿超过 512 KiB 限制", status=413, code="project_draft_too_large")
+    # Browser-selected IDs and AI-proposed resources are not capabilities.
+    # Verify catalog existence, type, entitlement and media owner in the same
+    # transaction that will commit the Project revision (no extra upload table).
+    from .studio_resources import check_media_owner, validate_draft_refs
     for media_id in seen_media:
-        row = tx.execute("SELECT 1 FROM media_assets WHERE id=? AND owner_user_id=?",
-                         (media_id, user_id)).fetchone()
-        if not row:
-            _fail("引用了不存在或无权访问的私有媒体", status=403,
-                  code="project_media_forbidden")
+        check_media_owner(media_id, tx, user_id)
+    validate_draft_refs(draft, tx, {"id": user_id})
     return encoded
 
 
