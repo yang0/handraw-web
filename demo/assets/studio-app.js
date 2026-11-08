@@ -17024,14 +17024,19 @@
           purpose: c.purpose || (c.role === "cover" ? "确立整篇文章的视觉主旨" : "在章节间提供阅读提示")
         })
       );
-      const templateDocument = window.HandrawStudioIntegration?.documentToken(draft);
+      const templateAnchors = () => (draft.cards || target?.planNode?.data?.cards ||
+        target?.art?.cards || []).map(c => ({slotId:c.slotId || c.id,
+        anchorId:c.anchorId || "",afterBlockIdx:c.afterBlockIdx ?? -1,
+        anchorText:c.anchorText || ""}));
+      const templateDocument = window.HandrawStudioIntegration?.documentToken(draft,templateAnchors());
       const review = await window.HandrawArticleReview.reviewPlan(templateCards, {
         source: "template", articleType: "knowledge",
         existingCards: draft.cards || target?.planNode?.data?.cards || target?.art?.cards || []
       });
       if (!review.approved || !isCurrentEditor()) return;
       const live = CS.articleEditorDraft?.id === draft.id ? CS.articleEditorDraft : draft;
-      if (templateDocument && !window.HandrawStudioIntegration.sameDocument(templateDocument,live)) {
+      if (templateDocument && !window.HandrawStudioIntegration.sameDocument(
+        templateDocument,live,templateAnchors())) {
         toast("正文已更新，旧章节模板未应用；原有图卡及锚点保持不变");
         return;
       }
@@ -17064,11 +17069,19 @@
       CS.articleIsPlanning = true;
       const reqArticleId = draft.id;
       const articleBridge = window.HandrawStudioIntegration;
-      const planDocumentAtStart = articleBridge?.documentToken(draft);
+      const currentPlanAnchors = () => {
+        const live = CS.articleEditorDraft?.id === reqArticleId
+          ? CS.articleEditorDraft : draft;
+        const cards = live?.cards || target?.planNode?.data?.cards || target?.art?.cards || [];
+        return cards.map(c => ({slotId:c.slotId || c.id,anchorId:c.anchorId || "",
+          afterBlockIdx:c.afterBlockIdx ?? -1,anchorText:c.anchorText || ""}));
+      };
+      const planDocumentAtStart = articleBridge?.documentToken(draft,currentPlanAnchors());
       const isPlanDocumentCurrent = () => {
         const live = CS.articleEditorDraft?.id === reqArticleId
           ? CS.articleEditorDraft : draft;
-        return !articleBridge || articleBridge.sameDocument(planDocumentAtStart, live);
+        return !articleBridge || articleBridge.sameDocument(
+          planDocumentAtStart,live,currentPlanAnchors());
       };
       const rejectStalePlan = () => {
         if (isPlanDocumentCurrent()) return false;
