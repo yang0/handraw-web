@@ -1684,13 +1684,46 @@
     });
 
     DOM.workflowsStage.querySelectorAll("[data-wf-rm]").forEach((btn) => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         const wid = btn.getAttribute("data-wf-rm");
-        CS.savedWorkflows = (CS.savedWorkflows || []).filter((x) => x.id !== wid);
+        const current = (CS.savedWorkflows || []).find((w) => w.id === wid);
+        if (!current || current.isOfficialPreset) return;
+        const scope = activeCacheScope, epoch = cacheScopeEpoch;
+        if (App.state?.serverBacked) {
+          if (!App.state?.loggedIn) {
+            toast("登录后才能删除云端工作流");
+            return;
+          }
+          btn.disabled = true;
+          try {
+            const resp = await fetch("/api/studio/workflows/delete", {
+              method: "POST", credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: wid })
+            });
+            const result = await resp.json().catch(() => null);
+            if (!resp.ok || result?.ok !== true) throw new Error(result?.error || "delete_failed");
+          } catch (_) {
+            if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+            btn.disabled = false;
+            toast("云端删除失败：工作流仍保留，请检查网络后重试");
+            return;
+          }
+        }
+        if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+        CS.savedWorkflows = (CS.savedWorkflows || []).filter((w) => w.id !== wid);
+        // Do not auto-create a just-deleted workflow from another open tab.
+        // Those tabs become local drafts until the user saves with a fresh ID.
+        CS.tabs.forEach((tab) => {
+          if (tab.savedId === wid) {
+            tab.savedId = null;
+            tab.dirty = true;
+          }
+        });
         writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-        studioApiPost("/api/studio/workflows/delete", { id: wid });
+        persistOpenTabs();
         renderTopAndBottomDocks();
-        toast("已删除该工作流");
+        toast(App.state?.serverBacked ? "工作流已从云端删除，打开的草稿仍保留" : "工作流已从本机删除");
       };
     });
   }
