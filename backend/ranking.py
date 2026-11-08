@@ -74,12 +74,56 @@ def topic_popular_score(topic: Any) -> int:
     return int(replies or 0) + int(_get(topic, "likes") or 0) + 2 * int(_get(topic, "favorites") or 0)
 
 
+# #25: each asset source is scored identically. Only observable events count.
+# Historical stamps stay readable although creation of new stamps is retired.
+# Tips are counted once per accepted request, NOT by currency/credits spent.
+# No author honour, source-type boost, or artificial freshness multiplier.
+ASSET_POPULAR_WEIGHTS = {
+    "usage": 10,
+    "likes": 1,
+    "favorites": 2,
+    "cheers": 1,
+    "stamps": 1,
+    "tips": 2,
+}
+
+
+def _asset_metric(row: Any, *names: str) -> int:
+    for name in names:
+        value = _get(row, name)
+        if value is not None:
+            return max(0, int(value))
+    return 0
+
+
 def asset_popular_score(row: Any) -> int:
-    """Styles and layouts are ranked by how many published works reference them."""
-    usage = _get(row, "usageCount")
-    if usage is None:
-        usage = _get(row, "usage_count")
-    return int(usage or 0)
+    """One canonical style/layout ranking formula for official/community alike."""
+    return sum((
+        ASSET_POPULAR_WEIGHTS["usage"] * _asset_metric(row, "usageCount", "usage_count"),
+        ASSET_POPULAR_WEIGHTS["likes"] * _asset_metric(row, "likes"),
+        ASSET_POPULAR_WEIGHTS["favorites"] * _asset_metric(row, "favorites"),
+        ASSET_POPULAR_WEIGHTS["cheers"] * _asset_metric(row, "cheers"),
+        ASSET_POPULAR_WEIGHTS["stamps"] * _asset_metric(row, "stamps", "stampCount", "stamp_count"),
+        ASSET_POPULAR_WEIGHTS["tips"] * _asset_metric(row, "tips", "tipCount", "tip_count"),
+    ))
+
+
+def asset_popular_sql(alias: str = "") -> str:
+    """SQL on an aggregated resource-metrics row (usage_count/likes/...)."""
+    if alias and not alias.replace("_", "").isalnum():
+        raise ValueError("Invalid resource ranking SQL alias")
+    prefix = f"{alias}." if alias else ""
+    return "(" + " + ".join(
+        f"{weight} * COALESCE({prefix}{column}, 0)"
+        for column, weight in (
+            ("usage_count", ASSET_POPULAR_WEIGHTS["usage"]),
+            ("likes", ASSET_POPULAR_WEIGHTS["likes"]),
+            ("favorites", ASSET_POPULAR_WEIGHTS["favorites"]),
+            ("cheers", ASSET_POPULAR_WEIGHTS["cheers"]),
+            ("stamps", ASSET_POPULAR_WEIGHTS["stamps"]),
+            ("tips", ASSET_POPULAR_WEIGHTS["tips"]),
+        )
+    ) + ")"
 
 
 def normalize_sort(value: str | None, *, allow_active: bool = False) -> str:
