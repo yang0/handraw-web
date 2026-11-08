@@ -293,6 +293,81 @@ def _pointer_tokens(path: Any) -> list[str]:
     return result
 
 
+
+# Node-scoped edits are deliberately narrower than Canvas-authority Graph writes.
+# In particular, no client may target edges, node identities, status or run
+# snapshots by a "simple editor" patch. The owner-scoped Project CAS covers
+# concurrent tabs, while this validator covers topology and field authority.
+_SIMPLE_NODE_FIELDS = {
+    "text_input": {"text"},
+    "skill_params": {"style1", "style2", "fusion", "layout", "colors", "tones",
+                     "moods", "customMood", "whitespace", "audience",
+                     "businessScene", "sc021Type", "sc022Name", "sc022Pinyin",
+                     "resourceRefs"},
+    "output_control": {"ratio", "ratioSource", "mode", "count"},
+}
+
+
+def _patch_graph_node(draft: dict[str, Any], tokens: list[str],
+                      item: dict[str, Any]) -> None:
+    if len(tokens) != 5 or tokens[0:2] != ["graph", "nodesById"] or tokens[3] != "data":
+        _fail("简洁编辑只能修改指定节点参数", code="invalid_graph_node_patch")
+    if item["op"] != "set" or "value" not in item:
+        _fail("简洁编辑不允许删除节点参数", code="invalid_graph_node_patch")
+    graph = draft.get("graph")
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    edges = graph.get("edges", []) if isinstance(graph, dict) else []
+    if not isinstance(nodes, list) or not isinstance(edges, list):
+        _fail("画布图形格式无效", code="invalid_graph_node_patch")
+    ident, field = tokens[2], tokens[4]
+    if len(ident) > 100 or not ident:
+        _fail("节点编号无效", code="invalid_graph_node_patch")
+    matched = [node for node in nodes if isinstance(node, dict) and node.get("id") == ident]
+    if len(matched) != 1:
+        _fail("目标节点不存在或有歧义", code="invalid_graph_node_patch")
+    node = matched[0]
+    kind = node.get("type")
+    if field not in _SIMPLE_NODE_FIELDS.get(kind, set()):
+        _fail("此字段必须在画布编辑", status=409, code="graph_field_read_only")
+    controls = [n for n in nodes if isinstance(n, dict) and n.get("type") == "output_control"]
+    skills = [n for n in nodes if isinstance(n, dict) and n.get("type") == "skill_params"]
+    texts = [n for n in nodes if isinstance(n, dict) and n.get("type") == "text_input"]
+    known = {"skill_params", "text_input", "asset", "output_control",
+             "output_display", "loop", "article_plan"}
+    if (not controls or len(skills) != 1 or len(texts) != 1 or
+            any(not isinstance(n, dict) or n.get("type") not in known for n in nodes)):
+        _fail("复杂图形不可用简洁编辑覆盖", status=409, code="graph_field_read_only")
+    ids = [n.get("id") for n in nodes]
+    if len(set(ids)) != len(ids) or any(
+        not isinstance(e, dict) or e.get("from") not in ids or e.get("to") not in ids
+        for e in edges
+    ):
+        _fail("图形连接不完整", status=409, code="graph_field_read_only")
+    inbound = lambda ctrl: {e["from"] for e in edges if e.get("to") == ctrl.get("id")}
+    shared = all(skills[0]["id"] in inbound(c) and texts[0]["id"] in inbound(c)
+                 for c in controls)
+    if not shared or (len(controls) > 1 and
+                      (kind == "output_control" or kind == "skill_params" and field not in
+                       {"style1", "style2", "fusion", "resourceRefs"})):
+        _fail("多分支仅可编辑安全映射的公共字段", status=409,
+              code="graph_field_read_only")
+    if kind == "skill_params" and node != skills[0] or (
+        kind == "text_input" and node != texts[0]
+    ) or (kind == "output_control" and
+          (len(controls) != 1 or node != controls[0])):
+        _fail("只能修改项目中唯一的公共参数节点", status=409,
+              code="graph_field_read_only")
+    locked = (node.get("data") or {}).get("lockedFields", [])
+    field_lock = {"style1": "style", "style2": "secondaryStyle",
+                  "layout": "layout", "ratio": "ratio", "text": "subject"}.get(field, field)
+    if isinstance(locked, list) and field_lock in locked:
+        _fail("该参数已锁定", status=409, code="graph_field_read_only")
+    if not isinstance(node.get("data"), dict):
+        node["data"] = {}
+    node["data"][field] = deepcopy(item["value"])
+    graph["revision"] = max(0, int(graph.get("revision", 0) or 0)) + 1
+
+
 def _apply_patch(project: dict[str, Any], patch: Any) -> dict[str, Any]:
     patches = patch if isinstance(patch, list) else [patch]
     if not patches or len(patches) > 32:
@@ -327,6 +402,9 @@ def _apply_patch(project: dict[str, Any], patch: Any) -> dict[str, Any]:
         if root not in writable[authority]:
             _fail("当前视图不能覆盖另一编辑权威的数据", status=409,
                   code="editor_authority_conflict")
+        if root == "graph" and len(tokens) > 1 and tokens[1] == "nodesById":
+            _patch_graph_node(draft, tokens, item)
+            continue
         node = draft
         for segment in tokens[:-1]:
             if not isinstance(node, dict):
@@ -348,6 +426,14 @@ def _apply_patch(project: dict[str, Any], patch: Any) -> dict[str, Any]:
             if "value" not in item:
                 _fail("字段修改缺少 value", code="invalid_project_patch")
             node[last] = deepcopy(item["value"])
+    # A view switch changes activeView/editorLayout, never authority. Once a
+    # user edits Graph, an unchecked return to Spec would expose a second
+    # writable source; explicit future migration must validate reversibility.
+    if project["authority"] == "graph" and updated["authority"] == "spec":
+        _fail("Graph 项目不能直接切回 Spec 写入权威", status=409,
+              code="editor_authority_conflict")
+    if updated["authority"] == "graph" and not isinstance(updated["draft"].get("graph"), dict):
+        _fail("Graph 写入权威要求存在图形", code="invalid_project_draft")
     if updated["kind"] == "image" and updated["authority"] == "article":
         _fail("单图项目不能使用文章编辑权威", code="invalid_project_authority")
     return updated
