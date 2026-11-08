@@ -228,6 +228,14 @@
       if ((spec.lockedFields || []).includes(key)) throw new Error("locked_field:" + key);
       next[key] = clone(value);
     }
+    // A field-level user ratio edit is explicit unless the caller sends a
+    // deliberate ratioSource override. Mode-default changes are not edits.
+    if (has(patch,"ratio") && !has(patch,"ratioSource")) next.ratioSource = "user";
+    if (has(patch,"outputMode") && !has(patch,"ratio") &&
+        next.ratioSource !== "user") {
+      next.ratio = MODE_RATIO[modeOf(next.outputMode)];
+      next.ratioSource = "default";
+    }
     next.revision = spec.revision + 1;
     return next;
   }
@@ -317,7 +325,9 @@
     const ids = Array.isArray(ld.studio2SlotIds) ? ld.studio2SlotIds : [];
     const next = (Array.isArray(items) ? items : []).map((item, index) => {
       const suggestedId = item?.slotId;
-      const prior = (suggestedId && rows.find(row => row?.slotId === suggestedId)) || rows[index] || {};
+      const prior = suggestedId
+        ? (rows.find(row => row?.slotId === suggestedId) || {})
+        : (rows[index] || {});
       const lockedFields = Array.isArray(prior.lockedFields) ? prior.lockedFields : [];
       const proposedTheme = text(item?.subject || item?.theme);
       const stableParentId = text(ld.planId || ld.id || loop?.id || "legacy-import");
@@ -330,6 +340,9 @@
           : mode === "ai" ? text(item?.layout) : text(prior.layout)
       };
     });
+    if (new Set(next.map(row => row.slotId)).size !== next.length) {
+      throw new Error("duplicate_slot_id");
+    }
     return {
       batchRows: next,
       promptListText: next.map(row => row.theme).join("\n"),
