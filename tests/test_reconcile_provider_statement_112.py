@@ -205,17 +205,12 @@ class ProviderReconciliation112(unittest.TestCase):
         p, h = clean_statements()
         # Backend uniqueness is scoped to user: request ID alone is unsafe.
         # Deliberately keep Run/Item/Slot identifiers equal to exercise scope.
-        p["tasks"].append({**p["tasks"][0], "owner_key": "owner-B",
-                           "provider_task_id": "task-B"})
-        p["events"].append({**p["events"][0], "owner_key": "owner-B",
-                            "provider_task_id": "task-B", "event_id": "invoice-B"})
-        h["attempts"].append({**h["attempts"][0], "owner_key": "owner-B",
-                              "provider_task_id": "task-B"})
-        h["ledger_events"].append({**h["ledger_events"][0], "owner_key": "owner-B",
-                                   "event_key": "wallet-B"})
-        h["callbacks"].append({**h["callbacks"][0], "owner_key": "owner-B",
-                               "provider_task_id": "task-B",
-                               "callback_event_id": "callback-B"})
+        # Different provider accounts may independently reuse external IDs.
+        p["tasks"].append({**p["tasks"][0], "owner_key": "owner-B"})
+        p["events"].append({**p["events"][0], "owner_key": "owner-B"})
+        h["attempts"].append({**h["attempts"][0], "owner_key": "owner-B"})
+        h["ledger_events"].append({**h["ledger_events"][0], "owner_key": "owner-B"})
+        h["callbacks"].append({**h["callbacks"][0], "owner_key": "owner-B"})
         report = reconcile(p, h)
         self.assertEqual(report["anomalies"], [])
         self.assertEqual(report["counts"]["attempts"], 2)
