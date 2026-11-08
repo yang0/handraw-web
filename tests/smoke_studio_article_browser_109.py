@@ -127,34 +127,55 @@ def main():
                 assert "追加一句" in response["body"]["project"]["draft"]["article"]["markdown"]
                 print("109 ArticleDocument Project CAS cloud ack: PASS",flush=True)
 
-                # Plan UI: real article editor uses existing plan engine and an
-                # offline template fallback (never a paid generation request).
-                page.locator("#editor-btn-plan").click()
-                try:
-                    page.locator("[data-ai-confirm]").wait_for(timeout=25000)
-                    page.locator("[data-ai-confirm]").click()
-                except Exception:
-                    # In explicit demo mode template fallback can bypass the
-                    # AI differences layer; article card review is still used.
-                    pass
-                try:
-                    page.locator("[data-review-apply]").wait_for(timeout=12000)
-                    page.locator("[data-review-apply]").click()
-                except Exception:
-                    pass
-                try:
-                    page.wait_for_function("""()=>window.CS?.articleEditorDraft?.cards?.length>0""",
-                        timeout=25000)
-                except Exception:
-                    # UI's local chapter-template button is the fallback when
-                    # the unified AI adapter reports an unavailable upstream.
-                    fallback=page.locator("#art-plan-use-template")
-                    if fallback.count():
-                        fallback.click()
-                        page.locator("[data-review-apply]").wait_for(timeout=12000)
-                        page.locator("[data-review-apply]").click()
-                    page.wait_for_function("""()=>window.CS?.articleEditorDraft?.cards?.length>0""",
-                        timeout=25000)
+                # Model-only plan endpoint is replaced with an offline
+                # deterministic response while keeping real Chromium review,
+                # permission/selection, PlanSlot and editor integration.
+                ai_ref=lambda ident,kind:{"id":ident,"type":kind,
+                    "source":"official","version":"current"}
+                def mock_ai_plan(route):
+                    req=route.request.post_data_json
+                    n=max(2,min(3,int(req.get("count") or 2)))
+                    slots=[]
+                    for i in range(n):
+                        slots.append({
+                            "slotId":f"article109-slot-{i}",
+                            "order":i,"subject":("茶山春光封面" if i==0 else f"茶园章节插图 {i}"),
+                            "role":"cover" if i==0 else "illustration",
+                            "anchorId":"cover" if i==0 else f"article109-anchor-{i}",
+                            "afterBlockIdx":-1 if i==0 else i,
+                            "anchorText":"茶园章节",
+                            "purpose":"用原创插图帮助读者理解文章",
+                            "imageType":"scene",
+                            "overrides":{"layout":ai_ref("SC-021","layout"),
+                                "ratio":"2.35:1" if i==0 else "4:3"},
+                            "reasons":{"subject":"衔接章节","layout":"视觉结构清晰","ratio":"与文章版面匹配"}
+                        })
+                    proposal={
+                        "ok":True,"schemaVersion":1,"kind":"article",
+                        "source":"model","phase":"review",
+                        "baseRevision":req["baseRevision"],
+                        "creationSpecPatch":{
+                            "baseRevision":req["baseRevision"],
+                            "changes":{"style":ai_ref("FA-001","style"),
+                                "layout":ai_ref("SC-021","layout"),"ratio":"2.35:1"},
+                            "reasons":{"style":"符合手绘主题",
+                                "layout":"清晰的知识布局","ratio":"适配封面"},
+                            "candidates":{"style":[{"id":"FA-001"}],"layout":[{"id":"SC-021"}]}
+                        },
+                        "planPatch":{"baseRevision":req["planRevision"],
+                            "kind":"article","slots":slots},
+                        "cost":{"generationStarted":False,"runCreated":False}
+                    }
+                    route.fulfill(status=200,content_type="application/json",
+                        body=json.dumps(proposal,ensure_ascii=False))
+                page.route("**/api/studio/ai-plan",mock_ai_plan)
+                page.locator("#editor-btn-plan").click(timeout=15000)
+                page.locator("[data-ai-confirm]").wait_for(timeout=20000)
+                page.locator("[data-ai-confirm]").click()
+                page.locator("[data-review-apply]").wait_for(timeout=20000)
+                page.locator("[data-review-apply]").click()
+                page.wait_for_function("""()=>window.CS?.articleEditorDraft?.cards?.length>0""",
+                    timeout=20000)
                 plan=article_state(page)
                 assert len(plan["cards"])>=1,plan
                 anchors=[c["anchorId"] for c in plan["cards"]]
