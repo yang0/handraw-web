@@ -3087,7 +3087,7 @@
       btn.addEventListener("click", async () => {
         const key = btn.getAttribute("data-key");
         const wid = btn.getAttribute("data-work-id");
-        if (!confirm(`确认取消作品 ${wid} 在场景【${key}】的置顶吗？`)) return;
+        if (!await window.HandrawDialogs.confirm(`确认取消作品 ${wid} 在场景【${key}】的置顶吗？`)) return;
         try {
           await api("/api/admin/home-scenarios", {
             method: "POST",
