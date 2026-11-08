@@ -1209,6 +1209,10 @@
       if (outgoing && outgoing.id !== tabId && outgoing.savedId && outgoing.dirty && !outgoing.savePromise) {
         void saveCurrentWorkflow(false, { silent: true });
       }
+      if (outgoing && outgoing.id !== tabId &&
+          (outgoing.projectSaveState === "local_only" || outgoing.projectPending)) {
+        void saveActiveProject(outgoing);
+      }
     }
     if (switchToCanvas && CS.stageView !== "canvas") {
       CS.stageView = "canvas";
@@ -1258,6 +1262,9 @@
     persistOpenTabs();
     // A dirty tab restored from disk may have missed its debounce while offline.
     if (target.dirty && target.savedId) scheduleWorkflowAutoSave();
+    if (target.projectPending || (target.projectSaveState === "local_only" && target.projectId)) {
+      scheduleProjectAutoSave(target);
+    }
   }
 
   function closeWorkflowTab(tabId) {
@@ -3464,6 +3471,13 @@
         if (!forkId && !forkTopicId && styleParam === null && layoutParam === null) ensureQuickTab();
         CS.stageView = "quick";
       }
+    }
+    // After refresh, replay a frozen outbox request using its original key.
+    // Project IDs and pending requests are stored in account-scoped local tabs.
+    const resumeTab = CS.tabs.find((t) => t.id === CS.activeTabId);
+    if (resumeTab && resumeTab.projectId && !isArticleTab(resumeTab) &&
+        (resumeTab.projectPending || ["local_only", "error"].includes(resumeTab.projectSaveState))) {
+      scheduleProjectAutoSave(resumeTab);
     }
   }
 
@@ -12842,6 +12856,8 @@
           <span role="status">${saveButtonText}</span>
           ${curTab?.dirty ? `<span class="ic-save-dirty-dot" title="有未保存改动"></span>` : ""}
         </button>
+        <button type="button" class="ic-canvas-save-btn" id="bl-save-project"
+          title="项目自动同步与工作流模板保存相互独立">${projectStatusText(curTab)}</button>
         <div class="ic-float-pill">
           <button type="button" class="ic-icon-btn ${CS.minimapOpen ? "is-active" : ""}" id="bl-minimap">缩略图</button>
           <div class="ic-divider-v"></div>
@@ -12854,6 +12870,17 @@
         DOM.zoomPctBtn = DOM.bottomRight.querySelector("#bl-zoom-pct");
 
         DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(cloudSaveState === "conflict");
+        DOM.bottomRight.querySelector("#bl-save-project").onclick = () => {
+          const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
+          if (!tab) return;
+          if (tab.projectSaveState === "conflict") {
+            void copyConflictedProject(tab);
+          } else if (!App.state?.loggedIn) {
+            toast("登录后可将项目保存至云端，本机草稿仍会保留");
+          } else {
+            void saveActiveProject(tab);
+          }
+        };
         DOM.bottomRight.querySelector("#bl-minimap").onclick = () => {
           CS.minimapOpen = !CS.minimapOpen;
           savePrefs();
@@ -17549,13 +17576,18 @@
       updateTabScrollButtons();
     });
     window.addEventListener("online", () => {
-      // Local-only saves and transient network failures retry after reconnect.
-      // Conflicts require a conscious copy/merge and must NEVER auto-retry.
+      // Uncertain network writes replay the same frozen outbox. A 409 stays
+      // blocked until the user explicitly preserves a conflict copy.
       const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
-      const wf = (CS.savedWorkflows || []).find((w) => w.id === tab?.savedId && !w.isOfficialPreset);
-      if (!tab || !wf || !["local", "error"].includes(wf.cloudSaveState)) return;
-      tab.dirty = true;
-      scheduleWorkflowAutoSave();
+      if (!tab) return;
+      const wf = (CS.savedWorkflows || []).find((w) => w.id === tab.savedId && !w.isOfficialPreset);
+      if (wf && ["local", "error"].includes(wf.cloudSaveState)) {
+        tab.dirty = true;
+        scheduleWorkflowAutoSave();
+      }
+      if (tab.projectPending || ["local_only", "error"].includes(tab.projectSaveState)) {
+        scheduleProjectAutoSave(tab);
+      }
     });
   }
 
