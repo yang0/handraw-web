@@ -2214,6 +2214,8 @@
           ctrl.data.status = "idle";
           delete ctrl.data.error;
           delete ctrl.data.activeBatchId;
+          delete ctrl.data.studio2RunSnapshot;
+          delete ctrl.data.runId;
           ctrl.data.elapsedSec = 0;
 
           skill.data.fusion = false;
