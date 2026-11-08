@@ -115,3 +115,17 @@
  color:var(--ic-ink);font-size:12px;font-weight:750;cursor:pointer}
 .ic129-shelf-action:hover{border-color:var(--ic-select)}
 .ic129-shelf-help{margin:3px 0 12px;font-size:11px;line-height:1.5;color:var(--ic-muted)}
+
+.ic129-first-start{max-width:680px;margin:0 auto 20px;padding:18px 20px;
+  border:1px solid var(--ic-border);border-radius:15px;background:var(--ic-panel);
+  box-shadow:var(--ic-dock-shadow)}
+.ic129-first-start h2{font-size:18px;margin:0 0 6px}
+.ic129-first-start p{font-size:12px;line-height:1.5;color:var(--ic-muted);margin:0 0 13px}
+.ic129-first-start form{display:flex;flex-wrap:wrap;gap:8px}
+.ic129-first-start form input{flex:1;min-width:200px;border:1px solid var(--ic-border);
+  border-radius:8px;background:var(--ic-panel-solid);padding:10px 12px;color:var(--ic-ink)}
+.ic129-first-start button{cursor:pointer;border:1px solid var(--ic-border);
+  border-radius:8px;background:var(--ic-surface);color:var(--ic-ink);font-weight:800;
+  padding:8px 12px}
+.ic129-first-start form button{background:var(--vermilion);color:#fff;border-color:transparent}
+.ic129-first-actions{display:flex;gap:8px;margin-top:9px}
