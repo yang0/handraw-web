@@ -153,12 +153,17 @@
     return { ok: true, ratio: width / height }; // Server validates model-specific limits.
   }
 
-  function catalogContains(catalog, id, type) {
-    if (!catalog) return true; // No catalog means validate syntax only; server rechecks.
+  function catalogResolve(catalog, id, type) {
+    if (!catalog) return null;
     const map = catalog.resourceMap;
     const byId = map && (typeof map.get === "function" ? map.get(id) : map[id]);
     const group = { style: "styles", layout: "layouts", color: "colors", tone: "tones" }[type];
-    const value = byId || (Array.isArray(catalog[group]) ? catalog[group].find(v => v.id === id) : null);
+    return byId || (Array.isArray(catalog[group]) ? catalog[group].find(v => v.id === id) : null);
+  }
+
+  function catalogContains(catalog, id, type) {
+    if (!catalog) return true; // Offline drafts may load; server rechecks all.
+    const value = catalogResolve(catalog, id, type);
     if (!value) return false;
     const foundType = value.kind || value.type;
     return !foundType || foundType === type || (type === "color" && foundType === "palette");
@@ -168,6 +173,9 @@
     const errors = [];
     if (!spec || !text(spec.subject).trim()) errors.push({ field: "subject", code: "missing_subject" });
     if (!spec?.style?.id) errors.push({ field: "style", code: "missing_style" });
+    if (spec?.fusionEnabled && !spec?.secondaryStyle?.id) {
+      errors.push({ field: "secondaryStyle", code: "missing_secondary_style" });
+    }
     if (!MODES.has(spec?.outputMode)) errors.push({ field: "outputMode", code: "invalid_mode" });
     if (!validateRatio(spec?.ratio).ok) errors.push({ field: "ratio", code: "invalid_ratio" });
     for (const [name, type, list] of [
@@ -178,8 +186,34 @@
       ["tones", "tone", spec?.tones || []]
     ]) {
       for (const item of list) {
-        if (!item || !item.id || !RESOURCE_TYPES.has(type) || item.type !== type || !catalogContains(options.catalog, item.id, type)) {
+        if (!item || !item.id || !RESOURCE_TYPES.has(type) || item.type !== type ||
+            !catalogContains(options.catalog, item.id, type)) {
           errors.push({ field: name, code: "invalid_resource", id: item?.id || "" });
+          continue;
+        }
+        if (item.source != null && !["official","community","override","private",
+          "pending","exclusive"].includes(item.source)) {
+          errors.push({ field: name, code: "invalid_resource_source", id: item.id });
+        }
+        if (item.version != null && !(typeof item.version === "string" && item.version.length <= 64 &&
+            item.version.length > 0) && !(Number.isInteger(item.version) && item.version > 0)) {
+          errors.push({ field: name, code: "invalid_resource_version", id: item.id });
+        }
+        const entry = catalogResolve(options.catalog, item.id, type);
+        if (entry) {
+          if (entry.canUse === false || entry.access?.canUse === false) {
+            errors.push({ field: name, code: "resource_forbidden", id: item.id });
+          }
+          const source = entry.source || entry.sourceType || entry.source_type;
+          if (source && item.source && source !== item.source &&
+              !(source === "official_override" && item.source === "override")) {
+            errors.push({ field: name, code: "resource_source_mismatch", id: item.id });
+          }
+          const version = entry.version ?? entry.definitionVersion ?? entry.revision;
+          if (version != null && item.version != null && item.version !== "current" &&
+              String(version) !== String(item.version)) {
+            errors.push({ field: name, code: "resource_version_conflict", id: item.id });
+          }
         }
       }
     }
