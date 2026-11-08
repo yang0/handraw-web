@@ -10513,6 +10513,7 @@
     }
     if(sizeChanged)DOM.nodesLayer.querySelectorAll('.ic-node[data-node-id]').forEach(el=>elById.set(el.getAttribute('data-node-id'),el));
     // Prevent vertical collisions when a variable-height node (e.g. 风格参数 enabling 双画风融合 or multi-select chips) expands!
+    if(sizeChanged){
     const sortedByY = [...(CS.graph.nodes || [])].sort((a, b) => a.y - b.y || a.x - b.x);
     for (let i = 0; i < sortedByY.length; i++) {
       const upper = sortedByY[i];
@@ -10530,11 +10531,13 @@
       }
     }
 
+    }
     renderEdgesSvg();
-    bindNodeInteriorActions();
+    for(const el of dirtyNodes)bindNodeInteriorActions(el);
+    if(DOM.nodesLayer.dataset.canvasBenchmark==='1')DOM.nodesLayer._lastCanvasPatchStats=stats;
   }
 
-  function bindNodeInteriorActions() {
+  function bindNodeInteriorActions(root = DOM.nodesLayer) {
     if (!DOM.nodesLayer) return;
 
     /* --- 1. Skill Params Actions --- */
