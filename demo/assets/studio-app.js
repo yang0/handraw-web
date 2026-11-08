@@ -1956,31 +1956,56 @@
       DOM.projectsStage.textContent = "项目中心模块暂不可用，请刷新页面";
       return;
     }
+    // Rebuilding the whole stage on every keystroke destroys Chinese IME
+    // composition, text selection and the scroll position after "load more".
+    const previousScroller = DOM.projectsStage.querySelector(".ic-pc-scroll");
+    const previousScrollTop = previousScroller?.scrollTop || 0;
     const focus = document.activeElement?.id === "pc-project-search";
+    const previousInput = focus ? document.activeElement : null;
+    const selectionStart = previousInput?.selectionStart;
+    const selectionEnd = previousInput?.selectionEnd;
     DOM.projectsStage.innerHTML = ProjectCenter.render({
       projects: CS.cloudProjects, tabs: CS.tabs.concat(CS.closedProjectDrafts || []), query: CS.projectQuery,
       loading: CS.projectCenterLoading, error: CS.projectCenterError,
       loggedIn: Boolean(App.state?.serverBacked && App.state?.loggedIn),
       hasMore: CS.projectHasMore, loadingMore: CS.projectCenterLoadingMore
     });
+    const nextScroller = DOM.projectsStage.querySelector(".ic-pc-scroll");
+    if (nextScroller) nextScroller.scrollTop = previousScrollTop;
     const queryInput = DOM.projectsStage.querySelector("#pc-project-search");
     if (queryInput) {
-      queryInput.oninput = () => {
+      let composing = false;
+      const scheduleSearch = (immediate = false) => {
         CS.projectQuery = queryInput.value;
-        CS.projectListRequestVersion += 1; // Invalidate responses from old search.
+        CS.projectListRequestVersion += 1; // Invalidate older request results.
         if (_projectSearchTimer) clearTimeout(_projectSearchTimer);
-        renderProjectCenterStage();
         const scope = activeCacheScope, epoch = cacheScopeEpoch;
         _projectSearchTimer = setTimeout(() => {
           _projectSearchTimer = null;
           if (!isStaleScope(epoch,scope) && CS.stageView === "projects") {
             void refreshProjectCenter();
           }
-        }, 300);
+        }, immediate ? 0 : 300);
+      };
+      queryInput.oncompositionstart = () => { composing = true; };
+      queryInput.oncompositionend = () => {
+        composing = false;
+        scheduleSearch();
+      };
+      queryInput.oninput = () => {
+        if (!composing) scheduleSearch();
+      };
+      queryInput.onkeydown = event => {
+        if (event.key === "Enter" && !composing && !event.isComposing) {
+          event.preventDefault();
+          scheduleSearch(true);
+        }
       };
       if (focus) {
         queryInput.focus();
-        try { queryInput.setSelectionRange(queryInput.value.length,queryInput.value.length); } catch (_) {}
+        if (typeof selectionStart === "number" && typeof selectionEnd === "number") {
+          try { queryInput.setSelectionRange(selectionStart, selectionEnd); } catch (_) {}
+        }
       }
     }
     DOM.projectsStage.querySelectorAll("[data-pc-refresh]").forEach(btn => {
