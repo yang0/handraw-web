@@ -141,8 +141,8 @@ def main():
                             ).length >= n""",arg=i+1,timeout=25000)
                         assert not host.locator("[data-gallery-upload-form]").is_visible()
                     page.wait_for_function("""() =>
-                        document.querySelector('[data-gallery-message]')?.textContent
-                            ?.includes('已加载 3 张')""",timeout=20000)
+                        document.querySelector('#qa91-library [data-gallery-message]')?.textContent
+                            ?.includes('添加成功')""",timeout=20000)
                     cards = host.locator("[data-gallery-cards] article.hw-personal-gallery-card")
                     assert cards.count() == 3
                     assert set(cards.locator("strong").all_inner_texts()) == {
