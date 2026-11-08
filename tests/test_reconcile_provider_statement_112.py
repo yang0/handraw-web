@@ -24,9 +24,9 @@ def clean_statements():
         "window": {**WINDOW, "exported_at_utc": "2026-11-04T00:00:00Z",
                    "settlement_grace_minutes": 1440, "invoice_final": True},
         "currency": "USD",
-        "tasks": [{"request_id": "request-1", "attempt": 1,
+        "tasks": [{"owner_key": "owner-A", "request_id": "request-1", "attempt": 1,
                    "provider_task_id": "task-1", "state": "succeeded"}],
-        "events": [{"event_id": "statement-event-1", "request_id": "request-1",
+        "events": [{"event_id": "statement-event-1", "owner_key": "owner-A", "request_id": "request-1",
                     "attempt": 1, "provider_task_id": "task-1",
                     "kind": "charge", "currency": "USD",
                     "amount_minor": 125, "occurred_at_utc": WHEN}],
@@ -35,15 +35,15 @@ def clean_statements():
         "schema_version": 1, "source": "handraw_export",
         "environment": "preproduction", "release_sha": SHA,
         "window": dict(WINDOW),
-        "attempts": [{"request_id": "request-1", "attempt": 1, "run_id": "run-1",
+        "attempts": [{"owner_key": "owner-A", "request_id": "request-1", "attempt": 1, "run_id": "run-1",
                       "item_id": "item-1", "slot_key": "slot-1",
                       "provider_task_id": "task-1", "submitted": True,
                       "status": "success", "cost_type": "credits"}],
-        "ledger_events": [{"event_key": "charge-credit-1", "request_id": "request-1",
+        "ledger_events": [{"event_key": "charge-credit-1", "owner_key": "owner-A", "request_id": "request-1",
                            "attempt": 1, "kind": "studio_gen", "delta_credits": -3,
                            "occurred_at_utc": WHEN}],
         "callbacks": [{"callback_event_id": "callback-1",
-                       "request_id": "request-1", "attempt": 1,
+                       "owner_key": "owner-A", "request_id": "request-1", "attempt": 1,
                        "provider_task_id": "task-1", "state": "succeeded",
                        "occurred_at_utc": WHEN}],
     }
@@ -200,6 +200,26 @@ class ProviderReconciliation112(unittest.TestCase):
                                "provider_task_id": "retry-task",
                                "callback_event_id": "retry-callback"})
         self.assertIn("multiple_successful_paid_attempts_per_slot", anomaly_codes(p, h))
+
+    def test_two_users_same_request_id_and_attempt_do_not_collide(self):
+        p, h = clean_statements()
+        # Backend uniqueness is scoped to user: request ID alone is unsafe.
+        # Deliberately keep Run/Item/Slot identifiers equal to exercise scope.
+        p["tasks"].append({**p["tasks"][0], "owner_key": "owner-B",
+                           "provider_task_id": "task-B"})
+        p["events"].append({**p["events"][0], "owner_key": "owner-B",
+                            "provider_task_id": "task-B", "event_id": "invoice-B"})
+        h["attempts"].append({**h["attempts"][0], "owner_key": "owner-B",
+                              "provider_task_id": "task-B"})
+        h["ledger_events"].append({**h["ledger_events"][0], "owner_key": "owner-B",
+                                   "event_key": "wallet-B"})
+        h["callbacks"].append({**h["callbacks"][0], "owner_key": "owner-B",
+                               "provider_task_id": "task-B",
+                               "callback_event_id": "callback-B"})
+        report = reconcile(p, h)
+        self.assertEqual(report["anomalies"], [])
+        self.assertEqual(report["counts"]["attempts"], 2)
+        self.assertNotIn("owner-B", json.dumps(report))
 
     def test_empty_statements_never_masquerade_as_reconciled(self):
         p, h = clean_statements()
