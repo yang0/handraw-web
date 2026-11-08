@@ -5390,6 +5390,84 @@
     }
   }
 
+  // A 409 never silently adopts a later Project revision. The source document,
+  // local PlanSlots and pending request stay intact until user resolution.
+  async function reviewArticleProjectConflict109(art) {
+    if (!ProjectClient || !ArticleProject109 || !art?.projectId ||
+        art.projectSaveState !== "conflict") return;
+    const scope=activeCacheScope,epoch=cacheScopeEpoch,projectId=art.projectId;
+    const atEdit=Number(art.editRevision || 0);
+    let remote;
+    try {
+      remote=(await ProjectClient.get(projectId)).project;
+      if (isStaleScope(epoch,scope) || art.projectId !== projectId) return;
+      if (!remote || remote.authority !== "article") throw new Error("invalid_article_remote");
+    } catch(error) {
+      if (!isStaleScope(epoch,scope)) toast("读取云端文章失败，保留本地未同步稿");
+      return;
+    }
+    const remoteDoc=remote.draft.article || {};
+    S.openModal({
+      title:"文章 Project 版本冲突",
+      sizeClass:"modal-wide",
+      html:'<p>正文和图卡在其他标签修改过。项目版本 '+esc(remote.revision)+
+        '，本机基线 '+esc(art.projectRevision)+
+        '。以下只读对比不会上传原文到公共作品。</p>'+
+        '<div class="article109-conflict-diff" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">'+
+        '<section><strong>本机待同步正文</strong><pre style="max-height:260px;overflow:auto;white-space:pre-wrap;">'+
+        esc(String(art.markdown||"").slice(0,7000))+'</pre></section>'+
+        '<section><strong>云端当前正文</strong><pre style="max-height:260px;overflow:auto;white-space:pre-wrap;">'+
+        esc(String(remoteDoc.markdown||"").slice(0,7000))+'</pre></section></div>'+
+        '<p>另存为副本会保存本机文章与锚点，不覆盖原云端项目。</p>'+
+        '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'+
+        '<button type="button" class="btn btn-sm" id="article109-keep">保留本机稿，稍后处理</button>'+
+        '<button type="button" class="btn btn-sm" id="article109-copy">另存为新项目副本</button>'+
+        '<button type="button" class="btn btn-sm btn-primary" id="article109-discard">放弃本地修改并恢复云端</button></div>',
+      onMount(root) {
+        root.querySelector("#article109-keep").onclick=()=>S.closeModal();
+        root.querySelector("#article109-copy").onclick=()=>{
+          S.closeModal();
+          void (async()=>{
+            try {
+              await ProjectClient.copyConflict(art,ArticleProject109.snapshot(art).draft,()=>{
+                if (!isStaleScope(epoch,scope))
+                  writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+              });
+              if (isStaleScope(epoch,scope)) return;
+              if (Number(art.editRevision || 0)>atEdit) {
+                markArticleProjectChanged(art);
+                persistMyArticles();
+              }
+              toast("已将本机文章另存为新云端项目，原项目未覆盖");
+              if (CS.activeArticleId===art.id) renderFullPreviewStage();
+            } catch(error) {
+              if (!isStaleScope(epoch,scope)) {
+                writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+                toast("副本保存失败：本机文章和固定的副本请求已保留，可重试");
+              }
+            }
+          })();
+        };
+        root.querySelector("#article109-discard").onclick=()=>{
+          if (isStaleScope(epoch,scope) || art.projectId!==projectId ||
+              Number(art.editRevision || 0)!==atEdit) {
+            S.closeModal();
+            toast("正文已再次变化，请重新查看冲突差异");
+            return;
+          }
+          const restored=ArticleProject109.hydrate(remote,art);
+          restored.linkedTabId=null;restored.linkedPlanNodeId=null;
+          const index=CS.myArticles.indexOf(art);
+          if (index>=0) CS.myArticles.splice(index,1,restored);
+          writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+          S.closeModal();
+          openUnifiedArticleEditor(restored.id);
+          toast("已按明确选择恢复云端文章，未产生新的生成任务");
+        };
+      }
+    });
+  }
+
   function markArticleProjectChanged(art, {document=false,plan=false}={}) {
     if (!art) return;
     if (document) art.documentRevision = Number(art.documentRevision || 0) + 1;
@@ -17067,6 +17145,23 @@
       if (!el) return;
       const retry = DOM.previewStage.querySelector("#editor-sync-retry");
       const remote = Boolean(App.state?.serverBacked && App.state?.loggedIn);
+      const projectArt = findArticleById(draft.id);
+      const projectState = projectArt?.projectSaveState || "";
+      const isProject = Boolean(projectArt?.projectId || projectArt?.projectPending);
+      if (isProject) {
+        if (retry) {
+          retry.hidden = !remote || !["error","conflict","local_only","dirty"].includes(projectState);
+          retry.textContent = projectState === "conflict" ? "查看版本冲突" : "重试云端同步";
+        }
+        el.textContent = !remote ? "已保存在本机 · 登录后同步" :
+          projectState === "synced" ? "文章已云端确认 · 版本 "+projectArt.projectRevision :
+          projectState === "conflict" ? "文章版本冲突 · 本机稿已保留" :
+          projectState === "saving" ? "文章同步云端中…" :
+          projectState === "error" ? "文章已在本机 · 云端同步失败" :
+          projectState === "dirty" ? "本机写入未确认 · 请勿关闭" :
+          "文章已保存到本机 · 等待同步";
+        return;
+      }
       if (retry) {
         retry.hidden = !remote || !["failed", "conflict"].includes(_articlesSyncStatus);
         retry.textContent = _articlesSyncStatus === "conflict" ? "恢复为新文章" : "重试云端同步";
@@ -17082,6 +17177,12 @@
     };
     const syncRetryBtn = DOM.previewStage.querySelector("#editor-sync-retry");
     if (syncRetryBtn) syncRetryBtn.onclick = () => {
+      const art=findArticleById(draft.id);
+      if (art && (art.projectId || art.projectPending)) {
+        if (art.projectSaveState === "conflict") void reviewArticleProjectConflict109(art);
+        else void flushArticleProject109(art);
+        return;
+      }
       if (_articlesCloudConflict) {
         restoreArticleConflictBackup();
         return;
@@ -17512,11 +17613,9 @@
       // In-place loading state (spec 2.3) without tearing down current editor instance
       const paper = DOM.previewStage?.querySelector("#art-editor-paper");
       if (paper) paper.setAttribute("aria-busy", "true");
-      getSegTextareas().forEach((t) => (t.readOnly = true));
-      DOM.previewStage?.querySelectorAll(".ic-art-card").forEach((c) => {
-        c.style.opacity = ".5";
-        c.style.pointerEvents = "none";
-      });
+      // Planning runs on a captured document revision. Keep the body
+      // editable; a stale asynchronous response is rejected, never forced
+      // into the user's newer text.
       if (planBtn) {
         planBtn.disabled = true;
         planBtn.setAttribute("aria-busy", "true");
