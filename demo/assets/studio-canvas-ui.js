@@ -163,7 +163,9 @@
       '<button type="button" data-c129="save">保存项目</button>'+
       '<button type="button" data-c129="simple">简洁编辑</button>'+
       '<button type="button" data-c129="undo">撤销</button>'+
-      '<button type="button" data-c129="redo">重做</button>'+
+      '<button type="button" data-c129="redo">重做</button>'+ 
+      '<button type="button" data-c129="note">便签</button>'+ 
+      '<button type="button" data-c129="group"'+((graph.selectedIds||[]).length<2?' disabled':'')+'>视觉分组</button>'+
       '<button type="button" class="ic129-primary" data-c129="run">▶ '+(selected?.type==="output_control"?"运行选中分支":"运行画布")+'</button>'+
       '<button type="button" data-c129="inspector" aria-expanded="'+inspectorOpen+'">属性 '+(inspectorOpen?'‹':'›')+'</button>';
     if(top.innerHTML!==topHtml)top.innerHTML=topHtml;
@@ -202,7 +204,7 @@
         for(const row of runRows){
           taskHtml+='<div><strong>'+htmlEscape(row.runId||row.controlId)+'</strong> · '+htmlEscape(row.text)+
             (row.total===null?'':(' · 成功 '+row.done+' / 失败 '+row.failed+' / 排队 '+row.queued+' / 生成 '+row.generating))+
-            (!row.isTerminal?'<button type="button" data-c129="stop" data-control="'+htmlEscape(row.controlId)+'">停止未提交任务</button>':'')+
+            ((row.runId&&!row.isTerminal)||(!row.runId&&row.text==="正在提交 · 远端待核实")?'<button type="button" data-c129="stop" data-control="'+htmlEscape(row.controlId)+'">停止未提交任务</button>':'')+
             '</div>';
         }
         taskHtml+='</div>';
