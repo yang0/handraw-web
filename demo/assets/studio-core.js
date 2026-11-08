@@ -368,8 +368,43 @@
 
   const RUN_PERSISTED = new Set(["pending", "uploading", "running", "partial", "success", "failed", "cancelled"]);
   const ITEM_PERSISTED = new Set(["pending", "generating", "success", "failed", "cancelled"]);
+  function selectAuthoritativeSlots(run, slots, expected, options) {
+    const totals = {succeeded:0,failed:0,cancelled:0,generating:0,queued:0,unknown:0};
+    for(let i=0;i<expected;i++){
+      const s=slots.find(slot=>Number(slot?.slotIndex)===i);
+      const view=String(s?.viewStatus||"unknown");
+      if(view==="success" && s?.mediaId && s?.imageUrl)totals.succeeded++;
+      else if(view==="failed")totals.failed++;
+      else if(view==="cancelled")totals.cancelled++;
+      else if(view==="running"||view==="generating")totals.generating++;
+      else if(view==="queued"||view==="pending")totals.queued++;
+      else totals.unknown++;
+    }
+    const total=Object.values(totals).reduce((a,b)=>a+b,0);
+    const processed=totals.succeeded+totals.failed+totals.cancelled;
+    const isTerminal=total>0&&processed===total;
+    const isStopping=options.cancelRequested===true;
+    return {
+      runId:run?.id||run?.runId||"",
+      persistedStatus:RUN_PERSISTED.has(run?.status)?run.status:"unknown",
+      total,...totals,processed,partialOutputs:0,isTerminal,isStopping,
+      canRetry:slots.some(s=>s?.retryAllowed===true),
+      viewStatus:isStopping&&!isTerminal?"cancel_requested":
+        totals.unknown?"unknown":
+        totals.generating?"running":
+        totals.queued?"pending":
+        totals.succeeded===total?"success":
+        totals.succeeded?"partial":
+        totals.failed?"failed":"cancelled"
+    };
+  }
   function selectRunProjection(run, items = [], options = {}) {
     const expected = Math.max(0, Number(options.expectedCount ?? run?.expected_count ?? run?.expectedCount ?? 0) || 0);
+    if(Array.isArray(options.authoritativeSlots)&&options.authoritativeSlots.length){
+      // Trusted, owner-scoped server slot projection supersedes guesses made
+      // from old failed RunItems during a newly submitted retry attempt.
+      return selectAuthoritativeSlots(run,options.authoritativeSlots,expected,options);
+    }
     const bySlot = new Map();
     for (const item of Array.isArray(items) ? items : []) {
       const position = Number(item.position);
