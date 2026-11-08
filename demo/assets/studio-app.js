@@ -11724,6 +11724,53 @@
     toast(`已复制 ${clones.length} 个节点`);
   }
 
+  // Session-local clipboard copies only editable Graph definition. Neither
+  // generated result nodes nor frozen Run facts can be pasted as new Runs.
+  function copyCanvasNodes(){
+    const ids=new Set(CS.graph.selectedIds||[]);
+    const nodes=CS.graph.nodes.filter(n=>ids.has(n.id)&&
+      n.type!=="output_display"&&n.type!=="article_plan");
+    if(!nodes.length){toast("请先选择可复制的编辑节点");return false;}
+    const allowed=new Set(nodes.map(n=>n.id));
+    const edges=CS.graph.edges.filter(e=>allowed.has(e.from)&&allowed.has(e.to));
+    CS.canvasClipboard={nodes:cloneGraph(nodes),edges:cloneGraph(edges),
+      copyCount:0,projectId:CS.tabs.find(t=>t.id===CS.activeTabId)?.projectId||null};
+    toast("已复制 "+nodes.length+" 个可编辑节点（不包含运行结果）");
+    return true;
+  }
+  function pasteCanvasNodes(){
+    const clip=CS.canvasClipboard;
+    if(!clip?.nodes?.length){toast("当前没有已复制的节点");return false;}
+    // Snapshot output results are not part of the paste definition.
+    pushUndo();
+    const map=new Map(),offset=48*(1+(clip.copyCount||0));
+    const nodes=clip.nodes.map(node=>{
+      const n=cloneGraph(node);
+      n.id=E.uid(n.type);
+      n.x=snapVal(Number(n.x||0)+offset);
+      n.y=snapVal(Number(n.y||0)+offset);
+      if(n.data){
+        for(const key of ["runId","studio2RunSnapshot","activeBatchId",
+          "pendingTaskId","pendingRequestId","pendingRequestIds","pendingSpec",
+          "pendingTasksBySlot","elapsedSec","error"])delete n.data[key];
+        if(n.type==="output_control"||n.type==="loop")n.data.status="idle";
+      }
+      map.set(node.id,n.id);return n;
+    });
+    CS.graph.nodes.push(...nodes);
+    for(const edge of clip.edges||[]){
+      const from=map.get(edge.from),to=map.get(edge.to);
+      const a=CS.graph.nodes.find(n=>n.id===from);
+      const b=CS.graph.nodes.find(n=>n.id===to);
+      if(from&&to&&a&&b&&canConnectNodes(a,b))ensureEdge(from,to);
+    }
+    clip.copyCount=(clip.copyCount||0)+1;
+    CS.graph.selectedIds=nodes.map(n=>n.id);
+    markActiveTabDirty();fullRenderCanvas();persistOpenTabs();
+    toast("已粘贴 "+nodes.length+" 个独立可编辑节点");
+    return true;
+  }
+
   /* ======================== CLEAN 3-GROUP LEFT TOOLBOX (输入节点 / 批量与多尺寸 / 输出节点) ======================== */
   const NODE_TOOLBOX_GROUPS = [
     {
@@ -19030,6 +19077,10 @@
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
         e.preventDefault();
         redoGraph();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        e.preventDefault();copyCanvasNodes();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        e.preventDefault();pasteCanvasNodes();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
         e.preventDefault();
         duplicateNodes(CS.graph.selectedIds);
