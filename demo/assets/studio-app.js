@@ -154,6 +154,11 @@
     historyExpandedBatchIds: {},
     historySelectedPreview: {},
     workflowQuery: "",
+    projectQuery: "",
+    cloudProjects: [],
+    projectCenterLoading: false,
+    projectCenterError: "",
+    projectOpeningId: "",
     activePlanNodeId: null,
     previewSlideIdx: 0,
     renamingTabId: null,
@@ -227,6 +232,12 @@
     CS.customUploads = readJsonStorage(UPLOAD_STORAGE_KEY, []);
     CS.customAssetCats = readJsonStorage(CUSTOM_ASSET_CATS_KEY, []);
     CS.savedWorkflows = readJsonStorage(SAVED_WORKFLOWS_KEY, null);
+    CS.cloudProjects = [];
+    CS.projectCenterLoading = false;
+    CS.projectCenterError = "";
+    CS.projectQuery = "";
+    CS.projectOpeningId = "";
+    CS.pendingProjectDeepLink = "";
     const rawHist = readJsonStorage(HISTORY_STORAGE_KEY, null);
     if (Array.isArray(rawHist)) {
       let normalizedHist = [];
@@ -1625,6 +1636,233 @@
       switchToCanvas: true
     });
     toast(`🎉 已导入并打开工作流《${title}》！`);
+  }
+
+  /* ======================== STUDIO2 PROJECT CENTER · #106 ======================== */
+  const ProjectCenter = window.HandrawStudioProjectCenter || null;
+
+  async function refreshProjectCenter() {
+    if (!ProjectClient || !App.state?.loggedIn || !App.state?.serverBacked) {
+      CS.cloudProjects = [];
+      CS.projectCenterError = "";
+      CS.projectCenterLoading = false;
+      renderProjectCenterStage();
+      return;
+    }
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    CS.projectCenterLoading = true;
+    CS.projectCenterError = "";
+    renderProjectCenterStage();
+    try {
+      const result = await ProjectClient.list();
+      if (isStaleScope(epoch, scope)) return;
+      CS.cloudProjects = Array.isArray(result.projects) ? result.projects : [];
+      CS.projectCenterError = "";
+    } catch (_) {
+      if (isStaleScope(epoch, scope)) return;
+      CS.projectCenterError = "请检查网络或重新登录后再试，本机草稿不会丢失。";
+    } finally {
+      if (!isStaleScope(epoch, scope)) {
+        CS.projectCenterLoading = false;
+        renderProjectCenterStage();
+      }
+    }
+  }
+
+  function openProjectCenter({fetchCloud = true, replaceUrl = true} = {}) {
+    if (CS.activeTabId) syncCurrentTabSnapshot();
+    CS.stageView = "projects";
+    if (replaceUrl) {
+      try { window.history.replaceState(null, "", "?view=projects"); } catch (_) {}
+    }
+    renderTopAndBottomDocks();
+    if (fetchCloud) void refreshProjectCenter();
+  }
+
+  function activateProjectTab(tab, project = null) {
+    if (!tab) return;
+    const graph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
+    const kind = project?.kind || (tab.batchStart ? "series" : "image");
+    const preferred = project?.draft?.activeView || (tab.batchStart || tab.quickStart ? "simple" : "canvas");
+    const asBatch = preferred === "simple" && kind === "series" && Boolean(getBatchParts(graph));
+    const asQuick = preferred === "simple" && kind === "image" && Boolean(getQuickParts(graph));
+    const stage = asBatch ? "batch" : asQuick ? "quick" : "canvas";
+    if (asBatch) tab.batchStart = true;
+    if (asQuick) tab.quickStart = true;
+    CS.stageView = stage;
+    CS.lastStudioTaskView = asBatch ? "batch" : asQuick ? "quick" : CS.lastStudioTaskView;
+    activateWorkflowTab(tab.id, {autoFit: false});
+    const url = new URL(window.location.href);
+    url.search = "?entry=" + (stage === "canvas" ? "canvas" : stage);
+    try { window.history.replaceState(null, "", url.pathname + url.search); } catch (_) {}
+    persistOpenTabs();
+    fullRenderCanvas();
+  }
+
+  async function openCloudProject(projectId) {
+    if (!ProjectClient || !App.state?.loggedIn || !App.state?.serverBacked) {
+      toast("请先登录，才能从云端恢复项目");
+      return;
+    }
+    if (CS.projectOpeningId) return;
+    const existing = CS.tabs.find(t => t.projectId === projectId);
+    // This check MUST precede the remote read: a stale cloud response is
+    // never allowed to replace offline edits or an unresolved 409.
+    if (existing && (ProjectCenter?.isLocallyUnsynced(existing) || existing.dirty)) {
+      activateProjectTab(existing);
+      toast("已打开本机未同步的版本；云端项目未覆盖本机修改");
+      return;
+    }
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    CS.projectOpeningId = String(projectId || "");
+    try {
+      const response = await ProjectClient.get(projectId);
+      if (isStaleScope(epoch, scope)) return;
+      const project = response.project;
+      if (!project || project.id !== projectId) throw new Error("项目编号不匹配");
+      if (project.authority !== "graph") {
+        toast("该项目目前由" + (project.authority === "article" ? "文章文档" : "结构化方案") +
+          "管理；旧画布不能安全恢复，待统一编辑器接入");
+        return;
+      }
+      if (!project.draft || !project.draft.graph || !Array.isArray(project.draft.graph.nodes)) {
+        throw new Error("云端草稿缺少可用的画布图形");
+      }
+      const decision = ProjectCenter?.classifyRestore(existing, project) || "open-cloud";
+      if (decision === "keep-local" || decision === "activate-local") {
+        activateProjectTab(existing, project);
+        if (decision === "keep-local") toast("已优先打开本机草稿，未覆盖未同步内容");
+        return;
+      }
+      const cloudGraph = normalizeGraphSchema(project.draft.graph);
+      let target = existing;
+      if (target) {
+        // The active tab is snapshotted in activateWorkflowTab: update CS.graph
+        // too or that snapshot would rewrite the newly fetched remote graph.
+        if (target.id === CS.activeTabId) CS.graph = cloneGraph(cloudGraph);
+        target.graph = cloneGraph(cloudGraph);
+      } else {
+        target = createWorkflowTab({
+          title: project.title || "云端项目",
+          blueprint: cloudGraph.blueprint || "single",
+          graph: cloudGraph, makeActive: false
+        });
+      }
+      target.title = project.title || target.title;
+      target.projectId = project.id;
+      target.projectRevision = Number(project.revision);
+      target.projectSaveState = "synced";
+      target.projectPending = null;
+      target.projectCopyPending = null;
+      target.projectError = "";
+      target.projectRemoteRevision = 0;
+      target.dirty = false;
+      target.editRevision = 0;
+      activateProjectTab(target, project);
+      toast("已恢复云端项目 · 版本 " + project.revision);
+    } catch (error) {
+      if (!isStaleScope(epoch, scope)) toast("无法恢复云端项目：" + (error.message || "网络错误"));
+    } finally {
+      if (!isStaleScope(epoch, scope)) CS.projectOpeningId = "";
+    }
+  }
+
+  function createProjectFromCenter(kind) {
+    if (kind === "workflow") {
+      openWorkflowsPage();
+      return;
+    }
+    if (kind === "article") {
+      switchCreationStage("article");
+      return;
+    }
+    let graph, title, stage;
+    if (kind === "image") {
+      graph = buildForkGraphFromWork({styles:[],layout:"",prompt:"",ratio:"3:4",mode:"graphic-text"});
+      title = "未命名图片项目";
+      stage = "quick";
+    } else if (kind === "series") {
+      const sp = E.makeSkillParamsNode(64,56,{});
+      const txt = E.makeTextInputNode(64,480,{text:""});
+      const asset = E.makeAssetNode(64,760,{items:[]});
+      const loop = E.makeLoopNode(468,200,{loopMode:"prompts",promptListText:"",maxIterations:200});
+      const ctrl = E.makeOutputControlNode(880,200,{mode:"graphic-text",count:1,ratio:"3:4"});
+      graph = {blueprint:"loop_100",nodes:[sp,txt,asset,loop,ctrl],selectedIds:[],
+        edges:[
+          {id:E.uid("edge"),from:sp.id,to:loop.id},
+          {id:E.uid("edge"),from:sp.id,to:ctrl.id},
+          {id:E.uid("edge"),from:txt.id,to:loop.id},
+          {id:E.uid("edge"),from:asset.id,to:loop.id},
+          {id:E.uid("edge"),from:asset.id,to:ctrl.id},
+          {id:E.uid("edge"),from:loop.id,to:ctrl.id}
+        ]};
+      title = "未命名系列项目";
+      stage = "batch";
+    } else {
+      return;
+    }
+    const tab = createWorkflowTab({title,blueprint:graph.blueprint,graph,makeActive:false});
+    tab.quickStart = stage === "quick";
+    tab.batchStart = stage === "batch";
+    tab.projectSaveState = "local_only";
+    CS.stageView = stage;
+    CS.lastStudioTaskView = stage;
+    activateWorkflowTab(tab.id, {autoFit:false});
+    window.history.replaceState(null, "", "?entry=" + stage);
+    persistOpenTabs();
+    fullRenderCanvas();
+    // A new project is not considered cloud-saved until its first successful
+    // edit is acknowledged. Don't auto-create empty projects merely on visit.
+  }
+
+  function renderProjectCenterStage() {
+    if (!DOM.projectsStage) return;
+    if (CS.stageView !== "projects") {
+      DOM.projectsStage.style.display = "none";
+      return;
+    }
+    DOM.projectsStage.style.display = "flex";
+    if (!ProjectCenter) {
+      DOM.projectsStage.textContent = "项目中心模块暂不可用，请刷新页面";
+      return;
+    }
+    const focus = document.activeElement?.id === "pc-project-search";
+    DOM.projectsStage.innerHTML = ProjectCenter.render({
+      projects: CS.cloudProjects, tabs: CS.tabs, query: CS.projectQuery,
+      loading: CS.projectCenterLoading, error: CS.projectCenterError,
+      loggedIn: Boolean(App.state?.serverBacked && App.state?.loggedIn)
+    });
+    const queryInput = DOM.projectsStage.querySelector("#pc-project-search");
+    if (queryInput) {
+      queryInput.oninput = () => {
+        CS.projectQuery = queryInput.value;
+        renderProjectCenterStage();
+      };
+      if (focus) {
+        queryInput.focus();
+        try { queryInput.setSelectionRange(queryInput.value.length,queryInput.value.length); } catch (_) {}
+      }
+    }
+    DOM.projectsStage.querySelectorAll("[data-pc-refresh]").forEach(btn => {
+      btn.onclick = () => { void refreshProjectCenter(); };
+    });
+    DOM.projectsStage.querySelectorAll("[data-pc-new]").forEach(btn => {
+      btn.onclick = () => createProjectFromCenter(btn.getAttribute("data-pc-new"));
+    });
+    DOM.projectsStage.querySelectorAll("[data-pc-local]").forEach(btn => {
+      btn.onclick = () => {
+        const tab = CS.tabs.find(t => t.id === btn.getAttribute("data-pc-local"));
+        if (tab) activateProjectTab(tab);
+      };
+    });
+    DOM.projectsStage.querySelectorAll("[data-pc-open]").forEach(btn => {
+      btn.onclick = () => { void openCloudProject(btn.getAttribute("data-pc-open")); };
+    });
+    const login = DOM.projectsStage.querySelector("[data-pc-login]");
+    if (login) login.onclick = () => S.openLoginModal(
+      "登录后查看你的云端创作项目",
+      () => { if (App.state?.loggedIn) void refreshProjectCenter(); }
+    );
   }
 
   function openWorkflowsPage({ renderNow = true } = {}) {
@@ -3472,6 +3710,9 @@
       CS.stageView = "history";
     } else if (viewParam === "workflows") {
       CS.stageView = "workflows";
+    } else if (viewParam === "projects" || params.get("project")) {
+      CS.stageView = "projects";
+      CS.pendingProjectDeepLink = params.get("project") || "";
     }
     if (!viewParam && !tabParam) {
       const entryParam = params.get("entry");
@@ -12855,6 +13096,7 @@
     renderFullPreviewStage();
     renderHistoryStage();
     renderWorkflowsStage();
+    renderProjectCenterStage();
     renderQuickStart();
 
     if (DOM.bottomRight) {
@@ -17632,6 +17874,7 @@
         <section class="ic-preview-stage" id="ic-preview-stage" style="display:none;"></section>
         <section class="ic-history-stage" id="ic-history-stage" style="display:none;"></section>
         <section class="ic-workflows-stage" id="ic-workflows-stage" style="display:none;"></section>
+        <section class="ic-projects-stage" id="ic-projects-stage" style="display:none;"></section>
       </div>
     `;
 
@@ -17653,6 +17896,7 @@
     DOM.previewStage = document.getElementById("ic-preview-stage");
     DOM.historyStage = document.getElementById("ic-history-stage");
     DOM.workflowsStage = document.getElementById("ic-workflows-stage");
+    DOM.projectsStage = document.getElementById("ic-projects-stage");
   }
 
   function syncCatalogFromShared() {
@@ -17750,6 +17994,10 @@
       renderShelfDrawer();
       fullRenderCanvas();
       bindViewportInteractions();
+      if (CS.stageView === "projects") {
+        void refreshProjectCenter();
+        if (CS.pendingProjectDeepLink) void openCloudProject(CS.pendingProjectDeepLink);
+      }
       if (CS.stageView === "canvas") requestAnimationFrame(() => fitView());
       resumePendingCloudTasks();
     } catch (err) {
