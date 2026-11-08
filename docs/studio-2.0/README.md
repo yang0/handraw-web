@@ -86,7 +86,7 @@ Example request/response (proposal, **not currently deployed**):
 
 **Error taxonomy**: `invalid_spec`, `invalid_resource`, `resource_forbidden`, `invalid_ratio`, `media_forbidden`, `quota_insufficient`, `revision_conflict`, `provider_unavailable`, `upstream_invalid_response`, `remote_state_unknown`; preserve HTTP status/requestId, never return raw provider keys or black-box prompt. Full spec schema and fixtures: [schema](schema.json), [single](fixtures/image.json), [series](fixtures/series.json), [article](fixtures/article.json), [canvas](fixtures/canvas.json).
 
-## Incremental migration / rollout
+Core #121 implementation & regression: [normalization adapter contract](normalization-contract.md) and [golden fixtures](golden/). This supplements the frozen ADR; it does not replace the existing prompt compiler.\n\n## Incremental migration / rollout
 
 1. #112: add deterministic tests and fixture-validation to CI, without requiring paid API.
 2. #121: pure normalizers/adapters on existing `skill_params`/batch fields, **read-only by default** until round-trip fixtures and permission rules pass.
