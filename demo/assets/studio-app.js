@@ -17523,7 +17523,14 @@
       const results = displays.flatMap((dn) => (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
         id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn, item: it
       })));
-      let statusText = busy
+      const remoteModel = getQuickRunProjection(p);
+      let statusText = remoteModel?.ok
+        ? "服务器确认："+remoteModel.succeeded+"/"+remoteModel.total+" 张成功" +
+          (remoteModel.failed?" · 失败 "+remoteModel.failed+" 张":"") +
+          (!remoteModel.isTerminal?" · 云端仍在执行，可刷新恢复":" · 本次任务已结束")
+        : p?.ctrl.data.runId && !busy
+        ? "正在核对云端任务，请保留请求编号，不要重复提交或假定退款。"
+        : busy
         ? "正在生成，可点击「停止等待」结束当前页面的生成流程；已提交云端的任务可能继续执行或计费。"
         : p?.ctrl.data.status === "stopped"
         ? "上次生成已解除本地等待；云端任务可能仍在运行或计费。请先在生图历史确认结果，再决定是否重新生成。"
@@ -17573,7 +17580,7 @@
         busy,
         statusText,
         forkSource: CS.forkGenerationSource,
-        runProjection: getQuickRunProjection(p),
+        runProjection: remoteModel,
         localBusy: isCurrentBusy(),
         pendingCloud: displays.some(d=>d.data?.pendingTaskId ||
           d.data?.pendingRequestId || Object.keys(d.data?.pendingRequestIds||{}).length)
@@ -17631,11 +17638,29 @@
             return;
           }
           const proposal = payload.proposal || {};
-          if (!sd.style1 && proposal.styleId) sd.style1 = proposal.styleId;
-          if (!sd.layout && proposal.layoutId) sd.layout = proposal.layoutId;
-          if (cd.ratioSource !== "user" && proposal.ratio) {
-            cd.ratio = proposal.ratio;
-            cd.ratioSource = "default";
+          try {
+            if(window.HandrawQuickSpec) {
+              const suggestions={};
+              if(!sd.style1 && proposal.styleId)suggestions.style=proposal.styleId;
+              if(!sd.layout && proposal.layoutId)suggestions.layout=proposal.layoutId;
+              if(cd.ratioSource!=="user" && proposal.ratio) {
+                suggestions.ratio=proposal.ratio;
+                suggestions.ratioSource="default";
+              }
+              if(Object.keys(suggestions).length)window.HandrawQuickSpec.apply(p,suggestions,{
+                catalog:Catalog,isUnlocked:(id,item)=>S.isUnlocked(id,item)
+              });
+            } else {
+              if (!sd.style1 && proposal.styleId) sd.style1 = proposal.styleId;
+              if (!sd.layout && proposal.layoutId) sd.layout = proposal.layoutId;
+              if (cd.ratioSource !== "user" && proposal.ratio) {
+                cd.ratio = proposal.ratio;
+                cd.ratioSource = "default";
+              }
+            }
+          } catch(err) {
+            toast("AI 推荐的资源不可用："+(err.code||err.message)+"；已保留原设置");
+            return;
           }
           markDirtyAndRender();
           toast("AI 已推荐合法画风、图型和画幅；可调整后再生成，不会自动扣费");
@@ -17691,6 +17716,23 @@
             }
           });
         },
+        retry: async () => {
+          if(!p || isCurrentBusy())return;
+          const remote=getQuickRunProjection(p);
+          if(!remote?.ok || !remote.isTerminal || !remote.canRetry)return;
+          const scope=activeCacheScope;
+          quickBusy={id:p.ctrl.id,scope};
+          quickRunModels.delete(scope+":"+remote.runId);
+          renderQuickStart();
+          try {
+            // The existing runner reuses the logical batch for an explicit
+            // failure retry, issuing a distinct gateway attempt.
+            await runOutputControlNode(p.ctrl.id,{onlyItemIdx:0});
+          } finally {
+            if(quickBusy?.scope===scope && quickBusy.id===p.ctrl.id)quickBusy=null;
+            renderQuickStart();
+          }
+        },
         run: async () => {
           if (!p || isCurrentBusy()) return;
           const topic = String(p.text.data.text || "").trim();
@@ -17700,20 +17742,24 @@
             if (input) input.focus();
             return;
           }
-          // The canonical adapter validates selected resources before we
-          // create a billable Run. Server entitlement checks remain mandatory.
-          if (window.HandrawStudioCore) {
-            const projected = window.HandrawStudioCore.normalizeLegacyParts(p);
-            const validated = window.HandrawStudioCore.validateSpec(projected.spec, { catalog: Catalog });
-            if (!validated.ok) {
-              const code = validated.errors[0]?.code || "invalid_spec";
-              const field = validated.errors[0]?.field || "";
-              toast(code === "missing_style" ? "请先选择画风（画风是必选项）"
-                : code === "invalid_resource" ? `所选${field}资源无效或不可用，请重新选择`
-                : code === "invalid_ratio" ? "画幅比例格式无效，请重新设置"
-                : "创作参数不完整，请检查后重试");
-              return;
-            }
+          // #121 + #105 unified preflight; no reservation or requestId
+          // is allocated for empty/invalid/locked directory resources.
+          const quickApi=window.HandrawQuickSpec;
+          const validated=quickApi?.preflight
+            ? quickApi.preflight(p,{catalog:Catalog,isUnlocked:(id,item)=>S.isUnlocked(id,item)})
+            : window.HandrawStudioCore.validateSpec(
+                window.HandrawStudioCore.normalizeLegacyParts(p).spec,{catalog:Catalog});
+          if(!validated.ok) {
+            const error=validated.errors[0]||{},code=error.code||"invalid_spec";
+            const rr=window.HandrawStudioResources;
+            toast(code==="missing_style"?"请先选择画风（画风是必选项）":
+              code==="missing_subject"?"请先填写创作主题":
+              code==="invalid_ratio"?"画幅比例格式无效，请重新设置":
+              code==="resource_forbidden"?"该画风/图型未授权，不能提交生成":
+              code==="invalid_resource"||code==="resource_not_found"
+                ?"所选资源已失效，请重新选择":
+              rr?.formatError?.(error)||"创作参数不完整，请检查后重试");
+            return;
           }
           // Strictly 1 image per brief
           p.ctrl.data.count = 1;
