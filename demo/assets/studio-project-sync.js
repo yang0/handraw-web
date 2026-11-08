@@ -30,6 +30,22 @@
     : typeof require === "function" ? require("./studio-views.js") : null;
 
   function authorityPatch(tab, snapshot) {
+    if (tab.projectAuthority === "article" || snapshot.authority === "article") {
+      // An ArticleDocument is authoritative. Never turn its Markdown into
+      // Graph node patches or replace one source with a derived Graph.
+      if (tab.projectAuthority && tab.projectAuthority !== "article")
+        throw new Error("editor_authority_conflict");
+      if (snapshot.authority !== "article" || !snapshot.draft.article)
+        throw new Error("article_document_required");
+      return [
+        {op:"set",path:"/article",value:snapshot.draft.article},
+        {op:"set",path:"/plan",value:snapshot.draft.plan},
+        {op:"set",path:"/creationSpec",value:snapshot.draft.creationSpec},
+        {op:"set",path:"/activeView",value:"simple"},
+        {op:"set",path:"/editorLayout",value:snapshot.draft.editorLayout || {}},
+        {op:"set",path:"/title",value:snapshot.title || "未命名文章"}
+      ];
+    }
     if (tab.projectAuthority !== "spec") return draftPatch(tab, snapshot);
     if (snapshot.authority === "spec") {
       const patch = [

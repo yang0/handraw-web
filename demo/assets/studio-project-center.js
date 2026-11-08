@@ -61,7 +61,7 @@
   }
   function cloudCard(p) {
     const x=escapeText;
-    const editable=p.authority==="graph";
+    const editable=p.authority==="graph" || p.authority==="article";
     const authority=p.authority==="article"?"文章文档":p.authority==="spec"?"结构化方案":"画布";
     return "<article class='ic-pc-card'><span class='ic-pc-tag'>云端已保存 · "+
       x(KINDS[p.kind]||"项目")+"</span><h3>"+x(p.title||"未命名创作")+"</h3>"+
