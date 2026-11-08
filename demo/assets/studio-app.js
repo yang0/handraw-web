@@ -5501,6 +5501,18 @@
       if (existing) pd.articleId = existing.id;
     }
 
+    // A Project-owned ArticleDocument is never written from a Canvas Graph.
+    // A virtual article_plan points to exactly the same object and may edit
+    // PlanSlots; a real Graph projection cannot rewrite its Markdown/cards.
+    if (existing?.projectId && pd !== existing) {
+      pd.articleId = existing.id;
+      pd.documentId = existing.id;
+      pd.documentRevision = Number(existing.documentRevision || 0);
+      pd.slotRefs = (existing.cards || []).map(c => ({
+        slotId:c.slotId || c.id,anchorId:c.anchorId || "card-anchor-" + (c.slotId || c.id)
+      }));
+      return existing;
+    }
     // If markdown changed to a distinct article and the previous article already had generated images or custom edits,
     // keep the old article in history and start a fresh article record!
     if (
@@ -5685,6 +5697,7 @@
       return;
     }
     if (target.art) {
+      markArticleProjectChanged(target.art, {plan:true});
       if (bumpTime) {
         const now = Date.now();
         target.art.updatedAtMs = now;
@@ -5710,7 +5723,7 @@
         : null;
     const rec = ctrl && hostGraph ? E.resolveControlRecipe(hostGraph, ctrl, Catalog) : null;
 
-    const rawMd = String(pd.markdown || "").trim();
+    const rawMd = String(target.art?.markdown || pd.markdown || "").trim();
     const cleanBody = rawMd.replace(/^#\s+.+\r?\n+/, "").trim() || rawMd;
 
     S.goToForumCompose({
@@ -6982,7 +6995,8 @@
       demoMode: isDemoGenerationEnabled(),
       recipeSummary: rec && ctrlNode ? buildRecipeSummaryText(rec, ctrlNode) : `文章配图方案 · ${readyCards.length} 张`,
       prompt: readyCards.map((c) => c.prompt).filter(Boolean).join("\n\n---\n\n"),
-      markdown: planNode.data.markdown || "",
+      // Public generation history is NOT a publication of ArticleDocument.
+      // Never forward unapproved full source text to the public Work layer.
       items: readyCards.map((c, idx) => ({
         id: c.id || `card_${idx}`,
         genId: c.genId || "",
@@ -8428,11 +8442,15 @@
     const readyCards = orderedCards.filter((c) => c.imageUrl);
     if (!readyCards.length) return null;
 
-    const blocks = E.parseArticleReadonlyBlocks(planNode.data.markdown || "", { withLines: true, noStarter: true });
+    // Export must read the editor-owned ArticleDocument, not the Graph's
+    // stale, derived planNode markdown.
+    const doc = findArticleById(planNode.data.articleId || planNode.id);
+    const sourceMarkdown = doc?.markdown ?? planNode.data.markdown ?? "";
+    const blocks = E.parseArticleReadonlyBlocks(sourceMarkdown, { withLines: true, noStarter: true });
     return {
       kind: "article",
-      title: planNode.data.articleTitle || "文章配图方案",
-      markdown: planNode.data.markdown || "",
+      title: doc?.articleTitle || planNode.data.articleTitle || "文章配图方案",
+      markdown: sourceMarkdown,
       items: readyCards.map((c) => {
         const isCover = c.role === "cover";
         const anchorBlock =
@@ -8466,10 +8484,9 @@
     }
 
     if (targetNode && targetNode.type === "article_plan") {
-      if (!(targetNode.data.cards || []).some((c) => c.imageUrl)) {
-        toast("⚡ 正在自动批量生成配图方案并打包下载 ZIP…");
-        await generateBatchPlanCards(dispOrCtrlId || targetNode.id, { silent: true });
-      }
+      // Export never creates paid generation requests as a side effect.
+      if (!(targetNode.data.cards || []).some((c) => c.imageUrl))
+        toast("还没有已生成的图片；导出不会自动付费生图");
       const payload = buildArticlePlanExportPayload(targetNode);
       if (payload) {
         await exportZipFromPayload(payload);
@@ -8482,10 +8499,8 @@
     if (!dispOrCtrlId && CS.stageView === "preview" && CS.activeArticleId) {
       const artTarget = resolveArticleTarget(CS.activeArticleId);
       if (artTarget?.planNode) {
-        if (!(artTarget.planNode.data.cards || []).some((c) => c.imageUrl)) {
-          toast("⚡ 正在自动批量生成配图方案并打包下载 ZIP…");
-          await generateBatchPlanCards(CS.activeArticleId, { silent: true });
-        }
+        if (!(artTarget.planNode.data.cards || []).some((c) => c.imageUrl))
+          toast("还没有已生成的图片；导出不会自动付费生图");
         const payload = buildArticlePlanExportPayload(artTarget.planNode);
         if (payload) {
           await exportZipFromPayload(payload);
@@ -14661,6 +14676,12 @@
 
     const title = (draft.title || "").trim();
     const md = draft.markdown || "";
+    const before = targetArt ? {
+      articleTitle:targetArt.articleTitle,markdown:targetArt.markdown,
+      cards:JSON.parse(JSON.stringify(targetArt.cards || [])),
+      style1:targetArt.style1,layout:targetArt.layout,
+      coverRatio:targetArt.coverRatio,inlineRatio:targetArt.inlineRatio
+    } : null;
 
     if (!targetArt && !title && !md) {
       return null;
@@ -14686,8 +14707,10 @@
         layout: "IG-001",
         coverRatio: draft.coverRatio || "2.35:1",
         inlineRatio: draft.inlineRatio || "4:3",
-        runCount: 0
+        runCount: 0,
+        documentRevision:0,planRevision:0
       };
+      markArticleProjectChanged(targetArt,{document:true});
       CS.myArticles.unshift(targetArt);
       CS.activeArticleId = newId;
     } else {
@@ -14707,6 +14730,16 @@
       draft.isNewDraft = false;
     }
 
+    if (before && ArticleProject109) {
+      const documentChanged = ArticleProject109.articleChanged(before,targetArt);
+      const planChanged = ArticleProject109.planChanged(before,targetArt);
+      if (documentChanged || planChanged)
+        markArticleProjectChanged(targetArt,{document:documentChanged,plan:planChanged});
+    }
+    draft.documentRevision = Number(targetArt.documentRevision || 0);
+    draft.planRevision = Number(targetArt.planRevision || 0);
+    draft.projectId = targetArt.projectId || null;
+    draft.projectRevision = Number(targetArt.projectRevision || 0);
     // Text-only save: never rebuild cards here. Cards are rebuilt only by explicit planning.
     if (targetArt.linkedPlanNodeId) {
       let hostGraph = null;
@@ -14729,8 +14762,13 @@
       if (hostGraph) {
         const planNode = hostGraph.nodes.find((n) => n.id === planNodeId);
         if (planNode && planNode.data) {
-          planNode.data.articleTitle = targetArt.articleTitle;
-          planNode.data.markdown = targetArt.markdown;
+          planNode.data.articleId = targetArt.id;
+          planNode.data.documentId = targetArt.id;
+          planNode.data.documentRevision = Number(targetArt.documentRevision || 0);
+          planNode.data.slotRefs = (targetArt.cards || []).map(c => ({
+            slotId:c.slotId || c.id,anchorId:c.anchorId || "card-anchor-" + (c.slotId || c.id)
+          }));
+          // Never copy ArticleDocument.markdown into a GraphPatch source.
           targetArt.linkedTabId = hostTabId;
           if (hostTabId === CS.activeTabId) markActiveTabDirty();
         }
@@ -15449,7 +15487,13 @@
       styleId: art.style1 || art.styleId || "FA-001",
       coverRatio: art.coverRatio || "2.35:1",
       inlineRatio: art.inlineRatio || "4:3",
-      isNewDraft: false
+      isNewDraft: false,
+      documentRevision:Number(art.documentRevision || 0),
+      planRevision:Number(art.planRevision || 0),
+      planId:art.planId || "",
+      projectId:art.projectId || null,
+      projectRevision:Number(art.projectRevision || 0),
+      projectSaveState:art.projectSaveState || "local_only"
     };
   }
 
@@ -15739,7 +15783,7 @@
       name: "手绘钢笔淡彩",
       image: "/images/individual/FA/FA-001.webp",
     };
-    const cards = resolveArticleTarget(art.id)?.planNode?.data?.cards || [];
+    const cards = art.cards || resolveArticleTarget(art.id)?.planNode?.data?.cards || [];
 
     DOM.previewStage.innerHTML = `
       <div class="ic-wechat-editor-root ic-article-preview-root">
