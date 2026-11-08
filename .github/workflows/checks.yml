@@ -98,6 +98,8 @@ jobs:
           node --check demo/assets/studio-make-image.js
           node --check demo/assets/studio-core.js
           node tests/test_studio_core.cjs
+          node --check demo/assets/studio-normalization.js
+          node tests/test_studio_normalization.cjs
           node tests/test_studio_canvas_incremental.cjs
           node tests/test_studio_views.cjs
           node --check demo/assets/studio-views.js
