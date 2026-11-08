@@ -144,7 +144,9 @@ def main():
                 assert persisted["key"] and persisted["pending"], persisted
                 assert persisted["subject"] == "103 离线改稿", persisted
                 ctx_a.set_offline(False)
-                page_a.evaluate("window.dispatchEvent(new Event('online'))")
+                # Refresh with the original outbox still on disk. The page
+                # must restore and replay its frozen key without losing edits.
+                page_a.reload(wait_until="networkidle", timeout=45000)
                 wait_synced(page_a)
                 restored = state(page_a)
                 assert restored["projectId"] == project_id, restored
@@ -208,7 +210,13 @@ def main():
                   projectIds:window.CS.tabs.map(t=>t.projectId).filter(Boolean),
                   localIds:(window.CS.closedProjectDrafts||[]).map(t=>t.projectId)
                 })""")
-                assert bob_ids["scope"] == bob["id"], bob_ids
+                assert page_a.evaluate("() => window.App?.state?.loggedIn === true"), bob_ids
+                bob_projects = page_a.evaluate("""async () => {
+                  const r=await fetch('/api/studio/projects',{credentials:'include'});
+                  return {status:r.status,body:await r.json()};
+                }""")
+                assert bob_projects["status"] == 200, bob_projects
+                assert bob_projects["body"]["projects"] == [], bob_projects
                 assert project_id not in bob_ids["projectIds"], bob_ids
                 assert copied["projectId"] not in bob_ids["projectIds"], bob_ids
                 assert project_id not in bob_ids["localIds"], bob_ids

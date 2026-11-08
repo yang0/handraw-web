@@ -19477,17 +19477,20 @@
       batchRunModels.clear();
       if(CS.stageView==="canvas")fullRenderCanvas();
       else if(["quick","batch"].includes(CS.stageView))renderQuickStart();
-      // Uncertain network writes replay the same frozen outbox. A 409 stays
-      // blocked until the user explicitly preserves a conflict copy.
-      const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
-      if (!tab) return;
-      const wf = (CS.savedWorkflows || []).find((w) => w.id === tab.savedId && !w.isOfficialPreset);
-      if (wf && ["local", "error"].includes(wf.cloudSaveState)) {
-        tab.dirty = true;
-        scheduleWorkflowAutoSave();
-      }
-      if (tab.projectPending || ["dirty", "local_only", "error"].includes(tab.projectSaveState)) {
-        scheduleProjectAutoSave(tab);
+      // Reconnect every account-scoped open Project, not just the visible
+      // tab: a single global debounce timer must not strand hidden outboxes.
+      // A 409 remains blocked until explicit resolution.
+      for (const tab of CS.tabs) {
+        const wf = (CS.savedWorkflows || []).find(w => w.id === tab.savedId && !w.isOfficialPreset);
+        if (tab.id === CS.activeTabId && wf &&
+            ["local", "error"].includes(wf.cloudSaveState)) {
+          tab.dirty = true;
+          scheduleWorkflowAutoSave();
+        }
+        if (tab.projectPending ||
+            ["dirty", "local_only", "error"].includes(tab.projectSaveState)) {
+          void saveActiveProject(tab);
+        }
       }
     });
   }
