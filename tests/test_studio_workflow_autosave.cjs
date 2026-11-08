@@ -48,7 +48,7 @@ function harness() {
     syncCurrentTabSnapshot: () => {},
     ensureDefaultSavedWorkflows: () => {},
     cloneGraph: (value) => JSON.parse(JSON.stringify(value)),
-    writeJsonStorage: (key, value) => writes.push({ key, value: JSON.stringify(value) }),
+    writeJsonStorage: (key, value) => { writes.push({ key, value: JSON.stringify(value) }); return true; },
     persistOpenTabs: () => {},
     renderTopAndBottomDocks: () => {},
     toast: (msg) => messages.push(msg),
