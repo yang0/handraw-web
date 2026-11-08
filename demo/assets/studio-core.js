@@ -388,9 +388,11 @@
       if (!candidates.length) { totals.queued++; continue; }
       const hasSuccess = candidates.some(item => item.status === "success" && (item.media_id || item.mediaId));
       const hasFailed = candidates.some(item => item.status === "failed");
-      if (candidates.some(item => item.status === "generating")) totals.generating++;
+      // A confirmed successful media item is immutable. Later retry/unknown
+      // attempts must not demote the same logical slot to "generating".
+      if (hasSuccess) totals.succeeded++;
+      else if (candidates.some(item => item.status === "generating")) totals.generating++;
       else if (candidates.some(item => item.status === "pending")) totals.queued++;
-      else if (hasSuccess) totals.succeeded++;
       else if (hasFailed) totals.failed++;
       else if (candidates.every(item => item.status === "cancelled")) totals.cancelled++;
       else totals.unknown++;
@@ -406,7 +408,7 @@
       isTerminal, isStopping, canRetry: totals.failed + totals.cancelled > 0,
       viewStatus: isStopping && !isTerminal ? "cancel_requested"
         : totals.unknown ? "unknown" : isTerminal
-        ? totals.succeeded === total && !partialOutputs ? "success"
+        ? totals.succeeded === total ? "success"
           : totals.succeeded ? "partial" : totals.failed ? "failed" : "cancelled"
         : totals.generating ? "running" : "pending"
     };
