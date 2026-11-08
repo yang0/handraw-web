@@ -150,3 +150,14 @@
  color:#405a73;border-radius:7px 7px 0 0;cursor:default}
 .ic129-visual-group textarea{height:39px;pointer-events:auto;max-width:270px;
  color:#405a73;background:#edf4fc95}
+
+.ic129-compare-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+ gap:14px;max-height:75vh;overflow:auto;padding:10px}
+.ic129-compare-grid>div{display:flex;flex-direction:column;gap:9px;min-width:0}
+.ic129-compare-grid img{max-width:100%;width:100%;height:50vh;object-fit:contain;
+ background:#f5f5f5;border-radius:10px}
+.ic129-compare-grid a{font-size:12px;color:var(--ic-ink)}
+.ic129-inspector-field{display:grid;gap:4px;margin:10px 0;font-size:11px;font-weight:750}
+.ic129-inspector-field input{width:100%;box-sizing:border-box;padding:8px 9px;
+ background:var(--ic-panel-solid);border:1px solid var(--ic-border);
+ color:var(--ic-ink);border-radius:7px;font:inherit}
