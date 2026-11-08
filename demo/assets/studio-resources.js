@@ -123,8 +123,13 @@
         }
         mapped.push(ref && ref.type === cfg.type ? clone(ref) : result.ref);
       }
-      if (!chosen.length || mapped.length === chosen.length || !strict) {
+      if (mapped.length === chosen.length) {
         refs[cfg.key] = field === "colors" || field === "tones" ? mapped : mapped[0] || null;
+      } else if (!strict) {
+        // Preserve the legacy ID in the graph so users can repair a missing
+        // resource, but NEVER manufacture an authorized ResourceRef for it.
+        // The generation preflight blocks missing IDs before any provider call.
+        delete refs[cfg.key];
       }
     }
     data.resourceRefs = refs;
