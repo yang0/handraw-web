@@ -30,6 +30,9 @@ def exercise(page, viewport):
         const section = document.createElement('section');
         section.id = 'qa-p0-profile-masonry';
         section.style.cssText = 'box-sizing:border-box;width:100%;max-width:1080px;margin:32px auto;padding:0 8px;';
+        // The shipped helper intentionally ignores grids outside the DOM.
+        // Mount the fixture before asking ResizeObserver to measure it.
+        document.body.appendChild(section);
         const classes = [
           ['works', 'hw-profile-feed hw-profile-work-feed', 'hw-card hw-profile-work-group'],
           ['resources', 'hw-profile-feed hw-profile-resource-feed', 'hw-card hw-profile-resource-card'],
@@ -68,7 +71,6 @@ def exercise(page, viewport):
             section.appendChild(one);
             window.HANDRAW_SHARED.layoutProfileMasonry(one);
         });
-        document.body.appendChild(section);
     }""")
     page.wait_for_function("""() => {
       const grids=[...document.querySelectorAll('#qa-p0-profile-masonry [data-qa-grid]')];
