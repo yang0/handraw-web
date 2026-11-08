@@ -116,8 +116,10 @@ assert.equal(snap.slotCount,6);assert.equal(snap.candidateCount,2);
 assert.equal(snap.outputCount,12);
 assert.equal(snap.outputs.length,12);
 assert.equal(new Set(snap.outputs.map(s=>s.outputId)).size,12);
-assert.deepEqual(snap.outputs.slice(4,6).map(x=>x.slotId),[third,third]);
-assert.deepEqual(snap.outputs.slice(4,6).map(x=>x.candidateIndex),[0,1]);
+const thirdOutputIndex=Series.read(loop).slots.findIndex(s=>s.slotId===third)*2;
+assert.ok(thirdOutputIndex>=0);
+assert.deepEqual(snap.outputs.slice(thirdOutputIndex,thirdOutputIndex+2).map(x=>x.slotId),[third,third]);
+assert.deepEqual(snap.outputs.slice(thirdOutputIndex,thirdOutputIndex+2).map(x=>x.candidateIndex),[0,1]);
 const frozen=JSON.stringify(snap);
 Series.patchSlot(loop,third,{overrides:{ratio:"9:16"}}, {...options,unlock:true});
 Series.switchMode(loop,"ai");
@@ -175,14 +177,15 @@ const graph={nodes:[skill,text,ast,loop,ctrl],edges:[
 const rec=E.resolveControlRecipe(graph,ctrl,catalog);
 const iter=E.resolveLoopIterations(graph,loop,rec,catalog);
 assert.equal(iter.length,6);
-assert.equal(iter[2].slotId,third);
-assert.equal(iter[2].style1,"FA-002");
-assert.equal(iter[2].layout,"SC-022");
-assert.equal(iter[2].ratio,"9:16");
-assert.equal(iter[2].assetItems[0].mediaId,"owned-scene");
+const thirdIter=iter.find(item=>item.slotId===third);
+assert.ok(thirdIter,"the same PlanSlot ID remains addressable after reorder/remove");
+assert.equal(thirdIter.style1,"FA-002");
+assert.equal(thirdIter.layout,"SC-022");
+assert.equal(thirdIter.ratio,"9:16");
+assert.equal(thirdIter.assetItems[0].mediaId,"owned-scene");
 const prompt=E.assembleControlPrompt(graph,ctrl,catalog,"cloud",{
-  fromLoop:true,style1:iter[2].style1,layout:iter[2].layout,
-  ratio:iter[2].ratio,assetItems:iter[2].assetItems,theme:iter[2].theme
+  fromLoop:true,style1:thirdIter.style1,layout:thirdIter.layout,
+  ratio:thirdIter.ratio,assetItems:thirdIter.assetItems,theme:thirdIter.theme
 });
 assert.ok(prompt.includes("FA-002")&&prompt.includes("SC-022")&&prompt.includes("9:16"));
 const html=fs.readFileSync("demo/studio.html","utf8");
