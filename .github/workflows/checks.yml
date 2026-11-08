@@ -104,6 +104,7 @@ jobs:
           node tests/test_studio_project_sync.cjs
           node --check demo/assets/studio-project-center.js
           node tests/test_studio_project_center.cjs
+          node tests/test_studio_project_center_ime.cjs
           node tests/test_studio_closed_project.cjs
           node tests/test_studio_picker_interactions.cjs
           node tests/test_quick_stale_generation.cjs
