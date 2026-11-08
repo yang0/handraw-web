@@ -30,6 +30,26 @@ async function main() {
   assert.deepEqual(Core.normalizeLegacyBatch(loop).slots.map(s=>s.slotId),
     series.plan.slots.map(s=>s.slotId));
   assert.equal(Views.classify(batch).mode,"simple-editable");
+  // #108: new Series tabs from ensureBatchTab use text -> Loop -> control,
+  // whereas compiled graphs also include a direct text -> control edge.
+  // This must remain editable without weakening unknown/ambiguous Graph rules.
+  const legacySeriesGraph=clone(batch);
+  const textId=legacySeriesGraph.nodes.find(n=>n.type==="text_input").id;
+  const ctrlId=legacySeriesGraph.nodes.find(n=>n.type==="output_control").id;
+  legacySeriesGraph.edges=legacySeriesGraph.edges.filter(e=>
+    !(e.from===textId&&e.to===ctrlId));
+  assert.equal(Views.classify(legacySeriesGraph).mode,"simple-editable",
+    "A valid text-to-Loop-to-control series graph must show its editor");
+  const detachedText=clone(legacySeriesGraph);
+  detachedText.edges=detachedText.edges.filter(e=>
+    !(e.from===textId&&e.to===loop.id));
+  assert.equal(Views.classify(detachedText).mode,"read-only-summary",
+    "A missing required subject dependency must stay protected");
+  const bypassLoop=clone(legacySeriesGraph);
+  bypassLoop.edges=bypassLoop.edges.filter(e=>
+    !(e.from===loop.id&&e.to===ctrlId));
+  assert.equal(Views.classify(bypassLoop).mode,"read-only-summary",
+    "A disconnected Loop cannot become a fake simple series");
   const a=Views.compile(article.creationSpec,article.plan,
     {projectId:"article-A",article:article.article});
   const anchorNode=a.nodes.find(n=>n.type==="article_plan");
