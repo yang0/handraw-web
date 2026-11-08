@@ -335,8 +335,9 @@ class PaidGatewayHttpZeroDarkCharge112(unittest.TestCase):
             "SELECT status FROM studio_generations WHERE id=?",
             (gid,)).fetchone()[0],"refunded")
         self.assertEqual(self.db.get_conn().execute(
-            "SELECT COUNT(*) FROM works WHERE run_id=?",
-            (result["runId"],)).fetchone()[0],0)
+            "SELECT COUNT(*) FROM works w JOIN generation_runs r ON r.id=w.run_id "
+            "WHERE r.source='web' AND r.external_run_id=? AND r.user_id=?",
+            (gid,owner_id)).fetchone()[0],0)
 
 
 if __name__ == "__main__":
