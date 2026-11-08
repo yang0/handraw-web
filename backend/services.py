@@ -6190,6 +6190,24 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
     request_id = str(body.get("requestId") or body.get("clientRequestId") or "").strip()
     if len(request_id) > 128:
         raise ServiceError("requestId 过长", status=400, code="invalid_request_id")
+    # The requestId is the user-scoped idempotency identity for one charged
+    # gateway attempt. Conflicting aliases must not allow double submission.
+    supplied_key = str(body.get("idempotencyKey") or "").strip()
+    if supplied_key and (len(supplied_key) > 128 or (request_id and supplied_key != request_id)):
+        raise ServiceError("幂等键与请求编号不一致", status=400, code="invalid_idempotency_key")
+    if not request_id and supplied_key:
+        request_id = supplied_key
+    slot_id = str(body.get("slotId") or "").strip()
+    if len(slot_id) > 120 or any(ord(ch) < 32 for ch in slot_id):
+        raise ServiceError("槽位编号无效", status=400, code="invalid_slot_id")
+    # Safe-to-return metadata, never a protected prompt or raw reference bytes.
+    runtime_snapshot = {
+        "batchId": batch_id, "slotId": slot_id,
+        "slotIndex": batch_index, "position": batch_index * 1000,
+        "expectedCount": batch_total, "idempotencyKey": request_id,
+    }
+    if type(body.get("planRevision")) is int and body["planRevision"] >= 0:
+        runtime_snapshot["planRevision"] = body["planRevision"]
     today = local_today_str()
     now_iso = utc_now_iso()
     gen_id = f"gen_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
@@ -6428,7 +6446,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 initial_prompt if recipe_id else initial_prompt[:4000],
                 initial_visible_prompt if (initial_visible_prompt is None or recipe_id) else initial_visible_prompt[:4000],
                 prompt_masked_init,
-                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False, "recipeSnapshot": snap, "creationSource": creation_source}, ensure_ascii=False),
+                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False, "recipeSnapshot": snap, "creationSource": creation_source, "runtimeSnapshot": runtime_snapshot}, ensure_ascii=False),
                 cost_type,
                 credits_spent,
                 request_id,
@@ -6589,6 +6607,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                             "systemAppend": system_append_list,
                             "promptTrimmed": bool(prompt_trimmed),
                             "recipeSnapshot": snap,
+                            "runtimeSnapshot": runtime_snapshot,
                         },
                         ensure_ascii=False,
                     ),
