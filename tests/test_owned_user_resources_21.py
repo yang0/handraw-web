@@ -201,6 +201,40 @@ class OwnedCustomResources21(unittest.TestCase):
                 server.server_close()
                 thread.join(5)
 
+    def test_private_style_trial_is_applied_server_side_and_foreign_code_denied(self):
+        rid = str(uuid.uuid4())
+        body = self.payload(rid)
+        code = bridge.put_resource(
+            self.db, self.owner, rid, body)["resource"]["code"]
+        before = self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM studio_generations").fetchone()[0]
+        with self.assertRaises(ServiceError) as forbidden:
+            prepare_cloud_generation(
+                self.db, self.other, {
+                    "requestId": "custom21-denied-" + uuid.uuid4().hex,
+                    "prompt": "用别人的画风画小猫", "promptFromSkill": True,
+                    "style1": code,
+                })
+        self.assertEqual(forbidden.exception.status, 403)
+        self.assertEqual(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM studio_generations").fetchone()[0], before)
+
+        receipt = prepare_cloud_generation(
+            self.db, self.owner, {
+                "requestId": "custom21-allowed-" + uuid.uuid4().hex,
+                "prompt": "请画一只原创小猫", "promptFromSkill": True,
+                "style1": code,
+            })
+        self.assertTrue(receipt["genId"])
+        row = self.db.get_conn().execute(
+            "SELECT prompt,visible_prompt FROM studio_generations WHERE id=?",
+            (receipt["genId"],)).fetchone()
+        self.assertIn("原创柔和水彩边缘与纸纹", row["prompt"])
+        self.assertNotIn("原创柔和水彩边缘与纸纹",
+                         str(receipt.get("finalPrompt") or ""))
+        self.assertNotIn("原创柔和水彩边缘与纸纹",
+                         str(row["visible_prompt"] or ""))
+
     def test_id_validation_and_cross_account_id_collision(self):
         rid = str(uuid.uuid4())
         with self.assertRaises(ServiceError):
