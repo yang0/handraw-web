@@ -25,6 +25,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_http.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_project_pagination.py' -v
+      - run: python -m unittest discover -s tests -p 'test_pg_studio_project_migration.py' -v
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
   python-full:
