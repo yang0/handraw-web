@@ -2390,7 +2390,15 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/studio/projects":
             user = self._current_user(required=True)
             from .studio_projects import list_projects
-            self._send_json(list_projects(self.db, user))
+            try:
+                page_size = int(q1("limit", "40"))
+            except ValueError as error:
+                raise ServiceError("项目每页数量无效", status=400,
+                                   code="invalid_project_limit") from error
+            self._send_json(list_projects(
+                self.db, user, query=q1("q"), cursor=q1("cursor"),
+                limit=page_size,
+            ))
             return
 
         m_project = re.fullmatch(r"/api/studio/projects/([A-Za-z0-9_-]{4,100})", req_path)
