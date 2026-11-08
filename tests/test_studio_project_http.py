@@ -6,6 +6,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -106,6 +107,29 @@ class StudioProjectHttpTests(unittest.TestCase):
                                        cookie=self.cookie_a)
         self.assertEqual(status, 200, copied)
         self.assertEqual(copied["project"]["draft"]["graph"]["nodes"][0]["id"], "offline")
+
+    def test_project_search_and_invalid_cursor_over_http(self):
+        body = {"projectId": "http-search-project", "kind": "image",
+                "authority": "graph", "idempotencyKey": "search-http-0001",
+                "title": "秋日海报100%", "draft": {}}
+        status, _ = self._request("POST", "/api/studio/projects", body, self.cookie_a)
+        self.assertEqual(status, 200)
+        status, hits = self._request(
+            "GET", "/api/studio/projects?q=" + quote("秋日") + "&limit=5",
+            cookie=self.cookie_a)
+        self.assertEqual(status, 200, hits)
+        self.assertEqual([p["id"] for p in hits["projects"]], ["http-search-project"])
+        self.assertFalse(hits["hasMore"])
+        status, missing = self._request(
+            "GET", "/api/studio/projects?q=" + quote("不匹配"),
+            cookie=self.cookie_a)
+        self.assertEqual(status, 200, missing)
+        self.assertEqual(missing["projects"], [])
+        status, bad = self._request(
+            "GET", "/api/studio/projects?cursor=bad%%&limit=5",
+            cookie=self.cookie_a)
+        self.assertEqual(status, 400, bad)
+        self.assertEqual(bad["code"], "invalid_project_cursor")
 
     def test_project_write_requires_authenticated_same_origin(self):
         body = {"projectId": "http-project-auth", "kind": "image",
