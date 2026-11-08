@@ -17964,6 +17964,7 @@
               }
             },
             markDirtyAndRender,
+            persistDraft: () => { markActiveTabDirty(); persistOpenTabs(); },
             ensureAssetItems: (items) => ensureBatchAssetNode(items),
             openAssetPicker: ({ kind, field, current, onPick, title } = {}) => {
               // Resource selection configures the next run, even when an older
