@@ -50,9 +50,41 @@ def _one(qs: dict[str, list[str]], key: str, default: str = "") -> str:
     return str((qs.get(key) or [default])[0] or default)
 
 
+def owned_resource_code(rid: str, kind: str) -> str:
+    """Stable collision-resistant code for a private Skill/Web definition."""
+    canonical = _uuid(rid)
+    if kind not in ("style", "layout"):
+        raise ServiceError("仅支持画风和图型", status=400, code="invalid_kind")
+    return ("USR-S" if kind == "style" else "USR-L") + canonical.replace("-", "").upper()
+
+
+def _sync_web_read_model(tx: Any, row: Any) -> None:
+    """Single-transaction projection; Skill CAS stays the only authority."""
+    definition = json.loads(row["definition_json"])
+    tx.execute(
+        """
+        INSERT INTO user_resources
+            (id,code,owner_user_id,kind,name,definition,description,cover_url,
+             revision,deleted_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            code=excluded.code,owner_user_id=excluded.owner_user_id,
+            kind=excluded.kind,name=excluded.name,definition=excluded.definition,
+            description=excluded.description,cover_url=excluded.cover_url,
+            revision=excluded.revision,deleted_at=excluded.deleted_at,
+            updated_at=excluded.updated_at
+        """,
+        (row["id"], owned_resource_code(row["id"], row["kind"]),
+         int(row["user_id"]), row["kind"], row["name"],
+         str(definition.get("zh") or ""), "", "",
+         int(row["revision"]), row["deleted_at"], row["updated_at"]),
+    )
+
+
 def _resource(row: Any) -> dict[str, Any]:
     return {
-        "id": row["id"], "kind": row["kind"], "name": row["name"],
+        "id": row["id"], "code": owned_resource_code(row["id"], row["kind"]),
+        "kind": row["kind"], "name": row["name"],
         "definition": json.loads(row["definition_json"]),
         "license": row["license"],
         "examples": json.loads(row["examples_json"]),
@@ -134,6 +166,7 @@ def put_resource(db: Any, user: dict[str, Any], rid: str, body: dict[str, Any]) 
                            (uid, rid, now))
         tx.execute("UPDATE skill_personal_resources SET change_seq=? WHERE id=?", (event.lastrowid, rid))
         current = tx.execute("SELECT * FROM skill_personal_resources WHERE id=?", (rid,)).fetchone()
+        _sync_web_read_model(tx, current)
     return {"ok": True, "resource": _resource(current)}
 
 
@@ -171,6 +204,7 @@ def delete_resource(db: Any, user: dict[str, Any], rid: str, body_revision: str)
             event=tx.execute("INSERT INTO skill_resource_changes(user_id,resource_id,created_at) VALUES(?,?,?)",(uid,rid,now))
             tx.execute("UPDATE skill_personal_resources SET change_seq=? WHERE id=?", (event.lastrowid,rid))
         current=tx.execute("SELECT * FROM skill_personal_resources WHERE id=?", (rid,)).fetchone()
+        _sync_web_read_model(tx, current)
     return {"ok": True, "resource": _resource(current)}
 
 
