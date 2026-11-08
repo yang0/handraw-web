@@ -328,5 +328,121 @@ class SkillPostgresS3Journey112(unittest.TestCase):
               "remote rehydrate, moderation revoke PASS")
 
 
+    @unittest.skipUnless(os.environ.get("HANDRAW_REAL_SKILL_CLIENT_PATH"),
+                         "requires pinned handraw-style real source")
+    def test_z_actual_skill_cli_record_upload_retry_across_http_pg_and_s3(self):
+        """#84: real handraw-style client, not a synthesized HTTP request.
+
+        Pinned public Skill source is executed against an ephemeral local server,
+        isolated PG17 and an S3 API emulator. No real user or paid gateway.
+        """
+        import contextlib
+        import importlib.util
+        import subprocess
+
+        path = Path(os.environ["HANDRAW_REAL_SKILL_CLIENT_PATH"]).resolve()
+        self.assertTrue(path.is_file(), f"missing real Skill client {path}")
+        expected = os.environ.get("HANDRAW_REAL_SKILL_EXPECTED_SHA")
+        if expected:
+            actual = subprocess.check_output(
+                ["git", "-C", str(path.parents[3]), "rev-parse", "HEAD"],
+                text=True).strip()
+            self.assertEqual(actual, expected, "Skill commit pin drift")
+        spec = importlib.util.spec_from_file_location("real_skill_qa84", path)
+        cloud = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cloud)
+
+        def invoke(*args):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cloud.main(list(args))
+            return json.loads(out.getvalue().strip())
+
+        with tempfile.TemporaryDirectory(prefix="skill-qa84-") as temp:
+            root = Path(temp)
+            with patch.dict(os.environ, {"HANDRAW_PROFILE_HOME": str(root)}), patch.object(
+                    cloud, "BASE_URL", self.base):
+                cloud.Credentials().save({
+                    "token": self.publisher, "scopes": ["publish"],
+                    "user": {"username": self.owner["username"]},
+                })
+                for count in (1, 5):
+                    names = []
+                    originals = []
+                    for i in range(count):
+                        filename = root / f"skill-{count}-{i}.png"
+                        Image.new("RGB", (16, 20), (
+                            31 + i * 25, 67, 155 - i * 13)).save(
+                                filename, format="PNG")
+                        names.append(filename)
+                        originals.append(filename.read_bytes())
+                    prompt = root / f"request-{count}.txt"
+                    prompt.write_text(f"Skill CLI 跨仓库 {count} 图验证", encoding="utf-8")
+                    external = str(uuid.uuid4())
+                    args = ["history", "record", "--run-id", external,
+                            "--original-request-file", str(prompt)]
+                    for filename in names:
+                        args.extend(["--image", str(filename)])
+                    before = self.db_count(
+                        "generation_runs", "user_id=?", (self.owner["id"],))
+                    with patch.object(cloud.API, "request",
+                                      side_effect=AssertionError("local history went online")):
+                        offline = invoke(*args)
+                    self.assertTrue(offline["localOnly"])
+                    self.assertEqual(offline["images"], count)
+                    self.assertEqual(self.db_count(
+                        "generation_runs", "user_id=?", (self.owner["id"],)), before)
+                    local = root / "generation-history" / external / "record.json"
+                    self.assertEqual(json.loads(local.read_text(
+                        encoding="utf-8"))["cloudState"], "local_only")
+                    first = invoke("history", "upload", "--run-id", external)
+                    again = invoke("history", "upload", "--run-id", external)
+                    self.assertEqual(first["workId"], again["workId"])
+                    self.assertEqual(first["workIds"], [first["workId"]])
+                    self.assertEqual(first["imageCount"], count)
+                    self.assertEqual(self.db_count(
+                        "generation_runs", "user_id=?", (self.owner["id"],)), before + 1)
+                    run = self.db.get_conn().execute(
+                        "SELECT id FROM generation_runs WHERE user_id=? "
+                        "AND source='skill' AND external_run_id=?",
+                        (self.owner["id"], external)).fetchone()
+                    self.assertEqual(first["cloudId"], run["id"])
+                    work_id = first["workId"]
+                    self.assertEqual(self.db_count(
+                        "works", "run_id=?", (run["id"],)), 1)
+                    self.assertEqual(self.db_count(
+                        "generation_items", "run_id=?", (run["id"],)), count)
+                    self.assertEqual(self.db_count(
+                        "work_media", "work_id=?", (work_id,)), count)
+                    self.assertEqual(self.db_count(
+                        "media_public_grants",
+                        "target_type='work' AND target_id=? AND revoked_at IS NULL",
+                        (work_id,)), count)
+                    urls = [row["storage_key"] for row in self.db.get_conn().execute(
+                        "SELECT m.storage_key FROM work_media wm "
+                        "JOIN media_assets m ON wm.media_id=m.id "
+                        "WHERE wm.work_id=? ORDER BY wm.position",
+                        (work_id,)).fetchall()]
+                    self.assertEqual(first["coverUrl"], urls[0])
+                    self.assertEqual(len(urls), count)
+                    for i, url in enumerate(urls):
+                        status, payload, _ = self.request("GET", url)
+                        self.assertEqual(status, 200)
+                        self.assertEqual(payload, originals[i])
+                    status, history, _ = self.request(
+                        "GET", "/api/v1/me/generations", token=self.reader)
+                    self.assertEqual(status, 200)
+                    self.assertTrue(any(
+                        row.get("id") == run["id"] and row.get("workId") == work_id
+                        for row in history["items"]))
+                    self.assertEqual(self.request(
+                        "GET", "/api/v1/me/generations",
+                        token=self.other_publisher)[0], 403)
+                    self.assertEqual(json.loads(local.read_text(
+                        encoding="utf-8"))["workId"], work_id)
+        print("ISSUE #84 actual pinned Skill CLI local record, explicit 1/5 "
+              "image upload, replay single Work, PG17/S3 bytes and ACL PASS")
+
+
 if __name__ == "__main__":
     unittest.main()
