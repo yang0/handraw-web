@@ -6766,6 +6766,12 @@ def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_url
         generation = tx.execute(
             "SELECT user_id, fork_work_id, engine, status FROM studio_generations WHERE id = ?", (gen_id,)
         ).fetchone()
+        # #112: a refunded attempt cannot be resurrected by a late gateway
+        # success callback. Likewise, a replay of an already completed attempt
+        # must not change its media, consume quota, reproject a Work or count
+        # an extra fork. Preserve the original terminal accounting facts.
+        if generation is None or str(generation["status"]) in ("refunded", "success"):
+            return
         if image_urls is not None:
             tx.execute(
                 "UPDATE studio_generations SET status = 'success', task_id = ?, items_json = ? WHERE id = ? AND status NOT IN ('refunded', 'success')",
