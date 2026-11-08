@@ -1608,6 +1608,8 @@
         loop.data.batchRows = self.lastPlanUndo.batchRows;
         loop.data.studio2SlotIds = self.lastPlanUndo.studio2SlotIds || [];
         loop.data.planRevision = self.lastPlanUndo.planRevision || 0;
+        if(self.getSeries() && self.lastPlanUndo.studio2Plan)
+          self.getSeries().sync(loop,self.lastPlanUndo.studio2Plan);
         self.lastPlanUndo = null;
         self.planNotice = "已恢复原规划";
         markDirty();
@@ -1818,8 +1820,12 @@
           const curLayout = currentRow.layout || "";
 
           const onPick = (pickedId, ref) => {
-            currentRow.layout = pickedId || "";
-            currentRow.layoutRef = ref || null;
+            if(self.getSeries()){
+              if(!self.patchSlotByIndex(idx,{overrides:{layout:ref||pickedId||null}}))return;
+            }else{
+              currentRow.layout=pickedId||"";
+              currentRow.layoutRef=ref||null;
+            }
             markDirty();
           };
 
@@ -1852,7 +1858,9 @@
               maxCount: 3,
               title: `第 ${idx + 1} 张参考图（最多 3 张）`,
               onConfirm: (selectedItems) => {
-                currentRow.assetItems = selectedItems;
+                if(self.getSeries()){
+                  if(!self.patchSlotByIndex(idx,{referenceMedia:selectedItems}))return;
+                }else currentRow.assetItems=selectedItems;
                 markDirty();
               }
             });
@@ -1867,7 +1875,9 @@
         chk.onchange = () => {
           const idx = Number(chk.getAttribute("data-row-skip-global"));
           if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
-          loop.data.batchRows[idx].skipGlobalRefs = Boolean(chk.checked);
+          if(self.getSeries()){
+            if(!self.patchSlotByIndex(idx,{skipGlobalRefs:Boolean(chk.checked)}))return;
+          }else loop.data.batchRows[idx].skipGlobalRefs=Boolean(chk.checked);
           markDirty();
         };
       });
@@ -1876,9 +1886,14 @@
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-del-row-idx"));
           if (!Array.isArray(loop.data.batchRows)) return;
-          loop.data.batchRows.splice(idx, 1);
-          if (Array.isArray(loop.data.studio2SlotIds)) loop.data.studio2SlotIds.splice(idx, 1);
-          loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
+          if(self.getSeries()){
+            const slot=self.readPlan()?.slots?.[idx];
+            if(slot)self.getSeries().remove(loop,slot.slotId);
+          }else{
+            loop.data.batchRows.splice(idx,1);
+            if(Array.isArray(loop.data.studio2SlotIds))loop.data.studio2SlotIds.splice(idx,1);
+            loop.data.promptListText=loop.data.batchRows.map(r=>r.theme).filter(Boolean).join("\n");
+          }
           markDirty();
         };
       });
@@ -1886,17 +1901,14 @@
       const btnAddRow = root.querySelector("#batch-btn-add-row");
       if (btnAddRow) {
         btnAddRow.onclick = () => {
-          if (!Array.isArray(loop.data.batchRows)) loop.data.batchRows = [];
-          const slotId = (self.getPromptEngine()?.uid || (() => "slot-" + Date.now()))("slot");
-          loop.data.batchRows.push({
-            slotId,
-            theme: "",
-            layout: "", // inherit global; do not copy a selected layout unnecessarily
-            assetItems: [],
-            skipGlobalRefs: false
-          });
-          if (!Array.isArray(loop.data.studio2SlotIds)) loop.data.studio2SlotIds = [];
-          loop.data.studio2SlotIds.push(slotId);
+          if(self.getSeries())self.getSeries().add(loop);
+          else{
+            if(!Array.isArray(loop.data.batchRows))loop.data.batchRows=[];
+            const slotId=(self.getPromptEngine()?.uid||(()=> "slot-"+Date.now()))("slot");
+            loop.data.batchRows.push({slotId,theme:"",layout:"",assetItems:[],skipGlobalRefs:false});
+            if(!Array.isArray(loop.data.studio2SlotIds))loop.data.studio2SlotIds=[];
+            loop.data.studio2SlotIds.push(slotId);
+          }
           markDirty();
         };
       }
@@ -1906,7 +1918,8 @@
         btn.onclick = () => {
           const ratio = btn.getAttribute("data-set-ratio");
           if (!ratio) return;
-          ctrl.data.ratio = ratio;
+          ctrl.data.ratio=ratio;
+          ctrl.data.ratioSource="user";
           markDirty();
         };
       });
@@ -1918,7 +1931,8 @@
           if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
             const parts = val.split(":").map(Number);
             if (parts[0] > 0 && parts[1] > 0) {
-              ctrl.data.ratio = val;
+              ctrl.data.ratio=val;
+              ctrl.data.ratioSource="user";
               markDirty();
               return;
             }
@@ -2059,6 +2073,15 @@
         };
       }
 
+      const candidatesControl=root.querySelector("#batch-candidates");
+      if(candidatesControl)candidatesControl.onchange=()=>{
+        if(!self.getSeries())return;
+        try{
+          self.getSeries().setCandidates(loop,Number(candidatesControl.value));
+          markDirty();
+        }catch(err){global.HANDRAW_SHARED?.toast?.(err.message);}
+      };
+
       // Default three in-flight requests, with a user-selectable 1-4 bound.
       const concurrencyControl = root.querySelector("#batch-concurrency");
       if (concurrencyControl) concurrencyControl.onchange = () => {
@@ -2176,6 +2199,8 @@
           loop.data.batchLayoutReq = "";
           loop.data.batchRows = [];
           loop.data.studio2SlotIds = [];
+          delete loop.data.studio2Plan;
+          loop.data.studio2CandidateCount=1;
           loop.data.promptListText = "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集";
           loop.data.status = "idle";
           loop.data.currentStep = 0;
@@ -2308,7 +2333,8 @@
 
     updatePreviewAndCost(root) {
       const iterations = this.resolveIterations();
-      const totalCount = Math.min(200, iterations.length);
+      const candidateCount=this.getSeries()?this.getSeries().candidateCount(this.getParts()?.loop):1;
+      const totalCount=Math.min(200,iterations.length*candidateCount);
 
       const costWrap = root.querySelector(".batch-cost-wrap");
       if (costWrap) {
@@ -2322,7 +2348,7 @@
 
       const title = root.querySelector(".batch-preview-title");
       if (title) {
-        title.textContent = `批量清单与状态 (${totalCount} 张)`;
+        title.textContent = `批量清单与状态 (计划 ${iterations.length} 张 · 实际输出 ${totalCount} 张)`;
       }
     }
 
