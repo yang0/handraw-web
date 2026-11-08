@@ -2413,7 +2413,7 @@
       return;
     }
     CS.redoStack.push(cloneGraph(CS.graph));
-    CS.graph = CS.undoStack.pop();
+    CS.graph = window.HandrawCanvasRenderer.preserveRuntime(CS.graph,CS.undoStack.pop());
     markActiveTabDirty();
     CS.selectedEdgeId = null;
     fullRenderCanvas();
@@ -2427,7 +2427,7 @@
       return;
     }
     CS.undoStack.push(cloneGraph(CS.graph));
-    CS.graph = CS.redoStack.pop();
+    CS.graph = window.HandrawCanvasRenderer.preserveRuntime(CS.graph,CS.redoStack.pop());
     markActiveTabDirty();
     CS.selectedEdgeId = null;
     fullRenderCanvas();
@@ -9337,64 +9337,18 @@
     return { hasH1, secs };
   }
 
-  // Studio 2.0: patch only changed node cards. Keeping unchanged elements
-  // preserves loaded images, input focus and scroll when another RunItem
-  // reports progress (#111/#127). Never conflate DOM patches with Graph Undo.
-  const studio2RenderedNodeMarkup = new WeakMap();
-  function patchStudioCanvasDom(layer, cardsHtml, datalistsHtml) {
-    const template = document.createElement("template");
-    template.innerHTML = cardsHtml + datalistsHtml;
-    const desired = Array.from(template.content.children);
-    const existing = new Map();
-    Array.from(layer.children).forEach(el => {
-      const key = el.classList.contains("ic-node")
-        ? "node:" + el.getAttribute("data-node-id")
-        : el.tagName === "DATALIST" ? "list:" + el.id : "";
-      if (key) existing.set(key, el);
-    });
-    const used = new Set();
-    for (const fresh of desired) {
-      const key = fresh.classList.contains("ic-node")
-        ? "node:" + fresh.getAttribute("data-node-id")
-        : fresh.tagName === "DATALIST" ? "list:" + fresh.id : "";
-      if (!key) continue;
-      used.add(key);
-      const old = existing.get(key);
-      const html = fresh.outerHTML;
-      if (!old) {
-        layer.appendChild(fresh);
-        studio2RenderedNodeMarkup.set(fresh, html);
-        continue;
-      }
-      if (studio2RenderedNodeMarkup.get(old) === html) continue;
-      const active = document.activeElement;
-      let focus = null;
-      if (active && old.contains(active)) {
-        const controls = Array.from(old.querySelectorAll("input,textarea,select,[contenteditable]"));
-        const index = controls.indexOf(active);
-        if (index >= 0) {
-          focus = { index, value: active.value, start: active.selectionStart,
-            end: active.selectionEnd, scrollTop: active.scrollTop };
-        }
-      }
-      old.replaceWith(fresh);
-      studio2RenderedNodeMarkup.set(fresh, html);
-      if (focus) {
-        const replacement = fresh.querySelectorAll("input,textarea,select,[contenteditable]")[focus.index];
-        if (replacement) {
-          if ("value" in replacement) replacement.value = focus.value;
-          replacement.focus({ preventScroll: true });
-          replacement.scrollTop = focus.scrollTop;
-          if (typeof replacement.setSelectionRange === "function"
-              && Number.isInteger(focus.start) && Number.isInteger(focus.end)) {
-            try { replacement.setSelectionRange(focus.start, focus.end); } catch (_) {}
-          }
-        }
-      }
-    }
-    for (const [key, old] of existing) {
-      if (!used.has(key)) old.remove();
-    }
+  // #127: DOM reconciliation is owned by the renderer module.
+  function patchStudioCanvasDom(layer,cardsHtml,datalistsHtml){
+    const r=window.HandrawCanvasRenderer;
+    if(!r)throw new Error('studio_canvas_renderer_not_loaded');
+    return r.reconcile(layer,cardsHtml,datalistsHtml);
+  }
+  function refreshCanvasSelection(){
+    if(!DOM.nodesLayer)return;
+    const sets=getRelatedSets();
+    window.HandrawCanvasRenderer.updateSelection(DOM.nodesLayer,
+      sets.selSet,sets.relNodeIds);
+    renderEdgesSvg();
   }
 
   function renderWorldNodes() {
