@@ -250,7 +250,7 @@
         '<form class="hw-personal-gallery-upload-form" data-gallery-upload-form hidden>' +
           '<div class="hw-personal-gallery-upload-head"><strong>添加到我的图库</strong><span data-gallery-selected-file></span></div>' +
           '<div class="hw-personal-gallery-upload-fields">' +
-            '<label>素材名称<input type="text" data-gallery-name maxlength="80" required placeholder="给图片起一个易识别的名称" autocomplete="off" /></label>' +
+            '<label>素材名称<input type="text" data-gallery-name maxlength="60" required placeholder="给图片起一个易识别的名称" autocomplete="off" /></label>' +
             '<label>素材类别<select data-gallery-upload-category required>' +
               cats.filter(function (cat) { return cat[0] !== "all"; }).map(function (cat) {
                 return '<option value="' + cat[0] + '">' + cat[1] + '</option>';
@@ -417,8 +417,8 @@
       const uid = pendingUid;
       const name = (uploadName?.value || "").trim();
       const cat = uploadCategory?.value || "other";
-      if (!name || name.length > 80) {
-        message("请填写 1—80 字的素材名称", true);
+      if (!name || name.length > 60) {
+        message("请填写 1—60 字的素材名称", true);
         uploadName?.focus();
         return;
       }
@@ -485,7 +485,7 @@
         message("只支持 15 MB 以内的 PNG、JPEG、WebP 图片", true);
         return;
       }
-      if (uploadName) uploadName.value = (file.name.replace(/\.[^.]+$/, "") || "我的素材").slice(0, 80);
+      if (uploadName) uploadName.value = (file.name.replace(/\.[^.]+$/, "") || "我的素材").slice(0, 60);
       if (uploadCategory) uploadCategory.value = category === "all" ? "other" : category;
       showUploadForm();
       message("已选择图片，请填写名称并确认类别后上传。");
