@@ -6593,7 +6593,7 @@
     const recipeId = isRecipe ? (ctrlNode.id || "") : (ctrlNode.recipeId || "");
     const mode = isRecipe ? (ctrlNode.mode || "graphic-text") : (ctrlNode.data?.mode || "graphic-text");
     const runGraph = snapshot?.graph || CS.graph;
-    const forkSource = snapshot?.forkSource || CS.forkGenerationSource;
+    const forkSource = snapshot ? snapshot.forkSource : CS.forkGenerationSource;
     const rec = isRecipe ? null : E.resolveControlRecipe(runGraph, ctrlNode, Catalog);
     const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
     const now = new Date();
