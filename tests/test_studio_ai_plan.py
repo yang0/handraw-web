@@ -106,8 +106,6 @@ class AIPlanContractTests(unittest.TestCase):
         self.assertEqual(result["baseRevision"],7)
 
     def test_escaped_and_fenced_json(self):
-        x=json.loads(self.run_plan()["creationSpecPatch"]["changes"]["style"]["id"].__class__.__name__=="str" and "{}" or "{}")
-        self.assertEqual(x,{})
         allowed=_user_catalog(self.db,self.user)
         data=json.dumps({"styleId":allowed["style"][0]["id"],
           "layoutId":allowed["layout"][0]["id"],"ratio":"1:1",
