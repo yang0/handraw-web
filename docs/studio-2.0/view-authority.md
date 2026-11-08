@@ -10,6 +10,8 @@ Source: [ADR #102](https://github.com/yang0/handraw-web/issues/102), [Issue #107
 | graph | Same WorkflowGraph | The same Graph | Graph projection only; node-scoped safe patches, no writable Spec duplicate |
 | article | ArticleDocument owns markdown/anchors, Spec/Plan owns illustration settings | Derived/linked Graph | Article editor owns text; Canvas never overwrites anchors |
 
+Cloud Spec/Plan projects are reopened through the compiler as a transient display Graph. In simple mode their authoritative cloud writes remain CreationSpec/Plan; entering Canvas sends an atomic authority=graph and graph patch under the same optimistic revision. Article projects still remain in the original ArticleDocument editor until #124.
+
 The stable compiler uses Project-scoped IDs and PlanSlot identities. Spec-to-Graph authority transition must be atomic with CAS. Once Graph is authoritative, unverified Graph-to-Spec downgrade is forbidden. A view switch never changes authority.
 
 ## Expressibility
