@@ -100,6 +100,20 @@ async function test() {
   assert.equal(conflicted.projectSaveState, "synced");
   assert.equal(conflicted.projectPending, null);
   assert.notEqual(conflicted.projectId, "prj-existing");
+  // Search and cursors must be encoded as URL parameters, never interpolated.
+  let requested="";
+  const searching=createClient({fetchImpl:async (path,init)=>{
+    requested=path;
+    assert.equal(init.method,"GET");
+    return {ok:true,status:200,json:async()=>({ok:true,projects:[],nextCursor:"",hasMore:false})};
+  }});
+  await searching.list({query:"秋日 海报 & %",cursor:"a+/==",limit:25});
+  const parsed=new URL(requested,"http://localhost:3080");
+  assert.equal(parsed.pathname,"/api/studio/projects");
+  assert.equal(parsed.searchParams.get("q"),"秋日 海报 & %");
+  assert.equal(parsed.searchParams.get("cursor"),"a+/==");
+  assert.equal(parsed.searchParams.get("limit"),"25");
+
   console.log("Studio2 Project client passes CAS/outbox/replay/conflict/copy tests");
 }
 test().catch(err => { console.error(err); process.exitCode = 1; });
