@@ -23,6 +23,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_run_read.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_quick_run_contract.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_series_run_contract.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_series_reference_preflight.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_cancel_pending.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_view_authority.py' -v
