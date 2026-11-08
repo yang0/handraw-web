@@ -127,3 +127,16 @@ CI 新增以上 Python HTTP 套件与真实 Chromium 冒烟（`interaction-journ
 - **原有局限**：这不是 Skill 仓库发布客户端的真实网络请求，也没有真实 MinIO/S3/R2、CDN、多副本故障/权限配置和真实计费结算。M2-04 的 `live_gate` 仍为 **PENDING**，全站上线判定仍是 **NO-GO**。测试输出的 PASS 只表示本行受控 CI 通过；实际是否通过以最终同一提交 SHA 的 GitHub Actions Log 为准。
 
 后续真实门禁仍需：跨仓库 Skill 客户端从另一进程/主机上传、真实 S3 或 R2 凭证与私有桶配置、断网/对象存储异常和跨实例访问、删除后 GC/退款/生产账本对照；未经独立人工复核不得将 D 级升级为 EVIDENCED。
+
+
+## 10. 第四轮：真实独立 Skill 客户端 × Web HTTP × PG17 × S3 协议模拟（#84 / #112）
+
+前一轮 #112 的六图中断恢复测试主要由 Web 测试进程自己组装 Skill HTTP payload，证明了**服务端**续传、事务和对象权限，不能冒充「已运行真实 Skill 客户端」。本轮保留它作为服务器故障恢复用例，**额外直接加载并调用**来自 `yang0/handraw-style` 的实际 `skills/handraw-cloud/scripts/handraw_cloud.py` 命令入口（`history record` / `history upload`）；不再用模拟 Skill 的 HTTP 发送器代替真实客户端。
+
+- **双仓代码绑定**：Web `.github/workflows/checks.yml` 在原有 `production-storage-integration` Job 内，使用公开仓库 `yang0/handraw-style` 的固定完整提交 `9542512c8fd49cd8a5bbc02b9378b82b6e6e9c24`，checkout 后通过 `git rev-parse HEAD` 校验精确 SHA；拒绝浮动分支拉取。原有 CI Job 数仍保持 14。Skill 自身在 `feature/skill-web-unification-v1-20261107` 上补齐 GIF 后通过独立仓库 CI；不修改 Skill 主干。
+- **真实执行**：通过真实客户端 CLI 保存本地历史时阻断任何 API 调用，确认 `cloudState=local_only` 且数据库 Run 数不变；创建真实 1 张 PNG、5 张 PNG、1 张两帧动画 GIF，分别明确执行上传并再上传一次；检查一个 logical Run 对应至多一件 Work、N 个有序 Media、稳定首图封面、授予 N 个公开 Grant、服务器 byte-for-byte 原始媒体读取及作者私有历史可见性。上传 GIF 的扩展名与 `image/gif` MIME 沿用 Skill 真实客户端，Web 按帧数/像素上限严格验证。
+- **负向保护**：伪造错误格式 GIF 经真实 Skill `record` 本地保存后执行 `upload`，服务端应以 HTTP 400 拒绝，Skill 不能错误地把本地记录设为 synced。读历史 API 在 publish-only Token 下应拒绝（403），public 才能获得已发布媒体。
+- **执行范围**：真实 Skill 客户端实现、真实 Web HTTP、真实临时 PostgreSQL 17、真实 PNG/GIF 字节；对象层仍用 **Moto S3 API 模拟**，本机环回地址注入进客户端（替代正式 handraw-style.com）；不访问付费生图，不使用真实云端账号/令牌或用户数据。阶段证据为 **C 级受控跨仓验证**，不是生产网络、第三方收费网关或真实 R2/S3/MinIO。
+- **审计依据**：`tests/test_studio_skill_pg_s3_112.py::test_z_actual_skill_cli_record_upload_retry_across_http_pg_and_s3`，GitHub Actions 的 `#84/#112 real Skill CLI -> local HTTP -> PG17 + S3 emulation` 步骤；本轮独立验证分支 [Actions #42511614919](https://github.com/yang0/handraw-web/actions/runs/42511614919) 已实际 14/14 SUCCESS（此后如更改文档，仍以最终同 SHA 的 CI 为准）。
+
+**依然阻断生产发布的 D 级事项**：远程机器上运行实际 Skill 安装包指向正式部署地址；R2/MinIO/AWS 真实桶私有权限、跨实例和 CDN 缓存吊销、网络中断与对象垃圾回收；真实网关计费/退款/重复回调，正式 PG 迁移备份和恢复、Redis 故障演练、账号/媒体 IDOR 与日志脱敏，Firefox/WebKit/触屏与弱网。**#84、#112 均保持 OPEN，发布 NO-GO；PR #131 必须保持 Draft。**
