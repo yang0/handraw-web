@@ -35,7 +35,8 @@ def fail(code: str, message: str, status: int = 422) -> None:
     raise ServiceError(message, status=status, code=code)
 
 
-def _user_catalog(db: Database, user: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _user_catalog(db: Database, user: dict[str, Any], subject: str = ""
+                  ) -> dict[str, list[dict[str, Any]]]:
     """Enumerate every accessible style/layout, not the first N or a fixed family.
 
     SQL discovers identities ONLY. resolve() enforces status, entitlement,
@@ -71,6 +72,16 @@ def _user_catalog(db: Database, user: dict[str, Any]) -> dict[str, list[dict[str
                 "source": str(resource.get("source") or "official"),
                 "type": resource["kind"]}
         result[resource["kind"]].append(meta)
+    # Relevance decides the order in which the entire approved catalog is
+    # presented to the model; it never filters out lower-ranking options.
+    terms = str(subject or "").casefold().strip()
+    tokens = {terms[i:i+2] for i in range(len(terms)-1)} or set(terms)
+    def score(item: dict[str, Any]) -> tuple[int, int, str]:
+        haystack = (item["id"]+" "+item["name"]+" "+item["purpose"]).casefold()
+        grams = {haystack[i:i+2] for i in range(len(haystack)-1)}
+        return (-int(bool(terms) and terms in haystack), -len(tokens & grams), item["id"])
+    for group in result.values():
+        group.sort(key=score)
     return result
 
 
@@ -190,7 +201,7 @@ def execute_ai_plan(db: Database, user: dict[str, Any], body: dict[str, Any]) ->
     blocks = _blocks(body) if kind == "article" else []
     # Remote planning does not own the article text; it only receives
     # limited paragraph summaries and returns original stable anchors.
-    authorized = _user_catalog(db, user)
+    authorized = _user_catalog(db, user, subject)
     if not authorized["style"] or not authorized["layout"]:
         fail("ai_catalog_empty", "当前没有可用于 AI 规划的已授权画风和图型")
     if not consume_daily_usage(db, user["id"], "studio_ai_plan", limit=50):
@@ -287,8 +298,14 @@ def execute_ai_plan(db: Database, user: dict[str, Any], body: dict[str, Any]) ->
             "changes": {"style": style, "layout": layout, "ratio": ratio},
             "reasons": reasons,
             "candidates": {
-                key: authorized[typ][:5] for key, typ in (
-                    ("style", "style"), ("layout", "layout"))
+                "style": [
+                    next(x for x in authorized["style"] if x["id"] == style["id"]),
+                    *[x for x in authorized["style"] if x["id"] != style["id"]][:4]
+                ],
+                "layout": [
+                    next(x for x in authorized["layout"] if x["id"] == layout["id"]),
+                    *[x for x in authorized["layout"] if x["id"] != layout["id"]][:4]
+                ]
             }
         },
         "planPatch": None if kind == "image" else {
