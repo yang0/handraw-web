@@ -662,6 +662,19 @@ class TestOfficialAssets(unittest.TestCase):
 
         export_out = self.root / "export_out"
 
+        # Real PG credentials are supplied only from a restricted environment
+        # variable; an absent one fails closed (not a SQLite fallback).
+        pg_env = os.environ.copy()
+        pg_env.pop("HANDRAW_OFFICIAL_EXPORT_PG_URL", None)
+        pg_probe = subprocess.run(
+            [sys.executable, "-X", "utf8", "ops/export_official_assets.py",
+             "--pg-dsn-env", "HANDRAW_OFFICIAL_EXPORT_PG_URL",
+             "--skill-root", str(mock_skill), "--out", str(export_out)],
+            capture_output=True, text=True, encoding="utf-8", env=pg_env,
+        )
+        self.assertNotEqual(pg_probe.returncode, 0)
+        self.assertFalse(export_out.exists())
+
         # 11a: Run without --skill-root -> exits with error (non-zero)
         cmd_no_root = [
             sys.executable, "-X", "utf8", "ops/export_official_assets.py",
