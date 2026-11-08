@@ -1307,16 +1307,16 @@
       // 8. Reset form button
       const resetBtn = root.querySelector("#make-image-btn-reset");
       if (resetBtn) {
-        resetBtn.onclick = () => {
+        resetBtn.onclick = async () => {
           const currentBusy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
           if (currentBusy || this.context?.pendingCloud ||
               (this.context?.runProjection?.ok && !this.context.runProjection.isTerminal)) {
             global.HANDRAW_SHARED?.toast?.("存在云端未确认任务，请先在生图历史查看结果，避免丢失恢复编号");
             return;
           }
-          const ok = typeof window.confirm === "function"
-            ? window.confirm("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？")
-            : true;
+          const ok = await global.HANDRAW_SHARED?.confirmAction?.(
+            "清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？",
+            { title: "清空图片创作设置", danger: true, confirmText: "清空" });
           if (!ok) return;
 
           if (typeof this.actions?.isBusy === "function" && this.actions.isBusy()) {
