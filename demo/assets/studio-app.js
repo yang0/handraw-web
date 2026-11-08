@@ -13776,7 +13776,8 @@
       const outputs = control?.data?.studio2RunSnapshot?.outputs || [];
       return {...projection,items:payload.items.filter(item=>item.status==="success" &&
         item.mediaId && typeof item.imageUrl==="string" && item.imageUrl &&
-        (/^\\/(?!\\/)/.test(item.imageUrl) || /^https:\\/\\//i.test(item.imageUrl)))
+        ((item.imageUrl.startsWith("/") && !item.imageUrl.startsWith("//")) ||
+          item.imageUrl.startsWith("https://")))
         .map(item=>({...item,slotId:outputs[Number(item.slotIndex)]?.slotId ||
           outputs[Number(item.slotIndex)]?.outputId || ""}))};
     }).then(model => {
