@@ -286,9 +286,14 @@ def main():
                   const d=window.CS.articleEditorDraft;
                   const art=window.CS.myArticles.find(a=>a.id===d.id);
                   const cards=art.cards;
-                  cards[0].imageUrl='/generated/article109-fixture.webp';
-                  cards[0].mediaId=media;cards[0].status='done';
-                  if(cards.length>1){cards[1].status='error';cards[1].imageUrl='';}
+                  cards.forEach((card,index)=>{
+                    if(index===1){
+                      card.status='error';card.imageUrl='';card.mediaId='';
+                    }else{
+                      card.imageUrl='/generated/article109-fixture.webp';
+                      card.mediaId=media;card.status='done';
+                    }
+                  });
                   d.cards=cards;
                   window.renderFullPreviewStage();
                 }""",media_id)
