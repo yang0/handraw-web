@@ -384,13 +384,15 @@ def _preset(graph: dict[str, Any], preset: str, selected: list[str],
         ops.append({"op": "addEdge",
                     "edge": {"id": ident + "e" + suffix, "from": src, "to": dst}})
     ratio = base_control.get("data", {}).get("ratio", "3:4")
-    if ratio not in _RATIOS:
+    if not isinstance(ratio, str) or ratio not in _RATIOS:
         ratio = "3:4"
     if preset == "seasons":
+        origin = pick if pick and pick["type"] == "text_input" else subject
+        theme = str(origin.get("data", {}).get("text") or "保留原主题")[:380]
         for i, season in enumerate(("春", "夏", "秋", "冬")):
             y = position_y + 250 * i
             txt = add("text_input", "t" + str(i), position_x, y,
-                      {"text": season + "季 · 保持原主题的主体与构图"}, season + "季主题")
+                      {"text": theme + " · " + season + "季氛围与构图"}, season + "季主题")
             control = add("output_control", "c" + str(i), position_x + 420, y,
                           {"mode": "graphic-text", "ratio": ratio, "count": 1},
                           season + "季生成")
@@ -427,14 +429,24 @@ def _preset(graph: dict[str, Any], preset: str, selected: list[str],
     return ops
 
 
-def _ai_operations(graph: dict[str, Any], instruction: str,
-                   selected: list[str]) -> list[dict[str, Any]]:
+def _ai_operations(db: Any, user: dict[str, Any], graph: dict[str, Any],
+                   instruction: str, selected: list[str]) -> list[dict[str, Any]]:
     # The model sees only identities/types and a user-submitted instruction.
     # No raw text, preview URLs, private media, resource definitions, run IDs,
     # prompt recipes, or local image data leave the server in this request.
     from .ai_client import chat
     from .batch_plan_routes import parse_batch_plan_response
+    from .studio_ai_plan import _user_catalog
+    catalog = _user_catalog(db, user, instruction)
+    # Only identities and display names for resources the actual user may use.
+    # Never serialize private prompt bodies, resource definitions or images.
+    approved = {
+        kind: [{"id": row["id"], "name": row["name"]}
+               for row in catalog[kind]]
+        for kind in ("style", "layout")
+    }
     abstract = {"instruction": instruction, "selectedIds": selected,
+                "authorizedResources": approved,
                 "nodes": [{"id": n["id"], "type": n["type"]}
                           for n in graph["nodes"][:300]],
                 "edges": [{"id": e["id"], "from": e["from"], "to": e["to"]}
@@ -446,6 +458,7 @@ def _ai_operations(graph: dict[str, Any], instruction: str,
                     "每条操作为 addNode(node)、removeNode(id)、setNodeData(id,field,value)、"
                     "addEdge(edge:{id,from,to}) 或 removeEdge(id)。"
                     "新增 ID 必须唯一，由英文字母/数字/下划线组成；"
+                    "新画风与图型 ID 必须取自 authorizedResources，不得编造编号；"
                     "不要编辑 output_display/article_plan 的既有结果。"
                     "不得创建引用私有图片 URL、资源秘方、状态字段或运行记录。"
                     "只能提出供用户确认的变更，不触发生成。")}
@@ -503,7 +516,7 @@ def preview(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, An
             instruction = body.get("instruction")
             if not isinstance(instruction, str) or not 2 <= len(instruction.strip()) <= 800:
                 _error("graphpatch_invalid_instruction", "请输入 2–800 字的修改说明", 400)
-            ops = _ai_operations(graph, instruction.strip(), selected)
+            ops = _ai_operations(db, user, graph, instruction.strip(), selected)
         elif mode == "operations":
             ops = body.get("operations")
         else:
