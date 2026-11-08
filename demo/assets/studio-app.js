@@ -47,6 +47,7 @@
   const WORKFLOW_AUTO_SAVE_DELAY_MS = 1200;
   const PROJECT_AUTO_SAVE_DELAY_MS = 1600;
   const ProjectClient = window.HandrawStudioProjectSync?.createClient() || null;
+  const StudioViews = window.HandrawStudioViews || null;
   let _workspaceHydrationController = null;
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
@@ -1054,6 +1055,17 @@
     cur.vx = CS.vx;
     cur.vy = CS.vy;
     cur.vk = CS.vk;
+    // Camera/selection/panels belong to Project, never to generation Run.
+    // Preserve them across form/canvas switches and local reloads.
+    if (["canvas","quick","batch"].includes(CS.stageView)) {
+      cur.editorLayout = {
+        ...(cur.editorLayout || {}),
+        camera: {vx:CS.vx,vy:CS.vy,vk:CS.vk},
+        selectedIds: cloneGraph(CS.graph.selectedIds || []),
+        panels: {shelfOpen:CS.shelfOpen,minimapOpen:CS.minimapOpen,
+          previewTab:CS.previewTab}
+      };
+    }
     cur.undoStack = CS.undoStack.slice(-15);
     cur.redoStack = CS.redoStack.slice(-15);
   }
@@ -1079,6 +1091,9 @@
         projectError: t.projectError || "",
         projectRemoteRevision: Number(t.projectRemoteRevision || 0),
         editRevision: Number(t.editRevision || 0),
+        projectSyncedGraph: t.projectSyncedGraph || null,
+        projectActiveView: t.projectActiveView || null,
+        editorLayout: t.editorLayout || null,
         vx: t.vx,
         vy: t.vy,
         vk: t.vk,
@@ -1265,6 +1280,16 @@
     CS.vx = target.vx ?? 290;
     CS.vy = target.vy ?? 48;
     CS.vk = target.vk ?? 0.85;
+    if (target.editorLayout?.camera) {
+      const camera = target.editorLayout.camera;
+      CS.vx = Number.isFinite(camera.vx) ? camera.vx : CS.vx;
+      CS.vy = Number.isFinite(camera.vy) ? camera.vy : CS.vy;
+      CS.vk = Number.isFinite(camera.vk) && camera.vk > 0 ? camera.vk : CS.vk;
+    }
+    if (Array.isArray(target.editorLayout?.selectedIds)) {
+      const allIds = new Set((CS.graph.nodes || []).map(n => n.id));
+      CS.graph.selectedIds = target.editorLayout.selectedIds.filter(id => allIds.has(id));
+    }
     CS.undoStack = target.undoStack || [];
     CS.redoStack = target.redoStack || [];
     CS.selectedEdgeId = null;
@@ -1314,6 +1339,9 @@
       projectRemoteRevision: Number(tab.projectRemoteRevision || 0),
       projectError: tab.projectError || "",
       editRevision: Number(tab.editRevision || 0),
+      projectSyncedGraph: tab.projectSyncedGraph || null,
+      projectActiveView: tab.projectActiveView || null,
+      editorLayout: tab.editorLayout || null,
       quickStart: tab.quickStart === true, batchStart: tab.batchStart === true,
       vx: tab.vx, vy: tab.vy, vk: tab.vk,
       closed: true
@@ -1412,7 +1440,12 @@
       title: tab.title || "未命名创作",
       draft: {
         graph: savedGraph,
-        activeView: CS.stageView === "canvas" ? "canvas" : "simple"
+        activeView: tab.projectActiveView ||
+          (tab.id === CS.activeTabId && CS.stageView === "canvas" ? "canvas" : "simple"),
+        editorLayout: cloneGraph(tab.editorLayout || {
+          camera: {vx:tab.vx ?? CS.vx,vy:tab.vy ?? CS.vy,vk:tab.vk ?? CS.vk},
+          selectedIds: [], panels: {}
+        })
       }
     };
   }
@@ -1794,10 +1827,14 @@
     if (!tab) return;
     const graph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
     const kind = project?.kind || (tab.batchStart ? "series" : "image");
-    const preferred = project?.draft?.activeView || (tab.batchStart || tab.quickStart ? "simple" : "canvas");
+    const preferred = tab.projectActiveView || project?.draft?.activeView ||
+      (tab.batchStart || tab.quickStart ? "simple" : "canvas");
     const asBatch = preferred === "simple" && kind === "series" && Boolean(getBatchParts(graph));
     const asQuick = preferred === "simple" && kind === "image" && Boolean(getQuickParts(graph));
-    const stage = asBatch ? "batch" : asQuick ? "quick" : "canvas";
+    const mapped = StudioViews?.classify(graph);
+    const safeComplex = preferred === "simple" && mapped?.mode !== "simple-editable";
+    const stage = asBatch ? "batch" : asQuick ? "quick" :
+      safeComplex ? (kind === "series" ? "batch" : "quick") : "canvas";
     if (asBatch) tab.batchStart = true;
     if (asQuick) tab.quickStart = true;
     CS.stageView = stage;
@@ -1870,6 +1907,16 @@
       target.title = project.title || target.title;
       target.projectId = project.id;
       target.projectRevision = Number(project.revision);
+      target.projectSyncedGraph = cloneGraph(cloudGraph);
+      target.projectActiveView = project.draft?.activeView || "canvas";
+      target.editorLayout = cloneGraph(project.draft?.editorLayout || target.editorLayout || {});
+      const cam = target.editorLayout.camera || {};
+      if (Number.isFinite(cam.vx)) target.vx = cam.vx;
+      if (Number.isFinite(cam.vy)) target.vy = cam.vy;
+      if (Number.isFinite(cam.vk) && cam.vk > 0) target.vk = cam.vk;
+      if (target.id === CS.activeTabId) {
+        CS.vx = target.vx; CS.vy = target.vy; CS.vk = target.vk;
+      }
       target.projectSaveState = "synced";
       target.projectPending = null;
       target.projectCopyPending = null;
@@ -1948,7 +1995,8 @@
     for (const key of [
       "projectId", "projectRevision", "projectSaveState", "projectPending",
       "projectCopyPending", "projectRemoteRevision", "projectError",
-      "editRevision", "quickStart", "batchStart", "vx", "vy", "vk"
+      "editRevision", "projectSyncedGraph", "projectActiveView",
+      "editorLayout", "quickStart", "batchStart", "vx", "vy", "vk"
     ]) {
       if (Object.prototype.hasOwnProperty.call(stored,key)) tab[key] = stored[key];
     }
