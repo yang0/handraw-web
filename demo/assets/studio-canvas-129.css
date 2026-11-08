@@ -129,3 +129,23 @@
   padding:8px 12px}
 .ic129-first-start form button{background:var(--vermilion);color:#fff;border-color:transparent}
 .ic129-first-actions{display:flex;gap:8px;margin-top:9px}
+
+/* CanvasDocument note/group overlay, deliberately outside executable nodes. */
+#canvas-129-visual-layer{position:absolute;inset:0;pointer-events:none}
+#canvas-129-visual-layer[hidden]{display:none}
+.ic129-visual-note{position:absolute;pointer-events:auto;box-sizing:border-box;
+ border:1px solid rgba(130,110,54,.42);border-radius:9px;
+ box-shadow:0 3px 10px rgba(60,48,12,.08);background:#fff7d8}
+.ic129-visual-header{display:flex;align-items:center;justify-content:space-between;
+ cursor:grab;user-select:none;padding:6px 9px;font-size:10px;font-weight:850;color:#786237}
+.ic129-visual-header button{padding:0 5px;cursor:pointer;background:transparent;border:0;
+ font-size:16px;color:inherit}
+.ic129-visual-note textarea{display:block;width:100%;height:calc(100% - 31px);
+ box-sizing:border-box;resize:none;border:0;background:transparent;
+ padding:7px 9px;line-height:1.45;font-size:12px;outline:0;color:#55472a}
+.ic129-visual-group{background:rgba(116,148,183,.055);border:1.5px dashed #87a2be;
+ pointer-events:none;box-shadow:none}
+.ic129-visual-group .ic129-visual-header{pointer-events:auto;background:#edf4fc;
+ color:#405a73;border-radius:7px 7px 0 0;cursor:default}
+.ic129-visual-group textarea{height:39px;pointer-events:auto;max-width:270px;
+ color:#405a73;background:#edf4fc95}
