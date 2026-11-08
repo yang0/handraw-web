@@ -1,9 +1,8 @@
-"""#87 audit gate: inventory native browser dialogs without bypassing confirmations.
+"""Issue #87: zero-tolerance native dialog gate for shipped JavaScript.
 
-Legacy native calls are an OPEN debt, not an approved UX implementation.
-The existing allowlist is a decreasing baseline: additions (or new files)
-are blocked in CI, removal needs no allowlist update. This intentionally
-DOES NOT claim Issue #87 is complete until zero native calls remain.
+Every browser-native alert/confirm/prompt blocks interaction, breaks async
+cancellation semantics and is forbidden in application JS (demo + plugin).
+Test fixtures, documentation and third-party dependencies are not app source.
 """
 from __future__ import annotations
 
@@ -13,30 +12,20 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BASELINE = {
-    "demo/assets/admin-app.js": 1,
-    "demo/assets/cloud-center.js": 1,
-    "demo/assets/curation-ui.js": 1,
-    "demo/assets/device-auth.js": 1,
-    "demo/assets/forum-app.js": 6,
-    "demo/assets/main-app.js": 3,
-    "demo/assets/messaging.js": 21,
-    "demo/assets/shared.js": 3,
-    "demo/assets/studio-app.js": 2,
-    "demo/assets/studio-batch.js": 1,
-    "demo/assets/studio-make-image.js": 1,
-    "plugin/public/portal.js": 2,
-}
-CALL = re.compile(r"(?<![\w.])(?:window\.)?(alert|confirm|prompt)\s*\(")
+SOURCE_ROOTS = ("demo/assets", "plugin/public")
+# Covers the three native functions in both direct and window/globalThis/self form.
+CALL = re.compile(
+    r"(?<![\w.])(?:(?:window|globalThis|self)\s*\.\s*)?"
+    r"(alert|confirm|prompt)\s*\("
+)
 
 
 def scan():
     findings = []
-    for folder in ("demo", "plugin"):
+    for folder in SOURCE_ROOTS:
         for file in sorted((ROOT / folder).rglob("*.js")):
             relative = file.relative_to(ROOT).as_posix()
-            for line_no, line in enumerate(file.read_text(
-                    encoding="utf-8").splitlines(), start=1):
+            for line_no, line in enumerate(file.read_text(encoding="utf-8").splitlines(), 1):
                 for match in CALL.finditer(line):
                     findings.append({
                         "file": relative,
@@ -47,40 +36,32 @@ def scan():
 
 
 class NativeDialogInventory87(unittest.TestCase):
-    def test_no_new_browser_native_dialogs_and_keep_debt_visible(self):
+    def test_no_native_browser_dialogs_in_application_code(self):
         findings = scan()
-        counts = {name: 0 for name in BASELINE}
-        for item in findings:
-            self.assertIn(
-                item["file"], BASELINE,
-                "New native browser dialog outside #87 debt baseline: " +
-                item["file"] + ":" + str(item["line"]))
-            counts[item["file"]] += 1
-        for filename, count in counts.items():
-            self.assertLessEqual(
-                count, BASELINE[filename],
-                "Native dialogs increased; use a genuine async in-app "
-                "modal/notice, never confirm() => true or prompt stubs: " +
-                filename)
         report = {
             "issue": 87,
-            "status": "OPEN_NATIVE_DIALOG_DEBT",
+            "status": "NO_NATIVE_DIALOGS" if not findings else "FAIL_NATIVE_DIALOGS",
             "nativeCallsRemaining": len(findings),
-            "notZero": bool(findings),
-            "codeAndBrowserUXDone": False,
-            "scope": "demo + plugin source JS, excludes tests/docs/vendor",
-            "counts": counts,
+            "codeAndBrowserUXDone": not findings,
+            "scope": "shipped JS under demo/assets and plugin/public; excludes tests/docs/vendor",
             "findings": findings,
         }
         output = ROOT / "artifacts" / "native-dialog-audit-87.json"
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
-        self.assertGreater(
-            len(findings), 0,
-            "This debt test is meant to be removed/replaced with strict "
-            "zero-native-dialog enforcement when #87 reaches zero.")
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.assertEqual([], findings, "Use genuine async in-app dialog/notice with cancel, "
+                         "Escape and explicit approval; no confirm()=>true stubs.")
+
+    def test_no_confirmation_bypass_stubs(self):
+        # Do not replace destructive confirms with always-true shims.
+        bypass = re.compile(
+            r"(?:window\.)?confirm\s*=\s*(?:\(\s*\)\s*=>\s*true|function\s*\(\s*\)\s*\{\s*return\s+true)",
+            re.I,
+        )
+        for folder in SOURCE_ROOTS:
+            for file in sorted((ROOT / folder).rglob("*.js")):
+                self.assertNotRegex(file.read_text(encoding="utf-8"), bypass,
+                                    "Do not bypass user confirmation: " + file.as_posix())
 
 
 if __name__ == "__main__":
