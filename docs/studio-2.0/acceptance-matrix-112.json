@@ -151,11 +151,12 @@
       "tests": [
         "tests/test_batch_stop.cjs",
         "tests/test_studio_dag_scheduler_120.cjs",
-        "tests/smoke_studio_dag_browser_120.py"
+        "tests/smoke_studio_dag_browser_120.py",
+        "tests/test_reconcile_provider_statement_112.py"
       ],
       "ci_scope": "deterministic-mock-local-browser-or-contract",
       "live_gate": "PENDING",
-      "live_evidence_required": "Real provider 429 throttle, gateway retry and refund reconciliation"
+      "live_evidence_required": "Real provider 429 throttle, gateway retry and refund reconciliation Production provider invoice vs Handraw paid-credit ledger independent audit remains PENDING; offline normalized statement consistency is only a C-level contract."
     },
     {
       "id": "M2-04",
