@@ -74,6 +74,8 @@ jobs:
       - run: python tests/smoke_studio_runtime_browser_119.py
       - run: python tests/smoke_studio_make_image_browser_128.py
       - run: python tests/smoke_studio_navigation_projects_106.py
+      - name: 'Legacy #86/#87 real Chromium history/workflow navigation widths (1440/1200/390)'
+        run: python tests/smoke_legacy_library_alignment_86_87.py
       - name: 'P0 #91 real Chromium gallery upload/error/retry'
         run: python tests/smoke_p0_gallery_upload_browser_91.py
       - name: 'P0 #114 real Chromium profile/gallery masonry at 1440/390'
@@ -100,6 +102,8 @@ jobs:
             artifacts/project-103-screen/**
             artifacts/article-109-screen/**
             artifacts/navigation-106-screen/**
+            artifacts/legacy-86-87/**
+            artifacts/native-dialog-audit-87.json
             artifacts/dag-120-screen/**
           if-no-files-found: ignore
   # Keep the complete unittest suite, but run each module on exactly one
