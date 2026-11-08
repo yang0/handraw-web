@@ -12661,13 +12661,21 @@
     if (DOM.bottomRight) {
       const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
       const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
+      const activeSavedWorkflow = (CS.savedWorkflows || []).find((w) => w.id === curTab?.savedId && !w.isOfficialPreset);
+      const cloudSaveState = activeSavedWorkflow?.cloudSaveState || "";
+      const saveButtonText = cloudSaveState === "conflict" ? "冲突 · 另存副本" :
+        cloudSaveState === "error" ? "云端失败 · 重试" :
+        cloudSaveState === "saving" ? "同步中…" :
+        curTab?.dirty && curTab?.savedId ? "待同步" :
+        cloudSaveState === "local" ? "仅本机保存" :
+        cloudSaveState === "synced" ? "云端已保存" : "保存";
       DOM.bottomRight.style.display = (CS.stageView === "canvas" && !isShowingTemplateLib) ? "flex" : "none";
       if (isShowingTemplateLib) {
         DOM.bottomRight.innerHTML = "";
       } else {
         DOM.bottomRight.innerHTML = `
-        <button type="button" class="ic-canvas-save-btn ${curTab?.dirty ? "is-dirty" : ""}" id="bl-save-wf" title="保存当前工作流到「工作流」 (Ctrl+S)">
-          <span>保存</span>
+        <button type="button" class="ic-canvas-save-btn ${curTab?.dirty ? "is-dirty" : ""}" id="bl-save-wf" title="保存到工作流；冲突时只允许另存副本 (Ctrl+S)">
+          <span role="status">${saveButtonText}</span>
           ${curTab?.dirty ? `<span class="ic-save-dirty-dot" title="有未保存改动"></span>` : ""}
         </button>
         <div class="ic-float-pill">
@@ -12681,7 +12689,7 @@
       `;
         DOM.zoomPctBtn = DOM.bottomRight.querySelector("#bl-zoom-pct");
 
-        DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(false);
+        DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(cloudSaveState === "conflict");
         DOM.bottomRight.querySelector("#bl-minimap").onclick = () => {
           CS.minimapOpen = !CS.minimapOpen;
           savePrefs();
