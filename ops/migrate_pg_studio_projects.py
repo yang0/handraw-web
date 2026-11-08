@@ -20,6 +20,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 VERSION = 101
 NAME = "101_studio_project_drafts"
@@ -56,11 +57,18 @@ LOCK_KEY = 729_032_101
 
 
 def validate_database_name(dsn: str) -> None:
+    # Safety checks must run even on build agents without psycopg installed.
+    # The actual migration still requires psycopg, imported inside migrate().
     if not dsn:
         raise RuntimeError("HANDRAW_DATABASE_URL 未配置")
-    from psycopg.conninfo import conninfo_to_dict
-    config = conninfo_to_dict(dsn)
-    if config.get("dbname", "") in ("", "postgres", "template0", "template1"):
+    try:
+        parsed = urlsplit(dsn)
+        database = unquote(parsed.path.lstrip("/"))
+        if parsed.scheme not in ("postgres", "postgresql") or not parsed.hostname:
+            raise ValueError("invalid PostgreSQL URL")
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("必须提供完整的 postgresql://host/database URL") from exc
+    if not database or "/" in database or database.lower() in ("postgres", "template0", "template1"):
         raise RuntimeError("拒绝操作默认 PostgreSQL 系统数据库")
 
 
