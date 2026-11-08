@@ -28,6 +28,9 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_view_authority.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_article_integration.py' -v
+      # This HTTP journey goes through login -> curation bootstrap, which
+      # imports Pillow; lighter unit tests above deliberately avoid it.
+      - run: python -m pip install "Pillow>=10.0"
       - run: python -m unittest discover -s tests -p 'test_studio_article_http_e2e.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_resource_refs.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_plan_slot_access.py' -v
