@@ -235,7 +235,8 @@
     CS.customUploads = readJsonStorage(UPLOAD_STORAGE_KEY, []);
     CS.customAssetCats = readJsonStorage(CUSTOM_ASSET_CATS_KEY, []);
     CS.savedWorkflows = readJsonStorage(SAVED_WORKFLOWS_KEY, null);
-    CS.closedProjectDrafts = readJsonStorage(CLOSED_PROJECT_DRAFTS_KEY, []) || [];
+    const locallyClosed = readJsonStorage(CLOSED_PROJECT_DRAFTS_KEY, []);
+    CS.closedProjectDrafts = Array.isArray(locallyClosed) ? locallyClosed : [];
     CS.cloudProjects = [];
     CS.projectCenterLoading = false;
     CS.projectCenterError = "";
@@ -1302,7 +1303,8 @@
       vx: tab.vx, vy: tab.vy, vk: tab.vk,
       closed: true
     };
-    const list = [backup, ...(CS.closedProjectDrafts || []).filter(x => x.id !== backup.id)].slice(0, 20);
+    const previous = Array.isArray(CS.closedProjectDrafts) ? CS.closedProjectDrafts : [];
+    const list = [backup, ...previous.filter(x => x && x.id !== backup.id)].slice(0, 20);
     // Closing a tab is destructive; unlike generic best-effort cache writes,
     // only close after its recovery copy has definitely reached storage.
     try {
@@ -1760,10 +1762,11 @@
       return;
     }
     const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const stageAtOpen = CS.stageView;
     CS.projectOpeningId = String(projectId || "");
     try {
       const response = await ProjectClient.get(projectId);
-      if (isStaleScope(epoch, scope)) return;
+      if (isStaleScope(epoch, scope) || CS.stageView !== stageAtOpen) return;
       const project = response.project;
       if (!project || project.id !== projectId) throw new Error("项目编号不匹配");
       if (project.authority !== "graph") {
@@ -1862,7 +1865,8 @@
   }
 
   function restoreClosedProjectDraft(draftId) {
-    const stored = (CS.closedProjectDrafts || []).find(x => x.id === draftId);
+    const stored = (Array.isArray(CS.closedProjectDrafts) ? CS.closedProjectDrafts : [])
+      .find(x => x && x.id === draftId);
     if (!stored?.graph || !Array.isArray(stored.graph.nodes)) return false;
     const tab = createWorkflowTab({
       title: stored.title || "恢复的草稿",
@@ -1879,7 +1883,7 @@
       if (Object.prototype.hasOwnProperty.call(stored,key)) tab[key] = stored[key];
     }
     tab.dirty = true;
-    CS.closedProjectDrafts = CS.closedProjectDrafts.filter(x => x.id !== draftId);
+    CS.closedProjectDrafts = CS.closedProjectDrafts.filter(x => x && x.id !== draftId);
     writeJsonStorage(CLOSED_PROJECT_DRAFTS_KEY,CS.closedProjectDrafts);
     activateProjectTab(tab);
     if (tab.projectSaveState !== "conflict") scheduleProjectAutoSave(tab);
