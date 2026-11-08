@@ -93,13 +93,17 @@ def main():
               ui.toggleGallery('smoke-gallery');
               const after=ui.galleryHtml(node,projection);
               ui.toggleGallery('smoke-gallery');
-              return {collapsed:before.includes('展开全部槽位'),
+              ui.toggleCompare('smoke-gallery',0);
+              ui.toggleCompare('smoke-gallery',1);
+              const compareCount=ui.selectedForCompare('smoke-gallery').length;
+              return {compareCount,collapsed:before.includes('展开全部槽位'),
                 expanded:after.includes('收起结果'),
                 failedRetry:after.includes('data-slot="2"'),
                 imageCount:(after.match(/data-disp-zoom=/g)||[]).length};
             }""")
             assert gallery["collapsed"] and gallery["expanded"] and gallery["failedRetry"],gallery
             assert gallery["imageCount"]==5,gallery
+            assert gallery["compareCount"]==2,gallery
             page.locator("#ic-nodes-layer .ic-node").first.wait_for(timeout=15000)
             ids=page.locator("#ic-nodes-layer .ic-node").evaluate_all(
                 "(nodes)=>nodes.map(n=>n.dataset.nodeId)")
@@ -151,6 +155,17 @@ def main():
             note.locator('textarea').fill("这个框是视觉便签，不是执行节点")
             assert page.locator("#ic-nodes-layer .ic-node").count()==len(ids)
             assert page.locator("#canvas-129-visual-layer .ic129-visual-sticky").count()==1
+            # In-app Ctrl+C/V duplicates editable Graph only; Undo and Redo
+            # preserve the original node IDs and never copy Run result nodes.
+            page.locator("#ic-nodes-layer .ic-node").first.click(position={"x":25,"y":14})
+            page.keyboard.press("Control+c")
+            page.keyboard.press("Control+v")
+            assert page.locator("#ic-nodes-layer .ic-node").count()==len(ids)+1
+            page.keyboard.press("Control+z")
+            assert page.locator("#ic-nodes-layer .ic-node").count()==len(ids)
+            page.keyboard.press("Control+y")
+            assert page.locator("#ic-nodes-layer .ic-node").count()==len(ids)+1
+
             assert not errors,errors
             out=ROOT/args.screenshots
             out.mkdir(parents=True,exist_ok=True)
