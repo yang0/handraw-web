@@ -87,9 +87,10 @@
   border-radius:6px;border:1px solid var(--ic-border);background:var(--ic-surface);
   color:var(--ic-ink);cursor:pointer;text-decoration:none}
 .ic129-result-actions a:hover{border-color:var(--ic-select)}
-/* Dense canvas cards: reveal expensive secondary controls on selection, not by default. */
-.ic-node-skill_params:not(.is-selected) .ic-v4-section,
-.ic-node-skill_params:not(.is-selected) .ic-v4-slot-grid:last-child{display:none}
+/* Node geometry remains stable when selection changes (no CSS-dependent card growth). */
+.ic-node-skill_params .ic-v4-card {max-height:295px;overflow-y:auto;overscroll-behavior:contain}
+.ic-node-output_control .ic-v4-card {max-height:325px;overflow-y:auto;overscroll-behavior:contain}
+.ic-node-output_control .ic-ctrl-generate-btn {position:sticky;bottom:0;z-index:2}
 .ic-disp-single-wrap img{max-height:none;max-width:100%;height:auto;object-fit:contain}
 @media(max-width:1200px){
   #canvas-129-inspector{display:none}
