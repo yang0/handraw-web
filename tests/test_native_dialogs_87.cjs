@@ -8,8 +8,13 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.join(__dirname, '..', 'demo');
 const assets = path.join(root, 'assets');
-const inputs = fs.readdirSync(assets).filter(file => file.endsWith('.js'))
-  .map(file => path.join(assets, file));
+const plugin = path.join(__dirname, '..', 'plugin', 'public');
+const inputs = [
+  ...fs.readdirSync(assets).filter(file => file.endsWith('.js'))
+    .map(file => path.join(assets, file)),
+  ...fs.readdirSync(plugin).filter(file => file.endsWith('.js'))
+    .map(file => path.join(plugin, file)),
+];
 let parsed = 0;
 for (const file of inputs) {
   const source = fs.readFileSync(file, 'utf8');
@@ -28,6 +33,11 @@ for (const name of ['index.html', 'forum.html', 'studio.html', 'admin.html']) {
     name + ' should load the dialog module early');
 }
 const dialog = fs.readFileSync(path.join(assets, 'app-dialogs.js'), 'utf8');
+assert.equal(fs.readFileSync(path.join(plugin, 'app-dialogs.js'), 'utf8'), dialog,
+  'standalone plugin dialog must stay byte-identical with primary dialog');
+const portal = fs.readFileSync(path.join(plugin, 'index.html'), 'utf8');
+assert.match(portal, /src="\/studio\/assets\/app-dialogs\.js"/,
+  'standalone plugin must load dialog before portal.js');
 assert.ok(dialog.includes('role", task.kind === "confirm" ? "alertdialog" : "dialog"'));
 assert.ok(dialog.includes('if (event.key === "Escape")'));
 assert.ok(dialog.includes('event.key === "Tab"'));
