@@ -229,8 +229,18 @@ def gateway_request(path: str, payload: dict[str, Any] | None = None, timeout: i
         headers["Content-Type"] = "application/json"
         data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST" if payload is not None else "GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    # A credentialed gateway response must NEVER redirect this Bearer token
+    # to an arbitrary host (urllib's default redirect handler forwards custom
+    # headers).  A 30x is an explicit gateway error for the caller to classify.
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    with opener.open(req, timeout=timeout) as resp:
+        raw = resp.read(4 * 1024 * 1024 + 1)
+    if len(raw) > 4 * 1024 * 1024:
+        raise ValueError("网关 JSON 响应超过 4MB 安全上限")
+    result = json.loads(raw.decode("utf-8"))
+    if not isinstance(result, dict):
+        raise ValueError("网关 JSON 响应必须是对象")
+    return result
 
 
 def _safe_generated_stem(filename_stem: str) -> str:
@@ -439,14 +449,23 @@ class GenerationReconciler:
                 result = gateway_request(f"/api/image-tasks?ids={urllib.parse.quote(lookup_id)}", timeout=12)
                 items = result.get("items") or []
                 if not items:
+                    # An empty lookup is NOT proof that the provider never
+                    # accepted the submission.  Some gateways index tasks
+                    # asynchronously or temporarily return empty collections.
+                    # Never turn an unknown paid attempt into a free generation.
+                    # Keep its durable reservation intact for an authoritative
+                    # provider status or an explicitly audited manual decision.
                     created_dt = _parse_created_at_dt(row["created_at"])
-                    if created_dt and created_dt < (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES)):
-                        refund_failed_cloud_generation(
-                            self.db,
-                            generation_id,
-                            "网关未收到任务，已退还",
+                    if created_dt and created_dt < (
+                        datetime.now(timezone.utc)
+                        - timedelta(minutes=RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES)
+                    ):
+                        logger.warning(
+                            "worker=generation-reconciler phase=unconfirmed-task "
+                            "generation_id=%s age_over_minutes=%s "
+                            "action=manual-provider-ledger-reconciliation-required",
+                            generation_id, RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES,
                         )
-                        handled += 1
                     continue
                 item = items[0] if isinstance(items[0], dict) else {}
                 actual_id = str(item.get("id") or lookup_id)
