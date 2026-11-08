@@ -9,6 +9,8 @@ const promptEngineSource = fs.readFileSync("demo/assets/studio-prompt-engine.js"
 const studioBatchSource = fs.readFileSync("demo/assets/studio-batch.js", "utf8");
 const quickCreateCss = fs.readFileSync("demo/assets/quick-create.css", "utf8");
 
+(async () => {
+
 // Setup unified VM environment with mock catalog
 const sharedCatalog = {
   styles: [
@@ -1354,15 +1356,15 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
   // A. Cancel confirm: nothing changes
   let confirmPrompt = "";
-  sandbox.window.confirm = (msg) => { confirmPrompt = msg; return false; };
-  btnReset.onclick();
+  sandbox.window.HandrawDialogs = {confirm: async (msg) => { confirmPrompt = msg; return false; }};
+  await btnReset.onclick();
   assert.ok(confirmPrompt.includes("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？"), "Confirm message must match specification");
   assert.equal(parts.loop.data.batchLayoutMode, "ai", "Mode should remain AI on cancel");
   assert.equal(dirtyCalled, false, "markDirty must not be called on cancel");
 
   // B. Accept confirm: restores all defaults
-  sandbox.window.confirm = () => true;
-  btnReset.onclick();
+  sandbox.window.HandrawDialogs = {confirm: async () => true};
+  await btnReset.onclick();
 
   assert.equal(dirtyCalled, true, "markDirty must be called on confirm");
   assert.equal(parts.ctrl.data.mode, "graphic-text", "mode must reset to graphic-text");
@@ -1571,3 +1573,4 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 console.log("\n==========================================");
 console.log("All 19 Studio Batch tests passed successfully!");
 console.log("==========================================");
+})().catch(error => { console.error(error); process.exitCode = 1; });
