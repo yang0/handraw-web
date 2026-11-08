@@ -330,6 +330,124 @@ class SkillPostgresS3Journey112(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("HANDRAW_REAL_SKILL_CLIENT_PATH"),
                          "requires pinned handraw-style real source")
+    def test_z21_actual_skill_web_private_resource_bidirectional_cas(self):
+        """#21 actual pinned Skill CLI ↔ Web HTTP ↔ native PG17 (no mocks).
+
+        Skill pushes, Web edits, stale Skill push gets HTTP 409, Skill restores
+        the Web revision, then resends idempotently. Private Web-only model
+        cannot be read by other accounts or publish-only tokens.
+        """
+        import contextlib
+        import importlib.util
+        import subprocess
+
+        path = Path(os.environ["HANDRAW_REAL_SKILL_CLIENT_PATH"]).resolve()
+        self.assertTrue(path.is_file())
+        expected = os.environ.get("HANDRAW_REAL_SKILL_EXPECTED_SHA")
+        if expected:
+            self.assertEqual(subprocess.check_output(
+                ["git", "-C", str(path.parents[3]), "rev-parse", "HEAD"],
+                text=True).strip(), expected)
+        spec = importlib.util.spec_from_file_location("real_skill_owned_qa21", path)
+        cloud = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cloud)
+
+        def invoke(*args):
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                cloud.main(list(args))
+            return json.loads(stdout.getvalue().strip())
+
+        rid = str(uuid.uuid4())
+        local_id = "mine:" + rid
+        code = "USR-S" + rid.replace("-", "").upper()
+        original = {
+            "id": local_id, "kind": "style", "section": "owned",
+            "name": "Skill原创纸纹", "prompt_zh": "无文字温暖纸纹与线稿",
+            "prompt_en": "Warm handmade paper and pencil outline",
+            "license": "原作者授权", "version": "1.0.0", "examples": [],
+        }
+        with tempfile.TemporaryDirectory(prefix="skill-custom21-") as temp:
+            root = Path(temp)
+            libpath = root / "personal-library" / "library.json"
+            cloud.atomic_json(libpath, {
+                "schema_version": 1, "resources": [original]
+            })
+            with patch.dict(os.environ, {
+                "HANDRAW_PROFILE_HOME": str(root),
+                "HANDRAW_SKILL_ROOT": str(root),
+            }), patch.object(cloud, "BASE_URL", self.base):
+                cloud.Credentials().save({
+                    "token": self.reader, "scopes": ["library"],
+                    "user": {"username": self.owner["username"]},
+                })
+                first = invoke("resources", "push", "--id", local_id)
+                replay = invoke("resources", "push", "--id", local_id)
+                self.assertEqual(first["code"], code)
+                self.assertEqual(first["revision"], 1)
+                self.assertEqual(replay["revision"], 1)
+                self.assertEqual(self.db_count(
+                    "skill_personal_resources", "id=?", (rid,)), 1)
+                self.assertEqual(self.db_count(
+                    "user_resources", "id=? AND code=?", (rid, code)), 1)
+                self.assertEqual(self.db.get_conn().execute(
+                    "SELECT revision FROM user_resources WHERE id=?",
+                    (rid,)).fetchone()["revision"], 1)
+
+                # Website owner changes the same resource over Web cookie.
+                website_body = {
+                    "id": rid, "kind": "style", "name": "网站修改纸纹",
+                    "definition": {
+                        "zh": "网站侧编辑：柔和纸纹",
+                        "en": "Warm paper texture from web editor",
+                    },
+                    "license": "原作者授权", "examples": [], "version": "1.1.0",
+                    "visibility": "private", "schemaVersion": 1,
+                    "baseRevision": 1,
+                }
+                status, changed, _ = self.request(
+                    "PUT", "/api/v1/me/resources/" + rid,
+                    website_body, cookie=self.owner_cookie)
+                self.assertEqual(status, 200, changed)
+                self.assertEqual(changed["resource"]["revision"], 2)
+                self.assertEqual(changed["resource"]["code"], code)
+
+                # Skill still holds baseRevision=1; must refuse overwriting.
+                with self.assertRaises(cloud.CloudError) as stale:
+                    invoke("resources", "push", "--id", local_id)
+                self.assertEqual(stale.exception.status, 409)
+                self.assertEqual(self.db.get_conn().execute(
+                    "SELECT name,revision FROM user_resources WHERE id=?",
+                    (rid,)).fetchone()["name"], "网站修改纸纹")
+
+                # Explicit forced restore after the conflict pulls Web→Skill,
+                # then a repeat Skill→Web push is a true no-op.
+                restored = invoke("resources", "restore", "--force")
+                self.assertTrue(any(
+                    item.get("id") == local_id and item.get("code") == code
+                    and item.get("restored") for item in restored["results"]))
+                local = json.loads(libpath.read_text(encoding="utf-8"))
+                self.assertEqual(local["resources"][0]["name"], "网站修改纸纹")
+                state = cloud.SyncState(cloud.Credentials().read())
+                self.assertEqual(state.data["resources"][local_id]["revision"], 2)
+                self.assertEqual(invoke("resources", "push", "--id", local_id)["revision"], 2)
+
+                status, own, _ = self.request(
+                    "GET", "/api/v1/me/resources?limit=20", token=self.reader)
+                self.assertEqual(status, 200, own)
+                self.assertTrue(any(
+                    row["id"] == rid and row["code"] == code
+                    and row["revision"] == 2 for row in own["items"]))
+                self.assertEqual(self.request(
+                    "GET", "/api/v1/me/resources", token=self.other_publisher)[0], 403)
+                self.assertEqual(self.db_count(
+                    "user_resources", "id=? AND code=?", (rid, code)), 1)
+        print("ISSUE #21 real Skill push → Web change → HTTP 409 → "
+              "Skill restore → idempotent push, PG17 and owner ACL PASS")
+
+
+    @unittest.skipUnless(os.environ.get("HANDRAW_REAL_SKILL_CLIENT_PATH"),
+                         "requires pinned handraw-style real source")
     def test_z_actual_skill_cli_record_upload_retry_across_http_pg_and_s3(self):
         """#84: real handraw-style client, not a synthesized HTTP request.
 
