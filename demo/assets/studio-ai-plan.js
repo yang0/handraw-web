@@ -192,11 +192,123 @@
       Object.assign(parts[node].data,copy(data));
     }
     if(loop&&before.loop){
+      const latestPlanRev=Number(loop.data.planRevision||0);
       for(const key of Object.keys(loop.data))delete loop.data[key];
       Object.assign(loop.data,copy(before.loop));
+      // Compensating edit: undo must not roll back CAS revisions.
+      if(loop.data.studio2Plan){
+        loop.data.studio2Plan.revision=latestPlanRev+1;
+        loop.data.planRevision=latestPlanRev+1;
+      }
     }
+    parts.skill.data.studioSpecRevision=
+      Math.max(Number(before.skill?.studioSpecRevision||0),
+        Number(token.reportRevision||0))+2;
     return true;
   }
+  const esc=v=>String(v??"").replace(/[&<>"']/g,c=>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  function confirmDifferences(report,{title="审阅 AI 方案差异"}={}){
+    // Nothing in the model payload is ever placed into innerHTML unescaped.
+    // Conflicts are opt-in; a locked field cannot be enabled even by review.
+    if(!report.conflicts.length)return Promise.resolve({approved:true,keys:[]});
+    if(typeof document==="undefined")return Promise.resolve({approved:false,keys:[]});
+    return new Promise(resolve=>{
+      const overlay=document.createElement("div");
+      overlay.className="hw-article-plan-review-overlay";
+      overlay.innerHTML=`<section class="hw-article-plan-review" role="dialog"
+        aria-modal="true" aria-labelledby="hw-ai-review-title">
+        <header><div class="hw-art-review-kicker">HANDRAW · AI 方案差异</div>
+          <h2 id="hw-ai-review-title">${esc(title)}</h2>
+          <p>不改动锁定项；已有人工设置默认保留。可以逐项勾选接受冲突建议。</p></header>
+        <div class="hw-art-review-list" role="group" aria-label="AI 方案差异">
+          ${report.conflicts.map((c,i)=>`<label class="hw-art-review-choice">
+            <input type="checkbox" data-ai-conflict="${i}" ${c.locked?"disabled":""} />
+            <span class="hw-art-review-main"><strong>${esc(c.key)}</strong>
+              <small>当前：${esc(display(c.from))} → 建议：${esc(display(c.to))}</small>
+              <span class="hw-art-review-purpose"><b>推荐理由</b> ${esc(c.reason||"AI 建议")}</span>
+              ${c.locked?"<small>用户已锁定，不可覆盖</small>":""}
+            </span></label>`).join("")}
+        </div>
+        <footer><button type="button" data-ai-cancel>暂不应用</button>
+          <button type="button" class="hw-art-review-apply" data-ai-confirm>应用安全项与勾选项</button></footer>
+      </section>`;
+      const prior=document.activeElement;
+      let closed=false;
+      const finish=approved=>{
+        if(closed)return;
+        closed=true;overlay.removeEventListener("keydown",onKey);
+        const keys=approved?[...overlay.querySelectorAll("[data-ai-conflict]:checked")]
+          .map(node=>report.conflicts[Number(node.dataset.aiConflict)].key):[];
+        overlay.remove();
+        if(prior?.isConnected&&prior.focus)prior.focus();
+        resolve({approved,keys});
+      };
+      const onKey=e=>{if(e.key==="Escape"){e.preventDefault();finish(false);}
+        if(e.key==="Tab"){const f=[...overlay.querySelectorAll("input:not(:disabled),button")];
+          if(e.shiftKey&&document.activeElement===f[0]){
+            e.preventDefault();f[f.length-1].focus();
+          }else if(!e.shiftKey&&document.activeElement===f[f.length-1]){
+            e.preventDefault();f[0].focus();
+          }}
+      };
+      overlay.addEventListener("keydown",onKey);
+      overlay.querySelector("[data-ai-cancel]").onclick=()=>finish(false);
+      overlay.querySelector("[data-ai-confirm]").onclick=()=>finish(true);
+      document.body.appendChild(overlay);
+      overlay.querySelector("[data-ai-cancel]").focus();
+    });
+  }
+  function articleLegacy(report){
+    if(report.kind!=="article")fail("ai_invalid_proposal");
+    const slots=report.source.planPatch.slots;
+    const convert=slot=>({subject:slot.subject,
+      purpose:slot.purpose||slot.reasons?.subject||"",
+      layout:slot.overrides.layout.id,ratio:slot.overrides.ratio,
+      imageType:slot.imageType||"scene",afterBlockIdx:slot.afterBlockIdx,
+      anchorText:slot.anchorText||""});
+    return {ok:true,source:"model",articleType:"knowledge",
+      cover:convert(slots[0]),illustrations:slots.slice(1).map(convert)};
+  }
+  function mergeArticleCards(report,oldCards,newCards,approvedKeys=[]){
+    if(report.kind!=="article")fail("ai_invalid_proposal");
+    const granted=new Set(approvedKeys),patchSlots=report.source.planPatch.slots;
+    const old=Array.isArray(oldCards)?oldCards:[];
+    const used=new Set();
+    const merged=newCards.map((card,index)=>{
+      const slot=patchSlots[index];if(!slot)fail("ai_invalid_plan_slot");
+      const previous=old.find(c=>!used.has(c.id)&&(c.id===slot.slotId ||
+        (c.role==="cover"&&slot.role==="cover") ||
+        (c.afterBlockIdx===slot.afterBlockIdx&&slot.role==="illustration")));
+      if(previous)used.add(previous.id);
+      const out={...(previous?copy(previous):{}),...copy(card),
+        id:previous?.id||slot.slotId,slotId:slot.slotId,anchorId:slot.anchorId,
+        ratio:slot.overrides.ratio,layoutId:slot.overrides.layout.id,
+        afterBlockIdx:slot.afterBlockIdx};
+      if(previous){
+        const locks=new Set(previous.lockedFields||[]);
+        const user=new Set(previous.userOverrides||[]);
+        for(const [field,fieldName] of [["subject","subject"],["layout","layoutId"],["ratio","ratio"]]){
+          const prev=previous[fieldName],next=out[fieldName],key="slot:"+slot.slotId+":"+field;
+          if(!same(prev,next) &&
+             (locks.has(field)||(user.has(field)||!!prev)&&!granted.has(key))){
+            out[fieldName]=copy(prev);
+          }
+        }
+        for(const key of ["imageUrl","mediaId","runId","runItemId","requestId",
+          "genId","taskId","status","referenceMedia","lockedFields","userOverrides",
+          "promptCustomized"]){
+          if(Object.prototype.hasOwnProperty.call(previous,key))out[key]=copy(previous[key]);
+        }
+        if(previous.promptCustomized===true&&previous.prompt)out.prompt=previous.prompt;
+      }
+      return out;
+    });
+    // Never silently delete an old user-made or generated figure.
+    for(const card of old)if(!used.has(card.id))merged.push(copy(card));
+    return merged;
+  }
+
   function message(code){
     return ({
       ai_upstream_502:"AI 上游 HTTP 502，请检查网关状态",
@@ -211,5 +323,6 @@
       resource_forbidden:"资源尚未解锁，请改用有权限的资源"
     })[code]||"AI 规划未能应用："+String(code||"unknown");
   }
-  return Object.freeze({review,apply,undo,approvedDelta,validResponse,message});
+  return Object.freeze({review,apply,undo,approvedDelta,validResponse,
+    confirmDifferences,articleLegacy,mergeArticleCards,message});
 });
