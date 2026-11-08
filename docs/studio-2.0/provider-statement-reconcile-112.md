@@ -8,7 +8,7 @@
 
 - 供应商账单：从真实供应商的任务记录、已结算 charge/refund 明细，**在授权环境**规范化成 `provider_export` JSON。必须有人确认账期已经完整、结算延迟窗口足够，并对原始供应商账单留存私有证据。不能把 Web 自己记录的网关 response 当作独立供应商财务凭据。
 - Handraw：从生产类 PG 的 `studio_generations`、持久化 `ledgers` 和接收回调记录各自导出 `handraw_export` JSON。`studio_generations` 代表远端请求/扣费 attempt，不代表 V3 Work；`generation_runs` 和 `generation_items` 提供 Run/Item/Slot 关联。映射务必由 operator 确认，不能凭名称拼接。当前文件只支持真实 `cost_type=credits` 的扣款；`free` 免费额度**未覆盖，必须保留独立 NO-GO 门禁**，不能以空 ledger 假装零扣费。
-- **强制用户作用域**：每条 provider task/event 和 Handraw attempt/ledger/callback 均要求同一个 `owner_key`（由授权导出人员用安全、不可逆的方式为同一账号赋予的**假名标识**）。匹配主键为 `(owner_key, request_id, attempt)`，因为 Web 的 requestId 幂等键并不保证跨账号全局唯一。它不是用户邮箱、原始 userId、access token，也不出现在机器报告里。真实供应商侧若不能把任务可靠归属到同一 owner_key，不得伪造关联，应明确登记无法对账并保持 NO-GO。
+- **强制用户作用域**：每条 provider task/event 和 Handraw attempt/ledger/callback 均要求同一个 `owner_key`（由授权导出人员用安全、不可逆的方式为同一账号赋予的**假名标识**）。匹配主键为 `(owner_key, request_id, attempt)`；供应商 task ID、账单 event ID、钱包 event_key 与 callback_event_id 也只在同一 owner_key 范围内判重，因为 Web 的 requestId 幂等键并不保证跨账号全局唯一。它不是用户邮箱、原始 userId、access token，也不出现在机器报告里。真实供应商侧若不能把任务可靠归属到同一 owner_key，不得伪造关联，应明确登记无法对账并保持 NO-GO。
 - 两者必须为同一个完整 40 字符部署 SHA、同一个 UTC 时间窗、同一个 environment（`preproduction` 或 `production`）。供应商发票 `invoice_final=true` 且 `exported_at_utc >= end_utc + settlement_grace_minutes`，其中 grace 至少 60 分钟；**满足声明不等于工具已证明供应商发票真实完整**。
 - 供应商货币用 `amount_minor` 与 ISO 货币码（如 USD）；Handraw 钱包用 `delta_credits`。**两个不同单位绝不直接相等比较**。业务人员应凭已审批的计价映射完成另外一轮财务核对。
 - 禁止原始 `authorization`、Cookie、email、prompt、URL、media、IP、用户资料、完整发票文本或密钥入仓库/工件。解析器严格拒绝不在合同里的额外字段。用户原始内容/账本保留在隔离目录。
