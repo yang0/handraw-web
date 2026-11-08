@@ -22,6 +22,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_studio_image_plan.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_run_read.py' -v
       - run: python -m unittest discover -s tests -p 'test_studio_cancel_pending.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
   python-full:
