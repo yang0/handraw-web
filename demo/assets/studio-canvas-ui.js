@@ -102,12 +102,24 @@
       Boolean(projection?.isTerminal)&&Boolean(projection?.canRetry);
   }
 
+  const comparison=new Map();
+  function toggleCompare(id,index){
+    const key=String(id),selected=comparison.get(key)||new Set();
+    if(selected.has(index))selected.delete(index);
+    else if(Number.isInteger(index)&&index>=0&&selected.size<4)selected.add(index);
+    comparison.set(key,selected);
+    return [...selected].sort((a,b)=>a-b);
+  }
+  function selectedForCompare(id){
+    return [...(comparison.get(String(id))||[])].sort((a,b)=>a-b);
+  }
   const expanded=new Set();
   function expandedGallery(id){return expanded.has(String(id));}
   function toggleGallery(id){const key=String(id);if(expanded.has(key))expanded.delete(key);else expanded.add(key);return expanded.has(key);}
   function htmlEscape(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
   function galleryHtml(node,projection){
     const state=galleryState(node,projection),isExpanded=expandedGallery(node.id);
+    const selectedCompare=selectedForCompare(node.id);
     const c=state.counts,slots=state.slots,first=slots.find(x=>x.imageUrl);
     let out='<div class="ic129-group-head"><strong>系列结果组 · '+state.expected+' 张</strong>'+
       '<span role="status">'+c.success+' 成功 · '+c.failed+' 失败 · '+
@@ -122,8 +134,10 @@
         if(slot.imageUrl){
           out+='<img loading="lazy" src="'+htmlEscape(slot.imageUrl)+'" alt="第'+(slot.index+1)+'张成图" data-disp-zoom="'+htmlEscape(slot.imageUrl)+'" />'+
             '<div class="ic129-result-actions"><a href="'+htmlEscape(slot.imageUrl)+'" download="handraw-'+(slot.index+1)+'.webp">下载</a>'+
-            '<button type="button" data-disp-variant="'+htmlEscape(node.id)+' data-slot="'+slot.index+'">生成变体</button>'+
-            '<button type="button" data-disp-reference="'+htmlEscape(node.id)+'" data-slot="'+slot.index+'">作为参考</button></div>';
+            '<button type="button" data-disp-variant="'+htmlEscape(node.id)+'" data-slot="'+slot.index+'">生成变体</button>'+
+            '<button type="button" data-disp-reference="'+htmlEscape(node.id)+'" data-slot="'+slot.index+'">作为参考</button>'+
+            '<button type="button" data-disp-compare="'+htmlEscape(node.id)+'" data-slot="'+slot.index+'">'+
+              (selectedCompare.includes(slot.index)?'取消对比':'加入对比')+'</button></div>';
         }else{
           out+='<div class="ic129-slot-placeholder">'+htmlEscape(slot.error||label(slot.status))+'</div>';
           if(mayRetry(slot,projection))out+='<button type="button" data-disp-retry-slot="'+htmlEscape(node.id)+
@@ -135,6 +149,7 @@
     }
     out+='<div class="ic129-result-actions"><button type="button" data-disp-toggle="'+htmlEscape(node.id)+
       '" aria-expanded="'+isExpanded+'">'+(isExpanded?'收起结果':'展开全部槽位')+'</button>'+
+      '<button type="button" data-disp-compare-view="'+htmlEscape(node.id)+'">对比选中（'+selectedCompare.length+'）</button>'+
       '<button type="button" data-disp-open-gal="'+htmlEscape(node.id)+'">查看图集</button>'+
       '<button type="button" data-disp-zip="'+htmlEscape(node.id)+'">下载 ZIP</button></div>';
     return out;
@@ -239,5 +254,5 @@
   }
   let inspectorOpen=true,inspectorTab="props",taskExpanded=false;
 
-  return Object.freeze({label,mediaUrl,slotIndex,slotSummary,summarize,galleryState,mayRetry,expandedGallery,toggleGallery,galleryHtml,renderWorkspace});
+  return Object.freeze({label,mediaUrl,slotIndex,slotSummary,summarize,galleryState,mayRetry,expandedGallery,toggleGallery,galleryHtml,renderWorkspace,toggleCompare,selectedForCompare});
 });
