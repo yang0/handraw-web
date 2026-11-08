@@ -7648,6 +7648,7 @@
             activeGenId = data.genId || "";
             // Only the server can allocate a V3 logical Run identity.
             if (data.runId) {
+              canvasRunModels.delete(runScope+":"+data.runId);
               quickRunModels.delete(runScope+":"+data.runId);
               batchRunModels.delete(runScope+":"+data.runId);
               ctrl.data.runId = data.runId;
@@ -13889,8 +13890,9 @@
     if (!runId || !App.state?.loggedIn || !window.HandrawStudioCore) return null;
     const key = activeCacheScope + ":" + runId, now = Date.now();
     const previous = canvasRunModels.get(key);
-    if (previous?.loading || previous?.model?.isTerminal ||
-        (previous && now - previous.requestedAt < 5000)) return previous?.model || null;
+    if (previous?.loading ||
+        (previous && now - previous.requestedAt < (previous.model?.isTerminal ? 30000 : 5000)))
+      return previous?.model || null;
     const entry = {requestedAt:now,loading:true,model:previous?.model || null};
     canvasRunModels.set(key,entry);
     const scope = activeCacheScope, epoch = cacheScopeEpoch;
@@ -13951,8 +13953,9 @@
     if(!runId||!api?.projectRun||!App.state?.loggedIn)return null;
     const key=activeCacheScope+":"+runId, now=Date.now();
     const previous=quickRunModels.get(key);
-    if(previous?.loading||previous?.model?.isTerminal||
-       (previous&&now-previous.requestedAt<5000))return previous?.model||null;
+    if(previous?.loading||
+       (previous&&now-previous.requestedAt<(previous.model?.isTerminal?30000:5000)))
+      return previous?.model||null;
     const entry={requestedAt:now,loading:true,model:previous?.model||null};
     quickRunModels.set(key,entry);
     const scope=activeCacheScope,epoch=cacheScopeEpoch;
@@ -13991,8 +13994,9 @@
     if(!api||!snap?.outputs?.length||!runId||!App.state?.loggedIn)return null;
     const key=activeCacheScope+":"+runId,now=Date.now();
     const previous=batchRunModels.get(key);
-    if(previous?.loading||previous?.model?.isTerminal||
-       (previous&&now-previous.requestedAt<5000))return previous?.model||null;
+    if(previous?.loading||
+       (previous&&now-previous.requestedAt<(previous.model?.isTerminal?30000:5000)))
+      return previous?.model||null;
     const entry={requestedAt:now,loading:true,model:previous?.model||null};
     batchRunModels.set(key,entry);
     const scope=activeCacheScope,epoch=cacheScopeEpoch;
@@ -16184,7 +16188,7 @@
     for (const runId of runIds) {
       const key = scope + ":" + articleId + ":" + runId;
       const previous = articleRunReads.get(key);
-      if (previous?.loading || previous?.done || previous && Date.now() - previous.started < 5000) continue;
+      if (previous?.loading || previous && Date.now() - previous.started < (previous.done ? 30000 : 5000)) continue;
       const entry = {loading:true,started:Date.now(),done:false};
       articleRunReads.set(key,entry);
       fetch("/api/studio/runs/" + encodeURIComponent(runId), {
@@ -16208,7 +16212,11 @@
           const slotIndex = Number.isInteger(card.batchIndex) ? card.batchIndex : 0;
           const candidates = payload.items.filter(item =>
             Number(item.slotIndex) === slotIndex);
-          const item = candidates.find(it => it.status === "success" && it.mediaId && it.imageUrl);
+          const verified = Array.isArray(payload.slots)
+            ? payload.slots.find(s => Number(s.slotIndex) === slotIndex) : null;
+          const item = (!verified || verified.viewStatus === "success")
+            ? candidates.find(it => it.status === "success" && it.mediaId && it.imageUrl)
+            : null;
           if (item && (!card.imageUrl || card.imageUrl === item.imageUrl)) {
             if (card.imageUrl !== item.imageUrl || card.runItemId !== item.id ||
                 card.mediaId !== item.mediaId || card.status !== "done") {
@@ -16218,13 +16226,15 @@
               card.status = "done";
               changed = true;
             }
-          } else if (!card.imageUrl && candidates.length && candidates.every(it =>
-            it.status === "failed" || it.status === "cancelled")) {
+          } else if (!card.imageUrl &&
+            (verified ? ["failed","cancelled"].includes(verified.viewStatus)
+              : candidates.length && candidates.every(it =>
+                it.status === "failed" || it.status === "cancelled"))) {
             if (card.status !== "error") {card.status = "error";changed=true;}
           }
         }
         entry.done = window.HandrawStudioCore.selectRunProjection(
-          payload.run,payload.items).isTerminal;
+          payload.run,payload.items,{authoritativeSlots:payload.slots}).isTerminal;
         if (entry.done && currentTarget?.planNode?.data?.status === "generating" &&
             currentCards.every(c => c.status !== "generating")) {
           currentTarget.planNode.data.status = "ready";
