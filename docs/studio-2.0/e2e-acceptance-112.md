@@ -115,3 +115,15 @@ CI 失败必须区分代码失败、Runner 失败、环境依赖与额度限制�
 **证据边界说明：** 本项相比 #127 的合成 Canvas DOM，更进一步运行了真实 Studio 业务渲染器、原生 Graph、Project API 与本地真实 WebP 解码。但图像仍是仓库测试样本，Graph 是受控构造的业务形态，不是实际客户作品，更没有生产图像尺寸分布/网络抖动/收费任务。首屏耗时仅记录为 CI Runner 的观察值，不设置未经真实硬件校准的性能 SLA。真实业务/生产 100 节点、跨设备弱网、隐私日志/URL 和外部供应商计费仍为 **PENDING / NO-GO**。
 
 CI 新增以上 Python HTTP 套件与真实 Chromium 冒烟（`interaction-journey-regression`），验收矩阵在 `M0-05`、`M3-03` 中引用；`ops/check_studio_acceptance_112.py` 检查其不会脱离 CI。**本节只描述新增测试及预期断言；PASS 必须以最终同 SHA 的 GitHub Actions Job 日志为准**。
+
+
+## 9. 第三轮：真实 PG17 + S3 协议模拟 · Web↔Skill 六图上传中断恢复
+
+本轮在 #91/#93/#114 P0 工程收口后的 \`studio2@5de44a778beca4d4f05d1012138550df518591ec\` 创建独立分支 \`studio2-issue112-real-integrations-round3\`，新增 \`tests/test_studio_skill_pg_s3_112.py\` 并将其纳入 **原有 14 个 Job 中的 \`production-storage-integration\`**，以及 M2-04 矩阵。该测试不使用付费图像模型，不上传任何用户数据。
+
+- **真实组件**：PostgreSQL 17 原生临时数据库、真实 Handraw HTTP 服务和 API Token、服务端 V3 Run/Media/Work/Grant 逻辑、boto3 S3 API、真实 PNG 字节。S3 由 Moto 在 CI 进程内模拟，不是 MinIO/R2/AWS 的真实部署。
+- **真实流程**：两个独立用户、6 张不同 PNG、Skill \`POST /api/v1/me/generations\`；注入第 4 张上传失败，前三张 RunItem 已持久化但没有 Work，也没有匿名公共图片授权。原始同 requestId/ExternalRunId/内容重放，只补充剩余 3 张；Run 唯一、Work 唯一、6 个 WorkMedia 及有效授权、首图封面；再次重放不重复上传或更换已成功媒体。
+- **对象与权限**：删除本地上传文件以模拟另一实例空缓存；通过匿名公开 Work 媒体 URL 从模拟 S3 恢复原始字节；隐藏 Work 后匿名和其他用户必须 404，且权限拒绝发生在任何对象存储回源之前。作者仍有对应私有历史，但 Work 的公共可见性被撤销。
+- **原有局限**：这不是 Skill 仓库发布客户端的真实网络请求，也没有真实 MinIO/S3/R2、CDN、多副本故障/权限配置和真实计费结算。M2-04 的 \`live_gate\` 仍为 **PENDING**，全站上线判定仍是 **NO-GO**。测试输出的 PASS 只表示本行受控 CI 通过；实际是否通过以最终同一提交 SHA 的 GitHub Actions Log 为准。
+
+后续真实门禁仍需：跨仓库 Skill 客户端从另一进程/主机上传、真实 S3 或 R2 凭证与私有桶配置、断网/对象存储异常和跨实例访问、删除后 GC/退款/生产账本对照；未经独立人工复核不得将 D 级升级为 EVIDENCED。
