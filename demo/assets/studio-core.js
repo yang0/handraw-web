@@ -236,8 +236,17 @@
     const result = clone(globalSpec);
     for (const [field, value] of Object.entries(slot?.overrides || {})) {
       if (!PATCH_FIELDS.has(field)) throw new Error("invalid_override_field:" + field);
+      // Locked user choices are not subject to AI or slot-plan overrides.
+      if ((globalSpec?.lockedFields || []).includes(field) ||
+          (slot?.lockedFields || []).includes(field)) {
+        if (JSON.stringify(result[field]) !== JSON.stringify(value)) throw new Error("locked_field:" + field);
+        continue;
+      }
       result[field] = clone(value);
     }
+    // A disabled secondary style is a draft-only preference. Never put it
+    // into a RunSnapshot or a prompt request.
+    if (!result.fusionEnabled) result.secondaryStyle = null;
     return result;
   }
 
@@ -257,23 +266,37 @@
     const titles = text(ld.promptListText).split(/\r?\n/).map(t => t.trim()).filter(Boolean);
     const active = mode === "ai" && rows.length ? rows : titles.map(theme => ({ theme }));
     const ids = Array.isArray(ld.studio2SlotIds) ? ld.studio2SlotIds : [];
+    const identity = text(options.planId || ld.planId || loop?.id || ld.id || options.key || options.projectId);
+    if (!identity) throw new Error("missing_plan_identity");
     const slots = active.map((row, index) => {
-      const subject = text(row.theme || row.subject).trim();
-      const slotId = row.slotId || ids[index] || ("legacy-" + stableHash([text(ld.id || options.key || "batch"), index, subject].join("|")));
-      const overrides = row.layout ? { layout: resource(row.layout, "layout") } : {};
-      if (row.ratio) overrides.ratio = row.ratio;
-      if (row.style1) overrides.style = resource(row.style1, "style");
-      return {
-        slotId: text(slotId), order: index, subject,
+      const subject = text(row.subject ?? row.theme).trim();
+      // Index is an initial import disambiguator, not the public logical ID.
+      // Pin the resulting IDs on the source loop immediately after import.
+      const slotId = row.slotId || ids[index] || ("legacy-" + stableHash([identity, index, subject].join("|")));
+      const overrides = clone(row.overrides || {});
+      if (row.layout && !has(overrides,"layout")) overrides.layout = clone(row.layoutRef && row.layoutRef.id === row.layout
+        ? row.layoutRef : resource(row.layout, "layout"));
+      if (row.ratio && !has(overrides,"ratio")) overrides.ratio = row.ratio;
+      if (row.style1 && !has(overrides,"style")) overrides.style = clone(row.styleRef && row.styleRef.id === row.style1
+        ? row.styleRef : resource(row.style1, "style"));
+      if (row.style2 && !has(overrides,"secondaryStyle")) overrides.secondaryStyle = resource(row.style2, "style");
+      const mapped = {
+        slotId: text(slotId), order: Number.isInteger(row.order) && row.order >= 0 ? row.order : index, subject,
         overrides,
-        referenceMedia: normalizeMedia(row.assetItems),
+        referenceMedia: normalizeMedia(row.referenceMedia || row.assetItems),
         skipGlobalRefs: Boolean(row.skipGlobalRefs),
         lockedFields: clone(Array.isArray(row.lockedFields) ? row.lockedFields : [])
       };
+      if (row.anchorId) mapped.anchorId = text(row.anchorId);
+      return mapped;
     });
-    return { planId: text(options.planId || ld.planId || "legacy-batch"),
+    if (new Set(slots.map(s => s.slotId)).size !== slots.length) throw new Error("duplicate_slot_id");
+    const plan = { planId: identity,
       revision: Math.max(0, Number(ld.planRevision) || 0),
       kind: text(ld.planKind || "story-series"), slots };
+    if (ld.documentId) plan.documentId = text(ld.documentId);
+    if (Number.isInteger(ld.documentRevision)) plan.documentRevision = ld.documentRevision;
+    return plan;
   }
 
   function pinLegacySlotIds(loop, plan) {
@@ -293,11 +316,13 @@
     const rows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
     const ids = Array.isArray(ld.studio2SlotIds) ? ld.studio2SlotIds : [];
     const next = (Array.isArray(items) ? items : []).map((item, index) => {
-      const prior = rows[index] || {};
+      const suggestedId = item?.slotId;
+      const prior = (suggestedId && rows.find(row => row?.slotId === suggestedId)) || rows[index] || {};
       const lockedFields = Array.isArray(prior.lockedFields) ? prior.lockedFields : [];
       const proposedTheme = text(item?.subject || item?.theme);
-      const slotId = prior.slotId || ids[index]
-        || ("slot-" + stableHash([text(ld.id || "batch"), index, proposedTheme].join("|")));
+      const stableParentId = text(ld.planId || ld.id || loop?.id || "legacy-import");
+      const slotId = prior.slotId || suggestedId || ids[index]
+        || ("slot-" + stableHash([stableParentId, index, proposedTheme].join("|")));
       return {
         ...clone(prior), slotId,
         theme: lockedFields.includes("subject") && prior.theme ? prior.theme : proposedTheme,
