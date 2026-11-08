@@ -3452,6 +3452,11 @@
             const picked = list.find((x) => x.id === id);
             if (!picked) return;
             const cm = getAssetCatMeta(picked.cat || "other");
+            const mediaSource = picked.source ||
+              (picked.mediaId ? "private" : picked.builtin ? "official" : "local");
+            const confirmed = window.HandrawStudioResources?.mediaRefFromAsset({
+              ...picked, source: mediaSource
+            });
             const itemObj = {
               id: picked.id,
               name: picked.name_zh || picked.name || picked.id,
@@ -3459,10 +3464,12 @@
               cat: picked.cat || "other",
               catLabel: cm.label,
               custom: Boolean(picked.custom),
-              // Only a confirmed server-owned UID becomes a private MediaRef.
-              mediaId: picked.mediaId || undefined,
-              source: picked.mediaId ? "private" : (picked.builtin ? "official" : "local"),
-              role: picked.cat === "characters" ? "character" :
+              // Local URL is for preview only; confirmed media UID is for
+              // private Project references and is rechecked on the server.
+              mediaId: confirmed?.ok ? confirmed.ref.mediaId : undefined,
+              source: mediaSource,
+              role: confirmed?.ok ? confirmed.ref.role :
+                picked.cat === "characters" ? "character" :
                 picked.cat === "scenes" ? "scene" :
                 picked.cat === "props" ? "object" : "other"
             };
