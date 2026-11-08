@@ -124,6 +124,44 @@ def _validate_draft(draft: Any, tx: Any, user_id: int) -> str:
     return encoded
 
 
+def _validate_article_integrity(project: dict[str, Any]) -> None:
+    """ADR #102: ArticleDocument and its PlanSlot anchors are one CAS unit.
+
+    Only the new kind=article Plan contract requires explicit revisions.
+    Older imported local article drafts are still readable and not rewritten.
+    """
+    if project.get("authority") != "article":
+        return
+    draft = project.get("draft") or {}
+    plan = draft.get("plan")
+    if not isinstance(plan, dict) or plan.get("kind") != "article":
+        return
+    article = draft.get("article")
+    if not isinstance(article, dict):
+        _fail("文章计划缺少正文权威", code="article_document_required")
+    doc_id = article.get("documentId")
+    doc_revision = article.get("revision")
+    if (not isinstance(doc_id, str) or not doc_id or
+            type(doc_revision) is not int or doc_revision < 0):
+        _fail("文章正文版本无效", code="article_document_invalid")
+    if plan.get("documentId") != doc_id or plan.get("documentRevision") != doc_revision:
+        _fail("文章规划基于旧正文版本，已拒绝覆盖", status=409,
+              code="article_revision_conflict")
+    anchors = article.get("anchors")
+    slots = plan.get("slots")
+    if not isinstance(anchors, list) or not isinstance(slots, list):
+        _fail("文章段落锚点或图卡方案无效", code="article_anchor_invalid")
+    anchor_ids = [a.get("anchorId") if isinstance(a, dict) else None for a in anchors]
+    slot_ids = [s.get("slotId") if isinstance(s, dict) else None for s in slots]
+    if (any(not isinstance(a, str) or not a for a in anchor_ids) or
+            len(set(anchor_ids)) != len(anchor_ids) or
+            any(not isinstance(s, str) or not s for s in slot_ids) or
+            len(set(slot_ids)) != len(slot_ids) or
+            any(not isinstance(slot, dict) or slot.get("anchorId") not in anchor_ids
+                for slot in slots)):
+        _fail("文章图卡必须使用唯一 slotId 和有效锚点", code="article_anchor_invalid")
+
+
 def _row_to_project(row: Any, *, include_draft: bool = True) -> dict[str, Any]:
     data = {
         "id": str(row["id"]),
@@ -206,6 +244,7 @@ def create_project(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[
             if prior:
                 return prior
             _fail("项目编号已存在，请重新生成项目编号", status=409, code="project_exists")
+        _validate_article_integrity({"authority": authority, "draft": draft})
         draft_json = _validate_draft(draft, tx, uid)
         now = _now()
         tx.execute(
@@ -334,7 +373,10 @@ def _patch_graph_node(draft: dict[str, Any], tokens: list[str],
     texts = [n for n in nodes if isinstance(n, dict) and n.get("type") == "text_input"]
     known = {"skill_params", "text_input", "asset", "output_control",
              "output_display", "loop", "article_plan"}
+    loops = [n for n in nodes if isinstance(n, dict) and n.get("type") == "loop"]
+    assets = [n for n in nodes if isinstance(n, dict) and n.get("type") == "asset"]
     if (not controls or len(skills) != 1 or len(texts) != 1 or
+            len(loops) > 1 or len(assets) > 1 or
             any(not isinstance(n, dict) or n.get("type") not in known for n in nodes)):
         _fail("复杂图形不可用简洁编辑覆盖", status=409, code="graph_field_read_only")
     ids = [n.get("id") for n in nodes]
@@ -346,7 +388,13 @@ def _patch_graph_node(draft: dict[str, Any], tokens: list[str],
     inbound = lambda ctrl: {e["from"] for e in edges if e.get("to") == ctrl.get("id")}
     shared = all(skills[0]["id"] in inbound(c) and texts[0]["id"] in inbound(c)
                  for c in controls)
-    if not shared or (len(controls) > 1 and
+    upstream = {n["id"]: n["type"] for n in nodes}
+    inputs_safe = all(all(upstream.get(source) in
+        {"skill_params", "text_input", "asset", "loop"} for source in inbound(c))
+        for c in controls)
+    loop_safe = not loops or (len(controls) == 1 and
+        loops[0]["id"] in inbound(controls[0]))
+    if not shared or not inputs_safe or not loop_safe or (len(controls) > 1 and
                       (kind == "output_control" or kind == "skill_params" and field not in
                        {"style1", "style2", "fusion", "resourceRefs"})):
         _fail("多分支仅可编辑安全映射的公共字段", status=409,
@@ -464,6 +512,7 @@ def patch_project(db: Any, user: dict[str, Any], project_id: str,
                   status=409, code="project_revision_conflict", currentRevision=current)
         before = _row_to_project(row)
         next_state = _apply_patch(before, patch)
+        _validate_article_integrity(next_state)
         draft_json = _validate_draft(next_state["draft"], tx, uid)
         unchanged = (
             next_state["authority"] == before["authority"]
