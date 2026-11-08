@@ -78,7 +78,7 @@ async function suite() {
     persistOpenTabs:()=>{},
     fullRenderCanvas:()=>{},
     openWorkflowsPage:()=>{},switchCreationStage:()=>{},buildForkGraphFromWork:()=>{},
-    E:{},document:{activeElement:null},S:{openLoginModal:()=>{}},
+    E:{},URL,document:{activeElement:null},S:{openLoginModal:()=>{}},
     isArticleTab:()=>false,
   };
   vm.createContext(sandbox);
