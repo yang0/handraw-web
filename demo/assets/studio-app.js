@@ -39,6 +39,8 @@
   ]);
   let activeCacheScope = "guest";
   let cacheScopeEpoch = 0;
+  let _workflowAutoSaveTimer = null;
+  const WORKFLOW_AUTO_SAVE_DELAY_MS = 1200;
   let _workspaceHydrationController = null;
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
@@ -184,6 +186,10 @@
     if (!changed && CS.tabs.length) return false;
 
     cacheScopeEpoch += 1;
+    if (_workflowAutoSaveTimer) {
+      clearTimeout(_workflowAutoSaveTimer);
+      _workflowAutoSaveTimer = null;
+    }
     _articlesSyncVersion = 0;
     _articleCloudBases.clear();
     _articlesCloudConflict = false;
@@ -799,14 +805,18 @@
               graph: normG
             };
             const prev = byId.get(rw.id);
-            if (!prev || (Number(rw.updatedAtMs) || 0) >= (Number(prev.updatedAtMs) || 0)) {
-              byId.set(rw.id, item);
-            } else {
-              // An offline/local draft is newer. Keep it as the editable
-              // version while tracking the server's actual CAS revision.
-              prev.serverUpdatedAtMs = Number(rw.updatedAtMs) || 0;
-              prev.cloudSaveState = "local";
+            const unsynced = prev && ["local", "saving", "error", "conflict"].includes(prev.cloudSaveState);
+            if (unsynced) {
+              // Browser timestamps cannot order local edits against server
+              // revisions. Preserve unsynced local data regardless of clocks.
+              // Keep the LAST acknowledged base: changing it here would let a
+              // later save silently overwrite another tab's cloud changes.
+              const changedRemotely = Number(rw.updatedAtMs || 0) !== Number(prev.serverUpdatedAtMs || 0);
+              prev.cloudSaveState = changedRemotely ? "conflict" : (prev.cloudSaveState === "error" ? "error" : "local");
+              prev.remoteUpdatedAtMs = Number(rw.updatedAtMs) || 0;
               byId.set(rw.id, prev);
+            } else {
+              byId.set(rw.id, item);
             }
           });
           const customs = [...byId.values()].filter((w) => !w.isOfficialPreset);
@@ -1172,6 +1182,11 @@
   function activateWorkflowTab(tabId, { autoFit = false, switchToCanvas = false } = {}) {
     if (CS.activeTabId) {
       syncCurrentTabSnapshot();
+      // Flush a saved workflow's pending edits before leaving its tab.
+      const outgoing = CS.tabs.find((t) => t.id === CS.activeTabId);
+      if (outgoing && outgoing.id !== tabId && outgoing.savedId && outgoing.dirty && !outgoing.savePromise) {
+        void saveCurrentWorkflow(false, { silent: true });
+      }
     }
     if (switchToCanvas && CS.stageView !== "canvas") {
       CS.stageView = "canvas";
@@ -1219,6 +1234,8 @@
       requestAnimationFrame(() => scrollActiveTabIntoView());
     }
     persistOpenTabs();
+    // A dirty tab restored from disk may have missed its debounce while offline.
+    if (target.dirty && target.savedId) scheduleWorkflowAutoSave();
   }
 
   function closeWorkflowTab(tabId) {
@@ -1241,22 +1258,42 @@
     }
   }
 
+  function scheduleWorkflowAutoSave() {
+    if (_workflowAutoSaveTimer) clearTimeout(_workflowAutoSaveTimer);
+    _workflowAutoSaveTimer = null;
+    const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
+    // New/official templates remain local drafts until explicitly saved. Do
+    // not fill the workflow library with every transient canvas tab.
+    if (!tab?.savedId || !tab.dirty) return;
+    const wf = (CS.savedWorkflows || []).find((w) => w.id === tab.savedId && !w.isOfficialPreset);
+    if (!wf || wf.cloudSaveState === "conflict") return;
+    const tabId = tab.id, scope = activeCacheScope, epoch = cacheScopeEpoch;
+    _workflowAutoSaveTimer = setTimeout(() => {
+      _workflowAutoSaveTimer = null;
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch || CS.activeTabId !== tabId) return;
+      const current = CS.tabs.find((t) => t.id === tabId);
+      if (current?.dirty) void saveCurrentWorkflow(false, { silent: true });
+    }, WORKFLOW_AUTO_SAVE_DELAY_MS);
+  }
+
   function markActiveTabDirty() {
     const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
     if (cur) {
       cur.dirty = true;
       cur.editRevision = Number(cur.editRevision || 0) + 1;
+      scheduleWorkflowAutoSave();
     }
   }
 
-  async function saveCurrentWorkflow(asNew = false) {
+  async function saveCurrentWorkflow(asNew = false, { silent = false } = {}) {
     syncCurrentTabSnapshot();
     const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
     if (!cur) return false;
     // Two clicks cannot race a stale base revision against our own save.
     if (cur.savePromise) {
       await cur.savePromise.catch(() => {});
-      return saveCurrentWorkflow(asNew);
+      if (CS.activeTabId !== cur.id || !cur.dirty) return false;
+      return saveCurrentWorkflow(asNew, { silent });
     }
     ensureDefaultSavedWorkflows();
 
@@ -1284,15 +1321,23 @@
     savedTarget.updatedAtMs = nowMs;
     savedTarget.blueprint = CS.graph.blueprint;
     savedTarget.graph = cloneGraph(CS.graph);
-    savedTarget.cloudSaveState = "local";
+    // A conflict is sticky: never turn it into a normal retry, as that could
+    // rewrite another tab's revision without explicit user intervention.
+    const conflicted = !asNew && savedTarget.cloudSaveState === "conflict";
+    savedTarget.cloudSaveState = conflicted ? "conflict" : "local";
     writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
     persistOpenTabs();
     renderTopAndBottomDocks();
 
     if (!App.state?.serverBacked || !App.state?.loggedIn) {
-      cur.dirty = false; // Saved locally, NOT in the cloud.
-      toast("已保存到本机，尚未同步云端");
+      cur.dirty = false; // Local confirmation only, not a cloud revision.
+      if (!silent) toast("已保存到本机，尚未同步云端");
       return true;
+    }
+    if (conflicted) {
+      cur.dirty = true;
+      if (!silent) toast("云端版本冲突：请在工作流列表中将本机草稿另存副本");
+      return false;
     }
 
     const request = {
@@ -1303,7 +1348,7 @@
       baseUpdatedAtMs: Number(savedTarget.serverUpdatedAtMs || 0)
     };
     savedTarget.cloudSaveState = "saving";
-    toast("工作流已保存在本机，正在同步云端…");
+    if (!silent) toast("工作流已保存在本机，正在同步云端…");
     const promise = (async () => {
       let response = null, httpStatus = 0;
       try {
@@ -1320,7 +1365,7 @@
         savedTarget.cloudSaveState = httpStatus === 409 ? "conflict" : "error";
         cur.dirty = true;
         writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-        toast(httpStatus === 409
+        if (!silent) toast(httpStatus === 409
           ? "云端版本冲突：本机草稿已保留，请检查后另存副本"
           : "云端保存失败：本机草稿已保留，可稍后重试");
         renderTopAndBottomDocks();
@@ -1336,7 +1381,8 @@
       writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
       persistOpenTabs();
       renderTopAndBottomDocks();
-      toast(cur.dirty ? "上一版本已同步云端，新的修改仍待保存" : "工作流已云端保存");
+      if (!silent) toast(cur.dirty ? "上一版本已同步云端，新的修改仍待保存" : "工作流已云端保存");
+      if (cur.dirty && cur.id === CS.activeTabId) scheduleWorkflowAutoSave();
       return true;
     })();
     cur.savePromise = promise;
@@ -1509,12 +1555,17 @@
                               <span>${nodes.length} 个节点</span>
                               <span>${edges.length} 条连线</span>
                               <span>${esc(wf.updatedAt || "已保存")}</span>
+                              ${wf.cloudSaveState === "conflict" ? '<span role="status">云端版本冲突 · 本机草稿未覆盖</span>' :
+                                wf.cloudSaveState === "error" ? '<span role="status">云端保存失败 · 草稿在本机</span>' :
+                                wf.cloudSaveState === "local" || wf.cloudSaveState === "saving" ? '<span role="status">本机草稿 · 待同步</span>' :
+                                wf.cloudSaveState === "synced" ? '<span>云端已确认</span>' : ""}
                             </div>
                             ${wf.scenarioDesc ? `<p class="ic-wf-card-description">${esc(wf.scenarioDesc)}</p>` : ""}
                             ${typePills ? `<div class="ic-wf-card-tags">${typePills}</div>` : ""}
                           </div>
                           <div class="ic-wf-card-actions">
                             <button type="button" class="btn btn-sm btn-primary" data-wf-open="${esc(wf.id)}">打开</button>
+                            ${wf.cloudSaveState === "conflict" ? `<button type="button" class="btn btn-sm" data-wf-copy="${esc(wf.id)}">另存本机副本</button>` : ""}
                             <button type="button" class="btn btn-sm" data-wf-dl="${esc(wf.id)}">导出 JSON</button>
                             <button type="button" class="btn btn-sm" data-wf-rm="${esc(wf.id)}" title="删除此工作流">删除</button>
                           </div>
@@ -1588,6 +1639,24 @@
       };
     });
 
+    DOM.workflowsStage.querySelectorAll("[data-wf-copy]").forEach((btn) => {
+      btn.onclick = () => {
+        const wf = (CS.savedWorkflows || []).find((x) => x.id === btn.getAttribute("data-wf-copy"));
+        if (!wf || wf.cloudSaveState !== "conflict") return;
+        // A new ID and base=0 preserve the remote workflow untouched.
+        createWorkflowTab({
+          title: wf.title,
+          blueprint: wf.blueprint,
+          graph: cloneGraph(wf.graph),
+          savedId: null,
+          makeActive: true,
+          autoFit: true,
+          switchToCanvas: true
+        });
+        void saveCurrentWorkflow(true);
+      };
+    });
+
     DOM.workflowsStage.querySelectorAll("[data-wf-dl]").forEach((btn) => {
       btn.onclick = () => {
         const wid = btn.getAttribute("data-wf-dl");
@@ -1623,6 +1692,7 @@
     }
     CS.redoStack.push(cloneGraph(CS.graph));
     CS.graph = CS.undoStack.pop();
+    markActiveTabDirty();
     CS.selectedEdgeId = null;
     fullRenderCanvas();
     persistOpenTabs();
@@ -1636,6 +1706,7 @@
     }
     CS.undoStack.push(cloneGraph(CS.graph));
     CS.graph = CS.redoStack.pop();
+    markActiveTabDirty();
     CS.selectedEdgeId = null;
     fullRenderCanvas();
     persistOpenTabs();
