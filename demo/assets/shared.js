@@ -4651,7 +4651,7 @@
               btn.innerHTML = (OAUTH_ICONS[provider.id] || "") + "<span>解绑 " + provider.title + "</span>";
               btn.onclick = async () => {
                 if (!pw.value) { socialStatus.textContent = "请输入当前密码后再解绑"; pw.focus(); return; }
-                if (!window.confirm("解除绑定后将无法用 " + provider.title + " 登录。确定继续吗？")) return;
+                if (!await confirmAction("解除绑定后将无法用 " + provider.title + " 登录。确定继续吗？", { danger: true, confirmText: "解除绑定" })) return;
                 btn.disabled = true;
                 try {
                   await apiJson("/api/auth/" + provider.id + "/unlink",
@@ -4702,7 +4702,7 @@
       const pwInput = formEl.querySelector("#acc-session-password");
       const status = formEl.querySelector("#acc-session-feedback");
       if (!pwInput.value) { status.textContent = "请输入当前密码后再继续"; pwInput.focus(); return; }
-      if (!window.confirm("确认退出其他所有浏览器登录会话？当前浏览器将保持登录。")) return;
+      if (!await confirmAction("确认退出其他所有浏览器登录会话？当前浏览器将保持登录。", { danger: true, confirmText: "退出其他会话" })) return;
       revokeBtn.disabled = true;
       status.textContent = "正在撤销其他登录会话…";
       try {
@@ -5001,7 +5001,7 @@
         btn.onclick = async () => {
           const tid = btn.getAttribute("data-rep-hide");
           const ttype = btn.getAttribute("data-rep-type");
-          if (!confirm(`确定要违规下架该内容 [${tid}] 吗？`)) return;
+          if (!await confirmAction(`确定要违规下架该内容 [${tid}] 吗？`, { danger: true, confirmText: "确认下架" })) return;
           try {
             if (App.state && App.state.serverBacked) {
               if (ttype === "work" || ttype === "作品") {
@@ -5287,6 +5287,7 @@
   function confirmAction(message, { title = "请确认操作", confirmText = "确认", danger = false } = {}) {
     if (typeof document === "undefined" || !document.body ||
         typeof document.createElement !== "function") return Promise.resolve(false);
+    const previousFocus = document.activeElement;
     const dialog = document.createElement("dialog");
     if (typeof dialog.showModal !== "function") {
       toast("当前浏览器不支持此确认操作，请使用更新的浏览器");
@@ -5298,7 +5299,7 @@
     const heading = document.createElement("h2");
     heading.textContent = title;
     heading.style.cssText = "margin:0 0 14px;font-size:18px;font-weight:750;";
-    heading.id = "hw-confirm-action-heading";
+    heading.id = "hw-confirm-action-heading-" + Math.random().toString(36).slice(2);
     dialog.setAttribute("aria-labelledby", heading.id);
     const description = document.createElement("p");
     description.textContent = String(message || "确定继续吗？");
@@ -5323,6 +5324,7 @@
         finished = true;
         try { if (dialog.open) dialog.close(); } catch (_) {}
         dialog.remove();
+        if (previousFocus && previousFocus.isConnected && typeof previousFocus.focus === "function") previousFocus.focus();
         resolve(value);
       };
       cancel.addEventListener("click", () => settle(false));
@@ -5339,6 +5341,88 @@
       } catch (_) {
         settle(false);
       }
+    });
+  }
+
+  // #87: a non-blocking, cancellable form dialog (null means cancellation).
+  // Sensitive mutation is the caller's responsibility after non-null resolution.
+  function promptAction(message, {
+    title = "填写信息", defaultValue = "", placeholder = "",
+    confirmText = "确认", minLength = 0, maxLength = 2000,
+    multiline = false, required = false
+  } = {}) {
+    if (typeof document === "undefined" || !document.body) return Promise.resolve(null);
+    const previousFocus = document.activeElement;
+    const dialog = document.createElement("dialog");
+    if (typeof dialog.showModal !== "function") {
+      toast("当前浏览器不支持此操作，请使用更新的浏览器");
+      return Promise.resolve(null);
+    }
+    const labelId = "hw-prompt-action-label-" + Math.random().toString(36).slice(2);
+    const descriptionId = "hw-prompt-action-desc-" + Math.random().toString(36).slice(2);
+    dialog.className = "hw-confirm-action-dialog hw-prompt-action-dialog";
+    dialog.setAttribute("aria-labelledby", labelId);
+    dialog.setAttribute("aria-describedby", descriptionId);
+    dialog.style.cssText = "width:min(460px,calc(100vw - 32px));max-width:100%;box-sizing:border-box;padding:24px;border:1px solid var(--line,#dedbd5);border-radius:16px;background:var(--paper,#fff);color:var(--ink,#222);box-shadow:0 20px 80px rgba(0,0,0,.22);";
+    const heading = document.createElement("h2");
+    heading.id = labelId;
+    heading.textContent = title;
+    heading.style.cssText = "margin:0 0 12px;font-size:18px;font-weight:750;";
+    const description = document.createElement("p");
+    description.id = descriptionId;
+    description.textContent = String(message || "");
+    description.style.cssText = "margin:0 0 14px;white-space:pre-wrap;line-height:1.6;font-size:14px;max-height:32vh;overflow:auto;";
+    const control = document.createElement(multiline ? "textarea" : "input");
+    if (!multiline) control.type = "text";
+    else control.rows = 4;
+    control.value = String(defaultValue ?? "");
+    control.placeholder = placeholder;
+    control.className = "hw-input";
+    control.maxLength = maxLength;
+    control.setAttribute("aria-label", title);
+    control.style.cssText = "width:100%;box-sizing:border-box;min-height:42px;padding:10px 12px;border:1px solid var(--line,#dedbd5);border-radius:9px;background:var(--paper,#fff);color:inherit;";
+    const error = document.createElement("p");
+    error.setAttribute("role", "alert");
+    error.style.cssText = "min-height:20px;margin:6px 0 14px;font-size:12px;color:#b42318;";
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:10px;";
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消";
+    const proceed = document.createElement("button");
+    proceed.type = "button"; proceed.className = "btn btn-primary"; proceed.textContent = confirmText;
+    actions.append(cancel, proceed);
+    dialog.append(heading, description, control, error, actions);
+    let finished = false;
+    return new Promise((resolve) => {
+      const settle = (value) => {
+        if (finished) return;
+        finished = true;
+        try { if (dialog.open) dialog.close(); } catch (_) {}
+        dialog.remove();
+        if (previousFocus && previousFocus.isConnected && typeof previousFocus.focus === "function") previousFocus.focus();
+        resolve(value);
+      };
+      const submit = () => {
+        const value = control.value.trim();
+        if ((required && !value) || value.length < minLength) {
+          error.textContent = "请至少填写 " + Math.max(1, minLength) + " 个字符";
+          control.focus();
+          return;
+        }
+        settle(value);
+      };
+      cancel.addEventListener("click", () => settle(null));
+      proceed.addEventListener("click", submit);
+      control.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && (!multiline || event.ctrlKey || event.metaKey)) {
+          event.preventDefault(); submit();
+        }
+      });
+      dialog.addEventListener("cancel", (event) => { event.preventDefault(); settle(null); });
+      dialog.addEventListener("close", () => settle(null));
+      document.body.appendChild(dialog);
+      try { dialog.showModal(); control.focus(); control.select(); }
+      catch (_) { settle(null); }
     });
   }
 
@@ -5364,6 +5448,7 @@
     visibleResourceGroups,
     toast,
     confirmAction,
+    promptAction,
     apiJson,
     channelUrl,
     layoutProfileMasonry,
