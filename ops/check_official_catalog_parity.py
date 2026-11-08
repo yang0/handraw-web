@@ -48,7 +48,9 @@ def _index(rows: Any, *, label: str, id_field: str | None = None) -> dict[str, d
 
 
 def audit(catalog: dict[str, Any], styles: Any, layouts: Any,
-          exceptions: dict[str, Any], *, strict: bool = False) -> dict[str, Any]:
+          exceptions: dict[str, Any], *, strict: bool = False,
+          approved_styles: Any | None = None,
+          approved_layouts: Any | None = None) -> dict[str, Any]:
     """Return public, machine-readable drift report or raise ValueError.
 
     Pure function: inputs are local JSON payloads, there is no network access
@@ -63,7 +65,24 @@ def audit(catalog: dict[str, Any], styles: Any, layouts: Any,
             raise ValueError("catalog item must be an object")
         if item.get("kind") in ("style", "layout"):
             official.append(item)
-    web = _index(official, label="Web catalog")
+    web_static = _index(official, label="Web catalog")
+    if (approved_styles is None) != (approved_layouts is None):
+        raise ValueError("approved DB styles/layouts exports must be supplied together")
+    db_checked = approved_styles is not None
+    db_style = (_index(approved_styles, label="published DB official styles",
+                       id_field="number") if db_checked else {})
+    db_layout = (_index(approved_layouts, label="published DB official layouts",
+                        id_field="id") if db_checked else {})
+    db_collision = sorted(set(db_style) & set(db_layout))
+    static_overlap = sorted(set(web_static) & (set(db_style) | set(db_layout)))
+    if db_collision or static_overlap:
+        raise ValueError("approved official DB export collision: " +
+                         str(sorted(set(db_collision + static_overlap))))
+    web = dict(web_static)
+    web.update({code: {"id": code, "kind": "style"}
+                for code in db_style})
+    web.update({code: {"id": code, "kind": "layout"}
+                for code in db_layout})
     skill_style = _index(styles, label="Skill styles", id_field="number")
     skill_layout = _index(layouts, label="Skill layouts", id_field="id")
     duplicate = set(skill_style) & set(skill_layout)
@@ -111,6 +130,10 @@ def audit(catalog: dict[str, Any], styles: Any, layouts: Any,
         "status": "in_sync" if not skill_only and not web_only and not mismatched_kind
                   else "pending_review",
         "webCount": len(web),
+        "webStaticCount": len(web_static),
+        "webDynamicApprovedCount": len(db_style) + len(db_layout),
+        "approvedExportChecked": db_checked,
+        "dbAuditRequired": not db_checked,
         "skillCount": len(skill),
         "webOnly": web_only,
         "skillOnly": skill_only,
@@ -119,10 +142,10 @@ def audit(catalog: dict[str, Any], styles: Any, layouts: Any,
         "staleExceptions": stale_exceptions,
         "mismatchedKind": mismatched_kind,
         "alteredPending": altered,
-        "readyForRelease": not (web_only or skill_only or mismatched_kind or stale_exceptions),
+        "readyForRelease": db_checked and not (web_only or skill_only or mismatched_kind or stale_exceptions),
     }
     bad = bool(web_only or unexpected or stale_exceptions or mismatched_kind or altered)
-    if strict and skill_only:
+    if strict and (skill_only or not db_checked):
         bad = True
     if bad:
         raise ValueError(json.dumps(report, ensure_ascii=False, sort_keys=True))
@@ -138,7 +161,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pending", type=Path,
                         default=ROOT / "ops/official_catalog_pending_11.json")
     parser.add_argument("--strict", action="store_true",
-                        help="release gate: reject even individually acknowledged pending codes")
+                        help="release gate: reject pending codes and require reviewed website DB official export")
+    parser.add_argument("--approved-export-dir", type=Path,
+                        help="read-only reviewed Web DB published-official export (styles.json/layouts.json)")
     parser.add_argument("--report", type=Path,
                         help="optional output JSON report; contains IDs only")
     args = parser.parse_args(argv)
@@ -148,6 +173,10 @@ def main(argv: list[str] | None = None) -> int:
             _read(args.skill_root / "references/styles.json"),
             _read(args.skill_root / "references/layouts.json"),
             _read(args.pending), strict=args.strict,
+            approved_styles=_read(args.approved_export_dir / "styles.json")
+                if args.approved_export_dir is not None else None,
+            approved_layouts=_read(args.approved_export_dir / "layouts.json")
+                if args.approved_export_dir is not None else None,
         )
     except (ValueError, KeyError, OSError, json.JSONDecodeError) as exc:
         print(f"Official catalog parity BLOCKED: {exc}", file=sys.stderr)
