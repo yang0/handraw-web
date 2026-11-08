@@ -5742,7 +5742,7 @@
       specsList.forEach((sp) => {
         if (!sp.recipeSnapshot) {
           const s1 = sp.style1 || rec.style1Id || "";
-          const s2 = rec.fusionToggleOn ? (rec.style2Id || "") : "";
+          const s2 = rec.fusionToggleOn ? (sp.style2 || rec.style2Id || "") : "";
           const lay = sp.layout || rec.layoutId || "";
           const s1Res = s1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s1) || rec.style1Res) : rec.style1Res;
           const s2Res = s2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s2) || rec.style2Res) : rec.style2Res;
@@ -5822,7 +5822,10 @@
           specs: []
         };
       }
-      const perIterCount = Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
+      const isStudio2Series=Boolean(rec.loopNode.data?.studio2Plan?.slots);
+      const perIterCount = isStudio2Series && window.HandrawStudioSeries
+        ? window.HandrawStudioSeries.candidateCount(rec.loopNode)
+        : Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
       const loopSpecs = [];
       for (const iter of loopIters) {
         for (let sub = 0; sub < perIterCount; sub++) {
@@ -5832,15 +5835,20 @@
             loopNodeId: rec.loopNode.id,
             loopStepIndex: iter.index,
             loopTotalSteps: loopIters.length,
-            slotKey: `loop_${iter.index}_${sub}`,
+            slotKey: isStudio2Series && iter.slotId
+              ? iter.slotId + ":candidate:" + sub
+              : `loop_${iter.index}_${sub}`,
+            ...(isStudio2Series ? {slotId:iter.slotId,
+              slotOrder:iter.slotOrder,candidateIndex:sub,outputIndex:loopSpecs.length} : {}),
             role: mode === "article-cover" ? "cover" : "image",
             title: perIterCount > 1 ? `${iter.title} (${sub + 1}/${perIterCount})` : iter.title,
             anchorHeading: "",
             style1: iter.style1 || "",
+            style2: iter.style2 || "",
             layout: iter.layout || rec.layoutId || "",
             assetItems: Array.isArray(iter.assetItems) ? iter.assetItems : null,
             mode,
-            ratio: cd.ratio || "3:4",
+            ratio: iter.ratio || cd.ratio || "3:4",
             theme: iter.theme,
             sampleImg: iter.sampleImg || ""
           });
@@ -7252,9 +7260,19 @@
 
     // Freeze the execution definition before asynchronous generation. Editing
     // the current Graph cannot mutate this queued Run's prompt or snapshot.
-    const executionGraph = cloneGraph(CS.graph);
+    const previousRunSnapshot = onlyItemIdx !== null ? ctrl.data?.studio2RunSnapshot : null;
+    // Explicit retry compiles the original submitted definition, never the
+    // editable next-revision Graph whose slot order may have changed.
+    const executionGraph = previousRunSnapshot?.executionGraph
+      ? cloneGraph(previousRunSnapshot.executionGraph) : cloneGraph(CS.graph);
     const executionCtrl = executionGraph.nodes.find(n => n.id === ctrlId);
     const plan = buildExecutionPlanForControl(executionCtrl, executionGraph);
+    if (previousRunSnapshot && (!plan.specs[onlyItemIdx] ||
+        previousRunSnapshot.outputCount!==plan.specs.length ||
+        previousRunSnapshot.outputs?.[onlyItemIdx]?.outputId!==plan.specs[onlyItemIdx].slotKey)) {
+      toast("原生成方案与重试槽位不一致，请先从历史恢复对应版本");
+      return false;
+    }
     if (plan.kind === "loop-empty") {
       const lp = getNodeById(plan.loopNodeId);
       const lm = lp?.data?.loopMode || "prompts";
@@ -7294,6 +7312,22 @@
 
     const batchId = (resolvedOnlyIdx !== null && ctrl.data.activeBatchId) ? ctrl.data.activeBatchId : makeStableRequestId("batch");
     ctrl.data.activeBatchId = batchId;
+    if (creationSource==="batch" && window.HandrawStudioSeries && plan.kind==="loop"
+        && resolvedOnlyIdx===null) {
+      const runLoop = executionGraph.nodes.find(n => n.id === plan.loopNodeId);
+      if(runLoop?.data?.studio2Plan) {
+        ctrl.data.studio2RunSnapshot={
+          ...window.HandrawStudioSeries.freeze(runLoop,"",batchId),
+          executionGraph:cloneGraph(executionGraph),
+          outputs:plan.specs.map((sp,i)=>({
+            outputId:sp.slotKey,slotId:sp.slotId,
+            candidateIndex:sp.candidateIndex??0,
+            slotOrder:sp.slotOrder??i,outputIndex:i
+          }))
+        };
+        persistOpenTabs();
+      }
+    }
 
     const { nodes: dispNodes, createdCount, isBatchGallery } = syncControlDisplayNodes(ctrl, plan.specs.length, {
       markGenerating: true,
@@ -7515,6 +7549,9 @@
           dn.data.pendingSpec[requestId] = {
             batchId,
             slotKey,
+            slotId:sp.slotId||"",
+            candidateIndex:sp.candidateIndex??0,
+            outputIndex:i,
             index: i,
             role: sp.role || "image",
             title: sp.title || `图片 #${i + 1}`,
@@ -7544,7 +7581,7 @@
                 prompt: cloudPrompt,
                 ratio: sp.ratio || "3:4",
                 style1: sp.style1 || rec.style1Id || "",
-                style2: rec.fusionToggleOn ? (rec.style2Id || "") : "",
+                style2: rec.fusionToggleOn ? (sp.style2 || rec.style2Id || "") : "",
                 layout: sp.layout || rec.layoutId || "",
                 refImages,
                 recipeSnapshot: sp.recipeSnapshot,
@@ -7581,6 +7618,8 @@
             if (data.runId) {
               quickRunModels.delete(runScope+":"+data.runId);
               ctrl.data.runId = data.runId;
+              if (ctrl.data.studio2RunSnapshot?.batchId===batchId)
+                ctrl.data.studio2RunSnapshot.runId=data.runId;
               if (dn) {
                 dn.data.runId = data.runId;
                 if (dn.data.pendingSpec?.[requestId])
@@ -7664,6 +7703,9 @@
             batchId,
             requestId: activeReqId || requestId,
             slotKey: currentSlotKey,
+            slotId:sp.slotId||"",
+            candidateIndex:sp.candidateIndex??0,
+            outputIndex:i,
             title: sp.title || `图片 #${i + 1}`,
             theme: sp.theme || "",
             failed: true,
@@ -7741,6 +7783,9 @@
           generationMode: useLiveApi ? "live" : "demo",
           demoMode: !useLiveApi,
           slotKey: currentSlotKey,
+          slotId:sp.slotId||"",
+          candidateIndex:sp.candidateIndex??0,
+          outputIndex:i,
           role: sp.role || "image",
           title: sp.title || `图片 #${i + 1}`,
           anchorHeading: sp.anchorHeading || "",
