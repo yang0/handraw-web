@@ -423,7 +423,8 @@ class BatchPlanRoutesTests(unittest.TestCase):
                 self.assertNotIn("unexpected model prose", logged)
         conn = self.db.get_conn()
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM generation_runs").fetchone()[0], 0)
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM works").fetchone()[0], 0)
+        # Demo seed works may exist, but planning must not create new ones.
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM works WHERE run_id IS NOT NULL").fetchone()[0], 0)
 
 
 if __name__ == "__main__":
