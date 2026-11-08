@@ -200,6 +200,15 @@ def main():
                     assert len(initial["types"]) == 5, initial
 
                     # Real Canvas click and zoom, rather than an isolated DOM benchmark.
+                    # Fit-to-all for a 100-node graph places its first card
+                    # under the dock/shelf. Pan to an operable viewport using
+                    # the shipped 100% zoom button, then use a real pointer
+                    # click (no DOM dispatch that bypasses hit testing).
+                    page.evaluate("""() => {
+                        window.CS.vx = 495;
+                        window.CS.vy = 225;
+                        document.querySelector('#bl-zoom-pct').click();
+                    }""")
                     header = page.locator(
                         '#ic-nodes-layer [data-node-id="g00-0"] .ic-node-header-above')
                     header.click(position={"x": 42, "y": 12}, timeout=20000)
