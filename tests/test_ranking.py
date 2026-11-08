@@ -14,6 +14,8 @@ from tempfile import TemporaryDirectory
 from backend.db import Database
 from backend.ranking import (
     asset_popular_score,
+    asset_popular_sql,
+    ASSET_POPULAR_WEIGHTS,
     normalize_sort,
     sort_works,
     topic_popular_score,
@@ -45,10 +47,37 @@ class RankingFormulaTests(unittest.TestCase):
     def test_topic_formula_uses_reply_count_when_list_absent(self):
         self.assertEqual(topic_popular_score(_row(likes=0, favorites=0, replyCount=3)), 3)
 
-    def test_asset_formula_uses_usage(self):
-        self.assertEqual(asset_popular_score(_row(usageCount=5)), 5)
-        self.assertEqual(asset_popular_score(_row(usage_count=2)), 2)
+    def test_asset_formula_weights_genuine_signals_not_source_or_honour(self):
+        self.assertEqual(asset_popular_score(_row(usageCount=5)), 50)
+        self.assertEqual(asset_popular_score(_row(usage_count=2)), 20)
         self.assertEqual(asset_popular_score(_row()), 0)
+        data = _row(usageCount=3, likes=2, favorites=4, cheers=5,
+                    stamps=1, tips=2, sourceType="exclusive", honorBoost=99,
+                    publishedAtMs=99999)
+        self.assertEqual(asset_popular_score(data), 30 + 2 + 8 + 5 + 1 + 4)
+        self.assertEqual(asset_popular_score({**data, "sourceType": "community",
+                                             "honorBoost": 1, "publishedAtMs": 0}),
+                         asset_popular_score(data))
+        self.assertEqual(asset_popular_score(_row(usageCount=-3, likes=-7)), 0)
+        self.assertEqual(ASSET_POPULAR_WEIGHTS["tips"], 2)
+
+    def test_asset_sql_expression_matches_python_formula(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute("""CREATE TABLE metrics (usage_count INTEGER, likes INTEGER,
+                         favorites INTEGER, cheers INTEGER, stamps INTEGER, tips INTEGER)""")
+            rows = [
+                (3, 2, 4, 5, 1, 2), (0, 0, 0, 0, 0, 0),
+                (7, 0, 0, 0, 0, 0), (1, 20, 0, 3, 2, 0),
+            ]
+            conn.executemany("INSERT INTO metrics VALUES (?,?,?,?,?,?)", rows)
+            scores = [r[0] for r in conn.execute(
+                f"SELECT {asset_popular_sql('m')} FROM metrics m")]
+            self.assertEqual(scores, [asset_popular_score(dict(zip(
+                ("usage_count", "likes", "favorites", "cheers", "stamps", "tips"), row
+            ))) for row in rows])
+        finally:
+            conn.close()
 
     def test_legacy_sort_values_collapse_to_popular(self):
         for legacy in ("favorites", "cheers", "hot", "recommended", "POPULAR"):
