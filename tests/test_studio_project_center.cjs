@@ -180,7 +180,7 @@ async function suite() {
   assert.equal(CS.tabs.at(-1).batchStart,true);
   c.createProjectFromCenter("workflow");
   c.createProjectFromCenter("article");
-  assert.deepEqual(entryCalls,["workflow","article"]);
+  assert.deepEqual(entryCalls,["open-article:cloud-doc","workflow","article"]);
 
   CS.projectQuery="春天";
   listResolver=async options => {
