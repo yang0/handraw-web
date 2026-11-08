@@ -150,6 +150,27 @@
       fusionEnabled:Boolean(sd.fusion),errors:normalized.errors};
   }
 
+  function mediaRefFromAsset(item) {
+    // A preview URL, local File, benchmark image and upload row ID cannot be
+    // used as an owned media capability. Only a real mediaId/assetUid from an
+    // authenticated owner-scoped response may enter CreationSpec.
+    const id = item?.mediaId || item?.assetUid;
+    if (!id || typeof id !== "string" || id.length > 128) {
+      return {ok:false,code:"media_upload_required",localOnly:true,ref:null};
+    }
+    const source = String(item.source || "");
+    if (!["private","generated"].includes(source)) {
+      return {ok:false,code:"media_source_unverified",ref:null};
+    }
+    const role = ({
+      characters:"character", scenes:"scene", props:"object", other:"other"
+    })[item.cat] || item.role || "other";
+    if (!["character","scene","object","composition","result","other"].includes(role)) {
+      return {ok:false,code:"invalid_project_media",ref:null};
+    }
+    return {ok:true,ref:{mediaId:id,role}};
+  }
+
   function formatError(result) {
     const id=result?.id ? " #" + result.id : "";
     return ({
@@ -160,10 +181,13 @@
       resource_forbidden:"资源未授权或尚未解锁",
       invalid_resource_source:"资源来源无效",
       invalid_resource_version:"资源版本无效",
-      resource_version_conflict:"资源定义已更新，请重新选择"
+      resource_version_conflict:"资源定义已更新，请重新选择",
+      media_upload_required:"该图片尚未上传云端，只能保存在本机草稿",
+      media_source_unverified:"无法验证素材所有权，请从我的图库重新选择",
+      invalid_project_media:"参考图用途无效"
     })[result?.code] || "资源不可用";
   }
 
   return {FIELDS,GROUPS,makeRef,resolveSelection,setLegacySelection,
-    syncLegacyRefs,deriveSpecResources,catalogFind,formatError};
+    syncLegacyRefs,deriveSpecResources,catalogFind,mediaRefFromAsset,formatError};
 });
