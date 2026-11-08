@@ -25,6 +25,33 @@
     return err;
   }
 
+  const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
+  const ViewModel = typeof window !== "undefined" ? window.HandrawStudioViews
+    : typeof require === "function" ? require("./studio-views.js") : null;
+
+  function draftPatch(tab, snapshot) {
+    const patches = [];
+    const graph = snapshot.draft.graph;
+    const baseline = tab.projectSyncedGraph || null;
+    const graphChanges = ViewModel && baseline && graph
+      ? ViewModel.graphFieldPatches(baseline, graph) : null;
+    if (graphChanges && graphChanges.length <= 27) {
+      patches.push(...graphChanges);
+    } else if (graphChanges && graphChanges.length > 27) {
+      // Never replace a multi-branch Graph just to fit the server patch limit.
+      throw new Error("too_many_graph_patches");
+    } else if (graph) {
+      patches.push({op:"set",path:"/graph",value:graph});
+    }
+    patches.push({op:"set",path:"/activeView",
+      value:snapshot.draft.activeView || "canvas"});
+    if (snapshot.draft.editorLayout) {
+      patches.push({op:"set",path:"/editorLayout",value:snapshot.draft.editorLayout});
+    }
+    patches.push({op:"set",path:"/title",value:snapshot.title || "未命名创作"});
+    return patches;
+  }
+
   function createClient({ fetchImpl = (...args) => fetch(...args), idFactory = newId } = {}) {
     async function request(method, path, body) {
       const response = await fetchImpl(path, {
@@ -59,11 +86,7 @@
         : {
             baseRevision: Number(tab.projectRevision),
             idempotencyKey: key,
-            patch: [
-              { op: "set", path: "/graph", value: snapshot.draft.graph },
-              { op: "set", path: "/activeView", value: snapshot.draft.activeView || "canvas" },
-              { op: "set", path: "/title", value: snapshot.title || "未命名创作" }
-            ]
+            patch: draftPatch(tab, snapshot)
           };
       tab.projectPending = {
         method: Number(tab.projectRevision || 0) < 1 ? "POST" : "PATCH",
@@ -71,7 +94,8 @@
           ? "/api/studio/projects"
           : "/api/studio/projects/" + encodeURIComponent(tab.projectId) + "/draft",
         payload,
-        atEditRevision: Number(tab.editRevision || 0)
+        atEditRevision: Number(tab.editRevision || 0),
+        confirmedGraph: clone(snapshot.draft.graph || null)
       };
       tab.projectSaveState = "local_only";
       return tab.projectPending;
@@ -90,6 +114,7 @@
           // Responses acknowledge exactly the frozen payload, not edits that
           // arrived while it was running.
           tab.projectRevision = Number(result.revision);
+          if (pending.confirmedGraph) tab.projectSyncedGraph = clone(pending.confirmedGraph);
           tab.projectPending = null;
           tab.projectSaveState = Number(tab.editRevision || 0) > pending.atEditRevision
             ? "local_only" : "synced";
@@ -137,6 +162,7 @@
       tab.projectCopyPending = null;
       tab.projectRemoteRevision = 0;
       tab.projectSaveState = "synced";
+      tab.projectSyncedGraph = clone(localDraft?.graph || null);
       tab.projectError = "";
       onChange(tab);
       return response;
