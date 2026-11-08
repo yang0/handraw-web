@@ -399,6 +399,8 @@ class BatchPlanRoutesTests(unittest.TestCase):
             ("", {"ok": False, "reason": "http_502"}, 503, "batch_plan_ai_unavailable"),
             ("", {"ok": False, "reason": "network"}, 503, "batch_plan_ai_unavailable"),
             ("", {"ok": False, "reason": "timeout"}, 503, "batch_plan_ai_unavailable"),
+            ("", {"ok": False, "reason": "invalid_json"}, 502, "batch_plan_ai_invalid"),
+            ("", {"ok": False, "reason": "too_large"}, 502, "batch_plan_ai_invalid"),
             ("unexpected model prose", {"ok": True}, 502, "batch_plan_ai_invalid"),
             ('{"items":[{"subject":"古街","layout":"NON_EXISTENT"}]}',
              {"ok": True}, 502, "batch_plan_ai_invalid"),
