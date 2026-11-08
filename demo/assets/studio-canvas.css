@@ -4065,3 +4065,73 @@ a.ic-hist-cover-button { cursor: pointer; }
   .ic-wf-card-grid .ic-wf-entry-card { min-height: 0; padding: 14px; }
   .ic-workflows-stage .ic-wf-minimal-tools #wf-search-inp { flex: 1 1 auto; min-width: 0; }
 }
+
+
+/* Studio2 Project Center · #106. Same width as the unified site navigation. */
+.ic-projects-stage {
+  position:absolute;inset:0;z-index:48;display:flex;flex-direction:column;
+  overflow:hidden;background:var(--ic-bg,var(--paper-bg));color:var(--ic-text);
+  user-select:text;
+}
+.ic-pc-scroll {flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;}
+.ic-pc-inner {width:calc(100% - 2 * var(--hw-page-gutter,24px));max-width:1180px;
+  margin:0 auto;padding:32px 0 64px;box-sizing:border-box;}
+.ic-pc-header {display:flex;align-items:flex-start;justify-content:space-between;
+  gap:24px;margin-bottom:24px;}
+.ic-pc-eyebrow {margin:0 0 8px;font:700 11px/1.3 var(--font-mono,monospace);
+  letter-spacing:.09em;color:var(--ink-muted,#777);}
+.ic-pc-header h1 {font-size:clamp(24px,3vw,34px);letter-spacing:-.03em;line-height:1.25;margin:0 0 10px;}
+.ic-pc-header p:not(.ic-pc-eyebrow) {font-size:13px;color:var(--ink-muted,#777);
+  margin:0;line-height:1.8;max-width:600px;}
+.ic-pc-header .btn {flex-shrink:0;}
+.ic-pc-new-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}
+.ic-pc-new-card {display:flex;flex-direction:column;text-align:left;align-items:flex-start;
+  gap:9px;min-height:148px;border:1px solid var(--ic-border,#ddd);border-radius:16px;
+  background:var(--ic-panel-solid,#fff);color:inherit;padding:20px;cursor:pointer;
+  transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease;}
+.ic-pc-new-card:hover,.ic-pc-new-card:focus-visible {transform:translateY(-2px);
+  border-color:var(--ic-border-strong,#bbb);box-shadow:0 8px 24px #0000000a;}
+.ic-pc-new-card strong {font-size:18px;line-height:1.3;}
+.ic-pc-new-card > span:last-child {font-size:12px;line-height:1.65;color:var(--ink-muted,#777);}
+.ic-pc-new-kicker {font:700 10px/1 var(--font-mono,monospace);
+  letter-spacing:.1em;color:var(--ink-muted,#777);}
+.ic-pc-library {margin-top:38px;}
+.ic-pc-toolbar {display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;}
+.ic-pc-toolbar h2 {font-size:19px;margin:0 0 6px;}
+.ic-pc-toolbar p {margin:0;font-size:12px;color:var(--ink-muted,#777);}
+.ic-pc-toolbar input {min-width:200px;max-width:330px;width:34%;min-height:38px;}
+.ic-pc-subtitle {margin:22px 0 12px;font-size:12px;font-weight:700;color:var(--ink-muted,#777);}
+.ic-pc-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}
+.ic-pc-card {min-width:0;background:var(--ic-panel-solid,#fff);border:1px solid var(--ic-border,#ddd);
+  border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px;min-height:150px;}
+.ic-pc-card.is-local {border-style:dashed;}
+.ic-pc-card h3 {margin:0;font-size:16px;line-height:1.45;overflow-wrap:anywhere;}
+.ic-pc-card p {margin:0;color:var(--ink-muted,#777);font-size:12px;line-height:1.6;}
+.ic-pc-tag {align-self:flex-start;font-size:11px;color:var(--ink-muted,#777);}
+.ic-pc-card > button {align-self:flex-start;margin-top:auto;}
+.ic-pc-card-foot {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:auto;}
+.ic-pc-card-foot > span {color:var(--ink-muted,#777);font-size:11px;}
+.ic-pc-card-foot .btn {flex-shrink:0;}
+.ic-pc-empty {padding:40px 24px;text-align:center;background:var(--ic-panel-solid,#fff);
+  border:1px dashed var(--ic-border,#ddd);border-radius:14px;}
+.ic-pc-empty strong {display:block;font-size:16px;margin-bottom:8px;}
+.ic-pc-empty p {font-size:12px;color:var(--ink-muted,#777);margin:0 0 14px;line-height:1.8;}
+@media(max-width:900px){
+ .ic-pc-new-grid {grid-template-columns:repeat(2,minmax(0,1fr));}
+ .ic-pc-grid {grid-template-columns:repeat(2,minmax(0,1fr));}
+}
+@media(max-width:620px){
+ .ic-pc-inner {padding-top:20px;}
+ .ic-pc-header {flex-direction:column;gap:12px;}
+ .ic-pc-new-grid {gap:8px;}
+ .ic-pc-new-card {padding:14px;min-height:128px;}
+ .ic-pc-new-card strong {font-size:15px;}
+ .ic-pc-toolbar {align-items:stretch;flex-direction:column;gap:12px;}
+ .ic-pc-toolbar input {max-width:100%;width:100%;}
+ .ic-pc-grid {grid-template-columns:1fr;}
+ .ic-pc-library {margin-top:24px;}
+}
+@media(prefers-reduced-motion:reduce) {
+ .ic-pc-new-card {transition:none;}
+ .ic-pc-new-card:hover {transform:none;}
+}
