@@ -157,7 +157,10 @@ def main():
             assert page.locator("#canvas-129-visual-layer .ic129-visual-sticky").count()==1
             # In-app Ctrl+C/V duplicates editable Graph only; Undo and Redo
             # preserve the original node IDs and never copy Run result nodes.
-            page.locator("#ic-nodes-layer .ic-node").first.click(position={"x":25,"y":14})
+            assert page.locator("#ic-nodes-layer .ic-node.is-selected").count()>=1
+            # The note textarea has keyboard focus. Blur it without moving the
+            # already selected node or clicking through the floating toolstrip.
+            page.evaluate("() => document.activeElement?.blur()")
             page.keyboard.press("Control+c")
             page.keyboard.press("Control+v")
             assert page.locator("#ic-nodes-layer .ic-node").count()==len(ids)+1
