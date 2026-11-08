@@ -942,7 +942,9 @@
               desc: ru.desc_zh || ru.desc || "云端上传图参",
               cat: ru.cat || "other",
               image: ru.image,
-              dataUrl: ru.image
+              dataUrl: ru.image,
+              // Library media identity is separate from a local upload row.
+              assetUid: ru.assetUid || null
             });
           });
           CS.customUploads = [...upMap.values()];
@@ -2541,6 +2543,8 @@
       desc_zh: u.desc || "用户本地上传图参",
       image: u.dataUrl || u.image,
       cat: u.cat || "other",
+      mediaId: u.assetUid || u.mediaId || undefined,
+      source: u.assetUid || u.mediaId ? "private" : "local",
       custom: true,
       builtin: false
     }));
@@ -2926,6 +2930,7 @@
       onCommitCallback = (items) => {
         pushUndo();
         targetOrOptions.data.items = items;
+        markActiveTabDirty();
         fullRenderCanvas();
         persistOpenTabs();
         if (typeof opts.onConfirm === "function") {
@@ -3453,7 +3458,13 @@
               image: picked.image,
               cat: picked.cat || "other",
               catLabel: cm.label,
-              custom: Boolean(picked.custom)
+              custom: Boolean(picked.custom),
+              // Only a confirmed server-owned UID becomes a private MediaRef.
+              mediaId: picked.mediaId || undefined,
+              source: picked.mediaId ? "private" : (picked.builtin ? "official" : "local"),
+              role: picked.cat === "characters" ? "character" :
+                picked.cat === "scenes" ? "scene" :
+                picked.cat === "props" ? "object" : "other"
             };
 
             card.onclick = () => {
