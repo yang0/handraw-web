@@ -80,7 +80,8 @@ assert.match(code,/ResourceRefs\.resolveSelection\(Catalog, field, id/);
 assert.match(code,/checkExclusiveGateForControl/);
 assert.match(code,/syncLegacyRefs\(node\.data, Catalog\)/);
 assert.match(make,/onSelect: \(id, ref\)/);
-assert.match(batch,/patchSlotByIndex\(idx,\{overrides:\{layout:ref\|\|pickedId\|\|null\}\}\)/,\n  "Batch picker writes only the selected PlanSlot override with catalog ResourceRef");
+assert.match(batch,/patchSlotByIndex\(idx,\{overrides:\{layout:ref\|\|pickedId\|\|null\}\}\)/,
+  "Batch picker writes only the selected PlanSlot override with catalog ResourceRef");
 assert.match(code,/gridEl\.innerHTML = list\s*\.map\(\(it\)/,
   "Unified catalog Picker must not silently hide resources after item 180");
 
