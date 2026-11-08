@@ -7265,6 +7265,20 @@
     // editable next-revision Graph whose slot order may have changed.
     const executionGraph = previousRunSnapshot?.executionGraph
       ? cloneGraph(previousRunSnapshot.executionGraph) : cloneGraph(CS.graph);
+    // Do not recursively serialize the previous RunSnapshot inside the next
+    // frozen Graph. Output display/gallery nodes contain historical images,
+    // not prompt inputs; only the current batch's upstream graph is needed.
+    if(creationSource==="batch" && window.HandrawStudioSeries) {
+      executionGraph.nodes=executionGraph.nodes.filter(n=>n.type!=="output_display");
+      const ids=new Set(executionGraph.nodes.map(n=>n.id));
+      executionGraph.edges=executionGraph.edges.filter(e=>ids.has(e.from)&&ids.has(e.to));
+    }
+    for(const node of executionGraph.nodes||[]) {
+      if(node.type==="output_control"&&node.data) {
+        delete node.data.studio2RunSnapshot;
+        delete node.data.runId;
+      }
+    }
     const executionCtrl = executionGraph.nodes.find(n => n.id === ctrlId);
     const plan = buildExecutionPlanForControl(executionCtrl, executionGraph);
     if (previousRunSnapshot && (!plan.specs[onlyItemIdx] ||
