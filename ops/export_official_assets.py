@@ -51,7 +51,7 @@ def main() -> None:
     query = ("SELECT * FROM catalog_assets WHERE source_type = 'official' "
              "AND status = 'published' ORDER BY code ASC")
     if db_path is not None:
-        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        conn = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         try:
             official_assets = conn.execute(query).fetchall()
