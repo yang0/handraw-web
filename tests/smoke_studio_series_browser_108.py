@@ -131,8 +131,17 @@ def main():
                     "cardCounts":counts,
                     "plan":page.evaluate("""()=>{
                       const loop=window.CS.graph.nodes.find(n=>n.type==='loop');
+                      const controller=window.HandrawBatchCreate;
+                      const bound=controller?.getParts?.()?.loop;
+                      const board=document.querySelector('.series108-board');
                       return {slots:loop.data.studio2Plan?.slots?.length,
-                        rows:loop.data.batchRows?.length,stage:window.CS.stageView};
+                        rows:loop.data.batchRows?.length,stage:window.CS.stageView,
+                        boardHandler:typeof board?.onclick,
+                        planAPI:typeof window.HandrawStudioSeries?.add,
+                        actionHandler:typeof controller?.actions?.markDirtyAndRender,
+                        boundLoop:bound?.id,activeLoop:loop.id,
+                        sameLoop:bound===loop,visibleButtons:document.querySelectorAll(
+                          '[data-series-action="add"]').length};
                     }"""),
                     "errors":errors
                 }
