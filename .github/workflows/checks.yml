@@ -300,6 +300,22 @@ jobs:
           ref: dad8dad2d2af25bd9df45971a03a499461a723db
           path: external/handraw-style
           persist-credentials: false
+      # #11 has TWO deliberate inputs: a pinned, reproducible Skill CLI
+      # for cross-repo tests and the latest Skill *references* for drift detection.
+      # This second checkout is read as JSON data only, never executed.
+      - name: '#11 checkout latest Skill official reference catalog (data only)'
+        uses: actions/checkout@v4
+        with:
+          repository: yang0/handraw-style
+          ref: feature/skill-web-unification-v1-20261107
+          path: external/handraw-style-catalog
+          persist-credentials: false
+      - name: '#11 official Web-authoritative code parity, no reverse publish'
+        run: |
+          echo "Skill reference commit: $(git -C external/handraw-style-catalog rev-parse HEAD)"
+          python ops/check_official_catalog_parity.py \
+            --skill-root external/handraw-style-catalog/skills/handdraw-style-prompter \
+            --report artifacts/official-catalog-parity-11.json
       - name: '#84/#112 real Skill CLI -> local HTTP -> PG17 + S3 emulation'
         env:
           HANDRAW_REAL_SKILL_CLIENT_PATH: external/handraw-style/skills/handraw-cloud/scripts/handraw_cloud.py
@@ -318,6 +334,14 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_p0_topic_redirect_93.py' -v
       # Artifacts are job-local. The PG audit is produced in THIS job, not in
       # interaction-journey-regression. Never attach the physical .dump backup.
+      - name: '#11 upload official catalog parity status (public IDs only)'
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-catalog-parity-11
+          path: artifacts/official-catalog-parity-11.json
+          if-no-files-found: ignore
+          retention-days: 30
       - name: '#112 upload redacted PostgreSQL backup/restore audit (no database archive)'
         uses: actions/upload-artifact@v4
         if: always()
