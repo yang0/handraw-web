@@ -58,6 +58,7 @@ jobs:
       - run: python tests/smoke_studio_runtime_browser_119.py
       - run: python tests/smoke_studio_make_image_browser_128.py
       - run: python tests/smoke_studio_navigation_projects_106.py
+      - run: python tests/smoke_studio_dag_browser_120.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -71,6 +72,7 @@ jobs:
             artifacts/project-103-screen/**
             artifacts/article-109-screen/**
             artifacts/navigation-106-screen/**
+            artifacts/dag-120-screen/**
           if-no-files-found: ignore
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
