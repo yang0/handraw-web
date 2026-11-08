@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const PC = require("../demo/assets/studio-project-center.js");
+const Article109 = require("../demo/assets/studio-article-project-109.js");
 const source = fs.readFileSync("demo/assets/studio-app.js","utf8");
 const css = fs.readFileSync("demo/assets/studio-canvas.css","utf8");
 const html = fs.readFileSync("demo/studio.html","utf8");
@@ -45,7 +46,7 @@ const end = source.indexOf("  function openWorkflowsPage(", begin);
 assert.ok(begin>0 && end>begin, "Extract Project Center bindings for functional tests");
 const fragment=source.slice(begin,end);
 async function suite() {
-  const CS={tabs:[],closedProjectDrafts:[],activeTabId:null,graph:{nodes:[],edges:[]},cloudProjects:[],
+  const CS={tabs:[],closedProjectDrafts:[],myArticles:[],activeTabId:null,graph:{nodes:[],edges:[]},cloudProjects:[],
     projectCenterLoading:false,projectCenterLoadingMore:false,projectHasMore:false,
     projectPageCursor:"",projectListRequestVersion:0,projectCenterError:"",projectQuery:"",stageView:"projects",
     projectOpeningId:""};
@@ -64,7 +65,8 @@ async function suite() {
     location:{href:"http://localhost:3080/studio/?view=projects"},
     history:{replaceState:(_a,_b,path)=>paths.push(path)}};
   const sandbox={
-    CS,DOM:{projectsStage:null},ProjectClient,App:{state:{loggedIn:true,serverBacked:true}},
+    CS,DOM:{projectsStage:null},ProjectClient,ArticleProject109:Article109,
+    App:{state:{loggedIn:true,serverBacked:true}},
     window:win,activeCacheScope:"account-1",cacheScopeEpoch:10,
     isStaleScope:(epoch,scope)=>epoch!==sandbox.cacheScopeEpoch||scope!==sandbox.activeCacheScope,
     toast:msg=>toasts.push(msg),
@@ -79,6 +81,9 @@ async function suite() {
       graph:args.graph,blueprint:args.blueprint,dirty:false};
       created.push(tab);CS.tabs.push(tab);return tab;},
     persistOpenTabs:()=>{},writeJsonStorage:()=>{},scheduleProjectAutoSave:()=>{},
+    ensureMyArticlesInitialized:()=>{if(!Array.isArray(CS.myArticles))CS.myArticles=[];},
+    openUnifiedArticleEditor:id=>entryCalls.push("open-article:"+id),
+    MY_ARTICLES_STORAGE_KEY:"my_articles",
     CLOSED_PROJECT_DRAFTS_KEY:"closed",
     fullRenderCanvas:()=>{},
     openWorkflowsPage:()=>entryCalls.push("workflow"),
@@ -121,15 +126,20 @@ async function suite() {
   assert.equal(CS.graph.nodes[0].id,"LOCAL","Conflicting local graph survives");
   assert.ok(toasts.some(x=>x.includes("未覆盖")));
 
-  // Project authored by the article editor must never be silently opened
-  // in an incompatible graph editor.
+  // An Article Project routes to its sole editor; it never imports its
+  // Markdown into the currently active Graph.
   local.projectSaveState="synced";local.projectPending=null;local.dirty=false;
   resolver=async id=>({ok:true,project:{id,kind:"article",title:"Article",
-    authority:"article",revision:8,draft:{article:{markdown:"keep this"}}}});
+    authority:"article",revision:8,draft:{article:{
+      documentId:"cloud-doc",revision:3,markdown:"keep this",anchors:[]},
+      plan:{kind:"article",planId:"plan-cloud",revision:1,
+        documentId:"cloud-doc",documentRevision:3,slots:[]}}}});
   await c.openCloudProject("prj-01");
-  assert.equal(created.length,1);
-  assert.equal(CS.graph.nodes[0].id,"LOCAL");
-  assert.ok(toasts.some(x=>x.includes("文章正文仍由文章编辑器管理")));
+  assert.equal(created.length,1,"Article Project does not open as Graph tab");
+  assert.equal(CS.graph.nodes[0].id,"LOCAL","Graph content is untouched");
+  assert.equal(CS.myArticles[0].markdown,"keep this");
+  assert.equal(CS.myArticles[0].projectRevision,8);
+  assert.ok(entryCalls.includes("open-article:cloud-doc"));
 
   // Previously closed offline drafts take precedence over stale cloud data.
   CS.closedProjectDrafts=[{id:"closed-1",title:"关闭前的草稿",blueprint:"single",
