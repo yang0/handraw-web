@@ -499,6 +499,28 @@ def preview(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, An
     graph_revision = body.get("graphRevision")
     if type(base) is not int or base < 1 or type(graph_revision) is not int or graph_revision < 0:
         _error("graphpatch_revision_required", "必须指定项目和图形基线版本", 400)
+    mode = body.get("mode")
+    generated_ops = None
+    if mode == "ai":
+        instruction = body.get("instruction")
+        if not isinstance(instruction, str) or not 2 <= len(instruction.strip()) <= 800:
+            _error("graphpatch_invalid_instruction", "请输入 2–800 字的修改说明", 400)
+        # Do not hold any transaction/writer lock across a 45-second model
+        # request. Read owner-scoped context, call the LLM, then re-check
+        # the identical CAS baseline under the exclusive commit transaction.
+        initial = _project_row(db.get_conn(), uid, project_id)
+        if int(initial["revision"]) != base:
+            _error("project_revision_conflict", "项目已变化，请刷新后重新规划", 409)
+        source_graph = _graph(_row_to_project(initial))
+        if _version(source_graph) != graph_revision:
+            _error("graphpatch_revision_conflict", "Graph 版本已变化", 409)
+        _check_graph(source_graph)
+        selected = _selected(source_graph, body.get("selectedIds"))
+        from .services import consume_daily_usage
+        if not consume_daily_usage(db, uid, "studio_graphpatch_ai", limit=30):
+            _error("graphpatch_ai_rate_limit", "今日画布 AI 规划次数已达到上限", 429)
+        generated_ops = _ai_operations(db, user, source_graph,
+                                       instruction.strip(), selected)
     with db.transaction() as tx:
         row = _project_row(tx, uid, project_id, lock=True)
         if int(row["revision"]) != base:
@@ -509,14 +531,10 @@ def preview(db: Any, user: dict[str, Any], body: dict[str, Any]) -> dict[str, An
             _error("graphpatch_revision_conflict", "Graph 版本已变化，请重新预览", 409)
         _check_graph(graph)
         selected = _selected(graph, body.get("selectedIds"))
-        mode = body.get("mode")
         if mode == "preset":
             ops = _preset(graph, body.get("preset"), selected, body, tx, user)
         elif mode == "ai":
-            instruction = body.get("instruction")
-            if not isinstance(instruction, str) or not 2 <= len(instruction.strip()) <= 800:
-                _error("graphpatch_invalid_instruction", "请输入 2–800 字的修改说明", 400)
-            ops = _ai_operations(db, user, graph, instruction.strip(), selected)
+            ops = generated_ops
         elif mode == "operations":
             ops = body.get("operations")
         else:
