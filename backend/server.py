@@ -3584,6 +3584,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     response = {
                         "ok": True,
                         "genId": gen_id,
+                        "runId": prep.get("runId") or "",
                         "requestId": prep.get("requestId") or "",
                         "clientRequestId": prep.get("clientRequestId") or prep.get("requestId") or "",
                         "idempotent": True,
@@ -3615,6 +3616,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     sim_res = {
                         "ok": True,
                         "genId": gen_id,
+                        "runId": prep.get("runId") or "",
                         "requestId": prep.get("requestId") or "",
                         "idempotent": bool(prep.get("idempotent")),
                         "taskId": fake_tid,
@@ -3684,6 +3686,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 gw_out = {
                     "ok": True,
                     "genId": gen_id,
+                    "runId": prep.get("runId") or "",
                     "requestId": prep.get("requestId") or "",
                     "idempotent": bool(prep.get("idempotent")),
                     "taskId": actual_id,
