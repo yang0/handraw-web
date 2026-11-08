@@ -7094,7 +7094,8 @@
       engine: isLive ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
       recipeSummary: rec && ctrlNode ? buildRecipeSummaryText(rec, ctrlNode) : `文章配图方案 · ${readyCards.length} 张`,
-      prompt: readyCards.map((c) => c.prompt).filter(Boolean).join("\n\n---\n\n"),
+      // Full article-derived prompts may embed private source paragraphs.
+      prompt: "文章插图",
       // Public generation history is NOT a publication of ArticleDocument.
       // Never forward unapproved full source text to the public Work layer.
       items: readyCards.map((c, idx) => ({
@@ -7106,7 +7107,7 @@
         subject: c.subject || artSubject,
         articleTitle: articleTitle,
         ratio: c.ratio || "4:3",
-        prompt: c.prompt || "",
+        prompt: "文章插图",
         imageUrl: c.imageUrl
       }))
     };
@@ -17445,6 +17446,7 @@
         replaceInp.disabled = true;
         collectDraftFromInputs(draft);
         const savedSnapshot = { title: draft.title, markdown: draft.markdown };
+        const importVersion = window.HandrawStudioIntegration?.documentToken(draft);
         toast("正在解析文档…");
         const finishReplace = () => {
           replaceInp.disabled = false;
@@ -17464,6 +17466,26 @@
             if (!isCurrentEditor()) { toast("编辑器已切换，未覆盖其他文章"); return; }
             const okTitle = res && typeof res.title === "string" ? res.title : savedSnapshot.title;
             const okMarkdown = res && typeof res.markdown === "string" ? res.markdown : savedSnapshot.markdown;
+            // Normal import replaces immediately. Only a *concurrent edit*
+            // between file selection and server parsing requires a decision.
+            if (importVersion && !window.HandrawStudioIntegration.sameDocument(importVersion,draft)) {
+              const approved = await new Promise(resolve => S.openModal({
+                title:"导入期间正文已被修改",
+                sizeClass:"modal-medium",
+                html:'<p>新的正文已在本机编辑。是否明确使用导入文档替换？取消会保留当前稿和图卡。</p>'+
+                  '<div style="display:flex;gap:8px;justify-content:flex-end;">'+
+                  '<button type="button" class="btn btn-sm" id="article109-import-keep">保留当前正文</button>'+
+                  '<button type="button" class="btn btn-sm btn-primary" id="article109-import-replace">使用导入文档覆盖</button></div>',
+                onMount(root) {
+                  root.querySelector("#article109-import-keep").onclick=()=>{S.closeModal();resolve(false);};
+                  root.querySelector("#article109-import-replace").onclick=()=>{S.closeModal();resolve(true);};
+                }
+              }));
+              if (!approved || !isCurrentEditor()) {
+                toast("已保留编辑期间的新正文，导入结果没有覆盖");
+                return;
+              }
+            }
             draft.title = okTitle;
             draft.markdown = okMarkdown;
 
@@ -17601,7 +17623,31 @@
           text:"文章正文在规划过程中已修改，旧方案未应用；请按当前正文重新规划",
           canRetry:true,canTemplate:false
         };
-        toast("正文已更新，旧规划结果已丢弃；已有图卡和锚点未改动");
+        // Never offer applying a stale AI proposal. Show the version difference
+        // and let the user retain the new draft or re-run against it.
+        const currentDoc=CS.articleEditorDraft?.id===reqArticleId?CS.articleEditorDraft:draft;
+        S.openModal({
+          title:"AI 规划与最新正文版本不同",
+          sizeClass:"modal-wide",
+          html:'<p>旧方案未应用，既有图卡和锚点未修改。</p>'+
+            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">'+
+            '<section><strong>开始规划时的正文</strong><pre style="white-space:pre-wrap;max-height:180px;overflow:auto;">'+
+            esc(String(planDocumentAtStart?.markdown||"").slice(0,3000))+'</pre></section>'+
+            '<section><strong>当前正文</strong><pre style="white-space:pre-wrap;max-height:180px;overflow:auto;">'+
+            esc(String(currentDoc?.markdown||"").slice(0,3000))+'</pre></section></div>'+
+            '<div style="display:flex;gap:8px;justify-content:flex-end;">'+
+            '<button type="button" class="btn btn-sm" id="article109-stale-keep">保留当前正文和原图卡</button>'+
+            '<button type="button" class="btn btn-sm btn-primary" id="article109-stale-replan">按新正文重新规划</button></div>',
+          onMount(root) {
+            root.querySelector("#article109-stale-keep").onclick=()=>S.closeModal();
+            root.querySelector("#article109-stale-replan").onclick=()=>{
+              S.closeModal();
+              CS.articleIsPlanning=false;
+              void executePlan();
+            };
+          }
+        });
+        toast("正文已更新，过期规划结果已拒绝，未覆盖原图卡");
         return true;
       };
       const controller = new AbortController();
