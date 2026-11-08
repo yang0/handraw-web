@@ -3568,6 +3568,22 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if handle_fission_post(self, req_path, body):
                 return
 
+        # #126: owner-only GraphPatch review, CAS-confirmed application and
+        # monotonic undo. These endpoints never invoke generation or billing.
+        if req_path in ("/api/studio/graph-patch/preview",
+                        "/api/studio/graph-patch/apply",
+                        "/api/studio/graph-patch/undo"):
+            from .studio_graph_patch import preview, apply, undo
+            user = self._current_user(required=True)
+            if req_path.endswith("/preview"):
+                payload = preview(self.db, user, body)
+            elif req_path.endswith("/apply"):
+                payload = apply(self.db, user, body)
+            else:
+                payload = undo(self.db, user, body)
+            self._send_json(payload)
+            return
+
         # #125: shared AI-only proposal protocol. No Run/Work or billing here.
         if req_path == "/api/studio/ai-plan":
             from .studio_ai_plan import execute_ai_plan
