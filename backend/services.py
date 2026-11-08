@@ -6363,6 +6363,16 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     injected_notes.append(raw_def)
                     system_append_list.append({"type": "asset_instructions", "code": code})
                     injected_definitions.append(raw_def)
+            elif res.get("source_type") == "private":
+                # #21: an owned style/layout is actually used, not merely
+                # accepted by the picker. The registry has already checked
+                # ownership. Send the definition to the gateway server-side
+                # without publishing it as a public catalog definition.
+                raw_def = (res.get("_raw_definition") or "").strip()
+                if raw_def:
+                    injected_notes.append(raw_def)
+                    injected_definitions.append(raw_def)
+                    system_append_list.append({"type": "asset_instructions", "code": code})
 
         # Length check before charging (X6)
         if recipe_id:
