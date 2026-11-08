@@ -3870,7 +3870,7 @@ a.ic-hist-cover-button { cursor: pointer; }
   max-width: none;
   height: auto;
   max-height: 175px;
-  object-fit: cover;
+  object-fit: contain; /* #92: never crop the original multi-image preview */
 }
 .ic-hist-masonry-grid .ic-hist-img-caption { max-width: 100%; }
 .ic-hist-masonry-grid .ic-hist-prompt-bar { flex-wrap: wrap; }
