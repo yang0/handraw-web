@@ -2536,6 +2536,7 @@
 
   // 1) Picker for Skill Params Node: Single-select (style1/style2/layout) & Multi-select (colors/tones/moods)
   function openSkillFieldPickerModal(skillNode, field, options = {}) {
+    const ResourceRefs = window.HandrawStudioResources;
     const hasCustomPick = typeof options?.onPick === "function";
     if (!hasCustomPick && (!skillNode || skillNode.type !== "skill_params")) return;
     const sd = (skillNode && skillNode.type === "skill_params") ? skillNode.data : {};
@@ -2630,6 +2631,30 @@
                 : [])
     );
 
+    const checked = (id, isJustUnlocked = false) => {
+      if (!ResourceRefs?.FIELDS[field]) return {ok:true,id,ref:null};
+      const result = ResourceRefs.resolveSelection(Catalog, field, id, {
+        isUnlocked: (code, item) => isJustUnlocked || S.isUnlocked(code, item)
+      });
+      if (!result.ok) toast(ResourceRefs.formatError(result) + (result.id ? " · " + result.id : ""));
+      return result;
+    };
+    const choose = (id, isJustUnlocked = false) => {
+      const result = checked(id, isJustUnlocked);
+      if (!result.ok) return false;
+      if (hasCustomPick) {
+        options.onPick(result.id, result.ref);
+      } else {
+        pushUndo();
+        if (ResourceRefs) ResourceRefs.setLegacySelection(sd, field, result);
+        else sd[field] = result.id;
+        markActiveTabDirty();
+        fullRenderCanvas();
+        persistOpenTabs();
+      }
+      S.closeModal();
+      return true;
+    };
     const titles = {
       style1: sd.fusion ? `🎭 选择角色画风（${Catalog.styles.length} 款）` : `🎨 选择画风（${Catalog.styles.length} 款）`,
       style2: "🌄 选择场景画风（跨媒介画面融合）",
@@ -2682,76 +2707,44 @@
         };
 
         root.querySelector("#sp-picker-rand").onclick = () => {
-          if (hasCustomPick) {
-            const pool = (field === "style1" || field === "style2") ? Catalog.styles : Catalog.layouts;
-            const freeFirst = pool.filter((x) => x.tier !== "pro_credit");
-            const src = freeFirst.length > 0 ? freeFirst : pool;
-            const pick = src[Math.floor(Math.random() * src.length)];
-            if (pick) options.onPick(pick.id);
-            S.closeModal();
-            return;
-          }
-          pushUndo();
-          if (field === "style1" || field === "style2") {
-            const pick = Catalog.styles[Math.floor(Math.random() * Catalog.styles.length)];
-            if (pick) sd[field] = pick.id;
-            S.closeModal();
-            fullRenderCanvas();
-            persistOpenTabs();
-            toast(`🎲 已随机选用画风 #${pick?.id || ""}`);
-          } else if (field === "layout") {
-            const pick = Catalog.layouts[Math.floor(Math.random() * Catalog.layouts.length)];
-            if (pick) sd.layout = pick.id;
-            S.closeModal();
-            fullRenderCanvas();
-            persistOpenTabs();
-            toast(`🎲 已随机选用图型 ${pick?.id || ""}`);
-          } else if (field === "colors") {
-            selectedSet.clear();
-            const c1 = Catalog.colors[Math.floor(Math.random() * Catalog.colors.length)];
-            const c2 = Catalog.colors[Math.floor(Math.random() * Catalog.colors.length)];
-            if (c1) selectedSet.add(c1.id);
-            if (c2) selectedSet.add(c2.id);
-            updateConfirmText();
-            renderGrid();
-          } else if (field === "tones") {
-            selectedSet.clear();
-            const t1 = Catalog.tones[Math.floor(Math.random() * Catalog.tones.length)];
-            if (t1) selectedSet.add(t1.id);
-            updateConfirmText();
-            renderGrid();
+          const kind = ResourceRefs?.FIELDS[field]?.type;
+          const pool = kind === "style" ? Catalog.styles : kind === "layout" ? Catalog.layouts
+            : kind === "color" ? Catalog.colors : kind === "tone" ? Catalog.tones : [];
+          const choices = pool.filter(it => it.tier !== "pro_credit" || S.isUnlocked(it.id, it))
+            .filter(it => checked(it.id).ok);
+          if (!choices.length) { toast("没有可使用的资源，请先解锁或更换分类"); return; }
+          const picked = choices[Math.floor(Math.random() * choices.length)];
+          if (isMulti) {
+            selectedSet.clear(); selectedSet.add(picked.id);
+            updateConfirmText(); renderGrid();
+          } else if (choose(picked.id)) {
+            toast("已随机选用 " + picked.id);
           }
         };
 
         root.querySelector("#sp-picker-clear").onclick = () => {
-          if (hasCustomPick) {
-            options.onPick("");
-            S.closeModal();
+          if (!isMulti) {
+            if (choose("")) toast("已清空资源选择");
             return;
           }
-          if (isMulti) {
-            selectedSet.clear();
-            updateConfirmText();
-            renderGrid();
-          } else {
-            pushUndo();
-            sd[field] = "";
-            S.closeModal();
-            fullRenderCanvas();
-            persistOpenTabs();
-            toast("已置空该参数");
-          }
+          selectedSet.clear(); updateConfirmText(); renderGrid();
         };
 
         if (confirmBtn) {
           confirmBtn.onclick = () => {
+            const chosen = [...selectedSet].map(id => checked(id));
+            if (chosen.some(x => !x.ok)) return;
             pushUndo();
-            if (field === "colors") sd.colors = [...selectedSet];
-            else if (field === "tones") sd.tones = [...selectedSet];
+            sd[field] = chosen.map(x => x.id);
+            if (ResourceRefs) {
+              sd.resourceRefs = {...(sd.resourceRefs || {}),
+                [ResourceRefs.FIELDS[field].key]: chosen.map(x => x.ref)};
+            }
+            markActiveTabDirty();
             S.closeModal();
             fullRenderCanvas();
             persistOpenTabs();
-            toast(`✓ 已保存${field === "colors" ? "主题色" : "影调"}选择（共 ${selectedSet.size} 项）`);
+            toast("已更新" + (field === "colors" ? "主题色" : "影调") + "（" + chosen.length + " 项）");
           };
         }
 
@@ -2814,14 +2807,13 @@
           countEl.textContent = `共筛出 ${list.length} 项${selectedSet.size ? ` · 当前已选：${[...selectedSet].join("、")}` : ""}`;
 
           gridEl.innerHTML = list
-            .slice(0, 180)
             .map((it) => {
               const id = it.id;
               const title = it.name || it.name_zh || id;
               const isSel = selectedSet.has(id);
               const proLocked = it.tier === "pro_credit" && !S.isUnlocked(id, it);
               return `
-                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" tabindex="0" role="button" aria-label="${esc(id)} ${esc(title)}" style="border:1.5px solid ${
+                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" tabindex="0" role="button" aria-pressed="${isSel}" aria-label="${esc(id)} ${esc(title)}" style="border:1.5px solid ${
                 isSel ? "var(--vermilion)" : "var(--line-soft)"
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
                 isSel ? "0 0 0 3px rgba(209,75,40,0.18)" : "0 2px 6px rgba(24,20,17,0.04)"
@@ -2859,24 +2851,17 @@
                 if (!S.unlockWithCredits(id, resObj.unlockCost || 5, `解锁 ${id}`)) return;
               }
 
-              if (hasCustomPick) {
-                options.onPick(id);
-                S.closeModal();
-                return;
-              }
-
+              // A real picker result is an authorized ResourceRef, not an
+              // arbitrary label/string. The server independently verifies it.
+              const justUnlocked = !proLocked || S.isUnlocked(id, resObj);
+              if (!checked(id, justUnlocked).ok) return;
               if (isMulti) {
                 if (selectedSet.has(id)) selectedSet.delete(id);
                 else selectedSet.add(id);
                 updateConfirmText();
                 renderGrid();
-              } else {
-                pushUndo();
-                sd[field] = id;
-                S.closeModal();
-                fullRenderCanvas();
-                persistOpenTabs();
-                toast(`✨ 已选用 ${id}`);
+              } else if (choose(id, justUnlocked)) {
+                toast("已选用 " + id);
               }
             };
             card.onclick = onSelect;
