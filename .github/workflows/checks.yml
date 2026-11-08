@@ -18,6 +18,7 @@ jobs:
       - run: node --check demo/assets/studio-core.js && node --check demo/assets/studio-app.js && node tests/test_studio_runtime_119.cjs
       - run: node --check demo/assets/studio-make-image.js && node --check demo/assets/studio-make-image-versions.js && node tests/test_studio_make_image_versions.cjs && node tests/test_studio_make_image_ui_128.cjs
       - run: node --check demo/assets/studio-series-board-108.js && node --check demo/assets/studio-batch.js && node tests/test_studio_series_ui_108.cjs
+      - run: node --check demo/assets/studio-article-project-109.js && node tests/test_studio_article_project_109.cjs
       - run: node tests/test_task_journey.cjs
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
@@ -48,6 +49,7 @@ jobs:
       # #127: use actual installed Chrome on the GitHub runner. Capture
       # first render/drag+zoom frame p95/DOM/heap/IME focus at 10–300 nodes.
       - run: python -m pip install "playwright>=1.50,<2"
+      - run: python tests/smoke_studio_article_browser_109.py
       - run: python tests/smoke_studio_project_reliability_103.py
       - run: python tests/smoke_studio_series_browser_108.py
       - run: python tests/benchmark_studio_canvas.py --output artifacts/canvas-127.json --require-browser
@@ -65,6 +67,7 @@ jobs:
             artifacts/quick-128-screen/**
             artifacts/series-108-screen/**
             artifacts/project-103-screen/**
+            artifacts/article-109-screen/**
           if-no-files-found: ignore
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
