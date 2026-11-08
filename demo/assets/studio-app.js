@@ -11337,6 +11337,36 @@
       };
     });
 
+    root.querySelectorAll("[data-disp-compare]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const groupId=btn.getAttribute("data-disp-compare");
+        const index=Number(btn.getAttribute("data-slot"));
+        CanvasUI.toggleCompare(groupId,index);
+        renderWorldNodes();
+      };
+    });
+    root.querySelectorAll("[data-disp-compare-view]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const disp=getNodeById(btn.getAttribute("data-disp-compare-view"));
+        if(!disp)return;
+        const selected=CanvasUI.selectedForCompare(disp.id);
+        if(selected.length<2){toast("先展开图集，选择 2～4 张图片进行对比");return;}
+        const upstream=getNodeById(disp.data?.sourceNodeId);
+        const state=CanvasUI.galleryState(disp,upstream?getCanvasRunProjection(upstream):null);
+        const images=selected.map(index=>state.slots[index]).filter(slot=>slot?.imageUrl);
+        if(images.length<2){toast("所选图片尚未完成，暂时无法对比");return;}
+        S.openModal({title:"系列结果对比",sizeClass:"modal-wide",html:
+          '<div class="ic129-compare-grid">'+images.map(slot=>
+            '<div><strong>第 '+(slot.index+1)+' 张</strong>'+
+              '<img src="'+esc(slot.imageUrl)+'" alt="对比第'+(slot.index+1)+'张成图" loading="lazy" />'+
+              '<a href="'+esc(slot.imageUrl)+'" download="handraw-'+(slot.index+1)+'.webp">下载原图</a></div>'
+          ).join("")+'</div>'
+        });
+      };
+    });
+
     /* --- 5. Image Display Actions --- */
     root.querySelectorAll("[data-disp-zoom]").forEach((el) => {
       el.onclick = (e) => {
