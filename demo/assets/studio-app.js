@@ -1241,6 +1241,20 @@
   function closeWorkflowTab(tabId) {
     const idx = CS.tabs.findIndex((t) => t.id === tabId);
     if (idx < 0) return;
+    const closing = CS.tabs[idx];
+    if (closing.id === CS.activeTabId && closing.savedId && closing.dirty) {
+      // Capture the latest graph before closing; an in-flight provider request
+      // cannot be trusted as an acknowledgement of subsequent edits.
+      syncCurrentTabSnapshot();
+      const local = (CS.savedWorkflows || []).find((w) => w.id === closing.savedId && !w.isOfficialPreset);
+      if (local) {
+        local.graph = cloneGraph(CS.graph);
+        local.updatedAtMs = Date.now();
+        if (local.cloudSaveState !== "conflict") local.cloudSaveState = "local";
+        writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
+      }
+      if (!closing.savePromise) void saveCurrentWorkflow(false, { silent: true });
+    }
     CS.tabs.splice(idx, 1);
     if (!CS.tabs.length) {
       CS.activeTabId = null;
@@ -1373,11 +1387,15 @@
       }
       if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return false;
       savedTarget.serverUpdatedAtMs = Number(response.updatedAtMs) || 0;
-      savedTarget.cloudSaveState = "synced";
-      savedTarget.updatedAt = "已云端保存";
-      // If another edit arrived while saving, preserve dirty and require a
-      // subsequent save, rather than falsely acknowledging the newer edit.
+      // The server only acknowledged the request snapshot. Changes made during
+      // this upload remain local, even if the previous request succeeded.
       cur.dirty = Number(cur.editRevision || 0) !== requestedEditEpoch;
+      savedTarget.cloudSaveState = cur.dirty ? "local" : "synced";
+      savedTarget.updatedAt = cur.dirty ? "本机修改待同步" : "已云端保存";
+      if (cur.dirty && cur.id === CS.activeTabId) {
+        savedTarget.graph = cloneGraph(CS.graph);
+        savedTarget.updatedAtMs = Date.now();
+      }
       writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
       persistOpenTabs();
       renderTopAndBottomDocks();
@@ -13053,7 +13071,7 @@
       p.skill.data.sc022Pinyin = String(value || "");
     } else return;
     const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
-    if (tab) tab.dirty = true;
+    if (tab) markActiveTabDirty();
     persistOpenTabs();
     if (CS.stageView === "quick") renderQuickStart();
   }
@@ -17357,6 +17375,15 @@
       positionFloatingOverlays();
       renderMinimap();
       updateTabScrollButtons();
+    });
+    window.addEventListener("online", () => {
+      // Local-only saves and transient network failures retry after reconnect.
+      // Conflicts require a conscious copy/merge and must NEVER auto-retry.
+      const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
+      const wf = (CS.savedWorkflows || []).find((w) => w.id === tab?.savedId && !w.isOfficialPreset);
+      if (!tab || !wf || !["local", "error"].includes(wf.cloudSaveState)) return;
+      tab.dirty = true;
+      scheduleWorkflowAutoSave();
     });
   }
 
