@@ -38,6 +38,11 @@ function harness() {
     cacheScopeEpoch: 1,
     _workflowAutoSaveTimer: null,
     WORKFLOW_AUTO_SAVE_DELAY_MS: 1200,
+    _projectAutoSaveTimer: null,
+    PROJECT_AUTO_SAVE_DELAY_MS: 1600,
+    ProjectClient: null, // the workflow save harness tests the independent template path
+    isArticleTab: () => false,
+    updateProjectStatusIndicator: () => {},
     SAVED_WORKFLOWS_KEY: "workflows",
     syncCurrentTabSnapshot: () => {},
     ensureDefaultSavedWorkflows: () => {},
