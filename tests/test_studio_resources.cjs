@@ -84,6 +84,14 @@ assert.match(batch,/currentRow\.layoutRef = ref \|\| null/);
 assert.match(code,/gridEl\.innerHTML = list\s*\.map\(\(it\)/,
   "Unified catalog Picker must not silently hide resources after item 180");
 
+const owned=RR.mediaRefFromAsset({assetUid:"asset-user-owned",source:"private",cat:"scenes"});
+assert.deepEqual(owned,{ok:true,ref:{mediaId:"asset-user-owned",role:"scene"}});
+assert.equal(RR.mediaRefFromAsset({id:"upload-row-id",image:"blob:local"}).code,
+  "media_upload_required","Local preview URL cannot mint server media authority");
+assert.equal(RR.mediaRefFromAsset({mediaId:"id-from-public-preview",source:"official"}).code,
+  "media_source_unverified","Public image may not impersonate private asset");
+assert.equal(RR.mediaRefFromAsset({mediaId:"generated-media",source:"generated",role:"result"}).ok,true);
+
 const wrongSource=JSON.parse(JSON.stringify(spec));
 wrongSource.style.source="private";
 assert.ok(Core.validateSpec(wrongSource,{catalog}).errors.some(x=>x.code==="resource_source_mismatch"));
@@ -107,8 +115,8 @@ assert.match(servicesSource,/"assetUid": r\["asset_uid"\] or None/,
   "Private workspace must expose actual media UID, never reuse upload row ID");
 assert.match(code,/assetUid: ru\.assetUid \|\| null/,
   "Gallery sync persists owner-only media UID");
-assert.match(code,/mediaId: picked\.mediaId \|\| undefined/,
-  "Only confirmed private media is serialized as MediaRef");
+assert.match(code,/mediaId: confirmed\?\.ok \? confirmed\.ref\.mediaId : undefined/,
+  "Only verified private media is serialized as MediaRef");
 assert.match(code,/markActiveTabDirty\(\);\s*fullRenderCanvas\(\);\s*persistOpenTabs\(\);/,
   "Asset picker edits should enter Project autosave");
 
