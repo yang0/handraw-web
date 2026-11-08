@@ -7572,6 +7572,7 @@
             activeGenId = data.genId || "";
             // Only the server can allocate a V3 logical Run identity.
             if (data.runId) {
+              quickRunModels.delete(runScope+":"+data.runId);
               ctrl.data.runId = data.runId;
               if (dn) {
                 dn.data.runId = data.runId;
@@ -17729,6 +17730,9 @@
             // failure retry, issuing a distinct gateway attempt.
             await runOutputControlNode(p.ctrl.id,{onlyItemIdx:0});
           } finally {
+            // Retried attempts can change a once-terminal Run into running
+            // and then success. Never keep the cached failed projection.
+            quickRunModels.delete(scope+":"+remote.runId);
             if(quickBusy?.scope===scope && quickBusy.id===p.ctrl.id)quickBusy=null;
             renderQuickStart();
           }
