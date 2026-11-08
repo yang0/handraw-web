@@ -83,9 +83,12 @@ def check_history(page, width):
       const r=card.getBoundingClientRect();
       const images=[...card.querySelectorAll('.ic-hist-expanded-gallery img')];
       return {outerRight:r.right,images:images.map(x=>{
-        const b=x.getBoundingClientRect();return {left:b.left,right:b.right,naturalWidth:x.naturalWidth};})};
+        const b=x.getBoundingClientRect();return {
+          left:b.left,right:b.right,naturalWidth:x.naturalWidth,
+          fit:getComputedStyle(x).objectFit};})};
     }""")
     assert len(expanded["images"]) == 3, expanded
+    assert all(it["fit"] == "contain" for it in expanded["images"]), expanded
     assert all(it["right"] <= width + 1 for it in expanded["images"]), expanded
     assert page.locator("#hist-records-list > article.ic-hist-entry-card").count() == 3
     assert page.locator('[data-hist-id="qa92-batch"] .ic-hist-cover-count').count() == 1
