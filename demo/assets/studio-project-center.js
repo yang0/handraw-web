@@ -46,15 +46,17 @@
     const includes = item => !needle || [item.title, KINDS[item.kind], item.projectId].some(
       v => String(v || "").toLowerCase().includes(needle));
     const drafts = localDrafts(tabs).filter(includes);
+    const conflicts = drafts.filter(d => d.saveState === "conflict");
     const cloud = (Array.isArray(projects) ? projects : [])
       .filter(p => p && p.id && includes({title:p.title, kind:p.kind, projectId:p.id}));
-    return {drafts,cloud,query:String(query),loading,error,loggedIn,hasMore,loadingMore};
+    return {drafts,conflicts,cloud,query:String(query),loading,error,loggedIn,hasMore,loadingMore};
   }
   function localCard(d) {
     const x=escapeText;
     const detail = d.saveState === "conflict" ? "与云端版本有冲突，打开后可另存副本" :
       d.saveState === "error" ? "上次同步失败，打开后可重试" : "仍有未确认的本机修改，优先保留";
-    return "<article class='ic-pc-card is-local'><span class='ic-pc-tag'>仅本机 · "+
+    return "<article class='ic-pc-card is-local "+(d.saveState === "conflict" ? "is-conflict" : "")+"'><span class='ic-pc-tag'>"+
+      (d.saveState === "conflict" ? "冲突副本 · " : "本机待同步 · ")+
       x(KINDS[d.kind]||"画布")+"</span><h3>"+x(d.title)+"</h3><p>"+detail+"</p>"+
       "<button type='button' class='btn btn-sm btn-primary' data-pc-local='"+x(d.id)+
       "'>继续本机草稿</button></article>";
@@ -84,8 +86,11 @@
       "</strong><span>"+desc+"</span></button>").join("");
     let content="";
     if (s.drafts.length) {
-      content+="<div class='ic-pc-subtitle'>本机待同步草稿 · "+s.drafts.length+
-        "</div><div class='ic-pc-grid'>"+s.drafts.map(localCard).join("")+"</div>";
+      const pending = s.drafts.filter(d => d.saveState !== "conflict");
+      if (pending.length) content+="<div class='ic-pc-subtitle'>本机待同步草稿 · "+pending.length+
+        "</div><div class='ic-pc-grid'>"+pending.map(localCard).join("")+"</div>";
+      if (s.conflicts.length) content+="<div class='ic-pc-subtitle' role='status'>本机待同步草稿 · 冲突副本 · "+
+        s.conflicts.length+"</div><div class='ic-pc-grid'>"+s.conflicts.map(localCard).join("")+"</div>";
     }
     if (!s.loggedIn) {
       content+="<div class='ic-pc-empty' role='status'><strong>登录后查看云端项目</strong>"+
@@ -111,7 +116,9 @@
       "<h1>创作项目</h1><p>继续编辑已保存的项目，或从一个新的想法开始。"+
       "项目草稿、生图历史和工作流模板分别管理。</p></div>"+
       "<button type='button' class='btn btn-sm' data-pc-refresh>刷新项目</button></header>"+
-      "<div class='ic-pc-new-grid' role='group' aria-label='开始创作'>"+cards+"</div>"+
+      "<div class='ic-pc-new-grid' role='group' aria-label='三类核心创作任务'>"+cards.split("</button>").slice(0,3).join("</button>")+"</button></div>"+
+      "<div class='ic-pc-workflow-start'><div><strong>已有成熟流程？</strong><p>导入 JSON 或选择已保存的模板，作为项目的另一种开始方式。</p></div>"+
+      "<button type='button' class='btn btn-sm' data-pc-new='workflow'>从工作流开始</button></div>"+
       "<section class='ic-pc-library' aria-label='我的项目'><div class='ic-pc-toolbar'>"+
       "<div><h2>最近项目</h2><p>云端与本机待同步草稿会明确区分。</p></div>"+
       "<input type='search' id='pc-project-search' class='hw-input' placeholder='搜索项目名称…'"+

@@ -1996,6 +1996,7 @@
     activateWorkflowTab(tab.id, {autoFit: false});
     const url = new URL(window.location.href);
     url.search = "?entry=" + (stage === "canvas" ? "canvas" : stage);
+    if (tab.projectId) url.searchParams.set("project", tab.projectId);
     try { window.history.replaceState(null, "", url.pathname + url.search); } catch (_) {}
     persistOpenTabs();
     fullRenderCanvas();
@@ -2128,6 +2129,9 @@
     }
     if (kind === "article") {
       switchCreationStage("article");
+      if (CS.stageView === "preview" && ArticleProject109) {
+        openUnifiedArticleEditor(null, {createNew:true,renderNow:true});
+      }
       return;
     }
     let graph, title, stage;
@@ -2337,6 +2341,9 @@
     };
 
     DOM.workflowsStage.innerHTML = `
+      ${CS.resourceEntryWarning && new URLSearchParams(window.location.search).get("workflow")
+        ? `<div class="ic-wf-link-warning" role="alert">${esc(CS.resourceEntryWarning)}</div>`
+        : ""}
       <div class="ic-wf-minimal-tools" role="search">
         <input type="search" class="hw-input" id="wf-search-inp"
           value="${esc(CS.workflowQuery || "")}" placeholder="搜索工作流…" aria-label="搜索工作流" />
@@ -3816,10 +3823,11 @@
     CS.resourceEntryWarning = "";
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get("tab");
-    const forkId = params.get("fork");
+    const forkId = params.get("fork") || params.get("remix");
     const forkTopicId = params.get("forkTopic");
     const forkGenId = params.get("forkGen") || params.get("forkGeneration");
     const forkItemId = params.get("forkItem") || "";
+    const workflowId = params.get("workflow") || "";
     const styleParam = params.get("style");
     const layoutParam = params.get("layout");
 
@@ -3931,7 +3939,9 @@
           }
           const cleanUrl = new URL(window.location.href);
           cleanUrl.searchParams.delete("fork");
+          cleanUrl.searchParams.delete("remix");
           cleanUrl.searchParams.delete("image");
+          if (params.get("remix")) cleanUrl.searchParams.set("sourceRemix", forkId);
           cleanUrl.searchParams.set("entry", forkCanvas ? "canvas" : "quick");
           window.history.replaceState(null, "", cleanUrl.pathname + cleanUrl.search);
           if (!forkCanvas) renderQuickStart();
@@ -4148,6 +4158,25 @@
       } else {
         if (!forkId && !forkTopicId && styleParam === null && layoutParam === null) ensureQuickTab();
         CS.stageView = "quick";
+      }
+    }
+    // A workflow deep link opens its actual saved graph, never silently
+    // falls back to a fresh Quick project. An unknown ID stays visible.
+    if (workflowId && !forkId && !forkGenId && !forkTopicId) {
+      const template = (CS.savedWorkflows || []).find(w => String(w.id) === workflowId);
+      if (template && template.graph && Array.isArray(template.graph.nodes)) {
+        let tab = CS.tabs.find(t => t.savedId === workflowId);
+        if (!tab) tab = createWorkflowTab({
+          title: template.title || "工作流项目", blueprint: template.blueprint,
+          graph: template.graph, savedId: workflowId, makeActive: false
+        });
+        CS.activeTabId = tab.id;
+        CS.graph = normalizeGraphSchema(tab.graph);
+        CS.stageView = "canvas";
+      } else {
+        CS.stageView = "workflows";
+        CS.workflowQuery = workflowId;
+        CS.resourceEntryWarning = "未找到链接指定的工作流：" + workflowId;
       }
     }
     // After refresh, replay a frozen outbox request using its original key.
@@ -18195,47 +18224,88 @@
   function renderCreationModeBar() {
     if (!DOM.entryBar) return;
     DOM.entryBar.hidden = false;
+    DOM.entryBar.classList.add("qc-studio-navigation");
     const canvas = CS.stageView === "canvas";
+    const editing = ["quick", "batch", "article", "preview", "canvas"].includes(CS.stageView);
     const quick = CS.stageView === "quick" || (canvas && CS.lastStudioTaskView === "quick");
     const batch = CS.stageView === "batch" || (canvas && CS.lastStudioTaskView === "batch");
-    const article = CS.stageView === "preview" || CS.stageView === "article"
+    const article = ["preview", "article"].includes(CS.stageView)
       || (canvas && CS.lastStudioTaskView === "article");
-    const history = CS.stageView === "history";
-    const workflows = CS.stageView === "workflows";
+    const history = CS.stageView === "history", workflows = CS.stageView === "workflows";
     const projects = CS.stageView === "projects";
-    const showProjectSave = CS.stageView === "quick" || CS.stageView === "batch";
-    const activeProjectTab = CS.tabs.find((t) => t.id === CS.activeTabId);
-    const historyCount = (CS.generationHistory || []).length;
-    DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作任务">
-      <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
-      <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
-      <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
-    </div><div class="qc-view-switch" role="group" aria-label="编辑视图">
-      <span class="qc-view-label">编辑方式</span>
-      <button type="button" class="btn btn-sm${!canvas ? " btn-primary" : ""}" id="studio-mode-simple" aria-pressed="${!canvas}">简洁编辑</button>
-      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布</button>
-    </div><div class="qc-entry-actions">${showProjectSave
-      ? `<button type="button" class="btn btn-sm" id="studio-project-status" title="保存当前项目至云端">${projectStatusText(activeProjectTab)}</button>`
-      : ""}<button type="button" class="btn btn-sm qc-mode-projects${projects ? " btn-primary" : ""}" id="studio-mode-projects" aria-pressed="${projects}" title="从云端或本机恢复项目">项目中心</button><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
-
-    const btnProjectSave = DOM.entryBar.querySelector("#studio-project-status");
-    if (btnProjectSave) btnProjectSave.onclick = handleProjectStatusClick;
-    const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
-    if (btnQuick) btnQuick.onclick = () => { switchCreationStage("quick"); };
-    const btnBatch = DOM.entryBar.querySelector("#studio-mode-batch");
-    if (btnBatch) btnBatch.onclick = () => { switchCreationStage("batch"); };
-    const btnArticle = DOM.entryBar.querySelector("#studio-mode-article");
-    if (btnArticle) btnArticle.onclick = () => { switchCreationStage("article"); };
-    const btnSimple = DOM.entryBar.querySelector("#studio-mode-simple");
-    if (btnSimple) btnSimple.onclick = () => { switchCreationStage("simple"); };
-    const btnCanvas = DOM.entryBar.querySelector("#studio-mode-canvas");
-    if (btnCanvas) btnCanvas.onclick = () => { switchCreationStage("canvas"); };
-    const btnProjects = DOM.entryBar.querySelector("#studio-mode-projects");
-    if (btnProjects) btnProjects.onclick = () => { openProjectCenter(); };
-    const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
-    if (btnHistory) btnHistory.onclick = () => { openHistoryPage(); };
-    const btnWorkflows = DOM.entryBar.querySelector("#studio-mode-workflows");
-    if (btnWorkflows) btnWorkflows.onclick = () => { openWorkflowsPage(); };
+    const tab = CS.tabs.find(t => t.id === CS.activeTabId);
+    const articleDraft = CS.articleEditorDraft;
+    const title = article && !canvas ? articleDraft?.title || articleDraft?.articleTitle || "未命名文章项目"
+      : tab?.title || (batch ? "未命名系列项目" : "未命名图片项目");
+    const projectState = tab ? projectStatusText(tab) : "仅本机 · 待同步";
+    DOM.entryBar.innerHTML = `
+      <div class="qc-project-line">
+        <button type="button" class="btn btn-sm qc-mode-projects${projects ? " btn-primary" : ""}"
+          id="studio-mode-projects" aria-pressed="${projects}">项目中心</button>
+        ${editing ? `<div class="qc-project-identity" aria-label="当前项目">
+          <strong title="${esc(title)}">${esc(title)}</strong>
+          <span class="qc-project-save-label" role="status">${esc(article && !canvas
+            ? (articleDraft?.projectSaveState === "synced" ? "云端已保存" : "文章草稿 · 本机")
+            : projectState)}</span>
+          </div>` : `<strong class="qc-project-identity">我的创作空间</strong>`}
+        <button type="button" id="studio-mobile-nav-toggle" class="btn btn-sm qc-mobile-nav-toggle"
+          aria-expanded="false" aria-controls="studio-navigation-panel" aria-label="展开创作导航">菜单</button>
+      </div>
+      <div class="qc-studio-controls" id="studio-navigation-panel">
+        <nav class="qc-mode-switch" aria-label="三类创作任务">
+          <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}"
+            id="studio-mode-quick" aria-pressed="${quick}">图片创作</button>
+          <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}"
+            id="studio-mode-batch" aria-pressed="${batch}">系列创作</button>
+          <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}"
+            id="studio-mode-article" aria-pressed="${article}">文章配图</button>
+        </nav>
+        <button type="button" class="btn btn-sm qc-start-workflow"
+          id="studio-mode-from-workflow">从工作流开始</button>
+        ${editing ? `<div class="qc-view-switch" role="group" aria-label="项目编辑视图">
+          <span class="qc-view-label">当前视图</span>
+          <button type="button" class="btn btn-sm${!canvas ? " btn-primary" : ""}"
+            id="studio-mode-simple" aria-pressed="${!canvas}">简洁编辑</button>
+          <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}"
+            id="studio-mode-canvas" aria-pressed="${canvas}">画布编辑</button>
+        </div>` : ""}
+        <details class="qc-asset-menu"><summary>资产与记录</summary>
+          <div class="qc-asset-menu-panel" role="group" aria-label="资产与历史">
+            <button type="button" class="btn btn-sm${history ? " btn-primary" : ""}"
+              id="studio-mode-history" aria-pressed="${history}">生图历史</button>
+            <button type="button" class="btn btn-sm${workflows ? " btn-primary" : ""}"
+              id="studio-mode-workflows" aria-pressed="${workflows}">我的工作流</button>
+            <a class="btn btn-sm" id="studio-mode-gallery" href="/?view=profile&ptab=resources">我的图库</a>
+          </div>
+        </details>
+      </div>`;
+    const bind = (id, action) => {
+      const el = DOM.entryBar.querySelector("#" + id);
+      if (el) el.onclick = action;
+    };
+    bind("studio-mode-quick", () => switchCreationStage("quick"));
+    bind("studio-mode-batch", () => switchCreationStage("batch"));
+    bind("studio-mode-article", () => switchCreationStage("article"));
+    bind("studio-mode-simple", () => switchCreationStage("simple"));
+    bind("studio-mode-canvas", () => switchCreationStage("canvas"));
+    bind("studio-mode-projects", () => openProjectCenter());
+    bind("studio-mode-from-workflow", () => openWorkflowsPage());
+    bind("studio-mode-history", () => openHistoryPage());
+    bind("studio-mode-workflows", () => openWorkflowsPage());
+    const toggle = DOM.entryBar.querySelector("#studio-mobile-nav-toggle");
+    if (toggle) toggle.onclick = () => {
+      const opened = DOM.entryBar.classList.toggle("is-mobile-nav-open");
+      toggle.setAttribute("aria-expanded", String(opened));
+      toggle.setAttribute("aria-label", opened ? "收起创作导航" : "展开创作导航");
+      toggle.textContent = opened ? "收起" : "菜单";
+    };
+    DOM.entryBar.onkeydown = (event) => {
+      if (event.key === "Escape" && DOM.entryBar.classList.contains("is-mobile-nav-open")) {
+        DOM.entryBar.classList.remove("is-mobile-nav-open");
+        toggle?.setAttribute("aria-expanded", "false");
+        toggle?.focus();
+      }
+    };
   }
 
   function renderGraphSummaryInSimpleView() {
