@@ -3568,6 +3568,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if handle_fission_post(self, req_path, body):
                 return
 
+        # #125: shared AI-only proposal protocol. No Run/Work or billing here.
+        if req_path == "/api/studio/ai-plan":
+            from .studio_ai_plan import execute_ai_plan
+            user = self._current_user(required=True)
+            self._send_json(execute_ai_plan(self.db, user, body))
+            return
+
         if req_path == "/api/studio/image-plan":
             user = self._current_user(required=True)
             from .studio_image_plan import execute_image_plan
