@@ -17231,7 +17231,9 @@
       DOM.quickStage.style.display = (isQuick || isBatch) ? "block" : "none";
       renderCreationModeBar();
       if (!isQuick && !isBatch) return;
-      if (isQuick && !getQuickParts(CS.graph) || isBatch && !getBatchParts(CS.graph)) {
+      const projection = StudioViews?.classify(CS.graph);
+      if (projection && projection.mode !== "simple-editable" ||
+          isQuick && !getQuickParts(CS.graph) || isBatch && !getBatchParts(CS.graph)) {
         renderGraphSummaryInSimpleView();
         return;
       }
