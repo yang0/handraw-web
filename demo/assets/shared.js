@@ -5282,7 +5282,7 @@
   }
 
   // #87: in-app, cancellable confirmation dialog. Never use native
-  // confirm(), and never treat missing dialog support as user approval.
+  // browser blocking confirmations, and never treat missing dialog support as user approval.
   // The destructive action runs only after the positive user gesture.
   function confirmAction(message, { title = "请确认操作", confirmText = "确认", danger = false } = {}) {
     if (typeof document === "undefined" || !document.body ||
