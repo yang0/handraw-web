@@ -17451,6 +17451,12 @@
         bp = getBatchParts(tab?.graph || CS.graph);
       }
       if (window.HandrawBatchCreate && bp) {
+        // Import legacy two-mode drafts once into the Loop-owned PlanSlot.
+        // Subsequent writes go through the same Loop and Project autosave.
+        if(window.HandrawStudioSeries && !bp.loop.data.studio2Plan) {
+          window.HandrawStudioSeries.read(bp.loop);
+          persistOpenTabs();
+        }
         const isBatchCurrentBusy = () => {
           if (!bp) return false;
           reconcileDetachedBatchState(bp);
@@ -17463,7 +17469,12 @@
           return false;
         };
         const busy = isBatchCurrentBusy();
+        const serverRun=getBatchRunProjection(bp);
         const displays = bp ? getDownstreamDisplayNodes(bp.ctrl.id) : [];
+        const pendingCloud=displays.some(d=>d.data?.pendingTaskId||
+          d.data?.pendingRequestId||
+          Object.keys(d.data?.pendingTasksBySlot||{}).length ||
+          Object.keys(d.data?.pendingRequestIds||{}).length);
         const results = displays.flatMap((dn) =>
           (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
             id: `${dn.id}:${index}`,
@@ -17509,10 +17520,18 @@
             results,
             displays,
             busy,
-            statusText: busy ? "正在批量生成中…" : ""
+            localBusy:busy,
+            runProjection:serverRun,
+            pendingCloud,
+            statusText:serverRun
+              ? "服务器确认："+serverRun.succeeded+"/"+serverRun.total+" 张成功"+
+                (serverRun.failed?" · 失败 "+serverRun.failed+" 张":"")
+              : busy ? "正在批量生成中…" :
+                bp.ctrl.data.runId ? "云端状态待核对，保留原请求编号" : ""
           },
           {
             isBusy: isBatchCurrentBusy,
+            isUnlocked:(id,item)=>S.isUnlocked(id,item),
             clearWorkspaceResults: (ctrlId) => {
               clearControlWorkspaceResults(ctrlId || bp.ctrl.id);
               if (bp.loop) {
@@ -17539,7 +17558,7 @@
               }
             },
             openReferencePicker: (opts = {}) => {
-              if (!bp || isBatchCurrentBusy()) return;
+              if (!bp) return;
               ensureBatchAssetNode();
               if (opts && typeof opts === "object" && typeof opts.onConfirm === "function") {
                 openAssetPickerModal(opts, {
@@ -17563,6 +17582,27 @@
             },
             run: async () => {
               if (!bp || isBatchCurrentBusy()) return;
+              const remote=getBatchRunProjection(bp);
+              if(remote&&!remote.isTerminal){
+                toast("上一批服务端任务仍在运行，请先确认状态避免重复计费");
+                return;
+              }
+              if(pendingCloud){
+                toast("存在待确认的云端请求，已保留 requestId，请先恢复/核对而非重复提交");
+                return;
+              }
+              if(window.HandrawStudioSeries){
+                const check=window.HandrawStudioSeries.validateForExecution(bp,{
+                  catalog:Catalog,isUnlocked:(id,item)=>S.isUnlocked(id,item)
+                });
+                if(!check.ok){
+                  const issue=check.errors[0]||{};
+                  toast("第 "+(check.plan?.slots.findIndex(s=>s.slotId===issue.slotId)+1||"相关")+
+                    " 张参数无效："+(issue.code||"invalid_plan")+
+                    "，请先修复，未提交付费生成");
+                  return;
+                }
+              }
               const scope = activeCacheScope;
               quickBusy = { id: bp.ctrl.id, scope };
               renderQuickStart();
@@ -17575,6 +17615,22 @@
             },
             runSingleRow: async (rowIndex) => {
               if (!bp || isBatchCurrentBusy()) return;
+              const remote=getBatchRunProjection(bp),snap=bp.ctrl.data.studio2RunSnapshot;
+              if(snap && (!Number.isInteger(rowIndex)||rowIndex<0||
+                  !snap.outputs?.[rowIndex])) {
+                toast("重试槽位无效，必须使用原始 RunSnapshot 的输出编号");
+                return;
+              }
+              if(remote){
+                if(!remote.isTerminal || remote.outputs?.[rowIndex]?.status!=="failed"){
+                  toast("只能重试已由服务器确认失败的单个输出，其他成功项保持不变");
+                  return;
+                }
+                batchRunModels.delete(activeCacheScope+":"+remote.runId);
+              }else if(bp.ctrl.data.runId){
+                toast("服务器结果尚未确认，暂不能再次提交以免重复计费");
+                return;
+              }
               const scope = activeCacheScope;
               quickBusy = { id: bp.ctrl.id, scope };
               renderQuickStart();
