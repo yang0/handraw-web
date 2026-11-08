@@ -39,9 +39,14 @@ class OfficialCatalogParity11(unittest.TestCase):
             "reason": "Not yet approved by website",
         }]}
 
-    def check(self, strict: bool = False):
+    def check(self, strict: bool = False, *, with_db: bool = False,
+              dynamic_styles=None, dynamic_layouts=None):
         return audit(self.catalog, self.styles, self.layouts,
-                     self.pending, strict=strict)
+                     self.pending, strict=strict,
+                     approved_styles=(dynamic_styles if dynamic_styles is not None else [])
+                        if with_db else None,
+                     approved_layouts=(dynamic_layouts if dynamic_layouts is not None else [])
+                        if with_db else None)
 
     def test_known_unapproved_skill_only_code_is_visible_but_not_released(self):
         report = self.check()
@@ -63,9 +68,53 @@ class OfficialCatalogParity11(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "staleExceptions"):
             self.check()
         self.pending["pendingSkillOnly"] = []
-        result = self.check(strict=True)
+        # Static parity is not sufficient for a production release gate:
+        # the Web DB may contain newly published official records as well.
+        with self.assertRaisesRegex(ValueError, "dbAuditRequired"):
+            self.check(strict=True)
+        result = self.check(strict=True, with_db=True)
         self.assertEqual(result["status"], "in_sync")
+        self.assertEqual(result["webDynamicApprovedCount"], 0)
+        self.assertTrue(result["approvedExportChecked"])
         self.assertTrue(result["readyForRelease"])
+
+    def test_dynamic_official_web_export_detects_unshipped_code(self):
+        # A new, approved DB-only official code must NOT silently pass the
+        # static catalog.json parity check when it is absent from Skill.
+        dynamic = [{"number": "FA-002", "generation_name": "官网新画风"}]
+        with self.assertRaisesRegex(ValueError, "FA-002"):
+            self.check(with_db=True, dynamic_styles=dynamic)
+        self.styles.append({"number": "FA-002", "generation_name": "官网新画风"})
+        report = self.check(with_db=True, dynamic_styles=dynamic)
+        self.assertEqual(report["webStaticCount"], 2)
+        self.assertEqual(report["webDynamicApprovedCount"], 1)
+        self.assertEqual(report["knownPending"], ["FG-025"])
+        self.assertFalse(report["readyForRelease"])
+        self.catalog["resources"].append({
+            "id": "FG-025", "kind": "style", "name": "Perler Bead Pixel Art"})
+        self.pending["pendingSkillOnly"] = []
+        self.assertTrue(self.check(strict=True, with_db=True,
+                                   dynamic_styles=dynamic)["readyForRelease"])
+
+    def test_db_approved_export_kind_and_code_collision_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "collision"):
+            self.check(with_db=True, dynamic_styles=[{"number": "FA-001"}])
+        with self.assertRaisesRegex(ValueError, "collision"):
+            self.check(with_db=True,
+                       dynamic_styles=[{"number": "FA-002"}],
+                       dynamic_layouts=[{"id": "FA-002"}])
+        with self.assertRaisesRegex(ValueError, "supplied together"):
+            audit(self.catalog, self.styles, self.layouts, self.pending,
+                  approved_styles=[])
+
+    def test_static_parity_does_not_auto_claim_release_without_db_evidence(self):
+        self.catalog["resources"].append({
+            "id": "FG-025", "kind": "style", "name": "Perler Bead Pixel Art"})
+        self.pending["pendingSkillOnly"] = []
+        report = self.check()
+        self.assertEqual(report["status"], "in_sync")
+        self.assertFalse(report["approvedExportChecked"])
+        self.assertFalse(report["readyForRelease"])
 
     def test_unapproved_new_style_causes_ci_failure(self):
         self.styles.append({"number": "FG-026", "generation_name": "Unauthorized new entry"})
