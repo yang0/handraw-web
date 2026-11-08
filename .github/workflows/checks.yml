@@ -293,13 +293,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: yang0/handraw-style
-          ref: 89382b7bb81b85cb3644f57b81ec917ce96c7bc8
+          ref: 9542512c8fd49cd8a5bbc02b9378b82b6e6e9c24
           path: external/handraw-style
           persist-credentials: false
       - name: '#84/#112 real Skill CLI -> local HTTP -> PG17 + S3 emulation'
         env:
           HANDRAW_REAL_SKILL_CLIENT_PATH: external/handraw-style/skills/handraw-cloud/scripts/handraw_cloud.py
-          HANDRAW_REAL_SKILL_EXPECTED_SHA: 89382b7bb81b85cb3644f57b81ec917ce96c7bc8
+          HANDRAW_REAL_SKILL_EXPECTED_SHA: 9542512c8fd49cd8a5bbc02b9378b82b6e6e9c24
         run: |
           test "$(git -C external/handraw-style rev-parse HEAD)" = "$HANDRAW_REAL_SKILL_EXPECTED_SHA"
           python -m pip install "moto[s3]>=5.0,<6"
