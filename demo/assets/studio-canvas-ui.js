@@ -82,7 +82,8 @@
     // Server-owned RunItem rows always win over optimistic/local slot state.
     if(Array.isArray(projection?.slots)){
       for(const s of projection.slots)if(Number.isInteger(s.index)&&s.index<expected&&s.index>=0){
-        if((s.status==="pending"||s.status==="unknown")&&slots[s.index].imageUrl)continue;
+        // Server facts override speculative local results, even when the
+        // gateway is uncertain. Never count unconfirmed local media as paid success.
         slots[s.index]={
           index:s.index,status:s.status,
           imageUrl:s.status==="success"?mediaUrl(s.imageUrl):"",
@@ -92,9 +93,10 @@
     }
     const counts=slots.reduce((acc,row)=>{
       const k=row.status==="success"?"success":row.status==="failed"?"failed":
-        row.status==="generating"?"generating":"pending";
+        row.status==="generating"||row.status==="running"?"generating":
+        row.status==="unknown"?"unknown":"pending";
       acc[k]++;return acc;
-    },{success:0,failed:0,generating:0,pending:0});
+    },{success:0,failed:0,generating:0,pending:0,unknown:0});
     return {slots,counts,expected};
   }
   function mayRetry(slot,projection){
@@ -123,7 +125,7 @@
     const c=state.counts,slots=state.slots,first=slots.find(x=>x.imageUrl);
     let out='<div class="ic129-group-head"><strong>系列结果组 · '+state.expected+' 张</strong>'+
       '<span role="status">'+c.success+' 成功 · '+c.failed+' 失败 · '+
-      (c.generating+c.pending)+' 进行中/待确认</span></div>';
+      (c.generating+c.pending)+' 进行中 · '+c.unknown+' 待核实</span></div>';
     if(first&&!isExpanded)out+='<div class="ic129-group-cover"><img loading="lazy" src="'+htmlEscape(first.imageUrl)+'" alt="系列结果封面" data-disp-zoom="'+htmlEscape(first.imageUrl)+'" />'+
       '<span class="ic129-cover-count">'+state.expected+' 张</span></div>';
     if(isExpanded){
@@ -225,6 +227,7 @@
           taskHtml+='<div><strong>'+htmlEscape(row.runId||row.controlId)+'</strong> · '+htmlEscape(row.text)+
             (row.total===null?'':(' · 成功 '+row.done+' / 失败 '+row.failed+' / 排队 '+row.queued+' / 生成 '+row.generating))+
             ((row.runId&&!row.isTerminal)||(!row.runId&&row.text==="正在提交 · 远端待核实")?'<button type="button" data-c129="stop" data-control="'+htmlEscape(row.controlId)+'">停止未提交任务</button>':'')+
+            '<button type="button" data-c129="recheck" data-control="'+htmlEscape(row.controlId)+'">重新检查远端 / 解除本地忙状态</button>'+
             '</div>';
         }
         taskHtml+='</div>';
@@ -251,6 +254,7 @@
           else if(action==="ai"){inspectorTab=inspectorTab==="ai"?"props":"ai";renderWorkspace(options);}
           else if(action==="tasks"){taskExpanded=!taskExpanded;renderWorkspace(options);}
           else if(action==="stop")options.onStop?.(btn.dataset.control);
+          else if(action==="recheck")options.onRecheck?.(btn.dataset.control);
           else options.onAction?.(action,selected);
         };
       });
