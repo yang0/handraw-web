@@ -287,9 +287,9 @@
       outputCount:plan.slots.length*candidateCount(loop),
       outputs:expand(plan,candidateCount(loop))});
   }
-  function project(snapshot,run,items=[]) {
+  function project(snapshot,run,items=[],authoritativeSlots=[]) {
     if(!snapshot?.outputs||!Array.isArray(snapshot.outputs))throw err("invalid_run_snapshot");
-    const raw=Core.selectRunProjection(run,items,{expectedCount:snapshot.outputCount});
+    const raw=Core.selectRunProjection(run,items,{expectedCount:snapshot.outputCount,authoritativeSlots});
     const byIndex=new Map();
     for(const item of items){
       const pos=Number(item?.slotIndex??(Number(item?.position)/1000));
@@ -302,9 +302,17 @@
     }
     const ordered=snapshot.outputs.map(o=>{
       const item=byIndex.get(o.outputIndex)||null;
+      const authoritative=authoritativeSlots.find(slot=>Number(slot?.slotIndex)===o.outputIndex);
+      if(authoritative){
+        const confirmed=authoritative.viewStatus==="success"&&authoritative.mediaId&&authoritative.imageUrl;
+        return {...o,status:confirmed?"success":authoritative.viewStatus,
+          imageUrl:confirmed?authoritative.imageUrl:"",
+          mediaId:confirmed?authoritative.mediaId:"",
+          itemId:authoritative.itemId||"",errorCode:authoritative.errorCode||""};
+      }
       return {...o,status:item?.status||"pending",
         imageUrl:item?.status==="success"&&item.mediaId?item.imageUrl||"":"",
-        mediaId:item?.status==="success"?item.mediaId||"":"",
+        mediaId:item?.status==="success"?item.mediaId||"",
         itemId:item?.id||"",errorCode:item?.errorCode||""};
     });
     return {...raw,runId:run?.id||snapshot.runId,slotCount:snapshot.slotCount,
