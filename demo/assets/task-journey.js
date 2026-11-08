@@ -394,7 +394,10 @@
       if (!active || active.state !== "done") return;
       active.recoverable = false;
       storage.clear();
-      draw(active);
+      // The editor has already consumed the document. A finished task
+      // overlay must not cover the article's AI Plan/Export buttons.
+      document.getElementById("hw-task-journey")?.remove();
+      active = null;
     }
   };
 })(window);
