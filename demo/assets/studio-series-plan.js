@@ -280,6 +280,54 @@
       outputCount:snapshot.outputCount,outputs:ordered,
       results:ordered.filter(o=>Boolean(o.imageUrl))};
   }
+  function validateForExecution(parts,options={}) {
+    const errors=[],loop=parts?.loop;
+    if(!loop?.data||!parts.skill?.data||!parts.ctrl?.data)
+      return {ok:false,errors:[{code:"missing_series_graph"}]};
+    if(!options.catalog)errors.push({code:"resource_authorization_required"});
+    let plan;
+    try{plan=read(loop);}
+    catch(e){return {ok:false,errors:[{code:e.code||e.message}]};}
+    if(!plan.slots.length)errors.push({code:"empty_plan"});
+    const global=Core.normalizeLegacyParts(parts).spec;
+    for(const slot of plan.slots){
+      if(!String(slot.subject||"").trim()){
+        errors.push({slotId:slot.slotId,field:"subject",code:"missing_subject"});
+        continue;
+      }
+      try{
+        const effective=Core.resolveEffectiveSpec(
+          {...global,subject:slot.subject},
+          {...slot,overrides:slot.overrides}
+        );
+        const check=Core.validateSpec(effective,{catalog:options.catalog});
+        for(const e of check.errors)errors.push({...e,slotId:slot.slotId});
+        // Resource entitlements are validated against the SAME picker rules.
+        for(const [field,key] of Object.entries({style:"style1",
+          secondaryStyle:"style2",layout:"layout"})){
+          if(field==="secondaryStyle"&&!effective.fusionEnabled)continue;
+          if(!effective[field]?.id)continue;
+          const r=Resources.resolveSelection(options.catalog,key,effective[field].id,
+            {isUnlocked:options.isUnlocked});
+          if(!r.ok)errors.push({field,slotId:slot.slotId,code:r.code});
+        }
+        const media=slot.referenceMedia||[];
+        if(!Array.isArray(media))errors.push({slotId:slot.slotId,code:"invalid_reference_media"});
+        else for(const mediaRef of media){
+          if(!mediaRef||typeof mediaRef!=="object"||
+            !String(mediaRef.id||mediaRef.mediaId||mediaRef.image||""))
+            errors.push({slotId:slot.slotId,code:"invalid_reference_media"});
+        }
+      }catch(e){
+        errors.push({slotId:slot.slotId,code:e.code||e.message});
+      }
+    }
+    const expected=plan.slots.length*candidateCount(loop);
+    if(expected>200)errors.push({code:"too_many_outputs"});
+    return {ok:errors.length===0,errors,slotCount:plan.slots.length,
+      candidateCount:candidateCount(loop),outputCount:expected,plan};
+  }
   return Object.freeze({read,sync,patchSlot,updateText,switchMode,move,duplicate,
-    remove,add,mergeAI,candidateCount,setCandidates,expand,freeze,project});
+    remove,add,mergeAI,candidateCount,setCandidates,expand,freeze,project,
+    validateForExecution});
 });
