@@ -25,6 +25,10 @@ if str(ROOT) not in sys.path:
 from backend.server import SESSION_COOKIE_NAME, create_channel_server, init_database
 from backend.services import register_user
 from smoke_studio_native_100_graph_112 import graph_fixture, http_json
+from ops.canvas_frame_trace_111 import (
+    delta_performance_metrics, read_trace_from_stream,
+    summarize_raf_intervals, summarize_trace_events,
+)
 
 
 def percentile(values, q):
@@ -245,6 +249,123 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
             "undoRedoGeometry": True}
 
 
+
+def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1) -> dict:
+    """Physical pointer + rAF cadence + bounded CDP render diagnostics.
+
+    Includes real presentation cadence while dragging AND settling after
+    pointerup. No fake Graph updates. Trace raw bytes never leave memory.
+    """
+    page.evaluate("""() => window.HANDRAW_STUDIO_TESTING
+      .focusCanvasNodeForBenchmark('g00-0')""")
+    coords = page.evaluate("""() => {
+      const node=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
+      const header=node?.querySelector('.ic-node-header-above');
+      if(!header)throw Error('real frame profile header missing');
+      const r=header.getBoundingClientRect();
+      const candidates=[.15,.45,.7];
+      for(const ratio of candidates){
+        const x=r.left+r.width*ratio, y=r.top+r.height*.5;
+        const hit=document.elementFromPoint(x,y);
+        if(hit?.closest('.ic-node')===node &&
+            !hit.closest('button,input,textarea,select,label')){
+          const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+          return {x,y,nodeX:n.x,nodeY:n.y};
+        }
+      }
+      throw Error('no pointer-reachable native header for frame profile');
+    }""")
+    cdp = page.context.new_cdp_session(page)
+    complete = {}
+    recording = False
+    try:
+        cdp.send("Performance.enable")
+        # The trace is Chrome renderer metadata only and is never uploaded or
+        # printed. Do not label these events as GPU fence/present timing.
+        cdp.on("Tracing.tracingComplete", lambda event: complete.update(event))
+        cdp.send("Tracing.start", {
+            "categories": "devtools.timeline,blink,cc",
+            "options": "record-as-much-as-possible",
+            "transferMode": "ReturnAsStream",
+        })
+        recording = True
+        before = cdp.send("Performance.getMetrics")
+        page.evaluate("""() => {
+          const monitor={active:true,last:null,intervals:[]};
+          window.__studio111Frames=monitor;
+          function frame(t){
+            if(!monitor.active)return;
+            if(monitor.last!==null && monitor.intervals.length<240)
+              monitor.intervals.push(t-monitor.last);
+            monitor.last=t;
+            requestAnimationFrame(frame);
+          }
+          requestAnimationFrame(frame);
+        }""")
+        page.mouse.move(coords["x"], coords["y"])
+        page.mouse.down()
+        # 12 real pointer movements with deliberate pacing, so the renderer
+        # has multiple opportunities to present frames. Unlike 9 rapid
+        # pointer events, this reports actual rAF cadence under pressure.
+        for step in range(1, 13):
+            page.mouse.move(coords["x"] + 92*step/12,
+                            coords["y"] + 53*step/12, steps=1)
+            page.wait_for_timeout(20)
+        page.mouse.up()
+        # Include pointer-up authoritative full reconcile and the ensuing
+        # paint opportunity; this is not solely a JavaScript handler metric.
+        page.wait_for_timeout(145)
+        intervals = page.evaluate("""() => {
+          const monitor=window.__studio111Frames;
+          monitor.active=false;
+          return monitor.intervals.slice();
+        }""")
+        after = cdp.send("Performance.getMetrics")
+        cdp.send("Tracing.end")
+        recording = False
+        for _ in range(45):
+            if complete.get("stream"):
+                break
+            page.wait_for_timeout(50)
+        if not complete.get("stream"):
+            raise AssertionError("CDP trace stream missing after real drag")
+        trace = read_trace_from_stream(cdp, complete["stream"])
+        frames = summarize_raf_intervals(intervals)
+        counters = delta_performance_metrics(before, after)
+        groups = summarize_trace_events(trace)
+        # Assertions prove the *measurement exists*, not 60fps performance.
+        assert frames["samples"] >= 5, ("too few real frame samples", size, frames)
+        assert counters["LayoutCount"] is not None, (
+            "Chromium LayoutCount metric missing", size, counters)
+        assert groups["eventCount"] > 0, ("empty Chromium trace", size)
+        state = page.evaluate("""() => {
+          const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+          return {x:n.x,y:n.y,
+            cards:document.querySelectorAll('#ic-nodes-layer .ic-node').length,
+            imageNodes:document.querySelectorAll('#ic-nodes-layer img').length,
+            edgeGroups:document.querySelectorAll(
+              '#ic-edges-svg g.ic-edge-group[data-edge-id]').length};
+        }""")
+        assert state["x"] > coords["nodeX"] and state["y"] > coords["nodeY"], (
+            "real paced frame drag failed to move Graph", size, coords, state)
+        assert state["cards"] == size and state["edgeGroups"] == size//2, (
+            "real paced drag lost Graph DOM", size, state)
+        assert state["imageNodes"] >= size*4//10, (
+            "real paced drag lost preview images", size, state)
+        return {"nodes": size, "cpuThrottle": cpu_factor,
+                "pointerMoves": 12, "raf": frames,
+                "cdpPerformance": counters, "cdpTrace": groups,
+                "paidGatewayRequests": 0, "productionFrameSLA": False}
+    finally:
+        if recording:
+            # Preserve cleanup when a browser assertion fails mid-trace.
+            try:
+                cdp.send("Tracing.end")
+            except Exception:
+                pass
+        cdp.detach()
+
+
 def main() -> None:
     from playwright.sync_api import sync_playwright
 
@@ -396,15 +517,27 @@ def main() -> None:
                             assert mini_camera_stable, ("camera zoom rebuilt every minimap node",size)
                             native["minimapStableOnZoom"] = True
                             native["physicalDrag"] = measure_physical_drag(page, size)
+                            # Full pipeline differs from handler-only p95.
+                            # Keep the original 9-event regression unchanged.
+                            if size in (100, 300):
+                                native["framePipeline"] = profile_real_frame_pipeline(
+                                    page, size)
                             if size == 300:
                                 cdp = context.new_cdp_session(page)
                                 try:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4})
                                     native["emulated4xCpuDrag"] = measure_physical_drag(
                                         page, size, cpu_factor=4)
+                                    native["emulated4xFramePipeline"] = (
+                                        profile_real_frame_pipeline(page, size, cpu_factor=4))
                                 finally:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1})
                                     cdp.detach()
+                            if native.get("framePipeline"):
+                                print("CANVAS #111 FULL FRAME PIPELINE " + json.dumps({
+                                    "nodes": size, "normal": native["framePipeline"],
+                                    "throttled": native.get("emulated4xFramePipeline"),
+                                }, ensure_ascii=False), flush=True)
                             print("CANVAS #111 REAL POINTER DRAG " + json.dumps({
                                 "nodes": size,
                                 "normal": native["physicalDrag"],
