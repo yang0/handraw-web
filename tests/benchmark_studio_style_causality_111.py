@@ -23,6 +23,14 @@ def main():
         nonlocal applied
         if mode == "baseline" and not applied:
             applied = True
+            # Stage 10's CSS A/B trials used to create the real selection
+            # toolbar as a side-effect. After deduplicating those trials,
+            # explicitly establish selection with ONE genuine mouse drag and
+            # its Undo; camera focus alone only pans, never selects a node.
+            warmup = stage10.profile_drag(page, cdp, cpu_factor=1)
+            assert warmup["graphUndoAndMediaStable"]
+            assert page.locator("[data-float-topbar]").count() == 1, (
+                "real native selection toolbar did not mount after warmup")
             same_window = trace_window(page, cdp)
             floating_overlay_window = trace_window(
                 page, cdp, "floating-layer-style-contain")
@@ -41,6 +49,8 @@ def main():
                 "issue": 111, "phase": 11,
                 "sameWindow": same_window,
                 "floatingOverlayContainWindow": floating_overlay_window,
+                "realMouseSelectionWarmup": True,
+                "stage10PairedAblationsAreRunSeparatelyInCI": True,
                 "ablationOrder": "A-B-A-B-A at normal and CDP 4x",
                 "candidates": trials,
                 "canPromoteWithoutFurtherReview": False,
