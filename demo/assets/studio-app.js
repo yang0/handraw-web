@@ -20059,6 +20059,11 @@
           vp.setPointerCapture(e.pointerId);
         } catch (_) {}
         refreshCanvasSelection();
+        // The selected edge SVG may have been rebuilt above. Capture its
+        // stable incident bindings only after the authoritative redraw.
+        dragCtx.edgeSession=window.HandrawCanvasRenderer.createEdgeDragSession(
+          DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
+          DOM.nodesLayer,startPositions.map(item=>item.node.id),bezierPath);
         renderFloatingOverlays();
         return;
       }
@@ -20100,6 +20105,7 @@
       }
 
       if (dragCtx.mode === "node-drag") {
+        const frameStart=window.__HANDRAW_TESTING__===true?performance.now():null;
         const dxScreen = e.clientX - dragCtx.startX;
         const dyScreen = e.clientY - dragCtx.startY;
         if (!dragCtx.moved && Math.hypot(dxScreen, dyScreen) < 3) return;
@@ -20127,11 +20133,31 @@
         const movedIds=dragCtx.startPositions.map(item=>item.node.id);
         // Keep the existing hit targets/selection; render all edges only if
         // the partial path finds a missing or ambiguous SVG/Graph binding.
-        if(!window.HandrawCanvasRenderer.patchMovedEdgePaths(
-          DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
-          DOM.nodesLayer,movedIds,bezierPath))renderEdgesSvg();
+        const wasSession=Boolean(dragCtx.edgeSession);
+        let usedSession=wasSession&&dragCtx.edgeSession.update(
+          CS.graph.edges||[],CS.graph.nodes||[]);
+        if(!usedSession){
+          // A mid-drag Graph/DOM/Run update invalidates the cached edges.
+          // Fall back once to the authoritative complete SVG calculation,
+          // then index the latest mounted graph before the next movement.
+          renderEdgesSvg();
+          dragCtx.edgeSession=window.HandrawCanvasRenderer.createEdgeDragSession(
+            DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
+            DOM.nodesLayer,movedIds,bezierPath);
+        }
+        const edgesEnd=frameStart===null?null:performance.now();
         positionFloatingOverlays();
         renderMinimapMovedNodes(movedIds);
+        if(frameStart!==null&&DOM.nodesLayer){
+          const samples=DOM.nodesLayer._drag111Samples||
+            (DOM.nodesLayer._drag111Samples=[]);
+          if(samples.length<120)samples.push({
+            totalMs:performance.now()-frameStart,
+            edgeAndPositionMs:edgesEnd-frameStart,
+            usedSession,
+            movedCount:movedIds.length
+          });
+        }
         return;
       }
 
@@ -20551,6 +20577,19 @@
       // #111: test-only instrumentation of the actual product card renderer.
       // Does not schedule saves or issue generation requests; never enabled
       // outside the explicit __HANDRAW_TESTING__ flag.
+      focusCanvasNodeForBenchmark: (id) => {
+        // Test-only camera positioning for physical Playwright mouse drags.
+        // No Graph mutation, autosave or external media API activity.
+        const n=(CS.graph.nodes||[]).find(node=>String(node.id)===String(id));
+        if(!n||!DOM.viewport)throw Error("canvas_drag_focus_node_missing");
+        const r=DOM.viewport.getBoundingClientRect();
+        CS.vk=1;
+        CS.vx=r.width*0.5-(n.x+(n.w||332)*0.5);
+        CS.vy=r.height*0.5-(n.y+32);
+        applyViewportTransform();
+        DOM.nodesLayer._drag111Samples=[];
+        return {id:String(n.id),zoom:CS.vk};
+      },
       renderCanvasNodesForBenchmark: (dirtyNodeIds = null) => {
         if (!DOM.nodesLayer) throw new Error("canvas_nodes_layer_missing");
         DOM.nodesLayer.dataset.canvasBenchmark = "1";
