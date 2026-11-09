@@ -243,7 +243,15 @@ class Phase22DFieldMatrixTests(unittest.TestCase):
                   "--web-sha",WEB,"--skill-sha",SKILL,"--report",str(report)]
             self.assertEqual(main(args),2)
             r=d/"record.json"
-            r.write_text(json.dumps(event_packet("redis")),encoding="utf-8")
+            # CLI uses the runner's real UTC clock rather than the test-only
+            # frozen NOW used by evaluate_record pure unit tests.
+            current=datetime.now(timezone.utc)
+            packet=event_packet("redis")
+            for row in packet["events"]:
+                row["observedAtUtc"]=ISO(current-timedelta(minutes=1))
+            packet["measurements"]["faultStartedAtUtc"]=ISO(current-timedelta(minutes=3))
+            packet["measurements"]["serviceRestoredAtUtc"]=ISO(current-timedelta(minutes=2))
+            r.write_text(json.dumps(packet),encoding="utf-8")
             r.chmod(0o600)
             args[1]=str(r)
             self.assertEqual(main(args),0)
