@@ -41,6 +41,10 @@ def profile_drag(page, cdp, cpu_factor=1):
       const head=node?.querySelector('.ic-node-header-above');
       const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
       if(!node||!head||!n)throw Error('native drag target missing');
+      // Undo may reconcile cards. Capture identities immediately before each
+      // physical drag, not before a previous gesture or the next undo.
+      window.__qa111MediaImageRefs=[
+        ...document.querySelectorAll('#ic-nodes-layer img')];
       const r=head.getBoundingClientRect();
       for(const frac of [.15,.45,.7]){
         const x=r.left+r.width*frac, y=r.top+r.height*.5;
