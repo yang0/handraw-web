@@ -3,6 +3,7 @@ import json
 import unittest
 from ops.canvas_style_invalidation_111 import (
     summarize_selector_footprint, summarize_style_invalidation,
+    summarize_selector_timings,
 )
 
 class StyleInvalidation111Tests(unittest.TestCase):
@@ -22,6 +23,30 @@ class StyleInvalidation111Tests(unittest.TestCase):
         self.assertNotIn("CANARY_TOPSECRET",json.dumps(result))
         self.assertFalse(result["rootCauseProven"])
         self.assertFalse(result["rawTracePersisted"])
+
+    def test_chrome_real_selector_stats_are_aggregated_and_redacted(self):
+        secret="https://private.example?token=TOP_SECRET_DO_NOT_LOG"
+        trace={"traceEvents":[
+            {"name":"SelectorStats","ph":"X","args":{"selector_stats":{
+                "selector_timings":[
+                    {"selector":".ic-node:hover .ic-port-zone","elapsed (us)":1200,
+                     "match_attempts":9000,"match_count":3,"fast_reject_count":8000,
+                     "style_sheet_id":secret},
+                    {"selector":".ic-node:hover .ic-port-zone","elapsed (us)":200,
+                     "match_attempts":1000,"match_count":1,"fast_reject_count":950},
+                    {"selector":"body [data-secret='"+secret+"']","elapsed (us)":9999,
+                     "match_attempts":100,"match_count":2},
+                ]}}},
+        ]}
+        result=summarize_selector_timings(trace)
+        self.assertTrue(result["selectorStatsEventsObserved"])
+        self.assertEqual(result["eligibleUniqueSelectors"],1)
+        top=result["topByMeasuredMatchTime"][0]
+        self.assertEqual(top["matchAttempts"],10000)
+        self.assertEqual(top["matchCount"],4)
+        self.assertEqual(top["elapsedMs"],1.4)
+        self.assertNotIn("TOP_SECRET",json.dumps(result))
+        self.assertTrue(result["addsInstrumentationOverhead"])
 
     def test_unknown_is_not_zero(self):
         result=summarize_style_invalidation({"traceEvents":[]})
