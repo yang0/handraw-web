@@ -11,6 +11,15 @@
       "state": "awaiting_website_editorial_review"
     },
     {
+      "code": "FF-019",
+      "kind": "style",
+      "name": "Hyperreal 3D Cartoon Portrait",
+      "sha256": "fc4f512c237ce56a6cf43776912be12ba9e81fc21f575ef962752e7302329fd3",
+      "issue": 132,
+      "reason": "Actual handraw-style main@9248843ba4659a1d9afbc177ae73b91bb1af68a9 v1.9.11 added FF-019 before Web official editorial approval; full Skill JSON metadata SHA256 fingerprint pinned for drift detection. NOT approved/public on Web; DO NOT reverse-import.",
+      "state": "awaiting_website_editorial_review"
+    },
+    {
       "code": "FG-025",
       "kind": "style",
       "name": "Perler Bead Pixel Art",
