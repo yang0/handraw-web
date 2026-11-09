@@ -12,6 +12,7 @@ import benchmark_studio_tree_style_111 as stage10
 from ops.canvas_phase12_isolation_111 import collect
 from ops.canvas_phase13_pointer_111 import collect as collect_phase13
 from ops.canvas_phase14_input_111 import collect as collect_phase14
+from ops.canvas_phase15_move_boundary_111 import collect as collect_phase15
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -69,6 +70,29 @@ def main():
                 "productionCandidate":False,
                 "physicalDeviceEvidence":False,
                 "paidRequests":0
+            },ensure_ascii=False),flush=True)
+            phase15=collect_phase15(page,cdp)
+            folder15=ROOT/"artifacts/studio-111-phase15"
+            folder15.mkdir(parents=True,exist_ok=True)
+            (folder15/"summary.json").write_text(
+                json.dumps(phase15,indent=2,ensure_ascii=False)+"\n",
+                encoding="utf-8")
+            print("CANVAS #111 PHASE15 "+json.dumps({
+                "tracesByCpu":{cpu:{
+                    win:{
+                        "large":row["largeUpdateEvents"],
+                        "max":row["maxElementCount"],
+                        "reasonCategories":row["reasonCategories"],
+                        "joinNearLargeByReason":row["joinNearLargeUpdateByReason"],
+                        "attributes":row["attributeMutationTypes"],
+                        "structureChanges":row["structure"],
+                    }
+                    for win,row in entry["windows"].items()}
+                    for cpu,entry in phase15["tracesByCpu"].items()},
+                "diagnosticOnly":True,
+                "rootCauseProven":False,
+                "paidRequests":0,
+                "releaseApproved":False,
             },ensure_ascii=False),flush=True)
             summary=result["traceModes"]
             print("CANVAS #111 PHASE12 "+json.dumps({
