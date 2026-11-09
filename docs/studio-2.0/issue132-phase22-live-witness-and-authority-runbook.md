@@ -20,8 +20,8 @@ python ops/studio_phase22_official_provenance_132.py \
   --skill-checkout /private/pinned-skill-checkout \
   --skill-sha <full-40-char-reviewed-skill-commit> \
   --catalog plugin/content/catalog.json \
-  --skill-styles /private/pinned-skill-checkout/references/styles.json \
-  --skill-layouts /private/pinned-skill-checkout/references/layouts.json \
+  --skill-styles /private/pinned-skill-checkout/skills/handdraw-style-prompter/references/styles.json \
+  --skill-layouts /private/pinned-skill-checkout/skills/handdraw-style-prompter/references/layouts.json \
   --pending-before ops/official_catalog_pending_11.json \
   --pending-after /private/reviewed-post-approval-pending.json \
   --published-styles /private/export/styles.json \
