@@ -18,6 +18,9 @@ import re
 import stat
 import sys
 
+if __package__ in (None, ""):
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+
 from ops.studio_official_approval_132 import CODES
 
 HEX=re.compile(r"^[a-f0-9]{64}$")
