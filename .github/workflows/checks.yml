@@ -77,6 +77,8 @@ jobs:
         run: python tests/benchmark_studio_tree_style_111.py
       - name: '#111 stage11 Chrome same-window invalidation ancestry + targeted hover A/B 1x/4x CPU'
         run: python tests/benchmark_studio_style_causality_111.py
+      - name: '#111 phase12 real Chromium SVG/global-selector/node-coordinate isolations on 1x/4x CPU'
+        run: python tests/benchmark_studio_phase12_111.py
       - name: '#112 Native Studio 100-node Graph + owner isolation Chromium smoke'
         run: python tests/smoke_studio_native_100_graph_112.py
       - run: python tests/smoke_studio_runtime_browser_119.py
@@ -105,6 +107,7 @@ jobs:
             artifacts/studio-111-distinct-media/**
             artifacts/studio-111-tree-style/**
             artifacts/studio-111-causality/**
+            artifacts/studio-111-phase12/**
             artifacts/graphpatch-126/**
             artifacts/ai-110-offline-eval.json
             artifacts/p0-masonry-114/**
@@ -333,6 +336,12 @@ jobs:
           python ops/check_official_catalog_parity.py \
             --skill-root external/handraw-style-catalog/skills/handdraw-style-prompter \
             --report artifacts/official-catalog-parity-11.json
+      - name: '#11/#84/#112 Phase12 read-only editorial and external integration gate inventory'
+        run: |
+          python ops/phase12_release_preflight_112.py \
+            --skill-root external/handraw-style-catalog/skills/handdraw-style-prompter \
+            --skill-client external/handraw-style/skills/handraw-cloud/scripts/handraw_cloud.py \
+            --report artifacts/studio-phase12-release-preflight.json
       - name: '#84/#112 real Skill CLI -> local HTTP -> PG17 + S3 emulation'
         env:
           HANDRAW_REAL_SKILL_CLIENT_PATH: external/handraw-style/skills/handraw-cloud/scripts/handraw_cloud.py
@@ -357,6 +366,14 @@ jobs:
         with:
           name: official-catalog-parity-11
           path: artifacts/official-catalog-parity-11.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: '#11/#84/#112 upload no-secret Phase12 release preflight'
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio2-phase12-release-preflight
+          path: artifacts/studio-phase12-release-preflight.json
           if-no-files-found: ignore
           retention-days: 30
       - name: '#112 upload redacted PostgreSQL backup/restore audit (no database archive)'
