@@ -20113,6 +20113,16 @@
         // Read the selected title bar geometry at the very start of a drag.
         // Do not retain across selection, graph, viewport or toolbar changes.
         dragCtx.overlayMetrics=captureDragOverlayMetrics(dragCtx.startPositions);
+        // Use individual CSS translate to move cards on the compositor path
+        // without changing their layout position on every pointermove. The
+        // experiment's legacy mode is only exposed in isolated browser tests.
+        const forceLegacy=window.__HANDRAW_TESTING__===true &&
+          window.HANDRAW_STUDIO_TESTING?.canvasDragPositionMode==="left-top";
+        const canTranslate=!forceLegacy && dragCtx.startPositions.length>0 &&
+          dragCtx.startPositions.every(item=>item.el &&
+            "translate" in item.el.style &&
+            (!item.el.style.translate||item.el.style.translate==="none"));
+        dragCtx.positionMode=canTranslate?"translate":"left-top";
         return;
       }
 
@@ -20170,12 +20180,25 @@
         dragCtx.moved = true;
         const dxW = dxScreen / CS.vk;
         const dyW = dyScreen / CS.vk;
+        // A refreshed node DOM mid-gesture may not have the original layout
+        // anchor. Fall back to the proven left/top path, clearing any
+        // earlier translate before writing a new authoritative position.
+        if(dragCtx.positionMode==="translate" &&
+          dragCtx.startPositions.some(item=>!item.el?.isConnected ||
+            !DOM.nodesLayer.contains(item.el)))dragCtx.positionMode="left-top";
         for (const item of dragCtx.startPositions) {
           item.node.x = snapVal(item.ox + dxW);
           item.node.y = snapVal(item.oy + dyW);
           if (item.el) {
-            item.el.style.left = `${item.node.x}px`;
-            item.el.style.top = `${item.node.y}px`;
+            if(dragCtx.positionMode==="translate"){
+              item.el.style.translate=
+                `${item.node.x-item.ox}px ${item.node.y-item.oy}px`;
+            }else{
+              // An interrupted translate must never double-apply a delta.
+              if(item.el.style.translate)item.el.style.translate="";
+              item.el.style.left = `${item.node.x}px`;
+              item.el.style.top = `${item.node.y}px`;
+            }
           }
         }
         const movedIds=dragCtx.startPositions.map(item=>item.node.id);
@@ -20208,6 +20231,7 @@
             overlayMs:overlayEnd-edgesEnd,
             minimapMs:minimapEnd-overlayEnd,
             overlayCached,usedSession,
+            positionMode:dragCtx.positionMode,
             movedCount:movedIds.length
           });
         }
@@ -20263,6 +20287,15 @@
       vp.classList.remove("is-panning");
 
       if (ctx.mode === "node-drag" && ctx.moved) {
+        // A render may reconcile/reuse existing card DOM. Commit Graph
+        // coordinates to layout exactly once and remove transient translate
+        // BEFORE the authoritative full-edge/card reconciliation.
+        for(const item of ctx.startPositions){
+          if(!item.el?.isConnected)continue;
+          item.el.style.left=`${item.node.x}px`;
+          item.el.style.top=`${item.node.y}px`;
+          item.el.style.translate="";
+        }
         fullRenderCanvas();
         persistOpenTabs();
       } else if (ctx.mode === "node-drag" && !ctx.moved && !ctx.withModifier && ctx.clickedNodeId) {
