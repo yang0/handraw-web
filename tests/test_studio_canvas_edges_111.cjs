@@ -171,6 +171,26 @@ assert.match(app,/dragCtx\.lastEdgeTrusted=Boolean\(usedSession\)&&diagMode==="n
 assert.match(app,/if\(!safe\)fullRenderCanvas\(\)/,
   "full pointerup fallback must remain in place");
 
+// #111 Phase 7 rAF controlled A/B: input events must always update Graph
+// while at most one current visual frame remains pending. On release,
+// cancellation must flush the final Graph coords before disposing edges.
+assert.match(app,/canvasDragFlushMode==="raf"/,
+  "rAF experiment must be explicitly opted into via the test bridge");
+assert.match(app,/const flushMode=window\.__HANDRAW_TESTING__===true/,
+  "production still uses the proven immediate visual path");
+assert.match(app,/ctx\.visualRaf=requestAnimationFrame\(/,
+  "render no more than once per browser frame");
+assert.match(app,/if\(dragCtx!==ctx\)return/,
+  "an obsolete graph gesture must never mutate the next gesture DOM");
+assert.match(app,/ctx\.flushVisuals=flushVisuals/,
+  "rAF callback must always use the most recent model coordinates");
+assert.match(app,/cancelAnimationFrame\(ctx\.visualRaf\)/,
+  "pointerup or pointercancel must cancel a scheduled visual frame");
+assert.match(app,/finalVisual\?\.\(\)/,
+  "release must synchronously commit final card, SVG, mini and toolbar");
+assert.match(app,/_drag111PhysicalMoves/,
+  "count true native pointer events separately from coalesced visual writes");
+
 // The old full-layout path remains authoritative whenever a session becomes
 // stale; do not remove it just to make 300-node synthetic numbers look good.
 assert.match(app,/DOM\.viewport\.getBoundingClientRect\(\)\.width/);
