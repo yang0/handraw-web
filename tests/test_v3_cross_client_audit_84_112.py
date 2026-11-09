@@ -41,7 +41,7 @@ class CrossClientV3Audit(unittest.TestCase):
 
     def test_foreign_media_or_work_link_rejected(self):
         for field, value in (("mediaOwner", "owner-B"), ("workMedia", "other-media"),
-                             ("work", "work-B"), ("client", "web")):
+                             ("work", "work-B"), ("client", "skill")):
             with self.subTest(field=field):
                 rows, specs = fixture()
                 rows[0][field] = value
