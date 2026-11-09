@@ -203,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     if result["knownPending"]:
         print("ATTENTION: pending Skill-only official code(s): " +
               ", ".join(result["knownPending"]) +
-              "; NOT website-approved; Issue #11 remains open and "
+              "; NOT website-approved; release gate #132 remains open and "
               "production parity is NO-GO.", file=sys.stderr)
     return 0
 
