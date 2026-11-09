@@ -118,6 +118,22 @@ class OfficialApprovalSignatureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.evaluate(bundle=bad)
 
+    def test_two_key_ids_same_ed25519_public_key_are_not_independent(self):
+        # A forged registry with different key IDs and roles, but identical
+        # public bytes, cannot be accepted even if the attacker repins it.
+        fake=json.loads(json.dumps(self.registry))
+        fake["keys"][1]["publicKeyBase64"]=fake["keys"][0]["publicKeyBase64"]
+        with self.assertRaisesRegex(ValueError,"same Ed25519 public key"):
+            self.evaluate(registry=fake,trust=sha(fake))
+
+        # Reusing the editor signature under a different role/key ID must also
+        # be blocked before it can masquerade as independent human approval.
+        forged=json.loads(json.dumps(self.bundle))
+        forged["approvals"][0]["signatures"][1]["signatureBase64"]=(
+            forged["approvals"][0]["signatures"][0]["signatureBase64"])
+        with self.assertRaisesRegex(ValueError,"same Ed25519 public key"):
+            self.evaluate(bundle=forged,registry=fake,trust=sha(fake))
+
     def test_missing_or_wrong_published_db_and_wrong_deployed_sha_refused(self):
         with self.assertRaises(ValueError):
             evaluate(self.bundle,self.registry,self.pending,None,
