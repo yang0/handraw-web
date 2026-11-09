@@ -431,21 +431,23 @@ def profile_drag_style_isolation(page, size: int = 300) -> dict:
     Keep model, image and SVG correctness assertions after every real gesture.
     """
     assert size == 300, "isolation only runs on the 300-node real Project"
-    modes = ("idle", "hover", "normal", "no-card", "normal",
+    modes = ("idle", "hover", "pressed-idle",
+             "normal", "no-card", "normal",
              "no-edges", "normal", "no-overlay", "normal",
-             "no-minimap", "normal", "node-only")
+             "no-minimap", "normal", "node-only", "normal", "no-visual")
     cdp = page.context.new_cdp_session(page)
     records = []
     try:
         cdp.send("Performance.enable")
         for mode in modes:
-            real_drag = mode not in ("idle", "hover")
+            pressed = mode not in ("idle", "hover")
+            real_drag = mode not in ("idle", "hover", "pressed-idle")
             page.evaluate("""mode => {
               const testing=window.HANDRAW_STUDIO_TESTING;
               if(window.__HANDRAW_TESTING__!==true||!testing)
                 throw Error('drag-only style isolation requires test bridge');
               testing.canvasDragVisualProbeMode=
-                ['no-card','no-edges','no-overlay','no-minimap','node-only']
+                ['no-card','no-edges','no-overlay','no-minimap','node-only','no-visual']
                   .includes(mode)?mode:'normal';
               testing.canvasDragFinishMode='full';
               testing.focusCanvasNodeForBenchmark('g00-0');
@@ -466,7 +468,11 @@ def profile_drag_style_isolation(page, size: int = 300) -> dict:
               throw Error('isolated real drag header blocked by UI');
             }""")
             page.mouse.move(target["x"], target["y"])
-            if real_drag:
+            page.evaluate("""() => {
+              const layer=document.getElementById('ic-nodes-layer');
+              if(layer)layer._drag111Samples=[];
+            }""")
+            if pressed:
                 page.mouse.down()
             page.wait_for_timeout(65)
             page.evaluate("""() => {
@@ -483,7 +489,7 @@ def profile_drag_style_isolation(page, size: int = 300) -> dict:
             before=cdp.send("Performance.getMetrics")
             wall=time.perf_counter()
             try:
-                if mode == "idle":
+                if mode in ("idle", "pressed-idle"):
                     page.wait_for_timeout(260)
                 else:
                     for step in range(1,13):
@@ -497,7 +503,7 @@ def profile_drag_style_isolation(page, size: int = 300) -> dict:
                   m.running=false;return m.intervals.slice();
                 }""")
             finally:
-                if real_drag:
+                if pressed:
                     page.mouse.up()
             delta=delta_performance_metrics(before,moved_end)
             raf=summarize_raf_intervals(gaps)
@@ -513,9 +519,17 @@ def profile_drag_style_isolation(page, size: int = 300) -> dict:
                 edges:document.querySelectorAll(
                   '#ic-edges-svg g.ic-edge-group[data-edge-id]').length,
                 images:layer.querySelectorAll('img').length,
+                modes:(layer._drag111Samples||[]).map(x=>x.visualProbeMode),
                 finish:layer._drag111Finish||null};
             }""")
             if real_drag:
+                expected_mode=mode if mode in (
+                    "no-card","no-edges","no-overlay","no-minimap",
+                    "node-only","no-visual") else "normal"
+                assert len(state["modes"])>=8 and all(
+                    observed==expected_mode for observed in state["modes"]), (
+                        "physical pointer samples did not use the intended visual mode",
+                        mode,state["modes"])
                 assert state["x"] > target["nodeX"] and state["y"] > target["nodeY"], (
                     "native isolation drag did not change Graph",mode,state)
                 assert state["finish"] and state["finish"]["targeted"] is False, (
