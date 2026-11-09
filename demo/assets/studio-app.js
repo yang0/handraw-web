@@ -9845,14 +9845,16 @@
   function renderEdgesSvg() {
     if (!DOM.edgesSvg) return;
     const { relEdgeIds } = getRelatedSets();
+    const edges = window.HandrawCanvasRenderer.createEdgeGeometryIndex(
+      CS.graph.nodes || [], DOM.nodesLayer);
     const parts = [];
 
     for (const e of CS.graph.edges || []) {
-      const nFrom = getNodeById(e.from);
-      const nTo = getNodeById(e.to);
+      const nFrom = edges.getNode(e.from);
+      const nTo = edges.getNode(e.to);
       if (!nFrom || !nTo) continue;
-      const p1 = getPortWorldPos(nFrom, "out");
-      const p2 = getPortWorldPos(nTo, "in");
+      const p1 = edges.port(nFrom, "out");
+      const p2 = edges.port(nTo, "in");
       const d = bezierPath(p1.x, p1.y, p2.x, p2.y);
       const isSel = CS.selectedEdgeId === e.id;
       const isRel = relEdgeIds.has(e.id);
@@ -9866,9 +9868,9 @@
     }
 
     if (CS.wiring) {
-      const src = getNodeById(CS.wiring.fromNodeId);
+      const src = edges.getNode(CS.wiring.fromNodeId);
       if (src) {
-        const anchor = getPortWorldPos(src, CS.wiring.fromDir);
+        const anchor = edges.port(src, CS.wiring.fromDir);
         const tx = CS.wiring.curWorldX;
         const ty = CS.wiring.curWorldY;
         const d = CS.wiring.fromDir === "out" ? bezierPath(anchor.x, anchor.y, tx, ty) : bezierPath(tx, ty, anchor.x, anchor.y);
@@ -9876,7 +9878,8 @@
       }
     }
 
-    DOM.edgesSvg.innerHTML = parts.join("");
+    window.HandrawCanvasRenderer.reconcileEdgeMarkup(
+      DOM.edgesSvg, parts.join(""));
   }
 
   function renderVisualSlotHtml(nodeId, field, label, icon, itemId) {
@@ -19790,7 +19793,7 @@
     syncAllDownstreamArticlePlans();
     if (CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length)) {
       if (DOM.nodesLayer) DOM.nodesLayer.innerHTML = "";
-      if (DOM.edgesSvg) DOM.edgesSvg.innerHTML = "";
+      window.HandrawCanvasRenderer.clearEdgeMarkup(DOM.edgesSvg);
       renderCanvasTemplateLibrary();
     } else {
       const tLib = DOM.canvasStage?.querySelector("#canvas-template-library");
