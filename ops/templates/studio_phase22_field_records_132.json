@@ -1,0 +1,311 @@
+{
+  "postgres": {
+    "schemaVersion": 1,
+    "kind": "postgres",
+    "environment": "preproduction",
+    "webSha": "REPLACE_DEPLOYED_WEB_SHA_40",
+    "skillSha": "REPLACE_SKILL_SHA_40",
+    "sessionId": "REPLACE_NONREPLAYED_SESSION_ID",
+    "operatorId": "REPLACE_OPERATOR_ID",
+    "reviewerId": "REPLACE_INDEPENDENT_REVIEWER_ID",
+    "events": [
+      {
+        "step": "physical_source_and_isolated_host",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "pg17_basebackup_manifest",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "pg_verifybackup_succeeded",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "independent_wal_archive_contiguous",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "pitr_target_replay_paused",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "schema_wallet_media_integrity",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "isolated_rollback_exercised",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "rpo_rto_measured",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      }
+    ],
+    "measurements": {
+      "pgMajorVersion": 0,
+      "sourceHostSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "restoreHostSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "sourceClusterSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "restoreClusterSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "basebackupManifestSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "walArchiveManifestSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "pitrTargetUtc": "REPLACE_WITH_ACTUAL_UTC",
+      "pitrReachedUtc": "REPLACE_WITH_ACTUAL_UTC",
+      "schemaBeforeSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "schemaAfterSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "walletBeforeSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "walletAfterSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "mediaBeforeSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "mediaAfterSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "rpoMeasuredSeconds": 0,
+      "rpoBudgetSeconds": 0,
+      "rtoMeasuredSeconds": 0,
+      "rtoBudgetSeconds": 0,
+      "rollbackSuccessful": false
+    }
+  },
+  "storage": {
+    "schemaVersion": 1,
+    "kind": "storage",
+    "environment": "preproduction",
+    "webSha": "REPLACE_DEPLOYED_WEB_SHA_40",
+    "skillSha": "REPLACE_SKILL_SHA_40",
+    "sessionId": "REPLACE_NONREPLAYED_SESSION_ID",
+    "operatorId": "REPLACE_OPERATOR_ID",
+    "reviewerId": "REPLACE_INDEPENDENT_REVIEWER_ID",
+    "events": [
+      {
+        "step": "two_scoped_real_provider_clients",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "tenant_a_b_own_bytes",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "cross_tenant_read_denied_both",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "cross_tenant_write_denied_both",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "anonymous_read_denied",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "expired_presigned_url_denied",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "revoked_and_cdn_old_url_denied",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "restored_bytes_and_publication_acl",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      }
+    ],
+    "measurements": {
+      "providerKind": "REPLACE_R2_S3_OR_MINIO",
+      "bucketPolicySha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "cdnPolicySha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "mediaBeforeSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "mediaAfterSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "tenantASha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "tenantBSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "anonymousDenied": false,
+      "crossTenantReadDeniedBothDirections": false,
+      "crossTenantWriteDeniedBothDirections": false,
+      "expiredSignedUrlDenied": false,
+      "revokedSignedUrlDenied": false,
+      "cdnOldUrlInvalidated": false,
+      "restoredMediaBytesMatched": false,
+      "publicGrantOnlyForPublishedAssets": false
+    }
+  },
+  "redis": {
+    "schemaVersion": 1,
+    "kind": "redis",
+    "environment": "preproduction",
+    "webSha": "REPLACE_DEPLOYED_WEB_SHA_40",
+    "skillSha": "REPLACE_SKILL_SHA_40",
+    "sessionId": "REPLACE_NONREPLAYED_SESSION_ID",
+    "operatorId": "REPLACE_OPERATOR_ID",
+    "reviewerId": "REPLACE_INDEPENDENT_REVIEWER_ID",
+    "events": [
+      {
+        "step": "two_independent_app_instances",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "distributed_nx_lock_atomic",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "tenant_acl_denied_both_directions",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "failover_fault_injected",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "lock_owner_fencing_after_failover",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "recovery_elapsed_measured",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "no_duplicate_work_or_charge",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      }
+    ],
+    "measurements": {
+      "instanceASha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "instanceBSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "redisClusterSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "tenantASha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "tenantBSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "lockOwnerSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "faultStartedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+      "serviceRestoredAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+      "rtoBudgetSeconds": 0,
+      "sharedNxLockAtomic": false,
+      "tenantAclDeniedBothDirections": false,
+      "lockFenceAfterFailover": false,
+      "noDuplicateWorkOrCharge": false
+    }
+  },
+  "provider": {
+    "schemaVersion": 1,
+    "kind": "provider",
+    "environment": "preproduction",
+    "webSha": "REPLACE_DEPLOYED_WEB_SHA_40",
+    "skillSha": "REPLACE_SKILL_SHA_40",
+    "sessionId": "REPLACE_NONREPLAYED_SESSION_ID",
+    "operatorId": "REPLACE_OPERATOR_ID",
+    "reviewerId": "REPLACE_INDEPENDENT_REVIEWER_ID",
+    "events": [
+      {
+        "step": "independent_final_provider_statement",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "web_run_item_attempt_export",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "wallet_and_free_quota_sources",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "reconciled_provider_wallet_events",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "duplicate_callback_replay",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "429_and_502_failure_paths",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "unknown_and_late_success_paths",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      },
+      {
+        "step": "refund_and_free_quota_reconciled",
+        "status": "PENDING",
+        "observedAtUtc": "REPLACE_WITH_ACTUAL_UTC",
+        "evidenceSha256": "REPLACE_WITH_ACTUAL_SHA256"
+      }
+    ],
+    "measurements": {
+      "currency": "REPLACE_ISO_4217",
+      "providerStatementSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "webRunItemAttemptSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "walletLedgerSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "freeQuotaLedgerSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "scenarioTraceSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "reconciliationReportSha256": "REPLACE_WITH_ACTUAL_SHA256",
+      "paidAttemptCount": 0,
+      "refundCount": 0,
+      "freeQuotaCasesChecked": 0,
+      "duplicateCallbackCasesChecked": 0,
+      "throttled429CasesChecked": 0,
+      "upstream502CasesChecked": 0,
+      "unknownRecoveryCasesChecked": 0,
+      "lateSuccessCasesChecked": 0,
+      "unmatchedProviderEntryCount": 0,
+      "unmatchedWalletEntryCount": 0,
+      "netChargeDeltaMinor": 0,
+      "netRefundDeltaMinor": 0
+    }
+  }
+}
