@@ -164,8 +164,8 @@ def prepare_pitr(*,backup_dir,archive_dir,target_utc):
         raise ValueError("PITR preparation requires isolated drill approval")
     b=_dir(backup_dir,required=True)
     a=_dir(archive_dir,required=True)
-    if b.is_symlink() or a.is_symlink() or
-            not b.name.startswith("pitr-"):
+    if (b.is_symlink() or a.is_symlink() or
+            not b.name.startswith("pitr-")):
         raise ValueError("untrusted physical recovery directories")
     evidence=_read_private(b/"phase21-physical-backup.json")
     if (evidence.get("mode")!="isolated-real-pg17-physical-basebackup"
