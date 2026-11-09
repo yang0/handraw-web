@@ -12,6 +12,7 @@ def sample(mode="skip-identical"):
     return {
         "mode":mode,"targetPresence":2,"seenMoveCount":3,
         "restored":True,"noTextOrIdsPersisted":True,
+        "visualLabelsPreserved":True,
         "writesByWindow":{
             p:{role:{"writes":0,"suppressed":0,"identical":0}
                for role in ROLES}
@@ -41,6 +42,12 @@ class Phase19VisualSafeTests(unittest.TestCase):
         validate("skip-identical",payload)
         payload["writesByWindow"]["synthetic-move-1"]["bottom-save-button"]["suppressed"]=2
         with self.assertRaises(ValueError):
+            validate("skip-identical",payload)
+
+    def test_semantic_button_labels_remain_exactly_as_requested(self):
+        payload=sample()
+        payload["visualLabelsPreserved"]=False
+        with self.assertRaisesRegex(ValueError,"semantics"):
             validate("skip-identical",payload)
 
     def test_preinput_never_suppresses_and_all_identical_moves_skip(self):
