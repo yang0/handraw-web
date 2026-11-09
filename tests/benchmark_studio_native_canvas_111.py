@@ -422,6 +422,147 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
             pass
 
 
+
+def profile_drag_style_isolation(page, size: int = 300) -> dict:
+    """Same-page Chromium A/B: idle, hover, real pointer and isolated updates.
+
+    This is DIAGNOSTICS, not a production animation mode: temporary skips only
+    run with __HANDRAW_TESTING__ enabled, and pointerup uses full reconciliation.
+    Keep model, image and SVG correctness assertions after every real gesture.
+    """
+    assert size == 300, "isolation only runs on the 300-node real Project"
+    modes = ("idle", "hover", "normal", "no-card", "normal",
+             "no-edges", "normal", "no-overlay", "normal",
+             "no-minimap", "normal", "node-only")
+    cdp = page.context.new_cdp_session(page)
+    records = []
+    try:
+        cdp.send("Performance.enable")
+        for mode in modes:
+            real_drag = mode not in ("idle", "hover")
+            page.evaluate("""mode => {
+              const testing=window.HANDRAW_STUDIO_TESTING;
+              if(window.__HANDRAW_TESTING__!==true||!testing)
+                throw Error('drag-only style isolation requires test bridge');
+              testing.canvasDragVisualProbeMode=
+                ['no-card','no-edges','no-overlay','no-minimap','node-only']
+                  .includes(mode)?mode:'normal';
+              testing.canvasDragFinishMode='full';
+              testing.focusCanvasNodeForBenchmark('g00-0');
+            }""", mode)
+            target=page.evaluate("""() => {
+              const node=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
+              const head=node?.querySelector('.ic-node-header-above');
+              const model=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+              if(!node||!head||!model)throw Error('isolation missing node/header');
+              const r=head.getBoundingClientRect();
+              for(const ratio of [.15,.45,.7]){
+                const x=r.left+r.width*ratio,y=r.top+r.height*.5;
+                const hit=document.elementFromPoint(x,y);
+                if(hit?.closest('.ic-node')===node &&
+                    !hit.closest('button,input,textarea,select,label'))
+                  return {x,y,nodeX:model.x,nodeY:model.y};
+              }
+              throw Error('isolated real drag header blocked by UI');
+            }""")
+            page.mouse.move(target["x"], target["y"])
+            if real_drag:
+                page.mouse.down()
+            page.wait_for_timeout(65)
+            page.evaluate("""() => {
+              const monitor={running:true,last:null,intervals:[]};
+              window.__studio111IsolationFrames=monitor;
+              function frame(t){
+                if(!monitor.running)return;
+                if(monitor.last!==null && monitor.intervals.length<120)
+                  monitor.intervals.push(t-monitor.last);
+                monitor.last=t;requestAnimationFrame(frame);
+              }
+              requestAnimationFrame(frame);
+            }""")
+            before=cdp.send("Performance.getMetrics")
+            wall=time.perf_counter()
+            try:
+                if mode == "idle":
+                    page.wait_for_timeout(260)
+                else:
+                    for step in range(1,13):
+                        page.mouse.move(target["x"]+48*step/12,
+                                        target["y"]+24*step/12,steps=1)
+                        page.wait_for_timeout(20)
+                moved_end=cdp.send("Performance.getMetrics")
+                elapsed_ms=round((time.perf_counter()-wall)*1000,2)
+                gaps=page.evaluate("""() => {
+                  const m=window.__studio111IsolationFrames;
+                  m.running=false;return m.intervals.slice();
+                }""")
+            finally:
+                if real_drag:
+                    page.mouse.up()
+            delta=delta_performance_metrics(before,moved_end)
+            raf=summarize_raf_intervals(gaps)
+            assert delta["RecalcStyleDuration"] is not None, (
+                "CDP isolation style metric unavailable",mode,delta)
+            assert raf["samples"] >= 5, ("isolation rAF missing",mode,raf)
+            state=page.evaluate("""() => {
+              const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+              const card=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
+              const layer=document.getElementById('ic-nodes-layer');
+              return {x:n.x,y:n.y,left:card?.style.left,top:card?.style.top,
+                cards:layer.querySelectorAll('.ic-node').length,
+                edges:document.querySelectorAll(
+                  '#ic-edges-svg g.ic-edge-group[data-edge-id]').length,
+                images:layer.querySelectorAll('img').length,
+                finish:layer._drag111Finish||null};
+            }""")
+            if real_drag:
+                assert state["x"] > target["nodeX"] and state["y"] > target["nodeY"], (
+                    "native isolation drag did not change Graph",mode,state)
+                assert state["finish"] and state["finish"]["targeted"] is False, (
+                    "isolated bypass must use complete pointerup reconciliation",mode,state)
+                assert state["left"] == f'{state["x"]}px' and (
+                    state["top"] == f'{state["y"]}px'), (
+                        "release did not restore real card coordinates",mode,state)
+                page.keyboard.press("Control+z")
+                undo=page.evaluate("""() => {
+                  const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+                  return {x:n.x,y:n.y};
+                }""")
+                assert undo == {"x":target["nodeX"],"y":target["nodeY"]}, (
+                    "isolated drag must be reversible",mode,undo,target)
+            else:
+                assert state["x"] == target["nodeX"] and (
+                    state["y"] == target["nodeY"]), (
+                        "idle/hover unexpectedly moved Graph",mode,state)
+            assert state["cards"] == size and state["edges"] == size//2 and (
+                state["images"] >= size*4//10), (
+                    "real Studio DOM damaged by isolation test",mode,state)
+            records.append({"mode":mode,"elapsedMs":elapsed_ms,
+                "raf":raf,"cdpDragOnly":delta,
+                "stylePerSecond":round(
+                    delta["RecalcStyleDuration"]/max(elapsed_ms,1)*1000,2),
+                "productionSLA":False})
+            page.wait_for_timeout(100)
+        return {"source":"same-Chromium-native-300-pointer-move-ablation",
+                "nodes":size,"cpuThrottle":1,
+                "realMouseMovesPerTrial":12,
+                "rawTracePersisted":False,
+                "productionFrameSLA":False,
+                "trialOrderPreserved":True,"trials":records}
+    finally:
+        try:
+            page.evaluate("""() => {
+              if(window.__HANDRAW_TESTING__===true && window.HANDRAW_STUDIO_TESTING){
+                window.HANDRAW_STUDIO_TESTING.canvasDragVisualProbeMode='normal';
+                window.HANDRAW_STUDIO_TESTING.canvasDragFinishMode='auto';
+              }
+            }""")
+        except Exception:
+            pass
+        cdp.detach()
+
+
+
 def main() -> None:
     from playwright.sync_api import sync_playwright
 
@@ -573,6 +714,10 @@ def main() -> None:
                             assert mini_camera_stable, ("camera zoom rebuilt every minimap node",size)
                             native["minimapStableOnZoom"] = True
                             native["physicalDrag"] = measure_physical_drag(page, size)
+                            if size == 300:
+                                native["styleIsolation"] = profile_drag_style_isolation(page,size)
+                                print("CANVAS #111 DRAG STYLE ISOLATION " + json.dumps(
+                                    native["styleIsolation"],ensure_ascii=False),flush=True)
                             # Full pipeline differs from handler-only p95.
                             # Keep the original 9-event regression unchanged.
                             if size in (100, 300):
