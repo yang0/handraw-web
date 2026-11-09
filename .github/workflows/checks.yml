@@ -336,6 +336,10 @@ jobs:
           python ops/check_official_catalog_parity.py \
             --skill-root external/handraw-style-catalog/skills/handdraw-style-prompter \
             --report artifacts/official-catalog-parity-11.json
+      - name: '#11 freeze actual Skill-main 539 / Web 537, explicit editorial and strict NO-GO regression'
+        env:
+          HANDRAW_SKILL_CATALOG_ROOT: external/handraw-style-catalog/skills/handdraw-style-prompter
+        run: python -m unittest discover -s tests -p 'test_official_catalog_snapshot_11.py' -v
       - name: '#11/#84/#112 Phase12 read-only editorial and external integration gate inventory'
         run: |
           python ops/phase12_release_preflight_112.py \
