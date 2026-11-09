@@ -588,6 +588,7 @@ def profile_style_invalidation_cdp(page, size: int = 300) -> dict:
     assert size == 300
     from ops.canvas_style_invalidation_111 import (
         summarize_selector_footprint, summarize_style_invalidation,
+        summarize_selector_timings,
     )
     census = page.evaluate("""() => {
       if(window.__HANDRAW_TESTING__!==true)throw Error('testing only');
@@ -668,7 +669,8 @@ def profile_style_invalidation_cdp(page, size: int = 300) -> dict:
             tracing=False
             try:
                 cdp.send("Tracing.start",{
-                    "categories":"devtools.timeline,blink,cc,disabled-by-default-devtools.timeline.invalidationTracking",
+                    "categories":"devtools.timeline,blink,cc,disabled-by-default-devtools.timeline.invalidationTracking" +
+                                 (",disabled-by-default-blink.debug" if mode=="normal" else ""),
                     "options":"record-as-much-as-possible",
                     "transferMode":"ReturnAsStream",
                 })
@@ -687,8 +689,10 @@ def profile_style_invalidation_cdp(page, size: int = 300) -> dict:
                 page.wait_for_timeout(50)
             if not complete.get("stream"):
                 raise AssertionError("Chrome invalidation trace stream unavailable")
-            summary=summarize_style_invalidation(
-                read_trace_from_stream(cdp,complete["stream"]))
+            trace=read_trace_from_stream(cdp,complete["stream"])
+            summary=summarize_style_invalidation(trace)
+            selector_timings=(summarize_selector_timings(trace) if mode=="normal" else None)
+            del trace
             metric=delta_performance_metrics(before,drag_end)
             state=page.evaluate("""() => {
               const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
@@ -709,6 +713,7 @@ def profile_style_invalidation_cdp(page, size: int = 300) -> dict:
             }""")
             assert undo=={"x":target["nodeX"],"y":target["nodeY"]},(mode,undo)
             records.append({"mode":mode,"chromeStyleInvalidations":summary,
+                            "chromeSelectorStats":selector_timings,
                             "cdpDragOnly":metric,
                             "visibleImageDOMNodes":census["images"]["images"],
                             "imagePaintingSuppressed":hidden,
