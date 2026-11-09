@@ -19971,6 +19971,9 @@
 
     vp.addEventListener("pointerdown", (e) => {
       if (e.button === 2) return;
+      // A second pointer start must not retain a live ResizeObserver from
+      // an interrupted first drag.
+      dragCtx?.edgeSession?.dispose?.();
       closeContextMenu();
 
       if (
@@ -20140,6 +20143,7 @@
           // A mid-drag Graph/DOM/Run update invalidates the cached edges.
           // Fall back once to the authoritative complete SVG calculation,
           // then index the latest mounted graph before the next movement.
+          dragCtx.edgeSession?.dispose?.();
           renderEdgesSvg();
           dragCtx.edgeSession=window.HandrawCanvasRenderer.createEdgeDragSession(
             DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
@@ -20206,6 +20210,7 @@
       if (!dragCtx || e.pointerId !== dragCtx.pointerId) return;
       const ctx = dragCtx;
       dragCtx = null;
+      ctx.edgeSession?.dispose?.();
       vp.classList.remove("is-panning");
 
       if (ctx.mode === "node-drag" && ctx.moved) {
