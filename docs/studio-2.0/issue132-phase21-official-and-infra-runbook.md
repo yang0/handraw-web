@@ -10,9 +10,26 @@
 
 1. 网站编辑分别复核提示词/描述的来源、全部原图 SHA256、权利人及可验证许可、商业使用/衍生使用/官网公开发布权、署名要求，按 `ops/templates/studio_official_rights_review_132.json` 填私有记录。私人许可文件及原图不要提交 GitHub。
 2. 在网站**实际官方审批后台**为各候选执行独立审批动作，并记录 `websiteActionId`；先在 Web 的 `catalog_assets(source_type='official',status='published')` 中确认真实已发布 DB 行。两名角色 `website_editor` 与 `independent_reviewer` 使用独立密钥对同一规范化 payload 签名；签名覆盖候选 Skill 全元数据 SHA、已发布 DB 的完整官方行 SHA、**整条许可/来源记录 SHA**、部署 Web SHA、操作 ID、审查 UTC。信任注册表 SHA 由**申请材料外部**受控管道固定。
-3. 使用最低权限、显式 read-only PG17 账号，在隔离验收机按 `ops/export_official_assets.py` 的查询与映射规则导出网站真实 `styles.json/layouts.json`；额外由操作人和独立复核者审视 DB 查询时点/身份/发布时间/环境并留下私有来源 receipt。签名/导出工具都**不能独立证明** DB 事实或真实许可有效。
+3. 使用最低权限、显式 read-only PG17 账号，在隔离验收机运行新增的 `ops/studio_phase21_official_web_export_132.py`，只从官网 `catalog_assets` 中导出 `source_type='official' AND status='published'` 的已发布完整资源（映射规则与原导出器一致），输出新的私有 `styles.json/layouts.json` 与 `readonly-export-receipt.json`。新工具避免原有通用导出器对“已存在于 Skill 中的候选 ID”的错误同号冲突处理；额外保留源 PG 行的整体 SHA256 `sourceRowsSha256`。操作人和独立复核者仍必须审视 DB 查询时点/身份/发布时间/环境。导出工具**不能独立证明** DB 事实或真实许可有效。
 4. 在隔离机运行原有 `ops/studio_official_approval_132.py` 双验签，再使用新增的 `ops/studio_phase21_official_gate_132.py` **单入口**：验签全部 3 项 → 核对独立 Web DB 导出 receipt 与真实部署 SHA → 调用 `stage_transition(...)` 严格检查 `--strict` 的动态 Web 已批准官方 DB、静态目录与完整 Skill main 的 540 项同步，检查所有候选的内容、编号、名称和防回退完整指纹。缺 1 项、伪造签名、旧 Skill 内容、旧 pending 清单、新旧 Web SHA 不匹配均 BLOCKED。
 5. 以上阶段只允许产生 `SIGNED_AND_STRICTLY_STAGED_FOR_INDEPENDENT_REVIEW` / `NO-GO` 的脱敏结果。实际网站 DB 来源、权利真实性、跨仓 Skill 正式审核和部署仍由独立操作者外部验证。**绝不让离线脚本授予 GO、自动写 Web DB 或修改 Skill main。**
+
+#### 官网 DB 官方导出（只有真实已获批准的预生产只读账号才执行）
+
+```bash
+# 在独立受控环境，先校验 Pg 来源身份和账号 SELECT-only 权限
+export HANDRAW_PHASE21_ALLOW_WEBSITE_READONLY_EXPORT=YES
+export HANDRAW_PHASE21_WEB_READONLY_DSN='(从 vault 注入，禁止复制到日志)'
+python ops/studio_phase21_official_web_export_132.py \
+  --dsn-env HANDRAW_PHASE21_WEB_READONLY_DSN \
+  --environment preprod-web-official-audit \
+  --deployed-sha FULL_DEPLOYED_WEB_40_CHAR_SHA \
+  --operator-id independent-exporter \
+  --independent-reviewer-id separate-db-auditor \
+  --out /private/new-website-official-export-dir
+# 其中 styles.json, layouts.json 与 readonly-export-receipt.json
+# 会成为下一步签名及 strict parity 输入，真实 Db 来源须独立复核。
+```
 
 #### 流程调用（仅已获授权、离线私有环境）
 
@@ -40,7 +57,7 @@ python ops/studio_phase21_official_gate_132.py \
   --report /private/new-phase21-official-audit.json
 ```
 
-其中 DB `source-receipt` JSON 只有 `schemaVersion=1,sourceSystem="website-postgresql-read-only",sourceRole="readonly-export",webDeployedSha,publishedStylesSha256,publishedLayoutsSha256,operatorId,independentReviewerId,exportSessionId`；它是来源**声明**而非独立认证。运营必须现场校验实际数据库只读会话、应用已发布状态、来源操作日志、导出原始摘要。3 项目前并无真实签名，因此 Phase21 没有尝试构造“已批准”的生产行。
+其中 DB `source-receipt` JSON 只有 `schemaVersion=1,sourceSystem="website-postgresql-read-only",sourceRole="readonly-export",webDeployedSha,publishedStylesSha256,publishedLayoutsSha256,sourceRowsSha256,operatorId,independentReviewerId,exportSessionId`；它是来源**声明**而非独立认证。运营必须现场校验实际数据库只读会话、应用已发布状态、来源操作日志、导出原始摘要。3 项目前并无真实签名，因此 Phase21 没有尝试构造“已批准”的生产行。
 
 ## 2. PG17 物理恢复与 PITR 的受控执行
 
