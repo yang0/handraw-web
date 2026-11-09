@@ -52,7 +52,9 @@ def sample():
        "cdnOldUrlInvalidated":True,
        "restoredMediaBytesMatched":True,
        "publicGrantOnlyForPublishedAssets":True}
-    provider_detail={k:pay[k] for k in pay}
+    # The phase22 anomaly scenario trace belongs only to signed field evidence;
+    # the existing immutable D receipt schema has no scenarioTraceSha256 field.
+    provider_detail={k:pay[k] for k in pay if k!="scenarioTraceSha256"}
     recs=[{"kind":kind,"caseId":case,"evidenceDigestSha256":digest(detail),
            "details":detail}
           for kind,case,detail in (
