@@ -16,9 +16,9 @@ from ops.canvas_frame_trace_111 import (
 from ops.canvas_style_causality_111 import summarize_causality_window
 
 CPU_FACTORS = (1, 4)
-CASES = ("no-edges", "no-card", "global-state-selector-mask", "no-overlay")
+CASES = ("no-edges", "no-card", "global-state-selector-mask", "no-overlay", "no-visual")
 MIN_IMPROVEMENT = 0.10
-TRACE_MODES = ("normal", "no-edges", "no-card", "global-state-selector-mask")
+TRACE_MODES = ("normal", "no-edges", "no-card", "global-state-selector-mask", "no-visual")
 MAX_TRACE_BYTES = 30_000_000
 
 # Only explicitly known, local, dynamic ancestor rules may be disabled.
@@ -116,7 +116,7 @@ DRAG_TARGET = r"""mode=>{
     throw Error("Stage12 requires native test flag");
   const testing=window.HANDRAW_STUDIO_TESTING;
   testing.canvasDragVisualProbeMode=
-    ["no-edges","no-card","no-overlay"].includes(mode)?mode:"normal";
+    ["no-edges","no-card","no-overlay","no-visual"].includes(mode)?mode:"normal";
   testing.canvasDragFinishMode="full";
   testing.focusCanvasNodeForBenchmark("g00-0");
   const node=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
@@ -228,7 +228,7 @@ def physical_trial(page, cdp, mode, cpu, *, trace=False):
         assert state["left"]==f'{state["x"]}px' and state["top"]==f'{state["y"]}px',(mode,state)
         assert state["decoded"] and state["paths"]>=150,(mode,state)
         assert state["finish"] and state["finish"]["targeted"] is False,(mode,state)
-        expected=mode if mode in ("no-edges","no-card","no-overlay") else "normal"
+        expected=mode if mode in ("no-edges","no-card","no-overlay","no-visual") else "normal"
         assert state["testedModes"]==[expected],(mode,state["testedModes"])
         page.keyboard.press("Control+z")
         undo=page.evaluate("""() => {
