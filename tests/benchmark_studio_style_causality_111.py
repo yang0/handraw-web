@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main():
     original = stage10.trace_tree_affected
+    original_cases = stage10.CASES
     applied = False
 
     def inspect(page, cdp, mode):
@@ -83,11 +84,17 @@ def main():
             }, ensure_ascii=False), flush=True)
         return original(page, cdp, mode)
 
+    # The Stage 10 A-B-A-B-A already runs as its own mandatory CI step.
+    # Reuse its real HTTP fixture, decoded WebPs and DOM/Undo assertions, but
+    # DO NOT rerun all four Stage 10 CSS experiments inside Stage 11.
+    # Keep this override process-local and restore both symbols on exit.
+    stage10.CASES = ()
     stage10.trace_tree_affected = inspect
     try:
         stage10.main()
     finally:
         stage10.trace_tree_affected = original
+        stage10.CASES = original_cases
     assert applied, "stage11 attribution hook was never invoked"
 
 
