@@ -82,6 +82,13 @@ def main() -> None:
                     assert row["domElements"] >= row["nodes"]
                     assert row["singleStatusP95Ms"] >= 0
                     assert row["dragZoomFrameP95Ms"] > 0
+                    # #111 memory-only edit history measured in Chromium,
+                    # avoiding opaque total-heap claims or invented SLAs.
+                    assert row["historySteps"] == 35
+                    assert row["historySharedRuntime"], row
+                    assert row["historyEditableCloned"], row
+                    assert row["historyCapture35Ms"] >= 0
+                    assert row["historyUniqueRuntimeObjects"] > 0
                 results.update({
                     "recordedAt": datetime.now(timezone.utc).isoformat(),
                     "chromeVersion": browser.version,
