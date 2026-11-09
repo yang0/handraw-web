@@ -24,6 +24,7 @@ JS_ABLATION = r"""mode=>{
     if(rule.selectorText!==original)throw Error("CSSOM restoration failed");
   }
   stash.length=0;
+  document.getElementById("__qa111overlayContain")?.remove();
   const allowed=new Set([
     '.ic-node:hover','.ic-node:hover .ic-node-header-above',
     '.ic-node:hover .ic-port-zone'
@@ -47,7 +48,19 @@ JS_ABLATION = r"""mode=>{
       if(rule.selectorText===out){stash.push([rule,old]);changes++}
     }
   };
-  if(mode!=="baseline"){
+  const overlays={
+    "floating-toolbar-contain":
+      "[data-float-topbar] { contain: layout style !important; }",
+    "floating-layer-style-contain":
+      ".ic-floating-overlay-layer { contain: style !important; }"
+  };
+  if(overlays[mode]){
+    const el=document.createElement("style");
+    el.id="__qa111overlayContain";
+    el.textContent=overlays[mode];
+    document.head.appendChild(el);
+    changes++;
+  }else if(mode!=="baseline"){
     for(const sheet of document.styleSheets)try{walk(sheet.cssRules)}catch(_){}
   }
   const layer=document.getElementById("ic-nodes-layer");
@@ -55,9 +68,14 @@ JS_ABLATION = r"""mode=>{
   const head=node.querySelector(".ic-node-header-above");
   const port=node.querySelector(".ic-port-zone");
   const mini=document.querySelector('#ic-minimap [data-mini-node-id="g00-0"]');
+  const toolbar=document.querySelector("[data-float-topbar]");
+  const overlay=document.getElementById("ic-overlay-layer");
+  if(!toolbar||!overlay)throw Error("missing real floating toolbar");
   const coords=el=>{const r=el.getBoundingClientRect();
     return [r.x,r.y,r.width,r.height].map(n=>Math.round(n*10)/10)};
-  return {changes,geometry:[coords(node),coords(head),coords(port),coords(mini)],
+  return {changes,geometry:[coords(node),coords(head),coords(port),coords(mini),coords(toolbar)],
+    toolbarContain:getComputedStyle(toolbar).contain,
+    overlayContain:getComputedStyle(overlay).contain,
     headOpacity:getComputedStyle(head).opacity,
     portOpacity:getComputedStyle(port).opacity,
     nodes:layer.querySelectorAll(".ic-node").length,
@@ -80,6 +98,8 @@ JS_MUTATIONS = r"""action=>{
     ['#ic-edges-svg path','edge-path'],
     ['#ic-edges-svg','edge-svg'],
     ['#ic-minimap','minimap'],
+    ['[data-float-topbar]','floating-toolbar'],
+    ['#ic-overlay-layer','canvas-overlay'],
     ['.ic-world','world'],
     ['.ic-viewport','viewport'],
     ['.ic-shelf-drawer','shelf'],
@@ -128,7 +148,8 @@ def ablation(page, cdp, name, profile_drag, metrics_for):
     first=page.evaluate(JS_ABLATION,"baseline")
     after=page.evaluate(JS_ABLATION,name)
     page.evaluate(JS_ABLATION,"baseline")
-    valid=(after["changes"]>=2 and
+    required_changes=1 if name.startswith("floating-") else 2
+    valid=(after["changes"]>=required_changes and
            (after["nodes"],after["images"],after["edges"])==(300,120,150) and
            all(all(abs(a-b)<=1 for a,b in zip(p,q))
                for p,q in zip(first["geometry"],after["geometry"])) and
@@ -178,9 +199,9 @@ def ablation(page, cdp, name, profile_drag, metrics_for):
             "furtherCrossViewAndPhysicalDeviceReviewRequired":True}
 
 
-def trace_window(page,cdp):
+def trace_window(page,cdp,mode="baseline"):
     """Capture only 3 mouse moves, no pointerdown/up/Undo in trace window."""
-    page.evaluate(JS_ABLATION,"baseline")
+    page.evaluate(JS_ABLATION,mode)
     target=page.evaluate(r"""() => {
       window.HANDRAW_STUDIO_TESTING.focusCanvasNodeForBenchmark('g00-0');
       const el=document.querySelector(
@@ -238,7 +259,8 @@ def trace_window(page,cdp):
     }""")
     assert state=={"x":target["nx"],"y":target["ny"],"cards":300,
                    "images":120,"decoded":True},state
-    return {"sameWindowChrome":summary,"staticCSSOM":cssom,
+    page.evaluate(JS_ABLATION,"baseline")
+    return {"mode":mode,"sameWindowChrome":summary,"staticCSSOM":cssom,
             "realMouseMoves":3,"traceIncludesPointerDownUpUndo":False,
             "mutationObserverInstrumentation":True,
             "chromeNodeIdIsNotVerifiedDomIdentity":True}
