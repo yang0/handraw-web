@@ -46,7 +46,9 @@ JS_MEASURE = r"""() => {
   input.value='光标仍保持在正在编辑的字段';
   if(typeof input.setSelectionRange==='function')input.setSelectionRange(2,5);
   const editNode=graph.nodes.find(n=>n.id==='g00-0');
-  const resultNode=graph.nodes.find(n=>n.id==='g00-8');
+  // Progress on the actual output_control keeps all already-successful media visible;
+  // output_display deliberately swaps its image for a spinner during new generation.
+  const resultNode=graph.nodes.find(n=>n.id==='g00-7');
   if(!editNode||!resultNode)throw Error('required text/result nodes are missing');
   const warm=probe();
   const updates=[];
@@ -71,7 +73,7 @@ JS_MEASURE = r"""() => {
   resultNode.data.status=oldStatus;
   const restored=probe();
   const stableNodes=[...beforeCards].filter(([id,el])=>
-    id!=='g00-0'&&id!=='g00-8'&&el.isConnected &&
+    id!=='g00-0'&&id!=='g00-7'&&el.isConnected &&
     root.querySelector('[data-node-id="'+id+'"]')===el).length;
   const afterImages=[...root.querySelectorAll('img')];
   const stableImages=beforeImages.filter(el=>el.isConnected&&afterImages.includes(el)).length;
@@ -177,7 +179,7 @@ def main() -> None:
                             assert all(x["dirty"] == ["node:g00-0"] for x in native["updates"]), (
                                 "one text edit touched extra nodes", size, native["updates"])
                             assert len(native["statusDirty"]) <= 1, (
-                                "one progress tick touched extra nodes", size, native["statusDirty"])
+                                "one control status tick touched extra nodes", size, native["statusDirty"])
                             assert native["restoredDirty"] in ([], ["node:g00-8"])
                             # Actual UI zoom/camera path, measured separately from JS repaint.
                             zoom_ms = []
