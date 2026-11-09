@@ -195,6 +195,16 @@ def main() -> None:
                             }""")
                             assert zoom_hit["reachable"], ("zoom covered by Canvas task queue",size,zoom_hit)
                             native["zoomPointerReachable"] = True
+                            # Keep observable baseline data in CI logs even when
+                            # a subsequent physical pointer/UI assertion fails.
+                            print("CANVAS #111 PRE-ZOOM " + json.dumps({
+                                "nodes": size, "mountMs": mount_ms,
+                                "nodePatchP95Ms": percentile(
+                                    [x["ms"] for x in native["updates"]], .95),
+                                "stableImages": native["stableImages"],
+                                "domElements": native["domElements"],
+                                "statusMs": native["statusMs"]
+                            }, ensure_ascii=False), flush=True)
                             # Actual UI zoom/camera path, measured separately from JS repaint.
                             zoom_ms = []
                             for _ in range(3):
