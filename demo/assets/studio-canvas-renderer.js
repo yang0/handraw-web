@@ -147,6 +147,54 @@
   // payloads instead of JSON-copying them for every one of 35 history steps.
   // A deleted output node must still be restorable, hence no ID-only stubs.
   // Never serialize these history snapshots as durable project Graphs.
+  // #111 P2: each edge render receives one immutable index of the current
+  // Graph and one query of the rendered node elements. Old behavior used
+  // Array.find + querySelector + offsetWidth/Height for EVERY edge endpoint.
+  // Dimensions are cached once per distinct endpoint for this render only;
+  // a subsequent render always remeasures after any card/content resize.
+  function createEdgeGeometryIndex(nodes,layer){
+    const model=new Map(),elements=new Map(),dimensions=new Map();
+    for(const node of nodes||[]){
+      if(node && !model.has(node.id))model.set(node.id,node);
+    }
+    for(const el of layer?.querySelectorAll?.(".ic-node[data-node-id]")||[]){
+      const id=el.getAttribute("data-node-id");
+      if(id!=null && !elements.has(id))elements.set(id,el);
+    }
+    const port=(node,dir)=>{
+      if(!node)return {x:0,y:0};
+      const id=String(node.id);
+      let size=dimensions.get(id);
+      if(!size){
+        const el=elements.get(id);
+        // Exactly match the old DOM-based geometry when a card is mounted.
+        size={w:el?el.offsetWidth:(node.w||320),
+              h:el?el.offsetHeight:(node.h||240)};
+        dimensions.set(id,size);
+      }
+      return {x:dir==="in"?node.x:node.x+size.w,
+              y:node.y+size.h*0.5};
+    };
+    return Object.freeze({getNode:id=>model.get(id)||null,port});
+  }
+
+  // An unrelated text edit or asynchronous result tick must not destroy all
+  // SVG path elements; selection/edge movement still updates changed markup.
+  // Only renderEdgesSvg and its explicit blank-Canvas reset modify this SVG.
+  const edgeMarkupCache=new WeakMap();
+  function reconcileEdgeMarkup(svg,markup){
+    if(!svg)return false;
+    if(edgeMarkupCache.get(svg)===markup)return false;
+    svg.innerHTML=markup;
+    edgeMarkupCache.set(svg,markup);
+    return true;
+  }
+  function clearEdgeMarkup(svg){
+    if(!svg)return;
+    svg.innerHTML="";
+    edgeMarkupCache.delete(svg);
+  }
+
   function captureEditableGraph(graph){
     const source=graph||{},snapshot={};
     for(const [name,value] of Object.entries(source)){
@@ -264,6 +312,7 @@
     return next;
   }
   return Object.freeze({reconcile,updateSelection,preserveRuntime,captureEditableGraph,
+    createEdgeGeometryIndex,reconcileEdgeMarkup,clearEdgeMarkup,
     // Exposed for controlled performance/DOM regression fixtures.
     rootFlags});
 });
