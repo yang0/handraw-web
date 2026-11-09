@@ -59,8 +59,12 @@ JS_MEASURE = r"""() => {
       replaced:measured.patch?.replaced,
     });
   }
-  const focusHeld=document.activeElement===input && input.selectionStart===2 &&
-    input.selectionEnd===5;
+  // Reconcile may replace the owning card while explicitly restoring focus,
+  // cursor and in-progress user value to the new real textarea node.
+  const activeInput=root.querySelector('[data-node-id="g00-0"] textarea, [data-node-id="g00-0"] input');
+  const focusHeld=document.activeElement===activeInput &&
+    activeInput?.value==='光标仍保持在正在编辑的字段' &&
+    activeInput.selectionStart===2 && activeInput.selectionEnd===5;
   const oldStatus=resultNode.data.status;
   resultNode.data.status=oldStatus==='generating'?'done':'generating';
   const status=probe();
