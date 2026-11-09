@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 import json
 import os
@@ -16,10 +16,10 @@ from ops.studio_phase22_witness_chain_132 import (
     SOURCES,CASE_IDS,evaluate,main,
 )
 
-NOW=datetime(2026,11,10,tzinfo=timezone.utc)
+NOW=datetime.now(timezone.utc)
 WEB="a"*40
 SKILL="b"*40
-DT="2026-11-09T23:00:00Z"
+DT=(NOW-timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def canonical(obj):
