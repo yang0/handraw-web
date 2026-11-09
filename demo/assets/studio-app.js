@@ -9838,7 +9838,7 @@
     DOM.world.style.transform = `translate(${CS.vx.toFixed(1)}px, ${CS.vy.toFixed(1)}px) scale(${CS.vk.toFixed(4)})`;
     updateGridBackground();
     positionFloatingOverlays();
-    renderMinimap();
+    updateMinimapLensOnly();
     if (DOM.zoomPctBtn) DOM.zoomPctBtn.textContent = `${Math.round(CS.vk * 100)}%`;
   }
 
@@ -11076,9 +11076,17 @@
     }
 
     }
-    renderEdgesSvg();
+    // Text/status-only dirty cards have unchanged port geometry and edge
+    // selection: don't index and measure every edge endpoint again.
+    // Any full render, changed node dimension, or collision adjustment still
+    // runs the authoritative complete edge calculation.
+    const edgesRecomputed=!partial||sizeChanged;
+    if(edgesRecomputed)renderEdgesSvg();
     for(const el of dirtyNodes)bindNodeInteriorActions(el);
-    if(DOM.nodesLayer.dataset.canvasBenchmark==='1')DOM.nodesLayer._lastCanvasPatchStats=stats;
+    if(DOM.nodesLayer.dataset.canvasBenchmark==='1'){
+      stats.edgesRecomputed=edgesRecomputed;
+      DOM.nodesLayer._lastCanvasPatchStats=stats;
+    }
   }
 
   function bindNodeInteriorActions(root = DOM.nodesLayer) {
@@ -12581,6 +12589,66 @@
 
 
   /* ======================== MINIMAP, TOP MULTI-TAB BAR & TOOLSTRIP ======================== */
+  // #111: pure camera changes must never rebuild the full minimap SVG.
+  // All node/layout/project updates still use renderMinimap(), which rebuilds
+  // cached bounds and miniature node elements from the authoritative graph.
+  function updateMinimapLensOnly(){
+    const map=DOM.minimap,meta=map?._mapMeta,lens=map?._lensEl;
+    if(!map||map.style.display==="none")return;
+    if(!meta||!lens?.isConnected||!DOM.viewport){
+      renderMinimap();return;
+    }
+    const vRect=DOM.viewport.getBoundingClientRect();
+    const values={
+      x:meta.offX+(-CS.vx/CS.vk-meta.minX)*meta.scale,
+      y:meta.offY+(-CS.vy/CS.vk-meta.minY)*meta.scale,
+      width:Math.max(18,(vRect.width/CS.vk)*meta.scale),
+      height:Math.max(14,(vRect.height/CS.vk)*meta.scale)
+    };
+    for(const [attr,value] of Object.entries(values)){
+      const next=value.toFixed(1);
+      if(lens.getAttribute(attr)!==next)lens.setAttribute(attr,next);
+    }
+    const zoom=map._zoomLabel;
+    if(zoom)zoom.textContent=`${Math.round(CS.vk*100)}%`;
+    meta.vRect=vRect;
+  }
+
+  // Pointer-drag fast path. Update only the moved miniature rectangles while
+  // the graph stays within the existing minimap bounds. Crossing those bounds
+  // falls back to full recomputation so the map never clips a moved card.
+  function renderMinimapMovedNodes(ids){
+    const map=DOM.minimap,meta=map?._mapMeta,rects=map?._miniRects;
+    if(!map||map.style.display==="none")return;
+    const nodes=CS.graph.nodes||[];
+    if(!meta||!rects||meta.nodeCount!==nodes.length){
+      renderMinimap();return;
+    }
+    const updates=[];
+    for(const id of new Set((ids||[]).map(String))){
+      const node=nodes.find(n=>String(n.id)===id),rect=rects.get(id);
+      if(!node||!rect?.isConnected||
+        node.x<meta.minX+120||node.y<meta.minY+120||
+        node.x+(node.w||320)>meta.maxX-120||
+        node.y+(node.h||260)>meta.maxY-120){
+        renderMinimap();return;
+      }
+      updates.push({node,rect});
+    }
+    for(const {node,rect} of updates){
+      const values={
+        x:meta.offX+(node.x-meta.minX)*meta.scale,
+        y:meta.offY+(node.y-meta.minY)*meta.scale,
+        width:Math.max(4,(node.w||320)*meta.scale),
+        height:Math.max(4,(node.h||240)*meta.scale)
+      };
+      for(const [attr,value] of Object.entries(values)){
+        const next=value.toFixed(1);
+        if(rect.getAttribute(attr)!==next)rect.setAttribute(attr,next);
+      }
+    }
+  }
+
   function renderMinimap() {
     if (!DOM.minimap) return;
     const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
@@ -12614,7 +12682,7 @@
     const lensW = Math.max(18, (vRect.width / CS.vk) * scale);
     const lensH = Math.max(14, (vRect.height / CS.vk) * scale);
 
-    DOM.minimap._mapMeta = { minX, minY, scale, offX, offY, vRect };
+    DOM.minimap._mapMeta = { minX, minY, maxX, maxY, scale, offX, offY, vRect, nodeCount:nodes.length };
 
     const rectsHtml = nodes
       .map((n) => {
@@ -12638,20 +12706,24 @@
                       : n.type === "asset"
                         ? "#2d8658"
                         : "#b74227";
-        return `<rect x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${rw.toFixed(1)}" height="${rh.toFixed(1)}" rx="2" fill="${fill}" opacity="0.84" />`;
+        return `<rect data-mini-node-id="${esc(n.id)}" x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${rw.toFixed(1)}" height="${rh.toFixed(1)}" rx="2" fill="${fill}" opacity="0.84" />`;
       })
       .join("");
 
     DOM.minimap.innerHTML = `
       <div class="ic-minimap-head">
         <span>缩略图 (${nodes.length})</span>
-        <span>${Math.round(CS.vk * 100)}%</span>
+        <span data-mini-zoom>${Math.round(CS.vk * 100)}%</span>
       </div>
       <svg width="${W}" height="${H}" style="display:block;">
         ${rectsHtml}
-        <rect x="${lensX.toFixed(1)}" y="${lensY.toFixed(1)}" width="${lensW.toFixed(1)}" height="${lensH.toFixed(1)}" fill="rgba(37,99,235,0.12)" stroke="var(--ic-select)" stroke-width="1.5" rx="3" />
+        <rect data-mini-lens="1" x="${lensX.toFixed(1)}" y="${lensY.toFixed(1)}" width="${lensW.toFixed(1)}" height="${lensH.toFixed(1)}" fill="rgba(37,99,235,0.12)" stroke="var(--ic-select)" stroke-width="1.5" rx="3" />
       </svg>
     `;
+    DOM.minimap._lensEl=DOM.minimap.querySelector("[data-mini-lens]");
+    DOM.minimap._zoomLabel=DOM.minimap.querySelector("[data-mini-zoom]");
+    DOM.minimap._miniRects=new Map([...DOM.minimap.querySelectorAll("[data-mini-node-id]")]
+      .map(el=>[el.getAttribute("data-mini-node-id"),el]));
   }
 
   function scrollActiveTabIntoView() {
@@ -20046,9 +20118,14 @@
             item.el.style.top = `${item.node.y}px`;
           }
         }
-        renderEdgesSvg();
+        const movedIds=dragCtx.startPositions.map(item=>item.node.id);
+        // Keep the existing hit targets/selection; render all edges only if
+        // the partial path finds a missing or ambiguous SVG/Graph binding.
+        if(!window.HandrawCanvasRenderer.patchMovedEdgePaths(
+          DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
+          DOM.nodesLayer,movedIds,bezierPath))renderEdgesSvg();
         positionFloatingOverlays();
-        renderMinimap();
+        renderMinimapMovedNodes(movedIds);
         return;
       }
 
