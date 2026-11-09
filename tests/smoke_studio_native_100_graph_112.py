@@ -32,12 +32,14 @@ PHOTO = "/starter/bear-and-bird.webp"
 OTHER_PHOTO = "/starter/clay-commuter.webp"
 
 
-def graph_fixture():
+def graph_fixture(groups=10):
+    """Real native node mix; 10 nodes and 5 edges per group."""
+    assert isinstance(groups, int) and 1 <= groups <= 30
     nodes, edges = [], []
     types = ("text_input", "text_input", "text_input", "skill_params",
              "skill_params", "asset", "asset", "output_control",
              "output_display", "output_display")
-    for group in range(10):
+    for group in range(groups):
         prefix = f"g{group:02}"
         ids = []
         for offset, kind in enumerate(types):
@@ -76,7 +78,7 @@ def graph_fixture():
                 "id": f"{prefix}-edge-{src}-{dst}",
                 "from": ids[src], "to": ids[dst],
             })
-    assert len(nodes) == 100 and len(edges) == 50
+    assert len(nodes) == groups * 10 and len(edges) == groups * 5
     return {"blueprint": "custom", "revision": 1, "nodes": nodes,
             "edges": edges, "selectedIds": []}
 
