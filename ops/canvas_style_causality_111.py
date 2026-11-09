@@ -18,6 +18,7 @@ STYLE_UPDATE = "UpdateLayoutTree"
 ROLE_ALLOWLIST = frozenset({
     "studio-shell", "canvas-stage", "viewport", "world", "nodes-layer",
     "node", "node-header", "port", "edge-svg", "edge-path", "minimap",
+    "floating-toolbar", "canvas-overlay",
     "shelf", "other", "outside-canvas",
 })
 ATTR_ALLOWLIST = frozenset({"style", "class"})
@@ -200,7 +201,7 @@ def validate_selector_census(rows):
             continue
         selector = row.get("selector")
         match = row.get("matches")
-        if selector in allowed and type(match) is int and 0 <= match <= 20_000:
+        if type(selector) is str and selector in allowed and type(match) is int and 0 <= match <= 20_000:
             out.append({"candidate": allowed[selector],
                         "matchesAtSnapshot": match,
                         "ancestorChildChain": selector.split(" "),
