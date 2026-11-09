@@ -20443,6 +20443,19 @@
       getHistory: () => (Array.isArray(CS.generationHistory) ? JSON.parse(JSON.stringify(CS.generationHistory)) : null),
       getTabs: () => CS.tabs,
       getGraph: () => CS.graph,
+      // #111: test-only instrumentation of the actual product card renderer.
+      // Does not schedule saves or issue generation requests; never enabled
+      // outside the explicit __HANDRAW_TESTING__ flag.
+      renderCanvasNodesForBenchmark: () => {
+        if (!DOM.nodesLayer) throw new Error("canvas_nodes_layer_missing");
+        DOM.nodesLayer.dataset.canvasBenchmark = "1";
+        const start = performance.now();
+        renderWorldNodes();
+        return {
+          durationMs: performance.now() - start,
+          patch: DOM.nodesLayer._lastCanvasPatchStats || null
+        };
+      },
       applyDurableTaskResult,
       isStaleScope,
       ensureStableRequestId,
