@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from ops.studio_official_approval_132 import CODES
 from ops.studio_phase22_witness_chain_132 import (
@@ -169,12 +170,12 @@ class Phase22WitnessTest(unittest.TestCase):
             report=root/"result.json"
             args=["--registry",str(registry),"--proof-dir",str(private),
                   "--web-sha",WEB,"--skill-sha",SKILL,"--report",str(report)]
-            with unittest.mock.patch.dict(os.environ,{"HANDRAW_PHASE22_TRUST_SHA256":anchor}):
+            with patch.dict(os.environ,{"HANDRAW_PHASE22_TRUST_SHA256":anchor}):
                 self.assertEqual(main(args),0)
             self.assertEqual(json.loads(report.read_text())["pinnedWitnessCount"],5)
             report.unlink()
             registry.chmod(0o644)
-            with unittest.mock.patch.dict(os.environ,{"HANDRAW_PHASE22_TRUST_SHA256":anchor}):
+            with patch.dict(os.environ,{"HANDRAW_PHASE22_TRUST_SHA256":anchor}):
                 self.assertEqual(main(args),2)
 
 
