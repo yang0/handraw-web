@@ -211,8 +211,16 @@ def evaluate_record(record,*,web_sha,skill_sha,provider=None,handraw=None,now=No
                 or sha(handraw)!=record["measurements"]["webRunItemAttemptSha256"]):
                 raise ValueError("provider ledger input digest drift")
             report=reconcile(provider,handraw)
+            observed_refunds=sum(
+                x.get("kind")=="refund" for x in provider.get("events",[]))
+            wallet_refunds=sum(
+                x.get("kind")=="studio_refund" for x in handraw.get("ledger_events",[]))
             if (report["anomalies"] or report["result"]!="NO_AUTOMATED_ANOMALIES"
                 or report["counts"]["attempts"]<1
+                or report["counts"]["attempts"]!=record["measurements"]["paidAttemptCount"]
+                or provider.get("currency")!=record["measurements"]["currency"]
+                or observed_refunds!=record["measurements"]["refundCount"]
+                or wallet_refunds!=observed_refunds
                 or sha(report)!=record["measurements"]["reconciliationReportSha256"]):
                 raise ValueError("paid-provider actual-source reconciliation failed")
     return {
