@@ -142,6 +142,61 @@
     }
     return updated;
   }
+  // #111: Undo/Redo snapshots live only in per-tab browser memory. Clone
+  // editable graph state, but SHARE immutable/authority-owned Run and media
+  // payloads instead of JSON-copying them for every one of 35 history steps.
+  // A deleted output node must still be restorable, hence no ID-only stubs.
+  // Never serialize these history snapshots as durable project Graphs.
+  function captureEditableGraph(graph){
+    const source=graph||{},snapshot={};
+    for(const [name,value] of Object.entries(source)){
+      if(name==="nodes")continue;
+      if(name==="runRefs"){snapshot[name]=value;continue;}
+      if(name==="meta"&&value&&typeof value==="object"&&!Array.isArray(value)){
+        const meta={};
+        for(const [k,v] of Object.entries(value))
+          meta[k]=k==="runRefs"?v:clone(v);
+        snapshot.meta=meta;
+      }else snapshot[name]=clone(value);
+    }
+    snapshot.nodes=(source.nodes||[]).map(node=>{
+      const result={};
+      for(const [name,value] of Object.entries(node)){
+        if(name==="data")continue;
+        result[name]=clone(value);
+      }
+      const data=node.data;
+      if(!data||typeof data!=="object") {
+        if(own(node,"data"))result.data=data;
+        return result;
+      }
+      if(node.type==="output_display"){
+        // The data holds the generated image list, its immutable media IDs,
+        // progress and upstream status. It isn't an editable history action.
+        result.data=data;
+      }else if(node.type==="output_control"||node.type==="loop"){
+        result.data={};
+        for(const [name,value] of Object.entries(data))
+          result.data[name]=RUN_FIELDS.has(name)?value:clone(value);
+      }else if(node.type==="article_plan"){
+        result.data={};
+        for(const [name,value] of Object.entries(data)){
+          if(name!=="cards"||!Array.isArray(value)){
+            result.data[name]=clone(value);continue;
+          }
+          result.data.cards=value.map(card=>{
+            if(!card||typeof card!=="object")return clone(card);
+            const copy={};
+            for(const [k,v] of Object.entries(card))
+              copy[k]=ARTICLE_CARD_FIELDS.has(k)?v:clone(v);
+            return copy;
+          });
+        }
+      }else result.data=clone(data);
+      return result;
+    });
+    return snapshot;
+  }
   const RUN_FIELDS=new Set([
     "runId","runIds","runRef","runRefs","runProjection","studio2RunSnapshot",
     "activeBatchId","pendingTaskId","pendingTaskIds","pendingRequestId",
@@ -208,7 +263,7 @@
     next.revision=Math.max(Number(current?.revision)||0,Number(next.revision)||0)+1;
     return next;
   }
-  return Object.freeze({reconcile,updateSelection,preserveRuntime,
+  return Object.freeze({reconcile,updateSelection,preserveRuntime,captureEditableGraph,
     // Exposed for controlled performance/DOM regression fixtures.
     rootFlags});
 });
