@@ -248,12 +248,12 @@
     if(!moved.size)return null;
     const incident=graphEdges.filter(e=>e&&
       (moved.has(String(e.from))||moved.has(String(e.to))));
-    const index=new Map();
-    for(const node of nodes){
-      if(!node||index.has(String(node.id)))return null;
-      index.set(String(node.id),node);
+    const model=new Map(),modelPosition=new Map();
+    for(let i=0;i<nodes.length;i++){
+      const node=nodes[i],id=String(node?.id);
+      if(!node||model.has(id))return null;
+      model.set(id,node);modelPosition.set(id,i);
     }
-    // The UI may have zero edges; still keep an updateable no-op session.
     const elements=new Map();
     for(const el of layer.querySelectorAll(".ic-node[data-node-id]")){
       const id=el.getAttribute("data-node-id");
@@ -266,39 +266,71 @@
       if(id==null||groups.has(id))return null;
       groups.set(id,el);
     }
-    const bindings=[];
-    for(const edge of incident){
-      const from=index.get(String(edge.from)),to=index.get(String(edge.to));
-      const fromEl=elements.get(String(edge.from)),toEl=elements.get(String(edge.to));
+    const bindings=[],watched=new Map(),sizes=new Map();
+    for(let i=0;i<graphEdges.length;i++){
+      const edge=graphEdges[i];
+      if(!incident.includes(edge))continue;
+      const fromId=String(edge.from),toId=String(edge.to);
+      const from=model.get(fromId),to=model.get(toId);
+      const fromEl=elements.get(fromId),toEl=elements.get(toId);
       const group=groups.get(String(edge.id));
       const hit=group?.querySelector("path.ic-edge-hit");
       const line=group?.querySelector("path.ic-edge-line");
       if(!from||!to||!fromEl||!toEl||!hit||!line)return null;
-      bindings.push({edge,id:String(edge.id),fromId:String(edge.from),
-        toId:String(edge.to),from,to,fromEl,toEl,group,hit,line});
+      bindings.push({edge,edgeIndex:i,id:String(edge.id),fromId,toId,
+        from,fromIndex:modelPosition.get(fromId),
+        to,toIndex:modelPosition.get(toId),fromEl,toEl,group,hit,line});
+      watched.set(fromId,fromEl);watched.set(toId,toEl);
+    }
+    // Measure each distinct linked endpoint BEFORE any pointer movement.
+    // Reading offsetWidth/Height after moving a card can force the entire
+    // 300-node layout to synchronously flush on every mouse frame.
+    for(const [id,el] of watched){
+      const size={w:el.offsetWidth,h:el.offsetHeight};
+      if(!Number.isFinite(size.w)||!Number.isFinite(size.h))return null;
+      sizes.set(id,size);
+    }
+    let active=true,observer=null;
+    // Real content changes can resize an endpoint during a drag. Resize
+    // notifications arrive after layout, without forcing layout on the
+    // pointermove hot path. Re-render on pointerup still remeasures all ports.
+    if(typeof ResizeObserver==="function"&&watched.size){
+      observer=new ResizeObserver(entries=>{
+        if(!active)return;
+        for(const entry of entries){
+          const el=entry.target,id=el.getAttribute("data-node-id");
+          if(watched.get(id)!==el)continue;
+          const size={w:el.offsetWidth,h:el.offsetHeight};
+          if(Number.isFinite(size.w)&&Number.isFinite(size.h))
+            sizes.set(id,size);
+        }
+      });
+      try{
+        for(const el of watched.values())observer.observe(el);
+      }catch(_){
+        observer.disconnect();observer=null;
+      }
     }
     const edgeCount=graphEdges.length,nodeCount=nodes.length;
     return Object.freeze({
       incidentCount:bindings.length,
+      dispose(){active=false;observer?.disconnect();},
       update(liveEdges,liveNodes){
-        if(liveEdges!==graphEdges||liveNodes!==nodes||
+        if(!active||liveEdges!==graphEdges||liveNodes!==nodes||
            graphEdges.length!==edgeCount||nodes.length!==nodeCount)return false;
-        const measured=new Map(),patches=[];
+        const patches=[];
         const port=(node,el,dir)=>{
-          const id=String(node.id);
-          let size=measured.get(id);
-          if(!size){
-            if(el.isConnected===false||
-               (typeof layer.contains==="function"&&!layer.contains(el)))return null;
-            size={w:el.offsetWidth,h:el.offsetHeight};
-            if(!Number.isFinite(size.w)||!Number.isFinite(size.h))return null;
-            measured.set(id,size);
-          }
+          if(el.isConnected===false||
+             (typeof layer.contains==="function"&&!layer.contains(el)))return null;
+          const size=sizes.get(String(node.id));
+          if(!size)return null;
           return {x:dir==="in"?node.x:node.x+size.w,
             y:node.y+size.h*0.5};
         };
         for(const b of bindings){
-          if(String(b.edge.id)!==b.id||
+          if(graphEdges[b.edgeIndex]!==b.edge||
+             nodes[b.fromIndex]!==b.from||nodes[b.toIndex]!==b.to||
+             String(b.edge.id)!==b.id||
              String(b.edge.from)!==b.fromId||
              String(b.edge.to)!==b.toId||
              b.group.isConnected===false||b.hit.isConnected===false||
@@ -311,7 +343,7 @@
           if(typeof d!=="string"||!d)return false;
           patches.push({hit:b.hit,line:b.line,d});
         }
-        // All binding/geometry checks finish before any write.
+        // Every binding is validated before any of the SVG attributes change.
         for(const {hit,line,d} of patches){
           if(hit.getAttribute("d")!==d)hit.setAttribute("d",d);
           if(line.getAttribute("d")!==d)line.setAttribute("d",d);
