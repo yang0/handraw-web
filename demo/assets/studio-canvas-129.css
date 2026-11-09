@@ -38,7 +38,8 @@
 .ic129-inspector-info p{margin:6px 0 12px;color:var(--ic-muted)}
 .ic129-inspector-info button{display:inline-block;margin:5px 4px 0 0}
 #canvas-129-taskbar{
-  position:absolute;z-index:46;bottom:10px;left:242px;right:14px;
+  /* Reserve the right-hand tool rail even when 300 branches are running. */
+  position:absolute;z-index:46;bottom:10px;left:242px;right:188px;
   background:var(--ic-panel);border:1px solid var(--ic-border);border-radius:12px;
   box-shadow:var(--ic-dock-shadow);backdrop-filter:blur(16px);
   max-height:36vh;overflow:auto;padding:9px 12px;
@@ -48,14 +49,19 @@
 .ic129-task-head strong{font-size:12px}
 .ic129-task-head span{color:var(--ic-muted)}
 .ic129-task-head button{margin-left:auto}
-.ic129-task-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:7px}
-.ic129-task-chip{display:flex;gap:9px;background:var(--ic-surface);
+/* Unbounded rows grew the taskbar above the zoom dock at 300 nodes.
+ * A single horizontally scrollable summary row has a fixed, compact height;
+ * expanding the task list keeps the separate scrollable details below.
+ */
+.ic129-task-chips{display:flex;flex-wrap:nowrap;gap:8px;margin-top:7px;
+  max-width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;padding-bottom:3px}
+.ic129-task-chip{display:flex;flex:0 0 auto;white-space:nowrap;gap:9px;background:var(--ic-surface);
   border:1px solid var(--ic-border);border-radius:8px;padding:5px 8px}
 .ic129-task-chip span:last-child{font-variant-numeric:tabular-nums;color:var(--ic-muted)}
 .ic129-task-details{display:grid;gap:8px;max-height:160px;overflow:auto;margin-top:9px;border-top:1px solid var(--ic-border);padding-top:8px}
 .ic129-task-details>div{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .ic129-task-details button{margin-left:auto}
-.ic-canvas-stage .ic-bottom-right-dock{bottom:100px;right:14px}
+.ic-canvas-stage .ic-bottom-right-dock{bottom:100px;right:14px;z-index:48}
 .ic-canvas-stage .ic-minimap{bottom:149px}
 #canvas-129-empty{position:absolute;inset:64px 250px 100px 235px;z-index:44;
   display:grid;place-items:center;pointer-events:none}
