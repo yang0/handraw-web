@@ -20,6 +20,9 @@ import stat
 import subprocess
 import sys
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from ops.pg_release_restore_drill_112 import fingerprint, settings
 
 LABEL=re.compile(r"^preprod-[a-z0-9][a-z0-9-]{3,55}$")
