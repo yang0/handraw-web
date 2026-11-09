@@ -30,3 +30,31 @@
 - **等待完成：** 独立 SHA 14/14 → compare ahead>0/behind=0 → expected-SHA `force=false` 快进 `studio2` → 同 SHA 的 Push/PR 两套各 14/14。没有结果不得勾选，失败要留审计记录。
 - PR #131 必须一直保持 Draft，绝不直接修改或合入 `main`。
 - **生产发布：NO-GO**；#111 树级 Style 根因、低端机真实性及 #84/#112 D 级仍需独立验收。
+
+## 实测结果与决策（2026-11-09）
+
+### 首轮：测试工具工作正确，但两组自然像素总量不相同
+
+独立分支 [GitHub Actions #42570307011](https://github.com/yang0/handraw-web/actions/runs/42570307011) 14/14 SUCCESS；120 张均已实际完成解码，物理拖拽、Ctrl+Z、150 条 SVG 和零付费调用均通过。注意复用原图组与独立派生组图片的自然像素总量不同，**首轮仅作为测试功能证据，不作为严格 A/B 耗时结论**。差异已在同独立分支修复：两个 Project 都使用相同的 960×720 媒体尺寸，复用组仅使用派生目录中的前两个 URL，独立组使用 120 个不同 URL；每组在 DOM 上均有 120 张 img、总计 82,944,000 自然像素。
+
+### 严格等像素 A→B→A · 同一 SHA 14/14 SUCCESS
+
+验证提交 `a73e040e2d9a2cad5f23d4501646b65605ae8c22`，独立分支 [GitHub Actions #42570819591](https://github.com/yang0/handraw-web/actions/runs/42570819591) **14/14 SUCCESS**；Chrome Runner 真正解析加载 120 份独立编码的 WebP，所有约束通过。
+
+| 场景 | 独立 WebP URL | 总自然像素 | Chrome CDP Drag-only Style 累计 | rAF gap P95 |
+| --- | ---: | ---: | ---: | ---: |
+| A1 · 复用两源 | 2 | 82,944,000 | 209.095ms | 33.3ms |
+| B · 120 独立文件 | 120 | 82,944,000 | 204.419ms | 33.3ms |
+| A2 · 复用两源复测 | 2 | 82,944,000 | 202.990ms | 83.4ms |
+| B / CDP 4× CPU 模拟 | 120 | 82,944,000 | 931.476ms | 详见 CI JSON |
+
+三组正常 CPU 的 Style 累计在约 203–209ms 范围，没有呈现独立媒体造成的明显 Style 增量；但 A2 的 rAF gap P95 大幅波动，**不能宣称独立媒体不增加真实帧成本，也不能据此认定稳定 30fps 或 60fps**。此处 4× CPU 数值不能与未限速数据直接比性能增益。完整单项目加载/解码耗时、CDP Layout、Script、Task、rAF 统计及可用 JS Heap 观测数值都留在 CI `artifacts/studio-111-distinct-media/summary.json`；不把 JS Heap 当 VRAM/所有解码图片内存。
+
+### 交付决策
+
+1. **没有对产品 Canvas CSS、DOM 或 Graph Runtime 做任何变更**；已有局部卡片重绘、定向 pointerup 和历史性能优化保持。
+2. 真实 300 节点、150 边、120 个不同 URL 的本地 WebP 解码与物理鼠标回归成为持续 CI 门禁；无付费网关及原始媒体 artifact 泄漏。
+3. 本次结果没有证明某条选择器是树级样式重算的唯一原因，也没有为未经验证的 GPU/Canvas 虚拟化方案提供支持，因此**不引入无稳定收益的渲染层重构**。
+4. #111 仍 **Open**；真实 CDN/R2/移动端、低端物理设备 GPU Present、超长会话 GC、真实媒体解码/纹理内存仍须 #112 D 级单独测试；#84/#11 也尚未验收，生产继续 **NO-GO**。
+
+后续工程纪律：本次文档提交的新 HEAD 仍需独立分支 14/14，才能 non-force expected-SHA 快进 `studio2`；之后需要 `studio2` Push 与 Draft PR #131 的同 SHA 14/14。未通过不得同步，严禁修改 `main` 或将 PR 标 Ready。
