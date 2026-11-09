@@ -79,6 +79,7 @@ def _registry(registry, trusted_sha):
     if not isinstance(registry["keys"],list) or not 2<=len(registry["keys"])<=16:
         raise ValueError("invalid trusted key registry")
     keys={}
+    public_material_seen=set()
     for row in registry["keys"]:
         if not isinstance(row,dict) or set(row)!={"keyId","role","publicKeyBase64"}:
             raise ValueError("unexpected trust fields")
@@ -87,8 +88,11 @@ def _registry(registry, trusted_sha):
             raise ValueError("duplicate/invalid key identity")
         if row["role"] not in ROLES:
             raise ValueError("unapproved signing role")
-        keys[kid]=(row["role"],Ed25519PublicKey.from_public_bytes(
-            decode64(row["publicKeyBase64"],32)))
+        raw_public=decode64(row["publicKeyBase64"],32)
+        if raw_public in public_material_seen:
+            raise ValueError("duplicate Ed25519 public material across signing identities")
+        public_material_seen.add(raw_public)
+        keys[kid]=(row["role"],Ed25519PublicKey.from_public_bytes(raw_public))
     return keys
 
 
@@ -130,6 +134,7 @@ def evaluate(approvals,registry,pending_manifest,db_styles,*,
             raise ValueError("duplicate official published Web DB row")
         rows[code]=row
     seen=set()
+    action_ids=set()
     for entry in approvals["approvals"]:
         if not isinstance(entry,dict) or set(entry)!={"payload","signatures"}:
             raise ValueError("invalid signed record fields")
@@ -150,6 +155,9 @@ def evaluate(approvals,registry,pending_manifest,db_styles,*,
         for field in ("websiteActionId","rightsReviewEvidenceId"):
             if not isinstance(p[field],str) or not TOKEN.fullmatch(p[field]):
                 raise ValueError("missing referenced editorial evidence")
+        if p["websiteActionId"] in action_ids:
+            raise ValueError("replayed editorial action across resource codes")
+        action_ids.add(p["websiteActionId"])
         _utc(p["reviewedAtUtc"],now)
         row=rows.get(code)
         if not row or row.get("generation_name")!=pinned[code]["name"] or sha(row)!=p["webDbPublishedRowSha256"]:
