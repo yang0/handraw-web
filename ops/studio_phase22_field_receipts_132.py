@@ -15,6 +15,9 @@ import re
 import stat
 import sys
 
+if __package__ in (None, ""):
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+
 from ops.studio_d_receipt_contract_132 import digest
 
 HEX=re.compile(r"^[a-f0-9]{64}$")
