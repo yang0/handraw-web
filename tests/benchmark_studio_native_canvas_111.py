@@ -387,8 +387,10 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
                 "real paced drag did not commit layout position", size, state)
         assert state["cssTranslate"] in ("", None, "none"), (
             "real drag retained a transient CSS translate", size, state)
-        assert state["cardStable"], (
-            "node drag replaced an unchanged media card DOM", size, state)
+        # The legacy full-render control is EXPECTED to replace cards.
+        # The targeted path, in contrast, must preserve the exact DOM node.
+        assert finish_mode == "full" or state["cardStable"], (
+            "targeted drag replaced an unchanged media card DOM", size, state)
         assert state["finish"] and (
             state["finish"]["targeted"] == (finish_mode == "targeted")), (
                 "node pointerup did not honor safe finish policy",
