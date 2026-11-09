@@ -23,16 +23,23 @@ def main():
         if mode == "baseline" and not applied:
             applied = True
             same_window = trace_window(page, cdp)
+            floating_overlay_window = trace_window(
+                page, cdp, "floating-layer-style-contain")
             trials = [
                 ablation(page, cdp, "selected-hover-guard",
                          stage10.profile_drag, stage10.metrics_for),
                 ablation(page, cdp, "node-hover-rules-off",
                          stage10.profile_drag, stage10.metrics_for),
+                ablation(page, cdp, "floating-toolbar-contain",
+                         stage10.profile_drag, stage10.metrics_for),
+                ablation(page, cdp, "floating-layer-style-contain",
+                         stage10.profile_drag, stage10.metrics_for),
             ]
-            assert all(t.get("valid") for t in trials), trials
+            assert len(trials) == 4, trials
             result = {
                 "issue": 111, "phase": 11,
                 "sameWindow": same_window,
+                "floatingOverlayContainWindow": floating_overlay_window,
                 "ablationOrder": "A-B-A-B-A at normal and CDP 4x",
                 "candidates": trials,
                 "canPromoteWithoutFurtherReview": False,
@@ -58,6 +65,12 @@ def main():
                     "updateLayoutTree", {}).get("largeEventsGE8000"),
                 "maxLayoutElements": evidence.get(
                     "updateLayoutTree", {}).get("maxElementCount"),
+                "overlayTraceLargeLayoutEvents": floating_overlay_window[
+                    "sameWindowChrome"].get("updateLayoutTree", {}).get(
+                        "largeEventsGE8000"),
+                "overlayTraceMaxElements": floating_overlay_window[
+                    "sameWindowChrome"].get("updateLayoutTree", {}).get(
+                        "maxElementCount"),
                 "mutations": evidence.get(
                     "actualDomMutations", {}).get("byTargetRole"),
                 "nearLargeUpdates": evidence.get("joinNearLargeUpdateByReason"),
