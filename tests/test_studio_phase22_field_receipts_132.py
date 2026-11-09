@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import tempfile
@@ -18,7 +19,7 @@ def good():
     pg={k:H for k in PG if k.endswith("Sha256")}
     pg.update({"sourcePhysicalHostSha256":"a"*64,
                "recoveryPhysicalHostSha256":"b"*64,
-               "targetUtc":"2026-11-09T20:00:00Z",
+               "targetUtc":(datetime.now(timezone.utc)-timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                "recoveredReplayLsn":"0/1100ABCD",
                "pg17PhysicalBackupVerified":True,
                "pg17WalReplayAtTarget":True,
@@ -62,6 +63,21 @@ class Phase22FieldReceiptsTests(unittest.TestCase):
             x["postgres"][field]=bad
             with self.subTest(field=field),self.assertRaises(ValueError):
                 evaluate(x,web_sha=WEB,skill_sha=SKILL)
+
+    def test_pitr_calendar_replay_lsn_and_freshness_are_real_invariants(self):
+        now=datetime.now(timezone.utc)
+        for field,bad in (
+            ("targetUtc","2026-02-30T12:00:00Z"),
+            ("targetUtc",(now+timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")),
+            ("targetUtc",(now-timedelta(days=31)).strftime("%Y-%m-%dT%H:%M:%SZ")),
+            ("recoveredReplayLsn","0/0"),
+            ("recoveredReplayLsn","000000000/1"),
+            ("recoveredReplayLsn","0/000000000"),
+        ):
+            candidate=good()
+            candidate["postgres"][field]=bad
+            with self.subTest(field=field,bad=bad),self.assertRaises(ValueError):
+                evaluate(candidate,web_sha=WEB,skill_sha=SKILL,now=now)
 
     def test_storage_anon_a_b_and_tombstone_not_shortcircuitable(self):
         for field,bad in (("anonymousDenied",False),
