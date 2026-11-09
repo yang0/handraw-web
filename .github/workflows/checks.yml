@@ -75,6 +75,8 @@ jobs:
         run: python tests/benchmark_studio_distinct_media_111.py
       - name: '#111 stage10 tree-wide style invalidation: native CSSOM + contain A-B-A-B-A on 1x/4x CPU'
         run: python tests/benchmark_studio_tree_style_111.py
+      - name: '#111 stage11 Chrome same-window invalidation ancestry + targeted hover A/B 1x/4x CPU'
+        run: python tests/benchmark_studio_style_causality_111.py
       - name: '#112 Native Studio 100-node Graph + owner isolation Chromium smoke'
         run: python tests/smoke_studio_native_100_graph_112.py
       - run: python tests/smoke_studio_runtime_browser_119.py
@@ -102,6 +104,7 @@ jobs:
             artifacts/studio-111-native/**
             artifacts/studio-111-distinct-media/**
             artifacts/studio-111-tree-style/**
+            artifacts/studio-111-causality/**
             artifacts/graphpatch-126/**
             artifacts/ai-110-offline-eval.json
             artifacts/p0-masonry-114/**
