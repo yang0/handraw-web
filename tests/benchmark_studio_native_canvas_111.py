@@ -51,13 +51,23 @@ JS_MEASURE = r"""() => {
   const resultNode=graph.nodes.find(n=>n.id==='g00-7');
   if(!editNode||!resultNode)throw Error('required text/result nodes are missing');
   const warm=probe();
+  // Within-page baseline keeps Chromium/Graph/DOM/CI host constant. The
+  // unoptimised path still builds/parses every native card for each change.
+  const fullUpdates=[];
+  for(let i=0;i<7;i++){
+    editNode.data.text='同页全量渲染对照-'+i;
+    const measured=probe();
+    fullUpdates.push({ms:+measured.durationMs.toFixed(2),
+      partial:measured.patch?.partial,nodes:measured.patch?.nodes});
+  }
   const stableEdgesAfterWarm=[...document.querySelectorAll('#ic-edges-svg [data-edge-id]')];
   const updates=[];
   for(let i=0;i<7;i++){
     editNode.data.text='页面实际编辑-'+String(i);
-    const measured=probe();
+    const measured=probe(['g00-0']);
     updates.push({
       ms:+measured.durationMs.toFixed(2),
+      partial:measured.patch?.partial,nodes:measured.patch?.nodes,
       dirty:(measured.patch?.changedIds||[]).filter(id=>id.startsWith('node:')),
       replaced:measured.patch?.replaced,
     });
@@ -72,17 +82,22 @@ JS_MEASURE = r"""() => {
     document.querySelector('#ic-edges-svg [data-edge-id="'+el.getAttribute('data-edge-id')+'"]')===el);
   const oldStatus=resultNode.data.status;
   resultNode.data.status=oldStatus==='generating'?'done':'generating';
-  const status=probe();
+  const status=probe(['g00-7']);
   resultNode.data.status=oldStatus;
-  const restored=probe();
+  const restored=probe(['g00-7']);
+  // Unknown dirty ID must safely fall back to a whole-Graph reconcile.
+  const fallback=probe(['not-a-real-node']);
   const stableNodes=[...beforeCards].filter(([id,el])=>
     id!=='g00-0'&&id!=='g00-7'&&el.isConnected &&
     root.querySelector('[data-node-id="'+id+'"]')===el).length;
   const afterImages=[...root.querySelectorAll('img')];
   const stableImages=beforeImages.filter(el=>el.isConnected&&afterImages.includes(el)).length;
   return {
-    updates, focusHeld,edgesStableOnTextOnly,
+    updates,fullUpdates,focusHeld,edgesStableOnTextOnly,
     statusMs:+status.durationMs.toFixed(2),
+    statusPartial:status.patch?.partial,statusNodeCount:status.patch?.nodes,
+    fallbackFull:!fallback.patch?.partial &&
+      fallback.patch?.nodes===graph.nodes.length,
     statusDirty:(status.patch?.changedIds||[]).filter(id=>id.startsWith('node:')),
     restoredDirty:(restored.patch?.changedIds||[]).filter(id=>id.startsWith('node:')),
     stableUnrelatedNodes:stableNodes,
@@ -183,8 +198,17 @@ def main() -> None:
                             assert native["imagesBefore"] >= size * 4 // 10, native
                             assert all(x["dirty"] == ["node:g00-0"] for x in native["updates"]), (
                                 "one text edit touched extra nodes", size, native["updates"])
+                            assert all(x["partial"] and x["nodes"] == 1
+                                       for x in native["updates"]), (
+                                "dirty rendering built extra node HTML", size, native["updates"])
+                            assert all(not x["partial"] and x["nodes"] == size
+                                       for x in native["fullUpdates"]), (
+                                "full baseline did not build all cards", size)
+                            assert native["fallbackFull"], (
+                                "stale dirty ID failed to fall back safely", size)
                             assert len(native["statusDirty"]) <= 1, (
                                 "one control status tick touched extra nodes", size, native["statusDirty"])
+                            assert native["statusPartial"] and native["statusNodeCount"] == 1
                             assert native["restoredDirty"] in ([], ["node:g00-7"]), native["restoredDirty"]
                             # The real zoom control must be pointer-reachable
                             # even with 30 output branches. Do not force-click or
@@ -204,8 +228,10 @@ def main() -> None:
                             # a subsequent physical pointer/UI assertion fails.
                             print("CANVAS #111 PRE-ZOOM " + json.dumps({
                                 "nodes": size, "mountMs": mount_ms,
-                                "nodePatchP95Ms": percentile(
+                                "dirtyPatchP95Ms": percentile(
                                     [x["ms"] for x in native["updates"]], .95),
+                                "fullPatchP95Ms": percentile(
+                                    [x["ms"] for x in native["fullUpdates"]], .95),
                                 "stableImages": native["stableImages"],
                                 "domElements": native["domElements"],
                                 "statusMs": native["statusMs"]
@@ -225,6 +251,8 @@ def main() -> None:
                             assert not errors and not paid_posts, (size, errors, paid_posts)
                             native["nodePatchMs"] = [x["ms"] for x in native.pop("updates")]
                             native["nodePatchP95Ms"] = percentile(native["nodePatchMs"], .95)
+                            native["fullNodePatchMs"] = [x["ms"] for x in native.pop("fullUpdates")]
+                            native["fullNodePatchP95Ms"] = percentile(native["fullNodePatchMs"], .95)
                             native["zoomClickMs"] = zoom_ms
                             native["zoomClickP95Ms"] = percentile(zoom_ms, .95)
                             native["mountMs"] = mount_ms
@@ -234,7 +262,8 @@ def main() -> None:
                             measurements.append(native)
                             print("CANVAS #111 REAL STUDIO " + json.dumps({
                                 "nodes": size, "mountMs": mount_ms,
-                                "nodePatchP95Ms": native["nodePatchP95Ms"],
+                                "dirtyPatchP95Ms": native["nodePatchP95Ms"],
+                                "fullPatchP95Ms": native["fullNodePatchP95Ms"],
                                 "zoomClickP95Ms": native["zoomClickP95Ms"],
                                 "domElements": native["domElements"],
                                 "usedJSHeapBytes": native["usedJSHeapBytes"],
