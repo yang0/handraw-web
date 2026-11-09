@@ -297,7 +297,11 @@ def browser_test(base, token, fixture):
                 # Probes are contextual, not full visual pixel equivalence.
                 cases=[]
                 for name in CASES:
-                    probe, valid,reason=install_case(page,name,baseline)
+                    # Geometry drift from prior drag/Undo cannot be attributed
+                    # to the next CSS candidate. Compare to an immediately
+                    # preceding native baseline, not the page's first snapshot.
+                    near_baseline,_,_=install_case(page,"baseline",None)
+                    probe, valid,reason=install_case(page,name,near_baseline)
                     install_case(page,"baseline",None)
                     if not valid:
                         cases.append({"case":name,"valid":False,"reason":reason,
