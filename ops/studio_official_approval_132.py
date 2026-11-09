@@ -79,6 +79,7 @@ def _registry(registry, trusted_sha):
     if not isinstance(registry["keys"],list) or not 2<=len(registry["keys"])<=16:
         raise ValueError("invalid trusted key registry")
     keys={}
+    public_key_bytes_seen=set()
     for row in registry["keys"]:
         if not isinstance(row,dict) or set(row)!={"keyId","role","publicKeyBase64"}:
             raise ValueError("unexpected trust fields")
@@ -87,8 +88,12 @@ def _registry(registry, trusted_sha):
             raise ValueError("duplicate/invalid key identity")
         if row["role"] not in ROLES:
             raise ValueError("unapproved signing role")
-        keys[kid]=(row["role"],Ed25519PublicKey.from_public_bytes(
-            decode64(row["publicKeyBase64"],32)))
+        public_bytes=decode64(row["publicKeyBase64"],32)
+        # Different key IDs are NOT independent signers if they share key material.
+        if public_bytes in public_key_bytes_seen:
+            raise ValueError("same Ed25519 public key reused across signing identities")
+        public_key_bytes_seen.add(public_bytes)
+        keys[kid]=(row["role"],Ed25519PublicKey.from_public_bytes(public_bytes))
     return keys
 
 
