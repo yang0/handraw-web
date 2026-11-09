@@ -10,6 +10,7 @@ from pathlib import Path
 
 import benchmark_studio_tree_style_111 as stage10
 from ops.canvas_phase12_isolation_111 import collect
+from ops.canvas_phase13_pointer_111 import collect as collect_phase13
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -27,6 +28,26 @@ def main():
             assert warmup["graphUndoAndMediaStable"]
             page.wait_for_selector("[data-float-topbar]",timeout=5000)
             result=collect(page,cdp)
+            # Reuse the already-loaded 300-node project and Chrome context.
+            # Phase 13 is a separate post-Phase12 browser experiment: isolate
+            # hover/pointer-induced residual UpdateLayoutTree in no-visual mode.
+            phase13=collect_phase13(page,cdp)
+            folder13=ROOT/"artifacts/studio-111-phase13"
+            folder13.mkdir(parents=True,exist_ok=True)
+            (folder13/"summary.json").write_text(
+                json.dumps(phase13,indent=2,ensure_ascii=False)+"\n",
+                encoding="utf-8")
+            print("CANVAS #111 PHASE13 "+json.dumps({
+                "windows":{name:{
+                    "large":row["largeUpdateEvents"],
+                    "maximum":row["maxElementCount"],
+                    "mutations":row["actualDomMutationCounts"],
+                    "globalClasses":row["globalClassMutations"],
+                } for name,row in phase13["conditions"].items()},
+                "hoverMaskVsNoVisual":phase13["hoverMaskVsNoVisual"]["gate"],
+                "safeProductionCandidate":False,
+                "paidRequests":0,
+            },ensure_ascii=False),flush=True)
             summary=result["traceModes"]
             print("CANVAS #111 PHASE12 "+json.dumps({
                 "traceModes":{name:{
