@@ -75,6 +75,7 @@ def fixture():
     src={"schemaVersion":1,"sourceSystem":"website-postgresql-read-only",
          "sourceRole":"readonly-export","webDeployedSha":WEB,
          "publishedStylesSha256":sha(db),"publishedLayoutsSha256":sha([]),
+         "sourceRowsSha256":sha(db),
          "operatorId":"db-export-operator","independentReviewerId":"db-export-reviewer",
          "exportSessionId":"mock-export-21"}
     return {
