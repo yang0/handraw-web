@@ -10,7 +10,14 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+# Invoked by CI as "python ops/phase12_release_preflight_112.py".
+# Script execution puts /ops (not repo root) on sys.path.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from ops.check_official_catalog_parity import audit
 
