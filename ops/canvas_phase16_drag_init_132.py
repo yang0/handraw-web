@@ -28,7 +28,9 @@ PROBE_JS=r"""arg=>{
     if(s.dropped>0)throw Error("phase16 probe event cap reached");
     return {phase:s.phase,reads:s.reads,
       rootAttributes:s.rootAttributes,childRecords:s.childRecords,
-      mountCounts:s.mountCounts,offsetGettersTracked:s.origOffsets.length,
+      mountCounts:s.mountCounts,
+      mutationLineages:{added:s.lineageRows("added"),removed:s.lineageRows("removed")},
+      offsetGettersTracked:s.origOffsets.length,
       restored:true,privateDomValuesPersisted:false,
       diagnosticOnly:true};
   }
@@ -58,6 +60,31 @@ PROBE_JS=r"""arg=>{
     if(el===layer||layer.contains(el))return "node-layer";
     return "other";
   };
+  // Emit only finite, static tag vocabulary and fixed landmark roles.
+  // No ID, class, attribute value, selector, text, or media URL is recorded.
+  const TAGS=new Set(["html","body","main","section","article","aside",
+    "header","footer","nav","div","span","button","svg","g","path","rect",
+    "circle","line","polygon","polyline","foreignobject","image","img",
+    "canvas","figure","figcaption","picture","p","a","ul","ol","li",
+    "input","textarea","label","form","select","option","dialog",
+    "table","tbody","thead","tr","td","th","template"]);
+  const safeTag=node=>{
+    if(node.nodeType===3)return "#text";
+    if(node.nodeType===8)return "#comment";
+    if(!(node instanceof Element))return "#other-node";
+    const tag=node.localName?.toLowerCase();
+    return TAGS.has(tag)?tag:"other-tag";
+  };
+  const ancestry=parent=>{
+    const tags=[];
+    let cur=parent;
+    while(cur && tags.length<24){
+      tags.push(safeTag(cur));
+      cur=cur.parentElement;
+    }
+    if(cur)throw Error("phase17 DOM ancestor depth exceeded");
+    return tags.reverse();
+  };
   const zero=()=>({"global-root":0,"canvas-shell":0,"viewport":0,
     "node-layer":0,"floating-toolbar":0,"overlay":0,"other":0});
   const s={phase:arg.phase,reads:{rect:zero(),computed:zero(),
@@ -65,6 +92,9 @@ PROBE_JS=r"""arg=>{
       offsetLeft:zero()},
     rootAttributes:{class:zero(),style:zero()},
     childRecords:0,mountCounts:{added:zero(),removed:zero()},
+    lineage:{added:new Map(),removed:new Map()},
+    lineageRows:kind=>Array.from(s.lineage[kind].values())
+      .sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))),
     dropped:0,origComputed:window.getComputedStyle,
     origRect:Element.prototype.getBoundingClientRect,
     origOffsets:[],role,
@@ -85,6 +115,17 @@ PROBE_JS=r"""arg=>{
       for(const node of nodes){
         const r=node instanceof Element?role(node):parentRole;
         s.mountCounts[kind][r]++;
+        // The removed node can already be detached when MutationObserver runs.
+        // Preserve its mutation *parent* ancestry, not a misleading post-remove
+        // closest()/contains() lookup against a detached child.
+        const path=ancestry(m.target);
+        const shape={ancestorTags:path,nodeTag:safeTag(node),
+          parentRole,parentConnected:m.target.isConnected,count:1};
+        const key=JSON.stringify([path,shape.nodeTag,parentRole,shape.parentConnected]);
+        const old=s.lineage[kind].get(key);
+        if(old)old.count++;
+        else s.lineage[kind].set(key,shape);
+        if(s.lineage[kind].size>64)throw Error("phase17 DOM lineage cardinality cap");
       }
     }
   };
@@ -144,9 +185,47 @@ def _validate_sample(name,sample):
             if (not isinstance(row,dict) or set(row)!=allowed or
                 any(type(v) is not int or v<0 or v>20000 for v in row.values())):
                 raise ValueError("unbounded/read of unexpected DOM category")
+    lineages=sample.get("mutationLineages")
+    if not isinstance(lineages,dict) or set(lineages)!={"added","removed"}:
+        raise ValueError("missing precise test-only DOM mutation lineages")
+    allowed_tags={"html","body","main","section","article","aside","header",
+        "footer","nav","div","span","button","svg","g","path","rect",
+        "circle","line","polygon","polyline","foreignobject","image","img",
+        "canvas","figure","figcaption","picture","p","a","ul","ol","li",
+        "input","textarea","label","form","select","option","dialog",
+        "table","tbody","thead","tr","td","th","template",
+        "#text","#comment","#other-node","other-tag"}
+    for kind,rows in lineages.items():
+        if not isinstance(rows,list) or len(rows)>64:
+            raise ValueError("unbounded DOM lineage cardinality")
+        seen=set()
+        total=0
+        for row in rows:
+            if not isinstance(row,dict) or set(row)!={
+                    "ancestorTags","nodeTag","parentRole","parentConnected","count"}:
+                raise ValueError("unexpected DOM lineage shape")
+            tags=row["ancestorTags"]
+            if (not isinstance(tags,list) or not 1<=len(tags)<=24 or
+                any(type(tag) is not str or tag not in allowed_tags for tag in tags)
+                or row["nodeTag"] not in allowed_tags
+                or row["parentRole"] not in allowed
+                or type(row["parentConnected"]) is not bool
+                or type(row["count"]) is not int or not 1<=row["count"]<=256):
+                raise ValueError("untrusted/private DOM lineage content")
+            ident=(tuple(tags),row["nodeTag"],row["parentRole"],
+                   row["parentConnected"])
+            if ident in seen:
+                raise ValueError("duplicate DOM lineage record")
+            seen.add(ident)
+            total+=row["count"]
+        if total!=sum(mounts[kind].values()):
+            raise ValueError("DOM lineage/mount counts disagree")
+    if type(sample.get("childRecords")) is not int or not 0<=sample["childRecords"]<=256:
+        raise ValueError("unbounded DOM child mutation records")
     return {
         "phase":name,"reads":reads,"rootAttributes":classes,
-        "mountCounts":mounts,"childRecords":sample["childRecords"],
+        "mountCounts":mounts,"mutationLineages":lineages,
+        "childRecords":sample["childRecords"],
         "offsetGettersTracked":4,
         "diagnosticOnly":True,
         "forcedSynchronousLayoutProven":False,

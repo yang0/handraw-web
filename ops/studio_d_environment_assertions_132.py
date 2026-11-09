@@ -77,6 +77,7 @@ def evaluate(claims,*,web_sha,skill_sha,now=None):
             or not isinstance(claims["cases"],list) or len(claims["cases"])>len(GATES)):
             raise ValueError("wrong schema/environment/deployment for D claims")
         witness_ids=set()
+        witness_digests=set()
         for row in claims["cases"]:
             if not isinstance(row,dict) or set(row)!=FIELDS:
                 raise ValueError("invalid or secret-bearing D claim fields")
@@ -102,6 +103,9 @@ def evaluate(claims,*,web_sha,skill_sha,now=None):
             if row["evidenceId"] in witness_ids:
                 raise ValueError("one evidence record cannot impersonate two D gates")
             witness_ids.add(row["evidenceId"])
+            if row["evidenceDigestSha256"] in witness_digests:
+                raise ValueError("one evidence digest cannot certify two independent D gates")
+            witness_digests.add(row["evidenceDigestSha256"])
             _utc(row["observedAtUtc"],now)
             counts[code]=row["status"]
     complete=all(status=="PASS" for status in counts.values())
