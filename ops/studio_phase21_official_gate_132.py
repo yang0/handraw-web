@@ -14,6 +14,9 @@ from pathlib import Path
 import re
 import sys
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from ops.studio_official_approval_132 import (
     CODES, evaluate as verify_signatures, sha, _private_json, _public_pending_json,
 )
