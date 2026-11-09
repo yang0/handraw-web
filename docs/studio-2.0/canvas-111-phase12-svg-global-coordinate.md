@@ -73,7 +73,29 @@ Stage 11 在受限 3 次真实鼠标位移中观测到 39 条 Chrome Style Inval
 
 联合 Style+Layout、rAF P95 同时受控；任何一档、任一次未满足都不能晋升。所有隔离均为**视觉不保真的诊断**，`productionCandidate=false`。
 
-为确认是否存在**多个因素叠加后才影响大范围布局树计数**，追加一次 `no-visual` 全部跳过（SVG、卡片、浮动栏、小地图）的 Trace 与 A-B-A-B-A **仅诊断性联合控制**。该补充结果需等待最终 SHA 实测，不预先填入任何数字；即使显著更快也不可作为生产优化上线。
+为确认**视觉更新是否有共同成本**，新增 `no-visual` 全部跳过（SVG、卡片、浮动栏、小地图）的 Trace 与 A-B-A-B-A **仅诊断性联合控制**。最终独立分支 [Actions #42593405790](https://github.com/yang0/handraw-web/actions/runs/42593405790) 在提交 `2c05722c8a4673200ef00f96dc8f98f8c6ee71b9` 上 **14/14 SUCCESS**。
+
+#### 第二轮联合隔离真实结果
+
+`no-visual` 的 3 次物理鼠标移动限时 Trace 中，`MutationObserver` 捕获 `class/style/d/transform` **属性变更 0 次**；顶层类变更 **0**。正常模式同时出现 `node.style=5`、`svg-path.d=6`、`floating-toolbar.style=5`。两者 `UpdateLayoutTree` 中大事件数量分别是 **3 次 → 1 次**，但最大 `elementCount` **均为 9,185**。代表性对照：
+
+| 模式 | 原生属性变更 | 大范围 UpdateLayoutTree | 最大元素计数 |
+| --- | ---: | ---: | ---: |
+| 正常拖拽 | 节点 5 / SVG 路径 6 / 浮动栏 5 | 3 | 9,185 |
+| `no-visual`（全跳过，仅诊断） | **0** | **1** | **9,185** |
+
+`no-visual` 在 1×、模拟 4× 的 A-B-A-B-A 交叉试验，两次 B 相对三次 A 的中位都超过 10% Style、Style+Layout 性能阈值，rAF P95 未回退：
+
+| CPU | A Style 中位 (ms) | B1/B2 Style (ms) | A Style+Layout 中位 (ms) | B1/B2 Style+Layout (ms) | rAF P95 A → B1/B2 (ms) |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1× | 255.196 | 42.275 / 42.521 | 259.442 | 42.635 / 42.883 | 50 → 16.7 / 16.7 |
+| 4× | 1,793.064 | 434.512 / 462.555 | 1,823.943 | 439.851 / 467.364 | 266.7 → 50 / 33.4 |
+
+其余 `no-edges`、`no-card`、`global-state-selector-mask`、`no-overlay` 在同一最终提交 **均不满足稳态双 CPU 门槛**。
+
+**可支持的归因结论：** 多处拖拽视觉写入作为整体，与部分大规模样式/布局树更新及 Style 耗时紧密相关；将它们全部抑制后，大事件由 3 次变成 1 次、拖拽期 Style 耗时显著下降，不能将单一 SVG 路径、单一节点坐标或一个顶层类视为独立的充分原因。**但剩余的 1 次大事件（9,185）仍存在**，未证明其触发来源；`elementCount` 也不能解释为某条 CSS 重匹配所有节点。后续应细分 `pointermove` 的伪状态/鼠标命中与“零 DOM 写入仍产生 UpdateLayoutTree”的时机，分离 Trace 启动、渲染刷新与 CSS 实际传播。需要证明真正保真的替代渲染架构在实机和双 CPU 下受益，才允许修改产品代码。
+
+**不能上线的原因：** `no-visual` 会让拖拽时卡片/边/浮层停止实时绘制，它只是在 pointerup 强制全量 reconciliation 后恢复 DOM，故 `productionCandidate=false`，上述性能改进是**诊断结果，不是产品性能提升**。本阶段生产 CSS/JS 零修改、Issue #111 OPEN、#112 及发布 NO-GO。
 
 ### #11 / #84 / #112 预检
 
