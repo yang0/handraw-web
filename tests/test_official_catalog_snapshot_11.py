@@ -1,4 +1,4 @@
-"""#11 frozen 2026-11-09 Web 537 / actual Skill main 539 parity witness.
+"""#11 Web 537 / actual Skill main v1.9.11 540 parity witness; all Skill-only candidates unapproved.
 
 This deliberately tests the REAL Skill main catalog in the dedicated CI job,
 not the independently SHA-pinned executable Skill client. A changed main
@@ -30,22 +30,26 @@ class Snapshot11(unittest.TestCase):
         self.assertEqual(len([r for r in approved if r["kind"] == "layout"]), 170)
         self.assertEqual(len(approved), 537)
         self.assertEqual(len({r["id"] for r in approved}), 537)
-        self.assertFalse({"FF-018", "FG-025"} &
+        self.assertFalse({"FF-018", "FF-019", "FG-025"} &
                          {r["id"] for r in approved},
                          "unapproved proposals must not be copied to Web")
 
     def test_proposals_are_explicitly_unapproved_and_hashed(self):
         pending = read(ROOT / "ops/official_catalog_pending_11.json")
         proposals = {r["code"]: r for r in pending["pendingSkillOnly"]}
-        self.assertEqual(set(proposals), {"FF-018", "FG-025"})
+        self.assertEqual(set(proposals), {"FF-018", "FF-019", "FG-025"})
         self.assertEqual({r["kind"] for r in proposals.values()}, {"style"})
         self.assertTrue(all(
             r.get("state") == "awaiting_website_editorial_review"
-            and r.get("issue") == 11 and len(r["sha256"]) == 64
+            and r.get("issue") in (11, 132) and len(r["sha256"]) == 64
             for r in proposals.values()))
+        self.assertEqual(proposals["FF-019"]["issue"], 132)
+        self.assertEqual(proposals["FF-019"]["name"], "Hyperreal 3D Cartoon Portrait")
+        self.assertEqual(proposals["FF-019"]["sha256"],
+                         "fc4f512c237ce56a6cf43776912be12ba9e81fc21f575ef962752e7302329fd3")
 
     @unittest.skipUnless(SKILL_ROOT, "real Skill main checkout present in PG/S3 CI job only")
-    def test_actual_skill_main_539_and_strict_release_blocked(self):
+    def test_actual_skill_main_540_and_strict_release_blocked(self):
         skill = Path(SKILL_ROOT)
         report = audit(
             read(ROOT / "plugin/content/catalog.json"),
@@ -55,8 +59,8 @@ class Snapshot11(unittest.TestCase):
         )
         self.assertEqual(report["webStaticCount"], 537)
         self.assertEqual(report["webCount"], 537)
-        self.assertEqual(report["skillCount"], 539)
-        self.assertEqual(report["knownPending"], ["FF-018", "FG-025"])
+        self.assertEqual(report["skillCount"], 540)
+        self.assertEqual(report["knownPending"], ["FF-018", "FF-019", "FG-025"])
         for key in ("unexpectedSkillOnly", "webOnly", "alteredPending",
                     "mismatchedName", "mismatchedKind", "staleExceptions"):
             self.assertEqual(report[key], [], key)
