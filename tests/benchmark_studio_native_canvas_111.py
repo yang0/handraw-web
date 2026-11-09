@@ -252,7 +252,8 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
 
 def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
                                 finish_mode: str = "targeted",
-                                flush_mode: str = "immediate") -> dict:
+                                flush_mode: str = "immediate",
+                                mouse_pattern: str = "paced") -> dict:
     """Physical pointer + rAF cadence + bounded CDP render diagnostics.
 
     Includes real presentation cadence while dragging AND settling after
@@ -260,6 +261,7 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
     """
     assert finish_mode in ("targeted", "full")
     assert flush_mode in ("immediate", "raf")
+    assert mouse_pattern in ("paced", "burst")
     page.evaluate("""setting => {
       if(window.__HANDRAW_TESTING__!==true||!window.HANDRAW_STUDIO_TESTING)
         throw Error('drag visual A/B requires isolated browser test');
@@ -331,14 +333,19 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
           if(!window.__studio111PacedToolbar||!window.__studio111PacedMini)
             throw Error('pointerdown did not mount selected toolbar/minimap');
         }""")
-        # 12 real pointer movements with deliberate pacing, so the renderer
-        # has multiple opportunities to present frames. Unlike 9 rapid
-        # pointer events, this reports actual rAF cadence under pressure.
-        for step in range(1, 13):
-            page.mouse.move(coords["x"] + 92*step/12,
-                            coords["y"] + 53*step/12, steps=1)
-            page.wait_for_timeout(20)
-        # Separate the compositor/style work triggered during paced dragging
+        # Compare separate real physical drag workloads: paced 12 events
+        # deliberately allow rendering between inputs; burst 24 Playwright
+        # mouse moves have no artificial pause so multiple events may land
+        # before the next visual frame. Never dispatch JS pointer events.
+        expected_moves=24 if mouse_pattern=="burst" else 12
+        if mouse_pattern=="burst":
+            page.mouse.move(coords["x"]+92,coords["y"]+53,steps=24)
+        else:
+            for step in range(1, 13):
+                page.mouse.move(coords["x"] + 92*step/12,
+                                coords["y"] + 53*step/12, steps=1)
+                page.wait_for_timeout(20)
+        # Separate the compositor/style work triggered during physical dragging
         # from the authoritative render and visual settling after pointerup.
         # Both snapshots are Chromium cumulative counters for the same page,
         # not Python wall-time or per-event microbenchmarks.
@@ -346,7 +353,9 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
         page.mouse.up()
         # Include pointer-up authoritative full reconcile and the ensuing
         # paint opportunity; this is not solely a JavaScript handler metric.
-        page.wait_for_timeout(145)
+        # Bursts may end before a compositor draw; allow enough rAF samples
+        # even under CDP 4x CPU while keeping the paced baseline unchanged.
+        page.wait_for_timeout(380 if mouse_pattern=="burst" else 145)
         intervals = page.evaluate("""() => {
           const monitor=window.__studio111Frames;
           monitor.active=false;
@@ -430,7 +439,7 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
             state["finish"]["targeted"] == (finish_mode == "targeted")), (
                 "node pointerup did not honor safe finish policy",
                 size, finish_mode, state)
-        assert state["inputEvents"] >= 8 and state["visualFlushes"] >= 1, (
+        assert state["inputEvents"] >= (expected_moves-1) and state["visualFlushes"] >= 1, (
             "native pointer moves or visual frame flush missing",
             size, flush_mode, state)
         assert all(m==flush_mode for m in state["flushModes"]), (
@@ -464,7 +473,8 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
                 "physicalPointerMoves": state["inputEvents"],
                 "visualFlushes": state["visualFlushes"],
                 "finishTargeted": state["finish"]["targeted"],
-                "pointerMoves": 12, "raf": frames,
+                "pointerMoves": expected_moves,
+                "mousePattern": mouse_pattern, "raf": frames,
                 "cdpPerformance": counters,
                 "cdpDragOnly": drag_counters,
                 "cdpPointerupAndSettle": settle_counters,
@@ -813,6 +823,18 @@ def main() -> None:
                                             page, size, finish_mode="targeted",
                                             flush_mode="raf"))
                             if size == 300:
+                                # A 20ms-paced drag cannot coalesce events;
+                                # exercise rapid native input in the SAME
+                                # Project and compare per-frame DOM flushes.
+                                native["burstImmediateFramePipeline"] = (
+                                    profile_real_frame_pipeline(
+                                        page,size,finish_mode="targeted",
+                                        flush_mode="immediate",mouse_pattern="burst"))
+                                native["burstRafFramePipeline"] = (
+                                    profile_real_frame_pipeline(
+                                        page,size,finish_mode="targeted",
+                                        flush_mode="raf",mouse_pattern="burst"))
+                            if size == 300:
                                 cdp = context.new_cdp_session(page)
                                 try:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4})
@@ -828,6 +850,14 @@ def main() -> None:
                                         profile_real_frame_pipeline(
                                             page, size, cpu_factor=4, finish_mode="targeted",
                                             flush_mode="raf"))
+                                    native["emulated4xBurstImmediateFramePipeline"] = (
+                                        profile_real_frame_pipeline(
+                                            page, size, cpu_factor=4, finish_mode="targeted",
+                                            flush_mode="immediate", mouse_pattern="burst"))
+                                    native["emulated4xBurstRafFramePipeline"] = (
+                                        profile_real_frame_pipeline(
+                                            page, size, cpu_factor=4, finish_mode="targeted",
+                                            flush_mode="raf", mouse_pattern="burst"))
                                 finally:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1})
                                     cdp.detach()
@@ -839,6 +869,12 @@ def main() -> None:
                                     "throttled": native.get("emulated4xFramePipeline"),
                                     "throttledRaf": native.get("emulated4xRafFramePipeline"),
                                     "throttledLegacyFull": native.get("emulated4xLegacyFullFramePipeline"),
+                                    "burstImmediate": native.get("burstImmediateFramePipeline"),
+                                    "burstRaf": native.get("burstRafFramePipeline"),
+                                    "throttledBurstImmediate": native.get(
+                                        "emulated4xBurstImmediateFramePipeline"),
+                                    "throttledBurstRaf": native.get(
+                                        "emulated4xBurstRafFramePipeline"),
                                 }, ensure_ascii=False), flush=True)
                             print("CANVAS #111 REAL POINTER DRAG " + json.dumps({
                                 "nodes": size,
