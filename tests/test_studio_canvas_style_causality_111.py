@@ -72,6 +72,17 @@ class Causality111Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reduce_mutation_window({"records": [None] * 4001})
 
+    def test_floating_toolbar_is_not_opaque_outside_canvas(self):
+        observed = reduce_mutation_window({"records": [
+            {"attribute": "style", "role": "node",
+             "ancestors": ["studio-shell", "canvas-stage", "world", "nodes-layer", "node"]},
+            {"attribute": "style", "role": "floating-toolbar",
+             "ancestors": ["studio-shell", "canvas-stage", "canvas-overlay", "floating-toolbar"]},
+        ]})
+        self.assertEqual(observed["byTargetRole"]["floating-toolbar"], 1)
+        self.assertEqual(observed["byTargetRole"]["node"], 1)
+        self.assertEqual(len(observed["topActualDomAncestorRoleChains"]), 2)
+
     def test_fixed_cssom_whitelist(self):
         private = "CANARY_PRIVATE_SELECTOR"
         found = validate_selector_census([
