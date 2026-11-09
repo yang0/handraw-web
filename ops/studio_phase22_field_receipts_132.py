@@ -8,6 +8,7 @@ Never creates GO or upgrades any of the 17 release cases.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -64,13 +65,23 @@ def _count(v,*,positive=False):
         raise ValueError("invalid measured value")
 
 
-def _stamp(v):
+def _stamp(v,*,now=None):
     if (not isinstance(v,str) or
         not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ",v)):
-        raise ValueError("precise observed PITR UTC required")
+        raise ValueError("precise PITR UTC required")
+    try:
+        when=datetime.strptime(v,"%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError("invalid PITR calendar date") from None
+    now=now or datetime.now(timezone.utc)
+    if (now.tzinfo is None or now.utcoffset()!=timedelta(0)
+        or when>now+timedelta(minutes=5)
+        or now-when>timedelta(days=30)):
+        raise ValueError("future, stale or non-UTC PITR target")
+    return when
 
 
-def evaluate(dossier,*,web_sha,skill_sha):
+def evaluate(dossier,*,web_sha,skill_sha,now=None):
     if (not isinstance(web_sha,str) or not SHA.fullmatch(web_sha)
         or not isinstance(skill_sha,str) or not SHA.fullmatch(skill_sha)):
         raise ValueError("full Web and Skill SHAs required")
@@ -88,9 +99,13 @@ def evaluate(dossier,*,web_sha,skill_sha):
     for stem in ("businessFingerprint","walletLedger","mediaIndex"):
         if pg[stem+"BeforeSha256"]!=pg[stem+"AfterSha256"]:
             raise ValueError("PITR business snapshot mismatch")
-    _stamp(pg["targetUtc"])
-    if not isinstance(pg["recoveredReplayLsn"],str) or not re.fullmatch(r"[0-9A-F]+/[0-9A-F]+",pg["recoveredReplayLsn"]):
+    _stamp(pg["targetUtc"],now=now)
+    lsn=pg["recoveredReplayLsn"]
+    if not isinstance(lsn,str) or not re.fullmatch(r"[0-9A-F]{1,8}/[0-9A-F]{1,8}",lsn):
         raise ValueError("real WAL replay LSN missing")
+    high,low=(int(part,16) for part in lsn.split("/"))
+    if not (high or low):
+        raise ValueError("zero WAL replay LSN cannot prove physical PITR")
     for f in ("pg17PhysicalBackupVerified","pg17WalReplayAtTarget","rollbackDrilled"):
         _yes(pg[f])
     for f in ("rpoBudgetSeconds","rpoMeasuredSeconds","rtoBudgetSeconds","rtoMeasuredSeconds"):
