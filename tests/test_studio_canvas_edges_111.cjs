@@ -62,6 +62,56 @@ assert.equal(markup,"");
 assert.equal(R.reconcileEdgeMarkup(svg,firstEdge),true,
   "blank Canvas must invalidate prior SVG markup before restoring a project");
 assert.equal(writes,4);
-console.log("CANVAS #111 indexed edges and stable SVG DOM PASS "+
+
+// #111: node-drag patches only incident SVG geometry and preserves all hit
+// targets, edge group identities and unrelated pre-existing path attributes.
+assert.match(app,/patchMovedEdgePaths\(/);
+assert.match(app,/updateMinimapLensOnly\(\)/);
+assert.match(app,/renderMinimapMovedNodes\(movedIds\)/);
+assert.match(app,/const edgesRecomputed=!partial\|\|sizeChanged/);
+const makePath=d=>{
+  const attrs={d};let writes=0;
+  return {
+    getAttribute:k=>attrs[k]||null,
+    setAttribute(k,v){attrs[k]=v;writes++;},
+    get writes(){return writes;}
+  };
+};
+function makeGroup(id){
+  const hit=makePath("OLD-"+id),line=makePath("OLD-"+id);
+  return {id,hit,line,getAttribute:key=>key==="data-edge-id"?id:null,
+    querySelector:selector=>selector==="path.ic-edge-hit"?hit:
+      selector==="path.ic-edge-line"?line:null};
+}
+const g1=makeGroup("e1"),g2=makeGroup("e2");
+const graphEdges=[
+  {id:"e1",from:"n0",to:"n1"},
+  {id:"e2",from:"n2",to:"n3"}
+];
+const svgDrag={querySelectorAll:q=>{
+  assert.equal(q,"g.ic-edge-group[data-edge-id]");
+  return [g1,g2];
+}};
+const geom=(x1,y1,x2,y2)=>`M${x1},${y1} L${x2},${y2}`;
+assert.equal(R.patchMovedEdgePaths(svgDrag,graphEdges,models,layer,["n0"],geom),true);
+assert.notEqual(g1.hit.getAttribute("d"),"OLD-e1");
+assert.equal(g1.hit.getAttribute("d"),g1.line.getAttribute("d"));
+assert.equal(g1.hit.writes,1);
+assert.equal(g1.line.writes,1);
+assert.equal(g2.hit.getAttribute("d"),"OLD-e2");
+assert.equal(g2.line.getAttribute("d"),"OLD-e2");
+assert.equal(g2.hit.writes,0,"unrelated hit path must retain identity/geometry");
+assert.equal(R.patchMovedEdgePaths(svgDrag,graphEdges,models,layer,["n0"],geom),true);
+assert.equal(g1.hit.writes,1,"same geometry must not write path again");
+const stale={querySelectorAll:()=>[g2]};
+assert.equal(R.patchMovedEdgePaths(stale,graphEdges,models,layer,["n0"],geom),false,
+  "missing incident SVG group must force complete re-render");
+assert.equal(g2.hit.writes,0,"preflight failure must not partially modify unrelated edges");
+const partial={querySelectorAll:()=>[g1,g2]};
+assert.equal(R.patchMovedEdgePaths(partial,[...graphEdges,
+  {id:"missing",from:"unknown",to:"n1"}],models,layer,["unknown"],geom),false);
+assert.equal(g1.hit.writes,1,"invalid edge graph must leave existing DOM untouched");
+
+console.log("CANVAS #111 indexed edges, drag patch and stable SVG DOM PASS "+
   JSON.stringify({nodes:n,edgeLookups:500,domQueries:selectCalls,
     measuredDimensions:widthReads,svgWrites:writes}));
