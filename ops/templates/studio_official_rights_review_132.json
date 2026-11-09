@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "reviews": [
+    {
+      "candidateCode": "FF-018",
+      "skillSourceSha256": "46743528837a25533e5ddac0b0f706c33d84f3c7a4f3cbb60853ee1212060ad3",
+      "rightsReviewEvidenceId": "REPLACE_RETAINED_PRIVATE_REVIEW_ID",
+      "promptProvenanceEvidenceId": "REPLACE_PROMPT_ORIGIN_REVIEW_ID",
+      "descriptionProvenanceEvidenceId": "REPLACE_DESCRIPTION_ORIGIN_REVIEW_ID",
+      "reviewDecision": "pending",
+      "assets": [
+        {
+          "assetSha256": "REPLACE_ORIGINAL_ASSET_SHA256",
+          "originType": "REPLACE_reviewed_source_category",
+          "rightsHolderEvidenceId": "REPLACE_AUTHOR_RIGHTS_HOLDER_RECORD",
+          "licenseOrPermissionEvidenceId": "REPLACE_LICENSE_OR_PERMISSION_RECORD",
+          "attributionEvidenceId": "REPLACE_ATTRIBUTION_DECISION_RECORD",
+          "commercialReuseAllowed": false,
+          "derivativeUseAllowed": false,
+          "officialWebsitePublishAllowed": false
+        }
+      ]
+    },
+    {
+      "candidateCode": "FF-019",
+      "skillSourceSha256": "fc4f512c237ce56a6cf43776912be12ba9e81fc21f575ef962752e7302329fd3",
+      "rightsReviewEvidenceId": "REPLACE_RETAINED_PRIVATE_REVIEW_ID",
+      "promptProvenanceEvidenceId": "REPLACE_PROMPT_ORIGIN_REVIEW_ID",
+      "descriptionProvenanceEvidenceId": "REPLACE_DESCRIPTION_ORIGIN_REVIEW_ID",
+      "reviewDecision": "pending",
+      "assets": [
+        {
+          "assetSha256": "REPLACE_ORIGINAL_ASSET_SHA256",
+          "originType": "REPLACE_reviewed_source_category",
+          "rightsHolderEvidenceId": "REPLACE_AUTHOR_RIGHTS_HOLDER_RECORD",
+          "licenseOrPermissionEvidenceId": "REPLACE_LICENSE_OR_PERMISSION_RECORD",
+          "attributionEvidenceId": "REPLACE_ATTRIBUTION_DECISION_RECORD",
+          "commercialReuseAllowed": false,
+          "derivativeUseAllowed": false,
+          "officialWebsitePublishAllowed": false
+        }
+      ]
+    },
+    {
+      "candidateCode": "FG-025",
+      "skillSourceSha256": "1044e1d628f2b2cf51cae3b64112e3a614effef80976a4163d3b675118844815",
+      "rightsReviewEvidenceId": "REPLACE_RETAINED_PRIVATE_REVIEW_ID",
+      "promptProvenanceEvidenceId": "REPLACE_PROMPT_ORIGIN_REVIEW_ID",
+      "descriptionProvenanceEvidenceId": "REPLACE_DESCRIPTION_ORIGIN_REVIEW_ID",
+      "reviewDecision": "pending",
+      "assets": [
+        {
+          "assetSha256": "REPLACE_ORIGINAL_ASSET_SHA256",
+          "originType": "REPLACE_reviewed_source_category",
+          "rightsHolderEvidenceId": "REPLACE_AUTHOR_RIGHTS_HOLDER_RECORD",
+          "licenseOrPermissionEvidenceId": "REPLACE_LICENSE_OR_PERMISSION_RECORD",
+          "attributionEvidenceId": "REPLACE_ATTRIBUTION_DECISION_RECORD",
+          "commercialReuseAllowed": false,
+          "derivativeUseAllowed": false,
+          "officialWebsitePublishAllowed": false
+        }
+      ]
+    }
+  ]
+}
