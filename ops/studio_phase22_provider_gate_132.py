@@ -15,6 +15,9 @@ from pathlib import Path
 import re
 import sys
 
+if __package__ in (None, ""):
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+
 from ops.reconcile_provider_statement_112 import (
     BadEvidence,reconcile,_private_read,_write_report,
 )
