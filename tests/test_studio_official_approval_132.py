@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from ops.studio_official_approval_132 import (
     evaluate, main, sha, canon, CODES,
 )
+from ops.studio_editorial_rights_132 import index_reviews
 
 ROOT=Path(__file__).resolve().parents[1]
 DEPLOY_SHA="a"*40
@@ -36,17 +37,33 @@ def test_fixture():
               "keys":registrations}
     approval_rows=[]
     styles=[]
+    rights_rows=[]
     for index,candidate in enumerate(pending["pendingSkillOnly"],start=1):
         code=candidate["code"]
         row={"number":code,"group":"offline-test-only",
              "generation_name":candidate["name"],"traits":"TEST-NONPRODUCTION"}
         styles.append(row)
+        rights={"candidateCode":code,"skillSourceSha256":candidate["sha256"],
+            "rightsReviewEvidenceId":f"mock-rights-{index:03d}",
+            "promptProvenanceEvidenceId":f"mock-prompt-{index:03d}",
+            "descriptionProvenanceEvidenceId":f"mock-description-{index:03d}",
+            "reviewDecision":"cleared_for_editorial_signature",
+            "assets":[{"assetSha256":format(index,"064x"),
+                "originType":"explicit-license",
+                "rightsHolderEvidenceId":f"mock-creator-{index:03d}",
+                "licenseOrPermissionEvidenceId":f"mock-license-{index:03d}",
+                "attributionEvidenceId":f"mock-attribution-{index:03d}",
+                "commercialReuseAllowed":True,
+                "derivativeUseAllowed":True,
+                "officialWebsitePublishAllowed":True}]}
+        rights_rows.append(rights)
         payload={"schemaVersion":1,"candidateCode":code,
             "skillSourceSha256":candidate["sha256"],
             "webDbPublishedRowSha256":sha(row),
             "deployedSha":DEPLOY_SHA,
             "websiteActionId":f"mock-web-action-{index:03d}",
-            "rightsReviewEvidenceId":"mock-rights-001",
+            "rightsReviewEvidenceId":rights["rightsReviewEvidenceId"],
+            "rightsReviewEvidenceSha256":sha(rights),
             "reviewedAtUtc":"2026-11-09T23:00:00Z",
             "result":"website_published_and_reviewed"}
         approvals=[]
@@ -56,21 +73,22 @@ def test_fixture():
             approvals.append({"role":role,"keyId":kid,
                               "signatureBase64":signed})
         approval_rows.append({"payload":payload,"signatures":approvals})
-    return pending,registry,{"schemaVersion":1,"approvals":approval_rows},styles
+    return pending,registry,{"schemaVersion":1,"approvals":approval_rows},styles,{"schemaVersion":1,"reviews":rights_rows}
 
 
 class OfficialApprovalSignatureTests(unittest.TestCase):
     def setUp(self):
-        self.pending,self.registry,self.bundle,self.db=test_fixture()
+        self.pending,self.registry,self.bundle,self.db,self.rights=test_fixture()
         self.trust_sha=sha(self.registry)
 
-    def evaluate(self,bundle=None,registry=None,db=None,trust=None,deploy=DEPLOY_SHA):
+    def evaluate(self,bundle=None,registry=None,db=None,trust=None,deploy=DEPLOY_SHA,rights=None):
         return evaluate(self.bundle if bundle is None else bundle,
                         self.registry if registry is None else registry,
                         self.pending,
                         self.db if db is None else db,
                         trusted_sha=self.trust_sha if trust is None else trust,
-                        expected_deployed_sha=deploy,now=NOW)
+                        expected_deployed_sha=deploy,
+                        rights_reviews=self.rights if rights is None else rights,now=NOW)
 
     def test_real_two_role_signatures_only_grant_claim_intake_never_website_publication(self):
         out=self.evaluate()
@@ -135,6 +153,42 @@ class OfficialApprovalSignatureTests(unittest.TestCase):
             bundle["approvals"][0]["payload"]["websiteActionId"])
         with self.assertRaisesRegex(ValueError,"replayed editorial action"):
             self.evaluate(bundle=bundle)
+
+    def test_authority_signatures_bind_full_rights_metadata_and_license(self):
+        reviews=index_reviews(self.rights,{r["code"]:r for r in self.pending["pendingSkillOnly"]})
+        self.assertEqual(set(reviews),set(CODES))
+        for code in CODES:
+            self.assertEqual(reviews[code]["reviewDecision"],"cleared_for_editorial_signature")
+        altered=json.loads(json.dumps(self.rights))
+        altered["reviews"][0]["assets"][0]["assetSha256"]="f"*64
+        with self.assertRaisesRegex(ValueError,"rights evidence digest"):
+            self.evaluate(rights=altered)
+        for field,bad in (("commercialReuseAllowed",False),
+                          ("derivativeUseAllowed",False),
+                          ("officialWebsitePublishAllowed",False),
+                          ("attributionEvidenceId","")):
+            altered=json.loads(json.dumps(self.rights))
+            altered["reviews"][0]["assets"][0][field]=bad
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                self.evaluate(rights=altered)
+        altered=json.loads(json.dumps(self.rights))
+        altered["reviews"][1]["skillSourceSha256"]="0"*64
+        with self.assertRaises(ValueError):
+            self.evaluate(rights=altered)
+        altered=json.loads(json.dumps(self.rights))
+        altered["reviews"][2]["assets"]=[]
+        with self.assertRaises(ValueError):
+            self.evaluate(rights=altered)
+        altered=json.loads(json.dumps(self.rights))
+        altered["reviews"].append(dict(altered["reviews"][0]))
+        with self.assertRaises(ValueError):
+            self.evaluate(rights=altered)
+
+    def test_missing_external_rights_bundle_is_always_rejected(self):
+        with self.assertRaises(ValueError):
+            evaluate(self.bundle,self.registry,self.pending,self.db,
+                     trusted_sha=self.trust_sha,expected_deployed_sha=DEPLOY_SHA,
+                     rights_reviews=None,now=NOW)
 
     def test_missing_or_wrong_published_db_and_wrong_deployed_sha_refused(self):
         with self.assertRaises(ValueError):
