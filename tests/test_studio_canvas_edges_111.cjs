@@ -119,6 +119,20 @@ assert.match(app,/createEdgeDragSession\(/);
 assert.match(app,/dragCtx\.edgeSession\.update\(/);
 assert.match(app,/focusCanvasNodeForBenchmark:/);
 assert.match(app,/_drag111Samples/);
+assert.match(app,/function captureDragOverlayMetrics\(startPositions\)/,
+  "measure the toolbar and viewport after selection, before drag updates");
+assert.match(app,/function validDragOverlayMetrics\(metrics\)/,
+  "graph, viewport, DOM, zoom and selection references must be checked");
+assert.match(app,/positionFloatingOverlays\(dragCtx\.overlayMetrics\)/,
+  "real pointermove must use the cached toolbar measurements");
+assert.match(app,/dragCtx\.overlayMetrics=null/,
+  "viewport resize must invalidate the cached toolbar dimensions");
+assert.match(app,/overlayMs:overlayEnd-edgesEnd/);
+assert.match(app,/minimapMs:minimapEnd-overlayEnd/);
+// The old full-layout path remains authoritative whenever a session becomes
+// stale; do not remove it just to make 300-node synthetic numbers look good.
+assert.match(app,/DOM\.viewport\.getBoundingClientRect\(\)\.width/);
+
 let edgeDomQueries=0,graphDomQueries=0;
 const cachedSvg={querySelectorAll(selector){
   assert.equal(selector,"g.ic-edge-group[data-edge-id]");
