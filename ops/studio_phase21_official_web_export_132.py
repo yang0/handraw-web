@@ -143,7 +143,9 @@ def load_readonly_pg(*,dsn_env):
         db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         ro=db.execute("SHOW transaction_read_only").fetchone()
         version=db.execute("SHOW server_version_num").fetchone()
-        if not ro or ro[0]!="on" or not version or int(version[0])//10000!=17:
+        read_only=ro.get("transaction_read_only") if isinstance(ro,dict) else ro[0]
+        version_number=version.get("server_version_num") if isinstance(version,dict) else version[0]
+        if read_only!="on" or int(version_number)//10000!=17:
             raise ValueError("requires read-only PostgreSQL 17 official DB session")
         rows=db.execute(QUERY).fetchall()
     return [dict(row) for row in rows]
