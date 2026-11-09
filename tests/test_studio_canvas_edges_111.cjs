@@ -116,14 +116,14 @@ assert.equal(g1.hit.writes,1,"invalid edge graph must leave existing DOM untouch
 // P2 drag session is built AFTER the selection SVG redraw, not recreated on
 // each pointermove. All updates remain bound to the exact live Graph arrays.
 assert.match(app,/createEdgeDragSession\(/);
-assert.match(app,/ctx\.edgeSession\.update\(/);
+assert.match(app,/dragCtx\.edgeSession\.update\(/);
 assert.match(app,/focusCanvasNodeForBenchmark:/);
 assert.match(app,/_drag111Samples/);
 assert.match(app,/function captureDragOverlayMetrics\(startPositions\)/,
   "measure the toolbar and viewport after selection, before drag updates");
 assert.match(app,/function validDragOverlayMetrics\(metrics\)/,
   "graph, viewport, DOM, zoom and selection references must be checked");
-assert.match(app,/positionFloatingOverlays\(ctx\.overlayMetrics\)/,
+assert.match(app,/positionFloatingOverlays\(dragCtx\.overlayMetrics\)/,
   "real pointermove must use the cached toolbar measurements");
 assert.match(app,/dragCtx\.overlayMetrics=null/,
   "viewport resize must invalidate the cached toolbar dimensions");
@@ -166,30 +166,10 @@ assert.match(app,/diagMode==="no-visual"/,
   "isolate pointer-capture drag even when all canvas visuals are bypassed");
 assert.match(app,/visualProbeMode:diagMode/,
   "every real pointer event must record the active test-only diagnostic mode");
-assert.match(app,/ctx\.lastEdgeTrusted=Boolean\(usedSession\)&&diagMode==="normal"/,
+assert.match(app,/dragCtx\.lastEdgeTrusted=Boolean\(usedSession\)&&diagMode==="normal"/,
   "any visual bypass must force an authoritative pointerup full render");
 assert.match(app,/if\(!safe\)fullRenderCanvas\(\)/,
   "full pointerup fallback must remain in place");
-
-// #111 Phase 7 rAF controlled A/B: input events must always update Graph
-// while at most one current visual frame remains pending. On release,
-// cancellation must flush the final Graph coords before disposing edges.
-assert.match(app,/canvasDragFlushMode==="raf"/,
-  "rAF experiment must be explicitly opted into via the test bridge");
-assert.match(app,/const flushMode=window\.__HANDRAW_TESTING__===true/,
-  "production still uses the proven immediate visual path");
-assert.match(app,/ctx\.visualRaf=requestAnimationFrame\(/,
-  "render no more than once per browser frame");
-assert.match(app,/if\(dragCtx!==ctx\)return/,
-  "an obsolete graph gesture must never mutate the next gesture DOM");
-assert.match(app,/ctx\.flushVisuals=flushVisuals/,
-  "rAF callback must always use the most recent model coordinates");
-assert.match(app,/cancelAnimationFrame\(ctx\.visualRaf\)/,
-  "pointerup or pointercancel must cancel a scheduled visual frame");
-assert.match(app,/finalVisual\?\.\(\)/,
-  "release must synchronously commit final card, SVG, mini and toolbar");
-assert.match(app,/_drag111PhysicalMoves/,
-  "count true native pointer events separately from coalesced visual writes");
 
 // The old full-layout path remains authoritative whenever a session becomes
 // stale; do not remove it just to make 300-node synthetic numbers look good.

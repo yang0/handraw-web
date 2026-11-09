@@ -20153,7 +20153,7 @@
       }
 
       if (dragCtx.mode === "node-drag") {
-        const ctx=dragCtx;
+        const frameStart=window.__HANDRAW_TESTING__===true?performance.now():null;
         const dxScreen = e.clientX - dragCtx.startX;
         const dyScreen = e.clientY - dragCtx.startY;
         if (!dragCtx.moved && Math.hypot(dxScreen, dyScreen) < 3) return;
@@ -20170,94 +20170,65 @@
         dragCtx.moved = true;
         const dxW = dxScreen / CS.vk;
         const dyW = dyScreen / CS.vk;
-        for(const item of ctx.startPositions){
-          item.node.x=snapVal(item.ox+dxW);
-          item.node.y=snapVal(item.oy+dyW);
+        // #111 isolated diagnosis: compare native DOM/edge/overlay/minimap
+        // invalidation without changing production drag behavior. All bypass
+        // modes are inert unless the native browser test flag is present.
+        const diagMode=window.__HANDRAW_TESTING__===true?
+          window.HANDRAW_STUDIO_TESTING?.canvasDragVisualProbeMode||"normal":"normal";
+        const skipCard=diagMode==="no-card"||diagMode==="no-visual";
+        const skipEdges=diagMode==="no-edges"||
+          diagMode==="node-only"||diagMode==="no-visual";
+        const skipOverlay=diagMode==="no-overlay"||
+          diagMode==="node-only"||diagMode==="no-visual";
+        const skipMini=diagMode==="no-minimap"||
+          diagMode==="node-only"||diagMode==="no-visual";
+        for (const item of dragCtx.startPositions) {
+          item.node.x = snapVal(item.ox + dxW);
+          item.node.y = snapVal(item.oy + dyW);
+          if (item.el && !skipCard) {
+            item.el.style.left = `${item.node.x}px`;
+            item.el.style.top = `${item.node.y}px`;
+          }
         }
-        if(window.__HANDRAW_TESTING__===true && DOM.nodesLayer)
-          DOM.nodesLayer._drag111PhysicalMoves=
-            (DOM.nodesLayer._drag111PhysicalMoves||0)+1;
-        const flushMode=window.__HANDRAW_TESTING__===true &&
-          window.HANDRAW_STUDIO_TESTING?.canvasDragFlushMode==="raf"?"raf":"immediate";
-        const flushVisuals=()=>{
-          const frameStart=window.__HANDRAW_TESTING__===true?
-            performance.now():null;
-          // #111 isolated diagnosis: compare native DOM/edge/overlay/minimap
-          // invalidation without changing production drag behavior. All bypass
-          // modes are inert unless the native browser test flag is present.
-          const diagMode=window.__HANDRAW_TESTING__===true?
-            window.HANDRAW_STUDIO_TESTING?.canvasDragVisualProbeMode||"normal":"normal";
-          const skipCard=diagMode==="no-card"||diagMode==="no-visual";
-          const skipEdges=diagMode==="no-edges"||
-            diagMode==="node-only"||diagMode==="no-visual";
-          const skipOverlay=diagMode==="no-overlay"||
-            diagMode==="node-only"||diagMode==="no-visual";
-          const skipMini=diagMode==="no-minimap"||
-            diagMode==="node-only"||diagMode==="no-visual";
-          for (const item of ctx.startPositions) {
-            if (item.el && !skipCard) {
-              item.el.style.left = `${item.node.x}px`;
-              item.el.style.top = `${item.node.y}px`;
-            }
-          }
-          const movedIds=ctx.startPositions.map(item=>item.node.id);
-          // Keep the existing hit targets/selection; render all edges only if
-          // the partial path finds a missing or ambiguous SVG/Graph binding.
-          const wasSession=Boolean(ctx.edgeSession);
-          let usedSession=!skipEdges&&wasSession&&ctx.edgeSession.update(
-            CS.graph.edges||[],CS.graph.nodes||[]);
-          if(!skipEdges&&!usedSession){
-            // A mid-drag Graph/DOM/Run update invalidates the cached edges.
-            // Fall back once to the authoritative complete SVG calculation,
-            // then index the latest mounted graph before the next movement.
-            ctx.edgeSession?.dispose?.();
-            renderEdgesSvg();
-            ctx.edgeSession=window.HandrawCanvasRenderer.createEdgeDragSession(
-              DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
-              DOM.nodesLayer,movedIds,bezierPath);
-          }
-          ctx.lastGraph=CS.graph;
-          ctx.lastNodes=CS.graph.nodes;
-          ctx.lastEdges=CS.graph.edges;
-          ctx.lastSelection=CS.graph.selectedIds;
-          ctx.lastEdgeTrusted=Boolean(usedSession)&&diagMode==="normal";
-          const edgesEnd=frameStart===null?null:performance.now();
-          const overlayCached=skipOverlay?null:
-            positionFloatingOverlays(ctx.overlayMetrics);
-          const overlayEnd=frameStart===null?null:performance.now();
-          if(!skipMini)renderMinimapMovedNodes(movedIds);
-          const minimapEnd=frameStart===null?null:performance.now();
-          if(frameStart!==null&&DOM.nodesLayer){
-            const samples=DOM.nodesLayer._drag111Samples||
-              (DOM.nodesLayer._drag111Samples=[]);
-            if(samples.length<120)samples.push({
-              totalMs:minimapEnd-frameStart,
-              edgeAndPositionMs:edgesEnd-frameStart,
-              overlayMs:overlayEnd-edgesEnd,
-              minimapMs:minimapEnd-overlayEnd,
-              overlayCached,usedSession,
-              visualProbeMode:diagMode,
-              flushMode,
-              movedCount:movedIds.length
-            });
-          }
-
-        };
-        if(flushMode==="raf"){
-          // Only one visual update per browser paint opportunity: every input
-          // still writes authoritative Graph coordinates immediately.
-          ctx.flushVisuals=flushVisuals;
-          if(ctx.visualRaf==null){
-            ctx.visualRaf=requestAnimationFrame(()=>{
-              ctx.visualRaf=null;
-              if(dragCtx!==ctx)return;
-              const latest=ctx.flushVisuals;
-              ctx.flushVisuals=null;
-              latest?.();
-            });
-          }
-        }else{
-          flushVisuals();
+        const movedIds=dragCtx.startPositions.map(item=>item.node.id);
+        // Keep the existing hit targets/selection; render all edges only if
+        // the partial path finds a missing or ambiguous SVG/Graph binding.
+        const wasSession=Boolean(dragCtx.edgeSession);
+        let usedSession=!skipEdges&&wasSession&&dragCtx.edgeSession.update(
+          CS.graph.edges||[],CS.graph.nodes||[]);
+        if(!skipEdges&&!usedSession){
+          // A mid-drag Graph/DOM/Run update invalidates the cached edges.
+          // Fall back once to the authoritative complete SVG calculation,
+          // then index the latest mounted graph before the next movement.
+          dragCtx.edgeSession?.dispose?.();
+          renderEdgesSvg();
+          dragCtx.edgeSession=window.HandrawCanvasRenderer.createEdgeDragSession(
+            DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
+            DOM.nodesLayer,movedIds,bezierPath);
+        }
+        dragCtx.lastGraph=CS.graph;
+        dragCtx.lastNodes=CS.graph.nodes;
+        dragCtx.lastEdges=CS.graph.edges;
+        dragCtx.lastSelection=CS.graph.selectedIds;
+        dragCtx.lastEdgeTrusted=Boolean(usedSession)&&diagMode==="normal";
+        const edgesEnd=frameStart===null?null:performance.now();
+        const overlayCached=skipOverlay?null:
+          positionFloatingOverlays(dragCtx.overlayMetrics);
+        const overlayEnd=frameStart===null?null:performance.now();
+        if(!skipMini)renderMinimapMovedNodes(movedIds);
+        const minimapEnd=frameStart===null?null:performance.now();
+        if(frameStart!==null&&DOM.nodesLayer){
+          const samples=DOM.nodesLayer._drag111Samples||
+            (DOM.nodesLayer._drag111Samples=[]);
+          if(samples.length<120)samples.push({
+            totalMs:minimapEnd-frameStart,
+            edgeAndPositionMs:edgesEnd-frameStart,
+            overlayMs:overlayEnd-edgesEnd,
+            minimapMs:minimapEnd-overlayEnd,
+            overlayCached,usedSession,
+            visualProbeMode:diagMode,
+            movedCount:movedIds.length
+          });
         }
         return;
       }
@@ -20306,13 +20277,6 @@
     const finishPointer = (e) => {
       if (!dragCtx || e.pointerId !== dragCtx.pointerId) return;
       const ctx = dragCtx;
-      if(ctx.mode==="node-drag" && ctx.visualRaf!=null){
-        cancelAnimationFrame(ctx.visualRaf);
-        ctx.visualRaf=null;
-        const finalVisual=ctx.flushVisuals;
-        ctx.flushVisuals=null;
-        finalVisual?.();
-      }
       dragCtx = null;
       ctx.edgeSession?.dispose?.();
       vp.classList.remove("is-panning");
