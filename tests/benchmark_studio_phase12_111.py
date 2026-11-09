@@ -14,6 +14,7 @@ from ops.canvas_phase13_pointer_111 import collect as collect_phase13
 from ops.canvas_phase14_input_111 import collect as collect_phase14
 from ops.canvas_phase15_move_boundary_111 import collect as collect_phase15
 from ops.canvas_phase16_drag_init_132 import collect as collect_phase16
+from ops.canvas_phase18_status_text_132 import collect as collect_phase18
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -112,6 +113,20 @@ def main():
                 for cpu,windows in phase16["tracesByCpu"].items()},
                 "diagnosticOnly":True,
                 "forcedLayoutCausalityProven":False,
+                "releaseDecision":"NO-GO",
+                "paidRequests":0,
+            },ensure_ascii=False),flush=True)
+            phase18=collect_phase18(page,cdp)
+            folder18=ROOT/"artifacts/studio-111-phase18"
+            folder18.mkdir(parents=True,exist_ok=True)
+            (folder18/"summary.json").write_text(
+                json.dumps(phase18,indent=2,ensure_ascii=False)+"\\n",
+                encoding="utf-8")
+            print("CANVAS #132 PHASE18 "+json.dumps({
+                "comparisonByCpu":phase18["comparisonByCpu"],
+                "order":phase18["order"],
+                "rootCauseUniquelyProven":False,
+                "productionChangeAuthorized":False,
                 "releaseDecision":"NO-GO",
                 "paidRequests":0,
             },ensure_ascii=False),flush=True)
