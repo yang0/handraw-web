@@ -26,6 +26,12 @@
 
 所有真实 gesture 继续校验：Graph 移动、`left/top` 与 Graph 一致、300 张卡、150 条边、至少 120 张 img、Ctrl+Z 恢复；0 个付费请求。4× CPU 仿真与真正低端机不同，CDP 样式总时长也不是呈现帧时间。
 
+## Chrome 原生 Selector Stats（二级证据）
+
+本轮追加真正的 Chrome `SelectorStats`（`disabled-by-default-blink.debug`）：只在第一组 `normal` 实测启用，汇总经过白名单筛选的 `.ic-/#ic-` 规则的 **elapsed (us)、match_attempts、match_count、fast_reject_count**。该采集会显著增加 Chrome 自身匹配计时开销，**不可直接把开启 Selector Stats 的 Style 总时长与未开启时进行 A/B 性能比较**。只用这个报告挑选下一轮 CSS 单点优化候选，再做不带 Selector Stats 的正常/限速 A/B 验证。绝不保存原始 `style_sheet_id`、私人选择器、trace event 或 URL。
+
+如果本次 Chrome 构建没有提供 `SelectorStats`，`selectorStatsEventsObserved=false` 代表“未观察到”，不代表不存在规则匹配开销。
+
 ## CSS 选择器与风险初查（静态源码）
 
 - `demo/assets/studio-canvas.css` 的 `.ic-node:hover`、`.ic-node:hover .ic-node-header-above` 与 `.ic-node:hover .ic-port-zone` 是**候选**，并非已定位根因。
