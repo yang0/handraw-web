@@ -235,6 +235,92 @@
     edgeMarkupCache.delete(svg);
     return true;
   }
+  // #111 P2: a drag lasts for many pointermove events. Resolve the immutable
+  // graph/edge-to-DOM topology once after selection has finished rendering,
+  // then measure only the incident endpoints on each subsequent move.
+  // Runtime/Graph/full-DOM replacement invalidates the session; the app can
+  // perform an authoritative full-edge render and create another session.
+  function createEdgeDragSession(svg,graphEdges,nodes,layer,movedIds,pathFor){
+    if(!svg?.querySelectorAll||!layer?.querySelectorAll||
+       !Array.isArray(graphEdges)||!Array.isArray(nodes)||
+       typeof pathFor!=="function")return null;
+    const moved=new Set((movedIds||[]).map(String));
+    if(!moved.size)return null;
+    const incident=graphEdges.filter(e=>e&&
+      (moved.has(String(e.from))||moved.has(String(e.to))));
+    const index=new Map();
+    for(const node of nodes){
+      if(!node||index.has(String(node.id)))return null;
+      index.set(String(node.id),node);
+    }
+    // The UI may have zero edges; still keep an updateable no-op session.
+    const elements=new Map();
+    for(const el of layer.querySelectorAll(".ic-node[data-node-id]")){
+      const id=el.getAttribute("data-node-id");
+      if(id==null||elements.has(id))return null;
+      elements.set(id,el);
+    }
+    const groups=new Map();
+    for(const el of svg.querySelectorAll("g.ic-edge-group[data-edge-id]")){
+      const id=el.getAttribute("data-edge-id");
+      if(id==null||groups.has(id))return null;
+      groups.set(id,el);
+    }
+    const bindings=[];
+    for(const edge of incident){
+      const from=index.get(String(edge.from)),to=index.get(String(edge.to));
+      const fromEl=elements.get(String(edge.from)),toEl=elements.get(String(edge.to));
+      const group=groups.get(String(edge.id));
+      const hit=group?.querySelector("path.ic-edge-hit");
+      const line=group?.querySelector("path.ic-edge-line");
+      if(!from||!to||!fromEl||!toEl||!hit||!line)return null;
+      bindings.push({edge,id:String(edge.id),fromId:String(edge.from),
+        toId:String(edge.to),from,to,fromEl,toEl,group,hit,line});
+    }
+    const edgeCount=graphEdges.length,nodeCount=nodes.length;
+    return Object.freeze({
+      incidentCount:bindings.length,
+      update(liveEdges,liveNodes){
+        if(liveEdges!==graphEdges||liveNodes!==nodes||
+           graphEdges.length!==edgeCount||nodes.length!==nodeCount)return false;
+        const measured=new Map(),patches=[];
+        const port=(node,el,dir)=>{
+          const id=String(node.id);
+          let size=measured.get(id);
+          if(!size){
+            if(el.isConnected===false||
+               (typeof layer.contains==="function"&&!layer.contains(el)))return null;
+            size={w:el.offsetWidth,h:el.offsetHeight};
+            if(!Number.isFinite(size.w)||!Number.isFinite(size.h))return null;
+            measured.set(id,size);
+          }
+          return {x:dir==="in"?node.x:node.x+size.w,
+            y:node.y+size.h*0.5};
+        };
+        for(const b of bindings){
+          if(String(b.edge.id)!==b.id||
+             String(b.edge.from)!==b.fromId||
+             String(b.edge.to)!==b.toId||
+             b.group.isConnected===false||b.hit.isConnected===false||
+             b.line.isConnected===false||
+             (typeof svg.contains==="function"&&!svg.contains(b.group)))return false;
+          const a=port(b.from,b.fromEl,"out");
+          const z=port(b.to,b.toEl,"in");
+          if(!a||!z)return false;
+          const d=pathFor(a.x,a.y,z.x,z.y);
+          if(typeof d!=="string"||!d)return false;
+          patches.push({hit:b.hit,line:b.line,d});
+        }
+        // All binding/geometry checks finish before any write.
+        for(const {hit,line,d} of patches){
+          if(hit.getAttribute("d")!==d)hit.setAttribute("d",d);
+          if(line.getAttribute("d")!==d)line.setAttribute("d",d);
+        }
+        if(patches.length)edgeMarkupCache.delete(svg);
+        return true;
+      }
+    });
+  }
   function clearEdgeMarkup(svg){
     if(!svg)return;
     svg.innerHTML="";
@@ -359,6 +445,7 @@
   }
   return Object.freeze({reconcile,updateSelection,preserveRuntime,captureEditableGraph,
     createEdgeGeometryIndex,reconcileEdgeMarkup,clearEdgeMarkup,patchMovedEdgePaths,
+    createEdgeDragSession,
     // Exposed for controlled performance/DOM regression fixtures.
     rootFlags});
 });
