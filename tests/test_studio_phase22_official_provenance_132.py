@@ -101,7 +101,7 @@ class Phase22OfficialTest(unittest.TestCase):
     def test_cli_skill_inputs_are_actual_tracked_blobs_not_external_json(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)/"skill"
-            refs=root/"references"
+            refs=root/"skills"/"handdraw-style-prompter"/"references"
             refs.mkdir(parents=True)
             styles=refs/"styles.json"
             layouts=refs/"layouts.json"
@@ -112,7 +112,8 @@ class Phase22OfficialTest(unittest.TestCase):
                     check=True,capture_output=True,text=True,timeout=10)
                 return proc.stdout.strip()
             git("init","-q")
-            git("add","references/styles.json","references/layouts.json")
+            git("add","skills/handdraw-style-prompter/references/styles.json",
+                "skills/handdraw-style-prompter/references/layouts.json")
             git("-c","user.name=CI","-c","user.email=ci@example.invalid",
                 "-c","commit.gpgsign=false","commit","-qm","pinned fixture")
             sha=git("rev-parse","HEAD")
@@ -134,7 +135,7 @@ class Phase22OfficialTest(unittest.TestCase):
             layouts.write_text("[]",encoding="utf-8")
             with self.assertRaises(ValueError):
                 load_pinned_skill_sources(root,sha,styles,layouts)
-            git("restore","references/layouts.json")
+            git("restore","skills/handdraw-style-prompter/references/layouts.json")
             if hasattr(Path,"symlink_to"):
                 links=Path(td)/"linked-styles.json"
                 try:
