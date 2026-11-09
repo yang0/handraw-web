@@ -51,6 +51,7 @@ JS_MEASURE = r"""() => {
   const resultNode=graph.nodes.find(n=>n.id==='g00-7');
   if(!editNode||!resultNode)throw Error('required text/result nodes are missing');
   const warm=probe();
+  const stableEdgesAfterWarm=[...document.querySelectorAll('#ic-edges-svg [data-edge-id]')];
   const updates=[];
   for(let i=0;i<7;i++){
     editNode.data.text='页面实际编辑-'+String(i);
@@ -67,6 +68,8 @@ JS_MEASURE = r"""() => {
   const focusHeld=document.activeElement===activeInput &&
     activeInput?.value==='光标仍保持在正在编辑的字段' &&
     activeInput.selectionStart===2 && activeInput.selectionEnd===5;
+  const edgesStableOnTextOnly=stableEdgesAfterWarm.every(el=>el.isConnected &&
+    document.querySelector('#ic-edges-svg [data-edge-id="'+el.getAttribute('data-edge-id')+'"]')===el);
   const oldStatus=resultNode.data.status;
   resultNode.data.status=oldStatus==='generating'?'done':'generating';
   const status=probe();
@@ -78,7 +81,7 @@ JS_MEASURE = r"""() => {
   const afterImages=[...root.querySelectorAll('img')];
   const stableImages=beforeImages.filter(el=>el.isConnected&&afterImages.includes(el)).length;
   return {
-    updates, focusHeld,
+    updates, focusHeld,edgesStableOnTextOnly,
     statusMs:+status.durationMs.toFixed(2),
     statusDirty:(status.patch?.changedIds||[]).filter(id=>id.startsWith('node:')),
     restoredDirty:(restored.patch?.changedIds||[]).filter(id=>id.startsWith('node:')),
@@ -171,6 +174,8 @@ def main() -> None:
                             assert native["totalCards"] == size, native
                             assert native["edges"] == size // 2, native
                             assert native["focusHeld"], ("input focus lost on real canvas", size)
+                            assert native["edgesStableOnTextOnly"], (
+                                "text edit re-created unchanged SVG edge DOM", size)
                             assert native["stableUnrelatedNodes"] == size - 2, (
                                 "single node edit replaced unrelated cards", size, native)
                             assert native["stableImages"] == native["imagesBefore"], (
