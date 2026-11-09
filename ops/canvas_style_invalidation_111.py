@@ -121,3 +121,76 @@ def summarize_selector_footprint(report):
         "matchingIsNotRecalcCost": True,
         "rootCauseProven": False,
     }
+
+
+def summarize_selector_timings(trace):
+    """Chrome SelectorStats: real instrumented match attempts and elapsed us.
+
+    The blink.debug capture changes workload cost and is NOT directly
+    comparable to no-debug Performance counters. Never persist style_sheet_id
+    or selectors outside a tiny local static .ic-/#ic- allowlist.
+    """
+    events = trace.get("traceEvents", []) if isinstance(trace, dict) else []
+    if not isinstance(events, list) or len(events) > MAX_EVENTS:
+        raise ValueError("invalid or excessive selector trace events")
+    records = {}
+    stats_events = 0
+    for event in events:
+        if not isinstance(event, dict) or event.get("name") != "SelectorStats":
+            continue
+        stats_events += 1
+        args = event.get("args") or {}
+        if not isinstance(args, dict):
+            continue
+        block = args.get("selector_stats") or {}
+        if not isinstance(block, dict):
+            continue
+        timings = block.get("selector_timings") or []
+        if not isinstance(timings, list):
+            continue
+        for t in timings[:20000]:
+            if not isinstance(t, dict):
+                continue
+            sel = t.get("selector")
+            if not isinstance(sel, str) or not (sel.startswith(".ic-") or sel.startswith("#ic-")):
+                continue
+            if len(sel) > 150 or not all(
+                ch.isalnum() or ch in " .#>+~:()-_[]*=" for ch in sel
+            ):
+                continue
+            elapsed = t.get("elapsed (us)")
+            attempts = t.get("match_attempts")
+            hits = t.get("match_count")
+            rejected = t.get("fast_reject_count", 0)
+            if not all(isinstance(n, (int, float)) and not isinstance(n, bool) and
+                       math.isfinite(n) and n >= 0 for n in (elapsed, attempts, hits, rejected)):
+                continue
+            if attempts > 10_000_000 or hits > attempts or rejected > attempts:
+                continue
+            row = records.setdefault(sel, {"selector": sel, "elapsedUs": 0.0,
+                                           "matchAttempts": 0, "matchCount": 0,
+                                           "fastRejectCount": 0})
+            row["elapsedUs"] += elapsed
+            row["matchAttempts"] += int(attempts)
+            row["matchCount"] += int(hits)
+            row["fastRejectCount"] += int(rejected)
+    ranked = sorted(records.values(), key=lambda row: -row["elapsedUs"])
+    result = []
+    for item in ranked[:20]:
+        result.append({
+            "selector": item["selector"],
+            "elapsedMs": round(item["elapsedUs"] / 1000, 4),
+            "matchAttempts": item["matchAttempts"],
+            "matchCount": item["matchCount"],
+            "fastRejectCount": item["fastRejectCount"],
+        })
+    return {
+        "source": "Chrome-SelectorStats-disabled-by-default-blink.debug",
+        "selectorStatsEventsObserved": stats_events > 0,
+        "events": stats_events,
+        "eligibleUniqueSelectors": len(records),
+        "topByMeasuredMatchTime": result,
+        "addsInstrumentationOverhead": True,
+        "rawTracePersisted": False,
+        "productionFrameSLA": False,
+    }
