@@ -15,6 +15,7 @@ from ops.canvas_phase14_input_111 import collect as collect_phase14
 from ops.canvas_phase15_move_boundary_111 import collect as collect_phase15
 from ops.canvas_phase16_drag_init_132 import collect as collect_phase16
 from ops.canvas_phase18_status_text_132 import collect as collect_phase18
+from ops.canvas_phase19_identical_text_132 import collect as collect_phase19
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -129,6 +130,19 @@ def main():
                 "productionChangeAuthorized":False,
                 "releaseDecision":"NO-GO",
                 "paidRequests":0,
+            },ensure_ascii=False),flush=True)
+            phase19=collect_phase19(page,cdp)
+            folder19=ROOT/"artifacts/studio-111-phase19"
+            folder19.mkdir(parents=True,exist_ok=True)
+            (folder19/"summary.json").write_text(
+                json.dumps(phase19,indent=2,ensure_ascii=False)+"\n",
+                encoding="utf-8")
+            print("CANVAS #132 PHASE19 "+json.dumps({
+                "comparisonByCpu":phase19["comparisonByCpu"],
+                "dualCpuControlledSignalObserved":phase19["dualCpuControlledSignalObserved"],
+                "productionChangeAuthorized":False,
+                "decision":"NO-GO",
+                "realProviderRequests":0,
             },ensure_ascii=False),flush=True)
             summary=result["traceModes"]
             print("CANVAS #111 PHASE12 "+json.dumps({
