@@ -110,6 +110,7 @@ async function run(size){
     const now=performance.now();frame.push(now-time);time=now;
     world.style.transform=`translate(${(i%20)*4}px,${(i%12)*2}px) scale(${1+(i%10)*.012})`;
   }
+  const memory=performance.memory?.usedJSHeapSize??null;
   // #111: capture a separate mixed editable/Run Graph inside real Chromium.
   // This is a synthetic local history benchmark, not a whole-app 300-node SLA.
   const historyNodes=nodes.map((node,i)=>({
@@ -143,7 +144,6 @@ async function run(size){
       n.data!==historyNodes.find(source=>source.id===n.id).data));
   if(!historySharedRuntime||!historyEditableCloned)
     throw Error("Graph History failed runtime sharing/edit isolation");
-  const memory=performance.memory?.usedJSHeapSize??null;
   const result={nodes:size,images:imageEls.size,firstScreenMs:+initialMs.toFixed(2),
     selectionMs:+selectionMs.toFixed(2),singleStatusP95Ms:+percentile(times,.95).toFixed(2),
     dragZoomFrameP95Ms:+percentile(frame,.95).toFixed(2),
