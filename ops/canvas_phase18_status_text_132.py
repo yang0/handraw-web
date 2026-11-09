@@ -33,7 +33,8 @@ HOOK_JS=r"""arg=>{
     }
     return {mode:s.mode,seenMoveCount:s.moveIndex,
       targetPresence:s.targetPresence,writesByWindow:s.writesByWindow,
-      restored:true,noTextOrIdsPersisted:true};
+      restored:true,noTextOrIdsPersisted:true,
+      visualLabelsPreserved:s.visualLabelsPreserved};
   }
   if(op!=="start"||window.__HANDRAW_TESTING__!==true||
      !["observe","suppress","skip-identical"].includes(arg.mode)||window.__qa132saveText)
@@ -57,7 +58,8 @@ HOOK_JS=r"""arg=>{
     "synthetic-move-2":bucket(),"synthetic-move-3":bucket()
   };
   const s={mode:arg.mode,originalDescriptor:desc,targetPresence:2,
-    moveIndex:0,writesByWindow:counts,onPointerMove:null};
+    moveIndex:0,writesByWindow:counts,onPointerMove:null,
+    visualLabelsPreserved:true};
   s.onPointerMove=ev=>{
     if(!ev.isTrusted&&ev.type==="pointermove")
       s.moveIndex=Math.min(s.moveIndex+1,3);
@@ -79,9 +81,12 @@ HOOK_JS=r"""arg=>{
     }
     if(s.mode==="suppress"&&s.moveIndex>=1){
       slot.suppressed++;
+      if(!same)s.visualLabelsPreserved=false;
       return;
     }
-    return desc.set.call(this,value);
+    const result=desc.set.call(this,value);
+    if(desc.get.call(this)!==String(value))s.visualLabelsPreserved=false;
+    return result;
   };
   try{
     Object.defineProperty(Node.prototype,"textContent",{
@@ -106,6 +111,8 @@ def validate(mode, payload):
         or payload.get("seenMoveCount")!=3 or payload.get("restored") is not True
         or payload.get("noTextOrIdsPersisted") is not True):
         raise ValueError("Phase18 save-text hook restoration/input not proven")
+    if mode=="skip-identical" and payload.get("visualLabelsPreserved") is not True:
+        raise ValueError("Phase19 browser button text semantics not verified")
     windows=payload.get("writesByWindow")
     if not isinstance(windows,dict) or set(windows)!=set(MOVE_WINDOWS):
         raise ValueError("Phase18 missing input windows")
