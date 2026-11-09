@@ -130,17 +130,24 @@ assert.match(app,/dragCtx\.overlayMetrics=null/,
 assert.match(app,/overlayMs:overlayEnd-edgesEnd/);
 assert.match(app,/minimapMs:minimapEnd-overlayEnd/);
 
-assert.match(app,/dragCtx\.positionMode=canTranslate\?"translate":"left-top"/,
-  "feature-detect compositor-friendly CSS translate, keep legacy fallback");
-assert.match(app,/window\.__HANDRAW_TESTING__===true &&/,
-  "test-only left/top comparison must be isolated from production users");
-assert.match(app,/item\.el\.style\.translate=/,
-  "real dragged node moves through individual CSS translate");
-assert.match(app,/item\.el\.style\.left=\x60\$\{item\.node\.x\}px\x60/,
-  "pointerup commits the authoritative Graph position in CSS layout");
-assert.match(app,/item\.el\.style\.translate=""/,
-  "pointerup/cancel must not leave a double-applied transient translation");
-
+// A pure position drag may skip only the terminal full DOM regeneration;
+// any stale Graph/selection/edge/DOM identity is a mandatory full fallback.
+assert.match(app,/ctx\.lastGraph===CS\.graph/,
+  "pointerup fast path must belong to the same graph object");
+assert.match(app,/ctx\.lastNodes===CS\.graph\?\.nodes/,
+  "pointerup fast path invalidates on model list replacement");
+assert.match(app,/ctx\.lastEdges===CS\.graph\?\.edges/,
+  "pointerup fast path invalidates on edge list replacement");
+assert.match(app,/ctx\.lastSelection===ids/,
+  "pointerup fast path invalidates on selection changes");
+assert.match(app,/ctx\.lastEdgeTrusted===true/,
+  "do not skip full render if edge drag session was invalidated");
+assert.match(app,/if\(!safe\)fullRenderCanvas\(\)/,
+  "stale DOM always falls back to authoritative full render");
+assert.match(app,/if\(window\.__HANDRAW_TESTING__===true && DOM\.nodesLayer\)/,
+  "finish mode instrumentation must be test-only");
+assert.doesNotMatch(app,/canvasDragPositionMode/,
+  "failed CSS translate experiment must not remain enabled in production");
 // The old full-layout path remains authoritative whenever a session becomes
 // stale; do not remove it just to make 300-node synthetic numbers look good.
 assert.match(app,/DOM\.viewport\.getBoundingClientRect\(\)\.width/);
