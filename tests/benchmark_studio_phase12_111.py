@@ -13,6 +13,7 @@ from ops.canvas_phase12_isolation_111 import collect
 from ops.canvas_phase13_pointer_111 import collect as collect_phase13
 from ops.canvas_phase14_input_111 import collect as collect_phase14
 from ops.canvas_phase15_move_boundary_111 import collect as collect_phase15
+from ops.canvas_phase16_drag_init_132 import collect as collect_phase16
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -93,6 +94,26 @@ def main():
                 "rootCauseProven":False,
                 "paidRequests":0,
                 "releaseApproved":False,
+            },ensure_ascii=False),flush=True)
+            phase16=collect_phase16(page,cdp)
+            folder16=ROOT/"artifacts/studio-111-phase16"
+            folder16.mkdir(parents=True,exist_ok=True)
+            (folder16/"summary.json").write_text(
+                json.dumps(phase16,indent=2,ensure_ascii=False)+"\n",
+                encoding="utf-8")
+            print("CANVAS #132 PHASE16 "+json.dumps({
+                "cpuWindows":{cpu:{win:{
+                    "large":row["largeUpdateEvents"],
+                    "max":row["maxElementCount"],
+                    "rootAttributes":row["inputReadAndMountProbe"]["rootAttributes"],
+                    "mountCounts":row["inputReadAndMountProbe"]["mountCounts"],
+                    "layoutReadCounts":row["inputReadAndMountProbe"]["reads"],
+                } for win,row in windows.items()}
+                for cpu,windows in phase16["tracesByCpu"].items()},
+                "diagnosticOnly":True,
+                "forcedLayoutCausalityProven":False,
+                "releaseDecision":"NO-GO",
+                "paidRequests":0,
             },ensure_ascii=False),flush=True)
             summary=result["traceModes"]
             print("CANVAS #111 PHASE12 "+json.dumps({
