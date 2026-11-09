@@ -13,9 +13,23 @@
 
 1. `tests/benchmark_studio_native_canvas_111.py` 仍使用真实 HTTP Project、Chromium、10/50/100/300 原生节点、120 本地 WebP、150 SVG edges；原 9 次真实 `page.mouse` 拖拽及 Undo/Redo、SVG/迷你图/图片、零收费 POST 验证保持。
 2. 对 100、300 节点补 **12 次带 20ms pacing 的真实 mouse.move**，并在鼠标按下/移动/松开以及松开后布局校正期间用 `requestAnimationFrame` 捕获屏幕帧回调间隔。输出 rAF P50/P95/max、超过 16.7 和 33.3ms 的样本数。这是 **rAF 节奏而不是 compositor 实际帧完成、显示器 Present 或 FPS SLA**。
-3. 使用 Chromium DevTools Protocol `Performance.getMetrics` 在测量窗口前后取 `LayoutCount/LayoutDuration/RecalcStyleCount/RecalcStyleDuration/ScriptDuration/TaskDuration` 的差值；所有 duration 使用毫秒，缺指标输出 `null` 而不是误报 0。
+3. 使用 Chromium DevTools Protocol `Performance.getMetrics` 在**鼠标开始前、12 次移动后（pointerup 前）、pointerup 后视觉沉淀完成**三个时间点读数，分别输出 `cdpDragOnly`、`cdpPointerupAndSettle` 和整个窗口 `cdpPerformance`。测量 `LayoutCount/LayoutDuration/RecalcStyleCount/RecalcStyleDuration/ScriptDuration/TaskDuration`；所有 duration 使用毫秒，缺指标输出 `null` 而不是误报 0，并检查分阶段样式耗时与全窗合计可对账。
 4. 在相同窗口开始/结束 Chromium `Tracing`；按 whitelisted event name 输出 Layout、Style、Paint/PrePaint、CompositeLayers/UpdateLayerTree、RasterTask 的出现情况、计数和**非排他事件时长之和**。某个组没有事件时视为 `observed=false`、值 `null`；**绝不据此断言 GPU 耗时 0**。
 5. 300 节点增加 CDP `Emulation.setCPUThrottlingRate=4` 的同类实验，明确这是 CPU 模拟，不是物理低端设备。真实网络媒体、触摸交互、实体低端机/显卡、GC 长期采样仍待 D 级复核。
+
+## 首轮 CI 已证实的问题（下一迭代需要归因）
+
+独立分支 run [42555509378](https://github.com/yang0/handraw-web/actions/runs/42555509378) 的 14/14 Job 已全部 SUCCESS。真实本地 HTTP Project + Chromium 的窗口观测：
+
+| 原生节点 | rAF gap P95 | CDP Style 重算累计 | CDP Layout 累计 | Trace Paint 累计 |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 33.5ms | 219.4ms | 6.9ms | 14.4ms |
+| 300 | **100.1ms** | **635.9ms** | 11.9ms | 22.6ms |
+| 300 / 4× CPU 模拟 | **400.0ms** | **3872.6ms** | 83.9ms | 166.6ms |
+
+同 Runner 的 300 节点 9-event JS mouse handler P95 仅 0.4ms，可见 **Frame Pipeline 卡顿不能用 handler P95 证明已解决**。Style 重算的累计时间最突出，因而本阶段补 `drag-only` vs `pointerup+settle` 分段采样，先定位 CSS/DOM 动画 vs 完整重绘的贡献，再决定是否继续动产品布局。
+
+这些数字包括 Chromium 调试 tracing 带来的额外负担；**不是无观测开销基线、生产低端机、真实 GPU/Paint present SLA**。Trace 的 CompositeLayers 类别未观察到时始终展示 unknown，绝不报 0。
 
 ## 安全与数据边界
 
