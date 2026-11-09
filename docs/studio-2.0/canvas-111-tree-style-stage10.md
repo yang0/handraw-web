@@ -34,3 +34,19 @@ Stage 8 Chromium `UpdateLayoutTree` 在 300 个真实节点、150 条 SVG 边、
 - 独立 SHA 全部 14/14 CI 成功之后，核查 ahead>0/behind=0、使用 `force=false` + `expected_sha` 将 `studio2` 快进，复核同 SHA 的 Push/PR 分别 14/14。
 - 如果没有找到正常与 4× CPU 都稳定获益且完全保真之候选，本阶段只交付 **诊断和可复验测试**，不允许宣称生产性能根因已解决，#111 保持 OPEN。
 - 生产 **NO-GO**：真实 GPU/VRAM、低端实体机、PostgreSQL/Redis/R2、供应商账本及 #84/#112 D 级门禁仍需另行验收；PR #131 继续 Draft，严禁合入 `main`。
+
+
+## Chrome Runner 首轮实测与结论（2026-11-09）
+
+- 在中间 SHA `8cc12114ef08a9e914b55a2b7c374022d8139f51` 的 [独立分支 CI #42575332854](https://github.com/yang0/handraw-web/actions/runs/42575332854)，**14/14 SUCCESS**，含 Stage 10 的真实 Chromium 交叉运行；此前 `416ea995` 的首轮 Trace 因超过 30 MB 安全上限失败，已通过限定仅 3 次真实鼠标移动并捕捉上限错误修复，未放宽上限。
+- **基线仍有大范围布局树更新**：3 步有界 Trace 中 `UpdateLayoutTree` 受影响元素数中位 **9,184**、最大 **9,235**（19 个有效样本）。与第八阶段 9,365 中位的差异属于不同采样窗口，**不是生产优化收益**，不能断言唯一 CSS 属性、继承链或选择器已经找到。
+- `world-style-containment` 测量有效，但两档 CPU **均未达到连续两次至少 10% 的 Style 与 Style+Layout 降幅**：
+
+| Chrome 档位 | baseline Style 中位 | candidate Style 两次 | baseline Style+Layout 中位 | candidate Style+Layout 两次 |
+| --- | ---: | ---: | ---: | ---: |
+| 普通 CPU | 155.069 ms | 162.042 / 151.125 ms | 160.545 ms | 167.383 / 156.268 ms |
+| CDP 模拟 4× CPU | 625.773 ms | 619.488 / 625.125 ms | 647.612 ms | 642.075 / 646.365 ms |
+
+- `world-layout-style-containment`、`selected-compositor-layer`、`relational-selector-off` 都未通过测量前置有效性检查，**不能拿它们的未测数据作为性能收益**；最新 runner 会在安全范围内显示拒绝原因，具体以该 runner 日志及 `summary.json` 为准。
+- 此阶段的 **已验证结论** 仅是：为已有 `.ic-node { contain: layout style }` 的图再添加世界层 `contain: style`，不能稳定减少受测的 Style 工作。其它候选并未建立充分有效的 A/B 数据；`:has` / hover / 树级依赖仍是待证假说。
+- **决策：不应用生产 CSS/JS 改动，不关闭 #111，不把未达到双 CPU 严格门槛的方案同步到用户界面。** 分支仅引入可重放诊断、CI 和证据，并继续保持生产 NO-GO。验收应推进更直接的 invalidation reason / matched selector 与祖先-后代依赖定位，以及实体低端设备测量。
