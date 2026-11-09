@@ -112,6 +112,79 @@ assert.equal(R.patchMovedEdgePaths(partial,[...graphEdges,
   {id:"missing",from:"unknown",to:"n1"}],models,layer,["unknown"],geom),false);
 assert.equal(g1.hit.writes,1,"invalid edge graph must leave existing DOM untouched");
 
-console.log("CANVAS #111 indexed edges, drag patch and stable SVG DOM PASS "+
+
+// P2 drag session is built AFTER the selection SVG redraw, not recreated on
+// each pointermove. All updates remain bound to the exact live Graph arrays.
+assert.match(app,/createEdgeDragSession\(/);
+assert.match(app,/dragCtx\.edgeSession\.update\(/);
+assert.match(app,/focusCanvasNodeForBenchmark:/);
+assert.match(app,/_drag111Samples/);
+let edgeDomQueries=0,graphDomQueries=0;
+const cachedSvg={querySelectorAll(selector){
+  assert.equal(selector,"g.ic-edge-group[data-edge-id]");
+  edgeDomQueries++;
+  return [g1,g2];
+}};
+const cachedLayer={querySelectorAll(selector){
+  assert.equal(selector,".ic-node[data-node-id]");
+  graphDomQueries++;
+  return elements;
+}};
+const dragGraph=[
+  {id:"e1",from:"n0",to:"n1"},
+  {id:"e2",from:"n2",to:"n3"}
+];
+const dragSession=R.createEdgeDragSession(cachedSvg,dragGraph,models,
+  cachedLayer,["n0"],geom);
+assert.ok(dragSession);
+assert.equal(dragSession.incidentCount,1);
+assert.equal(edgeDomQueries,1);
+assert.equal(graphDomQueries,1);
+models[0].x+=25;
+assert.equal(dragSession.update(dragGraph,models),true);
+assert.equal(g1.hit.getAttribute("d"),g1.line.getAttribute("d"));
+const firstSessionPath=g1.hit.getAttribute("d");
+models[0].x+=40;
+assert.equal(dragSession.update(dragGraph,models),true);
+assert.notEqual(g1.hit.getAttribute("d"),firstSessionPath);
+assert.equal(edgeDomQueries,1,"no full edge enumeration for every frame");
+assert.equal(graphDomQueries,1,"no full card query for every frame");
+assert.equal(g2.hit.getAttribute("d"),"OLD-e2",
+  "unrelated edge hit path must remain untouched");
+assert.equal(dragSession.update([...dragGraph],models),false,
+  "a new Graph edges array must invalidate the session");
+assert.equal(dragSession.update(dragGraph,[...models]),false,
+  "a new Graph nodes array must invalidate the session");
+dragGraph.push({id:"e3",from:"n0",to:"n3"});
+assert.equal(dragSession.update(dragGraph,models),false,
+  "an in-place topology growth must invalidate the session");
+dragGraph.pop();
+const oldEdgeTo=dragGraph[0].to;
+dragGraph[0].to="n3";
+assert.equal(dragSession.update(dragGraph,models),false,
+  "an in-place endpoint reassignment must invalidate the session");
+dragGraph[0].to=oldEdgeTo;
+const oldConnected=g1.isConnected;
+g1.isConnected=false;
+assert.equal(dragSession.update(dragGraph,models),false,
+  "a disconnected SVG group must invalidate the session");
+g1.isConnected=oldConnected;
+const origLine=g1.line;
+g1.querySelector=(selector)=>selector==="path.ic-edge-hit"?g1.hit:null;
+const invalidSession=R.createEdgeDragSession(cachedSvg,dragGraph,models,
+  cachedLayer,["n0"],geom);
+assert.equal(invalidSession,null,"missing hit/line means full fallback");
+g1.querySelector=selector=>selector==="path.ic-edge-hit"?g1.hit:
+  selector==="path.ic-edge-line"?origLine:null;
+// Two moving endpoints and zero incident edges must both stay safe.
+const both=R.createEdgeDragSession(cachedSvg,dragGraph,models,cachedLayer,
+  ["n0","n1"],geom);
+assert.ok(both&&both.update(dragGraph,models));
+const none=R.createEdgeDragSession(cachedSvg,dragGraph,models,cachedLayer,
+  ["n4"],geom);
+assert.ok(none&&none.update(dragGraph,models));
+assert.equal(none.incidentCount,0);
+
+console.log("CANVAS #111 indexed edges, drag-session and stable SVG DOM PASS "+
   JSON.stringify({nodes:n,edgeLookups:500,domQueries:selectCalls,
     measuredDimensions:widthReads,svgWrites:writes}));
