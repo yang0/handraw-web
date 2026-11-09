@@ -89,6 +89,8 @@ def fixture():
         if k.endswith("Sha256")}
     fp["sourcePhysicalHostSha256"]=h(701)
     fp["recoveryPhysicalHostSha256"]=h(702)
+    for prefix in ("businessFingerprint","mediaIndex"):
+        fp[prefix+"AfterSha256"]=fp[prefix+"BeforeSha256"]
     fp["walletLedgerBeforeSha256"]=pg["walletLedgerBeforeSha256"]
     fp["walletLedgerAfterSha256"]=pg["walletLedgerAfterSha256"]
     fp.update({"targetUtc":when,"recoveredReplayLsn":"0/10000000",
