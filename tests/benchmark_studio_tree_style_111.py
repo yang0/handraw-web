@@ -406,10 +406,13 @@ def main():
                         json.dumps(report,indent=2,ensure_ascii=False)+"\n",
                         encoding="utf-8")
                     print("CANVAS #111 STAGE10 "+json.dumps({
+                        "traceBaselineAvailable":report["styleTreeTraceBaseline"].get("traceAvailable"),
+                        "traceRelationalAvailable":(
+                            report["styleTreeTraceRelationalAblation"] or {}).get("traceAvailable"),
                         "baselineTreeAffected":report["styleTreeTraceBaseline"][
                             "reportedAffectedElements"],
                         "cases":[{"name":x["case"],"safe":x["promotionAllowed"],
-                                  "valid":x["valid"],
+                                  "valid":x["valid"],"reason":x.get("reason"),
                                   "gate":x.get("gate")} for x in report["cases"]],
                         "paid":0},ensure_ascii=False),flush=True)
                 finally:
