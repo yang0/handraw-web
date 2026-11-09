@@ -20175,10 +20175,13 @@
         // modes are inert unless the native browser test flag is present.
         const diagMode=window.__HANDRAW_TESTING__===true?
           window.HANDRAW_STUDIO_TESTING?.canvasDragVisualProbeMode||"normal":"normal";
-        const skipCard=diagMode==="no-card";
-        const skipEdges=diagMode==="no-edges"||diagMode==="node-only";
-        const skipOverlay=diagMode==="no-overlay"||diagMode==="node-only";
-        const skipMini=diagMode==="no-minimap"||diagMode==="node-only";
+        const skipCard=diagMode==="no-card"||diagMode==="no-visual";
+        const skipEdges=diagMode==="no-edges"||
+          diagMode==="node-only"||diagMode==="no-visual";
+        const skipOverlay=diagMode==="no-overlay"||
+          diagMode==="node-only"||diagMode==="no-visual";
+        const skipMini=diagMode==="no-minimap"||
+          diagMode==="node-only"||diagMode==="no-visual";
         for (const item of dragCtx.startPositions) {
           item.node.x = snapVal(item.ox + dxW);
           item.node.y = snapVal(item.oy + dyW);
