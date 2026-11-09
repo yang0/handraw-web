@@ -9952,11 +9952,17 @@
     const requested=Array.isArray(changedNodeIds)&&changedNodeIds.length
       ?new Set(changedNodeIds.map(String)):null;
     const mounted=requested&&CS.stageView==="canvas"&&requested.size<=12
-      ?new Set([...DOM.nodesLayer.querySelectorAll(".ic-node[data-node-id]")]
-          .map(el=>el.getAttribute("data-node-id"))):null;
+      ?new Map([...DOM.nodesLayer.querySelectorAll(".ic-node[data-node-id]")]
+          .map(el=>[el.getAttribute("data-node-id"),el])):null;
     const partial=Boolean(mounted&&mounted.size===nodes.length&&
       [...requested].every(id=>mounted.has(id)&&nodes.some(n=>String(n.id)===id)));
     const renderNodes=partial?nodes.filter(n=>requested.has(String(n.id))):nodes;
+    // Card geometry may have been edited in the Graph even if its dimensions
+    // stayed the same; a dirty render must then still refresh SVG endpoints.
+    const movedGeometry=partial&&renderNodes.some(n=>{
+      const el=mounted.get(String(n.id));
+      return !el||el.style.left!==`${n.x}px`||el.style.top!==`${n.y}px`;
+    });
 
     const audDatalistId = "ic-datalist-audience";
     const sceneDatalistId = "ic-datalist-scene";
@@ -11080,7 +11086,7 @@
     // selection: don't index and measure every edge endpoint again.
     // Any full render, changed node dimension, or collision adjustment still
     // runs the authoritative complete edge calculation.
-    const edgesRecomputed=!partial||sizeChanged;
+    const edgesRecomputed=!partial||sizeChanged||movedGeometry;
     if(edgesRecomputed)renderEdgesSvg();
     for(const el of dirtyNodes)bindNodeInteriorActions(el);
     if(DOM.nodesLayer.dataset.canvasBenchmark==='1'){
