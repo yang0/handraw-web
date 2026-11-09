@@ -120,7 +120,7 @@ def profile_drag(page, cdp, cpu_factor=1):
     }
 
 
-def open_project_and_measure(context, base, name, expected_unique, throttle=False):
+def open_project_and_measure(context, base, name, expected_unique, expected_pixels, throttle=False):
     page=context.new_page()
     page.add_init_script("window.__HANDRAW_TESTING__=true")
     errors, paid_posts=[],[]
@@ -158,6 +158,7 @@ def open_project_and_measure(context, base, name, expected_unique, throttle=Fals
         }""")
         assert images["elements"]==120 and images["decoded"]==120,images
         assert images["uniqueUrls"]==expected_unique,(images,expected_unique)
+        assert images["naturalPixels"]==expected_pixels,(images,expected_pixels)
         cdp=context.new_cdp_session(page)
         cdp.send("Performance.enable")
         normal=profile_drag(page,cdp,cpu_factor=1)
@@ -175,7 +176,7 @@ def open_project_and_measure(context, base, name, expected_unique, throttle=Fals
             "loadAndDecodeMs":decoded_ms,
             "physicalDrag":normal,"simulated4xCpuDrag":slowed,
             "browserErrors":0,"paidGatewayRequests":0,
-            "allWorkflowsReadOnly":True,
+            "isolatedProjectWritesOnly":True,
         }
     finally:
         if cdp: cdp.detach()
@@ -214,9 +215,13 @@ def main():
                     base=f"http://127.0.0.1:{server.server_port}"
                     for key in ("reused","distinct"):
                         graph=graph_fixture(30)
-                        if key=="distinct":
-                            count=apply_distinct_media(graph,fixture["urls"])
-                            assert count==120
+                        # Both variants use identical 960x720 natural pixels,
+                        # equal number of <img> nodes and the same geometry.
+                        # Only the number of independent URL/decode entries varies.
+                        urls=(fixture["urls"] if key=="distinct" else
+                              [fixture["urls"][i%2] for i in range(120)])
+                        count=apply_distinct_media(graph,urls)
+                        assert count==120
                         project=f"qa111-media-{key}"
                         status,obj=http_json(base,"/api/studio/projects",cookie,
                             "POST",{"projectId":project,
@@ -240,10 +245,12 @@ def main():
                             context.add_cookies([{"name":SESSION_COOKIE_NAME,
                                                  "value":token,"url":base}])
                             records=[
-                                open_project_and_measure(context,base,"qa111-media-reused",2),
+                                open_project_and_measure(context,base,"qa111-media-reused",2,
+                                                         fixture["decodedPixelsExpected"]),
                                 open_project_and_measure(context,base,"qa111-media-distinct",120,
-                                                         throttle=True),
-                                open_project_and_measure(context,base,"qa111-media-reused",2),
+                                                         fixture["decodedPixelsExpected"],throttle=True),
+                                open_project_and_measure(context,base,"qa111-media-reused",2,
+                                                         fixture["decodedPixelsExpected"]),
                             ]
                             assert all(r["paidGatewayRequests"]==0 for r in records)
                             report={
