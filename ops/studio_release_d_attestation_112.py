@@ -26,7 +26,7 @@ ENV = {"preproduction", "staging", "production"}
 FIELDS = {"gate", "status", "evidenceId", "operator", "reviewer", "observedAtUtc"}
 GROUPS = {
     11: (
-        "editorial_ff018", "editorial_fg025",
+        "editorial_ff018", "editorial_ff019", "editorial_fg025",
         "web_db_and_skill_main_strict_parity",
     ),
     84: (
