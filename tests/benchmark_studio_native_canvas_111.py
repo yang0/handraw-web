@@ -577,6 +577,160 @@ def profile_drag_style_isolation(page, size: int = 300) -> dict:
 
 
 
+
+def profile_style_invalidation_cdp(page, size: int = 300) -> dict:
+    """Real mouse/CDP invalidation trace plus CSS selector footprint.
+
+    All trace event args are reduced in memory, never written to artifacts.
+    media-hidden keeps the SAME 120 decoded WebP DOM nodes and only suppresses
+    painting. This is a controlled sensitivity check, not a decoding benchmark.
+    """
+    assert size == 300
+    from ops.canvas_style_invalidation_111 import (
+        summarize_selector_footprint, summarize_style_invalidation,
+    )
+    census = page.evaluate("""() => {
+      if(window.__HANDRAW_TESTING__!==true)throw Error('testing only');
+      const root=document.getElementById('ic-nodes-layer');
+      if(!root)throw Error('missing native Canvas layer');
+      const images=[...root.querySelectorAll('img')];
+      const count={images:images.length,decoded:images.filter(
+        img=>img.complete&&img.naturalWidth>0).length,
+        pixels:images.reduce((n,img)=>n+img.naturalWidth*img.naturalHeight,0)};
+      const selectors=[], seen=new Set();
+      let rulesInspected=0,skippedSheets=0;
+      function walk(rules){
+        for(const rule of rules){
+          if(++rulesInspected>10000)return;
+          if(rule.cssRules){try{walk(rule.cssRules)}catch(_){skippedSheets++}}
+          if(typeof rule.selectorText!=='string')continue;
+          for(const part of rule.selectorText.split(',')){
+            const sel=part.trim();
+            if(!(/^([.]ic-|#ic-)/.test(sel))||sel.length>150||
+                !sel.includes('ic-node')&&!sel.includes('ic-canvas'))continue;
+            if(seen.has(sel)||selectors.length>=700)continue;
+            seen.add(sel);
+            try{selectors.push({selector:sel,
+              matches:document.querySelectorAll(sel).length})}catch(_){}
+          }
+        }
+      }
+      for(const sheet of document.styleSheets){
+        try{walk(sheet.cssRules)}catch(_){skippedSheets++}
+      }
+      return {images:count,rulesInspected,skippedSheets,selectors};
+    }""")
+    assert census["images"]["images"] >= size * 4 // 10, census["images"]
+    selectors = summarize_selector_footprint(census)
+    cdp = page.context.new_cdp_session(page)
+    records=[]
+    try:
+        cdp.send("Performance.enable")
+        for mode in ("normal", "media-hidden", "normal-repeat", "no-visual"):
+            hidden = mode == "media-hidden"
+            visual_mode = "no-visual" if mode == "no-visual" else "normal"
+            page.evaluate("""args => {
+              const testing=window.HANDRAW_STUDIO_TESTING;
+              if(window.__HANDRAW_TESTING__!==true||!testing)
+                throw Error('Chrome trace requires isolated test bridge');
+              testing.canvasDragVisualProbeMode=args.visualMode;
+              testing.canvasDragFinishMode='full';
+              document.getElementById('__111_media_hidden')?.remove();
+              if(args.hidden){
+                const el=document.createElement('style');
+                el.id='__111_media_hidden';
+                el.textContent='#ic-nodes-layer img { visibility:hidden !important }';
+                document.head.appendChild(el);
+              }
+              testing.focusCanvasNodeForBenchmark('g00-0');
+            }""", {"hidden":hidden,"visualMode":visual_mode})
+            target = page.evaluate("""() => {
+              const node=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
+              const head=node?.querySelector('.ic-node-header-above');
+              const model=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+              if(!node||!head||!model)throw Error('missing trace drag target');
+              const r=head.getBoundingClientRect();
+              for(const ratio of [.15,.45,.7]){
+                const x=r.left+r.width*ratio,y=r.top+r.height*.5;
+                const hit=document.elementFromPoint(x,y);
+                if(hit?.closest('.ic-node')===node &&
+                   !hit.closest('button,input,textarea,select,label'))
+                  return {x,y,nodeX:model.x,nodeY:model.y};
+              }
+              throw Error('no physically reachable drag target');
+            }""")
+            page.mouse.move(target["x"],target["y"])
+            page.mouse.down()
+            page.wait_for_timeout(100)
+            before=cdp.send("Performance.getMetrics")
+            complete={}
+            cdp.on("Tracing.tracingComplete",lambda event:complete.update(event))
+            tracing=False
+            try:
+                cdp.send("Tracing.start",{
+                    "categories":"devtools.timeline,blink,cc,disabled-by-default-devtools.timeline.invalidationTracking",
+                    "options":"record-as-much-as-possible",
+                    "transferMode":"ReturnAsStream",
+                })
+                tracing=True
+                for step in range(1,13):
+                    page.mouse.move(target["x"]+48*step/12,
+                                    target["y"]+24*step/12,steps=1)
+                    page.wait_for_timeout(20)
+                drag_end=cdp.send("Performance.getMetrics")
+            finally:
+                page.mouse.up()
+                if tracing:
+                    cdp.send("Tracing.end")
+            for _ in range(45):
+                if complete.get("stream"):break
+                page.wait_for_timeout(50)
+            if not complete.get("stream"):
+                raise AssertionError("Chrome invalidation trace stream unavailable")
+            summary=summarize_style_invalidation(
+                read_trace_from_stream(cdp,complete["stream"]))
+            metric=delta_performance_metrics(before,drag_end)
+            state=page.evaluate("""() => {
+              const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+              const card=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
+              const layer=document.getElementById('ic-nodes-layer');
+              return {x:n.x,y:n.y,left:card?.style.left,top:card?.style.top,
+                cards:layer.querySelectorAll('.ic-node').length,
+                images:layer.querySelectorAll('img').length,
+                edges:document.querySelectorAll('#ic-edges-svg g.ic-edge-group[data-edge-id]').length};
+            }""")
+            assert state["x"]>target["nodeX"] and state["y"]>target["nodeY"],(mode,state)
+            assert state["cards"]==size and state["images"]>=120 and state["edges"]==150,(mode,state)
+            assert state["left"]==f'{state["x"]}px' and state["top"]==f'{state["y"]}px',(mode,state)
+            page.keyboard.press("Control+z")
+            undo=page.evaluate("""() => {
+              const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+              return {x:n.x,y:n.y};
+            }""")
+            assert undo=={"x":target["nodeX"],"y":target["nodeY"]},(mode,undo)
+            records.append({"mode":mode,"chromeStyleInvalidations":summary,
+                            "cdpDragOnly":metric,
+                            "visibleImageDOMNodes":census["images"]["images"],
+                            "imagePaintingSuppressed":hidden,
+                            "rootCauseProven":False})
+        return {"source":"real-300-node-Chromium-invalidation-tracing",
+                "nodes":size,"edges":150,"media":census["images"],
+                "selectorFootprint":selectors,"trials":records,
+                "rawTracePersisted":False,"productionReleaseEvidence":False}
+    finally:
+        try:
+            page.evaluate("""() => {
+              document.getElementById('__111_media_hidden')?.remove();
+              if(window.__HANDRAW_TESTING__===true&&window.HANDRAW_STUDIO_TESTING){
+                window.HANDRAW_STUDIO_TESTING.canvasDragVisualProbeMode='normal';
+                window.HANDRAW_STUDIO_TESTING.canvasDragFinishMode='auto';
+              }
+            }""")
+        except Exception:
+            pass
+        cdp.detach()
+
+
 def main() -> None:
     from playwright.sync_api import sync_playwright
 
@@ -732,6 +886,9 @@ def main() -> None:
                                 native["styleIsolation"] = profile_drag_style_isolation(page,size)
                                 print("CANVAS #111 DRAG STYLE ISOLATION " + json.dumps(
                                     native["styleIsolation"],ensure_ascii=False),flush=True)
+                                native["styleInvalidation"] = profile_style_invalidation_cdp(page,size)
+                                print("CANVAS #111 STYLE INVALIDATION " + json.dumps(
+                                    native["styleInvalidation"],ensure_ascii=False),flush=True)
                             # Full pipeline differs from handler-only p95.
                             # Keep the original 9-event regression unchanged.
                             if size in (100, 300):
