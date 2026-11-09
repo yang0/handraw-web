@@ -9928,6 +9928,11 @@
     if(!r)throw new Error('studio_canvas_renderer_not_loaded');
     return r.reconcile(layer,cardsHtml,datalistsHtml);
   }
+  // #111: the caller has proved the Graph topology and existing DOM cards
+  // agree. Reconcile only the specified nodes, never prune other nodes.
+  function patchStudioCanvasDirtyDom(layer,cardsHtml){
+    return window.HandrawCanvasRenderer.reconcile(layer,cardsHtml,"",true);
+  }
   function refreshCanvasSelection(){
     if(!DOM.nodesLayer)return;
     const sets=getRelatedSets();
@@ -9937,15 +9942,26 @@
     renderCanvasProductUI();
   }
 
-  function renderWorldNodes() {
+  function renderWorldNodes(changedNodeIds = null) {
     if (!DOM.nodesLayer) return;
     const { selSet, relNodeIds } = getRelatedSets();
     const nodes = CS.graph.nodes || [];
+    // Dirty rendering is opt-in. Only in-place updates of existing cards may
+    // use it: Graph topology, node order, datalists and project switches
+    // remain authoritative full-reconcile operations.
+    const requested=Array.isArray(changedNodeIds)&&changedNodeIds.length
+      ?new Set(changedNodeIds.map(String)):null;
+    const mounted=requested&&CS.stageView==="canvas"&&requested.size<=12
+      ?new Set([...DOM.nodesLayer.querySelectorAll(".ic-node[data-node-id]")]
+          .map(el=>el.getAttribute("data-node-id"))):null;
+    const partial=Boolean(mounted&&mounted.size===nodes.length&&
+      [...requested].every(id=>mounted.has(id)&&nodes.some(n=>String(n.id)===id)));
+    const renderNodes=partial?nodes.filter(n=>requested.has(String(n.id))):nodes;
 
     const audDatalistId = "ic-datalist-audience";
     const sceneDatalistId = "ic-datalist-scene";
 
-    const cardsHtml = nodes
+    const cardsHtml = renderNodes
       .map((n) => {
         const isSel = selSet.has(n.id);
         const isRel = relNodeIds.has(n.id) && !isSel;
@@ -11009,7 +11025,7 @@
       })
       .join("");
 
-    const datalistsHtml = `
+    const datalistsHtml = partial ? "" : `
       <datalist id="${audDatalistId}">
         ${(CS.recentAudiences || []).slice(0, 8).map((v) => `<option value="${esc(v)}"></option>`).join("")}
       </datalist>
@@ -11021,7 +11037,9 @@
       </datalist>
     `;
 
-    const {dirtyNodes,stats}=patchStudioCanvasDom(DOM.nodesLayer,cardsHtml,datalistsHtml);
+    const {dirtyNodes,stats}=partial
+      ?patchStudioCanvasDirtyDom(DOM.nodesLayer,cardsHtml)
+      :patchStudioCanvasDom(DOM.nodesLayer,cardsHtml,datalistsHtml);
 
     // Only measure new/changed nodes; remote progress must not force
     // layout reads on every unaffected image and input card.
@@ -11836,8 +11854,9 @@
     root.querySelectorAll("[data-disp-toggle]").forEach(btn=>{
       btn.onclick=e=>{
         e.stopPropagation();
-        CanvasUI.toggleGallery(btn.getAttribute("data-disp-toggle"));
-        renderWorldNodes();
+        const id=btn.getAttribute("data-disp-toggle");
+        CanvasUI.toggleGallery(id);
+        renderWorldNodes([id]);
       };
     });
     root.querySelectorAll("[data-disp-retry-slot]").forEach(btn=>{
@@ -11927,7 +11946,7 @@
         const groupId=btn.getAttribute("data-disp-compare");
         const index=Number(btn.getAttribute("data-slot"));
         CanvasUI.toggleCompare(groupId,index);
-        renderWorldNodes();
+        renderWorldNodes([groupId]);
       };
     });
     root.querySelectorAll("[data-disp-compare-view]").forEach(btn=>{
@@ -11978,7 +11997,7 @@
         const next = Math.min(totalPages, Math.max(1, cur + delta));
         if (next === cur) return;
         disp.data.page = next;
-        renderWorldNodes();
+        renderWorldNodes([disp.id]);
         persistOpenTabs();
       };
     });
@@ -20449,11 +20468,11 @@
       // #111: test-only instrumentation of the actual product card renderer.
       // Does not schedule saves or issue generation requests; never enabled
       // outside the explicit __HANDRAW_TESTING__ flag.
-      renderCanvasNodesForBenchmark: () => {
+      renderCanvasNodesForBenchmark: (dirtyNodeIds = null) => {
         if (!DOM.nodesLayer) throw new Error("canvas_nodes_layer_missing");
         DOM.nodesLayer.dataset.canvasBenchmark = "1";
         const start = performance.now();
-        renderWorldNodes();
+        renderWorldNodes(dirtyNodeIds);
         return {
           durationMs: performance.now() - start,
           patch: DOM.nodesLayer._lastCanvasPatchStats || null
