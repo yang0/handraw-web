@@ -34,8 +34,9 @@ class FinalDLevelIntakeTests(unittest.TestCase):
         self.assertEqual(out["decision"],"NO-GO")
         self.assertFalse(out["issueClosureAuthorized"])
         self.assertFalse(out["claimsComplete"])
-        self.assertEqual(out["statusCounts"]["MISSING"],16)
+        self.assertEqual(out["statusCounts"]["MISSING"],17)
         self.assertEqual(set(out["coverageByIssue"]),{"11","84","112"})
+        self.assertIn("editorial_ff019",[row["gate"] for row in out["missingOrUnpassedGates"]["11"]])
         self.assertFalse(out["privateEvidenceValuesEmitted"])
 
     def test_even_perfect_signed_off_claims_require_external_authentication(self):
@@ -43,7 +44,7 @@ class FinalDLevelIntakeTests(unittest.TestCase):
         out=evaluate(data,expected_sha=SHA,now=NOW)
         self.assertTrue(out["claimsComplete"])
         self.assertTrue(out["readyForManualAuthenticityReview"])
-        self.assertEqual(out["statusCounts"],{"PASS":16})
+        self.assertEqual(out["statusCounts"],{"PASS":17})
         self.assertEqual(out["decision"],"NO-GO")
         self.assertFalse(out["issueClosureAuthorized"])
         self.assertTrue(out["requiresIndependentAuditOfPrivateEvidence"])
@@ -87,7 +88,7 @@ class FinalDLevelIntakeTests(unittest.TestCase):
         partial["checks"][0]["status"]="BLOCKED"
         out=evaluate(partial,expected_sha=SHA,now=NOW)
         self.assertEqual(out["statusCounts"]["BLOCKED"],1)
-        self.assertEqual(out["statusCounts"]["MISSING"],12)
+        self.assertEqual(out["statusCounts"]["MISSING"],13)
         self.assertFalse(out["claimsComplete"])
         self.assertEqual(out["decision"],"NO-GO")
 
