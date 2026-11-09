@@ -10,7 +10,7 @@ from __future__ import annotations
 from ops.canvas_phase12_isolation_111 import CPU_FACTORS
 from ops.canvas_phase15_move_boundary_111 import one_trial
 
-MODES=("observe","suppress")
+MODES=("observe","suppress","skip-identical")
 ORDER=("observe","suppress","observe","suppress","observe")
 MOVE_WINDOWS=("pre-input-idle","synthetic-move-1","synthetic-move-2","synthetic-move-3")
 ROLES=("bottom-save-button","entry-save-button")
@@ -36,7 +36,7 @@ HOOK_JS=r"""arg=>{
       restored:true,noTextOrIdsPersisted:true};
   }
   if(op!=="start"||window.__HANDRAW_TESTING__!==true||
-     !["observe","suppress"].includes(arg.mode)||window.__qa132saveText)
+     !["observe","suppress","skip-identical"].includes(arg.mode)||window.__qa132saveText)
     throw Error("Phase18 only runs on a real Studio test canvas");
   const bottom=document.getElementById("bl-save-project");
   const entry=document.getElementById("studio-project-status");
@@ -70,7 +70,13 @@ HOOK_JS=r"""arg=>{
     slot.writes++;
     if(slot.writes>100)throw Error("Phase18 target write cap exceeded");
     // Equality is computed in page memory only; neither text is emitted.
-    if(desc.get.call(this)===String(value))slot.identical++;
+    const same=desc.get.call(this)===String(value);
+    if(same)slot.identical++;
+    if(s.mode==="skip-identical"&&s.moveIndex>=1&&same){
+      // Test-only visual-preserving idempotence: changed labels pass through.
+      slot.suppressed++;
+      return;
+    }
     if(s.mode==="suppress"&&s.moveIndex>=1){
       slot.suppressed++;
       return;
@@ -118,6 +124,13 @@ def validate(mode, payload):
             if mode=="suppress" and name.startswith("synthetic-move-") and (
                     row["suppressed"]!=row["writes"]):
                 raise ValueError("Phase18 intervention failed to suppress target writes")
+            if mode=="skip-identical" and (
+                    row["suppressed"]>row["identical"] or
+                    (name.startswith("synthetic-move-") and
+                     row["suppressed"]!=row["identical"])):
+                raise ValueError("Phase19 intervention changed nonidentical text or missed an identical write")
+            if mode=="skip-identical" and name=="pre-input-idle" and row["suppressed"]:
+                raise ValueError("Phase19 changed the pre-input setup")
     return windows
 
 
