@@ -77,7 +77,7 @@ jobs:
         run: python tests/benchmark_studio_tree_style_111.py
       - name: '#111 stage11 Chrome same-window invalidation ancestry + targeted hover A/B 1x/4x CPU'
         run: python tests/benchmark_studio_style_causality_111.py
-      - name: '#111 phase12 real Chromium SVG/global-selector/node-coordinate isolations on 1x/4x CPU'
+      - name: '#111 phase12/13 Chromium SVG/global/coordinate + residual hover pointer state 1x/4x CPU'
         run: python tests/benchmark_studio_phase12_111.py
       - name: '#112 Native Studio 100-node Graph + owner isolation Chromium smoke'
         run: python tests/smoke_studio_native_100_graph_112.py
@@ -95,6 +95,11 @@ jobs:
       - run: python tests/smoke_studio_dag_browser_120.py
       - name: '#112 M0-M3 acceptance matrix and CI wiring guard'
         run: python ops/check_studio_acceptance_112.py --output artifacts/studio-112-matrix.json
+      - name: '#11/#84/#112 final D-level evidence refusal and missing-gate matrix'
+        run: |
+          python ops/studio_release_d_attestation_112.py \
+            --release-sha "$GITHUB_SHA" \
+            --report artifacts/studio-112-d-gates.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -108,6 +113,8 @@ jobs:
             artifacts/studio-111-tree-style/**
             artifacts/studio-111-causality/**
             artifacts/studio-111-phase12/**
+            artifacts/studio-111-phase13/**
+            artifacts/studio-112-d-gates.json
             artifacts/graphpatch-126/**
             artifacts/ai-110-offline-eval.json
             artifacts/p0-masonry-114/**
