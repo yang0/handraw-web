@@ -31,24 +31,27 @@
 
 这些数字包括 Chromium 调试 tracing 带来的额外负担；**不是无观测开销基线、生产低端机、真实 GPU/Paint present SLA**。Trace 的 CompositeLayers 类别未观察到时始终展示 unknown，绝不报 0。
 
-## 相同 Runner 的 CSS 拖拽策略对照（第六阶段补充）
+## 同 Runner A/B 实测决策：拒绝 CSS translate，改为安全定向收尾
 
-分段 `Performance.getMetrics` 已确认最显著的 Style 重算发生在**拖拽中**，不只是松开后 `fullRenderCanvas`：
+`Performance.getMetrics` 证明样式重算在拖拽期间和 pointerup 后均有开销：100 节点约 154ms + 56ms；300 节点约 388ms + 161ms；300 节点 4× CPU 模拟约 2726ms + 705ms。已有 CSS `.ic-node { contain: layout style }`，不重复声明。
 
-| 节点 | Style 全窗 | 移动中 | Pointerup + 校正 | rAF gap P95 |
-|---:|---:|---:|---:|---:|
-| 100 | 209.6ms | 153.6ms | 56.0ms | 50.0ms |
-| 300 | 548.5ms | 387.7ms | 160.8ms | 66.7ms |
-| 300 + CDP 4× | 3430.5ms | 2725.9ms | 704.6ms | 483.3ms |
+独立 CI [42557522443](https://github.com/yang0/handraw-web/actions/runs/42557522443) 同一 Chrome Runner 300 节点对照结果：
 
-代码调查还确认：`studio-canvas.css` 的 `.ic-node` **已经**设置 `contain: layout style`，所以不重复增加，也不引入可能改变节点尺寸和端口命中的 `content-visibility:auto`。
+| 实验 | left/top rAF P95 | translate rAF P95 | left/top 拖拽 Style 累计 | translate 拖拽 Style 累计 |
+| --- | ---: | ---: | ---: | ---: |
+| 正常 CPU | 66.6ms | 83.3ms | 334.5ms | 414.6ms |
+| 4× CPU | 750ms | 383.3ms | 1990ms | 1926ms |
 
-本轮追加一个受限的**图层位移优化**：
+结果**不一致**，尤其正常 CPU 下 translate 退化，不能证明它是可靠的全局改进。因此后续提交**撤销产品中全部 translate 实验逻辑**和调试开关，恢复第 5 阶段已通过的 left/top 绘制；保留 Chrome rAF/Performance/Trace 的测量底座。
 
-- 现代浏览器支持 CSS individual `translate` 时，指针拖拽不再每个事件写 `style.left/top`，而是以起始坐标为锚点用 `translate:${deltaX}px ${deltaY}px` 显示位置，同时 Graph `x/y` 仍实时更新、SVG 连线与 minimap 继续读 Graph 权威坐标。
-- `pointerup/pointercancel` 将 Graph 最新 `x/y` **一次性提交**到 `left/top` 并清除 `translate`；缺浏览器支持、卡片在拖拽中被替换、或测试显式选择 Legacy 时回退原 CSS left/top。
-- 切换 `left-top` / `translate` 的开关仅在隔离测试 `__HANDRAW_TESTING__===true` 可用。真实浏览器内的 legacy 与 translate 测量使用相同 300 节点、同一 Runner、相同 12 步物理拖拽和 4× CPU 模拟，报告 P95、Style/Layout/Script 和 Trace 统计；**执行顺序/缓存热度仍可能影响数值**，不可用单次 A/B 直接声称因果或正式 SLA。
-- Chrome 浏览器始终通过真实交互断言两种路径的 Graph 最终坐标、卡片 `left/top` 提交以及 `translate` 已清空；原来的 9 次 pointermove + SVG 命中边/非关联边、图片、Undo/Redo 继续保留。
+## 定向 pointerup 优化
+
+原生拖拽期间已更新 Graph `x/y`、节点 DOM 的 `left/top`、SVG 关联边、浮动工具条及 minimap。旧 `finishPointer` 在拖拽结束时还无条件 `fullRenderCanvas()`，可能造成 300 节点几十/数百毫秒样式重算。此次新增保守快路径：
+
+- 如果**Graph 引用、nodes/edges/selection 数组、刚发生的 SVG 会话有效性、实际选中节点与卡片 DOM 身份、卡片绝对坐标、SVG edge 数量**均一致，pointerup 无需再次重新生成整张画布；照常 `persistOpenTabs()` 保存 Graph。
+- 任何条件不满足，保留原有完整 `fullRenderCanvas()` 回退；不跳过真实图结构修改、Run 更新、文章业务、切换项目或不可信的渲染场景。
+- 测试桥仅在 `__HANDRAW_TESTING__===true` 下开启 `canvasDragFinishMode="full"` 来对比旧版完整收尾；默认走谨慎判定的新路径。测试使用相同 300 节点、同一 Chromium、12 次真实鼠标事件、CDP 布局/样式与 rAF 指标，另保持原 10/50/100/300 图像/边/撤销回归。
+- **如正常/限速两种 CPU 场景下真实收益不足、或快捷收尾未触发/出现回归，必须重新评估甚至撤销。** 本阶段不宣称达标 60fps，低端设备及真实 GPU Present 的验收仍开放。
 
 ## 安全与数据边界
 
