@@ -99,7 +99,7 @@ def evaluate(claims,receipts,field_dossier,registry,proofs,*,
         ("expiredSignedUrlDenied","expiredUrlDenied"),
         ("revokedSignedUrlDenied","revokedUrlDenied"),
         ("cdnOldUrlInvalidated","cdnTombstoneDenied"),
-        ("restoredMediaBytesMatched","publishedPublicGrantOnly"),
+        ("publicGrantOnlyForPublishedAssets","publishedPublicGrantOnly"),
     ):
         if s3_detail[claim_flag] is not True or s3_field[field_flag] is not True:
             raise ValueError("storage claim/field scenario drift")
