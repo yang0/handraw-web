@@ -48,6 +48,41 @@ def check_skill_checkout(directory,expected_sha,runner=subprocess.run):
     return {"pinnedSkillSha":observed,"checkoutClean":True}
 
 
+def load_pinned_skill_sources(checkout, expected_sha, styles_path, layouts_path,
+                              runner=subprocess.run):
+    """Load ONLY tracked JSON from this exact clean Skill commit.
+
+    A clean checkout alone is insufficient when the CLI also accepts arbitrary
+    --skill-styles/--skill-layouts files.  Verify both path identity and
+    contents against the named Git blob.  No network access is required.
+    """
+    verified=check_skill_checkout(checkout,expected_sha,runner=runner)
+    root=Path(checkout).resolve(strict=True)
+    sources=[]
+    for name,provided in (("styles.json",styles_path),("layouts.json",layouts_path)):
+        rel="references/"+name
+        expected=root/"references"/name
+        candidate=Path(provided)
+        if (candidate.is_symlink() or expected.parent.is_symlink()
+            or not candidate.is_file() or not expected.is_file()
+            or candidate.resolve(strict=True)!=expected
+            or expected.stat().st_size>8*1024*1024):
+            raise ValueError("Skill JSON must be a non-symlink file inside pinned checkout")
+        proc=runner(["git","-C",str(root),"show",expected_sha+":"+rel],
+                    capture_output=True,text=True,timeout=10,check=False)
+        if proc.returncode!=0 or len(proc.stdout.encode("utf-8"))>8*1024*1024:
+            raise ValueError("pinned Skill Git blob missing or oversized")
+        try:
+            from_git=json.loads(proc.stdout)
+            on_disk=json.loads(expected.read_text(encoding="utf-8"))
+        except (UnicodeError,json.JSONDecodeError):
+            raise ValueError("invalid pinned Skill catalog JSON") from None
+        if not isinstance(from_git,list) or from_git!=on_disk:
+            raise ValueError("Skill catalog does not match pinned Git blob")
+        sources.append(from_git)
+    return verified,sources[0],sources[1]
+
+
 def evaluate(*,raw_web_rows,published_styles,published_layouts,source_receipt,
              skill_checkout_sha,expected_skill_sha,
              catalog,skill_styles,skill_layouts,pending_before,pending_after,
@@ -106,7 +141,8 @@ def main(argv=None):
     try:
         if args.report.exists() or args.report.is_symlink() or not args.report.parent.is_dir():
             raise ValueError("new audit file required")
-        observed=check_skill_checkout(args.skill_checkout,args.skill_sha)
+        observed,pinned_styles,pinned_layouts=load_pinned_skill_sources(
+            args.skill_checkout,args.skill_sha,args.skill_styles,args.skill_layouts)
         inputs={
             "raw_web_rows":_read(args.raw_web_rows,private=True),
             "published_styles":_read(args.published_styles,private=True),
@@ -115,8 +151,8 @@ def main(argv=None):
             "skill_checkout_sha":observed["pinnedSkillSha"],
             "expected_skill_sha":args.skill_sha,
             "catalog":_read(args.catalog),
-            "skill_styles":_read(args.skill_styles),
-            "skill_layouts":_read(args.skill_layouts),
+            "skill_styles":pinned_styles,
+            "skill_layouts":pinned_layouts,
             "pending_before":_read(args.pending_before),
             "pending_after":_read(args.pending_after),
             "approvals":_read(args.approvals,private=True),
