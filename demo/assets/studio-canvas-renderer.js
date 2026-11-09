@@ -83,11 +83,15 @@
     }
     return reused;
   }
-  function reconcile(layer,cardsHtml,datalistsHtml){
+  // partial=true receives only already-mounted dirty card markup. Full mode
+  // alone owns unmount/removal and the authoritative node/datalist ordering.
+  function reconcile(layer,cardsHtml,datalistsHtml,partial=false){
     const template=layer.ownerDocument.createElement("template");
     template.innerHTML=cardsHtml+datalistsHtml;
     const desired=[...template.content.children],existing=new Map();
     for(const el of [...layer.children]){const id=key(el);if(id)existing.set(id,el);}
+    if(partial && desired.some(el=>!key(el)?.startsWith("node:") ||
+      !existing.has(key(el))))throw new Error("canvas_dirty_render_invariant");
     const seen=new Set(),dirtyNodes=[],stat={
       nodes:0,inserted:0,replaced:0,removed:0,reused:0,
       selectionOnly:0,imagesPreserved:0,changedIds:[]
@@ -120,9 +124,12 @@
       if(id.startsWith("node:"))dirtyNodes.push(fresh);
       stat.replaced++;stat.changedIds.push(id);
     }
-    for(const [id,old] of existing){
-      if(!seen.has(id)){old.remove();stat.removed++;stat.changedIds.push(id);}
+    if(!partial){
+      for(const [id,old] of existing){
+        if(!seen.has(id)){old.remove();stat.removed++;stat.changedIds.push(id);}
+      }
     }
+    stat.partial=Boolean(partial);
     return {dirtyNodes,stats:stat};
   }
   function updateSelection(layer,ids,related){
