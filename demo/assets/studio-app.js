@@ -20113,16 +20113,6 @@
         // Read the selected title bar geometry at the very start of a drag.
         // Do not retain across selection, graph, viewport or toolbar changes.
         dragCtx.overlayMetrics=captureDragOverlayMetrics(dragCtx.startPositions);
-        // Use individual CSS translate to move cards on the compositor path
-        // without changing their layout position on every pointermove. The
-        // experiment's legacy mode is only exposed in isolated browser tests.
-        const forceLegacy=window.__HANDRAW_TESTING__===true &&
-          window.HANDRAW_STUDIO_TESTING?.canvasDragPositionMode==="left-top";
-        const canTranslate=!forceLegacy && dragCtx.startPositions.length>0 &&
-          dragCtx.startPositions.every(item=>item.el &&
-            "translate" in item.el.style &&
-            (!item.el.style.translate||item.el.style.translate==="none"));
-        dragCtx.positionMode=canTranslate?"translate":"left-top";
         return;
       }
 
@@ -20180,25 +20170,12 @@
         dragCtx.moved = true;
         const dxW = dxScreen / CS.vk;
         const dyW = dyScreen / CS.vk;
-        // A refreshed node DOM mid-gesture may not have the original layout
-        // anchor. Fall back to the proven left/top path, clearing any
-        // earlier translate before writing a new authoritative position.
-        if(dragCtx.positionMode==="translate" &&
-          dragCtx.startPositions.some(item=>!item.el?.isConnected ||
-            !DOM.nodesLayer.contains(item.el)))dragCtx.positionMode="left-top";
         for (const item of dragCtx.startPositions) {
           item.node.x = snapVal(item.ox + dxW);
           item.node.y = snapVal(item.oy + dyW);
           if (item.el) {
-            if(dragCtx.positionMode==="translate"){
-              item.el.style.translate=
-                `${item.node.x-item.ox}px ${item.node.y-item.oy}px`;
-            }else{
-              // An interrupted translate must never double-apply a delta.
-              if(item.el.style.translate)item.el.style.translate="";
-              item.el.style.left = `${item.node.x}px`;
-              item.el.style.top = `${item.node.y}px`;
-            }
+            item.el.style.left = `${item.node.x}px`;
+            item.el.style.top = `${item.node.y}px`;
           }
         }
         const movedIds=dragCtx.startPositions.map(item=>item.node.id);
@@ -20217,6 +20194,11 @@
             DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
             DOM.nodesLayer,movedIds,bezierPath);
         }
+        dragCtx.lastGraph=CS.graph;
+        dragCtx.lastNodes=CS.graph.nodes;
+        dragCtx.lastEdges=CS.graph.edges;
+        dragCtx.lastSelection=CS.graph.selectedIds;
+        dragCtx.lastEdgeTrusted=Boolean(usedSession);
         const edgesEnd=frameStart===null?null:performance.now();
         const overlayCached=positionFloatingOverlays(dragCtx.overlayMetrics);
         const overlayEnd=frameStart===null?null:performance.now();
@@ -20231,7 +20213,6 @@
             overlayMs:overlayEnd-edgesEnd,
             minimapMs:minimapEnd-overlayEnd,
             overlayCached,usedSession,
-            positionMode:dragCtx.positionMode,
             movedCount:movedIds.length
           });
         }
@@ -20287,16 +20268,41 @@
       vp.classList.remove("is-panning");
 
       if (ctx.mode === "node-drag" && ctx.moved) {
-        // A render may reconcile/reuse existing card DOM. Commit Graph
-        // coordinates to layout exactly once and remove transient translate
-        // BEFORE the authoritative full-edge/card reconciliation.
-        for(const item of ctx.startPositions){
-          if(!item.el?.isConnected)continue;
-          item.el.style.left=`${item.node.x}px`;
-          item.el.style.top=`${item.node.y}px`;
-          item.el.style.translate="";
-        }
-        fullRenderCanvas();
+        // A pure coordinate drag has already moved the correct card DOM,
+        // incident SVG paths and minimap. Avoid recreating all 300 cards on
+        // release only when every model/DOM/selection/topology identity still
+        // matches the last physical pointermove. On a concurrent Graph/Run
+        // update, stale card, changed selection or untrusted edge cache,
+        // conservatively reconcile the full authoritative Canvas.
+        const forceFull=window.__HANDRAW_TESTING__===true &&
+          window.HANDRAW_STUDIO_TESTING?.canvasDragFinishMode==="full";
+        const ids=(CS.graph?.selectedIds||[]);
+        const safe=!forceFull &&
+          CS.stageView==="canvas" &&
+          ctx.lastGraph===CS.graph &&
+          ctx.lastNodes===CS.graph?.nodes &&
+          ctx.lastEdges===CS.graph?.edges &&
+          ctx.lastSelection===ids &&
+          ctx.lastEdgeTrusted===true &&
+          ctx.startPositions.length>0 &&
+          ids.length===ctx.startPositions.length &&
+          DOM.nodesLayer?.isConnected &&
+          DOM.edgesSvg?.isConnected &&
+          (CS.graph.edges||[]).length===
+            DOM.edgesSvg.querySelectorAll('g.ic-edge-group[data-edge-id]').length &&
+          ctx.startPositions.every(item=>
+            item.el?.isConnected &&
+            DOM.nodesLayer.contains(item.el) &&
+            item.el===DOM.nodesLayer.querySelector(`[data-node-id="${item.node.id}"]`) &&
+            item.node===getNodeById(item.node.id) &&
+            ids.includes(item.node.id) &&
+            item.el.style.left===`${item.node.x}px` &&
+            item.el.style.top===`${item.node.y}px`);
+        if(!safe)fullRenderCanvas();
+        // Full render is only a fallback; in the safe case the visible card,
+        // incident SVG paths and minimap already match the persisted Graph.
+        if(window.__HANDRAW_TESTING__===true && DOM.nodesLayer)
+          DOM.nodesLayer._drag111Finish={targeted:safe,nodeCount:ctx.startPositions.length};
         persistOpenTabs();
       } else if (ctx.mode === "node-drag" && !ctx.moved && !ctx.withModifier && ctx.clickedNodeId) {
         const clicked = getNodeById(ctx.clickedNodeId);
