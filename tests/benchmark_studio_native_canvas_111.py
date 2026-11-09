@@ -117,10 +117,32 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
     """Actual Playwright mouse events, no synthetic handler invocation."""
     page.evaluate("""() => window.HANDRAW_STUDIO_TESTING
       .focusCanvasNodeForBenchmark('g00-0')""")
-    box = page.locator('#ic-nodes-layer .ic-node[data-node-id="g00-0"]').bounding_box()
-    assert box and 0 < box["x"] < 1390 and 0 < box["y"] < 850, (
-        "drag test node not in viewport", size, box)
-    x, y = box["x"] + 45, box["y"] + 15
+    # Use the real header drag handle, not the card's upper-left corner:
+    # that corner may overlap the file picker/other interactive controls.
+    target = page.evaluate("""() => {
+      const node=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
+      const head=node?.querySelector('.ic-node-header-above');
+      if(!node||!head)throw Error('native drag title bar unavailable');
+      const r=head.getBoundingClientRect(),points=[
+        [r.left+Math.min(26,r.width*.15),r.top+r.height*.5],
+        [r.left+r.width*.45,r.top+r.height*.5],
+        [r.left+r.width*.7,r.top+r.height*.5]
+      ];
+      const checked=[];
+      for(const [x,y] of points){
+        const hit=document.elementFromPoint(x,y);
+        checked.push({x:+x.toFixed(1),y:+y.toFixed(1),
+          tag:hit?.tagName||'',className:String(hit?.className||'').slice(0,90),
+          nodeId:hit?.closest('.ic-node')?.dataset.nodeId||null});
+        if(hit?.closest('.ic-node')===node &&
+           !hit.closest('button,input,textarea,select,label'))
+          return {x,y,checked};
+      }
+      return {x:null,y:null,checked};
+    }""")
+    assert target["x"] is not None, ("no interactive-free visible node header",
+                                    size, target)
+    x, y = target["x"], target["y"]
     page.mouse.move(x, y)
     page.mouse.down()
     before = page.evaluate("""() => {
