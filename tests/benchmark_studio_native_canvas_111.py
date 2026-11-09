@@ -68,6 +68,7 @@ JS_MEASURE = r"""() => {
     updates.push({
       ms:+measured.durationMs.toFixed(2),
       partial:measured.patch?.partial,nodes:measured.patch?.nodes,
+      edgesRecomputed:measured.patch?.edgesRecomputed,
       dirty:(measured.patch?.changedIds||[]).filter(id=>id.startsWith('node:')),
       replaced:measured.patch?.replaced,
     });
@@ -198,6 +199,8 @@ def main() -> None:
                             assert native["imagesBefore"] >= size * 4 // 10, native
                             assert all(x["dirty"] == ["node:g00-0"] for x in native["updates"]), (
                                 "one text edit touched extra nodes", size, native["updates"])
+                            assert all(x["edgesRecomputed"] is False
+                                       for x in native["updates"]), ("text-only dirty patch still recomputed all edges", size, native["updates"])
                             assert all(x["partial"] and x["nodes"] == 1
                                        for x in native["updates"]), (
                                 "dirty rendering built extra node HTML", size, native["updates"])
@@ -237,11 +240,28 @@ def main() -> None:
                                 "statusMs": native["statusMs"]
                             }, ensure_ascii=False), flush=True)
                             # Actual UI zoom/camera path, measured separately from JS repaint.
+                            page.evaluate("""() => {
+                              const mini=document.getElementById('ic-minimap');
+                              const node=mini?.querySelector('[data-mini-node-id]');
+                              const lens=mini?.querySelector('[data-mini-lens]');
+                              if(!node||!lens)throw Error('native minimap structure missing');
+                              window.__studio111MiniRefs={node,lens};
+                            }""")
                             zoom_ms = []
                             for _ in range(3):
                                 tick = time.perf_counter()
                                 page.locator("#bl-zoom-in").click(timeout=20000)
                                 zoom_ms.append(round((time.perf_counter() - tick) * 1000, 2))
+                            mini_camera_stable = page.evaluate("""() => {
+                              const refs=window.__studio111MiniRefs;
+                              const mini=document.getElementById('ic-minimap');
+                              return !!refs && refs.node.isConnected && refs.lens.isConnected &&
+                                mini.querySelector('[data-mini-node-id]')===refs.node &&
+                                mini.querySelector('[data-mini-lens]')===refs.lens &&
+                                mini.querySelector('[data-mini-zoom]')?.textContent?.endsWith('%');
+                            }""")
+                            assert mini_camera_stable, ("camera zoom rebuilt every minimap node",size)
+                            native["minimapStableOnZoom"] = True
                             camera_stable = page.evaluate("""() => {
                               const root=document.querySelector('#ic-nodes-layer');
                               return root.querySelectorAll('.ic-node').length===window.CS.graph.nodes.length
