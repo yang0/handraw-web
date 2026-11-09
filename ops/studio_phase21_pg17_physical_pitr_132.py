@@ -149,6 +149,7 @@ def run_backup(plan,*,user,port,runner=subprocess.run):
               "environment":plan["environment"],
               "sourceAndRecoveryHostsDeclaredDistinct":True,
               "backupVerifiedByPgVerifybackup":True,
+              "basebackupCompletedAtUtc":datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "pitrReplayAlreadyVerified":False,
               "productionReleaseAuthorized":False,"decision":"NO-GO"}
     _new_private(root/"phase21-physical-backup.json",evidence)
@@ -186,6 +187,9 @@ def prepare_pitr(*,backup_dir,archive_dir,target_utc):
     if not SAFE_PATH.fullmatch(str(a)):
         raise ValueError("unsafe WAL archive path")
     _time(target_utc)
+    completed=_time(evidence.get("basebackupCompletedAtUtc"))
+    if target_utc<=completed:
+        raise ValueError("physical PITR target must be AFTER basebackup completion")
     signal=b/"recovery.signal"
     config=b/"postgresql.auto.conf"
     if signal.exists() or signal.is_symlink() or not config.is_file() or config.is_symlink():
@@ -271,6 +275,8 @@ def main(argv=None):
     ap.add_argument("--report",type=Path,required=True)
     args=ap.parse_args(argv)
     try:
+        if not isinstance(args.environment,str) or not LABEL.fullmatch(args.environment):
+            raise ValueError("preproduction-only environment required")
         if args.report.exists() or args.report.is_symlink():
             raise ValueError("report must be new")
         # Only plan/backup require an absent target; prepare/verify use the
@@ -300,10 +306,17 @@ def main(argv=None):
         else:
             if not args.expected_witness:
                 raise ValueError("prior business-state witness required")
+            witness=_read_private(args.expected_witness)
+            backup=_read_private(Path(plan["backupDir"])/"phase21-physical-backup.json")
+            prepared=_read_private(Path(plan["backupDir"])/"phase21-pitr-prepare.json")
+            if (witness.get("targetUtc")!=plan["targetUtc"]
+                or prepared.get("targetUtc")!=plan["targetUtc"]
+                or witness.get("backupManifestSha256")!=backup.get("backupManifestSha256")
+                or witness.get("backupManifestSha256")!=prepared.get("backupManifestSha256")):
+                raise ValueError("physical backup, PITR target and expected fingerprint witness drift")
             result=verify_restored(
                 target_dsn=os.environ.get("HANDRAW_PHASE21_PG_TARGET_DSN",""),
-                expected=_read_private(args.expected_witness),
-                declared_host=args.target_host)
+                expected=witness,declared_host=args.target_host)
         args.report.parent.mkdir(parents=True,exist_ok=True)
         _new_private(args.report,result)
         print("PHASE21 PG17 "+json.dumps({"mode":args.mode,
