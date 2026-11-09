@@ -1,5 +1,7 @@
 # #11 官方编号权威与跨仓快照验收 · 2026-11-09
 
+> **补充移交约束（2026-11-09）**：在独立分支 14/14、studio2 安全快进、Push/PR 14/14 且完整证据归档后，#11 可以只按 C 级工程对账完成归档。原文关于“审批前 Issue 必须 Open”的**生产/D 级门禁责任**明确转交 [#132](https://github.com/yang0/handraw-web/issues/132)；未审批 FF-018/FG-025、动态官方 DB 导出缺失、\`--strict\` 不通过时，无论历史 Issue 状态如何，发布继续严格 NO-GO。
+
 Web: https://github.com/yang0/handraw-web (`studio2`)
 Skill: https://github.com/yang0/handraw-style (`main` 官方目录现状；跨仓 CLI 另 pin 固定 SHA)
 
