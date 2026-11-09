@@ -148,6 +148,25 @@ assert.match(app,/if\(window\.__HANDRAW_TESTING__===true && DOM\.nodesLayer\)/,
   "finish mode instrumentation must be test-only");
 assert.doesNotMatch(app,/canvasDragPositionMode/,
   "failed CSS translate experiment must not remain enabled in production");
+// #111 Phase 7 diagnostic-only ablation: never bypass visuals for normal
+// user interactions. Release in every non-normal mode must use full render.
+assert.match(app,/window\.__HANDRAW_TESTING__===true\?\s*window\.HANDRAW_STUDIO_TESTING\?\.canvasDragVisualProbeMode/,
+  "ablation controls must be isolated to __HANDRAW_TESTING__");
+assert.match(app,/diagMode==="no-card"/,
+  "measure card coordinate style writes independently");
+assert.match(app,/diagMode==="no-edges"/,
+  "measure incident SVG path writes independently");
+assert.match(app,/diagMode==="no-overlay"/,
+  "measure floating toolbar style writes independently");
+assert.match(app,/diagMode==="no-minimap"/,
+  "measure minimap SVG rect writes independently");
+assert.match(app,/diagMode==="node-only"/,
+  "measure native card left/top writes without other canvas updates");
+assert.match(app,/dragCtx\.lastEdgeTrusted=Boolean\(usedSession\)&&diagMode==="normal"/,
+  "any visual bypass must force an authoritative pointerup full render");
+assert.match(app,/if\(!safe\)fullRenderCanvas\(\)/,
+  "full pointerup fallback must remain in place");
+
 // The old full-layout path remains authoritative whenever a session becomes
 // stale; do not remove it just to make 300-node synthetic numbers look good.
 assert.match(app,/DOM\.viewport\.getBoundingClientRect\(\)\.width/);
