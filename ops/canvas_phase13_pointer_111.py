@@ -12,6 +12,7 @@ from ops.canvas_frame_trace_111 import (
     delta_performance_metrics, read_trace_from_stream, summarize_raf_intervals,
 )
 from ops.canvas_style_causality_111 import summarize_causality_window
+from ops.canvas_phase14_input_111 import DRIVERS, POINTER_INPUT_HOOK
 from ops.canvas_phase12_isolation_111 import (
     CPU_FACTORS, DRAG_TARGET, FRAMES, OBSERVE_DOM, VERIFY,
     MAX_TRACE_BYTES, gate,
@@ -124,7 +125,9 @@ def _plan(window: str):
     }
 
 
-def one_window(page, cdp, name, *, trace=True, moves_override=None):
+def one_window(page, cdp, name, *, trace=True, moves_override=None, driver="native"):
+    if driver not in DRIVERS or (driver!="native" and name!="drag-no-visual"):
+        raise ValueError("unapproved phase14 input driver/window")
     plan=_plan(name)
     moves=plan["moves"] if moves_override is None else moves_override
     if type(moves) is not int or moves < 0 or moves > 12:
@@ -138,7 +141,10 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
     started=False
     structure_started=False
     frames_started=False
+    driver_stats={"seenDown":0,"synthetic":0,"blocked":0}
     try:
+        if driver!="native":
+            page.evaluate(POINTER_INPUT_HOOK,{"op":"setup","driver":driver})
         if plan["pressed"]:
             page.mouse.down()
             mouse_down=True
@@ -166,8 +172,13 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
         try:
             if moves:
                 for i in range(1,moves+1):
-                    page.mouse.move(target["x"]+60*i/moves,
-                                    target["y"]+30*i/moves,steps=1)
+                    next_x=target["x"]+60*i/moves
+                    next_y=target["y"]+30*i/moves
+                    if driver=="synthetic":
+                        page.evaluate(POINTER_INPUT_HOOK,{
+                            "op":"dispatch","x":next_x,"y":next_y})
+                    else:
+                        page.mouse.move(next_x,next_y,steps=1)
                     page.wait_for_timeout(30 if trace else 20)
             else:
                 page.wait_for_timeout(90 if trace else 260)
@@ -185,6 +196,13 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
             started=False
             structure=page.evaluate(STRUCTURE_OBSERVER,"stop")
             structure_started=False
+            if driver!="native":
+                driver_stats=page.evaluate(POINTER_INPUT_HOOK,"stats")
+                assert driver_stats["seenDown"]==1,(name,driver,driver_stats)
+                assert driver_stats["synthetic"]==(moves if driver=="synthetic" else 0),(
+                    name,driver,driver_stats)
+                assert driver_stats["blocked"]==(moves if driver=="native-handler-blocked" else 0),(
+                    name,driver,driver_stats)
             if mouse_down:
                 page.mouse.up()
                 mouse_down=False
@@ -218,7 +236,7 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
         assert (state["cards"],state["edges"],state["images"])==(
             300,150,120),(name,state)
         assert state["decoded"] and state["paths"]>=150,(name,state)
-        moved=plan["pressed"] and moves>0
+        moved=plan["pressed"] and moves>0 and driver!="native-handler-blocked"
         if moved:
             assert state["x"]>target["nodeX"] and state["y"]>target["nodeY"],(
                 name,state)
@@ -236,7 +254,10 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
             assert state["x"]==target["nodeX"] and (
                 state["y"]==target["nodeY"]),(name,state)
         return {
-            "window":name,"physicalMouseMoves":moves,
+            "window":name,"physicalMouseMoves":0 if driver=="synthetic" else moves,
+            "eventDriver":driver,
+            "syntheticEvents":driver_stats["synthetic"],
+            "blockedNativeEvents":driver_stats["blocked"],
             "pressed":plan["pressed"],"hoverRulesMasked":mask["modified"],
             "domMutations":dom,"structureChanges":structure,"chrome":chrome,
             "metric":None if trace else metric,
@@ -258,6 +279,8 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
         if mouse_down:
             try:page.mouse.up()
             except Exception:pass
+        if driver!="native":
+            page.evaluate(POINTER_INPUT_HOOK,"restore")
         page.evaluate(HOVER_MASK,"restore")
         page.evaluate("""() => {
           const t=window.HANDRAW_STUDIO_TESTING;
