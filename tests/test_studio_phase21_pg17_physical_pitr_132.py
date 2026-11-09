@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime,timezone,timedelta
 import os
 from pathlib import Path
 import socket
@@ -18,7 +19,7 @@ ENV="preprod-phase21-pg17"
 TARGET="recovery-phase21"
 SOURCE="staging-db.internal"
 LEAF="pitr-phase21-check"
-UTC="2026-11-09T21:00:00Z"
+UTC=(datetime.now(timezone.utc)+timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class Exit:
@@ -127,7 +128,7 @@ class Phase21PhysicalPg17Tests(unittest.TestCase):
             self.assertFalse(prepared["replayVerified"])
             config=(Path(plan["backupDir"])/"postgresql.auto.conf").read_text()
             self.assertIn("recovery_target_action = 'pause'",config)
-            self.assertIn("recovery_target_time = '2026-11-09T21:00:00+00'",config)
+            self.assertIn("recovery_target_time = '"+UTC.replace("Z","+00")+"'",config)
             self.assertTrue((Path(plan["backupDir"])/"recovery.signal").exists())
             with self.assertRaises(ValueError):
                 prepare_pitr(backup_dir=plan["backupDir"],
