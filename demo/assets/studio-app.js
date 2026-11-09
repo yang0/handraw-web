@@ -20170,10 +20170,19 @@
         dragCtx.moved = true;
         const dxW = dxScreen / CS.vk;
         const dyW = dyScreen / CS.vk;
+        // #111 isolated diagnosis: compare native DOM/edge/overlay/minimap
+        // invalidation without changing production drag behavior. All bypass
+        // modes are inert unless the native browser test flag is present.
+        const diagMode=window.__HANDRAW_TESTING__===true?
+          window.HANDRAW_STUDIO_TESTING?.canvasDragVisualProbeMode||"normal":"normal";
+        const skipCard=diagMode==="no-card";
+        const skipEdges=diagMode==="no-edges"||diagMode==="node-only";
+        const skipOverlay=diagMode==="no-overlay"||diagMode==="node-only";
+        const skipMini=diagMode==="no-minimap"||diagMode==="node-only";
         for (const item of dragCtx.startPositions) {
           item.node.x = snapVal(item.ox + dxW);
           item.node.y = snapVal(item.oy + dyW);
-          if (item.el) {
+          if (item.el && !skipCard) {
             item.el.style.left = `${item.node.x}px`;
             item.el.style.top = `${item.node.y}px`;
           }
@@ -20182,9 +20191,9 @@
         // Keep the existing hit targets/selection; render all edges only if
         // the partial path finds a missing or ambiguous SVG/Graph binding.
         const wasSession=Boolean(dragCtx.edgeSession);
-        let usedSession=wasSession&&dragCtx.edgeSession.update(
+        let usedSession=!skipEdges&&wasSession&&dragCtx.edgeSession.update(
           CS.graph.edges||[],CS.graph.nodes||[]);
-        if(!usedSession){
+        if(!skipEdges&&!usedSession){
           // A mid-drag Graph/DOM/Run update invalidates the cached edges.
           // Fall back once to the authoritative complete SVG calculation,
           // then index the latest mounted graph before the next movement.
@@ -20198,11 +20207,12 @@
         dragCtx.lastNodes=CS.graph.nodes;
         dragCtx.lastEdges=CS.graph.edges;
         dragCtx.lastSelection=CS.graph.selectedIds;
-        dragCtx.lastEdgeTrusted=Boolean(usedSession);
+        dragCtx.lastEdgeTrusted=Boolean(usedSession)&&diagMode==="normal";
         const edgesEnd=frameStart===null?null:performance.now();
-        const overlayCached=positionFloatingOverlays(dragCtx.overlayMetrics);
+        const overlayCached=skipOverlay?null:
+          positionFloatingOverlays(dragCtx.overlayMetrics);
         const overlayEnd=frameStart===null?null:performance.now();
-        renderMinimapMovedNodes(movedIds);
+        if(!skipMini)renderMinimapMovedNodes(movedIds);
         const minimapEnd=frameStart===null?null:performance.now();
         if(frameStart!==null&&DOM.nodesLayer){
           const samples=DOM.nodesLayer._drag111Samples||
@@ -20213,6 +20223,7 @@
             overlayMs:overlayEnd-edgesEnd,
             minimapMs:minimapEnd-overlayEnd,
             overlayCached,usedSession,
+            visualProbeMode:diagMode,
             movedCount:movedIds.length
           });
         }
