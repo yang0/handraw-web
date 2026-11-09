@@ -155,7 +155,7 @@ def main(argv=None):
         print("PHASE21 OFFICIAL CHAIN "+json.dumps({
             "stage":result["stage"],"decision":"NO-GO","privateDataEmitted":False}))
         return 0
-    except (ValueError,TypeError,KeyError,OSError,json.JSONDecodeError):
+    except Exception:
         print("Phase21 official chain BLOCKED: missing/unauthenticated evidence",file=sys.stderr)
         return 2
 
