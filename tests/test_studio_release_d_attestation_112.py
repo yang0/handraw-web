@@ -36,7 +36,7 @@ class FinalDLevelIntakeTests(unittest.TestCase):
         self.assertFalse(out["claimsComplete"])
         self.assertEqual(out["statusCounts"]["MISSING"],17)
         self.assertEqual(set(out["coverageByIssue"]),{"11","84","112"})
-        self.assertIn("editorial_ff019",[row["gate"] for row in out["missingOrUnpassedGates"]["11"]])
+        self.assertIn("editorial_ff019",out["missingOrUnpassedGates"]["11"])
         self.assertFalse(out["privateEvidenceValuesEmitted"])
 
     def test_even_perfect_signed_off_claims_require_external_authentication(self):
