@@ -60,8 +60,8 @@ def load_pinned_skill_sources(checkout, expected_sha, styles_path, layouts_path,
     root=Path(checkout).resolve(strict=True)
     sources=[]
     for name,provided in (("styles.json",styles_path),("layouts.json",layouts_path)):
-        rel="references/"+name
-        expected=root/"references"/name
+        rel="skills/handdraw-style-prompter/references/"+name
+        expected=root/"skills"/"handdraw-style-prompter"/"references"/name
         candidate=Path(provided)
         if (candidate.is_symlink() or expected.parent.is_symlink()
             or not candidate.is_file() or not expected.is_file()
