@@ -110,6 +110,7 @@ jobs:
             artifacts/studio-111-phase12/**
             artifacts/studio-111-phase13/**
             artifacts/studio-111-phase14/**
+            artifacts/studio-111-phase15/**
             artifacts/graphpatch-126/**
             artifacts/ai-110-offline-eval.json
             artifacts/p0-masonry-114/**
