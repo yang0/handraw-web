@@ -110,6 +110,39 @@ async function run(size){
     const now=performance.now();frame.push(now-time);time=now;
     world.style.transform=`translate(${(i%20)*4}px,${(i%12)*2}px) scale(${1+(i%10)*.012})`;
   }
+  // #111: capture a separate mixed editable/Run Graph inside real Chromium.
+  // This is a synthetic local history benchmark, not a whole-app 300-node SLA.
+  const historyNodes=nodes.map((node,i)=>({
+    id:node.id,x:i*4,y:i*2,
+    type:i%5===0?"output_display":i%5===1?"output_control":"text_input",
+    data:i%5===0?{status:"success",items:[{mediaId:"media-"+i,
+      imageData:"media-payload-".repeat(240)}]}:
+      i%5===1?{ratio:"3:4",runId:"run-"+i,
+        studio2RunSnapshot:{id:i,payload:"run-payload-".repeat(160)}}:
+        {text:"创作主题 "+i,metadata:{a:1,b:2}}
+  }));
+  const historyGraph={revision:4,nodes:historyNodes,edges:[],selectedIds:[]};
+  const beforeHistory=JSON.stringify(historyGraph).length;
+  const startHistory=performance.now(),snaps=[];
+  for(let i=0;i<35;i++)snaps.push(R.captureEditableGraph(historyGraph));
+  const capture35Ms=+(performance.now()-startHistory).toFixed(2);
+  const runtime=historyNodes.filter(node=>
+    node.type==="output_display"||node.type==="output_control");
+  const referenceSet=new Set(snaps.flatMap(g=>g.nodes.filter(n=>
+    n.type==="output_display"||n.type==="output_control").map(n=>
+      n.type==="output_display"?n.data:n.data.studio2RunSnapshot)));
+  const historySharedRuntime=referenceSet.size===runtime.length &&
+    snaps.every(g=>g.nodes.filter(n=>n.type==="output_display"||
+      n.type==="output_control").every((n,i)=>{
+        const source=runtime[i];
+        return n.type==="output_display"?n.data===source.data:
+          n.data.studio2RunSnapshot===source.data.studio2RunSnapshot;
+      }));
+  const historyEditableCloned=snaps.every(g=>g.nodes.filter(n=>
+    n.type==="text_input").every(n=>
+      n.data!==historyNodes.find(source=>source.id===n.id).data));
+  if(!historySharedRuntime||!historyEditableCloned)
+    throw Error("Graph History failed runtime sharing/edit isolation");
   const memory=performance.memory?.usedJSHeapSize??null;
   const result={nodes:size,images:imageEls.size,firstScreenMs:+initialMs.toFixed(2),
     selectionMs:+selectionMs.toFixed(2),singleStatusP95Ms:+percentile(times,.95).toFixed(2),
@@ -118,7 +151,11 @@ async function run(size){
     usedJSHeapBytes:memory,imagesPreserved:true,
     focusAndCursorPreserved:true,otherNodesReused:true,
     changedCardsLastTick:last.changedIds?.length??0,
-    editDirtyCount:editResult.dirtyNodes.length};
+    editDirtyCount:editResult.dirtyNodes.length,
+    historyCapture35Ms:capture35Ms,historySteps:35,
+    theoreticalFullHistoryChars:35*beforeHistory,
+    historySharedRuntime,historyEditableCloned,
+    historyUniqueRuntimeObjects:referenceSet.size};
   return result;
 }
 window.runCanvasBenchmark=async function(){
