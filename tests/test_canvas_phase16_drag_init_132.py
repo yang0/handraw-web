@@ -16,6 +16,7 @@ def sample(name="synthetic-move-1"):
     return {"phase":name,"reads":reads,
             "rootAttributes":{"class":dict(counts),"style":dict(counts)},
             "mountCounts":{"added":dict(counts),"removed":dict(counts)},
+            "mutationLineages":{"added":[],"removed":[]},
             "childRecords":2,
             "offsetGettersTracked":4,"restored":True,
             "privateDomValuesPersisted":False}
@@ -29,6 +30,7 @@ class CanvasPhase16Tests(unittest.TestCase):
         self.assertEqual(len(s["reads"]),6)
         self.assertEqual(len(s["rootAttributes"]),2)
         self.assertEqual(len(s["mountCounts"]),2)
+        self.assertEqual(s["mutationLineages"],{"added":[],"removed":[]})
 
     def test_reject_incomplete_or_privacy_broken_data(self):
         tests=[
@@ -42,6 +44,41 @@ class CanvasPhase16Tests(unittest.TestCase):
             with self.subTest(window=window),self.assertRaises(ValueError):
                 _validate_sample(window,payload)
 
+    def test_detached_node_provenance_carries_parent_ancestry_without_ids(self):
+        payload=sample()
+        payload["mountCounts"]["removed"]["other"]=2
+        payload["mutationLineages"]["removed"]=[{
+            "ancestorTags":["html","body","div","section","div"],
+            "nodeTag":"span","parentRole":"other",
+            "parentConnected":True,"count":2,
+        }]
+        out=_validate_sample("synthetic-move-1",payload)
+        self.assertEqual(out["mutationLineages"]["removed"][0]["nodeTag"],"span")
+        self.assertEqual(out["mutationLineages"]["removed"][0]["count"],2)
+        self.assertNotIn("private-class",str(out))
+
+    def test_dom_lineage_fails_closed_on_identifier_or_count_injection(self):
+        payload=sample()
+        payload["mountCounts"]["added"]["other"]=1
+        payload["mutationLineages"]["added"]=[{
+            "ancestorTags":["html","body","div"],"nodeTag":"span",
+            "parentRole":"other","parentConnected":True,"count":1,
+        }]
+        self.assertEqual(
+            _validate_sample("synthetic-move-1",payload)["mutationLineages"]["added"][0]["count"],1)
+        for mutation in ("private-card-id",".secret-css-class","div#user-id"):
+            altered=sample()
+            altered["mountCounts"]["added"]["other"]=1
+            altered["mutationLineages"]["added"]=[{
+                "ancestorTags":["html","body",mutation],"nodeTag":"span",
+                "parentRole":"other","parentConnected":True,"count":1,
+            }]
+            with self.subTest(mutation=mutation),self.assertRaises(ValueError):
+                _validate_sample("synthetic-move-1",altered)
+        payload["mutationLineages"]["added"][0]["count"]=2
+        with self.assertRaisesRegex(ValueError,"counts disagree"):
+            _validate_sample("synthetic-move-1",payload)
+
     def test_real_dom_measurements_are_wrapped_only_in_testing(self):
         self.assertIn('window.__HANDRAW_TESTING__!==true',PROBE_JS)
         self.assertIn('window.getComputedStyle=function',PROBE_JS)
@@ -49,6 +86,10 @@ class CanvasPhase16Tests(unittest.TestCase):
         self.assertIn('Object.defineProperty(HTMLElement.prototype',PROBE_JS)
         self.assertIn('s.attr.observe(el,{attributes:true',PROBE_JS)
         self.assertIn('s.child.observe(document.body,{childList:true,subtree:true})',PROBE_JS)
+        self.assertIn("const path=ancestry(m.target)",PROBE_JS)
+        self.assertIn("parentConnected:m.target.isConnected",PROBE_JS)
+        self.assertIn("mutationLineages:",PROBE_JS)
+        self.assertIn("new Map()",PROBE_JS)
         self.assertIn('s.origOffsets',PROBE_JS)
         self.assertIn('delete window.__qa132draginit',PROBE_JS)
         for prohibited in ("innerHTML","outerHTML","textContent","localStorage"):
