@@ -10,7 +10,7 @@ from __future__ import annotations
 from ops.canvas_phase12_isolation_111 import CPU_FACTORS
 from ops.canvas_phase15_move_boundary_111 import one_trial
 
-MODES=("observe","suppress")
+MODES=("observe","suppress","skip_identical")
 ORDER=("observe","suppress","observe","suppress","observe")
 MOVE_WINDOWS=("pre-input-idle","synthetic-move-1","synthetic-move-2","synthetic-move-3")
 ROLES=("bottom-save-button","entry-save-button")
@@ -33,10 +33,11 @@ HOOK_JS=r"""arg=>{
     }
     return {mode:s.mode,seenMoveCount:s.moveIndex,
       targetPresence:s.targetPresence,writesByWindow:s.writesByWindow,
-      restored:true,noTextOrIdsPersisted:true};
+      restored:true,noTextOrIdsPersisted:true,
+      visualLabelsPreserved:s.visualLabelsPreserved};
   }
   if(op!=="start"||window.__HANDRAW_TESTING__!==true||
-     !["observe","suppress"].includes(arg.mode)||window.__qa132saveText)
+     !["observe","suppress","skip_identical"].includes(arg.mode)||window.__qa132saveText)
     throw Error("Phase18 only runs on a real Studio test canvas");
   const bottom=document.getElementById("bl-save-project");
   const entry=document.getElementById("studio-project-status");
@@ -57,7 +58,8 @@ HOOK_JS=r"""arg=>{
     "synthetic-move-2":bucket(),"synthetic-move-3":bucket()
   };
   const s={mode:arg.mode,originalDescriptor:desc,targetPresence:2,
-    moveIndex:0,writesByWindow:counts,onPointerMove:null};
+    moveIndex:0,writesByWindow:counts,onPointerMove:null,
+    visualLabelsPreserved:true};
   s.onPointerMove=ev=>{
     if(!ev.isTrusted&&ev.type==="pointermove")
       s.moveIndex=Math.min(s.moveIndex+1,3);
@@ -70,12 +72,20 @@ HOOK_JS=r"""arg=>{
     slot.writes++;
     if(slot.writes>100)throw Error("Phase18 target write cap exceeded");
     // Equality is computed in page memory only; neither text is emitted.
-    if(desc.get.call(this)===String(value))slot.identical++;
-    if(s.mode==="suppress"&&s.moveIndex>=1){
+    const identical=desc.get.call(this)===String(value);
+    if(identical)slot.identical++;
+    if(s.moveIndex>=1 &&
+       (s.mode==="suppress" ||
+        (s.mode==="skip_identical"&&identical))){
       slot.suppressed++;
+      // Skip only the semantically redundant assignment in Phase19.
+      // In Phase18's stronger all-write suppression, this is test-only UI.
+      if(!identical)s.visualLabelsPreserved=false;
       return;
     }
-    return desc.set.call(this,value);
+    const result=desc.set.call(this,value);
+    if(desc.get.call(this)!==String(value))s.visualLabelsPreserved=false;
+    return result;
   };
   try{
     Object.defineProperty(Node.prototype,"textContent",{
@@ -100,6 +110,8 @@ def validate(mode, payload):
         or payload.get("seenMoveCount")!=3 or payload.get("restored") is not True
         or payload.get("noTextOrIdsPersisted") is not True):
         raise ValueError("Phase18 save-text hook restoration/input not proven")
+    if mode=="skip_identical" and payload.get("visualLabelsPreserved") is not True:
+        raise ValueError("Phase19 semantic button labels not preserved")
     windows=payload.get("writesByWindow")
     if not isinstance(windows,dict) or set(windows)!=set(MOVE_WINDOWS):
         raise ValueError("Phase18 missing input windows")
@@ -118,6 +130,9 @@ def validate(mode, payload):
             if mode=="suppress" and name.startswith("synthetic-move-") and (
                     row["suppressed"]!=row["writes"]):
                 raise ValueError("Phase18 intervention failed to suppress target writes")
+            if mode=="skip_identical" and name.startswith("synthetic-move-") and (
+                    row["suppressed"]!=row["identical"]):
+                raise ValueError("Phase19 either suppressed a real status change or missed a redundant write")
     return windows
 
 
@@ -148,6 +163,7 @@ def _trial(page,cdp,mode):
             "saveButtonTextWrites":windows[key],
         }
     return {"mode":mode,"windows":samples,"restored":True,
+            "visualLabelsPreserved":report.get("visualLabelsPreserved"),
             "graphUndoMediaVerified":True}
 
 
