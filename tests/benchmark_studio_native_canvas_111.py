@@ -181,6 +181,20 @@ def main() -> None:
                             assert len(native["statusDirty"]) <= 1, (
                                 "one control status tick touched extra nodes", size, native["statusDirty"])
                             assert native["restoredDirty"] in ([], ["node:g00-7"]), native["restoredDirty"]
+                            # The real zoom control must be pointer-reachable
+                            # even with 30 output branches. Do not force-click or
+                            # dispatch a JS event around a taskbar overlay.
+                            zoom_hit = page.evaluate("""() => {
+                              const btn=document.querySelector('#bl-zoom-in');
+                              if(!btn)return {reachable:false,blocker:'missing-zoom'};
+                              const box=btn.getBoundingClientRect();
+                              const top=document.elementFromPoint(
+                                box.left+box.width/2,box.top+box.height/2);
+                              return {reachable:!!top&&(top===btn||btn.contains(top)),
+                                blocker:top?.id||top?.className?.toString()?.slice(0,70)||''};
+                            }""")
+                            assert zoom_hit["reachable"], ("zoom covered by Canvas task queue",size,zoom_hit)
+                            native["zoomPointerReachable"] = True
                             # Actual UI zoom/camera path, measured separately from JS repaint.
                             zoom_ms = []
                             for _ in range(3):
