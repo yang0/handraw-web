@@ -170,8 +170,12 @@ def paired_ablation(page, cdp, case):
             "candidateStylePlusLayoutMs":[x["stylePlusLayoutMs"] for x in candidate],
             "candidateRafGapP95Ms":[x["rafGapP95Ms"] for x in candidate],
             "bothReplicatesAtLeast10PercentFasterWithoutRafRegression":bool(passes)}
+    # Disabling a relational selector may break the resource shelf in other
+    # views. It is causal diagnosis only, never a production CSS proposal.
+    only_diagnostic=(case=="relational-selector-off")
     return {"case":case,"valid":True,"records":records,
-            "gate":gate,"promotionAllowed":all(
+            "gate":gate,"diagnosticOnly":only_diagnostic,
+            "promotionAllowed":not only_diagnostic and all(
                 p["bothReplicatesAtLeast10PercentFasterWithoutRafRegression"]
                 for p in gate.values())}
 
