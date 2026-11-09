@@ -120,7 +120,7 @@ def main():
             folder18=ROOT/"artifacts/studio-111-phase18"
             folder18.mkdir(parents=True,exist_ok=True)
             (folder18/"summary.json").write_text(
-                json.dumps(phase18,indent=2,ensure_ascii=False)+"\\n",
+                json.dumps(phase18,indent=2,ensure_ascii=False)+"\n",
                 encoding="utf-8")
             print("CANVAS #132 PHASE18 "+json.dumps({
                 "comparisonByCpu":phase18["comparisonByCpu"],
