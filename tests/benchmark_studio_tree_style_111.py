@@ -177,23 +177,70 @@ def paired_ablation(page, cdp, case):
 
 
 def trace_tree_affected(page, cdp, mode):
-    # Trace includes pointerup / Undo; it is not the drag-only counter window.
+    """Bounded Chromium invalidation trace; NEVER capture 12 debug moves.
+
+    Trace is a separate 3-move gesture because the full 12-move trace in
+    the first CI attempt exceeded our 30MB privacy/size cap. It is not
+    directly comparable to the A-B-A-B-A drag-only CDP measurements.
+    """
     install_case(page, mode, None)
+    target=page.evaluate("""() => {
+      window.HANDRAW_STUDIO_TESTING.focusCanvasNodeForBenchmark('g00-0');
+      const node=document.querySelector(
+        '#ic-nodes-layer [data-node-id="g00-0"]');
+      const head=node?.querySelector('.ic-node-header-above');
+      const graph=window.CS.graph.nodes.find(x=>x.id==='g00-0');
+      if(!head||!graph)throw Error('trace target missing');
+      const r=head.getBoundingClientRect();
+      for(const f of [.15,.45,.7]){
+        const x=r.left+r.width*f, y=r.top+r.height*.5;
+        if(document.elementFromPoint(x,y)?.closest('.ic-node')===node)
+          return {x,y,nodeX:graph.x,nodeY:graph.y};
+      }
+      throw Error('trace header not pointer reachable');
+    }""")
     handles=[]
-    cdp.on("Tracing.tracingComplete", lambda params: handles.append(params.get("stream")))
-    cdp.send("Tracing.start", {
+    cdp.on("Tracing.tracingComplete",lambda params:handles.append(params.get("stream")))
+    cdp.send("Tracing.start",{
         "categories":"devtools.timeline,disabled-by-default-devtools.timeline.invalidationTracking",
         "transferMode":"ReturnAsStream"})
     try:
-        profile_drag(page,cdp)
+        page.mouse.move(target["x"],target["y"])
+        page.mouse.down()
+        for step in range(1,4):
+            page.mouse.move(target["x"]+60*step/3,
+                            target["y"]+30*step/3,steps=1)
+            page.wait_for_timeout(20)
+        page.mouse.up()
+        page.keyboard.press("Control+z")
     finally:
         cdp.send("Tracing.end")
     for _ in range(50):
         if handles:break
         page.wait_for_timeout(100)
-    assert handles and handles[-1], "Chromium trace stream missing"
-    reduced=summarize_style_invalidation(
-        read_trace_from_stream(cdp,handles[-1],max_bytes=30_000_000))
+    assert handles and handles[-1],"Chromium trace stream missing"
+    try:
+        reduced=summarize_style_invalidation(
+            read_trace_from_stream(cdp,handles[-1],max_bytes=30_000_000))
+    except ValueError as exc:
+        # Report explicit unavailable evidence, never reinterpret it as zero.
+        return {"source":"Chromium-CDP-invalidationTracking",
+                "traceAvailable":False,"errorCategory":
+                    "bounded-30MB-trace" if "bounded" in str(exc) else
+                    "invalid-trace",
+                "rawTracePersisted":False,"rootCauseProven":False,
+                "productionFrameSLA":False}
+    state=page.evaluate("""() => {
+      const node=window.CS.graph.nodes.find(x=>x.id==='g00-0');
+      return {x:node.x,y:node.y,
+          cards:document.querySelectorAll('#ic-nodes-layer .ic-node').length,
+          edges:document.querySelectorAll(
+            '#ic-edges-svg g.ic-edge-group[data-edge-id]').length};
+    }""")
+    assert state=={"x":target["nodeX"],"y":target["nodeY"],
+                   "cards":300,"edges":150},state
+    reduced["physicalMouseMoves"]=3
+    reduced["traceAvailable"]=True
     return reduced
 
 
@@ -259,6 +306,15 @@ def browser_test(base, token, fixture):
                         continue
                     cases.append(paired_ablation(page,cdp,name))
                 install_case(page,"baseline",None)
+                # Persist only sanitized A/B aggregates BEFORE any bounded
+                # Chrome trace, so a browser trace-limit does not erase evidence.
+                interim=ROOT/"artifacts/studio-111-tree-style"
+                interim.mkdir(parents=True,exist_ok=True)
+                (interim/"ablation-before-trace.json").write_text(
+                    json.dumps({"issue":111,"phase":10,"fixture":decoded,
+                        "cases":cases,"paidGatewayRequests":len(paid),
+                        "traceCollected":False},indent=2,ensure_ascii=False)+"\n",
+                    encoding="utf-8")
                 tree=trace_tree_affected(page,cdp,"baseline")
                 # A single targeted CSSOM trace for change in tree scope only.
                 relational=next((x for x in cases if
