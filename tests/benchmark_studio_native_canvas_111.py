@@ -311,6 +311,11 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1) -> dict:
             page.mouse.move(coords["x"] + 92*step/12,
                             coords["y"] + 53*step/12, steps=1)
             page.wait_for_timeout(20)
+        # Separate the compositor/style work triggered during paced dragging
+        # from the authoritative render and visual settling after pointerup.
+        # Both snapshots are Chromium cumulative counters for the same page,
+        # not Python wall-time or per-event microbenchmarks.
+        before_pointerup = cdp.send("Performance.getMetrics")
         page.mouse.up()
         # Include pointer-up authoritative full reconcile and the ensuing
         # paint opportunity; this is not solely a JavaScript handler metric.
@@ -332,11 +337,22 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1) -> dict:
         trace = read_trace_from_stream(cdp, complete["stream"])
         frames = summarize_raf_intervals(intervals)
         counters = delta_performance_metrics(before, after)
+        drag_counters = delta_performance_metrics(before, before_pointerup)
+        settle_counters = delta_performance_metrics(before_pointerup, after)
         groups = summarize_trace_events(trace)
         # Assertions prove the *measurement exists*, not 60fps performance.
         assert frames["samples"] >= 5, ("too few real frame samples", size, frames)
         assert counters["LayoutCount"] is not None, (
             "Chromium LayoutCount metric missing", size, counters)
+        assert drag_counters["RecalcStyleDuration"] is not None and (
+            settle_counters["RecalcStyleDuration"] is not None), (
+                "CDP style recalc phase metrics unavailable", size,
+                drag_counters, settle_counters)
+        assert abs((drag_counters["RecalcStyleDuration"] +
+                    settle_counters["RecalcStyleDuration"]) -
+                   counters["RecalcStyleDuration"]) < .011, (
+            "CDP style phase deltas do not reconcile", size,
+            drag_counters, settle_counters, counters)
         assert groups["eventCount"] > 0, ("empty Chromium trace", size)
         state = page.evaluate("""() => {
           const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
@@ -354,7 +370,10 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1) -> dict:
             "real paced drag lost preview images", size, state)
         return {"nodes": size, "cpuThrottle": cpu_factor,
                 "pointerMoves": 12, "raf": frames,
-                "cdpPerformance": counters, "cdpTrace": groups,
+                "cdpPerformance": counters,
+                "cdpDragOnly": drag_counters,
+                "cdpPointerupAndSettle": settle_counters,
+                "cdpTrace": groups,
                 "paidGatewayRequests": 0, "productionFrameSLA": False}
     finally:
         if recording:
