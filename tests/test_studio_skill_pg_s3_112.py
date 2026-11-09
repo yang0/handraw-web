@@ -589,5 +589,117 @@ class SkillPostgresS3Journey112(unittest.TestCase):
               "HTTP PG17/S3 emulation, idempotent single Work, ACL PASS")
 
 
+    def test_zz_same_external_id_two_owners_five_images_acl_audit(self):
+        """#84/#112: identical client request keys cannot merge two owners.
+
+        Two independent authenticated Skill publishers submit five identical
+        image contents using the SAME externalRunId and requestId. Public
+        photos are intentionally public; ownership, private history and
+        moderation revocation must remain tenant-isolated.
+        """
+        from backend.services import set_work_visibility, utc_now_iso
+        from ops.audit_v3_cross_client_84_112 import audit_v3_uploads
+
+        external = str(uuid.uuid4())
+        images, originals = self.images()
+        body = {
+            "externalRunId": external,
+            "originClient": "skill",
+            "visibility": "public",
+            "status": "success",
+            "requestId": "cross-owner-" + external,
+            "originalRequest": "C-level tenant isolation fixture; no paid provider",
+            "images": images[:5],
+        }
+        accepted = []
+        for user, publisher in ((self.owner, self.publisher),
+                                (self.other, self.other_publisher)):
+            status, payload, _ = self.request(
+                "POST", "/api/v1/me/generations", body, token=publisher)
+            self.assertEqual(status, 200, payload)
+            self.assertEqual(payload["imageCount"], 5)
+            self.assertEqual(len(payload["workIds"]), 1)
+            accepted.append((user, payload))
+            again = self.request(
+                "POST", "/api/v1/me/generations", body, token=publisher)
+            self.assertEqual(again[0], 200)
+            self.assertEqual(again[1]["workId"], payload["workId"])
+            self.assertTrue(again[1]["deduped"])
+
+        (owner, a), (other, b) = accepted
+        self.assertNotEqual(a["id"], b["id"])
+        self.assertNotEqual(a["workId"], b["workId"])
+        rows, specs, urls = [], [], {}
+        for user, payload in accepted:
+            uid, rid, wid = int(user["id"]), payload["id"], payload["workId"]
+            selected = self.db.get_conn().execute(
+                "SELECT i.position, i.media_id, m.user_id AS media_owner,"
+                "m.storage_key FROM generation_items i "
+                "JOIN media_assets m ON m.id=i.media_id "
+                "WHERE i.run_id=? ORDER BY i.position", (rid,)).fetchall()
+            linked = {
+                int(entry["position"]): entry["media_id"]
+                for entry in self.db.get_conn().execute(
+                    "SELECT position,media_id FROM work_media WHERE work_id=?",
+                    (wid,)).fetchall()
+            }
+            self.assertEqual(len(selected), 5)
+            specs.append({"owner": str(uid), "client": "skill",
+                          "run": str(rid), "work": str(wid),
+                          "successful": 5, "totalSlots": 5, "status": "public"})
+            urls[uid] = []
+            for item in selected:
+                url = item["storage_key"]
+                urls[uid].append(url)
+                grant = self.db_count(
+                    "media_public_grants",
+                    "media_url=? AND target_type='work' AND target_id=? "
+                    "AND revoked_at IS NULL", (url, wid))
+                rows.append({
+                    "owner": str(uid), "client": "skill",
+                    "run": str(rid), "work": str(wid),
+                    "position": int(item["position"]),
+                    "media": str(item["media_id"]),
+                    "mediaOwner": str(item["media_owner"]),
+                    "workMedia": str(linked.get(int(item["position"]))),
+                    "publicGrant": grant == 1,
+                })
+        evidence = audit_v3_uploads(rows, specs)
+        self.assertEqual(evidence["auditedSuccessfulMedia"], 10)
+        self.assertEqual(evidence["owners"], 2)
+        self.assertFalse(evidence["readyForRelease"])
+        self.assertTrue(evidence["productionNoGo"])
+        self.assertFalse(set(urls[int(owner["id"])]) &
+                         set(urls[int(other["id"])]),
+                         "distinct tenants cannot share private storage URLs")
+        for user, payload in accepted:
+            uid = int(user["id"])
+            for index, url in enumerate(urls[uid]):
+                status, actual, _ = self.request("GET", url)
+                self.assertEqual(status, 200)
+                self.assertEqual(actual, originals[index])
+            reader = self.create_token(uid, ["library"])
+            status, history, _ = self.request(
+                "GET", "/api/v1/me/generations", token=reader)
+            self.assertEqual(status, 200)
+            self.assertTrue(any(item["id"] == payload["id"]
+                                for item in history["items"]))
+            forbidden_run = b["id"] if uid == int(owner["id"]) else a["id"]
+            self.assertFalse(any(item["id"] == forbidden_run
+                                 for item in history["items"]),
+                             "private run history leaked across tenants")
+        with self.db.transaction() as tx:
+            set_work_visibility(tx, a["workId"], "hidden", utc_now_iso(),
+                                source="moderator", reason="QA112",
+                                actor_role="admin")
+        # The unrelated tenant's public Work must remain readable.
+        self.assertEqual(self.request(
+            "GET", urls[int(owner["id"])][0])[0], 404)
+        self.assertEqual(self.request(
+            "GET", urls[int(other["id"])][0])[0], 200)
+        print("STUDIO #84/#112 same external IDs across two Skill owners, "
+              "5+5 media ownership, private history and moderation ACL PASS")
+
+
 if __name__ == "__main__":
     unittest.main()
