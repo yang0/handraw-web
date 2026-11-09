@@ -53,3 +53,27 @@
 - 分支 CI（14/14）：**待验收**。
 - `studio2` Push + Draft PR #131 同 SHA 两套 CI（各 14/14）：**未执行，不得快进**。
 - 真实生产/物理低端设备：**待验证，NO-GO**。
+
+
+## 实测证据（Chrome Runner，2026-11-09）
+
+### 首轮原生 invalidation 追踪 · 14/14 SUCCESS
+
+独立分支 `26af6f233c0266eebddbb2aa28f04c48d32a136a`，Actions [#42565811037](https://github.com/yang0/handraw-web/actions/runs/42565811037)。保留本报告前述 12 次鼠标拖拽标准：normal 306.875ms、media-hidden 290.620ms、normal-repeat 286.466ms、no-visual 48.762ms。布局树 UpdateLayoutTree 受影响元素计数中位约 9365，最大 9431。不是精确的「全部元素重新进行规则匹配」证明。
+
+### Blink SelectorStats 插桩与修复 · 14/14 SUCCESS
+
+初次尝试 `707341a80ae397f93732ea3dd0feb8ff29fbc078` 的 [CI #42566401875](https://github.com/yang0/handraw-web/actions/runs/42566401875) 有 13 个 Job 成功、1 个失败：`disabled-by-default-blink.debug` 追踪超出 30MB 内存上限，诊断脚本按设计拒绝继续读取；**不是产品故障**。该失败和失败日志保留用于审计，未向 studio2 快进。
+
+随后 `108c68b16cb0a77bc1d7ab3b5a774cdc2c02b1d2` 的 [CI #42566872332](https://github.com/yang0/handraw-web/actions/runs/42566872332) **14/14 SUCCESS**；移除非必要高流量 tracing 类别，仅 SelectorStats 试验用**3 次真实鼠标移动**，其余非插桩对照仍用 12 次。保留 30MB 上限、原始 trace 不落盘、全量节点/边/图片/Undo 检查。
+
+- 真实 Studio 300 节点、150 SVG 边、120 张 img 均 decoded；DOM 自然像素和 110,100,480。**图片源是仓库 fixture 内复用的少量 WebP，不等于 120 张不同大图片，也不能代表真实 R2/CDN 的低端设备负载。**
+- 非 SelectorStats 的 12 次真实鼠标对照：`media-hidden` 383.202ms、`normal-repeat` 386.050ms、`no-visual` 64.446ms，均为 CDP Drag-only Style 累计。隐藏已有图片绘制几乎未改变 Style 值；不能据此否定解码、GPU/内存、网络传输的真实成本。
+- SelectorStats **仅在 3 次鼠标移动样本中打开**，观察到 14 个 SelectorStats 事件、206 个可安全显示的 `.ic-/#ic-` 匹配规则；同一插桩录制的 Style 总时间 2280.313ms **包含巨大的测量开销，完全不能与 12 次普通拖拽耗时比较**。
+- 规则匹配热点（仅插桩内的排序，非真实帧外推）：`.ic-wechat-bottombar > *` 8.060ms / 142286 attempts / 0 matches（均 fast reject）；`.ic-canvas-stage:has(.ic-canvas-template-library) .ic-shelf-drawer` 7.623ms / 8 attempts / 0 matches；`.ic-pv-article-sheet.is-notion-dragging *` 4.334ms / 71143 attempts / 0 matches（均 fast reject）；`.ic-node:hover .ic-port-zone` 2.346ms / 3121 attempts / 1 match；`.ic-node:hover .ic-node-header-above` 1.380ms / 2401 attempts / 1 match。
+- 可见其它页面的选择器也参与了同一文档的匹配，但**尚未证明哪一条 CSS 规则是全树 Style 失效的触发源**；选择器匹配时间之外还存在计算样式、树失效传播及布局等工作。
+- 决策：**不为几个毫秒的插桩排名直接改生产 CSS**，不恢复已证明倒退的 CSS translate/rAF，也不贸然使用 `content-visibility` 或 DOM 虚拟化影响节点端口。继续保留定向渲染与追踪工具，#111 深度性能/重媒体设备 D 级验收仍 Open。
+
+### 发布状态
+
+本轮实验与 C 级 CI 不能替代实体低端机/独立真实媒体/Chromium GPU Present 性能标准，不声称 300 节点 60fps。#11 两个官方资源尚待签核；#84/#112 真实生产部署门禁仍未通过。**Studio 2.0：NO-GO；PR #131 保持 Draft；不得合入 main。**
