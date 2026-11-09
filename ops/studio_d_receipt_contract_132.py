@@ -31,7 +31,7 @@ PROVIDER_FIELDS = {
     "providerStatementSha256", "webRunItemAttemptSha256",
     "walletLedgerSha256", "freeQuotaLedgerSha256",
     "reconciliationReportSha256", "currency", "paidAttemptCount",
-    "refundCount", "unmatchedProviderEntryCount",
+    "refundCount", "freeQuotaCasesChecked", "unmatchedProviderEntryCount",
     "unmatchedWalletEntryCount", "netChargeDeltaMinor",
     "netRefundDeltaMinor", "duplicateCallbackCasesChecked",
     "throttled429CasesChecked", "upstream502CasesChecked",
@@ -60,8 +60,8 @@ BOOL_STORAGE = STORAGE_FIELDS - {
     "uploadDownloadManifestSha256", "tenantOneRef", "tenantTwoRef",
 }
 COUNT_PROVIDER = {
-    "paidAttemptCount", "refundCount", "unmatchedProviderEntryCount",
-    "unmatchedWalletEntryCount", "netChargeDeltaMinor", "netRefundDeltaMinor",
+    "paidAttemptCount", "refundCount", "freeQuotaCasesChecked",
+    "unmatchedProviderEntryCount", "unmatchedWalletEntryCount", "netChargeDeltaMinor", "netRefundDeltaMinor",
     "duplicateCallbackCasesChecked", "throttled429CasesChecked",
     "upstream502CasesChecked", "unknownRecoveryCasesChecked",
     "lateSuccessCasesChecked",
@@ -99,8 +99,8 @@ def _details(kind, data):
             raise ValueError("invalid reconciled currency")
         for f in COUNT_PROVIDER:
             _number(data[f], minimum=1 if f in {
-                "paidAttemptCount", "duplicateCallbackCasesChecked",
-                "throttled429CasesChecked", "upstream502CasesChecked",
+                "paidAttemptCount", "refundCount", "freeQuotaCasesChecked",
+                "duplicateCallbackCasesChecked", "throttled429CasesChecked", "upstream502CasesChecked",
                 "unknownRecoveryCasesChecked", "lateSuccessCasesChecked",
             } else 0)
         for f in ("unmatchedProviderEntryCount", "unmatchedWalletEntryCount",
@@ -171,7 +171,7 @@ def evaluate(receipts, claims, *, web_sha, skill_sha, now=None):
         _details(kind, row["details"])
         if (row["evidenceDigestSha256"] != claim["evidenceDigestSha256"]
                 or row["evidenceDigestSha256"] != digest(row["details"])):
-            raise ValueError("receipt was swapped after 17-case manifest signing")
+            raise ValueError("detailed receipt hash does not match 17-case manifest")
     return {
         "issue": 132, "requiredDetailedCases": len(GATES),
         "linkedDetailedCases": len(seen),
