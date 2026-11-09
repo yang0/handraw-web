@@ -2563,7 +2563,9 @@
 
   /* ======================== UNDO/REDO, GEOMETRY & CONNECTIONS ======================== */
   function pushUndo() {
-    CS.undoStack.push(cloneGraph(CS.graph));
+    // #111: edit history is memory-only. Keep authoritative Run/media payload
+    // references stable; project persistence still serializes the full Graph.
+    CS.undoStack.push(window.HandrawCanvasRenderer.captureEditableGraph(CS.graph));
     if (CS.undoStack.length > 35) CS.undoStack.shift();
     CS.redoStack = [];
     markActiveTabDirty();
@@ -2574,7 +2576,7 @@
       toast("已经是第一步");
       return;
     }
-    CS.redoStack.push(cloneGraph(CS.graph));
+    CS.redoStack.push(window.HandrawCanvasRenderer.captureEditableGraph(CS.graph));
     CS.graph = window.HandrawCanvasRenderer.preserveRuntime(CS.graph,CS.undoStack.pop());
     markActiveTabDirty();
     CS.selectedEdgeId = null;
@@ -2588,7 +2590,7 @@
       toast("没有可重做的操作");
       return;
     }
-    CS.undoStack.push(cloneGraph(CS.graph));
+    CS.undoStack.push(window.HandrawCanvasRenderer.captureEditableGraph(CS.graph));
     CS.graph = window.HandrawCanvasRenderer.preserveRuntime(CS.graph,CS.redoStack.pop());
     markActiveTabDirty();
     CS.selectedEdgeId = null;
