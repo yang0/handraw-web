@@ -24,7 +24,8 @@
         "throttled429CasesChecked": 0,
         "upstream502CasesChecked": 0,
         "unknownRecoveryCasesChecked": 0,
-        "lateSuccessCasesChecked": 0
+        "lateSuccessCasesChecked": 0,
+        "freeQuotaCasesChecked": 0
       }
     },
     {
