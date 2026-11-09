@@ -28,3 +28,11 @@ Trace 的启停、CDP/浏览器异步样式刷新、测量代码与事件循环�
 ## 集成门禁
 
 独立分支 `studio2-phase15-move-boundary-20261109`。本切片只改变 `ops/` 的诊断脚本、现有浏览器入口、单测、CI Artifact 路径以及本文。必须先独立 14/14 GitHub Actions，再校验和 `studio2` 比较 `ahead>0/behind=0`，使用 `expected_sha` + `force=false` 进行非强制快进；快进后同 SHA 的 Push、Draft PR #131 双 14/14 再分别验收。即便全部成功也只能作为 C 级诊断，[#132](https://github.com/yang0/handraw-web/issues/132) 保持 Open，PR #131 必须 Draft，`main` 不合并。
+
+## 2026-11-10 · Phase15 同 SHA 三套完整 CI 验收归档
+
+最终 `studio2@a16f919b3a48e23a392f632a5d8d056baec61796`：独立 [#42646570925](https://github.com/yang0/handraw-web/actions/runs/42646570925)、studio2 Push [#42648730744](https://github.com/yang0/handraw-web/actions/runs/42648730744)、Draft PR #131 [#42648747166](https://github.com/yang0/handraw-web/actions/runs/42648747166)，**全部同 SHA、每套 14/14 SUCCESS**，没有生产 CSS/JS 改动。
+
+三套的 `CANVAS #111 PHASE15` 记录相符：模拟 **1× CPU**：`pre-input-idle` 0；`synthetic-move-1` **1 次 >=8k，最大 9,184**；`synthetic-move-2` 0；`synthetic-move-3` 0。第一次移动窗口还有 **2 次 `childList`**、2 添加/2 删除；按固定父容器角色汇总为 `canvas-stage:1` 和 `other:1`；Chrome 同线程 <=50ms 的失效原因邻居仅为 `stylesheet-or-selector:2` 与 `tree-dependency:4`，**时间相邻并不证明因果**。模拟 **4× CPU** 各短窗口的 >=8k 大事件均为 0，虽然 Phase14 的完整连续窗口曾记录大树更新，这个跨时间窗差异可能由 Chrome 异步任务/Trace 边界及诊断本身的同步成本造成。
+
+本结果只证明 1× 受控场景的初次移动窗口可复现、后续窗口未同步复现；不能确定 `pushUndo`、浮层挂载、祖先 class 或某个具体 CSS 选择器是唯一根因，更不能作为生产优化的双 CPU 稳定收益。后续 Phase16 将只在 Chromium 测试浏览器中进行根 class / DOM mount / 几何读取计数对照，始终保留真实 Graph/Undo 与 300/150/120 素材断言；[#132](https://github.com/yang0/handraw-web/issues/132) 继续生产 NO-GO。
