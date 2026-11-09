@@ -51,4 +51,33 @@ Stage 11 在受限 3 次真实鼠标位移中观测到 39 条 Chrome Style Inval
 
 ## 实测结果
 
-本节必须在实际 Chromium Runner 完成后依据 `summary.json` 填写；不可预填收益、伪称已定位 9,185 元素的确定根因。
+第一轮真实浏览器独立分支 [Actions #42591447101](https://github.com/yang0/handraw-web/actions/runs/42591447101) **14/14 SUCCESS**。真实 300 卡片 / 150 SVG edges / 120 独立 WebP；原生 3 次物理鼠标移动的有界 Trace：
+
+| 路径隔离 | 变更内容（`MutationObserver` 同窗仅记类别） | `UpdateLayoutTree` 大事件（>=8,000） | 最大 `elementCount` |
+| --- | --- | ---: | ---: |
+| normal | `node.style=5`、`svg-path.d=6`、`floating-toolbar.style=5` | 3 | 9,186 |
+| `no-edges` | `node.style=5`、`floating-toolbar.style=5`；SVG `d` 写入归零 | 3 | 9,185 |
+| `no-card` | `svg-path.d=6`、`floating-toolbar.style=5`；节点内联坐标写入归零 | 3 | 9,185 |
+| `global-state-selector-mask` | `node.style=5`、`svg-path.d=6`、`floating-toolbar.style=5` | 3 | 9,185 |
+
+四组 Trace 中顶层 `class` 的实际 MutationObserver 记录均为 **0**。所覆盖的静态全局状态选择器消融没有降低大范围 `UpdateLayoutTree` 事件数。由此可严格表述为：**只关闭 SVG 路径更新、只关闭节点坐标写入、只屏蔽已审查全局状态选择器，均不能单独消除该大范围事件**。这不等于这些更新完全没有成本，更不能把一次 Chrome `elementCount` 当作 CSS 匹配数量或唯一起因证明。
+
+首轮五次 A-B-A-B-A 中已完成的四组目标的 CDP `RecalcStyleDuration` 累计毫秒（1×、4× CPU；B1/B2 两次）：
+
+| 诊断模式 | 1× 基线中位 | 1× B1/B2 | 4× 基线中位 | 4× B1/B2 | 双档双次 10% |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `no-edges` | 218.716 | 220.253 / 226.400 | 1164.665 | 1145.733 / 989.959 | 不通过 |
+| `no-card` | 218.997 | 220.262 / 245.690 | 1117.923 | 1153.667 / 1164.435 | 不通过 |
+| `global-state-selector-mask` | 219.192 | 222.941 / 221.607 | 1380.750 | 1598.955 / 1606.820 | 不通过 |
+| `no-overlay` | 220.283 | 217.688 / 243.701 | 978.925 | 1130.164 / 1122.932 | 不通过 |
+
+联合 Style+Layout、rAF P95 同时受控；任何一档、任一次未满足都不能晋升。所有隔离均为**视觉不保真的诊断**，`productionCandidate=false`。
+
+为确认是否存在**多个因素叠加后才影响大范围布局树计数**，追加一次 `no-visual` 全部跳过（SVG、卡片、浮动栏、小地图）的 Trace 与 A-B-A-B-A **仅诊断性联合控制**。该补充结果需等待最终 SHA 实测，不预先填入任何数字；即使显著更快也不可作为生产优化上线。
+
+### #11 / #84 / #112 预检
+
+来自同一首轮 CI 的固定版 Skill CLI + Skill main 数据目录只读核验：Web 官方 537 个、Skill 539 个；仅 **FF-018 / FG-025** 为已登记且内容 fingerprint 未漂移的待审批项，意外 Skill-only / Web-only / 类型或名称冲突均为 0。固定 Skill CLI SHA 核对成功。Web 官方 DB 发布审批未完成，`readyForRelease=false`。本地 PG17 / moto S3 的集成与回滚测试通过，但真实对象存储、Redis 多实例、供应商计费与退款、低端实体设备仍未签核；**生产始终 NO-GO**。参考工件 `studio2-phase12-release-preflight` 和 `studio2-canvas-127-benchmark`，不上传原始 Trace、凭据或数据库转储。
+
+最终交付前需要最新独立 SHA 14/14、`studio2` Push 14/14 与保持 Draft 的 PR #131 同 SHA 14/14，禁止改动 `main`。
+
