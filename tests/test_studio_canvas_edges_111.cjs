@@ -129,6 +129,18 @@ assert.match(app,/dragCtx\.overlayMetrics=null/,
   "viewport resize must invalidate the cached toolbar dimensions");
 assert.match(app,/overlayMs:overlayEnd-edgesEnd/);
 assert.match(app,/minimapMs:minimapEnd-overlayEnd/);
+
+assert.match(app,/dragCtx\.positionMode=canTranslate\?"translate":"left-top"/,
+  "feature-detect compositor-friendly CSS translate, keep legacy fallback");
+assert.match(app,/window\.__HANDRAW_TESTING__===true &&/,
+  "test-only left/top comparison must be isolated from production users");
+assert.match(app,/item\.el\.style\.translate=/,
+  "real dragged node moves through individual CSS translate");
+assert.match(app,/item\.el\.style\.left=\x60\$\{item\.node\.x\}px\x60/,
+  "pointerup commits the authoritative Graph position in CSS layout");
+assert.match(app,/item\.el\.style\.translate=""/,
+  "pointerup/cancel must not leave a double-applied transient translation");
+
 // The old full-layout path remains authoritative whenever a session becomes
 // stale; do not remove it just to make 300-node synthetic numbers look good.
 assert.match(app,/DOM\.viewport\.getBoundingClientRect\(\)\.width/);
