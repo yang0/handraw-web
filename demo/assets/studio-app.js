@@ -12174,31 +12174,73 @@
   }
 
   /* ======================== FLOATING SELECTION BAR & ITEM DELETION ======================== */
-  function positionFloatingOverlays() {
-    if (!DOM.overlayLayer || !DOM.viewport) return;
-    const vRect = DOM.viewport.getBoundingClientRect();
-    const selNodes = (CS.graph.selectedIds || []).map(getNodeById).filter(Boolean);
-    if (!selNodes.length) return;
+  // #111 P2: The native title toolbar is measured ONCE after selection
+  // has rendered but BEFORE pointermove mutates card CSS geometry. Re-reading
+  // offsetWidth/getBoundingClientRect after each mutation forces a browser
+  // layout flush over an otherwise unchanged 300-node Canvas.
+  function captureDragOverlayMetrics(startPositions) {
+    if (!DOM.overlayLayer || !DOM.viewport || !startPositions?.length) return null;
+    const topbar=DOM.overlayLayer.querySelector("[data-float-topbar]");
+    if (!topbar) return null;
+    const vRect=DOM.viewport.getBoundingClientRect();
+    const tbW=topbar.offsetWidth || 320;
+    const models=CS.graph.nodes || [],selection=CS.graph.selectedIds || [];
+    if(selection.length!==startPositions.length) return null;
+    const selected=startPositions.map(item=>({
+      id:String(item.node.id),node:item.node,index:models.indexOf(item.node)
+    }));
+    if(selected.some(item=>item.index<0)||
+       selected.some((item,i)=>String(selection[i])!==item.id)) return null;
+    return {topbar,viewport:DOM.viewport,overlayLayer:DOM.overlayLayer,
+      models,selection,selected,viewportWidth:vRect.width,
+      viewportHeight:vRect.height,toolbarWidth:tbW,
+      vx:CS.vx,vy:CS.vy,vk:CS.vk,shelfOpen:CS.shelfOpen};
+  }
 
-    const topbarEl = DOM.overlayLayer.querySelector("[data-float-topbar]");
-    if (!topbarEl) return;
+  function validDragOverlayMetrics(metrics) {
+    return Boolean(metrics &&
+      metrics.topbar?.isConnected && metrics.viewport===DOM.viewport &&
+      metrics.overlayLayer===DOM.overlayLayer &&
+      metrics.models===CS.graph.nodes &&
+      metrics.selection===CS.graph.selectedIds &&
+      metrics.selection.length===metrics.selected.length &&
+      metrics.selected.every((item,i)=>
+        String(metrics.selection[i])===item.id &&
+        metrics.models[item.index]===item.node) &&
+      metrics.vx===CS.vx && metrics.vy===CS.vy &&
+      metrics.vk===CS.vk && metrics.shelfOpen===CS.shelfOpen);
+  }
 
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity;
+  function positionFloatingOverlays(dragMetrics = null) {
+    if (!DOM.overlayLayer || !DOM.viewport) return false;
+    const cached=validDragOverlayMetrics(dragMetrics);
+    const selNodes=cached?dragMetrics.selected.map(item=>item.node):
+      (CS.graph.selectedIds || []).map(getNodeById).filter(Boolean);
+    if (!selNodes.length) return false;
+    const topbarEl=cached?dragMetrics.topbar:
+      DOM.overlayLayer.querySelector("[data-float-topbar]");
+    if (!topbarEl) return false;
+    const width=cached?dragMetrics.viewportWidth:
+      DOM.viewport.getBoundingClientRect().width;
+    const height=cached?dragMetrics.viewportHeight:
+      DOM.viewport.getBoundingClientRect().height;
+    const tbW=cached?dragMetrics.toolbarWidth:(topbarEl.offsetWidth || 320);
+
+    let minX=Infinity,minY=Infinity,maxX=-Infinity;
     for (const n of selNodes) {
-      minX = Math.min(minX, n.x);
-      minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + (n.w || 320));
+      minX=Math.min(minX,n.x);
+      minY=Math.min(minY,n.y);
+      maxX=Math.max(maxX,n.x+(n.w || 320));
     }
-
-    const centerScreen = worldToScreen((minX + maxX) * 0.5, minY);
-    const leftSafe = CS.shelfOpen ? 236 : 20;
-    const tbW = topbarEl.offsetWidth || 320;
-    const cx = Math.max(leftSafe + tbW * 0.5, Math.min(vRect.width - 20 - tbW * 0.5, centerScreen.x));
-    const ty = Math.max(54, Math.min(vRect.height - 96, centerScreen.y - 34));
-    topbarEl.style.left = `${cx}px`;
-    topbarEl.style.top = `${ty}px`;
+    const centerScreen=worldToScreen((minX+maxX)*0.5,minY);
+    const leftSafe=CS.shelfOpen?236:20;
+    const cx=Math.max(leftSafe+tbW*0.5,
+      Math.min(width-20-tbW*0.5,centerScreen.x));
+    const ty=Math.max(54,Math.min(height-96,centerScreen.y-34));
+    const left=`${cx}px`,top=`${ty}px`;
+    if(topbarEl.style.left!==left)topbarEl.style.left=left;
+    if(topbarEl.style.top!==top)topbarEl.style.top=top;
+    return cached;
   }
 
   function renderFloatingOverlays() {
@@ -20068,6 +20110,9 @@
           DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
           DOM.nodesLayer,startPositions.map(item=>item.node.id),bezierPath);
         renderFloatingOverlays();
+        // Read the selected title bar geometry at the very start of a drag.
+        // Do not retain across selection, graph, viewport or toolbar changes.
+        dragCtx.overlayMetrics=captureDragOverlayMetrics(dragCtx.startPositions);
         return;
       }
 
@@ -20150,15 +20195,19 @@
             DOM.nodesLayer,movedIds,bezierPath);
         }
         const edgesEnd=frameStart===null?null:performance.now();
-        positionFloatingOverlays();
+        const overlayCached=positionFloatingOverlays(dragCtx.overlayMetrics);
+        const overlayEnd=frameStart===null?null:performance.now();
         renderMinimapMovedNodes(movedIds);
+        const minimapEnd=frameStart===null?null:performance.now();
         if(frameStart!==null&&DOM.nodesLayer){
           const samples=DOM.nodesLayer._drag111Samples||
             (DOM.nodesLayer._drag111Samples=[]);
           if(samples.length<120)samples.push({
-            totalMs:performance.now()-frameStart,
+            totalMs:minimapEnd-frameStart,
             edgeAndPositionMs:edgesEnd-frameStart,
-            usedSession,
+            overlayMs:overlayEnd-edgesEnd,
+            minimapMs:minimapEnd-overlayEnd,
+            overlayCached,usedSession,
             movedCount:movedIds.length
           });
         }
@@ -20325,6 +20374,8 @@
     });
 
     window.addEventListener("resize", () => {
+      // A viewport resize invalidates any width/height captured on pointerdown.
+      if(dragCtx)dragCtx.overlayMetrics=null;
       positionFloatingOverlays();
       renderMinimap();
       updateTabScrollButtons();
