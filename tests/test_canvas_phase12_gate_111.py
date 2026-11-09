@@ -19,9 +19,9 @@ def records(fast):
 class Phase12Gates111(unittest.TestCase):
     def test_all_branches_covered_without_changing_production(self):
         self.assertEqual(set(CASES),{
-            "no-edges","no-card","global-state-selector-mask","no-overlay"})
+            "no-edges","no-card","global-state-selector-mask","no-overlay","no-visual"})
         self.assertEqual(set(TRACE_MODES),{
-            "normal","no-edges","no-card","global-state-selector-mask"})
+            "normal","no-edges","no-card","global-state-selector-mask","no-visual"})
 
     def test_diags_can_report_benefit_but_are_not_prod_candidates(self):
         for case in CASES:
