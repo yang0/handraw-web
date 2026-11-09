@@ -199,6 +199,12 @@ def _private_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _public_pending_json(path):
+    if path.is_symlink() or not path.is_file() or path.stat().st_size>MAX_BYTES:
+        raise ValueError("invalid published pending manifest path")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bundle",type=Path)
@@ -217,7 +223,7 @@ def main(argv=None):
         out=evaluate(
             _private_json(args.bundle) if args.bundle else None,
             _private_json(args.trust_registry) if args.trust_registry else None,
-            _private_json(args.pending),
+            _public_pending_json(args.pending),
             _private_json(args.published_web_styles) if args.published_web_styles else None,
             trusted_sha=os.getenv("HANDRAW_OFFICIAL_TRUST_SHA256",""),
             expected_deployed_sha=args.deployed_sha,
