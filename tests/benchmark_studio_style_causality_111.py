@@ -29,6 +29,7 @@ def main():
             # its Undo; camera focus alone only pans, never selects a node.
             warmup = stage10.profile_drag(page, cdp, cpu_factor=1)
             assert warmup["graphUndoAndMediaStable"]
+            page.wait_for_selector("[data-float-topbar]", timeout=5000)
             assert page.locator("[data-float-topbar]").count() == 1, (
                 "real native selection toolbar did not mount after warmup")
             same_window = trace_window(page, cdp)
