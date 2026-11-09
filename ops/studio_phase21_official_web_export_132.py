@@ -112,7 +112,7 @@ def _new_private(path,data):
         out.write("\n")
 
 
-def write_fresh(out_dir,styles,layouts,receipt):
+def write_fresh(out_dir,styles,layouts,receipt,raw_rows=None):
     root=Path(out_dir)
     if root.is_symlink() or root.exists() or not root.parent.is_dir():
         raise ValueError("only a NEW private export directory is allowed")
@@ -120,6 +120,12 @@ def write_fresh(out_dir,styles,layouts,receipt):
     _new_private(root/"styles.json",styles)
     _new_private(root/"layouts.json",layouts)
     _new_private(root/"readonly-export-receipt.json",receipt)
+    if raw_rows is not None:
+        regenerated_styles,regenerated_layouts,raw_hash=transform(raw_rows)
+        if (regenerated_styles!=styles or regenerated_layouts!=layouts
+            or raw_hash!=receipt["sourceRowsSha256"]):
+            raise ValueError("raw website row snapshot no longer matches official export")
+        _new_private(root/"raw-website-published-rows.json",raw_rows)
     return {"dbStylesExported":len(styles),"dbLayoutsExported":len(layouts),
             "candidateCodesInReadOnlyExport":sorted(
                 set(CODES)&{x["number"] for x in styles}),
@@ -172,7 +178,7 @@ def main(argv=None):
             raw_digest=original_hash,deployed_sha=args.deployed_sha,
             operator=args.operator_id,reviewer=args.independent_reviewer_id,
             session="web-export-"+secrets.token_hex(12))
-        output=write_fresh(args.out,styles,layouts,receipt)
+        output=write_fresh(args.out,styles,layouts,receipt,raw_rows=rows)
         print("PHASE21 WEB READONLY EXPORT "+json.dumps(output,sort_keys=True))
         return 0
     except Exception:
