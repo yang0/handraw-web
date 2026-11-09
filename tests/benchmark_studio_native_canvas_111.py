@@ -250,14 +250,20 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
 
 
 
-def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1) -> dict:
+def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
+                                drag_mode: str = "translate") -> dict:
     """Physical pointer + rAF cadence + bounded CDP render diagnostics.
 
     Includes real presentation cadence while dragging AND settling after
     pointerup. No fake Graph updates. Trace raw bytes never leave memory.
     """
-    page.evaluate("""() => window.HANDRAW_STUDIO_TESTING
-      .focusCanvasNodeForBenchmark('g00-0')""")
+    assert drag_mode in ("translate", "left-top")
+    page.evaluate("""mode => {
+      if(window.__HANDRAW_TESTING__!==true||!window.HANDRAW_STUDIO_TESTING)
+        throw Error('drag mode can only be chosen in isolated browser tests');
+      window.HANDRAW_STUDIO_TESTING.canvasDragPositionMode=mode;
+      return window.HANDRAW_STUDIO_TESTING.focusCanvasNodeForBenchmark('g00-0');
+    }""", drag_mode)
     coords = page.evaluate("""() => {
       const node=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
       const header=node?.querySelector('.ic-node-header-above');
@@ -356,7 +362,12 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1) -> dict:
         assert groups["eventCount"] > 0, ("empty Chromium trace", size)
         state = page.evaluate("""() => {
           const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+          const layer=document.getElementById('ic-nodes-layer');
+          const card=layer.querySelector('[data-node-id="g00-0"]');
           return {x:n.x,y:n.y,
+            cssX:card?.style.left,cssY:card?.style.top,
+            cssTranslate:card?.style.translate,
+            modes:(layer._drag111Samples||[]).map(x=>x.positionMode),
             cards:document.querySelectorAll('#ic-nodes-layer .ic-node').length,
             imageNodes:document.querySelectorAll('#ic-nodes-layer img').length,
             edgeGroups:document.querySelectorAll(
@@ -368,7 +379,17 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1) -> dict:
             "real paced drag lost Graph DOM", size, state)
         assert state["imageNodes"] >= size*4//10, (
             "real paced drag lost preview images", size, state)
+        assert state["cssX"] == f'{state["x"]}px' and (
+            state["cssY"] == f'{state["y"]}px'), (
+                "real paced drag did not commit layout position", size, state)
+        assert state["cssTranslate"] in ("", None, "none"), (
+            "drag left a transient CSS translate after pointerup", size, state)
+        assert len(state["modes"]) >= 8 and all(
+            mode == drag_mode for mode in state["modes"]), (
+                "CSS translate control mode was not honored by real drag",
+                size, drag_mode, state)
         return {"nodes": size, "cpuThrottle": cpu_factor,
+                "dragMode": drag_mode,
                 "pointerMoves": 12, "raf": frames,
                 "cdpPerformance": counters,
                 "cdpDragOnly": drag_counters,
@@ -383,6 +404,14 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1) -> dict:
             except Exception:
                 pass
         cdp.detach()
+        # A test-only override must not leak to subsequent product flows.
+        try:
+            page.evaluate("""() => {
+              if(window.__HANDRAW_TESTING__===true)
+                window.HANDRAW_STUDIO_TESTING.canvasDragPositionMode="auto";
+            }""")
+        except Exception:
+            pass
 
 
 def main() -> None:
@@ -539,23 +568,32 @@ def main() -> None:
                             # Full pipeline differs from handler-only p95.
                             # Keep the original 9-event regression unchanged.
                             if size in (100, 300):
+                                if size == 300:
+                                    native["legacyFramePipeline"] = profile_real_frame_pipeline(
+                                        page, size, drag_mode="left-top")
                                 native["framePipeline"] = profile_real_frame_pipeline(
-                                    page, size)
+                                    page, size, drag_mode="translate")
                             if size == 300:
                                 cdp = context.new_cdp_session(page)
                                 try:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4})
                                     native["emulated4xCpuDrag"] = measure_physical_drag(
                                         page, size, cpu_factor=4)
+                                    native["emulated4xLegacyFramePipeline"] = (
+                                        profile_real_frame_pipeline(
+                                            page, size, cpu_factor=4, drag_mode="left-top"))
                                     native["emulated4xFramePipeline"] = (
-                                        profile_real_frame_pipeline(page, size, cpu_factor=4))
+                                        profile_real_frame_pipeline(
+                                            page, size, cpu_factor=4, drag_mode="translate"))
                                 finally:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1})
                                     cdp.detach()
                             if native.get("framePipeline"):
                                 print("CANVAS #111 FULL FRAME PIPELINE " + json.dumps({
                                     "nodes": size, "normal": native["framePipeline"],
+                                    "legacy": native.get("legacyFramePipeline"),
                                     "throttled": native.get("emulated4xFramePipeline"),
+                                    "throttledLegacy": native.get("emulated4xLegacyFramePipeline"),
                                 }, ensure_ascii=False), flush=True)
                             print("CANVAS #111 REAL POINTER DRAG " + json.dumps({
                                 "nodes": size,
