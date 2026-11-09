@@ -11,7 +11,7 @@ Phase22 的 `check_skill_checkout()` 已验证 Skill Git 目录为固定完整 4
 Phase23 `load_pinned_skill_sources()` 额外实施：
 
 1. `--skill-checkout` 必须为干净、非 symlink 的本地 Skill Git 检出，HEAD = `--skill-sha` 的**完整 SHA**；
-2. `--skill-styles` 和 `--skill-layouts` 必须分别指向该检出树下真实非 symlink 的 `references/styles.json` 和 `references/layouts.json`，不能是其他位置即便内容相同的 JSON；
+2. `--skill-styles` 和 `--skill-layouts` 必须分别指向该检出树下真实非 symlink 的 `skills/handdraw-style-prompter/references/styles.json` 和 `skills/handdraw-style-prompter/references/layouts.json`，不能是其他位置即便内容相同的 JSON；
 3. 使用 `git show <exact-SHA>:references/styles.json` 和 `git show <exact-SHA>:references/layouts.json` 读取 Git 对象，校验内容与 checkout 一致，拒绝 Git 中不存在的文件、脏树、JSON 漂移；
 4. **只能把此 Git SHA 绑定的目录送进 Phase21 的 Ed25519 双签审核、Web 官方已批准 PG17 原始行 SHA、Web↔Skill `--strict` 校验**。脚本不会审批候选，也不会修改 Skill main / Web DB。
 
