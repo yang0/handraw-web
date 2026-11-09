@@ -1,7 +1,7 @@
 """Phase13 #111: no production tweak and 5 independent pointer conditions."""
 import unittest
 from ops.canvas_phase13_pointer_111 import (
-    TRACE_WINDOWS, _plan, HOVER_MASK,
+    TRACE_WINDOWS, _plan, HOVER_MASK, STRUCTURE_OBSERVER,
 )
 
 
@@ -18,6 +18,16 @@ class Phase13PointerTriageTests(unittest.TestCase):
                          {"pressed":True,"moves":3,"hoverMask":False})
         self.assertEqual(_plan("drag-no-visual-hover-mask"),
                          {"pressed":True,"moves":3,"hoverMask":True})
+    def test_structure_observer_is_bounded_and_content_free(self):
+        self.assertIn("childList:true,characterData:true", STRUCTURE_OBSERVER)
+        self.assertIn("eventsDroppedAtCap", STRUCTURE_OBSERVER)
+        self.assertIn("privateContentsPersisted:false", STRUCTURE_OBSERVER)
+        self.assertIn("s.total++>=5000", STRUCTURE_OBSERVER)
+        self.assertNotIn("textContent", STRUCTURE_OBSERVER)
+        self.assertNotIn("outerHTML", STRUCTURE_OBSERVER)
+        self.assertNotIn("innerHTML", STRUCTURE_OBSERVER)
+        self.assertNotIn("getAttribute(", STRUCTURE_OBSERVER)
+
     def test_pointer_mode_rejects_unknown_value(self):
         with self.assertRaises(ValueError):
             _plan("pretend-passed-prod")
