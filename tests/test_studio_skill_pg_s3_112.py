@@ -607,7 +607,7 @@ class SkillPostgresS3Journey112(unittest.TestCase):
             "originClient": "skill",
             "visibility": "public",
             "status": "success",
-            "requestId": "cross-owner-" + external,
+            "requestId": "skill-history-" + external,
             "originalRequest": "C-level tenant isolation fixture; no paid provider",
             "images": images[:5],
         }
