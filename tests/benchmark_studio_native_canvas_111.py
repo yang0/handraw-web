@@ -40,7 +40,7 @@ JS_MEASURE = r"""() => {
   const beforeCards=new Map([...root.querySelectorAll('.ic-node[data-node-id]')]
     .map(el=>[el.dataset.nodeId,el]));
   const beforeImages=[...root.querySelectorAll('img')];
-  const input=root.querySelector('[data-node-id="g00-0"] textarea, [data-node-id="g00-0"] input');
+  const input=root.querySelector('[data-node-id="g00-3"] input[data-sp-aud]');
   if(!input)throw Error('first real native text_input editor not found');
   input.focus();
   input.value='光标仍保持在正在编辑的字段';
@@ -61,7 +61,7 @@ JS_MEASURE = r"""() => {
   }
   // Reconcile may replace the owning card while explicitly restoring focus,
   // cursor and in-progress user value to the new real textarea node.
-  const activeInput=root.querySelector('[data-node-id="g00-0"] textarea, [data-node-id="g00-0"] input');
+  const activeInput=root.querySelector('[data-node-id="g00-3"] input[data-sp-aud]');
   const focusHeld=document.activeElement===activeInput &&
     activeInput?.value==='光标仍保持在正在编辑的字段' &&
     activeInput.selectionStart===2 && activeInput.selectionEnd===5;
