@@ -251,19 +251,24 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
 
 
 def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
-                                finish_mode: str = "targeted") -> dict:
+                                finish_mode: str = "targeted",
+                                flush_mode: str = "immediate") -> dict:
     """Physical pointer + rAF cadence + bounded CDP render diagnostics.
 
     Includes real presentation cadence while dragging AND settling after
     pointerup. No fake Graph updates. Trace raw bytes never leave memory.
     """
     assert finish_mode in ("targeted", "full")
-    page.evaluate("""mode => {
+    assert flush_mode in ("immediate", "raf")
+    page.evaluate("""setting => {
       if(window.__HANDRAW_TESTING__!==true||!window.HANDRAW_STUDIO_TESTING)
-        throw Error('finish mode is available only in isolated browser tests');
-      window.HANDRAW_STUDIO_TESTING.canvasDragFinishMode=mode;
+        throw Error('drag visual A/B requires isolated browser test');
+      window.HANDRAW_STUDIO_TESTING.canvasDragFinishMode=setting.finish;
+      window.HANDRAW_STUDIO_TESTING.canvasDragFlushMode=setting.flush;
+      const layer=document.getElementById('ic-nodes-layer');
+      if(layer){layer._drag111Samples=[];layer._drag111PhysicalMoves=0;}
       return window.HANDRAW_STUDIO_TESTING.focusCanvasNodeForBenchmark('g00-0');
-    }""", finish_mode)
+    }""", {"finish": finish_mode, "flush": flush_mode})
     coords = page.evaluate("""() => {
       const node=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
       const header=node?.querySelector('.ic-node-header-above');
@@ -277,6 +282,11 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
             !hit.closest('button,input,textarea,select,label')){
           const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
           window.__studio111PacedCard=node;
+          const layer=document.getElementById('ic-nodes-layer');
+          window.__studio111PacedImages=[...layer.querySelectorAll('img')];
+          window.__studio111PacedToolbar=document.querySelector('[data-float-topbar]');
+          window.__studio111PacedMini=document.querySelector(
+            '#ic-minimap [data-mini-node-id="g00-0"]');
           return {x,y,nodeX:n.x,nodeY:n.y};
         }
       }
@@ -370,6 +380,21 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
             cssTranslate:card?.style.translate,
             cardStable:card===window.__studio111PacedCard &&
               card?.isConnected===true,
+            imagesStable:window.__studio111PacedImages.every(img=>img.isConnected),
+            toolbarStable:!!window.__studio111PacedToolbar?.isConnected &&
+              document.querySelector('[data-float-topbar]')===window.__studio111PacedToolbar,
+            miniStable:!!window.__studio111PacedMini?.isConnected &&
+              document.querySelector('#ic-minimap [data-mini-node-id="g00-0"]')===
+                window.__studio111PacedMini,
+            edgePathCorrect:(()=>{
+              const svg=document.getElementById('ic-edges-svg');
+              const group=svg?.querySelector('[data-edge-id="g00-edge-0-7"]');
+              return !!group&&group.querySelector('path.ic-edge-line')?.getAttribute('d')===
+                group.querySelector('path.ic-edge-hit')?.getAttribute('d');
+            })(),
+            inputEvents:layer._drag111PhysicalMoves||0,
+            visualFlushes:(layer._drag111Samples||[]).length,
+            flushModes:(layer._drag111Samples||[]).map(x=>x.flushMode),
             finish:layer._drag111Finish||null,
             cards:document.querySelectorAll('#ic-nodes-layer .ic-node').length,
             imageNodes:document.querySelectorAll('#ic-nodes-layer img').length,
@@ -395,8 +420,39 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
             state["finish"]["targeted"] == (finish_mode == "targeted")), (
                 "node pointerup did not honor safe finish policy",
                 size, finish_mode, state)
+        assert state["inputEvents"] >= 8 and state["visualFlushes"] >= 1, (
+            "native pointer moves or visual frame flush missing",
+            size, flush_mode, state)
+        assert all(m==flush_mode for m in state["flushModes"]), (
+            "visual update path mismatched the selected A/B mode",
+            size, flush_mode, state)
+        if flush_mode=="raf":
+            assert state["visualFlushes"] <= state["inputEvents"], (
+                "rAF scheduled more renders than actual pointer events",
+                size, state)
+            assert all(state[k] for k in ("imagesStable","toolbarStable",
+                                          "miniStable","edgePathCorrect")), (
+                "rAF drag damaged image/toolbar/minimap/SVG identity",
+                size, state)
+            page.keyboard.press("Control+z")
+            undo=page.evaluate("""() => {
+              const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+              return {x:n.x,y:n.y};
+            }""")
+            assert undo=={"x":coords["nodeX"],"y":coords["nodeY"]}, (
+                "rAF coalesced drag Undo failed",size,undo,coords)
+            page.keyboard.press("Control+y")
+            redo=page.evaluate("""() => {
+              const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+              return {x:n.x,y:n.y};
+            }""")
+            assert redo=={"x":state["x"],"y":state["y"]}, (
+                "rAF coalesced drag Redo failed",size,redo,state)
         return {"nodes": size, "cpuThrottle": cpu_factor,
                 "finishMode": finish_mode,
+                "flushMode": flush_mode,
+                "physicalPointerMoves": state["inputEvents"],
+                "visualFlushes": state["visualFlushes"],
                 "finishTargeted": state["finish"]["targeted"],
                 "pointerMoves": 12, "raf": frames,
                 "cdpPerformance": counters,
@@ -417,6 +473,7 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
             page.evaluate("""() => {
               if(window.__HANDRAW_TESTING__===true)
                 window.HANDRAW_STUDIO_TESTING.canvasDragFinishMode="auto";
+              window.HANDRAW_STUDIO_TESTING.canvasDragFlushMode="auto";
             }""")
         except Exception:
             pass
@@ -740,6 +797,11 @@ def main() -> None:
                                         page, size, finish_mode="full")
                                 native["framePipeline"] = profile_real_frame_pipeline(
                                     page, size, finish_mode="targeted")
+                                if size == 300:
+                                    native["rafFramePipeline"] = (
+                                        profile_real_frame_pipeline(
+                                            page, size, finish_mode="targeted",
+                                            flush_mode="raf"))
                             if size == 300:
                                 cdp = context.new_cdp_session(page)
                                 try:
@@ -752,6 +814,10 @@ def main() -> None:
                                     native["emulated4xFramePipeline"] = (
                                         profile_real_frame_pipeline(
                                             page, size, cpu_factor=4, finish_mode="targeted"))
+                                    native["emulated4xRafFramePipeline"] = (
+                                        profile_real_frame_pipeline(
+                                            page, size, cpu_factor=4, finish_mode="targeted",
+                                            flush_mode="raf"))
                                 finally:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1})
                                     cdp.detach()
@@ -759,7 +825,9 @@ def main() -> None:
                                 print("CANVAS #111 FULL FRAME PIPELINE " + json.dumps({
                                     "nodes": size, "normal": native["framePipeline"],
                                     "legacyFull": native.get("legacyFullFramePipeline"),
+                                    "raf": native.get("rafFramePipeline"),
                                     "throttled": native.get("emulated4xFramePipeline"),
+                                    "throttledRaf": native.get("emulated4xRafFramePipeline"),
                                     "throttledLegacyFull": native.get("emulated4xLegacyFullFramePipeline"),
                                 }, ensure_ascii=False), flush=True)
                             print("CANVAS #111 REAL POINTER DRAG " + json.dumps({
