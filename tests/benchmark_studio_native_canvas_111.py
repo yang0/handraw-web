@@ -248,6 +248,52 @@ def main() -> None:
                                 && [...root.querySelectorAll('img')].every(img=>img.isConnected);
                             }""")
                             assert camera_stable, ("zoom removed graph cards", size)
+                            # Exercise REAL product gallery callbacks rather than only
+                            # the test-only render bridge. This mutates memory inside
+                            # the disposable local Project page, never any media API.
+                            gallery = page.evaluate("""() => {
+                              const display=window.CS.graph.nodes.find(n=>n.id==='g00-8');
+                              const root=document.getElementById('ic-nodes-layer');
+                              const other=root.querySelector('[data-node-id="g00-9"]');
+                              if(!display||!other)throw Error('gallery fixture unavailable');
+                              display.data={...display.data,kind:'batch_gallery',
+                                status:'success',totalTarget:8,
+                                items:Array.from({length:8},(_,i)=>({
+                                  status:'success',mediaId:'test-only-media-'+i,
+                                  slotIndex:i,position:i,
+                                  title:'本地静态回归图片',
+                                  imageUrl:'/starter/bear-and-bird.webp'
+                                }))};
+                              const bridge=window.HANDRAW_STUDIO_TESTING;
+                              const initial=bridge.renderCanvasNodesForBenchmark(['g00-8']);
+                              let node=root.querySelector('[data-node-id="g00-8"]');
+                              const toggle=node?.querySelector('[data-disp-toggle]');
+                              if(!toggle)throw Error('real gallery toggle missing');
+                              toggle.click();
+                              const expanded=root.querySelector('[data-node-id="g00-8"]');
+                              const expandPatch=root._lastCanvasPatchStats;
+                              const compare=expanded?.querySelector('[data-disp-compare]');
+                              if(!compare)throw Error('real gallery compare button missing');
+                              compare.click();
+                              const compared=root.querySelector('[data-node-id="g00-8"]');
+                              const comparePatch=root._lastCanvasPatchStats;
+                              return {
+                                initPartial:initial.patch?.partial,
+                                initCount:initial.patch?.nodes,
+                                expanded:expanded?.querySelector('[data-disp-toggle]')?.getAttribute('aria-expanded'),
+                                expandPartial:expandPatch?.partial,expandCount:expandPatch?.nodes,
+                                comparePartial:comparePatch?.partial,compareCount:comparePatch?.nodes,
+                                otherStable:other.isConnected&&root.querySelector('[data-node-id="g00-9"]')===other,
+                                compareButton:compared?.querySelector('[data-disp-compare]')?.textContent
+                              };
+                            }""")
+                            assert gallery["initPartial"] and gallery["initCount"] == 1, gallery
+                            assert gallery["expanded"] == "true", gallery
+                            assert gallery["expandPartial"] and gallery["expandCount"] == 1, gallery
+                            assert gallery["comparePartial"] and gallery["compareCount"] == 1, gallery
+                            assert gallery["otherStable"], gallery
+                            assert gallery["compareButton"] == "取消对比", gallery
+                            native["galleryTargetedCallbacks"] = gallery
                             assert not errors and not paid_posts, (size, errors, paid_posts)
                             native["nodePatchMs"] = [x["ms"] for x in native.pop("updates")]
                             native["nodePatchP95Ms"] = percentile(native["nodePatchMs"], .95)
