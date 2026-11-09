@@ -154,9 +154,11 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
         ?.querySelector('[data-mini-node-id="g00-0"]');
       const card=root?.querySelector('[data-node-id="g00-0"]');
       const model=window.CS.graph.nodes.find(n=>n.id==='g00-0');
-      if(!group||!other||!mini||!card||!model)
+      const toolbar=document.querySelector('[data-float-topbar]');
+      if(!group||!other||!mini||!card||!model||!toolbar)
         throw Error('native drag fixture has missing DOM binding');
-      window.__drag111Refs={group,other,mini,card,
+      window.__drag111Refs={group,other,mini,card,toolbar,
+        toolbarLeft:toolbar.style.left,toolbarTop:toolbar.style.top,
         otherPath:other.querySelector('path.ic-edge-line')?.getAttribute('d'),
         hitPath:group.querySelector('path.ic-edge-hit')?.getAttribute('d'),
         images:[...root.querySelectorAll('img')]};
@@ -184,8 +186,14 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
         miniStable:r.mini.isConnected &&
           document.querySelector('#ic-minimap [data-mini-node-id="g00-0"]')===r.mini,
         imageStable:r.images.every(img=>img.isConnected),
+        toolbarStable:r.toolbar.isConnected &&
+          document.querySelector('[data-float-topbar]')===r.toolbar,
+        toolbarMoved:r.toolbar.style.left!==r.toolbarLeft ||
+          r.toolbar.style.top!==r.toolbarTop,
         samples:samples.map(p=>({totalMs:p.totalMs,
           edgeAndPositionMs:p.edgeAndPositionMs,
+          overlayMs:p.overlayMs,minimapMs:p.minimapMs,
+          overlayCached:p.overlayCached,
           usedSession:p.usedSession,movedCount:p.movedCount}))
       };
     }""")
@@ -193,12 +201,17 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
     assert middle["x"] > before["x"] and middle["y"] > before["y"], (
         "real pointer drag did not move Graph", size, middle)
     for guard in ("incidentChanged", "hitMatchesLine", "unrelatedStable",
-                  "cardStable", "miniStable", "imageStable"):
+                  "cardStable", "miniStable", "imageStable",
+                  "toolbarStable", "toolbarMoved"):
         assert middle[guard], ("drag DOM/geometry regression", size, guard, middle)
     samples = middle.pop("samples")
     assert len(samples) >= 7, ("insufficient real pointermove samples", size, samples)
     assert all(p["usedSession"] and p["movedCount"] == 1 for p in samples), (
         "drag-session invalidated without known topology change", size, samples)
+    assert all(p["overlayCached"] is True for p in samples), (
+        "drag toolbar fell back to a layout read during a stable drag", size, samples)
+    assert all(p["overlayMs"] >= 0 and p["minimapMs"] >= 0 for p in samples), (
+        "non-finite drag split timing", size, samples)
     after = page.evaluate("""() => {
       const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
       return {x:n.x,y:n.y};
@@ -224,6 +237,9 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
             "pointerP95Ms": percentile([v["totalMs"] for v in samples], .95),
             "edgeAndPositionP95Ms": percentile(
                 [v["edgeAndPositionMs"] for v in samples], .95),
+            "overlayP95Ms": percentile([v["overlayMs"] for v in samples], .95),
+            "minimapP95Ms": percentile([v["minimapMs"] for v in samples], .95),
+            "allOverlayCacheHits": True,
             "allSessionUpdates": True, "incidentPathsCorrect": True,
             "unrelatedEdgeAndMiniDOMStable": True, "imageStable": True,
             "undoRedoGeometry": True}
