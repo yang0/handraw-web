@@ -633,7 +633,7 @@ class SkillPostgresS3Journey112(unittest.TestCase):
         for user, payload in accepted:
             uid, rid, wid = int(user["id"]), payload["id"], payload["workId"]
             selected = self.db.get_conn().execute(
-                "SELECT i.position, i.media_id, m.user_id AS media_owner,"
+                "SELECT i.position, i.media_id, m.owner_user_id AS media_owner,"
                 "m.storage_key FROM generation_items i "
                 "JOIN media_assets m ON m.id=i.media_id "
                 "WHERE i.run_id=? ORDER BY i.position", (rid,)).fetchall()
