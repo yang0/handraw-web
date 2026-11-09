@@ -58,13 +58,15 @@ def evaluate_chain(*, catalog, skill_styles, skill_layouts, pending_before,
     if (not isinstance(source_receipt,dict)
         or set(source_receipt)!={"schemaVersion","sourceSystem","sourceRole",
             "webDeployedSha","publishedStylesSha256","publishedLayoutsSha256",
-            "operatorId","independentReviewerId","exportSessionId"}
+            "sourceRowsSha256","operatorId","independentReviewerId","exportSessionId"}
         or source_receipt["schemaVersion"]!=1
         or source_receipt["sourceSystem"]!="website-postgresql-read-only"
         or source_receipt["sourceRole"]!="readonly-export"
         or source_receipt["webDeployedSha"]!=deployed_sha
         or source_receipt["publishedStylesSha256"]!=sha(published_styles)
-        or source_receipt["publishedLayoutsSha256"]!=sha(published_layouts)):
+        or source_receipt["publishedLayoutsSha256"]!=sha(published_layouts)
+        or not isinstance(source_receipt["sourceRowsSha256"],str)
+        or not HASH.fullmatch(source_receipt["sourceRowsSha256"])):
         raise ValueError("untrusted/mismatched website published DB origin claim")
     for f in ("operatorId","independentReviewerId","exportSessionId"):
         v=source_receipt[f]
