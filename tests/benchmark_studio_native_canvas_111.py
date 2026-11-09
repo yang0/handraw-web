@@ -669,15 +669,19 @@ def profile_style_invalidation_cdp(page, size: int = 300) -> dict:
             tracing=False
             try:
                 cdp.send("Tracing.start",{
-                    "categories":"devtools.timeline,blink,cc,disabled-by-default-devtools.timeline.invalidationTracking" +
+                    "categories":"devtools.timeline,disabled-by-default-devtools.timeline.invalidationTracking" +
                                  (",disabled-by-default-blink.debug" if mode=="normal" else ""),
                     "options":"record-as-much-as-possible",
                     "transferMode":"ReturnAsStream",
                 })
                 tracing=True
-                for step in range(1,13):
-                    page.mouse.move(target["x"]+48*step/12,
-                                    target["y"]+24*step/12,steps=1)
+                # Blink.debug SelectorStats instruments every selector; keep its
+                # physical input window short to honor the 30MB trace limit.
+                # Uninstrumented A/B variants still run all 12 real moves.
+                steps=3 if mode=="normal" else 12
+                for step in range(1,steps+1):
+                    page.mouse.move(target["x"]+48*step/steps,
+                                    target["y"]+24*step/steps,steps=1)
                     page.wait_for_timeout(20)
                 drag_end=cdp.send("Performance.getMetrics")
             finally:
@@ -712,7 +716,8 @@ def profile_style_invalidation_cdp(page, size: int = 300) -> dict:
               return {x:n.x,y:n.y};
             }""")
             assert undo=={"x":target["nodeX"],"y":target["nodeY"]},(mode,undo)
-            records.append({"mode":mode,"chromeStyleInvalidations":summary,
+            records.append({"mode":mode,"physicalMouseMoves":steps,
+                            "chromeStyleInvalidations":summary,
                             "chromeSelectorStats":selector_timings,
                             "cdpDragOnly":metric,
                             "visibleImageDOMNodes":census["images"]["images"],
