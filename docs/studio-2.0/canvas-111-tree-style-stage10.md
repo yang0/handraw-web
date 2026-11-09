@@ -50,3 +50,11 @@ Stage 8 Chromium `UpdateLayoutTree` 在 300 个真实节点、150 条 SVG 边、
 - `world-layout-style-containment`、`selected-compositor-layer`、`relational-selector-off` 都未通过测量前置有效性检查，**不能拿它们的未测数据作为性能收益**；最新 runner 会在安全范围内显示拒绝原因，具体以该 runner 日志及 `summary.json` 为准。
 - 此阶段的 **已验证结论** 仅是：为已有 `.ic-node { contain: layout style }` 的图再添加世界层 `contain: style`，不能稳定减少受测的 Style 工作。其它候选并未建立充分有效的 A/B 数据；`:has` / hover / 树级依赖仍是待证假说。
 - **决策：不应用生产 CSS/JS 改动，不关闭 #111，不把未达到双 CPU 严格门槛的方案同步到用户界面。** 分支仅引入可重放诊断、CI 和证据，并继续保持生产 NO-GO。验收应推进更直接的 invalidation reason / matched selector 与祖先-后代依赖定位，以及实体低端设备测量。
+
+### 有效性门禁复核（2026-11-09）
+
+中间 CI #42576038664 在相同 SHA 上完成 14/14，但显示诊断预检的 **后三个 CSS 候选均因节点/标题/端口/小地图几何偏移而拒绝**。复查发现预检的原始几何坐标是在整个测试最初捕获，多个 A-B-A-B-A 拖拽、Undo 后已经不一定是相邻参照；这种偏移不应直接归因某个 CSS 候选。
+
+新的测试改为 **每一个候选单独采集紧邻的原生 CSS baseline**，再比较 CSS 注入后的几何；这样将长期页面状态漂移与 CSS 的即时效果分离。最新 SHA 需重新执行完整 14/14 验证，再决定候选是否真实改变节点几何，不能引用旧报告中 `valid=false` 作为最终的 CSS 副作用定论。
+
+本次不同有界 3 步 Trace 的 `UpdateLayoutTree` 受影响元素计数可出现大量小值，单轮样本中曾是 19 个报告样本中位 9,184，另一轮 21 样本中位 6、最大 9,235；**样本窗口与浏览器事件混合，不能把该中位数当稳定的同尺度性能 KPI，更不能据此宣称已锁定全树失效的唯一起因**。需要重点观察重复出现的高元素事件与对应 mutation/selector 的同窗关联。最终结论以固定后的同 SHA runner 数据为准。
