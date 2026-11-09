@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from ops.studio_phase21_official_web_export_132 import transform,build_receipt
-from ops.studio_phase22_official_provenance_132 import evaluate,check_skill_checkout,main
+from ops.studio_phase22_official_provenance_132 import evaluate,check_skill_checkout,load_pinned_skill_sources,main
 
 WEB="a"*40
 SKILL="b"*40
@@ -93,6 +96,54 @@ class Phase22OfficialTest(unittest.TestCase):
                 check_skill_checkout(root,SKILL,runner=dirty)
             with self.assertRaises(ValueError):
                 check_skill_checkout(root,"c"*40,runner=clean)
+
+    @unittest.skipUnless(shutil.which("git"), "Git CLI required for pinned blob test")
+    def test_cli_skill_inputs_are_actual_tracked_blobs_not_external_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)/"skill"
+            refs=root/"references"
+            refs.mkdir(parents=True)
+            styles=refs/"styles.json"
+            layouts=refs/"layouts.json"
+            styles.write_text(json.dumps([{"number":"FF-018"}]),encoding="utf-8")
+            layouts.write_text(json.dumps([{"number":"IG-001"}]),encoding="utf-8")
+            def git(*args):
+                proc=subprocess.run(["git","-C",str(root),*args],
+                    check=True,capture_output=True,text=True,timeout=10)
+                return proc.stdout.strip()
+            git("init","-q")
+            git("add","references/styles.json","references/layouts.json")
+            git("-c","user.name=CI","-c","user.email=ci@example.invalid",
+                "-c","commit.gpgsign=false","commit","-qm","pinned fixture")
+            sha=git("rev-parse","HEAD")
+            bound,pinned_styles,pinned_layouts=load_pinned_skill_sources(
+                root,sha,styles,layouts)
+            self.assertEqual(bound["pinnedSkillSha"],sha)
+            self.assertEqual(pinned_styles,[{"number":"FF-018"}])
+            self.assertEqual(pinned_layouts,[{"number":"IG-001"}])
+
+            outside=Path(td)/"forged-styles.json"
+            outside.write_text(styles.read_text(encoding="utf-8"),encoding="utf-8")
+            # Even semantically identical content outside the checkout is not
+            # authoritative; Git SHA and a clean worktree alone are not enough.
+            with self.assertRaises(ValueError):
+                load_pinned_skill_sources(root,sha,outside,layouts)
+            with self.assertRaises(ValueError):
+                load_pinned_skill_sources(root,"f"*40,styles,layouts)
+
+            layouts.write_text("[]",encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_pinned_skill_sources(root,sha,styles,layouts)
+            git("restore","references/layouts.json")
+            if hasattr(Path,"symlink_to"):
+                links=Path(td)/"linked-styles.json"
+                try:
+                    links.symlink_to(styles)
+                except (OSError,NotImplementedError):
+                    pass
+                else:
+                    with self.assertRaises(ValueError):
+                        load_pinned_skill_sources(root,sha,links,layouts)
 
     def test_official_cli_missing_private_approval_fail_closed(self):
         with tempfile.TemporaryDirectory() as td:
