@@ -134,8 +134,13 @@ const dragGraph=[
   {id:"e1",from:"n0",to:"n1"},
   {id:"e2",from:"n2",to:"n3"}
 ];
+const widthBeforeDragSession=widthReads,heightBeforeDragSession=heightReads;
 const dragSession=R.createEdgeDragSession(cachedSvg,dragGraph,models,
   cachedLayer,["n0"],geom);
+const dragSessionWidthReads=widthReads,dragSessionHeightReads=heightReads;
+assert.equal(dragSessionWidthReads-widthBeforeDragSession,2,
+  "measure the two linked endpoints once at drag start");
+assert.equal(dragSessionHeightReads-heightBeforeDragSession,2);
 assert.ok(dragSession);
 assert.equal(dragSession.incidentCount,1);
 assert.equal(edgeDomQueries,1);
@@ -149,6 +154,10 @@ assert.equal(dragSession.update(dragGraph,models),true);
 assert.notEqual(g1.hit.getAttribute("d"),firstSessionPath);
 assert.equal(edgeDomQueries,1,"no full edge enumeration for every frame");
 assert.equal(graphDomQueries,1,"no full card query for every frame");
+assert.equal(widthReads,dragSessionWidthReads,
+  "drag pointermove must NEVER force offsetWidth layout reads");
+assert.equal(heightReads,dragSessionHeightReads,
+  "drag pointermove must NEVER force offsetHeight layout reads");
 assert.equal(g2.hit.getAttribute("d"),"OLD-e2",
   "unrelated edge hit path must remain untouched");
 assert.equal(dragSession.update([...dragGraph],models),false,
@@ -184,6 +193,54 @@ const none=R.createEdgeDragSession(cachedSvg,dragGraph,models,cachedLayer,
   ["n4"],geom);
 assert.ok(none&&none.update(dragGraph,models));
 assert.equal(none.incidentCount,0);
+dragSession.dispose();
+assert.equal(dragSession.update(dragGraph,models),false,
+  "disposed sessions must not alter SVG");
+both.dispose();
+none.dispose();
+
+// Real browsers use ResizeObserver notifications AFTER layout to refresh
+// cached endpoint dimensions, avoiding forced layout in pointermove itself.
+const originalRO=globalThis.ResizeObserver,observers=[];
+globalThis.ResizeObserver=class {
+  constructor(callback){this.callback=callback;this.targets=[];this.disconnected=false;observers.push(this);}
+  observe(el){this.targets.push(el);}
+  disconnect(){this.disconnected=true;}
+};
+try{
+  const obsSession=R.createEdgeDragSession(cachedSvg,dragGraph,models,
+    cachedLayer,["n0"],geom);
+  assert.ok(obsSession);
+  const ro=observers.at(-1);
+  assert.equal(ro.targets.length,2,
+    "the ResizeObserver should watch incident endpoints, not the entire graph");
+  const prevWidth=Object.getOwnPropertyDescriptor(elements[0],"offsetWidth");
+  const beforePath=g1.hit.getAttribute("d");
+  Object.defineProperty(elements[0],"offsetWidth",
+    {configurable:true,get(){widthReads++;return 490;}});
+  try{
+    const oldReads=widthReads;
+    ro.callback([{target:elements[0]}]);
+    assert.equal(widthReads,oldReads+1,
+      "resize observer may read new measured dimensions after layout");
+    const readsAfterNotification=widthReads;
+    assert.equal(obsSession.update(dragGraph,models),true);
+    assert.notEqual(g1.hit.getAttribute("d"),beforePath,
+      "a real endpoint resize updates incident SVG path");
+    assert.equal(widthReads,readsAfterNotification,
+      "pointer update uses ResizeObserver cache without layout reads");
+  }finally{
+    Object.defineProperty(elements[0],"offsetWidth",prevWidth);
+  }
+  obsSession.dispose();
+  assert.equal(ro.disconnected,true,
+    "every drag must disconnect the ResizeObserver");
+  assert.equal(obsSession.update(dragGraph,models),false);
+}finally{
+  if(originalRO===undefined)delete globalThis.ResizeObserver;
+  else globalThis.ResizeObserver=originalRO;
+}
+
 
 console.log("CANVAS #111 indexed edges, drag-session and stable SVG DOM PASS "+
   JSON.stringify({nodes:n,edgeLookups:500,domQueries:selectCalls,
