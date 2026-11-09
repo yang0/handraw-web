@@ -38,6 +38,19 @@ class Phase13PointerTriageTests(unittest.TestCase):
         self.assertIn('if(mode!=="mask")',HOVER_MASK)
         self.assertNotIn("CSSStyleSheet.prototype",HOVER_MASK)
 
+    def test_existing_real_chromium_ci_gate_exercises_and_exports_phase13(self):
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[1]
+        benchmark=(root/"tests/benchmark_studio_phase12_111.py").read_text(
+            encoding="utf-8")
+        workflow=(root/".github/workflows/checks.yml").read_text(
+            encoding="utf-8")
+        self.assertIn("from ops.canvas_phase13_pointer_111 import collect",benchmark)
+        self.assertIn("phase13=collect_phase13(page,cdp)",benchmark)
+        self.assertIn('artifacts/studio-111-phase13',benchmark)
+        self.assertIn('artifacts/studio-111-phase13/**',workflow)
+        self.assertIn("python tests/benchmark_studio_phase12_111.py",workflow)
+
 
 if __name__=="__main__":
     unittest.main()
