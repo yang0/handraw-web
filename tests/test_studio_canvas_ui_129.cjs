@@ -4,6 +4,13 @@ const assert=require("node:assert/strict");
 const fs=require("node:fs");
 const UI=require("../demo/assets/studio-canvas-ui.js");
 const app=fs.readFileSync("demo/assets/studio-app.js","utf8");
+const canvasCss=fs.readFileSync("demo/assets/studio-canvas-129.css","utf8");
+// #111: 30 output controls must not wrap task chips into a tall overlay that
+// blocks the right-hand zoom dock. Real Chromium hit-test is a separate gate.
+assert.match(canvasCss,/\.ic129-task-chips\{display:flex;flex-wrap:nowrap/);
+assert.match(canvasCss,/overflow-x:auto;overflow-y:hidden/);
+assert.match(canvasCss,/\.ic-canvas-stage \.ic-bottom-right-dock\{bottom:100px;right:14px;z-index:48\}/);
+
 const entry=fs.readFileSync("demo/studio.html","utf8");
 
 const six=[
