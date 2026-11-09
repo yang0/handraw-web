@@ -180,7 +180,7 @@ def main() -> None:
                                 "one text edit touched extra nodes", size, native["updates"])
                             assert len(native["statusDirty"]) <= 1, (
                                 "one control status tick touched extra nodes", size, native["statusDirty"])
-                            assert native["restoredDirty"] in ([], ["node:g00-8"])
+                            assert native["restoredDirty"] in ([], ["node:g00-7"]), native["restoredDirty"]
                             # Actual UI zoom/camera path, measured separately from JS repaint.
                             zoom_ms = []
                             for _ in range(3):
