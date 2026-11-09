@@ -108,6 +108,7 @@ jobs:
             artifacts/studio-111-tree-style/**
             artifacts/studio-111-causality/**
             artifacts/studio-111-phase12/**
+            artifacts/studio-111-phase13/**
             artifacts/graphpatch-126/**
             artifacts/ai-110-offline-eval.json
             artifacts/p0-masonry-114/**
