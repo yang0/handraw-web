@@ -31,6 +31,25 @@
 
 这些数字包括 Chromium 调试 tracing 带来的额外负担；**不是无观测开销基线、生产低端机、真实 GPU/Paint present SLA**。Trace 的 CompositeLayers 类别未观察到时始终展示 unknown，绝不报 0。
 
+## 相同 Runner 的 CSS 拖拽策略对照（第六阶段补充）
+
+分段 `Performance.getMetrics` 已确认最显著的 Style 重算发生在**拖拽中**，不只是松开后 `fullRenderCanvas`：
+
+| 节点 | Style 全窗 | 移动中 | Pointerup + 校正 | rAF gap P95 |
+|---:|---:|---:|---:|---:|
+| 100 | 209.6ms | 153.6ms | 56.0ms | 50.0ms |
+| 300 | 548.5ms | 387.7ms | 160.8ms | 66.7ms |
+| 300 + CDP 4× | 3430.5ms | 2725.9ms | 704.6ms | 483.3ms |
+
+代码调查还确认：`studio-canvas.css` 的 `.ic-node` **已经**设置 `contain: layout style`，所以不重复增加，也不引入可能改变节点尺寸和端口命中的 `content-visibility:auto`。
+
+本轮追加一个受限的**图层位移优化**：
+
+- 现代浏览器支持 CSS individual `translate` 时，指针拖拽不再每个事件写 `style.left/top`，而是以起始坐标为锚点用 `translate:${deltaX}px ${deltaY}px` 显示位置，同时 Graph `x/y` 仍实时更新、SVG 连线与 minimap 继续读 Graph 权威坐标。
+- `pointerup/pointercancel` 将 Graph 最新 `x/y` **一次性提交**到 `left/top` 并清除 `translate`；缺浏览器支持、卡片在拖拽中被替换、或测试显式选择 Legacy 时回退原 CSS left/top。
+- 切换 `left-top` / `translate` 的开关仅在隔离测试 `__HANDRAW_TESTING__===true` 可用。真实浏览器内的 legacy 与 translate 测量使用相同 300 节点、同一 Runner、相同 12 步物理拖拽和 4× CPU 模拟，报告 P95、Style/Layout/Script 和 Trace 统计；**执行顺序/缓存热度仍可能影响数值**，不可用单次 A/B 直接声称因果或正式 SLA。
+- Chrome 浏览器始终通过真实交互断言两种路径的 Graph 最终坐标、卡片 `left/top` 提交以及 `translate` 已清空；原来的 9 次 pointermove + SVG 命中边/非关联边、图片、Undo/Redo 继续保留。
+
 ## 安全与数据边界
 
 - `ops/canvas_frame_trace_111.py` 仅保留白名单事件类别及时间汇总；原始 trace 在内存解码后即丢弃，不上传到 Actions、磁盘或测试日志。
