@@ -290,7 +290,7 @@ def main(argv=None):
         print("PHASE21 INFRA "+json.dumps({"mode":args.mode,
             "decision":"NO-GO","secretsOrObjectKeysEmitted":False}))
         return 0
-    except (ValueError,TypeError,OSError,RuntimeError):
+    except Exception:
         print("Phase21 private infrastructure probe BLOCKED",file=sys.stderr)
         return 2
 
