@@ -36,7 +36,7 @@ def test_fixture():
               "keys":registrations}
     approval_rows=[]
     styles=[]
-    for candidate in pending["pendingSkillOnly"]:
+    for index,candidate in enumerate(pending["pendingSkillOnly"],start=1):
         code=candidate["code"]
         row={"number":code,"group":"offline-test-only",
              "generation_name":candidate["name"],"traits":"TEST-NONPRODUCTION"}
@@ -45,7 +45,7 @@ def test_fixture():
             "skillSourceSha256":candidate["sha256"],
             "webDbPublishedRowSha256":sha(row),
             "deployedSha":DEPLOY_SHA,
-            "websiteActionId":"mock-web-action-001",
+            "websiteActionId":f"mock-web-action-{index:03d}",
             "rightsReviewEvidenceId":"mock-rights-001",
             "reviewedAtUtc":"2026-11-09T23:00:00Z",
             "result":"website_published_and_reviewed"}
@@ -117,6 +117,24 @@ class OfficialApprovalSignatureTests(unittest.TestCase):
         bad["approvals"][0]["signatures"][1]["keyId"]=bad["approvals"][0]["signatures"][0]["keyId"]
         with self.assertRaises(ValueError):
             self.evaluate(bundle=bad)
+
+    def test_two_distinct_keyids_with_same_public_key_are_not_independent(self):
+        # An externally pinned registry can accidentally alias the same
+        # Ed25519 private key into the editor and reviewer roles. Reject the
+        # duplicate public bytes before verifying either signature.
+        registry=json.loads(json.dumps(self.registry))
+        registry["keys"][1]["publicKeyBase64"]=registry["keys"][0]["publicKeyBase64"]
+        with self.assertRaisesRegex(ValueError,"duplicate Ed25519 public material"):
+            self.evaluate(registry=registry,trust=sha(registry))
+
+    def test_replayed_editorial_action_across_two_resource_ids_refused(self):
+        # Per-resource website editorial approval is required, not one
+        # repeated 'approval action' relabeled across FF-018/FF-019/FG-025.
+        bundle=json.loads(json.dumps(self.bundle))
+        bundle["approvals"][1]["payload"]["websiteActionId"]=(
+            bundle["approvals"][0]["payload"]["websiteActionId"])
+        with self.assertRaisesRegex(ValueError,"replayed editorial action"):
+            self.evaluate(bundle=bundle)
 
     def test_missing_or_wrong_published_db_and_wrong_deployed_sha_refused(self):
         with self.assertRaises(ValueError):
