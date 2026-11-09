@@ -112,6 +112,101 @@ JS_MEASURE = r"""() => {
 }"""
 
 
+
+def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
+    """Actual Playwright mouse events, no synthetic handler invocation."""
+    page.evaluate("""() => window.HANDRAW_STUDIO_TESTING
+      .focusCanvasNodeForBenchmark('g00-0')""")
+    box = page.locator('#ic-nodes-layer .ic-node[data-node-id="g00-0"]').bounding_box()
+    assert box and 0 < box["x"] < 1390 and 0 < box["y"] < 850, (
+        "drag test node not in viewport", size, box)
+    x, y = box["x"] + 45, box["y"] + 15
+    page.mouse.move(x, y)
+    page.mouse.down()
+    before = page.evaluate("""() => {
+      const root=document.querySelector('#ic-nodes-layer');
+      const svg=document.getElementById('ic-edges-svg');
+      const group=svg?.querySelector('[data-edge-id="g00-edge-0-7"]');
+      const other=svg?.querySelector('[data-edge-id="g00-edge-3-7"]');
+      const mini=document.getElementById('ic-minimap')
+        ?.querySelector('[data-mini-node-id="g00-0"]');
+      const card=root?.querySelector('[data-node-id="g00-0"]');
+      const model=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+      if(!group||!other||!mini||!card||!model)
+        throw Error('native drag fixture has missing DOM binding');
+      window.__drag111Refs={group,other,mini,card,
+        otherPath:other.querySelector('path.ic-edge-line')?.getAttribute('d'),
+        hitPath:group.querySelector('path.ic-edge-hit')?.getAttribute('d'),
+        images:[...root.querySelectorAll('img')]};
+      return {x:model.x,y:model.y,
+        selected:(window.CS.graph.selectedIds||[]).includes('g00-0')};
+    }""")
+    assert before["selected"], ("real node pointer selection did not register", size)
+    page.mouse.move(x + 92, y + 53, steps=9)
+    middle = page.evaluate("""() => {
+      const r=window.__drag111Refs;
+      const svg=document.getElementById('ic-edges-svg');
+      const model=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+      const samples=document.getElementById('ic-nodes-layer')._drag111Samples||[];
+      const line=r.group.querySelector('path.ic-edge-line');
+      const hit=r.group.querySelector('path.ic-edge-hit');
+      return {
+        x:model.x,y:model.y,
+        incidentChanged:hit?.getAttribute('d')!==r.hitPath,
+        hitMatchesLine:hit?.getAttribute('d')===line?.getAttribute('d'),
+        unrelatedStable:r.other.isConnected &&
+          svg.querySelector('[data-edge-id="g00-edge-3-7"]')===r.other &&
+          r.other.querySelector('path.ic-edge-line')?.getAttribute('d')===r.otherPath,
+        cardStable:r.card.isConnected &&
+          document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]')===r.card,
+        miniStable:r.mini.isConnected &&
+          document.querySelector('#ic-minimap [data-mini-node-id="g00-0"]')===r.mini,
+        imageStable:r.images.every(img=>img.isConnected),
+        samples:samples.map(p=>({totalMs:p.totalMs,
+          edgeAndPositionMs:p.edgeAndPositionMs,
+          usedSession:p.usedSession,movedCount:p.movedCount}))
+      };
+    }""")
+    page.mouse.up()
+    assert middle["x"] > before["x"] and middle["y"] > before["y"], (
+        "real pointer drag did not move Graph", size, middle)
+    for guard in ("incidentChanged", "hitMatchesLine", "unrelatedStable",
+                  "cardStable", "miniStable", "imageStable"):
+        assert middle[guard], ("drag DOM/geometry regression", size, guard, middle)
+    samples = middle.pop("samples")
+    assert len(samples) >= 7, ("insufficient real pointermove samples", size, samples)
+    assert all(p["usedSession"] and p["movedCount"] == 1 for p in samples), (
+        "drag-session invalidated without known topology change", size, samples)
+    after = page.evaluate("""() => {
+      const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+      return {x:n.x,y:n.y};
+    }""")
+    assert after["x"] == middle["x"] and after["y"] == middle["y"], (
+        "pointerup lost drag coordinates", size, after, middle)
+    # Real keyboard Undo and Redo must restore the edited Graph geometry.
+    page.keyboard.press("Control+z")
+    undo = page.evaluate("""() => {
+      const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+      return {x:n.x,y:n.y};
+    }""")
+    assert undo == {"x": before["x"], "y": before["y"]}, (
+        "drag Undo failed to restore coordinates", size, before, undo)
+    page.keyboard.press("Control+y")
+    redo = page.evaluate("""() => {
+      const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+      return {x:n.x,y:n.y};
+    }""")
+    assert redo == after, ("drag Redo failed", size, after, redo)
+    return {"nodes": size, "cpuThrottle": cpu_factor, "pointerEvents": len(samples),
+            "pointerP50Ms": percentile([v["totalMs"] for v in samples], .5),
+            "pointerP95Ms": percentile([v["totalMs"] for v in samples], .95),
+            "edgeAndPositionP95Ms": percentile(
+                [v["edgeAndPositionMs"] for v in samples], .95),
+            "allSessionUpdates": True, "incidentPathsCorrect": True,
+            "unrelatedEdgeAndMiniDOMStable": True, "imageStable": True,
+            "undoRedoGeometry": True}
+
+
 def main() -> None:
     from playwright.sync_api import sync_playwright
 
@@ -262,6 +357,21 @@ def main() -> None:
                             }""")
                             assert mini_camera_stable, ("camera zoom rebuilt every minimap node",size)
                             native["minimapStableOnZoom"] = True
+                            native["physicalDrag"] = measure_physical_drag(page, size)
+                            if size == 300:
+                                cdp = context.new_cdp_session(page)
+                                try:
+                                    cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4})
+                                    native["emulated4xCpuDrag"] = measure_physical_drag(
+                                        page, size, cpu_factor=4)
+                                finally:
+                                    cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1})
+                                    cdp.detach()
+                            print("CANVAS #111 REAL POINTER DRAG " + json.dumps({
+                                "nodes": size,
+                                "normal": native["physicalDrag"],
+                                "throttled": native.get("emulated4xCpuDrag"),
+                            }, ensure_ascii=False), flush=True)
                             camera_stable = page.evaluate("""() => {
                               const root=document.querySelector('#ic-nodes-layer');
                               return root.querySelectorAll('.ic-node').length===window.CS.graph.nodes.length
