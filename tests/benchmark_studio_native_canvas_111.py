@@ -321,6 +321,16 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
         }""")
         page.mouse.move(coords["x"], coords["y"])
         page.mouse.down()
+        # Native pointerdown legitimately rebuilds the floating selection
+        # toolbar. Compare its identity from AFTER selection has settled,
+        # not from the earlier hover before mousedown.
+        page.evaluate("""() => {
+          window.__studio111PacedToolbar=document.querySelector('[data-float-topbar]');
+          window.__studio111PacedMini=document.querySelector(
+            '#ic-minimap [data-mini-node-id="g00-0"]');
+          if(!window.__studio111PacedToolbar||!window.__studio111PacedMini)
+            throw Error('pointerdown did not mount selected toolbar/minimap');
+        }""")
         # 12 real pointer movements with deliberate pacing, so the renderer
         # has multiple opportunities to present frames. Unlike 9 rapid
         # pointer events, this reports actual rAF cadence under pressure.
