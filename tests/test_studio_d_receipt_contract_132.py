@@ -27,6 +27,7 @@ def samples():
             "freeQuotaLedgerSha256":HASH(4),
             "reconciliationReportSha256":HASH(5),
             "currency":"USD", "paidAttemptCount":6, "refundCount":2,
+            "freeQuotaCasesChecked":2,
             "unmatchedProviderEntryCount":0, "unmatchedWalletEntryCount":0,
             "netChargeDeltaMinor":0, "netRefundDeltaMinor":0,
             "duplicateCallbackCasesChecked":2, "throttled429CasesChecked":1,
@@ -122,6 +123,7 @@ class DetailedReceiptsTest(unittest.TestCase):
             ("duplicateCallbackCasesChecked",0), ("throttled429CasesChecked",0),
             ("upstream502CasesChecked",0), ("unknownRecoveryCasesChecked",0),
             ("lateSuccessCasesChecked",0), ("paidAttemptCount",0),
+            ("refundCount",0), ("freeQuotaCasesChecked",0),
             ("providerStatementSha256","bad"), ("currency","FAKE"),
         ):
             pack,claims=samples()
