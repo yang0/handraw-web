@@ -195,6 +195,10 @@ class DetailedReceiptsTest(unittest.TestCase):
 
     def test_cli_private_0600_non_overwrite_reports_only_aggregates(self):
         pack,claims=samples()
+        # Only this CLI test uses the real clock; the other tests pin NOW.
+        utc=datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
+        for item in claims["cases"]:
+            item["observedAtUtc"]=utc
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)
             packet=root/"receipt.json"
