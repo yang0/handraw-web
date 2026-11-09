@@ -57,6 +57,61 @@ HOVER_MASK = r"""mode => {
   return {modified:state.rules.length};
 }"""
 
+# Attribute-only MutationObserver misses childList and characterData changes.
+# Count DOM structural mutations without reading any node text/HTML, IDs, URLs.
+STRUCTURE_OBSERVER = r"""action => {
+  if(action==="stop"){
+    const state=window.__qa111structure13;
+    if(!state)throw Error("no structure observer");
+    state.obs.takeRecords().forEach(state.record);
+    state.obs.disconnect();
+    return {
+      childListRecords:state.childList,
+      addedNodeCount:state.added,
+      removedNodeCount:state.removed,
+      characterDataRecords:state.characterData,
+      byParentRole:state.roles,
+      eventsDroppedAtCap:state.overflow,
+      privateContentsPersisted:false
+    };
+  }
+  if(action!=="start")throw Error("invalid structure observer action");
+  window.__qa111structure13?.obs.disconnect();
+  const role=el=>{
+    if(!el)return "other";
+    if(el.nodeType!==1)el=el.parentElement;
+    if(!el)return "other";
+    if(el.closest("#ic-nodes-layer .ic-node"))return "node";
+    if(el.closest("#ic-edges-svg"))return "edge-svg";
+    if(el.closest("[data-float-topbar]"))return "floating-toolbar";
+    if(el.closest("#ic-minimap"))return "minimap";
+    if(el.closest("#ic-overlay-layer"))return "overlay";
+    if(el.closest("#ic-viewport"))return "viewport";
+    if(el.closest("#ic-canvas-stage"))return "canvas-stage";
+    return "other";
+  };
+  const s={childList:0,added:0,removed:0,characterData:0,
+           roles:{},overflow:0,total:0};
+  s.record=m=>{
+    if(s.total++>=5000){s.overflow++;return}
+    const r=role(m.target);
+    s.roles[r]=(s.roles[r]||0)+1;
+    if(m.type==="childList"){
+      s.childList++;
+      s.added+=m.addedNodes.length;
+      s.removed+=m.removedNodes.length;
+    }else if(m.type==="characterData"){
+      s.characterData++;
+    }
+  };
+  s.obs=new MutationObserver(rows=>rows.forEach(s.record));
+  s.obs.observe(document.body,{
+    subtree:true,childList:true,characterData:true
+  });
+  window.__qa111structure13=s;
+  return true;
+}"""
+
 
 def _plan(window: str):
     if window not in TRACE_WINDOWS:
@@ -81,6 +136,7 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
     stream=[]
     tracing=False
     started=False
+    structure_started=False
     frames_started=False
     try:
         if plan["pressed"]:
@@ -94,6 +150,8 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
         page.wait_for_timeout(85)
         page.evaluate(OBSERVE_DOM,"start")
         started=True
+        page.evaluate(STRUCTURE_OBSERVER,"start")
+        structure_started=True
         if not trace:
             page.evaluate(FRAMES,"start")
             frames_started=True
@@ -125,6 +183,8 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
                 tracing=False
             dom=page.evaluate(OBSERVE_DOM,"stop")
             started=False
+            structure=page.evaluate(STRUCTURE_OBSERVER,"stop")
+            structure_started=False
             if mouse_down:
                 page.mouse.up()
                 mouse_down=False
@@ -178,7 +238,7 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
         return {
             "window":name,"physicalMouseMoves":moves,
             "pressed":plan["pressed"],"hoverRulesMasked":mask["modified"],
-            "domMutations":dom,"chrome":chrome,
+            "domMutations":dom,"structureChanges":structure,"chrome":chrome,
             "metric":None if trace else metric,
             "nativeGraphAndMediaStable":True,
         }
@@ -188,6 +248,9 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
             except Exception:pass
         if started:
             try:page.evaluate(OBSERVE_DOM,"stop")
+            except Exception:pass
+        if structure_started:
+            try:page.evaluate(STRUCTURE_OBSERVER,"stop")
             except Exception:pass
         if frames_started:
             try:page.evaluate(FRAMES,"stop")
@@ -215,6 +278,7 @@ def collect(page,cdp):
             "invalidationCount":chrome["invalidationEvents"],
             "joinNearLargeByReason":chrome["joinNearLargeUpdateByReason"],
             "actualDomMutationCounts":row["domMutations"]["byType"],
+            "structuralDomMutations":row["structureChanges"],
             "globalClassMutations":row["domMutations"]["globalClassMutations"],
             "hoverRulesMasked":row["hoverRulesMasked"],
             "pressed":row["pressed"],
