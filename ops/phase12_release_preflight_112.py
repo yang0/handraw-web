@@ -21,7 +21,9 @@ if str(ROOT) not in sys.path:
 
 from ops.check_official_catalog_parity import audit
 
-EXPECTED_PENDING = {"FF-018": "style", "FG-025": "style"}
+EXPECTED_PENDING = {"FF-018": ("style", 11),
+                    "FF-019": ("style", 132),
+                    "FG-025": ("style", 11)}
 PINNED_CLIENT_SHA = "dad8dad2d2af25bd9df45971a03a499461a723db"
 SHA = re.compile(r"^[a-f0-9]{40}$")
 
@@ -70,18 +72,18 @@ def pending_summary(manifest):
         code=row.get("code")
         if code in pending or code not in EXPECTED_PENDING:
             raise ValueError("unexpected or duplicate proposal")
-        if row.get("kind")!=EXPECTED_PENDING[code] or row.get("issue")!=11:
+        if (row.get("kind"), row.get("issue"))!=EXPECTED_PENDING[code]:
             raise ValueError("proposal kind/Issue does not match")
         if row.get("state")!="awaiting_website_editorial_review":
             raise ValueError("proposal review state changed; require review")
         if not isinstance(row.get("sha256"),str) or not re.fullmatch(
             r"[a-f0-9]{64}",row["sha256"]):
             raise ValueError("proposal source fingerprint missing")
-        pending[code]={"issue":11,"kind":row["kind"],
+        pending[code]={"issue":row["issue"],"kind":row["kind"],
                        "state":"awaiting_website_editorial_review",
                        "sourceFingerprintPresent":True}
     if set(pending)!=set(EXPECTED_PENDING):
-        raise ValueError("expected both pending catalog IDs")
+        raise ValueError("expected all fingerprinted pending catalog IDs")
     return dict(sorted(pending.items()))
 
 
