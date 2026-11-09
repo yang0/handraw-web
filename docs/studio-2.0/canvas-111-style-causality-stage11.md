@@ -33,4 +33,33 @@ Stage 10 在相同条件下测得 `UpdateLayoutTree` 峰值约 9,235 个元素�
 
 ## 实测结果
 
-等待真实 Runner 对最终 SHA 的可复验 Chromium 数值；不得预先填造定量结果或宣称核心触发链已证明。
+第一轮及覆盖层补充测试的结果见下方；最终交付 SHA 的 CI 验证记录应在实际全绿后于 Issue #111 同步。
+
+## 2026-11-09 实测证据：归因缩窄但尚非核心根因
+
+两套独立分支完整 CI 与脱敏 GitHub Actions artifact：
+
+- 第一轮验证 [#42582127806](https://github.com/yang0/handraw-web/actions/runs/42582127806)：14/14 SUCCESS，3 次真实 pointermove、39 条 Chrome Style Invalidation、3 次大型 `UpdateLayoutTree`（最大 9,185），实测 DOM `style` 变更 10 次：node 5 次、暂未细分覆盖层路径 5 次。第一轮两种 hover CSSOM 消融均未通过普通与模拟 4× CPU 稳态双重复门槛。
+- 补充精细化测试 [#42583855111](https://github.com/yang0/handraw-web/actions/runs/42583855111)：14/14 SUCCESS，脱敏 DOM 角色正式定位为 `node` 5 次、`floating-toolbar` 5 次；父级角色链分别通往 `canvas-stage > viewport > world > nodes-layer > node`，以及 `canvas-stage > canvas-overlay > floating-toolbar`。这是 `MutationObserver` 同窗口实测 DOM 目标，不是对 Chrome trace opaque `nodeId` 的已验证映射。
+- 第二轮分别在原始 CSS 与仅增加覆盖层 `contain: style` 后进行有界 Chromium Trace，**两者均有 3 次大型 UpdateLayoutTree，最大 9,185 元素**。两窗口 `Style Invalidation` 分类完全相同：39 条（attribute/class 11、style-property 10、stylesheet/selector 8、tree-dependency 8、unknown 2）。50ms 同线程邻近合计 39 条，说明相关失效事件集中在拖拽更新窗口，但**尚不能识别单一的 CSS 源头链**，且该次覆盖层隔离并没有缩小受影响元素的最大范围。
+
+### 目标候选实测（普通与 CDP 4× CPU；12 次物理 mousemove / 一轮）
+
+每组先使用紧邻的 baseline 采集节点、标题、端口、小地图及工具栏几何与透明度，CSSOM 修改后立即恢复，随后针对各 CPU 以 `A-B-A-B-A` 反复采样。以下为拖拽期间 CDP `RecalcStyleDuration` 累积毫秒，候选 B1/B2 与 A 的三次中位对照；不是每帧延迟：
+
+| 候选 | 普通 A 中位 | 普通 B1/B2 | 4× A 中位 | 4× B1/B2 | 双 CPU 稳态门槛 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 已选节点 hover 限制 | 263.206 | 262.981 / 260.102 | 1813.494 | 1910.414 / 1990.869 | 未通过 |
+| 临时移除节点 hover（仅诊断） | 258.167 | 257.066 / 257.703 | 1616.287 | 1600.239 / 1819.779 | 未通过 |
+| 浮动工具栏 `contain: layout style` | 263.332 | 262.107 / 259.009 | 1714.063 | 1669.039 / 1783.741 | 未通过 |
+| 覆盖层 `contain: style` | 259.043 | 263.522 / 260.124 | 1824.122 | 1896.047 / 1864.202 | 未通过 |
+
+此外每组都核对了 Style+Layout 总量和 rAF P95，指标必须同时达标才允许进入下一层审核。本轮 **4 个候选 `valid=true`、均未达到两种 CPU 各两次都快至少 10% 的门槛**。关闭 hover 会改变 UI 语义，因此无论测出什么数字它都不能直接上线。
+
+**工程判定：** 这轮精准找到了拖拽期间的两个真实 DOM 样式更新目标（Node / Floating toolbar），但尚未证明它们中谁引发 Chrome 9,185 的布局树影响计数，也无法证明哪个祖先选择器/后代匹配链是根因。当前 `CSS contain` / 层隔离未提供稳定双 CPU 改善，**生产 CSS、JS 继续完全不变；#111 保持 OPEN、#112 生产 NO-GO**。
+
+### CI 耗时治理
+
+Stage 11 使用 Stage 10 的隔离 HTTP、图像、Graph 和 Undo 基础测试设备，但 Stage 10 的 4 种 CSS A-B-A-B-A 已由工作流独立运行；为避免重复耗时，Stage 11 入口在其独立测试进程临时设置 `stage10.CASES=()`，只执行 Stage 11 的 4 种候选，退出后恢复原对象。不得跳过工作流中独立 Stage 10 门禁。该编排优化必须重新跑最终 SHA 全部 14/14 CI 后才可交付。
+
+此阶段数据来源是 Chrome 模拟 CPU 限速（不等于真实低端 CPU/GPU），没有真实浏览器 DOM backend node id 证明，任何“已找到唯一起因”或“生产性能提升 X%”声明都不成立。
