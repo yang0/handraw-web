@@ -162,6 +162,10 @@ assert.match(app,/diagMode==="no-minimap"/,
   "measure minimap SVG rect writes independently");
 assert.match(app,/diagMode==="node-only"/,
   "measure native card left/top writes without other canvas updates");
+assert.match(app,/diagMode==="no-visual"/,
+  "isolate pointer-capture drag even when all canvas visuals are bypassed");
+assert.match(app,/visualProbeMode:diagMode/,
+  "every real pointer event must record the active test-only diagnostic mode");
 assert.match(app,/dragCtx\.lastEdgeTrusted=Boolean\(usedSession\)&&diagMode==="normal"/,
   "any visual bypass must force an authoritative pointerup full render");
 assert.match(app,/if\(!safe\)fullRenderCanvas\(\)/,
