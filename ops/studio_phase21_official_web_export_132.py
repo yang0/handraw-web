@@ -175,7 +175,7 @@ def main(argv=None):
         output=write_fresh(args.out,styles,layouts,receipt)
         print("PHASE21 WEB READONLY EXPORT "+json.dumps(output,sort_keys=True))
         return 0
-    except (ValueError,KeyError,TypeError,RuntimeError,OSError):
+    except Exception:
         print("Phase21 website published DB export BLOCKED",file=sys.stderr)
         return 2
 
