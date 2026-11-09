@@ -20,8 +20,8 @@ class Phase12ReleasePreflight(unittest.TestCase):
         self.assertEqual(set(result),set(EXPECTED_PENDING))
         self.assertTrue(all(x["state"]=="awaiting_website_editorial_review"
                             for x in result.values()))
-        for code in result:
-            self.assertEqual(result[code]["issue"],11)
+        self.assertEqual({code: entry["issue"] for code, entry in result.items()},
+                         {"FF-018":11,"FF-019":132,"FG-025":11})
 
     def test_wrong_state_duplicate_or_missing_proposal_fails_closed(self):
         raw=json.loads((ROOT/"ops/official_catalog_pending_11.json")
