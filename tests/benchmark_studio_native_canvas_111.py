@@ -251,19 +251,19 @@ def measure_physical_drag(page, size: int, cpu_factor: int = 1) -> dict:
 
 
 def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
-                                drag_mode: str = "translate") -> dict:
+                                finish_mode: str = "targeted") -> dict:
     """Physical pointer + rAF cadence + bounded CDP render diagnostics.
 
     Includes real presentation cadence while dragging AND settling after
     pointerup. No fake Graph updates. Trace raw bytes never leave memory.
     """
-    assert drag_mode in ("translate", "left-top")
+    assert finish_mode in ("targeted", "full")
     page.evaluate("""mode => {
       if(window.__HANDRAW_TESTING__!==true||!window.HANDRAW_STUDIO_TESTING)
-        throw Error('drag mode can only be chosen in isolated browser tests');
-      window.HANDRAW_STUDIO_TESTING.canvasDragPositionMode=mode;
+        throw Error('finish mode is available only in isolated browser tests');
+      window.HANDRAW_STUDIO_TESTING.canvasDragFinishMode=mode;
       return window.HANDRAW_STUDIO_TESTING.focusCanvasNodeForBenchmark('g00-0');
-    }""", drag_mode)
+    }""", finish_mode)
     coords = page.evaluate("""() => {
       const node=document.querySelector('#ic-nodes-layer [data-node-id="g00-0"]');
       const header=node?.querySelector('.ic-node-header-above');
@@ -276,6 +276,7 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
         if(hit?.closest('.ic-node')===node &&
             !hit.closest('button,input,textarea,select,label')){
           const n=window.CS.graph.nodes.find(n=>n.id==='g00-0');
+          window.__studio111PacedCard=node;
           return {x,y,nodeX:n.x,nodeY:n.y};
         }
       }
@@ -367,7 +368,9 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
           return {x:n.x,y:n.y,
             cssX:card?.style.left,cssY:card?.style.top,
             cssTranslate:card?.style.translate,
-            modes:(layer._drag111Samples||[]).map(x=>x.positionMode),
+            cardStable:card===window.__studio111PacedCard &&
+              card?.isConnected===true,
+            finish:layer._drag111Finish||null,
             cards:document.querySelectorAll('#ic-nodes-layer .ic-node').length,
             imageNodes:document.querySelectorAll('#ic-nodes-layer img').length,
             edgeGroups:document.querySelectorAll(
@@ -383,13 +386,16 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
             state["cssY"] == f'{state["y"]}px'), (
                 "real paced drag did not commit layout position", size, state)
         assert state["cssTranslate"] in ("", None, "none"), (
-            "drag left a transient CSS translate after pointerup", size, state)
-        assert len(state["modes"]) >= 8 and all(
-            mode == drag_mode for mode in state["modes"]), (
-                "CSS translate control mode was not honored by real drag",
-                size, drag_mode, state)
+            "real drag retained a transient CSS translate", size, state)
+        assert state["cardStable"], (
+            "node drag replaced an unchanged media card DOM", size, state)
+        assert state["finish"] and (
+            state["finish"]["targeted"] == (finish_mode == "targeted")), (
+                "node pointerup did not honor safe finish policy",
+                size, finish_mode, state)
         return {"nodes": size, "cpuThrottle": cpu_factor,
-                "dragMode": drag_mode,
+                "finishMode": finish_mode,
+                "finishTargeted": state["finish"]["targeted"],
                 "pointerMoves": 12, "raf": frames,
                 "cdpPerformance": counters,
                 "cdpDragOnly": drag_counters,
@@ -408,7 +414,7 @@ def profile_real_frame_pipeline(page, size: int, cpu_factor: int = 1,
         try:
             page.evaluate("""() => {
               if(window.__HANDRAW_TESTING__===true)
-                window.HANDRAW_STUDIO_TESTING.canvasDragPositionMode="auto";
+                window.HANDRAW_STUDIO_TESTING.canvasDragFinishMode="auto";
             }""")
         except Exception:
             pass
@@ -569,31 +575,31 @@ def main() -> None:
                             # Keep the original 9-event regression unchanged.
                             if size in (100, 300):
                                 if size == 300:
-                                    native["legacyFramePipeline"] = profile_real_frame_pipeline(
-                                        page, size, drag_mode="left-top")
+                                    native["legacyFullFramePipeline"] = profile_real_frame_pipeline(
+                                        page, size, finish_mode="full")
                                 native["framePipeline"] = profile_real_frame_pipeline(
-                                    page, size, drag_mode="translate")
+                                    page, size, finish_mode="targeted")
                             if size == 300:
                                 cdp = context.new_cdp_session(page)
                                 try:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4})
                                     native["emulated4xCpuDrag"] = measure_physical_drag(
                                         page, size, cpu_factor=4)
-                                    native["emulated4xLegacyFramePipeline"] = (
+                                    native["emulated4xLegacyFullFramePipeline"] = (
                                         profile_real_frame_pipeline(
-                                            page, size, cpu_factor=4, drag_mode="left-top"))
+                                            page, size, cpu_factor=4, finish_mode="full"))
                                     native["emulated4xFramePipeline"] = (
                                         profile_real_frame_pipeline(
-                                            page, size, cpu_factor=4, drag_mode="translate"))
+                                            page, size, cpu_factor=4, finish_mode="targeted"))
                                 finally:
                                     cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1})
                                     cdp.detach()
                             if native.get("framePipeline"):
                                 print("CANVAS #111 FULL FRAME PIPELINE " + json.dumps({
                                     "nodes": size, "normal": native["framePipeline"],
-                                    "legacy": native.get("legacyFramePipeline"),
+                                    "legacyFull": native.get("legacyFullFramePipeline"),
                                     "throttled": native.get("emulated4xFramePipeline"),
-                                    "throttledLegacy": native.get("emulated4xLegacyFramePipeline"),
+                                    "throttledLegacyFull": native.get("emulated4xLegacyFullFramePipeline"),
                                 }, ensure_ascii=False), flush=True)
                             print("CANVAS #111 REAL POINTER DRAG " + json.dumps({
                                 "nodes": size,
