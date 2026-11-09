@@ -198,7 +198,7 @@ def prepare_pitr(*,backup_dir,archive_dir,target_utc):
     # quoted command; both placeholders are PostgreSQL-provided filenames.
     conf=("\n# Phase21 isolated PITR target; operator must start via local-only pg_ctl\n"
           + "restore_command = 'cp -- "+str(a)+"/%f %p'\n"
-          + "recovery_target_time = '"+target_utc.replace("Z","+00")+"''\n"
+          + "recovery_target_time = '"+target_utc.replace("Z","+00")+"'\n"
           + "recovery_target_action = 'pause'\n")
     with config.open("a",encoding="utf-8") as file:
         file.write(conf)
