@@ -1,5 +1,8 @@
 # #11 官方编号权威与跨仓快照验收 · 2026-11-09
 
+> **最新快照更新（Skill main v1.9.11）**：此文内较早的 Skill 539 / Web 537、FF-018/FG-025 两项待审数字是**当时快照**，不是当前线上 Skill main 的最新状态。2026-11-09 已核实 `yang0/handraw-style@9248843ba4659a1d9afbc177ae73b91bb1af68a9`：Skill 当前有 **370 画风 + 170 图型 = 540**，Web 仍是 **367 + 170 = 537**，因此新增第三项 Skill-only **FF-019 / Hyperreal 3D Cartoon Portrait（超现实 3D 卡通肖像）**。FF-018、FF-019、FG-025 均**只有 Skill 侧元数据，未获得网站官方审批**。本页原有快照与人工作业说明保留供历史追溯，最新待审数量以本段、`ops/official_catalog_pending_11.json` 和真实 Skill main 的当次审计为准。发布依旧 NO-GO，Issue #132 Open，PR #131 Draft。
+
+
 > **补充移交约束（2026-11-09）**：在独立分支 14/14、studio2 安全快进、Push/PR 14/14 且完整证据归档后，#11 可以只按 C 级工程对账完成归档。原文关于“审批前 Issue 必须 Open”的**生产/D 级门禁责任**明确转交 [#132](https://github.com/yang0/handraw-web/issues/132)；未审批 FF-018/FG-025、动态官方 DB 导出缺失、\`--strict\` 不通过时，无论历史 Issue 状态如何，发布继续严格 NO-GO。
 
 Web: https://github.com/yang0/handraw-web (`studio2`)
@@ -79,3 +82,10 @@ python ops/check_official_catalog_parity.py \
 - Skill main 本身是可变化的发布分支；审计运行记录 checkout SHA。仅当 Web 已批准并发布、Skill 合入并在同一个正式发布基线上通过 `--strict` + 真实官网 DB 审核导出，才能关闭 #11/#17；普通 CI 允许审计后确认的 pending 状态，仍然标记 `readyForRelease=false`、生产 NO-GO。
 
 本阶段不能擅自将 FF-018、FG-025 回填官网目录，也不能直接删除 Skill 源素材或修改 Skill main。
+
+## 2026-11-09 · v1.9.11 新增 FF-019：CI 真实漂移阻断与指纹再锁定
+
+本次 `studio2-phase15-move-boundary-20261109` 独立分支运行中，`production-storage-integration` 任务从**真实 Skill main** 只读 checkout 到 `9248843ba4659a1d9afbc177ae73b91bb1af68a9`，校验失败且返回 2，报告 `unexpectedSkillOnly=["FF-019"]`。这证明严格检测起效，而不是生产功能回退、PG17 迁移故障或本轮 Canvas Phase15 导致。具体 Skill 提交 `release: v1.9.11 - 新增 FF-019 超现实 3D 卡通肖像风格`，元数据只有 `number/group/reference/generation_name/traits`，已按仓库现有纯函数 `_sha` 的规范（UTF-8、`ensure_ascii=False`、字典键排序、无多余空白）计算完整行 SHA256，锁定为 `fc4f512c237ce56a6cf43776912be12ba9e81fc21f575ef962752e7302329fd3`，关联未完成的 [#132](https://github.com/yang0/handraw-web/issues/132)。
+
+**修复范围明确有限**：只把 FF-019 加入**编辑待审 manifest**，并调整只读快照测试的 Skill 计数、待审 ID 和指纹；不修改 Web `catalog.json`、Skill repo、图片或页面，不认可它为 Web 已批准资源，不对网站作任何反向导入或发布。普通 CI 只可在三项 Skill-only 候选的元数据 SHA 均未变时产出 `status=pending_review`、`readyForRelease=false`；未来新增任何第四项 Skill-only 或修改任一候选指纹，仍必须严格失败。实际部署 `--strict` 因三项未批准及官方 DB 审查导出缺失**继续返回 2**。官网审查需按授权来源、画风泛化与文案/图片版权逐项独立完成后，再通过 Web 管理接口正式审批及 Web→Skill 双向核对；这不由 CI 自动执行。
+
