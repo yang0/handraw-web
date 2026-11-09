@@ -76,14 +76,16 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
         raise ValueError("unbounded pointer moves")
     target=page.evaluate(DRAG_TARGET,"no-visual")
     page.mouse.move(target["x"],target["y"])
-    if plan["pressed"]:
-        page.mouse.down()
+    mouse_down=False
     mask={"modified":0}
     stream=[]
     tracing=False
     started=False
     frames_started=False
     try:
+        if plan["pressed"]:
+            page.mouse.down()
+            mouse_down=True
         # CSS changes occur before tracing and measurement, not during drag.
         if plan["hoverMask"]:
             mask=page.evaluate(HOVER_MASK,"mask")
@@ -123,8 +125,9 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
                 tracing=False
             dom=page.evaluate(OBSERVE_DOM,"stop")
             started=False
-            if plan["pressed"]:
+            if mouse_down:
                 page.mouse.up()
+                mouse_down=False
 
         chrome=None
         if trace:
@@ -189,7 +192,7 @@ def one_window(page, cdp, name, *, trace=True, moves_override=None):
         if frames_started:
             try:page.evaluate(FRAMES,"stop")
             except Exception:pass
-        if plan["pressed"]:
+        if mouse_down:
             try:page.mouse.up()
             except Exception:pass
         page.evaluate(HOVER_MASK,"restore")
