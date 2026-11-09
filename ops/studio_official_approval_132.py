@@ -20,6 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from ops.studio_editorial_rights_132 import index_reviews
 
 CODES=("FF-018","FF-019","FG-025")
 ROLES=("website_editor","independent_reviewer")
@@ -28,7 +29,7 @@ COMMIT=re.compile(r"^[a-f0-9]{40}$")
 TOKEN=re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{2,79}$")
 PAYLOAD_FIELDS={"schemaVersion","candidateCode","skillSourceSha256",
  "webDbPublishedRowSha256","deployedSha","websiteActionId",
- "rightsReviewEvidenceId","reviewedAtUtc","result"}
+ "rightsReviewEvidenceId","rightsReviewEvidenceSha256","reviewedAtUtc","result"}
 MAX_BYTES=256_000
 
 
@@ -97,7 +98,7 @@ def _registry(registry, trusted_sha):
 
 
 def evaluate(approvals,registry,pending_manifest,db_styles,*,
-             trusted_sha,expected_deployed_sha,now=None):
+             trusted_sha,expected_deployed_sha,rights_reviews=None,now=None):
     """Validate claims, not real-world editorial authority or storage origin."""
     if not isinstance(expected_deployed_sha,str) or not COMMIT.fullmatch(expected_deployed_sha):
         raise ValueError("40-character deployed SHA required")
@@ -119,6 +120,7 @@ def evaluate(approvals,registry,pending_manifest,db_styles,*,
     if registry is None or db_styles is None:
         raise ValueError("signed claim needs external trust and published DB export")
     keys=_registry(registry,trusted_sha)
+    reviews=index_reviews(rights_reviews,pinned)
     if (not isinstance(approvals,dict) or set(approvals)!={"schemaVersion","approvals"}
         or approvals["schemaVersion"]!=1 or not isinstance(approvals["approvals"],list)
         or len(approvals["approvals"])>3):
@@ -149,7 +151,7 @@ def evaluate(approvals,registry,pending_manifest,db_styles,*,
             or p["skillSourceSha256"]!=pinned[code]["sha256"]
             or p["deployedSha"]!=expected_deployed_sha):
             raise ValueError("unapproved source hash, deployment or result")
-        for field in ("webDbPublishedRowSha256",):
+        for field in ("webDbPublishedRowSha256","rightsReviewEvidenceSha256"):
             if not isinstance(p[field],str) or not SHA256.fullmatch(p[field]):
                 raise ValueError("invalid published DB row fingerprint")
         for field in ("websiteActionId","rightsReviewEvidenceId"):
@@ -158,6 +160,10 @@ def evaluate(approvals,registry,pending_manifest,db_styles,*,
         if p["websiteActionId"] in action_ids:
             raise ValueError("replayed editorial action across resource codes")
         action_ids.add(p["websiteActionId"])
+        rights=reviews.get(code)
+        if (rights is None or rights["rightsReviewEvidenceId"]!=p["rightsReviewEvidenceId"]
+                or sha(rights)!=p["rightsReviewEvidenceSha256"]):
+            raise ValueError("signed rights evidence digest mismatch")
         _utc(p["reviewedAtUtc"],now)
         row=rows.get(code)
         if not row or row.get("generation_name")!=pinned[code]["name"] or sha(row)!=p["webDbPublishedRowSha256"]:
@@ -218,6 +224,7 @@ def main(argv=None):
     ap.add_argument("--bundle",type=Path)
     ap.add_argument("--trust-registry",type=Path)
     ap.add_argument("--published-web-styles",type=Path)
+    ap.add_argument("--rights-reviews",type=Path)
     ap.add_argument("--deployed-sha",required=True)
     ap.add_argument("--pending",type=Path,default=Path(__file__).resolve().parent/"official_catalog_pending_11.json")
     ap.add_argument("--report",type=Path,required=True)
@@ -225,8 +232,8 @@ def main(argv=None):
     try:
         if args.report.exists() or args.report.is_symlink():
             raise ValueError("will not overwrite signed approval report")
-        all_supplied=all((args.bundle,args.trust_registry,args.published_web_styles))
-        if not all_supplied and any((args.bundle,args.trust_registry,args.published_web_styles)):
+        all_supplied=all((args.bundle,args.trust_registry,args.published_web_styles,args.rights_reviews))
+        if not all_supplied and any((args.bundle,args.trust_registry,args.published_web_styles,args.rights_reviews)):
             raise ValueError("partial approval evidence refused")
         out=evaluate(
             _private_json(args.bundle) if args.bundle else None,
@@ -235,6 +242,7 @@ def main(argv=None):
             _private_json(args.published_web_styles) if args.published_web_styles else None,
             trusted_sha=os.getenv("HANDRAW_OFFICIAL_TRUST_SHA256",""),
             expected_deployed_sha=args.deployed_sha,
+            rights_reviews=_private_json(args.rights_reviews) if args.rights_reviews else None,
         )
         args.report.parent.mkdir(parents=True,exist_ok=True)
         fd=os.open(args.report,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
