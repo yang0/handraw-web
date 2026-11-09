@@ -325,8 +325,7 @@ def main(argv=None):
         print("PHASE21 PG17 "+json.dumps({"mode":args.mode,
             "decision":"NO-GO","rawCredentialsOrRowsEmitted":False}))
         return 0
-    except (ValueError,OSError,RuntimeError,TypeError,KeyError,
-            json.JSONDecodeError):
+    except Exception:
         print("Phase21 PG17 physical rehearsal BLOCKED",file=sys.stderr)
         return 2
 
