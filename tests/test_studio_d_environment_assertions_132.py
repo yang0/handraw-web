@@ -84,6 +84,30 @@ class RealEnvironmentAssertionContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             evaluate(data,web_sha=WEB,skill_sha=SKILL,now=NOW)
 
+    def test_each_of_17_origin_claims_fail_closed_individually(self):
+        self.assertEqual(len(GATES),17)
+        self.assertEqual(len(ORIGINS),17)
+        for i,gate in enumerate(GATES):
+            with self.subTest(gate=gate):
+                for field,bad in (
+                    ("origin","ci-moto-simulated"),
+                    ("isSimulation",True),
+                    ("physicalOrRealProviderClaim",False),
+                    ("status","UNVERIFIED"),
+                    ("deployedSha","f"*40),
+                    ("reviewer","synthetic-operator"),
+                ):
+                    case=sample()
+                    case["cases"][i][field]=bad
+                    with self.subTest(gate=gate,field=field),self.assertRaises(ValueError):
+                        evaluate(case,web_sha=WEB,skill_sha=SKILL,now=NOW)
+
+    def test_reusing_same_private_evidence_bytes_for_distinct_gates_is_blocked(self):
+        case=sample()
+        case["cases"][1]["evidenceDigestSha256"]=case["cases"][0]["evidenceDigestSha256"]
+        with self.assertRaisesRegex(ValueError,"digest"):
+            evaluate(case,web_sha=WEB,skill_sha=SKILL,now=NOW)
+
     def test_partial_inputs_cannot_be_marked_complete(self):
         data=sample()
         data["cases"]=data["cases"][:-4]
