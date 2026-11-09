@@ -19,12 +19,14 @@ CSS `.ic-node` 已启用 `contain: layout style`；尝试纯 CSS translate 的�
 
 - `idle`：静止，保留实际 Canvas DOM/CSS、脚本/动画；
 - `hover`：不按住鼠标，12 段真实 move；
+- `pressed-idle`：按住鼠标、完成 Pointer Capture 后保持静止 260ms；检验伪类/捕获本身的 style 成本，不改变 Graph；
 - `normal`：实际按住鼠标移动 12 段；
 - `no-card`：仅测试时跳过卡片 `left/top` 写入，其他视觉更新照常；
 - `no-edges`：仅测试时跳过 SVG 边路径写入；
 - `no-overlay`：仅测试时跳过浮动 toolbar 跟随；
 - `no-minimap`：仅测试时跳过小地图定位更新；
-- `node-only`：仅保留卡片 `left/top`，屏蔽上述三种输出。
+- `node-only`：仅保留卡片 `left/top`，屏蔽上述三种输出；
+- `no-visual`：保留 Graph `x/y` 更新与真正的 mousemove，但临时跳过卡片 CSS、连线、悬浮层和小地图全部视觉写入；pointerup 强制权威全图恢复。
 
 每个 ablation 之间重复一轮 `normal`，报告 CDP `Performance.getMetrics` 的 `RecalcStyleDuration` / `LayoutDuration` / `ScriptDuration` / `TaskDuration`、rAF gap p50/p95、样本数与实测窗口长度，防止把不同耗时窗口简单当作可比较的总累计。诊断不录入原始 Chrome Trace，不读取用户数据，不使用生产项目或收费 API。
 
@@ -44,6 +46,26 @@ python tests/benchmark_studio_native_canvas_111.py
 ```
 
 保留旧有 10/50/100/300 工程/Undo/Redo/最小边集合/图片 DOM 验收，`CANVAS #111 DRAG STYLE ISOLATION` 日志与 artifact JSON 只记录**数值**，不导出真实会话或浏览器原始 Trace。独立分支 14/14 后，核查 ahead>0、behind=0 和 expected_sha，再使用 `update_ref(force=false)` 快进 studio2，最后等待 studio2 Push 与 Draft PR #131 **同 SHA 两套 14/14**；main 绝不改变。
+
+## 第一批已通过的实测数据与解释
+
+同一独立分支 SHA `60c6cf74cdc6ebf9cc706c6e81aec0399551d801` 完整 14/14 CI
+([Run 42560803082](https://github.com/yang0/handraw-web/actions/runs/42560803082)) 真实 300 节点前 12 组数据：
+
+| 场景 | 窗口墙钟耗时 | CDP Style 累计 | rAF gap P95 |
+| --- | ---: | ---: | ---: |
+| idle | 262ms | 0ms | 16.7ms |
+| hover | 386ms | 0.33ms | 16.8ms |
+| normal（五次重复） | 972–1042ms | 271–291ms | 66.8–83.4ms |
+| no-card | 843ms | 269ms | 66.7ms |
+| no-edges | 1061ms | 313ms | 83.3ms |
+| no-overlay | 970ms | 283ms | 83.3ms |
+| no-minimap | 973ms | 290ms | 66.7ms |
+| node-only | 951ms | 299ms | 83.3ms |
+
+每组都是相同的真实 300 节点 Studio，但墙钟时间、缓存热度和顺序并不相同；**不可以只看毫秒差额就宣称某个单通道是瓶颈**。可确定的是 idle/hover 样式成本远低于真实拖拽，而单独省略卡片/边/工具条/minimap 的某一路没有显著稳定改善。
+
+为了确定「按住捕获」还是「只要存在任一视觉 style/attribute 写入就触发全图重算」，下一次新加 `pressed-idle`、`no-visual` 和 per-pointer 模式一致性断言。如果 no-visual 仍和正常 drag 类似，后续就不应继续在边/mini 做局部删减。
 
 ## 待下一批数据决策
 
