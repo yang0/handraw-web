@@ -67,6 +67,18 @@ python tests/benchmark_studio_native_canvas_111.py
 
 为了确定「按住捕获」还是「只要存在任一视觉 style/attribute 写入就触发全图重算」，下一次新加 `pressed-idle`、`no-visual` 和 per-pointer 模式一致性断言。如果 no-visual 仍和正常 drag 类似，后续就不应继续在边/mini 做局部删减。
 
+## 第二批对照：完整视觉关闭与 requestAnimationFrame 合并
+
+补充 [独立 Run 42561615603](https://github.com/yang0/handraw-web/actions/runs/42561615603)，同一个 300 节点浏览器中：**pressed-idle**（真实 pointerdown、保持 260ms）CDP Style 0ms、rAF P95≈16.8ms；**no-visual**（12 次真实 pointermove + Graph 实时更新，但测试时跳过四类视觉 DOM 写入）Style **47.68ms**、rAF P95 **33.4ms**；同窗的正常 drag 重复组 Style 282–301ms、rAF P95≈83ms。说明同步视觉样式/属性失效是重要成本来源，但**不说明任意一个通道可以删除**。
+
+为避免无意义地每个鼠标事件立即触发 DOM 样式变更，新增一个严格**测试态**的 rAF 合并策略，与普通用户原版 immediate 做同一 Chrome / 同一 300 节点 / 12 次 paced 真实鼠标拖拽 A/B：
+
+1. 所有真实 `pointermove` **立即**更新 Graph 的权威 `x/y`；只有展示相关的卡片 `left/top`、SVG 关联边、浮动工具条和小地图更新才可在实验模式 `canvasDragFlushMode="raf"` 下被合并。
+2. 最多登记一个尚未执行的 `requestAnimationFrame`，回调读取当前 Graph 的最新位置，不能拿旧闭包快照覆盖新输入；如果 DOM/Graph 被别的编辑动作替换，保留原有 edge-session 不可信回退逻辑。
+3. `pointerup`/**`pointercancel`** 取消未执行的 rAF 并**同步 flush 最后的位置**，才释放 edge-session；防止尾帧丢失、连线/mini 落后、Graph 与 CSS 绝对坐标不一致。
+4. 此阶段**生产默认保持 immediate**。只通过 `__HANDRAW_TESTING__===true` 的测试桥选择 `raf`；用 300 节点正常/4× CPU 同 Runner 记录 `physicalPointerMoves` 对 `visualFlushes`、rAF gap P95、drag-only RecalcStyle/Task/Layout、pointerup 最终视觉、WebP DOM identity、SVG hit/line、minimap/toolbar identity、Undo/Redo 与 0 付费。
+5. 任何结果必须说明受 Chrome Trace 观察成本、固定 A/B 顺序及缓存影响。如果没有稳定收益，撤销测试态调度代码；如果确实受益，另做受控小切片再考虑生产默认开启。**不以本次测试给出真实 GPU present/实体低端机 SLA 声明**。
+
 ## 待下一批数据决策
 
 - 如果 `idle` 已经占绝大多数 Style 开销，优先检查循环动画/常驻 hover 影响，而不是错误地删边/改 minimap。
