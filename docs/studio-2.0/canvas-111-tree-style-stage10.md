@@ -58,3 +58,22 @@ Stage 8 Chromium `UpdateLayoutTree` 在 300 个真实节点、150 条 SVG 边、
 新的测试改为 **每一个候选单独采集紧邻的原生 CSS baseline**，再比较 CSS 注入后的几何；这样将长期页面状态漂移与 CSS 的即时效果分离。最新 SHA 需重新执行完整 14/14 验证，再决定候选是否真实改变节点几何，不能引用旧报告中 `valid=false` 作为最终的 CSS 副作用定论。
 
 本次不同有界 3 步 Trace 的 `UpdateLayoutTree` 受影响元素计数可出现大量小值，单轮样本中曾是 19 个报告样本中位 9,184，另一轮 21 样本中位 6、最大 9,235；**样本窗口与浏览器事件混合，不能把该中位数当稳定的同尺度性能 KPI，更不能据此宣称已锁定全树失效的唯一起因**。需要重点观察重复出现的高元素事件与对应 mutation/selector 的同窗关联。最终结论以固定后的同 SHA runner 数据为准。
+
+## 修正相邻基线后的确认结果：四候选均真实可测，但均未达标
+
+最终复核测试提交 `729ed5b8244114b39c68af05c37c8edb29564520`：[独立分支完整 CI #42576577211](https://github.com/yang0/handraw-web/actions/runs/42576577211) **14/14 SUCCESS**。测试脚本在各候选注入之前立即重新采集原生 CSS 几何基线，因此前一版因跨轮拖拽/Undo 导致的“几何不一致”误判不再出现。四候选 `valid=true`、全部 `promotionAllowed=false`；`relational-selector-off` 同时设置 `diagnosticOnly=true`，不能直接改生产样式规则。
+
+普通 CPU 和 4× CPU 的 Style 累计（12 次真实 pointer move，单位 ms）：
+
+| 候选 | 普通 CPU 基线中位 | 普通 CPU 候选 B1/B2 | 4× CPU 基线中位 | 4× CPU 候选 B1/B2 | 双 CPU 10% 门槛 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `world-style-containment` | 199.467 | 205.150 / 197.635 | 1082.348 | 1066.135 / 895.294 | 未通过 |
+| `world-layout-style-containment` | 197.469 | 195.281 / 198.126 | 1037.993 | 1090.632 / 1063.778 | 未通过 |
+| `selected-compositor-layer` | 199.867 | 196.431 / 202.283 | 920.209 | 1063.011 / 1073.758 | 未通过 |
+| `relational-selector-off`（仅诊断） | 195.255 | 192.851 / 195.213 | 1081.466 | 882.306 / 1096.619 | 未通过 |
+
+另外的 Style+Layout、rAF P95、CSSOM 有效性与 Graph/DOM/Undo 保真结果均包含在同一 CI `artifacts/studio-111-tree-style/summary.json`，绝不能仅截取最好的 B1 数值来证明收益。
+
+**树级失效对照：** 在有界 3 次物理鼠标移动的 Chrome Trace 中，原生 baseline 与临时关闭匹配目标的 `.ic-canvas-stage:has(.ic-canvas-template-library)` 后的 `tree-dependency` 类计数**都是 386**。两组 `UpdateLayoutTree` 最大受影响元素均是 **9,235**，中位均是 **9,184**（baseline 17 个有效样本，消融 20 个）。该次证据不支持“该特定 `:has` 规则是大范围更新的唯一或主要触发器”；事件分类不是属性/选择器单点归因证据，且有限次 Trace 的不同事件窗口不足以证实所有其它规则无影响。
+
+**确认决策：** Stage 10 已完成代码化消融、真实浏览器复验与审计证据；在当前 1×/4× CPU 条件下，**没有任何候选符合稳定收益且保真门槛**。因此保持生产 `demo/assets/studio-canvas.css` / `studio-app.js` 等完全不动。#111 继续 OPEN，后续应沿 Chrome tree-dependency 的安全分类深入做节点/祖先作用域归因，并由独立实体设备复验；#84/#112 发布门禁仍然 NO-GO。后续代码 SHA 的 CI/分支快进结果须另行记录，不把此独立 SHA 的成功套用至后续提交。
