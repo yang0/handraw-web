@@ -7,8 +7,6 @@ Only fixed role counters and bounded CDP layout aggregate statistics leave Chrom
 """
 from __future__ import annotations
 
-from statistics import median
-
 from ops.canvas_phase12_isolation_111 import CPU_FACTORS
 from ops.canvas_phase15_move_boundary_111 import one_trial
 
@@ -23,7 +21,7 @@ HOOK_JS=r"""arg=>{
     const s=window.__qa132saveText;
     if(!s)throw Error("Phase18 save-text hook missing");
     try{
-      Node.prototype.textContent=s.originalDescriptor;
+      Object.defineProperty(Node.prototype,"textContent",s.originalDescriptor);
       window.removeEventListener("pointermove",s.onPointerMove,true);
       delete window.__qa132saveText;
     }catch(e){
