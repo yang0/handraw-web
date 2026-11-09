@@ -58,7 +58,7 @@ def _bounded_summary(name, raw, attrs, structure):
     }
 
 
-def one_trial(page, cdp):
+def one_trial(page, cdp, *, probe=False):
     """Trace four windows within one native pointerdown/synthetic-move drag."""
     cdp.send("Performance.enable")
     target=page.evaluate(DRAG_TARGET,"no-visual")
@@ -68,6 +68,7 @@ def one_trial(page, cdp):
     observer_started=False
     structure_started=False
     tracing=False
+    probe_started=False
     streams=[]
     cdp.on("Tracing.tracingComplete",
            lambda ev: streams.append(ev.get("stream")))
@@ -85,7 +86,7 @@ def one_trial(page, cdp):
         page.wait_for_timeout(40)
 
         def capture(name, action):
-            nonlocal observer_started, structure_started, tracing
+            nonlocal observer_started, structure_started, tracing, probe_started
             if name not in WINDOWS or name in windows:
                 raise ValueError("unapproved/duplicate phase15 window")
             page.evaluate(OBSERVE_DOM,"start")
@@ -93,6 +94,12 @@ def one_trial(page, cdp):
             page.evaluate(STRUCTURE_OBSERVER,"start")
             structure_started=True
             start_count=len(streams)
+            if probe:
+                from ops.canvas_phase16_drag_init_132 import PROBE_JS
+                installed=page.evaluate(PROBE_JS,{"op":"start","phase":name})
+                if installed!={"installed":True,"offsetGettersTracked":4}:
+                    raise RuntimeError("phase16 layout probe not fully active")
+                probe_started=True
             cdp.send("Tracing.start",{
                 "categories":
                     "devtools.timeline,disabled-by-default-devtools.timeline.invalidationTracking",
@@ -101,6 +108,7 @@ def one_trial(page, cdp):
             tracing=True
             attrs=None
             structure=None
+            probe_data=None
             try:
                 action()
                 page.wait_for_timeout(75 if name!="pre-input-idle" else 90)
@@ -108,6 +116,10 @@ def one_trial(page, cdp):
                 if tracing:
                     cdp.send("Tracing.end")
                     tracing=False
+                if probe_started:
+                    from ops.canvas_phase16_drag_init_132 import PROBE_JS
+                    probe_data=page.evaluate(PROBE_JS,"stop")
+                    probe_started=False
                 if observer_started:
                     attrs=page.evaluate(OBSERVE_DOM,"stop")
                     observer_started=False
@@ -124,6 +136,8 @@ def one_trial(page, cdp):
                 cdp,streams[-1],max_bytes=MAX_TRACE_BYTES)
             summary=_bounded_summary(name,raw,attrs,structure)
             del raw
+            if probe:
+                summary["phase16"]=probe_data
             windows[name]=summary
 
         capture("pre-input-idle",lambda: None)
@@ -180,6 +194,11 @@ def one_trial(page, cdp):
             except Exception:pass
         if structure_started:
             try:page.evaluate(STRUCTURE_OBSERVER,"stop")
+            except Exception:pass
+        if probe_started:
+            try:
+                from ops.canvas_phase16_drag_init_132 import PROBE_JS
+                page.evaluate(PROBE_JS,"stop")
             except Exception:pass
         if mouse_down:
             try:page.mouse.up()
