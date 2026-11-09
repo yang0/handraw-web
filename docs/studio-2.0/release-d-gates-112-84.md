@@ -1,5 +1,7 @@
 # Studio 2.0 · #112 / #84 生产级 D 门禁执行手册
 
+> **2026-11-09 新权威跟踪项：[Release #132](https://github.com/yang0/handraw-web/issues/132)**。本手册的 D 级门禁不因 #84/#112 的 C 级工程归档而改变；下文历史“保持 Open”指对应发布门禁仍然 Open，由 #132 持续强制 NO-GO。
+
 2026-11-09 · 工作起点 studio2@3ee76a00b3020e798242fcbf645efc9c39fce504。
 
 **当前结论：NO-GO。PR #131 必须继续 Draft，严禁合入 main。** 本文是操作规约，不是生产验收成功记录。未经授权不得对生产数据库停机、恢复、迁移、写入或调用付费供应商。保密证据保存在授权的运维系统，不上传 Git、Issue、Actions Artifacts。
