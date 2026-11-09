@@ -65,7 +65,7 @@ assert.equal(writes,4);
 
 // #111: node-drag patches only incident SVG geometry and preserves all hit
 // targets, edge group identities and unrelated pre-existing path attributes.
-assert.match(app,/patchMovedEdgePaths\(/);
+assert.match(app,/createEdgeDragSession\(/);
 assert.match(app,/updateMinimapLensOnly\(\)/);
 assert.match(app,/renderMinimapMovedNodes\(movedIds\)/);
 assert.match(app,/const edgesRecomputed=!partial\|\|sizeChanged/);
