@@ -196,6 +196,45 @@
     edgeMarkupCache.set(svg,markup);
     return true;
   }
+  // #111 P2: only during an active node drag. CSS classes, wiring and
+  // selection do not change on this path; update the incident SVG path
+  // geometry in place, preserving hit targets and unrelated edge elements.
+  // Any missing graph/DOM invariant returns false for a full SVG fallback.
+  function patchMovedEdgePaths(svg,graphEdges,nodes,layer,movedIds,pathFor){
+    if(!svg?.querySelectorAll||typeof pathFor!=="function")return false;
+    const moved=new Set((movedIds||[]).map(String));
+    if(!moved.size)return false;
+    const incident=(graphEdges||[]).filter(e=>
+      moved.has(String(e.from))||moved.has(String(e.to)));
+    if(!incident.length)return true;
+    const groups=new Map();
+    for(const el of svg.querySelectorAll("g.ic-edge-group[data-edge-id]")){
+      const id=el.getAttribute("data-edge-id");
+      if(groups.has(id))return false;
+      groups.set(id,el);
+    }
+    const geometry=createEdgeGeometryIndex(nodes,layer),patches=[];
+    for(const edge of incident){
+      const from=geometry.getNode(edge.from),to=geometry.getNode(edge.to);
+      const group=groups.get(String(edge.id));
+      const hit=group?.querySelector("path.ic-edge-hit");
+      const line=group?.querySelector("path.ic-edge-line");
+      if(!from||!to||!hit||!line)return false;
+      const a=geometry.port(from,"out"),b=geometry.port(to,"in");
+      const d=pathFor(a.x,a.y,b.x,b.y);
+      if(typeof d!=="string"||!d)return false;
+      patches.push({hit,line,d});
+    }
+    // Preflight every edge before mutating any DOM: no half-patched SVG.
+    for(const {hit,line,d} of patches){
+      if(hit.getAttribute("d")!==d)hit.setAttribute("d",d);
+      if(line.getAttribute("d")!==d)line.setAttribute("d",d);
+    }
+    // A later full render must compare against fresh markup, not the
+    // pre-drag string that was cached before these in-place attribute writes.
+    edgeMarkupCache.delete(svg);
+    return true;
+  }
   function clearEdgeMarkup(svg){
     if(!svg)return;
     svg.innerHTML="";
@@ -319,7 +358,7 @@
     return next;
   }
   return Object.freeze({reconcile,updateSelection,preserveRuntime,captureEditableGraph,
-    createEdgeGeometryIndex,reconcileEdgeMarkup,clearEdgeMarkup,
+    createEdgeGeometryIndex,reconcileEdgeMarkup,clearEdgeMarkup,patchMovedEdgePaths,
     // Exposed for controlled performance/DOM regression fixtures.
     rootFlags});
 });
