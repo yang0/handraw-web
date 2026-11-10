@@ -260,8 +260,11 @@ def verify_restored(*,target_dsn,expected,declared_host):
     info=settings(target_dsn)
     if (info.get("host") not in ("127.0.0.1","localhost")
         or declared_host.lower() not in {socket.getfqdn().lower(),
-                                         socket.gethostname().lower()}):
-        raise ValueError("read-only restore verification must be local to recovery host")
+                                         socket.gethostname().lower()}
+        or any(info.get(field) for field in ("hostaddr","service","servicefile"))
+        or any(os.environ.get(field) for field in
+               ("PGHOSTADDR","PGSERVICE","PGSERVICEFILE"))):
+        raise ValueError("read-only restore DSN must target only the local recovery host")
     if (not isinstance(expected,dict) or set(expected)!={"schemaVersion","expected",
             "targetUtc","backupManifestSha256"}
         or expected["schemaVersion"]!=1
@@ -270,8 +273,17 @@ def verify_restored(*,target_dsn,expected,declared_host):
         raise ValueError("invalid out-of-band pre-target snapshot")
     _time(expected["targetUtc"])
     import psycopg
-    with psycopg.connect(target_dsn,autocommit=False,connect_timeout=5) as pg:
+    # The conninfo host label alone does not pin the endpoint: libpq may
+    # resolve it using hostaddr/service/PGHOSTADDR.  Force the network target
+    # to numeric loopback in both this audit and the following fingerprint
+    # connection, even when the caller used the name "localhost".
+    from psycopg.conninfo import make_conninfo
+    local_dsn=make_conninfo(target_dsn,host="127.0.0.1",hostaddr="127.0.0.1")
+    with psycopg.connect(local_dsn,autocommit=False,connect_timeout=5) as pg:
         pg.execute("SET TRANSACTION READ ONLY")
+        addr=pg.execute("SELECT inet_server_addr()").fetchone()
+        if not addr or str(addr[0]) not in ("127.0.0.1","::1"):
+            raise ValueError("connected PostgreSQL server is not on loopback")
         version=int(pg.execute("SHOW server_version_num").fetchone()[0])
         if version//10000!=17:
             raise ValueError("restore is not PostgreSQL 17")
@@ -280,7 +292,7 @@ def verify_restored(*,target_dsn,expected,declared_host):
             "pg_get_wal_replay_pause_state(), pg_last_wal_replay_lsn()").fetchone()
         if in_recovery is not True or paused!="paused" or lsn is None:
             raise ValueError("PITR recovery is not paused at target")
-    observed=fingerprint(target_dsn)
+    observed=fingerprint(local_dsn)
     if observed!=expected["expected"]:
         raise ValueError("business tables differ from pre-target snapshot")
     return {"mode":"isolated-postgres17-pitr-readonly-verified",
