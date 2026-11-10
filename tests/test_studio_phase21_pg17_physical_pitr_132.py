@@ -110,6 +110,99 @@ class Phase21PhysicalPg17Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"overwrite"):
             self.plan()
 
+    def test_rejects_symlinked_ancestor_and_filesystem_root_before_io(self):
+        alias=Path(self.dir.name)/"alias"
+        try:
+            alias.symlink_to(self.base,target_is_directory=True)
+        except (OSError,NotImplementedError):
+            self.skipTest("symlink creation not supported by runner")
+        with self.assertRaisesRegex(ValueError,"symbolic link"):
+            preflight(environment=ENV,source_host=SOURCE,target_host=TARGET,
+                root=alias,leaf=LEAF,archive_dir=self.wal,target_utc=UTC)
+        wal_alias=Path(self.dir.name)/"wal-alias"
+        wal_alias.symlink_to(self.wal,target_is_directory=True)
+        with self.assertRaisesRegex(ValueError,"symbolic link"):
+            preflight(environment=ENV,source_host=SOURCE,target_host=TARGET,
+                root=self.base,leaf=LEAF,archive_dir=wal_alias,target_utc=UTC)
+        with self.assertRaises(ValueError):
+            preflight(environment=ENV,source_host=SOURCE,target_host=TARGET,
+                root=Path("/"),leaf=LEAF,archive_dir=self.wal,target_utc=UTC)
+        self.assertFalse((self.base/LEAF).exists())
+
+    def test_direct_runner_rejects_forged_nonisolated_plan(self):
+        plan=self.plan()
+        with patch.dict(os.environ,{"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
+                                    "HANDRAW_PHASE21_PG_REPLICATION_PASSWORD":"fake"}):
+            for bad in (
+                {"environment":"production"},
+                {"sourceHost":TARGET},
+                {"archiveDir":str(self.base)},
+                {"backupDir":str(self.base/"not-disposable")},
+            ):
+                forged={**plan,**bad}
+                fake=FakeRunner()
+                with self.subTest(bad=bad),self.assertRaises(ValueError):
+                    run_backup(forged,user="limited_replication",port=5432,runner=fake)
+                self.assertEqual(fake.commands,[])
+        self.assertFalse((self.base/LEAF).exists())
+
+    def test_prepare_rejects_nested_wal_and_symlink_before_writing_config(self):
+        with patch.dict(os.environ,{"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
+                                    "HANDRAW_PHASE21_PG_REPLICATION_PASSWORD":"fake"}):
+            plan=self.plan(run=True)
+            run_backup(plan,user="limited_replication",port=5432,runner=FakeRunner())
+            target=Path(plan["backupDir"])
+            nested=target/"wal-archive"
+            nested.mkdir()
+            (nested/"000000010000000000000001").write_bytes(b"fake")
+            original=(target/"postgresql.auto.conf").read_bytes()
+            for archive in (nested,self.base):
+                with self.subTest(archive=str(archive)),self.assertRaisesRegex(
+                    ValueError,"must be separate"
+                ):
+                    prepare_pitr(backup_dir=target,archive_dir=archive,target_utc=UTC)
+            parent_alias=Path(self.dir.name)/"recovery-alias"
+            try:
+                parent_alias.symlink_to(self.base,target_is_directory=True)
+            except (OSError,NotImplementedError):
+                self.skipTest("symlink creation not supported")
+            with self.assertRaisesRegex(ValueError,"symbolic link"):
+                prepare_pitr(backup_dir=parent_alias/LEAF,
+                             archive_dir=self.wal,target_utc=UTC)
+            self.assertEqual((target/"postgresql.auto.conf").read_bytes(),original)
+            self.assertFalse((target/"recovery.signal").exists())
+
+    def test_prepare_and_verify_cli_recheck_host_and_wal_root_isolation(self):
+        with patch.dict(os.environ,{"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
+                                    "HANDRAW_PHASE21_PG_REPLICATION_PASSWORD":"fake"}):
+            plan=self.plan(run=True)
+            run_backup(plan,user="limited_replication",port=5432,runner=FakeRunner())
+            target=Path(plan["backupDir"])
+            nested=target/"wal-subdir"
+            nested.mkdir()
+            report=Path(self.dir.name)/"new-report.json"
+            baseargs=["--environment",ENV,"--source-host",SOURCE,
+                "--target-host",TARGET,"--root",str(self.base),
+                "--leaf",LEAF,"--archive-dir",str(nested),
+                "--target-utc",UTC,"--report",str(report)]
+            with patch("ops.studio_phase21_pg17_physical_pitr_132.verify_restored") as check:
+                for mode in ("prepare","verify"):
+                    with self.subTest(mode=mode):
+                        self.assertEqual(main(["--mode",mode,*baseargs]),2)
+                check.assert_not_called()
+            with patch("ops.studio_phase21_pg17_physical_pitr_132.verify_restored") as check:
+                for mode in ("prepare","verify"):
+                    badargs=[*baseargs]
+                    i=badargs.index("--archive-dir")
+                    badargs[i+1]=str(self.wal)
+                    j=badargs.index("--source-host")
+                    badargs[j+1]=TARGET
+                    with self.subTest(mode=mode):
+                        self.assertEqual(main(["--mode",mode,*badargs]),2)
+                check.assert_not_called()
+            self.assertFalse((target/"recovery.signal").exists())
+            self.assertFalse(report.exists())
+
     def test_guarded_physical_basebackup_and_wal_recovery_configuration(self):
         fake=FakeRunner()
         with patch.dict(os.environ,{"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
