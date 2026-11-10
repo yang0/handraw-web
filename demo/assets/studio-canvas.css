@@ -4150,6 +4150,8 @@ a.ic-hist-cover-button { cursor: pointer; }
 .qc-studio-controls .btn {white-space:nowrap;min-height:38px;}
 .qc-studio-controls .qc-mode-switch .btn {padding:6px 10px;}
 .qc-studio-controls .qc-view-switch {display:flex;align-items:center;gap:4px;border-left:1px solid var(--ic-border,#ddd);padding-left:10px;}
+.qc-studio-controls .qc-view-toggle {border-color:var(--ic-select);font-weight:750;min-width:108px;}
+.qc-studio-controls .qc-view-toggle:focus-visible {outline:2px solid var(--ic-select);outline-offset:2px;}
 .qc-studio-controls .qc-view-label {white-space:nowrap;font-size:11px;}
 .qc-asset-menu {position:relative;flex-shrink:0;}
 .qc-asset-menu > summary {list-style:none;cursor:pointer;border:1px solid var(--ic-border,#ddd);border-radius:8px;padding:10px 12px;color:var(--ic-text,#222);white-space:nowrap;}
