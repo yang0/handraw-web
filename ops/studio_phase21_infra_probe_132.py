@@ -112,11 +112,36 @@ def probe_s3(client_a,client_b,anonymous_client,*,bucket,prefix,
         results["crossTenantReadDeniedBothDirections"]=(
             _deny(lambda:client_a.get_object(Bucket=bucket,Key=key_b))
             and _deny(lambda:client_b.get_object(Bucket=bucket,Key=key_a)))
-        results["crossTenantWriteDeniedBothDirections"]=(
-            _deny(lambda:client_a.put_object(Bucket=bucket,Key=key_b,
-                                              Body=b"unauthorized"))
-            and _deny(lambda:client_b.put_object(Bucket=bucket,Key=key_a,
-                                              Body=b"unauthorized")))
+        # Separate each probe; boolean short-circuiting would otherwise
+        # skip the second direction after the first violation, making the
+        # independent ACL evidence incomplete even on a disposable QA bucket.
+        put_a_to_b=_deny(lambda:client_a.put_object(
+            Bucket=bucket,Key=key_b,Body=b"unauthorized"))
+        put_b_to_a=_deny(lambda:client_b.put_object(
+            Bucket=bucket,Key=key_a,Body=b"unauthorized"))
+        results["crossTenantWriteDeniedBothDirections"]=(put_a_to_b and put_b_to_a)
+        delete_a_to_b=_deny(lambda:client_a.delete_object(Bucket=bucket,Key=key_b))
+        delete_b_to_a=_deny(lambda:client_b.delete_object(Bucket=bucket,Key=key_a))
+        results["crossTenantDeleteDeniedBothDirections"]=(delete_a_to_b and delete_b_to_a)
+        list_a_to_b=_deny(lambda:client_a.list_objects_v2(
+            Bucket=bucket,Prefix=f"{prefix}/tenant-b/"))
+        list_b_to_a=_deny(lambda:client_b.list_objects_v2(
+            Bucket=bucket,Prefix=f"{prefix}/tenant-a/"))
+        results["crossTenantListDeniedBothDirections"]=(list_a_to_b and list_b_to_a)
+        # Verify the original canary bytes AGAIN after probing unauthorized
+        # PUT/DELETE.  This detects a policy violation that mutates objects,
+        # even when a gateway returned a misleading response code.
+        postprobe_ok=True
+        for owner,key,expected in ((client_a,key_a,content_a),(client_b,key_b,content_b)):
+            try:
+                response=owner.get_object(Bucket=bucket,Key=key)
+                try:
+                    postprobe_ok=postprobe_ok and response["Body"].read(65)==expected
+                finally:
+                    response["Body"].close()
+            except Exception:
+                postprobe_ok=False
+        results["postDeniedProbeOwnBytesMatched"]=postprobe_ok
         results["anonymousDenied"]=(
             _deny(lambda:anonymous_client.get_object(Bucket=bucket,Key=key_a))
             and _deny(lambda:anonymous_client.get_object(Bucket=bucket,Key=key_b)))
@@ -136,8 +161,11 @@ def probe_s3(client_a,client_b,anonymous_client,*,bucket,prefix,
         # authorized HTTP app/media test. Do NOT pretend S3 proves either.
         if not all((results["crossTenantReadDeniedBothDirections"],
                     results["crossTenantWriteDeniedBothDirections"],
+                    results["crossTenantDeleteDeniedBothDirections"],
+                    results["crossTenantListDeniedBothDirections"],
+                    results["postDeniedProbeOwnBytesMatched"],
                     results["anonymousDenied"])):
-            raise ValueError("real cross-tenant bucket policy allowed access")
+            raise ValueError("real cross-tenant bucket policy allowed access or corrupted QA canary")
         return {"phase":21,"scope":"r2-s3-real-disposable",
                 "observed":results,
                 "cdnOldUrlInvalidated":False,"revokedSignedUrlDenied":False,
