@@ -190,7 +190,14 @@
       '<button type="button" data-c129="note">添加便签</button>'+
       '<button type="button" data-c129="group"'+((graph.selectedIds||[]).length<2?' disabled':'')+'>视觉分组</button>'+
       '</div></details>';
-    if(top.innerHTML!==topHtml)top.innerHTML=topHtml;
+    // A native <details> adds its `open` attribute to innerHTML. Without
+    // preserving it, any task/projection re-render immediately closes the
+    // menu between a user's summary click and their tool selection.
+    const moreWasOpen=top.querySelector(".ic129-more-tools")?.open===true;
+    if(top.innerHTML!==topHtml){
+      top.innerHTML=topHtml;
+      if(moreWasOpen)top.querySelector(".ic129-more-tools").open=true;
+    }
     let inspectorHtml='<div class="ic129-inspector-title"><strong>属性</strong><button type="button" data-c129="ai" aria-pressed="'+(inspectorTab==="ai")+'">AI 建议</button></div>';
     if(inspectorTab==="ai"){
       inspectorHtml+='<div class="ic129-inspector-info"><h3>AI 创作导演</h3>'+
