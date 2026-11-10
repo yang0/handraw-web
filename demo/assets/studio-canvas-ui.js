@@ -179,17 +179,17 @@
     const empty=ensurePanel(stage,"canvas-129-empty","section");
     for(const el of [top,side,bottom,empty])el.hidden=!isCanvas;
     if(!isCanvas)return;
-    const topHtml='<div class="ic129-project-name">'+htmlEscape(active?.title||"新项目")+'</div>'+
-      '<span class="ic129-save-state" role="status">'+htmlEscape(options.saveText||"仅本机")+'</span>'+
-      '<button type="button" data-c129="save">保存项目</button>'+
-      '<button type="button" data-c129="simple">简洁编辑</button>'+
-      '<button type="button" data-c129="undo">撤销</button>'+
-      '<button type="button" data-c129="redo">重做</button>'+ 
-      '<button type="button" data-c129="graphpatch">AI 修改画布</button>'+ 
-      '<button type="button" data-c129="note">便签</button>'+ 
+    // Single primary action. Save is available in the studio status bar,
+    // Undo/Redo in the floating edit strip, and form/canvas view changes in
+    // the global navigation. Less frequent tools live under one disclosure.
+    const topHtml='<button type="button" class="ic129-primary" data-c129="run">▶ '+
+      (selected?.type==="output_control"?"运行选中分支":"运行画布")+'</button>'+
+      '<button type="button" data-c129="inspector" aria-expanded="'+inspectorOpen+'">属性 '+(inspectorOpen?'‹':'›')+'</button>'+
+      '<details class="ic129-more-tools"><summary>更多工具</summary><div class="ic129-more-tools-panel">'+
+      '<button type="button" data-c129="graphpatch">AI 修改画布</button>'+
+      '<button type="button" data-c129="note">添加便签</button>'+
       '<button type="button" data-c129="group"'+((graph.selectedIds||[]).length<2?' disabled':'')+'>视觉分组</button>'+
-      '<button type="button" class="ic129-primary" data-c129="run">▶ '+(selected?.type==="output_control"?"运行选中分支":"运行画布")+'</button>'+
-      '<button type="button" data-c129="inspector" aria-expanded="'+inspectorOpen+'">属性 '+(inspectorOpen?'‹':'›')+'</button>';
+      '</div></details>';
     if(top.innerHTML!==topHtml)top.innerHTML=topHtml;
     let inspectorHtml='<div class="ic129-inspector-title"><strong>属性</strong><button type="button" data-c129="ai" aria-pressed="'+(inspectorTab==="ai")+'">AI 建议</button></div>';
     if(inspectorTab==="ai"){
@@ -211,7 +211,7 @@
       else if(selected.type==="output_control")inspectorHtml+='<p>比例：'+htmlEscape(d.ratio||"默认")+' · 数量：'+htmlEscape(d.count||"按方案")+'</p>'+
         '<label class="ic129-inspector-field">生成张数（1–200）<input type="number" min="1" max="200" data-c129-edit="count" value="'+htmlEscape(d.count||1)+'" /></label>'+
         '<label class="ic129-inspector-field">画幅比例<input type="text" data-c129-edit="ratio" value="'+htmlEscape(d.ratio||"3:4")+'" placeholder="宽:高" /></label>'+
-        '<button type="button" data-c129="run">运行此分支</button>';
+        '<small>运行请使用画布顶部的主按钮；选中分支时将只运行该分支。</small>';
       else if(selected.type==="output_display")inspectorHtml+='<p>输出图像会保留原始媒体引用与上游运行记录，不在此面板重写。</p>';
       inspectorHtml+='</div>';
     }else{
