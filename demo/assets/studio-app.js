@@ -1980,15 +1980,11 @@
     }
   }
 
-  function openProjectCenter({fetchCloud = true, replaceUrl = true} = {}) {
-    if (CS.activeTabId) syncCurrentTabSnapshot();
-    flushUnifiedArticleEditor();
-    CS.stageView = "projects";
-    if (replaceUrl) {
-      try { window.history.replaceState(null, "", "?view=projects"); } catch (_) {}
-    }
-    renderTopAndBottomDocks();
-    if (fetchCloud) void refreshProjectCenter();
+  function openProjectCenter() {
+    // The Project Center page has been retired. Keep this older integration
+    // entry point as a safe route to the current form; never delete drafts
+    // or change the backing Project/Graph/Run records.
+    switchCreationStage("quick");
   }
 
   function activateProjectTab(tab, project = null) {
@@ -4158,12 +4154,23 @@
       CS.stageView = "history";
     } else if (viewParam === "workflows") {
       CS.stageView = "workflows";
-    } else if (viewParam === "projects" || params.get("project")) {
-      CS.stageView = "projects";
+    } else if (viewParam === "projects") {
+      // Retired page: legacy bookmarks enter the simple editor instead.
+      // The dedicated project parameter is still restored below.
+      ensureQuickTab();
+      CS.stageView = "quick";
+      const cleaned = new URL(window.location.href);
+      cleaned.searchParams.delete("view");
+      cleaned.searchParams.set("entry", "quick");
+      window.history.replaceState(null, "", cleaned.pathname + cleaned.search);
       CS.pendingProjectDeepLink = params.get("project") || "";
+    } else if (params.get("project")) {
+      // Keep cloud project deep links without exposing the project directory.
+      CS.stageView = "quick";
+      CS.pendingProjectDeepLink = params.get("project");
     }
-    // A direct ?project=id is not a default Quick entry. Never override
-    // the Project Center stage before boot can restore the requested ID.
+    // Direct ?project=id is not a fresh blank Project: the original identity
+    // must be restored after boot, without navigating through a project list.
     if (!viewParam && !tabParam && !params.get("project")) {
       const entryParam = params.get("entry");
       if (entryParam === "canvas") {
@@ -18647,7 +18654,6 @@
     const article = ["preview", "article"].includes(CS.stageView)
       || (canvas && CS.lastStudioTaskView === "article");
     const history = CS.stageView === "history", workflows = CS.stageView === "workflows";
-    const projects = CS.stageView === "projects";
     const tab = CS.tabs.find(t => t.id === CS.activeTabId);
     const articleDraft = CS.articleEditorDraft;
     const title = article && !canvas ? articleDraft?.title || articleDraft?.articleTitle || "未命名文章项目"
@@ -18655,8 +18661,6 @@
     const projectState = tab ? projectStatusText(tab) : "仅本机 · 待同步";
     DOM.entryBar.innerHTML = `
       <div class="qc-project-line">
-        <button type="button" class="btn btn-sm qc-mode-projects${projects ? " btn-primary" : ""}"
-          id="studio-mode-projects" aria-pressed="${projects}">项目中心</button>
         ${editing ? `<div class="qc-project-identity" aria-label="当前项目">
           <strong title="${esc(title)}">${esc(title)}</strong>
           ${article && !canvas ? `<span class="qc-project-save-label" role="status">${esc(
@@ -18678,12 +18682,10 @@
         </nav>
         <button type="button" class="btn btn-sm qc-start-workflow"
           id="studio-mode-from-workflow">从工作流开始</button>
-        ${editing ? `<div class="qc-view-switch" role="group" aria-label="项目编辑视图">
-          <span class="qc-view-label">当前视图</span>
-          <button type="button" class="btn btn-sm${!canvas ? " btn-primary" : ""}"
-            id="studio-mode-simple" aria-pressed="${!canvas}">简洁编辑</button>
-          <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}"
-            id="studio-mode-canvas" aria-pressed="${canvas}">画布编辑</button>
+        ${editing ? `<div class="qc-view-switch" role="group" aria-label="编辑视图切换">
+          <button type="button" class="btn btn-sm qc-view-toggle" id="studio-mode-view-toggle"
+            title="${canvas ? "返回当前图文表单，保留画布内容" : "在同一创作内容上打开画布"}"
+            aria-label="${canvas ? "返回表单编辑" : "切换到画布编辑"}">${canvas ? "← 返回表单" : "切换到画布 →"}</button>
         </div>` : ""}
         <details class="qc-asset-menu"><summary>资产与记录</summary>
           <div class="qc-asset-menu-panel" role="group" aria-label="资产与历史">
@@ -18702,9 +18704,7 @@
     bind("studio-mode-quick", () => switchCreationStage("quick"));
     bind("studio-mode-batch", () => switchCreationStage("batch"));
     bind("studio-mode-article", () => switchCreationStage("article"));
-    bind("studio-mode-simple", () => switchCreationStage("simple"));
-    bind("studio-mode-canvas", () => switchCreationStage("canvas"));
-    bind("studio-mode-projects", () => openProjectCenter());
+    bind("studio-mode-view-toggle", () => switchCreationStage(canvas ? "simple" : "canvas"));
     bind("studio-project-status", () => handleProjectStatusClick());
     bind("studio-mode-from-workflow", () => openWorkflowsPage());
     bind("studio-mode-history", () => openHistoryPage());
@@ -20608,10 +20608,9 @@
       renderShelfDrawer();
       fullRenderCanvas();
       bindViewportInteractions();
-      if (CS.stageView === "projects") {
-        void refreshProjectCenter();
-        if (CS.pendingProjectDeepLink) void openCloudProject(CS.pendingProjectDeepLink);
-      }
+      // Existing ?project=ID links still hydrate their specific saved graph.
+      // They no longer require or display a separate Project Center page.
+      if (CS.pendingProjectDeepLink) void openCloudProject(CS.pendingProjectDeepLink);
       if (CS.stageView === "canvas") requestAnimationFrame(() => fitView());
       resumePendingCloudTasks();
     } catch (err) {
