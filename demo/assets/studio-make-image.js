@@ -390,7 +390,7 @@
           <form class="make-image-form" novalidate onsubmit="return false;">
             <div class="make-image-main-grid">
 
-              <!-- Row 1: Output Mode & Fusion Toggle in ONE Row (left-aligned) -->
+              <!-- Output mode is independent from the style/layout relationship. -->
               <div class="make-image-top-row">
                 <div class="make-image-inline-group">
                   <span class="make-image-field-label">生成方式</span>
@@ -400,27 +400,31 @@
                     `).join("")}
                   </div>
                 </div>
+              </div>
 
-                <div class="make-image-inline-group">
-                  <span class="make-image-field-label">画风模式</span>
-                  <div class="make-image-btn-group" role="group" aria-label="画风模式">
-                    <button type="button" class="btn btn-sm ${!isFusion ? "btn-primary is-active" : ""}" id="make-image-mode-single" aria-pressed="${!isFusion}">单画风</button>
-                    <button type="button" class="btn btn-sm ${isFusion ? "btn-primary is-active" : ""}" id="make-image-mode-fusion" aria-pressed="${isFusion}">双画风融合</button>
+              <!-- Style mode changes the style picker structure, so it is
+                   grouped with the actual style/layout controls. -->
+              <section class="make-image-resource-group" aria-label="画风与图型配置">
+                <div class="make-image-resource-head">
+                  <strong class="make-image-field-label">画风与图型</strong>
+                  <div class="make-image-style-mode-switch">
+                    <span class="make-image-field-label">画风模式</span>
+                    <div class="make-image-btn-group" role="group" aria-label="画风模式">
+                      <button type="button" class="btn btn-sm ${!isFusion ? "btn-primary is-active" : ""}" id="make-image-mode-single" aria-pressed="${!isFusion}">单画风</button>
+                      <button type="button" class="btn btn-sm ${isFusion ? "btn-primary is-active" : ""}" id="make-image-mode-fusion" aria-pressed="${isFusion}">双画风融合</button>
+                    </div>
                   </div>
                 </div>
-              </div>
-
-              <!-- Row 2: Main Pickers Row (3 cards or 4 cards with fusion) -->
-              <div class="make-image-pickers-row ${isFusion ? "has-style2" : ""}">
-                ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
-                ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
-                ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
-                ${this.renderPickerSlot("color", "主题色", colorObj, true)}
-              </div>
-
-              ${isFusion ? `
-                <div class="make-image-style-note" role="note">角色画风决定人物与主体的画法，场景画风决定背景与环境</div>
-              ` : ""}
+                <div class="make-image-pickers-row ${isFusion ? "has-style2" : ""}">
+                  ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
+                  ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
+                  ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
+                  ${this.renderPickerSlot("color", "主题色", colorObj, true)}
+                </div>
+                ${isFusion ? `
+                  <div class="make-image-style-note" role="note">角色画风决定主体，场景画风决定环境；切换模式会改变可选画风槽位，保留已选参数。</div>
+                ` : ""}
+              </section>
 
               <!-- Row 3: Topic / Subject Input -->
               <div class="make-image-field-wrap">
