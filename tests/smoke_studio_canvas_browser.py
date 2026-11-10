@@ -148,7 +148,10 @@ def main():
             new_ids=page.locator("#ic-nodes-layer .ic-node").evaluate_all(
                 "(nodes)=>nodes.map(n=>n.dataset.nodeId)")
             assert set(new_ids)==set(ids),(ids,new_ids)
-            # Visual notes are project editor metadata, never executable Graph nodes.
+            # #136: low-frequency annotation tools live behind one native
+            # disclosure; the toolbar should not crowd the primary Run.
+            page.locator("#canvas-129-topbar .ic129-more-tools > summary").click()
+            assert page.locator("#canvas-129-topbar .ic129-more-tools").get_attribute("open") is not None
             page.locator('#canvas-129-topbar [data-c129="note"]').click()
             note=page.locator('#canvas-129-visual-layer [data-visual-note]').first
             note.wait_for(timeout=5000)
