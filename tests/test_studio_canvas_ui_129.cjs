@@ -4,6 +4,20 @@ const assert=require("node:assert/strict");
 const fs=require("node:fs");
 const UI=require("../demo/assets/studio-canvas-ui.js");
 const app=fs.readFileSync("demo/assets/studio-app.js","utf8");
+const canvasUiSource=fs.readFileSync("demo/assets/studio-canvas-ui.js","utf8");
+// #136: run is the single canvas primary action; duplicate global save/
+// view/undo controls must not crowd its own topbar.
+const canvasTop=canvasUiSource.slice(canvasUiSource.indexOf("const topHtml="),
+  canvasUiSource.indexOf("if(top.innerHTML!==topHtml)"));
+assert.match(canvasTop,/data-c129=\\"run\\"/);
+assert.match(canvasTop,/ic129-more-tools/);
+for(const deprecated of ['data-c129="save"','data-c129="simple"',
+  'data-c129="undo"','data-c129="redo"']){
+  assert.equal(canvasTop.includes(deprecated),false,deprecated+" must not duplicate global action");
+}
+assert.match(app,/id="studio-mode-view-toggle"/);
+assert.doesNotMatch(app,/id="studio-mode-projects"/);
+
 const canvasCss=fs.readFileSync("demo/assets/studio-canvas-129.css","utf8");
 // #111: 30 output controls must not wrap task chips into a tall overlay that
 // blocks the right-hand zoom dock. Real Chromium hit-test is a separate gate.
