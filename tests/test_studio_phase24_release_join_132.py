@@ -64,7 +64,7 @@ def fixture():
     for prefix in ("schemaFingerprint","walletLedger","mediaManifest"):
         pg[prefix+"AfterSha256"]=pg[prefix+"BeforeSha256"]
     pg["restoreClusterIdSha256"]=h(421)
-    pg["sourceClusterIdSha256"]=h(422)
+    pg["sourceClusterIdSha256"]=h(421)
     pg.update({"pgMajorVersion":17,"independentHostClaim":True,
         "restoreCompleted":True,"pitrTargetReached":True,
         "rollbackDrilled":True,"rpoMeasuredSeconds":40,"rpoBudgetSeconds":300,
