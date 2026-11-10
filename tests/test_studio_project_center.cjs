@@ -8,8 +8,10 @@ const source = fs.readFileSync("demo/assets/studio-app.js","utf8");
 const css = fs.readFileSync("demo/assets/studio-canvas.css","utf8");
 const html = fs.readFileSync("demo/studio.html","utf8");
 assert.ok(html.includes("studio-project-center.js"), "Page loads the Project Center module");
-assert.ok(source.includes('id="studio-mode-projects"'), "Project Center has visible navigation");
-assert.ok(source.includes('viewParam === "projects"'), "Direct ?view=projects deep link is supported");
+assert.ok(!source.includes('id="studio-mode-projects"'),
+  "The retired Project Center must not be visible in the Studio navigation");
+assert.ok(source.includes('viewParam === "projects"') && source.includes('cleaned.searchParams.delete("view")'),
+  "Legacy ?view=projects bookmarks must redirect to the image form");
 assert.ok(source.includes('params.get("project")'), "?project= project deep link is supported");
 assert.ok(css.includes(".ic-projects-stage"), "Project Center is styled in shared shell");
 assert.ok(css.includes("@media(max-width:620px)"), "Mobile layout has a responsive grid");
