@@ -84,6 +84,23 @@ def main():
                 assert page.locator("#make-image-ref-dropzone").count()==1
                 assert page.locator("#make-image-ratio-input").count()==1
                 assert page.locator("#make-image-btn-run").count()==1
+                # #136: style mode, primary style and layout belong to one
+                # decision area. Toggling fusion must reveal/hide the extra
+                # picker without destroying the other selected choices.
+                resources=page.locator(".make-image-resource-group")
+                assert resources.count()==1
+                assert resources.locator("#make-image-mode-single").count()==1
+                assert resources.locator("#make-image-mode-fusion").count()==1
+                assert resources.locator('[data-pick-kind="style1"]').count()==1
+                assert resources.locator('[data-pick-kind="layout"]').count()==1
+                resources.locator("#make-image-mode-fusion").click()
+                page.wait_for_function("""() => !!document.querySelector(
+                    '.make-image-resource-group [data-pick-kind="style2"]')""")
+                assert resources.locator("#make-image-mode-fusion").get_attribute("aria-pressed")=="true"
+                resources.locator("#make-image-mode-single").click()
+                page.wait_for_function("""() => !document.querySelector(
+                    '.make-image-resource-group [data-pick-kind="style2"]')""")
+                assert resources.locator('[data-pick-kind="layout"]').count()==1
                 desktop=page.locator(".make-image-workspace-layout").evaluate(
                     "(el)=>getComputedStyle(el).gridTemplateColumns")
                 assert len(desktop.split(" "))>=2,desktop
