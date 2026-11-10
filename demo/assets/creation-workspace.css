@@ -54,14 +54,16 @@
 .creation-workspace .batch-count-wrap { flex-direction: column; align-items: stretch; }
 .creation-workspace .batch-strategy-wrap { grid-column: 1 / -1; flex-wrap: wrap; }
 .creation-workspace .batch-plan-row-b-wrap { flex-direction: column; align-items: stretch; }
-.creation-workspace .batch-plan-action-wrap { align-items: flex-start; }
+.creation-workspace .batch-plan-action-wrap { align-items: flex-start; flex-wrap: wrap; justify-content: flex-start; min-width: 0; }
+.creation-workspace .batch-plan-notice { white-space: normal; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
 .creation-workspace .batch-btn-plan-hero { min-height: 42px; }
 .creation-workspace .batch-prompts-textarea { min-height: 190px; }
 .creation-workspace .batch-table-wrap { box-sizing: border-box; }
 .creation-workspace .batch-iter-label { white-space: normal; overflow-wrap: anywhere; }
 .creation-workspace .batch-edit-table { min-width: 0; table-layout: fixed; width: 100%; }
 .creation-workspace .batch-col-layout { width: 130px !important; }
-.creation-workspace .batch-col-refs { width: 100px !important; }
+.creation-workspace .batch-col-refs { width: 100px !important; min-width: 0; }
+.creation-workspace .batch-btn-row-refs-mobile { width: 100%; min-width: 0; padding: 5px; white-space: normal; font-size: 11px; }
 .creation-workspace .batch-row-refs-desktop { display: none; }
 .creation-workspace .batch-row-refs-mobile { display: block; }
 .creation-workspace .batch-row-layout-btn { width: 100%; max-width: 100%; }
@@ -79,7 +81,30 @@
   .creation-form .make-image-btn-wrap, .creation-form .batch-btn-wrap { width: 100%; }
   .creation-form .make-image-btn-run, .creation-form .make-image-run-btn, .creation-form .batch-stop-btn { flex: 1; min-height: 44px; padding: 10px 14px; }
   .creation-form .make-image-busy-hint, .creation-form .batch-busy-hint { flex-basis: 100%; }
-  .creation-workspace .batch-edit-table, .creation-workspace .batch-preview-table { min-width: 480px; }
   .creation-workspace .batch-table-wrap { overscroll-behavior-x: contain; }
   .creation-content .make-image-results-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Stack editable rows on phones so theme, layout, references and delete stay accessible. */
+@media (max-width: 600px) {
+  .creation-workspace .batch-edit-table, .creation-workspace .batch-preview-table,
+  .creation-workspace .batch-edit-table tbody, .creation-workspace .batch-preview-table tbody { display: block; min-width: 0; width: 100%; }
+  .creation-workspace .batch-edit-table thead, .creation-workspace .batch-preview-table thead { display: none; }
+  .creation-workspace .batch-edit-row, .creation-workspace .batch-table-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line-soft); }
+  .creation-workspace .batch-edit-row > td, .creation-workspace .batch-table-row > td { display: block; padding: 0; border: 0; min-width: 0; }
+  .creation-workspace .batch-edit-row > td:first-child { flex: 1; }
+  .creation-workspace .batch-edit-row > td:last-child { order: -1; margin-left: auto; }
+  .creation-workspace .batch-edit-row > td:first-child { order: -2; }
+  .creation-workspace .batch-edit-row > td:nth-child(2),
+  .creation-workspace .batch-edit-row > .batch-col-layout,
+  .creation-workspace .batch-edit-row > .batch-col-refs { flex-basis: 100%; width: 100% !important; }
+  .creation-workspace .batch-edit-row > td:nth-child(2)::before { content: "画面主题"; }
+  .creation-workspace .batch-edit-row > .batch-col-layout::before { content: "图型版式"; }
+  .creation-workspace .batch-edit-row > .batch-col-refs::before { content: "参考图"; }
+  .creation-workspace .batch-edit-row > td::before { display: block; margin-bottom: 5px; font-size: 11px; color: var(--ink-muted); }
+  .creation-workspace .batch-row-theme-input { font-size: 13px; min-height: 40px; }
+  .creation-workspace .batch-row-layout-btn, .creation-workspace .batch-btn-row-refs-mobile { min-height: 40px; }
+  .creation-workspace .batch-table-row > .batch-col-content { flex-basis: 100%; order: 1; }
+  .creation-workspace .batch-table-row > .batch-col-status { margin-left: auto; }
+  .creation-workspace .batch-table-row > .batch-col-action { order: 2; margin-left: auto; }
 }

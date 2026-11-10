@@ -4,6 +4,7 @@ Uses production templates, styles and event handlers with isolated adapter fixtu
 No image provider, account, production database or paid request is used.
 """
 import json
+import base64
 import os
 import re
 from pathlib import Path
@@ -15,8 +16,8 @@ OUT = Path(os.environ.get("HANDRAW_BROWSER_ARTIFACTS", "/tmp/handraw-creation-wo
 OUT.mkdir(parents=True, exist_ok=True)
 
 BOOT = r"""
-(kind) => {
-  const pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+(config) => {
+  const {kind, image:pixel} = config;
   const parts = {
     skill: {id:"skill",data:{style1:"FF-001",style2:"",layout:"SC-001",colors:[],tones:[],moods:[]}},
     text: {id:"text",data:{text:"暖阳下的单车少女"}},
@@ -71,6 +72,9 @@ def geometry(page, width):
         overflow:document.documentElement.scrollWidth>innerWidth+1,
         cols:getComputedStyle(document.querySelector('.creation-workspace')).gridTemplateColumns};
     }""")
+    if data["overflow"]:
+        page.screenshot(path=str(OUT/f"overflow-{width}.png"),full_page=True)
+        data["overflowingNodes"]=page.evaluate("""() => [...document.querySelectorAll("body *")].filter(el=>el.getBoundingClientRect().right>innerWidth+1).slice(-15).map(el=>({tag:el.tagName,cls:el.className,w:el.getBoundingClientRect().width,text:el.textContent.slice(0,80)}))""")
     assert not data["overflow"], (width, data)
     c, s = data["content"], data["settings"]
     if width > 980:
@@ -97,7 +101,8 @@ def load(page, kind):
     page.add_style_tag(content="body{margin:0;overflow:auto}#fixture{max-width:1440px;margin:0 auto;padding:24px;box-sizing:border-box}")
     for name in ["studio-make-image.js","studio-batch.js"]:
         page.add_script_tag(path=str(ROOT/"demo/assets"/name))
-    page.evaluate(BOOT,kind)
+    image="data:image/webp;base64,"+base64.b64encode((ROOT/"demo/starter/bear-and-bird.webp").read_bytes()).decode()
+    page.evaluate(BOOT,{"kind":kind,"image":image})
 
 def main():
     with sync_playwright() as p:
@@ -157,6 +162,9 @@ def main():
                     page.locator("#batch-seed-input").fill("城市散步")
                     page.locator("#batch-btn-plan").click()
                     expect(page.locator(".batch-edit-row")).to_have_count(3)
+                    geometry(page,width)
+                    if width<=600:
+                        assert page.locator(".batch-edit-table").evaluate("el=>el.scrollWidth<=el.clientWidth+1")
                     page.locator("#batch-concurrency").select_option("2")
                     assert page.evaluate("fixture.parts.loop.data.batchConcurrency")==2
                     page.locator("#batch-btn-start").scroll_into_view_if_needed()
