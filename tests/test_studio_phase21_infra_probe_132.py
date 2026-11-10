@@ -29,10 +29,14 @@ class NoPermissionError(Exception):
 
 
 class FakeS3:
-    def __init__(self,state,tenant,*,ignore_acl=False):
+    def __init__(self,state,tenant,*,ignore_acl=False,allow_list=False,
+                 allow_cross_delete=False,mutate_then_deny=False):
         self.state=state
         self.tenant=tenant
         self.ignore_acl=ignore_acl
+        self.allow_list=allow_list
+        self.allow_cross_delete=allow_cross_delete
+        self.mutate_then_deny=mutate_then_deny
         self.cleared=[]
     def allowed(self,key):
         return (self.ignore_acl or
@@ -40,6 +44,8 @@ class FakeS3:
                  and f"/{self.tenant}/" in key))
     def put_object(self,*,Bucket,Key,Body,**kwargs):
         if self.tenant=="anonymous" or not self.allowed(Key):
+            if self.mutate_then_deny and self.tenant!="anonymous":
+                self.state[Key]=Body
             raise AccessDenied()
         self.state[Key]=Body
         return {}
@@ -48,10 +54,14 @@ class FakeS3:
             raise AccessDenied()
         return {"Body":BytesIO(self.state[Key])}
     def delete_object(self,*,Bucket,Key):
-        if not self.allowed(Key):
+        if not self.allowed(Key) and not self.allow_cross_delete:
             raise AccessDenied()
         self.cleared.append(Key)
         self.state.pop(Key,None)
+    def list_objects_v2(self,*,Bucket,Prefix):
+        if not self.allowed(Prefix) and not self.allow_list:
+            raise AccessDenied()
+        return {"Contents":[{"Key":k} for k in self.state if k.startswith(Prefix)]}
     def generate_presigned_url(self,*args,**kwargs):
         return "https://s3.example.test/temporarily-signed"
 
@@ -120,6 +130,9 @@ class Phase21InfraTest(unittest.TestCase):
         self.assertTrue(out["observed"]["ownBytesMatched"])
         self.assertTrue(out["observed"]["crossTenantReadDeniedBothDirections"])
         self.assertTrue(out["observed"]["crossTenantWriteDeniedBothDirections"])
+        self.assertTrue(out["observed"]["crossTenantDeleteDeniedBothDirections"])
+        self.assertTrue(out["observed"]["crossTenantListDeniedBothDirections"])
+        self.assertTrue(out["observed"]["postDeniedProbeOwnBytesMatched"])
         self.assertTrue(out["observed"]["anonymousDenied"])
         self.assertTrue(out["observed"]["expiredSignedUrlDenied"])
         self.assertFalse(out["cdnOldUrlInvalidated"])
@@ -137,6 +150,43 @@ class Phase21InfraTest(unittest.TestCase):
             probe_s3(a,b,anon,bucket=BUCKET,prefix=PREFIX,
                      endpoint_host="s3.example.test")
         self.assertEqual(state,{})
+
+    def test_s3_unscoped_delete_or_listing_is_a_strict_failure(self):
+        for violation,flags in (
+            ("delete",{"allow_cross_delete":True}),
+            ("list",{"allow_list":True}),
+            ("mutated_403",{"mutate_then_deny":True}),
+        ):
+            with self.subTest(violation=violation):
+                state={}
+                a=FakeS3(state,"tenant-a",**flags)
+                b=FakeS3(state,"tenant-b",**flags)
+                anon=FakeS3(state,"anonymous")
+                with self.assertRaisesRegex(ValueError,"policy allowed access"):
+                    probe_s3(a,b,anon,bucket=BUCKET,prefix=PREFIX,
+                             endpoint_host="s3.example.test")
+                # Only disposable canary objects ever existed, and owner
+                # cleanup must remove them even after a policy violation.
+                self.assertEqual(state,{})
+
+    def test_s3_404_or_timeout_does_not_pass_cross_tenant_list_authz(self):
+        class NoSuchKey(Exception):
+            def __init__(self):
+                self.response={"Error":{"Code":"NoSuchKey"},
+                               "ResponseMetadata":{"HTTPStatusCode":404}}
+        for error in (NoSuchKey,TimeoutError):
+            class BogusList(FakeS3):
+                def list_objects_v2(self,*,Bucket,Prefix):
+                    raise error()
+            with self.subTest(error=error.__name__):
+                state={}
+                a=BogusList(state,"tenant-a")
+                b=FakeS3(state,"tenant-b")
+                anon=FakeS3(state,"anonymous")
+                with self.assertRaisesRegex(ValueError,"policy allowed access"):
+                    probe_s3(a,b,anon,bucket=BUCKET,prefix=PREFIX,
+                             endpoint_host="s3.example.test")
+                self.assertEqual(state,{})
 
     def test_s3_expired_url_network_outage_does_not_prove_expiry(self):
         state={}
