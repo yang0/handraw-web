@@ -172,6 +172,19 @@ class StudioReleaseAuditWorkbenchTest(unittest.TestCase):
             self.assertEqual(result["verifiedRealDPassCount"],0)
             self.assertFalse(result["releaseAuthorized"])
             self.assertNotIn("mock-operator",(folder/"review.html").read_text())
+            # Even 17 internally consistent synthetic claims must never
+            # produce a zero exit status from the DEFAULT deployment gate.
+            blocked_dir=root/"gate-recheck"
+            blocked_dir.mkdir(mode=0o700)
+            gated_args=list(args)
+            gated_args[gated_args.index("--out-dir")+1]=str(blocked_dir)
+            gated_args=gated_args[:-2]  # strip explicit --mode audit
+            self.assertEqual(main(gated_args),2)
+            blocked=json.loads((blocked_dir/"release-audit.json").read_text())
+            self.assertEqual(blocked["evidenceStructure"],
+                             "STRUCTURALLY_CONSISTENT_UNVERIFIED")
+            self.assertFalse(blocked["releaseAuthorized"])
+            self.assertEqual(blocked["verifiedRealDPassCount"],0)
 
 
 if __name__=="__main__":
