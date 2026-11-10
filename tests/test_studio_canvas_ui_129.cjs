@@ -9,7 +9,7 @@ const canvasUiSource=fs.readFileSync("demo/assets/studio-canvas-ui.js","utf8");
 // view/undo controls must not crowd its own topbar.
 const canvasTop=canvasUiSource.slice(canvasUiSource.indexOf("const topHtml="),
   canvasUiSource.indexOf("if(top.innerHTML!==topHtml)"));
-assert.match(canvasTop,/data-c129=\\"run\\"/);
+assert.ok(canvasTop.includes('data-c129="run"'), "canvas must retain the primary Run action");
 assert.match(canvasTop,/ic129-more-tools/);
 for(const deprecated of ['data-c129="save"','data-c129="simple"',
   'data-c129="undo"','data-c129="redo"']){
