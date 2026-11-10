@@ -48,12 +48,15 @@ class DbRows:
 
 
 class FakePg:
-    def __init__(self,paused="paused",version=170002):
+    def __init__(self,paused="paused",version=170002,server_addr="127.0.0.1"):
         self.paused=paused
         self.version=version
+        self.server_addr=server_addr
     def __enter__(self): return self
     def __exit__(self,*a): return None
     def execute(self,sql):
+        if "SELECT inet_server_addr()" in sql:
+            return DbRows((self.server_addr,))
         if "SHOW server_version_num" in sql:
             return DbRows((str(self.version),))
         if "pg_is_in_recovery()" in sql:
@@ -271,6 +274,80 @@ class Phase21PhysicalPg17Tests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 verify_restored(target_dsn="host=remote.example dbname=test",
                                 expected=expected,declared_host=TARGET)
+
+    def test_pg17_local_audit_rejects_libpq_hostaddr_service_overrides(self):
+        import psycopg
+        expected={"schemaVersion":1,"targetUtc":UTC,
+                  "backupManifestSha256":"a"*64,
+                  "expected":{"rowCounts":{"wallets":2},
+                              "rowSha256":{"wallets":"b"*64}}}
+        for injected in (
+            {"hostaddr":"203.0.113.14"},
+            {"service":"unreviewed-remote-pg"},
+            {"servicefile":"/private/override.conf"},
+        ):
+            info={"host":"127.0.0.1","dbname":"handraw_restore_drill_test",
+                  **injected}
+            with self.subTest(injected=injected), \
+                 patch.dict(os.environ,{"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
+                    "PGHOSTADDR":"","PGSERVICE":"","PGSERVICEFILE":""}), \
+                 patch("ops.studio_phase21_pg17_physical_pitr_132.settings",
+                       return_value=info), \
+                 patch.object(psycopg,"connect") as connect:
+                with self.assertRaisesRegex(ValueError,"local recovery host"):
+                    verify_restored(target_dsn="host=127.0.0.1 dbname=handraw_restore_drill_test",
+                                    expected=expected,declared_host=TARGET)
+                connect.assert_not_called()
+        for env_name in ("PGHOSTADDR","PGSERVICE","PGSERVICEFILE"):
+            with self.subTest(env_name=env_name), \
+                 patch.dict(os.environ,{"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
+                     "PGHOSTADDR":"","PGSERVICE":"","PGSERVICEFILE":"",
+                     env_name:"untrusted-override"}), \
+                 patch("ops.studio_phase21_pg17_physical_pitr_132.settings",
+                       return_value={"host":"127.0.0.1",
+                                     "dbname":"handraw_restore_drill_test"}), \
+                 patch.object(psycopg,"connect") as connect:
+                with self.assertRaisesRegex(ValueError,"local recovery host"):
+                    verify_restored(target_dsn="host=127.0.0.1 dbname=handraw_restore_drill_test",
+                                    expected=expected,declared_host=TARGET)
+                connect.assert_not_called()
+
+    def test_pg17_actual_server_must_be_loopback_and_second_pass_stays_pinned(self):
+        import psycopg
+        expected={"schemaVersion":1,"targetUtc":UTC,
+                  "backupManifestSha256":"a"*64,
+                  "expected":{"rowCounts":{"wallets":2},
+                              "rowSha256":{"wallets":"b"*64}}}
+        dsn="host=localhost dbname=handraw_restore_drill_test"
+        env={"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
+             "PGHOSTADDR":"","PGSERVICE":"","PGSERVICEFILE":""}
+        for actual in ("10.0.5.3","203.0.113.20",None):
+            with self.subTest(actual=actual),patch.dict(os.environ,env), \
+                 patch("ops.studio_phase21_pg17_physical_pitr_132.settings",
+                       return_value={"host":"localhost",
+                                     "dbname":"handraw_restore_drill_test"}), \
+                 patch.object(psycopg,"connect",
+                              return_value=FakePg(server_addr=actual)), \
+                 patch("ops.studio_phase21_pg17_physical_pitr_132.fingerprint") as fp:
+                with self.assertRaisesRegex(ValueError,"not on loopback"):
+                    verify_restored(target_dsn=dsn,expected=expected,
+                                    declared_host=TARGET)
+                fp.assert_not_called()
+        with patch.dict(os.environ,env), \
+             patch("ops.studio_phase21_pg17_physical_pitr_132.settings",
+                   return_value={"host":"localhost",
+                                 "dbname":"handraw_restore_drill_test"}), \
+             patch.object(psycopg,"connect",return_value=FakePg()) as connect, \
+             patch("ops.studio_phase21_pg17_physical_pitr_132.fingerprint",
+                   return_value=expected["expected"]) as fp:
+            out=verify_restored(target_dsn=dsn,expected=expected,
+                                declared_host=TARGET)
+            self.assertEqual(out["decision"],"NO-GO")
+            audited_dsn=connect.call_args.args[0]
+            fingerprint_dsn=fp.call_args.args[0]
+            for pinned in (audited_dsn,fingerprint_dsn):
+                self.assertIn("host=127.0.0.1",pinned)
+                self.assertIn("hostaddr=127.0.0.1",pinned)
 
     def test_cli_plan_writes_private_report_and_cannot_overwrite(self):
         report=Path(self.dir.name)/"report.json"
