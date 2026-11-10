@@ -119,7 +119,7 @@ def _prompt_candidates(rows: list[dict[str, Any]], theme: str, *,
     the entire hundreds-entry registry. SHA tie-breaking depends on the
     current theme, so zero-overlap queries cannot permanently bias SC-001.
     """
-    theme_text = re.sub(r"\\s+", "", str(theme).lower())[:160]
+    theme_text = re.sub(r"\s+", "", str(theme).lower())[:160]
     grams = {theme_text[i:i + 2] for i in range(max(0, len(theme_text) - 1))}
     grams |= set(re.findall(r"[a-z0-9]{3,}", theme_text))
     grams -= {"画风", "风格", "图型", "主题", "图片", "系列", "生成", "设计"}
