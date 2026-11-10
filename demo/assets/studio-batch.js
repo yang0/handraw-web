@@ -1986,7 +1986,16 @@
             // .batch-plan-notice line, and it must survive the re-render that
             // finally{} triggers. A toast alone disappears after 2.8s (#135).
             const code=err&&err.code;
-            stage("AI 规划失败："+AI.message(code||err&&err.message));
+            const serverDetail=String(err?.message||"").trim();
+            const schemaProblem=["ai_invalid_json","ai_schema_invalid","ai_cannot_recommend"].includes(code);
+            const explain=schemaProblem && serverDetail && serverDetail!==code
+              ? serverDetail : AI.message(code||serverDetail);
+            // The server has already tried one bounded repair for an invalid
+            // series plan. Show the precise schema reason rather than only
+            // the opaque "结构不符" code. Never alter the user's draft here.
+            stage("AI 规划失败："+explain+
+              (schemaProblem?"；模型修复后仍不符合要求，可尝试减少张数或细化主题":"")+
+              (code?" ["+code+"]":""));
             self.planFailed=true;
             S?.toast?.(self.planNotice);
             if(global.console&&console.warn&&code)
