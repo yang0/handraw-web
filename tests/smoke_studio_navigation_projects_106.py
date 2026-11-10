@@ -89,83 +89,71 @@ def main():
                     page.wait_for_function("(v) => window.CS?.stageView === v",
                                            arg=expected, timeout=20000)
 
+                # #136: Project Center is removed. Legacy URLs land on the
+                # image form without erasing saved project data or deep links.
                 visit("view=projects")
-                stage("projects")
-                page.locator("[data-pc-open]").first.wait_for(timeout=20000)
-                assert page.locator("[data-pc-open]").count() == 40
-                assert page.locator("[data-pc-more]").count() == 1
-                page.locator("[data-pc-more]").click()
-                page.wait_for_function(
-                    "() => document.querySelectorAll('[data-pc-open]').length === 46",
-                    timeout=20000)
-                steps.append("cursor pagination 40+6")
-
-                # Input composition must not be interrupted. The real server
-                # owns title filtering; selection and focus stay in the input.
-                box = page.locator("#pc-project-search")
-                box.focus()
-                box.dispatch_event("compositionstart")
-                box.fill("106 春日")
-                assert page.locator("#pc-project-search").input_value() == "106 春日"
-                box.dispatch_event("compositionend")
-                page.wait_for_function(
-                    "() => document.querySelectorAll('[data-pc-open]').length === 1",
-                    timeout=20000)
-                assert page.locator("[data-pc-open]").first.get_attribute("data-pc-open") == "nav106-03"
-                assert page.evaluate("document.activeElement?.id") == "pc-project-search"
-                steps.append("IME/search/server filtering/focus")
-                page.screenshot(path=str(screens / "desktop-projects.png"),
-                                animations="disabled")
-
-                page.locator("[data-pc-new='image']").click()
                 stage("quick")
-                page.locator("#make-image-subject").wait_for(timeout=20000)
-                assert page.locator("#studio-mode-canvas").count() == 1
-                assert page.locator("#studio-mode-from-workflow").count() == 1
-                assert page.locator("#studio-mode-gallery").count() == 1
-                page.locator("#studio-mode-canvas").click()
+                assert "view=projects" not in page.url
+                assert page.locator("#studio-mode-projects").count() == 0
+                assert page.locator("[data-pc-open]").count() == 0
+                assert page.locator("#studio-mode-view-toggle").count() == 1
+                assert page.locator("#make-image-subject").is_visible()
+                steps.append("retired project center redirects to image form")
+
+                # One contextual switch, both directions, SAME graph.
+                subject_box=page.locator("#make-image-subject")
+                subject_box.fill("136 图像视图往返保真")
+                page.wait_for_function("""() => window.CS.graph.nodes.some(n =>
+                    n.type==='text_input' && n.data.text==='136 图像视图往返保真')""")
+                before_graph=page.evaluate("""() => JSON.stringify(window.CS.graph.nodes
+                    .map(n=>({id:n.id,type:n.type,data:n.data})))""")
+                page.locator("#studio-mode-view-toggle").click()
                 stage("canvas")
-                assert page.locator("#studio-mode-simple").get_attribute("aria-pressed") == "false"
-                page.locator("#studio-mode-simple").click()
+                assert page.locator("#studio-mode-view-toggle").inner_text().find("返回表单") >= 0
+                assert page.locator("#studio-mode-simple").count() == 0
+                assert page.locator("#studio-mode-canvas").count() == 0
+                page.locator("#studio-mode-view-toggle").click()
                 stage("quick")
-                steps.append("new image and explicit two views")
+                assert page.locator("#make-image-subject").input_value() == "136 图像视图往返保真"
+                after_graph=page.evaluate("""() => JSON.stringify(window.CS.graph.nodes
+                    .map(n=>({id:n.id,type:n.type,data:n.data})))""")
+                assert before_graph == after_graph,"view switch must not rewrite graph nodes"
+                steps.append("single contextual form/canvas round-trip preserves graph")
 
-                page.locator("#studio-mode-projects").click()
-                stage("projects")
-                page.locator("[data-pc-new='series']").click()
+                page.locator("#studio-mode-batch").click()
                 stage("batch")
                 page.locator(".series108-board").wait_for(timeout=20000)
-                steps.append("new series")
+                page.locator("#studio-mode-view-toggle").click()
+                stage("canvas")
+                page.locator("#studio-mode-view-toggle").click()
+                stage("batch")
+                steps.append("series form/canvas two-way projection")
 
-                page.locator("#studio-mode-projects").click()
-                stage("projects")
-                page.locator("[data-pc-new='article']").click()
+                page.locator("#studio-mode-article").click()
                 stage("preview")
                 page.locator("#ic-preview-stage").wait_for(timeout=20000,
                                                            state="visible")
-                assert page.locator("#studio-mode-article").get_attribute("aria-pressed") == "true"
-                steps.append("new article")
+                assert page.locator("#studio-mode-article").get_attribute("aria-pressed")=="true"
+                steps.append("article entry without Project Center")
 
-                page.locator("#studio-mode-projects").click()
-                stage("projects")
-                page.locator("[data-pc-new='workflow']").click()
+                page.locator("#studio-mode-from-workflow").click()
                 stage("workflows")
                 page.locator("#wf-search-inp").wait_for(timeout=20000)
-                steps.append("from workflow")
+                steps.append("workflow entry without Project Center")
 
                 for url, expected, selector in [
                     ("entry=quick", "quick", "#make-image-subject"),
                     ("entry=batch", "batch", ".series108-board"),
                     ("entry=article", "preview", "#ic-preview-stage"),
                     ("entry=canvas", "canvas", "#ic-canvas-stage"),
-                    ("view=projects", "projects", ".ic-pc-scroll"),
+                    ("view=projects", "quick", "#make-image-subject"),
                     ("view=history", "history", "#ic-history-stage"),
                     ("view=workflows", "workflows", "#wf-search-inp"),
                 ]:
                     visit(url)
                     stage(expected)
                     page.locator(selector).wait_for(timeout=20000)
-                steps.append("seven legacy routes")
+                steps.append("legacy routes redirect safely")
 
                 # Known saved template must be routed into its Canvas graph.
                 template_id = page.evaluate("""() => window.CS.savedWorkflows
@@ -260,7 +248,7 @@ def main():
                     "steps": steps, "paidRequests": paid,
                     "pageErrors": errors, "viewports": [1366, 768, 360],
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
-                print("STUDIO #106 REAL CHROMIUM NAVIGATION/PROJECTS/REMIX PASS",
+                print("STUDIO #136 REAL CHROMIUM FORM/CANVAS/REMIX PASS",
                       json.dumps(steps, ensure_ascii=False), flush=True)
                 browser.close()
         finally:
