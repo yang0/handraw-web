@@ -172,8 +172,12 @@ assert.ok(styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
   "Tablet workflow list needs two cards across");
 assert.ok(styles.includes("grid-template-columns: minmax(0, 1fr)"),
   "Mobile workflow list needs a single card column");
-assert.ok(studio.includes('id="studio-mode-canvas"') && studio.includes('>画布编辑</button>'),
-  "Studio2 #106 explicitly names the in-project second view 画布编辑");
+assert.ok(studio.includes('id="studio-mode-view-toggle"') &&
+  studio.includes('切换到画布 →') && studio.includes('← 返回表单'),
+  "Studio2 #136 provides a single contextual form/canvas toggle");
+assert.ok(!studio.includes('id="studio-mode-simple"') &&
+  !studio.includes('id="studio-mode-canvas"'),
+  "The two redundant edit mode buttons must be removed");
 assert.ok(!studio.includes("高级画布"), "Studio UI must not keep the old canvas label");
 
 const workflowStage = {
