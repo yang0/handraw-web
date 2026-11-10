@@ -37,14 +37,40 @@ MAX_INPUT=256_000
 
 
 def _dir(path,*,required=False):
+    """Reject symlinked ancestors, not only the final directory.
+
+    This runs before ever constructing restore_command or opening a backup
+    output. An alias of the recovery root must not reach a non-QA tree.
+    """
     p=Path(path)
-    if not p.is_absolute() or not SAFE_PATH.fullmatch(str(p)) or ".." in p.parts:
+    if (not p.is_absolute() or p==Path("/") or
+        not SAFE_PATH.fullmatch(str(p)) or ".." in p.parts):
         raise ValueError("unsafe PITR directory")
-    if p.is_symlink() or (p.exists() and not p.is_dir()):
-        raise ValueError("PITR path symlink/non-directory")
+    if any(part.is_symlink() for part in (p,*p.parents)):
+        raise ValueError("PITR path or ancestor is a symbolic link")
+    if p.exists() and not p.is_dir():
+        raise ValueError("PITR path non-directory")
     if required and not p.is_dir():
         raise ValueError("required PITR root absent")
     return p
+
+
+def _separate_directories(left,right):
+    """Never permit archived WAL to alias or contain a recovery data tree."""
+    if left==right or left in right.parents or right in left.parents:
+        raise ValueError("WAL archive and PITR target roots must be separate")
+
+
+def _host_pair(source_host,target_host):
+    if any(not isinstance(v,str) or not HOST.fullmatch(v)
+           for v in (source_host,target_host)):
+        raise ValueError("explicit host identities required")
+    forbidden={"localhost","127.0.0.1","0.0.0.0","::1"}
+    if source_host.lower() in forbidden or source_host.lower()==target_host.lower():
+        raise ValueError("PITR source may not be local or equal target")
+    current={socket.gethostname().lower(),socket.getfqdn().lower()}
+    if target_host.lower() not in current:
+        raise ValueError("must execute on the declared independent recovery host")
 
 
 def _time(value):
@@ -60,19 +86,10 @@ def preflight(*,environment,source_host,target_host,root,leaf,archive_dir,
               target_utc,run=False):
     if not isinstance(environment,str) or not LABEL.fullmatch(environment):
         raise ValueError("preproduction-only environment ID required")
-    if any(not isinstance(v,str) or not HOST.fullmatch(v)
-           for v in (source_host,target_host)):
-        raise ValueError("explicit host identities required")
-    forbidden={"localhost","127.0.0.1","0.0.0.0","::1"}
-    if source_host.lower() in forbidden or source_host.lower()==target_host.lower():
-        raise ValueError("PITR source may not be local or equal target")
-    current={socket.gethostname().lower(),socket.getfqdn().lower()}
-    if target_host.lower() not in current:
-        raise ValueError("must execute on the declared independent recovery host")
+    _host_pair(source_host,target_host)
     base=_dir(root,required=True)
     wal=_dir(archive_dir,required=True)
-    if wal==base or base in wal.parents or wal in base.parents:
-        raise ValueError("WAL archive and PITR target roots must be separate")
+    _separate_directories(base,wal)
     if not isinstance(leaf,str) or not TARGET.fullmatch(leaf):
         raise ValueError("invalid new disposable PITR directory name")
     dest=base/leaf
@@ -120,8 +137,21 @@ def run_backup(plan,*,user,port,runner=subprocess.run):
         raise ValueError("missing limited replication username")
     if type(port) is not int or not 1<=port<=65535:
         raise ValueError("invalid PG source port")
+    # Do not trust a forged plan passed by another Python caller: the CLI
+    # preflight's host/path restrictions remain mandatory in run_backup.
+    if (not isinstance(plan,dict)
+        or not isinstance(plan.get("environment"),str)
+        or not LABEL.fullmatch(plan["environment"])):
+        raise ValueError("isolated preproduction backup plan required")
     root=Path(plan["backupDir"])
-    if root.exists() or root.is_symlink():
+    if not TARGET.fullmatch(root.name):
+        raise ValueError("dedicated disposable recovery leaf required")
+    base=_dir(root.parent,required=True)
+    wal=_dir(plan["archiveDir"],required=True)
+    _host_pair(plan["sourceHost"],plan["targetHost"])
+    _separate_directories(base,wal)
+    _dir(root)
+    if root.exists():
         raise ValueError("backup target must be absent")
     if not os.environ.get("HANDRAW_PHASE21_PG_REPLICATION_PASSWORD"):
         raise ValueError("replication credentials missing")
@@ -168,9 +198,9 @@ def prepare_pitr(*,backup_dir,archive_dir,target_utc):
         raise ValueError("PITR preparation requires isolated drill approval")
     b=_dir(backup_dir,required=True)
     a=_dir(archive_dir,required=True)
-    if (b.is_symlink() or a.is_symlink() or
-            not b.name.startswith("pitr-")):
-        raise ValueError("untrusted physical recovery directories")
+    _separate_directories(b,a)
+    if not TARGET.fullmatch(b.name):
+        raise ValueError("untrusted disposable recovery directory")
     evidence=_read_private(b/"phase21-physical-backup.json")
     if (evidence.get("mode")!="isolated-real-pg17-physical-basebackup"
         or evidence.get("backupVerifiedByPgVerifybackup") is not True
@@ -290,14 +320,16 @@ def main(argv=None):
                 archive_dir=args.archive_dir,target_utc=args.target_utc,
                 run=args.mode=="backup")
         else:
-            target=_dir(args.root,required=True)/args.leaf
-            if not TARGET.fullmatch(args.leaf) or not target.is_dir() or target.is_symlink():
-                raise ValueError("isolated recovery target not found")
-            if args.target_host.lower() not in {socket.gethostname().lower(),
-                                                 socket.getfqdn().lower()}:
-                raise ValueError("wrong recovery host")
-            if args.source_host.lower()==args.target_host.lower():
-                raise ValueError("same physical source and target")
+            # Prepare and verify must retain the same isolated-host and WAL
+            # root constraints as plan/backup, despite the target now existing.
+            root=_dir(args.root,required=True)
+            archive=_dir(args.archive_dir,required=True)
+            _separate_directories(root,archive)
+            _host_pair(args.source_host,args.target_host)
+            if not TARGET.fullmatch(args.leaf):
+                raise ValueError("invalid disposable recovery leaf")
+            target=_dir(root/args.leaf,required=True)
+            _separate_directories(target,archive)
             plan={"backupDir":str(target),"targetUtc":_time(args.target_utc)}
         if args.mode=="plan":
             result=plan
