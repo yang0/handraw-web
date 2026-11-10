@@ -165,37 +165,69 @@ def _validate_model_reply(response: str, *, db: Database, user: dict[str, Any],
                           kind: str, count: int, authorized: dict[str, Any],
                           blocks: list[dict[str, Any]], current_slots: list[dict[str, Any]]):
     try:
-        style, layout, ratio, reasons, slots = _validate_model_reply(
-            response, db=db, user=user, kind=kind, count=count,
-            authorized=authorized, blocks=blocks, current_slots=current_slots)
-    except ServiceError as invalid:
-        # A model may return incomplete slots or extraneous JSON keys even
-        # with json_mode=True. Give SERIES one bounded repair request while
-        # preserving the *same* authorized catalog, count and CAS snapshot.
-        # Never auto-fill a missing slot, bypass authorization, or trigger Run.
-        retryable = {"ai_invalid_json", "ai_schema_invalid",
-                     "ai_cannot_recommend", "ai_resource_not_found"}
-        if kind != "series" or invalid.code not in retryable:
-            raise
-        log.warning("studio_ai_plan_retry kind=series reason=%s", invalid.code)
-        repair = {**prompt, "instruction": prompt["instruction"] + (
-            "上次输出未通过严格结构校验。现在重新规划并输出完整 JSON，"
-            "顶层仅有 styleId,layoutId,ratio,reasons,slots 五个字段；"
-            "reasons 必须恰好包含 style/layout/ratio 三项非空理由；"
-            "slots 必须为恰好 count 条数组，每条仅含 subject,layoutId,ratio,reason 四项；"
-            "所有画风和图型编号只准从给定授权目录中选取，所有比例只准用 allowedRatios；"
-            "不能遗漏图卡、不能添加解释文字、不能夹带 Markdown。"
-        ), "repairFor": invalid.code}
-        response, meta = chat([
-            {"role": "system", "content": "你是严格授权资源的系列图策划师。"
-             "修复结构错误，只能输出完整 JSON，不要添加字段或创建任务。"},
-            {"role": "user", "content": json.dumps(repair, ensure_ascii=False)}
-        ], json_mode=True, temperature=0.15, timeout=45)
-        if not meta.get("ok") or not response:
-            _upstream(meta)
-        style, layout, ratio, reasons, slots = _validate_model_reply(
-            response, db=db, user=user, kind=kind, count=count,
-            authorized=authorized, blocks=blocks, current_slots=current_slots)
+        raw = parse_batch_plan_response(response)
+    except (ValueError, TypeError):
+        fail("ai_invalid_json", "AI 返回的 JSON 无法解析，未修改任何内容", 502)
+    if not isinstance(raw, dict) or set(raw) - MODEL_KEYS or not {
+            "styleId", "layoutId", "ratio", "reasons", "slots"} <= set(raw):
+        fail("ai_schema_invalid", "AI 返回结构不符合统一方案契约")
+    reasons = raw["reasons"]
+    if not isinstance(reasons, dict) or set(reasons) != REASON_KEYS:
+        fail("ai_schema_invalid", "AI 未提供画风、图型与画幅的字段级理由")
+    reasons = {key: _valid_reason(reasons[key], key) for key in REASON_KEYS}
+    style = _ref(db, user, raw["styleId"], "style", authorized)
+    layout = _ref(db, user, raw["layoutId"], "layout", authorized)
+    ratio = raw["ratio"]
+    if not isinstance(ratio, str) or ratio not in RATIOS:
+        fail("ai_schema_invalid", "AI 推荐了不合法的画幅比例")
+    raw_slots = raw["slots"]
+    if not isinstance(raw_slots, list) or len(raw_slots) != (0 if kind == "image" else count):
+        fail("ai_cannot_recommend", "AI 未返回完整且可用的规划槽位")
+    by_index = {b["idx"]: b for b in blocks}
+    seen_anchor = set()
+    slots = []
+    for order, entry in enumerate(raw_slots):
+        if not isinstance(entry, dict) or set(entry) - SLOT_KEYS:
+            fail("ai_schema_invalid", "AI 返回的槽位字段无效")
+        if kind == "article":
+            expected_role = "cover" if order == 0 else "illustration"
+            if entry.get("role") != expected_role:
+                fail("ai_schema_invalid", "AI 文章图卡的封面/插图角色无效")
+            if "afterBlockIdx" not in entry:
+                fail("ai_anchor_invalid", "AI 文章图卡缺少原文锚点")
+        elif set(entry) - {"subject", "layoutId", "ratio", "reason"}:
+            fail("ai_schema_invalid", "系列图卡出现了文章专属字段")
+        title = entry.get("subject")
+        if not isinstance(title, str) or not title.strip() or len(title) > 120:
+            fail("ai_cannot_recommend", "AI 未能给每张图规划有效主题")
+        reason = _valid_reason(entry.get("reason"), "图卡")
+        slot_layout = _ref(db, user, entry.get("layoutId"), "layout", authorized)
+        slot_ratio = entry.get("ratio")
+        if not isinstance(slot_ratio, str) or slot_ratio not in RATIOS:
+            fail("ai_schema_invalid", "图卡画幅不在合法范围内")
+        slot_id = current_slots[order]["slotId"] if order < len(current_slots) else ""
+        slot_id = slot_id or "ai-slot-" + uuid.uuid4().hex[:20]
+        result = {"slotId": slot_id, "order": order, "subject": title.strip(),
+                  "overrides": {"layout": slot_layout, "ratio": slot_ratio},
+                  "reasons": {"subject": reason, "layout": reason, "ratio": reason}}
+        if kind == "article":
+            is_cover = order == 0
+            after = entry.get("afterBlockIdx")
+            if type(after) is not int or (is_cover and after != -1) or (
+                    not is_cover and after not in by_index):
+                fail("ai_anchor_invalid", "文章规划引用了非法段落锚点")
+            aid = "cover" if is_cover else by_index[after]["anchorId"]
+            if aid in seen_anchor:
+                fail("ai_anchor_invalid", "文章插图的锚点重复")
+            seen_anchor.add(aid)
+            result.update({"anchorId": aid, "afterBlockIdx": after,
+                           "anchorText": "" if is_cover else by_index[after]["text"][:24],
+                           "role": "cover" if is_cover else "illustration",
+                           "purpose": str(entry.get("purpose") or "")[:40],
+                           "imageType": str(entry.get("imageType") or "scene")})
+            if result["imageType"] not in VALID_IMAGE_TYPES:
+                fail("ai_schema_invalid", "文章配图类型无效")
+        slots.append(result)
     return style, layout, ratio, reasons, slots
 
 
@@ -280,69 +312,37 @@ def execute_ai_plan(db: Database, user: dict[str, Any], body: dict[str, Any]) ->
     if not meta.get("ok") or not response:
         _upstream(meta)
     try:
-        raw = parse_batch_plan_response(response)
-    except (ValueError, TypeError):
-        fail("ai_invalid_json", "AI 返回的 JSON 无法解析，未修改任何内容", 502)
-    if not isinstance(raw, dict) or set(raw) - MODEL_KEYS or not {
-            "styleId", "layoutId", "ratio", "reasons", "slots"} <= set(raw):
-        fail("ai_schema_invalid", "AI 返回结构不符合统一方案契约")
-    reasons = raw["reasons"]
-    if not isinstance(reasons, dict) or set(reasons) != REASON_KEYS:
-        fail("ai_schema_invalid", "AI 未提供画风、图型与画幅的字段级理由")
-    reasons = {key: _valid_reason(reasons[key], key) for key in REASON_KEYS}
-    style = _ref(db, user, raw["styleId"], "style", authorized)
-    layout = _ref(db, user, raw["layoutId"], "layout", authorized)
-    ratio = raw["ratio"]
-    if not isinstance(ratio, str) or ratio not in RATIOS:
-        fail("ai_schema_invalid", "AI 推荐了不合法的画幅比例")
-    raw_slots = raw["slots"]
-    if not isinstance(raw_slots, list) or len(raw_slots) != (0 if kind == "image" else count):
-        fail("ai_cannot_recommend", "AI 未返回完整且可用的规划槽位")
-    by_index = {b["idx"]: b for b in blocks}
-    seen_anchor = set()
-    slots = []
-    for order, entry in enumerate(raw_slots):
-        if not isinstance(entry, dict) or set(entry) - SLOT_KEYS:
-            fail("ai_schema_invalid", "AI 返回的槽位字段无效")
-        if kind == "article":
-            expected_role = "cover" if order == 0 else "illustration"
-            if entry.get("role") != expected_role:
-                fail("ai_schema_invalid", "AI 文章图卡的封面/插图角色无效")
-            if "afterBlockIdx" not in entry:
-                fail("ai_anchor_invalid", "AI 文章图卡缺少原文锚点")
-        elif set(entry) - {"subject", "layoutId", "ratio", "reason"}:
-            fail("ai_schema_invalid", "系列图卡出现了文章专属字段")
-        title = entry.get("subject")
-        if not isinstance(title, str) or not title.strip() or len(title) > 120:
-            fail("ai_cannot_recommend", "AI 未能给每张图规划有效主题")
-        reason = _valid_reason(entry.get("reason"), "图卡")
-        slot_layout = _ref(db, user, entry.get("layoutId"), "layout", authorized)
-        slot_ratio = entry.get("ratio")
-        if not isinstance(slot_ratio, str) or slot_ratio not in RATIOS:
-            fail("ai_schema_invalid", "图卡画幅不在合法范围内")
-        slot_id = current_slots[order]["slotId"] if order < len(current_slots) else ""
-        slot_id = slot_id or "ai-slot-" + uuid.uuid4().hex[:20]
-        result = {"slotId": slot_id, "order": order, "subject": title.strip(),
-                  "overrides": {"layout": slot_layout, "ratio": slot_ratio},
-                  "reasons": {"subject": reason, "layout": reason, "ratio": reason}}
-        if kind == "article":
-            is_cover = order == 0
-            after = entry.get("afterBlockIdx")
-            if type(after) is not int or (is_cover and after != -1) or (
-                    not is_cover and after not in by_index):
-                fail("ai_anchor_invalid", "文章规划引用了非法段落锚点")
-            aid = "cover" if is_cover else by_index[after]["anchorId"]
-            if aid in seen_anchor:
-                fail("ai_anchor_invalid", "文章插图的锚点重复")
-            seen_anchor.add(aid)
-            result.update({"anchorId": aid, "afterBlockIdx": after,
-                           "anchorText": "" if is_cover else by_index[after]["text"][:24],
-                           "role": "cover" if is_cover else "illustration",
-                           "purpose": str(entry.get("purpose") or "")[:40],
-                           "imageType": str(entry.get("imageType") or "scene")})
-            if result["imageType"] not in VALID_IMAGE_TYPES:
-                fail("ai_schema_invalid", "文章配图类型无效")
-        slots.append(result)
+        style, layout, ratio, reasons, slots = _validate_model_reply(
+            response, db=db, user=user, kind=kind, count=count,
+            authorized=authorized, blocks=blocks, current_slots=current_slots)
+    except ServiceError as invalid:
+        # A model may return incomplete slots or extraneous JSON keys even
+        # with json_mode=True. Give SERIES one bounded repair request while
+        # preserving the *same* authorized catalog, count and CAS snapshot.
+        # Never auto-fill a missing slot, bypass authorization, or trigger Run.
+        retryable = {"ai_invalid_json", "ai_schema_invalid",
+                     "ai_cannot_recommend", "ai_resource_not_found"}
+        if kind != "series" or invalid.code not in retryable:
+            raise
+        log.warning("studio_ai_plan_retry kind=series reason=%s", invalid.code)
+        repair = {**prompt, "instruction": prompt["instruction"] + (
+            "上次输出未通过严格结构校验。现在重新规划并输出完整 JSON，"
+            "顶层仅有 styleId,layoutId,ratio,reasons,slots 五个字段；"
+            "reasons 必须恰好包含 style/layout/ratio 三项非空理由；"
+            "slots 必须为恰好 count 条数组，每条仅含 subject,layoutId,ratio,reason 四项；"
+            "所有画风和图型编号只准从给定授权目录中选取，所有比例只准用 allowedRatios；"
+            "不能遗漏图卡、不能添加解释文字、不能夹带 Markdown。"
+        ), "repairFor": invalid.code}
+        response, meta = chat([
+            {"role": "system", "content": "你是严格授权资源的系列图策划师。"
+             "修复结构错误，只能输出完整 JSON，不要添加字段或创建任务。"},
+            {"role": "user", "content": json.dumps(repair, ensure_ascii=False)}
+        ], json_mode=True, temperature=0.15, timeout=45)
+        if not meta.get("ok") or not response:
+            _upstream(meta)
+        style, layout, ratio, reasons, slots = _validate_model_reply(
+            response, db=db, user=user, kind=kind, count=count,
+            authorized=authorized, blocks=blocks, current_slots=current_slots)
     # Do not force any model value over a user lock; the client must show the
     # difference. Preserve identity and caller's revision for CAS review.
     _revision(db, user, project_id, base_revision)
