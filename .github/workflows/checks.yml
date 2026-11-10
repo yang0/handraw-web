@@ -69,6 +69,8 @@ jobs:
       - run: python tests/smoke_studio_canvas_browser.py --screenshots artifacts/canvas-127-screen
       - name: '#126 GraphPatch real Chromium approval and rollback'
         run: python tests/smoke_studio_graph_patch_browser_126.py
+      - run: python tests/smoke_studio_make_image_browser_128.py
+      - run: python tests/smoke_studio_navigation_projects_106.py
       - name: '#111 real Studio Project 10/50/100/300 nodes benchmark (no paid gateway)'
         run: python tests/benchmark_studio_native_canvas_111.py
       - name: '#111 true 120-unique-WebP decode + 300-node physical drag Chromium'
@@ -82,8 +84,6 @@ jobs:
       - name: '#112 Native Studio 100-node Graph + owner isolation Chromium smoke'
         run: python tests/smoke_studio_native_100_graph_112.py
       - run: python tests/smoke_studio_runtime_browser_119.py
-      - run: python tests/smoke_studio_make_image_browser_128.py
-      - run: python tests/smoke_studio_navigation_projects_106.py
       - name: 'Legacy #86/#87 real Chromium history/workflow navigation widths (1440/1200/390)'
         run: python tests/smoke_legacy_library_alignment_86_87.py
       - name: '#92/#97 true Chromium 1440/390 history and work detail interactions'

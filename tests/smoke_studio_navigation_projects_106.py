@@ -117,7 +117,8 @@ def main():
                 assert page.locator("#make-image-subject").input_value() == "136 图像视图往返保真"
                 after_graph=page.evaluate("""() => JSON.stringify(window.CS.graph.nodes
                     .map(n=>({id:n.id,type:n.type,data:n.data})))""")
-                assert before_graph == after_graph,"view switch must not rewrite graph nodes"
+                assert before_graph == after_graph, {"before":json.loads(before_graph),
+                    "after":json.loads(after_graph)}
                 steps.append("single contextual form/canvas round-trip preserves graph")
 
                 page.locator("#studio-mode-batch").click()

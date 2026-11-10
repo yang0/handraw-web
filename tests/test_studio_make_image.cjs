@@ -675,6 +675,10 @@ function createTestGraph(options = {}) {
   sandbox.document.body = { id: "body" };
   sandbox.document.activeElement = null;
 
+  let subjectPatchCalls = 0;
+  const applySubjectPatch = controller.patchSpec.bind(controller);
+  controller.patchSpec = (...args) => { subjectPatchCalls++; return applySubjectPatch(...args); };
+
   // Bind events with our controller
   controller.bindEvents(fakeDom);
   controller.actions = actions;
@@ -710,7 +714,15 @@ function createTestGraph(options = {}) {
 
   // 4. User blurs: onchange fires without destroying DOM, and persists draft immediately
   assert.ok(typeof subjInput.onchange === "function", "subjInput must have onchange listener");
+  const patchesBeforeBlur = subjectPatchCalls;
   subjInput.onchange();
+  assert.equal(subjectPatchCalls, patchesBeforeBlur,
+    "Unchanged blur must not create an extra CreationSpec revision");
+  subjInput.value = "自动填充的新主题";
+  subjInput.onchange();
+  assert.equal(subjectPatchCalls, patchesBeforeBlur + 1,
+    "Change-only inputs must still apply their new subject");
+  assert.equal(txt.data.text, "自动填充的新主题");
   assert.equal(markDirtyAndRenderCalls, 0, "markDirtyAndRender must not be called on blur to prevent swallowing clicks on clear/run buttons");
   assert.ok(persistDraftCalls > 0, "persistDraft must be called on change/blur to persist draft without re-rendering");
 

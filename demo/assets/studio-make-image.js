@@ -1051,7 +1051,10 @@
           }, 350);
         };
         subjInput.onchange = () => {
-          this.patchSpec({subject:subjInput.value},()=>{td.text=subjInput.value});
+          // Input already committed this value. Clicking a view switch also
+          // fires change; do not create a second Spec revision for that blur.
+          if (td.text !== subjInput.value)
+            this.patchSpec({subject:subjInput.value},()=>{td.text=subjInput.value});
           this.syncPromptPreview();
           updateClearSubjBtn();
           flushPersist();
