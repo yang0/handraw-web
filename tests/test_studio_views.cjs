@@ -17,5 +17,7 @@ assert.ok(src.includes("renderGraphSummaryInSimpleView"),"Complex graph must not
 assert.ok(src.includes("current.projectActiveView = view"),"View changes only edit Project metadata");
 assert.ok(!/function switchCreationStage\(next\)[\s\S]*?function renderCreationModeBar\(\)/.exec(src)[0].includes("generateSingleImage("),"View transition never sends a new generation");
 assert.ok(src.includes("lastStudioTaskView"),"Canvas retains its originating creation task");
+assert.ok(src.includes('CS.stageView === "preview" ? "article" : CS.stageView'),
+  "Article preview must return to its editor from Canvas, not a blank Quick form");
 assert.ok(src.includes('p.ctrl.data.ratioSource = "user"'),"Explicit ratio must survive mode changes");
 console.log("studio2 navigation and view switching safety contract passes");
