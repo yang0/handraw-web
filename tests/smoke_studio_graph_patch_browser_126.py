@@ -113,6 +113,13 @@ def main():
                       && document.querySelectorAll('#ic-nodes-layer .ic-node').length===4
                     """, timeout=45000)
                     page.locator("#canvas-129-topbar .ic129-more-tools > summary").click()
+                    # Live Run projection/inspector refreshes must not close
+                    # the native disclosure before the user can pick a tool.
+                    page.locator("#canvas-129-topbar .ic129-more-tools[open]").wait_for(
+                        timeout=10000)
+                    page.wait_for_timeout(300)
+                    assert page.locator(
+                        "#canvas-129-topbar .ic129-more-tools").get_attribute("open") is not None
                     page.locator('#canvas-129-topbar [data-c129="graphpatch"]').click(
                         timeout=15000)
                     dialog = page.locator("#gp126-backdrop")
