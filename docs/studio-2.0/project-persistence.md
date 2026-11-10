@@ -76,9 +76,17 @@ Saving is debounced; switching tabs flushes unsynced active edits. On reconnect 
 4. Live PostgreSQL migration plan for existing instances and storage-limit/operator observability.
 
 
-## Incremental migration for existing PostgreSQL installations (101)
+## Incremental migration for existing PostgreSQL installations (101–103)
 
-**Do not run the fresh bootstrap against a database with any existing users.** New PostgreSQL installations initialized from the latest fresh V3 schema already include migration 101. An *existing* V3 PostgreSQL database, however, must be upgraded before starting code that uses \`/api/studio/projects\`; application startup now fails closed with a migration hint if 101 is missing.
+**Do not run the fresh bootstrap against a database with any existing users.** New PostgreSQL installations initialized from the latest fresh V3 schema already include migrations 101–103. An *existing* V3 PostgreSQL database, however, must be upgraded before starting code that uses \`/api/studio/projects\`, signed-in \`/api/boot\`, or GraphPatch review; application startup now fails closed with a migration hint if any of 101–103 is missing.
+
+| Version | Name | Objects |
+|---|---|---|
+| 101 | \`101_studio_project_drafts\` | \`studio_projects\`, \`studio_project_requests\`, owner/update index |
+| 102 | \`102_studio_graphpatch_reviews\` | \`studio_graphpatch_reviews\`, owner index |
+| 103 | \`103_author_private_resource_projection\` | \`user_resources\` (derived), owner index |
+
+Step 103 is a **read model** of the Skill CAS authority: rows are projected from \`skill_personal_resources\` with \`ON CONFLICT (id) DO NOTHING\`, so reruns never change CAS revisions or publish anything. If the Skill tables are absent the tool refuses instead of creating an empty projection.
 
 Take an independently verified database backup / PITR snapshot first, and have the operator review both the dry-run report and the SQL in \`ops/migrate_pg_studio_projects.py\`.
 
@@ -96,6 +104,6 @@ HANDRAW_DATABASE_URL='postgresql://...' \
 python -m ops.migrate_pg_studio_projects --apply
 \`\`\`
 
-The migration is atomic and additive: create only \`studio_projects\`, its owner/update index, and \`studio_project_requests\`, then record \`101_studio_project_drafts\` in \`schema_migrations\`. Re-running it against a complete 101 schema returns a no-op. It **refuses** unknown/partial Project tables, incomplete 101 records, an invalid native V3 baseline, default system databases, and missing explicit operator authorization. No \`DROP\`, \`TRUNCATE\`, \`UPDATE\`, import, account reset, or reinterpretation of existing works is performed.
+The migration is atomic and additive: it creates only the three steps above (each with its index) and records each version in \`schema_migrations\` in the same transaction. Re-running it against a complete 101–103 schema returns a no-op; a partially upgraded instance applies only the missing steps. It **refuses** unknown/partial objects, receipts whose name or objects drifted, an invalid native V3 baseline, an instance without the Skill authority tables for 103, default system databases, and missing explicit operator authorization. No \`DROP\`, \`TRUNCATE\`, \`UPDATE\`, import, account reset, or reinterpretation of existing works is performed.
 
 A no-op dry-run is not a substitute for genuine PostgreSQL integration tests or an operator-verified backup. Enforce a maintenance/change window when appropriate, because PostgreSQL catalog DDL can still obtain short-lived locks.
