@@ -6,6 +6,7 @@ The model sees full *authorized* catalog metadata, not protected definitions.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -104,6 +105,46 @@ def _ref(db: Database, user: dict[str, Any], code: str, kind: str,
     if version is None:
         version = _catalog()[0] if source == "official" and not raw else "current"
     return {"id": code, "type": kind, "source": source, "version": version}
+
+
+
+def _prompt_candidates(rows: list[dict[str, Any]], theme: str, *,
+                       selected_id: str = "", limit: int = 48
+                       ) -> list[dict[str, str]]:
+    """Per-request theme-aware candidate window, never a static fixed shortlist.
+
+    All accessible IDs still remain server-side for strict authorization;
+    client-selected IDs are always included. The prompt receives only public
+    labels and a small purpose excerpt, not prompts, private definitions or
+    the entire hundreds-entry registry. SHA tie-breaking depends on the
+    current theme, so zero-overlap queries cannot permanently bias SC-001.
+    """
+    theme_text = re.sub(r"\\s+", "", str(theme).lower())[:160]
+    grams = {theme_text[i:i + 2] for i in range(max(0, len(theme_text) - 1))}
+    grams |= set(re.findall(r"[a-z0-9]{3,}", theme_text))
+    grams -= {"画风", "风格", "图型", "主题", "图片", "系列", "生成", "设计"}
+    ranked = []
+    for row in rows:
+        rid = str(row["id"])
+        name = str(row.get("name") or "")[:120]
+        purpose = str(row.get("purpose") or "")[:120]
+        lower_name, lower_purpose = name.lower(), purpose.lower()
+        score = sum(4 if g in lower_name else 1 if g in lower_purpose else 0
+                    for g in grams)
+        tie = hashlib.sha256((theme_text + "|" + rid).encode("utf-8")).hexdigest()
+        ranked.append((-score, tie, {"id": rid, "name": name,
+                                      "purpose": purpose[:72]}))
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    chosen = [item[2] for item in ranked[:limit]]
+    if selected_id and not any(item["id"] == selected_id for item in chosen):
+        selected = next((entry[2] for entry in ranked
+                         if entry[2]["id"] == selected_id), None)
+        if selected is not None:
+            if len(chosen) >= limit:
+                chosen[-1] = selected
+            else:
+                chosen.append(selected)
+    return chosen
 
 
 def _upstream(meta: dict[str, Any]) -> None:
@@ -286,13 +327,17 @@ def execute_ai_plan(db: Database, user: dict[str, Any], body: dict[str, Any]) ->
         fail("ai_schema_invalid", "当前草稿画幅无效，请先修正再规划")
     if not consume_daily_usage(db, user["id"], "studio_ai_plan", limit=50):
         fail("rate_limited", "今日 AI 规划次数已达上限", 429)
-    # Preserve every authorized ID, but avoid flooding the model context with
-    # hundreds of 200-character descriptions. Full entitlement checks remain
-    # on the server, and no fixed/few-shot shortlist restricts selection.
-    model_catalog = {key: [
-        {**item, "purpose": item["purpose"][:72]}
-        for item in authorized[key]
-    ] for key in ("style", "layout")}
+    # The full authorized registry can be >500 items and overflow smaller
+    # models. Send a bounded, theme-ranked window per request (never a
+    # hardcoded few-shot catalog), always including current user selections.
+    # _ref below validates against the FULL authorized registry, not the
+    # shortened prompt; a bad model ID cannot become an authorization grant.
+    model_catalog = {
+        "style": _prompt_candidates(authorized["style"], subject,
+                                    selected_id=selected["styleId"], limit=48),
+        "layout": _prompt_candidates(authorized["layout"], subject,
+                                     selected_id=selected["layoutId"], limit=32),
+    }
     prompt = {
         "kind": kind, "theme": subject, "count": count,
         "allowedStyles": model_catalog["style"], "allowedLayouts": model_catalog["layout"],
