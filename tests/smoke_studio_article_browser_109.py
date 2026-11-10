@@ -230,10 +230,10 @@ def main():
 
                 # Article/Canvas are separate editors over one Project model.
                 # A view switch must not rewrite editor Markdown/anchors.
-                page.locator("#studio-mode-canvas").click()
+                page.locator("#studio-mode-view-toggle").click()
                 page.wait_for_function("""()=>window.CS?.stageView==='canvas'""",
                     timeout=15000)
-                page.locator("#studio-mode-article").click()
+                page.locator("#studio-mode-view-toggle").click()
                 page.locator(".ic-art-seg-ta").first.wait_for(timeout=15000)
                 view_restored=article_state(page)
                 assert "保留我的正文" in view_restored["markdown"],view_restored
