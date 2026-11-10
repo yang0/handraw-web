@@ -286,9 +286,16 @@ def execute_ai_plan(db: Database, user: dict[str, Any], body: dict[str, Any]) ->
         fail("ai_schema_invalid", "当前草稿画幅无效，请先修正再规划")
     if not consume_daily_usage(db, user["id"], "studio_ai_plan", limit=50):
         fail("rate_limited", "今日 AI 规划次数已达上限", 429)
+    # Preserve every authorized ID, but avoid flooding the model context with
+    # hundreds of 200-character descriptions. Full entitlement checks remain
+    # on the server, and no fixed/few-shot shortlist restricts selection.
+    model_catalog = {key: [
+        {**item, "purpose": item["purpose"][:72]}
+        for item in authorized[key]
+    ] for key in ("style", "layout")}
     prompt = {
         "kind": kind, "theme": subject, "count": count,
-        "allowedStyles": authorized["style"], "allowedLayouts": authorized["layout"],
+        "allowedStyles": model_catalog["style"], "allowedLayouts": model_catalog["layout"],
         "allowedRatios": sorted(RATIOS),
         "current": selected, "lockedFields": locks,
         "articleBlocks": blocks,
