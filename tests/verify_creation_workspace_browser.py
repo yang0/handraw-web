@@ -114,6 +114,7 @@ def main():
                 evidence.append({"kind":kind,"width":width,**geometry(page,width)})
                 expect(page.locator(".creation-content")).to_be_visible()
                 expect(page.locator(".creation-settings")).to_be_visible()
+                check_bar(page, "#make-image-btn-run" if kind=="quick" else "#batch-btn-start")
                 if kind=="quick":
                     # Input persists through changes in the other column.
                     page.locator("#make-image-subject").fill("纸上风景与城市散步")

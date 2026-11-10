@@ -25,9 +25,9 @@
 .creation-settings .make-image-inline-field { min-width: 0; flex-basis: 100%; }
 .creation-settings .make-image-inline-field input { min-width: 0; }
 .creation-settings .make-image-collapsible-toggle { gap: 10px; line-height: 1.6; }
-.creation-workspace > .make-image-action-bar,
-.creation-workspace > .batch-action-bar {
-  grid-column: 1 / -1;
+.creation-form > .make-image-action-bar,
+.creation-form > .batch-action-bar {
+  margin-top: 16px;
   position: sticky;
   bottom: 12px;
   z-index: 5;
@@ -43,10 +43,10 @@
   padding: 14px 18px;
   box-shadow: 0 4px 20px rgba(43, 38, 35, .08);
 }
-.creation-workspace .make-image-btn-wrap,
-.creation-workspace .batch-btn-wrap { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-.creation-workspace .make-image-busy-hint,
-.creation-workspace .batch-busy-hint { white-space: normal; max-width: 320px; }
+.creation-form .make-image-btn-wrap,
+.creation-form .batch-btn-wrap { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.creation-form .make-image-busy-hint,
+.creation-form .batch-busy-hint { white-space: normal; max-width: 320px; }
 .creation-workspace :is(input, textarea, button, select, [tabindex]) { scroll-margin-block: 100px 150px; }
 .creation-workspace .batch-plan-row-a { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
 .creation-workspace .batch-seed-wrap { min-width: 0; flex-direction: column; align-items: stretch; }
@@ -70,15 +70,15 @@
   .make-image-main-grid.creation-workspace { grid-template-columns: minmax(0, 1fr); padding: 20px; gap: 20px; }
   .creation-settings { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 20px; }
   .creation-settings .make-image-top-row { flex-direction: row; flex-wrap: wrap; }
-  .creation-workspace .make-image-btn-wrap, .creation-workspace .batch-btn-wrap { width: auto; flex-direction: row; }
-  .creation-workspace .make-image-btn-wrap button, .creation-workspace .batch-btn-wrap button { width: auto; }
+  .creation-form .make-image-btn-wrap, .creation-form .batch-btn-wrap { width: auto; flex-direction: row; }
+  .creation-form .make-image-btn-wrap button, .creation-form .batch-btn-wrap button { width: auto; }
 }
 @media (max-width: 540px) {
   .make-image-main-grid.creation-workspace { padding: 14px; gap: 18px; }
-  .creation-workspace > .make-image-action-bar, .creation-workspace > .batch-action-bar { bottom: 6px; padding: 12px; gap: 8px; }
-  .creation-workspace .make-image-btn-wrap, .creation-workspace .batch-btn-wrap { width: 100%; }
-  .creation-workspace .make-image-btn-run, .creation-workspace .make-image-run-btn, .creation-workspace .batch-stop-btn { flex: 1; min-height: 44px; padding: 10px 14px; }
-  .creation-workspace .make-image-busy-hint, .creation-workspace .batch-busy-hint { flex-basis: 100%; }
+  .creation-form > .make-image-action-bar, .creation-form > .batch-action-bar { bottom: 6px; padding: 12px; gap: 8px; }
+  .creation-form .make-image-btn-wrap, .creation-form .batch-btn-wrap { width: 100%; }
+  .creation-form .make-image-btn-run, .creation-form .make-image-run-btn, .creation-form .batch-stop-btn { flex: 1; min-height: 44px; padding: 10px 14px; }
+  .creation-form .make-image-busy-hint, .creation-form .batch-busy-hint { flex-basis: 100%; }
   .creation-workspace .batch-edit-table, .creation-workspace .batch-preview-table { min-width: 480px; }
   .creation-workspace .batch-table-wrap { overscroll-behavior-x: contain; }
   .creation-content .make-image-results-grid { grid-template-columns: minmax(0, 1fr); }

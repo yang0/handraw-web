@@ -328,7 +328,7 @@
             </div>
           ` : ""}
 
-          <form class="make-image-form" novalidate onsubmit="return false;">
+          <form class="make-image-form creation-form" novalidate onsubmit="return false;">
             <div class="make-image-main-grid creation-workspace">
 
               <section class="creation-content" aria-labelledby="make-content-title">
@@ -586,6 +586,7 @@
 
 
               </section>
+            </div>
               <!-- Action & Cost Row (同一行) -->
               <div class="make-image-action-bar">
                 <div class="make-image-cost" aria-live="polite">
@@ -602,7 +603,6 @@
               </div>
 
 
-            </div>
           </form>
         </div>
       `;

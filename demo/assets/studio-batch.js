@@ -397,7 +397,7 @@
 
           </div>
 
-          <form class="make-image-form" novalidate onsubmit="return false;">
+          <form class="make-image-form creation-form" novalidate onsubmit="return false;">
             <div class="make-image-main-grid creation-workspace">
 
               <section class="creation-content" aria-labelledby="batch-content-title">
@@ -818,6 +818,7 @@
               </select>
             </label>
               </section>
+            </div>
               <!-- Bottom Bar: Cost + Action (Defect 2 Fixed) -->
               <div class="batch-action-bar">
                 <div class="batch-cost-wrap">
@@ -836,7 +837,6 @@
                 </div>
               </div>
 
-            </div>
           </form>
 
           <!-- Results Section (when completed items exist) -->
@@ -1671,7 +1671,9 @@
         };
         promptsInput.onblur = () => {
           loop.data.promptListText = promptsInput.value;
-          markDirty();
+          // Save without replacing the button receiving this blur's click.
+          if (self.actions?.persistDraft) self.actions.persistDraft();
+          else markDirty();
         };
       }
 

@@ -16269,6 +16269,10 @@
           },
           {
             isBusy: isBatchCurrentBusy,
+            persistDraft: () => {
+              markActiveTabDirty();
+              persistOpenTabs();
+            },
             clearWorkspaceResults: (ctrlId) => {
               clearControlWorkspaceResults(ctrlId || bp.ctrl.id);
               if (bp.loop) {
