@@ -129,6 +129,74 @@ class AIPlanContractTests(unittest.TestCase):
                         execute_ai_plan(self.db,self.user,BASE)
                 self.assertEqual(ctx.exception.code,code)
 
+    def test_series_repairs_bad_model_structure_once_without_generation(self):
+        catalog=_user_catalog(self.db,self.user)
+        style=catalog["style"][0]["id"]
+        layout=catalog["layout"][0]["id"]
+        valid={"styleId":style,"layoutId":layout,"ratio":"3:4",
+               "reasons":{"style":"形象协调","layout":"适合连续分镜","ratio":"适合手机浏览"},
+               "slots":[{"subject":f"第{i+1}张画面","layoutId":layout,
+                         "ratio":"3:4","reason":"与系列主题连贯"} for i in range(6)]}
+        calls=[]
+        def gateway(messages,**kwargs):
+            calls.append((messages,kwargs))
+            if len(calls)==1:
+                return json.dumps({"styleId":style,"layoutId":layout,"ratio":"3:4",
+                      "reasons":{"style":"相符","layout":"可用","ratio":"适合"},
+                      "slots":[]}),{"ok":True}
+            return json.dumps(valid,ensure_ascii=False),{"ok":True}
+        before=self.db.get_conn().execute("SELECT COUNT(*) FROM generation_runs").fetchone()[0]
+        with patch("backend.studio_ai_plan.chat",side_effect=gateway):
+            result=execute_ai_plan(self.db,self.user,{"kind":"series",
+                "subject":"儿童城市故事六图","count":6,"baseRevision":0,
+                "planRevision":4,"currentSlots":[{"slotId":f"s-{i}"} for i in range(6)]})
+        self.assertEqual(len(calls),2)
+        self.assertEqual(json.loads(calls[1][0][-1]["content"])["repairFor"],
+                         "ai_cannot_recommend")
+        self.assertEqual(len(result["planPatch"]["slots"]),6)
+        self.assertEqual([x["slotId"] for x in result["planPatch"]["slots"]],
+                         [f"s-{i}" for i in range(6)])
+        self.assertFalse(result["cost"]["generationStarted"])
+        self.assertEqual(before,self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM generation_runs").fetchone()[0])
+
+    def test_series_second_bad_response_stays_blocked_and_bounded(self):
+        calls=[]
+        def gateway(messages,**kwargs):
+            calls.append(1)
+            return '{"styleId":"FA-001"}',{"ok":True}
+        with patch("backend.studio_ai_plan.chat",side_effect=gateway):
+            with self.assertRaises(ServiceError) as ctx:
+                execute_ai_plan(self.db,self.user,{"kind":"series",
+                    "subject":"六张图的主题","count":6,"baseRevision":0})
+        self.assertEqual(ctx.exception.code,"ai_schema_invalid")
+        self.assertEqual(len(calls),2,"no unbounded inference retries")
+
+    def test_series_forbidden_resource_must_not_retry_or_fallback(self):
+        catalog=_user_catalog(self.db,self.user)
+        payload={"styleId":"FORBIDDEN-STYLE-ID",
+                 "layoutId":catalog["layout"][0]["id"],"ratio":"3:4",
+                 "reasons":{"style":"理由","layout":"理由","ratio":"理由"},
+                 "slots":[{"subject":"一张图","layoutId":catalog["layout"][0]["id"],
+                            "ratio":"3:4","reason":"理由"}]}
+        requests=[]
+        def gateway(*args,**kwargs):
+            requests.append(1)
+            return json.dumps(payload),{"ok":True}
+        # Unknown ID may be retried once; an access-denied ID is not.
+        from backend.studio_ai_plan import resolve as original_resolve
+        def deny(conn,code,**kwargs):
+            if code=="FORBIDDEN-STYLE-ID":
+                return {"kind":"style","canUse":False,"access":{"canUse":False}}
+            return original_resolve(conn,code,**kwargs)
+        with patch("backend.studio_ai_plan.chat",side_effect=gateway), \
+             patch("backend.studio_ai_plan.resolve",side_effect=deny):
+            with self.assertRaises(ServiceError) as ctx:
+                execute_ai_plan(self.db,self.user,{"kind":"series","count":1,
+                    "subject":"未授权素材不得推荐","baseRevision":0})
+        self.assertEqual(ctx.exception.code,"ai_resource_forbidden")
+        self.assertEqual(len(requests),1)
+
     def test_unknown_and_unauthorized_resource_errors(self):
         layout=_user_catalog(self.db,self.user)["layout"][0]["id"]
         model=lambda style: json.dumps({"styleId":style,"layoutId":layout,
