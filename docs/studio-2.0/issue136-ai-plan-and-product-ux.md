@@ -23,3 +23,7 @@
 独立 #136 分支完成同 SHA 全量 GitHub Actions **14/14** → compare ahead>0/behind=0 + 原 PR #131 Open Draft + main 未修改 → 使用 `expected_sha`、`force=false` 非强制快进 studio2 → 目标 `studio2` Push 和 Draft PR #131 两套同 SHA **各 14/14**。任意红灯或不一致即阻断集成；不强制推送、不合并 main，不使用实际供应商付费生图凭据进行 CI。
 
 即便全绿，外部真实 D 级验收仍 0/17，三项画风 FF-018/FF-019/FG-025 官方网站授权未到位，Issue #132 继续 Open / NO-GO。
+
+## 本轮集成前修正
+
+独立分支末尾两次提交曾将模型目录缩成 48 画风/32 图型，导致完整目录合同与离线质量回放失败。本轮恢复全部已授权 ID 和主题排序，仅压缩公开元数据（用途最多 72 字、JSON 紧凑序列化），不降低原有完整目录与多样性验收标准。`demo/studio.html` 同步更新七项已修改前端资源的缓存版本。

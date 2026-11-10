@@ -78,6 +78,10 @@ class AIPlanContractTests(unittest.TestCase):
         all_resources=_user_catalog(self.db,self.user)
         self.assertEqual(len(req["allowedStyles"]),len(all_resources["style"]))
         self.assertEqual(len(req["allowedLayouts"]),len(all_resources["layout"]))
+        for key, kind in (("allowedStyles", "style"), ("allowedLayouts", "layout")):
+            self.assertEqual({r["id"] for r in req[key]},
+                             {r["id"] for r in all_resources[kind]})
+            self.assertTrue(all(len(r["purpose"]) <= 72 for r in req[key]))
         self.assertEqual(result["creationSpecPatch"]["changes"]["layout"]["id"],
                          req["allowedLayouts"][-1]["id"])
         self.assertNotIn("secret_blackbox_prompt",str(self.messages[-1]))
