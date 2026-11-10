@@ -1689,6 +1689,10 @@
 
     bindEvents(root, parts, iterations) {
       const self = this;
+      // `parts` is the single source of nodes; Studio2 AI planning/undo below
+      // reads the same object, so keep the local alias instead of an
+      // undefined `p` (regression #134).
+      const p = parts;
       const { loop, skill, ctrl, asset, text } = parts;
 
       const markDirty = () => {
