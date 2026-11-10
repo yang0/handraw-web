@@ -757,9 +757,14 @@ function createTestGraph(options = {}) {
   assert.ok(!freshStudioApp.includes("studio-mode-more-menu"), "studio-mode-more-menu must be removed from studio-app.js");
   assert.ok(!freshStudioApp.includes("_modeMoreOpen"), "_modeMoreOpen must be removed from studio-app.js");
 
-  const modeSwitchPattern = /id="studio-mode-article"[^>]*>文章配图<\/button>\s*<button[^>]+id="studio-mode-canvas"[^>]*>画布<\/button>/;
-  assert.ok(modeSwitchPattern.test(freshStudioApp), "Canvas button must be directly placed to the right of 文章配图 button with text '画布' and without '更多' dropdown");
-  console.log("✓ Test 11 Passed: Canvas button directly displayed to the right of 文章配图 without 更多 dropdown.");
+  assert.ok(freshStudioApp.includes('id="studio-mode-view-toggle"'),
+    "One contextual form/canvas switch must replace the two mode buttons");
+  assert.ok(freshStudioApp.includes("切换到画布 →") && freshStudioApp.includes("← 返回表单"),
+    "The single switch must explain the destination in both directions");
+  assert.ok(!freshStudioApp.includes('id="studio-mode-canvas"') &&
+    !freshStudioApp.includes('id="studio-mode-simple"'),
+    "No redundant pair of canvas/simple mode buttons");
+  console.log("✓ Test 11 Passed: One contextual form/canvas switch preserves navigation.");
 }
 
 console.log("\nALL 11 TESTS PASSED SUCCESSFULLY!");
