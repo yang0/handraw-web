@@ -632,6 +632,20 @@ class TestOfficialAssets(unittest.TestCase):
                 (now, now, now, now),
             )
 
+        # An unapproved/hidden official entry must NEVER be exported.
+        # Also catch reopening the same directory after a previous release.
+        with self.db.transaction() as tx:
+            tx.execute(
+                """INSERT INTO catalog_assets
+                    (code, name, kind, source_type, group_name, description,
+                     definition, unlock_cost, tier, image_url, status,
+                     published_at_ms, created_at, updated_at)
+                VALUES ('FE-071', '隐藏敏感定义', 'style', 'official', 'FE',
+                        '内部仅审查', 'SECRET_HIDDEN_PROMPT_NEVER_EXPORT',
+                        0, 'free', '', 'hidden', 1000, ?, ?)""",
+                (now, now),
+            )
+
         # Setup mock skill repo
         mock_skill = self.root / "mock_skill"
         (mock_skill / "references").mkdir(parents=True, exist_ok=True)
@@ -647,6 +661,19 @@ class TestOfficialAssets(unittest.TestCase):
         (mock_skill / "references" / "layouts.json").write_text(json.dumps(layouts_data, ensure_ascii=False), encoding="utf-8")
 
         export_out = self.root / "export_out"
+
+        # Real PG credentials are supplied only from a restricted environment
+        # variable; an absent one fails closed (not a SQLite fallback).
+        pg_env = os.environ.copy()
+        pg_env.pop("HANDRAW_OFFICIAL_EXPORT_PG_URL", None)
+        pg_probe = subprocess.run(
+            [sys.executable, "-X", "utf8", "ops/export_official_assets.py",
+             "--pg-dsn-env", "HANDRAW_OFFICIAL_EXPORT_PG_URL",
+             "--skill-root", str(mock_skill), "--out", str(export_out)],
+            capture_output=True, text=True, encoding="utf-8", env=pg_env,
+        )
+        self.assertNotEqual(pg_probe.returncode, 0)
+        self.assertFalse(export_out.exists())
 
         # 11a: Run without --skill-root -> exits with error (non-zero)
         cmd_no_root = [
@@ -677,8 +704,15 @@ class TestOfficialAssets(unittest.TestCase):
         if export_out.exists():
             self.assertEqual(len(list(export_out.iterdir())), 0)
 
-        # 11c: Clean collision and export successfully
+        # 11c: Never overwrite a nonempty old export folder (hidden assets
+        # could otherwise remain in the stale artifact after a later release).
         (mock_skill / "references" / "styles.json").write_text(json.dumps(styles_data, ensure_ascii=False), encoding="utf-8")
+        export_out.mkdir(exist_ok=True)
+        (export_out / "stale-definition.txt").write_text("DONT_REUSE_OLD_RELEASE")
+        res_stale = subprocess.run(cmd_collision, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(res_stale.returncode, 2)
+        (export_out / "stale-definition.txt").unlink()
+        # 11d: Clean empty destination and export successfully.
         res_ok = subprocess.run(cmd_collision, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(res_ok.returncode, 0, f"Failed export:\n{res_ok.stdout}\n{res_ok.stderr}")
 
@@ -690,11 +724,31 @@ class TestOfficialAssets(unittest.TestCase):
         item_070 = next((s for s in exported_styles if s["number"] == "FE-070"), None)
         self.assertIsNotNone(item_069)
         self.assertIsNotNone(item_070)
+        self.assertNotIn("FE-071", json.dumps(exported_styles, ensure_ascii=False))
+        self.assertNotIn("SECRET_HIDDEN_PROMPT_NEVER_EXPORT",
+                         (export_out / "styles.json").read_text(encoding="utf-8"))
 
         # Free asset has definition
         self.assertEqual(item_069.get("definition"), "免费官方定义")
         # Paid asset has definition stripped per #21a
         self.assertNotIn("definition", item_070)
+
+        # No approved official rows is still an explicit, auditable empty
+        # catalog snapshot. It must not re-export hidden/pending definitions.
+        with self.db.transaction() as tx:
+            tx.execute(
+                "UPDATE catalog_assets SET status = 'hidden' "
+                "WHERE source_type = 'official' AND code IN ('FE-069', 'FE-070')"
+            )
+        empty_out = self.root / "empty_approved_db_export"
+        empty_cmd = [str(empty_out) if part == str(export_out) else part
+                     for part in cmd_collision]
+        empty_res = subprocess.run(
+            empty_cmd, capture_output=True, text=True, encoding="utf-8"
+        )
+        self.assertEqual(empty_res.returncode, 0, empty_res.stderr)
+        self.assertEqual(json.loads((empty_out / "styles.json").read_text()), [])
+        self.assertEqual(json.loads((empty_out / "layouts.json").read_text()), [])
 
     def test_12_refresh_content_script(self) -> None:
         """12. Refresh script (ops/refresh_content.py):

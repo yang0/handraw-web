@@ -410,7 +410,9 @@ def _project_generation_impl(
             WITH ranked AS (
                 SELECT *, ROW_NUMBER() OVER (
                     PARTITION BY batch_index
-                    ORDER BY created_at DESC, id DESC
+                    -- Earliest successful attempt owns the logical slot forever.
+                    -- Later successful callbacks cannot replace accepted media.
+                    ORDER BY created_at ASC, id ASC
                 ) AS attempt_rank
                 FROM studio_generations
                 WHERE user_id=? AND batch_id=? AND status='success'

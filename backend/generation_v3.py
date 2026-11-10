@@ -523,11 +523,11 @@ def record_public_work(
     expected_count: int,
     request_id: str = "",
 ) -> str:
-    """Atomically make a run, its output media and its ONE public work agree.
+    """Atomically project one immutable successful media per run/position.
 
-    Caller must already have stored/authorized all media, and must execute this
-    within its transaction. No file IO or external network calls happen here.
-    The snapshot is replaced, so deleted/retried slots cannot leave stale media.
+    Confirmed media wins over a delayed callback or newly charged attempt.
+    Rebuild Work links only from authoritative stored successes, never solely
+    from a possibly incomplete callback. The gateway ledger remains auditable.
     """
     if not ordered_images:
         raise ValueError("Cannot publish an empty work")
@@ -535,6 +535,8 @@ def record_public_work(
         tx, user_id=user_id, source=source, external_run_id=external_run_id,
         expected_count=expected_count, request_id=request_id,
     )
+    if getattr(tx, "dialect", "") == "postgresql":
+        tx.execute("SELECT id FROM generation_runs WHERE id=? FOR UPDATE", (run_id,)).fetchone()
     if tx.execute(
         "SELECT 1 FROM generation_runs WHERE id=? AND publication_deleted_at<>''",
         (run_id,),
@@ -575,53 +577,108 @@ def record_public_work(
 
     now = _now()
     previous_media_urls = work_images(tx, work_id) if work["run_id"] else []
-    # Unlink cover before replacing the ordered collection; DB triggers enforce
-    # that a new cover belongs to this work.
-    tx.execute("UPDATE works SET run_id=?, cover_media_id=NULL WHERE id=?", (run_id, work_id))
-    tx.execute("DELETE FROM work_media WHERE work_id=?", (work_id,))
-    # Replace successful snapshots, but do not erase failed/pending slots that
-    # belong to the same logical batch. A retried successful position overrides
-    # that position's earlier failure, while other failures remain auditable.
-    tx.execute(
-        "DELETE FROM generation_items WHERE run_id=? AND status='success'",
-        (run_id,),
-    )
-    for rank, (position, media_id, _) in enumerate(entries):
-        tx.execute(
-            "DELETE FROM generation_items WHERE run_id=? AND position=?",
-            (run_id, position),
-        )
+
+    # A late or out-of-order callback may provide only a subset of the work.
+    # Persist its new slots without ever overwriting an already successful
+    # media_id. A new attempt is billed separately, but cannot change a
+    # previously confirmed image in the same logical slot.
+    for position, media_id, _ in entries:
         tx.execute(
             """
             INSERT INTO generation_items
               (id,run_id,position,status,media_id,created_at,updated_at)
             VALUES (?,?,?,'success',?,?,?)
+            ON CONFLICT(run_id,position) DO UPDATE SET
+                status='success',media_id=excluded.media_id,
+                error_code='',updated_at=excluded.updated_at
+            WHERE generation_items.status <> 'success'
             """,
             (_stable_id("item", run_id, position), run_id, position, media_id, now, now),
         )
+
+    actual_rows = tx.execute(
+        """SELECT i.position,i.media_id,m.storage_key
+           FROM generation_items i JOIN media_assets m ON m.id=i.media_id
+           WHERE i.run_id=? AND i.status='success'
+           ORDER BY i.position""", (run_id,),
+    ).fetchall()
+    actual = [(int(row["position"]), str(row["media_id"]), str(row["storage_key"]))
+              for row in actual_rows]
+    if source == "web":
+        # Canonical successes remain durable even after the author deliberately
+        # deletes/hides ONE generated image. Public work_media is a visibility
+        # projection, *not* the history of successful gateway executions.
+        # This also ensures a late callback cannot resurrect a deleted image.
+        execution_rows = tx.execute(
+            """SELECT id,batch_index,items_json,visibility,deleted_at,engine
+               FROM studio_generations
+               WHERE user_id=? AND status='success'
+                 AND ((batch_id=? AND batch_id<>'')
+                   OR (id=? AND COALESCE(batch_id,'')=''))""",
+            (user_id, external_run_id, external_run_id),
+        ).fetchall()
+        known_positions: set[int] = set()
+        allowed_by_position: dict[int, set[str]] = {}
+        for execution in execution_rows:
+            slot_index = int(execution["batch_index"] or 0)
+            try:
+                raw_images = json.loads(execution["items_json"] or "[]")
+            except (TypeError, ValueError):
+                raw_images = []
+            if not isinstance(raw_images, list):
+                continue
+            for image_index, raw in enumerate(raw_images):
+                url = (raw if isinstance(raw, str) else
+                       raw.get("imageUrl") or raw.get("url") or ""
+                       if isinstance(raw, dict) else "")
+                if not isinstance(url, str) or not url.strip():
+                    continue
+                try:
+                    storage_key = _storage_url(url)
+                except (TypeError, ValueError):
+                    continue
+                position = slot_index * 1000 + image_index
+                known_positions.add(position)
+                if (str(execution["visibility"] or "public") == "public"
+                    and not execution["deleted_at"]
+                    and str(execution["engine"] or "") != "demo"):
+                    allowed_by_position.setdefault(position, set()).add(storage_key)
+        actual = [
+            (position, media_id, storage_key)
+            for position, media_id, storage_key in actual
+            if position not in known_positions
+            or storage_key in allowed_by_position.get(position, set())
+        ]
+    if not actual:
+        raise ValueError("No publicly visible media remains in this work")
+    # Only authorized canonical RunItems may appear in a public Work. Never demote a
+    # successful item merely because a later attempt lacks that media.
+    tx.execute("UPDATE works SET run_id=?, cover_media_id=NULL WHERE id=?", (run_id, work_id))
+    tx.execute("DELETE FROM work_media WHERE work_id=?", (work_id,))
+    for rank, (_, media_id, _) in enumerate(actual):
         tx.execute(
             "INSERT INTO work_media(work_id,media_id,position) VALUES (?,?,?)",
             (work_id, media_id, rank),
         )
     previous_cover = str(work["cover_media_id"] or "")
-    valid_media_ids = {entry[1] for entry in entries}
+    valid_media_ids = {entry[1] for entry in actual}
     # The default cover follows the first successful *planned* slot even if
     # responses arrive out of order. Only an explicit author choice is sticky.
     keep_author_cover = bool(work["cover_selected_by_author"]) and (
         previous_cover in valid_media_ids
     )
-    cover_id = previous_cover if keep_author_cover else entries[0][1]
+    cover_id = previous_cover if keep_author_cover else actual[0][1]
     tx.execute(
         """UPDATE works SET cover_media_id=?,cover_selected_by_author=?,
                   images_json=?,updated_at=? WHERE id=?""",
         (cover_id, int(keep_author_cover),
-         json.dumps([e[2] for e in entries], ensure_ascii=False),
+         json.dumps([e[2] for e in actual], ensure_ascii=False),
          now, work_id),
     )
     refresh_run_status(tx, run_id)
     # Replaced media must immediately lose this work's public grant. Physical
     # deletion happens only after a delayed, durable DB-reference check.
-    removed_urls = set(previous_media_urls) - {entry[2] for entry in entries}
+    removed_urls = set(previous_media_urls) - {entry[2] for entry in actual}
     for removed in removed_urls:
         tx.execute(
             """UPDATE media_public_grants SET revoked_at=?
@@ -739,13 +796,13 @@ def cancel_unsubmitted_web_slots(
         skipped: list[int] = []
         now = _now()
         for pos in sorted(set(positions)):
-            # Queued/running/success tasks have been submitted; the client
-            # cannot honestly cancel them by closing a dialog.
+            # Any gateway ledger row (including failed/cancelled attempts)
+            # proves an execution may have been submitted. Never rewrite it as
+            # an unsubmitted cancel: that would erase real failure/billing facts.
             gateway = tx.execute(
                 """
                 SELECT 1 FROM studio_generations
                 WHERE user_id=? AND batch_id=? AND batch_index=?
-                  AND status IN ('queued','running','success')
                 LIMIT 1
                 """,
                 (uid, batch_id, pos),
@@ -754,7 +811,13 @@ def cancel_unsubmitted_web_slots(
                 "SELECT status FROM generation_items WHERE run_id=? AND position=?",
                 (run["id"], pos * 1000),
             ).fetchone()
-            if gateway or (existing and existing["status"] == "success"):
+            if gateway:
+                skipped.append(pos)
+                continue
+            if existing and existing["status"] == "cancelled":
+                cancelled.append(pos)  # idempotent replay, not a new cancellation
+                continue
+            if existing and existing["status"] != "pending":
                 skipped.append(pos)
                 continue
             tx.execute(
@@ -764,7 +827,7 @@ def cancel_unsubmitted_web_slots(
                 VALUES (?, ?, ?, 'cancelled', NULL, '', ?, ?)
                 ON CONFLICT(run_id,position) DO UPDATE SET
                     status='cancelled',media_id=NULL,error_code='',updated_at=excluded.updated_at
-                WHERE generation_items.status <> 'success'
+                WHERE generation_items.status = 'pending'
                 """,
                 (_stable_id("item", run["id"], pos * 1000),
                  run["id"], pos * 1000, now, now),
@@ -779,3 +842,76 @@ def cancel_unsubmitted_web_slots(
         "alreadySubmittedPositions": skipped,
         "remoteTasksCancelled": False,
     }
+
+def get_owned_studio_run(db: Any, user: dict[str, Any], run_id: str) -> dict[str, Any]:
+    """Authenticated, V3-authoritative Run/Item read model (Studio 2.0 #119).
+
+    The external gateway accounting table is not a second history. For Web
+    Runs, a position uses batch-index*1000+image-index; response includes the
+    stable slotIndex for correct browser projection and restart recovery.
+    """
+    from .services import ServiceError
+    uid = int(user["id"])
+    conn = db.get_conn()
+    run = conn.execute(
+        """SELECT r.id,r.source,r.external_run_id,r.expected_count,r.status,
+                  r.created_at,r.updated_at,w.id AS work_id
+           FROM generation_runs r LEFT JOIN works w ON w.run_id=r.id
+           WHERE r.id=? AND r.user_id=?""", (str(run_id), uid),
+    ).fetchone()
+    if not run:
+        raise ServiceError("生成任务不存在", status=404, code="run_not_found")
+    items = conn.execute(
+        """SELECT i.id,i.position,i.status,i.media_id,i.error_code,
+                  i.created_at,i.updated_at,m.storage_key
+           FROM generation_items i LEFT JOIN media_assets m
+             ON m.id=i.media_id AND m.owner_user_id=?
+           WHERE i.run_id=? ORDER BY i.position""", (uid, str(run_id)),
+    ).fetchall()
+    result = {
+        "ok": True,
+        "run": {
+            "id": str(run["id"]), "source": str(run["source"]),
+            "expectedCount": int(run["expected_count"]), "status": str(run["status"]),
+            "workId": str(run["work_id"] or ""),
+            "createdAt": str(run["created_at"]), "updatedAt": str(run["updated_at"]),
+        },
+        "items": [
+            {
+                "id": str(i["id"]), "position": int(i["position"]),
+                "slotIndex": int(i["position"]) // 1000
+                    if str(run["source"]) == "web" else int(i["position"]),
+                "imageIndex": int(i["position"]) % 1000
+                    if str(run["source"]) == "web" else 0,
+                "status": str(i["status"]),
+                "mediaId": str(i["media_id"] or ""),
+                "imageUrl": str(i["storage_key"] or "") if i["status"] == "success" else "",
+                "errorCode": str(i["error_code"] or ""),
+            }
+            for i in items
+        ],
+    }
+    # The owner-scoped gateway ledger links retry attempts to logical slots
+    # without becoming a second work/media truth table.
+    if str(run["source"]) == "web":
+        attempt_rows = conn.execute(
+            """SELECT id,batch_index,request_id,task_id,status,credits_spent,
+                      cost_type,created_at,system_append_json
+               FROM studio_generations
+               WHERE user_id=? AND (
+                 (batch_id=? AND COALESCE(batch_id,'')<>'')
+                 OR (id=? AND COALESCE(batch_id,'')='')
+               )
+               ORDER BY batch_index,created_at,id""",
+            (uid, str(run["external_run_id"]), str(run["external_run_id"])),
+        ).fetchall()
+    else:
+        attempt_rows = []
+    from .studio_runtime_projection import project_studio_run
+    read_model = project_studio_run(
+        result["run"], result["items"], [dict(row) for row in attempt_rows],
+    )
+    # "unknown" and "cancel_requested" are never persisted into V3 CHECKs.
+    result.update(read_model)
+    return result
+

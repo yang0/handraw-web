@@ -1,0 +1,410 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://handraw-style.com/schemas/studio-2.0/v1",
+  "title": "Studio2 Core Wire Contract",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "project",
+    "creationSpec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "project": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "revision",
+        "authority"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "image",
+            "series",
+            "article"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "authority": {
+          "enum": [
+            "spec",
+            "graph",
+            "article"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "creationSpec": {
+      "$ref": "#/$defs/spec"
+    },
+    "plan": {
+      "$ref": "#/$defs/plan"
+    },
+    "graph": {
+      "type": "object",
+      "required": [
+        "nodes",
+        "edges",
+        "revision"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "article": {
+      "type": "object",
+      "required": [
+        "documentId",
+        "revision",
+        "markdown",
+        "anchors"
+      ],
+      "properties": {
+        "documentId": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "markdown": {
+          "type": "string"
+        },
+        "anchors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "anchorId"
+            ],
+            "properties": {
+              "anchorId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "resource": {
+      "type": "object",
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": [
+            "style",
+            "layout",
+            "color",
+            "tone"
+          ]
+        },
+        "source": {
+          "enum": [
+            "official",
+            "community",
+            "override",
+            "private",
+            "pending",
+            "exclusive"
+          ]
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "media": {
+      "type": "object",
+      "required": [
+        "mediaId",
+        "role"
+      ],
+      "properties": {
+        "mediaId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": [
+            "character",
+            "scene",
+            "object",
+            "composition",
+            "result",
+            "other"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "revision",
+        "subject",
+        "outputMode",
+        "style",
+        "fusionEnabled",
+        "ratio",
+        "ratioSource",
+        "referenceMedia"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "subject": {
+          "type": "string"
+        },
+        "outputMode": {
+          "enum": [
+            "graphic-text",
+            "pure",
+            "poster",
+            "article-illust",
+            "series"
+          ]
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/resource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secondaryStyle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/resource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fusionEnabled": {
+          "type": "boolean"
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/resource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "colors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource"
+          }
+        },
+        "tones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource"
+          }
+        },
+        "moods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ratio": {
+          "type": "string"
+        },
+        "ratioSource": {
+          "enum": [
+            "default",
+            "user"
+          ]
+        },
+        "referenceMedia": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/media"
+          }
+        },
+        "lockedFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "layoutParams": {
+          "type": "object",
+          "properties": {
+            "sc021Type": {
+              "type": "string"
+            },
+            "sc022Name": {
+              "type": "string"
+            },
+            "sc022Pinyin": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        },
+        "userNotes": {
+          "type": "string"
+        },
+        "whitespace": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "slot": {
+      "type": "object",
+      "required": [
+        "slotId",
+        "order",
+        "subject",
+        "overrides",
+        "lockedFields"
+      ],
+      "properties": {
+        "slotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "subject": {
+          "type": "string"
+        },
+        "overrides": {
+          "type": "object"
+        },
+        "lockedFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "anchorId": {
+          "type": "string"
+        },
+        "referenceMedia": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/media"
+          }
+        },
+        "skipGlobalRefs": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "plan": {
+      "type": "object",
+      "required": [
+        "planId",
+        "revision",
+        "kind",
+        "slots"
+      ],
+      "properties": {
+        "planId": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "enum": [
+            "same-spec",
+            "story-series",
+            "compare",
+            "multi-format",
+            "article"
+          ]
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/slot"
+          }
+        },
+        "documentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "documentRevision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

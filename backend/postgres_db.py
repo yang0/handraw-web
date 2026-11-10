@@ -285,6 +285,51 @@ class PostgresDatabase:
             if not cursor.fetchone():
                 raise RuntimeError("Missing native V3 schema baseline and media GC (migration 100)")
             cursor.execute(
+                """SELECT to_regclass('public.studio_projects'),
+                          to_regclass('public.studio_project_requests'),
+                          to_regclass('public.pg_idx_studio_projects_owner_updated')"""
+            )
+            if not all(cursor.fetchone()):
+                raise RuntimeError(
+                    "Studio2 Project migration 101 is missing. Run a dry-run of "
+                    "python -m ops.migrate_pg_studio_projects before applying "
+                    "the non-destructive PostgreSQL schema upgrade."
+                )
+            cursor.execute(
+                "SELECT 1 FROM schema_migrations "
+                "WHERE version=101 AND name='101_studio_project_drafts' LIMIT 1"
+            )
+            if not cursor.fetchone():
+                raise RuntimeError(
+                    "Studio2 Project schema version 101 is unregistered. "
+                    "Review python -m ops.migrate_pg_studio_projects."
+                )
+            # GraphPatch reviews (102) and the owned-resource read model (103)
+            # are queried on normal request paths (e.g. /api/boot), so a
+            # database without them must fail here instead of at request time.
+            cursor.execute(
+                """SELECT to_regclass('public.studio_graphpatch_reviews'),
+                          to_regclass('public.pg_idx_studio_graphpatch_owner'),
+                          to_regclass('public.user_resources'),
+                          to_regclass('public.pg_idx_user_resources_owner')"""
+            )
+            if not all(cursor.fetchone()):
+                raise RuntimeError(
+                    "Studio2 migrations 102/103 are missing. Run a dry-run of "
+                    "python -m ops.migrate_pg_studio_projects before applying "
+                    "the non-destructive PostgreSQL schema upgrade."
+                )
+            cursor.execute(
+                "SELECT version FROM schema_migrations "
+                "WHERE (version=102 AND name='102_studio_graphpatch_reviews') "
+                "   OR (version=103 AND name='103_author_private_resource_projection')"
+            )
+            if len(cursor.fetchall()) != 2:
+                raise RuntimeError(
+                    "Studio2 schema versions 102/103 are unregistered or renamed. "
+                    "Review python -m ops.migrate_pg_studio_projects."
+                )
+            cursor.execute(
                 """SELECT COUNT(*) FROM pg_trigger
                    WHERE tgname IN ('v3_run_immutable','v3_media_immutable',
                                     'v3_work_run_owner','v3_work_media_owner',

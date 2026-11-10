@@ -21,7 +21,12 @@ const topics = [
   { likes: 0, favorites: 0, replies: [] },
   { likes: 5, favorites: 0, replyCount: 3 },
 ];
-const assets = [{ usageCount: 7 }, { usageCount: 0 }];
+const assets = [
+  { usageCount: 7, likes: 3, favorites: 2, cheers: 4, stamps: 1, tips: 2, honorBoost: 20, sourceType: 'exclusive' },
+  { usageCount: 0, likes: 0, favorites: 0, cheers: 0, stamps: 0, tips: 0 },
+  { usage_count: 3, likes: 15, favorites: 4, cheers: 3, stamps: 0, tips: 1 },
+  { usageCount: 2, likes: 3, favorites: 4, cheers: 5, stamps: 1, tips: 2, sourceType: 'community' }
+];
 
 const jsWork = works.map(w => S.popularScore('work', w));
 const jsTopic = topics.map(t => S.popularScore('topic', t));
@@ -42,4 +47,30 @@ print(json.dumps({
 assert.deepEqual(jsWork, py.work, 'work popularity must match between shared.js and ranking.py');
 assert.deepEqual(jsTopic, py.topic, 'topic popularity must match');
 assert.deepEqual(jsAsset, py.asset, 'asset popularity must match');
+// Period and creator honor never create an independent scoring formula.
+S.App.state = {
+  works: [], assetCounts: { 'FA-001': 2, 'FX-001': 2 },
+  assetSeedMetrics: {},
+  assetLiveLikes: { 'FA-001': 3, 'FX-001': 3 },
+  assetLiveFavorites: { 'FA-001': 2, 'FX-001': 2 },
+  assetLiveCheers: { 'FA-001': 1, 'FX-001': 1 },
+  assetLiveStamps: { 'FA-001': 0, 'FX-001': 0 },
+  assetLiveTips: { 'FA-001': 1, 'FX-001': 1 },
+  assetRankingWeights: { usage:10, likes:1, favorites:2, cheers:1, stamps:1, tips:2 },
+  publicCreators: [{ username:'vip', honor:{ boost:999 } }]
+};
+S.App.styles = [
+  { id:'FA-001', kind:'style', sourceType:'official', author:'vip', honorBoost:999 },
+  { id:'FX-001', kind:'style', sourceType:'community', author:'ordinary', honorBoost:1 }
+];
+S.App.layouts = [];
+assert.equal(S.getRankedAssets(2, 'all').map(x => x.asset.id).join(','), 'FA-001,FX-001',
+  'equal authentic engagement means equal scoring irrespective of asset source or honor');
+S.App.state.assetLiveLikes['FX-001'] = 20;
+assert.equal(S.getRankedAssets(2, 'all')[0].asset.id, 'FX-001',
+  'real interactions must determine ranking and override fake author honors');
+assert.equal(S.getRankedAssets(2, 'all')[0].rankScore, S.popularScore('style', {
+  usageCount:2, likes:20, favorites:2, cheers:1, stamps:0, tips:1
+}));
+
 console.log('Ranking parity: shared.js and backend/ranking.py agree on', works.length, 'works,', topics.length, 'topics,', assets.length, 'assets');

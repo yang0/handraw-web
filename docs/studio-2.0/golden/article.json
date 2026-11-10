@@ -1,0 +1,92 @@
+{
+  "scenario": "article-document-revision-and-stable-anchors",
+  "wire": {
+    "schemaVersion": 1,
+    "project": {
+      "id": "p-article",
+      "kind": "article",
+      "revision": 4,
+      "authority": "article"
+    },
+    "creationSpec": {
+      "schemaVersion": 1,
+      "revision": 1,
+      "subject": "杭州春日旅行",
+      "outputMode": "article-illust",
+      "style": {
+        "id": "FA-001",
+        "type": "style"
+      },
+      "fusionEnabled": false,
+      "layout": {
+        "id": "SC-021",
+        "type": "layout"
+      },
+      "colors": [],
+      "tones": [],
+      "moods": [],
+      "ratio": "4:3",
+      "ratioSource": "user",
+      "referenceMedia": [
+        {
+          "mediaId": "media-self-1",
+          "role": "scene"
+        }
+      ],
+      "lockedFields": [
+        "style"
+      ]
+    },
+    "plan": {
+      "planId": "article-plan",
+      "revision": 2,
+      "kind": "article",
+      "slots": [
+        {
+          "slotId": "cover",
+          "order": 0,
+          "subject": "文章封面",
+          "overrides": {
+            "ratio": "2.35:1"
+          },
+          "lockedFields": [],
+          "anchorId": "anchor-cover"
+        },
+        {
+          "slotId": "illust-1",
+          "order": 1,
+          "subject": "龙井茶园插图",
+          "overrides": {},
+          "lockedFields": [],
+          "anchorId": "anchor-paragraph-1"
+        }
+      ]
+    },
+    "article": {
+      "documentId": "doc-1",
+      "revision": 4,
+      "markdown": "# 杭州春日旅行\n\n龙井茶园很美。",
+      "anchors": [
+        {
+          "anchorId": "anchor-cover",
+          "kind": "cover"
+        },
+        {
+          "anchorId": "anchor-paragraph-1",
+          "offset": 12
+        }
+      ]
+    }
+  },
+  "expect": {
+    "revision": 4,
+    "anchorIds": [
+      "anchor-cover",
+      "anchor-paragraph-1"
+    ],
+    "slotIds": [
+      "cover",
+      "illust-1"
+    ]
+  }
+}

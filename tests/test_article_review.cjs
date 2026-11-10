@@ -25,7 +25,9 @@ assert.equal(review.fidelitySummary({}).issues,0);
 assert.match(source,/data-art-review-check/);
 assert.match(source,/review\.cards|cards:approved/);
 assert.match(studio,/await window\.HandrawArticleReview\.reviewPlan\(aiCards/);
-assert.match(studio,/const approvedCards = review\.cards/);
+assert.match(studio,/const approvedCards\s*=\s*review\.cards/);
+assert.match(studio,/AI\.mergeArticleCards\(report,oldCards,suggestedCards,decision\.keys\)/,
+  "AI article cards preserve manual locks and stable anchors");
 assert.match(studio,/planUnifiedArticleDraft\(draft, \{ aiCards: approvedCards \}\)/);
 assert.match(studio,/推荐理由/);
 assert.match(importer,/hw-document-review-single-editor/);

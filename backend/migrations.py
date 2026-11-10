@@ -779,5 +779,9 @@ MIGRATIONS.extend(SKILL_WEB_MIGRATIONS)
 from .generation_v3 import V3_MIGRATIONS
 MIGRATIONS.extend(V3_MIGRATIONS)
 
+# Studio 2.0 Project drafts are separate from workflow templates and V3 Run/Work.
+from .studio_projects import STUDIO_PROJECT_MIGRATIONS
+MIGRATIONS.extend(STUDIO_PROJECT_MIGRATIONS)
+
 # Ensure migrations execute in strictly ascending numerical order
 MIGRATIONS.sort(key=lambda m: m[0])

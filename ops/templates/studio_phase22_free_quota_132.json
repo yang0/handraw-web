@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "source": "handraw-independent-free-quota",
+  "environment": "preproduction",
+  "releaseSha": "0000000000000000000000000000000000000000",
+  "periodStartUtc": "1970-01-01T00:00:00Z",
+  "periodEndUtc": "1970-01-01T00:00:00Z",
+  "beforeQuota": 0,
+  "grantedQuota": 0,
+  "consumedQuota": 0,
+  "restoredQuota": 0,
+  "afterQuota": 0,
+  "freeTaskCount": 0,
+  "unmatchedFreeTaskCount": 0,
+  "independentExportSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

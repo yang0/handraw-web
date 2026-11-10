@@ -1,0 +1,705 @@
+"""#112 round 3: Skill -> HTTP -> native PG17 -> S3 API emulator -> public Work.
+
+CI uses a RANDOM, throwaway PostgreSQL database and moto's S3 protocol
+emulation. This is not a live MinIO/R2 deployment and calls no paid image
+provider. A six-image Skill upload is interrupted after three persisted
+items, then resumed across HTTP requests with a new server worker.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import io
+import json
+import os
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+from unittest.mock import patch
+
+from PIL import Image
+
+
+@unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"),
+                     "requires disposable CI PostgreSQL staging server")
+class SkillPostgresS3Journey112(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import boto3
+        import psycopg
+        from moto import mock_aws
+        from psycopg import sql
+        from psycopg.conninfo import make_conninfo
+        from backend import object_storage
+        from backend.postgres_db import PostgresDatabase
+        from backend.config import SESSION_COOKIE_NAME
+        from backend.server import create_channel_server
+        from backend.services import register_user
+        from ops.bootstrap_postgres_v3 import bootstrap
+
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        root = Path(cls.temp.name)
+        cls.uploads = root / "uploads"
+        cls.aws = mock_aws()
+        cls.aws.start()
+        cls.addClassCleanup(cls.aws.stop)
+        cls.bucket = "handraw-qa112-" + uuid.uuid4().hex[:12]
+        cls.env = patch.dict(os.environ, {
+            "HANDRAW_ALLOW_PG_BOOTSTRAP": "YES",
+            "HANDRAW_DEMO_MODE": "0",
+            "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test",
+            "HANDRAW_REDIS_REQUIRED": "0",
+            "HANDRAW_PRIVATE_STORAGE": str(root / "private"),
+            "HANDRAW_UPLOADS_DIR": str(cls.uploads),
+            "HANDRAW_GENERATED_DIR": str(root / "generated"),
+            "HANDRAW_OBJECT_BUCKET": cls.bucket,
+            "HANDRAW_OBJECT_PREFIX": "qa112/v3",
+            "HANDRAW_OBJECT_ENDPOINT": "",
+            "HANDRAW_OBJECT_REGION": "us-east-1",
+            "AWS_ACCESS_KEY_ID": "testing",
+            "AWS_SECRET_ACCESS_KEY": "testing",
+            "AWS_DEFAULT_REGION": "us-east-1",
+        })
+        cls.env.start()
+        cls.addClassCleanup(cls.env.stop)
+        object_storage._client.cache_clear()
+        cls.addClassCleanup(object_storage._client.cache_clear)
+        cls.s3 = boto3.client("s3", region_name="us-east-1")
+        cls.s3.create_bucket(Bucket=cls.bucket)
+
+        cls.admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
+        cls.database_name = "handraw_skill_s3_112_" + uuid.uuid4().hex[:9]
+        with psycopg.connect(cls.admin_dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(
+                sql.Identifier(cls.database_name)))
+        cls.addClassCleanup(cls.drop_database)
+        dsn = make_conninfo(cls.admin_dsn, dbname=cls.database_name)
+        bootstrap(dsn=dsn, apply=True)
+        cls.db = PostgresDatabase(dsn)
+        cls.addClassCleanup(cls.db.close)
+        cls.db.migrate()
+        cls.owner, owner_cookie = register_user(
+            cls.db, "skill_pg_s3_owner", "TestOnlyPassword#112")
+        cls.other, other_cookie = register_user(
+            cls.db, "skill_pg_s3_other", "TestOnlyPassword#112")
+        cls.owner_cookie = f"{SESSION_COOKIE_NAME}={owner_cookie}"
+        cls.other_cookie = f"{SESSION_COOKIE_NAME}={other_cookie}"
+        cls.publisher = cls.create_token(int(cls.owner["id"]), ["publish"])
+        cls.reader = cls.create_token(int(cls.owner["id"]), ["library"])
+        cls.other_publisher = cls.create_token(int(cls.other["id"]), ["publish"])
+        cls.server = create_channel_server(
+            0, "main", cls.db, host="127.0.0.1", demo_mode=False)
+        cls.thread = threading.Thread(
+            target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_port}"
+        cls.addClassCleanup(cls.stop_server)
+
+    @classmethod
+    def create_token(cls, user_id, scopes):
+        key = "hwt_qa112_" + uuid.uuid4().hex
+        with cls.db.transaction() as tx:
+            tx.execute(
+                "INSERT INTO api_tokens(id,user_id,name,scopes,token_hash,"
+                "created_at,last_used_at,revoked_at) "
+                "VALUES (?,?,?,?,?,'2026-11-08T00:00:00Z','','')",
+                ("tok_" + uuid.uuid4().hex, user_id, "QA #112",
+                 json.dumps(scopes), hashlib.sha256(key.encode()).hexdigest()),
+            )
+        return key
+
+    @classmethod
+    def stop_server(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(5)
+
+    @classmethod
+    def drop_database(cls):
+        import psycopg
+        from psycopg import sql
+        assert cls.database_name.startswith("handraw_skill_s3_112_")
+        with psycopg.connect(cls.admin_dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
+                sql.Identifier(cls.database_name)))
+
+    def request(self, method, path, body=None, *, token=None, cookie=None):
+        headers = {"Origin": "http://trusted.test"}
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        if cookie:
+            headers["Cookie"] = cookie
+        raw = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
+        if raw is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(self.base + path, data=raw, method=method, headers=headers)
+        try:
+            res = urllib.request.urlopen(req, timeout=30)
+        except urllib.error.HTTPError as error:
+            res = error
+        with res:
+            payload = res.read()
+            parsed = json.loads(payload) if "json" in res.headers.get(
+                "Content-Type", "") else payload
+            return res.status, parsed, res.headers
+
+    def db_count(self, table, where="", params=()):
+        return int(self.db.get_conn().execute(
+            "SELECT COUNT(*) FROM " + table + (" WHERE " + where if where else ""),
+            params).fetchone()[0])
+
+    @staticmethod
+    def images():
+        result = []
+        originals = []
+        for i in range(6):
+            buff = io.BytesIO()
+            Image.new("RGB", (24, 20), (23 + i * 35, 48, 150 - i * 17)).save(
+                buff, format="PNG")
+            b = buff.getvalue()
+            originals.append(b)
+            result.append({
+                "name": f"season-{i+1}.png",
+                "sha256": hashlib.sha256(b).hexdigest(),
+                "dataUrl": "data:image/png;base64," + base64.b64encode(b).decode(),
+            })
+        return result, originals
+
+    def test_six_images_resume_single_work_s3_recovery_and_acl(self):
+        from backend import object_storage
+        from backend import server as server_module
+        from backend.services import set_work_visibility, utc_now_iso
+        from backend.generation_v3 import work_images
+
+        external = str(uuid.uuid4())
+        images, raw_images = self.images()
+        body = {
+            "externalRunId": external, "originClient": "skill",
+            "visibility": "public", "status": "success",
+            "originalRequest": "原创插画四季衍生系列六张图",
+            "requestId": "skill-history-" + external,
+            "images": images,
+        }
+        path = "/api/v1/me/generations"
+        self.assertEqual(self.request("POST", path, body)[0], 401)
+        self.assertEqual(self.request(
+            "POST", path, body, token=self.other_publisher)[0], 200,
+            "A different authorized owner may publish their own distinct run")
+        # Remove the unrelated second user's run; only owner's run is
+        # relevant to the unique images/publication assertions below.
+        # The other user's data remains isolated, never conflated with owner.
+        other_count = self.db_count(
+            "generation_runs", "user_id=?", (self.other["id"],))
+        self.assertEqual(other_count, 1)
+        before = self.db_count(
+            "generation_runs", "user_id=?", (self.owner["id"],))
+        original_save = server_module.save_data_url_upload
+        calls = []
+        def interrupt_after_three(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 4:
+                raise OSError("injected client upload disconnect after slot 3")
+            return original_save(*args, **kwargs)
+
+        with patch.object(server_module, "save_data_url_upload",
+                          side_effect=interrupt_after_three):
+            status, error, _ = self.request(
+                "POST", path, body, token=self.publisher)
+        self.assertGreaterEqual(status, 500, error)
+        self.assertEqual(self.db_count(
+            "generation_runs", "user_id=?", (self.owner["id"],)), before + 1)
+        run = self.db.get_conn().execute(
+            "SELECT id,status FROM generation_runs WHERE user_id=? AND "
+            "source='skill' AND external_run_id=?",
+            (self.owner["id"], external)).fetchone()
+        self.assertEqual(run["status"], "uploading")
+        self.assertEqual(self.db_count(
+            "generation_items", "run_id=?", (run["id"],)), 3)
+        self.assertEqual(self.db_count(
+            "user_uploads", "user_id=? AND cat='skill_history'",
+            (self.owner["id"],)), 3)
+        self.assertEqual(self.db_count("works", "run_id=?", (run["id"],)), 0)
+        partial = self.db.get_conn().execute(
+            "SELECT m.storage_key FROM generation_items i "
+            "JOIN media_assets m ON m.id=i.media_id "
+            "WHERE i.run_id=? ORDER BY i.position",
+            (run["id"],)).fetchall()
+        self.assertEqual(len(partial), 3)
+        private_url = partial[0]["storage_key"]
+        # Unpublished uploads are private, despite the object already being
+        # durably stored in the bucket and a guessable /uploads/ URL.
+        self.assertEqual(self.request("GET", private_url)[0], 404)
+        self.assertEqual(self.request("GET", private_url,
+                                      cookie=self.other_cookie)[0], 404)
+        owner_code, owner_bytes, _ = self.request(
+            "GET", private_url, cookie=self.owner_cookie)
+        self.assertEqual(owner_code, 200)
+        self.assertEqual(owner_bytes, raw_images[0])
+
+        # Owner retries exactly the SAME payload; only slots 3,4,5 are
+        # written. Any already successful item remains immutable.
+        status, result, _ = self.request(
+            "POST", path, body, token=self.publisher)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["imageCount"], 6)
+        self.assertEqual(len(result["workIds"]), 1)
+        self.assertEqual(result["visibility"], "public")
+        self.assertEqual(result["id"], run["id"])
+        wid = result["workId"]
+        urls = work_images(self.db.get_conn(), wid)
+        self.assertEqual(len(urls), 6)
+        self.assertEqual(self.db_count(
+            "generation_items", "run_id=?", (run["id"],)), 6)
+        self.assertEqual(self.db_count(
+            "work_media", "work_id=?", (wid,)), 6)
+        self.assertEqual(self.db_count(
+            "works", "run_id=?", (run["id"],)), 1)
+        self.assertEqual(self.db_count(
+            "user_uploads", "user_id=? AND cat='skill_history'",
+            (self.owner["id"],)), 6)
+        self.assertEqual(self.db_count(
+            "media_public_grants",
+            "target_type='work' AND target_id=? AND revoked_at IS NULL",
+            (wid,)), 6)
+        self.assertEqual(result["coverUrl"], urls[0])
+        first_keys = sorted(
+            x["Key"] for x in self.s3.list_objects_v2(
+                Bucket=self.bucket, Prefix="qa112/v3/uploads/")["Contents"])
+        self.assertEqual(len(first_keys), 12, "Six per owner, no ghost uploads")
+
+        status, repeat, _ = self.request(
+            "POST", path, body, token=self.publisher)
+        self.assertEqual(status, 200, repeat)
+        self.assertTrue(repeat["deduped"])
+        self.assertEqual(repeat["workId"], wid)
+        self.assertEqual(work_images(self.db.get_conn(), wid), urls)
+        self.assertEqual(self.db_count(
+            "user_uploads", "user_id=? AND cat='skill_history'",
+            (self.owner["id"],)), 6)
+        self.assertEqual(sorted(
+            x["Key"] for x in self.s3.list_objects_v2(
+                Bucket=self.bucket, Prefix="qa112/v3/uploads/")["Contents"]),
+            first_keys)
+
+        # Simulate another web instance with an EMPTY local media cache:
+        # authorized public GET must recover exact original bytes from S3.
+        target = object_storage._key(urls[0])
+        self.assertIn(target, first_keys)
+        for path_in_cache in self.uploads.glob("*"):
+            path_in_cache.unlink()
+        status, restored, headers = self.request("GET", urls[0])
+        self.assertEqual(status, 200)
+        self.assertEqual(restored, raw_images[0])
+        self.assertIn("must-revalidate", headers.get("Cache-Control", ""))
+
+        # Moderation is evaluated BEFORE any object GET: a hidden work's
+        # media must be inaccessible even when object still exists.
+        with self.db.transaction() as tx:
+            set_work_visibility(tx, wid, "hidden", utc_now_iso(),
+                                source="moderator", reason="QA112",
+                                actor_role="admin")
+        for path_in_cache in self.uploads.glob("*"):
+            path_in_cache.unlink()
+        with patch("backend.object_storage.ensure_local_copy",
+                   side_effect=AssertionError("unauthorized object fetch")):
+            self.assertEqual(self.request("GET", urls[0])[0], 404)
+            self.assertEqual(self.request("GET", urls[0],
+                                          cookie=self.other_cookie)[0], 404)
+        # The original owner may still read private history, but the
+        # published square must not expose a hidden work.
+        self.assertEqual(self.request(
+            "GET", path, token=self.publisher)[0], 403,
+            "A publish-only token must not read private run history")
+        status, history, _ = self.request(
+            "GET", path, token=self.reader)
+        self.assertEqual(status, 200)
+        record = next(x for x in history["items"] if x["id"] == run["id"])
+        self.assertEqual(record["workStatus"], "hidden")
+        self.assertEqual(record["visibility"], "private")
+        self.assertEqual(record["imageCount"], 6)
+
+        print("STUDIO #112 PG17 + moto S3 Skill 6-image HTTP interrupted/resumed "
+              "one Work, 6 Media, no dupes, private-before-grant, "
+              "remote rehydrate, moderation revoke PASS")
+
+
+    @unittest.skipUnless(os.environ.get("HANDRAW_REAL_SKILL_CLIENT_PATH"),
+                         "requires pinned handraw-style real source")
+    def test_z21_actual_skill_web_private_resource_bidirectional_cas(self):
+        """#21 actual pinned Skill CLI ↔ Web HTTP ↔ native PG17 (no mocks).
+
+        Skill pushes, Web edits, stale Skill push gets HTTP 409, Skill restores
+        the Web revision, then resends idempotently. Private Web-only model
+        cannot be read by other accounts or publish-only tokens.
+        """
+        import contextlib
+        import importlib.util
+        import subprocess
+
+        path = Path(os.environ["HANDRAW_REAL_SKILL_CLIENT_PATH"]).resolve()
+        self.assertTrue(path.is_file())
+        expected = os.environ.get("HANDRAW_REAL_SKILL_EXPECTED_SHA")
+        if expected:
+            self.assertEqual(subprocess.check_output(
+                ["git", "-C", str(path.parents[3]), "rev-parse", "HEAD"],
+                text=True).strip(), expected)
+        spec = importlib.util.spec_from_file_location("real_skill_owned_qa21", path)
+        cloud = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cloud)
+
+        def invoke(*args):
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                cloud.main(list(args))
+            return json.loads(stdout.getvalue().strip())
+
+        rid = str(uuid.uuid4())
+        local_id = "mine:" + rid
+        code = "USR-S" + rid.replace("-", "").upper()
+        original = {
+            "id": local_id, "kind": "style", "section": "owned",
+            "name": "Skill原创纸纹", "prompt_zh": "无文字温暖纸纹与线稿",
+            "prompt_en": "Warm handmade paper and pencil outline",
+            "license": "原作者授权", "version": "1.0.0", "examples": [],
+        }
+        with tempfile.TemporaryDirectory(prefix="skill-custom21-") as temp:
+            root = Path(temp)
+            libpath = root / "personal-library" / "library.json"
+            cloud.atomic_json(libpath, {
+                "schema_version": 1, "resources": [original]
+            })
+            with patch.dict(os.environ, {
+                "HANDRAW_PROFILE_HOME": str(root),
+                "HANDRAW_SKILL_ROOT": str(root),
+            }), patch.object(cloud, "BASE_URL", self.base):
+                cloud.Credentials().save({
+                    "token": self.reader, "scopes": ["library"],
+                    "user": {"username": self.owner["username"]},
+                })
+                first = invoke("resources", "push", "--id", local_id)
+                replay = invoke("resources", "push", "--id", local_id)
+                self.assertEqual(first["code"], code)
+                self.assertEqual(first["revision"], 1)
+                self.assertEqual(replay["revision"], 1)
+                self.assertEqual(self.db_count(
+                    "skill_personal_resources", "id=?", (rid,)), 1)
+                self.assertEqual(self.db_count(
+                    "user_resources", "id=? AND code=?", (rid, code)), 1)
+                self.assertEqual(self.db.get_conn().execute(
+                    "SELECT revision FROM user_resources WHERE id=?",
+                    (rid,)).fetchone()["revision"], 1)
+
+                # Website owner changes the same resource over Web cookie.
+                website_body = {
+                    "id": rid, "kind": "style", "name": "网站修改纸纹",
+                    "definition": {
+                        "zh": "网站侧编辑：柔和纸纹",
+                        "en": "Warm paper texture from web editor",
+                    },
+                    "license": "原作者授权", "examples": [], "version": "1.1.0",
+                    "visibility": "private", "schemaVersion": 1,
+                    "baseRevision": 1,
+                }
+                status, changed, _ = self.request(
+                    "PUT", "/api/v1/me/resources/" + rid,
+                    website_body, cookie=self.owner_cookie)
+                self.assertEqual(status, 200, changed)
+                self.assertEqual(changed["resource"]["revision"], 2)
+                self.assertEqual(changed["resource"]["code"], code)
+
+                # Skill still holds baseRevision=1; must refuse overwriting.
+                with self.assertRaises(cloud.CloudError) as stale:
+                    invoke("resources", "push", "--id", local_id)
+                self.assertEqual(stale.exception.status, 409)
+                self.assertEqual(self.db.get_conn().execute(
+                    "SELECT name,revision FROM user_resources WHERE id=?",
+                    (rid,)).fetchone()["name"], "网站修改纸纹")
+
+                # Explicit forced restore after the conflict pulls Web→Skill,
+                # then a repeat Skill→Web push is a true no-op.
+                restored = invoke("resources", "restore", "--force")
+                self.assertTrue(any(
+                    item.get("id") == local_id and item.get("code") == code
+                    and item.get("restored") for item in restored["results"]))
+                local = json.loads(libpath.read_text(encoding="utf-8"))
+                self.assertEqual(local["resources"][0]["name"], "网站修改纸纹")
+                state = cloud.SyncState(cloud.Credentials().read())
+                self.assertEqual(state.data["resources"][local_id]["revision"], 2)
+                self.assertEqual(invoke("resources", "push", "--id", local_id)["revision"], 2)
+
+                status, own, _ = self.request(
+                    "GET", "/api/v1/me/resources?limit=20", token=self.reader)
+                self.assertEqual(status, 200, own)
+                self.assertTrue(any(
+                    row["id"] == rid and row["code"] == code
+                    and row["revision"] == 2 for row in own["items"]))
+                self.assertEqual(self.request(
+                    "GET", "/api/v1/me/resources", token=self.other_publisher)[0], 403)
+                self.assertEqual(self.db_count(
+                    "user_resources", "id=? AND code=?", (rid, code)), 1)
+        print("ISSUE #21 real Skill push → Web change → HTTP 409 → "
+              "Skill restore → idempotent push, PG17 and owner ACL PASS")
+
+
+    @unittest.skipUnless(os.environ.get("HANDRAW_REAL_SKILL_CLIENT_PATH"),
+                         "requires pinned handraw-style real source")
+    def test_z_actual_skill_cli_record_upload_retry_across_http_pg_and_s3(self):
+        """#84: real handraw-style client, not a synthesized HTTP request.
+
+        Pinned public Skill source is executed against an ephemeral local server,
+        isolated PG17 and an S3 API emulator. No real user or paid gateway.
+        """
+        import contextlib
+        import importlib.util
+        import subprocess
+
+        path = Path(os.environ["HANDRAW_REAL_SKILL_CLIENT_PATH"]).resolve()
+        self.assertTrue(path.is_file(), f"missing real Skill client {path}")
+        expected = os.environ.get("HANDRAW_REAL_SKILL_EXPECTED_SHA")
+        if expected:
+            actual = subprocess.check_output(
+                ["git", "-C", str(path.parents[3]), "rev-parse", "HEAD"],
+                text=True).strip()
+            self.assertEqual(actual, expected, "Skill commit pin drift")
+        spec = importlib.util.spec_from_file_location("real_skill_qa84", path)
+        cloud = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cloud)
+
+        def invoke(*args):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cloud.main(list(args))
+            return json.loads(out.getvalue().strip())
+
+        with tempfile.TemporaryDirectory(prefix="skill-qa84-") as temp:
+            root = Path(temp)
+            with patch.dict(os.environ, {"HANDRAW_PROFILE_HOME": str(root)}), patch.object(
+                    cloud, "BASE_URL", self.base):
+                cloud.Credentials().save({
+                    "token": self.publisher, "scopes": ["publish"],
+                    "user": {"username": self.owner["username"]},
+                })
+                for count, image_kind in ((1, "png"), (5, "png"), (1, "gif")):
+                    names = []
+                    originals = []
+                    for i in range(count):
+                        filename = root / f"skill-{count}-{i}.{image_kind}"
+                        if image_kind == "gif":
+                            frames = [
+                                Image.new("RGB", (8, 8), (255, 50, 40)),
+                                Image.new("RGB", (8, 8), (40, 50, 255)),
+                            ]
+                            frames[0].save(filename, format="GIF", save_all=True,
+                                           append_images=frames[1:],
+                                           duration=[100, 150], loop=0)
+                            with Image.open(filename) as animated:
+                                self.assertEqual(animated.n_frames, 2)
+                        else:
+                            Image.new("RGB", (16, 20), (
+                                31 + i * 25, 67, 155 - i * 13)).save(
+                                    filename, format="PNG")
+                        names.append(filename)
+                        originals.append(filename.read_bytes())
+                    prompt = root / f"request-{image_kind}-{count}.txt"
+                    prompt.write_text(f"Skill CLI 跨仓库 {count} 图验证", encoding="utf-8")
+                    external = str(uuid.uuid4())
+                    args = ["history", "record", "--run-id", external,
+                            "--original-request-file", str(prompt)]
+                    for filename in names:
+                        args.extend(["--image", str(filename)])
+                    before = self.db_count(
+                        "generation_runs", "user_id=?", (self.owner["id"],))
+                    with patch.object(cloud.API, "request",
+                                      side_effect=AssertionError("local history went online")):
+                        offline = invoke(*args)
+                    self.assertTrue(offline["localOnly"])
+                    self.assertEqual(offline["images"], count)
+                    self.assertEqual(self.db_count(
+                        "generation_runs", "user_id=?", (self.owner["id"],)), before)
+                    local = root / "generation-history" / external / "record.json"
+                    self.assertEqual(json.loads(local.read_text(
+                        encoding="utf-8"))["cloudState"], "local_only")
+                    first = invoke("history", "upload", "--run-id", external)
+                    again = invoke("history", "upload", "--run-id", external)
+                    self.assertEqual(first["workId"], again["workId"])
+                    self.assertEqual(first["workIds"], [first["workId"]])
+                    self.assertEqual(first["imageCount"], count)
+                    self.assertEqual(self.db_count(
+                        "generation_runs", "user_id=?", (self.owner["id"],)), before + 1)
+                    run = self.db.get_conn().execute(
+                        "SELECT id FROM generation_runs WHERE user_id=? "
+                        "AND source='skill' AND external_run_id=?",
+                        (self.owner["id"], external)).fetchone()
+                    self.assertEqual(first["cloudId"], run["id"])
+                    work_id = first["workId"]
+                    self.assertEqual(self.db_count(
+                        "works", "run_id=?", (run["id"],)), 1)
+                    self.assertEqual(self.db_count(
+                        "generation_items", "run_id=?", (run["id"],)), count)
+                    self.assertEqual(self.db_count(
+                        "work_media", "work_id=?", (work_id,)), count)
+                    self.assertEqual(self.db_count(
+                        "media_public_grants",
+                        "target_type='work' AND target_id=? AND revoked_at IS NULL",
+                        (work_id,)), count)
+                    urls = [row["storage_key"] for row in self.db.get_conn().execute(
+                        "SELECT m.storage_key FROM work_media wm "
+                        "JOIN media_assets m ON wm.media_id=m.id "
+                        "WHERE wm.work_id=? ORDER BY wm.position",
+                        (work_id,)).fetchall()]
+                    self.assertEqual(first["coverUrl"], urls[0])
+                    self.assertEqual(len(urls), count)
+                    for i, url in enumerate(urls):
+                        status, payload, _ = self.request("GET", url)
+                        self.assertEqual(status, 200)
+                        self.assertEqual(payload, originals[i])
+                    status, history, _ = self.request(
+                        "GET", "/api/v1/me/generations", token=self.reader)
+                    self.assertEqual(status, 200)
+                    self.assertTrue(any(
+                        row.get("id") == run["id"] and row.get("workId") == work_id
+                        for row in history["items"]))
+                    self.assertEqual(self.request(
+                        "GET", "/api/v1/me/generations",
+                        token=self.other_publisher)[0], 403)
+                    self.assertEqual(json.loads(local.read_text(
+                        encoding="utf-8"))["workId"], work_id)
+                # A malformed GIF is rejected by the real Web content
+                # validator; the local Skill record stays unpublished.
+                invalid = root / "invalid.gif"
+                invalid.write_bytes(b"not a valid GIF")
+                note = root / "invalid-gif.txt"
+                note.write_text("无效动图测试", encoding="utf-8")
+                invalid_run = str(uuid.uuid4())
+                invoke("history", "record", "--run-id", invalid_run,
+                       "--original-request-file", str(note),
+                       "--image", str(invalid))
+                with self.assertRaises(cloud.CloudError) as failure:
+                    invoke("history", "upload", "--run-id", invalid_run)
+                self.assertEqual(failure.exception.status, 400)
+                record_file = root / "generation-history" / invalid_run / "record.json"
+                self.assertEqual(json.loads(record_file.read_text(
+                    encoding="utf-8"))["cloudState"], "local_only")
+        print("ISSUE #84 pinned real Skill CLI 1/5 PNG + animated GIF "
+              "HTTP PG17/S3 emulation, idempotent single Work, ACL PASS")
+
+
+    def test_zz_same_external_id_two_owners_five_images_acl_audit(self):
+        """#84/#112: identical client request keys cannot merge two owners.
+
+        Two independent authenticated Skill publishers submit five identical
+        image contents using the SAME externalRunId and requestId. Public
+        photos are intentionally public; ownership, private history and
+        moderation revocation must remain tenant-isolated.
+        """
+        from backend.services import set_work_visibility, utc_now_iso
+        from ops.audit_v3_cross_client_84_112 import audit_v3_uploads
+
+        external = str(uuid.uuid4())
+        images, originals = self.images()
+        body = {
+            "externalRunId": external,
+            "originClient": "skill",
+            "visibility": "public",
+            "status": "success",
+            "requestId": "skill-history-" + external,
+            "originalRequest": "C-level tenant isolation fixture; no paid provider",
+            "images": images[:5],
+        }
+        accepted = []
+        for user, publisher in ((self.owner, self.publisher),
+                                (self.other, self.other_publisher)):
+            status, payload, _ = self.request(
+                "POST", "/api/v1/me/generations", body, token=publisher)
+            self.assertEqual(status, 200, payload)
+            self.assertEqual(payload["imageCount"], 5)
+            self.assertEqual(len(payload["workIds"]), 1)
+            accepted.append((user, payload))
+            again = self.request(
+                "POST", "/api/v1/me/generations", body, token=publisher)
+            self.assertEqual(again[0], 200)
+            self.assertEqual(again[1]["workId"], payload["workId"])
+            self.assertTrue(again[1]["deduped"])
+
+        (owner, a), (other, b) = accepted
+        self.assertNotEqual(a["id"], b["id"])
+        self.assertNotEqual(a["workId"], b["workId"])
+        rows, specs, urls = [], [], {}
+        for user, payload in accepted:
+            uid, rid, wid = int(user["id"]), payload["id"], payload["workId"]
+            selected = self.db.get_conn().execute(
+                "SELECT i.position, i.media_id, m.owner_user_id AS media_owner,"
+                "m.storage_key FROM generation_items i "
+                "JOIN media_assets m ON m.id=i.media_id "
+                "WHERE i.run_id=? ORDER BY i.position", (rid,)).fetchall()
+            linked = {
+                int(entry["position"]): entry["media_id"]
+                for entry in self.db.get_conn().execute(
+                    "SELECT position,media_id FROM work_media WHERE work_id=?",
+                    (wid,)).fetchall()
+            }
+            self.assertEqual(len(selected), 5)
+            specs.append({"owner": str(uid), "client": "skill",
+                          "run": str(rid), "work": str(wid),
+                          "successful": 5, "totalSlots": 5, "status": "public"})
+            urls[uid] = []
+            for item in selected:
+                url = item["storage_key"]
+                urls[uid].append(url)
+                grant = self.db_count(
+                    "media_public_grants",
+                    "media_url=? AND target_type='work' AND target_id=? "
+                    "AND revoked_at IS NULL", (url, wid))
+                rows.append({
+                    "owner": str(uid), "client": "skill",
+                    "run": str(rid), "work": str(wid),
+                    "position": int(item["position"]),
+                    "media": str(item["media_id"]),
+                    "mediaOwner": str(item["media_owner"]),
+                    "workMedia": str(linked.get(int(item["position"]))),
+                    "publicGrant": grant == 1,
+                })
+        evidence = audit_v3_uploads(rows, specs)
+        self.assertEqual(evidence["auditedSuccessfulMedia"], 10)
+        self.assertEqual(evidence["owners"], 2)
+        self.assertFalse(evidence["readyForRelease"])
+        self.assertTrue(evidence["productionNoGo"])
+        self.assertFalse(set(urls[int(owner["id"])]) &
+                         set(urls[int(other["id"])]),
+                         "distinct tenants cannot share private storage URLs")
+        for user, payload in accepted:
+            uid = int(user["id"])
+            for index, url in enumerate(urls[uid]):
+                status, actual, _ = self.request("GET", url)
+                self.assertEqual(status, 200)
+                self.assertEqual(actual, originals[index])
+            reader = self.create_token(uid, ["library"])
+            status, history, _ = self.request(
+                "GET", "/api/v1/me/generations", token=reader)
+            self.assertEqual(status, 200)
+            self.assertTrue(any(item["id"] == payload["id"]
+                                for item in history["items"]))
+            forbidden_run = b["id"] if uid == int(owner["id"]) else a["id"]
+            self.assertFalse(any(item["id"] == forbidden_run
+                                 for item in history["items"]),
+                             "private run history leaked across tenants")
+        with self.db.transaction() as tx:
+            set_work_visibility(tx, a["workId"], "hidden", utc_now_iso(),
+                                source="moderator", reason="QA112",
+                                actor_role="admin")
+        # The unrelated tenant's public Work must remain readable.
+        self.assertEqual(self.request(
+            "GET", urls[int(owner["id"])][0])[0], 404)
+        self.assertEqual(self.request(
+            "GET", urls[int(other["id"])][0])[0], 200)
+        print("STUDIO #84/#112 same external IDs across two Skill owners, "
+              "5+5 media ownership, private history and moderation ACL PASS")
+
+
+if __name__ == "__main__":
+    unittest.main()

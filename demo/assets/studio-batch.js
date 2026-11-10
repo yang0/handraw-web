@@ -131,10 +131,36 @@
       this.isPlanning = false;
       this.progressState = null;
       this.lastSummary = "";
+      this.seriesView = "cards";
+      this.seriesFilter = "all";
+      this.seriesControlId = null;
+      this.seriesPersistTimer = null;
     }
 
     getParts() {
       return this.context?.parts || null;
+    }
+
+    getSeries() { return global.HandrawStudioSeries || null; }
+    readPlan() {
+      const api=this.getSeries(),loop=this.getParts()?.loop;
+      return api&&loop?api.read(loop):null;
+    }
+    patchSlotByIndex(index,delta) {
+      const api=this.getSeries(),loop=this.getParts()?.loop;
+      if(!api||!loop)return false;
+      const slot=api.read(loop).slots[index];
+      if(!slot)return false;
+      try{
+        api.patchSlot(loop,slot.slotId,delta,{
+          catalog:this.context?.catalog,
+          isUnlocked:this.actions?.isUnlocked
+        });
+        return true;
+      }catch(e){
+        global.HANDRAW_SHARED?.toast?.("逐张参数修改失败："+(e.code||e.message));
+        return false;
+      }
     }
 
     getGraph() {
@@ -244,10 +270,11 @@
       const rMap = (catalog && catalog.resourceMap) || new Map();
       const hasSpecific = Boolean(row && row.layout && String(row.layout).trim());
       const specificId = hasSpecific ? String(row.layout).trim() : "";
-      const effectiveId = specificId || globalLayoutId || "SC-021";
+      const effectiveId = specificId || globalLayoutId || "";
       const res = effectiveId ? (rMap.get(effectiveId) || catalog?.layouts?.find((l) => l.id === effectiveId)) : null;
-      const thumbUrl = res?.image || "/images/layouts/social-cards/SC-021.webp";
-      const codeText = effectiveId;
+      // An illustration placeholder is not an authorized selected layout.
+      const thumbUrl = res?.image || "";
+      const codeText = effectiveId || "待选择";
       const nameText = res ? (res.name_zh || res.name || effectiveId) : (hasSpecific ? specificId : "默认图型");
       const btnTitle = hasSpecific ? `图型版式：${effectiveId} ${nameText}（点击更换）` : `跟随全局图型 ${effectiveId}（点击更换）`;
       const ariaLabel = hasSpecific ? `图型版式：${effectiveId} ${nameText}` : `跟随全局图型 ${effectiveId} ${nameText}`;
@@ -255,7 +282,7 @@
       return `
         <button type="button" class="btn batch-row-layout-btn" data-pick-layout-idx="${idx}" data-hover-src="${esc(thumbUrl)}" data-hover-code="${esc(codeText)}" data-hover-name="${esc(nameText)}" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
           <span class="batch-row-layout-thumb-wrap" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}">
-            <img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />
+            ${thumbUrl ? `<img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />` : '<span class="batch-row-layout-placeholder">选择图型</span>'}
           </span>
           <span class="batch-row-layout-info">
             <span class="batch-row-layout-code">${esc(codeText)}</span>
@@ -294,6 +321,19 @@
       if (context) this.context = context;
       if (actions) this.actions = actions;
       if (!this.hostElement) return;
+      const editorActive=typeof document!=="undefined" ? document.activeElement : null;
+      const wasEditing=editorActive?.getAttribute?.("data-series-subject");
+      const editorRestore=wasEditing && this.hostElement.contains?.(editorActive)
+        ? {slotId:wasEditing,value:editorActive.value,
+          start:editorActive.selectionStart,end:editorActive.selectionEnd,
+          scroll:editorActive.scrollTop} : null;
+      const mediaNodes=new Map();
+      if (typeof this.hostElement.querySelectorAll==="function") {
+        this.hostElement.querySelectorAll("img.series108-image[data-series-media]").forEach(img=>{
+          const id=img.getAttribute("data-series-media");
+          if(id&&!mediaNodes.has(id))mediaNodes.set(id,img);
+        });
+      }
 
       const p = this.getParts();
       if (p?.ctrl?.data?.activeBatchId) {
@@ -310,11 +350,21 @@
         return;
       }
 
+      const series=this.getSeries();
+      const plan=series?series.read(p.loop):null;
+      const candidateCount=series?series.candidateCount(p.loop):1;
       const sd = p.skill.data || {};
       const td = p.text?.data || {};
       const cd = p.ctrl.data || {};
       const ld = p.loop.data || {};
       const ad = p.asset?.data || {};
+      if (global.HandrawStudioCore) {
+        this.context.effectiveCreationSpec = global.HandrawStudioCore.normalizeLegacyParts(p).spec;
+        this.context.seriesPlan = global.HandrawStudioCore.normalizeLegacyBatch(p.loop);
+        if (!Array.isArray(ld.studio2SlotIds) || ld.studio2SlotIds.length !== this.context.seriesPlan.slots.length) {
+          global.HandrawStudioCore.pinLegacySlotIds(p.loop, this.context.seriesPlan);
+        }
+      }
 
       // M1: ctrl.data.count folded into batchCount if > 1, then reset to 1
       if (p.ctrl?.data && Number(p.ctrl.data.count) > 1) {
@@ -362,25 +412,39 @@
       const globalAssetItems = Array.isArray(p.asset?.data?.items) ? p.asset.data.items : [];
 
       // M1: Single truth - each iteration generates 1 image in batch set planning
-      const perIterCount = 1;
+      const perIterCount = candidateCount;
       const iterations = this.resolveIterations();
       const totalCount = Math.min(200, iterations.length * perIterCount);
-
-      const busy = Boolean(this.context?.busy);
+      const remote=this.context?.runProjection;
+      const runSnapshot=cd.studio2RunSnapshot||null;
+      // The previous Run can have a different order or candidate count
+      // from the draft currently being edited.
+      const displayCandidateCount=runSnapshot?.candidateCount||candidateCount;
+      const localBusy=Boolean(this.context?.localBusy??this.context?.busy);
+      const busy=localBusy||Boolean(remote&&!remote.isTerminal);
       const displays = Array.isArray(this.context?.displays) ? this.context.displays : [];
-      const results = Array.isArray(this.context?.results) ? this.context.results : [];
+      const results = remote?.results
+        ? remote.results.map(r=>({
+            id:r.itemId||r.outputId,imageUrl:r.imageUrl,
+            title:"第"+(r.slotOrder+1)+"张 · 候选"+(r.candidateIndex+1),
+            index:r.outputIndex,item:r
+          }))
+        : (Array.isArray(this.context?.results) ? this.context.results : []);
 
       const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
-      // The displayed slot results are the source of truth. Node progress can
-      // be stale (0/2) after a re-render even while both images are visible.
-      const slotResults = iterations.map((_, index) => this.getItemResult(index, displays, isBatchGallery));
+      // Legacy display rows are fallback only. The V3 projection (when
+      // available) is authoritative for both success count and ownership.
       const progress = this.progressState?.batchId === this.activeBatchId ? this.progressState : null;
       const currentStep = ld.currentStep || 0;
       const totalSteps = ld.totalSteps || totalCount;
-      const completedCount = Math.max(slotResults.filter((item) => item?.imageUrl).length,
-        progress?.completedCount || 0);
-      const failedCount = Math.max(slotResults.filter((item) => item?.failed && !item?.imageUrl).length,
-        progress?.failedCount || 0);
+      const completedCount = remote
+        ? remote.succeeded
+        : Math.max(displays.flatMap(d=>d.data?.items||[]).filter(i=>i?.imageUrl).length,
+          progress?.completedCount || 0);
+      const failedCount = remote
+        ? remote.failed
+        : Math.max(displays.flatMap(d=>d.data?.items||[]).filter(i=>i?.failed&&!i?.imageUrl).length,
+          progress?.failedCount || 0);
       const isStopping = Boolean(progress?.isStopping || ld.isStopping);
       const activeIndices = Array.isArray(progress?.activeIndices) ? progress.activeIndices : [];
       const activeIndex = activeIndices.length ? activeIndices[0]
@@ -394,6 +458,11 @@
               <h1 class="make-image-title">批量</h1>
               <p class="make-image-lede">套图规划批量出图：统一画风与母题，AI 规划每张主题与图型，支持自由微调。</p>
             </div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;">每张候选
+              <select class="hw-input" id="batch-candidates" aria-label="每个计划槽位生成候选数" ${busy ? "disabled" : ""}>
+                ${[1,2,3,4].map(n=>`<option value="${n}" ${candidateCount===n?"selected":""}>${n} 张</option>`).join("")}
+              </select>
+            </label>
             <label style="display:flex;align-items:center;gap:8px;font-size:12px;">同时生成
               <select class="hw-input" id="batch-concurrency" aria-label="批量生图并发数量" ${busy ? "disabled" : ""}>
                 ${[1,2,3,4].map((n) => `<option value="${n}" ${Number(ld.batchConcurrency || 3) === n ? "selected" : ""}>${n} 张</option>`).join("")}
@@ -519,7 +588,7 @@
                         </svg>
                         <span>${busy ? "AI 规划中…" : "AI 规划这套图"}</span>
                       </button>
-                      ${this.planNotice ? `<span class="batch-plan-notice" role="status">${esc(this.planNotice)}</span>` : ""}
+                      ${`<span class="batch-plan-notice" role="status" aria-live="polite">${esc(this.planNotice || "")}</span>`}
                       ${this.lastPlanUndo ? '<button type="button" class="btn btn-sm" id="batch-undo-plan">撤销上次规划</button>' : ""}
                     </div>
                   </div>
@@ -591,6 +660,9 @@
                                 </div>
                               </td>
                               <td style="text-align:center;">
+                                <button type="button" class="btn btn-sm" data-row-options-idx="${idx}" title="逐张画风、画幅、锁定">参数</button>
+                                <button type="button" class="btn btn-sm" data-row-copy-idx="${idx}" title="复制此槽位">复制</button>
+                                <button type="button" class="btn btn-sm" data-row-up-idx="${idx}" title="向上移动">↑</button>
                                 <button type="button" class="btn btn-sm btn-ghost batch-row-del-btn" data-del-row-idx="${idx}" title="删除此张">删除</button>
                               </td>
                             </tr>
@@ -730,8 +802,39 @@
                           <td colspan="4" class="batch-table-empty">暂无待批量生成的项，请在上方规划主题或添加条目</td>
                         </tr>
                       ` : iterations.map((iter, idx) => {
-                        const itemResult = this.getItemResult(idx, displays, isBatchGallery);
-                        const rowStatus = this.getRowStatus(idx, busy, currentStep, itemResult, activeIndex);
+                        const slotId=iter.slotId||iter.itemKey||plan?.slots?.[idx]?.slotId||"";
+                        const outputIndices=Array.from({length:displayCandidateCount},(_,candidateIndex)=>{
+                          if(!runSnapshot?.outputs?.length)return idx*displayCandidateCount+candidateIndex;
+                          const pinned=runSnapshot.outputs.find(o=>o.slotId===slotId&&
+                            o.candidateIndex===candidateIndex);
+                          return pinned?.outputIndex??-1;
+                        });
+                        const perOutput=outputIndices.map((outputIndex,candidateIndex)=>{
+                          const server=remote?.outputs?.find(o=>
+                            o.slotId===slotId&&o.candidateIndex===candidateIndex);
+                          if(remote)return server||{slotId,candidateIndex,outputIndex:-1,
+                            status:"pending",imageUrl:""};
+                          const local=outputIndex>=0
+                            ?this.getItemResult(outputIndex,displays,isBatchGallery):null;
+                          return {slotId,candidateIndex,outputIndex,
+                            imageUrl:local?.imageUrl||"",
+                            status:local?.imageUrl?"success":local?.failed?"failed":"pending",
+                            errorCode:local?.error||""};
+                        });
+                        const rowSuccess=perOutput.filter(x=>x.imageUrl).length;
+                        const rowFailed=perOutput.filter(x=>x.status==="failed").length;
+                        const successOutput=perOutput.find(o=>o.imageUrl);
+                        const itemResult=successOutput?.imageUrl?successOutput:null;
+                        const physicalBusy=perOutput.some(o=>activeIndices.includes(o.outputIndex));
+                        const rowStatus=remote||displayCandidateCount>1
+                          ? {key:rowSuccess===displayCandidateCount?"done":rowFailed?"failed":
+                              busy&&physicalBusy?"generating":"waiting",
+                            label:rowSuccess+"/"+displayCandidateCount+" 成功"+
+                              (rowFailed?" · 失败"+rowFailed:""),
+                            className:rowSuccess===displayCandidateCount?"is-done":rowFailed?"is-failed":
+                              busy&&physicalBusy?"is-generating":"is-waiting"}
+                          : this.getRowStatus(idx,busy,currentStep,
+                              this.getItemResult(outputIndices[0],displays,isBatchGallery),activeIndex);
                         const iterLayoutId = iter.layout || (batchLayoutMode === "fixed" ? (sd.layout || "") : "");
                         const catalog = this.context?.catalog;
                         const rMap = (catalog && catalog.resourceMap) || new Map();
@@ -777,15 +880,19 @@
                                 <button type="button" class="batch-iter-label-btn" data-iter-theme-idx="${idx}" title="点击编辑主题" aria-label="编辑第 ${idx + 1} 张主题">
                                   <span class="batch-iter-label" data-iter-theme-idx="${idx}">${esc(iter.shortLabel || iter.title || iter.theme)}</span>
                                 </button>
+                                <button type="button" class="btn btn-sm" data-row-options-idx="${idx}" title="逐张参数编辑">逐张参数</button>
+                                <button type="button" class="btn btn-sm" data-row-copy-idx="${idx}" title="复制本槽位">复制</button>
+                                <button type="button" class="btn btn-sm" data-row-up-idx="${idx}" title="上移">↑</button>
+                                ${plan?.slots?.[idx]?.lockedFields?.length?`<span class="batch-slot-lock">已锁定 ${plan.slots[idx].lockedFields.join("、")}</span>`:""}
                               </div>
                             </td>
                             <td class="batch-col-status">
                               <span class="batch-status-badge is-${esc(rowStatus.key)}">${esc(rowStatus.label)}</span>
                             </td>
                             <td class="batch-col-action">
-                              ${rowStatus.key === "failed" ? `
-                                <button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${idx}">重试</button>
-                              ` : ""}
+                              ${rowStatus.key === "failed" ? perOutput.filter(o=>o.status==="failed").map(o=>`
+                                <button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${o.outputIndex}">重试候选 ${(o.candidateIndex??0)+1}</button>
+                              `).join("") : ""}
                               ${rowStatus.key === "done" && itemResult?.imageUrl ? `
                                 <div class="batch-row-actions">
                                   <a href="${esc(itemResult.imageUrl)}" download="batch-${idx + 1}.webp" class="btn btn-sm batch-btn-dl" title="下载此图">下载</a>
@@ -806,17 +913,18 @@
               <!-- Bottom Bar: Cost + Action (Defect 2 Fixed) -->
               <div class="batch-action-bar">
                 <div class="batch-cost-wrap">
+                  <span class="batch-output-count" data-slot-count="${iterations.length}" data-output-count="${totalCount}">计划 ${iterations.length} 张 × 候选 ${candidateCount} = ${totalCount} 个实际输出</span>
                   ${this.renderCostHtml(totalCount)}
                   ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
                 </div>
 
                 <div class="batch-btn-wrap">
-                  ${busy ? `<span class="batch-busy-hint">任务处理中，暂不能清空或再次生成</span>` : ""}
-                  <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
-                  ${busy ? `
-                    <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止"}</button>
+                  ${busy ? `<span class="batch-busy-hint">${localBusy?"停止只中断本地排队/等待，已提交上游可能继续计费":"云端仍在执行，刷新可恢复状态；停止并不保证取消或退款"}</span>` : ""}
+                  <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy || this.context?.pendingCloud ? "disabled" : ""}>清空表单</button>
+                  ${localBusy ? `
+                    <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止本地等待"}</button>
                   ` : `
-                    <button type="button" class="make-image-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>开始批量生成</button>
+                    <button type="button" class="make-image-run-btn" id="batch-btn-start" ${busy || totalCount === 0 ? "disabled" : ""}>开始批量生成</button>
                   `}
                 </div>
               </div>
@@ -853,13 +961,230 @@
         </div>
       `;
 
-      if (typeof host.querySelectorAll === "function") {
-        this.bindEvents(host, p, iterations);
+      if (typeof this.hostElement.querySelector==="function" &&
+          typeof document!=="undefined" && global.HandrawSeriesBoard108) {
+        this.mountSeriesWorkspace(p,plan,candidateCount,remote,busy);
+        // Retain the exact decoded HTMLImageElement across a live Run poll.
+        this.hostElement.querySelectorAll("img.series108-image[data-series-media]").forEach(img=>{
+          const id=img.getAttribute("data-series-media"),prior=mediaNodes.get(id);
+          if(prior && prior.getAttribute("src")===img.getAttribute("src"))img.replaceWith(prior);
+        });
+      }
+      if (typeof this.hostElement.querySelectorAll === "function") {
+        this.bindEvents(this.hostElement, p, iterations);
+        this.bindSeriesWorkspace(p);
+      }
+      if(editorRestore){
+        const editor=[...this.hostElement.querySelectorAll?.("[data-series-subject]")||[]]
+          .find(el=>el.getAttribute("data-series-subject")===editorRestore.slotId);
+        if(editor){
+          editor.value=editorRestore.value;
+          editor.focus({preventScroll:true});
+          try{
+            if(Number.isInteger(editorRestore.start))editor.setSelectionRange(
+              editorRestore.start,editorRestore.end);
+          }catch(_){}
+          editor.scrollTop=editorRestore.scroll;
+        }
       }
 
       if (global.HANDRAW_SHARED?.triggerImageLoaders) {
         global.HANDRAW_SHARED.triggerImageLoaders(this.hostElement);
       }
+    }
+
+
+    mountSeriesWorkspace(parts,plan,candidateCount,remote,busy){
+      const Board=global.HandrawSeriesBoard108;
+      const container=this.hostElement?.querySelector(".batch-container");
+      const form=container?.querySelector(".make-image-form");
+      const grid=form?.querySelector(".make-image-main-grid");
+      if(!Board||!form||!grid||!plan)return;
+      if(this.seriesControlId!==parts.ctrl.id){
+        this.seriesControlId=parts.ctrl.id;
+        this.seriesView="cards";
+        this.seriesFilter="all";
+      }
+      const layout=document.createElement("div");
+      layout.className="series108-layout";
+      const settings=document.createElement("section");
+      settings.className="series108-settings";
+      settings.setAttribute("aria-label","系列统一设置");
+      const workspace=document.createElement("section");
+      workspace.className="series108-workspace";
+      workspace.setAttribute("aria-label","系列方案板");
+      const board=document.createElement("div");
+      board.className="series108-board";
+      board.innerHTML=Board.render({plan,projection:remote,
+        snapshot:parts.ctrl.data.studio2RunSnapshot||null,
+        candidateCount,intent:parts.loop.data.studio2SeriesIntent||"story-series",
+        globalSpec:this.context?.effectiveCreationSpec||null,
+        catalog:this.context?.catalog,
+        busy,filter:this.seriesFilter,view:this.seriesView});
+      const preview=grid.querySelector(".batch-preview-section");
+      const action=grid.querySelector(".batch-action-bar");
+      form.insertBefore(layout,grid);
+      settings.appendChild(grid);
+      layout.appendChild(settings);
+      layout.appendChild(workspace);
+      workspace.appendChild(board);
+      if(preview)workspace.appendChild(preview);
+      if(action)form.appendChild(action);
+      container.setAttribute("data-series-view",this.seriesView);
+    }
+
+    bindSeriesWorkspace(parts){
+      const board=this.hostElement?.querySelector(".series108-board");
+      if(!board)return;
+      const Series=this.getSeries(),loop=parts.loop;
+      const notify=msg=>global.HANDRAW_SHARED?.toast?.(msg);
+      const commit=()=>this.actions?.markDirtyAndRender?.();
+      const persist=()=>this.actions?.persistDraft?.();
+      const slotIndex=id=>Series?.read(loop).slots.findIndex(s=>s.slotId===id)??-1;
+      const getOutput=(slotId,idx)=>{
+        const snap=parts.ctrl.data.studio2RunSnapshot;
+        const slot=Series?.read(loop).slots.find(s=>s.slotId===slotId);
+        return global.HandrawSeriesBoard108?.outputsFor(slot||{slotId},snap,
+          this.context?.runProjection).find(o=>o.outputIndex===idx);
+      };
+      board.querySelectorAll("[data-series-subject]").forEach(input=>{
+        const slotId=input.getAttribute("data-series-subject");
+        const slot=Series?.read(loop).slots.find(s=>s.slotId===slotId);
+        if(slot?.lockedFields?.includes("subject")){
+          input.readOnly=true;
+          input.title="本槽位主题已锁定，可从逐张参数解锁";
+          return;
+        }
+        input.oninput=()=>{
+          try{
+            Series.patchSlot(loop,slotId,{subject:input.value});
+            if(this.seriesPersistTimer)clearTimeout(this.seriesPersistTimer);
+            this.seriesPersistTimer=setTimeout(()=>{this.seriesPersistTimer=null;persist();},350);
+          }catch(err){notify("主题未保存："+(err.code||err.message));}
+        };
+        input.onblur=()=>{
+          if(this.seriesPersistTimer){clearTimeout(this.seriesPersistTimer);this.seriesPersistTimer=null;}
+          persist();
+        };
+      });
+      board.onclick=e=>{
+        // The ancestor .batch-container also carries data-series-view for CSS.
+        // Only explicit view toggle buttons may consume a board click.
+        const view=e.target.closest("button[data-series-view]");
+        if(view){
+          this.seriesView=view.getAttribute("data-series-view")==="table"?"table":"cards";
+          this.render();
+          return;
+        }
+        const filter=e.target.closest("[data-series-filter]");
+        if(filter){this.seriesFilter=filter.getAttribute("data-series-filter");this.render();return;}
+        const kind=e.target.closest("[data-series-kind]");
+        if(kind){
+          const requested=kind.getAttribute("data-series-kind");
+          if(!global.HandrawSeriesBoard108.KINDS.some(k=>k.id===requested))return;
+          loop.data.studio2SeriesIntent=requested;
+          commit();return;
+        }
+        const button=e.target.closest("[data-series-action]");
+        if(!button)return;
+        const action=button.getAttribute("data-series-action");
+        const slotId=button.getAttribute("data-series-slot")||"";
+        const idx=slotIndex(slotId);
+        const slot=idx>=0?Series.read(loop).slots[idx]:null;
+        const outputIndex=Number(button.getAttribute("data-series-output"));
+        if(action==="add"){
+          try{Series.add(loop,"");commit();}
+          catch(err){notify("无法新增图卡："+(err.code||err.message));}
+          return;
+        }
+        if(action==="paste"){
+          const shared=global.HANDRAW_SHARED;
+          if(!shared?.openModal){notify("批量添加功能暂不可用");return;}
+          shared.openModal({title:"批量追加图卡",sizeClass:"modal-medium",
+            html:'<p style="font-size:12px;color:var(--ink-muted)">每行一张。只追加，不覆盖既有图卡、用户锁定字段或成功媒体。</p>'+
+              '<textarea id="series108-paste-input" class="make-image-textarea" rows="8" placeholder="每行一个新画面主题"></textarea>'+
+              '<div class="series108-modal-actions"><button type="button" class="btn btn-sm" id="series108-paste-cancel">取消</button>'+
+              '<button type="button" class="btn btn-primary btn-sm" id="series108-paste-save">追加图卡</button></div>',
+            onMount:root=>{
+              root.querySelector("#series108-paste-cancel").onclick=()=>shared.closeModal();
+              root.querySelector("#series108-paste-save").onclick=()=>{
+                const themes=root.querySelector("#series108-paste-input").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+                if(!themes.length){notify("请至少输入一行主题");return;}
+                if(Series.read(loop).slots.length+themes.length>200){notify("最多允许 200 个方案槽位");return;}
+                for(const theme of themes)Series.add(loop,theme);
+                shared.closeModal();commit();
+              };
+            }});
+          return;
+        }
+        if(action==="ratios"){
+          const ratios=["3:4","1:1","9:16","16:9","2.35:1","4:3"];
+          let changed=0;
+          try{
+            for(const [i,item] of Series.read(loop).slots.entries()){
+              if(item.lockedFields?.includes("ratio")||item.userOverrides?.includes("ratio")||
+                 item.overrides?.ratio)continue;
+              Series.patchSlot(loop,item.slotId,{overrides:{ratio:ratios[i%ratios.length]}});
+              changed++;
+            }
+            if(changed)commit();
+            notify("已为 "+changed+" 张未覆盖比例的图卡填入平台比例，原人工比例保持不变");
+          }catch(err){notify("平台比例无法应用："+(err.code||err.message));}
+          return;
+        }
+        if(!slot)return;
+        if(action==="edit"){this.openSlotOptions(idx);return;}
+        if(action==="refs"){
+          this.actions?.openReferencePicker?.({
+            items:slot.referenceMedia||[],currentRefs:slot.referenceMedia||[],
+            maxCount:6,title:"第 "+(idx+1)+" 张参考图",
+            onConfirm:refs=>{
+              if(this.patchSlotByIndex(idx,{referenceMedia:refs}))commit();
+            }});
+          return;
+        }
+        if(action==="copy"||action==="up"){
+          try{
+            if(action==="copy")Series.duplicate(loop,slotId);
+            else if(idx>0)Series.move(loop,slotId,idx-1);
+            commit();
+          }catch(err){notify("方案操作失败："+(err.code||err.message));}
+          return;
+        }
+        if(action==="delete"){
+          const shared=global.HANDRAW_SHARED;
+          if(!shared?.openModal){
+            notify("删除需要确认，当前确认弹层不可用");return;
+          }
+          shared.openModal({title:"移除方案图卡",sizeClass:"modal-medium",
+            html:'<p>只移除本项目的下一版方案槽位。任何已提交 Run、历史结果与公开作品仍保留。</p>'+
+              '<div class="series108-modal-actions"><button type="button" id="series108-cancel-remove" class="btn btn-sm">取消</button>'+
+              '<button type="button" id="series108-confirm-remove" class="btn btn-sm btn-primary">确认移除</button></div>',
+            onMount:root=>{
+              root.querySelector("#series108-cancel-remove").onclick=()=>shared.closeModal();
+              root.querySelector("#series108-confirm-remove").onclick=()=>{
+                Series.remove(loop,slotId);shared.closeModal();commit();
+              };
+            }});
+          return;
+        }
+        if(!Number.isInteger(outputIndex)||outputIndex<0)return;
+        const output=getOutput(slotId,outputIndex);
+        if(!output)return;
+        if(action==="view"&&output.imageUrl){
+          this.actions?.openImageLightbox?.(output.imageUrl,"候选 "+(Number(output.candidateIndex||0)+1));
+        }else if(action==="download"&&output.imageUrl){
+          const link=document.createElement("a");
+          link.href=output.imageUrl;link.rel="noopener";
+          link.download="handraw-series-"+String(idx+1).padStart(2,"0")+".webp";
+          link.click();
+        }else if(action==="retry"){
+          const remote=this.context?.runProjection;
+          if(remote?.isTerminal&&output.status==="failed"){
+            this.actions?.runSingleRow?.(outputIndex);
+          }else notify("只有服务端确认失败的候选可以原位重试");
+        }
+      };
     }
 
     getItemResult(rowIndex, displays, isBatchGallery) {
@@ -1147,6 +1472,16 @@
         }
       }
 
+      // Multiple candidates share one PLAN row but have independent
+      // OUTPUT indices. Recompose the 6 plan rows from their ordered outputs
+      // rather than treating output #7 as nonexistent plan row #7.
+      if(this.getSeries() && this.getSeries().candidateCount(this.getParts()?.loop)>1){
+        if(itemResult?.imageUrl && updatedIndex!=null)
+          this.appendResultCard(itemResult,updatedIndex);
+        this.render();
+        return;
+      }
+
       // 3. Update specific completed or failed row
       if (updatedIndex !== null && updatedIndex !== undefined) {
         const row = host.querySelector(`tr[data-batch-row="${updatedIndex}"]`);
@@ -1354,6 +1689,10 @@
 
     bindEvents(root, parts, iterations) {
       const self = this;
+      // `parts` is the single source of nodes; Studio2 AI planning/undo below
+      // reads the same object, so keep the local alias instead of an
+      // undefined `p` (regression #134).
+      const p = parts;
       const { loop, skill, ctrl, asset, text } = parts;
 
       const markDirty = () => {
@@ -1370,9 +1709,15 @@
         btn.onclick = () => {
           const mode = btn.getAttribute("data-set-mode");
           if (!mode) return;
-          ctrl.data.mode = mode;
-          const opt = OUTPUT_MODE_OPTIONS.find((o) => o.id === mode);
-          if (opt?.defaultRatio) ctrl.data.ratio = opt.defaultRatio;
+          if (global.HandrawStudioCore) {
+            global.HandrawStudioCore.setMode(ctrl.data, mode);
+          } else {
+            const oldDefault = OUTPUT_MODE_OPTIONS.find(o => o.id === ctrl.data.mode)?.defaultRatio || "3:4";
+            const explicit = ctrl.data.ratioSource === "user" || (ctrl.data.ratio && ctrl.data.ratio !== oldDefault);
+            ctrl.data.mode = mode;
+            if (!explicit) ctrl.data.ratio = OUTPUT_MODE_OPTIONS.find(o => o.id === mode)?.defaultRatio || "3:4";
+            ctrl.data.ratioSource = explicit ? "user" : "default";
+          }
           markDirty();
         };
       });
@@ -1383,7 +1728,7 @@
         btnSingle.onclick = () => {
           if (!skill.data.fusion) return;
           skill.data.fusion = false;
-          skill.data.style2 = "";
+          // Retain the unused second style as a draft; it is not sent when fusion is off.
           markDirty();
         };
       }
@@ -1460,20 +1805,13 @@
       if (btnStratFixed) {
         btnStratFixed.onclick = () => {
           if (loop.data.batchLayoutMode === "fixed") return;
-          // Switching from AI to Fixed: prompt confirmation if rows have varied layouts
-          const rows = Array.isArray(loop.data.batchRows) ? loop.data.batchRows : [];
-          if (rows.length > 0) {
-            const hasCustomLayouts = rows.some((r) => r.layout && r.layout !== (skill.data.layout || ""));
-            if (hasCustomLayouts) {
-              const ok = typeof window.confirm === "function"
-                ? window.confirm("切换到固定图型将丢失每张独立的图型设置，所有图片将使用统一图型。是否继续？")
-                : true;
-              if (!ok) return;
-            }
-            loop.data.promptListText = rows.map((r) => r.theme).filter(Boolean).join("\n");
-            loop.data.batchRows = [];
+          const api=self.getSeries();
+          if(api)api.switchMode(loop,"fixed");
+          else {
+            const rows=Array.isArray(loop.data.batchRows)?loop.data.batchRows:[];
+            if(rows.length)loop.data.promptListText=rows.map(r=>r.theme).filter(Boolean).join("\n");
+            loop.data.batchLayoutMode="fixed";
           }
-          loop.data.batchLayoutMode = "fixed";
           markDirty();
         };
         btnStratFixed.onkeydown = (e) => {
@@ -1489,15 +1827,17 @@
       if (btnStratAi) {
         btnStratAi.onclick = () => {
           if (loop.data.batchLayoutMode === "ai") return;
-          // Switching from Fixed to AI: split promptListText lines into rows
-          loop.data.batchLayoutMode = "ai";
-          const rawText = typeof loop.data.promptListText === "string" ? loop.data.promptListText : "";
-          const lines = rawText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-          if (lines.length > 0) {
-            loop.data.batchRows = lines.map((line) => ({ theme: line, layout: skill.data.layout || "" }));
-          } else {
-            const cnt = Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6));
-            loop.data.batchRows = Array.from({ length: cnt }, () => ({ theme: "", layout: skill.data.layout || "" }));
+          const api=self.getSeries();
+          if(api){
+            api.switchMode(loop,"ai");
+            if(api.read(loop).slots.length===0){
+              const count=Math.max(1,Math.min(20,Number(loop.data.batchCount)||6));
+              for(let i=0;i<count;i++)api.add(loop);
+            }
+          }else{
+            loop.data.batchLayoutMode="ai";
+            const lines=String(loop.data.promptListText||"").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+            loop.data.batchRows=lines.map((theme,i)=>({theme,layout:"",slotId:loop.data.studio2SlotIds?.[i]||""}));
           }
           markDirty();
         };
@@ -1527,8 +1867,25 @@
       const undoPlan = root.querySelector("#batch-undo-plan");
       if (undoPlan) undoPlan.onclick = () => {
         if (!self.lastPlanUndo) return;
+        if(self.lastPlanUndo.studio2AIUndo){
+          try{
+            global.HandrawStudioAIPlan.undo(self.lastPlanUndo.studio2AIUndo,{
+              parts:p,loop
+            });
+            self.lastPlanUndo=null;
+            self.planDetails=null;
+            self.planNotice="已撤销 AI 规划，不影响历史生成任务";
+            markDirty();self.render();
+          }catch(err){global.HANDRAW_SHARED?.toast?.(
+            global.HandrawStudioAIPlan.message(err.code));}
+          return;
+        }
         loop.data.promptListText = self.lastPlanUndo.promptListText;
         loop.data.batchRows = self.lastPlanUndo.batchRows;
+        loop.data.studio2SlotIds = self.lastPlanUndo.studio2SlotIds || [];
+        loop.data.planRevision = self.lastPlanUndo.planRevision || 0;
+        if(self.getSeries() && self.lastPlanUndo.studio2Plan)
+          self.getSeries().sync(loop,self.lastPlanUndo.studio2Plan);
         self.lastPlanUndo = null;
         self.planNotice = "已恢复原规划";
         markDirty();
@@ -1547,102 +1904,108 @@
       const btnPlan = root.querySelector("#batch-btn-plan");
       if (btnPlan) {
         btnPlan.onclick = async () => {
-          const currentMode = loop.data.batchLayoutMode || "fixed";
-          const hasExisting = currentMode === "fixed"
-            ? Boolean(loop.data.promptListText && loop.data.promptListText.trim())
-            : (Array.isArray(loop.data.batchRows) && loop.data.batchRows.some((r) => r.theme && r.theme.trim()));
-
-          // Direct action: no confirmation modal. Preserve the existing
-          // planning data so a user can undo an accidental re-plan.
-          const priorPlan = hasExisting ? {
-            promptListText: loop.data.promptListText || "",
-            batchRows: JSON.parse(JSON.stringify(loop.data.batchRows || []))
-          } : null;
-
-          const seed = String(loop.data.batchSeed || text?.data?.text || "").trim();
-          if (!seed) {
-            const S = global.HANDRAW_SHARED;
-            if (S?.toast) S.toast("请先填写母题（例如：都市慢生活与手绘手账）");
-            const seedEl = root.querySelector("#batch-seed-input");
-            if (seedEl) seedEl.focus();
-            return;
+          const AI=global.HandrawStudioAIPlan,Quick=global.HandrawQuickSpec;
+          const Series=self.getSeries();
+          if(!AI||!Quick||!Series){
+            global.HANDRAW_SHARED?.toast?.("AI 规划模块尚未就绪");return;
           }
-
-          const reqBody = {
-            seed,
-            count: Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6)),
-            layoutMode: currentMode,
-            // Never leak the previously selected fixed layout into AI recommendations.
-            fixedLayout: currentMode === "fixed" ? (skill.data.layout || "") : "",
-            layoutRequirement: loop.data.batchLayoutReq || "",
-            styleId: skill.data.style1 || ""
+          const seed=String(loop.data.batchSeed||text?.data?.text||"").trim();
+          if(!seed){global.HANDRAW_SHARED?.toast?.("请先填写创作母题");return;}
+          if(btnPlan.disabled)return;
+          const baseSpec=Quick.read(p).spec,plan=Series.read(loop);
+          const baseRevision=baseSpec.revision,planRevision=plan.revision;
+          const currentMode=loop.data.batchLayoutMode||"fixed";
+          const hadFixedLayout=Boolean(p.skill.data.layout);
+          const signature=()=>JSON.stringify({parts:{
+            skill:p.skill.data,text:p.text?.data,ctrl:p.ctrl.data},
+            loop:loop.data});
+          const starting=signature(),S=global.HANDRAW_SHARED;
+          const stage=text=>{
+            self.planNotice=text;
+            const status=root.querySelector(".batch-plan-notice");
+            if(status)status.textContent=text;
           };
-
-          btnPlan.disabled = true;
-          const labelSpan = btnPlan.querySelector("span");
-          if (labelSpan) labelSpan.textContent = "AI 规划中…";
-          else btnPlan.textContent = "AI 规划中…";
-
+          btnPlan.disabled=true;
+          stage("正在检索全部已授权画风和图型，并请求 AI…");
+          const span=btnPlan.querySelector("span");
+          if(span)span.textContent="AI 规划中…";
+          else btnPlan.textContent="AI 规划中…";
           try {
-            const resp = await (global.HandrawTaskJourney?.withActivity
-              ? global.HandrawTaskJourney.withActivity("AI 正在规划这套图", () => fetch("/api/studio/batch-plan", {
-                  method: "POST",
-                  credentials: "include",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(reqBody)
-                }))
-              : fetch("/api/studio/batch-plan", {
-                  method: "POST",
-                  credentials: "include",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(reqBody)
-                }));
-            const data = await resp.json();
-            if (!resp.ok || !data.ok) {
-              const requestId = String(data.requestId || resp.headers?.get("X-Request-ID") || "");
-              const incident = /^[a-f0-9]{32}$/i.test(requestId) ? `（问题编号：${requestId}）` : "";
-              throw new Error((data.error || `HTTP ${resp.status}`) + incident);
+            const payload={
+              kind:"series",subject:seed,baseRevision,
+              count:Math.max(1,Math.min(20,Number(loop.data.batchCount)||6)),
+              planRevision,current:{styleId:p.skill.data.style1||"",
+                layoutId:currentMode==="fixed"?p.skill.data.layout||"":"",
+                ratio:p.ctrl.data.ratioSource==="user"?p.ctrl.data.ratio:""},
+              lockedFields:baseSpec.lockedFields||[],
+              currentSlots:plan.slots.map(x=>({slotId:x.slotId}))
+            };
+            const resp=await (global.HandrawTaskJourney?.withActivity
+              ? global.HandrawTaskJourney.withActivity("AI 正在规划这套图",
+                  ()=>fetch("/api/studio/ai-plan",{
+                    method:"POST",credentials:"include",
+                    headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify(payload)}))
+              : fetch("/api/studio/ai-plan",{
+                  method:"POST",credentials:"include",
+                  headers:{"Content-Type":"application/json"},
+                  body:JSON.stringify(payload)}));
+            const data=await resp.json();
+            if(!resp.ok||!data?.ok)throw Object.assign(new Error(data?.error||"规划失败"),
+              {code:data?.code||"ai_unavailable"});
+            if(signature()!==starting)throw Object.assign(
+              new Error("ai_revision_conflict"),{code:"ai_revision_conflict"});
+            stage("AI 已返回，正在校验结构化图卡、资源权限和人工锁定…");
+            const report=AI.review(data,{kind:"series",baseRevision,planRevision,
+              currentSpec:baseSpec,currentPlan:plan,catalog:self.context?.catalog,
+              isUnlocked:self.actions?.isUnlocked});
+            const decision=await AI.confirmDifferences(report,{title:"审阅批量规划差异"});
+            if(!decision.approved){stage("已保留当前方案");return;}
+            if(signature()!==starting)throw Object.assign(
+              new Error("ai_revision_conflict"),{code:"ai_revision_conflict"});
+            const result=AI.apply(report,{parts:p,loop,
+              catalog:self.context?.catalog,isUnlocked:self.actions?.isUnlocked,
+              approvedKeys:decision.keys});
+            if(!result.undo){stage("没有需要应用的合法差异");return;}
+            // When no fixed layout was manually selected, a theme-only plan
+            // must display each recommended layout instead of fake fixed mode.
+            if(currentMode==="fixed"&&!hadFixedLayout){
+              loop.data.batchLayoutMode="ai";
+              result.undo.after=JSON.stringify({skill:p.skill.data,text:p.text?.data,
+                ctrl:p.ctrl.data,loop:loop.data});
             }
-
-            const items = Array.isArray(data.items) ? data.items : [];
-            if (priorPlan) {
-              self.lastPlanUndo = priorPlan;
-              // Replan undo is an inline affordance, not a disruptive dialog.
-              self.planNotice = "规划已更新，可点击撤销恢复原列表";
-            }
-            if (currentMode === "fixed") {
-              loop.data.promptListText = items.map((it) => it.subject).join("\n");
-              loop.data.batchRows = [];
-            } else {
-              loop.data.batchRows = items.map((it) => ({ theme: it.subject, layout: it.layout || "" }));
-              loop.data.promptListText = items.map((it) => it.subject).join("\n");
-            }
-
-            if (data.source === "template") {
-              self.planNotice = priorPlan ? "模板规划已更新，可撤销" : "未使用 AI 规划，已按模板生成";
-            } else if (!priorPlan) {
-              self.planNotice = "";
-            }
-
-            if (data.defaultLayoutUsed && items.length > 0 && items[0].layout) {
-              const defLayout = items[0].layout;
-              if (skill?.data) {
-                skill.data.layout = defLayout;
-              }
-              const defaultMsg = `未选图型，已使用默认图型 ${defLayout}`;
-              self.planNotice = self.planNotice ? `${self.planNotice}（${defaultMsg}）` : defaultMsg;
-            }
-
+            self.lastPlanUndo={studio2AIUndo:result.undo};
+            self.planDetails=data.creationSpecPatch.reasons;
+            stage("AI 已规划 "+data.planPatch.slots.length+
+              " 张 · 画风："+data.creationSpecPatch.reasons.style+
+              " · 图型："+data.creationSpecPatch.reasons.layout+
+              " · 可撤销，无扣费");
             markDirty();
-          } catch (err) {
-            const S = global.HANDRAW_SHARED;
-            if (S?.toast) S.toast(`规划失败：${err.message || err}`);
-          } finally {
-            btnPlan.disabled = false;
-            const labelSpan = btnPlan.querySelector("span");
-            if (labelSpan) labelSpan.textContent = "AI 规划这套图";
-            else btnPlan.textContent = "AI 规划这套图";
+          }catch(err){
+            // Keep the failure visible: stage() writes the persistent
+            // .batch-plan-notice line, and it must survive the re-render that
+            // finally{} triggers. A toast alone disappears after 2.8s (#135).
+            const code=err&&err.code;
+            const serverDetail=String(err?.message||"").trim();
+            const schemaProblem=["ai_invalid_json","ai_schema_invalid","ai_cannot_recommend"].includes(code);
+            const explain=schemaProblem && serverDetail && serverDetail!==code
+              ? serverDetail : AI.message(code||serverDetail);
+            // The server has already tried one bounded repair for an invalid
+            // series plan. Show the precise schema reason rather than only
+            // the opaque "结构不符" code. Never alter the user's draft here.
+            stage("AI 规划失败："+explain+
+              (schemaProblem?"；模型修复后仍不符合要求，可尝试减少张数或细化主题":"")+
+              (code?" ["+code+"]":""));
+            self.planFailed=true;
+            S?.toast?.(self.planNotice);
+            if(global.console&&console.warn&&code)
+              console.warn("[ai-plan] failed code=",code,err&&err.message);
+          }finally{
+            btnPlan.disabled=false;
+            if(span)span.textContent="AI 规划这套图";
+            else btnPlan.textContent="AI 规划这套图";
           }
+
         };
       }
 
@@ -1650,12 +2013,19 @@
       const promptsInput = root.querySelector("#batch-prompts-input");
       if (promptsInput) {
         promptsInput.oninput = () => {
-          loop.data.promptListText = promptsInput.value;
-          loop.data.batchRows = [];
+          if(self.getSeries()) {
+            try {self.getSeries().updateText(loop,promptsInput.value);}
+            catch(err) {global.HANDRAW_SHARED?.toast?.("主题编辑未保存："+(err.code||err.message));return;}
+          } else loop.data.promptListText=promptsInput.value;
           self.updatePreviewAndCost(root);
         };
         promptsInput.onblur = () => {
-          loop.data.promptListText = promptsInput.value;
+          if(self.getSeries()) {
+            if(loop.data.promptListText!==promptsInput.value){
+              try{self.getSeries().updateText(loop,promptsInput.value);}
+              catch(err){global.HANDRAW_SHARED?.toast?.("主题编辑失败："+(err.code||err.message));return;}
+            }
+          }else loop.data.promptListText=promptsInput.value;
           markDirty();
         };
       }
@@ -1692,8 +2062,13 @@
           const currentRow = loop.data.batchRows[idx];
           const curLayout = currentRow.layout || "";
 
-          const onPick = (pickedId) => {
-            currentRow.layout = pickedId || "";
+          const onPick = (pickedId, ref) => {
+            if(self.getSeries()){
+              if(!self.patchSlotByIndex(idx,{overrides:{layout:ref||pickedId||null}}))return;
+            }else{
+              currentRow.layout=pickedId||"";
+              currentRow.layoutRef=ref||null;
+            }
             markDirty();
           };
 
@@ -1726,7 +2101,9 @@
               maxCount: 3,
               title: `第 ${idx + 1} 张参考图（最多 3 张）`,
               onConfirm: (selectedItems) => {
-                currentRow.assetItems = selectedItems;
+                if(self.getSeries()){
+                  if(!self.patchSlotByIndex(idx,{referenceMedia:selectedItems}))return;
+                }else currentRow.assetItems=selectedItems;
                 markDirty();
               }
             });
@@ -1741,7 +2118,9 @@
         chk.onchange = () => {
           const idx = Number(chk.getAttribute("data-row-skip-global"));
           if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
-          loop.data.batchRows[idx].skipGlobalRefs = Boolean(chk.checked);
+          if(self.getSeries()){
+            if(!self.patchSlotByIndex(idx,{skipGlobalRefs:Boolean(chk.checked)}))return;
+          }else loop.data.batchRows[idx].skipGlobalRefs=Boolean(chk.checked);
           markDirty();
         };
       });
@@ -1750,8 +2129,14 @@
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-del-row-idx"));
           if (!Array.isArray(loop.data.batchRows)) return;
-          loop.data.batchRows.splice(idx, 1);
-          loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
+          if(self.getSeries()){
+            const slot=self.readPlan()?.slots?.[idx];
+            if(slot)self.getSeries().remove(loop,slot.slotId);
+          }else{
+            loop.data.batchRows.splice(idx,1);
+            if(Array.isArray(loop.data.studio2SlotIds))loop.data.studio2SlotIds.splice(idx,1);
+            loop.data.promptListText=loop.data.batchRows.map(r=>r.theme).filter(Boolean).join("\n");
+          }
           markDirty();
         };
       });
@@ -1759,23 +2144,44 @@
       const btnAddRow = root.querySelector("#batch-btn-add-row");
       if (btnAddRow) {
         btnAddRow.onclick = () => {
-          if (!Array.isArray(loop.data.batchRows)) loop.data.batchRows = [];
-          loop.data.batchRows.push({
-            theme: "",
-            layout: skill.data.layout || "",
-            assetItems: [],
-            skipGlobalRefs: false
-          });
+          if(self.getSeries())self.getSeries().add(loop);
+          else{
+            if(!Array.isArray(loop.data.batchRows))loop.data.batchRows=[];
+            const slotId=(self.getPromptEngine()?.uid||(()=> "slot-"+Date.now()))("slot");
+            loop.data.batchRows.push({slotId,theme:"",layout:"",assetItems:[],skipGlobalRefs:false});
+            if(!Array.isArray(loop.data.studio2SlotIds))loop.data.studio2SlotIds=[];
+            loop.data.studio2SlotIds.push(slotId);
+          }
           markDirty();
         };
       }
+
+      // UI index is only a locator: every PlanSlot operation uses slotId.
+      root.querySelectorAll("[data-row-options-idx]").forEach(btn=>{
+        btn.onclick=()=>self.openSlotOptions(Number(btn.getAttribute("data-row-options-idx")));
+      });
+      root.querySelectorAll("[data-row-copy-idx]").forEach(btn=>{
+        btn.onclick=()=>{
+          const idx=Number(btn.getAttribute("data-row-copy-idx")),api=self.getSeries();
+          const slot=self.readPlan()?.slots?.[idx];
+          if(api&&slot){api.duplicate(loop,slot.slotId);markDirty();}
+        };
+      });
+      root.querySelectorAll("[data-row-up-idx]").forEach(btn=>{
+        btn.onclick=()=>{
+          const idx=Number(btn.getAttribute("data-row-up-idx")),api=self.getSeries();
+          const slot=self.readPlan()?.slots?.[idx];
+          if(idx>0&&api&&slot){api.move(loop,slot.slotId,idx-1);markDirty();}
+        };
+      });
 
       // 5. Ratio Buttons & Inline Input (Defect 3 Fixed: /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/)
       root.querySelectorAll("[data-set-ratio]").forEach((btn) => {
         btn.onclick = () => {
           const ratio = btn.getAttribute("data-set-ratio");
           if (!ratio) return;
-          ctrl.data.ratio = ratio;
+          ctrl.data.ratio=ratio;
+          ctrl.data.ratioSource="user";
           markDirty();
         };
       });
@@ -1787,7 +2193,8 @@
           if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
             const parts = val.split(":").map(Number);
             if (parts[0] > 0 && parts[1] > 0) {
-              ctrl.data.ratio = val;
+              ctrl.data.ratio=val;
+              ctrl.data.ratioSource="user";
               markDirty();
               return;
             }
@@ -1928,6 +2335,15 @@
         };
       }
 
+      const candidatesControl=root.querySelector("#batch-candidates");
+      if(candidatesControl)candidatesControl.onchange=()=>{
+        if(!self.getSeries())return;
+        try{
+          self.getSeries().setCandidates(loop,Number(candidatesControl.value));
+          markDirty();
+        }catch(err){global.HANDRAW_SHARED?.toast?.(err.message);}
+      };
+
       // Default three in-flight requests, with a user-selectable 1-4 bound.
       const concurrencyControl = root.querySelector("#batch-concurrency");
       if (concurrencyControl) concurrencyControl.onchange = () => {
@@ -1989,7 +2405,7 @@
       // 7.8. Reset Form Button
       const btnReset = root.querySelector("#batch-btn-reset");
       if (btnReset) {
-        btnReset.onclick = () => {
+        btnReset.onclick = async () => {
           const currentBusy = typeof self.actions?.isBusy === "function"
             ? self.actions.isBusy()
             : Boolean(self.context?.busy || self.progressState?.busy);
@@ -1998,9 +2414,9 @@
             if (S?.toast) S.toast("任务处理中，暂不能清空或再次生成");
             return;
           }
-          const ok = typeof window.confirm === "function"
-            ? window.confirm("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？")
-            : true;
+          const ok = await global.HANDRAW_SHARED?.confirmAction?.(
+            "清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？",
+            { title: "清空批量创作设置", danger: true, confirmText: "清空" });
           if (!ok) return;
 
           if (typeof self.actions?.isBusy === "function" && self.actions.isBusy()) {
@@ -2011,10 +2427,13 @@
 
           ctrl.data.mode = "graphic-text";
           ctrl.data.ratio = "3:4";
+          ctrl.data.ratioSource = "default";
           ctrl.data.count = 1;
           ctrl.data.status = "idle";
           delete ctrl.data.error;
           delete ctrl.data.activeBatchId;
+          delete ctrl.data.studio2RunSnapshot;
+          delete ctrl.data.runId;
           ctrl.data.elapsedSec = 0;
 
           skill.data.fusion = false;
@@ -2043,6 +2462,9 @@
           loop.data.batchLayoutMode = "fixed";
           loop.data.batchLayoutReq = "";
           loop.data.batchRows = [];
+          loop.data.studio2SlotIds = [];
+          delete loop.data.studio2Plan;
+          loop.data.studio2CandidateCount=1;
           loop.data.promptListText = "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集";
           loop.data.status = "idle";
           loop.data.currentStep = 0;
@@ -2175,7 +2597,8 @@
 
     updatePreviewAndCost(root) {
       const iterations = this.resolveIterations();
-      const totalCount = Math.min(200, iterations.length);
+      const candidateCount=this.getSeries()?this.getSeries().candidateCount(this.getParts()?.loop):1;
+      const totalCount=Math.min(200,iterations.length*candidateCount);
 
       const costWrap = root.querySelector(".batch-cost-wrap");
       if (costWrap) {
@@ -2189,7 +2612,7 @@
 
       const title = root.querySelector(".batch-preview-title");
       if (title) {
-        title.textContent = `批量清单与状态 (${totalCount} 张)`;
+        title.textContent = `批量清单与状态 (计划 ${iterations.length} 张 · 实际输出 ${totalCount} 张)`;
       }
     }
 
@@ -2418,6 +2841,82 @@
       }
     }
 
+    openSlotOptions(idx) {
+      const api=this.getSeries(),p=this.getParts(),S=global.HANDRAW_SHARED;
+      if(!api||!p?.loop||!S?.openModal)return;
+      const slot=api.read(p.loop).slots[idx];
+      if(!slot)return;
+      const current=slot.overrides||{},catalog=this.context?.catalog||{};
+      const options=(kind,selected)=>{
+        const pool=kind==="style"?catalog.styles:catalog.layouts;
+        const list=Array.isArray(pool)?pool:[];
+        const missing=selected&&!list.some(it=>it.id===selected);
+        return '<option value="">跟随全局</option>'+
+          (missing?'<option value="'+esc(selected)+'" selected>原资源失效：'+esc(selected)+'</option>':"")+
+          list.filter(it=>it?.id).map(it=>
+            '<option value="'+esc(it.id)+'" '+(selected===it.id?'selected':'')+'>'+
+            esc(it.id)+' · '+esc(it.name_zh||it.name||it.id)+'</option>').join("");
+      };
+      const isLocked=field=>slot.lockedFields?.includes(field);
+      const html=[
+        '<div style="display:grid;gap:12px;padding:4px 0;">',
+        '<p style="font-size:12px;color:var(--ink-muted)">仅修改当前 PlanSlot（'+esc(slot.slotId)+'）；其他图片及已提交任务不受影响。</p>',
+        '<label>画风 <select class="hw-input" id="slot-style">'+options("style",current.style?.id||"")+'</select></label>',
+        '<label>图型 <select class="hw-input" id="slot-layout">'+options("layout",current.layout?.id||"")+'</select></label>',
+        '<label>画幅 <input class="hw-input" id="slot-ratio" value="'+esc(current.ratio||"")+'" placeholder="留空继承全局，如 2.35:1" /></label>',
+        '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;">',
+        ...["subject","style","layout","ratio"].map(k=>'<label><input type="checkbox" id="slot-lock-'+k+'" '+(isLocked(k)?"checked":"")+' /> 锁定'+({subject:"主题",style:"画风",layout:"图型",ratio:"画幅"}[k])+'</label>'),
+        '</div>',
+        '<button type="button" class="btn btn-sm" id="slot-pick-refs">本张参考素材（已选 '+(slot.referenceMedia?.length||0)+' 张）</button>',
+        '<div style="display:flex;justify-content:flex-end;gap:8px">',
+        '<button type="button" class="btn btn-sm" id="slot-cancel">取消</button>',
+        '<button type="button" class="btn btn-primary" id="slot-save">保存独立参数</button>',
+        '</div></div>'
+      ].join("");
+      S.openModal({
+        title:"第 "+(idx+1)+" 张 · 独立参数 / 锁定",
+        sizeClass:"modal-medium",html,
+        onMount:root=>{
+          root.querySelector("#slot-cancel").onclick=()=>S.closeModal();
+          root.querySelector("#slot-pick-refs").onclick=()=>{
+            if(!this.actions?.openReferencePicker)return;
+            this.actions.openReferencePicker({
+              items:slot.referenceMedia||[],maxCount:6,
+              title:"第 "+(idx+1)+" 张参考素材",
+              onConfirm:refs=>{
+                if(this.patchSlotByIndex(idx,{referenceMedia:refs}))
+                  this.actions?.markDirtyAndRender?.();
+              }
+            });
+          };
+          root.querySelector("#slot-save").onclick=()=>{
+            const read=id=>root.querySelector(id);
+            const style=read("#slot-style").value;
+            const layout=read("#slot-layout").value;
+            const ratio=read("#slot-ratio").value.trim();
+            if(ratio&&!global.HandrawStudioCore?.validateRatio(ratio).ok){
+              S.toast?.("画幅比例无效，请输入如 2.35:1");return;
+            }
+            const locks=["subject","style","layout","ratio"].filter(k=>read("#slot-lock-"+k).checked);
+            for(const k of slot.lockedFields||[]){
+              if(!["subject","style","layout","ratio"].includes(k))locks.push(k);
+            }
+            const overrides={};
+            if(style!==(current.style?.id||""))overrides.style=style||null;
+            if(layout!==(current.layout?.id||""))overrides.layout=layout||null;
+            if(ratio!==(current.ratio||""))overrides.ratio=ratio||null;
+            try{
+              api.patchSlot(p.loop,slot.slotId,
+                {lockedFields:locks,...(Object.keys(overrides).length?{overrides}:{})},
+                {catalog,isUnlocked:this.actions?.isUnlocked,unlock:true});
+              S.closeModal();
+              this.actions?.markDirtyAndRender?.();
+            }catch(err){S.toast?.("当前槽位无法保存："+(err.code||err.message));}
+          };
+        }
+      });
+    }
+
     openThemeEditModal(idx, source = "row") {
       const self = this;
       const S = global.HANDRAW_SHARED;
@@ -2531,7 +3030,9 @@
             const newTheme = ta.value;
             if (newTheme.length > MAX_CHARS) return;
 
-            if (isAiMode && Array.isArray(loop.data.batchRows) && loop.data.batchRows[idx]) {
+            if (self.getSeries()) {
+              if(!self.patchSlotByIndex(idx,{subject:newTheme}))return;
+            } else if (isAiMode && Array.isArray(loop.data.batchRows) && loop.data.batchRows[idx]) {
               loop.data.batchRows[idx].theme = newTheme;
               loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
             } else {

@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "deployedSha": "REPLACE_EXACT_DEPLOYED_WEB_40_SHA",
+  "skillSha": "REPLACE_EXACT_DEPLOYED_SKILL_40_SHA",
+  "receipts": [
+    {
+      "kind": "provider",
+      "caseId": "real_provider_charge_refund_ledger",
+      "evidenceDigestSha256": "REPLACE_WITH_SHA256_OF_CANONICAL_DETAILS",
+      "details": {
+        "providerStatementSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "webRunItemAttemptSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "walletLedgerSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "freeQuotaLedgerSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "reconciliationReportSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "currency": "REPLACE",
+        "paidAttemptCount": 0,
+        "refundCount": 0,
+        "unmatchedProviderEntryCount": 0,
+        "unmatchedWalletEntryCount": 0,
+        "netChargeDeltaMinor": 0,
+        "netRefundDeltaMinor": 0,
+        "duplicateCallbackCasesChecked": 0,
+        "throttled429CasesChecked": 0,
+        "upstream502CasesChecked": 0,
+        "unknownRecoveryCasesChecked": 0,
+        "lateSuccessCasesChecked": 0,
+        "freeQuotaCasesChecked": 0
+      }
+    },
+    {
+      "kind": "postgres",
+      "caseId": "pg17_offline_backup_restore_rollback",
+      "evidenceDigestSha256": "REPLACE_WITH_SHA256_OF_CANONICAL_DETAILS",
+      "details": {
+        "pgMajorVersion": 17,
+        "basebackupManifestSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "walArchiveManifestSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "sourceClusterIdSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "restoreClusterIdSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "schemaFingerprintBeforeSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "schemaFingerprintAfterSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "walletLedgerBeforeSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "walletLedgerAfterSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "mediaManifestBeforeSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "mediaManifestAfterSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "independentHostClaim": false,
+        "restoreCompleted": false,
+        "pitrTargetReached": false,
+        "rollbackDrilled": false,
+        "rpoMeasuredSeconds": 0,
+        "rpoBudgetSeconds": 0,
+        "rtoMeasuredSeconds": 0,
+        "rtoBudgetSeconds": 0
+      }
+    },
+    {
+      "kind": "storage",
+      "caseId": "real_object_bucket_and_expired_url",
+      "evidenceDigestSha256": "REPLACE_WITH_SHA256_OF_CANONICAL_DETAILS",
+      "details": {
+        "providerKind": "REPLACE_REAL_R2_S3_OR_MINIO",
+        "bucketPolicySha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "cdnPolicySha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "uploadDownloadManifestSha256": "REPLACE_WITH_REAL_PRIVATE_PROOF_SHA256",
+        "tenantOneRef": "REPLACE_ACCOUNT_1_REF",
+        "tenantTwoRef": "REPLACE_ACCOUNT_2_REF",
+        "anonymousDenied": false,
+        "crossTenantReadDeniedBothDirections": false,
+        "crossTenantWriteDeniedBothDirections": false,
+        "expiredSignedUrlDenied": false,
+        "revokedSignedUrlDenied": false,
+        "cdnOldUrlInvalidated": false,
+        "restoredMediaBytesMatched": false,
+        "publicGrantOnlyForPublishedAssets": false
+      }
+    }
+  ]
+}

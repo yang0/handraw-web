@@ -23,3 +23,6 @@ redis>=5.2,<7
 
 # Optional, required when HANDRAW_OBJECT_BUCKET enables S3/R2/MinIO.
 boto3>=1.35,<2
+
+# Offline #132 website editorial dual-signature verification (Ed25519).
+cryptography>=42,<50

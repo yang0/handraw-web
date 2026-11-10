@@ -230,7 +230,7 @@ function createTestGraph(options = {}) {
   controller.render(fakeDom, controller.context, {});
   assert.ok(fakeDom.innerHTML.includes("data-pick-kind=\"style1\""), "style1 picker must exist");
   assert.ok(!fakeDom.innerHTML.includes("data-pick-kind=\"style2\""), "style2 picker must NOT exist in single style");
-  assert.ok(!fakeDom.innerHTML.includes("角色画风决定人物与主体的画法"), "Fusion explanation note must NOT exist in single style");
+  assert.ok(!fakeDom.innerHTML.includes('class="make-image-style-note"'), "Fusion explanation note must NOT exist in single style");
 
   // Single style prompt should only lock style1
   let prompt = controller.getPromptPreview();
@@ -242,7 +242,7 @@ function createTestGraph(options = {}) {
   sp.data.style2 = "FA-002";
   controller.render(fakeDom, controller.context, {});
   assert.ok(fakeDom.innerHTML.includes("data-pick-kind=\"style2\""), "style2 picker must exist in dual style");
-  assert.ok(fakeDom.innerHTML.includes("角色画风决定人物与主体的画法，场景画风决定背景与环境"), "Fusion explanation note must exist in dual style");
+  assert.ok(fakeDom.innerHTML.includes("角色画风决定主体，场景画风决定环境"), "Fusion explanation note must exist in dual style");
 
   prompt = controller.getPromptPreview();
   assert.match(prompt, /【画风】：角色风格：#FA-001；场景风格：#FA-002/);
@@ -308,32 +308,9 @@ function createTestGraph(options = {}) {
 }
 
 // ==========================================
-// Test 4: Sub-options Node Storage & Baseline Parity for assembleControlPrompt
+// Test 4: Sub-options Node Storage & assembleControlPrompt output contract
 // ==========================================
 {
-  const cp = require("node:child_process");
-  const baselineSrc = cp.execSync("git show 5103d23:demo/assets/studio-prompt-engine.js", { encoding: "utf8" });
-  const baselineSandbox = {
-    window: {},
-    globalThis: {},
-    Date,
-    Math,
-    Number,
-    String,
-    Array,
-    Set,
-    Map,
-    JSON,
-    RegExp,
-    console
-  };
-  baselineSandbox.window = baselineSandbox;
-  baselineSandbox.globalThis = baselineSandbox;
-  vm.createContext(baselineSandbox);
-  vm.runInContext(baselineSrc, baselineSandbox);
-  const baselineEngine = baselineSandbox.HANDRAW_CANVAS_ENGINE;
-  assert.ok(baselineEngine, "Baseline engine must load successfully");
-
   // 1) Test SC-021 node storage & cloud prompt output
   const graph21 = createTestGraph({
     layout: "SC-021",
@@ -698,6 +675,10 @@ function createTestGraph(options = {}) {
   sandbox.document.body = { id: "body" };
   sandbox.document.activeElement = null;
 
+  let subjectPatchCalls = 0;
+  const applySubjectPatch = controller.patchSpec.bind(controller);
+  controller.patchSpec = (...args) => { subjectPatchCalls++; return applySubjectPatch(...args); };
+
   // Bind events with our controller
   controller.bindEvents(fakeDom);
   controller.actions = actions;
@@ -733,7 +714,15 @@ function createTestGraph(options = {}) {
 
   // 4. User blurs: onchange fires without destroying DOM, and persists draft immediately
   assert.ok(typeof subjInput.onchange === "function", "subjInput must have onchange listener");
+  const patchesBeforeBlur = subjectPatchCalls;
   subjInput.onchange();
+  assert.equal(subjectPatchCalls, patchesBeforeBlur,
+    "Unchanged blur must not create an extra CreationSpec revision");
+  subjInput.value = "自动填充的新主题";
+  subjInput.onchange();
+  assert.equal(subjectPatchCalls, patchesBeforeBlur + 1,
+    "Change-only inputs must still apply their new subject");
+  assert.equal(txt.data.text, "自动填充的新主题");
   assert.equal(markDirtyAndRenderCalls, 0, "markDirtyAndRender must not be called on blur to prevent swallowing clicks on clear/run buttons");
   assert.ok(persistDraftCalls > 0, "persistDraft must be called on change/blur to persist draft without re-rendering");
 
@@ -757,9 +746,14 @@ function createTestGraph(options = {}) {
   assert.ok(!freshStudioApp.includes("studio-mode-more-menu"), "studio-mode-more-menu must be removed from studio-app.js");
   assert.ok(!freshStudioApp.includes("_modeMoreOpen"), "_modeMoreOpen must be removed from studio-app.js");
 
-  const modeSwitchPattern = /id="studio-mode-article"[^>]*>文章配图<\/button>\s*<button[^>]+id="studio-mode-canvas"[^>]*>画布<\/button>/;
-  assert.ok(modeSwitchPattern.test(freshStudioApp), "Canvas button must be directly placed to the right of 文章配图 button with text '画布' and without '更多' dropdown");
-  console.log("✓ Test 11 Passed: Canvas button directly displayed to the right of 文章配图 without 更多 dropdown.");
+  assert.ok(freshStudioApp.includes('id="studio-mode-view-toggle"'),
+    "One contextual form/canvas switch must replace the two mode buttons");
+  assert.ok(freshStudioApp.includes("切换到画布 →") && freshStudioApp.includes("← 返回表单"),
+    "The single switch must explain the destination in both directions");
+  assert.ok(!freshStudioApp.includes('id="studio-mode-canvas"') &&
+    !freshStudioApp.includes('id="studio-mode-simple"'),
+    "No redundant pair of canvas/simple mode buttons");
+  console.log("✓ Test 11 Passed: One contextual form/canvas switch preserves navigation.");
 }
 
 console.log("\nALL 11 TESTS PASSED SUCCESSFULLY!");

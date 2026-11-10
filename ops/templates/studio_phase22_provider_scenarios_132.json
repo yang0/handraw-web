@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "source": "independent-scenario-receipts",
+  "environment": "preproduction",
+  "releaseSha": "0000000000000000000000000000000000000000",
+  "periodStartUtc": "1970-01-01T00:00:00Z",
+  "periodEndUtc": "1970-01-01T00:00:00Z",
+  "providerStatementSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "handrawLedgerSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "freeQuotaSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "scenarios": [
+    {
+      "case": "duplicate_callback",
+      "observedCount": 0,
+      "evidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "operatorId": "MISSING",
+      "reviewerId": "MISSING"
+    },
+    {
+      "case": "throttled_429",
+      "observedCount": 0,
+      "evidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "operatorId": "MISSING",
+      "reviewerId": "MISSING"
+    },
+    {
+      "case": "upstream_502",
+      "observedCount": 0,
+      "evidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "operatorId": "MISSING",
+      "reviewerId": "MISSING"
+    },
+    {
+      "case": "unknown_recovery",
+      "observedCount": 0,
+      "evidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "operatorId": "MISSING",
+      "reviewerId": "MISSING"
+    },
+    {
+      "case": "late_success",
+      "observedCount": 0,
+      "evidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "operatorId": "MISSING",
+      "reviewerId": "MISSING"
+    },
+    {
+      "case": "refund",
+      "observedCount": 0,
+      "evidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "operatorId": "MISSING",
+      "reviewerId": "MISSING"
+    },
+    {
+      "case": "free_quota",
+      "observedCount": 0,
+      "evidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "operatorId": "MISSING",
+      "reviewerId": "MISSING"
+    }
+  ]
+}

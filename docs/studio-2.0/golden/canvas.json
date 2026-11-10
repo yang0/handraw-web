@@ -1,0 +1,150 @@
+{
+  "scenario": "custom-graph-double-branch",
+  "wire": {
+    "schemaVersion": 1,
+    "project": {
+      "id": "p-canvas",
+      "kind": "image",
+      "revision": 6,
+      "authority": "graph"
+    },
+    "creationSpec": {
+      "schemaVersion": 1,
+      "revision": 1,
+      "subject": "杭州春日旅行",
+      "outputMode": "graphic-text",
+      "style": {
+        "id": "FA-001",
+        "type": "style"
+      },
+      "fusionEnabled": false,
+      "layout": {
+        "id": "SC-021",
+        "type": "layout"
+      },
+      "colors": [],
+      "tones": [],
+      "moods": [],
+      "ratio": "3:4",
+      "ratioSource": "user",
+      "referenceMedia": [
+        {
+          "mediaId": "media-self-1",
+          "role": "scene"
+        }
+      ],
+      "lockedFields": [
+        "style"
+      ]
+    },
+    "graph": {
+      "revision": 6,
+      "nodes": [
+        {
+          "id": "n-text",
+          "type": "text_input",
+          "data": {
+            "text": "古风旅行"
+          }
+        },
+        {
+          "id": "n-style",
+          "type": "skill_params",
+          "data": {
+            "style1": "FA-001"
+          }
+        },
+        {
+          "id": "n-output-a",
+          "type": "output_control",
+          "data": {
+            "ratio": "3:4"
+          }
+        },
+        {
+          "id": "n-output-b",
+          "type": "output_control",
+          "data": {
+            "ratio": "9:16"
+          }
+        },
+        {
+          "id": "n-assets",
+          "type": "asset",
+          "data": {
+            "items": [
+              {
+                "mediaId": "owned-canvas-scene",
+                "source": "private",
+                "role": "scene"
+              },
+              {
+                "localFileName": "not-uploaded.png",
+                "previewUrl": "blob:local"
+              }
+            ]
+          }
+        },
+        {
+          "id": "custom-branch",
+          "type": "custom_filter",
+          "data": {
+            "contrast": 0.7
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "e-a",
+          "from": "n-text",
+          "to": "n-output-a"
+        },
+        {
+          "id": "e-b",
+          "from": "n-text",
+          "to": "n-output-b"
+        },
+        {
+          "id": "e-c",
+          "from": "n-style",
+          "to": "n-output-a"
+        },
+        {
+          "id": "e-d",
+          "from": "n-style",
+          "to": "n-output-b"
+        },
+        {
+          "id": "e-custom",
+          "from": "custom-branch",
+          "to": "n-output-b"
+        }
+      ],
+      "groups": [
+        {
+          "id": "g-left",
+          "nodeIds": [
+            "n-text",
+            "n-output-a"
+          ]
+        }
+      ],
+      "runRefs": [
+        {
+          "runId": "run-1",
+          "nodeId": "n-output-b",
+          "mediaId": "result-1"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "branchNodes": [
+      "n-output-a",
+      "n-output-b"
+    ],
+    "customId": "custom-branch",
+    "groupId": "g-left",
+    "privateMedia": "owned-canvas-scene"
+  }
+}

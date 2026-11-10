@@ -923,13 +923,58 @@
       });
     }
 
+    // #123: authoritative PlanSlot route. Legacy batchRows/promptListText
+    // remain derived view mirrors; never choose one by mode to recreate IDs.
+    if (mode === "prompts" && ld.studio2Plan &&
+        Array.isArray(ld.studio2Plan.slots)) {
+      const rows=ld.studio2Plan.slots.slice().sort((a,b)=>a.order-b.order);
+      const aiLayouts=ld.batchLayoutMode==="ai";
+      return rows.slice(0,maxIter).map((slot,idx)=>{
+        const ov=slot.overrides||{};
+        const subject=String(slot.subject||"");
+        const explicitLayout=slot.userOverrides?.includes("layout");
+        const layout=(explicitLayout||aiLayouts)
+          ? (ov.layout?.id||slot.suggestedLayout||rec.layoutId||"")
+          : (rec.layoutId||"");
+        const lRes=layout?(rMap.get(layout)||catalog?.layouts?.find(x=>x.id===layout)):null;
+        const textTheme=rec.combinedText
+          ? (/\{\{?item\}?\}|\{主题\}|\{文案\}/i.test(rec.combinedText)
+            ? rec.combinedText
+              .replace(/\{\{?item\}?\}|\{主题\}|\{文案\}/gi,subject)
+              .replace(/\{\{?index\}?\}|\{序号\}/gi,String(idx+1))
+            : subject+"\n（统一要求："+rec.combinedText+"）")
+          : subject;
+        const ownRefs=Array.isArray(slot.referenceMedia)?slot.referenceMedia:[];
+        const skip=Boolean(slot.skipGlobalRefs);
+        const globalRefs=skip?[]:(Array.isArray(rec.assetItems)?rec.assetItems:[]);
+        const assetItems=(ownRefs.length||skip)
+          ? dedupeByIdOrImage([...globalRefs,...ownRefs]).slice(0,MAX_MERGED_REFS)
+          : null;
+        const short=subject.replace(/^#+\s*/,"").slice(0,16);
+        return {
+          index:idx,loopMode:"prompts",itemKey:slot.slotId,
+          slotId:slot.slotId,slotOrder:slot.order,
+          shortLabel:short+(subject.length>16?"…":""),
+          title:"循环 #"+(idx+1)+" · "+short,
+          style1:ov.style?.id||"",
+          style2:ov.secondaryStyle?.id||"",
+          ratio:ov.ratio||"",
+          layout,assetItems,skipGlobalRefs:skip,
+          theme:textTheme,sampleImg:lRes?.image||""
+        };
+      });
+    }
+
     // Default: "prompts" mode — each non-empty line is 1 loop iteration
     // When ld.batchRows is provided (Phase 3b-4 Set Planning / AI Recommended Layouts), each row specifies theme + layout
     if (Array.isArray(ld.batchRows) && ld.batchRows.length > 0) {
       return ld.batchRows.slice(0, maxIter).map((row, idx) => {
         const rowTheme = typeof row === "string" ? row : (row && row.theme != null ? String(row.theme) : "");
         const rowLayout = (row && typeof row === "object" && row.layout) ? String(row.layout).trim() : "";
-        const effLayout = rowLayout || rec.layoutId || "";
+        // Fixed means use one global layout regardless of preserved per-row
+        // overrides. The per-row draft is retained for reversible AI strategy.
+        const aiLayouts = ld.batchLayoutMode === "ai" || (!ld.batchLayoutMode && Array.isArray(ld.batchRows));
+        const effLayout = aiLayouts ? (rowLayout || rec.layoutId || "") : (rec.layoutId || "");
         const lRes = effLayout ? (rMap.get(effLayout) || (catalog?.layouts?.find((l) => l.id === effLayout))) || null : null;
         let mergedTheme = rowTheme;
         if (rec.combinedText) {
@@ -956,7 +1001,7 @@
         return {
           index: idx,
           loopMode: "prompts",
-          itemKey: `row_${idx}`,
+          itemKey: row && row.slotId ? String(row.slotId) : `row_${idx}`,
           shortLabel: cleanShort + (rowTheme.length > 16 ? "…" : ""),
           title: `循环 #${idx + 1} · ${cleanShort}${rowTheme.length > 16 ? "…" : ""}`,
           style1: "",
@@ -1043,6 +1088,7 @@
     const effectiveMode = rawMode === "series" || rawMode === "xhs-batch" ? "graphic-text" : rawMode;
     const ratio = String((slotSpec && slotSpec.ratio) || cd.ratio || DEFAULT_MODE_RATIOS[rawMode] || "3:4").trim();
     const effectiveStyle1Id = (slotSpec && slotSpec.style1) || rec.style1Id || "";
+    const effectiveStyle2Id = rec.fusionToggleOn ? ((slotSpec && slotSpec.style2) || rec.style2Id || "") : "";
     const effectiveStyle1Res =
       effectiveStyle1Id && catalog?.resourceMap ? catalog.resourceMap.get(effectiveStyle1Id) || null : rec.style1Res;
     const effectiveLayoutId = (slotSpec && slotSpec.layout) || rec.layoutId || "";
@@ -1116,7 +1162,7 @@
       // Style(s)
       if (rec.fusionToggleOn) {
         if (effectiveStyle1Id) parts.push(`角色风格：#${effectiveStyle1Id.replace(/^#/, "")}`);
-        if (rec.style2Id) parts.push(`场景风格：#${rec.style2Id.replace(/^#/, "")}`);
+        if (effectiveStyle2Id) parts.push(`场景风格：#${rec.style2Id.replace(/^#/, "")}`);
       } else if (effectiveStyle1Id) {
         parts.push(`画风：#${effectiveStyle1Id.replace(/^#/, "")}`);
       }
@@ -1163,7 +1209,7 @@
 
       // Fallback hint if style or color left open
       const missingStyleOrColor = rec.fusionToggleOn
-        ? !effectiveStyle1Id || !rec.style2Id || rec.colorIds.length === 0
+        ? !effectiveStyle1Id || !effectiveStyle2Id || rec.colorIds.length === 0
         : !effectiveStyle1Id || rec.colorIds.length === 0;
       if (missingStyleOrColor) {
         parts.push("未指定项由系统自动择优匹配");
@@ -1205,7 +1251,7 @@
         `[Subject & Copy]: ${cleanTheme || "Editorial hand-drawn visual storytelling."}`
       ];
       const s1Id = (effectiveStyle1Id || (effectiveStyle1Res && effectiveStyle1Res.id) || "").replace(/^#/, "");
-      const s2Id = (rec.style2Id || (rec.style2Res && rec.style2Res.id) || "").replace(/^#/, "");
+      const s2Id = (effectiveStyle2Id || (rec.style2Res && rec.style2Res.id) || "").replace(/^#/, "");
       const lId = (effectiveLayoutId || (effectiveLayoutRes && effectiveLayoutRes.id) || "").replace(/^#/, "");
 
       if (rec.fusionToggleOn) {
@@ -1250,7 +1296,7 @@
       );
     }
     const s1Id = (effectiveStyle1Id || (effectiveStyle1Res && effectiveStyle1Res.id) || "").replace(/^#/, "");
-    const s2Id = (rec.style2Id || (rec.style2Res && rec.style2Res.id) || "").replace(/^#/, "");
+    const s2Id = (effectiveStyle2Id || (rec.style2Res && rec.style2Res.id) || "").replace(/^#/, "");
     const lId = (effectiveLayoutId || (effectiveLayoutRes && effectiveLayoutRes.id) || "").replace(/^#/, "");
 
     if (rec.fusionToggleOn && (s1Id || s2Id)) {

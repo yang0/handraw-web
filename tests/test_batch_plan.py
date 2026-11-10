@@ -347,5 +347,85 @@ class BatchPlanRoutesTests(unittest.TestCase):
         self.assertEqual(res.get("code"), "rate_limited")
 
 
+    def test_08_ai_distinct_themes_choose_distant_catalog_items_no_first_n_bias(self) -> None:
+        """#88: replay distinct subjects on full catalog; don't bias by first N."""
+        allowed = {f"USR-L{i:03d}": f"主题图型 {i}" for i in range(91)}
+        choices = [("植物显微图鉴", "USR-L090"), ("都市街头分镜", "USR-L071")]
+        prompts = []
+
+        def model(messages, **kwargs):
+            self.assertTrue(kwargs["json_mode"])
+            self.assertEqual(len(messages), 2, "No few-shot examples allowed")
+            text = messages[1]["content"]
+            prompts.append(text)
+            self.assertIn("USR-L000", text)
+            self.assertIn("USR-L090", text)
+            self.assertNotIn('{"items":', text)
+            expected = next(code for subject, code in choices if subject in text)
+            return json.dumps({"items": [
+                {"subject": "分镜主题: " + expected, "layout": expected}
+            ]}), {"ok": True}
+
+        with patch("backend.batch_plan_routes.get_valid_layout_map", return_value=allowed), \
+             patch("backend.batch_plan_routes.get_layout_descriptions", return_value={}), \
+             patch("backend.batch_plan_routes.chat", side_effect=model):
+            results = []
+            for subject, code in choices:
+                status, result = self._req("POST", "/api/studio/batch-plan", {
+                    "seed": subject, "count": 1, "layoutMode": "ai",
+                }, cookie=self.cookie)
+                self.assertEqual(status, 200, result)
+                self.assertEqual(result["source"], "model")
+                self.assertEqual(result["items"][0]["layout"], code)
+                results.append(result["items"][0]["layout"])
+        self.assertEqual(results, ["USR-L090", "USR-L071"])
+        self.assertEqual(len(prompts), 2)
+        for prompt in prompts:
+            self.assertNotIn("SC-001", prompt)
+            self.assertNotIn("SC-006", prompt)
+
+    def test_09_ai_gateway_errors_do_not_impersonate_success(self) -> None:
+        """#90: upstream HTTP 502, non-JSON and invalid items remain explicit."""
+        from backend.batch_plan_routes import parse_batch_plan_response
+
+        for response in ("前言 {\"items\": []} 后记",
+                         '{"items": []}{"items": []}',
+                         '{"items": [', ""):
+            with self.subTest(response=response), self.assertRaises(
+                (json.JSONDecodeError, ValueError)
+            ):
+                parse_batch_plan_response(response)
+        cases = [
+            ("", {"ok": False, "reason": "http_502"}, 503, "batch_plan_ai_unavailable"),
+            ("", {"ok": False, "reason": "network"}, 503, "batch_plan_ai_unavailable"),
+            ("", {"ok": False, "reason": "timeout"}, 503, "batch_plan_ai_unavailable"),
+            ("", {"ok": False, "reason": "invalid_json"}, 502, "batch_plan_ai_invalid"),
+            ("", {"ok": False, "reason": "too_large"}, 502, "batch_plan_ai_invalid"),
+            ("unexpected model prose", {"ok": True}, 502, "batch_plan_ai_invalid"),
+            ('{"items":[{"subject":"古街","layout":"NON_EXISTENT"}]}',
+             {"ok": True}, 502, "batch_plan_ai_invalid"),
+        ]
+        for model_body, meta, code, name in cases:
+            with self.subTest(reason=meta.get("reason") or model_body[:24]), \
+                 patch("backend.batch_plan_routes.chat", return_value=(model_body, meta)) as model, \
+                 self.assertLogs("backend.batch_plan_routes", level="WARNING") as records:
+                status, result = self._req("POST", "/api/studio/batch-plan", {
+                    "seed": "sensitive-client-prompt-not-to-log",
+                    "count": 1, "layoutMode": "ai",
+                }, cookie=self.cookie)
+                self.assertEqual(status, code, result)
+                self.assertEqual(result.get("code"), name)
+                self.assertTrue(result.get("requestId"))
+                self.assertTrue(model.call_args.kwargs["json_mode"])
+                logged = "\n".join(records.output)
+                self.assertIn("event=batch_plan_failed", logged)
+                self.assertNotIn("sensitive-client-prompt-not-to-log", logged)
+                self.assertNotIn("unexpected model prose", logged)
+        conn = self.db.get_conn()
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM generation_runs").fetchone()[0], 0)
+        # Demo seed works may exist, but planning must not create new ones.
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM works WHERE run_id IS NOT NULL").fetchone()[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -96,7 +96,8 @@ class FakeReader {
     this.onload();
   }
 }
-const win = {confirm:()=>true, crypto:{randomUUID:()=>anotherUid}};
+let approvedDelete = false;
+const win = {HANDRAW_SHARED:{confirmAction:async()=>approvedDelete}, crypto:{randomUUID:()=>anotherUid}};
 const ctx = {window:win, document:{}, FileReader:FakeReader, Map, Object, Array, String, console};
 vm.runInNewContext(source,ctx);
 (async()=>{
@@ -115,6 +116,10 @@ vm.runInNewContext(source,ctx);
   assert.match(cards.innerHTML,/私家角色/);
   assert.equal(cards.classes.has("is-empty"), false, "Returning to populated category restores masonry");
 
+  await cards.callbacks.click({target:{closest:()=>({dataset:{galleryDelete:uid}})}});
+  assert.equal(uploads.length,1, "Cancel in-app confirm must retain private asset");
+  assert.ok(!calls.some(c=>c.init?.method==="DELETE"), "Cancel must not send DELETE request");
+  approvedDelete = true;
   await cards.callbacks.click({target:{closest:()=>({dataset:{galleryDelete:uid}})}});
   assert.equal(uploads.length,0);
   assert.match(cards.innerHTML,/图库暂无图片/);

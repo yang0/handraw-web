@@ -1,0 +1,169 @@
+{
+  "scenario": "image-fusion-off-explicit-ratio-private-asset",
+  "wire": {
+    "schemaVersion": 1,
+    "project": {
+      "id": "p-image",
+      "kind": "image",
+      "revision": 2,
+      "authority": "spec"
+    },
+    "creationSpec": {
+      "schemaVersion": 1,
+      "revision": 1,
+      "subject": "杭州春日旅行",
+      "outputMode": "graphic-text",
+      "style": {
+        "id": "FA-001",
+        "type": "style"
+      },
+      "fusionEnabled": false,
+      "layout": {
+        "id": "SC-021",
+        "type": "layout"
+      },
+      "colors": [],
+      "tones": [],
+      "moods": [],
+      "ratio": "3:4",
+      "ratioSource": "user",
+      "referenceMedia": [
+        {
+          "mediaId": "media-self-1",
+          "role": "scene"
+        }
+      ],
+      "lockedFields": [
+        "style"
+      ]
+    }
+  },
+  "legacyGraph": {
+    "blueprint": "single",
+    "revision": 5,
+    "nodes": [
+      {
+        "id": "im-style",
+        "type": "skill_params",
+        "data": {
+          "style1": "FA-001",
+          "style2": "FA-002",
+          "fusion": false,
+          "layout": "SC-022",
+          "colors": [
+            "C-01"
+          ],
+          "tones": [
+            "T-01"
+          ],
+          "moods": [
+            "治愈"
+          ],
+          "customMood": "东方留白",
+          "whitespace": "high",
+          "sc021Type": "双屏续绘",
+          "sc022Name": "林夏",
+          "sc022Pinyin": "LIN XIA",
+          "lockedFields": [
+            "style"
+          ],
+          "resourceRefs": {
+            "style": {
+              "id": "FA-001",
+              "type": "style",
+              "source": "official",
+              "version": 1
+            },
+            "secondaryStyle": {
+              "id": "FA-002",
+              "type": "style",
+              "source": "official",
+              "version": "current"
+            },
+            "layout": {
+              "id": "SC-022",
+              "type": "layout",
+              "source": "official",
+              "version": 1
+            },
+            "colors": [
+              {
+                "id": "C-01",
+                "type": "color",
+                "source": "official",
+                "version": 1
+              }
+            ],
+            "tones": [
+              {
+                "id": "T-01",
+                "type": "tone",
+                "source": "official",
+                "version": 1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "im-text",
+        "type": "text_input",
+        "data": {
+          "text": "日式茶室"
+        }
+      },
+      {
+        "id": "im-asset",
+        "type": "asset",
+        "data": {
+          "items": [
+            {
+              "mediaId": "owned-private-im",
+              "role": "scene",
+              "source": "private"
+            },
+            {
+              "localFileName": "unuploaded.png",
+              "previewUrl": "blob:preview"
+            }
+          ]
+        }
+      },
+      {
+        "id": "im-output",
+        "type": "output_control",
+        "data": {
+          "mode": "poster",
+          "ratio": "2.35:1",
+          "ratioSource": "user"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "ie1",
+        "from": "im-style",
+        "to": "im-output"
+      },
+      {
+        "id": "ie2",
+        "from": "im-text",
+        "to": "im-output"
+      },
+      {
+        "id": "ie3",
+        "from": "im-asset",
+        "to": "im-output"
+      }
+    ],
+    "selectedIds": []
+  },
+  "expect": {
+    "ratio": "2.35:1",
+    "ratioSource": "user",
+    "secondaryStyle": "FA-002",
+    "sc021Type": "双屏续绘",
+    "sc022Name": "林夏",
+    "mediaId": "owned-private-im"
+  }
+}

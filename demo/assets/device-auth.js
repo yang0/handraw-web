@@ -317,7 +317,7 @@
         btn.onclick = async () => {
           const tokenId = btn.getAttribute("data-token-id");
           if (!tokenId) return;
-          const ok = window.confirm("确定撤销该设备的访问权限吗？撤销后该设备将无法继续访问网站。");
+          const ok = await S.confirmAction?.("确定撤销该设备的访问权限吗？撤销后该设备将无法继续访问网站。", { danger: true, confirmText: "撤销授权" });
           if (!ok) return;
 
           btn.disabled = true;

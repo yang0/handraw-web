@@ -14,10 +14,122 @@ jobs:
         with:
           node-version: '24'
       - run: node --check demo/assets/task-journey.js && node --check demo/assets/studio-app.js && node --check demo/assets/studio-batch.js
+      - run: node --check demo/assets/studio-canvas-ui.js && node tests/test_studio_canvas_ui_129.cjs
+      - name: '#126 GraphPatch Node interface and HTML escaping'
+        run: node --check demo/assets/studio-graph-patch-126.js && node tests/test_studio_graph_patch_126.cjs
+      - run: node --check demo/assets/studio-core.js && node --check demo/assets/studio-app.js && node tests/test_studio_runtime_119.cjs
+      - run: node --check demo/assets/studio-dag-scheduler-120.js && node tests/test_studio_dag_scheduler_120.cjs
+      - run: node --check demo/assets/studio-make-image.js && node --check demo/assets/studio-make-image-versions.js && node tests/test_studio_make_image_versions.cjs && node tests/test_studio_make_image_ui_128.cjs && node tests/test_studio_make_image.cjs
+      - run: node --check demo/assets/studio-series-board-108.js && node --check demo/assets/studio-batch.js && node tests/test_studio_series_ui_108.cjs
+      - run: node --check demo/assets/studio-article-project-109.js && node tests/test_studio_article_project_109.cjs
       - run: node tests/test_task_journey.cjs
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
       - run: python -m unittest discover -s tests -p 'test_article_versions.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_workflow_versions.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_image_plan.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_run_read.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_runtime_119.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_quick_run_contract.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_series_run_contract.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_series_reference_preflight.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_cancel_pending.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_projects.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_view_authority.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_article_integration.py' -v
+      # This HTTP journey goes through login -> curation bootstrap, which
+      # imports Pillow; lighter unit tests above deliberately avoid it.
+      - run: python -m pip install "Pillow>=10.0"
+      - run: python -m unittest discover -s tests -p 'test_studio_runtime_http_119.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_article_http_e2e.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_ai_plan.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_ai_plan_http.py' -v
+      - name: '#110 offline AI quality + diversity / consistency evaluator'
+        run: python -m unittest discover -s tests -p 'test_studio_ai_quality_110.py' -v
+      - name: '#126 GraphPatch schema/permissions/DAG/CAS/undo'
+        run: python -m unittest discover -s tests -p 'test_studio_graph_patch_126.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_resource_refs.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_security_negative_112.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_plan_slot_access.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_project_http.py' -v
+      - run: python -m unittest discover -s tests -p 'test_studio_project_pagination.py' -v
+      - name: 'P0 #91 real HTTP private-gallery uploads and error recovery'
+        run: python -m unittest discover -s tests -p 'test_p0_gallery_upload_91.py' -v
+      - name: 'P0 #93 real SQLite /t/ lazy topics and rollback'
+        run: python -m unittest discover -s tests -p 'test_p0_topic_redirect_93.py' -v
+      - run: python -m unittest discover -s tests -p 'test_pg_studio_project_migration.py' -v
+      # #127: use actual installed Chrome on the GitHub runner. Capture
+      # first render/drag+zoom frame p95/DOM/heap/IME focus at 10–300 nodes.
+      - run: python -m pip install "playwright>=1.50,<2"
+      - run: python tests/smoke_studio_article_browser_109.py
+      - run: python tests/smoke_studio_picker_browser_105.py
+      - run: python tests/smoke_studio_project_reliability_103.py
+      - run: python tests/smoke_studio_series_browser_108.py
+      - run: python tests/benchmark_studio_canvas.py --output artifacts/canvas-127.json --require-browser
+      - run: python tests/smoke_studio_canvas_browser.py --screenshots artifacts/canvas-127-screen
+      - name: '#126 GraphPatch real Chromium approval and rollback'
+        run: python tests/smoke_studio_graph_patch_browser_126.py
+      - run: python tests/smoke_studio_make_image_browser_128.py
+      - run: python tests/smoke_studio_navigation_projects_106.py
+      - name: '#111 real Studio Project 10/50/100/300 nodes benchmark (no paid gateway)'
+        run: python tests/benchmark_studio_native_canvas_111.py
+      - name: '#111 true 120-unique-WebP decode + 300-node physical drag Chromium'
+        run: python tests/benchmark_studio_distinct_media_111.py
+      - name: '#111 stage10 tree-wide style invalidation: native CSSOM + contain A-B-A-B-A on 1x/4x CPU'
+        run: python tests/benchmark_studio_tree_style_111.py
+      - name: '#111 stage11 Chrome same-window invalidation ancestry + targeted hover A/B 1x/4x CPU'
+        run: python tests/benchmark_studio_style_causality_111.py
+      - name: '#111 phase12 real Chromium SVG/global-selector/node-coordinate isolations on 1x/4x CPU'
+        run: python tests/benchmark_studio_phase12_111.py
+      - name: '#112 Native Studio 100-node Graph + owner isolation Chromium smoke'
+        run: python tests/smoke_studio_native_100_graph_112.py
+      - run: python tests/smoke_studio_runtime_browser_119.py
+      - name: 'Legacy #86/#87 real Chromium history/workflow navigation widths (1440/1200/390)'
+        run: python tests/smoke_legacy_library_alignment_86_87.py
+      - name: '#92/#97 true Chromium 1440/390 history and work detail interactions'
+        run: python tests/smoke_legacy_ui_92_97_98.py
+      - name: '#91/#98 Chromium 1440/390 gallery metadata/edit/upload/retry'
+        run: python tests/smoke_p0_gallery_upload_browser_91.py
+      - name: 'P0 #114 real Chromium profile/gallery masonry at 1440/390'
+        run: python tests/smoke_p0_profile_gallery_masonry_114.py
+      - run: python tests/smoke_studio_dag_browser_120.py
+      - name: '#112 M0-M3 acceptance matrix and CI wiring guard'
+        run: python ops/check_studio_acceptance_112.py --output artifacts/studio-112-matrix.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio2-canvas-127-benchmark
+          path: |
+            artifacts/canvas-127.json
+            artifacts/studio-112-matrix.json
+            artifacts/studio-112-100-node/**
+            artifacts/studio-111-native/**
+            artifacts/studio-111-distinct-media/**
+            artifacts/studio-111-tree-style/**
+            artifacts/studio-111-causality/**
+            artifacts/studio-111-phase12/**
+            artifacts/studio-111-phase13/**
+            artifacts/studio-111-phase14/**
+            artifacts/studio-111-phase15/**
+            artifacts/studio-111-phase16/**
+            artifacts/studio-111-phase18/**
+            artifacts/studio-111-phase19/**
+            artifacts/graphpatch-126/**
+            artifacts/ai-110-offline-eval.json
+            artifacts/p0-masonry-114/**
+            artifacts/p0-gallery-91/**
+            artifacts/ui-92-97-98/**
+            artifacts/canvas-127-screen/**
+            artifacts/canvas-119-screen/**
+            artifacts/quick-128-screen/**
+            artifacts/series-108-screen/**
+            artifacts/project-103-screen/**
+            artifacts/article-109-screen/**
+            artifacts/navigation-106-screen/**
+            artifacts/legacy-86-87/**
+            artifacts/native-dialog-audit-87.json
+            artifacts/dag-120-screen/**
+          if-no-files-found: ignore
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
   python-full:
@@ -78,6 +190,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: '#25 resource ranking Python ↔ JS parity and leaderboard'
+        run: node --check demo/assets/shared.js && node tests/test_ranking_parity.cjs
+      - name: '#111 edit history, indexed edges, and targeted dirty-node DOM reconcile'
+        run: node --check demo/assets/studio-canvas-renderer.js && node --check demo/assets/studio-app.js && node tests/test_studio_canvas_edit_history_111.cjs && node tests/test_studio_canvas_edges_111.cjs && node tests/test_studio_canvas_dirty_111.cjs
       - run: node --check demo/assets/main-app.js && node --check demo/assets/mixed-feed.js && node --check demo/assets/image-loader.js
       - run: node tests/test_mixed_feed.cjs && node tests/test_main_image_loader.cjs && node tests/test_progressive_image_loader.cjs && node tests/test_masonry_flow.cjs && node tests/test_profile_studio_p2_p3.cjs && node tests/test_studio_history_masonry.cjs && node tests/test_forum_work_assets.cjs && node tests/test_image_asset_detail.cjs && node tests/test_work_fork_hydration.cjs && node tests/test_fork_subject_single_field.cjs
       - name: Private gallery, batch parallel UI and progress regression
@@ -86,6 +202,35 @@ jobs:
           node --check demo/assets/studio-batch.js
           node --check demo/assets/studio-app.js
           node --check demo/assets/studio-make-image.js
+          node --check demo/assets/studio-core.js
+          node tests/test_studio_core.cjs
+          node --check demo/assets/studio-normalization.js
+          node tests/test_studio_normalization.cjs
+          node --check demo/assets/studio-quick-spec.js
+          node tests/test_studio_make_image_integration.cjs
+          node --check demo/assets/studio-series-plan.js
+          node tests/test_studio_series_plan_integration.cjs
+          node --check demo/assets/studio-canvas-renderer.js
+          node tests/test_studio_canvas_incremental.cjs
+          node tests/test_studio_views.cjs
+          node --check demo/assets/studio-views.js
+          node tests/test_studio_view_authority.cjs
+          node --check demo/assets/studio-article-integration.js
+          node tests/test_studio_article_integration.cjs
+          node --check demo/assets/studio-ai-plan.js
+          node tests/test_studio_ai_plan.cjs
+          node tests/test_studio_workflow_autosave.cjs
+          node tests/test_studio_workflow_delete.cjs
+          node --check demo/assets/studio-project-sync.js
+          node tests/test_studio_project_sync.cjs
+          node --check demo/assets/studio-project-center.js
+          node tests/test_studio_project_center.cjs
+          node --check demo/assets/studio-resources.js
+          node tests/test_studio_resources.cjs
+          node --check demo/assets/studio-article-picker-105.js
+          node tests/test_studio_article_picker_105.cjs
+          node tests/test_studio_project_center_ime.cjs
+          node tests/test_studio_closed_project.cjs
           node tests/test_studio_picker_interactions.cjs
           node tests/test_quick_stale_generation.cjs
           node tests/test_profile_private_gallery.cjs
@@ -138,6 +283,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_generation_v3.py' -v
           python -m unittest discover -s tests -p 'test_stage5_plaza_batch_folding.py' -v
           python -m unittest discover -s tests -p 'test_skill_web_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_studio_billing_112.py' -v
           python -m unittest discover -s tests -p 'test_profile_generation_history.py' -v
           python -m unittest discover -s tests -p 'test_stage3_backfill_and_filtering.py' -v
 
@@ -170,3 +316,81 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_production_storage.py' -v
+      # #84: execute the actual public Skill source, not a fake transport or
+      # server-only payload fixture. Freeze the exact client commit for review.
+      - name: '#84 checkout pinned real handraw-style Skill client'
+        uses: actions/checkout@v4
+        with:
+          repository: yang0/handraw-style
+          ref: dad8dad2d2af25bd9df45971a03a499461a723db
+          path: external/handraw-style
+          persist-credentials: false
+      # #11 uses TWO deliberate inputs: a pinned, reproducible Skill CLI
+      # for cross-repo execution and ACTUAL Skill main reference catalog for
+      # release drift detection. This second checkout is JSON data only,
+      # never executable code. Record the SHA because main is mutable.
+      - name: '#11 checkout actual Skill main reference catalog (data only)'
+        uses: actions/checkout@v4
+        with:
+          repository: yang0/handraw-style
+          ref: main
+          path: external/handraw-style-catalog
+          persist-credentials: false
+      - name: '#11 official Web-authoritative code parity, no reverse publish'
+        run: |
+          echo "Skill reference commit: $(git -C external/handraw-style-catalog rev-parse HEAD)"
+          python ops/check_official_catalog_parity.py \
+            --skill-root external/handraw-style-catalog/skills/handdraw-style-prompter \
+            --report artifacts/official-catalog-parity-11.json
+      - name: '#11 freeze actual Skill-main 539 / Web 537, explicit editorial and strict NO-GO regression'
+        env:
+          HANDRAW_SKILL_CATALOG_ROOT: external/handraw-style-catalog/skills/handdraw-style-prompter
+        run: python -m unittest discover -s tests -p 'test_official_catalog_snapshot_11.py' -v
+      - name: '#11/#84/#112 Phase12 read-only editorial and external integration gate inventory'
+        run: |
+          python ops/phase12_release_preflight_112.py \
+            --skill-root external/handraw-style-catalog/skills/handdraw-style-prompter \
+            --skill-client external/handraw-style/skills/handraw-cloud/scripts/handraw_cloud.py \
+            --report artifacts/studio-phase12-release-preflight.json
+      - name: '#84/#112 real Skill CLI -> local HTTP -> PG17 + S3 emulation'
+        env:
+          HANDRAW_REAL_SKILL_CLIENT_PATH: external/handraw-style/skills/handraw-cloud/scripts/handraw_cloud.py
+          HANDRAW_REAL_SKILL_EXPECTED_SHA: dad8dad2d2af25bd9df45971a03a499461a723db
+        run: |
+          test "$(git -C external/handraw-style rev-parse HEAD)" = "$HANDRAW_REAL_SKILL_EXPECTED_SHA"
+          python -m pip install "moto[s3]>=5.0,<6"
+          python -m unittest discover -s tests -p 'test_studio_skill_pg_s3_112.py' -v
+      - name: '#21 pinned Skill owned-resource push/restore and CAS tests'
+        run: python -m unittest discover -s external/handraw-style/skills/handraw-cloud/tests -p 'test_handraw_cloud.py' -v
+      - name: '#112 PostgreSQL17 physical dump, two isolated restores, rollback and full-row audit'
+        env:
+          HANDRAW_PG_DRILL_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
+        run: python -m unittest discover -s tests -p 'test_pg_backup_restore_112.py' -v
+      - name: 'P0 #93 isolated PostgreSQL 17 first topic, concurrent race and rollback'
+        run: python -m unittest discover -s tests -p 'test_p0_topic_redirect_93.py' -v
+      # Artifacts are job-local. The PG audit is produced in THIS job, not in
+      # interaction-journey-regression. Never attach the physical .dump backup.
+      - name: '#11 upload official catalog parity status (public IDs only)'
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-catalog-parity-11
+          path: artifacts/official-catalog-parity-11.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: '#11/#84/#112 upload no-secret Phase12 release preflight'
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio2-phase12-release-preflight
+          path: artifacts/studio-phase12-release-preflight.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: '#112 upload redacted PostgreSQL backup/restore audit (no database archive)'
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio2-pg112-backup-restore-audit
+          path: artifacts/studio-112-pg-backup-report.json
+          if-no-files-found: ignore
+          retention-days: 30

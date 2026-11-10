@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "description": "Editorially labelled scenarios for repeatable offline AI recommendation quality evaluation. This is NOT a claim about a live model.",
+  "cases": [
+    {
+      "id": "humor_cartoon",
+      "kind": "image",
+      "subject": "一只猫和一个打工人四格冷幽默漫画",
+      "count": 1,
+      "ratio": "1:1",
+      "expectedStyleIds": [
+        "FA-001"
+      ],
+      "expectedLayoutIds": [
+        "SB-002"
+      ],
+      "reason": "冷幽默漫画+四格节奏"
+    },
+    {
+      "id": "minimal_editorial",
+      "kind": "image",
+      "subject": "极简线条插画表达城市孤独与关系",
+      "count": 1,
+      "ratio": "3:4",
+      "expectedStyleIds": [
+        "FA-002"
+      ],
+      "expectedLayoutIds": [
+        "SC-016"
+      ],
+      "reason": "极简连续线人物与留白社媒卡"
+    },
+    {
+      "id": "timeline",
+      "kind": "series",
+      "subject": "太阳系行星发现史时间轴信息图",
+      "count": 6,
+      "ratio": "16:9",
+      "expectedStyleIds": [
+        "FA-029"
+      ],
+      "expectedLayoutIds": [
+        "IG-009",
+        "SB-044"
+      ],
+      "reason": "几何信息线稿与时间轴节点"
+    },
+    {
+      "id": "ancient_ink",
+      "kind": "image",
+      "subject": "中国古风山林水墨人物竖幅海报",
+      "count": 1,
+      "ratio": "3:4",
+      "expectedStyleIds": [
+        "FE-013"
+      ],
+      "expectedLayoutIds": [
+        "SC-014"
+      ],
+      "reason": "中国水墨人物与留白主视觉"
+    },
+    {
+      "id": "tech_photography",
+      "kind": "image",
+      "subject": "纯白背景科技产品极简商业摄影主视觉",
+      "count": 1,
+      "ratio": "1:1",
+      "expectedStyleIds": [
+        "FI-001"
+      ],
+      "expectedLayoutIds": [
+        "SC-011"
+      ],
+      "reason": "科技产品摄影与中心主视觉信息卡"
+    },
+    {
+      "id": "kids_science_article",
+      "kind": "article",
+      "subject": "儿童科普：种子如何发芽的三步图文",
+      "count": 3,
+      "ratio": "3:4",
+      "expectedStyleIds": [
+        "FB-011"
+      ],
+      "expectedLayoutIds": [
+        "SC-023"
+      ],
+      "reason": "童书几何插画与知识封面卡",
+      "blocks": [
+        {
+          "idx": 1,
+          "kind": "h2",
+          "text": "第一个阶段：吸水",
+          "anchorId": "qa110-p1"
+        },
+        {
+          "idx": 2,
+          "kind": "p",
+          "text": "接下来种子开始发芽。",
+          "anchorId": "qa110-p2"
+        }
+      ]
+    }
+  ]
+}

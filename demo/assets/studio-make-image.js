@@ -157,10 +157,50 @@
       this.actions = null;
       this.moreSettingsOpen = false;
       this.promptPreviewOpen = false;
+      this.settingsCollapsed = false;
+      this.compareOpen = false;
+      this.recipeOpen = false;
+      this.previewVersionKey = null;
+      this.lastControlId = null;
     }
 
     getParts() {
       return this.context?.parts || null;
+    }
+
+    // The legacy nodes are the only writable truth. #121 normalizes them
+    // on read and #122 writes back only the changed fields.
+    getSpec() {
+      const parts=this.getParts();
+      const bridge=global.HandrawQuickSpec;
+      return bridge && parts ? bridge.read(parts).spec : null;
+    }
+
+    patchSpec(delta, fallback) {
+      const bridge=global.HandrawQuickSpec;
+      if (!bridge) {
+        if (typeof fallback === "function") fallback();
+        return true;
+      }
+      try {
+        bridge.apply(this.getParts(),delta,{
+          catalog:this.context?.catalog,
+          isUnlocked:this.actions?.isUnlocked
+        });
+        return true;
+      } catch(err) {
+        const r=global.HandrawStudioResources;
+        const detail=r?.formatError?.({code:err.code})||"";
+        global.HANDRAW_SHARED?.toast?.(
+          err.code === "locked_field" ? "该参数已被用户锁定，无法自动覆盖" :
+          err.code === "invalid_ratio" ? "画幅比例格式无效" :
+          err.code === "invalid_output_mode" ? "该创作模式不可用" :
+          err.code?.startsWith("resource_") || err.code?.startsWith("invalid_resource")
+            ? detail+"（"+(err.field||"所选资源")+"）" :
+          "创作参数修改失败："+(err.code||err.message)
+        );
+        return false;
+      }
     }
 
     getGraph() {
@@ -261,6 +301,13 @@
       if (actions) this.actions = actions;
       if (!this.hostElement) return;
 
+      const priorImage = this.hostElement.querySelector?.("#make-image-primary-media");
+      const preservedImage = priorImage?.getAttribute("src") ? priorImage : null;
+      const focused = typeof document !== "undefined" ? document.activeElement : null;
+      const restore = focused?.id && this.hostElement.contains?.(focused) ? {
+        id: focused.id, start: focused.selectionStart, end: focused.selectionEnd,
+        scroll: focused.scrollTop
+      } : null;
       const p = this.getParts();
       if (!p) {
         this.hostElement.innerHTML = `
@@ -277,6 +324,10 @@
       const td = p.text.data || {};
       const cd = p.ctrl.data || {};
       const ad = p.asset?.data || {};
+      // A read-only canonical projection: legacy nodes stay the only writable
+      // draft until the Project API is migrated (#121/#122).
+      const effectiveSpec=this.getSpec();
+      if(effectiveSpec)this.context.effectiveCreationSpec=effectiveSpec;
 
       const isFusion = Boolean(sd.fusion);
       const style1Id = sd.style1 || "";
@@ -308,9 +359,17 @@
       const colorObj = selectedColors[0] ? this.getResourceInfo(selectedColors[0], "colors") : null;
 
       const currentPrompt = this.getPromptPreview();
-      const results = Array.isArray(this.context?.results) ? this.context.results : [];
-      const busy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
-      const statusText = this.context?.statusText || "";
+      const authoritative=this.context?.runProjection;
+      const localBusy=typeof this.actions?.isBusy==="function"
+        ? Boolean(this.actions.isBusy()):Boolean(this.context?.localBusy);
+      const remoteBusy=Boolean(authoritative?.ok && !authoritative.isTerminal);
+      const busy=localBusy||remoteBusy;
+      const results=authoritative?.ok
+        ? authoritative.results.map((it,i)=>({id:it.id||"run-"+i,
+            imageUrl:it.imageUrl,title:"生成结果 #"+(i+1),
+            item:{mediaId:it.mediaId,runId:authoritative.runId}}))
+        : (Array.isArray(this.context?.results)?this.context.results:[]);
+      const statusText=this.context?.statusText||"";
       const forkSource = this.context?.forkSource || this.forkSource || null;
 
       this.hostElement.innerHTML = `
@@ -331,7 +390,7 @@
           <form class="make-image-form" novalidate onsubmit="return false;">
             <div class="make-image-main-grid">
 
-              <!-- Row 1: Output Mode & Fusion Toggle in ONE Row (left-aligned) -->
+              <!-- Output mode is independent from the style/layout relationship. -->
               <div class="make-image-top-row">
                 <div class="make-image-inline-group">
                   <span class="make-image-field-label">生成方式</span>
@@ -341,27 +400,31 @@
                     `).join("")}
                   </div>
                 </div>
+              </div>
 
-                <div class="make-image-inline-group">
-                  <span class="make-image-field-label">画风模式</span>
-                  <div class="make-image-btn-group" role="group" aria-label="画风模式">
-                    <button type="button" class="btn btn-sm ${!isFusion ? "btn-primary is-active" : ""}" id="make-image-mode-single" aria-pressed="${!isFusion}">单画风</button>
-                    <button type="button" class="btn btn-sm ${isFusion ? "btn-primary is-active" : ""}" id="make-image-mode-fusion" aria-pressed="${isFusion}">双画风融合</button>
+              <!-- Style mode changes the style picker structure, so it is
+                   grouped with the actual style/layout controls. -->
+              <section class="make-image-resource-group" aria-label="画风与图型配置">
+                <div class="make-image-resource-head">
+                  <strong class="make-image-field-label">画风与图型</strong>
+                  <div class="make-image-style-mode-switch">
+                    <span class="make-image-field-label">画风模式</span>
+                    <div class="make-image-btn-group" role="group" aria-label="画风模式">
+                      <button type="button" class="btn btn-sm ${!isFusion ? "btn-primary is-active" : ""}" id="make-image-mode-single" aria-pressed="${!isFusion}">单画风</button>
+                      <button type="button" class="btn btn-sm ${isFusion ? "btn-primary is-active" : ""}" id="make-image-mode-fusion" aria-pressed="${isFusion}">双画风融合</button>
+                    </div>
                   </div>
                 </div>
-              </div>
-
-              <!-- Row 2: Main Pickers Row (3 cards or 4 cards with fusion) -->
-              <div class="make-image-pickers-row ${isFusion ? "has-style2" : ""}">
-                ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
-                ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
-                ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
-                ${this.renderPickerSlot("color", "主题色", colorObj, true)}
-              </div>
-
-              ${isFusion ? `
-                <div class="make-image-style-note" role="note">角色画风决定人物与主体的画法，场景画风决定背景与环境</div>
-              ` : ""}
+                <div class="make-image-pickers-row ${isFusion ? "has-style2" : ""}">
+                  ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
+                  ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
+                  ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
+                  ${this.renderPickerSlot("color", "主题色", colorObj, true)}
+                </div>
+                ${isFusion ? `
+                  <div class="make-image-style-note" role="note">角色画风决定主体，场景画风决定环境；切换模式会改变可选画风槽位，保留已选参数。</div>
+                ` : ""}
+              </section>
 
               <!-- Row 3: Topic / Subject Input -->
               <div class="make-image-field-wrap">
@@ -549,21 +612,31 @@
                   ${this.renderCostHtml()}
                 </div>
                 <div class="make-image-btn-wrap">
-                  ${busy ? `<span class="make-image-busy-hint">生成中 · 停止仅中断本地等待；已提交云端的任务可能继续执行或计费</span>` : ""}
-                  <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
-                  ${busy ? '<button type="button" class="btn btn-sm" id="make-image-btn-stop">停止等待</button>' : ""}
+                  ${busy ? `<span class="make-image-busy-hint">${localBusy?"正在提交/本地等待；停止不能保证取消已提交任务或退款":"服务端任务仍在进行，可刷新恢复并查看历史"}</span>` : ""}
+                  <button type="button" class="btn btn-sm make-image-btn-reset" id="make-image-btn-reset" ${busy || this.context?.pendingCloud ? "disabled" : ""}>清空表单</button>
+                  ${localBusy ? '<button type="button" class="btn btn-sm" id="make-image-btn-stop">停止等待</button>' : ""}
+                  <button type="button" class="btn btn-sm" id="make-image-btn-ai-plan" ${this.isPlanning ? 'disabled' : ''} title="根据主题和实际可用画风、图型规划，不触发付费生图">${this.isPlanning ? 'AI 正在规划…' : 'AI 辅助设计'}</button>
+                   ${this.context?.planUndoAvailable ? '<button type="button" class="btn btn-sm" id="make-image-btn-ai-undo">撤销 AI 规划</button>' : ''}
+                  ${authoritative?.canRetry && !busy ? '<button type="button" class="btn btn-sm" id="make-image-btn-retry">重试失败项</button>' : ""}
                   <button type="button" class="btn btn-primary make-image-btn-run" id="make-image-btn-run" ${busy ? "disabled" : ""}>
                     ${busy ? "正在生成中…" : "开始生成 (1张)"}
                   </button>
                 </div>
               </div>
 
+               ${this.context?.aiPhase?'<p id="make-image-ai-status" role="status" aria-live="polite" style="font-size:12px;">'+esc(this.context.aiPhase)+'</p>':''}
+               ${this.context?.aiProposal?.reasons?`<div class="make-image-ai-reasons" aria-label="AI 字段推荐理由" style="font-size:12px;padding:10px 0;line-height:1.7">
+                 <strong>AI 推荐理由</strong>
+                 <div>画风：${esc(this.context.aiProposal.reasons.style||"")}</div>
+                 <div>图型：${esc(this.context.aiProposal.reasons.layout||"")}</div>
+                 <div>画幅：${esc(this.context.aiProposal.reasons.ratio||"")}</div>
+               </div>`:""}
               <!-- Status text -->
               ${statusText ? `<div class="make-image-status" role="status">${esc(statusText)}</div>` : ""}
 
               <!-- Results Gallery -->
-              ${results.length ? `
-                <div class="make-image-results-section">
+              <div class="make-image-results-section make-image-result-workspace" aria-label="图片创作结果">
+                ${results.length ? `
                   <div class="make-image-results-head">
                     <h3 style="margin:0;font-size:15px;font-weight:700;">生成结果 (${results.length} 张)</h3>
                     <div style="display:flex;gap:8px;">
@@ -577,21 +650,294 @@
                         <div class="make-image-result-thumb">
                           <img src="${esc(r.imageUrl)}" alt="生成结果 #${idx + 1}" loading="lazy" />
                         </div>
-                        <div class="make-image-result-actions">
-                          <button type="button" class="btn btn-sm btn-primary" data-action="download" data-url="${esc(r.imageUrl)}">下载</button>
+                        <div class="make-image-result-caption">
+                          <strong class="make-image-result-title">${esc(r.title || `结果 #${idx + 1}`)}</strong>
+                          <div class="make-image-result-actions">
+                            <button type="button" class="btn btn-sm" data-action="view" data-result-idx="${idx}">查看大图</button>
+                            <button type="button" class="btn btn-sm btn-primary" data-action="download" data-url="${esc(r.imageUrl)}">下载</button>
+                            <button type="button" class="btn btn-sm" data-action="reference" data-result-idx="${idx}">作为参考图</button>
+                            <button type="button" class="btn btn-sm" data-action="canvas">进入画布</button>
+                          </div>
                         </div>
                       </div>
                     `).join("")}
                   </div>
-                </div>
-              ` : ""}
+              ` : `
+                  <div class="make-image-empty-result" role="status">
+                    <div class="make-image-empty-result-icon" aria-hidden="true">▧</div>
+                    <strong>${busy ? "图片正在生成中…" : "创作结果将在这里显示"}</strong>
+                    <p>${remoteBusy?"服务器正在执行已提交的任务，刷新不会遗失请求编号。":busy?"停止只结束本地等待，云端任务以服务器为准。":"左侧输入主题并选择画风，生成成功后可查看大图、下载或继续创作。"}</p>
+                  </div>
+              `}
+              </div>
 
             </div>
           </form>
         </div>
       `;
 
+      this.upgradeWorkspace(this.hostElement);
+      if (preservedImage) {
+        const fresh = this.hostElement.querySelector("#make-image-primary-media");
+        if (fresh && fresh.getAttribute("src") === preservedImage.getAttribute("src")) {
+          fresh.replaceWith(preservedImage);
+        }
+      }
       this.bindEvents(this.hostElement);
+      this.bindWorkspaceEvents(this.hostElement);
+      if (restore) {
+        const target = this.hostElement.querySelector("#" + restore.id);
+        if (target && typeof target.focus === "function") {
+          target.focus({preventScroll:true});
+          try {
+            if (Number.isInteger(restore.start) && typeof target.setSelectionRange === "function")
+              target.setSelectionRange(restore.start,restore.end);
+          } catch (_) {}
+          target.scrollTop = restore.scroll;
+        }
+      }
+    }
+
+
+    // Reorganize existing controls without recreating field logic or pickers.
+    // Moving real DOM nodes is deliberate: all legacy SC-021/022 and fusion
+    // inputs remain present and their old bindEvents handlers stay active.
+    upgradeWorkspace(root) {
+      const p=this.getParts();
+      if (!p) return;
+      const ctrl=p.ctrl.data;
+      if (this.lastControlId!==p.ctrl.id) {
+        this.previewVersionKey=null;
+        this.compareOpen=false;
+        this.recipeOpen=false;
+        this.settingsCollapsed=false;
+        this.lastControlId=p.ctrl.id;
+      }
+      const grid=root.querySelector(".make-image-main-grid");
+      const form=root.querySelector(".make-image-form");
+      const result=root.querySelector(".make-image-results-section");
+      if (!grid||!form||!result) return;
+      const advanced=root.querySelector(".make-image-more-list");
+      const subject=root.querySelector(".make-image-field-wrap");
+      const mode=root.querySelector(".make-image-top-row");
+      const pickerRow=root.querySelector(".make-image-pickers-row");
+      const color=root.querySelector('[data-pick-kind="color"]');
+      if(subject) grid.insertBefore(subject,grid.firstChild);
+      if(advanced&&mode)advanced.insertBefore(mode,advanced.firstChild);
+      if(advanced&&color)advanced.insertBefore(color,advanced.children[1]||null);
+      const refs=root.querySelector("#make-image-open-ref-picker")?.closest(".make-image-more-row");
+      if(refs){
+        const refPanel=document.createElement("div");
+        refPanel.className="make-image-quick-references";
+        refPanel.innerHTML='<div class="make-image-ref-heading"><strong>参考素材</strong><span>支持多图、粘贴及拖放 · 仅选用，不自动生成</span></div>'+
+          '<div id="make-image-ref-dropzone" class="make-image-ref-dropzone" tabindex="0" aria-label="粘贴或拖放参考图片">'+
+          '<button type="button" class="btn btn-sm" id="make-image-ref-upload">＋ 上传多张图片</button>'+
+          '<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden id="make-image-ref-files" />'+
+          '<span>或将图片拖入此处 / Ctrl+V 粘贴</span></div>';
+        refPanel.appendChild(refs);
+        if(advanced?.parentNode?.parentNode)grid.insertBefore(refPanel,grid.querySelector(".make-image-ratio-row"));
+        const items=Array.isArray(p.asset?.data?.items)?p.asset.data.items:[];
+        refs.querySelectorAll("[data-ref-card]").forEach(card=>{
+          const i=Number(card.getAttribute("data-ref-card"));
+          const entry=items[i];
+          const chooser=document.createElement("select");
+          chooser.className="make-image-ref-role";
+          chooser.setAttribute("data-ref-role",String(i));
+          chooser.setAttribute("aria-label","参考图用途");
+          const roles=[["other","通用参考"],["character","人物/角色"],["scene","场景"],["object","道具/物品"],["composition","构图"]];
+          chooser.innerHTML=roles.map(pair=>'<option value="'+pair[0]+'"'+(entry?.role===pair[0]?' selected':'')+'>'+pair[1]+'</option>').join("");
+          card.appendChild(chooser);
+        });
+      }
+      const layout=document.createElement("div");
+      layout.className="make-image-workspace-layout";
+      const settings=document.createElement("section");
+      settings.className="make-image-settings-panel";
+      const toggle=document.createElement("button");
+      toggle.type="button";
+      toggle.id="make-image-settings-collapse";
+      toggle.className="make-image-settings-collapse";
+      toggle.setAttribute("aria-expanded",String(!this.settingsCollapsed));
+      toggle.textContent=this.settingsCollapsed?"展开创作设置":"收起创作设置";
+      settings.appendChild(toggle);
+      grid.parentNode.insertBefore(layout,grid);
+      settings.appendChild(grid);
+      layout.appendChild(settings);
+      layout.appendChild(result);
+      if(this.settingsCollapsed)settings.classList.add("is-collapsed");
+
+      const V=global.HandrawQuickVersions;
+      const remote=this.context?.runProjection;
+      const live=Array.isArray(this.context?.results)?this.context.results:[];
+      const remoteItems=remote?.ok ? (remote.results||[]).map(it=>({
+        id:it.id,mediaId:it.mediaId,runId:remote.runId,
+        imageUrl:it.imageUrl,title:"生成图片",item:{...it,runId:remote.runId}
+      })) : [];
+      const prior=Array.isArray(ctrl.quickVersionHistory)?ctrl.quickVersionHistory:[];
+      const versions=V?V.merge(prior,[...live,...remoteItems],{
+        runId:remote?.runId||ctrl.runId||"",
+        runSpec:ctrl.quickLastSubmittedSpec||null
+      }):prior;
+      if(V&&JSON.stringify(prior)!==JSON.stringify(versions)){
+        ctrl.quickVersionHistory=versions;
+        this.actions?.persistDraft?.();
+      }
+      this.visibleVersions=versions;
+      const selected=V?.select(versions,this.previewVersionKey);
+      const selectedIndex=selected?versions.findIndex(v=>v.key===selected.key):-1;
+      const other=selectedIndex>0?versions[selectedIndex-1]:
+        selectedIndex===0&&versions.length>1?versions[1]:null;
+      const state=remote?.ok?(remote.viewStatus||remote.persistedStatus||"unknown"):
+        this.context?.localBusy?"running":ctrl.status==="stopped"?"cancel_requested":
+        ctrl.status==="error"?"failed":this.context?.pendingCloud?"unknown":"idle";
+      const statusMap={
+        idle:"可以开始创作",pending:"已提交 · 等待服务器确认",queued:"排队中",
+        running:"生成中 · 可以继续编辑左侧下一版草稿",uploading:"素材上传中",
+        success:"本次生成成功",partial:"部分完成",failed:"生成失败 · 旧版本仍可使用",
+        cancel_requested:"已停止本地等待 · 云端仍可能继续执行",
+        cancelled:"服务端确认取消",unknown:"状态待核对 · 请勿重复提交"
+      };
+      const busy=Boolean(this.context?.localBusy || (remote?.ok&&!remote.isTerminal) || this.context?.pendingCloud);
+      if(versions.length)layout.classList.add("has-results");
+      const safeValue=v=>esc(v==null?"":v);
+      const snapshot=selected?.recipeSnapshot||null;
+      const snapText=snapshot?JSON.stringify(snapshot,null,2):"这张历史图片没有可验证的 CreationSpec 快照；不会用当前草稿冒充本次配方。";
+      result.innerHTML='<header class="make-image-result-header"><div><small>图片创作 · 结果工作台</small>'+
+        '<h2>当前结果 <span>'+versions.length+' 个版本</span></h2></div>'+
+        '<button type="button" class="btn btn-sm" data-quick-action="compare" '+(versions.length<2?'disabled':'')+'>'+
+        (this.compareOpen?"关闭对比":"版本对比")+'</button></header>'+
+        '<div class="make-image-run-status" role="status" aria-live="polite"><span class="make-image-status-dot '+safeValue(state)+'"></span>'+
+        '<span>'+safeValue(statusMap[state]||"正在核对任务状态")+'</span>'+
+        (remote?.runId?'<code>Run '+safeValue(String(remote.runId).slice(0,18))+'</code>':"")+'</div>'+
+        (selected?
+          '<figure class="make-image-current-result"><div class="make-image-current-image">'+
+          '<img id="make-image-primary-media" src="'+safeValue(selected.imageUrl)+'" data-version-key="'+safeValue(selected.key)+
+          '" alt="'+safeValue(selected.title||"生成图片")+'" />'+
+          '</div><figcaption><strong>版本 '+(selectedIndex+1)+'</strong>'+
+          '<span>'+safeValue(selected.title||"生成图片")+'</span>'+
+          (selected.runId?'<small>Run '+safeValue(String(selected.runId).slice(0,18))+'</small>':"")+'</figcaption></figure>':
+          '<div class="make-image-empty-result" role="status"><strong>'+(busy?"任务已提交，正在等待生成结果":"创作结果将在这里出现")+
+          '</strong><p>'+(busy?"旧版本会继续保留；可在左侧准备下一次创作。":"输入主题，选择画风与图型，然后生成第一张图片。")+'</p></div>')+
+        (selected?'<div class="make-image-result-toolbar" aria-label="当前图片操作">'+
+          '<button type="button" class="btn btn-sm" data-quick-action="view">放大</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="download">原图下载</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="again" '+(busy?'disabled':'')+'>同配方再来一张</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="reference">作为参考</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="variant">生成变体</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="recipe">真实配方</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="series">进入系列</button>'+
+          '<button type="button" class="btn btn-sm" data-quick-action="canvas">进入画布</button>'+
+          '</div>':"")+
+        (selected&&this.recipeOpen?'<pre class="make-image-recipe-snapshot">'+safeValue(snapText)+'</pre>':"")+
+        (versions.length?'<div class="make-image-version-section"><h3>创作版本 · 选择缩略图查看</h3>'+
+          '<div class="make-image-version-strip" role="list">'+versions.map((v,i)=>
+            '<button type="button" role="listitem" class="make-image-version-tile '+(selected?.key===v.key?"is-selected":"")+
+            '" data-quick-version="'+safeValue(v.key)+'" aria-label="选择版本 '+(i+1)+'" aria-pressed="'+(selected?.key===v.key)+'">'+
+            '<img src="'+safeValue(v.imageUrl)+'" alt="" loading="lazy" /><small>V'+(i+1)+'</small></button>'
+          ).join("")+'</div></div>':"")+
+        (this.compareOpen&&selected&&other?
+          '<div class="make-image-comparison"><h3>版本并排比较</h3><div class="make-image-compare-grid">'+
+          [other,selected].map(v=>'<figure><img src="'+safeValue(v.imageUrl)+'" alt="'+safeValue(v.title)+'" />'+
+            '<figcaption>'+safeValue(v.mediaId)+(v.recipeSnapshot?
+              '<pre>'+safeValue(JSON.stringify({style:v.recipeSnapshot.style?.id,layout:v.recipeSnapshot.layout?.id,
+                ratio:v.recipeSnapshot.ratio,subject:v.recipeSnapshot.subject},null,2))+'</pre>':
+              '<small>配方快照不可用</small>')+'</figcaption></figure>').join("")+
+          '</div></div>':"");
+      const aiReview=this.context?.aiReview;
+      if(aiReview?.changes?.length){
+        const anchor=grid.querySelector(".make-image-action-bar");
+        const card=document.createElement("div");
+        card.className="make-image-ai-review";
+        card.innerHTML='<h3>AI 辅助设计建议 · 审阅后采纳</h3><p>只建议已授权资源；不会自动生成或扣费。原有人工选择默认保留。</p>'+
+          aiReview.changes.map((c,i)=>'<label class="make-image-ai-choice">'+
+            '<input type="checkbox" data-quick-ai-choice="'+i+'" '+(c.locked?'disabled':c.conflict?'':'checked')+' />'+
+            '<span><strong>'+safeValue(c.field)+'</strong> '+safeValue(c.from?.id||c.from||"未选")+
+            ' → '+safeValue(c.to?.id||c.to||"未选")+
+            '<small>'+safeValue(c.reason||"")+(c.locked?" · 已锁定，不能覆盖":c.conflict?" · 人工设置，需明确勾选":"")+'</small></span></label>').join("")+
+          '<div class="make-image-ai-review-actions"><button type="button" class="btn btn-sm" data-quick-ai="discard">保留原方案</button>'+
+          '<button type="button" class="btn btn-primary btn-sm" data-quick-ai="accept">采纳选中建议</button></div>';
+        grid.insertBefore(card,anchor||null);
+      }
+    }
+
+    bindWorkspaceEvents(root) {
+      const p=this.getParts();
+      if(!p)return;
+      const versions=this.visibleVersions||[];
+      const selected=()=>versions.find(v=>v.key===this.previewVersionKey)||versions[versions.length-1]||null;
+      const toast=msg=>global.HANDRAW_SHARED?.toast?.(msg);
+      root.querySelector("#make-image-settings-collapse")?.addEventListener("click",()=>{
+        this.settingsCollapsed=!this.settingsCollapsed;this.render();
+      });
+      root.querySelectorAll("[data-quick-version]").forEach(btn=>btn.addEventListener("click",()=>{
+        this.previewVersionKey=btn.getAttribute("data-quick-version");
+        this.compareOpen=false;this.render();
+      }));
+      root.querySelectorAll("[data-quick-action]").forEach(btn=>btn.addEventListener("click",()=>{
+        const v=selected();
+        const action=btn.getAttribute("data-quick-action");
+        if(action==="compare"){this.compareOpen=!this.compareOpen;this.render();return;}
+        if(!v)return;
+        if(action==="view")return this.actions?.openImageLightbox?.(v.imageUrl,v.title);
+        if(action==="download"){
+          const a=document.createElement("a");a.href=v.imageUrl;a.download="handraw-"+v.mediaId+".webp";
+          a.rel="noopener";a.click();return;
+        }
+        if(action==="recipe"){this.recipeOpen=!this.recipeOpen;this.render();return;}
+        if(action==="canvas")return this.actions?.openCanvas?.(v);
+        if(action==="series")return this.actions?.openSeries?.(v);
+        if(action==="reference"||action==="variant"){
+          this.actions?.addResultAsReference?.({imageUrl:v.imageUrl,title:v.title,item:{mediaId:v.mediaId}});
+          if(action==="variant"){
+            toast("已将选中版本加入参考；请描述希望保留及修改的内容，再生成变体");
+            this.hostElement?.querySelector("#make-image-subject")?.focus();
+          }return;
+        }
+        if(action==="again"){
+          const spec=v.recipeSnapshot;
+          if(!spec){toast("历史结果缺少真实配方快照，不能冒充同配方生成；请使用当前设置生成");return;}
+          const delta={};
+          for(const field of ["subject","style","secondaryStyle","layout","colors","tones",
+            "moods","customMood","whitespace","audience","businessScene",
+            "outputMode","ratio","fusionEnabled","layoutParams"]){
+            if(Object.prototype.hasOwnProperty.call(spec,field))delta[field]=spec[field];
+          }
+          if(!this.patchSpec(delta))return;
+          this.actions?.persistDraft?.();
+          this.actions?.run?.();
+        }
+      }));
+      root.querySelectorAll("[data-quick-ai]").forEach(btn=>btn.addEventListener("click",()=>{
+        const report=this.context?.aiReview;
+        if(btn.getAttribute("data-quick-ai")==="discard")return this.actions?.discardPlan?.();
+        const approved=[...root.querySelectorAll("[data-quick-ai-choice]:checked")].map(input=>
+          report?.changes?.[Number(input.getAttribute("data-quick-ai-choice"))]?.key).filter(Boolean);
+        this.actions?.applyPlan?.(approved);
+      }));
+      root.querySelectorAll("[data-ref-role]").forEach(select=>select.addEventListener("change",()=>{
+        const idx=Number(select.getAttribute("data-ref-role"));
+        const items=(p.asset?.data?.items||[]).map((v,i)=>i===idx?{...v,role:select.value}:v);
+        this.actions?.ensureAssetItems?.(items);
+      }));
+      const fileInput=root.querySelector("#make-image-ref-files");
+      root.querySelector("#make-image-ref-upload")?.addEventListener("click",()=>fileInput?.click());
+      fileInput?.addEventListener("change",()=>{
+        if(fileInput.files?.length)this.actions?.uploadReferenceFiles?.([...fileInput.files]);
+        fileInput.value="";
+      });
+      const zone=root.querySelector("#make-image-ref-dropzone");
+      zone?.addEventListener("dragover",e=>{e.preventDefault();zone.classList.add("is-dragging");});
+      zone?.addEventListener("dragleave",()=>zone.classList.remove("is-dragging"));
+      zone?.addEventListener("drop",e=>{
+        e.preventDefault();zone.classList.remove("is-dragging");
+        if(e.dataTransfer?.files?.length)this.actions?.uploadReferenceFiles?.([...e.dataTransfer.files]);
+      });
+      // Re-renders share the same host: assign once instead of stacking handlers.
+      root.onpaste=e=>{
+        const files=[...(e.clipboardData?.items||[])].filter(i=>i.kind==="file"&&i.type.startsWith("image/"))
+          .map(i=>i.getAsFile()).filter(Boolean);
+        if(files.length){e.preventDefault();this.actions?.uploadReferenceFiles?.(files);}
+      };
     }
 
     bindEvents(root) {
@@ -607,16 +953,17 @@
       const btnSingle = root.querySelector("#make-image-mode-single");
       if (btnSingle) {
         btnSingle.onclick = () => {
-          sd.fusion = false;
-          sd.style2 = "";
-          this.actions?.markDirtyAndRender();
+          if (this.patchSpec({fusionEnabled:false},()=>{sd.fusion=false})) {
+            // The second style remains stored, but is not sent in a Run.
+            this.actions?.markDirtyAndRender();
+          }
         };
       }
       const btnFusion = root.querySelector("#make-image-mode-fusion");
       if (btnFusion) {
         btnFusion.onclick = () => {
-          sd.fusion = true;
-          this.actions?.markDirtyAndRender();
+          if (this.patchSpec({fusionEnabled:true},()=>{sd.fusion=true}))
+            this.actions?.markDirtyAndRender();
         };
       }
 
@@ -636,13 +983,15 @@
             field,
             kind,
             currentId,
-            onSelect: (id) => {
-              if (kind === "color") {
-                sd.colors = id ? [id] : [];
-              } else {
-                sd[field] = id || "";
-              }
-              this.actions?.markDirtyAndRender();
+            onSelect: (id, ref) => {
+              const names={style1:"style",style2:"secondaryStyle",layout:"layout",colors:"colors"};
+              const key=names[field];
+              if (this.patchSpec({[key]:kind==="color"?(id?[ref||id]:[]):(ref||id||null)},()=>{
+                if (kind==="color") sd.colors=id?[id]:[];
+                else sd[field]=id||"";
+                sd.resourceRefs={...(sd.resourceRefs||{}),
+                  [key]:kind==="color"?(ref?[ref]:[]):(ref||null)};
+              })) this.actions?.markDirtyAndRender();
             }
           });
         };
@@ -658,11 +1007,12 @@
         btn.onclick = (e) => {
           e.stopPropagation();
           const kind = btn.getAttribute("data-clear-kind");
-          if (kind === "style1") sd.style1 = "";
-          else if (kind === "style2") sd.style2 = "";
-          else if (kind === "layout") sd.layout = "";
-          else if (kind === "color") sd.colors = [];
-          this.actions?.markDirtyAndRender();
+          const field={style1:"style",style2:"secondaryStyle",layout:"layout",color:"colors"}[kind];
+          if (field && this.patchSpec({[field]:field==="colors"?[]:null},()=>{
+            if(kind==="color") sd.colors=[];
+            else sd[kind]="";
+            if(sd.resourceRefs)sd.resourceRefs[field]=field==="colors"?[]:null;
+          }))this.actions?.markDirtyAndRender();
         };
       });
 
@@ -691,7 +1041,7 @@
         activeSubjectFlush = flushPersist;
         ensureBeforeUnloadHandler();
         subjInput.oninput = () => {
-          td.text = subjInput.value;
+          this.patchSpec({subject:subjInput.value},()=>{td.text=subjInput.value});
           this.syncPromptPreview();
           updateClearSubjBtn();
           if (debounceTimer) clearTimeout(debounceTimer);
@@ -701,7 +1051,10 @@
           }, 350);
         };
         subjInput.onchange = () => {
-          td.text = subjInput.value;
+          // Input already committed this value. Clicking a view switch also
+          // fires change; do not create a second Spec revision for that blur.
+          if (td.text !== subjInput.value)
+            this.patchSpec({subject:subjInput.value},()=>{td.text=subjInput.value});
           this.syncPromptPreview();
           updateClearSubjBtn();
           flushPersist();
@@ -714,7 +1067,7 @@
       // Clear subject button
       if (clearSubjBtn) {
         clearSubjBtn.onclick = () => {
-          td.text = "";
+          if(!this.patchSpec({subject:""},()=>{td.text=""}))return;
           td.subjectHint = "";
           this.actions?.markDirtyAndRender();
           const input = this.hostElement?.querySelector("#make-image-subject");
@@ -726,20 +1079,25 @@
       root.querySelectorAll("[data-set-mode]").forEach((btn) => {
         btn.onclick = () => {
           const mode = btn.getAttribute("data-set-mode");
-          cd.mode = mode;
-          const opt = OUTPUT_MODE_OPTIONS.find((m) => m.id === mode);
-          if (opt && opt.defaultRatio) {
-            cd.ratio = opt.defaultRatio;
-          }
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({outputMode:mode},()=>{
+            if(global.HandrawStudioCore) global.HandrawStudioCore.setMode(cd,mode);
+            else {
+              const oldDefault=OUTPUT_MODE_OPTIONS.find(m=>m.id===cd.mode)?.defaultRatio||"3:4";
+              const explicit=cd.ratioSource==="user" || (cd.ratio && cd.ratio!==oldDefault);
+              cd.mode=mode;
+              if(!explicit)cd.ratio=OUTPUT_MODE_OPTIONS.find(m=>m.id===mode)?.defaultRatio||"3:4";
+              cd.ratioSource=explicit?"user":"default";
+            }
+          }))this.actions?.markDirtyAndRender();
         };
       });
 
       // 5. Ratio buttons
       root.querySelectorAll("[data-set-ratio]").forEach((btn) => {
         btn.onclick = () => {
-          cd.ratio = btn.getAttribute("data-set-ratio");
-          this.actions?.markDirtyAndRender();
+          const ratio=btn.getAttribute("data-set-ratio");
+          if(this.patchSpec({ratio},()=>{cd.ratio=ratio;cd.ratioSource="user"}))
+            this.actions?.markDirtyAndRender();
         };
       });
 
@@ -749,7 +1107,7 @@
         ratioInput.oninput = () => {
           const val = ratioInput.value.trim();
           if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
-            cd.ratio = val;
+            if(!this.patchSpec({ratio:val},()=>{cd.ratio=val;cd.ratioSource="user"}))return;
             root.querySelectorAll("[data-set-ratio]").forEach((b) => {
               const match = b.getAttribute("data-set-ratio") === val;
               b.classList.toggle("btn-primary", match);
@@ -762,8 +1120,8 @@
         ratioInput.onchange = () => {
           const val = ratioInput.value.trim();
           if (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(val)) {
-            cd.ratio = val;
-            this.actions?.markDirtyAndRender();
+            if(this.patchSpec({ratio:val},()=>{cd.ratio=val;cd.ratioSource="user"}))
+              this.actions?.markDirtyAndRender();
           } else {
             ratioInput.value = cd.ratio || "3:4";
           }
@@ -796,8 +1154,8 @@
         btn.onclick = (e) => {
           e.stopPropagation();
           const tid = btn.getAttribute("data-del-tone");
-          sd.tones = (sd.tones || []).filter((x) => x !== tid);
-          this.actions?.markDirtyAndRender();
+          const tones=(sd.tones||[]).filter(x=>x!==tid);
+          if(this.patchSpec({tones},()=>{sd.tones=tones}))this.actions?.markDirtyAndRender();
         };
       });
 
@@ -819,8 +1177,9 @@
         const applyMoods = (triggerRender = false) => {
           const presetSet = this.getKnownPresetMoods();
           const parsed = parseMoodsText(moodsInput.value, presetSet);
-          sd.moods = parsed.moods;
-          sd.customMood = parsed.customMood;
+          if(!this.patchSpec({moods:parsed.moods,customMood:parsed.customMood},()=>{
+            sd.moods=parsed.moods;sd.customMood=parsed.customMood;
+          }))return;
           if (triggerRender) {
             this.actions?.markDirtyAndRender();
           } else {
@@ -839,8 +1198,9 @@
       // Whitespace
       root.querySelectorAll("[data-set-ws]").forEach((btn) => {
         btn.onclick = () => {
-          sd.whitespace = btn.getAttribute("data-set-ws") || "";
-          this.actions?.markDirtyAndRender();
+          const whitespace=btn.getAttribute("data-set-ws")||"";
+          if(this.patchSpec({whitespace},()=>{sd.whitespace=whitespace}))
+            this.actions?.markDirtyAndRender();
         };
       });
 
@@ -848,12 +1208,12 @@
       const audInput = root.querySelector("#make-image-audience");
       if (audInput) {
         audInput.oninput = () => {
-          sd.audience = audInput.value.trim();
+          this.patchSpec({audience:audInput.value.trim()},()=>{sd.audience=audInput.value.trim()});
           this.syncPromptPreview();
         };
         audInput.onchange = () => {
-          sd.audience = audInput.value.trim();
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({audience:audInput.value.trim()},()=>{sd.audience=audInput.value.trim()}))
+            this.actions?.markDirtyAndRender();
         };
       }
 
@@ -861,12 +1221,12 @@
       const sceneInput = root.querySelector("#make-image-business-scene");
       if (sceneInput) {
         sceneInput.oninput = () => {
-          sd.businessScene = sceneInput.value.trim();
+          this.patchSpec({businessScene:sceneInput.value.trim()},()=>{sd.businessScene=sceneInput.value.trim()});
           this.syncPromptPreview();
         };
         sceneInput.onchange = () => {
-          sd.businessScene = sceneInput.value.trim();
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({businessScene:sceneInput.value.trim()},()=>{sd.businessScene=sceneInput.value.trim()}))
+            this.actions?.markDirtyAndRender();
         };
       }
 
@@ -874,8 +1234,8 @@
       const sc021Select = root.querySelector("#make-image-sc021-select");
       if (sc021Select) {
         sc021Select.onchange = () => {
-          sd.sc021Type = sc021Select.value;
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({layoutParams:{sc021Type:sc021Select.value}},
+            ()=>{sd.sc021Type=sc021Select.value}))this.actions?.markDirtyAndRender();
         };
       }
 
@@ -883,23 +1243,23 @@
       const sc022NameInput = root.querySelector("#make-image-sc022-name");
       if (sc022NameInput) {
         sc022NameInput.oninput = () => {
-          sd.sc022Name = sc022NameInput.value.trim();
+          this.patchSpec({layoutParams:{sc022Name:sc022NameInput.value.trim()}},()=>{sd.sc022Name=sc022NameInput.value.trim()});
           this.syncPromptPreview();
         };
         sc022NameInput.onchange = () => {
-          sd.sc022Name = sc022NameInput.value.trim();
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({layoutParams:{sc022Name:sc022NameInput.value.trim()}},()=>{sd.sc022Name=sc022NameInput.value.trim()}))
+            this.actions?.markDirtyAndRender();
         };
       }
       const sc022PinyinInput = root.querySelector("#make-image-sc022-pinyin");
       if (sc022PinyinInput) {
         sc022PinyinInput.oninput = () => {
-          sd.sc022Pinyin = sc022PinyinInput.value.trim();
+          this.patchSpec({layoutParams:{sc022Pinyin:sc022PinyinInput.value.trim()}},()=>{sd.sc022Pinyin=sc022PinyinInput.value.trim()});
           this.syncPromptPreview();
         };
         sc022PinyinInput.onchange = () => {
-          sd.sc022Pinyin = sc022PinyinInput.value.trim();
-          this.actions?.markDirtyAndRender();
+          if(this.patchSpec({layoutParams:{sc022Pinyin:sc022PinyinInput.value.trim()}},()=>{sd.sc022Pinyin=sc022PinyinInput.value.trim()}))
+            this.actions?.markDirtyAndRender();
         };
       }
 
@@ -954,15 +1314,16 @@
       // 8. Reset form button
       const resetBtn = root.querySelector("#make-image-btn-reset");
       if (resetBtn) {
-        resetBtn.onclick = () => {
+        resetBtn.onclick = async () => {
           const currentBusy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
-          if (currentBusy) {
-            global.HANDRAW_SHARED?.toast?.("任务处理中，暂不能清空或再次生成");
+          if (currentBusy || this.context?.pendingCloud ||
+              (this.context?.runProjection?.ok && !this.context.runProjection.isTerminal)) {
+            global.HANDRAW_SHARED?.toast?.("存在云端未确认任务，请先在生图历史查看结果，避免丢失恢复编号");
             return;
           }
-          const ok = typeof window.confirm === "function"
-            ? window.confirm("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？")
-            : true;
+          const ok = await global.HANDRAW_SHARED?.confirmAction?.(
+            "清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？",
+            { title: "清空图片创作设置", danger: true, confirmText: "清空" });
           if (!ok) return;
 
           if (typeof this.actions?.isBusy === "function" && this.actions.isBusy()) {
@@ -972,6 +1333,7 @@
 
           cd.mode = "graphic-text";
           cd.ratio = "3:4";
+          cd.ratioSource = "default";
           cd.count = 1;
           cd.status = "idle";
           delete cd.error;
@@ -1055,18 +1417,52 @@
         };
       }
 
+      // A plan is distinct from generation. No duplicate confirmation modal.
+      const planBtn = root.querySelector("#make-image-btn-ai-plan");
+      if (planBtn) planBtn.onclick = async () => {
+        const subject = String(td.text || "").trim();
+        if (!subject) {
+          global.HANDRAW_SHARED?.toast?.("请先填写创作主题，再使用 AI 辅助设计");
+          return;
+        }
+        if (this.isPlanning) return;
+        this.isPlanning = true;
+        planBtn.disabled = true;
+        planBtn.textContent = "AI 正在规划…";
+        try {
+          await this.actions?.plan?.();
+        } finally {
+          this.isPlanning = false;
+          if (planBtn.isConnected) {
+            planBtn.disabled = false;
+            planBtn.textContent = "AI 辅助设计";
+          }
+        }
+      };
+
+      const aiUndo = root.querySelector("#make-image-btn-ai-undo");
+      if(aiUndo)aiUndo.onclick=()=>this.actions?.undoPlan?.();
+ 
       // 9. Run button
       const runBtn = root.querySelector("#make-image-btn-run");
       if (runBtn) {
         runBtn.onclick = () => {
-          const currentBusy = typeof this.actions?.isBusy === "function" ? this.actions.isBusy() : Boolean(this.context?.busy);
-          if (currentBusy) {
-            global.HANDRAW_SHARED?.toast?.("任务处理中，暂不能清空或再次生成");
+          const currentBusy = typeof this.actions?.isBusy === "function" ?
+            this.actions.isBusy():Boolean(this.context?.busy);
+          const remote=this.context?.runProjection;
+          if (currentBusy || (remote?.ok && !remote.isTerminal)) {
+            global.HANDRAW_SHARED?.toast?.("服务器仍在处理上一个任务，请查看当前状态后再生成");
             return;
           }
           this.actions?.run();
         };
       }
+
+      const retryBtn=root.querySelector("#make-image-btn-retry");
+      if(retryBtn)retryBtn.onclick=()=>{
+        if(this.actions?.isBusy?.())return;
+        this.actions?.retry?.();
+      };
 
       // 9. Results Actions
       root.querySelectorAll("[data-action='download']").forEach((btn) => {
@@ -1081,9 +1477,34 @@
         };
       });
 
+      root.querySelectorAll("[data-action='view']").forEach(btn => {
+        btn.onclick = () => {
+          const index = Number(btn.getAttribute("data-result-idx"));
+          const result = this.context?.results?.[index];
+          if (result?.imageUrl && this.actions?.openImageLightbox) {
+            this.actions.openImageLightbox(result.imageUrl, result.title || "生成图片");
+          }
+        };
+      });
+      root.querySelectorAll("[data-action='reference']").forEach(btn => {
+        btn.onclick = () => {
+          const index = Number(btn.getAttribute("data-result-idx"));
+          const result = this.context?.results?.[index];
+          if (result?.imageUrl) this.actions?.addResultAsReference?.(result);
+        };
+      });
+      root.querySelectorAll("[data-action='canvas']").forEach(btn => {
+        btn.onclick = () => this.actions?.openCanvas?.();
+      });
+
       const againBtn = root.querySelector("#make-image-btn-again");
       if (againBtn) {
         againBtn.onclick = () => {
+          if(this.actions?.isBusy?.() ||
+              (this.context?.runProjection?.ok && !this.context.runProjection.isTerminal)){
+            global.HANDRAW_SHARED?.toast?.("请先确认当前云端任务已结束");
+            return;
+          }
           this.actions?.run();
         };
       }
@@ -1091,7 +1512,7 @@
       const newThemeBtn = root.querySelector("#make-image-btn-new-theme");
       if (newThemeBtn) {
         newThemeBtn.onclick = () => {
-          td.text = "";
+          if(!this.patchSpec({subject:""},()=>{td.text=""}))return;
           td.subjectHint = "";
           this.actions?.markDirtyAndRender();
           const input = this.hostElement?.querySelector("#make-image-subject");

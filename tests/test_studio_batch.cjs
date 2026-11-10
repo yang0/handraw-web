@@ -387,6 +387,7 @@ function createFakeDom() {
 console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
 // ==========================================
+async function runTests() {
 // Requirement 1: 固定图型 (Fixed Layout)
 // 主题文本框 -> promptListText，图型取控制节点；生成的 specs 与改前逐项一致
 // ==========================================
@@ -1352,17 +1353,24 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   const btnReset = fakeHost.querySelector("#batch-btn-reset");
   assert.ok(btnReset, "Should find #batch-btn-reset");
 
-  // A. Cancel confirm: nothing changes
+  // A. Cancel in-app confirm: no state change or default acceptance
   let confirmPrompt = "";
-  sandbox.window.confirm = (msg) => { confirmPrompt = msg; return false; };
-  btnReset.onclick();
+  let userApproved = false;
+  sandbox.window.HANDRAW_SHARED = {
+    ...(sandbox.window.HANDRAW_SHARED || {}),
+    confirmAction: async (msg) => {
+      confirmPrompt = msg;
+      return userApproved;
+    }
+  };
+  await btnReset.onclick();
   assert.ok(confirmPrompt.includes("清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？"), "Confirm message must match specification");
   assert.equal(parts.loop.data.batchLayoutMode, "ai", "Mode should remain AI on cancel");
   assert.equal(dirtyCalled, false, "markDirty must not be called on cancel");
 
-  // B. Accept confirm: restores all defaults
-  sandbox.window.confirm = () => true;
-  btnReset.onclick();
+  // B. Explicit in-app approval restores all defaults
+  userApproved = true;
+  await btnReset.onclick();
 
   assert.equal(dirtyCalled, true, "markDirty must be called on confirm");
   assert.equal(parts.ctrl.data.mode, "graphic-text", "mode must reset to graphic-text");
@@ -1571,3 +1579,6 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 console.log("\n==========================================");
 console.log("All 19 Studio Batch tests passed successfully!");
 console.log("==========================================");
+
+}
+runTests().catch((error) => { console.error(error); process.exitCode = 1; });

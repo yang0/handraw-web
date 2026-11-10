@@ -18,15 +18,22 @@ from backend.config import get_uploads_dir
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, required=True, help="Path to SQLite database")
+    database = parser.add_mutually_exclusive_group(required=True)
+    database.add_argument("--db", type=Path, help="Path to isolated SQLite database")
+    database.add_argument("--pg-dsn-env", type=str, help="Environment variable holding read-only PG17 DSN (never pass a secret on CLI)")
     parser.add_argument("--skill-root", type=Path, required=True, help="Path to <Skill>/skills/handdraw-style-prompter")
-    parser.add_argument("--out", type=Path, default=Path(".local/export-official"), help="Output directory")
+    parser.add_argument("--out", type=Path, default=Path(".local/export-official"), help="New empty output directory")
     args = parser.parse_args()
 
-    db_path = args.db.resolve()
-    if not db_path.is_file():
-        print(f"Error: 数据库文件不存在: {db_path}", file=sys.stderr)
+    db_path = args.db.resolve() if args.db else None
+    if db_path is not None and not db_path.is_file():
+        print("Error: SQLite 数据库文件不存在", file=sys.stderr)
         sys.exit(1)
+    if args.pg_dsn_env:
+        import re
+        if not re.fullmatch(r"HANDRAW_[A-Z][A-Z0-9_]{0,80}", args.pg_dsn_env) or not os.environ.get(args.pg_dsn_env):
+            print("Error: 需提供受控的 PG 只读连接环境变量", file=sys.stderr)
+            sys.exit(1)
 
     skill_root = args.skill_root.resolve()
     if not skill_root.is_dir():
@@ -39,19 +46,34 @@ def main() -> None:
         print(f"Error: Skill references 文件不存在: {skill_styles_file} 或 {skill_layouts_file}", file=sys.stderr)
         sys.exit(1)
 
-    # 1. Read official assets from DB
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        official_assets = conn.execute(
-            "SELECT * FROM catalog_assets WHERE source_type = 'official' ORDER BY code ASC"
-        ).fetchall()
-    finally:
-        conn.close()
+    # 1. Read website-approved official assets from DB. Do NOT create tables,
+    # migrate schemas or issue a write. PG requires a separate read-only role.
+    query = ("SELECT * FROM catalog_assets WHERE source_type = 'official' "
+             "AND status = 'published' ORDER BY code ASC")
+    if db_path is not None:
+        conn = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            official_assets = conn.execute(query).fetchall()
+        finally:
+            conn.close()
+    else:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+            with psycopg.connect(os.environ[args.pg_dsn_env], row_factory=dict_row,
+                                 autocommit=False, connect_timeout=5) as conn:
+                conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                official_assets = conn.execute(query).fetchall()
+        except Exception:
+            # Never render the DSN or raw server errors to public CI logs.
+            print("Error: PostgreSQL 只读官方目录导出失败；检查数据库权限与连接", file=sys.stderr)
+            sys.exit(2)
 
     if not official_assets:
-        print("未找到 source_type='official' 的官方新增资产。")
-        sys.exit(0)
+        # A verified empty official DB is still evidence: write two explicit
+        # [] snapshots for the strict parity release gate, not no files.
+        print("数据库中无已发布的新增官方资源；将导出两份空列表供严格审计。")
 
     # 2. Collision check (同号防护)
     skill_styles = json.loads(skill_styles_file.read_text(encoding="utf-8"))
@@ -105,6 +127,13 @@ def main() -> None:
     exported_styles: list[dict[str, Any]] = []
     exported_layouts: list[dict[str, Any]] = []
     layout_prompts: dict[str, str] = {}
+    # A release artifact must not silently retain assets from an older export.
+    # In particular, a newly hidden/unapproved resource must never survive in
+    # an existing directory and be mistakenly published to Skill.
+    if args.out.is_symlink() or (args.out.exists() and
+                                   (not args.out.is_dir() or any(args.out.iterdir()))):
+        print("拒绝导出：目标必须是新的空目录，禁止覆盖旧发布包", file=sys.stderr)
+        sys.exit(2)
     out_dir = args.out.resolve()
 
     for row in official_assets:

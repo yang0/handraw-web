@@ -28,7 +28,7 @@ from pathlib import Path
 import logging
 
 logger = logging.getLogger("backend.server")
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .admin_services import (
@@ -229,8 +229,18 @@ def gateway_request(path: str, payload: dict[str, Any] | None = None, timeout: i
         headers["Content-Type"] = "application/json"
         data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST" if payload is not None else "GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    # A credentialed gateway response must NEVER redirect this Bearer token
+    # to an arbitrary host (urllib's default redirect handler forwards custom
+    # headers).  A 30x is an explicit gateway error for the caller to classify.
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    with opener.open(req, timeout=timeout) as resp:
+        raw = resp.read(4 * 1024 * 1024 + 1)
+    if len(raw) > 4 * 1024 * 1024:
+        raise ValueError("网关 JSON 响应超过 4MB 安全上限")
+    result = json.loads(raw.decode("utf-8"))
+    if not isinstance(result, dict):
+        raise ValueError("网关 JSON 响应必须是对象")
+    return result
 
 
 def _safe_generated_stem(filename_stem: str) -> str:
@@ -398,6 +408,9 @@ class GenerationReconciler:
         self.interval_seconds = max(5, min(120, configured))
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # Prevent a stuck gateway from flooding logs every 15 seconds.
+        # The durable reservation remains authoritative across restarts.
+        self._next_unconfirmed_warning_at = 0.0
 
     def reconcile_once(self, lease=None) -> int:
         cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -439,14 +452,26 @@ class GenerationReconciler:
                 result = gateway_request(f"/api/image-tasks?ids={urllib.parse.quote(lookup_id)}", timeout=12)
                 items = result.get("items") or []
                 if not items:
+                    # An empty lookup is NOT proof that the provider never
+                    # accepted the submission.  Some gateways index tasks
+                    # asynchronously or temporarily return empty collections.
+                    # Never turn an unknown paid attempt into a free generation.
+                    # Keep its durable reservation intact for an authoritative
+                    # provider status or an explicitly audited manual decision.
                     created_dt = _parse_created_at_dt(row["created_at"])
-                    if created_dt and created_dt < (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES)):
-                        refund_failed_cloud_generation(
-                            self.db,
-                            generation_id,
-                            "网关未收到任务，已退还",
-                        )
-                        handled += 1
+                    if created_dt and created_dt < (
+                        datetime.now(timezone.utc)
+                        - timedelta(minutes=RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES)
+                    ):
+                        now_monotonic = time.monotonic()
+                        if now_monotonic >= self._next_unconfirmed_warning_at:
+                            logger.warning(
+                                "worker=generation-reconciler phase=unconfirmed-task "
+                                "generation_id=%s age_over_minutes=%s "
+                                "action=manual-provider-ledger-reconciliation-required",
+                                generation_id, RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES,
+                            )
+                            self._next_unconfirmed_warning_at = now_monotonic + 900
                     continue
                 item = items[0] if isinstance(items[0], dict) else {}
                 actual_id = str(item.get("id") or lookup_id)
@@ -1226,6 +1251,61 @@ def resolve_local_ref_image(
     return {"b64_json": base64.b64encode(raw_bytes).decode("ascii"), "mime_type": mime}
 
 
+
+def preflight_generation_references(
+    body: dict[str, Any],
+    resolve_one: Callable[[str], dict[str, str] | None],
+) -> list[dict[str, str]]:
+    """Resolve all user-selected references before a charge/reservation.
+
+    An inaccessible private media URL, deleted file, unsupported blob: preview
+    or invalid data-image must NEVER turn into a billable request with silently
+    omitted references. Caller supplies an owner-scoped resolve_one closure;
+    reusable across quick, series and canvas generation.
+    """
+    from .services import ServiceError
+
+    raw = body.get("refImages") or []
+    if not isinstance(raw, list) or len(raw) > 6:
+        raise ServiceError(
+            "参考素材最多选择 6 张，请重新选择",
+            status=400, code="invalid_generation_references",
+        )
+    custom = body.get("customRefImg")
+    refs = ([custom] if custom else []) + raw
+    if len(refs) > 7:
+        raise ServiceError(
+            "参考素材超过数量上限",
+            status=400, code="invalid_generation_references",
+        )
+    out: list[dict[str, str]] = []
+    for value in refs:
+        if not isinstance(value, str) or not value.strip():
+            raise ServiceError(
+                "参考素材格式不合法，请重新选择",
+                status=400, code="invalid_generation_reference",
+            )
+        try:
+            resolved = resolve_one(value)
+        except OSError:
+            # A disk/object-store read failure happens BEFORE any reservation
+            # or gateway submit. Preserve the original API's 502/refunded
+            # contract while making clear that no wallet debit occurred.
+            logger.warning("Reference image preflight read failed; request not reserved", exc_info=True)
+            raise ServiceError(
+                "参考素材读取失败，未提交生成且未扣费；请稍后重试",
+                status=502, code="generation_reference_read_failed",
+                extra={"refunded": True},
+            ) from None
+        if not resolved:
+            raise ServiceError(
+                "参考素材不存在、已失效或无权访问；未扣费也未提交任务",
+                status=403, code="generation_reference_forbidden",
+            )
+        out.append(resolved)
+    return out
+
+
 def build_export_zip_package(
     body: dict[str, Any],
     db: Database | None = None,
@@ -1867,7 +1947,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Vary", "Origin")
         if origin and origin_allowed(origin):
             self.send_header("Access-Control-Allow-Origin", origin.rstrip("/"))
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
             self.send_header(
                 "Access-Control-Allow-Headers",
                 "Content-Type, Authorization, X-Handraw-Token, Api-Key, User-Api-Key, Api-Username, X-CSRF-Token",
@@ -2380,6 +2460,41 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        m_run = re.fullmatch(r"/api/studio/runs/([A-Za-z0-9_-]{1,120})", req_path)
+        if m_run:
+            user = self._current_user(required=True)
+            from .generation_v3 import get_owned_studio_run
+            self._send_json(get_owned_studio_run(self.db, user, m_run.group(1)))
+            return
+
+        # #126: authorized style identities only; no protected prompt content.
+        if req_path == "/api/studio/graph-patch/styles":
+            user = self._current_user(required=True)
+            from .studio_graph_patch import list_styles
+            self._send_json(list_styles(self.db, user))
+            return
+
+        if req_path == "/api/studio/projects":
+            user = self._current_user(required=True)
+            from .studio_projects import list_projects
+            try:
+                page_size = int(q1("limit", "40"))
+            except ValueError as error:
+                raise ServiceError("项目每页数量无效", status=400,
+                                   code="invalid_project_limit") from error
+            self._send_json(list_projects(
+                self.db, user, query=q1("q"), cursor=q1("cursor"),
+                limit=page_size,
+            ))
+            return
+
+        m_project = re.fullmatch(r"/api/studio/projects/([A-Za-z0-9_-]{4,100})", req_path)
+        if m_project:
+            user = self._current_user(required=True)
+            from .studio_projects import get_project
+            self._send_json(get_project(self.db, user, m_project.group(1)))
+            return
+
         if req_path == "/api/studio/workspace":
             user = self._current_user(required=False)
             self._send_json(get_studio_workspace(self.db, user))
@@ -2866,6 +2981,20 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self._dispatch_request(self._handle_post)
 
+    def do_PATCH(self) -> None:
+        self._dispatch_request(self._handle_patch)
+
+    def _handle_patch(self) -> None:
+        self._enforce_write_origin()
+        req_path = unquote(urlparse(self.path).path)
+        match = re.fullmatch(r"/api/studio/projects/([A-Za-z0-9_-]{4,100})/draft", req_path)
+        if match:
+            user = self._current_user(required=True)
+            from .studio_projects import patch_project
+            self._send_json(patch_project(self.db, user, match.group(1), self._read_json_body()))
+            return
+        self._send_json({"ok": False, "error": "Not Found"}, status=404)
+
     def do_PUT(self) -> None:
         self._dispatch_request(self._handle_put)
 
@@ -3295,6 +3424,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(forum_moderator_action(self.db, user, body))  # type: ignore[arg-type]
             return
 
+        # Studio 2.0 canonical, versioned project drafts. The V3 Run ledger
+        # remains separate; saving a project never triggers paid generation.
+        if req_path == "/api/studio/projects":
+            user = self._current_user(required=True)
+            from .studio_projects import create_project
+            self._send_json(create_project(self.db, user, body))
+            return
+
+        m_project_copy = re.fullmatch(
+            r"/api/studio/projects/([A-Za-z0-9_-]{4,100})/copy", req_path
+        )
+        if m_project_copy:
+            user = self._current_user(required=True)
+            from .studio_projects import copy_project
+            self._send_json(copy_project(self.db, user, m_project_copy.group(1), body))
+            return
+
         # Studio Cloud Persistence, Generation & ZIP Export
         if req_path == "/api/studio/workflows":
             user = self._current_user(required=True)
@@ -3454,6 +3600,42 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if handle_fission_post(self, req_path, body):
                 return
 
+        # #126: owner-only GraphPatch review, CAS-confirmed application and
+        # monotonic undo. These endpoints never invoke generation or billing.
+        if req_path in ("/api/studio/graph-patch/preview",
+                        "/api/studio/graph-patch/apply",
+                        "/api/studio/graph-patch/undo"):
+            from .studio_graph_patch import preview, apply, undo
+            user = self._current_user(required=True)
+            if req_path.endswith("/preview"):
+                payload = preview(self.db, user, body)
+            elif req_path.endswith("/apply"):
+                payload = apply(self.db, user, body)
+            else:
+                payload = undo(self.db, user, body)
+            self._send_json(payload)
+            return
+
+        # #125: shared AI-only proposal protocol. No Run/Work or billing here.
+        if req_path == "/api/studio/ai-plan":
+            from .studio_ai_plan import execute_ai_plan
+            user = self._current_user(required=True)
+            self._send_json(execute_ai_plan(self.db, user, body))
+            return
+
+        if req_path == "/api/studio/image-plan":
+            user = self._current_user(required=True)
+            from .studio_image_plan import execute_image_plan
+            self._send_json(execute_image_plan(
+                self.db, user,
+                subject=str(body.get("subject") or ""),
+                selected_style=str(body.get("selectedStyleId") or ""),
+                selected_layout=str(body.get("selectedLayoutId") or ""),
+                ratio=str(body.get("ratio") or ""),
+                locked_fields=body.get("lockedFields") if isinstance(body.get("lockedFields"), list) else []
+            ))
+            return
+
         if req_path == "/api/studio/batch-plan":
             from .batch_plan_routes import handle_batch_plan_post
             if handle_batch_plan_post(self, req_path, body):
@@ -3496,6 +3678,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 return
 
             user = self._current_user(required=True)
+            # Validate real media owner/access before reserving wallet quota.
+            # Preserve decoded bytes to avoid decoding large data images twice.
+            validated_refs = preflight_generation_references(
+                body,
+                lambda image: resolve_local_ref_image(image, db=self.db, user=user),
+            )
             prep = prepare_cloud_generation(self.db, user, body)
             gen_id = prep["genId"]
             submitted = False
@@ -3512,6 +3700,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     response = {
                         "ok": True,
                         "genId": gen_id,
+                        "runId": prep.get("runId") or "",
                         "requestId": prep.get("requestId") or "",
                         "clientRequestId": prep.get("clientRequestId") or prep.get("requestId") or "",
                         "idempotent": True,
@@ -3543,6 +3732,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     sim_res = {
                         "ok": True,
                         "genId": gen_id,
+                        "runId": prep.get("runId") or "",
                         "requestId": prep.get("requestId") or "",
                         "idempotent": bool(prep.get("idempotent")),
                         "taskId": fake_tid,
@@ -3577,15 +3767,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     resolved = resolve_local_ref_image("/images/characters/CH-001.webp", db=self.db, user=user)
                     if resolved:
                         refs.append(resolved)
-                if custom_ref:
-                    resolved = resolve_local_ref_image(custom_ref, db=self.db, user=user)
-                    if resolved:
-                        refs.append(resolved)
-                if isinstance(ref_images, list):
-                    for r_str in ref_images[:6]:
-                        resolved = resolve_local_ref_image(str(r_str), db=self.db, user=user)
-                        if resolved:
-                            refs.append(resolved)
+                refs.extend(validated_refs)
 
                 grow = self.db.get_conn().execute(
                     "SELECT prompt FROM studio_generations WHERE id = ?", (gen_id,)
@@ -3612,6 +3794,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 gw_out = {
                     "ok": True,
                     "genId": gen_id,
+                    "runId": prep.get("runId") or "",
                     "requestId": prep.get("requestId") or "",
                     "idempotent": bool(prep.get("idempotent")),
                     "taskId": actual_id,

@@ -128,6 +128,55 @@
     return `${paths[channel] || "/"}${suffix}`;
   }
 
+  // The standalone admin.html does not load shared.js; preserve the same
+  // fail-closed cancellable confirmation contract in this entry point.
+  function adminConfirmAction(message, { title = "请确认操作", confirmText = "确认", danger = false } = {}) {
+    if (window.HANDRAW_SHARED?.confirmAction) {
+      return window.HANDRAW_SHARED.confirmAction(message, { title, confirmText, danger });
+    }
+    if (!document.body) return Promise.resolve(false);
+    const previousFocus = document.activeElement;
+    const dialog = document.createElement("dialog");
+    if (typeof dialog.showModal !== "function") return Promise.resolve(false);
+    const heading = document.createElement("h2");
+    heading.id = "hw-admin-confirm-heading-" + Math.random().toString(36).slice(2);
+    heading.textContent = title;
+    heading.style.cssText = "margin:0 0 12px;font-size:18px;";
+    dialog.className = "hw-confirm-action-dialog";
+    dialog.setAttribute("aria-labelledby", heading.id);
+    dialog.style.cssText = "width:min(420px,calc(100vw - 32px));max-width:100%;box-sizing:border-box;padding:24px;border:1px solid #dedbd5;border-radius:14px;background:#fff;color:#24211e;box-shadow:0 20px 80px rgba(0,0,0,.22);";
+    const description = document.createElement("p");
+    description.textContent = String(message);
+    description.style.cssText = "white-space:pre-wrap;line-height:1.65;margin:0 0 24px;";
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:10px;";
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消";
+    const proceed = document.createElement("button");
+    proceed.type = "button"; proceed.className = "btn"; proceed.textContent = confirmText;
+    if (danger) proceed.style.cssText = "background:#b42318;border-color:#b42318;color:#fff;";
+    actions.append(cancel, proceed);
+    dialog.append(heading, description, actions);
+    let finished = false;
+    return new Promise(resolve => {
+      const settle = value => {
+        if (finished) return;
+        finished = true;
+        try { if (dialog.open) dialog.close(); } catch (_) {}
+        dialog.remove();
+        if (previousFocus?.isConnected && typeof previousFocus.focus === "function") previousFocus.focus();
+        resolve(value);
+      };
+      cancel.addEventListener("click", () => settle(false));
+      proceed.addEventListener("click", () => settle(true));
+      dialog.addEventListener("cancel", e => { e.preventDefault(); settle(false); });
+      dialog.addEventListener("close", () => settle(false));
+      document.body.append(dialog);
+      try { dialog.showModal(); cancel.focus(); }
+      catch (_) { settle(false); }
+    });
+  }
+
   function toast(msg, isError) {
     const stack = document.getElementById("admin-toast-stack");
     if (!stack) return;
@@ -3087,7 +3136,7 @@
       btn.addEventListener("click", async () => {
         const key = btn.getAttribute("data-key");
         const wid = btn.getAttribute("data-work-id");
-        if (!confirm(`确认取消作品 ${wid} 在场景【${key}】的置顶吗？`)) return;
+        if (!await adminConfirmAction(`确认取消作品 ${wid} 在场景【${key}】的置顶吗？`, { danger: true, confirmText: "取消置顶" })) return;
         try {
           await api("/api/admin/home-scenarios", {
             method: "POST",

@@ -1802,6 +1802,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     conn = db.get_conn()
     settings = get_site_settings(conn)
     asset_counts, total_works_count, total_cheers_count, public_creators = compute_public_asset_counts_and_creators(conn)
+    from .ranking import ASSET_POPULAR_WEIGHTS
 
     unlocked_set: set[str] = set()
     collections: dict[str, list[str]] = {"styles": [], "layouts": [], "works": [], "topics": [], "generations": []}
@@ -1976,6 +1977,30 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
                     "canUse": True,
                     "hiddenBy": None,
                 },
+            })
+
+        # #21: surface only the signed-in owner's private custom definitions.
+        # Skill's versioned personal resource table is authoritative; this
+        # user_resources read model is updated in the same CAS transaction.
+        # Never include these records in anonymous boot or public catalogs.
+        private_rows = conn.execute(
+            "SELECT code,kind,name,definition,revision FROM user_resources "
+            "WHERE owner_user_id=? AND deleted_at IS NULL ORDER BY updated_at DESC",
+            (uid,),
+        ).fetchall()
+        for own in private_rows:
+            code = str(own["code"])
+            my_resources.append({
+                "id": code, "code": code, "kind": own["kind"],
+                "name": own["name"], "sourceType": "private", "source": "private",
+                "status": "private", "image": "", "cover": "",
+                "description": "", "definition": own["definition"],
+                "unlockCost": 0, "revision": int(own["revision"]),
+                "author": current_user.get("username") or "",
+                "authorName": current_user.get("display_name") or
+                              current_user.get("username") or "",
+                "isMine": True, "canUse": True, "canCollect": True,
+                "access": {"canRead": True, "canUse": True, "hiddenBy": None},
             })
 
         fav_codes = set(collections.get("styles", [])) | set(collections.get("layouts", []))
@@ -2189,6 +2214,34 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         ).fetchall()
     }
 
+    # #25: only authoritative interaction/tip_request rows, never the mixed
+    # catalog_assets.cheers cache (+3 per tip on community assets). Official
+    # and community resource codes follow one canonical normalization path.
+    asset_live_cheers = {
+        r["code"]: int(r["cnt"])
+        for r in conn.execute(
+            f"SELECT UPPER(target_id) AS code, COUNT(*) AS cnt FROM interactions "
+            f"WHERE target_type = 'asset' AND stamp_label = '' AND {live_asset_filter} "
+            "GROUP BY UPPER(target_id)", live_asset_ids,
+        ).fetchall()
+    }
+    asset_live_stamps = {
+        r["code"]: int(r["cnt"])
+        for r in conn.execute(
+            f"SELECT UPPER(target_id) AS code, COUNT(*) AS cnt FROM interactions "
+            f"WHERE target_type = 'asset' AND stamp_label <> '' AND {live_asset_filter} "
+            "GROUP BY UPPER(target_id)", live_asset_ids,
+        ).fetchall()
+    }
+    asset_live_tips = {
+        r["code"]: int(r["cnt"])
+        for r in conn.execute(
+            f"SELECT UPPER(target_id) AS code, COUNT(*) AS cnt FROM tip_requests "
+            f"WHERE target_type = 'asset' AND {live_asset_filter} "
+            "GROUP BY UPPER(target_id)", live_asset_ids,
+        ).fetchall()
+    }
+
     # Active Forum Board Moderators (publicly displayed on boards & author badges)
     if is_demo_mode():
         moderator_seed_clause, moderator_seed_params = "1 = 1", ()
@@ -2374,6 +2427,10 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         "assetSeedMetrics": asset_seed_metrics,
         "assetLiveLikes": asset_live_likes,
         "assetLiveFavorites": asset_live_favorites,
+        "assetLiveCheers": asset_live_cheers,
+        "assetLiveStamps": asset_live_stamps,
+        "assetLiveTips": asset_live_tips,
+        "assetRankingWeights": ASSET_POPULAR_WEIGHTS.copy(),
         "ledger": ledger_list,
         "siteSettings": {
             "announcement": settings.get("announcement", {}),
@@ -5305,6 +5362,9 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "name_zh": r["name_zh"],
             "desc_zh": r["desc_zh"],
             "image": r["image_url"],
+            # A private upload's stable MediaRef is asset_uid, NOT the old
+            # user_uploads row ID. Never send a public reference capability.
+            "assetUid": r["asset_uid"] or None,
             "custom": True,
         }
         for r in conn.execute("SELECT * FROM user_uploads WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", (uid,)).fetchall()
@@ -5322,30 +5382,65 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
 
 
 def save_user_studio_workflow(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    """Persist a workflow using server revisions and optional optimistic locking.
+
+    Existing clients may omit baseUpdatedAtMs. New Studio2 clients MUST pass
+    the last server-acknowledged version (0 for a new workflow). A stale write
+    never overwrites another tab's graph. The local draft is the client's
+    responsibility until this response is acknowledged.
+    """
     uid = int(user["id"])
-    wf_id = str(body.get("id") or f"wf_{int(time.time() * 1000)}")
+    wf_id = str(body.get("id") or f"wf_{uuid.uuid4().hex}")
     title = str(body.get("title") or "未命名工作流").strip()[:100]
     blueprint = str(body.get("blueprint") or "single")
     graph_json = json.dumps(body.get("graph") or {}, ensure_ascii=False)
-    now_ms = int(body.get("updatedAtMs") or time.time() * 1000)
+    now_ms = int(time.time() * 1000)
     now_iso = utc_now_iso()
 
     with db.transaction() as tx:
+        existing = tx.execute(
+            "SELECT user_id, is_official_preset, title, blueprint, graph_json, updated_at_ms "
+            "FROM studio_workflows WHERE id = ?",
+            (wf_id,),
+        ).fetchone()
+        if existing and (
+            int(existing["user_id"]) != uid or int(existing["is_official_preset"] or 0)
+        ):
+            raise ServiceError("无权修改此工作流", status=403, code="workflow_forbidden")
+        current_version = int(existing["updated_at_ms"] or 0) if existing else 0
+        if "baseUpdatedAtMs" in body:
+            try:
+                base = int(body["baseUpdatedAtMs"])
+            except (TypeError, ValueError) as exc:
+                raise ServiceError("工作流基准版本无效", status=400, code="invalid_workflow_version") from exc
+            if base != current_version:
+                raise ServiceError(
+                    "云端工作流已由其他窗口更新，当前草稿保留在本机；请检查冲突后另存副本",
+                    status=409, code="workflow_version_conflict",
+                    extra={"currentRevision": current_version},
+                )
+        if existing and (
+            str(existing["title"]) == title
+            and str(existing["blueprint"]) == blueprint
+            and str(existing["graph_json"]) == graph_json
+        ):
+            return {"ok": True, "id": wf_id, "updatedAtMs": current_version, "unchanged": True}
+        next_version = max(now_ms, current_version + 1)
         tx.execute(
             """
-            INSERT INTO studio_workflows (id, user_id, title, blueprint, scenario_badge, scenario_desc, graph_json, is_official_preset, enabled, sort_order, updated_at_ms, created_at)
+            INSERT INTO studio_workflows (id, user_id, title, blueprint, scenario_badge, scenario_desc, graph_json,
+                is_official_preset, enabled, sort_order, updated_at_ms, created_at)
             VALUES (?, ?, ?, ?, '', '', ?, 0, 1, 0, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 blueprint = excluded.blueprint,
                 graph_json = excluded.graph_json,
                 updated_at_ms = excluded.updated_at_ms
-            WHERE studio_workflows.user_id = excluded.user_id
+            WHERE studio_workflows.user_id = excluded.user_id AND studio_workflows.is_official_preset = 0
             """,
-            (wf_id, uid, title, blueprint, graph_json, now_ms, now_iso),
+            (wf_id, uid, title, blueprint, graph_json, next_version, now_iso),
         )
-    return {"ok": True, "id": wf_id}
-
+    return {"ok": True, "id": wf_id, "updatedAtMs": next_version}
 
 def delete_user_studio_workflow(db: Database, user: dict[str, Any], wf_id: str) -> dict[str, Any]:
     uid = int(user["id"])
@@ -5880,6 +5975,17 @@ def _cloud_generation_result(
         "reservationDate": row["reservation_date"] or "",
         "model": str(settings.get("gateway", {}).get("model", "gpt-image-2")),
     }
+    # The V3 logical Run is the only source for status, result count and
+    # media ownership. Return its opaque ID without making the client derive
+    # it from a gateway genId or a user-specific hash.
+    logical_key = str(row["batch_id"] or "") if "batch_id" in row_keys else ""
+    logical_key = logical_key or str(row["id"])
+    run_row = conn.execute(
+        "SELECT id FROM generation_runs WHERE user_id=? AND source='web' AND external_run_id=?",
+        (uid, logical_key),
+    ).fetchone()
+    if run_row:
+        res["runId"] = str(run_row["id"])
     if was_masked:
         res["promptMasked"] = True
     if "fork_generation_id" in row_keys and row["fork_generation_id"]:
@@ -6141,6 +6247,24 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
     request_id = str(body.get("requestId") or body.get("clientRequestId") or "").strip()
     if len(request_id) > 128:
         raise ServiceError("requestId 过长", status=400, code="invalid_request_id")
+    # The requestId is the user-scoped idempotency identity for one charged
+    # gateway attempt. Conflicting aliases must not allow double submission.
+    supplied_key = str(body.get("idempotencyKey") or "").strip()
+    if supplied_key and (len(supplied_key) > 128 or (request_id and supplied_key != request_id)):
+        raise ServiceError("幂等键与请求编号不一致", status=400, code="invalid_idempotency_key")
+    if not request_id and supplied_key:
+        request_id = supplied_key
+    slot_id = str(body.get("slotId") or "").strip()
+    if len(slot_id) > 120 or any(ord(ch) < 32 for ch in slot_id):
+        raise ServiceError("槽位编号无效", status=400, code="invalid_slot_id")
+    # Safe-to-return metadata, never a protected prompt or raw reference bytes.
+    runtime_snapshot = {
+        "batchId": batch_id, "slotId": slot_id,
+        "slotIndex": batch_index, "position": batch_index * 1000,
+        "expectedCount": batch_total, "idempotencyKey": request_id,
+    }
+    if type(body.get("planRevision")) is int and body["planRevision"] >= 0:
+        runtime_snapshot["planRevision"] = body["planRevision"]
     today = local_today_str()
     now_iso = utc_now_iso()
     gen_id = f"gen_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
@@ -6246,6 +6370,14 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
             from . import resource_registry
             res = resource_registry.resolve(tx, code, viewer=user, purpose="generate")
             if not res:
+                # #21: an owned-only UUID code cannot be silently ignored;
+                # otherwise another user would pay for an image created
+                # WITHOUT the style they thought they had selected.
+                if re.fullmatch(r"USR-[SL][A-F0-9]{32}", str(code).upper()):
+                    raise ServiceError(
+                        "自建画风/图型不存在或无权使用",
+                        status=403, code="private_resource_forbidden",
+                    )
                 continue
             if not res.get("canUse"):
                 hidden_by = (res.get("access") or {}).get("hiddenBy")
@@ -6272,6 +6404,16 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     injected_notes.append(raw_def)
                     system_append_list.append({"type": "asset_instructions", "code": code})
                     injected_definitions.append(raw_def)
+            elif res.get("source_type") == "private":
+                # #21: an owned style/layout is actually used, not merely
+                # accepted by the picker. The registry has already checked
+                # ownership. Send the definition to the gateway server-side
+                # without publishing it as a public catalog definition.
+                raw_def = (res.get("_raw_definition") or "").strip()
+                if raw_def:
+                    injected_notes.append(raw_def)
+                    injected_definitions.append(raw_def)
+                    system_append_list.append({"type": "asset_instructions", "code": code})
 
         # Length check before charging (X6)
         if recipe_id:
@@ -6379,7 +6521,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 initial_prompt if recipe_id else initial_prompt[:4000],
                 initial_visible_prompt if (initial_visible_prompt is None or recipe_id) else initial_visible_prompt[:4000],
                 prompt_masked_init,
-                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False, "recipeSnapshot": snap, "creationSource": creation_source}, ensure_ascii=False),
+                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False, "recipeSnapshot": snap, "creationSource": creation_source, "runtimeSnapshot": runtime_snapshot}, ensure_ascii=False),
                 cost_type,
                 credits_spent,
                 request_id,
@@ -6423,6 +6565,45 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 "SELECT status FROM generation_items WHERE run_id=? AND position=?",
                 (canonical_run_id, slot_position),
             ).fetchone()
+            previous_attempts = tx.execute(
+                """SELECT id,request_id,status,system_append_json
+                   FROM studio_generations
+                   WHERE user_id=? AND batch_id=? AND batch_index=?
+                     AND id<>?
+                   ORDER BY created_at,id""",
+                (uid, batch_id, batch_index, gen_id),
+            ).fetchall()
+            # Re-delivery of the SAME requestId was returned from the
+            # idempotency lookup before charging. A new requestId is another
+            # billed attempt, only permitted after the old attempt terminates.
+            if (prior_slot and prior_slot["status"] == "success") or any(
+                str(a["status"]) == "success" for a in previous_attempts
+            ):
+                raise ServiceError(
+                    "该槽位已有确认成图，不允许覆盖；请派生新分支",
+                    status=409, code="generation_slot_completed",
+                )
+            if any(str(a["status"]) in ("queued", "running") for a in previous_attempts):
+                raise ServiceError(
+                    "原请求仍在上游执行或待核实，请先重新检查，避免重复计费",
+                    status=409, code="generation_slot_unconfirmed",
+                )
+            if previous_attempts and body.get("retryFailed") is not True and body.get("retryCancelled") is not True:
+                raise ServiceError(
+                    "再次生成会产生新的计费事实，请明确重试失败槽位",
+                    status=409, code="generation_retry_confirmation_required",
+                )
+            for previous in previous_attempts:
+                try:
+                    old_meta = json.loads(previous["system_append_json"] or "{}")
+                    frozen = old_meta.get("runtimeSnapshot") or {}
+                except (ValueError, TypeError):
+                    frozen = {}
+                if frozen.get("slotId") and slot_id and frozen["slotId"] != slot_id:
+                    raise ServiceError(
+                        "原运行槽位与重试槽位不一致",
+                        status=409, code="generation_slot_identity_conflict",
+                    )
             if prior_slot and prior_slot["status"] == "cancelled":
                 if body.get("retryCancelled") is not True:
                     raise ServiceError(
@@ -6434,7 +6615,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                     (canonical_run_id, slot_position),
                 )
         tx.execute(
-            "UPDATE generation_runs SET original_request=? WHERE id=?",
+            "UPDATE generation_runs SET original_request=? WHERE id=? AND original_request=''",
             (user_subject, canonical_run_id),
         )
 
@@ -6540,6 +6721,7 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                             "systemAppend": system_append_list,
                             "promptTrimmed": bool(prompt_trimmed),
                             "recipeSnapshot": snap,
+                            "runtimeSnapshot": runtime_snapshot,
                         },
                         ensure_ascii=False,
                     ),
@@ -6659,6 +6841,12 @@ def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_url
         generation = tx.execute(
             "SELECT user_id, fork_work_id, engine, status FROM studio_generations WHERE id = ?", (gen_id,)
         ).fetchone()
+        # #112: a refunded attempt cannot be resurrected by a late gateway
+        # success callback. Likewise, a replay of an already completed attempt
+        # must not change its media, consume quota, reproject a Work or count
+        # an extra fork. Preserve the original terminal accounting facts.
+        if generation is None or str(generation["status"]) in ("refunded", "success"):
+            return
         if image_urls is not None:
             tx.execute(
                 "UPDATE studio_generations SET status = 'success', task_id = ?, items_json = ? WHERE id = ? AND status NOT IN ('refunded', 'success')",

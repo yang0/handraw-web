@@ -23,11 +23,12 @@ const run = {
 const state = {activeBatchRun:null};
 const context = {
   run, state,
+  getBatchParts:()=>null, // No detached Project in this isolated stop-harness test.
   toast:message=>messages.push(message),
   window:{HandrawBatchCreate:{setStopping:()=>{stopping++;}}}
 };
 const stop = vm.runInNewContext(
-  "let _activeBatchRun = run;\nconst CS = state;\n" + handler + "\ncancelActiveBatchGeneration",
+  "let _activeBatchRun = run;\nconst _activeControlRuns=new Map();\nlet _dagAbortController=null;\nconst CS = state;\n" + handler + "\ncancelActiveBatchGeneration",
   context
 );
 assert.equal(stop("not_this_ctrl"), false, "Must not stop an unrelated job");
@@ -48,12 +49,12 @@ const empty = {
   controller:{signal:{aborted:false},abort(){this.signal.aborted=true;}}
 };
 const emptyStop=vm.runInNewContext(
-  "let _activeBatchRun = run;\nconst CS = state;\n" + handler + "\ncancelActiveBatchGeneration",
+  "let _activeBatchRun = run;\nconst _activeControlRuns=new Map();\nlet _dagAbortController=null;\nconst CS = state;\n" + handler + "\ncancelActiveBatchGeneration",
   {...context,run:empty}
 );
 assert.equal(emptyStop("ctrl_batch"),true);
 assert.match(messages.at(-1),/尚未提交的图片不会计费/);
-assert.match(studio, /const batchRun = \{ id: batchId, ctrlId: ctrl\.id, cancelled: false, controller, submittedSlots \}/);
+assert.match(studio, /const batchRun = \{ id: batchId, ctrlId: ctrl\.id, cancelled: false, controller,[\s\S]*?submittedSlots,[\s\S]*?executionGraph/, "Run retains submitted slots and frozen execution Graph");
 assert.match(studio, /signal: controller \? controller\.signal : undefined/);
 assert.match(studio, /if \(batchRun\.cancelled\) return;/);
 assert.match(studio,/ctrl\.data\.status = "stopped"/);

@@ -164,6 +164,73 @@
     if (!$("#modal").open) $("#modal").showModal();
   }
 
+  // Standalone legacy portal uses the same cancellable dialog contract as
+  // HANDRAW_SHARED.promptAction (this Discourse page does not load shared.js).
+  function requestReason(message, { title = "确认操作", minLength = 5 } = {}) {
+    if (!document.body) return Promise.resolve(null);
+    const previousFocus = document.activeElement;
+    const dialog = document.createElement("dialog");
+    if (typeof dialog.showModal !== "function") {
+      tell("当前浏览器不支持审核输入框，请升级浏览器后重试。");
+      return Promise.resolve(null);
+    }
+    const heading = document.createElement("h2");
+    heading.id = "hw-reason-title-" + Math.random().toString(36).slice(2);
+    heading.textContent = title;
+    heading.style.cssText = "margin:0 0 12px;font-size:18px;";
+    dialog.className = "hw-confirm-action-dialog hw-reason-dialog";
+    dialog.setAttribute("aria-labelledby", heading.id);
+    dialog.style.cssText = "width:min(440px,calc(100vw - 32px));max-width:100%;box-sizing:border-box;padding:24px;border:1px solid #dedbd5;border-radius:14px;background:#fff;color:#26221d;box-shadow:0 20px 80px #0003;";
+    const label = document.createElement("label");
+    label.textContent = message;
+    label.htmlFor = "hw-reason-input-" + Math.random().toString(36).slice(2);
+    label.style.cssText = "display:block;line-height:1.6;white-space:pre-wrap;margin-bottom:10px;";
+    const input = document.createElement("textarea");
+    input.id = label.htmlFor; input.rows = 3; input.maxLength = 1000;
+    input.style.cssText = "width:100%;box-sizing:border-box;padding:10px;border:1px solid #bcb5ac;border-radius:8px;";
+    const error = document.createElement("p");
+    error.setAttribute("role", "alert");
+    error.style.cssText = "min-height:18px;color:#b42318;font-size:12px;margin:5px 0 14px;";
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:10px;";
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "hw-button hw-button--quiet"; cancel.textContent = "取消";
+    const submit = document.createElement("button");
+    submit.type = "button"; submit.className = "hw-button"; submit.textContent = "确认提交";
+    actions.append(cancel, submit);
+    dialog.append(heading, label, input, error, actions);
+    let done = false;
+    return new Promise(resolve => {
+      const settle = value => {
+        if (done) return;
+        done = true;
+        try { if (dialog.open) dialog.close(); } catch (_) {}
+        dialog.remove();
+        if (previousFocus?.isConnected && typeof previousFocus.focus === "function") previousFocus.focus();
+        resolve(value);
+      };
+      cancel.addEventListener("click", () => settle(null));
+      submit.addEventListener("click", () => {
+        const reason = input.value.trim();
+        if (reason.length < minLength) {
+          error.textContent = "理由至少需要 " + minLength + " 个字符";
+          input.focus();
+          return;
+        }
+        settle(reason);
+      });
+      input.addEventListener("keydown", e => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault(); submit.click();
+        }
+      });
+      dialog.addEventListener("cancel", e => { e.preventDefault(); settle(null); });
+      dialog.addEventListener("close", () => settle(null));
+      document.body.append(dialog);
+      try { dialog.showModal(); input.focus(); } catch (_) { settle(null); }
+    });
+  }
+
   function field(name, label, type = "text", required = true, value = "") {
     const control =
       type === "textarea"
@@ -710,7 +777,7 @@
   }
 
   async function reviewAction(entry, actionName, extra = {}) {
-    const reason = prompt("请填写审核理由（至少五个字，会保留记录）");
+    const reason = await requestReason("请填写审核理由（至少五个字，会保留记录）", { title: "审核操作" });
     if (reason === null) return;
     await api(`/entries/${entry.id}/review`, {
       method: "POST",
@@ -839,7 +906,7 @@
           button(
             "确认退款",
             async () => {
-              const reason = prompt("请填写退款原因（至少五个字）");
+              const reason = await requestReason("请填写退款原因（至少五个字）", { title: "退款确认" });
               if (reason === null) return;
               await api(`/unlocks/${sale.id}/refund`, {
                 method: "POST",

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Issue 127 · Canvas DOM benchmark</title>
+<style>
+  body{margin:0;background:#f5f1ea;font-family:system-ui;overflow:hidden}
+  #viewport{position:fixed;inset:0;overflow:auto}
+  #world{position:relative;width:7000px;height:15000px;transform-origin:0 0}
+  #nodes{position:relative;width:100%;height:100%}
+  .ic-node{position:absolute;width:248px;min-height:130px;box-sizing:border-box;
+    border:1px solid #d6d1c9;background:#fffdf8;border-radius:12px;padding:8px;
+    box-shadow:0 3px 15px #16161612}
+  .ic-node.is-selected{outline:2px solid #1674b8}
+  .ic-node.is-related{outline:1px dotted #1674b8}
+  .ic-node img{width:60px;height:48px;object-fit:contain;vertical-align:middle}
+  .ic-node input{width:90%;border:1px solid #c2bdb8;padding:3px}
+  .node-status{font-size:11px}
+</style>
+</head>
+<body>
+<div id="viewport"><div id="world"><div id="nodes"></div></div></div>
+<script src="/demo/assets/studio-canvas-renderer.js"></script>
+<script>
+(function(){
+"use strict";
+const R=window.HandrawCanvasRenderer;
+const root=document.getElementById("nodes");
+const world=document.getElementById("world");
+const img="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==";
+const sample=n=>{const values=[];
+  for(let i=0;i<n;i++)values.push({id:"node-"+i,
+    type:i%5===0?"output_display":"text_input",
+    text:"主题 "+i,status:i%5===0?"generating":"ready"});
+  return values;
+};
+function escape(value){return String(value??"").replace(/[&<>"']/g,c=>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function html(nodes){
+  return nodes.map((node,i)=>`<div class="ic-node ic-node-${node.type}  " data-node-id="${node.id}"
+    style="left:${(i%14)*300}px;top:${Math.floor(i/14)*170}px;width:248px">
+    <strong>${escape(node.text)}</strong><div class="node-status" data-status="${node.id}">
+      ${escape(node.status)}</div>
+    <input data-editor="${node.id}" id="edit-${i}" value="${escape(node.text)}">
+    ${node.type==="output_display"?`<img src="${img}" data-media-id="media-${i}" alt="生成结果 ${i}">`:""}
+  </div>`).join("");
+}
+const raf=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+const percentile=(arr,p)=>{const sorted=[...arr].sort((a,b)=>a-b);
+  return sorted[Math.min(sorted.length-1,Math.floor((sorted.length-1)*p))]||0;};
+async function run(size){
+  root.replaceChildren();
+  const nodes=sample(size);
+  const original=html(nodes);
+  const begin=performance.now();
+  const initial=R.reconcile(root,original,"");
+  await raf();await raf();
+  const initialMs=performance.now()-begin;
+  if(initial.dirtyNodes.length!==size)throw Error("missing initial DOM cards");
+  const imageEls=new Map([...root.querySelectorAll("img")].map(img=>[img.dataset.mediaId,img]));
+  const stable=root.querySelector('[data-node-id="node-1"]');
+  const input=root.querySelector('#edit-0');
+  input.focus();input.value="焦点正在编辑 0123456789";
+  input.setSelectionRange(4,6);
+  const beforeSelection=performance.now();
+  R.updateSelection(root,new Set(["node-1"]),new Set(["node-2"]));
+  const selectionMs=performance.now()-beforeSelection;
+  if(document.activeElement!==input||root.querySelector('[data-node-id="node-1"]')!==stable)
+    throw Error("selection rebuilt cards/focus");
+  const times=[];let last={};
+  for(let i=0;i<20;i++){
+    // Simulated remote RunItem completion: one image card changes each tick.
+    const idx=(i*5)%size;
+    nodes[idx].status=i%2?"success":"generating";
+    const tick=performance.now();
+    const change=R.reconcile(root,html(nodes),"");
+    times.push(performance.now()-tick);
+    last=change.stats;
+    if(change.dirtyNodes.length>1)throw Error("unexpected dirty card count");
+    if(root.querySelector('[data-node-id="node-1"]')!==stable)
+      throw Error("unrelated node element replaced");
+    if(document.activeElement?.id!=="edit-0")
+      throw Error("input lost focus during remote tick");
+    for(const [id,img] of imageEls){
+      if(root.querySelector('[data-media-id="'+id+'"]')!==img)
+        throw Error("result image element was recreated: "+id);
+    }
+  }
+  // Changed card with its own focused textarea/input: cursor and value survive.
+  const edit=root.querySelector('#edit-0');
+  edit.value="用户正在写新主题";
+  edit.focus();edit.setSelectionRange(2,4);
+  nodes[0].text="服务器确认的旧主题";
+  const editResult=R.reconcile(root,html(nodes),"");
+  const restored=root.querySelector('#edit-0');
+  if(document.activeElement!==restored||restored.value!=="用户正在写新主题"||
+     restored.selectionStart!==2||restored.selectionEnd!==4)
+    throw Error("focused control cursor/value changed on owning card patch");
+  if(root.querySelector('[data-node-id="node-1"]')!==stable)
+    throw Error("editing one card destroyed neighbor");
+  for(const [id,imageNode] of imageEls){
+    if(root.querySelector('[data-media-id="'+id+'"]')!==imageNode)
+      throw Error("image reloaded on owner card patch");
+  }
+  const frame=[];
+  let time=performance.now();
+  for(let i=0;i<60;i++){
+    await raf();
+    const now=performance.now();frame.push(now-time);time=now;
+    world.style.transform=`translate(${(i%20)*4}px,${(i%12)*2}px) scale(${1+(i%10)*.012})`;
+  }
+  const memory=performance.memory?.usedJSHeapSize??null;
+  // #111: capture a separate mixed editable/Run Graph inside real Chromium.
+  // This is a synthetic local history benchmark, not a whole-app 300-node SLA.
+  const historyNodes=nodes.map((node,i)=>({
+    id:node.id,x:i*4,y:i*2,
+    type:i%5===0?"output_display":i%5===1?"output_control":"text_input",
+    data:i%5===0?{status:"success",items:[{mediaId:"media-"+i,
+      imageData:"media-payload-".repeat(240)}]}:
+      i%5===1?{ratio:"3:4",runId:"run-"+i,
+        studio2RunSnapshot:{id:i,payload:"run-payload-".repeat(160)}}:
+        {text:"创作主题 "+i,metadata:{a:1,b:2}}
+  }));
+  const historyGraph={revision:4,nodes:historyNodes,edges:[],selectedIds:[]};
+  const beforeHistory=JSON.stringify(historyGraph).length;
+  const startHistory=performance.now(),snaps=[];
+  for(let i=0;i<35;i++)snaps.push(R.captureEditableGraph(historyGraph));
+  const capture35Ms=+(performance.now()-startHistory).toFixed(2);
+  const runtime=historyNodes.filter(node=>
+    node.type==="output_display"||node.type==="output_control");
+  const referenceSet=new Set(snaps.flatMap(g=>g.nodes.filter(n=>
+    n.type==="output_display"||n.type==="output_control").map(n=>
+      n.type==="output_display"?n.data:n.data.studio2RunSnapshot)));
+  const historySharedRuntime=referenceSet.size===runtime.length &&
+    snaps.every(g=>g.nodes.filter(n=>n.type==="output_display"||
+      n.type==="output_control").every((n,i)=>{
+        const source=runtime[i];
+        return n.type==="output_display"?n.data===source.data:
+          n.data.studio2RunSnapshot===source.data.studio2RunSnapshot;
+      }));
+  const historyEditableCloned=snaps.every(g=>g.nodes.filter(n=>
+    n.type==="text_input").every(n=>
+      n.data!==historyNodes.find(source=>source.id===n.id).data));
+  if(!historySharedRuntime||!historyEditableCloned)
+    throw Error("Graph History failed runtime sharing/edit isolation");
+  const result={nodes:size,images:imageEls.size,firstScreenMs:+initialMs.toFixed(2),
+    selectionMs:+selectionMs.toFixed(2),singleStatusP95Ms:+percentile(times,.95).toFixed(2),
+    dragZoomFrameP95Ms:+percentile(frame,.95).toFixed(2),
+    domElements:root.querySelectorAll("*").length,
+    usedJSHeapBytes:memory,imagesPreserved:true,
+    focusAndCursorPreserved:true,otherNodesReused:true,
+    changedCardsLastTick:last.changedIds?.length??0,
+    editDirtyCount:editResult.dirtyNodes.length,
+    historyCapture35Ms:capture35Ms,historySteps:35,
+    theoreticalFullHistoryChars:35*beforeHistory,
+    historySharedRuntime,historyEditableCloned,
+    historyUniqueRuntimeObjects:referenceSet.size};
+  return result;
+}
+window.runCanvasBenchmark=async function(){
+  if(!R)throw Error("canvas renderer script missing");
+  const data=[];
+  for(const n of [10,50,100,300])data.push(await run(n));
+  return {browser:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency||null,
+    deviceMemory:navigator.deviceMemory||null,viewport:{width:innerWidth,height:innerHeight},
+    measurements:data};
+};
+})();
+</script>
+</body>
+</html>

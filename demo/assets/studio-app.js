@@ -14,6 +14,8 @@
 (function () {
   const S = window.HANDRAW_SHARED;
   const E = window.HANDRAW_CANVAS_ENGINE;
+  const CanvasUI = window.HandrawCanvasUI;
+  const GraphPatchUI = window.HandrawStudioGraphPatch;
   const { App, esc, toast, channelUrl } = S;
 
   const UPLOAD_STORAGE_KEY = "handraw_canvas_uploads_v3";
@@ -21,6 +23,7 @@
   const PREFS_STORAGE_KEY = "handraw_canvas_prefs_v10";
   const SAVED_WORKFLOWS_KEY = "handraw_saved_workflows_v10";
   const OPEN_TABS_KEY = "handraw_open_tabs_v10";
+  const CLOSED_PROJECT_DRAFTS_KEY = "handraw_closed_project_drafts_v1";
   const HISTORY_STORAGE_KEY = "handraw_gen_history_v4";
   const MY_ARTICLES_STORAGE_KEY = "handraw_my_articles_v1";
   const ARTICLE_CONFLICT_BACKUP_KEY = "handraw_article_conflict_backup_v1";
@@ -31,6 +34,7 @@
     CUSTOM_ASSET_CATS_KEY,
     SAVED_WORKFLOWS_KEY,
     OPEN_TABS_KEY,
+    CLOSED_PROJECT_DRAFTS_KEY,
     HISTORY_STORAGE_KEY,
     MY_ARTICLES_STORAGE_KEY,
     ARTICLE_CONFLICT_BACKUP_KEY,
@@ -39,6 +43,15 @@
   ]);
   let activeCacheScope = "guest";
   let cacheScopeEpoch = 0;
+  let _workflowAutoSaveTimer = null;
+  let _projectAutoSaveTimer = null;
+  let _projectSearchTimer = null;
+  const WORKFLOW_AUTO_SAVE_DELAY_MS = 1200;
+  const PROJECT_AUTO_SAVE_DELAY_MS = 1600;
+  const ProjectClient = window.HandrawStudioProjectSync?.createClient() || null;
+  const ArticleProject109 = window.HandrawStudioArticle109 || null;
+  let _articleProjectTimer = null;
+  const StudioViews = window.HandrawStudioViews || null;
   let _workspaceHydrationController = null;
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
@@ -55,6 +68,9 @@
     }
   }
   let _activeBatchRun = null;
+  // #120: independent controls own distinct live queues; no singleton overwrite.
+  const _activeControlRuns = new Map();
+  let _dagAbortController = null;
 
   function isExplicitDemoMode() {
     const queryMode = new URLSearchParams(window.location.search || "").get("demo_mode");
@@ -112,7 +128,11 @@
   function writeJsonStorage(key, val) {
     try {
       localStorage.setItem(scopedStorageKey(key), JSON.stringify(val));
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      // A failed local write must not be mistaken for an offline backup.
+      return false;
+    }
   }
 
   const savedPrefs = readJsonStorage(PREFS_STORAGE_KEY, {});
@@ -149,6 +169,16 @@
     historyExpandedBatchIds: {},
     historySelectedPreview: {},
     workflowQuery: "",
+    projectQuery: "",
+    cloudProjects: [],
+    closedProjectDrafts: [],
+    projectCenterLoading: false,
+    projectCenterLoadingMore: false,
+    projectHasMore: false,
+    projectPageCursor: "",
+    projectListRequestVersion: 0,
+    projectCenterError: "",
+    projectOpeningId: "",
     activePlanNodeId: null,
     previewSlideIdx: 0,
     renamingTabId: null,
@@ -184,6 +214,22 @@
     if (!changed && CS.tabs.length) return false;
 
     cacheScopeEpoch += 1;
+    if (_workflowAutoSaveTimer) {
+      clearTimeout(_workflowAutoSaveTimer);
+      _workflowAutoSaveTimer = null;
+    }
+    if (_projectAutoSaveTimer) {
+      clearTimeout(_projectAutoSaveTimer);
+      _projectAutoSaveTimer = null;
+    }
+    if (_articleProjectTimer) {
+      clearTimeout(_articleProjectTimer);
+      _articleProjectTimer = null;
+    }
+    if (_projectSearchTimer) {
+      clearTimeout(_projectSearchTimer);
+      _projectSearchTimer = null;
+    }
     _articlesSyncVersion = 0;
     _articleCloudBases.clear();
     _articlesCloudConflict = false;
@@ -214,6 +260,18 @@
     CS.customUploads = readJsonStorage(UPLOAD_STORAGE_KEY, []);
     CS.customAssetCats = readJsonStorage(CUSTOM_ASSET_CATS_KEY, []);
     CS.savedWorkflows = readJsonStorage(SAVED_WORKFLOWS_KEY, null);
+    const locallyClosed = readJsonStorage(CLOSED_PROJECT_DRAFTS_KEY, []);
+    CS.closedProjectDrafts = Array.isArray(locallyClosed) ? locallyClosed : [];
+    CS.cloudProjects = [];
+    CS.projectCenterLoading = false;
+    CS.projectCenterLoadingMore = false;
+    CS.projectHasMore = false;
+    CS.projectPageCursor = "";
+    CS.projectListRequestVersion = 0;
+    CS.projectCenterError = "";
+    CS.projectQuery = "";
+    CS.projectOpeningId = "";
+    CS.pendingProjectDeepLink = "";
     const rawHist = readJsonStorage(HISTORY_STORAGE_KEY, null);
     if (Array.isArray(rawHist)) {
       let normalizedHist = [];
@@ -262,6 +320,10 @@
     CS.historyReturnStage = "quick";
     CS.historyReturnUrl = "";
     _activeBatchRun = null;
+    _activeControlRuns.clear();
+    if (_dagAbortController && !_dagAbortController.signal.aborted) _dagAbortController.abort();
+    _dagAbortController = null;
+    CS.dagProgress = null;
     CS.activeBatchRun = null;
     return true;
   }
@@ -409,7 +471,13 @@
   }
 
   function cancelActiveBatchGeneration(expectedCtrlId = null) {
-    const run = _activeBatchRun;
+    // Stopping any Control in a DAG stops its siblings and queued dependents.
+    if (_dagAbortController && !_dagAbortController.signal.aborted) {
+      _dagAbortController.abort();
+    }
+    const run = expectedCtrlId
+      ? (_activeControlRuns.get(expectedCtrlId) || (_activeBatchRun?.ctrlId === expectedCtrlId ? _activeBatchRun : null))
+      : _activeBatchRun;
     if (!run && expectedCtrlId) {
       const parts = getBatchParts();
       if (parts?.ctrl.id === expectedCtrlId && reconcileDetachedBatchState(parts)) {
@@ -707,7 +775,7 @@
       _articlesSyncInFlight = true;
       const sentVersion = _articlesSyncVersion;
       const payload = {
-        articles: (CS.myArticles || []).map((art) => ({
+        articles: (CS.myArticles || []).filter(art => !art.projectId && !art.projectPending).map((art) => ({
           ...art,
           baseUpdatedAtMs: _articleCloudBases.get(String(art.id)) ?? 0
         }))
@@ -783,8 +851,16 @@
         : [];
       if (ws.loggedIn) {
         ensureDefaultSavedWorkflows();
-        if (Array.isArray(ws.workflows) && ws.workflows.length) {
-          const byId = new Map((CS.savedWorkflows || []).map((w) => [w.id, w]));
+        if (Array.isArray(ws.workflows)) {
+          const remoteIds = new Set(ws.workflows.filter((w) => w?.id).map((w) => w.id));
+          const byId = new Map((CS.savedWorkflows || [])
+            .filter((w) => w && (
+              w.isOfficialPreset || remoteIds.has(w.id) || w.cloudSaveState !== "synced"
+            ))
+            .map((w) => [w.id, w]));
+          // A missing remote workflow is a confirmed deletion only for local
+          // copies that had been acknowledged as synced. Unconfirmed local
+          // drafts must survive even when the cloud list is empty.
           ws.workflows.forEach((rw) => {
             if (!rw || !rw.id || !rw.graph) return;
             const normG = normalizeGraphSchema(rw.graph);
@@ -793,11 +869,23 @@
               title: rw.title || "云端工作流",
               updatedAt: "云端同步",
               updatedAtMs: Number(rw.updatedAtMs) || Date.now(),
+              serverUpdatedAtMs: Number(rw.updatedAtMs) || 0,
+              cloudSaveState: "synced",
               blueprint: rw.blueprint || normG.blueprint || "single",
               graph: normG
             };
             const prev = byId.get(rw.id);
-            if (!prev || (Number(rw.updatedAtMs) || 0) >= (Number(prev.updatedAtMs) || 0)) {
+            const unsynced = prev && ["local", "saving", "error", "conflict"].includes(prev.cloudSaveState);
+            if (unsynced) {
+              // Browser timestamps cannot order local edits against server
+              // revisions. Preserve unsynced local data regardless of clocks.
+              // Keep the LAST acknowledged base: changing it here would let a
+              // later save silently overwrite another tab's cloud changes.
+              const changedRemotely = Number(rw.updatedAtMs || 0) !== Number(prev.serverUpdatedAtMs || 0);
+              prev.cloudSaveState = changedRemotely ? "conflict" : (prev.cloudSaveState === "error" ? "error" : "local");
+              prev.remoteUpdatedAtMs = Number(rw.updatedAtMs) || 0;
+              byId.set(rw.id, prev);
+            } else {
               byId.set(rw.id, item);
             }
           });
@@ -820,6 +908,10 @@
             if (!ra || !ra.id) return;
             _articleCloudBases.set(String(ra.id), Number(ra.updatedAtMs) || 0);
             const prev = (CS.myArticles || []).find((a) => a.id === ra.id);
+            if (prev?.projectId || prev?.projectPending) {
+              artMap.set(ra.id,prev);
+              return; // Legacy workspace cannot overwrite a CAS ArticleDocument.
+            }
             // A newer local/offline draft must be recoverable before the
             // cloud workspace replaces its in-memory representation.
             if (prev && Number(prev.updatedAtMs || 0) > Number(ra.updatedAtMs || 0) &&
@@ -851,7 +943,7 @@
           });
           (CS.myArticles || []).forEach((a) => {
             if (!a || !a.id || serverIds.has(a.id)) return;
-            if (a.isNewDraft) {
+            if (a.isNewDraft || a.projectId || a.projectPending) {
               artMap.set(a.id, a);
               return;
             }
@@ -880,7 +972,9 @@
               desc: ru.desc_zh || ru.desc || "云端上传图参",
               cat: ru.cat || "other",
               image: ru.image,
-              dataUrl: ru.image
+              dataUrl: ru.image,
+              // Library media identity is separate from a local upload row.
+              assetUid: ru.assetUid || null
             });
           });
           CS.customUploads = [...upMap.values()];
@@ -990,6 +1084,17 @@
     cur.vx = CS.vx;
     cur.vy = CS.vy;
     cur.vk = CS.vk;
+    // Camera/selection/panels belong to Project, never to generation Run.
+    // Preserve them across form/canvas switches and local reloads.
+    if (["canvas","quick","batch"].includes(CS.stageView)) {
+      cur.editorLayout = {
+        ...(cur.editorLayout || {}),
+        camera: {vx:CS.vx,vy:CS.vy,vk:CS.vk},
+        selectedIds: cloneGraph(CS.graph.selectedIds || []),
+        panels: {shelfOpen:CS.shelfOpen,minimapOpen:CS.minimapOpen,
+          previewTab:CS.previewTab}
+      };
+    }
     cur.undoStack = CS.undoStack.slice(-15);
     cur.redoStack = CS.redoStack.slice(-15);
   }
@@ -1007,6 +1112,20 @@
         blueprint: t.blueprint,
         dirty: Boolean(t.dirty),
         savedId: t.savedId || null,
+        projectId: t.projectId || null,
+        projectRevision: Number(t.projectRevision || 0),
+        projectSaveState: t.projectSaveState || "",
+        projectPending: t.projectPending || null,
+        projectCopyPending: t.projectCopyPending || null,
+        projectError: t.projectError || "",
+        projectRemoteRevision: Number(t.projectRemoteRevision || 0),
+        editRevision: Number(t.editRevision || 0),
+        projectSyncedGraph: t.projectSyncedGraph || null,
+        projectAuthority: t.projectAuthority || "graph",
+        projectSpec: t.projectSpec || null,
+        projectPlan: t.projectPlan || null,
+        projectActiveView: t.projectActiveView || null,
+        editorLayout: t.editorLayout || null,
         vx: t.vx,
         vy: t.vy,
         vk: t.vk,
@@ -1014,7 +1133,23 @@
         quickStart: t.quickStart === true,
         batchStart: t.batchStart === true
       }));
-    writeJsonStorage(OPEN_TABS_KEY, { activeTabId: CS.activeTabId, tabs: slimTabs });
+    const written = writeJsonStorage(OPEN_TABS_KEY, {
+      activeTabId: CS.activeTabId, tabs: slimTabs,
+      lastStudioTaskView: CS.lastStudioTaskView || ""
+    });
+    if (!written) {
+      const current = CS.tabs.find(t => t.id === CS.activeTabId);
+      if (current && !["synced", "conflict", "saving"].includes(current.projectSaveState)) {
+        current.projectSaveState = "dirty";
+      }
+      if (!CS.localDraftStorageWarning) {
+        CS.localDraftStorageWarning = true;
+        toast("本机空间不足或存储不可用，草稿未安全落盘；请勿关闭页面");
+      }
+    } else {
+      CS.localDraftStorageWarning = false;
+    }
+    return written;
   }
 
   function createWorkflowTab({
@@ -1161,6 +1296,15 @@
   function activateWorkflowTab(tabId, { autoFit = false, switchToCanvas = false } = {}) {
     if (CS.activeTabId) {
       syncCurrentTabSnapshot();
+      // Flush a saved workflow's pending edits before leaving its tab.
+      const outgoing = CS.tabs.find((t) => t.id === CS.activeTabId);
+      if (outgoing && outgoing.id !== tabId && outgoing.savedId && outgoing.dirty && !outgoing.savePromise) {
+        void saveCurrentWorkflow(false, { silent: true });
+      }
+      if (outgoing && outgoing.id !== tabId &&
+          (outgoing.projectSaveState === "local_only" || outgoing.projectPending)) {
+        void saveActiveProject(outgoing);
+      }
     }
     if (switchToCanvas && CS.stageView !== "canvas") {
       CS.stageView = "canvas";
@@ -1181,6 +1325,16 @@
     CS.vx = target.vx ?? 290;
     CS.vy = target.vy ?? 48;
     CS.vk = target.vk ?? 0.85;
+    if (target.editorLayout?.camera) {
+      const camera = target.editorLayout.camera;
+      CS.vx = Number.isFinite(camera.vx) ? camera.vx : CS.vx;
+      CS.vy = Number.isFinite(camera.vy) ? camera.vy : CS.vy;
+      CS.vk = Number.isFinite(camera.vk) && camera.vk > 0 ? camera.vk : CS.vk;
+    }
+    if (Array.isArray(target.editorLayout?.selectedIds)) {
+      const allIds = new Set((CS.graph.nodes || []).map(n => n.id));
+      CS.graph.selectedIds = target.editorLayout.selectedIds.filter(id => allIds.has(id));
+    }
     CS.undoStack = target.undoStack || [];
     CS.redoStack = target.redoStack || [];
     CS.selectedEdgeId = null;
@@ -1208,11 +1362,73 @@
       requestAnimationFrame(() => scrollActiveTabIntoView());
     }
     persistOpenTabs();
+    // A dirty tab restored from disk may have missed its debounce while offline.
+    if (target.dirty && target.savedId) scheduleWorkflowAutoSave();
+    if (target.projectPending || (target.projectSaveState === "local_only" && target.projectId)) {
+      scheduleProjectAutoSave(target);
+    }
+  }
+
+  function archiveClosedProjectDraft(tab) {
+    if (!tab) return true;
+    const unsynced = tab.projectPending || tab.projectCopyPending ||
+      ["dirty", "local_only", "saving", "error", "conflict"].includes(tab.projectSaveState);
+    if (!unsynced) return true;
+    const backup = {
+      id: tab.id, title: tab.title, blueprint: tab.blueprint,
+      graph: cloneGraph(tab.graph), projectId: tab.projectId || null,
+      projectRevision: Number(tab.projectRevision || 0),
+      projectSaveState: tab.projectSaveState || "local_only",
+      projectPending: tab.projectPending || null,
+      projectCopyPending: tab.projectCopyPending || null,
+      projectRemoteRevision: Number(tab.projectRemoteRevision || 0),
+      projectError: tab.projectError || "",
+      editRevision: Number(tab.editRevision || 0),
+      projectSyncedGraph: tab.projectSyncedGraph || null,
+      projectAuthority: tab.projectAuthority || "graph",
+      projectSpec: tab.projectSpec || null,
+      projectPlan: tab.projectPlan || null,
+      projectActiveView: tab.projectActiveView || null,
+      editorLayout: tab.editorLayout || null,
+      quickStart: tab.quickStart === true, batchStart: tab.batchStart === true,
+      vx: tab.vx, vy: tab.vy, vk: tab.vk,
+      closed: true
+    };
+    const previous = Array.isArray(CS.closedProjectDrafts) ? CS.closedProjectDrafts : [];
+    // Never silently evict an older unsynced draft to make room. The storage
+    // write either succeeds for every archived draft or refuses the close.
+    const list = [backup, ...previous.filter(x => x && x.id !== backup.id)];
+    // Closing a tab is destructive; unlike generic best-effort cache writes,
+    // only close after its recovery copy has definitely reached storage.
+    try {
+      localStorage.setItem(scopedStorageKey(CLOSED_PROJECT_DRAFTS_KEY), JSON.stringify(list));
+    } catch (_) {
+      toast("本机空间不足，未能保存待同步草稿：请保持标签打开或先清理存储");
+      return false;
+    }
+    CS.closedProjectDrafts = list;
+    return true;
   }
 
   function closeWorkflowTab(tabId) {
     const idx = CS.tabs.findIndex((t) => t.id === tabId);
     if (idx < 0) return;
+    const closing = CS.tabs[idx];
+    if (closing.id === CS.activeTabId) syncCurrentTabSnapshot();
+    if (!archiveClosedProjectDraft(closing)) return;
+    if (closing.id === CS.activeTabId && closing.savedId && closing.dirty) {
+      // Capture the latest graph before closing; an in-flight provider request
+      // cannot be trusted as an acknowledgement of subsequent edits.
+      syncCurrentTabSnapshot();
+      const local = (CS.savedWorkflows || []).find((w) => w.id === closing.savedId && !w.isOfficialPreset);
+      if (local) {
+        local.graph = cloneGraph(CS.graph);
+        local.updatedAtMs = Date.now();
+        if (local.cloudSaveState !== "conflict") local.cloudSaveState = "local";
+        writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
+      }
+      if (!closing.savePromise) void saveCurrentWorkflow(false, { silent: true });
+    }
     CS.tabs.splice(idx, 1);
     if (!CS.tabs.length) {
       CS.activeTabId = null;
@@ -1230,54 +1446,402 @@
     }
   }
 
-  function markActiveTabDirty() {
-    const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
-    if (cur) cur.dirty = true;
+  function scheduleWorkflowAutoSave() {
+    if (_workflowAutoSaveTimer) clearTimeout(_workflowAutoSaveTimer);
+    _workflowAutoSaveTimer = null;
+    const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
+    // New/official templates remain local drafts until explicitly saved. Do
+    // not fill the workflow library with every transient canvas tab.
+    if (!tab?.savedId || !tab.dirty) return;
+    const wf = (CS.savedWorkflows || []).find((w) => w.id === tab.savedId && !w.isOfficialPreset);
+    if (!wf || wf.cloudSaveState === "conflict") return;
+    const tabId = tab.id, scope = activeCacheScope, epoch = cacheScopeEpoch;
+    _workflowAutoSaveTimer = setTimeout(() => {
+      _workflowAutoSaveTimer = null;
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch || CS.activeTabId !== tabId) return;
+      const current = CS.tabs.find((t) => t.id === tabId);
+      if (current?.dirty) void saveCurrentWorkflow(false, { silent: true });
+    }, WORKFLOW_AUTO_SAVE_DELAY_MS);
   }
 
-  function saveCurrentWorkflow(asNew = false) {
+  function currentProjectSnapshot(tab) {
+    const graph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
+    const blueprint = String(graph?.blueprint || tab.blueprint || "");
+    // Project authority is still the Graph. Attach *derived identity metadata*
+    // on the saved Graph node, not a second writable CreationSpec snapshot.
+    const savedGraph = cloneGraph(graph);
+    const refs = typeof window !== "undefined" ? window.HandrawStudioResources : null;
+    if (refs) {
+      for (const node of savedGraph.nodes || []) {
+        if (node?.type !== "skill_params" || !node.data) continue;
+        const result = refs.syncLegacyRefs(node.data, Catalog);
+        node.data.resourceRefs = result.data.resourceRefs;
+      }
+    }
+    if (tab.projectAuthority === "spec" && tab.projectActiveView !== "canvas") {
+      const projection = StudioViews?.specFromGraph(savedGraph);
+      if (!projection?.spec || projection.mode === "read-only-summary") {
+        throw new Error("spec_graph_not_expressible");
+      }
+      const compiledSpec = {...cloneGraph(tab.projectSpec || {}),...projection.spec};
+      compiledSpec.revision = Number(tab.projectSpec?.revision || 0) + 1;
+      let plan = tab.projectPlan ? cloneGraph(tab.projectPlan) : null;
+      const loop = (savedGraph.nodes || []).find(n => n.type === "loop");
+      if (loop && window.HandrawStudioCore) {
+        const current = window.HandrawStudioCore.normalizeLegacyBatch(loop);
+        const originals = new Map((plan?.slots || []).map(slot => [slot.slotId,slot]));
+        plan = {...(plan || {}),...current,slots:current.slots.map(slot => {
+          const before = originals.get(slot.slotId) || {};
+          return {...before,...slot,overrides:{...(before.overrides || {}),...slot.overrides},
+            anchorId:before.anchorId || slot.anchorId || null,
+            lockedFields:before.lockedFields || slot.lockedFields};
+        })};
+      }
+      return {
+        kind:plan?.slots?.length ? "series" : "image",
+        authority:"spec", title:tab.title || "未命名创作",
+        draft:{creationSpec:compiledSpec,...(plan ? {plan} : {}),
+          activeView:"simple",editorLayout:cloneGraph(tab.editorLayout || {})}
+      };
+    }
+    return {
+      kind: ["series", "xhs", "loop_100", "ip_story", "loop", "style_ab", "omnimedia"].includes(blueprint)
+        ? "series" : "image",
+      // Existing form UI still edits the SAME Graph directly. Until #124
+      // switches it to true Spec/Plan authority, store Graph as the single
+      // authoritative draft. Never maintain a second writable Spec copy.
+      authority: "graph",
+      title: tab.title || "未命名创作",
+      draft: {
+        graph: savedGraph,
+        activeView: tab.projectActiveView ||
+          (tab.id === CS.activeTabId && CS.stageView === "canvas" ? "canvas" : "simple"),
+        editorLayout: cloneGraph(tab.editorLayout || {
+          camera: {vx:tab.vx ?? CS.vx,vy:tab.vy ?? CS.vy,vk:tab.vk ?? CS.vk},
+          selectedIds: [], panels: {}
+        })
+      }
+    };
+  }
+
+  function projectStatusText(tab) {
+    if (!App.state?.serverBacked || !App.state?.loggedIn) return "仅本机草稿";
+    switch (tab?.projectSaveState) {
+      case "dirty": return "本机未保存 · 请勿关闭";
+      case "saving": return "项目同步中…";
+      case "synced": return "项目已云端保存";
+      case "conflict": return "项目冲突 · 保留副本";
+      case "error": return tab.projectError === "project_media_upload_required"
+        ? "请先上传本地图片" :
+        /^(invalid_resource|resource_|project_media_forbidden)/.test(tab.projectError || "")
+          ? "项目资源无效 · 请重新选择" : "项目同步失败 · 重试";
+      case "local_only": return "项目待同步";
+      default: return "保存云端项目";
+    }
+  }
+
+  function updateProjectStatusIndicator() {
+    const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
+    for (const btn of [DOM.bottomRight?.querySelector("#bl-save-project"),
+                       DOM.entryBar?.querySelector("#studio-project-status")]) {
+      if (!btn) continue;
+      btn.textContent = projectStatusText(tab);
+      btn.disabled = tab?.projectSaveState === "saving";
+      btn.title = tab?.projectSaveState === "conflict"
+        ? "云端版本冲突：点击查看本地与云端差异、保留副本或恢复云端"
+        : "项目自动保存到云端，点击可立即同步；与「工作流模板保存」相互独立";
+    }
+  }
+
+  function handleProjectStatusClick() {
+    const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
+    if (!tab) return;
+    if (tab.projectSaveState === "conflict") {
+      void reviewConflictedProject(tab);
+    } else if (!App.state?.loggedIn) {
+      toast("登录后可将项目保存至云端，本机草稿仍会保留");
+    } else {
+      void saveActiveProject(tab);
+    }
+  }
+
+  async function saveActiveProject(tab = CS.tabs.find((t) => t.id === CS.activeTabId)) {
+    if (!ProjectClient || !tab || isArticleTab(tab)) return false;
+    if (!App.state?.serverBacked || !App.state?.loggedIn) {
+      tab.projectSaveState = "local_only";
+      persistOpenTabs();
+      updateProjectStatusIndicator();
+      return false;
+    }
+    if (tab.projectSaveState === "conflict") {
+      updateProjectStatusIndicator();
+      return false;
+    }
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const callback = () => {
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      persistOpenTabs();
+      updateProjectStatusIndicator();
+    };
+    const result = await ProjectClient.flush(tab, currentProjectSnapshot(tab), callback);
+    if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return false;
+    if (result?.needsSave) {
+      // An in-flight save can finish after navigation to another tab.
+      // Do not strand the newer local draft until that tab is reopened.
+      if (CS.activeTabId === tab.id) scheduleProjectAutoSave(tab);
+      else void saveActiveProject(tab);
+    }
+    return Boolean(result?.ok);
+  }
+
+  function scheduleProjectAutoSave(tab = CS.tabs.find((t) => t.id === CS.activeTabId)) {
+    if (_projectAutoSaveTimer) clearTimeout(_projectAutoSaveTimer);
+    _projectAutoSaveTimer = null;
+    if (!ProjectClient || !tab || isArticleTab(tab) || tab.projectSaveState === "conflict") return;
+    const tabId = tab.id, scope = activeCacheScope, epoch = cacheScopeEpoch;
+    _projectAutoSaveTimer = setTimeout(() => {
+      _projectAutoSaveTimer = null;
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      const current = CS.tabs.find((t) => t.id === tabId);
+      if (current && (current.projectSaveState !== "synced" || current.projectPending)) {
+        void saveActiveProject(current);
+      }
+    }, PROJECT_AUTO_SAVE_DELAY_MS);
+  }
+
+  // #103: a 409 never becomes an automatic overwrite. The user first sees
+  // an owner-scoped side-by-side comparison and explicitly chooses a resolution.
+  async function reviewConflictedProject(tab) {
+    if (!ProjectClient || !tab?.projectId || tab.projectSaveState !== "conflict") return;
+    if (!S?.openModal) { toast("无法打开冲突比较面板，本机修改仍已保留"); return; }
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const id = tab.projectId;
+    const editAtOpen = Number(tab.editRevision || 0);
+    let remote;
+    try {
+      const result = await ProjectClient.get(id);
+      if (isStaleScope(epoch, scope) || tab.projectId !== id ||
+          tab.projectSaveState !== "conflict") return;
+      remote = result.project;
+      if (!remote || remote.id !== id) throw new Error("invalid_remote_project");
+    } catch (err) {
+      if (!isStaleScope(epoch, scope)) toast("读取云端差异失败，本机草稿未被覆盖：" + (err.message || "网络错误"));
+      return;
+    }
+    const snapshot = currentProjectSnapshot(tab);
+    const preview = value => esc(JSON.stringify(value || {}, null, 2).slice(0, 9000));
+    S.openModal({
+      title: "项目版本冲突 · 查看差异",
+      sizeClass: "modal-wide",
+      html: '<p>本机草稿与云端版本不一致。云端版本 '+esc(remote.revision)+
+        ' · 本机基线版本 '+esc(tab.projectRevision)+
+        '。以下是只读对比；不会自动合并或重新生图。</p>'+
+        '<div class="studio103-diff" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;">'+
+        '<section><strong>本机未同步修改</strong><pre style="white-space:pre-wrap;overflow:auto;max-height:280px;">'+
+        preview(snapshot.draft)+'</pre></section>'+
+        '<section><strong>云端当前版本</strong><pre style="white-space:pre-wrap;overflow:auto;max-height:280px;">'+
+        preview(remote.draft)+'</pre></section></div>'+
+        '<p>保留副本会创建新的私有项目，不修改原云端项目。放弃本机修改后不可通过此草稿恢复。</p>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">'+
+        '<button type="button" class="btn btn-sm" id="studio103-conflict-cancel">暂不处理</button>'+
+        '<button type="button" class="btn btn-sm" id="studio103-conflict-copy">另存为新项目副本</button>'+
+        '<button type="button" class="btn btn-sm btn-primary" id="studio103-conflict-discard">放弃本地修改并恢复云端</button></div>',
+      onMount: root => {
+        root.querySelector("#studio103-conflict-cancel").onclick = () => S.closeModal();
+        root.querySelector("#studio103-conflict-copy").onclick = () => {
+          S.closeModal();
+          void copyConflictedProject(tab);
+        };
+        root.querySelector("#studio103-conflict-discard").onclick = () => {
+          if (isStaleScope(epoch, scope) || tab.projectId !== id ||
+              tab.projectSaveState !== "conflict") return;
+          if (Number(tab.editRevision || 0) !== editAtOpen) {
+            toast("比较期间草稿已有新修改，请重新查看差异后选择");
+            S.closeModal();
+            return;
+          }
+          const rawGraph = remote.authority === "spec"
+            ? StudioViews?.compile(remote.draft?.creationSpec,remote.draft?.plan,{projectId:id})
+            : remote.draft?.graph;
+          if (!rawGraph || !Array.isArray(rawGraph.nodes)) {
+            toast("云端版本不能安全恢复，本机草稿保持不变");
+            return;
+          }
+          const graph = normalizeGraphSchema(rawGraph);
+          tab.graph = cloneGraph(graph);
+          if (tab.id === CS.activeTabId) CS.graph = cloneGraph(graph);
+          tab.title = remote.title || tab.title;
+          tab.projectRevision = Number(remote.revision);
+          tab.projectAuthority = remote.authority;
+          tab.projectSyncedGraph = remote.authority === "graph" ? cloneGraph(graph) : null;
+          tab.projectSpec = remote.authority === "spec" ? cloneGraph(remote.draft?.creationSpec || {}) : null;
+          tab.projectPlan = remote.authority === "spec" ? cloneGraph(remote.draft?.plan || null) : null;
+          tab.projectActiveView = remote.draft?.activeView || "canvas";
+          tab.editorLayout = cloneGraph(remote.draft?.editorLayout || {});
+          tab.projectPending = null;
+          tab.projectCopyPending = null;
+          tab.projectRemoteRevision = 0;
+          tab.projectError = "";
+          tab.projectSaveState = "synced";
+          tab.dirty = false;
+          tab.editRevision = 0;
+          S.closeModal();
+          persistOpenTabs();
+          activateProjectTab(tab, remote);
+          updateProjectStatusIndicator();
+          toast("已按明确选择恢复云端版本，本机冲突修改已放弃");
+        };
+      }
+    });
+  }
+
+  async function copyConflictedProject(tab) {
+    if (!ProjectClient || !tab || tab.projectSaveState !== "conflict") return;
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const changedAt = Number(tab.editRevision || 0);
+    try {
+      const snapshot = currentProjectSnapshot(tab);
+      await ProjectClient.copyConflict(tab, snapshot.draft, () => {
+        if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+        persistOpenTabs();
+        updateProjectStatusIndicator();
+      });
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      if (Number(tab.editRevision || 0) > changedAt) {
+        tab.projectSaveState = "local_only";
+        scheduleProjectAutoSave(tab);
+      }
+      toast("已保留本机修改为新的云端项目，原项目未被覆盖");
+    } catch (error) {
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      toast("保留副本失败：本机草稿未删除，请稍后重试");
+    }
+  }
+
+  function markActiveTabDirty() {
+    const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
+    if (cur) {
+      cur.dirty = true;
+      cur.editRevision = Number(cur.editRevision || 0) + 1;
+      if (cur.projectSaveState !== "conflict") cur.projectSaveState = "local_only";
+      scheduleWorkflowAutoSave();
+      scheduleProjectAutoSave(cur);
+      updateProjectStatusIndicator();
+    }
+  }
+
+  async function saveCurrentWorkflow(asNew = false, { silent = false } = {}) {
     syncCurrentTabSnapshot();
     const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
-    if (!cur) return;
+    if (!cur) return false;
+    // Two clicks cannot race a stale base revision against our own save.
+    if (cur.savePromise) {
+      await cur.savePromise.catch(() => {});
+      if (CS.activeTabId !== cur.id || !cur.dirty) return false;
+      return saveCurrentWorkflow(asNew, { silent });
+    }
     ensureDefaultSavedWorkflows();
 
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const requestedEditEpoch = Number(cur.editRevision || 0);
     const nowStr = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
     const nowMs = Date.now();
-    const existing = !asNew && cur.savedId ? CS.savedWorkflows.find((w) => w.id === cur.savedId && !w.isOfficialPreset) : null;
-    let savedTarget = null;
-
-    if (existing) {
-      existing.title = cur.title;
-      existing.updatedAt = `今天 ${nowStr}`;
-      existing.updatedAtMs = nowMs;
-      existing.blueprint = CS.graph.blueprint;
-      existing.graph = cloneGraph(CS.graph);
-      savedTarget = existing;
-    } else {
-      const newId = E.uid("savedwf");
-      cur.savedId = newId;
+    const existing = !asNew && cur.savedId
+      ? CS.savedWorkflows.find(w => w.id === cur.savedId && !w.isOfficialPreset) : null;
+    let savedTarget = existing;
+    if (!savedTarget) {
+      cur.savedId = E.uid("savedwf");
       savedTarget = {
-        id: newId,
+        id: cur.savedId,
         title: asNew ? `${cur.title} (副本)` : cur.title,
-        updatedAt: `今天 ${nowStr}`,
-        updatedAtMs: nowMs,
         blueprint: CS.graph.blueprint,
-        graph: cloneGraph(CS.graph)
+        graph: cloneGraph(CS.graph),
+        serverUpdatedAtMs: 0
       };
       CS.savedWorkflows.unshift(savedTarget);
     }
-    cur.dirty = false;
-    writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-    persistOpenTabs();
+    savedTarget.title = savedTarget.title || cur.title;
+    if (!asNew) savedTarget.title = cur.title;
+    savedTarget.updatedAt = `本机 ${nowStr}`;
+    savedTarget.updatedAtMs = nowMs;
+    savedTarget.blueprint = CS.graph.blueprint;
+    savedTarget.graph = cloneGraph(CS.graph);
+    // A conflict is sticky: never turn it into a normal retry, as that could
+    // rewrite another tab's revision without explicit user intervention.
+    const conflicted = !asNew && savedTarget.cloudSaveState === "conflict";
+    savedTarget.cloudSaveState = conflicted ? "conflict" : "local";
+    const workflowStored = writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
+    const tabsStored = persistOpenTabs();
     renderTopAndBottomDocks();
-    studioApiPost("/api/studio/workflows", {
+    if (!workflowStored || !tabsStored) {
+      cur.dirty = true;
+      if (!silent) toast("本机空间不足，工作流未安全保存，请勿关闭页面");
+      return false;
+    }
+
+    if (!App.state?.serverBacked || !App.state?.loggedIn) {
+      cur.dirty = false; // Confirmed local write only, not a cloud revision.
+      if (!silent) toast("已保存到本机，尚未同步云端");
+      return true;
+    }
+    if (conflicted) {
+      cur.dirty = true;
+      if (!silent) toast("云端版本冲突：请在工作流列表中将本机草稿另存副本");
+      return false;
+    }
+
+    const request = {
       id: savedTarget.id,
       title: savedTarget.title,
       blueprint: savedTarget.blueprint,
       graph: savedTarget.graph,
-      updatedAtMs: nowMs
-    });
-    toast(`💾 工作流《${cur.title}》已保存！（共 ${CS.graph.nodes.length} 个节点）`);
+      baseUpdatedAtMs: Number(savedTarget.serverUpdatedAtMs || 0)
+    };
+    savedTarget.cloudSaveState = "saving";
+    if (!silent) toast("工作流已保存在本机，正在同步云端…");
+    const promise = (async () => {
+      let response = null, httpStatus = 0;
+      try {
+        const resp = await fetch("/api/studio/workflows", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request)
+        });
+        httpStatus = resp.status;
+        response = await resp.json().catch(() => null);
+        if (!resp.ok || !response?.ok) throw new Error(response?.error || "cloud_save_failed");
+      } catch (err) {
+        if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return false;
+        savedTarget.cloudSaveState = httpStatus === 409 ? "conflict" : "error";
+        cur.dirty = true;
+        writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
+        if (!silent) toast(httpStatus === 409
+          ? "云端版本冲突：本机草稿已保留，请检查后另存副本"
+          : "云端保存失败：本机草稿已保留，可稍后重试");
+        renderTopAndBottomDocks();
+        return false;
+      }
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return false;
+      savedTarget.serverUpdatedAtMs = Number(response.updatedAtMs) || 0;
+      // The server only acknowledged the request snapshot. Changes made during
+      // this upload remain local, even if the previous request succeeded.
+      cur.dirty = Number(cur.editRevision || 0) !== requestedEditEpoch;
+      savedTarget.cloudSaveState = cur.dirty ? "local" : "synced";
+      savedTarget.updatedAt = cur.dirty ? "本机修改待同步" : "已云端保存";
+      if (cur.dirty && cur.id === CS.activeTabId) {
+        savedTarget.graph = cloneGraph(CS.graph);
+        savedTarget.updatedAtMs = Date.now();
+      }
+      writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
+      persistOpenTabs();
+      renderTopAndBottomDocks();
+      if (!silent) toast(cur.dirty ? "上一版本已同步云端，新的修改仍待保存" : "工作流已云端保存");
+      if (cur.dirty && cur.id === CS.activeTabId) scheduleWorkflowAutoSave();
+      return true;
+    })();
+    cur.savePromise = promise;
+    try { return await promise; }
+    finally { if (cur.savePromise === promise) delete cur.savePromise; }
   }
 
   function exportWorkflowJsonFile(wfObj) {
@@ -1315,17 +1879,13 @@
       updatedAt: `导入于 ${nowStr}`,
       updatedAtMs: nowMs,
       blueprint: normGraph.blueprint || "single",
-      graph: cloneGraph(normGraph)
+      graph: cloneGraph(normGraph),
+      cloudSaveState: "local", serverUpdatedAtMs: 0
     };
     CS.savedWorkflows.unshift(importedWf);
-    writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-    studioApiPost("/api/studio/workflows", {
-      id: importedWf.id,
-      title: importedWf.title,
-      blueprint: importedWf.blueprint,
-      graph: importedWf.graph,
-      updatedAtMs: nowMs
-    });
+    if (!writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows)) {
+      toast("导入工作流未能写入本机存储，请勿关闭当前页面");
+    }
 
     CS.stageView = "canvas";
     try {
@@ -1343,7 +1903,404 @@
       autoFit: true,
       switchToCanvas: true
     });
-    toast(`🎉 已导入并打开工作流《${title}》！`);
+    // Import is an explicit template creation. Route it through the same
+    // acknowledged CAS writer instead of the old fire-and-forget POST.
+    void saveCurrentWorkflow(false, {silent:true});
+    toast(`已导入并打开工作流《${title}》，云端状态以服务端回执为准`);
+  }
+
+  /* ======================== STUDIO2 PROJECT CENTER · #106 ======================== */
+  const ProjectCenter = window.HandrawStudioProjectCenter || null;
+
+  async function refreshProjectCenter() {
+    const version = ++CS.projectListRequestVersion;
+    if (!ProjectClient || !App.state?.loggedIn || !App.state?.serverBacked) {
+      CS.cloudProjects = [];
+      CS.projectCenterError = "";
+      CS.projectCenterLoading = false;
+      CS.projectCenterLoadingMore = false;
+      CS.projectHasMore = false;
+      CS.projectPageCursor = "";
+      renderProjectCenterStage();
+      return;
+    }
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const query = CS.projectQuery;
+    CS.projectCenterLoading = true;
+    CS.projectCenterLoadingMore = false;
+    CS.projectCenterError = "";
+    CS.projectHasMore = false;
+    CS.projectPageCursor = "";
+    renderProjectCenterStage();
+    try {
+      const result = await ProjectClient.list({query,limit:40});
+      if (isStaleScope(epoch,scope) || version !== CS.projectListRequestVersion) return;
+      CS.cloudProjects = Array.isArray(result.projects) ? result.projects : [];
+      CS.projectHasMore = Boolean(result.hasMore && result.nextCursor);
+      CS.projectPageCursor = String(result.nextCursor || "");
+      CS.projectCenterError = "";
+    } catch (_) {
+      if (isStaleScope(epoch,scope) || version !== CS.projectListRequestVersion) return;
+      CS.projectCenterError = "请检查网络或重新登录后再试，本机草稿不会丢失。";
+    } finally {
+      if (!isStaleScope(epoch,scope) && version === CS.projectListRequestVersion) {
+        CS.projectCenterLoading = false;
+        renderProjectCenterStage();
+      }
+    }
+  }
+
+  async function loadMoreProjects() {
+    if (!ProjectClient || CS.projectCenterLoading || CS.projectCenterLoadingMore ||
+        !CS.projectHasMore || !CS.projectPageCursor) return;
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const version = CS.projectListRequestVersion;
+    const cursor = CS.projectPageCursor, query = CS.projectQuery;
+    CS.projectCenterLoadingMore = true;
+    renderProjectCenterStage();
+    try {
+      const result = await ProjectClient.list({query,cursor,limit:40});
+      if (isStaleScope(epoch,scope) || version !== CS.projectListRequestVersion) return;
+      const seen = new Set(CS.cloudProjects.map(x => x.id));
+      for (const p of result.projects || []) {
+        if (p && p.id && !seen.has(p.id)) {
+          CS.cloudProjects.push(p);
+          seen.add(p.id);
+        }
+      }
+      CS.projectHasMore = Boolean(result.hasMore && result.nextCursor);
+      CS.projectPageCursor = String(result.nextCursor || "");
+    } catch (_) {
+      if (!isStaleScope(epoch,scope)) toast("更多项目加载失败，请检查网络后重试");
+    } finally {
+      if (!isStaleScope(epoch,scope) && version === CS.projectListRequestVersion) {
+        CS.projectCenterLoadingMore = false;
+        renderProjectCenterStage();
+      }
+    }
+  }
+
+  function openProjectCenter() {
+    // The Project Center page has been retired. Keep this older integration
+    // entry point as a safe route to the current form; never delete drafts
+    // or change the backing Project/Graph/Run records.
+    switchCreationStage("quick");
+  }
+
+  function activateProjectTab(tab, project = null) {
+    if (!tab) return;
+    const graph = tab.id === CS.activeTabId ? CS.graph : tab.graph;
+    const kind = project?.kind || (tab.batchStart ? "series" : "image");
+    const preferred = tab.projectActiveView || project?.draft?.activeView ||
+      (tab.batchStart || tab.quickStart ? "simple" : "canvas");
+    const asBatch = preferred === "simple" && kind === "series" && Boolean(getBatchParts(graph));
+    const asQuick = preferred === "simple" && kind === "image" && Boolean(getQuickParts(graph));
+    const mapped = window.HandrawStudioViews?.classify(graph);
+    const safeComplex = preferred === "simple" && mapped?.mode !== "simple-editable";
+    const stage = asBatch ? "batch" : asQuick ? "quick" :
+      safeComplex ? (kind === "series" ? "batch" : "quick") : "canvas";
+    if (asBatch) tab.batchStart = true;
+    if (asQuick) tab.quickStart = true;
+    CS.stageView = stage;
+    CS.lastStudioTaskView = asBatch ? "batch" : asQuick ? "quick" : CS.lastStudioTaskView;
+    activateWorkflowTab(tab.id, {autoFit: false});
+    const url = new URL(window.location.href);
+    url.search = "?entry=" + (stage === "canvas" ? "canvas" : stage);
+    if (tab.projectId) url.searchParams.set("project", tab.projectId);
+    try { window.history.replaceState(null, "", url.pathname + url.search); } catch (_) {}
+    persistOpenTabs();
+    fullRenderCanvas();
+  }
+
+  async function openCloudProject(projectId) {
+    if (!ProjectClient || !App.state?.loggedIn || !App.state?.serverBacked) {
+      toast("请先登录，才能从云端恢复项目");
+      return;
+    }
+    if (CS.projectOpeningId) return;
+    const existing = CS.tabs.find(t => t.projectId === projectId);
+    const closedDraft = (CS.closedProjectDrafts || []).find(t => t.projectId === projectId &&
+      ProjectCenter?.isLocallyUnsynced(t));
+    if (closedDraft) {
+      restoreClosedProjectDraft(closedDraft.id);
+      toast("已恢复关闭前的本机未同步草稿，未使用云端版本覆盖");
+      return;
+    }
+    // This check MUST precede the remote read: a stale cloud response is
+    // never allowed to replace offline edits or an unresolved 409.
+    if (existing && (ProjectCenter?.isLocallyUnsynced(existing) || existing.dirty)) {
+      activateProjectTab(existing);
+      toast("已打开本机未同步的版本；云端项目未覆盖本机修改");
+      return;
+    }
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const stageAtOpen = CS.stageView;
+    CS.projectOpeningId = String(projectId || "");
+    try {
+      const response = await ProjectClient.get(projectId);
+      if (isStaleScope(epoch, scope) || CS.stageView !== stageAtOpen) return;
+      const project = response.project;
+      if (!project || project.id !== projectId) throw new Error("项目编号不匹配");
+      if (project.authority === "article") {
+        if (!ArticleProject109) throw new Error("文章项目适配模块未加载");
+        ensureMyArticlesInitialized();
+        const documentId = project.draft?.article?.documentId;
+        const local = (CS.myArticles || []).find(a =>
+          a.projectId === projectId || (a.id === documentId && a.projectPending));
+        if (local && (local.projectPending ||
+            ["dirty","local_only","saving","error","conflict"].includes(local.projectSaveState))) {
+          openUnifiedArticleEditor(local.id);
+          toast("已打开本机待同步文章，云端未覆盖正文或图卡");
+          return;
+        }
+        const restored = ArticleProject109.hydrate(project,local);
+        restored.linkedPlanNodeId = null;
+        restored.linkedTabId = null;
+        CS.myArticles = [restored,...(CS.myArticles || []).filter(a =>
+          a.id !== restored.id && a.projectId !== projectId)];
+        writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+        CS.activeArticleId = restored.id;
+        openUnifiedArticleEditor(restored.id);
+        // A direct ?project=ID deep link starts in a hidden Quick stage;
+        // opening the Article editor must also reveal its stage container.
+        renderTopAndBottomDocks();
+        toast("已恢复云端文章项目 · 版本 " + project.revision);
+        return;
+      }
+      if (!["graph","spec"].includes(project.authority)) {
+        throw new Error("不支持的项目权威");
+      }
+      // A Spec Project is mapped to a transient view Graph. It is not yet
+      // another persisted write source; Canvas promotion is atomic on save.
+      const rawGraph = project.authority === "spec"
+        ? StudioViews?.compile(project.draft?.creationSpec,project.draft?.plan,{
+            projectId:project.id
+          })
+        : project.draft?.graph;
+      if (!rawGraph || !Array.isArray(rawGraph.nodes)) {
+        throw new Error("云端草稿缺少可安全编译的创作内容");
+      }
+      const decision = ProjectCenter?.classifyRestore(existing, project) || "open-cloud";
+      if (decision === "keep-local" || decision === "activate-local") {
+        activateProjectTab(existing, project);
+        if (decision === "keep-local") toast("已优先打开本机草稿，未覆盖未同步内容");
+        return;
+      }
+      const cloudGraph = normalizeGraphSchema(rawGraph);
+      let target = existing;
+      if (target) {
+        // The active tab is snapshotted in activateWorkflowTab: update CS.graph
+        // too or that snapshot would rewrite the newly fetched remote graph.
+        if (target.id === CS.activeTabId) CS.graph = cloneGraph(cloudGraph);
+        target.graph = cloneGraph(cloudGraph);
+      } else {
+        target = createWorkflowTab({
+          title: project.title || "云端项目",
+          blueprint: cloudGraph.blueprint || "single",
+          graph: cloudGraph, makeActive: false
+        });
+      }
+      target.title = project.title || target.title;
+      target.projectId = project.id;
+      target.projectRevision = Number(project.revision);
+      target.projectSyncedGraph = project.authority === "graph" ? cloneGraph(cloudGraph) : null;
+      target.projectAuthority = project.authority;
+      target.projectSpec = project.authority === "spec"
+        ? cloneGraph(project.draft?.creationSpec || {}) : null;
+      target.projectPlan = project.authority === "spec"
+        ? cloneGraph(project.draft?.plan || null) : null;
+      target.projectActiveView = project.authority === "spec" ? "simple"
+        : project.draft?.activeView || "canvas";
+      target.editorLayout = cloneGraph(project.draft?.editorLayout || target.editorLayout || {});
+      const cam = target.editorLayout.camera || {};
+      if (Number.isFinite(cam.vx)) target.vx = cam.vx;
+      if (Number.isFinite(cam.vy)) target.vy = cam.vy;
+      if (Number.isFinite(cam.vk) && cam.vk > 0) target.vk = cam.vk;
+      if (target.id === CS.activeTabId) {
+        CS.vx = target.vx; CS.vy = target.vy; CS.vk = target.vk;
+      }
+      target.projectSaveState = "synced";
+      target.projectPending = null;
+      target.projectCopyPending = null;
+      target.projectError = "";
+      target.projectRemoteRevision = 0;
+      target.dirty = false;
+      target.editRevision = 0;
+      activateProjectTab(target, project);
+      toast("已恢复云端项目 · 版本 " + project.revision);
+    } catch (error) {
+      if (!isStaleScope(epoch, scope)) toast("无法恢复云端项目：" + (error.message || "网络错误"));
+    } finally {
+      if (!isStaleScope(epoch, scope)) CS.projectOpeningId = "";
+    }
+  }
+
+  function createProjectFromCenter(kind) {
+    if (kind === "workflow") {
+      openWorkflowsPage();
+      return;
+    }
+    if (kind === "article") {
+      switchCreationStage("article");
+      if (CS.stageView === "preview" && ArticleProject109) {
+        openUnifiedArticleEditor(null, {createNew:true,renderNow:true});
+      }
+      return;
+    }
+    let graph, title, stage;
+    if (kind === "image") {
+      graph = buildForkGraphFromWork({styles:[],layout:"",prompt:"",ratio:"3:4",mode:"graphic-text"});
+      title = "未命名图片项目";
+      stage = "quick";
+    } else if (kind === "series") {
+      const sp = E.makeSkillParamsNode(64,56,{});
+      const txt = E.makeTextInputNode(64,480,{text:""});
+      const asset = E.makeAssetNode(64,760,{items:[]});
+      const loop = E.makeLoopNode(468,200,{loopMode:"prompts",promptListText:"",maxIterations:200});
+      const ctrl = E.makeOutputControlNode(880,200,{mode:"graphic-text",count:1,ratio:"3:4"});
+      graph = {blueprint:"loop_100",nodes:[sp,txt,asset,loop,ctrl],selectedIds:[],
+        edges:[
+          {id:E.uid("edge"),from:sp.id,to:loop.id},
+          {id:E.uid("edge"),from:sp.id,to:ctrl.id},
+          {id:E.uid("edge"),from:txt.id,to:loop.id},
+          {id:E.uid("edge"),from:asset.id,to:loop.id},
+          {id:E.uid("edge"),from:asset.id,to:ctrl.id},
+          {id:E.uid("edge"),from:loop.id,to:ctrl.id}
+        ]};
+      title = "未命名系列项目";
+      stage = "batch";
+    } else {
+      return;
+    }
+    const tab = createWorkflowTab({title,blueprint:graph.blueprint,graph,makeActive:false});
+    tab.quickStart = stage === "quick";
+    tab.batchStart = stage === "batch";
+    tab.projectSaveState = "local_only";
+    CS.stageView = stage;
+    CS.lastStudioTaskView = stage;
+    activateWorkflowTab(tab.id, {autoFit:false});
+    window.history.replaceState(null, "", "?entry=" + stage);
+    persistOpenTabs();
+    fullRenderCanvas();
+    // A new project is not considered cloud-saved until its first successful
+    // edit is acknowledged. Don't auto-create empty projects merely on visit.
+  }
+
+  function restoreClosedProjectDraft(draftId) {
+    const stored = (Array.isArray(CS.closedProjectDrafts) ? CS.closedProjectDrafts : [])
+      .find(x => x && x.id === draftId);
+    if (!stored?.graph || !Array.isArray(stored.graph.nodes)) return false;
+    const tab = createWorkflowTab({
+      title: stored.title || "恢复的草稿",
+      blueprint: stored.blueprint || stored.graph.blueprint || "single",
+      graph: cloneGraph(stored.graph), makeActive: false
+    });
+    // Restoration is a move, not another Project creation. Retain the
+    // original idempotency key / expected revision to safely replay uploads.
+    for (const key of [
+      "projectId", "projectRevision", "projectSaveState", "projectPending",
+      "projectCopyPending", "projectRemoteRevision", "projectError",
+      "editRevision", "projectSyncedGraph", "projectAuthority", "projectSpec",
+      "projectPlan", "projectActiveView", "editorLayout", "quickStart", "batchStart", "vx", "vy", "vk"
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(stored,key)) tab[key] = stored[key];
+    }
+    tab.dirty = true;
+    CS.closedProjectDrafts = CS.closedProjectDrafts.filter(x => x && x.id !== draftId);
+    writeJsonStorage(CLOSED_PROJECT_DRAFTS_KEY,CS.closedProjectDrafts);
+    activateProjectTab(tab);
+    if (tab.projectSaveState !== "conflict") scheduleProjectAutoSave(tab);
+    return true;
+  }
+
+  function renderProjectCenterStage() {
+    if (!DOM.projectsStage) return;
+    if (CS.stageView !== "projects") {
+      DOM.projectsStage.style.display = "none";
+      return;
+    }
+    DOM.projectsStage.style.display = "flex";
+    if (!ProjectCenter) {
+      DOM.projectsStage.textContent = "项目中心模块暂不可用，请刷新页面";
+      return;
+    }
+    // Rebuilding the whole stage on every keystroke destroys Chinese IME
+    // composition, text selection and the scroll position after "load more".
+    const previousScroller = DOM.projectsStage.querySelector(".ic-pc-scroll");
+    const previousScrollTop = previousScroller?.scrollTop || 0;
+    const focus = document.activeElement?.id === "pc-project-search";
+    const previousInput = focus ? document.activeElement : null;
+    const selectionStart = previousInput?.selectionStart;
+    const selectionEnd = previousInput?.selectionEnd;
+    DOM.projectsStage.innerHTML = ProjectCenter.render({
+      projects: CS.cloudProjects, tabs: CS.tabs.concat(CS.closedProjectDrafts || []), query: CS.projectQuery,
+      loading: CS.projectCenterLoading, error: CS.projectCenterError,
+      loggedIn: Boolean(App.state?.serverBacked && App.state?.loggedIn),
+      hasMore: CS.projectHasMore, loadingMore: CS.projectCenterLoadingMore
+    });
+    const nextScroller = DOM.projectsStage.querySelector(".ic-pc-scroll");
+    if (nextScroller) nextScroller.scrollTop = previousScrollTop;
+    const queryInput = DOM.projectsStage.querySelector("#pc-project-search");
+    if (queryInput) {
+      let composing = false;
+      const scheduleSearch = (immediate = false) => {
+        CS.projectQuery = queryInput.value;
+        CS.projectListRequestVersion += 1; // Invalidate older request results.
+        if (_projectSearchTimer) clearTimeout(_projectSearchTimer);
+        const scope = activeCacheScope, epoch = cacheScopeEpoch;
+        _projectSearchTimer = setTimeout(() => {
+          _projectSearchTimer = null;
+          if (!isStaleScope(epoch,scope) && CS.stageView === "projects") {
+            void refreshProjectCenter();
+          }
+        }, immediate ? 0 : 300);
+      };
+      queryInput.oncompositionstart = () => { composing = true; };
+      queryInput.oncompositionend = () => {
+        composing = false;
+        scheduleSearch();
+      };
+      queryInput.oninput = () => {
+        if (!composing) scheduleSearch();
+      };
+      queryInput.onkeydown = event => {
+        if (event.key === "Enter" && !composing && !event.isComposing) {
+          event.preventDefault();
+          scheduleSearch(true);
+        }
+      };
+      if (focus) {
+        queryInput.focus();
+        if (typeof selectionStart === "number" && typeof selectionEnd === "number") {
+          try { queryInput.setSelectionRange(selectionStart, selectionEnd); } catch (_) {}
+        }
+      }
+    }
+    DOM.projectsStage.querySelectorAll("[data-pc-refresh]").forEach(btn => {
+      btn.onclick = () => { void refreshProjectCenter(); };
+    });
+    DOM.projectsStage.querySelectorAll("[data-pc-more]").forEach(btn => {
+      btn.onclick = () => { void loadMoreProjects(); };
+    });
+    DOM.projectsStage.querySelectorAll("[data-pc-new]").forEach(btn => {
+      btn.onclick = () => createProjectFromCenter(btn.getAttribute("data-pc-new"));
+    });
+    DOM.projectsStage.querySelectorAll("[data-pc-local]").forEach(btn => {
+      btn.onclick = () => {
+        const draftId = btn.getAttribute("data-pc-local");
+        const tab = CS.tabs.find(t => t.id === draftId);
+        if (tab) activateProjectTab(tab);
+        else restoreClosedProjectDraft(draftId);
+      };
+    });
+    DOM.projectsStage.querySelectorAll("[data-pc-open]").forEach(btn => {
+      btn.onclick = () => { void openCloudProject(btn.getAttribute("data-pc-open")); };
+    });
+    const login = DOM.projectsStage.querySelector("[data-pc-login]");
+    if (login) login.onclick = () => S.openLoginModal(
+      "登录后查看你的云端创作项目",
+      () => { if (App.state?.loggedIn) void refreshProjectCenter(); }
+    );
   }
 
   function openWorkflowsPage({ renderNow = true } = {}) {
@@ -1397,6 +2354,9 @@
     };
 
     DOM.workflowsStage.innerHTML = `
+      ${CS.resourceEntryWarning && new URLSearchParams(window.location.search).get("workflow")
+        ? `<div class="ic-wf-link-warning" role="alert">${esc(CS.resourceEntryWarning)}</div>`
+        : ""}
       <div class="ic-wf-minimal-tools" role="search">
         <input type="search" class="hw-input" id="wf-search-inp"
           value="${esc(CS.workflowQuery || "")}" placeholder="搜索工作流…" aria-label="搜索工作流" />
@@ -1445,12 +2405,17 @@
                               <span>${nodes.length} 个节点</span>
                               <span>${edges.length} 条连线</span>
                               <span>${esc(wf.updatedAt || "已保存")}</span>
+                              ${wf.cloudSaveState === "conflict" ? '<span role="status">云端版本冲突 · 本机草稿未覆盖</span>' :
+                                wf.cloudSaveState === "error" ? '<span role="status">云端保存失败 · 草稿在本机</span>' :
+                                wf.cloudSaveState === "local" || wf.cloudSaveState === "saving" ? '<span role="status">本机草稿 · 待同步</span>' :
+                                wf.cloudSaveState === "synced" ? '<span>云端已确认</span>' : ""}
                             </div>
                             ${wf.scenarioDesc ? `<p class="ic-wf-card-description">${esc(wf.scenarioDesc)}</p>` : ""}
                             ${typePills ? `<div class="ic-wf-card-tags">${typePills}</div>` : ""}
                           </div>
                           <div class="ic-wf-card-actions">
                             <button type="button" class="btn btn-sm btn-primary" data-wf-open="${esc(wf.id)}">打开</button>
+                            ${wf.cloudSaveState === "conflict" ? `<button type="button" class="btn btn-sm" data-wf-copy="${esc(wf.id)}">另存本机副本</button>` : ""}
                             <button type="button" class="btn btn-sm" data-wf-dl="${esc(wf.id)}">导出 JSON</button>
                             <button type="button" class="btn btn-sm" data-wf-rm="${esc(wf.id)}" title="删除此工作流">删除</button>
                           </div>
@@ -1524,6 +2489,24 @@
       };
     });
 
+    DOM.workflowsStage.querySelectorAll("[data-wf-copy]").forEach((btn) => {
+      btn.onclick = () => {
+        const wf = (CS.savedWorkflows || []).find((x) => x.id === btn.getAttribute("data-wf-copy"));
+        if (!wf || wf.cloudSaveState !== "conflict") return;
+        // A new ID and base=0 preserve the remote workflow untouched.
+        createWorkflowTab({
+          title: wf.title,
+          blueprint: wf.blueprint,
+          graph: cloneGraph(wf.graph),
+          savedId: null,
+          makeActive: true,
+          autoFit: true,
+          switchToCanvas: true
+        });
+        void saveCurrentWorkflow(true);
+      };
+    });
+
     DOM.workflowsStage.querySelectorAll("[data-wf-dl]").forEach((btn) => {
       btn.onclick = () => {
         const wid = btn.getAttribute("data-wf-dl");
@@ -1533,20 +2516,55 @@
     });
 
     DOM.workflowsStage.querySelectorAll("[data-wf-rm]").forEach((btn) => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         const wid = btn.getAttribute("data-wf-rm");
-        CS.savedWorkflows = (CS.savedWorkflows || []).filter((x) => x.id !== wid);
+        const current = (CS.savedWorkflows || []).find((w) => w.id === wid);
+        if (!current || current.isOfficialPreset) return;
+        const scope = activeCacheScope, epoch = cacheScopeEpoch;
+        if (App.state?.serverBacked) {
+          if (!App.state?.loggedIn) {
+            toast("登录后才能删除云端工作流");
+            return;
+          }
+          btn.disabled = true;
+          try {
+            const resp = await fetch("/api/studio/workflows/delete", {
+              method: "POST", credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: wid })
+            });
+            const result = await resp.json().catch(() => null);
+            if (!resp.ok || result?.ok !== true) throw new Error(result?.error || "delete_failed");
+          } catch (_) {
+            if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+            btn.disabled = false;
+            toast("云端删除失败：工作流仍保留，请检查网络后重试");
+            return;
+          }
+        }
+        if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+        CS.savedWorkflows = (CS.savedWorkflows || []).filter((w) => w.id !== wid);
+        // Do not auto-create a just-deleted workflow from another open tab.
+        // Those tabs become local drafts until the user saves with a fresh ID.
+        CS.tabs.forEach((tab) => {
+          if (tab.savedId === wid) {
+            tab.savedId = null;
+            tab.dirty = true;
+          }
+        });
         writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
-        studioApiPost("/api/studio/workflows/delete", { id: wid });
+        persistOpenTabs();
         renderTopAndBottomDocks();
-        toast("已删除该工作流");
+        toast(App.state?.serverBacked ? "工作流已从云端删除，打开的草稿仍保留" : "工作流已从本机删除");
       };
     });
   }
 
   /* ======================== UNDO/REDO, GEOMETRY & CONNECTIONS ======================== */
   function pushUndo() {
-    CS.undoStack.push(cloneGraph(CS.graph));
+    // #111: edit history is memory-only. Keep authoritative Run/media payload
+    // references stable; project persistence still serializes the full Graph.
+    CS.undoStack.push(window.HandrawCanvasRenderer.captureEditableGraph(CS.graph));
     if (CS.undoStack.length > 35) CS.undoStack.shift();
     CS.redoStack = [];
     markActiveTabDirty();
@@ -1557,8 +2575,9 @@
       toast("已经是第一步");
       return;
     }
-    CS.redoStack.push(cloneGraph(CS.graph));
-    CS.graph = CS.undoStack.pop();
+    CS.redoStack.push(window.HandrawCanvasRenderer.captureEditableGraph(CS.graph));
+    CS.graph = window.HandrawCanvasRenderer.preserveRuntime(CS.graph,CS.undoStack.pop());
+    markActiveTabDirty();
     CS.selectedEdgeId = null;
     fullRenderCanvas();
     persistOpenTabs();
@@ -1570,8 +2589,9 @@
       toast("没有可重做的操作");
       return;
     }
-    CS.undoStack.push(cloneGraph(CS.graph));
-    CS.graph = CS.redoStack.pop();
+    CS.undoStack.push(window.HandrawCanvasRenderer.captureEditableGraph(CS.graph));
+    CS.graph = window.HandrawCanvasRenderer.preserveRuntime(CS.graph,CS.redoStack.pop());
+    markActiveTabDirty();
     CS.selectedEdgeId = null;
     fullRenderCanvas();
     persistOpenTabs();
@@ -1781,6 +2801,8 @@
       desc_zh: u.desc || "用户本地上传图参",
       image: u.dataUrl || u.image,
       cat: u.cat || "other",
+      mediaId: u.assetUid || u.mediaId || undefined,
+      source: u.assetUid || u.mediaId ? "private" : "local",
       custom: true,
       builtin: false
     }));
@@ -1789,6 +2811,7 @@
 
   // 1) Picker for Skill Params Node: Single-select (style1/style2/layout) & Multi-select (colors/tones/moods)
   function openSkillFieldPickerModal(skillNode, field, options = {}) {
+    const ResourceRefs = window.HandrawStudioResources;
     const hasCustomPick = typeof options?.onPick === "function";
     if (!hasCustomPick && (!skillNode || skillNode.type !== "skill_params")) return;
     const sd = (skillNode && skillNode.type === "skill_params") ? skillNode.data : {};
@@ -1883,6 +2906,30 @@
                 : [])
     );
 
+    const checked = (id, isJustUnlocked = false, quiet = false) => {
+      if (!ResourceRefs?.FIELDS[field]) return {ok:true,id,ref:null};
+      const result = ResourceRefs.resolveSelection(Catalog, field, id, {
+        isUnlocked: (code, item) => isJustUnlocked || S.isUnlocked(code, item)
+      });
+      if (!result.ok && !quiet) toast(ResourceRefs.formatError(result) + (result.id ? " · " + result.id : ""));
+      return result;
+    };
+    const choose = (id, isJustUnlocked = false) => {
+      const result = checked(id, isJustUnlocked);
+      if (!result.ok) return false;
+      if (hasCustomPick) {
+        options.onPick(result.id, result.ref);
+      } else {
+        pushUndo();
+        if (ResourceRefs) ResourceRefs.setLegacySelection(sd, field, result);
+        else sd[field] = result.id;
+        markActiveTabDirty();
+        fullRenderCanvas();
+        persistOpenTabs();
+      }
+      S.closeModal();
+      return true;
+    };
     const titles = {
       style1: sd.fusion ? `🎭 选择角色画风（${Catalog.styles.length} 款）` : `🎨 选择画风（${Catalog.styles.length} 款）`,
       style2: "🌄 选择场景画风（跨媒介画面融合）",
@@ -1935,76 +2982,44 @@
         };
 
         root.querySelector("#sp-picker-rand").onclick = () => {
-          if (hasCustomPick) {
-            const pool = (field === "style1" || field === "style2") ? Catalog.styles : Catalog.layouts;
-            const freeFirst = pool.filter((x) => x.tier !== "pro_credit");
-            const src = freeFirst.length > 0 ? freeFirst : pool;
-            const pick = src[Math.floor(Math.random() * src.length)];
-            if (pick) options.onPick(pick.id);
-            S.closeModal();
-            return;
-          }
-          pushUndo();
-          if (field === "style1" || field === "style2") {
-            const pick = Catalog.styles[Math.floor(Math.random() * Catalog.styles.length)];
-            if (pick) sd[field] = pick.id;
-            S.closeModal();
-            fullRenderCanvas();
-            persistOpenTabs();
-            toast(`🎲 已随机选用画风 #${pick?.id || ""}`);
-          } else if (field === "layout") {
-            const pick = Catalog.layouts[Math.floor(Math.random() * Catalog.layouts.length)];
-            if (pick) sd.layout = pick.id;
-            S.closeModal();
-            fullRenderCanvas();
-            persistOpenTabs();
-            toast(`🎲 已随机选用图型 ${pick?.id || ""}`);
-          } else if (field === "colors") {
-            selectedSet.clear();
-            const c1 = Catalog.colors[Math.floor(Math.random() * Catalog.colors.length)];
-            const c2 = Catalog.colors[Math.floor(Math.random() * Catalog.colors.length)];
-            if (c1) selectedSet.add(c1.id);
-            if (c2) selectedSet.add(c2.id);
-            updateConfirmText();
-            renderGrid();
-          } else if (field === "tones") {
-            selectedSet.clear();
-            const t1 = Catalog.tones[Math.floor(Math.random() * Catalog.tones.length)];
-            if (t1) selectedSet.add(t1.id);
-            updateConfirmText();
-            renderGrid();
+          const kind = ResourceRefs?.FIELDS[field]?.type;
+          const pool = kind === "style" ? Catalog.styles : kind === "layout" ? Catalog.layouts
+            : kind === "color" ? Catalog.colors : kind === "tone" ? Catalog.tones : [];
+          const choices = pool.filter(it => it.tier !== "pro_credit" || S.isUnlocked(it.id, it))
+            .filter(it => checked(it.id, false, true).ok);
+          if (!choices.length) { toast("没有可使用的资源，请先解锁或更换分类"); return; }
+          const picked = choices[Math.floor(Math.random() * choices.length)];
+          if (isMulti) {
+            selectedSet.clear(); selectedSet.add(picked.id);
+            updateConfirmText(); renderGrid();
+          } else if (choose(picked.id)) {
+            toast("已随机选用 " + picked.id);
           }
         };
 
         root.querySelector("#sp-picker-clear").onclick = () => {
-          if (hasCustomPick) {
-            options.onPick("");
-            S.closeModal();
+          if (!isMulti) {
+            if (choose("")) toast("已清空资源选择");
             return;
           }
-          if (isMulti) {
-            selectedSet.clear();
-            updateConfirmText();
-            renderGrid();
-          } else {
-            pushUndo();
-            sd[field] = "";
-            S.closeModal();
-            fullRenderCanvas();
-            persistOpenTabs();
-            toast("已置空该参数");
-          }
+          selectedSet.clear(); updateConfirmText(); renderGrid();
         };
 
         if (confirmBtn) {
           confirmBtn.onclick = () => {
+            const chosen = [...selectedSet].map(id => checked(id));
+            if (chosen.some(x => !x.ok)) return;
             pushUndo();
-            if (field === "colors") sd.colors = [...selectedSet];
-            else if (field === "tones") sd.tones = [...selectedSet];
+            sd[field] = chosen.map(x => x.id);
+            if (ResourceRefs) {
+              sd.resourceRefs = {...(sd.resourceRefs || {}),
+                [ResourceRefs.FIELDS[field].key]: chosen.map(x => x.ref)};
+            }
+            markActiveTabDirty();
             S.closeModal();
             fullRenderCanvas();
             persistOpenTabs();
-            toast(`✓ 已保存${field === "colors" ? "主题色" : "影调"}选择（共 ${selectedSet.size} 项）`);
+            toast("已更新" + (field === "colors" ? "主题色" : "影调") + "（" + chosen.length + " 项）");
           };
         }
 
@@ -2067,14 +3082,13 @@
           countEl.textContent = `共筛出 ${list.length} 项${selectedSet.size ? ` · 当前已选：${[...selectedSet].join("、")}` : ""}`;
 
           gridEl.innerHTML = list
-            .slice(0, 180)
             .map((it) => {
               const id = it.id;
               const title = it.name || it.name_zh || id;
               const isSel = selectedSet.has(id);
               const proLocked = it.tier === "pro_credit" && !S.isUnlocked(id, it);
               return `
-                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" tabindex="0" role="button" aria-label="${esc(id)} ${esc(title)}" style="border:1.5px solid ${
+                <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-pick-id="${esc(id)}" tabindex="0" role="button" aria-pressed="${isSel}" aria-label="${esc(id)} ${esc(title)}" style="border:1.5px solid ${
                 isSel ? "var(--vermilion)" : "var(--line-soft)"
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
                 isSel ? "0 0 0 3px rgba(209,75,40,0.18)" : "0 2px 6px rgba(24,20,17,0.04)"
@@ -2112,24 +3126,17 @@
                 if (!S.unlockWithCredits(id, resObj.unlockCost || 5, `解锁 ${id}`)) return;
               }
 
-              if (hasCustomPick) {
-                options.onPick(id);
-                S.closeModal();
-                return;
-              }
-
+              // A real picker result is an authorized ResourceRef, not an
+              // arbitrary label/string. The server independently verifies it.
+              const justUnlocked = resObj?.tier !== "pro_credit" || S.isUnlocked(id, resObj);
+              if (!checked(id, justUnlocked).ok) return;
               if (isMulti) {
                 if (selectedSet.has(id)) selectedSet.delete(id);
                 else selectedSet.add(id);
                 updateConfirmText();
                 renderGrid();
-              } else {
-                pushUndo();
-                sd[field] = id;
-                S.closeModal();
-                fullRenderCanvas();
-                persistOpenTabs();
-                toast(`✨ 已选用 ${id}`);
+              } else if (choose(id, justUnlocked)) {
+                toast("已选用 " + id);
               }
             };
             card.onclick = onSelect;
@@ -2181,6 +3188,7 @@
       onCommitCallback = (items) => {
         pushUndo();
         targetOrOptions.data.items = items;
+        markActiveTabDirty();
         fullRenderCanvas();
         persistOpenTabs();
         if (typeof opts.onConfirm === "function") {
@@ -2702,13 +3710,26 @@
             const picked = list.find((x) => x.id === id);
             if (!picked) return;
             const cm = getAssetCatMeta(picked.cat || "other");
+            const mediaSource = picked.source ||
+              (picked.mediaId ? "private" : picked.builtin ? "official" : "local");
+            const confirmed = window.HandrawStudioResources?.mediaRefFromAsset({
+              ...picked, source: mediaSource
+            });
             const itemObj = {
               id: picked.id,
               name: picked.name_zh || picked.name || picked.id,
               image: picked.image,
               cat: picked.cat || "other",
               catLabel: cm.label,
-              custom: Boolean(picked.custom)
+              custom: Boolean(picked.custom),
+              // Local URL is for preview only; confirmed media UID is for
+              // private Project references and is rechecked on the server.
+              mediaId: confirmed?.ok ? confirmed.ref.mediaId : undefined,
+              source: mediaSource,
+              role: confirmed?.ok ? confirmed.ref.role :
+                picked.cat === "characters" ? "character" :
+                picked.cat === "scenes" ? "scene" :
+                picked.cat === "props" ? "object" : "other"
             };
 
             card.onclick = () => {
@@ -2817,14 +3838,17 @@
     CS.resourceEntryWarning = "";
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get("tab");
-    const forkId = params.get("fork");
+    const forkId = params.get("fork") || params.get("remix");
     const forkTopicId = params.get("forkTopic");
     const forkGenId = params.get("forkGen") || params.get("forkGeneration");
     const forkItemId = params.get("forkItem") || "";
+    const workflowId = params.get("workflow") || "";
     const styleParam = params.get("style");
     const layoutParam = params.get("layout");
 
     const storedOpen = readJsonStorage(OPEN_TABS_KEY, null);
+    CS.lastStudioTaskView = ["quick","batch","article"].includes(storedOpen?.lastStudioTaskView)
+      ? storedOpen.lastStudioTaskView : "";
     if (storedOpen && Array.isArray(storedOpen.tabs) && storedOpen.tabs.length > 0) {
       CS.tabs = storedOpen.tabs
         // Older builds saved the article workspace as a tab; drop it so the
@@ -2930,7 +3954,9 @@
           }
           const cleanUrl = new URL(window.location.href);
           cleanUrl.searchParams.delete("fork");
+          cleanUrl.searchParams.delete("remix");
           cleanUrl.searchParams.delete("image");
+          if (params.get("remix")) cleanUrl.searchParams.set("sourceRemix", forkId);
           cleanUrl.searchParams.set("entry", forkCanvas ? "canvas" : "quick");
           window.history.replaceState(null, "", cleanUrl.pathname + cleanUrl.search);
           if (!forkCanvas) renderQuickStart();
@@ -3131,8 +4157,24 @@
       CS.stageView = "history";
     } else if (viewParam === "workflows") {
       CS.stageView = "workflows";
+    } else if (viewParam === "projects") {
+      // Retired page: legacy bookmarks enter the simple editor instead.
+      // The dedicated project parameter is still restored below.
+      ensureQuickTab();
+      CS.stageView = "quick";
+      const cleaned = new URL(window.location.href);
+      cleaned.searchParams.delete("view");
+      cleaned.searchParams.set("entry", "quick");
+      window.history.replaceState(null, "", cleaned.pathname + cleaned.search);
+      CS.pendingProjectDeepLink = params.get("project") || "";
+    } else if (params.get("project")) {
+      // Keep cloud project deep links without exposing the project directory.
+      CS.stageView = "quick";
+      CS.pendingProjectDeepLink = params.get("project");
     }
-    if (!viewParam && !tabParam) {
+    // Direct ?project=id is not a fresh blank Project: the original identity
+    // must be restored after boot, without navigating through a project list.
+    if (!viewParam && !tabParam && !params.get("project")) {
       const entryParam = params.get("entry");
       if (entryParam === "canvas") {
         CS.stageView = "canvas";
@@ -3146,6 +4188,35 @@
         CS.stageView = "quick";
       }
     }
+    // A workflow deep link opens its actual saved graph, never silently
+    // falls back to a fresh Quick project. An unknown ID stays visible.
+    if (workflowId && !forkId && !forkGenId && !forkTopicId) {
+      const template = (CS.savedWorkflows || []).find(w => String(w.id) === workflowId);
+      if (template && template.graph && Array.isArray(template.graph.nodes)) {
+        let tab = CS.tabs.find(t => t.savedId === workflowId);
+        if (!tab) tab = createWorkflowTab({
+          title: template.title || "工作流项目", blueprint: template.blueprint,
+          graph: template.graph, savedId: workflowId, makeActive: false
+        });
+        CS.activeTabId = tab.id;
+        CS.graph = normalizeGraphSchema(tab.graph);
+        CS.stageView = "canvas";
+      } else {
+        CS.stageView = "workflows";
+        CS.workflowQuery = workflowId;
+        CS.resourceEntryWarning = "未找到链接指定的工作流：" + workflowId;
+      }
+    }
+    // After refresh, replay a frozen outbox request using its original key.
+    // Project IDs and pending requests are stored in account-scoped local tabs.
+    const resumeTab = CS.tabs.find((t) => t.id === CS.activeTabId);
+    if (resumeTab && resumeTab.projectId && !isArticleTab(resumeTab) &&
+        (resumeTab.projectPending || ["dirty", "local_only", "error"].includes(resumeTab.projectSaveState))) {
+      scheduleProjectAutoSave(resumeTab);
+    }
+    // Project-owned article outbox is persisted alongside the private document.
+    if ((CS.myArticles || []).some(a => a?.projectPending))
+      scheduleArticleProjectAutosave();
   }
 
   /* ======================== LOOP NODE PICKER & BATCH LIST EDITOR MODALS ======================== */
@@ -3985,7 +5056,7 @@
 
     // Smart Single-Node Batch Gallery: when generating > 6 images (e.g. 12, 50, 100+),
     // converge into 1 paginated "🗂️ 批量图集" node instead of exploding the canvas into 100 nodes!
-    if (safeCount > BATCH_GALLERY_THRESHOLD || (existing[0] && existing[0].data?.kind === "batch_gallery" && !onlyDispNodeId && onlyItemIdx === null)) {
+    if ((safeCount > 1 && (existing.length <= 1 || existing[0]?.data?.kind === "batch_gallery")) || (existing[0]?.data?.kind === "batch_gallery" && !onlyDispNodeId && onlyItemIdx === null)) {
       let galNode = existing[0] || null;
       let createdCount = 0;
       const spawnY = snapVal(Math.max(48, ctrlNode.y - 24));
@@ -4376,9 +5447,169 @@
     }
   }
 
+  // A 409 never silently adopts a later Project revision. The source document,
+  // local PlanSlots and pending request stay intact until user resolution.
+  async function reviewArticleProjectConflict109(art) {
+    if (!ProjectClient || !ArticleProject109 || !art?.projectId ||
+        art.projectSaveState !== "conflict") return;
+    const scope=activeCacheScope,epoch=cacheScopeEpoch,projectId=art.projectId;
+    const atEdit=Number(art.editRevision || 0);
+    let remote;
+    try {
+      remote=(await ProjectClient.get(projectId)).project;
+      if (isStaleScope(epoch,scope) || art.projectId !== projectId) return;
+      if (!remote || remote.authority !== "article") throw new Error("invalid_article_remote");
+    } catch(error) {
+      if (!isStaleScope(epoch,scope)) toast("读取云端文章失败，保留本地未同步稿");
+      return;
+    }
+    const remoteDoc=remote.draft.article || {};
+    S.openModal({
+      title:"文章 Project 版本冲突",
+      sizeClass:"modal-wide",
+      html:'<p>正文和图卡在其他标签修改过。项目版本 '+esc(remote.revision)+
+        '，本机基线 '+esc(art.projectRevision)+
+        '。以下只读对比不会上传原文到公共作品。</p>'+
+        '<div class="article109-conflict-diff" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">'+
+        '<section><strong>本机待同步正文</strong><pre style="max-height:260px;overflow:auto;white-space:pre-wrap;">'+
+        esc(String(art.markdown||"").slice(0,7000))+'</pre></section>'+
+        '<section><strong>云端当前正文</strong><pre style="max-height:260px;overflow:auto;white-space:pre-wrap;">'+
+        esc(String(remoteDoc.markdown||"").slice(0,7000))+'</pre></section></div>'+
+        '<p>另存为副本会保存本机文章与锚点，不覆盖原云端项目。</p>'+
+        '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'+
+        '<button type="button" class="btn btn-sm" id="article109-keep">保留本机稿，稍后处理</button>'+
+        '<button type="button" class="btn btn-sm" id="article109-copy">另存为新项目副本</button>'+
+        '<button type="button" class="btn btn-sm btn-primary" id="article109-discard">放弃本地修改并恢复云端</button></div>',
+      onMount(root) {
+        root.querySelector("#article109-keep").onclick=()=>S.closeModal();
+        root.querySelector("#article109-copy").onclick=()=>{
+          S.closeModal();
+          void (async()=>{
+            try {
+              await ProjectClient.copyConflict(art,ArticleProject109.snapshot(art).draft,()=>{
+                if (!isStaleScope(epoch,scope))
+                  writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+              });
+              if (isStaleScope(epoch,scope)) return;
+              if (Number(art.editRevision || 0)>atEdit) {
+                markArticleProjectChanged(art);
+                persistMyArticles();
+              }
+              toast("已将本机文章另存为新云端项目，原项目未覆盖");
+              if (CS.activeArticleId===art.id) renderFullPreviewStage();
+            } catch(error) {
+              if (!isStaleScope(epoch,scope)) {
+                writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+                toast("副本保存失败：本机文章和固定的副本请求已保留，可重试");
+              }
+            }
+          })();
+        };
+        root.querySelector("#article109-discard").onclick=()=>{
+          if (isStaleScope(epoch,scope) || art.projectId!==projectId ||
+              Number(art.editRevision || 0)!==atEdit) {
+            S.closeModal();
+            toast("正文已再次变化，请重新查看冲突差异");
+            return;
+          }
+          const restored=ArticleProject109.hydrate(remote,art);
+          restored.linkedTabId=null;restored.linkedPlanNodeId=null;
+          const index=CS.myArticles.indexOf(art);
+          if (index>=0) CS.myArticles.splice(index,1,restored);
+          writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+          S.closeModal();
+          openUnifiedArticleEditor(restored.id);
+          toast("已按明确选择恢复云端文章，未产生新的生成任务");
+        };
+      }
+    });
+  }
+
+  function markArticleProjectChanged(art, {document=false,plan=false}={}) {
+    if (!art) return;
+    if (document) art.documentRevision = Number(art.documentRevision || 0) + 1;
+    if (plan) art.planRevision = Number(art.planRevision || 0) + 1;
+    art.editRevision = Number(art.editRevision || 0) + 1;
+    art.projectAuthority = "article";
+    if (art.projectSaveState !== "conflict") art.projectSaveState = "local_only";
+    art._articleProjectDirty = true;
+  }
+
+  async function flushArticleProject109(art) {
+    if (!ProjectClient || !ArticleProject109 || !art || !App.state?.loggedIn ||
+        !App.state?.serverBacked || art.projectSaveState === "conflict") return false;
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const notify = () => {
+      if (isStaleScope(epoch,scope)) return;
+      writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+      if (CS.activeArticleId === art.id)
+        setArticlesSyncStatus(art.projectSaveState === "synced" ? "synced" :
+          art.projectSaveState === "conflict" ? "conflict" :
+          art.projectSaveState === "error" ? "failed" : "syncing");
+    };
+    try {
+      const result = await ProjectClient.flush(art,ArticleProject109.snapshot(art),notify);
+      if (isStaleScope(epoch,scope)) return false;
+      if (result?.needsSave) {
+        art._articleProjectDirty = true;
+        scheduleArticleProjectAutosave();
+      }
+      return Boolean(result?.ok);
+    } catch (error) {
+      if (!isStaleScope(epoch,scope)) {
+        art.projectSaveState = "error";
+        art.projectError = String(error?.message || error);
+        notify();
+      }
+      return false;
+    }
+  }
+
+  function scheduleArticleProjectAutosave() {
+    if (_articleProjectTimer) clearTimeout(_articleProjectTimer);
+    const scope = activeCacheScope,epoch = cacheScopeEpoch;
+    _articleProjectTimer = setTimeout(() => {
+      _articleProjectTimer = null;
+      if (isStaleScope(epoch,scope) || !App.state?.serverBacked ||
+          !App.state?.loggedIn) return;
+      (CS.myArticles || []).filter(a => a && (a.projectPending ||
+        (a._articleProjectDirty && a.projectSaveState !== "conflict")))
+        .forEach(a => void flushArticleProject109(a));
+    }, 900);
+  }
+
   function persistMyArticles() {
     ensureMyArticlesInitialized();
-    writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
+    // Stage a frozen #103 request before local write. Offline and refreshing
+    // tabs replay the SAME idempotency key; no phantom cloud acknowledgements.
+    if (App.state?.loggedIn && App.state?.serverBacked &&
+        ProjectClient && ArticleProject109) {
+      for (const art of CS.myArticles) {
+        if (!art?._articleProjectDirty || art.projectSaveState === "conflict") continue;
+        try {
+          ProjectClient.stage(art,ArticleProject109.snapshot(art));
+          art._articleProjectDirty = false;
+        } catch (error) {
+          art.projectSaveState = "error";
+          art.projectError = String(error?.message || error);
+        }
+      }
+    }
+    if (!writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles)) {
+      for (const art of CS.myArticles || []) {
+        if (art && (art.projectPending || art._articleProjectDirty ||
+            ["local_only","error","saving","dirty"].includes(art.projectSaveState))) {
+          if (art.projectSaveState !== "conflict") art.projectSaveState = "dirty";
+          art.projectError = "local_draft_storage_failed";
+        }
+      }
+      setArticlesSyncStatus("failed");
+      toast("文章本机存储失败，请勿关闭页面；请检查浏览器存储空间");
+      return;
+    }
+    if ((CS.myArticles || []).some(a => a?.projectPending ||
+        (a?._articleProjectDirty && a.projectSaveState !== "conflict")))
+      scheduleArticleProjectAutosave();
     if (_articlesCloudConflict) {
       // Keep entries omitted from the hydrated workspace; merge later edits
       // without deleting the offline versions saved before rehydration.
@@ -4392,7 +5623,10 @@
         activeId: CS.activeArticleId || existing?.activeId || ""
       });
     }
-    scheduleCloudArticlesSync();
+    // Project-owned documents have one remote authority. Legacy workspace
+    // remains only for pre-Project articles during migration.
+    if ((CS.myArticles || []).some(a => !a.projectId && !a.projectPending))
+      scheduleCloudArticlesSync();
   }
 
   function isArticleGenerating(art) {
@@ -4431,6 +5665,18 @@
       if (existing) pd.articleId = existing.id;
     }
 
+    // A Project-owned ArticleDocument is never written from a Canvas Graph.
+    // A virtual article_plan points to exactly the same object and may edit
+    // PlanSlots; a real Graph projection cannot rewrite its Markdown/cards.
+    if (existing?.projectId && pd !== existing) {
+      pd.articleId = existing.id;
+      pd.documentId = existing.id;
+      pd.documentRevision = Number(existing.documentRevision || 0);
+      pd.slotRefs = (existing.cards || []).map(c => ({
+        slotId:c.slotId || c.id,anchorId:c.anchorId || "card-anchor-" + (c.slotId || c.id)
+      }));
+      return existing;
+    }
     // If markdown changed to a distinct article and the previous article already had generated images or custom edits,
     // keep the old article in history and start a fresh article record!
     if (
@@ -4615,6 +5861,13 @@
       return;
     }
     if (target.art) {
+      // In-flight RunItem callbacks should update the canonical Article and
+      // the visible editor, never leave the previous card clone on screen.
+      if (CS.articleEditorDraft?.id === target.art.id) {
+        CS.articleEditorDraft.cards = cloneGraph(target.art.cards || []);
+        CS.articleEditorDraft.planRevision = Number(target.art.planRevision || 0);
+      }
+      markArticleProjectChanged(target.art, {plan:true});
       if (bumpTime) {
         const now = Date.now();
         target.art.updatedAtMs = now;
@@ -4640,7 +5893,7 @@
         : null;
     const rec = ctrl && hostGraph ? E.resolveControlRecipe(hostGraph, ctrl, Catalog) : null;
 
-    const rawMd = String(pd.markdown || "").trim();
+    const rawMd = String(target.art?.markdown || pd.markdown || "").trim();
     const cleanBody = rawMd.replace(/^#\s+.+\r?\n+/, "").trim() || rawMd;
 
     S.goToForumCompose({
@@ -4861,9 +6114,9 @@
     persistOpenTabs();
   }
 
-  function buildExecutionPlanForControl(ctrlNode) {
+  function buildExecutionPlanForControl(ctrlNode, executionGraph = CS.graph) {
     const cd = ctrlNode.data || {};
-    const rec = E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
+    const rec = E.resolveControlRecipe(executionGraph, ctrlNode, Catalog);
     const mode = cd.mode === "xhs-batch" ? "series" : cd.mode || "graphic-text";
 
     function attachRecipeSnapshots(specsList) {
@@ -4872,7 +6125,7 @@
       specsList.forEach((sp) => {
         if (!sp.recipeSnapshot) {
           const s1 = sp.style1 || rec.style1Id || "";
-          const s2 = rec.style2Id || "";
+          const s2 = rec.fusionToggleOn ? (sp.style2 || rec.style2Id || "") : "";
           const lay = sp.layout || rec.layoutId || "";
           const s1Res = s1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s1) || rec.style1Res) : rec.style1Res;
           const s2Res = s2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(s2) || rec.style2Res) : rec.style2Res;
@@ -4942,7 +6195,7 @@
     }
 
     if (rec.loopNode) {
-      const loopIters = E.resolveLoopIterations(CS.graph, rec.loopNode, rec, Catalog);
+      const loopIters = E.resolveLoopIterations(executionGraph, rec.loopNode, rec, Catalog);
       if (!loopIters.length) {
         return {
           kind: "loop-empty",
@@ -4952,7 +6205,10 @@
           specs: []
         };
       }
-      const perIterCount = Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
+      const isStudio2Series=Boolean(rec.loopNode.data?.studio2Plan?.slots);
+      const perIterCount = isStudio2Series && window.HandrawStudioSeries
+        ? window.HandrawStudioSeries.candidateCount(rec.loopNode)
+        : Math.min(50, Math.max(1, Math.round(Number(cd.count) || 1)));
       const loopSpecs = [];
       for (const iter of loopIters) {
         for (let sub = 0; sub < perIterCount; sub++) {
@@ -4962,15 +6218,20 @@
             loopNodeId: rec.loopNode.id,
             loopStepIndex: iter.index,
             loopTotalSteps: loopIters.length,
-            slotKey: `loop_${iter.index}_${sub}`,
+            slotKey: isStudio2Series && iter.slotId
+              ? iter.slotId + ":candidate:" + sub
+              : `loop_${iter.index}_${sub}`,
+            ...(isStudio2Series ? {slotId:iter.slotId,
+              slotOrder:iter.slotOrder,candidateIndex:sub,outputIndex:loopSpecs.length} : {}),
             role: mode === "article-cover" ? "cover" : "image",
             title: perIterCount > 1 ? `${iter.title} (${sub + 1}/${perIterCount})` : iter.title,
             anchorHeading: "",
             style1: iter.style1 || "",
+            style2: iter.style2 || "",
             layout: iter.layout || rec.layoutId || "",
             assetItems: Array.isArray(iter.assetItems) ? iter.assetItems : null,
             mode,
-            ratio: cd.ratio || "3:4",
+            ratio: iter.ratio || cd.ratio || "3:4",
             theme: iter.theme,
             sampleImg: iter.sampleImg || ""
           });
@@ -5055,8 +6316,42 @@
     return defaultPlan;
   }
 
-  function checkExclusiveGateForControl(ctrlNode) {
-    const rec = E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
+  function checkExclusiveGateForControl(ctrlNode, sourceGraph = CS.graph) {
+    const rec = E.resolveControlRecipe(sourceGraph, ctrlNode, Catalog);
+    const refs = window.HandrawStudioResources;
+    if (refs) {
+      const selections = [
+        ["style1", rec.style1Id],
+        ...(rec.fusionToggleOn ? [["style2", rec.style2Id]] : []),
+        ["layout", rec.layoutId],
+        ...(rec.colorIds || []).map(id => ["colors", id]),
+        ...(rec.toneIds || []).map(id => ["tones", id])
+      ];
+      for (const loop of rec.loopNodes || []) {
+        const ld = loop?.data || {};
+        if (ld.loopMode === "styles") {
+          (ld.styleIds || []).forEach(id => selections.push(["style1",id]));
+        }
+        if (ld.loopMode === "layouts") {
+          (ld.layoutIds || []).forEach(id => selections.push(["layout",id]));
+        }
+        for (const row of ld.batchRows || []) {
+          if (row?.layout) selections.push(["layout", row.layout]);
+          if (row?.style1) selections.push(["style1", row.style1]);
+        }
+      }
+      for (const [field,id] of selections) {
+        if (!id) continue;
+        const valid = refs.resolveSelection(Catalog, field, id, {
+          isUnlocked: (code, item) => S.isUnlocked(code,item)
+        });
+        if (!valid.ok) {
+          toast(refs.formatError(valid) + " · " + id +
+            "。请重新选择后生成，原有选择已保留。");
+          return false;
+        }
+      }
+    }
     const rMap = Catalog.resourceMap || new Map();
     const extraLoopRes = [];
     if (rec.loopNode && rec.loopNode.data) {
@@ -5133,7 +6428,7 @@
         throw err;
       }
     }
-    throw new Error("等待时间较长，生成结果出来后会出现在生图历史里；如果最终没有生成，额度或积分会自动退还。");
+    throw new Error("等待上游结果超时，任务状态仍待核实；请点击重新检查。超时或取消本地等待不代表云端停止，也不保证退款。");
   }
 
   function applyDurableTaskResult(task, images, errorMessage = "") {
@@ -5682,13 +6977,15 @@
     return parts.join(" · ");
   }
 
-  function recordGenerationHistory(ctrlNode, items = [], kind = "single", markdown = "", creationSource = "") {
+  function recordGenerationHistory(ctrlNode, items = [], kind = "single", markdown = "", creationSource = "", snapshot = null) {
     ensureGenerationHistoryInitialized();
     if (!ctrlNode || !Array.isArray(items) || !items.length) return;
     const isRecipe = Boolean(ctrlNode.styleIds || ctrlNode.style_ids || (typeof ctrlNode.id === "string" && ctrlNode.id.startsWith("rcp_")));
     const recipeId = isRecipe ? (ctrlNode.id || "") : (ctrlNode.recipeId || "");
     const mode = isRecipe ? (ctrlNode.mode || "graphic-text") : (ctrlNode.data?.mode || "graphic-text");
-    const rec = isRecipe ? null : E.resolveControlRecipe(CS.graph, ctrlNode, Catalog);
+    const runGraph = snapshot?.graph || CS.graph;
+    const forkSource = snapshot ? snapshot.forkSource : CS.forkGenerationSource;
+    const rec = isRecipe ? null : E.resolveControlRecipe(runGraph, ctrlNode, Catalog);
     const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
     const now = new Date();
     const timeShort = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -5786,13 +7083,14 @@
         ? (ctrlNode.prompt || ctrlNode.subject || "")
         : isLoopBatch
           ? items.map((it, idx) => `【第 ${idx + 1} 轮】${it.prompt || it.theme || ""}`).join("\n\n")
-          : E.assembleControlPrompt(CS.graph, ctrlNode, Catalog, "skill"),
+          : E.assembleControlPrompt(runGraph, ctrlNode, Catalog, "skill"),
       markdown: markdown || "",
       items: resolvedItems,
-      ...(CS.forkGenerationSource?.generationId ? {
-        forkGenerationId: CS.forkGenerationSource.generationId,
-        forkItemId: CS.forkGenerationSource.itemId || ""
-      } : {})
+      ...(forkSource?.generationId ? {
+        forkGenerationId: forkSource.generationId,
+        forkItemId: forkSource.itemId || ""
+      } : {}),
+      ...(forkSource?.workId ? { forkWorkId:forkSource.workId } : {})
     };
 
     CS.generationHistory = upsertHistoryEntry(CS.generationHistory, entry, { isServer: false });
@@ -5839,19 +7137,22 @@
     const hasLiveCards = readyCards.some((c) => c && (c.generationMode === "live" || c.engine === "live"));
     const isLive = isLiveGenerationEnabled() || hasLiveCards;
 
-    const articleTitle = String(planNode.data?.articleTitle || "").trim();
-    const isManualTitle = Boolean(
-      planNode.data?.articleTitleSource === "manual" ||
-      planNode.data?.titleSource === "manual"
-    );
-    const artSubject = articleTitle || (readyCards[0]?.subject) || (readyCards[0]?.recipeSnapshot?.subject) || "";
+    // ArticleDocument markdown, title and derived subjects stay private
+    // until the user explicitly publishes an article (separate flow).
+    const articleTitle = "";
+    const isManualTitle = false;
+    const artSubject = "文章配图";
+    // All single image completions and failed-only retries belong to one
+    // article history / public Work identity, including after a page reload.
+    const historyId = planNode.data.generationId ||
+      (planNode.data.generationId = E.uid("hist_art"));
 
     const entry = {
-      id: planNode.data.generationId || E.uid("hist_art"),
+      id: historyId,
       requestId: planNode.data.requestId || "",
       createdAt: dateFull,
       timeShort,
-      tabTitle: curTab ? curTab.title : "文章配图方案",
+      tabTitle: "文章配图方案",
       subject: artSubject,
       articleTitle: articleTitle,
       title: isManualTitle ? articleTitle : "",
@@ -5865,19 +7166,21 @@
       kind: "article",
       engine: isLive ? "live" : "demo",
       demoMode: isDemoGenerationEnabled(),
-      recipeSummary: rec && ctrlNode ? buildRecipeSummaryText(rec, ctrlNode) : `文章配图方案 · ${readyCards.length} 张`,
-      prompt: readyCards.map((c) => c.prompt).filter(Boolean).join("\n\n---\n\n"),
-      markdown: planNode.data.markdown || "",
+      recipeSummary: `文章配图方案 · ${readyCards.length} 张`,
+      // Full article-derived prompts may embed private source paragraphs.
+      prompt: "文章插图",
+      // Public generation history is NOT a publication of ArticleDocument.
+      // Never forward unapproved full source text to the public Work layer.
       items: readyCards.map((c, idx) => ({
         id: c.id || `card_${idx}`,
         genId: c.genId || "",
         requestId: c.requestId || "",
         role: c.role || "inline",
-        title: c.title || "配图",
-        subject: c.subject || artSubject,
-        articleTitle: articleTitle,
+        title: `配图 ${idx + 1}`,
+        subject: "文章插图",
+        articleTitle: "",
         ratio: c.ratio || "4:3",
-        prompt: c.prompt || "",
+        prompt: "文章插图",
         imageUrl: c.imageUrl
       }))
     };
@@ -5901,7 +7204,7 @@
     if (CS.stageView === "history") renderHistoryStage();
   }
 
-  async function generateSinglePlanCard(planNodeOrArtId, cardId, { silent = false, skipHistory = false, skipCostConfirmation = false, batchId = "", batchIndex = 0, batchTotal = 1 } = {}) {
+  async function generateSinglePlanCard(planNodeOrArtId, cardId, { silent = false, skipHistory = false, skipCostConfirmation = false, batchId = "", batchIndex = 0, batchTotal = 1, slotPermitHeld = false } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const target = resolveArticleTarget(planNodeOrArtId);
@@ -5910,6 +7213,9 @@
     const card = (planNode.data.cards || []).find((c) => c.id === cardId);
     if (!card || card.status === "generating") return false;
     const previousImageUrl = card.imageUrl || "";
+    // Capture the previous RunItem state before setting "generating";
+    // otherwise retryFailed/retryCancelled are always falsely disabled.
+    const previousStatus = card.status;
     if (batchId) {
       card.batchId = batchId;
       card.batchIndex = batchIndex;
@@ -5934,6 +7240,23 @@
 
     if (target.isActiveCanvas && ctrl && !checkExclusiveGateForControl(ctrl)) return false;
 
+    // Shared catalog and owner MediaRef preflight, before any billable request.
+    const articlePicker = window.HandrawStudioArticlePicker105;
+    if (articlePicker && target.art) {
+      const valid=articlePicker.validateForExecution({
+        styleId:card.styleId||target.art.style1,
+        layoutId:card.layoutId||target.art.layout,
+        styleRef:card.styleRef||(!card.styleId?target.art.styleRef:null),
+        layoutRef:card.layoutRef||(!card.layoutId?target.art.layoutRef:null),
+        referenceMedia:card.referenceMedia||target.art.referenceMedia||[]
+      },Catalog,{isUnlocked:(id,item)=>S.isUnlocked(id,item)});
+      if(!valid.ok){
+        if(!silent)toast("配图资源不可用："+valid.message+
+          (valid.id?" · "+valid.id:"")+"，请重新选择");
+        return false;
+      }
+    }
+
     const useLiveApi = isLiveGenerationEnabled();
     const useDemo = isDemoGenerationEnabled();
     if (!useLiveApi && !useDemo) {
@@ -5955,6 +7278,16 @@
       : false;
     card.status = "generating";
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let releaseSlotPermit = null;
+    if (!slotPermitHeld && window.HandrawStudioDAG120?.defaultPool) {
+      try {
+        releaseSlotPermit = await window.HandrawStudioDAG120.defaultPool.acquire({
+          signal: controller?.signal,user:activeCacheScope,
+          gateway:String(CS.serverCfg?.generationGateway || "default"),
+          model:String(CS.serverCfg?.generationModel || "default")
+        });
+      } catch (error) { if (!silent) toast("等待生图容量失败："+(error.message||error)); return false; }
+    }
     if (controller) _generationControllers.add(controller);
     commitArticleTargetChanges(target, { bumpTime: false });
     renderFullPreviewStage();
@@ -5982,9 +7315,9 @@
       const uniquePool = [...new Set(fallbackPool)];
 
       let imgUrl = "";
-      const cardS1 = rec?.style1Id || target.art?.style1 || "";
+      const cardS1 = card.styleId || target.art?.style1 || rec?.style1Id || "";
       const cardS2 = rec?.style2Id || "";
-      const cardLay = card.layoutId || rec?.layoutId || target.art?.layout || "";
+      const cardLay = card.layoutId || target.art?.layout || rec?.layoutId || "";
       const cardS1Res = cardS1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS1) || rec?.style1Res) : rec?.style1Res;
       const cardS2Res = cardS2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS2) || rec?.style2Res) : rec?.style2Res;
       const cardLayRes = cardLay && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardLay) || rec?.layoutRes) : rec?.layoutRes;
@@ -6001,7 +7334,11 @@
       };
 
       if (useLiveApi) {
-        const refImages = (rec?.assetItems || []).map((a) => a.image).filter(Boolean);
+        const articleRefImages = (target.art?.referenceItems || [])
+          .filter(x=>x?.image&&(x.source==="official"||(x.source==="private"&&x.mediaId)))
+          .map(x=>x.image);
+        const refImages=[...new Set([...articleRefImages,
+          ...(rec?.assetItems||[]).map(x=>x.image).filter(Boolean)])];
         const requestId = card.requestId = ensureStableRequestId(card.requestId, `article_${card.id || "card"}`);
         card.taskId = "";
         commitArticleTargetChanges(target, { bumpTime: false });
@@ -6026,8 +7363,11 @@
               batchId: card.batchId,
               batchIndex: card.batchIndex || 0,
               batchTotal: card.batchTotal || 1,
-              retryCancelled: card.status === "cancelled" || card.status === "error"
+              retryCancelled: previousStatus === "cancelled" || previousStatus === "error",
+              retryFailed: previousStatus === "error" || previousStatus === "failed",
+              slotId: String(card.id || "")
             } : {}),
+            idempotencyKey: requestId,
             requestId,
             clientRequestId: requestId,
             confirmCost: true
@@ -6041,6 +7381,16 @@
         if (S.renderChrome) S.renderChrome();
         const activeReqId = data.requestId || requestId;
         const activeGenId = data.genId || "";
+        // Persist server-minted Run ID and stable card identity BEFORE any
+        // async task polling. Reload/reconnect must query this same Run,
+        // never reserve a second paid generation.
+        if (data.runId) {
+          card.runId = String(data.runId);
+          card.slotId = card.slotId || card.id;
+          if (!Number.isInteger(card.batchIndex)) card.batchIndex = 0;
+          if (ctrl) ctrl.data.runId = String(data.runId);
+          commitArticleTargetChanges(target, { bumpTime:false });
+        }
         card.genId = activeGenId;
         card.requestId = activeReqId;
         if (data.imageUrl) {
@@ -6111,6 +7461,7 @@
       if (!silent) toast(`⚠️ 配图生成失败：${err.message || err}`);
       return false;
     } finally {
+      if (releaseSlotPermit) releaseSlotPermit();
       if (controller) _generationControllers.delete(controller);
       if (!isStaleScope(runEpoch, runScope)) {
         commitArticleTargetChanges(target, { bumpTime: false });
@@ -6127,13 +7478,14 @@
     }
   }
 
-  async function generateBatchPlanCards(planNodeOrArtId, { onlyPending = true, silent = false } = {}) {
+  async function generateBatchPlanCards(planNodeOrArtId, { onlyPending = true, silent = false,
+    sharedPool = null, runtimeSignal = null } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const target = resolveArticleTarget(planNodeOrArtId);
     const planNode = target?.planNode || null;
     if (!planNode || planNode.type !== "article_plan" || planNode.data.status === "generating") return false;
-    if (_activeBatchRun) {
+    if (_activeBatchRun && !runtimeSignal) {
       if (!silent) toast("另一批图片正在生成，请等待完成或停止后再操作");
       return false;
     }
@@ -6203,7 +7555,19 @@
     });
     const batchRun = { id: resolvedBatchId, cancelled: false,
       total: effectiveTargets.length, completed: 0, failed: 0, running: 0,
-      parallel: selection.parallel, startedAt: Date.now(), ids: effectiveTargets.map(x=>x.id) };
+      parallel: selection.parallel, startedAt: Date.now(), ids: effectiveTargets.map(x=>x.id),
+      controller: new AbortController() };
+    const abortArticleRun = () => {
+      batchRun.cancelled = true;
+      if (!batchRun.controller.signal.aborted) batchRun.controller.abort();
+    };
+    runtimeSignal?.addEventListener("abort", abortArticleRun, {once:true});
+    const articleSlotPool = sharedPool || window.HandrawStudioDAG120?.defaultPool;
+    const articleSlotMeta = {
+      user: activeCacheScope, gateway: String(CS.serverCfg?.generationGateway || "default"),
+      model: String(CS.serverCfg?.generationModel || "default"),
+      signal: batchRun.controller.signal
+    };
     CS.lastArticleBatchSummary = null;
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
@@ -6221,10 +7585,13 @@
           if (isStaleScope(runEpoch, runScope) || batchRun.cancelled) return false;
           batchRun.running += 1;
           try {
-            return await generateSinglePlanCard(targetRefId, c.id, {
+            const invoke = () => generateSinglePlanCard(targetRefId, c.id, {
               silent: true, skipHistory: true, skipCostConfirmation: true,
-              batchId: c.batchId, batchIndex: c.batchIndex, batchTotal: c.batchTotal
+              batchId: c.batchId, batchIndex: c.batchIndex, batchTotal: c.batchTotal,
+              slotPermitHeld: true
             });
+            return articleSlotPool
+              ? await articleSlotPool.withPermit(invoke, articleSlotMeta) : await invoke();
           } finally {
             batchRun.running = Math.max(0,batchRun.running-1);
           }
@@ -6267,11 +7634,12 @@
       if (!silent) {
         toast(`批量完成：成功 ${okCount} 张，失败 ${batchRun.failed} 张，跳过 ${allCards.length-effectiveTargets.length} 张；失败项可以单独重试。`);
       }
-      return okCount > 0;
+      return runtimeSignal ? okCount === effectiveTargets.length : okCount > 0;
     } finally {
+      runtimeSignal?.removeEventListener("abort",abortArticleRun);
       if (_activeBatchRun === batchRun) {
-        _activeBatchRun = null;
-        CS.activeBatchRun = null;
+        _activeBatchRun = [..._activeControlRuns.values()].at(-1) || null;
+        CS.activeBatchRun = _activeBatchRun;
       }
       if (!isStaleScope(runEpoch, runScope)) {
         planNode.data.status = "ready";
@@ -6295,7 +7663,9 @@
   }
 
   // CRITICAL AUTO-RULE #2: Multi-image output automatically connects multiple 1-image "图片显示" nodes!
-  async function runOutputControlNode(ctrlId, { onlyItemIdx = null, onlyDispNodeId = null, silent = false } = {}) {
+  async function runOutputControlNode(ctrlId, { onlyItemIdx = null, onlyDispNodeId = null,
+    silent = false, executionGraphOverride = null, runtimeSignal = null,
+    sharedPool = null, onSlotProgress = null } = {}) {
     const runEpoch = cacheScopeEpoch;
     const runScope = activeCacheScope;
     const creationSource = CS.stageView === "batch" ? "batch" : CS.stageView === "quick" ? "quick" : CS.stageView === "preview" || CS.stageView === "article" ? "article" : "canvas";
@@ -6307,7 +7677,9 @@
       return false;
     }
 
-    if (!checkExclusiveGateForControl(ctrl)) return false;
+    const frozenControl = executionGraphOverride?.nodes?.find(n => n.id === ctrlId);
+    if (!checkExclusiveGateForControl(frozenControl || ctrl, executionGraphOverride || CS.graph)) return false;
+    if (runtimeSignal?.aborted) return false;
 
     if (ctrl.data.mode === "article-illust") {
       const { node: planNode, createdNew } = ensureArticlePlanNodeForControl(ctrl);
@@ -6321,7 +7693,8 @@
         requestAnimationFrame(() => fitView());
       }
       try {
-        const ok = await generateBatchPlanCards(planNode.id, { onlyPending: false, silent });
+        const ok = await generateBatchPlanCards(planNode.id, { onlyPending: false, silent,
+          runtimeSignal, sharedPool });
         ctrl.data.status = ok ? "done" : "idle";
         return ok;
       } finally {
@@ -6343,7 +7716,35 @@
       return false;
     }
 
-    const plan = buildExecutionPlanForControl(ctrl);
+    // Freeze the execution definition before asynchronous generation. Editing
+    // the current Graph cannot mutate this queued Run's prompt or snapshot.
+    const previousRunSnapshot = onlyItemIdx !== null ? ctrl.data?.studio2RunSnapshot : null;
+    // Explicit retry compiles the original submitted definition, never the
+    // editable next-revision Graph whose slot order may have changed.
+    const executionGraph = previousRunSnapshot?.executionGraph
+      ? cloneGraph(previousRunSnapshot.executionGraph) : cloneGraph(executionGraphOverride || CS.graph);
+    // Do not recursively serialize the previous RunSnapshot inside the next
+    // frozen Graph. Output display/gallery nodes contain historical images,
+    // not prompt inputs; only the current batch's upstream graph is needed.
+    if(creationSource==="batch" && window.HandrawStudioSeries) {
+      executionGraph.nodes=executionGraph.nodes.filter(n=>n.type!=="output_display");
+      const ids=new Set(executionGraph.nodes.map(n=>n.id));
+      executionGraph.edges=executionGraph.edges.filter(e=>ids.has(e.from)&&ids.has(e.to));
+    }
+    for(const node of executionGraph.nodes||[]) {
+      if(node.type==="output_control"&&node.data) {
+        delete node.data.studio2RunSnapshot;
+        delete node.data.runId;
+      }
+    }
+    const executionCtrl = executionGraph.nodes.find(n => n.id === ctrlId);
+    const plan = buildExecutionPlanForControl(executionCtrl, executionGraph);
+    if (previousRunSnapshot && (!plan.specs[onlyItemIdx] ||
+        previousRunSnapshot.outputCount!==plan.specs.length ||
+        previousRunSnapshot.outputs?.[onlyItemIdx]?.outputId!==plan.specs[onlyItemIdx].slotKey)) {
+      toast("原生成方案与重试槽位不一致，请先从历史恢复对应版本");
+      return false;
+    }
     if (plan.kind === "loop-empty") {
       const lp = getNodeById(plan.loopNodeId);
       const lm = lp?.data?.loopMode || "prompts";
@@ -6363,7 +7764,7 @@
     }
 
     const activeLoopNode = plan.kind === "loop" ? getNodeById(plan.loopNodeId) : null;
-    if (activeLoopNode && activeLoopNode.data.status === "running") {
+    if (!runtimeSignal && activeLoopNode && activeLoopNode.data.status === "running") {
       if (!silent) toast("已有批量任务正在运行中，请等待完成或停止后再开始新批次");
       return false;
     }
@@ -6383,6 +7784,22 @@
 
     const batchId = (resolvedOnlyIdx !== null && ctrl.data.activeBatchId) ? ctrl.data.activeBatchId : makeStableRequestId("batch");
     ctrl.data.activeBatchId = batchId;
+    if (creationSource==="batch" && window.HandrawStudioSeries && plan.kind==="loop"
+        && resolvedOnlyIdx===null) {
+      const runLoop = executionGraph.nodes.find(n => n.id === plan.loopNodeId);
+      if(runLoop?.data?.studio2Plan) {
+        ctrl.data.studio2RunSnapshot={
+          ...window.HandrawStudioSeries.freeze(runLoop,"",batchId),
+          executionGraph:cloneGraph(executionGraph),
+          outputs:plan.specs.map((sp,i)=>({
+            outputId:sp.slotKey,slotId:sp.slotId,
+            candidateIndex:sp.candidateIndex??0,
+            slotOrder:sp.slotOrder??i,outputIndex:i
+          }))
+        };
+        persistOpenTabs();
+      }
+    }
 
     const { nodes: dispNodes, createdCount, isBatchGallery } = syncControlDisplayNodes(ctrl, plan.specs.length, {
       markGenerating: true,
@@ -6442,8 +7859,18 @@
     const startedAt = Date.now();
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     const submittedSlots = new Set();
-    const batchRun = { id: batchId, ctrlId: ctrl.id, cancelled: false, controller, submittedSlots };
+    const batchRun = { id: batchId, ctrlId: ctrl.id, cancelled: false, controller,
+      submittedSlots, executionGraph,
+      projectId: CS.tabs.find(t => t.id === CS.activeTabId)?.projectId || "",
+      projectRevision: CS.tabs.find(t => t.id === CS.activeTabId)?.projectRevision || 0,
+      forkSource: CS.forkGenerationSource ? cloneGraph(CS.forkGenerationSource) : null };
     if (controller) _generationControllers.add(controller);
+    const abortFromDAG = () => {
+      batchRun.cancelled = true;
+      if (controller && !controller.signal.aborted) controller.abort();
+    };
+    if (runtimeSignal) runtimeSignal.addEventListener("abort", abortFromDAG, {once:true});
+    _activeControlRuns.set(ctrl.id,batchRun);
     _activeBatchRun = batchRun;
     CS.activeBatchRun = batchRun;
     const timer = setInterval(() => {
@@ -6462,7 +7889,7 @@
     let currentReqId = "";
 
     try {
-      const rec = E.resolveControlRecipe(CS.graph, ctrl, Catalog);
+      const rec = E.resolveControlRecipe(executionGraph, executionCtrl, Catalog);
       if (rec.audience) recordRecentFieldValue("audience", rec.audience);
       if (rec.businessScene) recordRecentFieldValue("businessScene", rec.businessScene);
       const fallbackPool = [
@@ -6500,8 +7927,17 @@
       const runningIndices = new Set();
       let stopLaunching = false;
       const requestedConcurrency = Number(activeLoopNode?.data?.batchConcurrency || ctrl.data.batchConcurrency || 3);
+      // Local worker count only controls demand; the global shared pool owns
+      // every in-flight slot across ALL controls and their branches.
       const concurrency = resolvedOnlyIdx !== null ? 1 : Math.max(1,
         Math.min(4, Number.isFinite(requestedConcurrency) ? requestedConcurrency : 3));
+      const dagEngine = window.HandrawStudioDAG120;
+      const slotPool = sharedPool || dagEngine?.defaultPool;
+      const slotMeta = {
+        signal: controller?.signal || runtimeSignal || undefined,
+        user: activeCacheScope, gateway: String(CS.serverCfg?.generationGateway || "default"),
+        model: String(CS.serverCfg?.generationModel || "default")
+      };
       const slotIndexes = resolvedOnlyIdx === null ? plan.specs.map((_, i) => i) : [resolvedOnlyIdx];
       if (resolvedOnlyIdx !== null) {
         for (let i = 0; i < plan.specs.length; i++) {
@@ -6553,7 +7989,7 @@
           });
         }
 
-        const skillPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "skill", sp);
+        const skillPrompt = E.assembleControlPrompt(executionGraph, executionCtrl, Catalog, "skill", sp);
         let imgUrl = "";
         let activeReqId = "";
         let activeGenId = "";
@@ -6600,6 +8036,9 @@
           dn.data.pendingSpec[requestId] = {
             batchId,
             slotKey,
+            slotId:sp.slotId||"",
+            candidateIndex:sp.candidateIndex??0,
+            outputIndex:i,
             index: i,
             role: sp.role || "image",
             title: sp.title || `图片 #${i + 1}`,
@@ -6616,11 +8055,13 @@
 
         try {
           if (useLiveApi) {
-            const cloudPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "cloud", sp);
+            const cloudPrompt = E.assembleControlPrompt(executionGraph, executionCtrl, Catalog, "cloud", sp);
             const effectiveAssets = Array.isArray(sp.assetItems) ? sp.assetItems : rec.assetItems;
             const refImages = effectiveAssets.map((a) => a.image).filter(Boolean);
             submittedSlots.add(slotKey);
-            const resp = await fetch("/api/studio/generate", {
+            // Retry only the same frozen POST and request ID; never invent a
+            // new paid slot after a 429/502 or an ambiguous gateway response.
+            const generateRequest = () => fetch("/api/studio/generate", {
               method: "POST",
               credentials: "include",
               signal: controller ? controller.signal : undefined,
@@ -6629,7 +8070,7 @@
                 prompt: cloudPrompt,
                 ratio: sp.ratio || "3:4",
                 style1: sp.style1 || rec.style1Id || "",
-                style2: rec.style2Id || "",
+                style2: rec.fusionToggleOn ? (sp.style2 || rec.style2Id || "") : "",
                 layout: sp.layout || rec.layoutId || "",
                 refImages,
                 recipeSnapshot: sp.recipeSnapshot,
@@ -6638,15 +8079,42 @@
                 batchIndex: i,
                 batchTotal: plan.specs.length,
                 retryCancelled: resolvedOnlyIdx !== null,
+                retryFailed: resolvedOnlyIdx !== null,
+                slotId: String(sp.slotId || ""),
+                planRevision: Number(ctrl.data.studio2RunSnapshot?.revision || 0),
+                idempotencyKey: requestId,
                 requestId,
                 clientRequestId: requestId,
                 confirmCost: true,
-                ...(CS.forkGenerationSource?.generationId ? {
-                  forkGenerationId: CS.forkGenerationSource.generationId,
-                  forkItemId: CS.forkGenerationSource.itemId || ""
+                ...(batchRun.forkSource?.workId ? {
+                  forkOf: batchRun.forkSource.workId
+                } : {}),
+                ...(batchRun.forkSource?.generationId ? {
+                  forkGenerationId: batchRun.forkSource.generationId,
+                  forkItemId: batchRun.forkSource.itemId || ""
                 } : {})
               })
             });
+            const dagEngineRetry = window.HandrawStudioDAG120;
+            const resp = dagEngineRetry?.retryTransient
+              ? await dagEngineRetry.retryTransient(async () => {
+                  const response = await generateRequest();
+                  if ([429,500,502,503,504].includes(response.status)) {
+                    const body = await response.clone().json().catch(() => ({}));
+                    const error = new Error(body.error || "HTTP " + response.status);
+                    error.status = response.status;
+                    throw error;
+                  }
+                  return response;
+                }, {
+                  signal: controller?.signal, requestId, maxAttempts: 3,
+                  key: slotMeta.gateway + ":" + slotMeta.model,
+                  onRetry: ({attempt,status,wait}) => {
+                    if (!silent) toast("网关 HTTP " + status + " · 使用原请求编号第 " +
+                      (attempt+1) + " 次尝试（退避 " + wait + "ms）");
+                  }
+                })
+              : await generateRequest();
             const data = await resp.json();
             if (isStaleScope(runEpoch, runScope)) return;
             if (!resp.ok || !data.ok) {
@@ -6659,6 +8127,21 @@
             if (S.renderChrome) S.renderChrome();
             activeReqId = data.requestId || requestId;
             activeGenId = data.genId || "";
+            // Only the server can allocate a V3 logical Run identity.
+            if (data.runId) {
+              canvasRunModels.delete(runScope+":"+data.runId);
+              quickRunModels.delete(runScope+":"+data.runId);
+              batchRunModels.delete(runScope+":"+data.runId);
+              ctrl.data.runId = data.runId;
+              if (ctrl.data.studio2RunSnapshot?.batchId===batchId)
+                ctrl.data.studio2RunSnapshot.runId=data.runId;
+              if (dn) {
+                dn.data.runId = data.runId;
+                if (dn.data.pendingSpec?.[requestId])
+                  dn.data.pendingSpec[requestId].runId = data.runId;
+              }
+              persistOpenTabs();
+            }
             if (data.imageUrl) {
               imgUrl = data.imageUrl;
             } else if (Array.isArray(data.images) && data.images.length) {
@@ -6735,6 +8218,9 @@
             batchId,
             requestId: activeReqId || requestId,
             slotKey: currentSlotKey,
+            slotId:sp.slotId||"",
+            candidateIndex:sp.candidateIndex??0,
+            outputIndex:i,
             title: sp.title || `图片 #${i + 1}`,
             theme: sp.theme || "",
             failed: true,
@@ -6812,6 +8298,9 @@
           generationMode: useLiveApi ? "live" : "demo",
           demoMode: !useLiveApi,
           slotKey: currentSlotKey,
+          slotId:sp.slotId||"",
+          candidateIndex:sp.candidateIndex??0,
+          outputIndex:i,
           role: sp.role || "image",
           title: sp.title || `图片 #${i + 1}`,
           anchorHeading: sp.anchorHeading || "",
@@ -6900,9 +8389,19 @@
         }
       }
       async function worker() {
-        while (nextSlotToLaunch < slotIndexes.length && !batchRun.cancelled && !stopLaunching) {
+        while (nextSlotToLaunch < slotIndexes.length && !batchRun.cancelled &&
+               !stopLaunching && !runtimeSignal?.aborted) {
           const i = slotIndexes[nextSlotToLaunch++];
-          await runSlot(i);
+          try {
+            if (slotPool) await slotPool.withPermit(() => runSlot(i),slotMeta);
+            else await runSlot(i);
+          } catch (error) {
+            if (batchRun.cancelled || runtimeSignal?.aborted || error?.code==="cancelled") break;
+            throw error;
+          }
+          if (typeof onSlotProgress==="function") onSlotProgress({
+            total: slotIndexes.length,succeeded: completedCount,failed: failedCount
+          });
         }
       }
       await Promise.all(Array.from({length: Math.min(concurrency, slotIndexes.length)}, () => worker()));
@@ -6941,7 +8440,8 @@
           activeLoopNode.data.totalSteps = plan.specs.length;
         }
         if (allItems.length > 0) {
-          recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown, creationSource);
+          recordGenerationHistory(executionCtrl, allItems, plan.kind, plan.markdown,
+            creationSource, {graph:executionGraph, forkSource:batchRun.forkSource});
         }
         markActiveTabDirty();
         persistOpenTabs();
@@ -6984,7 +8484,8 @@
         activeLoopNode.data.totalSteps = plan.specs.length;
       }
       if (allItems.length > 0) {
-        recordGenerationHistory(ctrl, allItems, plan.kind, plan.markdown, creationSource);
+        recordGenerationHistory(executionCtrl, allItems, plan.kind, plan.markdown,
+            creationSource, {graph:executionGraph, forkSource:batchRun.forkSource});
       }
       markActiveTabDirty();
       persistOpenTabs();
@@ -7018,7 +8519,9 @@
           toast(`批量出图未全部完成：${parts.join(" · ")}`, "error");
         }
       }
-      return completedCount > 0;
+      // A dependent Control may only run after *all* source slots succeed.
+      return runtimeSignal ? (completedCount === plan.specs.length && failedCount === 0)
+        : completedCount > 0;
     } catch (err) {
       if (isStaleScope(runEpoch, runScope)) return false;
       ctrl.data.status = "error";
@@ -7040,10 +8543,12 @@
       toast(`⚠️ 生成异常：${err.message || err}`);
       return false;
     } finally {
+      if (_activeControlRuns.get(ctrl.id) === batchRun) _activeControlRuns.delete(ctrl.id);
       if (_activeBatchRun === batchRun) {
-        _activeBatchRun = null;
-        CS.activeBatchRun = null;
+        _activeBatchRun = [..._activeControlRuns.values()].at(-1) || null;
+        CS.activeBatchRun = _activeBatchRun;
       }
+      if (runtimeSignal) runtimeSignal.removeEventListener("abort",abortFromDAG);
       if (controller) _generationControllers.delete(controller);
       clearInterval(timer);
       if (!isStaleScope(runEpoch, runScope)) fullRenderCanvas();
@@ -7108,11 +8613,9 @@
       }
     }
 
-    let anyOk = false;
-    for (const c of ctrls) {
-      const ok = await runOutputControlNode(c.id, { silent: ctrls.length > 1 });
-      if (ok) anyOk = true;
-    }
+    // #120: run sibling controls concurrently under ONE shared slot budget.
+    const result = await runDAGOutputControls({targets:ctrls.map(c=>c.id)});
+    const anyOk = Boolean(result?.succeeded);
     if (ctrls.length > 1 && anyOk) {
       toast(`🔁 已完成全部 ${ctrls.length} 组下游输出控制的循环批量出图！`);
     }
@@ -7138,18 +8641,105 @@
     return false;
   }
 
-  async function runAllOutputControls() {
-    const ctrls = CS.graph.nodes.filter((n) => n.type === "output_control" && n.data.status !== "generating");
-    if (!ctrls.length) {
-      toast("当前画布暂无「输出控制」节点，请从左侧拖入一个");
+  function renderDAGPanel() {
+    if (!DOM.dagPanel) return;
+    const summary=CS.dagProgress;
+    const active=CS.stageView==="canvas" && (CS.graph?.nodes||[]).some(n=>n.type==="output_control");
+    DOM.dagPanel.style.display=active?"":"none";
+    if (!active) return;
+    if (!summary) {
+      DOM.dagPanel.innerHTML='<span class="ic-dag-label">DAG 运行策略</span> '+
+        '<select id="ic-dag-fail-policy" aria-label="分支失败策略">'+
+        '<option value="continue">其他独立分支继续</option>'+
+        '<option value="fail-fast">失败时停止新调度</option></select>'+
+        '<span class="ic-dag-tip">所有生成设置共享全局并发上限 3</span>';
+      const selector=DOM.dagPanel.querySelector("#ic-dag-fail-policy");
+      if(selector) {
+        selector.value=CS.dagFailurePolicy||"continue";
+        selector.onchange=()=>{CS.dagFailurePolicy=selector.value;};
+      }
       return;
     }
-    for (const c of ctrls) {
-      await runOutputControlNode(c.id, { silent: ctrls.length > 1 });
+    const fmt=s=>s.status==="waiting" && s.blockedBy.length
+      ? "等待中 · 阻塞于 "+s.blockedBy.map(id=>summary.nodes.find(x=>x.id===id)?.name||id).join("、")
+      : s.status==="blocked" ? "前置失败 · "+s.blockedBy.join("、")
+      : s.status==="running" ? "运行中" : s.status==="success" ? "已成功"
+      : s.status==="failed" ? "失败" : s.status==="cancelled" ? "已取消" : "等待中";
+    DOM.dagPanel.innerHTML='<div class="ic-dag-summary" role="status" aria-live="polite">'+
+      'Graph Revision '+Number(summary.revision)+' · 分支 '+Number(summary.succeeded)+' / '+
+      Number(summary.total)+' · 运行 '+Number(summary.running)+' · 失败 '+Number(summary.failed)+
+      ' · 等待 '+Number(summary.waiting)+' · 槽位完成 '+Number(summary.slots?.succeeded||0)+
+      ' / '+Number(summary.slots?.total||0)+' · 全局占用 '+
+      Number(summary.pool?.running||0)+' / '+Number(summary.pool?.limit||3)+'</div>'+
+      '<div class="ic-dag-branches">'+summary.nodes.map(s=>
+        '<span class="ic-dag-branch"><strong>'+esc(s.name||s.id)+'</strong> · '+
+        esc(fmt(s))+'</span>').join('')+'</div>'+
+      (_dagAbortController && !_dagAbortController.signal.aborted
+        ? '<button type="button" class="btn btn-sm" id="ic-dag-cancel">取消未提交任务</button>' : '');
+    const button=DOM.dagPanel.querySelector("#ic-dag-cancel");
+    if(button)button.onclick=()=>{_dagAbortController?.abort();cancelActiveBatchGeneration();};
+  }
+
+  async function runDAGOutputControls({targets=null}={}) {
+    const scheduler=window.HandrawStudioDAG120;
+    if (!scheduler) { toast("DAG 调度器未加载，请刷新后重试"); return null; }
+    if (_dagAbortController && !_dagAbortController.signal.aborted) {
+      toast("已有 DAG 正在运行，先停止当前批次");return null;
     }
-    if (ctrls.length > 1) {
-      toast(`🎉 已完成全部 ${ctrls.length} 个输出控制节点的运行！`);
+    const tab=CS.tabs.find(t=>t.id===CS.activeTabId);
+    let compiled;
+    try {
+      compiled=scheduler.compile(CS.graph,{
+        targets,revision:Number(tab?.editRevision||0),
+        references:{projectId:tab?.projectId||"",projectRevision:tab?.projectRevision||0}
+      });
+    }catch(e) {
+      toast("工作流不能运行："+(e.message||e)+" · "+(e.nodeId||""),"error");
+      return null;
     }
+    const controller=new AbortController();
+    _dagAbortController=controller;
+    const capturedOutputs=new Map();
+    const failurePolicy=CS.dagFailurePolicy || CS.serverCfg?.dagFailurePolicy || "continue";
+    try {
+      const result=await scheduler.run(compiled,async ({id,graph,signal,pool,report})=>{
+        if (signal?.aborted) return false;
+        // Freeze all editable inputs at dispatch; only confirmed upstream
+        // output-display media can enrich a downstream invocation.
+        const runGraph=cloneGraph(graph);
+        for(const item of runGraph.nodes||[]) {
+          const ready=capturedOutputs.get(item.id);
+          if (ready && item.type==="output_display") item.data={...item.data,items:cloneGraph(ready)};
+        }
+        const ok=await runOutputControlNode(id,{
+          silent:true,executionGraphOverride:runGraph,
+          runtimeSignal:signal,sharedPool:pool,onSlotProgress:report
+        });
+        if (ok && !signal?.aborted) {
+          for(const display of getDownstreamDisplayNodes(id))
+            capturedOutputs.set(display.id,cloneGraph(display.data?.items||[]));
+        }
+        return ok;
+      },{
+        signal:controller.signal,policy:failurePolicy,
+        pool:scheduler.defaultPool,
+        onUpdate:summary=>{CS.dagProgress=summary;renderDAGPanel();}
+      });
+      CS.dagProgress=result;
+      if (result.failed || result.blocked)
+        toast("DAG 结束：成功 "+result.succeeded+"，失败 "+
+          result.failed+"，阻塞 "+result.blocked,"error");
+      else if (result.cancelled)toast("DAG 已停止：尚未提交的槽位不会继续发出");
+      else toast("DAG 运行完成：成功 "+result.succeeded+" 个分支");
+      return result;
+    }finally {
+      if (_dagAbortController===controller) _dagAbortController=null;
+      renderDAGPanel();
+    }
+  }
+
+  async function runAllOutputControls() {
+    return runDAGOutputControls();
   }
 
   /* ======================== ZIP PACKAGE EXPORT & GENERATION HISTORY MODAL ======================== */
@@ -7219,11 +8809,15 @@
     const readyCards = orderedCards.filter((c) => c.imageUrl);
     if (!readyCards.length) return null;
 
-    const blocks = E.parseArticleReadonlyBlocks(planNode.data.markdown || "", { withLines: true, noStarter: true });
+    // Export must read the editor-owned ArticleDocument, not the Graph's
+    // stale, derived planNode markdown.
+    const doc = findArticleById(planNode.data.articleId || planNode.id);
+    const sourceMarkdown = doc?.markdown ?? planNode.data.markdown ?? "";
+    const blocks = E.parseArticleReadonlyBlocks(sourceMarkdown, { withLines: true, noStarter: true });
     return {
       kind: "article",
-      title: planNode.data.articleTitle || "文章配图方案",
-      markdown: planNode.data.markdown || "",
+      title: doc?.articleTitle || planNode.data.articleTitle || "文章配图方案",
+      markdown: sourceMarkdown,
       items: readyCards.map((c) => {
         const isCover = c.role === "cover";
         const anchorBlock =
@@ -7257,10 +8851,9 @@
     }
 
     if (targetNode && targetNode.type === "article_plan") {
-      if (!(targetNode.data.cards || []).some((c) => c.imageUrl)) {
-        toast("⚡ 正在自动批量生成配图方案并打包下载 ZIP…");
-        await generateBatchPlanCards(dispOrCtrlId || targetNode.id, { silent: true });
-      }
+      // Export never creates paid generation requests as a side effect.
+      if (!(targetNode.data.cards || []).some((c) => c.imageUrl))
+        toast("还没有已生成的图片；导出不会自动付费生图");
       const payload = buildArticlePlanExportPayload(targetNode);
       if (payload) {
         await exportZipFromPayload(payload);
@@ -7273,10 +8866,8 @@
     if (!dispOrCtrlId && CS.stageView === "preview" && CS.activeArticleId) {
       const artTarget = resolveArticleTarget(CS.activeArticleId);
       if (artTarget?.planNode) {
-        if (!(artTarget.planNode.data.cards || []).some((c) => c.imageUrl)) {
-          toast("⚡ 正在自动批量生成配图方案并打包下载 ZIP…");
-          await generateBatchPlanCards(CS.activeArticleId, { silent: true });
-        }
+        if (!(artTarget.planNode.data.cards || []).some((c) => c.imageUrl))
+          toast("还没有已生成的图片；导出不会自动付费生图");
         const payload = buildArticlePlanExportPayload(artTarget.planNode);
         if (payload) {
           await exportZipFromPayload(payload);
@@ -7350,9 +8941,7 @@
       const allCtrls = CS.graph.nodes.filter((n) => n.type === "output_control");
       if (allCtrls.length) {
         toast("⚡ 正在自动运行并打包下载 ZIP…");
-        for (const c of allCtrls) {
-          await runOutputControlNode(c.id, { silent: true });
-        }
+        await runDAGOutputControls();
         const planAfter = CS.graph.nodes.find((n) => n.type === "article_plan" && (n.data.cards || []).some((c) => c.imageUrl));
         if (planAfter) {
           const payload = buildArticlePlanExportPayload(planAfter);
@@ -7598,7 +9187,7 @@
 
   function returnFromHistoryPage() {
     if (CS.stageView !== "history") return;
-    CS.stageView = ["quick", "batch", "canvas", "preview", "article", "workflows"].includes(CS.historyReturnStage)
+    CS.stageView = ["quick", "batch", "canvas", "preview", "article", "workflows", "projects"].includes(CS.historyReturnStage)
       ? (CS.historyReturnStage === "article" ? "preview" : CS.historyReturnStage)
       : "quick";
     window.history.replaceState(null, "", CS.historyReturnUrl || (window.location.pathname + "?entry=quick"));
@@ -8090,8 +9679,10 @@
     });
 
     DOM.historyStage.querySelectorAll("[data-hist-restore]").forEach((btn) => {
-      btn.onclick = () => {
-        if (typeof window.confirm === "function" && !window.confirm("将历史图片恢复到当前画布的输出节点，可能替换已有内容（可撤销）。确定继续吗？")) return;
+      btn.onclick = async () => {
+        if (!await S.confirmAction?.(
+          "将历史图片恢复到当前画布的输出节点，可能替换已有内容（可撤销）。确定继续吗？",
+          { title: "恢复历史图片", confirmText: "恢复" })) return;
         restoreHistoryEntryToCanvas(btn.getAttribute("data-hist-restore"));
       };
     });
@@ -8130,7 +9721,9 @@
       btn.onclick = async () => {
         const hid = btn.getAttribute("data-hist-del");
         if (!hid) return;
-        if (typeof window.confirm === "function" && !window.confirm("删除本次生成记录后，关联的公开作品可能同步下架，确定继续吗？")) return;
+        if (!await S.confirmAction?.(
+          "删除本次生成记录后，关联的公开作品可能同步下架，确定继续吗？",
+          { title: "删除生成历史", danger: true, confirmText: "删除记录" })) return;
         btn.disabled = true;
         try {
           await deleteCloudHistory(hid, false);
@@ -8255,21 +9848,23 @@
     DOM.world.style.transform = `translate(${CS.vx.toFixed(1)}px, ${CS.vy.toFixed(1)}px) scale(${CS.vk.toFixed(4)})`;
     updateGridBackground();
     positionFloatingOverlays();
-    renderMinimap();
+    updateMinimapLensOnly();
     if (DOM.zoomPctBtn) DOM.zoomPctBtn.textContent = `${Math.round(CS.vk * 100)}%`;
   }
 
   function renderEdgesSvg() {
     if (!DOM.edgesSvg) return;
     const { relEdgeIds } = getRelatedSets();
+    const edges = window.HandrawCanvasRenderer.createEdgeGeometryIndex(
+      CS.graph.nodes || [], DOM.nodesLayer);
     const parts = [];
 
     for (const e of CS.graph.edges || []) {
-      const nFrom = getNodeById(e.from);
-      const nTo = getNodeById(e.to);
+      const nFrom = edges.getNode(e.from);
+      const nTo = edges.getNode(e.to);
       if (!nFrom || !nTo) continue;
-      const p1 = getPortWorldPos(nFrom, "out");
-      const p2 = getPortWorldPos(nTo, "in");
+      const p1 = edges.port(nFrom, "out");
+      const p2 = edges.port(nTo, "in");
       const d = bezierPath(p1.x, p1.y, p2.x, p2.y);
       const isSel = CS.selectedEdgeId === e.id;
       const isRel = relEdgeIds.has(e.id);
@@ -8283,9 +9878,9 @@
     }
 
     if (CS.wiring) {
-      const src = getNodeById(CS.wiring.fromNodeId);
+      const src = edges.getNode(CS.wiring.fromNodeId);
       if (src) {
-        const anchor = getPortWorldPos(src, CS.wiring.fromDir);
+        const anchor = edges.port(src, CS.wiring.fromDir);
         const tx = CS.wiring.curWorldX;
         const ty = CS.wiring.curWorldY;
         const d = CS.wiring.fromDir === "out" ? bezierPath(anchor.x, anchor.y, tx, ty) : bezierPath(tx, ty, anchor.x, anchor.y);
@@ -8293,7 +9888,8 @@
       }
     }
 
-    DOM.edgesSvg.innerHTML = parts.join("");
+    window.HandrawCanvasRenderer.reconcileEdgeMarkup(
+      DOM.edgesSvg, parts.join(""));
   }
 
   function renderVisualSlotHtml(nodeId, field, label, icon, itemId) {
@@ -8336,15 +9932,52 @@
     return { hasH1, secs };
   }
 
-  function renderWorldNodes() {
+  // #127: DOM reconciliation is owned by the renderer module.
+  function patchStudioCanvasDom(layer,cardsHtml,datalistsHtml){
+    const r=window.HandrawCanvasRenderer;
+    if(!r)throw new Error('studio_canvas_renderer_not_loaded');
+    return r.reconcile(layer,cardsHtml,datalistsHtml);
+  }
+  // #111: the caller has proved the Graph topology and existing DOM cards
+  // agree. Reconcile only the specified nodes, never prune other nodes.
+  function patchStudioCanvasDirtyDom(layer,cardsHtml){
+    return window.HandrawCanvasRenderer.reconcile(layer,cardsHtml,"",true);
+  }
+  function refreshCanvasSelection(){
+    if(!DOM.nodesLayer)return;
+    const sets=getRelatedSets();
+    window.HandrawCanvasRenderer.updateSelection(DOM.nodesLayer,
+      sets.selSet,sets.relNodeIds);
+    renderEdgesSvg();
+    renderCanvasProductUI();
+  }
+
+  function renderWorldNodes(changedNodeIds = null) {
     if (!DOM.nodesLayer) return;
     const { selSet, relNodeIds } = getRelatedSets();
     const nodes = CS.graph.nodes || [];
+    // Dirty rendering is opt-in. Only in-place updates of existing cards may
+    // use it: Graph topology, node order, datalists and project switches
+    // remain authoritative full-reconcile operations.
+    const requested=Array.isArray(changedNodeIds)&&changedNodeIds.length
+      ?new Set(changedNodeIds.map(String)):null;
+    const mounted=requested&&CS.stageView==="canvas"&&requested.size<=12
+      ?new Map([...DOM.nodesLayer.querySelectorAll(".ic-node[data-node-id]")]
+          .map(el=>[el.getAttribute("data-node-id"),el])):null;
+    const partial=Boolean(mounted&&mounted.size===nodes.length&&
+      [...requested].every(id=>mounted.has(id)&&nodes.some(n=>String(n.id)===id)));
+    const renderNodes=partial?nodes.filter(n=>requested.has(String(n.id))):nodes;
+    // Card geometry may have been edited in the Graph even if its dimensions
+    // stayed the same; a dirty render must then still refresh SVG endpoints.
+    const movedGeometry=partial&&renderNodes.some(n=>{
+      const el=mounted.get(String(n.id));
+      return !el||el.style.left!==`${n.x}px`||el.style.top!==`${n.y}px`;
+    });
 
     const audDatalistId = "ic-datalist-audience";
     const sceneDatalistId = "ic-datalist-scene";
 
-    const cardsHtml = nodes
+    const cardsHtml = renderNodes
       .map((n) => {
         const isSel = selSet.has(n.id);
         const isRel = relNodeIds.has(n.id) && !isSel;
@@ -9072,6 +10705,7 @@
           const curCount = Math.max(1, Math.min(200, Math.round(Number(cd.count) || (curMode === "series" ? 4 : 1))));
           const rec = E.resolveControlRecipe(CS.graph, n, Catalog);
           const plan = buildExecutionPlanForControl(n);
+          const cloudRun = getCanvasRunProjection(n);
           const downPlan = curMode === "article-illust" ? getDownstreamArticlePlanNode(n) : null;
           const planSlotCount = downPlan?.data?.cards?.length ?? plan.specs.length;
           const hasBridgeUp = CS.graph.edges.some((e) => e.to === n.id && getNodeById(e.from)?.type === "bridge");
@@ -9112,7 +10746,16 @@
                   }
                 </div>
 
-                <!-- 5 Modes Grid (文章封面+插图已合并为统一的「文章配图」) -->
+                ${cloudRun ? `<div role="status" class="ic-v4-run-status" style="font-size:11px;padding:6px 8px;">
+                   云端 Run：已确认 ${cloudRun.succeeded}/${cloudRun.total} 张成功${cloudRun.failed ? " · 失败 "+cloudRun.failed+" 张" : ""}
+                   ${cloudRun.isTerminal ? " · 已结束" : " · 仍在执行（可刷新恢复）"}
+                   ${cloudRun.items?.length ? `<div class="ic-v4-run-items" style="display:flex;gap:6px;overflow:auto;margin-top:5px;">
+                     ${cloudRun.items.map(item=>`<img src="${esc(item.imageUrl)}" alt="已恢复生成结果" loading="lazy"
+                       data-run-id="${esc(cloudRun.runId)}" data-item-id="${esc(item.id)}"
+                       data-slot-id="${esc(item.slotId)}" style="width:64px;height:64px;object-fit:cover;border-radius:5px;">`).join("")}
+                   </div>` : ""}
+                 </div>` : cd.runId ? `<div role="status" class="ic-v4-run-status" style="font-size:11px;padding:6px 8px;">云端状态待核对 · 不自动重新提交任务</div>` : ""}
+                 <!-- 5 Modes Grid (文章封面+插图已合并为统一的「文章配图」) -->
                 <div class="ic-v4-section">
                   <div class="ic-v4-row-head"><span>输出模式</span></div>
                   <div class="ic-ctrl-mode-grid">
@@ -9330,76 +10973,14 @@
             (Number(dd.totalTarget) || 0) > BATCH_GALLERY_THRESHOLD;
 
           if (isGallery) {
-            const pageSize = 9;
-            const totalPages = Math.max(1, Math.ceil(Math.max(1, items.length) / pageSize));
-            const curPage = Math.min(totalPages, Math.max(1, Math.round(Number(dd.page) || 1)));
-            const sliceStart = (curPage - 1) * pageSize;
-            const pageItems = items.slice(sliceStart, sliceStart + pageSize);
-
-            return `
-              <div class="ic-node ic-node-output_display ${isSel ? "is-selected" : ""} ${isRel ? "is-related" : ""}" data-node-id="${esc(n.id)}" style="${posStyle}">
-                <div class="ic-node-header-above">
-                  <span>批量图集</span>
-                  <span class="ic-node-badge ic-badge-output-disp">${
-                    dd.status === "generating" ? "批量生成中" : `共 ${items.length} 张`
-                  }</span>
-                </div>
-
-                <div class="ic-v4-card" style="position:relative;">
-                  ${
-                    dd.status === "generating"
-                      ? `
-                      <div style="padding:24px 14px;border-radius:10px;background:rgba(31,111,74,0.06);border:1px dashed rgba(31,111,74,0.38);text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px;">
-                        <div style="font-size:12.5px;font-weight:850;color:#1f6f4a;" data-gal-prog-for="${esc(n.id)}">
-                          正在批量出图 ${items.length} / ${dd.totalTarget || items.length || 100} 张…
-                        </div>
-                        <div style="font-size:10.8px;color:var(--ic-muted);">所有成图自动汇聚于此节点，无需堆叠百个显示框</div>
-                      </div>
-                    `
-                      : items.length > 0
-                        ? `
-                        <div class="ic-disp-gallery-grid">
-                          ${pageItems
-                            .map((gIt, gIdx) => {
-                              const absIdx = sliceStart + gIdx;
-                              return `
-                                <div class="ic-disp-gal-cell" data-disp-zoom="${esc(gIt.imageUrl)}" data-disp-title="${esc(gIt.title || `成图 #${absIdx + 1}`)}" title="第 ${absIdx + 1} 张 · ${esc(gIt.title || "")}">
-                                  <img data-hw-src="${esc(gIt.imageUrl)}" alt="${esc(gIt.title || "")}" loading="lazy" />
-                                  <span class="ic-disp-gal-idx">#${String(absIdx + 1).padStart(2, "0")}</span>
-                                  ${gIt.demoMode ? '<span style="position:absolute;right:4px;top:4px;padding:1px 4px;border-radius:4px;background:#fff0bf;color:#7a4d00;font-size:9px;font-weight:900;">演示</span>' : ""}
-                                </div>
-                              `;
-                            })
-                            .join("")}
-                        </div>
-                        <div class="ic-disp-gal-pager">
-                          <button type="button" class="ic-opt-pill" data-disp-gal-page="${esc(n.id)}" data-delta="-1" ${curPage <= 1 ? "disabled" : ""} style="padding:2px 8px;font-size:10.8px;">‹ 上页</button>
-                          <span>第 ${curPage} / ${totalPages} 页 · 共 ${items.length} 张</span>
-                          <button type="button" class="ic-opt-pill" data-disp-gal-page="${esc(n.id)}" data-delta="1" ${curPage >= totalPages ? "disabled" : ""} style="padding:2px 8px;font-size:10.8px;">下页 ›</button>
-                        </div>
-                        <div class="ic-disp-deliverable-bar">
-                          <div style="display:flex;gap:6px;">
-                            <button type="button" class="btn btn-sm" data-disp-open-gal="${esc(n.id)}" style="flex:1.18;font-weight:800;">百图画廊</button>
-                            <button type="button" class="btn btn-sm" data-disp-zip="${esc(n.id)}" style="flex:1;">ZIP</button>
-                          </div>
-                        </div>
-                      `
-                        : `
-                        <div style="padding:28px 14px;border-radius:10px;background:var(--ic-surface);border:1px dashed var(--ic-border);text-align:center;font-size:11.5px;color:var(--ic-muted);">
-                          等待上游批量运行出图（成图将自动分页收纳于此）…
-                        </div>
-                      `
-                  }
-                </div>
-
-                <div class="ic-port-zone is-in" data-port-node="${esc(n.id)}" data-port-dir="in" title="来自左侧「生成设置」节点">
-                  <span class="ic-port-dot">+</span>
-                </div>
-                <div class="ic-port-zone is-out" data-port-node="${esc(n.id)}" data-port-dir="out" title="可将图集首图连入下游新的「生成设置」节点">
-                  <span class="ic-port-dot">+</span>
-                </div>
-              </div>
-            `;
+            const cloudRun = upParentId ? getCanvasRunProjection(getNodeById(upParentId)) : null;
+            return '<div class="ic-node ic-node-output_display '+(isSel?'is-selected ':'')+(isRel?'is-related':'')+
+              '" data-node-id="'+esc(n.id)+'" style="'+posStyle+'">'+
+              '<div class="ic-node-header-above"><span>系列结果组</span>'+
+              '<span class="ic-node-badge ic-badge-output-disp">共 '+(dd.totalTarget||items.length)+' 张</span></div>'+
+              '<div class="ic-v4-card ic129-gallery-card">'+CanvasUI.galleryHtml(n,cloudRun)+'</div>'+
+              '<div class="ic-port-zone is-in" data-port-node="'+esc(n.id)+'" data-port-dir="in"><span class="ic-port-dot">+</span></div>'+
+              '<div class="ic-port-zone is-out" data-port-node="'+esc(n.id)+'" data-port-dir="out"><span class="ic-port-dot">+</span></div></div>';
           }
 
           return `
@@ -9433,6 +11014,8 @@
                         </div>
                         <div style="display:flex;gap:6px;">
                           <a class="btn btn-sm" href="${esc(it.imageUrl)}" download="handraw-output.webp" style="flex:1;text-align:center;">下载</a>
+                          <button type="button" class="btn btn-sm" data-disp-reference="${esc(n.id)}" data-slot="0">作为参考</button>
+                          <button type="button" class="btn btn-sm" data-disp-variant="${esc(n.id)}" data-slot="0">派生变体</button>
                         </div>
                       </div>
                     `
@@ -9458,7 +11041,7 @@
       })
       .join("");
 
-    const datalistsHtml = `
+    const datalistsHtml = partial ? "" : `
       <datalist id="${audDatalistId}">
         ${(CS.recentAudiences || []).slice(0, 8).map((v) => `<option value="${esc(v)}"></option>`).join("")}
       </datalist>
@@ -9470,21 +11053,27 @@
       </datalist>
     `;
 
-    DOM.nodesLayer.innerHTML = cardsHtml + datalistsHtml;
+    const {dirtyNodes,stats}=partial
+      ?patchStudioCanvasDirtyDom(DOM.nodesLayer,cardsHtml)
+      :patchStudioCanvasDom(DOM.nodesLayer,cardsHtml,datalistsHtml);
 
-    // Sync actual rendered DOM heights back to node.h so port positions, wires, minimap & fitView are pixel-accurate!
-    const elById = new Map();
-    DOM.nodesLayer.querySelectorAll(".ic-node[data-node-id]").forEach((el) => {
-      const nid = el.getAttribute("data-node-id");
-      elById.set(nid, el);
-      const n = getNodeById(nid);
-      if (n && el.offsetHeight > 20) {
-        n.h = el.offsetHeight;
-        n.w = el.offsetWidth;
+    // Only measure new/changed nodes; remote progress must not force
+    // layout reads on every unaffected image and input card.
+    const elById=new Map();
+    let sizeChanged=Boolean(stats.inserted||stats.removed);
+    for(const el of dirtyNodes){
+      const id=el.getAttribute('data-node-id');
+      elById.set(id,el);
+      const n=getNodeById(id);
+      if(n&&el.offsetHeight>20){
+        const h=el.offsetHeight,w=el.offsetWidth;
+        if(h!==n.h||w!==n.w)sizeChanged=true;
+        n.h=h;n.w=w;
       }
-    });
-
+    }
+    if(sizeChanged)DOM.nodesLayer.querySelectorAll('.ic-node[data-node-id]').forEach(el=>elById.set(el.getAttribute('data-node-id'),el));
     // Prevent vertical collisions when a variable-height node (e.g. 风格参数 enabling 双画风融合 or multi-select chips) expands!
+    if(sizeChanged){
     const sortedByY = [...(CS.graph.nodes || [])].sort((a, b) => a.y - b.y || a.x - b.x);
     for (let i = 0; i < sortedByY.length; i++) {
       const upper = sortedByY[i];
@@ -9502,15 +11091,25 @@
       }
     }
 
-    renderEdgesSvg();
-    bindNodeInteriorActions();
+    }
+    // Text/status-only dirty cards have unchanged port geometry and edge
+    // selection: don't index and measure every edge endpoint again.
+    // Any full render, changed node dimension, or collision adjustment still
+    // runs the authoritative complete edge calculation.
+    const edgesRecomputed=!partial||sizeChanged||movedGeometry;
+    if(edgesRecomputed)renderEdgesSvg();
+    for(const el of dirtyNodes)bindNodeInteriorActions(el);
+    if(DOM.nodesLayer.dataset.canvasBenchmark==='1'){
+      stats.edgesRecomputed=edgesRecomputed;
+      DOM.nodesLayer._lastCanvasPatchStats=stats;
+    }
   }
 
-  function bindNodeInteriorActions() {
-    if (!DOM.nodesLayer) return;
+  function bindNodeInteriorActions(root = DOM.nodesLayer) {
+    if (!root) return;
 
     /* --- 1. Skill Params Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-sp-fusion]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-fusion]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-fusion"));
@@ -9522,7 +11121,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-pick]").forEach((el) => {
+    root.querySelectorAll("[data-sp-pick]").forEach((el) => {
       el.onclick = (e) => {
         if (e.target.closest("[data-sp-clear-field]")) return;
         e.stopPropagation();
@@ -9532,7 +11131,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-clear-field]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-clear-field]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-clear-field"));
@@ -9545,7 +11144,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-rm-arr]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-rm-arr]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-rm-arr"));
@@ -9559,7 +11158,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-ws]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-ws]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-ws"));
@@ -9571,7 +11170,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-aud]").forEach((inp) => {
+    root.querySelectorAll("[data-sp-aud]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-sp-aud"));
         if (n) {
@@ -9597,7 +11196,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-scene]").forEach((inp) => {
+    root.querySelectorAll("[data-sp-scene]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-sp-scene"));
         if (n) {
@@ -9623,7 +11222,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-sc021]").forEach((sel) => {
+    root.querySelectorAll("[data-sp-sc021]").forEach((sel) => {
       sel.onchange = () => {
         const n = getNodeById(sel.getAttribute("data-sp-sc021"));
         if (n) {
@@ -9633,21 +11232,21 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-sc022-name]").forEach((inp) => {
+    root.querySelectorAll("[data-sp-sc022-name]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-sp-sc022-name"));
         if (n) n.data.sc022Name = inp.value;
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-sc022-py]").forEach((inp) => {
+    root.querySelectorAll("[data-sp-sc022-py]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-sp-sc022-py"));
         if (n) n.data.sc022Pinyin = inp.value;
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-sp-reset-all]").forEach((btn) => {
+    root.querySelectorAll("[data-sp-reset-all]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-sp-reset-all"));
@@ -9673,7 +11272,7 @@
     });
 
     /* --- 2. Asset Node Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-ast-open]").forEach((el) => {
+    root.querySelectorAll("[data-ast-open]").forEach((el) => {
       el.onclick = (e) => {
         if (e.target.closest("[data-ast-clear]")) return;
         e.stopPropagation();
@@ -9682,7 +11281,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ast-clear]").forEach((btn) => {
+    root.querySelectorAll("[data-ast-clear]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-ast-clear"));
@@ -9695,7 +11294,7 @@
     });
 
     /* --- 3. Text Input + File Attachment Actions (Click textarea opens clean single-button modal!) --- */
-    DOM.nodesLayer.querySelectorAll("[data-txt-ta]").forEach((ta) => {
+    root.querySelectorAll("[data-txt-ta]").forEach((ta) => {
       ta.onclick = (e) => {
         e.stopPropagation();
         const nid = ta.getAttribute("data-txt-ta");
@@ -9703,7 +11302,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-txt-file]").forEach((inp) => {
+    root.querySelectorAll("[data-txt-file]").forEach((inp) => {
       inp.onchange = (e) => {
         const f = e.target.files && e.target.files[0];
         const n = getNodeById(inp.getAttribute("data-txt-file"));
@@ -9723,7 +11322,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-txt-clear-file]").forEach((btn) => {
+    root.querySelectorAll("[data-txt-clear-file]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-txt-clear-file"));
@@ -9763,7 +11362,7 @@
       }
     };
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-seed]").forEach((inp) => {
+    root.querySelectorAll("[data-fis-seed]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-fis-seed"));
         if (n) {
@@ -9787,7 +11386,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-strat]").forEach((btn) => {
+    root.querySelectorAll("[data-fis-strat]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-fis-strat"));
@@ -9800,7 +11399,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-custom-strat]").forEach((inp) => {
+    root.querySelectorAll("[data-fis-custom-strat]").forEach((inp) => {
       inp.oninput = () => {
         const n = getNodeById(inp.getAttribute("data-fis-custom-strat"));
         if (n) {
@@ -9824,7 +11423,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-cnt-step]").forEach((btn) => {
+    root.querySelectorAll("[data-fis-cnt-step]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-fis-cnt-step"));
@@ -9837,7 +11436,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-cnt-inp]").forEach((inp) => {
+    root.querySelectorAll("[data-fis-cnt-inp]").forEach((inp) => {
       inp.onchange = () => {
         const n = getNodeById(inp.getAttribute("data-fis-cnt-inp"));
         if (!n) return;
@@ -9853,7 +11452,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-gen]").forEach((btn) => {
+    root.querySelectorAll("[data-fis-gen]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-fis-gen"));
@@ -9863,7 +11462,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-fis-open-modal]").forEach((el) => {
+    root.querySelectorAll("[data-fis-open-modal]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         openFissionListModal(el.getAttribute("data-fis-open-modal"));
@@ -9871,7 +11470,7 @@
     });
 
     /* --- 3.5. Bridge Node Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-bridge-add-ctrl]").forEach((btn) => {
+    root.querySelectorAll("[data-bridge-add-ctrl]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         spawnDownstreamControlFromBridge(btn.getAttribute("data-bridge-add-ctrl"));
@@ -9879,7 +11478,7 @@
     });
 
     /* --- 3.6. Loop Batch Node Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-loop-mode]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-mode]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-mode"));
@@ -9892,7 +11491,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-ta]").forEach((ta) => {
+    root.querySelectorAll("[data-loop-ta]").forEach((ta) => {
       ta.oninput = () => {
         const n = getNodeById(ta.getAttribute("data-loop-ta"));
         if (!n) return;
@@ -9928,14 +11527,14 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-open-prompts]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-open-prompts]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         openLoopPromptsModal(btn.getAttribute("data-loop-open-prompts"));
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-clear-prompts]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-clear-prompts]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-clear-prompts"));
@@ -9949,7 +11548,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-fill-demo]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-fill-demo]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-fill-demo"));
@@ -9964,7 +11563,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-pick]").forEach((el) => {
+    root.querySelectorAll("[data-loop-pick]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(el.getAttribute("data-loop-pick"));
@@ -9973,7 +11572,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-rand]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-rand]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-rand"));
@@ -9997,7 +11596,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-rm-item]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-rm-item]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-rm-item"));
@@ -10015,7 +11614,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-clear-arr]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-clear-arr]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(btn.getAttribute("data-loop-clear-arr"));
@@ -10029,7 +11628,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-setup-assets]").forEach((el) => {
+    root.querySelectorAll("[data-loop-setup-assets]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         const n = getNodeById(el.getAttribute("data-loop-setup-assets"));
@@ -10048,7 +11647,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-loop-add-ctrl]").forEach((btn) => {
+    root.querySelectorAll("[data-loop-add-ctrl]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         spawnDownstreamControlFromLoop(btn.getAttribute("data-loop-add-ctrl"));
@@ -10056,7 +11655,7 @@
     });
 
     /* --- 4. Output Control Node Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-mode]").forEach((btn) => {
+    root.querySelectorAll("[data-ctrl-mode]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const ctrl = getNodeById(btn.getAttribute("data-ctrl-mode"));
@@ -10065,7 +11664,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-count-step]").forEach((btn) => {
+    root.querySelectorAll("[data-ctrl-count-step]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const ctrl = getNodeById(btn.getAttribute("data-ctrl-count-step"));
@@ -10079,7 +11678,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-count-inp]").forEach((inp) => {
+    root.querySelectorAll("[data-ctrl-count-inp]").forEach((inp) => {
       inp.oninput = () => {
         const ctrl = getNodeById(inp.getAttribute("data-ctrl-count-inp"));
         if (!ctrl) return;
@@ -10107,7 +11706,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-mix-lay]").forEach((chk) => {
+    root.querySelectorAll("[data-ctrl-mix-lay]").forEach((chk) => {
       chk.onchange = () => {
         const ctrl = getNodeById(chk.getAttribute("data-ctrl-mix-lay"));
         if (!ctrl) return;
@@ -10117,7 +11716,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-ratio]").forEach((btn) => {
+    root.querySelectorAll("[data-ctrl-ratio]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const ctrl = getNodeById(btn.getAttribute("data-ctrl-ratio"));
@@ -10129,7 +11728,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-ratio-inp]").forEach((inp) => {
+    root.querySelectorAll("[data-ctrl-ratio-inp]").forEach((inp) => {
       inp.oninput = () => {
         const ctrl = getNodeById(inp.getAttribute("data-ctrl-ratio-inp"));
         if (!ctrl) return;
@@ -10140,7 +11739,7 @@
           markActiveTabDirty();
           const isPreset = E.RATIO_PRESETS.includes(norm);
           if (wrap) wrap.classList.toggle("is-custom-active", !isPreset);
-          DOM.nodesLayer.querySelectorAll(`[data-ctrl-ratio="${ctrl.id}"]`).forEach((b) => {
+          root.querySelectorAll(`[data-ctrl-ratio="${ctrl.id}"]`).forEach((b) => {
             b.classList.toggle("is-active", b.getAttribute("data-val") === norm);
           });
         }
@@ -10176,7 +11775,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-inc-cover]").forEach((chk) => {
+    root.querySelectorAll("[data-ctrl-inc-cover]").forEach((chk) => {
       chk.onchange = () => {
         const ctrl = getNodeById(chk.getAttribute("data-ctrl-inc-cover"));
         if (!ctrl) return;
@@ -10197,7 +11796,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-cov-ratio]").forEach((inp) => {
+    root.querySelectorAll("[data-ctrl-cov-ratio]").forEach((inp) => {
       inp.oninput = () => {
         const ctrl = getNodeById(inp.getAttribute("data-ctrl-cov-ratio"));
         if (!ctrl) return;
@@ -10229,7 +11828,7 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-inl-ratio]").forEach((inp) => {
+    root.querySelectorAll("[data-ctrl-inl-ratio]").forEach((inp) => {
       inp.oninput = () => {
         const ctrl = getNodeById(inp.getAttribute("data-ctrl-inl-ratio"));
         if (!ctrl) return;
@@ -10261,36 +11860,156 @@
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-ctrl-run]").forEach((btn) => {
+    root.querySelectorAll("[data-ctrl-run]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         runOutputControlNode(btn.getAttribute("data-ctrl-run"));
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-plan-open-wide]").forEach((btn) => {
+    root.querySelectorAll("[data-plan-open-wide]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         openArticlePlanWidePage(btn.getAttribute("data-plan-open-wide"));
       };
     });
 
+    // #129: result gallery actions are UI-only except explicit user-triggered retry/branch.
+    root.querySelectorAll("[data-disp-toggle]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const id=btn.getAttribute("data-disp-toggle");
+        CanvasUI.toggleGallery(id);
+        renderWorldNodes([id]);
+      };
+    });
+    root.querySelectorAll("[data-disp-retry-slot]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const display=getNodeById(btn.getAttribute("data-disp-retry-slot"));
+        const index=Number(btn.getAttribute("data-slot"));
+        const parent=getNodeById(display?.data?.sourceNodeId);
+        const projection=parent?getCanvasRunProjection(parent):null;
+        const state=CanvasUI.galleryState(display,projection);
+        if(!Number.isInteger(index)||!CanvasUI.mayRetry(state.slots[index],projection)){
+          toast("只有服务端确认失败且运行结束的槽位才可以单张重试");
+          return;
+        }
+        void runOutputControlNode(parent.id,{onlyItemIdx:index});
+      };
+    });
+    function resolveOwnedResultSlot(display,index){
+      if(!display||!Number.isInteger(index)||index<0)return null;
+      const upstream=getNodeById(display.data?.sourceNodeId);
+      const projection=upstream?getCanvasRunProjection(upstream):null;
+      const slot=projection?.slots?.[index];
+      if(slot?.status!=="success"||!slot.mediaId||!CanvasUI.mediaUrl(slot.imageUrl))
+        return null;
+      return {mediaId:String(slot.mediaId),imageUrl:CanvasUI.mediaUrl(slot.imageUrl)};
+    }
+    function spawnResultReference(display,index,reference){
+      if(!reference)return null;
+      const asset=spawnShelfItem({kind:"asset"},
+        {x:display.x+(display.w||340)+60,y:display.y+55},display.id);
+      if(!asset)return null;
+      asset.data.items=[{id:reference.mediaId,assetUid:reference.mediaId,
+        mediaId:reference.mediaId,image:reference.imageUrl,
+        name:"生成结果参考 #"+(index+1),cat:"other",source:"private"}];
+      markActiveTabDirty();persistOpenTabs();fullRenderCanvas();
+      return asset;
+    }
+    root.querySelectorAll("[data-disp-variant]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const disp=getNodeById(btn.getAttribute("data-disp-variant"));
+        if(!disp)return;
+        const slotAttr=btn.getAttribute("data-slot");
+        const index=slotAttr!==null?Number(slotAttr):0;
+        const isGroup=disp.data?.kind==="batch_gallery";
+        if(isGroup){
+          const ref=resolveOwnedResultSlot(disp,index);
+          if(!ref){
+            toast("该槽位需要先有服务端确认的成图，才能独立派生变体");
+            return;
+          }
+          const asset=spawnResultReference(disp,index,ref);
+          if(!asset)return;
+          const ctrl=spawnShelfItem({kind:"output_control"},
+            {x:asset.x+(asset.w||340)+110,y:asset.y+20},asset.id);
+          if(!ctrl)return;
+          pushUndo();ensureEdge(asset.id,ctrl.id);
+          markActiveTabDirty();fullRenderCanvas();persistOpenTabs();
+        }else{
+          const ctrl=spawnShelfItem({kind:"output_control"},
+            {x:disp.x+(disp.w||340)+100,y:disp.y+30},disp.id);
+          if(!ctrl)return;
+          pushUndo();ensureEdge(disp.id,ctrl.id);
+          markActiveTabDirty();fullRenderCanvas();persistOpenTabs();
+        }
+        toast("已派生该图片的独立分支，检查参数后可手动运行");
+      };
+    });
+    root.querySelectorAll("[data-disp-reference]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const disp=getNodeById(btn.getAttribute("data-disp-reference"));
+        const index=Number(btn.getAttribute("data-slot")||0);
+        const reference=resolveOwnedResultSlot(disp,index);
+        if(!reference){
+          toast("此结果缺少已确认的受控媒体 ID，请先通过我的图库选择授权素材");
+          return;
+        }
+        const asset=spawnResultReference(disp,index,reference);
+        if(asset)toast("已添加该槽位的受控参考素材；生成前仍须通过服务端资源授权校验");
+      };
+    });
+
+    root.querySelectorAll("[data-disp-compare]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const groupId=btn.getAttribute("data-disp-compare");
+        const index=Number(btn.getAttribute("data-slot"));
+        CanvasUI.toggleCompare(groupId,index);
+        renderWorldNodes([groupId]);
+      };
+    });
+    root.querySelectorAll("[data-disp-compare-view]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const disp=getNodeById(btn.getAttribute("data-disp-compare-view"));
+        if(!disp)return;
+        const selected=CanvasUI.selectedForCompare(disp.id);
+        if(selected.length<2){toast("先展开图集，选择 2～4 张图片进行对比");return;}
+        const upstream=getNodeById(disp.data?.sourceNodeId);
+        const state=CanvasUI.galleryState(disp,upstream?getCanvasRunProjection(upstream):null);
+        const images=selected.map(index=>state.slots[index]).filter(slot=>slot?.imageUrl);
+        if(images.length<2){toast("所选图片尚未完成，暂时无法对比");return;}
+        S.openModal({title:"系列结果对比",sizeClass:"modal-wide",html:
+          '<div class="ic129-compare-grid">'+images.map(slot=>
+            '<div><strong>第 '+(slot.index+1)+' 张</strong>'+
+              '<img src="'+esc(slot.imageUrl)+'" alt="对比第'+(slot.index+1)+'张成图" loading="lazy" />'+
+              '<a href="'+esc(slot.imageUrl)+'" download="handraw-'+(slot.index+1)+'.webp">下载原图</a></div>'
+          ).join("")+'</div>'
+        });
+      };
+    });
+
     /* --- 5. Image Display Actions --- */
-    DOM.nodesLayer.querySelectorAll("[data-disp-zoom]").forEach((el) => {
+    root.querySelectorAll("[data-disp-zoom]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
         openImageLightbox(el.getAttribute("data-disp-zoom"), el.getAttribute("data-disp-title") || "输出大图");
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-regen-node]").forEach((btn) => {
+    root.querySelectorAll("[data-disp-regen-node]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         regenerateDisplayNode(btn.getAttribute("data-disp-regen-node"));
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-gal-page]").forEach((btn) => {
+    root.querySelectorAll("[data-disp-gal-page]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const disp = getNodeById(btn.getAttribute("data-disp-gal-page"));
@@ -10302,19 +12021,19 @@
         const next = Math.min(totalPages, Math.max(1, cur + delta));
         if (next === cur) return;
         disp.data.page = next;
-        renderWorldNodes();
+        renderWorldNodes([disp.id]);
         persistOpenTabs();
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-open-gal]").forEach((btn) => {
+    root.querySelectorAll("[data-disp-open-gal]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         openBatchGalleryModal(btn.getAttribute("data-disp-open-gal"));
       };
     });
 
-    DOM.nodesLayer.querySelectorAll("[data-disp-zip]").forEach((btn) => {
+    root.querySelectorAll("[data-disp-zip]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
         exportZipPackage(btn.getAttribute("data-disp-zip"));
@@ -10465,31 +12184,73 @@
   }
 
   /* ======================== FLOATING SELECTION BAR & ITEM DELETION ======================== */
-  function positionFloatingOverlays() {
-    if (!DOM.overlayLayer || !DOM.viewport) return;
-    const vRect = DOM.viewport.getBoundingClientRect();
-    const selNodes = (CS.graph.selectedIds || []).map(getNodeById).filter(Boolean);
-    if (!selNodes.length) return;
+  // #111 P2: The native title toolbar is measured ONCE after selection
+  // has rendered but BEFORE pointermove mutates card CSS geometry. Re-reading
+  // offsetWidth/getBoundingClientRect after each mutation forces a browser
+  // layout flush over an otherwise unchanged 300-node Canvas.
+  function captureDragOverlayMetrics(startPositions) {
+    if (!DOM.overlayLayer || !DOM.viewport || !startPositions?.length) return null;
+    const topbar=DOM.overlayLayer.querySelector("[data-float-topbar]");
+    if (!topbar) return null;
+    const vRect=DOM.viewport.getBoundingClientRect();
+    const tbW=topbar.offsetWidth || 320;
+    const models=CS.graph.nodes || [],selection=CS.graph.selectedIds || [];
+    if(selection.length!==startPositions.length) return null;
+    const selected=startPositions.map(item=>({
+      id:String(item.node.id),node:item.node,index:models.indexOf(item.node)
+    }));
+    if(selected.some(item=>item.index<0)||
+       selected.some((item,i)=>String(selection[i])!==item.id)) return null;
+    return {topbar,viewport:DOM.viewport,overlayLayer:DOM.overlayLayer,
+      models,selection,selected,viewportWidth:vRect.width,
+      viewportHeight:vRect.height,toolbarWidth:tbW,
+      vx:CS.vx,vy:CS.vy,vk:CS.vk,shelfOpen:CS.shelfOpen};
+  }
 
-    const topbarEl = DOM.overlayLayer.querySelector("[data-float-topbar]");
-    if (!topbarEl) return;
+  function validDragOverlayMetrics(metrics) {
+    return Boolean(metrics &&
+      metrics.topbar?.isConnected && metrics.viewport===DOM.viewport &&
+      metrics.overlayLayer===DOM.overlayLayer &&
+      metrics.models===CS.graph.nodes &&
+      metrics.selection===CS.graph.selectedIds &&
+      metrics.selection.length===metrics.selected.length &&
+      metrics.selected.every((item,i)=>
+        String(metrics.selection[i])===item.id &&
+        metrics.models[item.index]===item.node) &&
+      metrics.vx===CS.vx && metrics.vy===CS.vy &&
+      metrics.vk===CS.vk && metrics.shelfOpen===CS.shelfOpen);
+  }
 
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity;
+  function positionFloatingOverlays(dragMetrics = null) {
+    if (!DOM.overlayLayer || !DOM.viewport) return false;
+    const cached=validDragOverlayMetrics(dragMetrics);
+    const selNodes=cached?dragMetrics.selected.map(item=>item.node):
+      (CS.graph.selectedIds || []).map(getNodeById).filter(Boolean);
+    if (!selNodes.length) return false;
+    const topbarEl=cached?dragMetrics.topbar:
+      DOM.overlayLayer.querySelector("[data-float-topbar]");
+    if (!topbarEl) return false;
+    const width=cached?dragMetrics.viewportWidth:
+      DOM.viewport.getBoundingClientRect().width;
+    const height=cached?dragMetrics.viewportHeight:
+      DOM.viewport.getBoundingClientRect().height;
+    const tbW=cached?dragMetrics.toolbarWidth:(topbarEl.offsetWidth || 320);
+
+    let minX=Infinity,minY=Infinity,maxX=-Infinity;
     for (const n of selNodes) {
-      minX = Math.min(minX, n.x);
-      minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + (n.w || 320));
+      minX=Math.min(minX,n.x);
+      minY=Math.min(minY,n.y);
+      maxX=Math.max(maxX,n.x+(n.w || 320));
     }
-
-    const centerScreen = worldToScreen((minX + maxX) * 0.5, minY);
-    const leftSafe = CS.shelfOpen ? 236 : 20;
-    const tbW = topbarEl.offsetWidth || 320;
-    const cx = Math.max(leftSafe + tbW * 0.5, Math.min(vRect.width - 20 - tbW * 0.5, centerScreen.x));
-    const ty = Math.max(54, Math.min(vRect.height - 96, centerScreen.y - 34));
-    topbarEl.style.left = `${cx}px`;
-    topbarEl.style.top = `${ty}px`;
+    const centerScreen=worldToScreen((minX+maxX)*0.5,minY);
+    const leftSafe=CS.shelfOpen?236:20;
+    const cx=Math.max(leftSafe+tbW*0.5,
+      Math.min(width-20-tbW*0.5,centerScreen.x));
+    const ty=Math.max(54,Math.min(height-96,centerScreen.y-34));
+    const left=`${cx}px`,top=`${ty}px`;
+    if(topbarEl.style.left!==left)topbarEl.style.left=left;
+    if(topbarEl.style.top!==top)topbarEl.style.top=top;
+    return cached;
   }
 
   function renderFloatingOverlays() {
@@ -10662,6 +12423,53 @@
     toast(`已复制 ${clones.length} 个节点`);
   }
 
+  // Session-local clipboard copies only editable Graph definition. Neither
+  // generated result nodes nor frozen Run facts can be pasted as new Runs.
+  function copyCanvasNodes(){
+    const ids=new Set(CS.graph.selectedIds||[]);
+    const nodes=CS.graph.nodes.filter(n=>ids.has(n.id)&&
+      n.type!=="output_display"&&n.type!=="article_plan");
+    if(!nodes.length){toast("请先选择可复制的编辑节点");return false;}
+    const allowed=new Set(nodes.map(n=>n.id));
+    const edges=CS.graph.edges.filter(e=>allowed.has(e.from)&&allowed.has(e.to));
+    CS.canvasClipboard={nodes:cloneGraph(nodes),edges:cloneGraph(edges),
+      copyCount:0,projectId:CS.tabs.find(t=>t.id===CS.activeTabId)?.projectId||null};
+    toast("已复制 "+nodes.length+" 个可编辑节点（不包含运行结果）");
+    return true;
+  }
+  function pasteCanvasNodes(){
+    const clip=CS.canvasClipboard;
+    if(!clip?.nodes?.length){toast("当前没有已复制的节点");return false;}
+    // Snapshot output results are not part of the paste definition.
+    pushUndo();
+    const map=new Map(),offset=48*(1+(clip.copyCount||0));
+    const nodes=clip.nodes.map(node=>{
+      const n=cloneGraph(node);
+      n.id=E.uid(n.type);
+      n.x=snapVal(Number(n.x||0)+offset);
+      n.y=snapVal(Number(n.y||0)+offset);
+      if(n.data){
+        for(const key of ["runId","studio2RunSnapshot","activeBatchId",
+          "pendingTaskId","pendingRequestId","pendingRequestIds","pendingSpec",
+          "pendingTasksBySlot","elapsedSec","error"])delete n.data[key];
+        if(n.type==="output_control"||n.type==="loop")n.data.status="idle";
+      }
+      map.set(node.id,n.id);return n;
+    });
+    CS.graph.nodes.push(...nodes);
+    for(const edge of clip.edges||[]){
+      const from=map.get(edge.from),to=map.get(edge.to);
+      const a=CS.graph.nodes.find(n=>n.id===from);
+      const b=CS.graph.nodes.find(n=>n.id===to);
+      if(from&&to&&a&&b&&canConnectNodes(a,b))ensureEdge(from,to);
+    }
+    clip.copyCount=(clip.copyCount||0)+1;
+    CS.graph.selectedIds=nodes.map(n=>n.id);
+    markActiveTabDirty();fullRenderCanvas();persistOpenTabs();
+    toast("已粘贴 "+nodes.length+" 个独立可编辑节点");
+    return true;
+  }
+
   /* ======================== CLEAN 3-GROUP LEFT TOOLBOX (输入节点 / 批量与多尺寸 / 输出节点) ======================== */
   const NODE_TOOLBOX_GROUPS = [
     {
@@ -10734,9 +12542,10 @@
     DOM.shelf.classList.toggle("is-collapsed", !CS.shelfOpen);
     DOM.shelf.innerHTML = `
       <div style="padding:10px 12px;border-bottom:1px solid var(--ic-border);display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:12.5px;font-weight:850;color:var(--ic-ink);">节点工具箱</span>
+        <span style="font-size:12.5px;font-weight:850;color:var(--ic-ink);">创作资源</span>
         <button type="button" class="ic-icon-btn" id="ic-shelf-collapse-btn" title="收拢左侧节点箱" style="padding:2px 6px;font-size:11px;">«</button>
       </div>
+      <div class="ic129-shelf-tabs" role="tablist" aria-label="画布侧栏"><button type="button" data-shelf-tab="assets">素材</button><button type="button" data-shelf-tab="nodes">节点</button><button type="button" data-shelf-tab="templates">模板</button></div>
       <div class="ic-shelf-grid" id="ic-shelf-grid-box" data-canvas-no-zoom style="grid-template-columns:1fr;padding:10px 10px 14px;gap:8px;"></div>
     `;
 
@@ -10747,6 +12556,12 @@
       renderTopAndBottomDocks();
     };
 
+    DOM.shelf.querySelectorAll("[data-shelf-tab]").forEach(btn=>{
+      const tab=CS.canvasShelfTab||"nodes";
+      btn.classList.toggle("is-active",btn.dataset.shelfTab===tab);
+      btn.setAttribute("aria-selected",String(btn.dataset.shelfTab===tab));
+      btn.onclick=()=>{CS.canvasShelfTab=btn.dataset.shelfTab;renderShelfDrawer();};
+    });
     renderShelfGridOnly();
   }
 
@@ -10756,6 +12571,46 @@
 
     const flatSpecs = [];
     const htmlBlocks = [];
+    const activeShelfTab=CS.canvasShelfTab||"nodes";
+    if(activeShelfTab==="assets"){
+      gridBox.innerHTML='<p class="ic129-shelf-help">官方画风、图型与私有素材统一从已有授权选择器进入。</p>'+
+        '<button type="button" class="ic129-shelf-action" data-shelf-resource="assets">参考图 / 我的图库</button>'+
+        '<button type="button" class="ic129-shelf-action" data-shelf-resource="style">选择画风</button>'+
+        '<button type="button" class="ic129-shelf-action" data-shelf-resource="layout">选择图型</button>';
+      gridBox.querySelectorAll("[data-shelf-resource]").forEach(btn=>{
+        btn.onclick=()=>{
+          const resource=btn.dataset.shelfResource;
+          if(resource==="assets"){
+            let node=CS.graph.nodes.find(n=>n.type==="asset");
+            if(!node)node=spawnShelfItem({kind:"asset"});
+            openAssetPickerModal(node);
+          }else{
+            let node=CS.graph.nodes.find(n=>n.type==="skill_params");
+            if(!node)node=spawnShelfItem({kind:"skill_params"});
+            openSkillFieldPickerModal(node,resource==="style"?"style1":"layout");
+          }
+        };
+      });
+      return;
+    }
+    if(activeShelfTab==="templates"){
+      const options=[["single","单图起步"],["ip_story","角色系列"],
+        ["style_ab","多画风横评"],["omnimedia","多尺寸输出"]];
+      gridBox.innerHTML='<p class="ic129-shelf-help">模板会带入合法连接；不会自动执行收费生成。</p>'+
+        options.map(p=>'<button type="button" class="ic129-shelf-action" data-shelf-template="'+p[0]+'">'+p[1]+'</button>').join("");
+      gridBox.querySelectorAll("[data-shelf-template]").forEach(btn=>{
+        btn.onclick=()=>{
+          const blueprint=btn.dataset.shelfTemplate;
+          if(!CS.graph.nodes.length){
+            pushUndo();CS.graph=E.createBlueprintGraph(blueprint,Catalog,window.HANDRAW_MOCK);
+            markActiveTabDirty();fullRenderCanvas();persistOpenTabs();fitView();
+          }else{
+            createWorkflowTab({title:btn.textContent,blueprint,makeActive:true,autoFit:true,switchToCanvas:true});
+          }
+        };
+      });
+      return;
+    }
 
     for (const grp of NODE_TOOLBOX_GROUPS) {
       if (!grp.items.length) continue;
@@ -10792,6 +12647,66 @@
 
 
   /* ======================== MINIMAP, TOP MULTI-TAB BAR & TOOLSTRIP ======================== */
+  // #111: pure camera changes must never rebuild the full minimap SVG.
+  // All node/layout/project updates still use renderMinimap(), which rebuilds
+  // cached bounds and miniature node elements from the authoritative graph.
+  function updateMinimapLensOnly(){
+    const map=DOM.minimap,meta=map?._mapMeta,lens=map?._lensEl;
+    if(!map||map.style.display==="none")return;
+    if(!meta||!lens?.isConnected||!DOM.viewport){
+      renderMinimap();return;
+    }
+    const vRect=DOM.viewport.getBoundingClientRect();
+    const values={
+      x:meta.offX+(-CS.vx/CS.vk-meta.minX)*meta.scale,
+      y:meta.offY+(-CS.vy/CS.vk-meta.minY)*meta.scale,
+      width:Math.max(18,(vRect.width/CS.vk)*meta.scale),
+      height:Math.max(14,(vRect.height/CS.vk)*meta.scale)
+    };
+    for(const [attr,value] of Object.entries(values)){
+      const next=value.toFixed(1);
+      if(lens.getAttribute(attr)!==next)lens.setAttribute(attr,next);
+    }
+    const zoom=map._zoomLabel;
+    if(zoom)zoom.textContent=`${Math.round(CS.vk*100)}%`;
+    meta.vRect=vRect;
+  }
+
+  // Pointer-drag fast path. Update only the moved miniature rectangles while
+  // the graph stays within the existing minimap bounds. Crossing those bounds
+  // falls back to full recomputation so the map never clips a moved card.
+  function renderMinimapMovedNodes(ids){
+    const map=DOM.minimap,meta=map?._mapMeta,rects=map?._miniRects;
+    if(!map||map.style.display==="none")return;
+    const nodes=CS.graph.nodes||[];
+    if(!meta||!rects||meta.nodeCount!==nodes.length){
+      renderMinimap();return;
+    }
+    const updates=[];
+    for(const id of new Set((ids||[]).map(String))){
+      const node=nodes.find(n=>String(n.id)===id),rect=rects.get(id);
+      if(!node||!rect?.isConnected||
+        node.x<meta.minX+120||node.y<meta.minY+120||
+        node.x+(node.w||320)>meta.maxX-120||
+        node.y+(node.h||260)>meta.maxY-120){
+        renderMinimap();return;
+      }
+      updates.push({node,rect});
+    }
+    for(const {node,rect} of updates){
+      const values={
+        x:meta.offX+(node.x-meta.minX)*meta.scale,
+        y:meta.offY+(node.y-meta.minY)*meta.scale,
+        width:Math.max(4,(node.w||320)*meta.scale),
+        height:Math.max(4,(node.h||240)*meta.scale)
+      };
+      for(const [attr,value] of Object.entries(values)){
+        const next=value.toFixed(1);
+        if(rect.getAttribute(attr)!==next)rect.setAttribute(attr,next);
+      }
+    }
+  }
+
   function renderMinimap() {
     if (!DOM.minimap) return;
     const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
@@ -10825,7 +12740,7 @@
     const lensW = Math.max(18, (vRect.width / CS.vk) * scale);
     const lensH = Math.max(14, (vRect.height / CS.vk) * scale);
 
-    DOM.minimap._mapMeta = { minX, minY, scale, offX, offY, vRect };
+    DOM.minimap._mapMeta = { minX, minY, maxX, maxY, scale, offX, offY, vRect, nodeCount:nodes.length };
 
     const rectsHtml = nodes
       .map((n) => {
@@ -10849,20 +12764,24 @@
                       : n.type === "asset"
                         ? "#2d8658"
                         : "#b74227";
-        return `<rect x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${rw.toFixed(1)}" height="${rh.toFixed(1)}" rx="2" fill="${fill}" opacity="0.84" />`;
+        return `<rect data-mini-node-id="${esc(n.id)}" x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${rw.toFixed(1)}" height="${rh.toFixed(1)}" rx="2" fill="${fill}" opacity="0.84" />`;
       })
       .join("");
 
     DOM.minimap.innerHTML = `
       <div class="ic-minimap-head">
         <span>缩略图 (${nodes.length})</span>
-        <span>${Math.round(CS.vk * 100)}%</span>
+        <span data-mini-zoom>${Math.round(CS.vk * 100)}%</span>
       </div>
       <svg width="${W}" height="${H}" style="display:block;">
         ${rectsHtml}
-        <rect x="${lensX.toFixed(1)}" y="${lensY.toFixed(1)}" width="${lensW.toFixed(1)}" height="${lensH.toFixed(1)}" fill="rgba(37,99,235,0.12)" stroke="var(--ic-select)" stroke-width="1.5" rx="3" />
+        <rect data-mini-lens="1" x="${lensX.toFixed(1)}" y="${lensY.toFixed(1)}" width="${lensW.toFixed(1)}" height="${lensH.toFixed(1)}" fill="rgba(37,99,235,0.12)" stroke="var(--ic-select)" stroke-width="1.5" rx="3" />
       </svg>
     `;
+    DOM.minimap._lensEl=DOM.minimap.querySelector("[data-mini-lens]");
+    DOM.minimap._zoomLabel=DOM.minimap.querySelector("[data-mini-zoom]");
+    DOM.minimap._miniRects=new Map([...DOM.minimap.querySelectorAll("[data-mini-node-id]")]
+      .map(el=>[el.getAttribute("data-mini-node-id"),el]));
   }
 
   function scrollActiveTabIntoView() {
@@ -11070,6 +12989,12 @@
       const commitRename = () => {
         if (targetTab && renameInp.value.trim()) {
           targetTab.title = renameInp.value.trim();
+          targetTab.editRevision = Number(targetTab.editRevision || 0) + 1;
+          targetTab.dirty = true;
+          if (targetTab.projectSaveState !== "conflict") {
+            targetTab.projectSaveState = "local_only";
+            void saveActiveProject(targetTab);
+          }
           persistOpenTabs();
         }
         CS.renamingTabId = null;
@@ -12436,25 +14361,37 @@
     }
 
     renderCreationModeBar();
+    renderDAGPanel();
     renderWorkbenchBar();
     renderCanvasToolstrip();
     renderFullPreviewStage();
     renderHistoryStage();
     renderWorkflowsStage();
+    renderProjectCenterStage();
     renderQuickStart();
 
     if (DOM.bottomRight) {
       const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
       const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
+      const activeSavedWorkflow = (CS.savedWorkflows || []).find((w) => w.id === curTab?.savedId && !w.isOfficialPreset);
+      const cloudSaveState = activeSavedWorkflow?.cloudSaveState || "";
+      const saveButtonText = cloudSaveState === "conflict" ? "冲突 · 另存副本" :
+        cloudSaveState === "error" ? "云端失败 · 重试" :
+        cloudSaveState === "saving" ? "同步中…" :
+        curTab?.dirty && curTab?.savedId ? "待同步" :
+        cloudSaveState === "local" ? "仅本机保存" :
+        cloudSaveState === "synced" ? "云端已保存" : "保存";
       DOM.bottomRight.style.display = (CS.stageView === "canvas" && !isShowingTemplateLib) ? "flex" : "none";
       if (isShowingTemplateLib) {
         DOM.bottomRight.innerHTML = "";
       } else {
         DOM.bottomRight.innerHTML = `
-        <button type="button" class="ic-canvas-save-btn ${curTab?.dirty ? "is-dirty" : ""}" id="bl-save-wf" title="保存当前工作流到「工作流」 (Ctrl+S)">
-          <span>保存</span>
+        <button type="button" class="ic-canvas-save-btn ${curTab?.dirty ? "is-dirty" : ""}" id="bl-save-wf" title="保存到工作流；冲突时只允许另存副本 (Ctrl+S)">
+          <span role="status">${saveButtonText}</span>
           ${curTab?.dirty ? `<span class="ic-save-dirty-dot" title="有未保存改动"></span>` : ""}
         </button>
+        <button type="button" class="ic-canvas-save-btn" id="bl-save-project"
+          title="项目自动同步与工作流模板保存相互独立">${projectStatusText(curTab)}</button>
         <div class="ic-float-pill">
           <button type="button" class="ic-icon-btn ${CS.minimapOpen ? "is-active" : ""}" id="bl-minimap">缩略图</button>
           <div class="ic-divider-v"></div>
@@ -12466,7 +14403,8 @@
       `;
         DOM.zoomPctBtn = DOM.bottomRight.querySelector("#bl-zoom-pct");
 
-        DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(false);
+        DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(cloudSaveState === "conflict");
+        DOM.bottomRight.querySelector("#bl-save-project").onclick = handleProjectStatusClick;
         DOM.bottomRight.querySelector("#bl-minimap").onclick = () => {
           CS.minimapOpen = !CS.minimapOpen;
           savePrefs();
@@ -12670,8 +14608,147 @@
     });
   }
 
+  // Canvas and simple editors read the same owner-scoped server Run/Items.
+  // View switches never call POST /generate, including multi-output graphs.
+  const canvasRunModels = new Map();
+  function getCanvasRunProjection(control) {
+    const runId = String(control?.data?.runId || control?.data?.studio2RunSnapshot?.runId || "");
+    if (!runId || !App.state?.loggedIn || !window.HandrawStudioCore) return null;
+    const key = activeCacheScope + ":" + runId, now = Date.now();
+    const previous = canvasRunModels.get(key);
+    if (previous?.loading ||
+        (previous && now - previous.requestedAt < (previous.model?.isTerminal ? 30000 : 5000)))
+      return previous?.model || null;
+    const entry = {requestedAt:now,loading:true,model:previous?.model || null};
+    canvasRunModels.set(key,entry);
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    fetch("/api/studio/runs/" + encodeURIComponent(runId), {
+      credentials:"include"
+    }).then(async response => {
+      const payload = await response.json();
+      if (!response.ok || !payload?.ok || !payload.run || !Array.isArray(payload.items) ||
+          String(payload.run.id || payload.run.runId || "") !== runId)
+        throw new Error("run_read_failed");
+      const projection = window.HandrawStudioCore.selectRunProjection(
+        payload.run,payload.items,{authoritativeSlots:payload.slots}
+      );
+      // The owner-scoped GET is the only source of confirmed item/media URLs.
+      // Keep each result linked to its original control, slot and V3 Item;
+      // rendering this read-only projection must not mutate Graph or publish.
+      const outputs = control?.data?.studio2RunSnapshot?.outputs || [];
+      const slots = Array.isArray(payload.slots) ? payload.slots.map(slot=>({
+        index:slot.slotIndex,status:slot.viewStatus,
+        imageUrl:slot.viewStatus==="success"?slot.imageUrl:"",
+        mediaId:slot.viewStatus==="success"?slot.mediaId:"",
+        runItemId:slot.itemId,error:slot.errorCode,
+        retryAllowed:slot.retryAllowed
+      })) : CanvasUI.slotSummary(payload.items, projection.total, payload.run.source || "web");
+      return {...projection,slots,
+        attempts:payload.attempts||[],billing:payload.billing||{},
+        recoveryRequired:Boolean(payload.projection?.recoveryRequired),
+        items:payload.items.filter(item=>item.status==="success" &&
+        item.mediaId && typeof item.imageUrl==="string" && item.imageUrl &&
+        ((item.imageUrl.startsWith("/") && !item.imageUrl.startsWith("//")) ||
+          item.imageUrl.startsWith("https://")))
+        .map(item=>({...item,slotId:outputs[Number(item.slotIndex)]?.slotId ||
+          outputs[Number(item.slotIndex)]?.outputId || ""}))};
+    }).then(model => {
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch ||
+          canvasRunModels.get(key) !== entry) return;
+      entry.model = model;
+      if (CS.stageView === "canvas") fullRenderCanvas();
+      if (!model.isTerminal) setTimeout(() => {
+        if (scope === activeCacheScope && epoch === cacheScopeEpoch &&
+            CS.stageView === "canvas") fullRenderCanvas();
+      },5200);
+    }).catch(error => {
+      if (scope !== activeCacheScope || epoch !== cacheScopeEpoch) return;
+      entry.error = String(error?.message || error);
+    }).finally(() => { entry.loading = false; });
+    return entry.model;
+  }
+
   // Quick-create shares the canvas graph and the existing guarded task runner.
   let quickBusy = null;
+  // Read-only projection from owner-scoped V3 Run and RunItems.
+  // A local display status is never the successful billing/media count.
+  const quickRunModels = new Map();
+  function getQuickRunProjection(parts) {
+    const runId=String(parts?.ctrl?.data?.runId||"");
+    const api=window.HandrawQuickSpec;
+    if(!runId||!api?.projectRun||!App.state?.loggedIn)return null;
+    const key=activeCacheScope+":"+runId, now=Date.now();
+    const previous=quickRunModels.get(key);
+    if(previous?.loading||
+       (previous&&now-previous.requestedAt<(previous.model?.isTerminal?30000:5000)))
+      return previous?.model||null;
+    const entry={requestedAt:now,loading:true,model:previous?.model||null};
+    quickRunModels.set(key,entry);
+    const scope=activeCacheScope,epoch=cacheScopeEpoch;
+    fetch("/api/studio/runs/"+encodeURIComponent(runId),{
+      credentials:"include"
+    }).then(async response=>{
+      const data=await response.json();
+      if(!response.ok||!data.ok)throw new Error(data?.error||"run_read_failed");
+      return api.projectRun(data);
+    }).then(model=>{
+      if(scope!==activeCacheScope||epoch!==cacheScopeEpoch||
+         quickRunModels.get(key)!==entry)return;
+      entry.model=model;
+      if(CS.stageView==="quick"&&parts.ctrl.data.runId===runId)renderQuickStart();
+      if(!model.isTerminal)setTimeout(()=>{
+        if(scope===activeCacheScope&&epoch===cacheScopeEpoch&&
+           CS.stageView==="quick"&&parts.ctrl.data.runId===runId)
+          renderQuickStart();
+      },5200);
+    }).catch(error=>{
+      if(scope!==activeCacheScope||epoch!==cacheScopeEpoch)return;
+      entry.error=String(error?.message||error);
+      // Network uncertainty is not a remote cancellation or refund.
+      if(CS.stageView==="quick")renderQuickStart();
+    }).finally(()=>{entry.loading=false});
+    return entry.model;
+  }
+
+  // #123: batch RunProjection reads the same V3 Run/Items as quick creation.
+  // No second state machine or speculative completion counter is allowed.
+  const batchRunModels=new Map();
+  function getBatchRunProjection(parts) {
+    const api=window.HandrawStudioSeries;
+    const snap=parts?.ctrl?.data?.studio2RunSnapshot;
+    const runId=String(parts?.ctrl?.data?.runId||snap?.runId||"");
+    if(!api||!snap?.outputs?.length||!runId||!App.state?.loggedIn)return null;
+    const key=activeCacheScope+":"+runId,now=Date.now();
+    const previous=batchRunModels.get(key);
+    if(previous?.loading||
+       (previous&&now-previous.requestedAt<(previous.model?.isTerminal?30000:5000)))
+      return previous?.model||null;
+    const entry={requestedAt:now,loading:true,model:previous?.model||null};
+    batchRunModels.set(key,entry);
+    const scope=activeCacheScope,epoch=cacheScopeEpoch;
+    fetch("/api/studio/runs/"+encodeURIComponent(runId),{
+      credentials:"include"
+    }).then(async response=>{
+      const data=await response.json();
+      if(!response.ok||!data.ok)throw Error(data.error||"run_read_failed");
+      return api.project(snap,data.run,data.items,data.slots||[]);
+    }).then(model=>{
+      if(scope!==activeCacheScope||epoch!==cacheScopeEpoch||
+         batchRunModels.get(key)!==entry)return;
+      entry.model=model;
+      if(CS.stageView==="batch"&&parts.ctrl.data.runId===runId)renderQuickStart();
+      if(!model.isTerminal)setTimeout(()=>{
+        if(scope===activeCacheScope&&epoch===cacheScopeEpoch&&
+           CS.stageView==="batch"&&parts.ctrl.data.runId===runId)
+          renderQuickStart();
+      },5200);
+    }).catch(error=>{
+      if(scope!==activeCacheScope||epoch!==cacheScopeEpoch)return;
+      entry.error=String(error?.message||error);
+      if(CS.stageView==="batch")renderQuickStart();
+    }).finally(()=>{entry.loading=false});
+    return entry.model;
+  }
 
   function generationCostText(count) {
     const qty = count != null && Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : null;
@@ -12747,7 +14824,11 @@
     const skills = nodes.filter((n) => n.type === "skill_params");
     const texts = nodes.filter((n) => n.type === "text_input");
     const assets = nodes.filter((n) => n.type === "asset");
-    if (controls.length !== 1 || loops.length !== 1 || skills.length !== 1) return null;
+    // An advanced graph must never be silently rewritten by the Batch form.
+    const supported = new Set(["output_control","loop","skill_params","text_input","asset","output_display"]);
+    if (nodes.some(n => !supported.has(n.type))
+        || controls.length !== 1 || loops.length !== 1 || skills.length !== 1
+        || texts.length > 1 || assets.length > 1) return null;
     const ctrl = controls[0];
     const loop = loops[0];
     const skill = skills[0];
@@ -12811,16 +14892,19 @@
     } else if (field === "ratio") {
       if (!/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(String(value)) || String(value).split(":").some((x) => Number(x) <= 0)) return;
       p.ctrl.data.ratio = String(value);
+      p.ctrl.data.ratioSource = "user";
     } else if (field === "mode") {
       const mode = value === "pure-image" ? "pure" : value;
       if (["graphic-text", "pure", "pure-image", "poster", "series"].includes(value)) {
-        p.ctrl.data.mode = mode;
-        const defaultRatio = mode === "poster" ? "9:16" : (mode === "graphic-text" || mode === "pure" || mode === "pure-image") ? "3:4" : p.ctrl.data.ratio;
-        p.ctrl.data.ratio = defaultRatio;
+        if (window.HandrawStudioCore) {
+          window.HandrawStudioCore.setMode(p.ctrl.data, mode);
+        } else {
+          p.ctrl.data.mode = mode;
+        }
       }
     } else if (field === "fusion") {
       p.skill.data.fusion = Boolean(value);
-      if (!p.skill.data.fusion) p.skill.data.style2 = "";
+      // Secondary style remains a disabled draft selection when fusion is off.
     } else if (field === "style1") {
       p.skill.data.style1 = String(value || "");
     } else if (field === "style2") {
@@ -12849,7 +14933,7 @@
       p.skill.data.sc022Pinyin = String(value || "");
     } else return;
     const tab = CS.tabs.find((t) => t.id === CS.activeTabId);
-    if (tab) tab.dirty = true;
+    if (tab) markActiveTabDirty();
     persistOpenTabs();
     if (CS.stageView === "quick") renderQuickStart();
   }
@@ -12862,6 +14946,15 @@
     ensureQuickTab();
     const p = getQuickParts();
     if (!p) return;
+    const adapter=typeof window!=="undefined"?window.HandrawQuickSpec:null;
+    if(adapter?.fork) {
+      // #100 resolved selected media and source; do not fetch first/cover.
+      adapter.fork(p,draft);
+      markActiveTabDirty();
+      persistOpenTabs();
+      if(CS.stageView==="quick")renderQuickStart();
+      return;
+    }
     const sd = p.skill.data;
     const td = p.text.data;
     const cd = p.ctrl.data;
@@ -12888,6 +14981,7 @@
     td.subjectHint = draft.subjectHint || extractedTheme || "";
 
     cd.ratio = draft.ratio || "3:4";
+    cd.ratioSource = draft.ratio ? "user" : "default";
     const forkMode = draft.mode === "pure-image" ? "pure" : (draft.mode || "graphic-text");
     cd.mode = ["graphic-text", "pure", "poster", "series"].includes(forkMode) ? forkMode : "graphic-text";
     cd.count = 1;
@@ -13094,6 +15188,14 @@
 
     const title = (draft.title || "").trim();
     const md = draft.markdown || "";
+    const before = targetArt ? {
+      articleTitle:targetArt.articleTitle,markdown:targetArt.markdown,
+      cards:JSON.parse(JSON.stringify(targetArt.cards || [])),
+      style1:targetArt.style1,layout:targetArt.layout,
+      styleRef:targetArt.styleRef,layoutRef:targetArt.layoutRef,
+      referenceMedia:targetArt.referenceMedia,
+      coverRatio:targetArt.coverRatio,inlineRatio:targetArt.inlineRatio
+    } : null;
 
     if (!targetArt && !title && !md) {
       return null;
@@ -13116,11 +15218,15 @@
         linkedTabId: null,
         linkedPlanNodeId: null,
         style1: draft.styleId || "FA-001",
-        layout: "IG-001",
+        layout: draft.layoutId || "IG-001",
+        styleRef:draft.styleRef||null,layoutRef:draft.layoutRef||null,
+        referenceItems:draft.referenceItems||[],referenceMedia:draft.referenceMedia||[],
         coverRatio: draft.coverRatio || "2.35:1",
         inlineRatio: draft.inlineRatio || "4:3",
-        runCount: 0
+        runCount: 0,
+        documentRevision:0,planRevision:0
       };
+      markArticleProjectChanged(targetArt,{document:true});
       CS.myArticles.unshift(targetArt);
       CS.activeArticleId = newId;
     } else {
@@ -13131,6 +15237,10 @@
         targetArt.cards = draft.cards;
       }
       targetArt.style1 = draft.styleId || targetArt.style1 || "FA-001";
+      targetArt.layout = draft.layoutId || targetArt.layout || "IG-001";
+      targetArt.styleRef=draft.styleRef||null;targetArt.layoutRef=draft.layoutRef||null;
+      targetArt.referenceItems=draft.referenceItems||[];
+      targetArt.referenceMedia=draft.referenceMedia||[];
       targetArt.coverRatio = draft.coverRatio || targetArt.coverRatio || "2.35:1";
       targetArt.inlineRatio = draft.inlineRatio || targetArt.inlineRatio || "4:3";
       if (bumpTime) {
@@ -13140,6 +15250,16 @@
       draft.isNewDraft = false;
     }
 
+    if (before && ArticleProject109) {
+      const documentChanged = ArticleProject109.articleChanged(before,targetArt);
+      const planChanged = ArticleProject109.planChanged(before,targetArt);
+      if (documentChanged || planChanged)
+        markArticleProjectChanged(targetArt,{document:documentChanged,plan:planChanged});
+    }
+    draft.documentRevision = Number(targetArt.documentRevision || 0);
+    draft.planRevision = Number(targetArt.planRevision || 0);
+    draft.projectId = targetArt.projectId || null;
+    draft.projectRevision = Number(targetArt.projectRevision || 0);
     // Text-only save: never rebuild cards here. Cards are rebuilt only by explicit planning.
     if (targetArt.linkedPlanNodeId) {
       let hostGraph = null;
@@ -13162,8 +15282,13 @@
       if (hostGraph) {
         const planNode = hostGraph.nodes.find((n) => n.id === planNodeId);
         if (planNode && planNode.data) {
-          planNode.data.articleTitle = targetArt.articleTitle;
-          planNode.data.markdown = targetArt.markdown;
+          planNode.data.articleId = targetArt.id;
+          planNode.data.documentId = targetArt.id;
+          planNode.data.documentRevision = Number(targetArt.documentRevision || 0);
+          planNode.data.slotRefs = (targetArt.cards || []).map(c => ({
+            slotId:c.slotId || c.id,anchorId:c.anchorId || "card-anchor-" + (c.slotId || c.id)
+          }));
+          // Never copy ArticleDocument.markdown into a GraphPatch source.
           targetArt.linkedTabId = hostTabId;
           if (hostTabId === CS.activeTabId) markActiveTabDirty();
         }
@@ -13866,6 +15991,9 @@
       markdown: "",
       cards: [],
       styleId: "FA-001",
+      layoutId: "IG-001",
+      styleRef:null, layoutRef:null,
+      referenceItems:[], referenceMedia:[],
       coverRatio: "2.35:1",
       inlineRatio: "4:3",
       isNewDraft: true
@@ -13880,9 +16008,19 @@
       markdown: art.markdown || "",
       cards: Array.isArray(art.cards) ? JSON.parse(JSON.stringify(art.cards)) : [],
       styleId: art.style1 || art.styleId || "FA-001",
+      layoutId: art.layout || art.layoutId || "IG-001",
+      styleRef:art.styleRef||null,layoutRef:art.layoutRef||null,
+      referenceItems:JSON.parse(JSON.stringify(art.referenceItems||[])),
+      referenceMedia:JSON.parse(JSON.stringify(art.referenceMedia||[])),
       coverRatio: art.coverRatio || "2.35:1",
       inlineRatio: art.inlineRatio || "4:3",
-      isNewDraft: false
+      isNewDraft: false,
+      documentRevision:Number(art.documentRevision || 0),
+      planRevision:Number(art.planRevision || 0),
+      planId:art.planId || "",
+      projectId:art.projectId || null,
+      projectRevision:Number(art.projectRevision || 0),
+      projectSaveState:art.projectSaveState || "local_only"
     };
   }
 
@@ -14101,6 +16239,7 @@
 
   function renderUnifiedArticleCardsHtml(draft) {
     const target = resolveArticleTarget(draft.id);
+    resumeArticleCardRuns(draft.id,target,draft);
     const cards = sortPlanCardsInDocOrder(target?.planNode?.data?.cards || []);
     const blocks = E.parseArticleReadonlyBlocks(draft.markdown || "");
     const blockIndexes = blocks.map((b) => b.idx).sort((a, b) => a - b);
@@ -14171,7 +16310,7 @@
       name: "手绘钢笔淡彩",
       image: "/images/individual/FA/FA-001.webp",
     };
-    const cards = resolveArticleTarget(art.id)?.planNode?.data?.cards || [];
+    const cards = art.cards || resolveArticleTarget(art.id)?.planNode?.data?.cards || [];
 
     DOM.previewStage.innerHTML = `
       <div class="ic-wechat-editor-root ic-article-preview-root">
@@ -14805,6 +16944,97 @@
     commitArticleTargetChanges(target, { bumpTime: false });
   }
 
+  // Article generation recovery is a read-only view of the V3 ledger.
+  // Each generated card owns a stable slotId/runId; the server owns item/media
+  // and authorization. No second submit, project publish or anchor rewriting.
+  const articleRunReads = new Map();
+  function resumeArticleCardRuns(articleId, target, draft) {
+    if (!App.state?.loggedIn || !articleId || !target) return;
+    const cards = target.planNode?.data?.cards || target.art?.cards || [];
+    const runIds = [...new Set(cards.map(c=>String(c?.runId||"")).filter(Boolean))];
+    if (!runIds.length) return;
+    const scope = activeCacheScope, epoch = cacheScopeEpoch;
+    const documentToken = window.HandrawStudioIntegration?.documentToken(draft);
+    for (const runId of runIds) {
+      const key = scope + ":" + articleId + ":" + runId;
+      const previous = articleRunReads.get(key);
+      if (previous?.loading || previous && Date.now() - previous.started < (previous.done ? 30000 : 5000)) continue;
+      const entry = {loading:true,started:Date.now(),done:false};
+      articleRunReads.set(key,entry);
+      fetch("/api/studio/runs/" + encodeURIComponent(runId), {
+        credentials:"include"
+      }).then(async response => {
+        const payload = await response.json();
+        if (!response.ok || !payload?.ok || !payload.run || !Array.isArray(payload.items) ||
+            String(payload.run.id || payload.run.runId || "") !== runId)
+          throw new Error("run_read_failed");
+        return payload;
+      }).then(payload => {
+        if (scope !== activeCacheScope || epoch !== cacheScopeEpoch ||
+            articleRunReads.get(key) !== entry || CS.activeArticleId !== articleId) return;
+        const live = CS.articleEditorDraft?.id === articleId ? CS.articleEditorDraft : null;
+        if (documentToken && !window.HandrawStudioIntegration.sameDocument(documentToken,live)) return;
+        const currentTarget = resolveArticleTarget(articleId);
+        const currentCards = currentTarget?.planNode?.data?.cards || currentTarget?.art?.cards || [];
+        let changed = false;
+        for (const card of currentCards) {
+          if (!card || String(card.runId || "") !== runId) continue;
+          const slotIndex = Number.isInteger(card.batchIndex) ? card.batchIndex : 0;
+          const candidates = payload.items.filter(item =>
+            Number(item.slotIndex) === slotIndex);
+          const verified = Array.isArray(payload.slots)
+            ? payload.slots.find(s => Number(s.slotIndex) === slotIndex) : null;
+          const item = (!verified || verified.viewStatus === "success")
+            ? candidates.find(it => it.status === "success" && it.mediaId && it.imageUrl)
+            : null;
+          if (item && (!card.imageUrl || card.imageUrl === item.imageUrl)) {
+            if (card.imageUrl !== item.imageUrl || card.runItemId !== item.id ||
+                card.mediaId !== item.mediaId || card.status !== "done") {
+              card.imageUrl = item.imageUrl;
+              card.runItemId = item.id;
+              card.mediaId = item.mediaId;
+              card.status = "done";
+              changed = true;
+            }
+          } else if (!card.imageUrl &&
+            (verified ? ["failed","cancelled"].includes(verified.viewStatus)
+              : candidates.length && candidates.every(it =>
+                it.status === "failed" || it.status === "cancelled"))) {
+            if (card.status !== "error") {card.status = "error";changed=true;}
+          }
+        }
+        entry.done = window.HandrawStudioCore.selectRunProjection(
+          payload.run,payload.items,{authoritativeSlots:payload.slots}).isTerminal;
+        if (entry.done && currentTarget?.planNode?.data?.status === "generating" &&
+            currentCards.every(c => c.status !== "generating")) {
+          currentTarget.planNode.data.status = "ready";
+          changed = true;
+        }
+        if (changed) {
+          // Modify only the selected card's result, never markdown, anchor,
+          // plan version or unrelated cards.
+          if (live?.cards) {
+            for (const local of live.cards) {
+              const authoritative = currentCards.find(c=>c.id === local.id);
+              if (authoritative && authoritative !== local && authoritative.runId === local.runId) {
+                local.imageUrl = authoritative.imageUrl;
+                local.runItemId = authoritative.runItemId;
+                local.mediaId = authoritative.mediaId;
+                local.status = authoritative.status;
+              }
+            }
+          }
+          commitArticleTargetChanges(currentTarget,{bumpTime:false});
+          if (CS.stageView === "preview" && CS.articleSubView === "editor")
+            renderFullPreviewStage();
+        }
+      }).catch(error => {
+        if (scope === activeCacheScope && epoch === cacheScopeEpoch)
+          entry.error = String(error?.message || error);
+      }).finally(() => {entry.loading=false;});
+    }
+  }
+
   function renderArticleEditorPage(sortedArticles) {
     const draft = CS.articleEditorDraft || {
       title: "",
@@ -14857,10 +17087,13 @@
     const planDisabled = isGenerating || isPlanning;
 
     const styleObj = Catalog.resourceMap?.get(draft.styleId) || {
-      id: draft.styleId || "FA-001",
-      name: "手绘钢笔淡彩",
-      image: "/images/individual/FA/FA-001.webp"
+      id:draft.styleId || "未选择",name:"资源不可用，请重新选择",image:""
     };
+    const layoutObj = Catalog.resourceMap?.get(draft.layoutId) || {
+      id:draft.layoutId || "未选择",name:"资源不可用，请重新选择"
+    };
+    const articleResourceCheck = window.HandrawStudioArticlePicker105
+      ?.validateForExecution(draft,Catalog,{isUnlocked:(id,item)=>S.isUnlocked(id,item)});
 
     if (!draft._editorToken) {
       draft._editorToken = E.uid("ed");
@@ -14869,7 +17102,9 @@
 
     // Construct #art-plan-summary HTML
     let summaryHtml = "";
-    const showUndo = Boolean(CS.articlePlanUndoState && CS.articlePlanUndoState.expireAt > Date.now());
+    const showUndo = Boolean(CS.articlePlanUndoState &&
+      (CS.articlePlanUndoState.ai === true ||
+       CS.articlePlanUndoState.expireAt > Date.now()));
     const undoButtonHtml = showUndo
       ? '<button type="button" class="btn btn-sm" id="art-plan-undo" style="margin-left:auto;text-decoration:underline;background:none;border:none;cursor:pointer;color:var(--ink-strong,#1f1b16);font-weight:700;">撤销</button>'
       : "";
@@ -14878,7 +17113,7 @@
       summaryHtml = `
         <div id="art-plan-summary" class="ic-art-summary-loading" role="status" tabindex="-1">
           <span class="art-spinner ic-art-spin-icon" style="margin-right:4px;"></span>
-          <span>正在调用手绘 Skill 分析文章结构，约 10–30 秒…</span>
+          <span>正在检索已授权资源并请求 AI 可审阅方案（不会在此步骤扣费生图）…</span>
           <button type="button" class="btn btn-sm" id="art-plan-cancel" style="margin-left:auto;">取消</button>
         </div>
       `;
@@ -15204,6 +17439,19 @@
                 </button>
               </div>
 
+              <!-- #105: shared catalog and reference Pickers -->
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">图型:</span>
+                <button type="button" class="btn btn-sm" id="editor-layout-picker" aria-label="选择文章配图图型">
+                  <span id="editor-layout-id">${esc(layoutObj.id)}</span> · <span id="editor-layout-name">${esc(layoutObj.name||layoutObj.id)}</span> ▾
+                </button>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <button type="button" class="btn btn-sm" id="editor-reference-picker" aria-label="选择文章参考素材">
+                  参考图 <span id="editor-reference-count">${(draft.referenceItems||draft.referenceMedia||[]).length}</span> / 6 ▾
+                </button>
+              </div>
+              ${articleResourceCheck && !articleResourceCheck.ok ? '<span id="editor-resource-warning" role="alert" style="font-size:11px;color:#b42318;">'+esc(articleResourceCheck.message)+' · '+esc(articleResourceCheck.id||"请修复选择")+'</span>' : ""}
               <!-- Cover Aspect Ratio Selector -->
               <div style="display:flex;align-items:center;gap:6px;">
                 <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">封面画幅:</span>
@@ -15278,6 +17526,8 @@
     const coverSel = DOM.previewStage.querySelector("#editor-cover-ratio");
     const inlineSel = DOM.previewStage.querySelector("#editor-inline-ratio");
     const stylePickerBtn = DOM.previewStage.querySelector("#editor-style-picker");
+    const layoutPickerBtn = DOM.previewStage.querySelector("#editor-layout-picker");
+    const referencePickerBtn = DOM.previewStage.querySelector("#editor-reference-picker");
     const replaceInp = DOM.previewStage.querySelector("#editor-file-replace-inp");
     const planBtn = DOM.previewStage.querySelector("#editor-btn-plan");
     const togglePreviewBtn = DOM.previewStage.querySelector("#editor-switch-preview, #editor-btn-toggle-preview");
@@ -15340,6 +17590,23 @@
       if (!el) return;
       const retry = DOM.previewStage.querySelector("#editor-sync-retry");
       const remote = Boolean(App.state?.serverBacked && App.state?.loggedIn);
+      const projectArt = findArticleById(draft.id);
+      const projectState = projectArt?.projectSaveState || "";
+      const isProject = Boolean(projectArt?.projectId || projectArt?.projectPending);
+      if (isProject) {
+        if (retry) {
+          retry.hidden = !remote || !["error","conflict","local_only","dirty"].includes(projectState);
+          retry.textContent = projectState === "conflict" ? "查看版本冲突" : "重试云端同步";
+        }
+        el.textContent = !remote ? "已保存在本机 · 登录后同步" :
+          projectState === "synced" ? "文章已云端确认 · 版本 "+projectArt.projectRevision :
+          projectState === "conflict" ? "文章版本冲突 · 本机稿已保留" :
+          projectState === "saving" ? "文章同步云端中…" :
+          projectState === "error" ? "文章已在本机 · 云端同步失败" :
+          projectState === "dirty" ? "本机写入未确认 · 请勿关闭" :
+          "文章已保存到本机 · 等待同步";
+        return;
+      }
       if (retry) {
         retry.hidden = !remote || !["failed", "conflict"].includes(_articlesSyncStatus);
         retry.textContent = _articlesSyncStatus === "conflict" ? "恢复为新文章" : "重试云端同步";
@@ -15355,6 +17622,12 @@
     };
     const syncRetryBtn = DOM.previewStage.querySelector("#editor-sync-retry");
     if (syncRetryBtn) syncRetryBtn.onclick = () => {
+      const art=findArticleById(draft.id);
+      if (art && (art.projectId || art.projectPending)) {
+        if (art.projectSaveState === "conflict") void reviewArticleProjectConflict109(art);
+        else void flushArticleProject109(art);
+        return;
+      }
       if (_articlesCloudConflict) {
         restoreArticleConflictBackup();
         return;
@@ -15585,29 +17858,58 @@
       };
     });
 
-    if (stylePickerBtn) {
-      stylePickerBtn.onclick = () => {
-        S.openAssetPickerModal({
-          kind: "style",
-          currentId: draft.styleId || "FA-001",
-          onSelect: (id) => {
-            if (!isCurrentEditor()) return;
-            draft.styleId = id;
-            syncArticleEditorDraftToHistory(draft);
-            const res = Catalog.resourceMap?.get(id);
-            const thumbEl = DOM.previewStage.querySelector("#editor-style-thumb");
-            const idEl = DOM.previewStage.querySelector("#editor-style-id");
-            const nameEl = DOM.previewStage.querySelector("#editor-style-name");
-            if (thumbEl && res?.image) {
-              thumbEl.src = res.image;
-              thumbEl.style.display = "block";
+    const selectArticleResource = (field) => {
+      const adapter=window.HandrawStudioArticlePicker105;
+      if(!adapter){toast("统一资源选择器未加载，请刷新后重试");return;}
+      try {
+        openSkillFieldPickerModal(null,field,{
+          current:field==="style1"?draft.styleId:draft.layoutId,
+          title:field==="style1"?"文章画风 · 统一资源目录":"文章图型 · 统一资源目录",
+          onPick:(id,ref)=>{
+            if(!isCurrentEditor())return;
+            const result=adapter.applyResource(draft,field,id,ref);
+            if(!result.ok){toast(result.message+"，请选择有效画风/图型");return;}
+            commitSync({bumpTime:true});
+            const res=Catalog.resourceMap?.get(id);
+            if(field==="style1"){
+              const thumb=DOM.previewStage.querySelector("#editor-style-thumb");
+              if(thumb){thumb.src=res?.image||"";thumb.style.display=res?.image?"block":"none";}
+              const idEl=DOM.previewStage.querySelector("#editor-style-id");
+              const nameEl=DOM.previewStage.querySelector("#editor-style-name");
+              if(idEl)idEl.textContent="#"+id;
+              if(nameEl)nameEl.textContent=res?.name||id;
+            }else{
+              const idEl=DOM.previewStage.querySelector("#editor-layout-id");
+              const nameEl=DOM.previewStage.querySelector("#editor-layout-name");
+              if(idEl)idEl.textContent=id;
+              if(nameEl)nameEl.textContent=res?.name||id;
             }
-            if (idEl) idEl.textContent = `#${id}`;
-            if (nameEl) nameEl.textContent = res?.name || id;
+            DOM.previewStage.querySelector("#editor-resource-warning")?.remove();
           }
         });
-      };
-    }
+      }catch(error){console.error("Article shared Picker",error);
+        toast("统一资源选择器暂不可用，请刷新后重试");}
+    };
+    if(stylePickerBtn)stylePickerBtn.onclick=()=>selectArticleResource("style1");
+    if(layoutPickerBtn)layoutPickerBtn.onclick=()=>selectArticleResource("layout");
+    if(referencePickerBtn)referencePickerBtn.onclick=()=>{
+      const adapter=window.HandrawStudioArticlePicker105;
+      if(!adapter){toast("参考素材选择器未加载");return;}
+      openAssetPickerModal({
+        currentRefs:draft.referenceItems||[],maxCount:6,
+        title:"文章参考素材（我的图库 / 官方示例 / 上传）",
+        onConfirm:(items)=>{
+          if(!isCurrentEditor())return;
+          const result=adapter.normalizeAssetSelection(items);
+          if(!result.ok){toast(result.message+"；私人图片须先上传并确认归属");return;}
+          draft.referenceItems=result.referenceItems;
+          draft.referenceMedia=result.referenceMedia;
+          commitSync({bumpTime:true});
+          const count=DOM.previewStage.querySelector("#editor-reference-count");
+          if(count)count.textContent=String(result.referenceItems.length);
+        }
+      });
+    };
 
     if (replaceInp) {
       replaceInp.onchange = async (e) => {
@@ -15617,6 +17919,7 @@
         replaceInp.disabled = true;
         collectDraftFromInputs(draft);
         const savedSnapshot = { title: draft.title, markdown: draft.markdown };
+        const importVersion = window.HandrawStudioIntegration?.documentToken(draft);
         toast("正在解析文档…");
         const finishReplace = () => {
           replaceInp.disabled = false;
@@ -15636,6 +17939,26 @@
             if (!isCurrentEditor()) { toast("编辑器已切换，未覆盖其他文章"); return; }
             const okTitle = res && typeof res.title === "string" ? res.title : savedSnapshot.title;
             const okMarkdown = res && typeof res.markdown === "string" ? res.markdown : savedSnapshot.markdown;
+            // Normal import replaces immediately. Only a *concurrent edit*
+            // between file selection and server parsing requires a decision.
+            if (importVersion && !window.HandrawStudioIntegration.sameDocument(importVersion,draft)) {
+              const approved = await new Promise(resolve => S.openModal({
+                title:"导入期间正文已被修改",
+                sizeClass:"modal-medium",
+                html:'<p>新的正文已在本机编辑。是否明确使用导入文档替换？取消会保留当前稿和图卡。</p>'+
+                  '<div style="display:flex;gap:8px;justify-content:flex-end;">'+
+                  '<button type="button" class="btn btn-sm" id="article109-import-keep">保留当前正文</button>'+
+                  '<button type="button" class="btn btn-sm btn-primary" id="article109-import-replace">使用导入文档覆盖</button></div>',
+                onMount(root) {
+                  root.querySelector("#article109-import-keep").onclick=()=>{S.closeModal();resolve(false);};
+                  root.querySelector("#article109-import-replace").onclick=()=>{S.closeModal();resolve(true);};
+                }
+              }));
+              if (!approved || !isCurrentEditor()) {
+                toast("已保留编辑期间的新正文，导入结果没有覆盖");
+                return;
+              }
+            }
             draft.title = okTitle;
             draft.markdown = okMarkdown;
 
@@ -15708,11 +18031,22 @@
           purpose: c.purpose || (c.role === "cover" ? "确立整篇文章的视觉主旨" : "在章节间提供阅读提示")
         })
       );
+      const templateAnchors = () => (draft.cards || target?.planNode?.data?.cards ||
+        target?.art?.cards || []).map(c => ({slotId:c.slotId || c.id,
+        anchorId:c.anchorId || "",afterBlockIdx:c.afterBlockIdx ?? -1,
+        anchorText:c.anchorText || ""}));
+      const templateDocument = window.HandrawStudioIntegration?.documentToken(draft,templateAnchors());
       const review = await window.HandrawArticleReview.reviewPlan(templateCards, {
         source: "template", articleType: "knowledge",
         existingCards: draft.cards || target?.planNode?.data?.cards || target?.art?.cards || []
       });
       if (!review.approved || !isCurrentEditor()) return;
+      const live = CS.articleEditorDraft?.id === draft.id ? CS.articleEditorDraft : draft;
+      if (templateDocument && !window.HandrawStudioIntegration.sameDocument(
+        templateDocument,live,templateAnchors())) {
+        toast("正文已更新，旧章节模板未应用；原有图卡及锚点保持不变");
+        return;
+      }
       const oldCardsBackup = JSON.parse(
         JSON.stringify(target?.planNode?.data?.cards || target?.art?.cards || [])
       );
@@ -15741,6 +18075,54 @@
       CS.articleDocReplacedNotice = false;
       CS.articleIsPlanning = true;
       const reqArticleId = draft.id;
+      const articleBridge = window.HandrawStudioIntegration;
+      const currentPlanAnchors = () => {
+        const live = CS.articleEditorDraft?.id === reqArticleId
+          ? CS.articleEditorDraft : draft;
+        const cards = live?.cards || target?.planNode?.data?.cards || target?.art?.cards || [];
+        return cards.map(c => ({slotId:c.slotId || c.id,anchorId:c.anchorId || "",
+          afterBlockIdx:c.afterBlockIdx ?? -1,anchorText:c.anchorText || ""}));
+      };
+      const planDocumentAtStart = articleBridge?.documentToken(draft,currentPlanAnchors());
+      const isPlanDocumentCurrent = () => {
+        const live = CS.articleEditorDraft?.id === reqArticleId
+          ? CS.articleEditorDraft : draft;
+        return !articleBridge || articleBridge.sameDocument(
+          planDocumentAtStart,live,currentPlanAnchors());
+      };
+      const rejectStalePlan = () => {
+        if (isPlanDocumentCurrent()) return false;
+        CS.articlePlanError = {
+          text:"文章正文在规划过程中已修改，旧方案未应用；请按当前正文重新规划",
+          canRetry:true,canTemplate:false
+        };
+        // Never offer applying a stale AI proposal. Show the version difference
+        // and let the user retain the new draft or re-run against it.
+        const currentDoc=CS.articleEditorDraft?.id===reqArticleId?CS.articleEditorDraft:draft;
+        S.openModal({
+          title:"AI 规划与最新正文版本不同",
+          sizeClass:"modal-wide",
+          html:'<p>旧方案未应用，既有图卡和锚点未修改。</p>'+
+            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">'+
+            '<section><strong>开始规划时的正文</strong><pre style="white-space:pre-wrap;max-height:180px;overflow:auto;">'+
+            esc(String(planDocumentAtStart?.markdown||"").slice(0,3000))+'</pre></section>'+
+            '<section><strong>当前正文</strong><pre style="white-space:pre-wrap;max-height:180px;overflow:auto;">'+
+            esc(String(currentDoc?.markdown||"").slice(0,3000))+'</pre></section></div>'+
+            '<div style="display:flex;gap:8px;justify-content:flex-end;">'+
+            '<button type="button" class="btn btn-sm" id="article109-stale-keep">保留当前正文和原图卡</button>'+
+            '<button type="button" class="btn btn-sm btn-primary" id="article109-stale-replan">按新正文重新规划</button></div>',
+          onMount(root) {
+            root.querySelector("#article109-stale-keep").onclick=()=>S.closeModal();
+            root.querySelector("#article109-stale-replan").onclick=()=>{
+              S.closeModal();
+              CS.articleIsPlanning=false;
+              void executePlan();
+            };
+          }
+        });
+        toast("正文已更新，过期规划结果已拒绝，未覆盖原图卡");
+        return true;
+      };
       const controller = new AbortController();
       CS.articlePlanAbortController = controller;
       const timeoutId = setTimeout(() => {
@@ -15750,11 +18132,9 @@
       // In-place loading state (spec 2.3) without tearing down current editor instance
       const paper = DOM.previewStage?.querySelector("#art-editor-paper");
       if (paper) paper.setAttribute("aria-busy", "true");
-      getSegTextareas().forEach((t) => (t.readOnly = true));
-      DOM.previewStage?.querySelectorAll(".ic-art-card").forEach((c) => {
-        c.style.opacity = ".5";
-        c.style.pointerEvents = "none";
-      });
+      // Planning runs on a captured document revision. Keep the body
+      // editable; a stale asynchronous response is rejected, never forced
+      // into the user's newer text.
       if (planBtn) {
         planBtn.disabled = true;
         planBtn.setAttribute("aria-busy", "true");
@@ -15797,20 +18177,42 @@
         }));
         const charCount = String(draft.markdown || "").length;
 
-        const resp = await fetch("/api/studio/article-plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            articleId: draft.id || CS.activeArticleId || "",
-            title: draft.title || "",
-            blocks: reqBlocks,
-            charCount,
-            styleId: draft.styleId || "FA-001",
-            coverRatio: draft.coverRatio || "2.35:1",
-            inlineRatio: draft.inlineRatio || "4:3",
-            includeCover: true
+        const AI=window.HandrawStudioAIPlan;
+        if(!AI)throw Object.assign(new Error("ai_unavailable"),{code:"ai_unavailable"});
+        const oldCards=draft.cards||target?.planNode?.data?.cards||target?.art?.cards||[];
+        const candidateBlocks=reqBlocks.filter(x=>
+          ["p","h2","h3","ul","blockquote"].includes(x.kind)&&String(x.text||"").trim());
+        const planCount=Math.min(7,Math.max(2,
+          Math.min(candidateBlocks.length+1,Math.ceil(charCount/1000)+2)));
+        const baseRevision=Number.isInteger(draft.documentRevision)?draft.documentRevision:
+          Number.isInteger(draft.revision)?draft.revision:0;
+        const planRevision=Number(target?.planNode?.data?.planRevision||0);
+        const aiCurrentSpec={
+          style:draft.styleId?{id:draft.styleId,type:"style"}:null,
+          layout:draft.layoutId?{id:draft.layoutId,type:"layout"}:null,
+          ratio:draft.coverRatio||"2.35:1",ratioSource:draft.coverRatioSource||"default",
+          lockedFields:draft.lockedFields||[],userOverrides:draft.userOverrides||[]
+        };
+        const aiCurrentPlan={slots:oldCards.map((c,i)=>({
+          slotId:c.slotId||c.id,order:i,subject:c.subject||"",
+          overrides:{...(c.layoutId?{layout:{id:c.layoutId,type:"layout"}}:{}),
+            ...(c.ratio?{ratio:c.ratio}:{})},
+          lockedFields:c.lockedFields||[],userOverrides:c.userOverrides||[],
+          referenceMedia:c.referenceMedia||[]
+        }))};
+        const resp=await fetch("/api/studio/ai-plan",{
+          method:"POST",credentials:"include",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            kind:"article",subject:draft.title||draft.markdown?.slice(0,160)||"",
+            title:draft.title||"",count:planCount,
+            baseRevision,planRevision,blocks:reqBlocks,
+            currentSlots:aiCurrentPlan.slots.map(c=>({slotId:c.slotId})),
+            current:{styleId:draft.styleId||"",layoutId:draft.layoutId||"",
+              ratio:draft.coverRatio||""},
+            lockedFields:aiCurrentSpec.lockedFields
           }),
-          signal: controller.signal
+          signal:controller.signal
         });
         clearTimeout(timeoutId);
 
@@ -15855,15 +18257,28 @@
           }
 
           CS.articlePlanError = {
-            text: `规划失败：${errMsg || resp.status}，正文和配图位都没有改动`,
+            text: `规划失败：${AI.message(errCode) || errMsg || resp.status}，正文和配图位都没有改动`,
             canRetry: true,
-            canTemplate: true
+            canTemplate: false
           };
           renderFullPreviewStage();
           return;
         }
 
         const data = await resp.json();
+        // A model response cannot overwrite a later ArticleDocument.
+        if (rejectStalePlan()) { renderFullPreviewStage(); return; }
+        const progress=DOM.previewStage?.querySelector("#art-plan-summary span:nth-child(2)");
+        if(progress)progress.textContent="正在验证图卡、原文段落锚点和已锁定参数…";
+        const report=AI.review(data,{kind:"article",baseRevision,planRevision,
+          currentSpec:aiCurrentSpec,currentPlan:aiCurrentPlan,catalog:Catalog,
+          isUnlocked:(id,item)=>S.isUnlocked(id,item)});
+        const decision=await AI.confirmDifferences(report,{title:"审阅文章 AI 方案差异"});
+        if(!decision.approved || rejectStalePlan()){renderFullPreviewStage();return;}
+        if(Number(target?.planNode?.data?.planRevision||0)!==planRevision){
+          toast("审阅期间文章方案已经变化，未覆盖原图卡");return;
+        }
+        const legacyPlan=AI.articleLegacy(report);
 
         const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
           withPresetAssets: false
@@ -15877,17 +18292,26 @@
           tmpCtrl.data.inlineRatio = draft.inlineRatio || "4:3";
         }
 
-        const aiCards = E.buildArticlePlanFromAi(data, {
-          ctrlNode: tmpCtrl,
-          graph: tmpGraph,
-          catalog: Catalog,
-          coverRatio: draft.coverRatio || "2.35:1",
-          inlineRatio: draft.inlineRatio || "4:3"
+        // Card prompts are derived from the *effective reviewed* recipe,
+        // never from a sample blueprint's default FA-001 / IG-001 options.
+        const selectedPatch=AI.approvedDelta(report,decision.keys).spec;
+        const selectedStyle=selectedPatch.style?.id||draft.styleId||"";
+        const selectedLayout=selectedPatch.layout?.id||draft.layoutId||"";
+        const tmpSkill=tmpGraph.nodes.find(n=>n.type==="skill_params");
+        if(tmpSkill){
+          tmpSkill.data=tmpSkill.data||{};
+          tmpSkill.data.style1=selectedStyle;
+          tmpSkill.data.layout=selectedLayout;
+        }
+        const suggestedCards=E.buildArticlePlanFromAi(legacyPlan,{
+          ctrlNode:tmpCtrl,graph:tmpGraph,catalog:Catalog,
+          coverRatio:draft.coverRatio||"2.35:1",
+          inlineRatio:draft.inlineRatio||"4:3"
         });
+        const aiCards=AI.mergeArticleCards(report,oldCards,suggestedCards,decision.keys);
 
         const review = await window.HandrawArticleReview.reviewPlan(aiCards, {
-          source: data.source, articleType: data.articleType,
-          existingCards: draft.cards || target?.planNode?.data?.cards || target?.art?.cards || []
+          source:"model",articleType:"knowledge",existingCards:oldCards
         });
         if (!review.approved) {
           CS.articleIsPlanning = false;
@@ -15896,29 +18320,44 @@
           return;
         }
         if (CS.activeArticleId !== reqArticleId || !isCurrentEditor()) return;
+        if (rejectStalePlan()) { renderFullPreviewStage(); return; }
         const oldCardsBackup = JSON.parse(
           JSON.stringify(draft.cards || target?.planNode?.data?.cards || target?.art?.cards || [])
         );
-        CS.articlePlanUndoState = {
-          cards: oldCardsBackup,
-          expireAt: Date.now() + 10000
+        // Undo is a compensating editor change, not a rolling timeout or a
+        // rollback that could silently destroy a later hand edit / Run result.
+        const articleAiBefore={
+          cards:oldCardsBackup,styleId:draft.styleId||"",
+          layoutId:draft.layoutId||"",coverRatio:draft.coverRatio||""
         };
-        setTimeout(() => {
-          if (CS.articlePlanUndoState && Date.now() >= CS.articlePlanUndoState.expireAt) {
-            CS.articlePlanUndoState = null;
-            const undoEl = DOM.previewStage?.querySelector("#art-plan-undo");
-            if (undoEl) undoEl.remove();
-          }
-        }, 10000);
+        const articleAIUndoSignature=()=>JSON.stringify({
+          articleId:draft.id,markdown:draft.markdown||"",
+          title:draft.title||"",cards:draft.cards||[],
+          styleId:draft.styleId||"",layoutId:draft.layoutId||"",
+          coverRatio:draft.coverRatio||""
+        });
 
         // Mark entrance animation for newly planned cards
-        const approvedCards = review.cards;
+        const approvedCards=review.cards;
+        for(const prior of oldCards){
+          if(!approvedCards.some(c=>c.id===prior.id))
+            approvedCards.push(JSON.parse(JSON.stringify(prior)));
+        }
+        const specDelta=AI.approvedDelta(report,decision.keys).spec;
+        if(specDelta.style)draft.styleId=specDelta.style.id;
+        if(specDelta.layout)draft.layoutId=specDelta.layout.id;
+        if(specDelta.ratio && !(draft.lockedFields||[]).includes("ratio"))
+          draft.coverRatio=specDelta.ratio;
         approvedCards.forEach((c) => {
           c.isNewEntrance = true;
         });
 
         draft.cards = approvedCards;
         planUnifiedArticleDraft(draft, { aiCards: approvedCards });
+        CS.articlePlanUndoState={
+          ai:true,articleId:draft.id,
+          ...articleAiBefore,afterSignature:articleAIUndoSignature()
+        };
 
         const coverCards = approvedCards.filter((c) => c.role === "cover");
         const inlines = approvedCards.filter((c) => c.role !== "cover");
@@ -16045,11 +18484,27 @@
     if (undoBtn) {
       undoBtn.onclick = () => {
         if (!CS.articlePlanUndoState) return;
-        const restored = JSON.parse(JSON.stringify(CS.articlePlanUndoState.cards || []));
-        CS.articlePlanUndoState = null;
-        if (target?.planNode) target.planNode.data.cards = restored;
-        if (target?.art) target.art.cards = restored;
-        draft.cards = restored;
+        const undo=CS.articlePlanUndoState;
+        if(undo.ai){
+          const current=JSON.stringify({
+            articleId:draft.id,markdown:draft.markdown||"",
+            title:draft.title||"",cards:draft.cards||[],
+            styleId:draft.styleId||"",layoutId:draft.layoutId||"",
+            coverRatio:draft.coverRatio||""
+          });
+          if(undo.articleId!==draft.id||current!==undo.afterSignature){
+            toast("AI 方案应用后已有新的文章或配图编辑，无法安全撤销");
+            CS.articlePlanUndoState=null;renderFullPreviewStage();return;
+          }
+          draft.styleId=undo.styleId;
+          draft.layoutId=undo.layoutId;
+          draft.coverRatio=undo.coverRatio;
+        }
+        const restored=JSON.parse(JSON.stringify(undo.cards||[]));
+        CS.articlePlanUndoState=null;
+        if(target?.planNode)target.planNode.data.cards=restored;
+        if(target?.art)target.art.cards=restored;
+        draft.cards=restored;
         commitArticleTargetChanges(target, { bumpTime: true });
         renderFullPreviewStage();
         toast("已恢复原来的配图位");
@@ -16116,6 +18571,23 @@
   }
 
   function switchCreationStage(next) {
+    const beforeView = CS.stageView === "canvas" ? "canvas" :
+      ["quick","batch","article","preview"].includes(CS.stageView) ? "simple" : null;
+    if (next === "simple") {
+      // Never create/activate a fresh blank workflow when returning from
+      // Canvas: partial/read-only is a safe projection of THIS same Project.
+      const desired = CS.lastStudioTaskView ||
+        (getBatchParts(CS.graph) || (CS.graph?.nodes || []).some(n => n.type === "loop")
+          ? "batch" : "quick");
+      next = desired === "article" && isArticleGraph(CS.graph) ? "article" : desired;
+    }
+    if (next === "canvas" && ["quick","batch","article","preview"].includes(CS.stageView)) {
+      // Preview is the Article editing stage. Remember it explicitly, or the
+      // new single reverse toggle would return to a Quick form instead of
+      // restoring the same article markdown and stable image anchors.
+      CS.lastStudioTaskView = CS.stageView === "preview" ? "article" : CS.stageView;
+    }
+    if (["quick","batch","article"].includes(next)) CS.lastStudioTaskView = next;
     if (next !== "article") flushUnifiedArticleEditor();
     if (next === "article") {
       switchIntoArticleMode();
@@ -16129,7 +18601,9 @@
         }
         delete CS.articleReturnTab;
       }
-      ensureQuickTab();
+      if (CS.stageView !== "canvas" || !CS.activeTabId || getQuickParts(CS.graph)) {
+        ensureQuickTab();
+      }
       CS.stageView = "quick";
     } else if (next === "batch") {
       if (CS.stageView === "preview" || CS.stageView === "article" || isArticleGraph(CS.graph)) {
@@ -16139,7 +18613,9 @@
         }
         delete CS.articleReturnTab;
       }
-      ensureBatchTab();
+      if (CS.stageView !== "canvas" || !CS.activeTabId || getBatchParts(CS.graph)) {
+        ensureBatchTab();
+      }
       CS.stageView = "batch";
     } else {
       CS.stageView = next;
@@ -16154,38 +18630,145 @@
     url.searchParams.set("entry", next === "quick" ? "quick" : next === "batch" ? "batch" : next === "article" ? "article" : "canvas");
     window.history.replaceState(null, "", url.pathname + url.search);
     fullRenderCanvas();
-    if (next === "canvas") requestAnimationFrame(() => fitView());
+    // View transitions update only project editor metadata; they never
+    // call the generation endpoints or modify the Run ledger.
+    const current = CS.tabs.find(t => t.id === CS.activeTabId);
+    const view = CS.stageView === "canvas" ? "canvas" :
+      ["quick","batch"].includes(CS.stageView) ? "simple" : null;
+    if (current && view && beforeView !== view) {
+      current.projectActiveView = view;
+      current.editRevision = Number(current.editRevision || 0) + 1;
+      syncCurrentTabSnapshot();
+      // No project is auto-created merely because someone switched views.
+      if (current.projectId) {
+        if (current.projectSaveState !== "conflict") current.projectSaveState = "local_only";
+        scheduleProjectAutoSave(current);
+      }
+      persistOpenTabs();
+      updateProjectStatusIndicator();
+    }
   }
 
   function renderCreationModeBar() {
     if (!DOM.entryBar) return;
     DOM.entryBar.hidden = false;
-    const quick = CS.stageView === "quick";
-    const batch = CS.stageView === "batch";
+    DOM.entryBar.classList.add("qc-studio-navigation");
     const canvas = CS.stageView === "canvas";
-    const article = CS.stageView === "preview" || CS.stageView === "article";
-    const history = CS.stageView === "history";
-    const workflows = CS.stageView === "workflows";
-    const historyCount = (CS.generationHistory || []).length;
-    DOM.entryBar.innerHTML = `<div class="qc-mode-switch" role="group" aria-label="创作任务">
-      <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}" id="studio-mode-quick" aria-pressed="${quick}">做图</button>
-      <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}" id="studio-mode-batch" aria-pressed="${batch}">批量</button>
-      <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}" id="studio-mode-article" aria-pressed="${article}">文章配图</button>
-      <button type="button" class="btn btn-sm${canvas ? " btn-primary" : ""}" id="studio-mode-canvas" aria-pressed="${canvas}">画布</button>
-    </div><div class="qc-entry-actions"><button type="button" class="btn btn-sm qc-mode-history${history ? " btn-primary" : ""}" id="studio-mode-history" aria-pressed="${history}" title="查看生图历史记录">生图历史</button><button type="button" class="btn btn-sm qc-mode-workflows${workflows ? " btn-primary" : ""}" id="studio-mode-workflows" aria-pressed="${workflows}" title="查看我的工作流">工作流</button></div>`;
+    const editing = ["quick", "batch", "article", "preview", "canvas"].includes(CS.stageView);
+    const quick = CS.stageView === "quick" || (canvas && CS.lastStudioTaskView === "quick");
+    const batch = CS.stageView === "batch" || (canvas && CS.lastStudioTaskView === "batch");
+    const article = ["preview", "article"].includes(CS.stageView)
+      || (canvas && CS.lastStudioTaskView === "article");
+    const history = CS.stageView === "history", workflows = CS.stageView === "workflows";
+    const tab = CS.tabs.find(t => t.id === CS.activeTabId);
+    const articleDraft = CS.articleEditorDraft;
+    const title = article && !canvas ? articleDraft?.title || articleDraft?.articleTitle || "未命名文章项目"
+      : tab?.title || (batch ? "未命名系列项目" : "未命名图片项目");
+    const projectState = tab ? projectStatusText(tab) : "仅本机 · 待同步";
+    DOM.entryBar.innerHTML = `
+      <div class="qc-project-line">
+        ${editing ? `<div class="qc-project-identity" aria-label="当前项目">
+          <strong title="${esc(title)}">${esc(title)}</strong>
+          ${article && !canvas ? `<span class="qc-project-save-label" role="status">${esc(
+          articleDraft?.projectSaveState === "synced" ? "云端已保存" : "文章草稿 · 本机"
+          )}</span>` : `<button type="button" class="qc-project-save-label" id="studio-project-status"
+          title="点击查看云端保存状态或手动同步">${esc(projectState)}</button>`}
+          </div>` : `<strong class="qc-project-identity">我的创作空间</strong>`}
+        <button type="button" id="studio-mobile-nav-toggle" class="btn btn-sm qc-mobile-nav-toggle"
+          aria-expanded="false" aria-controls="studio-navigation-panel" aria-label="展开创作导航">菜单</button>
+      </div>
+      <div class="qc-studio-controls" id="studio-navigation-panel">
+        <nav class="qc-mode-switch" aria-label="三类创作任务">
+          <button type="button" class="btn btn-sm${quick ? " btn-primary" : ""}"
+            id="studio-mode-quick" aria-pressed="${quick}">图片创作</button>
+          <button type="button" class="btn btn-sm${batch ? " btn-primary" : ""}"
+            id="studio-mode-batch" aria-pressed="${batch}">系列创作</button>
+          <button type="button" class="btn btn-sm${article ? " btn-primary" : ""}"
+            id="studio-mode-article" aria-pressed="${article}">文章配图</button>
+        </nav>
+        <button type="button" class="btn btn-sm qc-start-workflow"
+          id="studio-mode-from-workflow">从工作流开始</button>
+        ${editing ? `<div class="qc-view-switch" role="group" aria-label="编辑视图切换">
+          <button type="button" class="btn btn-sm qc-view-toggle" id="studio-mode-view-toggle"
+            title="${canvas ? "返回当前图文表单，保留画布内容" : "在同一创作内容上打开画布"}"
+            aria-label="${canvas ? "返回表单编辑" : "切换到画布编辑"}">${canvas ? "← 返回表单" : "切换到画布 →"}</button>
+        </div>` : ""}
+        <details class="qc-asset-menu"><summary>资产与记录</summary>
+          <div class="qc-asset-menu-panel" role="group" aria-label="资产与历史">
+            <button type="button" class="btn btn-sm${history ? " btn-primary" : ""}"
+              id="studio-mode-history" aria-pressed="${history}">生图历史</button>
+            <button type="button" class="btn btn-sm${workflows ? " btn-primary" : ""}"
+              id="studio-mode-workflows" aria-pressed="${workflows}">我的工作流</button>
+            <a class="btn btn-sm" id="studio-mode-gallery" href="/?view=profile&ptab=resources">我的图库</a>
+          </div>
+        </details>
+      </div>`;
+    const bind = (id, action) => {
+      const el = DOM.entryBar.querySelector("#" + id);
+      if (el) el.onclick = action;
+    };
+    bind("studio-mode-quick", () => switchCreationStage("quick"));
+    bind("studio-mode-batch", () => switchCreationStage("batch"));
+    bind("studio-mode-article", () => switchCreationStage("article"));
+    bind("studio-mode-view-toggle", () => switchCreationStage(canvas ? "simple" : "canvas"));
+    bind("studio-project-status", () => handleProjectStatusClick());
+    bind("studio-mode-from-workflow", () => openWorkflowsPage());
+    bind("studio-mode-history", () => openHistoryPage());
+    bind("studio-mode-workflows", () => openWorkflowsPage());
+    const toggle = DOM.entryBar.querySelector("#studio-mobile-nav-toggle");
+    if (toggle) toggle.onclick = () => {
+      const opened = DOM.entryBar.classList.toggle("is-mobile-nav-open");
+      toggle.setAttribute("aria-expanded", String(opened));
+      toggle.setAttribute("aria-label", opened ? "收起创作导航" : "展开创作导航");
+      toggle.textContent = opened ? "收起" : "菜单";
+    };
+    DOM.entryBar.onkeydown = (event) => {
+      if (event.key === "Escape" && DOM.entryBar.classList.contains("is-mobile-nav-open")) {
+        DOM.entryBar.classList.remove("is-mobile-nav-open");
+        toggle?.setAttribute("aria-expanded", "false");
+        toggle?.focus();
+      }
+    };
+  }
 
-    const btnQuick = DOM.entryBar.querySelector("#studio-mode-quick");
-    if (btnQuick) btnQuick.onclick = () => { switchCreationStage("quick"); };
-    const btnBatch = DOM.entryBar.querySelector("#studio-mode-batch");
-    if (btnBatch) btnBatch.onclick = () => { switchCreationStage("batch"); };
-    const btnArticle = DOM.entryBar.querySelector("#studio-mode-article");
-    if (btnArticle) btnArticle.onclick = () => { switchCreationStage("article"); };
-    const btnCanvas = DOM.entryBar.querySelector("#studio-mode-canvas");
-    if (btnCanvas) btnCanvas.onclick = () => { switchCreationStage("canvas"); };
-    const btnHistory = DOM.entryBar.querySelector("#studio-mode-history");
-    if (btnHistory) btnHistory.onclick = () => { openHistoryPage(); };
-    const btnWorkflows = DOM.entryBar.querySelector("#studio-mode-workflows");
-    if (btnWorkflows) btnWorkflows.onclick = () => { openWorkflowsPage(); };
+  function renderGraphSummaryInSimpleView() {
+    const projection = StudioViews?.classify(CS.graph);
+    const mode = projection?.mode || "read-only-summary";
+    const editable = mode === "partial-editable" && projection.nodeIds?.text;
+    const textNode = (CS.graph.nodes || []).find(n => n.id === projection?.nodeIds?.text);
+    const message = mode === "partial-editable"
+      ? "复杂项目：仅摘要/局部可编辑。所有分支、素材和输出设置保持在画布中。"
+      : "复杂项目：仅摘要。当前节点或连线不能安全映射到简洁表单，画布内容不会被覆盖。";
+    DOM.quickStage.innerHTML = '<section class="qc-form" style="max-width:740px;margin:28px auto">' +
+      '<h3>复杂项目 · 安全编辑</h3>' +
+      '<p role="status" class="qc-help">' + esc(message) + '</p>' +
+      '<p>节点：' + (CS.graph.nodes || []).length +
+      ' · 连线：' + (CS.graph.edges || []).length +
+      ' · 输出分支：' + (CS.graph.nodes || []).filter(n => n.type === "output_control").length + '</p>' +
+      (editable ? '<label for="studio-shared-subject">公共主题（仅更新文本节点）</label>' +
+        '<textarea id="studio-shared-subject" rows="3" style="width:100%">' +
+        esc(String(textNode?.data?.text || '')) + '</textarea>' +
+        '<button type="button" class="btn btn-sm btn-primary" id="studio-shared-save">保存公共主题</button>' : '') +
+      '<button type="button" class="btn btn-sm" id="studio-complex-canvas">返回画布编辑其余内容</button>' +
+      '</section>';
+    const back = DOM.quickStage.querySelector("#studio-complex-canvas");
+    if (back) back.onclick = () => switchCreationStage("canvas");
+    const submit = DOM.quickStage.querySelector("#studio-shared-save");
+    if (submit) submit.onclick = () => {
+      try {
+        const field = DOM.quickStage.querySelector("#studio-shared-subject");
+        const proposed = StudioViews.patchNode(CS.graph, {
+          nodeId: projection.nodeIds.text, field:"text",
+          value:field.value, baseRevision:Number(CS.graph.revision || 0)
+        });
+        CS.graph = proposed;
+        markActiveTabDirty();
+        persistOpenTabs();
+        fullRenderCanvas();
+      } catch (_) {
+        toast("公共主题已发生变化，请返回画布核对");
+      }
+    };
   }
 
   let isRenderingQuickStart = false;
@@ -16199,6 +18782,12 @@
       DOM.quickStage.style.display = (isQuick || isBatch) ? "block" : "none";
       renderCreationModeBar();
       if (!isQuick && !isBatch) return;
+      const projection = StudioViews?.classify(CS.graph);
+      if (projection && projection.mode !== "simple-editable" ||
+          isQuick && !getQuickParts(CS.graph) || isBatch && !getBatchParts(CS.graph)) {
+        renderGraphSummaryInSimpleView();
+        return;
+      }
 
     if (isBatch) {
       let bp = getBatchParts();
@@ -16207,6 +18796,12 @@
         bp = getBatchParts(tab?.graph || CS.graph);
       }
       if (window.HandrawBatchCreate && bp) {
+        // Import legacy two-mode drafts once into the Loop-owned PlanSlot.
+        // Subsequent writes go through the same Loop and Project autosave.
+        if(window.HandrawStudioSeries && !bp.loop.data.studio2Plan) {
+          window.HandrawStudioSeries.read(bp.loop);
+          persistOpenTabs();
+        }
         const isBatchCurrentBusy = () => {
           if (!bp) return false;
           reconcileDetachedBatchState(bp);
@@ -16219,7 +18814,12 @@
           return false;
         };
         const busy = isBatchCurrentBusy();
+        const serverRun=getBatchRunProjection(bp);
         const displays = bp ? getDownstreamDisplayNodes(bp.ctrl.id) : [];
+        const pendingCloud=displays.some(d=>d.data?.pendingTaskId||
+          d.data?.pendingRequestId||
+          Object.keys(d.data?.pendingTasksBySlot||{}).length ||
+          Object.keys(d.data?.pendingRequestIds||{}).length);
         const results = displays.flatMap((dn) =>
           (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
             id: `${dn.id}:${index}`,
@@ -16265,10 +18865,18 @@
             results,
             displays,
             busy,
-            statusText: busy ? "正在批量生成中…" : ""
+            localBusy:busy,
+            runProjection:serverRun,
+            pendingCloud,
+            statusText:serverRun
+              ? "服务器确认："+serverRun.succeeded+"/"+serverRun.total+" 张成功"+
+                (serverRun.failed?" · 失败 "+serverRun.failed+" 张":"")
+              : busy ? "正在批量生成中…" :
+                bp.ctrl.data.runId ? "云端状态待核对，保留原请求编号" : ""
           },
           {
             isBusy: isBatchCurrentBusy,
+            isUnlocked:(id,item)=>S.isUnlocked(id,item),
             clearWorkspaceResults: (ctrlId) => {
               clearControlWorkspaceResults(ctrlId || bp.ctrl.id);
               if (bp.loop) {
@@ -16278,6 +18886,7 @@
               }
             },
             markDirtyAndRender,
+            persistDraft: () => { markActiveTabDirty(); persistOpenTabs(); },
             ensureAssetItems: (items) => ensureBatchAssetNode(items),
             openAssetPicker: ({ kind, field, current, onPick, title } = {}) => {
               // Resource selection configures the next run, even when an older
@@ -16295,7 +18904,7 @@
               }
             },
             openReferencePicker: (opts = {}) => {
-              if (!bp || isBatchCurrentBusy()) return;
+              if (!bp) return;
               ensureBatchAssetNode();
               if (opts && typeof opts === "object" && typeof opts.onConfirm === "function") {
                 openAssetPickerModal(opts, {
@@ -16319,6 +18928,27 @@
             },
             run: async () => {
               if (!bp || isBatchCurrentBusy()) return;
+              const remote=getBatchRunProjection(bp);
+              if(remote&&!remote.isTerminal){
+                toast("上一批服务端任务仍在运行，请先确认状态避免重复计费");
+                return;
+              }
+              if(pendingCloud){
+                toast("存在待确认的云端请求，已保留 requestId，请先恢复/核对而非重复提交");
+                return;
+              }
+              if(window.HandrawStudioSeries){
+                const check=window.HandrawStudioSeries.validateForExecution(bp,{
+                  catalog:Catalog,isUnlocked:(id,item)=>S.isUnlocked(id,item)
+                });
+                if(!check.ok){
+                  const issue=check.errors[0]||{};
+                  toast("第 "+(check.plan?.slots.findIndex(s=>s.slotId===issue.slotId)+1||"相关")+
+                    " 张参数无效："+(issue.code||"invalid_plan")+
+                    "，请先修复，未提交付费生成");
+                  return;
+                }
+              }
               const scope = activeCacheScope;
               quickBusy = { id: bp.ctrl.id, scope };
               renderQuickStart();
@@ -16331,6 +18961,22 @@
             },
             runSingleRow: async (rowIndex) => {
               if (!bp || isBatchCurrentBusy()) return;
+              const remote=getBatchRunProjection(bp),snap=bp.ctrl.data.studio2RunSnapshot;
+              if(snap && (!Number.isInteger(rowIndex)||rowIndex<0||
+                  !snap.outputs?.[rowIndex])) {
+                toast("重试槽位无效，必须使用原始 RunSnapshot 的输出编号");
+                return;
+              }
+              if(remote){
+                if(!remote.isTerminal || remote.outputs?.[rowIndex]?.status!=="failed"){
+                  toast("只能重试已由服务器确认失败的单个输出，其他成功项保持不变");
+                  return;
+                }
+                batchRunModels.delete(activeCacheScope+":"+remote.runId);
+              }else if(bp.ctrl.data.runId){
+                toast("服务器结果尚未确认，暂不能再次提交以免重复计费");
+                return;
+              }
               const scope = activeCacheScope;
               quickBusy = { id: bp.ctrl.id, scope };
               renderQuickStart();
@@ -16372,9 +19018,16 @@
       const busy = isCurrentBusy();
       const displays = p ? getDownstreamDisplayNodes(p.ctrl.id) : [];
       const results = displays.flatMap((dn) => (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
-        id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn
+        id: `${dn.id}:${index}`, imageUrl: it.imageUrl, title: it.title || "生成结果", node: dn, item: it
       })));
-      let statusText = busy
+      const remoteModel = getQuickRunProjection(p);
+      let statusText = remoteModel?.ok
+        ? "服务器确认："+remoteModel.succeeded+"/"+remoteModel.total+" 张成功" +
+          (remoteModel.failed?" · 失败 "+remoteModel.failed+" 张":"") +
+          (!remoteModel.isTerminal?" · 云端仍在执行，可刷新恢复":" · 本次任务已结束")
+        : p?.ctrl.data.runId && !busy
+        ? "正在核对云端任务，请保留请求编号，不要重复提交或假定退款。"
+        : busy
         ? "正在生成，可点击「停止等待」结束当前页面的生成流程；已提交云端的任务可能继续执行或计费。"
         : p?.ctrl.data.status === "stopped"
         ? "上次生成已解除本地等待；云端任务可能仍在运行或计费。请先在生图历史确认结果，再决定是否重新生成。"
@@ -16406,6 +19059,7 @@
         } else {
           ast.data.items = items || [];
         }
+        if(window.HandrawQuickSpec)window.HandrawQuickSpec.setAssets(p,ast.data.items);
         markDirtyAndRender();
       };
 
@@ -16422,9 +19076,18 @@
         results,
         busy,
         statusText,
-        forkSource: CS.forkGenerationSource
+        forkSource: CS.forkGenerationSource,
+        aiPhase: CS.quickAIPhase || "",
+        aiProposal: CS.quickAIProposal || null,
+        aiReview: CS.quickAIPending?.ctrlId === p.ctrl.id ? CS.quickAIPending.report : null,
+        planUndoAvailable: Boolean(CS.quickAIUndo?.ctrlId === p.ctrl.id),
+        runProjection: remoteModel,
+        localBusy: isCurrentBusy(),
+        pendingCloud: displays.some(d=>d.data?.pendingTaskId ||
+          d.data?.pendingRequestId || Object.keys(d.data?.pendingRequestIds||{}).length)
       }, {
         isBusy: isCurrentBusy,
+        isUnlocked: (id,item) => S.isUnlocked(id,item),
         cancel: () => {
           const stopped = cancelActiveBatchGeneration(p.ctrl.id);
           if (stopped) {
@@ -16438,6 +19101,163 @@
         markDirtyAndRender,
         persistDraft,
         ensureAssetItems: (items) => ensureAssetNode(items),
+        openImageLightbox: (url, title) => openImageLightbox(url, title),
+        openCanvas: (version) => {
+          if (version?.mediaId && version?.imageUrl) {
+            const old=Array.isArray(p.asset?.data?.items)?p.asset.data.items:[];
+            if (!old.some(x=>x.mediaId===version.mediaId))
+              ensureAssetNode([...old,{id:version.mediaId,mediaId:version.mediaId,
+                name:version.title||"当前生成结果",image:version.imageUrl,
+                role:"result",source:"generated",cat:"other"}]);
+          }
+          switchCreationStage("canvas");
+        },
+        openSeries: (version) => {
+          const spec=version?.recipeSnapshot;
+          if(!version?.mediaId || !spec) {
+            toast("没有可验证的媒体与配方快照，无法从此图建立系列");
+            return;
+          }
+          // A separate Graph is intentional. Never overwrite an existing Series.
+          const sd={
+            style1:spec.style?.id||"",style2:spec.secondaryStyle?.id||"",
+            fusion:Boolean(spec.fusionEnabled),layout:spec.layout?.id||"",
+            colors:(spec.colors||[]).map(x=>x.id||x),
+            tones:(spec.tones||[]).map(x=>x.id||x),
+            moods:spec.moods||[],customMood:spec.customMood||"",
+            whitespace:spec.whitespace||"",audience:spec.audience||"",
+            businessScene:spec.businessScene||"",
+            ...spec.layoutParams
+          };
+          const sp=E.makeSkillParamsNode(64,56,sd);
+          const txt=E.makeTextInputNode(64,480,{text:spec.subject||""});
+          const ast=E.makeAssetNode(64,760,{items:[{
+            id:version.mediaId,mediaId:version.mediaId,role:"result",
+            name:"系列起点",image:version.imageUrl,source:"generated",cat:"other"
+          }]});
+          const lp=E.makeLoopNode(468,200,{loopMode:"prompts",
+            promptListText:spec.subject||"",maxIterations:200});
+          const ctrl=E.makeOutputControlNode(880,200,{mode:spec.outputMode||"graphic-text",
+            count:1,ratio:spec.ratio||"3:4",ratioSource:"user"});
+          const nodes=[sp,txt,ast,lp,ctrl];
+          const links=[[sp,lp],[sp,ctrl],[txt,lp],[ast,lp],[ast,ctrl],[lp,ctrl]];
+          const graph={blueprint:"loop_100",nodes,edges:links.map(([a,b])=>({
+            id:E.uid("edge"),from:a.id,to:b.id})),selectedIds:[]};
+          const tab=createWorkflowTab({title:"从图片开始的系列",
+            blueprint:"loop_100",graph,makeActive:false});
+          tab.batchStart=true;
+          activateWorkflowTab(tab.id);
+          switchCreationStage("batch");
+          toast("已建立独立系列草稿，继承当前结果与可见配方；请继续规划各张图片");
+        },
+        plan: async () => {
+          const subject=String(p.text.data.text||"").trim();
+          if(!subject)return toast("请先填写主题");
+          const AI=window.HandrawStudioAIPlan,Quick=window.HandrawQuickSpec;
+          if(!AI||!Quick)return toast("AI 规划模块未加载，请刷新");
+          const snapshot=Quick.read(p).spec;
+          const baseRevision=snapshot.revision;
+          const signature=()=>JSON.stringify({
+            graphId:CS.activeTabId,graphRevision:CS.graph.revision,
+            subject:p.text.data.text,spec:Quick.read(p).spec
+          });
+          const before=signature();
+          const updatePhase=label=>{
+            CS.quickAIPhase=label;
+            const status=DOM.quickStage?.querySelector("#make-image-ai-status");
+            if(status)status.textContent=label;
+          };
+          updatePhase("正在检索已授权资源并请求 AI 结构化规划…");
+          try{
+            const resp=await fetch("/api/studio/ai-plan",{
+              method:"POST",credentials:"include",
+              headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({kind:"image",subject,baseRevision,count:1,
+                current:{styleId:p.skill.data.style1||"",
+                  layoutId:p.skill.data.layout||"",
+                  ratio:p.ctrl.data.ratioSource==="user"?p.ctrl.data.ratio:""},
+                lockedFields:snapshot.lockedFields||[]})
+            });
+            const data=await resp.json();
+            if(!resp.ok||!data?.ok){
+              const error=new Error(AI.message(data?.code)||data?.error||"规划失败");
+              error.code=data?.code;throw error;
+            }
+            if(signature()!==before)throw Object.assign(
+              new Error("ai_revision_conflict"),{code:"ai_revision_conflict"});
+            updatePhase("正在校验方案资源和字段级差异…");
+            const report=AI.review(data,{kind:"image",baseRevision,
+              currentSpec:snapshot,catalog:Catalog,
+              isUnlocked:(id,item)=>S.isUnlocked(id,item)});
+            // #128: review the structured patch in the editing pane. Neither
+            // request completion nor display of suggestions may trigger a Run.
+            CS.quickAIPending={ctrlId:p.ctrl.id,report,signature:before};
+            CS.quickAIProposal=data.creationSpecPatch;
+            updatePhase("AI 规划已就绪，等待用户审阅采纳；未触发生成或扣费");
+            markDirtyAndRender();
+          }catch(err){
+            updatePhase("");
+            toast("AI 规划失败："+AI.message(err.code||err.message));
+          }
+        },
+        applyPlan: (keys=[]) => {
+          const pending=CS.quickAIPending,AI=window.HandrawStudioAIPlan;
+          if(!pending||pending.ctrlId!==p.ctrl.id||!AI)return;
+          const current=JSON.stringify({graphId:CS.activeTabId,
+            graphRevision:CS.graph.revision,subject:p.text.data.text,
+            spec:window.HandrawQuickSpec.read(p).spec});
+          if(current!==pending.signature){
+            CS.quickAIPending=null;CS.quickAIPhase="";
+            renderQuickStart();
+            toast("草稿在 AI 审阅期间已改变；建议已失效，请重新规划");
+            return;
+          }
+          try {
+            const result=AI.apply(pending.report,{parts:p,catalog:Catalog,
+              isUnlocked:(id,item)=>S.isUnlocked(id,item),approvedKeys:keys});
+            CS.quickAIUndo=result.undo?{ctrlId:p.ctrl.id,token:result.undo}:null;
+            CS.quickAIPending=null;
+            CS.quickAIPhase="已采纳可用建议；未触发生图";
+            markDirtyAndRender();
+            toast("AI 方案已采纳，可继续微调后再生成图片");
+          }catch(err){
+            toast("AI 方案采纳失败："+AI.message(err.code||err.message));
+          }
+        },
+        discardPlan: () => {
+          CS.quickAIPending=null;
+          CS.quickAIPhase="";
+          CS.quickAIProposal=null;
+          renderQuickStart();
+        },
+        undoPlan: () => {
+          const token=CS.quickAIUndo;
+          if(!token||token.ctrlId!==p.ctrl.id)return;
+          try{
+            window.HandrawStudioAIPlan.undo(token.token,{parts:p});
+            CS.quickAIUndo=null;
+            CS.quickAIProposal=null;
+            markDirtyAndRender();
+            toast("已撤销 AI 方案，不影响历史图片和 Run");
+          }catch(err){toast(window.HandrawStudioAIPlan.message(err.code));}
+        },
+        addResultAsReference: (result) => {
+          if (!p || !result?.imageUrl) return;
+          const prior = Array.isArray(p.asset?.data?.items) ? p.asset.data.items : [];
+          if (prior.some(it => it.image === result.imageUrl)) {
+            toast("这张图片已经是参考图");
+            return;
+          }
+          ensureAssetNode([...prior, {
+            id: result.item?.mediaId || result.item?.media_id || E.uid("ref"),
+            mediaId: result.item?.mediaId || result.item?.media_id || undefined,
+            name: result.title || "已生成图片参考",
+            image: result.imageUrl,
+            cat: "other",
+            source: "generated"
+          }]);
+          toast("已加入参考图，可继续调整主题后生成");
+        },
         openAssetPicker: ({ kind, field, currentId, onSelect } = {}) => {
           if (!p?.skill) {
             toast("画风/图型选择器暂不可用：请刷新创作台后重试");
@@ -16450,9 +19270,9 @@
             if (typeof onSelect === "function") {
               openSkillFieldPickerModal(p.skill, targetField, {
                 current: currentId,
-                onPick: (id) => {
+                onPick: (id, ref) => {
                   if (!CS.graph.nodes.includes(p.skill)) return;
-                  onSelect(id);
+                  onSelect(id, ref);
                 }
               });
             } else {
@@ -16464,7 +19284,7 @@
           }
         },
         openReferencePicker: ({ currentRefs, onConfirm }) => {
-          if (!p || isCurrentBusy()) return;
+          if (!p) return;
           openAssetPickerModal({
             currentRefs,
             onConfirm: (selectedItems) => {
@@ -16472,8 +19292,69 @@
             }
           });
         },
+        uploadReferenceFiles: async (files) => {
+          if(!p||!Array.isArray(files)||!files.length)return;
+          const allowed=new Set(["image/jpeg","image/png","image/webp","image/gif"]);
+          const items=Array.isArray(p.asset?.data?.items)?[...p.asset.data.items]:[];
+          for(const file of files) {
+            if(items.length>=6){toast("参考图最多 6 张，请先移除部分图片");break;}
+            if(!allowed.has(file.type)){toast("不支持的图片格式："+file.name);continue;}
+            if(file.size>10*1024*1024){toast("图片超过 10 MB："+file.name);continue;}
+            try{
+              const dataUrl=await new Promise((resolve,reject)=>{
+                const reader=new FileReader();
+                reader.onerror=()=>reject(new Error("本地文件读取失败"));
+                reader.onload=()=>resolve(String(reader.result||""));
+                reader.readAsDataURL(file);
+              });
+              const uploaded=await studioApiPost("/api/studio/uploads",{
+                dataUrl,nameZh:file.name.replace(/\.[^.]+$/,""),
+                descZh:"做图 2.0 参考素材",cat:"other"
+              });
+              if(!uploaded?.ok||!uploaded.image||!uploaded.id)
+                throw new Error(uploaded?.error||"上传后没有取得可用素材");
+              items.push({id:uploaded.id,name:file.name,image:uploaded.image,
+                cat:"other",role:"other",custom:true,builtin:false,
+                mediaId:uploaded.mediaId||undefined,source:"upload"});
+              ensureAssetNode([...items]);
+            }catch(err){toast("参考图上传失败："+file.name+" · "+String(err.message||err));}
+          }
+        },
+        retry: async () => {
+          if(!p || isCurrentBusy())return;
+          const remote=getQuickRunProjection(p);
+          if(!remote?.ok || !remote.isTerminal || !remote.canRetry)return;
+          const scope=activeCacheScope;
+          quickBusy={id:p.ctrl.id,scope};
+          quickRunModels.delete(scope+":"+remote.runId);
+          renderQuickStart();
+          try {
+            // The existing runner reuses the logical batch for an explicit
+            // failure retry, issuing a distinct gateway attempt.
+            await runOutputControlNode(p.ctrl.id,{onlyItemIdx:0});
+          } finally {
+            // Retried attempts can change a once-terminal Run into running
+            // and then success. Never keep the cached failed projection.
+            quickRunModels.delete(scope+":"+remote.runId);
+            if(quickBusy?.scope===scope && quickBusy.id===p.ctrl.id)quickBusy=null;
+            renderQuickStart();
+          }
+        },
         run: async () => {
           if (!p || isCurrentBusy()) return;
+          const remote=getQuickRunProjection(p);
+          if(remote?.ok && !remote.isTerminal) {
+            toast("服务器仍在处理上一个任务，请等待状态确认，避免重复提交");
+            return;
+          }
+          const unconfirmed=getDownstreamDisplayNodes(p.ctrl.id).some(d=>
+            d.data?.pendingTaskId || d.data?.pendingRequestId ||
+            Object.keys(d.data?.pendingRequestIds||{}).length ||
+            Object.keys(d.data?.pendingTasksBySlot||{}).length);
+          if(unconfirmed) {
+            toast("仍有待核对的云端请求，已保留请求 ID，请先从生图历史恢复结果");
+            return;
+          }
           const topic = String(p.text.data.text || "").trim();
           if (!topic) {
             toast("请先填写创作主题");
@@ -16481,6 +19362,28 @@
             if (input) input.focus();
             return;
           }
+          // #121 + #105 unified preflight; no reservation or requestId
+          // is allocated for empty/invalid/locked directory resources.
+          const quickApi=window.HandrawQuickSpec;
+          const validated=quickApi?.preflight
+            ? quickApi.preflight(p,{catalog:Catalog,isUnlocked:(id,item)=>S.isUnlocked(id,item)})
+            : window.HandrawStudioCore.validateSpec(
+                window.HandrawStudioCore.normalizeLegacyParts(p).spec,{catalog:Catalog});
+          if(!validated.ok) {
+            const error=validated.errors[0]||{},code=error.code||"invalid_spec";
+            const rr=window.HandrawStudioResources;
+            toast(code==="missing_style"?"请先选择画风（画风是必选项）":
+              code==="missing_subject"?"请先填写创作主题":
+              code==="invalid_ratio"?"画幅比例格式无效，请重新设置":
+              code==="resource_forbidden"?"该画风/图型未授权，不能提交生成":
+              code==="invalid_resource"||code==="resource_not_found"
+                ?"所选资源已失效，请重新选择":
+              rr?.formatError?.(error)||"创作参数不完整，请检查后重试");
+            return;
+          }
+          // Freeze the submitted normalized spec before the editable next draft
+          // can change. This is display metadata, not a second Run authority.
+          p.ctrl.data.quickLastSubmittedSpec=JSON.parse(JSON.stringify(validated.spec));
           // Strictly 1 image per brief
           p.ctrl.data.count = 1;
           const scope = activeCacheScope;
@@ -16609,6 +19512,18 @@
 
     libEl.innerHTML = `
       <div class="ic-tmpl-lib-wrap">
+        <div class="ic129-first-start">
+          <h2>描述画面，直接开始</h2>
+          <p>输入主题后创建已连接的单图工作流；需要时可继续增加画风与参考素材。</p>
+          <form id="canvas-129-first-form">
+            <input name="subject" maxlength="4000" aria-label="单图主题" placeholder="例如：秋日桂花树下的猫" required />
+            <button type="submit">开始单图</button>
+          </form>
+          <div class="ic129-first-actions">
+            <button type="button" id="canvas-129-first-asset">添加素材</button>
+            <button type="button" id="canvas-129-first-template">应用模板</button>
+          </div>
+        </div>
         <div class="ic-tmpl-lib-head">
           <h2 class="ic-tmpl-lib-title">工作流模板库</h2>
           <p class="ic-tmpl-lib-desc">选择一个典型场景模板快速开始创作，或从空白画布自由编排节点工作流。</p>
@@ -16632,6 +19547,28 @@
       </div>
     `;
 
+    libEl.querySelector("#canvas-129-first-form").onsubmit=e=>{
+      e.preventDefault();
+      const subject=libEl.querySelector('[name="subject"]').value.trim();
+      if(!subject)return;
+      const tab=createWorkflowTab({title:subject.slice(0,25),blueprint:"single",
+        makeActive:true,autoFit:true,switchToCanvas:true});
+      const txt=tab.graph.nodes.find(n=>n.type==="text_input");
+      if(txt)txt.data.text=subject;
+      const current=CS.graph.nodes.find(n=>n.id===txt?.id);
+      if(current)current.data.text=subject;
+      markActiveTabDirty();persistOpenTabs();libEl.remove();fullRenderCanvas();
+    };
+    libEl.querySelector("#canvas-129-first-asset").onclick=()=>{
+      createWorkflowTab({title:"素材创作",blueprint:"single",
+        makeActive:true,autoFit:true,switchToCanvas:true});
+      libEl.remove();fullRenderCanvas();
+      const asset=CS.graph.nodes.find(n=>n.type==="asset")||spawnShelfItem({kind:"asset"});
+      if(asset)openAssetPickerModal(asset);
+    };
+    libEl.querySelector("#canvas-129-first-template").onclick=()=>{
+      libEl.querySelector(".ic-tmpl-grid")?.scrollIntoView({behavior:"smooth",block:"nearest"});
+    };
     libEl.querySelectorAll("[data-tmpl-bp]").forEach((el) => {
       el.onclick = (e) => {
         e.stopPropagation();
@@ -16650,11 +19587,358 @@
     });
   }
 
+
+  // #129: annotations are CanvasDocument presentation metadata, not Graph
+  // nodes, executable edges, Run facts or media; preserve on simple switch.
+  function canvasVisualAnnotations(){
+    const tab=CS.tabs.find(t=>t.id===CS.activeTabId);
+    if(!tab)return null;
+    tab.editorLayout=tab.editorLayout||{};
+    if(!Array.isArray(tab.editorLayout.visualAnnotations))
+      tab.editorLayout.visualAnnotations=[];
+    return tab.editorLayout.visualAnnotations;
+  }
+  function newCanvasVisualAnnotation(kind){
+    const annotations=canvasVisualAnnotations();
+    if(!annotations)return;
+    const vRect=DOM.viewport.getBoundingClientRect();
+    const world=screenToWorld(vRect.left+vRect.width*.45,vRect.top+vRect.height*.44);
+    const selected=(CS.graph.selectedIds||[]).filter(id=>getNodeById(id));
+    if(kind==="group"&&selected.length<2){
+      toast("请先按住 Shift 选择至少两个节点，再创建视觉分组");
+      return;
+    }
+    const visual={id:E.uid("canvas-note"),kind,
+      text:kind==="group"?"视觉分组":"双击添加说明",
+      x:snapVal(world.x),y:snapVal(world.y),w:230,h:150,
+      nodeIds:kind==="group"?selected:[]};
+    annotations.push(visual);
+    markActiveTabDirty();persistOpenTabs();
+    renderCanvasAnnotations();
+  }
+  function renderCanvasAnnotations(){
+    if(!DOM.world)return;
+    let layer=DOM.world.querySelector("#canvas-129-visual-layer");
+    if(!layer){
+      layer=document.createElement("div");
+      layer.id="canvas-129-visual-layer";
+      DOM.world.appendChild(layer);
+    }
+    if(CS.stageView!=="canvas"){
+      layer.hidden=true;return;
+    }
+    layer.hidden=false;
+    const annotations=canvasVisualAnnotations()||[];
+    const snapshot=JSON.stringify(annotations.map(n=>({
+      id:n.id,kind:n.kind,x:n.x,y:n.y,w:n.w,h:n.h,text:n.text,
+      members:n.nodeIds?.map(id=>{
+        const node=getNodeById(id);
+        return node?[node.x,node.y,node.w,node.h]:null;
+      })||[]
+    })));
+    if(layer.dataset.snapshot===snapshot)return;
+    layer.dataset.snapshot=snapshot;
+    const getFrame=a=>{
+      const members=(a.nodeIds||[]).map(getNodeById).filter(Boolean);
+      if(a.kind==="group"&&members.length){
+        const x=Math.min(...members.map(n=>n.x))-28;
+        const y=Math.min(...members.map(n=>n.y))-48;
+        const right=Math.max(...members.map(n=>n.x+(n.w||340)))+28;
+        const bottom=Math.max(...members.map(n=>n.y+(n.h||260)))+28;
+        return {x,y,w:right-x,h:bottom-y};
+      }
+      return {x:a.x,y:a.y,w:a.w||230,h:a.h||150};
+    };
+    layer.innerHTML=annotations.map(note=>{
+      const p=getFrame(note);
+      return '<div class="ic129-visual-note '+(note.kind==="group"?'ic129-visual-group':'ic129-visual-sticky')+
+        '" data-visual-note="'+esc(note.id)+'" style="left:'+p.x+'px;top:'+p.y+
+        'px;width:'+p.w+'px;height:'+p.h+'px">'+
+        '<div class="ic129-visual-header" data-visual-move="'+esc(note.id)+'">'+
+          (note.kind==="group"?'视觉分组（不影响执行）':'便签')+
+          '<button type="button" data-visual-delete="'+esc(note.id)+'" title="删除这条视觉标注">×</button>'+
+        '</div>'+
+        '<textarea data-visual-text="'+esc(note.id)+'" data-canvas-no-zoom aria-label="视觉便签内容">'+
+          esc(note.text||"")+'</textarea></div>';
+    }).join("");
+    const resolve=id=>annotations.find(n=>n.id===id);
+    layer.querySelectorAll("[data-visual-delete]").forEach(btn=>{
+      btn.onclick=e=>{
+        e.preventDefault();e.stopPropagation();
+        const idx=annotations.findIndex(n=>n.id===btn.dataset.visualDelete);
+        if(idx<0)return;
+        annotations.splice(idx,1);
+        markActiveTabDirty();persistOpenTabs();renderCanvasAnnotations();
+      };
+    });
+    layer.querySelectorAll("[data-visual-text]").forEach(inp=>{
+      inp.onpointerdown=e=>e.stopPropagation();
+      inp.oninput=()=>{
+        const note=resolve(inp.dataset.visualText);
+        if(note){note.text=inp.value;markActiveTabDirty();persistOpenTabs();}
+      };
+      inp.onchange=()=>{renderCanvasAnnotations();};
+    });
+    layer.querySelectorAll("[data-visual-move]").forEach(bar=>{
+      const note=resolve(bar.dataset.visualMove);
+      if(!note||note.kind==="group")return;
+      let origin=null;
+      bar.onpointerdown=e=>{
+        if(e.target.closest("button")||e.button!==0)return;
+        e.preventDefault();e.stopPropagation();
+        origin={x:e.clientX,y:e.clientY,nx:note.x,ny:note.y};
+        bar.setPointerCapture(e.pointerId);
+      };
+      bar.onpointermove=e=>{
+        if(!origin)return;
+        note.x=snapVal(origin.nx+(e.clientX-origin.x)/CS.vk);
+        note.y=snapVal(origin.ny+(e.clientY-origin.y)/CS.vk);
+        const parent=bar.closest(".ic129-visual-note");
+        parent.style.left=note.x+"px";parent.style.top=note.y+"px";
+      };
+      bar.onpointerup=e=>{
+        if(!origin)return;origin=null;
+        markActiveTabDirty();persistOpenTabs();renderCanvasAnnotations();
+      };
+    });
+  }
+
+  // #119: a recheck is a read/poll, never another charged POST /generate.
+  // An abandoned browser lock is not proof that the upstream was cancelled.
+  async function recheckStudioControl(controlId) {
+    const ctrl=getNodeById(controlId);
+    if(!ctrl || ctrl.type!=="output_control")return false;
+    if(_activeBatchRun && _activeBatchRun.ctrlId===controlId &&
+       !_activeBatchRun.cancelled){
+      toast("本页仍有运行中的提交队列，请使用停止按钮终止未提交槽位");
+      return false;
+    }
+    const runId=String(ctrl.data?.runId||ctrl.data?.studio2RunSnapshot?.runId||"");
+    // No remote identity: clear only a detached local busy marker; keep any
+    // frozen pendingRequestIds so an accepted upstream job remains auditable.
+    if(ctrl.data.status==="generating" && (!_activeBatchRun||_activeBatchRun.ctrlId!==controlId)){
+      ctrl.data.status="stopped";
+      for(const display of getDownstreamDisplayNodes(controlId)){
+        if(display.data.status==="generating")display.data.status="idle";
+      }
+      persistOpenTabs();
+    }
+    if(!runId){
+      fullRenderCanvas();
+      toast("已解除失效的本地忙状态；暂无可核实的服务器 Run 编号，未声称任务取消或退款");
+      return false;
+    }
+    const scope=activeCacheScope,epoch=cacheScopeEpoch;
+    const runKey=scope+":"+runId;
+    try{
+      const resp=await fetch("/api/studio/runs/"+encodeURIComponent(runId),{
+        credentials:"include",cache:"no-store"
+      });
+      if(!resp.ok)throw new Error("owner_run_read_failed");
+      const payload=await resp.json();
+      if(!payload?.ok||payload.run?.id!==runId||!Array.isArray(payload.slots))
+        throw new Error("run_read_invalid");
+      if(isStaleScope(epoch,scope))return false;
+      // Reconcile only the latest submitted attempt of each slot. The
+      // existing owner-scoped task GET uses the gateway's real taskId.
+      const toPoll=payload.slots.filter(slot=>slot.needsRecheck&&slot.taskId)
+        .slice(0,12);
+      for(const slot of toPoll){
+        if(isStaleScope(epoch,scope))return false;
+        try{
+          const params=new URLSearchParams({id:String(slot.taskId)});
+          await fetch("/api/studio/tasks?"+params.toString(),{
+            credentials:"include",cache:"no-store"
+          });
+        }catch(error){
+          console.warn("Studio Run remote reconciliation uncertain",error);
+        }
+      }
+      if(isStaleScope(epoch,scope))return false;
+      canvasRunModels.delete(runKey);
+      quickRunModels.delete(runKey);
+      batchRunModels.delete(runKey);
+      if(CS.stageView==="canvas")fullRenderCanvas();
+      else if(["quick","batch"].includes(CS.stageView))renderQuickStart();
+      toast(toPoll.length
+        ?"已向上游重新核实已提交槽位；未完成结果仍按服务器事实显示，取消不保证退款"
+        :"已从服务器重新读取运行状态；无可轮询任务的槽位保持待核实，不会重新计费");
+      return true;
+    }catch(error){
+      if(!isStaleScope(epoch,scope)){
+        canvasRunModels.delete(runKey);
+        quickRunModels.delete(runKey);
+        batchRunModels.delete(runKey);
+        fullRenderCanvas();
+        toast("暂时无法联系运行服务，已清除本地失效锁；上游任务仍可能执行或计费");
+      }
+      return false;
+    }
+  }
+
+  // #126: review/confirmation is fully server-authoritative. Never mark the
+  // old Graph dirty before approval or race ProjectClient.flush against CAS.
+  function openCanvasGraphPatch126(){
+    const tab=CS.tabs.find(t=>t.id===CS.activeTabId);
+    if(!GraphPatchUI){toast("GraphPatch 编辑器未加载，请刷新页面");return;}
+    if(!App.state?.serverBacked||!App.state?.loggedIn){
+      toast("登录后才能使用 AI 画布结构修改");return;
+    }
+    if(!tab?.projectId||tab.projectAuthority!=="graph"||
+      tab.projectSaveState!=="synced"||tab.projectPending){
+      toast("请先将当前画布保存为已确认的云端 Graph 项目，再审阅 AI 补丁");
+      if(tab&&!tab.projectPending&&tab.projectSaveState!=="saving"&&
+         tab.projectSaveState!=="conflict")void saveActiveProject(tab);
+      return;
+    }
+    const scope=activeCacheScope,epoch=cacheScopeEpoch,tabId=tab.id,projectId=tab.projectId;
+    const getContext=()=>{
+      const live=CS.tabs.find(t=>t.id===CS.activeTabId);
+      if(isStaleScope(epoch,scope)||!live||live.id!==tabId||
+         live.projectId!==projectId)return null;
+      return {projectId:live.projectId,
+        baseRevision:Number(live.projectRevision||0),
+        graphRevision:Number(CS.graph.revision||0),
+        saveState:live.projectSaveState,
+        selectedIds:[...(CS.graph.selectedIds||[])]};
+    };
+    GraphPatchUI.open({
+      getContext,
+      onApplied:(response,expected)=>{
+        const live=CS.tabs.find(t=>t.id===CS.activeTabId);
+        const ctx=getContext();
+        if(!live||!ctx||ctx.projectId!==response.projectId||
+           ctx.baseRevision!==Number(expected?.baseRevision)||
+           ctx.graphRevision!==Number(expected?.graphRevision)||
+           ctx.saveState!=="synced"||!response.graph)return false;
+        // Authoritative response retains existing RunSnapshot/Artifact nodes;
+        // invalidate ephemeral browser Undo snapshots and rely on the durable
+        // CAS-guarded Review rollback, never a competing unsynced local patch.
+        CS.graph=normalizeGraphSchema(response.graph);
+        live.graph=cloneGraph(CS.graph);
+        live.projectSyncedGraph=cloneGraph(CS.graph);
+        live.projectRevision=Number(response.projectRevision);
+        live.projectAuthority="graph";
+        live.projectActiveView="canvas";
+        live.projectSaveState="synced";
+        live.projectPending=null;
+        live.projectCopyPending=null;
+        live.projectError="";
+        live.projectRemoteRevision=0;
+        live.editRevision=0;
+        live.dirty=false;
+        CS.undoStack=[];CS.redoStack=[];
+        persistOpenTabs();fullRenderCanvas();updateProjectStatusIndicator();
+        toast(response.phase==="reverted"?"GraphPatch 已撤销并云端保存":
+          "GraphPatch 已确认应用 · 没有启动付费生图");
+        return true;
+      }
+    });
+  }
+
+  // #129: one project, one Graph and server-backed Run projection for both views.
+  function renderCanvasProductUI(){
+    if(!CanvasUI||!DOM.canvasStage)return;
+    const tab=CS.tabs.find(t=>t.id===CS.activeTabId)||null;
+    const runs=CanvasUI.summarize(CS.graph,getCanvasRunProjection);
+    renderCanvasAnnotations();
+    CanvasUI.renderWorkspace({
+      stage:DOM.canvasStage,isCanvas:CS.stageView==="canvas",
+      graph:CS.graph,activeTab:tab,saveText:projectStatusText(tab),runs,
+      onStart:subject=>{
+        // Upgrade an existing blank Project in place; never spawn a parallel tab.
+        const wasBlank=!(CS.graph.nodes||[]).length;
+        if(!wasBlank)return;
+        pushUndo();
+        CS.graph=E.createBlueprintGraph("single",Catalog,window.HANDRAW_MOCK);
+        const textNode=CS.graph.nodes.find(n=>n.type==="text_input");
+        if(textNode)textNode.data.text=String(subject||"").trim();
+        CS.graph.selectedIds=textNode?[textNode.id]:[];
+        markActiveTabDirty();persistOpenTabs();fullRenderCanvas();fitView();
+      },
+      onEdit:(nodeId,field,raw)=>{
+        const node=getNodeById(nodeId);
+        if(!node||!node.data)return;
+        const allowed=node.type==="output_control"?["ratio","count"]:
+          node.type==="skill_params"?["audience","businessScene"]:[];
+        if(!allowed.includes(field))return;
+        let value=String(raw||"").trim();
+        if(field==="ratio"){
+          value=normalizeRatioInput(value);
+          if(!isValidRatioInput(value)){
+            toast("画幅比例请使用宽:高格式，如 3:4、16:9");return;
+          }
+        }else if(field==="count"){
+          value=Math.max(1,Math.min(200,Math.round(Number(value)||1)));
+        }else{
+          value=value.slice(0,200);
+        }
+        if(node.data[field]===value)return;
+        pushUndo();
+        node.data[field]=value;
+        markActiveTabDirty();
+        persistOpenTabs();fullRenderCanvas();
+      },
+      onRecheck:controlId=>{void recheckStudioControl(controlId);},
+      onStop:controlId=>{
+        if(!cancelActiveBatchGeneration(controlId)){
+          toast("未找到可停止的本地队列；已提交远端的任务仍需从运行记录核实");
+        }else{
+          toast("已请求停止未提交槽位；上游已接收任务仍可能完成或计费");
+          fullRenderCanvas();
+        }
+      },
+      onAction:(action,node)=>{
+        if(action==="graphpatch")openCanvasGraphPatch126();
+        else if(action==="save")handleProjectStatusClick();
+        else if(action==="simple")switchCreationStage("simple");
+        else if(action==="undo")undoGraph();
+        else if(action==="redo")redoGraph();
+        else if(action==="note")newCanvasVisualAnnotation("note");
+        else if(action==="group")newCanvasVisualAnnotation("group");
+        else if(action==="run"){
+          if(node?.type==="output_control")void runOutputControlNode(node.id);
+          else void runAllOutputControls();
+        }else if(action==="edit"&&node?.type==="text_input")openTextEditModal(node.id);
+        else if(action==="style"&&node?.type==="skill_params")openSkillFieldPickerModal(node,"style1");
+        else if(action==="layout"&&node?.type==="skill_params")openSkillFieldPickerModal(node,"layout");
+        else if(action==="asset"&&node?.type==="asset")openAssetPickerModal(node);
+        else if(action==="add-asset"){
+          // An asset-only start must still have a valid single-image Graph.
+          if(!(CS.graph.nodes||[]).length){
+            const form=DOM.canvasStage.querySelector("#canvas-129-quick-form");
+            form?.dispatchEvent(new Event("submit",{cancelable:true,bubbles:true}));
+            if(!(CS.graph.nodes||[]).length){
+              // The subject form is optional for adding a reference.
+              const g=E.createBlueprintGraph("single",Catalog,window.HANDRAW_MOCK);
+              pushUndo();CS.graph=g;markActiveTabDirty();persistOpenTabs();fullRenderCanvas();
+            }
+          }
+          const asset=CS.graph.nodes.find(n=>n.type==="asset");
+          if(asset)openAssetPickerModal(asset);
+        }else if(action==="template"){
+          if(!(CS.graph.nodes||[]).length){
+            pushUndo();CS.graph=E.createBlueprintGraph("single",Catalog,window.HANDRAW_MOCK);
+            markActiveTabDirty();persistOpenTabs();fullRenderCanvas();fitView();
+          }else{
+            const btn=DOM.workbenchBar?.querySelector("#tb-new-wf");
+            if(btn)btn.click();
+          }
+        }
+      }
+    });
+  }
+
   function fullRenderCanvas() {
+    // A first-use template changes from zero tabs to an active Graph without
+    // remounting the shell. Restore the hidden shelf on that exact transition.
+    if(CS.stageView==="canvas"&&CS.tabs?.length&&DOM.shelf&&
+       (DOM.shelf.style.display==="none"||!DOM.shelf.querySelector("#ic-shelf-grid-box")))
+      renderShelfDrawer();
     syncAllDownstreamArticlePlans();
     if (CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length)) {
       if (DOM.nodesLayer) DOM.nodesLayer.innerHTML = "";
-      if (DOM.edgesSvg) DOM.edgesSvg.innerHTML = "";
+      window.HandrawCanvasRenderer.clearEdgeMarkup(DOM.edgesSvg);
       renderCanvasTemplateLibrary();
     } else {
       const tLib = DOM.canvasStage?.querySelector("#canvas-template-library");
@@ -16663,6 +19947,7 @@
       renderFloatingOverlays();
     }
     renderTopAndBottomDocks();
+    renderCanvasProductUI();
     renderMinimap();
     if (CS.stageView === "quick" || CS.stageView === "batch") {
       renderQuickStart();
@@ -16676,7 +19961,7 @@
     vp.addEventListener(
       "wheel",
       (e) => {
-        if (e.target.closest("[data-canvas-no-zoom]")) return;
+        if (e.target.closest("[data-canvas-no-zoom], input, textarea, select, [contenteditable], .ic-node, .ic129-inspector-info")) return;
         e.preventDefault();
         closeContextMenu();
         zoomAroundPoint(e.clientX, e.clientY, e.deltaY < 0 ? 1.11 : 1 / 1.11);
@@ -16734,6 +20019,9 @@
 
     vp.addEventListener("pointerdown", (e) => {
       if (e.button === 2) return;
+      // A second pointer start must not retain a live ResizeObserver from
+      // an interrupted first drag.
+      dragCtx?.edgeSession?.dispose?.();
       closeContextMenu();
 
       if (
@@ -16777,7 +20065,7 @@
         CS.selectedEdgeId = edgeHit.getAttribute("data-edge-hit");
         CS.selectedEdgePt = { x: e.clientX, y: e.clientY - 18 };
         CS.graph.selectedIds = [];
-        renderEdgesSvg();
+        refreshCanvasSelection();
         renderFloatingOverlays();
         return;
       }
@@ -16821,8 +20109,16 @@
         try {
           vp.setPointerCapture(e.pointerId);
         } catch (_) {}
-        renderWorldNodes();
+        refreshCanvasSelection();
+        // The selected edge SVG may have been rebuilt above. Capture its
+        // stable incident bindings only after the authoritative redraw.
+        dragCtx.edgeSession=window.HandrawCanvasRenderer.createEdgeDragSession(
+          DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
+          DOM.nodesLayer,startPositions.map(item=>item.node.id),bezierPath);
         renderFloatingOverlays();
+        // Read the selected title bar geometry at the very start of a drag.
+        // Do not retain across selection, graph, viewport or toolbar changes.
+        dragCtx.overlayMetrics=captureDragOverlayMetrics(dragCtx.startPositions);
         return;
       }
 
@@ -16841,7 +20137,7 @@
       } else {
         if (!e.shiftKey && CS.graph.selectedIds.length) {
           CS.graph.selectedIds = [];
-          renderWorldNodes();
+          refreshCanvasSelection();
           renderFloatingOverlays();
         }
         vp.classList.add("is-panning");
@@ -16863,6 +20159,7 @@
       }
 
       if (dragCtx.mode === "node-drag") {
+        const frameStart=window.__HANDRAW_TESTING__===true?performance.now():null;
         const dxScreen = e.clientX - dragCtx.startX;
         const dyScreen = e.clientY - dragCtx.startY;
         if (!dragCtx.moved && Math.hypot(dxScreen, dyScreen) < 3) return;
@@ -16879,17 +20176,66 @@
         dragCtx.moved = true;
         const dxW = dxScreen / CS.vk;
         const dyW = dyScreen / CS.vk;
+        // #111 isolated diagnosis: compare native DOM/edge/overlay/minimap
+        // invalidation without changing production drag behavior. All bypass
+        // modes are inert unless the native browser test flag is present.
+        const diagMode=window.__HANDRAW_TESTING__===true?
+          window.HANDRAW_STUDIO_TESTING?.canvasDragVisualProbeMode||"normal":"normal";
+        const skipCard=diagMode==="no-card"||diagMode==="no-visual";
+        const skipEdges=diagMode==="no-edges"||
+          diagMode==="node-only"||diagMode==="no-visual";
+        const skipOverlay=diagMode==="no-overlay"||
+          diagMode==="node-only"||diagMode==="no-visual";
+        const skipMini=diagMode==="no-minimap"||
+          diagMode==="node-only"||diagMode==="no-visual";
         for (const item of dragCtx.startPositions) {
           item.node.x = snapVal(item.ox + dxW);
           item.node.y = snapVal(item.oy + dyW);
-          if (item.el) {
+          if (item.el && !skipCard) {
             item.el.style.left = `${item.node.x}px`;
             item.el.style.top = `${item.node.y}px`;
           }
         }
-        renderEdgesSvg();
-        positionFloatingOverlays();
-        renderMinimap();
+        const movedIds=dragCtx.startPositions.map(item=>item.node.id);
+        // Keep the existing hit targets/selection; render all edges only if
+        // the partial path finds a missing or ambiguous SVG/Graph binding.
+        const wasSession=Boolean(dragCtx.edgeSession);
+        let usedSession=!skipEdges&&wasSession&&dragCtx.edgeSession.update(
+          CS.graph.edges||[],CS.graph.nodes||[]);
+        if(!skipEdges&&!usedSession){
+          // A mid-drag Graph/DOM/Run update invalidates the cached edges.
+          // Fall back once to the authoritative complete SVG calculation,
+          // then index the latest mounted graph before the next movement.
+          dragCtx.edgeSession?.dispose?.();
+          renderEdgesSvg();
+          dragCtx.edgeSession=window.HandrawCanvasRenderer.createEdgeDragSession(
+            DOM.edgesSvg,CS.graph.edges||[],CS.graph.nodes||[],
+            DOM.nodesLayer,movedIds,bezierPath);
+        }
+        dragCtx.lastGraph=CS.graph;
+        dragCtx.lastNodes=CS.graph.nodes;
+        dragCtx.lastEdges=CS.graph.edges;
+        dragCtx.lastSelection=CS.graph.selectedIds;
+        dragCtx.lastEdgeTrusted=Boolean(usedSession)&&diagMode==="normal";
+        const edgesEnd=frameStart===null?null:performance.now();
+        const overlayCached=skipOverlay?null:
+          positionFloatingOverlays(dragCtx.overlayMetrics);
+        const overlayEnd=frameStart===null?null:performance.now();
+        if(!skipMini)renderMinimapMovedNodes(movedIds);
+        const minimapEnd=frameStart===null?null:performance.now();
+        if(frameStart!==null&&DOM.nodesLayer){
+          const samples=DOM.nodesLayer._drag111Samples||
+            (DOM.nodesLayer._drag111Samples=[]);
+          if(samples.length<120)samples.push({
+            totalMs:minimapEnd-frameStart,
+            edgeAndPositionMs:edgesEnd-frameStart,
+            overlayMs:overlayEnd-edgesEnd,
+            minimapMs:minimapEnd-overlayEnd,
+            overlayCached,usedSession,
+            visualProbeMode:diagMode,
+            movedCount:movedIds.length
+          });
+        }
         return;
       }
 
@@ -16938,10 +20284,45 @@
       if (!dragCtx || e.pointerId !== dragCtx.pointerId) return;
       const ctx = dragCtx;
       dragCtx = null;
+      ctx.edgeSession?.dispose?.();
       vp.classList.remove("is-panning");
 
       if (ctx.mode === "node-drag" && ctx.moved) {
-        fullRenderCanvas();
+        // A pure coordinate drag has already moved the correct card DOM,
+        // incident SVG paths and minimap. Avoid recreating all 300 cards on
+        // release only when every model/DOM/selection/topology identity still
+        // matches the last physical pointermove. On a concurrent Graph/Run
+        // update, stale card, changed selection or untrusted edge cache,
+        // conservatively reconcile the full authoritative Canvas.
+        const forceFull=window.__HANDRAW_TESTING__===true &&
+          window.HANDRAW_STUDIO_TESTING?.canvasDragFinishMode==="full";
+        const ids=(CS.graph?.selectedIds||[]);
+        const safe=!forceFull &&
+          CS.stageView==="canvas" &&
+          ctx.lastGraph===CS.graph &&
+          ctx.lastNodes===CS.graph?.nodes &&
+          ctx.lastEdges===CS.graph?.edges &&
+          ctx.lastSelection===ids &&
+          ctx.lastEdgeTrusted===true &&
+          ctx.startPositions.length>0 &&
+          ids.length===ctx.startPositions.length &&
+          DOM.nodesLayer?.isConnected &&
+          DOM.edgesSvg?.isConnected &&
+          (CS.graph.edges||[]).length===
+            DOM.edgesSvg.querySelectorAll('g.ic-edge-group[data-edge-id]').length &&
+          ctx.startPositions.every(item=>
+            item.el?.isConnected &&
+            DOM.nodesLayer.contains(item.el) &&
+            item.el===DOM.nodesLayer.querySelector(`[data-node-id="${item.node.id}"]`) &&
+            item.node===getNodeById(item.node.id) &&
+            ids.includes(item.node.id) &&
+            item.el.style.left===`${item.node.x}px` &&
+            item.el.style.top===`${item.node.y}px`);
+        if(!safe)fullRenderCanvas();
+        // Full render is only a fallback; in the safe case the visible card,
+        // incident SVG paths and minimap already match the persisted Graph.
+        if(window.__HANDRAW_TESTING__===true && DOM.nodesLayer)
+          DOM.nodesLayer._drag111Finish={targeted:safe,nodeCount:ctx.startPositions.length};
         persistOpenTabs();
       } else if (ctx.mode === "node-drag" && !ctx.moved && !ctx.withModifier && ctx.clickedNodeId) {
         const clicked = getNodeById(ctx.clickedNodeId);
@@ -16960,7 +20341,7 @@
           CS.graph.selectedIds = CS.graph.nodes
             .filter((n) => n.x + (n.w || 320) >= w1.x && n.x <= w2.x && n.y + (n.h || 240) >= w1.y && n.y <= w2.y)
             .map((n) => n.id);
-          renderWorldNodes();
+          refreshCanvasSelection();
           renderFloatingOverlays();
         }
       } else if (ctx.mode === "wiring" && CS.wiring) {
@@ -17034,6 +20415,10 @@
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
         e.preventDefault();
         redoGraph();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        e.preventDefault();copyCanvasNodes();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        e.preventDefault();pasteCanvasNodes();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
         e.preventDefault();
         duplicateNodes(CS.graph.selectedIds);
@@ -17048,9 +20433,38 @@
     });
 
     window.addEventListener("resize", () => {
+      // A viewport resize invalidates any width/height captured on pointerdown.
+      if(dragCtx)dragCtx.overlayMetrics=null;
       positionFloatingOverlays();
       renderMinimap();
       updateTabScrollButtons();
+    });
+    window.addEventListener("online", () => {
+      // A network transition invalidates stale Run read caches, not the
+      // paid request identity or its immutable RunSnapshot.
+      canvasRunModels.clear();
+      quickRunModels.clear();
+      batchRunModels.clear();
+      if(CS.stageView==="canvas")fullRenderCanvas();
+      else if(["quick","batch"].includes(CS.stageView))renderQuickStart();
+      // Reconnect every account-scoped open Project, not just the visible
+      // tab: a single global debounce timer must not strand hidden outboxes.
+      // A 409 remains blocked until explicit resolution.
+      for (const tab of CS.tabs) {
+        const wf = (CS.savedWorkflows || []).find(w => w.id === tab.savedId && !w.isOfficialPreset);
+        if (tab.id === CS.activeTabId && wf &&
+            ["local", "error"].includes(wf.cloudSaveState)) {
+          tab.dirty = true;
+          scheduleWorkflowAutoSave();
+        }
+        if (tab.projectPending ||
+            ["dirty", "local_only", "error"].includes(tab.projectSaveState)) {
+          void saveActiveProject(tab);
+        }
+      }
+      if ((CS.myArticles || []).some(a => a?.projectPending ||
+          (a?._articleProjectDirty && a.projectSaveState !== "conflict")))
+        scheduleArticleProjectAutosave();
     });
   }
 
@@ -17058,6 +20472,7 @@
     DOM.root = document.getElementById("studio-app-root");
     DOM.root.innerHTML = `
       <div class="qc-entry-bar" id="ic-entry-bar"></div>
+      <div class="ic-dag-panel" id="ic-dag-panel" role="region" aria-label="DAG 执行状态"></div>
       <header class="ic-workbench-bar" id="ic-workbench-bar"></header>
       <div class="ic-stage-wrap" id="ic-stage-wrap">
         <section class="ic-quick-stage" id="ic-quick-stage" style="display:none;"></section>
@@ -17078,10 +20493,12 @@
         <section class="ic-preview-stage" id="ic-preview-stage" style="display:none;"></section>
         <section class="ic-history-stage" id="ic-history-stage" style="display:none;"></section>
         <section class="ic-workflows-stage" id="ic-workflows-stage" style="display:none;"></section>
+        <section class="ic-projects-stage" id="ic-projects-stage" style="display:none;"></section>
       </div>
     `;
 
     DOM.entryBar = document.getElementById("ic-entry-bar");
+    DOM.dagPanel = document.getElementById("ic-dag-panel");
     DOM.quickStage = document.getElementById("ic-quick-stage");
     DOM.workbenchBar = document.getElementById("ic-workbench-bar");
     DOM.stageWrap = document.getElementById("ic-stage-wrap");
@@ -17099,6 +20516,7 @@
     DOM.previewStage = document.getElementById("ic-preview-stage");
     DOM.historyStage = document.getElementById("ic-history-stage");
     DOM.workflowsStage = document.getElementById("ic-workflows-stage");
+    DOM.projectsStage = document.getElementById("ic-projects-stage");
   }
 
   function syncCatalogFromShared() {
@@ -17196,6 +20614,9 @@
       renderShelfDrawer();
       fullRenderCanvas();
       bindViewportInteractions();
+      // Existing ?project=ID links still hydrate their specific saved graph.
+      // They no longer require or display a separate Project Center page.
+      if (CS.pendingProjectDeepLink) void openCloudProject(CS.pendingProjectDeepLink);
       if (CS.stageView === "canvas") requestAnimationFrame(() => fitView());
       resumePendingCloudTasks();
     } catch (err) {
@@ -17220,6 +20641,7 @@
   window.HANDRAW_STUDIO = window.HANDRAW_STUDIO || {};
   window.HANDRAW_STUDIO.clearControlWorkspaceResults = clearControlWorkspaceResults;
   window.HANDRAW_STUDIO.cancelActiveBatchGeneration = cancelActiveBatchGeneration;
+  window.HANDRAW_STUDIO.runDAGOutputControls = runDAGOutputControls;
   window.HANDRAW_STUDIO.getCacheScope = () => activeCacheScope;
   window.HANDRAW_STUDIO.getEngineMode = () => CS.engineMode;
   window.HANDRAW_STUDIO.openReferenceAssetPickerModal = openAssetPickerModal;
@@ -17230,6 +20652,7 @@
   window.HANDRAW_STUDIO.ensureBatchTab = ensureBatchTab;
   window.HANDRAW_STUDIO.resolveShareTitle = resolveShareTitle;
   window.HANDRAW_STUDIO.openHistoryStage = openHistoryPage;
+  window.HANDRAW_STUDIO.openProjectCenter = openProjectCenter;
   window.HANDRAW_STUDIO.getHistory = () => CS.generationHistory;
   window.HANDRAW_STUDIO.setHistory = (list) => {
     CS.generationHistory = list;
@@ -17265,6 +20688,32 @@
       getHistory: () => (Array.isArray(CS.generationHistory) ? JSON.parse(JSON.stringify(CS.generationHistory)) : null),
       getTabs: () => CS.tabs,
       getGraph: () => CS.graph,
+      // #111: test-only instrumentation of the actual product card renderer.
+      // Does not schedule saves or issue generation requests; never enabled
+      // outside the explicit __HANDRAW_TESTING__ flag.
+      focusCanvasNodeForBenchmark: (id) => {
+        // Test-only camera positioning for physical Playwright mouse drags.
+        // No Graph mutation, autosave or external media API activity.
+        const n=(CS.graph.nodes||[]).find(node=>String(node.id)===String(id));
+        if(!n||!DOM.viewport)throw Error("canvas_drag_focus_node_missing");
+        const r=DOM.viewport.getBoundingClientRect();
+        CS.vk=1;
+        CS.vx=r.width*0.5-(n.x+(n.w||332)*0.5);
+        CS.vy=r.height*0.5-(n.y+32);
+        applyViewportTransform();
+        DOM.nodesLayer._drag111Samples=[];
+        return {id:String(n.id),zoom:CS.vk};
+      },
+      renderCanvasNodesForBenchmark: (dirtyNodeIds = null) => {
+        if (!DOM.nodesLayer) throw new Error("canvas_nodes_layer_missing");
+        DOM.nodesLayer.dataset.canvasBenchmark = "1";
+        const start = performance.now();
+        renderWorldNodes(dirtyNodeIds);
+        return {
+          durationMs: performance.now() - start,
+          patch: DOM.nodesLayer._lastCanvasPatchStats || null
+        };
+      },
       applyDurableTaskResult,
       isStaleScope,
       ensureStableRequestId,

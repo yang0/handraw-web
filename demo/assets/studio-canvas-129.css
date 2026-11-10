@@ -1,0 +1,179 @@
+/* Canvas 2.0 / #129. Presentation-only layout; no change to Graph semantics. */
+#canvas-129-topbar,#canvas-129-inspector,#canvas-129-taskbar,#canvas-129-empty {
+  color:var(--ic-ink);font-size:12px;
+}
+#canvas-129-topbar[hidden],#canvas-129-inspector[hidden],
+#canvas-129-taskbar[hidden],#canvas-129-empty[hidden] {display:none!important}
+#canvas-129-topbar {
+  position:absolute;z-index:45;top:10px;left:242px;right:14px;min-height:44px;
+  display:flex;gap:6px;align-items:center;padding:5px 9px;
+  background:var(--ic-panel);border:1px solid var(--ic-border);
+  border-radius:12px;box-shadow:var(--ic-dock-shadow);backdrop-filter:blur(16px);
+}
+.ic-canvas-stage.shelf-collapsed #canvas-129-topbar{left:14px}
+/* Product UX #136: only the run action is primary; lesser-used tools are tucked away. */
+#canvas-129-topbar {justify-content:flex-end;}
+.ic129-more-tools {position:relative;}
+.ic129-more-tools > summary {list-style:none;cursor:pointer;padding:7px 10px;border:1px solid var(--ic-border);border-radius:7px;background:var(--ic-surface);font-weight:750;white-space:nowrap;}
+.ic129-more-tools > summary::-webkit-details-marker {display:none;}
+.ic129-more-tools > summary::after {content:" ▾";}
+.ic129-more-tools > summary:focus-visible {outline:2px solid var(--ic-select);outline-offset:2px;}
+.ic129-more-tools-panel {position:absolute;right:0;top:calc(100% + 7px);z-index:80;display:grid;gap:6px;min-width:164px;padding:8px;border-radius:10px;background:var(--ic-panel-solid);border:1px solid var(--ic-border);box-shadow:var(--ic-dock-shadow);}
+.ic129-more-tools-panel button {width:100%;text-align:left;}
+
+.ic129-project-name{font-weight:900;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px;font-size:13px}
+.ic129-save-state{font-size:10px;color:var(--ic-muted);margin-right:auto;white-space:nowrap}
+#canvas-129-topbar button,#canvas-129-inspector button,
+#canvas-129-taskbar button,#canvas-129-empty button,.ic129-result-actions button {
+  background:var(--ic-surface);color:var(--ic-ink);border:1px solid var(--ic-border);
+  border-radius:7px;cursor:pointer;padding:6px 9px;font-size:11px;font-weight:750;
+}
+#canvas-129-topbar button:hover,#canvas-129-inspector button:hover,
+#canvas-129-taskbar button:hover,#canvas-129-empty button:hover,.ic129-result-actions button:hover{
+  border-color:var(--ic-select);background:var(--ic-panel-solid);
+}
+#canvas-129-topbar .ic129-primary,#canvas-129-empty .ic129-primary {
+  background:var(--vermilion);color:#fff;border-color:transparent;
+}
+.ic-canvas-stage .ic-canvas-toolstrip{top:65px}
+#canvas-129-inspector {
+  position:absolute;z-index:43;right:12px;top:65px;bottom:116px;width:234px;
+  background:var(--ic-panel);border:1px solid var(--ic-border);border-radius:13px;
+  overflow:auto;box-shadow:var(--ic-dock-shadow);backdrop-filter:blur(16px);
+}
+.ic129-inspector-title{display:flex;justify-content:space-between;align-items:center;
+  padding:12px;border-bottom:1px solid var(--ic-border)}
+.ic129-inspector-info{padding:14px;line-height:1.6;overflow-wrap:anywhere}
+.ic129-inspector-info h3{margin:0 0 12px;font-size:13px}
+.ic129-inspector-info p{margin:6px 0 12px;color:var(--ic-muted)}
+.ic129-inspector-info button{display:inline-block;margin:5px 4px 0 0}
+#canvas-129-taskbar{
+  /* Reserve the right-hand tool rail even when 300 branches are running. */
+  position:absolute;z-index:46;bottom:10px;left:242px;right:188px;
+  background:var(--ic-panel);border:1px solid var(--ic-border);border-radius:12px;
+  box-shadow:var(--ic-dock-shadow);backdrop-filter:blur(16px);
+  max-height:36vh;overflow:auto;padding:9px 12px;
+}
+.ic-canvas-stage.shelf-collapsed #canvas-129-taskbar{left:14px}
+.ic129-task-head{display:flex;align-items:center;gap:9px}
+.ic129-task-head strong{font-size:12px}
+.ic129-task-head span{color:var(--ic-muted)}
+.ic129-task-head button{margin-left:auto}
+/* Unbounded rows grew the taskbar above the zoom dock at 300 nodes.
+ * A single horizontally scrollable summary row has a fixed, compact height;
+ * expanding the task list keeps the separate scrollable details below.
+ */
+.ic129-task-chips{display:flex;flex-wrap:nowrap;gap:8px;margin-top:7px;
+  max-width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;padding-bottom:3px}
+.ic129-task-chip{display:flex;flex:0 0 auto;white-space:nowrap;gap:9px;background:var(--ic-surface);
+  border:1px solid var(--ic-border);border-radius:8px;padding:5px 8px}
+.ic129-task-chip span:last-child{font-variant-numeric:tabular-nums;color:var(--ic-muted)}
+.ic129-task-details{display:grid;gap:8px;max-height:160px;overflow:auto;margin-top:9px;border-top:1px solid var(--ic-border);padding-top:8px}
+.ic129-task-details>div{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.ic129-task-details button{margin-left:auto}
+.ic-canvas-stage .ic-bottom-right-dock{bottom:100px;right:14px;z-index:48}
+.ic-canvas-stage .ic-minimap{bottom:149px}
+#canvas-129-empty{position:absolute;inset:64px 250px 100px 235px;z-index:44;
+  display:grid;place-items:center;pointer-events:none}
+.ic129-empty-card{width:min(95%,510px);background:var(--ic-panel);border:1px solid var(--ic-border);
+  padding:24px;border-radius:18px;box-shadow:var(--ic-dock-shadow);pointer-events:auto}
+.ic129-empty-card h2{font-size:19px;margin:0 0 7px}
+.ic129-empty-card p{color:var(--ic-muted);line-height:1.55}
+.ic129-empty-card form{display:grid;gap:8px}
+.ic129-empty-card input{width:100%;padding:10px 12px;border-radius:8px;
+  border:1px solid var(--ic-border);background:var(--ic-panel-solid);color:var(--ic-ink);box-sizing:border-box}
+.ic129-empty-actions{display:flex;gap:10px;margin-top:12px}
+.ic129-gallery-card{display:grid;gap:9px}
+.ic129-group-head{display:flex;gap:9px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.ic129-group-head strong{font-size:12px}
+.ic129-group-head span{color:var(--ic-muted);font-size:10px}
+.ic129-group-cover{position:relative;min-height:80px;background:var(--ic-surface);border-radius:10px;overflow:hidden}
+.ic129-group-cover img{width:100%;height:180px;object-fit:contain;display:block;cursor:zoom-in}
+.ic129-cover-count{position:absolute;right:8px;top:8px;border-radius:8px;
+ background:#202020c7;color:#fff;padding:5px 9px}
+.ic129-group-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;max-height:410px;overflow:auto}
+.ic129-result-slot{display:flex;flex-direction:column;gap:5px;min-width:0;
+  padding:6px;border:1px solid var(--ic-border);border-radius:8px;background:var(--ic-surface)}
+.ic129-result-slot img{width:100%;height:125px;object-fit:contain;cursor:zoom-in}
+.ic129-slot-index{color:var(--ic-muted);font-size:10px}
+.ic129-slot-placeholder{min-height:70px;display:grid;place-items:center;text-align:center;color:var(--ic-muted)}
+.ic129-slot-failed{border-style:dashed}
+.ic129-result-actions{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+.ic129-result-actions button,.ic129-result-actions a{padding:4px 7px;font-size:10px;
+  border-radius:6px;border:1px solid var(--ic-border);background:var(--ic-surface);
+  color:var(--ic-ink);cursor:pointer;text-decoration:none}
+.ic129-result-actions a:hover{border-color:var(--ic-select)}
+/* Node geometry remains stable when selection changes (no CSS-dependent card growth). */
+.ic-node-skill_params .ic-v4-card {max-height:295px;overflow-y:auto;overscroll-behavior:contain}
+.ic-node-output_control .ic-v4-card {max-height:325px;overflow-y:auto;overscroll-behavior:contain}
+.ic-node-output_control .ic-ctrl-generate-btn {position:sticky;bottom:0;z-index:2}
+.ic-disp-single-wrap img{max-height:none;max-width:100%;height:auto;object-fit:contain}
+@media(max-width:1200px){
+  #canvas-129-inspector{display:none}
+  #canvas-129-topbar{right:8px;flex-wrap:wrap}
+  #canvas-129-empty{right:15px}
+}
+@media(max-width:768px){
+  #canvas-129-topbar{left:8px;top:7px;right:8px}
+  #canvas-129-topbar button{padding:5px}
+  .ic129-project-name{max-width:90px}
+  .ic129-save-state{display:none}
+  #canvas-129-taskbar{left:8px;right:8px;bottom:8px}
+  #canvas-129-empty{inset:130px 8px 110px}
+  .ic-canvas-stage .ic-bottom-right-dock{bottom:115px}
+}
+
+/* Explicit tabs for assets, executable nodes, and safe ready-made templates. */
+.ic129-shelf-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:8px 10px;border-bottom:1px solid var(--ic-border)}
+.ic129-shelf-tabs button{border:0;border-radius:7px;background:transparent;color:var(--ic-muted);padding:8px 3px;cursor:pointer;font-size:11px;font-weight:800}
+.ic129-shelf-tabs button.is-active{background:var(--ic-surface);color:var(--ic-ink);box-shadow:inset 0 0 0 1px var(--ic-border)}
+.ic129-shelf-action{width:100%;display:block;text-align:left;padding:11px;margin:0 0 7px;
+ background:var(--ic-surface);border:1px solid var(--ic-border);border-radius:9px;
+ color:var(--ic-ink);font-size:12px;font-weight:750;cursor:pointer}
+.ic129-shelf-action:hover{border-color:var(--ic-select)}
+.ic129-shelf-help{margin:3px 0 12px;font-size:11px;line-height:1.5;color:var(--ic-muted)}
+
+.ic129-first-start{max-width:680px;margin:0 auto 20px;padding:18px 20px;
+  border:1px solid var(--ic-border);border-radius:15px;background:var(--ic-panel);
+  box-shadow:var(--ic-dock-shadow)}
+.ic129-first-start h2{font-size:18px;margin:0 0 6px}
+.ic129-first-start p{font-size:12px;line-height:1.5;color:var(--ic-muted);margin:0 0 13px}
+.ic129-first-start form{display:flex;flex-wrap:wrap;gap:8px}
+.ic129-first-start form input{flex:1;min-width:200px;border:1px solid var(--ic-border);
+  border-radius:8px;background:var(--ic-panel-solid);padding:10px 12px;color:var(--ic-ink)}
+.ic129-first-start button{cursor:pointer;border:1px solid var(--ic-border);
+  border-radius:8px;background:var(--ic-surface);color:var(--ic-ink);font-weight:800;
+  padding:8px 12px}
+.ic129-first-start form button{background:var(--vermilion);color:#fff;border-color:transparent}
+.ic129-first-actions{display:flex;gap:8px;margin-top:9px}
+
+/* CanvasDocument note/group overlay, deliberately outside executable nodes. */
+#canvas-129-visual-layer{position:absolute;inset:0;pointer-events:none}
+#canvas-129-visual-layer[hidden]{display:none}
+.ic129-visual-note{position:absolute;pointer-events:auto;box-sizing:border-box;
+ border:1px solid rgba(130,110,54,.42);border-radius:9px;
+ box-shadow:0 3px 10px rgba(60,48,12,.08);background:#fff7d8}
+.ic129-visual-header{display:flex;align-items:center;justify-content:space-between;
+ cursor:grab;user-select:none;padding:6px 9px;font-size:10px;font-weight:850;color:#786237}
+.ic129-visual-header button{padding:0 5px;cursor:pointer;background:transparent;border:0;
+ font-size:16px;color:inherit}
+.ic129-visual-note textarea{display:block;width:100%;height:calc(100% - 31px);
+ box-sizing:border-box;resize:none;border:0;background:transparent;
+ padding:7px 9px;line-height:1.45;font-size:12px;outline:0;color:#55472a}
+.ic129-visual-group{background:rgba(116,148,183,.055);border:1.5px dashed #87a2be;
+ pointer-events:none;box-shadow:none}
+.ic129-visual-group .ic129-visual-header{pointer-events:auto;background:#edf4fc;
+ color:#405a73;border-radius:7px 7px 0 0;cursor:default}
+.ic129-visual-group textarea{height:39px;pointer-events:auto;max-width:270px;
+ color:#405a73;background:#edf4fc95}
+
+.ic129-compare-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+ gap:14px;max-height:75vh;overflow:auto;padding:10px}
+.ic129-compare-grid>div{display:flex;flex-direction:column;gap:9px;min-width:0}
+.ic129-compare-grid img{max-width:100%;width:100%;height:50vh;object-fit:contain;
+ background:#f5f5f5;border-radius:10px}
+.ic129-compare-grid a{font-size:12px;color:var(--ic-ink)}
+.ic129-inspector-field{display:grid;gap:4px;margin:10px 0;font-size:11px;font-weight:750}
+.ic129-inspector-field input{width:100%;box-sizing:border-box;padding:8px 9px;
+ background:var(--ic-panel-solid);border:1px solid var(--ic-border);
+ color:var(--ic-ink);border-radius:7px;font:inherit}
