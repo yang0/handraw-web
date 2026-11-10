@@ -11,6 +11,16 @@
   border-radius:12px;box-shadow:var(--ic-dock-shadow);backdrop-filter:blur(16px);
 }
 .ic-canvas-stage.shelf-collapsed #canvas-129-topbar{left:14px}
+/* Product UX #136: only the run action is primary; lesser-used tools are tucked away. */
+#canvas-129-topbar {justify-content:flex-end;}
+.ic129-more-tools {position:relative;}
+.ic129-more-tools > summary {list-style:none;cursor:pointer;padding:7px 10px;border:1px solid var(--ic-border);border-radius:7px;background:var(--ic-surface);font-weight:750;white-space:nowrap;}
+.ic129-more-tools > summary::-webkit-details-marker {display:none;}
+.ic129-more-tools > summary::after {content:" ▾";}
+.ic129-more-tools > summary:focus-visible {outline:2px solid var(--ic-select);outline-offset:2px;}
+.ic129-more-tools-panel {position:absolute;right:0;top:calc(100% + 7px);z-index:80;display:grid;gap:6px;min-width:164px;padding:8px;border-radius:10px;background:var(--ic-panel-solid);border:1px solid var(--ic-border);box-shadow:var(--ic-dock-shadow);}
+.ic129-more-tools-panel button {width:100%;text-align:left;}
+
 .ic129-project-name{font-weight:900;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px;font-size:13px}
 .ic129-save-state{font-size:10px;color:var(--ic-muted);margin-right:auto;white-space:nowrap}
 #canvas-129-topbar button,#canvas-129-inspector button,
