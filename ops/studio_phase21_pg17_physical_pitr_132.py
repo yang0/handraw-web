@@ -266,11 +266,13 @@ def verify_restored(*,target_dsn,expected,declared_host):
                ("PGHOSTADDR","PGSERVICE","PGSERVICEFILE"))):
         raise ValueError("read-only restore DSN must target only the local recovery host")
     if (not isinstance(expected,dict) or set(expected)!={"schemaVersion","expected",
-            "targetUtc","backupManifestSha256"}
+            "targetUtc","backupManifestSha256","sourceSystemIdentifierSha256"}
         or expected["schemaVersion"]!=1
         or not isinstance(expected["backupManifestSha256"],str)
-        or not HASH.fullmatch(expected["backupManifestSha256"])):
-        raise ValueError("invalid out-of-band pre-target snapshot")
+        or not HASH.fullmatch(expected["backupManifestSha256"])
+        or not isinstance(expected.get("sourceSystemIdentifierSha256"),str)
+        or not HASH.fullmatch(expected["sourceSystemIdentifierSha256"])):
+        raise ValueError("invalid out-of-band pre-target snapshot/PG cluster identity")
     _time(expected["targetUtc"])
     import psycopg
     # The conninfo host label alone does not pin the endpoint: libpq may
@@ -292,12 +294,26 @@ def verify_restored(*,target_dsn,expected,declared_host):
             "pg_get_wal_replay_pause_state(), pg_last_wal_replay_lsn()").fetchone()
         if in_recovery is not True or paused!="paused" or lsn is None:
             raise ValueError("PITR recovery is not paused at target")
+        # A different local PG17 instance can satisfy version/paused checks
+        # and even contain copied business rows.  Pin its physical cluster
+        # identity to the source's independently collected pre-backup witness.
+        # This is a read-only query on the restored local PG control file.
+        system_row=pg.execute(
+            "SELECT system_identifier FROM pg_control_system()").fetchone()
+        system_id=system_row[0] if system_row and len(system_row)==1 else None
+        if type(system_id) is not int or not (0 < system_id < 2**64):
+            raise ValueError("invalid recovered PG17 cluster system identifier")
+        actual_id_hash=hashlib.sha256(str(system_id).encode("ascii")).hexdigest()
+        if actual_id_hash!=expected["sourceSystemIdentifierSha256"]:
+            raise ValueError("recovered PG17 cluster identity does not match source witness")
     observed=fingerprint(local_dsn)
     if observed!=expected["expected"]:
         raise ValueError("business tables differ from pre-target snapshot")
     return {"mode":"isolated-postgres17-pitr-readonly-verified",
             "physicalClusterAndWALProvenByThisReport":False,
             "pg17ReplayPausedAndRowsMatched":True,
+            "clusterIdentifierMatchesOutOfBandClaim":True,
+            "sourceClusterIdentityIndependentlyAuthenticatedHere":False,
             "independentHumanAuditStillRequired":True,
             "fingerprintsDigestSha256":hashlib.sha256(json.dumps(
                 observed,sort_keys=True,separators=(",",":")).encode()).hexdigest(),
