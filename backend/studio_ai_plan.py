@@ -158,6 +158,47 @@ def _blocks(body: dict[str, Any]) -> list[dict[str, Any]]:
     return clean
 
 
+# A model-generated JSON shape is untrusted until the entire strict
+# resource, slot-count and article-anchor contract has passed here.
+# Do NOT silently invent layouts, ratios, prompts or authorization grants.
+def _validate_model_reply(response: str, *, db: Database, user: dict[str, Any],
+                          kind: str, count: int, authorized: dict[str, Any],
+                          blocks: list[dict[str, Any]], current_slots: list[dict[str, Any]]):
+    try:
+        style, layout, ratio, reasons, slots = _validate_model_reply(
+            response, db=db, user=user, kind=kind, count=count,
+            authorized=authorized, blocks=blocks, current_slots=current_slots)
+    except ServiceError as invalid:
+        # A model may return incomplete slots or extraneous JSON keys even
+        # with json_mode=True. Give SERIES one bounded repair request while
+        # preserving the *same* authorized catalog, count and CAS snapshot.
+        # Never auto-fill a missing slot, bypass authorization, or trigger Run.
+        retryable = {"ai_invalid_json", "ai_schema_invalid",
+                     "ai_cannot_recommend", "ai_resource_not_found"}
+        if kind != "series" or invalid.code not in retryable:
+            raise
+        log.warning("studio_ai_plan_retry kind=series reason=%s", invalid.code)
+        repair = {**prompt, "instruction": prompt["instruction"] + (
+            "上次输出未通过严格结构校验。现在重新规划并输出完整 JSON，"
+            "顶层仅有 styleId,layoutId,ratio,reasons,slots 五个字段；"
+            "reasons 必须恰好包含 style/layout/ratio 三项非空理由；"
+            "slots 必须为恰好 count 条数组，每条仅含 subject,layoutId,ratio,reason 四项；"
+            "所有画风和图型编号只准从给定授权目录中选取，所有比例只准用 allowedRatios；"
+            "不能遗漏图卡、不能添加解释文字、不能夹带 Markdown。"
+        ), "repairFor": invalid.code}
+        response, meta = chat([
+            {"role": "system", "content": "你是严格授权资源的系列图策划师。"
+             "修复结构错误，只能输出完整 JSON，不要添加字段或创建任务。"},
+            {"role": "user", "content": json.dumps(repair, ensure_ascii=False)}
+        ], json_mode=True, temperature=0.15, timeout=45)
+        if not meta.get("ok") or not response:
+            _upstream(meta)
+        style, layout, ratio, reasons, slots = _validate_model_reply(
+            response, db=db, user=user, kind=kind, count=count,
+            authorized=authorized, blocks=blocks, current_slots=current_slots)
+    return style, layout, ratio, reasons, slots
+
+
 def execute_ai_plan(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
     if user.get("_auth_kind") == "token":
         fail("token_disallowed", "请使用网站登录状态执行 AI 规划", 403)
