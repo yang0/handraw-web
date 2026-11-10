@@ -293,9 +293,10 @@ def main():
                 # The same Article Project in a second browser uses the same
                 # server revision, and cannot overwrite a stale first tab.
                 second_ctx,second=make_page(token)
-                second.goto(base+"/studio/?view=projects&demo_mode=1",
+                # Project Center has been retired; direct authorized
+                # project deep links restore the same Article Project.
+                second.goto(base+"/studio/?project="+project_id+"&demo_mode=1",
                     wait_until="networkidle",timeout=45000)
-                second.locator(f"[data-pc-open='{project_id}']").click()
                 second.locator(".ic-art-seg-ta").first.wait_for(timeout=20000)
                 assert article_state(second)["projectId"]==project_id
                 second.locator(".ic-art-seg-ta").first.fill(ARTICLE+"\n\n第二窗口确认稿。")
@@ -373,9 +374,8 @@ def main():
                     "value":token,"url":base}])
                 mobile=mobile_ctx.new_page()
                 mobile.add_init_script("window.__HANDRAW_TESTING__ = true")
-                mobile.goto(base+"/studio/?view=projects",wait_until="networkidle",
-                    timeout=45000)
-                mobile.locator(f"[data-pc-open='{copied['projectId']}']").click()
+                mobile.goto(base+"/studio/?project="+copied["projectId"],
+                    wait_until="networkidle",timeout=45000)
                 mobile.locator(".ic-art-seg-ta").first.wait_for(timeout=15000)
                 geometry=mobile.locator(".ic-art-seg-ta").first.evaluate("""el=>{
                   const r=el.getBoundingClientRect();
@@ -391,7 +391,7 @@ def main():
 
                 ctx.clear_cookies()
                 ctx.add_cookies([{"name":SESSION_COOKIE_NAME,"value":other,"url":base}])
-                page.goto(base+"/studio/?view=projects",wait_until="networkidle",timeout=45000)
+                page.goto(base+"/studio/?entry=quick",wait_until="networkidle",timeout=45000)
                 assert get_project(page,project_id)["status"]==404
                 assert get_project(page,copied["projectId"])["status"]==404
                 private_read=page.evaluate("""async()=>await fetch(
