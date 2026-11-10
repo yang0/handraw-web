@@ -38,7 +38,7 @@ def samples():
             "pgMajorVersion":17, "basebackupManifestSha256":HASH(6),
             "walArchiveManifestSha256":HASH(7),
             "sourceClusterIdSha256":HASH(8),
-            "restoreClusterIdSha256":HASH(9),
+            "restoreClusterIdSha256":HASH(8),
             "schemaFingerprintBeforeSha256":HASH(10),
             "schemaFingerprintAfterSha256":HASH(10),
             "walletLedgerBeforeSha256":HASH(11),
@@ -134,7 +134,7 @@ class DetailedReceiptsTest(unittest.TestCase):
 
     def test_independent_pg17_physical_restore_wal_pitr_rollback_fails_closed(self):
         for field,bad in (
-            ("pgMajorVersion",16), ("restoreClusterIdSha256",HASH(8)),
+            ("pgMajorVersion",16), ("restoreClusterIdSha256",HASH(9)),
             ("schemaFingerprintAfterSha256",HASH(80)),
             ("walletLedgerAfterSha256",HASH(81)),
             ("mediaManifestAfterSha256",HASH(82)),
