@@ -1244,7 +1244,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     // 1. Must contain #batch-more-row-refs
     assert.ok(html.includes('id="batch-more-row-refs"'), `#batch-more-row-refs must be present in ${mode} mode`);
 
-    // 2. Position check: after Row 2 (.batch-pickers-row) and before Set Planning card (.batch-plan-card)
+    // 2. Content comes first; shared references remain visible in the settings column.
     const idxPickers = html.indexOf("batch-pickers-row");
     const idxGlobalRefs = html.indexOf('id="batch-more-row-refs"');
     const idxPlanCard = html.indexOf("batch-plan-card");
@@ -1256,7 +1256,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     assert.ok(idxMoreSettingsToggle !== -1, "More settings toggle must exist");
 
     assert.ok(idxPickers < idxGlobalRefs, "Global refs row must come after pickers row");
-    assert.ok(idxGlobalRefs < idxPlanCard, "Global refs row must come before set planning card");
+    assert.ok(idxPlanCard < idxPickers, "Planning must precede the shared settings column");
     assert.ok(idxPlanCard < idxMoreSettingsToggle, "Set planning card must come before more settings");
 
     // 3. More settings body must NOT contain #batch-more-row-refs or #batch-btn-pick-global-refs

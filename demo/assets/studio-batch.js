@@ -394,67 +394,17 @@
               <h1 class="make-image-title">批量</h1>
               <p class="make-image-lede">套图规划批量出图：统一画风与母题，AI 规划每张主题与图型，支持自由微调。</p>
             </div>
-            <label style="display:flex;align-items:center;gap:8px;font-size:12px;">同时生成
-              <select class="hw-input" id="batch-concurrency" aria-label="批量生图并发数量" ${busy ? "disabled" : ""}>
-                ${[1,2,3,4].map((n) => `<option value="${n}" ${Number(ld.batchConcurrency || 3) === n ? "selected" : ""}>${n} 张</option>`).join("")}
-              </select>
-            </label>
+
           </div>
 
           <form class="make-image-form" novalidate onsubmit="return false;">
-            <div class="make-image-main-grid">
+            <div class="make-image-main-grid creation-workspace">
 
-              <!-- Row 1: Output Mode (Left) + Fusion Toggle in ONE Row -->
-              <div class="make-image-top-row batch-top-row">
-                <div class="make-image-inline-group">
-                  <span class="make-image-field-label">生成方式</span>
-                  <div class="make-image-btn-group" role="group" aria-label="生成方式">
-                    ${OUTPUT_MODE_OPTIONS.map((m) => `
-                      <button type="button" class="btn btn-sm ${currentMode === m.id ? "btn-primary is-active" : ""}" data-set-mode="${esc(m.id)}" aria-pressed="${currentMode === m.id}">${esc(m.label)}</button>
-                    `).join("")}
-                  </div>
+              <section class="creation-content" aria-labelledby="batch-content-title">
+                <div class="creation-section-head">
+                  <h2 id="batch-content-title">套图内容</h2>
+                  <p>填写母题让 AI 规划，或直接编辑主题列表；确认清单后再生成。</p>
                 </div>
-
-                <div class="make-image-inline-group">
-                  <span class="make-image-field-label">画风模式</span>
-                  <div class="make-image-btn-group" role="group" aria-label="画风模式">
-                    <button type="button" class="btn btn-sm ${!isFusion ? "btn-primary is-active" : ""}" id="batch-mode-single" aria-pressed="${!isFusion}">单画风</button>
-                    <button type="button" class="btn btn-sm ${isFusion ? "btn-primary is-active" : ""}" id="batch-mode-fusion" aria-pressed="${isFusion}">双画风融合</button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Row 2: Fixed Parameter Picker Cards (Style1, Style2 if fusion, Color) -->
-              <div class="make-image-pickers-row batch-pickers-row ${isFusion ? "has-style2" : ""}">
-                ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
-                ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
-                ${this.renderPickerSlot("color", "主题色", colorObj, true)}
-              </div>
-
-              ${isFusion ? `
-                <div class="make-image-style-note" role="note">角色画风决定人物与主体的画法，场景画风决定背景与环境</div>
-              ` : ""}
-
-              <!-- Global References Row (Independent row outside collapsible) -->
-              <div class="make-image-more-row batch-global-refs-row" id="batch-more-row-refs">
-                <span class="make-image-field-label">参考图</span>
-                <button type="button" class="btn btn-sm" id="batch-btn-pick-global-refs">选择参考图</button>
-                <div class="make-image-more-thumbs batch-global-refs-thumbs" id="batch-global-refs-thumbs">
-                  ${globalAssetItems.length ? globalAssetItems.map((ast, idx) => `
-                    <div class="make-image-slot-card is-inline">
-                      <div class="make-image-slot-thumb-wrap">
-                        ${ast.image ? `<img data-hw-src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}" loading="lazy" />` : ""}
-                        <button type="button" class="make-image-slot-clear" data-remove-global-ref="${idx}" title="移除">×</button>
-                      </div>
-                      <div class="make-image-slot-meta">
-                        <span class="make-image-slot-code">${esc(ast.id || `REF-${idx + 1}`)}</span>
-                        <span class="make-image-slot-title">${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}</span>
-                      </div>
-                    </div>
-                  `).join("") : `<span class="make-image-picker-hint">未指定，可点此添加（最多 4 张）</span>`}
-                </div>
-              </div>
-
               <!-- 套图规划 (Set Planning Section) -->
               <div class="batch-plan-card">
                 <!-- 规划输入整体分区 (Planning Inputs Panel) -->
@@ -466,12 +416,12 @@
                   <!-- 规划第一行: 母题 + 张数 + 图型策略 -->
                   <div class="batch-plan-row-a">
                     <div class="batch-seed-wrap">
-                      <span class="make-image-field-label">母题</span>
+                      <label for="batch-seed-input" class="make-image-field-label">母题</label>
                       <input type="text" class="make-image-input batch-seed-input" id="batch-seed-input" placeholder="输入这套图的创作母题（如：都市慢生活与手绘手账）..." value="${esc(batchSeed)}" />
                     </div>
 
                     <div class="batch-count-wrap">
-                      <span class="make-image-field-label">张数</span>
+                      <label for="batch-count-input" class="make-image-field-label">张数</label>
                       <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" />
                     </div>
 
@@ -529,7 +479,7 @@
                 ${batchLayoutMode === "fixed" ? `
                   <div class="batch-edit-area batch-fixed-edit-area">
                     <div class="batch-field-head">
-                      <span class="make-image-field-label">主题列表（每行一条，直接编辑）</span>
+                      <label for="batch-prompts-input" class="make-image-field-label">主题列表 · 每行生成一张</label>
                     </div>
                     <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="5" placeholder="每行输入一个创作主题，每行将生成一张独立画面...">${esc(promptListText)}</textarea>
                   </div>
@@ -603,109 +553,6 @@
                     </div>
                   </div>
                 `}
-              </div>
-
-              <!-- Row 4: Ratio Buttons + Inline Ratio Input (Defect 3 Fixed) -->
-              <div class="make-image-ratio-row">
-                <span class="make-image-field-label">画幅</span>
-                <div class="make-image-ratio-controls">
-                  <div class="make-image-btn-group" role="group" aria-label="预置比例">
-                    ${RATIO_OPTIONS.map((r) => `
-                      <button type="button" class="btn btn-sm ${currentRatio === r.value ? "btn-primary is-active" : ""}" data-set-ratio="${esc(r.value)}" aria-pressed="${currentRatio === r.value}">${esc(r.label)}</button>
-                    `).join("")}
-                  </div>
-                  <input type="text" class="make-image-input make-image-ratio-input" id="batch-ratio-input" value="${esc(currentRatio)}" pattern="[0-9]+(?:\\.[0-9]+)?:[0-9]+(?:\\.[0-9]+)?" placeholder="宽:高" aria-label="比例数值" />
-                </div>
-              </div>
-
-              <!-- Collapsible: 更多设置 (More Settings) -->
-              <div class="make-image-collapsible-card">
-                <button type="button" class="make-image-collapsible-toggle" id="batch-toggle-more-settings" aria-expanded="${this.moreSettingsOpen}">
-                  <span>更多设置</span>
-                  <span class="make-image-toggle-icon">${this.moreSettingsOpen ? "▲ 收起" : "▼ 展开"}</span>
-                </button>
-                <div class="make-image-collapsible-body" id="batch-body-more-settings" ${this.moreSettingsOpen ? "" : "hidden"}>
-                  <div class="make-image-more-list">
-
-                    <!-- Tones -->
-                    <div class="make-image-more-row">
-                      <span class="make-image-more-label">影调</span>
-                      <button type="button" class="btn btn-sm" id="batch-btn-pick-tones">选择影调</button>
-                      <div class="make-image-more-thumbs" id="batch-tones-thumbs">
-                        ${selectedTones.length ? selectedTones.map((tid) => {
-                          const tObj = this.getResourceInfo(tid, "tones");
-                          return `
-                            <div class="make-image-slot-card is-inline">
-                              <div class="make-image-slot-thumb-wrap">
-                                ${tObj?.image ? `<img data-hw-src="${esc(tObj.image)}" alt="${esc(tObj.name || tid)}" loading="lazy" />` : ""}
-                                <button type="button" class="make-image-slot-clear" data-remove-tone="${esc(tid)}" title="移除">×</button>
-                              </div>
-                              <div class="make-image-slot-meta">
-                                <span class="make-image-slot-code">${esc(tid)}</span>
-                                <span class="make-image-slot-title">${esc(tObj?.name || tid)}</span>
-                              </div>
-                            </div>
-                          `;
-                        }).join("") : `<span class="make-image-picker-hint">未指定影调</span>`}
-                      </div>
-                    </div>
-
-                    <!-- Moods -->
-                    <div class="make-image-more-row">
-                      <span class="make-image-more-label">情绪</span>
-                      <button type="button" class="btn btn-sm" id="batch-btn-pick-moods">选择情绪</button>
-                      <div class="make-image-inline-inputs" style="flex:1;">
-                        <input type="text" class="make-image-input" id="batch-moods-input" value="${esc(moodTextValue)}" placeholder="点击「选择情绪」或输入逗号分隔情绪词..." />
-                      </div>
-                    </div>
-
-                    <!-- Whitespace -->
-                    <div class="make-image-more-row">
-                      <span class="make-image-more-label">留白</span>
-                      <div class="make-image-btn-group" role="group" aria-label="留白程度">
-                        ${WHITESPACE_OPTIONS.map((w) => `
-                          <button type="button" class="btn btn-sm ${whitespace === w.value ? "btn-primary is-active" : ""}" data-set-whitespace="${esc(w.value)}" aria-pressed="${whitespace === w.value}">${esc(w.label)}</button>
-                        `).join("")}
-                      </div>
-                    </div>
-
-                    <!-- Audience & Business Scene -->
-                    <div class="make-image-duo-row">
-                      <div class="make-image-inline-field">
-                        <span class="make-image-more-label">目标受众</span>
-                        <input type="text" class="make-image-input" id="batch-audience-input" value="${esc(audience)}" placeholder="例如：手账爱好者、都市白领" />
-                      </div>
-                      <div class="make-image-inline-field">
-                        <span class="make-image-more-label">业务场景</span>
-                        <input type="text" class="make-image-input" id="batch-business-scene-input" value="${esc(businessScene)}" placeholder="例如：小红书图文封面、文创日签" />
-                      </div>
-                    </div>
-
-                    <!-- SC-021 Options -->
-                    ${layoutId === "SC-021" ? `
-                      <div class="make-image-more-row">
-                        <span class="make-image-more-label">SC-021玩法</span>
-                        <select class="make-image-select" id="batch-sc021-select">
-                          ${SC021_PLAYSTYLES.map((st) => `
-                            <option value="${esc(st)}" ${sc021Type === st ? "selected" : ""}>${esc(st)}</option>
-                          `).join("")}
-                        </select>
-                      </div>
-                    ` : ""}
-
-                    <!-- SC-022 Options -->
-                    ${layoutId === "SC-022" ? `
-                      <div class="make-image-more-row">
-                        <span class="make-image-more-label">SC-022印鉴</span>
-                        <div class="make-image-inline-inputs">
-                          <input type="text" class="make-image-input" id="batch-sc022-name" value="${esc(sc022Name)}" placeholder="姓名，如：林知夏" style="width:140px;" />
-                          <input type="text" class="make-image-input" id="batch-sc022-pinyin" value="${esc(sc022Pinyin)}" placeholder="拼音，如：LIN ZHIXIA" style="flex:1;" />
-                        </div>
-                      </div>
-                    ` : ""}
-
-                  </div>
-                </div>
               </div>
 
               <!-- Preview Table: Listed before generation -->
@@ -803,6 +650,174 @@
                 </div>
               </div>
 
+
+              </section>
+              <section class="creation-settings" aria-labelledby="batch-settings-title">
+                <div class="creation-section-head">
+                  <h2 id="batch-settings-title">统一画面设置</h2>
+                  <p>以下设置应用于整套图片，逐张图型与参考图可单独调整。</p>
+                </div>
+              <!-- Row 1: Output Mode (Left) + Fusion Toggle in ONE Row -->
+              <div class="make-image-top-row batch-top-row">
+                <div class="make-image-inline-group">
+                  <span class="make-image-field-label">生成方式</span>
+                  <div class="make-image-btn-group" role="group" aria-label="生成方式">
+                    ${OUTPUT_MODE_OPTIONS.map((m) => `
+                      <button type="button" class="btn btn-sm ${currentMode === m.id ? "btn-primary is-active" : ""}" data-set-mode="${esc(m.id)}" aria-pressed="${currentMode === m.id}">${esc(m.label)}</button>
+                    `).join("")}
+                  </div>
+                </div>
+
+                <div class="make-image-inline-group">
+                  <span class="make-image-field-label">画风模式</span>
+                  <div class="make-image-btn-group" role="group" aria-label="画风模式">
+                    <button type="button" class="btn btn-sm ${!isFusion ? "btn-primary is-active" : ""}" id="batch-mode-single" aria-pressed="${!isFusion}">单画风</button>
+                    <button type="button" class="btn btn-sm ${isFusion ? "btn-primary is-active" : ""}" id="batch-mode-fusion" aria-pressed="${isFusion}">双画风融合</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Row 2: Fixed Parameter Picker Cards (Style1, Style2 if fusion, Color) -->
+              <div class="make-image-pickers-row batch-pickers-row ${isFusion ? "has-style2" : ""}">
+                ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
+                ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
+                ${this.renderPickerSlot("color", "主题色", colorObj, true)}
+              </div>
+
+              ${isFusion ? `
+                <div class="make-image-style-note" role="note">角色画风决定人物与主体的画法，场景画风决定背景与环境</div>
+              ` : ""}
+
+              <!-- Row 4: Ratio Buttons + Inline Ratio Input (Defect 3 Fixed) -->
+              <div class="make-image-ratio-row">
+                <span class="make-image-field-label">画幅</span>
+                <div class="make-image-ratio-controls">
+                  <div class="make-image-btn-group" role="group" aria-label="预置比例">
+                    ${RATIO_OPTIONS.map((r) => `
+                      <button type="button" class="btn btn-sm ${currentRatio === r.value ? "btn-primary is-active" : ""}" data-set-ratio="${esc(r.value)}" aria-pressed="${currentRatio === r.value}">${esc(r.label)}</button>
+                    `).join("")}
+                  </div>
+                  <input type="text" class="make-image-input make-image-ratio-input" id="batch-ratio-input" value="${esc(currentRatio)}" pattern="[0-9]+(?:\\.[0-9]+)?:[0-9]+(?:\\.[0-9]+)?" placeholder="宽:高" aria-label="比例数值" />
+                </div>
+              </div>
+
+              <!-- Global References Row (Independent row outside collapsible) -->
+              <div class="make-image-more-row batch-global-refs-row" id="batch-more-row-refs">
+                <span class="make-image-field-label">参考图</span>
+                <button type="button" class="btn btn-sm" id="batch-btn-pick-global-refs">选择参考图</button>
+                <div class="make-image-more-thumbs batch-global-refs-thumbs" id="batch-global-refs-thumbs">
+                  ${globalAssetItems.length ? globalAssetItems.map((ast, idx) => `
+                    <div class="make-image-slot-card is-inline">
+                      <div class="make-image-slot-thumb-wrap">
+                        ${ast.image ? `<img data-hw-src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}" loading="lazy" />` : ""}
+                        <button type="button" class="make-image-slot-clear" data-remove-global-ref="${idx}" title="移除">×</button>
+                      </div>
+                      <div class="make-image-slot-meta">
+                        <span class="make-image-slot-code">${esc(ast.id || `REF-${idx + 1}`)}</span>
+                        <span class="make-image-slot-title">${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}</span>
+                      </div>
+                    </div>
+                  `).join("") : `<span class="make-image-picker-hint">未指定，可点此添加（最多 4 张）</span>`}
+                </div>
+              </div>
+
+              <!-- Collapsible: 更多设置 (More Settings) -->
+              <div class="make-image-collapsible-card">
+                <button type="button" class="make-image-collapsible-toggle" id="batch-toggle-more-settings" aria-expanded="${this.moreSettingsOpen}">
+                  <span>更多设置</span>
+                  <span class="make-image-toggle-icon">${this.moreSettingsOpen ? "▲ 收起" : "▼ 展开"}</span>
+                </button>
+                <div class="make-image-collapsible-body" id="batch-body-more-settings" ${this.moreSettingsOpen ? "" : "hidden"}>
+                  <div class="make-image-more-list">
+
+                    <!-- Tones -->
+                    <div class="make-image-more-row">
+                      <span class="make-image-more-label">影调</span>
+                      <button type="button" class="btn btn-sm" id="batch-btn-pick-tones">选择影调</button>
+                      <div class="make-image-more-thumbs" id="batch-tones-thumbs">
+                        ${selectedTones.length ? selectedTones.map((tid) => {
+                          const tObj = this.getResourceInfo(tid, "tones");
+                          return `
+                            <div class="make-image-slot-card is-inline">
+                              <div class="make-image-slot-thumb-wrap">
+                                ${tObj?.image ? `<img data-hw-src="${esc(tObj.image)}" alt="${esc(tObj.name || tid)}" loading="lazy" />` : ""}
+                                <button type="button" class="make-image-slot-clear" data-remove-tone="${esc(tid)}" title="移除">×</button>
+                              </div>
+                              <div class="make-image-slot-meta">
+                                <span class="make-image-slot-code">${esc(tid)}</span>
+                                <span class="make-image-slot-title">${esc(tObj?.name || tid)}</span>
+                              </div>
+                            </div>
+                          `;
+                        }).join("") : `<span class="make-image-picker-hint">未指定影调</span>`}
+                      </div>
+                    </div>
+
+                    <!-- Moods -->
+                    <div class="make-image-more-row">
+                      <span class="make-image-more-label">情绪</span>
+                      <button type="button" class="btn btn-sm" id="batch-btn-pick-moods">选择情绪</button>
+                      <div class="make-image-inline-inputs" style="flex:1;">
+                        <input type="text" class="make-image-input" id="batch-moods-input" value="${esc(moodTextValue)}" placeholder="点击「选择情绪」或输入逗号分隔情绪词..." />
+                      </div>
+                    </div>
+
+                    <!-- Whitespace -->
+                    <div class="make-image-more-row">
+                      <span class="make-image-more-label">留白</span>
+                      <div class="make-image-btn-group" role="group" aria-label="留白程度">
+                        ${WHITESPACE_OPTIONS.map((w) => `
+                          <button type="button" class="btn btn-sm ${whitespace === w.value ? "btn-primary is-active" : ""}" data-set-whitespace="${esc(w.value)}" aria-pressed="${whitespace === w.value}">${esc(w.label)}</button>
+                        `).join("")}
+                      </div>
+                    </div>
+
+                    <!-- Audience & Business Scene -->
+                    <div class="make-image-duo-row">
+                      <div class="make-image-inline-field">
+                        <span class="make-image-more-label">目标受众</span>
+                        <input type="text" class="make-image-input" id="batch-audience-input" value="${esc(audience)}" placeholder="例如：手账爱好者、都市白领" />
+                      </div>
+                      <div class="make-image-inline-field">
+                        <span class="make-image-more-label">业务场景</span>
+                        <input type="text" class="make-image-input" id="batch-business-scene-input" value="${esc(businessScene)}" placeholder="例如：小红书图文封面、文创日签" />
+                      </div>
+                    </div>
+
+                    <!-- SC-021 Options -->
+                    ${layoutId === "SC-021" ? `
+                      <div class="make-image-more-row">
+                        <span class="make-image-more-label">SC-021玩法</span>
+                        <select class="make-image-select" id="batch-sc021-select">
+                          ${SC021_PLAYSTYLES.map((st) => `
+                            <option value="${esc(st)}" ${sc021Type === st ? "selected" : ""}>${esc(st)}</option>
+                          `).join("")}
+                        </select>
+                      </div>
+                    ` : ""}
+
+                    <!-- SC-022 Options -->
+                    ${layoutId === "SC-022" ? `
+                      <div class="make-image-more-row">
+                        <span class="make-image-more-label">SC-022印鉴</span>
+                        <div class="make-image-inline-inputs">
+                          <input type="text" class="make-image-input" id="batch-sc022-name" value="${esc(sc022Name)}" placeholder="姓名，如：林知夏" style="width:140px;" />
+                          <input type="text" class="make-image-input" id="batch-sc022-pinyin" value="${esc(sc022Pinyin)}" placeholder="拼音，如：LIN ZHIXIA" style="flex:1;" />
+                        </div>
+                      </div>
+                    ` : ""}
+
+                  </div>
+                </div>
+              </div>
+
+
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;">同时生成
+              <select class="hw-input" id="batch-concurrency" aria-label="批量生图并发数量" ${busy ? "disabled" : ""}>
+                ${[1,2,3,4].map((n) => `<option value="${n}" ${Number(ld.batchConcurrency || 3) === n ? "selected" : ""}>${n} 张</option>`).join("")}
+              </select>
+            </label>
+              </section>
               <!-- Bottom Bar: Cost + Action (Defect 2 Fixed) -->
               <div class="batch-action-bar">
                 <div class="batch-cost-wrap">
