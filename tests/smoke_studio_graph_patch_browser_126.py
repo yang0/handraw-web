@@ -112,6 +112,7 @@ def main():
                         ?.projectSaveState==='synced'
                       && document.querySelectorAll('#ic-nodes-layer .ic-node').length===4
                     """, timeout=45000)
+                    page.locator("#canvas-129-topbar .ic129-more-tools > summary").click()
                     page.locator('#canvas-129-topbar [data-c129="graphpatch"]').click(
                         timeout=15000)
                     dialog = page.locator("#gp126-backdrop")
