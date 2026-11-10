@@ -8,7 +8,7 @@ const canvasUiSource=fs.readFileSync("demo/assets/studio-canvas-ui.js","utf8");
 // #136: run is the single canvas primary action; duplicate global save/
 // view/undo controls must not crowd its own topbar.
 const canvasTop=canvasUiSource.slice(canvasUiSource.indexOf("const topHtml="),
-  canvasUiSource.indexOf("if(top.innerHTML!==topHtml)"));
+  canvasUiSource.indexOf("if(top.__handrawTemplate!==topHtml)"));
 assert.ok(canvasTop.includes('data-c129="run"'), "canvas must retain the primary Run action");
 assert.match(canvasTop,/ic129-more-tools/);
 for(const deprecated of ['data-c129="save"','data-c129="simple"',

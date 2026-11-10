@@ -120,8 +120,17 @@ def main():
                     page.wait_for_timeout(300)
                     assert page.locator(
                         "#canvas-129-topbar .ic129-more-tools").get_attribute("open") is not None
-                    page.locator('#canvas-129-topbar [data-c129="graphpatch"]').click(
-                        timeout=15000)
+                    # A taskbar redraw must retain the focused menu control,
+                    # so keyboard users can activate it after runtime updates.
+                    assert page.evaluate("""() => {
+                      const button=document.querySelector(
+                        '#canvas-129-topbar [data-c129="graphpatch"]');
+                      button.focus();
+                      document.querySelector(
+                        '#canvas-129-taskbar [data-c129="tasks"]').click();
+                      return button.isConnected && document.activeElement===button;
+                    }""")
+                    page.keyboard.press("Enter")
                     dialog = page.locator("#gp126-backdrop")
                     dialog.wait_for(timeout=15000)
                     assert dialog.locator('[data-gp126="apply"]').is_disabled()

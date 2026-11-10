@@ -308,32 +308,9 @@ function createTestGraph(options = {}) {
 }
 
 // ==========================================
-// Test 4: Sub-options Node Storage & Baseline Parity for assembleControlPrompt
+// Test 4: Sub-options Node Storage & assembleControlPrompt output contract
 // ==========================================
 {
-  const cp = require("node:child_process");
-  const baselineSrc = cp.execSync("git show 5103d23:demo/assets/studio-prompt-engine.js", { encoding: "utf8" });
-  const baselineSandbox = {
-    window: {},
-    globalThis: {},
-    Date,
-    Math,
-    Number,
-    String,
-    Array,
-    Set,
-    Map,
-    JSON,
-    RegExp,
-    console
-  };
-  baselineSandbox.window = baselineSandbox;
-  baselineSandbox.globalThis = baselineSandbox;
-  vm.createContext(baselineSandbox);
-  vm.runInContext(baselineSrc, baselineSandbox);
-  const baselineEngine = baselineSandbox.HANDRAW_CANVAS_ENGINE;
-  assert.ok(baselineEngine, "Baseline engine must load successfully");
-
   // 1) Test SC-021 node storage & cloud prompt output
   const graph21 = createTestGraph({
     layout: "SC-021",

@@ -193,9 +193,12 @@
     // A native <details> adds its `open` attribute to innerHTML. Without
     // preserving it, any task/projection re-render immediately closes the
     // menu between a user's summary click and their tool selection.
+    // Compare our last template, not serialized live DOM: open/disabled
+    // attributes must not replace unchanged controls and erase keyboard focus.
     const moreWasOpen=top.querySelector(".ic129-more-tools")?.open===true;
-    if(top.innerHTML!==topHtml){
+    if(top.__handrawTemplate!==topHtml){
       top.innerHTML=topHtml;
+      top.__handrawTemplate=topHtml;
       if(moreWasOpen)top.querySelector(".ic129-more-tools").open=true;
     }
     let inspectorHtml='<div class="ic129-inspector-title"><strong>属性</strong><button type="button" data-c129="ai" aria-pressed="'+(inspectorTab==="ai")+'">AI 建议</button></div>';
