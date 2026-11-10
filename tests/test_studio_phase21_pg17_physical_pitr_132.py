@@ -19,6 +19,8 @@ ENV="preprod-phase21-pg17"
 TARGET="recovery-phase21"
 SOURCE="staging-db.internal"
 LEAF="pitr-phase21-check"
+SOURCE_SYSTEM_ID=1234567890123456789
+SOURCE_SYSTEM_SHA256=hashlib.sha256(str(SOURCE_SYSTEM_ID).encode("ascii")).hexdigest()
 UTC=(datetime.now(timezone.utc)+timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -48,15 +50,22 @@ class DbRows:
 
 
 class FakePg:
-    def __init__(self,paused="paused",version=170002,server_addr="127.0.0.1"):
+    def __init__(self,paused="paused",version=170002,server_addr="127.0.0.1",
+                 system_id=SOURCE_SYSTEM_ID,deny_control=False):
         self.paused=paused
         self.version=version
         self.server_addr=server_addr
+        self.system_id=system_id
+        self.deny_control=deny_control
     def __enter__(self): return self
     def __exit__(self,*a): return None
     def execute(self,sql):
         if "SELECT inet_server_addr()" in sql:
             return DbRows((self.server_addr,))
+        if "pg_control_system()" in sql:
+            if self.deny_control:
+                raise PermissionError("PG control identity requires authorized read")
+            return DbRows((self.system_id,))
         if "SHOW server_version_num" in sql:
             return DbRows((str(self.version),))
         if "pg_is_in_recovery()" in sql:
@@ -248,6 +257,7 @@ class Phase21PhysicalPg17Tests(unittest.TestCase):
         import psycopg
         expected={"schemaVersion":1,"targetUtc":UTC,
                   "backupManifestSha256":"a"*64,
+                  "sourceSystemIdentifierSha256":SOURCE_SYSTEM_SHA256,
                   "expected":{"rowCounts":{"wallets":2},
                               "rowSha256":{"wallets":"b"*64}}}
         with patch.dict(os.environ,{"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES"}), \
@@ -261,6 +271,8 @@ class Phase21PhysicalPg17Tests(unittest.TestCase):
             self.assertEqual(out["decision"],"NO-GO")
             self.assertTrue(out["pg17ReplayPausedAndRowsMatched"])
             self.assertFalse(out["physicalClusterAndWALProvenByThisReport"])
+            self.assertTrue(out["clusterIdentifierMatchesOutOfBandClaim"])
+            self.assertFalse(out["sourceClusterIdentityIndependentlyAuthenticatedHere"])
             expected["expected"]["rowCounts"]["wallets"]=3
             with patch("ops.studio_phase21_pg17_physical_pitr_132.fingerprint",
                        return_value={"rowCounts":{"wallets":2},
@@ -279,6 +291,7 @@ class Phase21PhysicalPg17Tests(unittest.TestCase):
         import psycopg
         expected={"schemaVersion":1,"targetUtc":UTC,
                   "backupManifestSha256":"a"*64,
+                  "sourceSystemIdentifierSha256":SOURCE_SYSTEM_SHA256,
                   "expected":{"rowCounts":{"wallets":2},
                               "rowSha256":{"wallets":"b"*64}}}
         for injected in (
@@ -316,6 +329,7 @@ class Phase21PhysicalPg17Tests(unittest.TestCase):
         import psycopg
         expected={"schemaVersion":1,"targetUtc":UTC,
                   "backupManifestSha256":"a"*64,
+                  "sourceSystemIdentifierSha256":SOURCE_SYSTEM_SHA256,
                   "expected":{"rowCounts":{"wallets":2},
                               "rowSha256":{"wallets":"b"*64}}}
         dsn="host=localhost dbname=handraw_restore_drill_test"
@@ -348,6 +362,66 @@ class Phase21PhysicalPg17Tests(unittest.TestCase):
             for pinned in (audited_dsn,fingerprint_dsn):
                 self.assertIn("host=127.0.0.1",pinned)
                 self.assertIn("hostaddr=127.0.0.1",pinned)
+
+    def test_pg17_system_identity_source_digest_is_required_before_connect(self):
+        import psycopg
+        expected={"schemaVersion":1,"targetUtc":UTC,
+                  "backupManifestSha256":"a"*64,
+                  "sourceSystemIdentifierSha256":SOURCE_SYSTEM_SHA256,
+                  "expected":{"rowCounts":{"wallets":2},
+                              "rowSha256":{"wallets":"b"*64}}}
+        env={"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
+             "PGHOSTADDR":"","PGSERVICE":"","PGSERVICEFILE":""}
+        for bad in (None,"wrong",123,"0"*64):
+            candidate={**expected}
+            if bad is None:
+                candidate.pop("sourceSystemIdentifierSha256")
+            else:
+                candidate["sourceSystemIdentifierSha256"]=bad
+            with self.subTest(bad=bad),patch.dict(os.environ,env), \
+                 patch("ops.studio_phase21_pg17_physical_pitr_132.settings",
+                       return_value={"host":"127.0.0.1",
+                                     "dbname":"handraw_restore_drill_test"}), \
+                 patch.object(psycopg,"connect") as connect:
+                if bad in (None,"wrong",123):
+                    with self.assertRaises(ValueError):
+                        verify_restored(target_dsn="host=127.0.0.1 dbname=handraw_restore_drill_test",
+                                        expected=candidate,declared_host=TARGET)
+                    connect.assert_not_called()
+                else:
+                    # A correctly shaped but wrong independent digest must
+                    # fail after reading actual cluster identity, not be PASS.
+                    with patch.object(psycopg,"connect",return_value=FakePg()):
+                        with self.assertRaisesRegex(ValueError,"identity does not match"):
+                            verify_restored(target_dsn="host=127.0.0.1 dbname=handraw_restore_drill_test",
+                                            expected=candidate,declared_host=TARGET)
+
+    def test_pg17_system_identity_rejects_wrong_cluster_and_bad_pg_control(self):
+        import psycopg
+        expected={"schemaVersion":1,"targetUtc":UTC,
+                  "backupManifestSha256":"a"*64,
+                  "sourceSystemIdentifierSha256":SOURCE_SYSTEM_SHA256,
+                  "expected":{"rowCounts":{"wallets":2},
+                              "rowSha256":{"wallets":"b"*64}}}
+        env={"HANDRAW_PHASE21_PG_ISOLATED_DRILL":"YES",
+             "PGHOSTADDR":"","PGSERVICE":"","PGSERVICEFILE":""}
+        for system_id,denied in (
+            (SOURCE_SYSTEM_ID+1,False),(None,False),(0,False),
+            (-1,False),(str(SOURCE_SYSTEM_ID),False),
+            (True,False),(SOURCE_SYSTEM_ID,True),
+        ):
+            with self.subTest(system_id=system_id,denied=denied), \
+                 patch.dict(os.environ,env), \
+                 patch("ops.studio_phase21_pg17_physical_pitr_132.settings",
+                       return_value={"host":"127.0.0.1",
+                                     "dbname":"handraw_restore_drill_test"}), \
+                 patch.object(psycopg,"connect",return_value=FakePg(
+                     system_id=system_id,deny_control=denied)), \
+                 patch("ops.studio_phase21_pg17_physical_pitr_132.fingerprint") as fp:
+                with self.assertRaises((ValueError,PermissionError)):
+                    verify_restored(target_dsn="host=127.0.0.1 dbname=handraw_restore_drill_test",
+                                    expected=expected,declared_host=TARGET)
+                fp.assert_not_called()
 
     def test_cli_plan_writes_private_report_and_cannot_overwrite(self):
         report=Path(self.dir.name)/"report.json"
