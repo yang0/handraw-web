@@ -18581,8 +18581,11 @@
           ? "batch" : "quick");
       next = desired === "article" && isArticleGraph(CS.graph) ? "article" : desired;
     }
-    if (next === "canvas" && ["quick","batch","article"].includes(CS.stageView)) {
-      CS.lastStudioTaskView = CS.stageView;
+    if (next === "canvas" && ["quick","batch","article","preview"].includes(CS.stageView)) {
+      // Preview is the Article editing stage. Remember it explicitly, or the
+      // new single reverse toggle would return to a Quick form instead of
+      // restoring the same article markdown and stable image anchors.
+      CS.lastStudioTaskView = CS.stageView === "preview" ? "article" : CS.stageView;
     }
     if (["quick","batch","article"].includes(next)) CS.lastStudioTaskView = next;
     if (next !== "article") flushUnifiedArticleEditor();
