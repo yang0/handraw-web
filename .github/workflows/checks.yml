@@ -19,7 +19,7 @@ jobs:
         run: node --check demo/assets/studio-graph-patch-126.js && node tests/test_studio_graph_patch_126.cjs
       - run: node --check demo/assets/studio-core.js && node --check demo/assets/studio-app.js && node tests/test_studio_runtime_119.cjs
       - run: node --check demo/assets/studio-dag-scheduler-120.js && node tests/test_studio_dag_scheduler_120.cjs
-      - run: node --check demo/assets/studio-make-image.js && node --check demo/assets/studio-make-image-versions.js && node tests/test_studio_make_image_versions.cjs && node tests/test_studio_make_image_ui_128.cjs
+      - run: node --check demo/assets/studio-make-image.js && node --check demo/assets/studio-make-image-versions.js && node tests/test_studio_make_image_versions.cjs && node tests/test_studio_make_image_ui_128.cjs && node tests/test_studio_make_image.cjs
       - run: node --check demo/assets/studio-series-board-108.js && node --check demo/assets/studio-batch.js && node tests/test_studio_series_ui_108.cjs
       - run: node --check demo/assets/studio-article-project-109.js && node tests/test_studio_article_project_109.cjs
       - run: node tests/test_task_journey.cjs

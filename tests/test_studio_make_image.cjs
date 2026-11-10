@@ -230,7 +230,7 @@ function createTestGraph(options = {}) {
   controller.render(fakeDom, controller.context, {});
   assert.ok(fakeDom.innerHTML.includes("data-pick-kind=\"style1\""), "style1 picker must exist");
   assert.ok(!fakeDom.innerHTML.includes("data-pick-kind=\"style2\""), "style2 picker must NOT exist in single style");
-  assert.ok(!fakeDom.innerHTML.includes("角色画风决定人物与主体的画法"), "Fusion explanation note must NOT exist in single style");
+  assert.ok(!fakeDom.innerHTML.includes('class="make-image-style-note"'), "Fusion explanation note must NOT exist in single style");
 
   // Single style prompt should only lock style1
   let prompt = controller.getPromptPreview();
@@ -242,7 +242,7 @@ function createTestGraph(options = {}) {
   sp.data.style2 = "FA-002";
   controller.render(fakeDom, controller.context, {});
   assert.ok(fakeDom.innerHTML.includes("data-pick-kind=\"style2\""), "style2 picker must exist in dual style");
-  assert.ok(fakeDom.innerHTML.includes("角色画风决定人物与主体的画法，场景画风决定背景与环境"), "Fusion explanation note must exist in dual style");
+  assert.ok(fakeDom.innerHTML.includes("角色画风决定主体，场景画风决定环境"), "Fusion explanation note must exist in dual style");
 
   prompt = controller.getPromptPreview();
   assert.match(prompt, /【画风】：角色风格：#FA-001；场景风格：#FA-002/);
