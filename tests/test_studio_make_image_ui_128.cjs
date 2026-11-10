@@ -9,6 +9,13 @@ const app=fs.readFileSync("demo/assets/studio-app.js","utf8");
 const code=fs.readFileSync("demo/assets/studio-make-image.js","utf8");
 assert.ok(html.indexOf("studio-make-image-versions.js")<html.indexOf("studio-make-image.js"));
 assert.match(css,/make-image-workspace-layout\s*\{/);
+assert.match(css,/\.make-image-resource-group\s*\{/);
+const styleArea=code.indexOf('class="make-image-resource-group"');
+const firstPicker=code.indexOf('class="make-image-pickers-row',styleArea);
+const fusionButton=code.indexOf('id="make-image-mode-fusion"',styleArea);
+assert.ok(styleArea>=0&&fusionButton>styleArea&&firstPicker>fusionButton,
+  "fusion toggle must live inside the style/layout picker decision group");
+
 assert.match(css,/@media \(max-width:760px\)/);
 assert.match(css,/make-image-settings-panel\.is-collapsed/);
 assert.match(css,/make-image-version-strip/);
