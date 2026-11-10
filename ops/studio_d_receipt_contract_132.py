@@ -112,8 +112,13 @@ def _details(kind, data):
             raise ValueError("physical restore must use PG17")
         for f in HASH_PG:
             _sha(data[f])
-        if data["sourceClusterIdSha256"] == data["restoreClusterIdSha256"]:
-            raise ValueError("source and physical restore cluster are not independently identified")
+        # A PostgreSQL *physical* basebackup restores the SAME cluster
+        # system_identifier on a different recovery host. Source/restore
+        # system IDs must match; independent machines are established by
+        # sourcePhysicalHostSha256 != recoveryPhysicalHostSha256 in the
+        # separately audited field dossier, never by changing cluster ID.
+        if data["sourceClusterIdSha256"] != data["restoreClusterIdSha256"]:
+            raise ValueError("PG17 physical restore system identifier differs from source")
         for prefix in ("schemaFingerprint", "walletLedger", "mediaManifest"):
             if data[prefix+"BeforeSha256"] != data[prefix+"AfterSha256"]:
                 raise ValueError("PG17 recovered business ledger/media fingerprint mismatch")
