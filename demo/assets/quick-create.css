@@ -1498,3 +1498,17 @@
 @media(prefers-reduced-motion:reduce){
   .series108-card,.series108-kinds button { transition:none !important; }
 }
+
+/* #136: 4-picker fusion mode must not overflow a narrow form column. */
+@media(max-width:768px) {
+  .make-image-settings-panel .make-image-pickers-row.has-style2,
+  .make-image-container:not(.batch-container) .make-image-pickers-row.has-style2 {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+@media(max-width:420px) {
+  .make-image-settings-panel .make-image-pickers-row.has-style2,
+  .make-image-container:not(.batch-container) .make-image-pickers-row.has-style2 {
+    grid-template-columns:minmax(0,1fr);
+  }
+}
