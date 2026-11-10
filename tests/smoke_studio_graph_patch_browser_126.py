@@ -176,6 +176,8 @@ def main():
                     # UI supports the remaining presets and authorized style
                     # choices without requesting protected prompt definitions.
                     dialog.locator('[data-gp126="close"]').first.click()
+                    if page.locator("#canvas-129-topbar .ic129-more-tools").get_attribute("open") is None:
+                        page.locator("#canvas-129-topbar .ic129-more-tools > summary").click()
                     page.locator('#canvas-129-topbar [data-c129="graphpatch"]').click()
                     dialog = page.locator("#gp126-backdrop")
                     dialog.locator('[data-gp126-mode="style_compare"]').click()
