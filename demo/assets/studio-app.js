@@ -2061,6 +2061,9 @@
         writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
         CS.activeArticleId = restored.id;
         openUnifiedArticleEditor(restored.id);
+        // A direct ?project=ID deep link starts in a hidden Quick stage;
+        // opening the Article editor must also reveal its stage container.
+        renderTopAndBottomDocks();
         toast("已恢复云端文章项目 · 版本 " + project.revision);
         return;
       }
