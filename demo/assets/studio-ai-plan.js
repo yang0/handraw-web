@@ -5,17 +5,27 @@
 (function(root,factory){
   "use strict";
   const dep=name=>typeof require==="function"?require(name):null;
-  const api=factory(root.HandrawQuickSpec||dep("./studio-quick-spec.js"),
-    root.HandrawStudioSeries||dep("./studio-series-plan.js"),
-    root.HandrawStudioResources||dep("./studio-resources.js"),
-    root.HandrawStudioCore||dep("./studio-core.js"));
+  const api=factory(root,dep);
   root.HandrawStudioAIPlan=api;
   if(typeof module==="object"&&module.exports)module.exports=api;
-})(typeof window!=="undefined"?window:globalThis,function(Quick,Series,Resources,Core){
+})(typeof window!=="undefined"?window:globalThis,function(root,dep){
   "use strict";
   const copy=v=>v==null?v:JSON.parse(JSON.stringify(v));
   const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
   const fail=(code)=>{const e=new Error(code);e.code=code;throw e;};
+  /* Dependencies are resolved on every access instead of being captured when
+   * this file is parsed. A script-order mistake then surfaces as a coded
+   * ai_plan_dependencies_missing error instead of "Cannot read properties of
+   * null (reading 'read')" or a silently dead button (#135). */
+  const lazy=(name,path)=>new Proxy({},{get(_,prop){
+    const value=root[name]||(path?dep(path):null);
+    if(!value)fail("ai_plan_dependencies_missing");
+    return value[prop];
+  }});
+  const Quick=lazy("HandrawQuickSpec","./studio-quick-spec.js");
+  const Series=lazy("HandrawStudioSeries","./studio-series-plan.js");
+  const Resources=lazy("HandrawStudioResources","./studio-resources.js");
+  const Core=lazy("HandrawStudioCore","./studio-core.js");
   const SPEC_FIELDS=["style","layout","ratio"];
   function validResponse(result,kind,baseRevision,planRevision) {
     if(!result?.ok||result.schemaVersion!==1||result.kind!==kind||
@@ -331,6 +341,14 @@
       ai_revision_conflict:"规划期间草稿已改变，未覆盖新版",
       ai_plan_revision_conflict:"分镜计划版本已变化，未覆盖新版",
       ai_undo_conflict:"撤销前方案已再次修改，无法安全撤销",
+      ai_invalid_proposal:"AI 返回的提案字段不完整，原方案未修改",
+      ai_plan_dependencies_missing:"创作台脚本未按顺序加载，请刷新页面后重试",
+      invalid_resource_ref:"AI 返回的资源引用格式不正确",
+      resource_version_conflict:"资源版本已变化，请重新选择后再规划",
+      resource_authorization_required:"缺少已授权资源清单，请刷新页面后重试",
+      missing_quick_nodes:"当前套图草稿节点不完整，请返回画布检查",
+      invalid_ratio:"AI 推荐了不受支持的画幅比例",
+      ai_unavailable:"AI 服务暂不可用，请稍后重试",
       resource_forbidden:"资源尚未解锁，请改用有权限的资源"
     })[code]||"AI 规划未能应用："+String(code||"unknown");
   }

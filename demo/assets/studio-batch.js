@@ -588,7 +588,7 @@
                         </svg>
                         <span>${busy ? "AI 规划中…" : "AI 规划这套图"}</span>
                       </button>
-                      ${this.planNotice ? `<span class="batch-plan-notice" role="status">${esc(this.planNotice)}</span>` : ""}
+                      ${`<span class="batch-plan-notice" role="status" aria-live="polite">${esc(this.planNotice || "")}</span>`}
                       ${this.lastPlanUndo ? '<button type="button" class="btn btn-sm" id="batch-undo-plan">撤销上次规划</button>' : ""}
                     </div>
                   </div>
@@ -1982,8 +1982,15 @@
               " · 可撤销，无扣费");
             markDirty();
           }catch(err){
-            stage("AI 规划失败："+AI.message(err.code||err.message));
+            // Keep the failure visible: stage() writes the persistent
+            // .batch-plan-notice line, and it must survive the re-render that
+            // finally{} triggers. A toast alone disappears after 2.8s (#135).
+            const code=err&&err.code;
+            stage("AI 规划失败："+AI.message(code||err&&err.message));
+            self.planFailed=true;
             S?.toast?.(self.planNotice);
+            if(global.console&&console.warn&&code)
+              console.warn("[ai-plan] failed code=",code,err&&err.message);
           }finally{
             btnPlan.disabled=false;
             if(span)span.textContent="AI 规划这套图";

@@ -35,13 +35,15 @@
   <script src="/assets/studio-normalization.js?v=1"></script>
   <script src="/assets/studio-article-integration.js?v=1"></script>
   <script src="/assets/studio-article-project-109.js?v=1"></script>
-  <script src="/assets/studio-ai-plan.js?v=1"></script>
   <script src="/assets/studio-quick-spec.js?v=1"></script>
   <script src="/assets/studio-make-image-versions.js?v=1"></script>
   <script src="/assets/studio-make-image.js?v=8"></script>
   <script src="/assets/studio-series-plan.js?v=1"></script>
   <script src="/assets/studio-series-board-108.js?v=1"></script>
-  <script src="/assets/studio-batch.js?v=13"></script>
+  <!-- #135: studio-ai-plan.js captures HandrawQuickSpec / HandrawStudioSeries
+       at load time, so it MUST come after both definitions. -->
+  <script src="/assets/studio-ai-plan.js?v=2"></script>
+  <script src="/assets/studio-batch.js?v=14"></script>
   <script src="/assets/studio-dag-scheduler-120.js?v=1"></script>
   <script src="/assets/task-journey.js?v=10"></script>
   <script src="/assets/article-generation-guard.js?v=2"></script>
