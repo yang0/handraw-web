@@ -160,10 +160,8 @@ def main():
                 # Same owner, independent browser context: both start at the
                 # same CAS base; the second writer must not silently overwrite.
                 ctx_two, page_two = make_page(token_a)
-                page_two.goto(base + "/studio/?view=projects", wait_until="networkidle",
-                    timeout=45000)
-                page_two.locator("[data-pc-open='" + project_id + "']").wait_for(timeout=20000)
-                page_two.locator("[data-pc-open='" + project_id + "']").click()
+                page_two.goto(base + "/studio/?project=" + project_id,
+                    wait_until="networkidle", timeout=45000)
                 page_two.locator("#make-image-subject").wait_for(timeout=20000)
                 initial_two = state(page_two)
                 assert initial_two["projectId"] == project_id, initial_two
@@ -202,9 +200,9 @@ def main():
                 ctx_a.clear_cookies()
                 ctx_a.add_cookies([{"name": SESSION_COOKIE_NAME,
                     "value": token_b, "url": base}])
-                page_a.goto(base + "/studio/?view=projects", wait_until="networkidle",
+                page_a.goto(base + "/studio/?entry=quick", wait_until="networkidle",
                     timeout=45000)
-                page_a.locator(".ic-pc-scroll").wait_for(timeout=15000)
+                page_a.locator("#make-image-subject").wait_for(timeout=15000)
                 bob_ids = page_a.evaluate("""() => ({
                   scope:window.App?.state?.user?.id,
                   projectIds:window.CS.tabs.map(t=>t.projectId).filter(Boolean),
