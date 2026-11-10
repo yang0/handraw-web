@@ -109,9 +109,9 @@ def probe_s3(client_a,client_b,anonymous_client,*,bucket,prefix,
             if got!=value:
                 raise ValueError("authorized S3 read does not match temporary bytes")
         results["ownBytesMatched"]=True
-        results["crossTenantReadDeniedBothDirections"]=(
-            _deny(lambda:client_a.get_object(Bucket=bucket,Key=key_b))
-            and _deny(lambda:client_b.get_object(Bucket=bucket,Key=key_a)))
+        read_a_to_b=_deny(lambda:client_a.get_object(Bucket=bucket,Key=key_b))
+        read_b_to_a=_deny(lambda:client_b.get_object(Bucket=bucket,Key=key_a))
+        results["crossTenantReadDeniedBothDirections"]=(read_a_to_b and read_b_to_a)
         # Separate each probe; boolean short-circuiting would otherwise
         # skip the second direction after the first violation, making the
         # independent ACL evidence incomplete even on a disposable QA bucket.
@@ -136,15 +136,16 @@ def probe_s3(client_a,client_b,anonymous_client,*,bucket,prefix,
             try:
                 response=owner.get_object(Bucket=bucket,Key=key)
                 try:
-                    postprobe_ok=postprobe_ok and response["Body"].read(65)==expected
+                    actual=response["Body"].read(65)
+                    postprobe_ok=(actual==expected) and postprobe_ok
                 finally:
                     response["Body"].close()
             except Exception:
                 postprobe_ok=False
         results["postDeniedProbeOwnBytesMatched"]=postprobe_ok
-        results["anonymousDenied"]=(
-            _deny(lambda:anonymous_client.get_object(Bucket=bucket,Key=key_a))
-            and _deny(lambda:anonymous_client.get_object(Bucket=bucket,Key=key_b)))
+        anon_a=_deny(lambda:anonymous_client.get_object(Bucket=bucket,Key=key_a))
+        anon_b=_deny(lambda:anonymous_client.get_object(Bucket=bucket,Key=key_b))
+        results["anonymousDenied"]=(anon_a and anon_b)
         results["expiredSignedUrlDenied"]=False
         if signed_url_checker is not None:
             # A 1-second URL must first work, then be explicitly rejected
