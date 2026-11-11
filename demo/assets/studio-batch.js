@@ -1338,6 +1338,55 @@
         }
       };
 
+
+      // #143: thumbnail selection drives both the single main image and left
+      // selected-picture properties; series metadata remains shared above.
+      root.querySelectorAll("[data-series-select-idx]").forEach(btn => {
+        btn.onclick = () => {
+          const idx = Number(btn.getAttribute("data-series-select-idx"));
+          if (!Number.isInteger(idx) || idx < 0 || idx >= self.resolveIterations().length) return;
+          self.selectedSeriesIndex = idx;
+          self.seriesComposerMode = "image";
+          self.render();
+        };
+        btn.onkeydown = event => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          const index = Number(btn.getAttribute("data-series-select-idx"));
+          const length = self.resolveIterations().length;
+          if (!length) return;
+          self.selectedSeriesIndex = (index + (event.key === "ArrowDown" ? 1 : -1) + length) % length;
+          self.seriesComposerMode = "image";
+          self.render();
+          self.hostElement?.querySelector(`[data-series-select-idx="${self.selectedSeriesIndex}"]`)?.focus();
+        };
+      });
+
+      root.querySelectorAll("[data-series-composer-mode]").forEach(btn => {
+        btn.onclick = () => {
+          const mode = btn.getAttribute("data-series-composer-mode");
+          if (mode !== "series" && mode !== "image") return;
+          if (mode === "image" && !self.resolveIterations().length) return;
+          if (self.seriesComposerMode === mode) return;
+          self.seriesComposerMode = mode;
+          self.render();
+        };
+      });
+
+      root.querySelectorAll("[data-remove-series-ref]").forEach(btn => {
+        btn.onclick = event => {
+          event.stopPropagation();
+          const index = Number(btn.getAttribute("data-remove-series-ref"));
+          const idx = self.selectedSeriesIndex;
+          if (!Number.isInteger(index) || index < 0) return;
+          const current = loop.data.batchLayoutMode === "ai" ? loop.data.batchRows?.[idx] : null;
+          if (!current || !Array.isArray(current.assetItems) || index >= current.assetItems.length) return;
+          const row = ensureSeriesRow(idx);
+          row.assetItems.splice(index,1);
+          markDirty();
+        };
+      });
+
       // #141: keep the planned card editable in-place. Creating a per-card
       // override in fixed mode transitions to row mode without losing themes.
       const ensureSeriesRow = (index) => {
@@ -1598,8 +1647,9 @@
           if (!seed) {
             const S = global.HANDRAW_SHARED;
             if (S?.toast) S.toast("请先填写母题（例如：都市慢生活与手绘手账）");
-            const seedEl = root.querySelector("#batch-seed-input");
-            if (seedEl) seedEl.focus();
+            self.seriesComposerMode = "series";
+            self.render();
+            self.hostElement?.querySelector("#batch-seed-input")?.focus();
             return;
           }
 
@@ -1609,7 +1659,9 @@
             layoutMode: currentMode,
             // Never leak the previously selected fixed layout into AI recommendations.
             fixedLayout: currentMode === "fixed" ? (skill.data.layout || "") : "",
-            layoutRequirement: loop.data.batchLayoutReq || "",
+            // Natural-language directions such as "随机选不同图型" live in
+            // the composer, not an extra layout-requirement input.
+            layoutRequirement: currentMode === "ai" ? seed : "",
             styleId: skill.data.style1 || ""
           };
 
@@ -1659,6 +1711,8 @@
               self.planNotice = "";
             }
 
+            self.selectedSeriesIndex = 0;
+            self.seriesComposerMode = "image";
             if (data.defaultLayoutUsed && items.length > 0 && items[0].layout) {
               const defLayout = items[0].layout;
               if (skill?.data) {
@@ -1805,6 +1859,8 @@
           row.theme = "";
           row.layout = skill.data.layout || "";
           row.assetItems = [];
+          self.selectedSeriesIndex = nextIndex;
+          self.seriesComposerMode = "image";
           markDirty();
         };
       }
@@ -2126,6 +2182,9 @@
             self.context.results = [];
           }
           self.progressState = null;
+          self.seriesOutcomes = new Map();
+          self.selectedSeriesIndex = 0;
+          self.seriesComposerMode = "series";
           self.lastSummary = "";
           self.planNotice = "";
           markDirty();
@@ -2150,7 +2209,10 @@
             ? loop.data.batchRows.findIndex(row => !String(row?.theme || "").trim()) : -1;
           if (incompleteIndex >= 0) {
             global.HANDRAW_SHARED?.toast?.(`请填写第 ${incompleteIndex + 1} 张画面的主题后再生成`);
-            root.querySelector(`[data-series-theme-idx="${incompleteIndex}"]`)?.focus();
+            self.selectedSeriesIndex = incompleteIndex;
+            self.seriesComposerMode = "image";
+            self.render();
+            self.hostElement?.querySelector(`[data-series-theme-idx="${incompleteIndex}"]`)?.focus();
             return;
           }
 
