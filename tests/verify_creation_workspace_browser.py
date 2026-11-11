@@ -317,6 +317,25 @@ def main():
                     expect(page.locator(".batch-series-grid")).to_have_count(0)
                     expect(page.locator(".batch-series-properties .batch-series-shared")).to_be_visible()
                     expect(page.locator(".batch-series-properties .batch-series-selected-settings")).to_be_visible()
+                    expect(page.locator(".batch-series-selected-settings .make-image-picker-card")).to_be_visible()
+                    # No second fixed-height sidebar. All attributes flow naturally
+                    # inside one scrollable rail, including the selected picture.
+                    if width > 980:
+                        flow=page.evaluate("""() => {
+                          const parent=document.querySelector('.batch-series-properties');
+                          const shared=document.querySelector('.batch-series-shared');
+                          const selected=document.querySelector('.batch-series-selected-settings');
+                          const hasOwnScroller=[shared,selected].some(el=>/auto|scroll/.test(getComputedStyle(el).overflowY));
+                          const linked=selected.getBoundingClientRect().top >= shared.getBoundingClientRect().bottom-1;
+                          const canScroll=parent.scrollHeight>parent.clientHeight;
+                          parent.scrollTop=parent.scrollHeight;
+                          const visibleAtEnd=selected.getBoundingClientRect().bottom<=parent.getBoundingClientRect().bottom+2;
+                          const moved=parent.scrollTop;
+                          parent.scrollTop=0;
+                          return {parentOverflow:getComputedStyle(parent).overflowY,hasOwnScroller,linked,canScroll,visibleAtEnd,moved};
+                        }""")
+                        assert flow["parentOverflow"]=="auto" and not flow["hasOwnScroller"] and flow["linked"],flow
+                        assert not flow["canScroll"] or (flow["visibleAtEnd"] and flow["moved"]>0),flow
                     expect(page.locator(".batch-series-properties #batch-count-input")).to_have_count(0)
                     expect(page.locator(".batch-series-dock #batch-count-input")).to_be_visible()
                     expect(page.locator(".batch-series-properties #batch-strategy-fixed")).to_be_visible()
