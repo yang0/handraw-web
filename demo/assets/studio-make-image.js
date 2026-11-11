@@ -264,7 +264,7 @@
       const p = this.getParts();
       if (!p) {
         this.hostElement.innerHTML = `
-          <div class="make-image-container">
+          <div class="make-image-container make-image-chat-container">
             <div style="padding:48px 24px;text-align:center;color:var(--ink-muted);">
               <h3>正在载入创作工作流…</h3>
             </div>
@@ -328,108 +328,12 @@
             </div>
           ` : ""}
 
-          <form class="make-image-form creation-form" novalidate onsubmit="return false;">
-            <div class="make-image-main-grid creation-workspace">
+          <form class="make-image-form creation-form make-image-chat-layout" novalidate onsubmit="return false;">
+            <div class="make-image-main-grid creation-workspace make-image-chat-workspace">
 
-              <section class="creation-content" aria-labelledby="make-content-title">
+              <section class="creation-settings make-image-properties" aria-labelledby="make-settings-title">
                 <div class="creation-section-head">
-                  <h2 id="make-content-title">创作内容</h2>
-                  <p>描述画面内容，再搭配画风与图型。</p>
-                </div>
-              <!-- Row 3: Topic / Subject Input -->
-              <div class="make-image-field-wrap">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                  <label for="make-image-subject" class="make-image-field-label" style="margin-bottom:0;">创作主题</label>
-                  <button type="button" class="btn btn-sm" id="make-image-clear-subject" style="font-size:11.5px;padding:2px 8px;color:var(--ink-muted);${topicText ? "" : "display:none;"}">清空主题</button>
-                </div>
-                <textarea
-                  id="make-image-subject"
-                  class="make-image-textarea"
-                  rows="6"
-                  placeholder="输入你想创作的画面内容或主题，例如：暖阳下的单车少女，在咖啡馆门口停留"
-                  aria-label="创作主题"
-                >${esc(topicText)}</textarea>
-              </div>
-
-                    <!-- 7. 参考图：【选择参考图】+ 已选缩略图同一行 -->
-                    <div class="make-image-more-row">
-                      <span class="make-image-more-label">参考图</span>
-                      <button type="button" class="btn btn-sm btn-primary" id="make-image-open-ref-picker">选择参考图</button>
-                      <div class="make-image-more-thumbs" id="make-image-refs-row">
-                        ${refItems.map((u, idx) => {
-                          const imgUrl = typeof u === "string" ? u : (u.image || u.url || "");
-                          const imgName = typeof u === "string" ? `P${idx + 1}` : (u.name || u.id || `P${idx + 1}`);
-                          return `
-                            <div class="make-image-slot-card is-inline" data-ref-card="${idx}">
-                              <div class="make-image-slot-thumb-wrap">
-                                <img src="${esc(imgUrl)}" alt="${esc(imgName)}" />
-                                <button type="button" class="make-image-slot-clear" data-del-ref="${idx}" title="删除此参考图">×</button>
-                              </div>
-                              <div class="make-image-slot-meta">
-                                <span class="make-image-slot-code">P${idx + 1}</span>
-                                <span class="make-image-slot-title">${esc(imgName)}</span>
-                              </div>
-                            </div>
-                          `;
-                        }).join("")}
-                      </div>
-                    </div>
-                <p class="creation-help">参考图为选填，可用于人物、姿势或构图参考。</p>
-              <!-- Collapsible: Prompt Preview (只读, 可复制, 不可编辑) -->
-              <div class="make-image-collapsible-card">
-                <button type="button" class="make-image-collapsible-toggle" id="make-image-prompt-toggle" aria-expanded="${this.promptPreviewOpen}">
-                  <span>查看提示词（实际发出的完整提示词）</span>
-                  <span class="make-image-toggle-icon" aria-hidden="true">${this.promptPreviewOpen ? "▲" : "▼"}</span>
-                </button>
-                <div class="make-image-collapsible-body" ${this.promptPreviewOpen ? "" : "hidden"}>
-                  <div class="make-image-prompt-inner">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                      <span style="font-size:12px;color:var(--ink-muted);">由系统根据当前参数实时组装，生成时原样发送至模型服务：</span>
-                      <button type="button" class="btn btn-sm" id="make-image-copy-prompt">复制提示词</button>
-                    </div>
-                    <textarea
-                      id="make-image-prompt"
-                      class="make-image-textarea is-readonly"
-                      rows="6"
-                      readonly
-                      aria-label="提示词预览"
-                    >${esc(currentPrompt)}</textarea>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Status text -->
-              ${statusText ? `<div class="make-image-status" role="status">${esc(statusText)}</div>` : ""}
-
-              <!-- Results Gallery -->
-              ${results.length ? `
-                <div class="make-image-results-section">
-                  <div class="make-image-results-head">
-                    <h3 style="margin:0;font-size:15px;font-weight:700;">生成结果 (${results.length} 张)</h3>
-                    <div style="display:flex;gap:8px;">
-                      <button type="button" class="btn btn-sm" id="make-image-btn-again">再来一张</button>
-                      <button type="button" class="btn btn-sm" id="make-image-btn-new-theme">换个主题</button>
-                    </div>
-                  </div>
-                  <div class="make-image-results-grid">
-                    ${results.map((r, idx) => `
-                      <div class="make-image-result-card" data-result-id="${esc(r.id)}">
-                        <div class="make-image-result-thumb">
-                          <img src="${esc(r.imageUrl)}" alt="生成结果 #${idx + 1}" loading="lazy" />
-                        </div>
-                        <div class="make-image-result-actions">
-                          <button type="button" class="btn btn-sm btn-primary" data-action="download" data-url="${esc(r.imageUrl)}">下载</button>
-                        </div>
-                      </div>
-                    `).join("")}
-                  </div>
-                </div>
-              ` : ""}
-
-              </section>
-              <section class="creation-settings" aria-labelledby="make-settings-title">
-                <div class="creation-section-head">
-                  <h2 id="make-settings-title">画面设置</h2>
+                  <h2 id="make-settings-title">画面属性</h2>
                   <p>搭配画风与图型，确定画面的视觉表达。</p>
                 </div>
               <!-- Row 1: Output Mode & Fusion Toggle in ONE Row (left-aligned) -->
@@ -585,9 +489,107 @@
               </div>
 
 
+              <!-- Collapsible: Prompt Preview (只读, 可复制, 不可编辑) -->
+              <div class="make-image-collapsible-card">
+                <button type="button" class="make-image-collapsible-toggle" id="make-image-prompt-toggle" aria-expanded="${this.promptPreviewOpen}">
+                  <span>查看提示词（实际发出的完整提示词）</span>
+                  <span class="make-image-toggle-icon" aria-hidden="true">${this.promptPreviewOpen ? "▲" : "▼"}</span>
+                </button>
+                <div class="make-image-collapsible-body" ${this.promptPreviewOpen ? "" : "hidden"}>
+                  <div class="make-image-prompt-inner">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                      <span style="font-size:12px;color:var(--ink-muted);">由系统根据当前参数实时组装，生成时原样发送至模型服务：</span>
+                      <button type="button" class="btn btn-sm" id="make-image-copy-prompt">复制提示词</button>
+                    </div>
+                    <textarea
+                      id="make-image-prompt"
+                      class="make-image-textarea is-readonly"
+                      rows="6"
+                      readonly
+                      aria-label="提示词预览"
+                    >${esc(currentPrompt)}</textarea>
+                  </div>
+                </div>
+              </div>
+
+
               </section>
-            </div>
-              <!-- Action & Cost Row (同一行) -->
+              <section class="creation-content make-image-conversation" aria-labelledby="make-content-title">
+                <div class="creation-section-head make-image-results-intro"><h2 id="make-content-title">生成画面</h2><p>图片从这里开始显示，下方输入你的创作主题。</p></div>
+                <div class="make-image-output-scroll" role="region" aria-label="生成结果" tabindex="0">
+                  ${busy ? `<div class="make-image-pending" role="status" aria-label="图片生成中"><div class="make-image-pending-art" style="aspect-ratio:${esc(previewRatio)}"><span class="make-image-pending-symbol" aria-hidden="true">✦</span><span class="make-image-pending-shimmer" aria-hidden="true"></span></div><p class="make-image-pending-caption">正在生成画面…</p></div>` : ""}
+                  ${!busy && !results.length ? `<div class="make-image-output-empty"><strong>让灵感从这里开始</strong><p>在下方输入主题，选好左侧属性后开始生成。</p></div>` : ""}
+              <!-- Results Gallery -->
+              ${results.length ? `
+                <div class="make-image-results-section">
+                  <div class="make-image-results-head">
+                    <h3 style="margin:0;font-size:15px;font-weight:700;">生成结果 (${results.length} 张)</h3>
+                    <div style="display:flex;gap:8px;">
+                      <button type="button" class="btn btn-sm" id="make-image-btn-again">再来一张</button>
+                      <button type="button" class="btn btn-sm" id="make-image-btn-new-theme">换个主题</button>
+                    </div>
+                  </div>
+                  <div class="make-image-results-grid">
+                    ${results.map((r, idx) => `
+                      <div class="make-image-result-card" data-result-id="${esc(r.id)}">
+                        <div class="make-image-result-thumb">
+                          <img src="${esc(r.imageUrl)}" alt="生成结果 #${idx + 1}" loading="lazy" />
+                        </div>
+                        <div class="make-image-result-actions">
+                          <button type="button" class="btn btn-sm btn-primary" data-action="download" data-url="${esc(r.imageUrl)}">下载</button>
+                        </div>
+                      </div>
+                    `).join("")}
+                  </div>
+                </div>
+              ` : ""}
+
+              <!-- Status text -->
+              ${statusText ? `<div class="make-image-status" role="status">${esc(statusText)}</div>` : ""}
+
+
+                </div>
+                <div class="make-image-composer">
+              <!-- Row 3: Topic / Subject Input -->
+              <div class="make-image-field-wrap">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                  <label for="make-image-subject" class="make-image-field-label" style="margin-bottom:0;">创作主题</label>
+                  <button type="button" class="btn btn-sm" id="make-image-clear-subject" style="font-size:11.5px;padding:2px 8px;color:var(--ink-muted);${topicText ? "" : "display:none;"}">清空主题</button>
+                </div>
+                <textarea
+                  id="make-image-subject"
+                  class="make-image-textarea"
+                  rows="6"
+                  placeholder="输入你想创作的画面内容或主题，例如：暖阳下的单车少女，在咖啡馆门口停留"
+                  aria-label="创作主题"
+                >${esc(topicText)}</textarea>
+              </div>
+
+                    <!-- 7. 参考图：【选择参考图】+ 已选缩略图同一行 -->
+                    <div class="make-image-more-row">
+                      <span class="make-image-more-label">参考图</span>
+                      <button type="button" class="make-image-add-reference" id="make-image-open-ref-picker" title="添加参考图" aria-label="添加参考图">+</button>
+                      <div class="make-image-more-thumbs" id="make-image-refs-row">
+                        ${refItems.map((u, idx) => {
+                          const imgUrl = typeof u === "string" ? u : (u.image || u.url || "");
+                          const imgName = typeof u === "string" ? `P${idx + 1}` : (u.name || u.id || `P${idx + 1}`);
+                          return `
+                            <div class="make-image-slot-card is-inline" data-ref-card="${idx}">
+                              <div class="make-image-slot-thumb-wrap">
+                                <img src="${esc(imgUrl)}" alt="${esc(imgName)}" />
+                                <button type="button" class="make-image-slot-clear" data-del-ref="${idx}" title="删除此参考图">×</button>
+                              </div>
+                              <div class="make-image-slot-meta">
+                                <span class="make-image-slot-code">P${idx + 1}</span>
+                                <span class="make-image-slot-title">${esc(imgName)}</span>
+                              </div>
+                            </div>
+                          `;
+                        }).join("")}
+                      </div>
+                    </div>
+                <p class="creation-help">参考图为选填，可用于人物、姿势或构图参考。</p>
+
               <div class="make-image-action-bar">
                 <div class="make-image-cost" aria-live="polite">
                   ${this.renderCostHtml()}
@@ -601,12 +603,20 @@
                   </button>
                 </div>
               </div>
+                </div>
+              </section>
+            </div>
 
 
           </form>
         </div>
       `;
 
+      const propertiesPanel = this.hostElement.querySelector(".make-image-properties");
+      const outputPanel = this.hostElement.querySelector(".make-image-output-scroll");
+      if (propertiesPanel) propertiesPanel.scrollTop = oldPropertiesScroll;
+      if (outputPanel) outputPanel.scrollTop = results.length > oldResultCount ? 0 : oldOutputScroll;
+      this.lastResultCount = results.length;
       this.bindEvents(this.hostElement);
     }
 

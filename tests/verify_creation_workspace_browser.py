@@ -65,7 +65,7 @@ BOOT = r"""
 }
 """
 
-def geometry(page, width):
+def geometry(page, width, kind):
     data = page.evaluate("""() => {
       const box=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom};};
       return {content:box('.creation-content'),settings:box('.creation-settings'),
@@ -78,7 +78,10 @@ def geometry(page, width):
     assert not data["overflow"], (width, data)
     c, s = data["content"], data["settings"]
     if width > 980:
-        assert s["x"] >= c["right"] and abs(c["y"] - s["y"]) < 2, data
+        if kind == "quick":
+            assert c["x"] >= s["right"] and abs(c["y"] - s["y"]) < 2, data
+        else:
+            assert s["x"] >= c["right"] and abs(c["y"] - s["y"]) < 2, data
         assert c["w"] > s["w"], data
     else:
         assert abs(s["x"] - c["x"]) < 2 and s["y"] >= c["bottom"], data
@@ -116,7 +119,7 @@ def main():
             page.set_viewport_size({"width":width,"height":900})
             for kind in ["quick","batch"]:
                 load(page,kind)
-                evidence.append({"kind":kind,"width":width,**geometry(page,width)})
+                evidence.append({"kind":kind,"width":width,**geometry(page,width,kind)})
                 expect(page.locator(".creation-content")).to_be_visible()
                 expect(page.locator(".creation-settings")).to_be_visible()
                 check_bar(page, "#make-image-btn-run" if kind=="quick" else "#batch-btn-start")
@@ -134,18 +137,19 @@ def main():
                     assert page.evaluate("fixture.parts.ctrl.data.ratio")=="1:1"
                     page.locator("#make-image-more-toggle").click()
                     expect(page.locator("#make-image-audience")).to_be_visible()
-                    geometry(page,width)
+                    geometry(page,width,kind)
                     page.locator("#make-image-prompt-toggle").click()
-                    geometry(page,width)
+                    geometry(page,width,kind)
                     # The action stays reachable with both panels expanded.
                     page.locator("#make-image-btn-run").scroll_into_view_if_needed()
                     check_bar(page,"#make-image-btn-run")
                     page.screenshot(path=str(OUT/f"{kind}-{width}.png"),full_page=True)
                     page.locator("#make-image-btn-run").click()
                     expect(page.locator("#make-image-btn-run")).to_be_disabled()
+                    expect(page.locator(".make-image-pending")).to_be_visible()
                     page.locator("#make-image-btn-stop").click()
                     assert page.evaluate("fixture.counts().cancels")==1
-                    geometry(page,width)
+                    geometry(page,width,kind)
                 else:
                     page.locator("#batch-prompts-input").fill("山间晨雾\n湖边暮色")
                     expect(page.locator(".batch-cost-text")).to_contain_text("2 张")
@@ -158,11 +162,11 @@ def main():
                     page.locator("#batch-btn-pick-global-refs").click()
                     assert page.evaluate("fixture.counts().refs")==1
                     page.locator("#batch-toggle-more-settings").click()
-                    geometry(page,width)
+                    geometry(page,width,kind)
                     page.locator("#batch-seed-input").fill("城市散步")
                     page.locator("#batch-btn-plan").click()
                     expect(page.locator(".batch-edit-row")).to_have_count(3)
-                    geometry(page,width)
+                    geometry(page,width,kind)
                     if width<=600:
                         assert page.locator(".batch-edit-table").evaluate("el=>el.scrollWidth<=el.clientWidth+1")
                     page.locator("#batch-concurrency").select_option("2")
@@ -175,7 +179,7 @@ def main():
                     page.locator("#batch-btn-stop").click()
                     expect(page.locator("#batch-btn-stop")).to_be_disabled()
                     assert page.evaluate("fixture.counts().cancels")==1
-                    geometry(page,width)
+                    geometry(page,width,kind)
         assert not errors, errors
         (OUT/"geometry.json").write_text(json.dumps(evidence,ensure_ascii=False,indent=2))
         print(f"PASS: {len(evidence)} responsive form states; input retention, keyboard pickers, references, planning, costs, run and stop.")
