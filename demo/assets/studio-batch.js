@@ -299,7 +299,7 @@
        Cards stay in the existing workflow graph; only the presentation changes. */
     renderSeriesCard(iter, idx, opts = {}) {
       const mode = opts.mode || "fixed";
-      const row = mode === "ai" ? (opts.rows?.[idx] || {}) : {};
+      const row = opts.rows?.[idx] || {};
       const theme = mode === "ai" ? (row.theme || "") : (opts.fixedThemes?.[idx] ?? iter?.theme ?? "");
       const image = opts.result?.imageUrl || "";
       const status = this.getRowStatus(idx, opts.busy, opts.currentStep || 0, opts.result, opts.activeIndex);
@@ -307,6 +307,30 @@
       const aspect = ratio.length === 2 && ratio.every(n => Number.isFinite(n) && n > 0)
         ? `${ratio[0]} / ${ratio[1]}` : "3 / 4";
       const label = theme || `第 ${idx + 1} 张画面`;
+      const styleLabel = (id) => {
+        const info = this.getResourceInfo(id, "styles");
+        return info ? [info.id, info.name_zh || info.name].filter(Boolean).join(" · ") : "未选择";
+      };
+      const layoutId = row.layout || opts.globalLayout || iter?.layout || "";
+      const layoutInfo = this.getResourceInfo(layoutId, "layouts");
+      const layoutLabel = layoutId
+        ? [layoutId, layoutInfo?.name_zh || layoutInfo?.name].filter(Boolean).join(" · ")
+        : (mode === "ai" ? "待 AI 推荐" : "未选择");
+      const properties = [
+        ["画风", opts.isFusion ? `角色：${styleLabel(opts.style1)} / 场景：${styleLabel(opts.style2)}` : styleLabel(opts.style1)],
+        ["图型", layoutLabel],
+        ["主题色", opts.colorLabel || "未选择"],
+        ["画幅", opts.ratio || "3:4"],
+        ["生成方式", opts.outputModeLabel || "图文"]
+      ];
+      const readOnlyPreview = `
+        <div class="batch-series-preview" aria-label="本图参数只读预览">
+          <span class="batch-series-preview-eyebrow">待生成 · 本图预览</span>
+          <h3 class="batch-series-preview-theme">${esc(theme || "尚未填写本图主题")}</h3>
+          <dl class="batch-series-preview-details">
+            ${properties.map(([name, value]) => `<div class="batch-series-preview-property"><dt>${esc(name)}</dt><dd>${esc(value)}</dd></div>`).join("")}
+          </dl>
+        </div>`;
       let media;
       if (image) {
         media = `<button type="button" class="batch-iter-thumb-btn is-generated batch-series-image" data-zoom-src="${esc(image)}" data-zoom-title="${esc(label)}" aria-label="放大查看图 ${idx + 1}"><img data-hw-src="${esc(image)}" alt="${esc(label)}" loading="lazy" /></button>`;
@@ -325,9 +349,7 @@
         media = `<div class="batch-iter-placeholder batch-series-placeholder" role="group" aria-label="图 ${idx + 1} 待生成">
           <span class="batch-series-placeholder-glow" aria-hidden="true"></span>
           <div class="batch-series-placeholder-center">
-            <span class="batch-series-placeholder-symbol" aria-hidden="true">◇</span>
-            <strong class="batch-series-placeholder-title">图 ${idx + 1}</strong>
-            <span class="batch-series-placeholder-note">准备好开始创作</span>
+            ${readOnlyPreview}
             <button type="button" class="batch-series-generate-one" data-generate-series-idx="${idx}" ${opts.busy ? "disabled" : ""}>
               <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></svg>
               <span>生成这张</span>
@@ -664,7 +686,9 @@
                     ${selectedIter ? this.renderSeriesCard(selectedIter, selectedIndex, {
                       mode:batchLayoutMode, rows:batchRows, globalLayout:sd.layout || "",
                       fixedThemes, result:slotResults[selectedIndex], busy, currentStep,
-                      activeIndex, ratio:currentRatio
+                      activeIndex, ratio:currentRatio, style1:style1Id, style2:style2Id,
+                      isFusion, colorLabel:colorObj?.name_zh || colorObj?.name || selectedColors[0] || "",
+                      outputModeLabel:OUTPUT_MODE_OPTIONS.find(x => x.id === currentMode)?.label || currentMode
                     }) : '<div class="batch-series-empty">填写主题并规划画面，或添加一张。</div>'}
                   </div>
                   <div class="batch-series-thumbs-rail">
@@ -791,7 +815,10 @@
       main.innerHTML = iterations[selected] ? this.renderSeriesCard(iterations[selected],selected,{
         mode,rows:loop.batchRows || [],fixedThemes,globalLayout:skill.layout || "",
         ratio:ctrl.ratio || "3:4",result:results[selected],busy,
-        currentStep:loop.currentStep || 0,activeIndex
+        currentStep:loop.currentStep || 0,activeIndex,
+        style1:skill.style1 || "",style2:skill.style2 || "",isFusion:Boolean(skill.fusion),
+        colorLabel:(skill.colors || [])[0] || "",
+        outputModeLabel:OUTPUT_MODE_OPTIONS.find(x => x.id === ctrl.mode)?.label || ctrl.mode || "图文"
       }) : '<div class="batch-series-empty">写下系列母题并规划画面，或者直接添加一张。</div>';
       thumbs.innerHTML = iterations.map((iter,idx)=>this.renderSeriesThumb(iter,idx,{
         selectedIndex:selected,result:results[idx],globalLayout:skill.layout || "",
