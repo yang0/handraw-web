@@ -618,9 +618,15 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   assert.ok(notice, "Template notice must be rendered");
   assert.ok(notice.textContent.includes("未使用 AI 规划，已按模板生成"), "Notice text must match template message");
 
-  const prompts = parsed.querySelector("#batch-prompts-input");
-  assert.ok(prompts, "Prompts textarea must exist");
-  assert.ok(prompts.value.includes("【都市慢生活】序章初探"), "Template generated content must be filled into textarea");
+  assert.ok(!fakeHost.innerHTML.includes('id="batch-prompts-input"'),
+    "Removed bulk-paste textarea must not reappear");
+  HandrawBatchCreate.seriesComposerMode = "image";
+  HandrawBatchCreate.render(fakeHost,{parts,graph,catalog:sharedCatalog},{});
+  assert.ok(fakeHost.innerHTML.includes('data-series-theme-idx="0"'),
+    "Each planned theme is edited through the focused image composer");
+  assert.ok(fakeHost.innerHTML.includes("【都市慢生活】序章初探"),
+    "Template result remains available in focused theme editor");
+  HandrawBatchCreate.seriesComposerMode = "series";
 
   // Clean notice for next tests
   HandrawBatchCreate.planNotice = "";
@@ -686,7 +692,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
   // M1: ctrl.data.count reset to 1, folded into batchCount (6 * 3 = 18 <= 20)
   assert.equal(parts.ctrl.data.count, 1, "ctrl.data.count must be reset to 1");
-  assert.equal(parts.loop.data.batchCount, 18, "batchCount must be folded to 18 (6 * 3)");
+  assert.equal(parts.loop.data.batchCount, 10, "Legacy ctrl count folds into the new 10-image maximum");
   assert.ok(fakeHost.innerHTML.includes("已按每行一张折算，共 18 张"), "Must display conversion notice in plan notice");
 
   const parsed = parseHtml(fakeHost.innerHTML);
@@ -911,18 +917,12 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
   // Requirement 10: Batch preview iteration thumbnail zoom button verification
   const zoomBtns = fakeHost.querySelectorAll(".batch-iter-thumb-btn");
-  assert.equal(zoomBtns.length, 1, "Only the focused main image has a zoom button");
-  const zb0 = zoomBtns[0];
-  assert.ok(zb0.getAttribute("data-zoom-src"), ".batch-iter-thumb-btn must have data-zoom-src");
-  assert.ok(zb0.getAttribute("data-zoom-title"), ".batch-iter-thumb-btn must have data-zoom-title");
-  assert.ok(!zb0.innerHTML.includes(" src="), "Batch iteration thumbnail must use only data-hw-src");
-
-  zb0.onclick();
-  assert.ok(openedLightbox, "Clicking .batch-iter-thumb-btn must trigger openImageLightbox");
-  assert.equal(openedLightbox.url, zb0.getAttribute("data-zoom-src"));
+  assert.equal(zoomBtns.length, 0, "Ungenerated image shows a styled placeholder, not a schematic zoom target");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-placeholder").length, 1,
+    "Focused preview remains a single borderless placeholder");
 
   console.log("✓ Requirement 9 Passed: Inline layout cell contains <img> and picker shares 168-card renderer");
-  console.log("✓ Requirement 10 Passed: Batch iteration thumbnail has lightbox zoom button");
+  console.log("✓ Requirement 10 Passed: Pre-generation focused preview is not a schematic image");
 }
 
 // ==========================================
@@ -1382,7 +1382,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   assert.equal(parts.skill.data.negativePrompt, "", "negativePrompt must reset to empty");
 
   assert.equal(parts.loop.data.batchSeed, "", "batchSeed must reset to empty");
-  assert.equal(parts.loop.data.batchCount, 6, "batchCount must reset to 6");
+  assert.equal(parts.loop.data.batchCount, 3, "Default examples start with 3 selectable images");
   assert.equal(parts.loop.data.batchLayoutMode, "ai", "New series reset defaults to AI layout recommendations");
   assert.equal(parts.loop.data.batchLayoutReq, "", "batchLayoutReq must reset to empty");
   assert.equal(parts.loop.data.batchRows.length, 3, "Default AI mode includes three editable example image rows");
@@ -1502,12 +1502,12 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   }, {});
 
   const placeholdersLayout = fakeHost.querySelectorAll(".batch-iter-placeholder");
-  assert.equal(placeholdersLayout.length, 0, "Table must NOT render placeholders when layout is selected");
-  const thumbBtnsLayout = fakeHost.querySelectorAll(".batch-iter-thumb-btn");
-  assert.equal(thumbBtnsLayout.length, 1, "One focused main-image zoom button");
-  const badgesLayout = fakeHost.querySelectorAll(".batch-iter-schematic-badge");
-  assert.equal(badgesLayout.length, 1, "Only the focused main image shows a schematic badge");
-  assert.equal(thumbBtnsLayout[0].getAttribute("data-zoom-src"), "/images/sc-021.webp");
+  assert.equal(placeholdersLayout.length, 1,
+    "Even with a selected layout, an ungenerated image should show its clean placeholder");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-thumb-btn").length, 0,
+    "Layout sample imagery must not masquerade as generated output");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-schematic-badge").length, 0,
+    "No schematic badge overlays the focused placeholder");
 
   // 4. AI recommended layout mode with diverse layouts
   const graphAi = createTestBatchGraph({
@@ -1542,14 +1542,15 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     loggedIn: true
   }, {});
 
-  assert.equal(fakeHost.querySelectorAll(".batch-iter-thumb-btn").length, 1, "Only the selected image has a large zoom button");
-  assert.equal(fakeHost.querySelectorAll(".batch-iter-placeholder").length, 0, "Selected row 1 shows layout; unselected row 3 stays a small thumbnail");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-thumb-btn").length, 0, "An ungenerated picture does not have a zoom target");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-placeholder").length, 1,
+    "Selected picture 1 keeps its placeholder until an actual image is generated");
   HandrawBatchCreate.selectedSeriesIndex = 2;
   HandrawBatchCreate.render(fakeHost, {
     parts: partsAi, graph: graphAi, catalog: sharedCatalog, loggedIn:true
   }, {});
   assert.equal(fakeHost.querySelectorAll(".batch-iter-placeholder").length, 1,
-    "Choosing picture 3 moves its empty state into the main image");
+    "Selecting picture 3 also shows its own placeholder");
   assert.equal(fakeHost.querySelectorAll(".batch-iter-thumb-btn").length, 0,
     "No zoom target before selected picture 3 has a layout or result");
   HandrawBatchCreate.selectedSeriesIndex = 0;
