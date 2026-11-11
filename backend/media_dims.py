@@ -25,11 +25,8 @@ def _cached_image_size(path: str, mtime_ns: int, file_size: int) -> tuple[int, i
     Only successful probes are cached long-term in practice; the caller avoids
     probing missing files, while corrupt files can be retried after replacement.
     """
-    try:
-        with Image.open(path) as img:
-            return int(img.width), int(img.height)
-    except Exception:
-        return None
+    with Image.open(path) as img:
+        return int(img.width), int(img.height)
 
 
 def is_square(w: int, h: int) -> bool:
@@ -71,5 +68,8 @@ def image_size(url: str | None) -> tuple[int, int] | None:
                 stat = target.stat()
             except OSError:
                 return None
-            return _cached_image_size(str(target), stat.st_mtime_ns, stat.st_size)
+            try:
+                return _cached_image_size(str(target), stat.st_mtime_ns, stat.st_size)
+            except Exception:
+                return None
     return None
