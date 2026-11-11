@@ -2123,6 +2123,13 @@
           }
           const currentIters = self.resolveIterations();
           const totalCount = currentIters.length;
+          const incompleteIndex = loop.data.batchLayoutMode === "ai" && Array.isArray(loop.data.batchRows)
+            ? loop.data.batchRows.findIndex(row => !String(row?.theme || "").trim()) : -1;
+          if (incompleteIndex >= 0) {
+            global.HANDRAW_SHARED?.toast?.(`请填写第 ${incompleteIndex + 1} 张画面的主题后再生成`);
+            root.querySelector(`[data-series-theme-idx="${incompleteIndex}"]`)?.focus();
+            return;
+          }
 
           if (totalCount === 0) {
             const S = global.HANDRAW_SHARED;
