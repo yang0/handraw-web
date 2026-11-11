@@ -6411,8 +6411,17 @@
       ? plan.specs.length - completedBefore.size : 1;
     if (!confirmPotentialGenerationCost(pendingCount)) return false;
 
-    const batchId = (resolvedOnlyIdx !== null && ctrl.data.activeBatchId) ? ctrl.data.activeBatchId : makeStableRequestId("batch");
+    const prevActiveBatchId = ctrl.data.activeBatchId || "";
+    const prevActiveBatchTotal = Number(ctrl.data.activeBatchTotal || 0);
+    const hasMatchingBatch = Boolean(
+      resolvedOnlyIdx !== null &&
+      prevActiveBatchId &&
+      (!prevActiveBatchTotal || prevActiveBatchTotal === plan.specs.length)
+    );
+    let batchId = hasMatchingBatch ? prevActiveBatchId : makeStableRequestId("batch");
+    let isRotatedBatch = batchId !== prevActiveBatchId;
     ctrl.data.activeBatchId = batchId;
+    ctrl.data.activeBatchTotal = plan.specs.length;
 
     const { nodes: dispNodes, createdCount, isBatchGallery } = syncControlDisplayNodes(ctrl, plan.specs.length, {
       markGenerating: true,
@@ -6426,8 +6435,22 @@
     ctrl.data.elapsedSec = 0;
     ctrl.data.runCount = (ctrl.data.runCount || 0) + 1;
     const currentRunCount = ctrl.data.runCount;
-    for (const dn of dispNodes) {
-      if (resolvedOnlyIdx === null || dn.id === resolvedOnlyDispId) {
+    const preserveCompletedItemsForBatch = (targetBatchId) => {
+      for (const dn of dispNodes) {
+        if (resolvedOnlyIdx === null || dn.id === resolvedOnlyDispId || isBatchGallery || dn.data?.items?.some((it) => it?.imageUrl)) {
+          dn.data.activeBatchId = targetBatchId;
+        }
+        if (Array.isArray(dn.data?.items)) {
+          for (const item of dn.data.items) {
+            if (item && item.imageUrl) item.batchId = targetBatchId;
+          }
+        }
+      }
+    };
+    if (resolvedOnlyIdx !== null) {
+      preserveCompletedItemsForBatch(batchId);
+    } else {
+      for (const dn of dispNodes) {
         dn.data.activeBatchId = batchId;
       }
     }
@@ -6528,6 +6551,7 @@
       allItems.push(...allItemsFromBefore);
       let completedCount = completedSlots.size;
       let failedCount = 0;
+      let lastFailureError = "";
 
       if (activeLoopNode && resolvedOnlyIdx === null) {
         activeLoopNode.data.currentStep = 0;
@@ -6555,6 +6579,7 @@
           const dn = isBatchGallery ? dispNodes[0] : dispNodes[i];
           const old = isBatchGallery ? dn?.data?.items?.[i] : dn?.data?.items?.[0];
           if (!old) continue;
+          if (isRotatedBatch && !old.imageUrl) continue;
           allItems.push(old);
           const key = plan.specs[i].slotKey || String(i);
           if (old.imageUrl) completedSlots.add(key);
@@ -6611,16 +6636,14 @@
         const slotKey = sp.slotKey || String(i);
         currentSlotKey = slotKey;
         // A deliberate image-level rerun must reserve a NEW gateway request
-        // while remaining in the SAME logical batch/work. Otherwise it simply
-        // replays the old failed request and never generates a replacement.
-        if (resolvedOnlyIdx !== null && dn && dn.data && !dn.data.pendingTaskId) {
-          const previous = (dn.data.items || []).find(it =>
-            it && (it.slotKey === slotKey || (it.requestId && it.requestId === dn.data.pendingRequestIds?.[slotKey]))
-          );
-          if (previous && (previous.failed || previous.imageUrl)) {
-            const previousRequestId = dn.data.pendingRequestIds?.[slotKey];
+        // (and when batch count changed, never replay a stale batch or requestId).
+        if (resolvedOnlyIdx !== null && dn && dn.data) {
+          const staleReqId = dn.data.pendingRequestIds?.[slotKey];
+          const hasLiveTask = Boolean(dn.data.pendingTaskId || dn.data.pendingTasksBySlot?.[slotKey]?.taskId);
+          if (staleReqId && (!hasLiveTask || isRotatedBatch || !staleReqId.includes(batchId))) {
             if (dn.data.pendingRequestIds) delete dn.data.pendingRequestIds[slotKey];
-            if (previousRequestId && dn.data.pendingSpec) delete dn.data.pendingSpec[previousRequestId];
+            if (dn.data.pendingSpec) delete dn.data.pendingSpec[staleReqId];
+            if (dn.data.pendingTasksBySlot) delete dn.data.pendingTasksBySlot[slotKey];
           }
         }
         let requestId = dn && dn.data && dn.data.pendingRequestIds && dn.data.pendingRequestIds[slotKey];
@@ -6665,36 +6688,98 @@
             const cloudPrompt = E.assembleControlPrompt(CS.graph, ctrl, Catalog, "cloud", sp);
             const effectiveAssets = Array.isArray(sp.assetItems) ? sp.assetItems : rec.assetItems;
             const refImages = effectiveAssets.map((a) => a.image).filter(Boolean);
-            submittedSlots.add(slotKey);
-            const resp = await fetch("/api/studio/generate", {
-              method: "POST",
-              credentials: "include",
-              signal: controller ? controller.signal : undefined,
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                prompt: cloudPrompt,
-                ratio: sp.ratio || "3:4",
-                style1: sp.style1 || rec.style1Id || "",
-                style2: rec.style2Id || "",
-                layout: sp.layout || rec.layoutId || "",
-                refImages,
-                recipeSnapshot: sp.recipeSnapshot,
-                creationSource,
-                batchId,
-                batchIndex: i,
-                batchTotal: plan.specs.length,
-                retryCancelled: resolvedOnlyIdx !== null,
-                requestId,
-                clientRequestId: requestId,
-                confirmCost: true,
-                ...(CS.forkGenerationSource?.generationId ? {
-                  forkGenerationId: CS.forkGenerationSource.generationId,
-                  forkItemId: CS.forkGenerationSource.itemId || ""
-                } : {})
-              })
-            });
-            const data = await resp.json();
-            if (isStaleScope(runEpoch, runScope)) return;
+            let resp = null;
+            let data = null;
+            for (let batchAttempt = 0; batchAttempt < 2; batchAttempt += 1) {
+              submittedSlots.add(slotKey);
+              resp = await fetch("/api/studio/generate", {
+                method: "POST",
+                credentials: "include",
+                signal: controller ? controller.signal : undefined,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  prompt: cloudPrompt,
+                  ratio: sp.ratio || "3:4",
+                  style1: sp.style1 || rec.style1Id || "",
+                  style2: rec.style2Id || "",
+                  layout: sp.layout || rec.layoutId || "",
+                  refImages,
+                  recipeSnapshot: sp.recipeSnapshot,
+                  creationSource,
+                  batchId,
+                  batchIndex: i,
+                  batchTotal: plan.specs.length,
+                  retryCancelled: resolvedOnlyIdx !== null,
+                  requestId,
+                  clientRequestId: requestId,
+                  confirmCost: true,
+                  ...(CS.forkGenerationSource?.generationId ? {
+                    forkGenerationId: CS.forkGenerationSource.generationId,
+                    forkItemId: CS.forkGenerationSource.itemId || ""
+                  } : {})
+                })
+              });
+              data = await resp.json();
+              if (isStaleScope(runEpoch, runScope)) return;
+              if (
+                batchAttempt === 0 &&
+                resolvedOnlyIdx !== null &&
+                resp.status === 409 &&
+                data?.code === "batch_size_mismatch" &&
+                !batchRun.cancelled
+              ) {
+                const prevBatchId = batchId;
+                const rotatedBatchId = makeStableRequestId("batch");
+                const staleReqId = requestId;
+                batchId = rotatedBatchId;
+                isRotatedBatch = true;
+                batchRun.id = rotatedBatchId;
+                ctrl.data.activeBatchId = rotatedBatchId;
+                ctrl.data.activeBatchTotal = plan.specs.length;
+                preserveCompletedItemsForBatch(rotatedBatchId);
+                requestId = makeStableRequestId(`out_${rotatedBatchId}_${slotKey}`);
+                currentReqId = requestId;
+                if (dn && dn.data) {
+                  dn.data.activeBatchId = rotatedBatchId;
+                  dn.data.pendingRequestIds = dn.data.pendingRequestIds || {};
+                  dn.data.pendingRequestIds[slotKey] = requestId;
+                  dn.data.pendingRequestId = requestId;
+                  dn.data.pendingTasksBySlot = dn.data.pendingTasksBySlot || {};
+                  dn.data.pendingTasksBySlot[slotKey] = { taskId: "", requestId };
+                  dn.data.pendingSpec = dn.data.pendingSpec || {};
+                  const prevSpec = dn.data.pendingSpec[staleReqId] || {
+                    slotKey,
+                    index: i,
+                    role: sp.role || "image",
+                    title: sp.title || `图片 #${i + 1}`,
+                    anchorHeading: sp.anchorHeading || "",
+                    ratio: sp.ratio || "3:4",
+                    theme: sp.theme || "",
+                    prompt: skillPrompt,
+                    recipeSnapshot: sp.recipeSnapshot ? JSON.parse(JSON.stringify(sp.recipeSnapshot)) : null
+                  };
+                  delete dn.data.pendingSpec[staleReqId];
+                  dn.data.pendingSpec[requestId] = { ...prevSpec, batchId: rotatedBatchId };
+                  persistOpenTabs();
+                }
+                if (window.HandrawBatchCreate) {
+                  if (typeof window.HandrawBatchCreate.rotateBatchId === "function") {
+                    window.HandrawBatchCreate.rotateBatchId(prevBatchId, rotatedBatchId);
+                  }
+                  window.HandrawBatchCreate.updateProgress({
+                    completedCount,
+                    failedCount,
+                    totalCount: plan.specs.length,
+                    activeIndex: i,
+                    activeIndices: Array.from(runningIndices),
+                    busy: true,
+                    batchId: rotatedBatchId
+                  });
+                }
+                continue;
+              }
+              break;
+            }
             if (!resp.ok || !data.ok) {
               const err = new Error(data.error || `HTTP ${resp.status}`);
               err.status = resp.status;
@@ -6761,6 +6846,7 @@
           if (batchRun.cancelled) return;
           itemFailed = true;
           itemErrorMsg = itemErr?.message || "生成失败";
+          lastFailureError = itemErrorMsg;
           itemIsTerminal = Boolean(itemErr?.terminal);
           const st = itemErr?.status;
           if (st === 401 || st === 402 || st === 403 || st === 429 ||
@@ -7057,11 +7143,15 @@
             toast(`🎉 批量出图完成！已生成 ${completedCount} 张图片`);
           }
         } else {
-          const unexecuted = Math.max(0, plan.specs.length - completedCount - failedCount);
-          const parts = [`已完成 ${completedCount} / ${plan.specs.length} 张`];
-          if (failedCount > 0) parts.push(`失败 ${failedCount} 张`);
-          if (unexecuted > 0) parts.push(`未执行 ${unexecuted} 张`);
-          toast(`批量出图未全部完成：${parts.join(" · ")}`, "error");
+          if (resolvedOnlyIdx !== null && failedCount > 0 && lastFailureError) {
+            toast(`单张生成失败：${lastFailureError}`, "error");
+          } else {
+            const unexecuted = Math.max(0, plan.specs.length - completedCount - failedCount);
+            const parts = [`已完成 ${completedCount} / ${plan.specs.length} 张`];
+            if (failedCount > 0) parts.push(`失败 ${failedCount} 张`);
+            if (unexecuted > 0) parts.push(`未执行 ${unexecuted} 张`);
+            toast(`批量出图未全部完成：${parts.join(" · ")}`, "error");
+          }
         }
       }
       return completedCount > 0;
@@ -7083,6 +7173,18 @@
         }
       }
       persistOpenTabs();
+      if (window.HandrawBatchCreate) {
+        window.HandrawBatchCreate.updateProgress({
+          completedCount: 0,
+          failedCount: 1,
+          totalCount: plan.specs.length,
+          activeIndex: null,
+          busy: false,
+          isStopping: false,
+          summaryText: err?.message || "生成失败",
+          batchId
+        });
+      }
       toast(`⚠️ 生成异常：${err.message || err}`);
       return false;
     } finally {

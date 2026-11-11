@@ -344,7 +344,10 @@
           <span class="make-image-pending-caption">正在生成图 ${idx + 1}…</span>
         </div>`;
       } else if (status.key === "failed") {
-        media = `<div class="batch-series-failed" role="status"><span>图 ${idx + 1} 生成失败</span><small>可重试这张图片</small></div>`;
+        const errDetail = String(opts.result?.error || "").trim();
+        const shortErr = errDetail ? (errDetail.length > 64 ? `${errDetail.slice(0, 64)}…` : errDetail) : "";
+        const failedHint = shortErr ? `${shortErr} · 可重试这张图片` : "可重试这张图片";
+        media = `<div class="batch-series-failed" role="status"><span>图 ${idx + 1} 生成失败</span><small title="${esc(errDetail || "可重试这张图片")}">${esc(failedHint)}</small></div>`;
       } else {
         media = `<div class="batch-iter-placeholder batch-series-placeholder" role="group" aria-label="图 ${idx + 1} 待生成">
           <span class="batch-series-placeholder-glow" aria-hidden="true"></span>
@@ -475,7 +478,9 @@
       const iterations = this.resolveIterations();
       const totalCount = Math.min(200, iterations.length * perIterCount);
 
-      const busy = typeof this.progressState?.busy === "boolean" ? this.progressState.busy : Boolean(this.context?.busy);
+      const matchingProgress = (!this.progressState?.batchId || !this.activeBatchId || this.progressState.batchId === this.activeBatchId)
+        ? this.progressState : null;
+      const busy = typeof matchingProgress?.busy === "boolean" ? matchingProgress.busy : Boolean(this.context?.busy);
       const displays = Array.isArray(this.context?.displays) ? this.context.displays : [];
       const results = Array.isArray(this.context?.results) ? this.context.results : [];
 
@@ -795,7 +800,9 @@
       const loop = parts.loop?.data || {};
       const ctrl = parts.ctrl?.data || {};
       const skill = parts.skill?.data || {};
-      const busy = typeof this.progressState?.busy === "boolean" ? this.progressState.busy : Boolean(this.context?.busy);
+      const matchingProgress = (!this.progressState?.batchId || !this.activeBatchId || this.progressState.batchId === this.activeBatchId)
+        ? this.progressState : null;
+      const busy = typeof matchingProgress?.busy === "boolean" ? matchingProgress.busy : Boolean(this.context?.busy);
       const activeIndices = this.progressState?.activeIndices || [];
       const activeIndex = activeIndices.length ? activeIndices[0]
         : this.progressState?.activeIndex ?? (busy ? Number(loop.activeIndex ?? 0) : null);
@@ -1067,6 +1074,30 @@
       }
       const btnStart = host.querySelector("#batch-btn-start");
       if (btnStart) btnStart.disabled = true;
+    }
+
+    rotateBatchId(previousBatchId, nextBatchId) {
+      if (!nextBatchId) return;
+      if (!this.activeBatchId || !previousBatchId || this.activeBatchId === previousBatchId) {
+        this.activeBatchId = nextBatchId;
+      }
+      if (this.progressState && (!previousBatchId || !this.progressState.batchId || this.progressState.batchId === previousBatchId)) {
+        this.progressState.batchId = nextBatchId;
+      }
+      if (this.seriesOutcomes instanceof Map) {
+        for (const [k, item] of this.seriesOutcomes.entries()) {
+          if (item && (!previousBatchId || !item.batchId || item.batchId === previousBatchId)) {
+            this.seriesOutcomes.set(k, { ...item, batchId: nextBatchId });
+          }
+        }
+      }
+      if (this.context && Array.isArray(this.context.results)) {
+        this.context.results = this.context.results.map((item) => (
+          item && (!previousBatchId || !item.batchId || item.batchId === previousBatchId)
+            ? { ...item, batchId: nextBatchId }
+            : item
+        ));
+      }
     }
 
     updateProgress({
@@ -1574,9 +1605,21 @@
         };
       }
 
+      const clearStaleBatchContext = () => {
+        if (ctrl?.data) {
+          delete ctrl.data.activeBatchId;
+          delete ctrl.data.activeBatchTotal;
+        }
+        if (loop?.data) {
+          delete loop.data.activeBatchId;
+        }
+        self.activeBatchId = null;
+      };
+
       // A count change is authoritative for the image slots, not just an
       // annotation in the composer. Keep the user's existing themes in order.
       const syncSeriesCount = (requestedCount) => {
+        const prevCount = self.resolveIterations().length;
         const count = Math.max(1,Math.min(10,Math.round(Number.isFinite(Number(requestedCount)) ? Number(requestedCount) : 3)));
         const savedRows = Array.isArray(loop.data.batchRows) && loop.data.batchRows.length
           ? loop.data.batchRows.slice()
@@ -1588,15 +1631,23 @@
         loop.data.batchRows = rows;
         loop.data.promptListText = rows.map(row=>String(row?.theme || "")).join("\n");
         if (ctrl?.data) ctrl.data.count=1;
+        if (prevCount !== rows.length || (ctrl?.data?.activeBatchTotal && ctrl.data.activeBatchTotal !== rows.length)) {
+          clearStaleBatchContext();
+        }
         self.selectedSeriesIndex = Math.min(self.selectedSeriesIndex || 0,count-1);
         return rows;
       };
       const countInput = root.querySelector("#batch-count-input");
       if (countInput) {
         countInput.oninput = () => {
+          const prevCount = Math.max(1, Math.min(10, Number(loop.data.batchCount) || 3));
           const value = Number(countInput.value);
           if (Number.isFinite(value) && value >= 1) {
-            loop.data.batchCount = Math.max(1,Math.min(10,Math.round(value)));
+            const nextCount = Math.max(1,Math.min(10,Math.round(value)));
+            loop.data.batchCount = nextCount;
+            if (nextCount !== prevCount || (ctrl?.data?.activeBatchTotal && ctrl.data.activeBatchTotal !== nextCount)) {
+              clearStaleBatchContext();
+            }
           }
           if (ctrl?.data) ctrl.data.count=1;
         };
@@ -1613,6 +1664,7 @@
       if (btnStratFixed) {
         btnStratFixed.onclick = () => {
           if (loop.data.batchLayoutMode === "fixed") return;
+          const prevCount = self.resolveIterations().length;
           // Switching from AI to Fixed: prompt confirmation if rows have varied layouts
           const rows = Array.isArray(loop.data.batchRows) ? loop.data.batchRows : [];
           if (rows.length > 0) {
@@ -1627,6 +1679,7 @@
             loop.data.batchRows = [];
           }
           loop.data.batchLayoutMode = "fixed";
+          if (self.resolveIterations().length !== prevCount) clearStaleBatchContext();
           markDirty();
         };
         btnStratFixed.onkeydown = (e) => {
@@ -1642,6 +1695,7 @@
       if (btnStratAi) {
         btnStratAi.onclick = () => {
           if (loop.data.batchLayoutMode === "ai") return;
+          const prevCount = self.resolveIterations().length;
           // Switching from Fixed to AI: split promptListText lines into rows
           loop.data.batchLayoutMode = "ai";
           const rawText = typeof loop.data.promptListText === "string" ? loop.data.promptListText : "";
@@ -1652,6 +1706,7 @@
             const cnt = Math.max(1, Math.min(10, Number(loop.data.batchCount) || 3));
             loop.data.batchRows = Array.from({ length: cnt }, () => ({ theme: "", layout: skill.data.layout || "" }));
           }
+          if (self.resolveIterations().length !== prevCount) clearStaleBatchContext();
           markDirty();
         };
         btnStratAi.onkeydown = (e) => {
@@ -1680,9 +1735,14 @@
       const undoPlan = root.querySelector("#batch-undo-plan");
       if (undoPlan) undoPlan.onclick = () => {
         if (!self.lastPlanUndo) return;
+        const prevCount = self.resolveIterations().length;
         loop.data.promptListText = self.lastPlanUndo.promptListText;
         loop.data.batchRows = self.lastPlanUndo.batchRows;
+        if (Array.isArray(loop.data.batchRows) && loop.data.batchRows.length) {
+          loop.data.batchCount = Math.max(1, Math.min(10, loop.data.batchRows.length));
+        }
         self.lastPlanUndo = null;
+        if (self.resolveIterations().length !== prevCount) clearStaleBatchContext();
         self.planNotice = "已恢复原规划";
         markDirty();
         self.render();
@@ -1770,6 +1830,7 @@
               // Replan undo is an inline affordance, not a disruptive dialog.
               self.planNotice = "规划已更新，可点击撤销恢复原列表";
             }
+            const prevPlanCount = self.resolveIterations().length;
             loop.data.batchCount = reqBody.count;
             loop.data.batchRows = items.map(it=>({
               theme:String(it.subject || ""),
@@ -1778,6 +1839,9 @@
               assetItems:[]
             }));
             loop.data.promptListText = loop.data.batchRows.map(row=>row.theme).join("\n");
+            if (prevPlanCount !== loop.data.batchRows.length || (ctrl?.data?.activeBatchTotal && ctrl.data.activeBatchTotal !== loop.data.batchRows.length)) {
+              clearStaleBatchContext();
+            }
 
             if (data.source === "template") {
               self.planNotice = priorPlan ? "模板规划已更新，可撤销" : "未使用 AI 规划，已按模板生成";
@@ -1813,8 +1877,13 @@
       const promptsInput = root.querySelector("#batch-prompts-input");
       if (promptsInput) {
         promptsInput.oninput = () => {
+          const prevCount = self.resolveIterations().length;
           loop.data.promptListText = promptsInput.value;
           loop.data.batchRows = [];
+          const nextCount = self.resolveIterations().length;
+          if (nextCount !== prevCount || (ctrl?.data?.activeBatchTotal && ctrl.data.activeBatchTotal !== nextCount)) {
+            clearStaleBatchContext();
+          }
           self.updatePreviewAndCost(root);
           self.refreshSeriesCards();
 
@@ -1923,6 +1992,7 @@
             loop.data.promptListText = lines.join("\n");
           }
           loop.data.batchCount = Math.max(1,Math.min(10,count-1));
+          clearStaleBatchContext();
           self.selectedSeriesIndex=Math.min(self.selectedSeriesIndex,count-2);
           markDirty();
         };
@@ -1943,6 +2013,7 @@
           row.assetItems = [];
           loop.data.batchCount = nextIndex+1;
           loop.data.promptListText = loop.data.batchRows.map(r=>r.theme || "").join("\n");
+          clearStaleBatchContext();
           self.selectedSeriesIndex = nextIndex;
           self.seriesComposerMode = "image";
           markDirty();
@@ -2136,10 +2207,13 @@
           }
           if (typeof self.actions?.runSingleRow === "function") {
             btn.disabled = true;
-            Promise.resolve(self.actions.runSingleRow(idx)).catch(error => {
-              btn.disabled = false;
-              global.HANDRAW_SHARED?.toast?.(error?.message || "单张生成未能启动");
-            });
+            Promise.resolve(self.actions.runSingleRow(idx))
+              .catch(error => {
+                global.HANDRAW_SHARED?.toast?.(error?.message || "单张生成未能启动");
+              })
+              .finally(() => {
+                btn.disabled = false;
+              });
           } else {
             global.HANDRAW_SHARED?.toast?.("当前单张生图操作不可用");
           }
@@ -2226,6 +2300,7 @@
           ctrl.data.status = "idle";
           delete ctrl.data.error;
           delete ctrl.data.activeBatchId;
+          delete ctrl.data.activeBatchTotal;
           ctrl.data.elapsedSec = 0;
 
           skill.data.fusion = false;

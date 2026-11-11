@@ -6403,12 +6403,26 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
         # Concurrent model calls may have distinct requestId values, but share
         # their user's stable batchId and therefore one run / public work.
         from .generation_v3 import ensure_run
-        canonical_run_id = ensure_run(
-            tx, user_id=uid, source="web",
-            external_run_id=batch_id or gen_id,
-            expected_count=batch_total if batch_id else 1,
-            request_id=batch_id or request_id,
-        )
+        try:
+            canonical_run_id = ensure_run(
+                tx, user_id=uid, source="web",
+                external_run_id=batch_id or gen_id,
+                expected_count=batch_total if batch_id else 1,
+                request_id=batch_id or request_id,
+            )
+        except ValueError as exc:
+            msg = str(exc).lower()
+            if "size" in msg:
+                raise ServiceError(
+                    "当前系列批次张数已变更，请使用新批次重新发起生成",
+                    status=409,
+                    code="batch_size_mismatch",
+                ) from exc
+            raise ServiceError(
+                "批次校验冲突，请开启新批次后再试",
+                status=409,
+                code="batch_conflict",
+            ) from exc
         if batch_id:
             # Serialize remote-submission reservation against cancellation.
             # The cancellation endpoint locks the SAME run before writing a
