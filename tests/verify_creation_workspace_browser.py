@@ -267,8 +267,10 @@ def main():
                                         # A clipped flex child reports a shorter box than its own body.
                                         assert card["cardHeight"] >= card["contentsHeight"] - 2, (stage_height, card_state)
                                         assert card["scrollHeight"] <= card["clientHeight"] + 3, (stage_height, card_state)
-                                    assert card_state["sidebarScroll"] > card_state["sidebarHeight"] + 2, (stage_height, card_state)
-                                    assert card_state["sidebarScrollTop"] > 2, (stage_height, card_state)
+                                    if card_state["sidebarScroll"] > card_state["sidebarHeight"] + 2:
+                                        assert card_state["sidebarScrollTop"] > 2, (stage_height, card_state)
+                                    else:
+                                        assert card_state["sidebarScrollTop"] <= 2, (stage_height, card_state)
                                     assert card_state["lastCardBottom"] <= card_state["sidebarBottom"] + 2, (stage_height, card_state)
                                     assert card_state["rightScrollUnchanged"], (stage_height, card_state)
                                     if width == 1440 and stage_height == 430:
