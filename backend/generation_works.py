@@ -255,6 +255,9 @@ def generation_image_assets(
             if (len(items) == 1 and work_prompt_safe and
                     source["prompt_masked"] == 0 and source["visible_prompt"] is not None):
                 public_prompt = str(source["visible_prompt"] or "").strip()
+            if not styles and not layout and not public_prompt:
+                by_url[url] = {"url": url, "styles": [], "layout": "", "scope": "missing"}
+                continue
             scope = "image" if item_styles or item_layout or len(items) == 1 else "group"
             by_url[url] = {
                 "url": url, "styles": styles, "layout": layout,
