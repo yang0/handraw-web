@@ -127,6 +127,7 @@
       this.context = null;
       this.actions = null;
       this.moreSettingsOpen = false;
+      this.planOptionsOpen = false;
       this.planNotice = "";
       this.isPlanning = false;
       this.progressState = null;
@@ -456,83 +457,6 @@
           <form class="make-image-form creation-form batch-series-form" novalidate onsubmit="return false;">
             <div class="make-image-main-grid creation-workspace batch-series-workspace">
               <section class="creation-settings batch-series-properties" aria-label="系列图设置">
-              <!-- 套图规划 (Set Planning Section) -->
-              <div class="batch-plan-card">
-                <!-- 规划输入整体分区 (Planning Inputs Panel) -->
-                <div class="batch-plan-inputs-panel">
-                  <div class="batch-plan-inputs-head">
-                    <span class="batch-plan-inputs-tag">规划输入</span>
-                  </div>
-
-                  <!-- 规划第一行: 母题 + 张数 + 图型策略 -->
-                  <div class="batch-plan-row-a">
-                    <div class="batch-seed-wrap">
-                      <label for="batch-seed-input" class="make-image-field-label">母题</label>
-                      <input type="text" class="make-image-input batch-seed-input" id="batch-seed-input" placeholder="输入这套图的创作母题（如：都市慢生活与手绘手账）..." value="${esc(batchSeed)}" />
-                    </div>
-
-                    <div class="batch-count-wrap">
-                      <label for="batch-count-input" class="make-image-field-label">张数</label>
-                      <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" />
-                    </div>
-
-                    <div class="batch-strategy-wrap">
-                      <span class="make-image-field-label">图型策略</span>
-                      <div class="batch-strategy-seg" role="group" aria-label="图型策略">
-                        <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "fixed" ? "is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}">固定图型</button>
-                        <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "ai" ? "is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}">AI 推荐图型</button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- 规划第二行: 固定图型/图型要求 + 右下角【AI 规划这套图】主操作 -->
-                  <div class="batch-plan-row-b-wrap">
-                    ${batchLayoutMode === "fixed" ? `
-                      <div class="batch-plan-row-b batch-fixed-layout-row">
-                        <span class="make-image-field-label">固定图型</span>
-                        <button type="button" class="btn btn-sm" id="batch-btn-pick-fixed-layout">选择图型</button>
-                        <div class="batch-fixed-layout-card-wrap">
-                          ${layoutObj?.id ? `
-                            <div class="make-image-slot-card is-inline batch-chip" data-pick-kind="layout">
-                              <div class="make-image-slot-thumb-wrap">
-                                ${layoutObj.image ? `<img data-hw-src="${esc(layoutObj.image)}" alt="${esc(layoutObj.name || layoutObj.id)}" loading="lazy" />` : ""}
-                                <button type="button" class="make-image-slot-clear" data-clear-kind="layout" title="清除">×</button>
-                              </div>
-                              <div class="make-image-slot-meta">
-                                <span class="make-image-slot-code">${esc(layoutObj.id)}</span>
-                                <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
-                              </div>
-                            </div>
-                          ` : `<span class="make-image-picker-hint">未选图型（将使用默认版式）</span>`}
-                        </div>
-                      </div>
-                    ` : `
-                      <div class="batch-plan-row-b batch-ai-layout-row">
-                        <span class="make-image-field-label">图型要求</span>
-                        <input type="text" class="make-image-input batch-layout-req-input" id="batch-layout-req-input" placeholder="例如：前 3 张分镜、后面图鉴，不要封面图（可留空）" value="${esc(batchLayoutReq)}" />
-                      </div>
-                    `}
-
-                    <div class="batch-plan-action-wrap">
-                      <button type="button" class="batch-btn-plan-hero batch-plan-trigger" id="batch-btn-plan" ${busy ? "disabled" : ""}>
-                        <svg class="batch-plan-icon" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
-                          <path d="M7.5 0.5c.2 2.6 1.8 4.2 4.4 4.4.2 0 .2.3 0 .4-2.6.2-4.2 1.8-4.4 4.4 0 .2-.3.2-.4 0-.2-2.6-1.8-4.2-4.4-4.4-.2 0-.2-.3 0-.4 2.6-.2 4.2-1.8 4.4-4.4 0-.2.3-.2.4 0zm5 9c.1 1.5 1 2.4 2.5 2.5.1 0 .1.2 0 .2-1.5.1-2.4 1-2.5 2.5 0 .1-.2.1-.2 0-.1-1.5-1-2.4-2.5-2.5-.1 0-.1-.2 0-.2 1.5-.1 2.4-1 2.5-2.5 0-.1.2-.1.2 0z"/>
-                        </svg>
-                        <span>${busy ? "AI 规划中…" : "AI 规划这套图"}</span>
-                      </button>
-                      ${this.planNotice ? `<span class="batch-plan-notice" role="status">${esc(this.planNotice)}</span>` : ""}
-                      ${this.lastPlanUndo ? '<button type="button" class="btn btn-sm" id="batch-undo-plan">撤销上次规划</button>' : ""}
-                    </div>
-                  </div>
-                </div>
-
-
-              ${batchLayoutMode === "fixed" ? `
-                <details class="batch-series-bulk-input">
-                  <summary>批量粘贴主题（可选）</summary>
-                  <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="5" aria-label="批量粘贴主题，每行一张" placeholder="每行一张画面主题…">${esc(promptListText)}</textarea>
-                </details>
-              ` : ""}
               <!-- Row 1: Output Mode (Left) + Fusion Toggle in ONE Row -->
               <div class="make-image-top-row batch-top-row">
                 <div class="make-image-inline-group">
@@ -705,28 +629,104 @@
                       mode: batchLayoutMode, rows: batchRows, globalLayout: sd.layout || "",
                       fixedThemes: promptListText.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
                       result: slotResults[idx], busy, currentStep, activeIndex, ratio: currentRatio
-                    })).join("") : `<div class="batch-series-empty">还没有画面。可在左侧用 AI 规划，或点击「添加画面」开始。</div>`}
+                    })).join("") : `<div class="batch-series-empty">还没有画面。在下方输入系列母题并使用 AI 规划，或点击「添加画面」开始。</div>`}
                   </div>
                 </div>
-              <!-- Bottom Bar: Cost + Action (Defect 2 Fixed) -->
-              <div class="batch-action-bar">
-                <div class="batch-cost-wrap">
-                  ${this.renderCostHtml(totalCount)}
-                  ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
-                </div>
+              <div class="batch-series-dock" role="group" aria-label="系列图规划与生成">
+        <div class="batch-plan-card batch-series-planner">
+          <div class="batch-series-seed-line">
+            <label class="batch-series-seed-label" for="batch-seed-input">系列母题</label>
+            <input type="text" class="make-image-input batch-seed-input" id="batch-seed-input" placeholder="描述整套系列图想表达的主题…" value="${esc(batchSeed)}" ${busy ? "disabled" : ""} />
+          </div>
+          <div class="batch-series-options-wrap">
+            <button type="button" class="batch-series-options-toggle" id="batch-plan-options-toggle" aria-controls="batch-plan-options" aria-expanded="${this.planOptionsOpen ? "true" : "false"}">
+              <span>规划参数 <small>${batchCount} 张 · ${batchLayoutMode === "fixed" ? "固定图型" : "AI 推荐图型"}</small></span>
+              <span class="make-image-toggle-icon" aria-hidden="true">${this.planOptionsOpen ? "▲" : "▼"}</span>
+            </button>
+            <div id="batch-plan-options" class="batch-series-options-body" ${this.planOptionsOpen ? "" : "hidden"}>
+              <div class="batch-series-options-grid">
+                    <div class="batch-count-wrap">
+                      <label for="batch-count-input" class="make-image-field-label">张数</label>
+                      <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" />
+                    </div>
 
-                <div class="batch-btn-wrap">
-                  ${busy ? `<span class="batch-busy-hint">任务处理中，暂不能清空或再次生成</span>` : ""}
-                  <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) || slotResults.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
-                  <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
-                  ${busy ? `
-                    <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止"}</button>
-                  ` : `
-                    <button type="button" class="make-image-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>生成系列图</button>
-                  `}
+                    <div class="batch-strategy-wrap">
+                      <span class="make-image-field-label">图型策略</span>
+                      <div class="batch-strategy-seg" role="group" aria-label="图型策略">
+                        <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "fixed" ? "is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}">固定图型</button>
+                        <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "ai" ? "is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}">AI 推荐图型</button>
+                      </div>
+                    </div>
+
+              </div>
+                  <!-- 规划第二行: 固定图型/图型要求 + 右下角【AI 规划这套图】主操作 -->
+                  <div class="batch-plan-row-b-wrap">
+                    ${batchLayoutMode === "fixed" ? `
+                      <div class="batch-plan-row-b batch-fixed-layout-row">
+                        <span class="make-image-field-label">固定图型</span>
+                        <button type="button" class="btn btn-sm" id="batch-btn-pick-fixed-layout">选择图型</button>
+                        <div class="batch-fixed-layout-card-wrap">
+                          ${layoutObj?.id ? `
+                            <div class="make-image-slot-card is-inline batch-chip" data-pick-kind="layout">
+                              <div class="make-image-slot-thumb-wrap">
+                                ${layoutObj.image ? `<img data-hw-src="${esc(layoutObj.image)}" alt="${esc(layoutObj.name || layoutObj.id)}" loading="lazy" />` : ""}
+                                <button type="button" class="make-image-slot-clear" data-clear-kind="layout" title="清除">×</button>
+                              </div>
+                              <div class="make-image-slot-meta">
+                                <span class="make-image-slot-code">${esc(layoutObj.id)}</span>
+                                <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
+                              </div>
+                            </div>
+                          ` : `<span class="make-image-picker-hint">未选图型（将使用默认版式）</span>`}
+                        </div>
+                      </div>
+                    ` : `
+                      <div class="batch-plan-row-b batch-ai-layout-row">
+                        <span class="make-image-field-label">图型要求</span>
+                        <input type="text" class="make-image-input batch-layout-req-input" id="batch-layout-req-input" placeholder="例如：前 3 张分镜、后面图鉴，不要封面图（可留空）" value="${esc(batchLayoutReq)}" />
+                      </div>
+                    `}
+
+
+                  </div>
+              ${batchLayoutMode === "fixed" ? `
+                <details class="batch-series-bulk-input">
+                  <summary>批量粘贴主题（可选）</summary>
+                  <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="5" aria-label="批量粘贴主题，每行一张" placeholder="每行一张画面主题…">${esc(promptListText)}</textarea>
+                </details>
+              ` : ""}
+
+            </div>
+          </div>
+        </div>
+                <div class="batch-series-footer">
+                  <div class="batch-series-footer-meta">
+                    <div class="batch-cost-wrap">
+                      ${this.renderCostHtml(totalCount)}
+                      ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
+                    </div>
+                    ${this.planNotice ? `<span class="batch-plan-notice" role="status">${esc(this.planNotice)}</span>` : ""}
+                  </div>
+                  <div class="batch-series-footer-actions">
+                    <div class="batch-plan-action-wrap">
+                      <button type="button" class="btn btn-sm batch-series-plan-btn batch-plan-trigger" id="batch-btn-plan" ${busy ? "disabled" : ""}>
+                        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M7.5.5c.2 2.6 1.8 4.2 4.4 4.4.2 0 .2.3 0 .4-2.6.2-4.2 1.8-4.4 4.4 0 .2-.3.2-.4 0-.2-2.6-1.8-4.2-4.4-4.4-.2 0-.2-.3 0-.4 2.6-.2 4.2-1.8 4.4-4.4.2-.2.3-.2.4 0z"/></svg>
+                        <span>AI 规划</span>
+                      </button>
+                      ${this.lastPlanUndo ? '<button type="button" class="btn btn-sm" id="batch-undo-plan">撤销规划</button>' : ""}
+                    </div>
+                    <div class="batch-btn-wrap">
+                      <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) || slotResults.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
+                      <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空</button>
+                      ${busy ? `
+                        <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止生成"}</button>
+                      ` : `
+                        <button type="button" class="make-image-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>生成系列图 · ${totalCount} 张</button>
+                      `}
+                    </div>
+                  </div>
                 </div>
               </div>
-
               </section>
             </div>
           </form>
@@ -778,7 +778,7 @@
           result: cachedResult || cachedContext || displayResult,
           busy: isBusy, currentStep: loop.currentStep || 0, activeIndex
         });
-      }).join("") : '<div class="batch-series-empty">还没有画面。可在左侧用 AI 规划，或点击「添加画面」开始。</div>';
+      }).join("") : '<div class="batch-series-empty">还没有画面。在下方输入系列母题并使用 AI 规划，或点击「添加画面」开始。</div>';
       const cardCount = host.querySelector(".batch-series-toolbar strong");
       if (cardCount) cardCount.textContent = String(iterations.length);
       const scroll = host.querySelector(".batch-series-scroll");
@@ -1437,6 +1437,19 @@
           markDirty();
         };
       });
+
+      // Planning preferences expand in-place and persist across card re-renders.
+      const optionsToggle = root.querySelector("#batch-plan-options-toggle");
+      const optionsBody = root.querySelector("#batch-plan-options");
+      if (optionsToggle && optionsBody) {
+        optionsToggle.onclick = () => {
+          self.planOptionsOpen = !self.planOptionsOpen;
+          optionsToggle.setAttribute("aria-expanded", String(self.planOptionsOpen));
+          optionsBody.hidden = !self.planOptionsOpen;
+          const chevron = optionsToggle.querySelector(".make-image-toggle-icon");
+          if (chevron) chevron.textContent = self.planOptionsOpen ? "▲" : "▼";
+        };
+      }
 
       // 4. Set Planning Controls
       // (a) Seed input
