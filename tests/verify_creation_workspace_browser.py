@@ -304,6 +304,33 @@ def main():
                     # #141: one live card grid; no separate edit, status or result lists.
                     expect(page.locator(".batch-series-workspace")).to_be_visible()
                     expect(page.locator(".batch-series-grid")).to_be_visible()
+                    # #142: shared settings remain left; all planning lives in the
+                    # same bottom-right dock as the generation action.
+                    expect(page.locator(".batch-series-content > .batch-series-dock")).to_be_visible()
+                    expect(page.locator(".batch-series-properties .batch-plan-card")).to_have_count(0)
+                    expect(page.locator(".batch-series-dock #batch-seed-input")).to_be_visible()
+                    expect(page.locator(".batch-series-dock #batch-btn-plan")).to_be_visible()
+                    expect(page.locator(".batch-series-dock #batch-btn-start")).to_be_visible()
+                    expect(page.locator("#batch-plan-options-toggle")).to_have_attribute("aria-expanded","false")
+                    expect(page.locator("#batch-plan-options")).to_be_hidden()
+                    dock_layout=page.evaluate("""() => {
+                      const r=s=>document.querySelector(s).getBoundingClientRect();
+                      const p=r('.batch-series-properties'),c=r('.batch-series-content'),
+                            dock=r('.batch-series-dock'),left=r('#batch-btn-plan'),
+                            right=r('#batch-btn-start'),grid=r('.batch-series-grid');
+                      return {
+                        planWithinContent:dock.left>=c.left-1 && dock.right<=c.right+1,
+                        actionOrder:left.left<right.right,
+                        dockBelowCards:dock.top>=grid.top,
+                        dockBottom:dock.bottom<=c.bottom+2
+                      };
+                    }""")
+                    assert dock_layout["planWithinContent"] and dock_layout["dockBelowCards"] and dock_layout["dockBottom"],dock_layout
+                    if width>540:
+                        assert dock_layout["actionOrder"],dock_layout
+                    page.locator("#batch-plan-options-toggle").click()
+                    expect(page.locator("#batch-plan-options-toggle")).to_have_attribute("aria-expanded","true")
+                    expect(page.locator("#batch-count-input")).to_be_visible()
                     expect(page.locator(".batch-edit-table")).to_have_count(0)
                     expect(page.locator(".batch-preview-table")).to_have_count(0)
                     expect(page.locator(".batch-results-section")).to_have_count(0)
@@ -318,6 +345,8 @@ def main():
                     expect(page.locator(".batch-cost-text")).to_contain_text("2 张")
                     expect(page.locator("#batch-btn-start")).to_be_enabled()
                     page.locator("#batch-strategy-ai").click()
+                    expect(page.locator("#batch-plan-options-toggle")).to_have_attribute("aria-expanded","true")
+                    expect(page.locator("#batch-layout-req-input")).to_be_visible()
                     expect(page.locator(".batch-series-card")).to_have_count(2)
                     page.locator("#batch-mode-fusion").click()
                     page.locator('[data-pick-kind="style1"]').press("Space")
@@ -327,6 +356,9 @@ def main():
                     page.locator("#batch-toggle-more-settings").click()
                     geometry(page,width,kind)
                     page.locator("#batch-seed-input").fill("城市散步")
+                    page.locator("#batch-plan-options-toggle").click()
+                    expect(page.locator("#batch-plan-options")).to_be_hidden()
+                    expect(page.locator("#batch-seed-input")).to_have_value("城市散步")
                     page.locator("#batch-btn-plan").click()
                     expect(page.locator(".batch-series-card")).to_have_count(3)
                     expect(page.locator(".batch-series-card .batch-status-badge")).to_have_count(3)
