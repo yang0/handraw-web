@@ -449,24 +449,13 @@
         : (busy && typeof ld.activeIndex === "number" ? ld.activeIndex
           : (busy && currentStep < totalSteps ? currentStep : null));
 
+      const oldSeriesScroll = this.hostElement.querySelector(".batch-series-scroll")?.scrollTop || 0;
+      const oldSeriesPropertiesScroll = this.hostElement.querySelector(".batch-series-properties")?.scrollTop || 0;
       this.hostElement.innerHTML = `
-        <div class="make-image-container batch-container">
-          <div class="make-image-head">
-            <div class="make-image-head-left">
-              <h1 class="make-image-title">批量</h1>
-              <p class="make-image-lede">套图规划批量出图：统一画风与母题，AI 规划每张主题与图型，支持自由微调。</p>
-            </div>
-
-          </div>
-
-          <form class="make-image-form creation-form" novalidate onsubmit="return false;">
-            <div class="make-image-main-grid creation-workspace">
-
-              <section class="creation-content" aria-labelledby="batch-content-title">
-                <div class="creation-section-head">
-                  <h2 id="batch-content-title">套图内容</h2>
-                  <p>填写母题让 AI 规划，或直接编辑主题列表；确认清单后再生成。</p>
-                </div>
+        <div class="make-image-container batch-container batch-series-container">
+          <form class="make-image-form creation-form batch-series-form" novalidate onsubmit="return false;">
+            <div class="make-image-main-grid creation-workspace batch-series-workspace">
+              <section class="creation-settings batch-series-properties" aria-label="系列图设置">
               <!-- 套图规划 (Set Planning Section) -->
               <div class="batch-plan-card">
                 <!-- 规划输入整体分区 (Planning Inputs Panel) -->
@@ -537,188 +526,13 @@
                   </div>
                 </div>
 
-                <!-- 编辑区: 固定图型为一个文本框；AI 推荐图型为逐张表格 -->
-                ${batchLayoutMode === "fixed" ? `
-                  <div class="batch-edit-area batch-fixed-edit-area">
-                    <div class="batch-field-head">
-                      <label for="batch-prompts-input" class="make-image-field-label">主题列表 · 每行生成一张</label>
-                    </div>
-                    <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="5" placeholder="每行输入一个创作主题，每行将生成一张独立画面...">${esc(promptListText)}</textarea>
-                  </div>
-                ` : `
-                  <div class="batch-edit-area batch-ai-edit-area">
-                    <div class="batch-field-head">
-                      <span class="make-image-field-label">逐张主题与图型调整</span>
-                    </div>
-                    <div class="batch-table-wrap">
-                      <table class="batch-edit-table">
-                        <thead>
-                          <tr>
-                            <th style="width:44px;" class="batch-col-idx">序号</th>
-                            <th>画面主题</th>
-                            <th style="width:190px;" class="batch-col-layout">图型版式</th>
-                            <th style="width:160px;" class="batch-col-refs">参考图</th>
-                            <th style="width:52px;text-align:center;">操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          ${batchRows.length === 0 ? `
-                            <tr><td colspan="5" class="batch-table-empty">暂无主题，请点击「AI 规划这套图」或「＋ 添加一张」</td></tr>
-                          ` : batchRows.map((row, idx) => {
-                            const rowRefs = (row && Array.isArray(row.assetItems)) ? row.assetItems : [];
-                            const isSkipGlobal = Boolean(row && row.skipGlobalRefs);
-                            return `
-                            <tr class="batch-edit-row" data-row-idx="${idx}">
-                              <td class="batch-col-idx">#${idx + 1}</td>
-                              <td>
-                                <input type="text" class="make-image-input batch-row-theme-input" data-row-idx="${idx}" value="${esc(row.theme)}" placeholder="输入该张画面主题..." readonly role="button" aria-haspopup="dialog" aria-label="第 ${idx + 1} 张主题，点击编辑" title="点击编辑主题" style="cursor:pointer;" />
-                              </td>
-                              <td class="batch-col-layout">
-                                ${this.renderRowLayoutButtonHtml(row, idx, sd.layout)}
-                              </td>
-                              <td class="batch-col-refs">
-                                <div class="batch-row-refs-wrap">
-                                  <div class="batch-row-refs-desktop">
-                                    ${rowRefs.length === 0 ? `
-                                      <button type="button" class="btn btn-sm batch-btn-pick-row-refs" data-pick-row-refs-idx="${idx}">+ 选择</button>
-                                    ` : `
-                                      <div class="batch-row-refs-thumbs" data-pick-row-refs-idx="${idx}" role="button" tabindex="0" title="点击调整此条参考图（共 ${rowRefs.length} 张）">
-                                        ${rowRefs.slice(0, 3).map((ast, rIdx) => `
-                                          <img src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${rIdx + 1}`)}" class="batch-row-ref-thumb" loading="lazy" />
-                                        `).join("")}
-                                        ${rowRefs.length < 3 ? `<span class="batch-row-refs-plus-badge" title="继续添加">+</span>` : ""}
-                                      </div>
-                                    `}
-                                  </div>
-                                  <div class="batch-row-refs-mobile">
-                                    <button type="button" class="btn btn-sm batch-btn-row-refs-mobile" data-pick-row-refs-idx="${idx}">参考图：已选 ${rowRefs.length} 张</button>
-                                  </div>
-                                  <div class="batch-row-skip-global-wrap">
-                                    <label class="batch-row-skip-global-label" title="本条生成时不使用全局参考图">
-                                      <input type="checkbox" class="batch-row-skip-global-checkbox" data-row-skip-global="${idx}" ${isSkipGlobal ? "checked" : ""} />
-                                      <span>不用全局</span>
-                                    </label>
-                                    ${isSkipGlobal ? `<span class="batch-ref-skip-badge">仅本条</span>` : ""}
-                                  </div>
-                                </div>
-                              </td>
-                              <td style="text-align:center;">
-                                <button type="button" class="btn btn-sm btn-ghost batch-row-del-btn" data-del-row-idx="${idx}" title="删除此张">删除</button>
-                              </td>
-                            </tr>
-                          `;}).join("")}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div class="batch-add-row-wrap">
-                      <button type="button" class="btn btn-sm" id="batch-btn-add-row">＋ 添加一张</button>
-                    </div>
-                  </div>
-                `}
-              </div>
 
-              <!-- Preview Table: Listed before generation -->
-              <div class="batch-preview-section">
-                <div class="batch-preview-head">
-                  <h3 class="batch-preview-title">批量清单与状态 (${totalCount} 张)</h3>
-                </div>
-
-                <div class="batch-table-wrap">
-                  <table class="batch-preview-table">
-                    <thead>
-                      <tr>
-                        <th style="width:48px;">序号</th>
-                        <th>维度内容 / 主题</th>
-                        <th style="width:110px;">状态</th>
-                        <th style="width:120px;">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${iterations.length === 0 ? `
-                        <tr>
-                          <td colspan="4" class="batch-table-empty">暂无待批量生成的项，请在上方规划主题或添加条目</td>
-                        </tr>
-                      ` : iterations.map((iter, idx) => {
-                        const itemResult = this.getItemResult(idx, displays, isBatchGallery);
-                        const rowStatus = this.getRowStatus(idx, busy, currentStep, itemResult, activeIndex);
-                        const iterLayoutId = iter.layout || (batchLayoutMode === "fixed" ? (sd.layout || "") : "");
-                        const catalog = this.context?.catalog;
-                        const rMap = (catalog && catalog.resourceMap) || new Map();
-                        const layoutRes = iterLayoutId ? (rMap.get(iterLayoutId) || catalog?.layouts?.find((l) => l.id === iterLayoutId)) : null;
-                        const layoutName = layoutRes ? (layoutRes.name_zh || layoutRes.name || iterLayoutId) : "";
-                        const layoutImg = layoutRes?.image || iter.sampleImg || "";
-                        const zoomTitle = iterLayoutId && layoutName ? `${iterLayoutId} ${layoutName}` : (iterLayoutId || iter.shortLabel || iter.title || "图型预览");
-
-                        let thumbHtml = "";
-                        if (itemResult?.imageUrl) {
-                          const genTitle = iter.shortLabel || iter.title || "生成结果";
-                          thumbHtml = `
-                            <button type="button" class="batch-iter-thumb-btn is-generated" data-zoom-src="${esc(itemResult.imageUrl)}" data-zoom-title="${esc(genTitle)}" data-hover-src="${esc(itemResult.imageUrl)}" data-hover-code="" data-hover-name="${esc(genTitle)}" title="${esc(genTitle)}（点击放大查看）" aria-label="放大查看生成结果">
-                              <img data-hw-src="${esc(itemResult.imageUrl)}" class="batch-iter-thumb" alt="${esc(genTitle)}" loading="lazy" />
-                            </button>
-                          `;
-                        } else if (layoutImg) {
-                          const schematicTitle = `版式示意 · ${zoomTitle}`;
-                          thumbHtml = `
-                            <button type="button" class="batch-iter-thumb-btn is-schematic" data-zoom-src="${esc(layoutImg)}" data-zoom-title="${esc(schematicTitle)}" data-hover-src="${esc(layoutImg)}" data-hover-code="${esc(iterLayoutId || '')}" data-hover-name="${esc(layoutName || '')}" title="${esc(schematicTitle)}（点击放大查看）" aria-label="${esc(schematicTitle)}">
-                              <img data-hw-src="${esc(layoutImg)}" class="batch-iter-thumb" alt="${esc(schematicTitle)}" loading="lazy" />
-                              <span class="batch-iter-schematic-badge">版式示意</span>
-                            </button>
-                          `;
-                        } else {
-                          thumbHtml = `
-                            <div class="batch-iter-placeholder" title="待生成" aria-label="待生成" role="img">
-                              <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <rect x="2" y="2" width="16" height="16" rx="3" />
-                                <circle cx="7" cy="7" r="1.5" />
-                                <path d="M18 13l-4-4-7 7" />
-                              </svg>
-                            </div>
-                          `;
-                        }
-
-                        return `
-                          <tr class="batch-table-row ${rowStatus.className}" data-batch-row="${idx}">
-                            <td class="batch-col-idx">#${idx + 1}</td>
-                            <td class="batch-col-content">
-                              <div class="batch-iter-cell">
-                                ${thumbHtml}
-                                <button type="button" class="batch-iter-label-btn" data-iter-theme-idx="${idx}" title="点击编辑主题" aria-label="编辑第 ${idx + 1} 张主题">
-                                  <span class="batch-iter-label" data-iter-theme-idx="${idx}">${esc(iter.shortLabel || iter.title || iter.theme)}</span>
-                                </button>
-                              </div>
-                            </td>
-                            <td class="batch-col-status">
-                              <span class="batch-status-badge is-${esc(rowStatus.key)}">${esc(rowStatus.label)}</span>
-                            </td>
-                            <td class="batch-col-action">
-                              ${rowStatus.key === "failed" ? `
-                                <button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${idx}">重试</button>
-                              ` : ""}
-                              ${rowStatus.key === "done" && itemResult?.imageUrl ? `
-                                <div class="batch-row-actions">
-                                  <a href="${esc(itemResult.imageUrl)}" download="batch-${idx + 1}.webp" class="btn btn-sm batch-btn-dl" title="下载此图">下载</a>
-                                </div>
-                              ` : ""}
-                              ${rowStatus.key === "waiting" || rowStatus.key === "generating" ? `
-                                <span class="batch-action-idle">-</span>
-                              ` : ""}
-                            </td>
-                          </tr>
-                        `;
-                      }).join("")}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-
-              </section>
-              <section class="creation-settings" aria-labelledby="batch-settings-title">
-                <div class="creation-section-head">
-                  <h2 id="batch-settings-title">统一画面设置</h2>
-                  <p>以下设置应用于整套图片，逐张图型与参考图可单独调整。</p>
-                </div>
+              ${batchLayoutMode === "fixed" ? `
+                <details class="batch-series-bulk-input">
+                  <summary>批量粘贴主题（可选）</summary>
+                  <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="5" aria-label="批量粘贴主题，每行一张" placeholder="每行一张画面主题…">${esc(promptListText)}</textarea>
+                </details>
+              ` : ""}
               <!-- Row 1: Output Mode (Left) + Fusion Toggle in ONE Row -->
               <div class="make-image-top-row batch-top-row">
                 <div class="make-image-inline-group">
@@ -880,7 +694,19 @@
               </select>
             </label>
               </section>
-            </div>
+              <section class="creation-content batch-series-content" aria-label="系列图卡片工作区">
+                <div class="batch-series-toolbar">
+                  <span>系列画面 <strong>${totalCount}</strong> 张</span>
+                  <button type="button" class="btn btn-sm" id="batch-btn-add-row" ${busy ? "disabled" : ""}>＋ 添加画面</button>
+                </div>
+                <div class="batch-series-scroll" role="region" aria-label="系列画面编辑与生成结果" tabindex="0">
+                  <div class="batch-series-grid">
+                    ${iterations.length ? iterations.map((iter, idx) => this.renderSeriesCard(iter, idx, {
+                      mode: batchLayoutMode, rows: batchRows, globalLayout: sd.layout || "",
+                      result: slotResults[idx], busy, currentStep, activeIndex, ratio: currentRatio
+                    })).join("") : `<div class="batch-series-empty">还没有画面。可在左侧用 AI 规划，或点击「添加画面」开始。</div>`}
+                  </div>
+                </div>
               <!-- Bottom Bar: Cost + Action (Defect 2 Fixed) -->
               <div class="batch-action-bar">
                 <div class="batch-cost-wrap">
@@ -894,41 +720,20 @@
                   ${busy ? `
                     <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止"}</button>
                   ` : `
-                    <button type="button" class="make-image-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>开始批量生成</button>
+                    <button type="button" class="make-image-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>生成系列图</button>
                   `}
                 </div>
               </div>
 
-          </form>
-
-          <!-- Results Section (when completed items exist) -->
-          ${results.length > 0 ? `
-            <div class="make-image-results-section batch-results-section">
-              <div class="make-image-results-head">
-                <h2>批量生成结果 (${results.length})</h2>
-                <button type="button" class="btn btn-sm" id="batch-btn-download-all">全部下载</button>
-              </div>
-
-              <div class="make-image-results-grid">
-                ${results.map((res, index) => `
-                  <figure class="make-image-result-card" data-result-idx="${index}">
-                    <div class="make-image-result-frame">
-                      <img data-hw-src="${esc(res.imageUrl)}" alt="${esc(res.title || `批量图片 #${index + 1}`)}" loading="lazy" />
-                    </div>
-                    <figcaption class="make-image-result-caption">
-                      <strong class="make-image-result-title" title="${esc(res.title || "")}">${esc(res.title || `图片 #${index + 1}`)}</strong>
-                      <div class="make-image-result-actions">
-                        <a href="${esc(res.imageUrl)}" download="handraw-batch-${index + 1}.webp" class="btn btn-sm">下载图片</a>
-                      </div>
-                    </figcaption>
-                  </figure>
-                `).join("")}
-              </div>
+              </section>
             </div>
-          ` : ""}
-
+          </form>
         </div>
       `;
+      const newSeriesScroll = this.hostElement.querySelector(".batch-series-scroll");
+      const newPropertiesScroll = this.hostElement.querySelector(".batch-series-properties");
+      if (newSeriesScroll) newSeriesScroll.scrollTop = oldSeriesScroll;
+      if (newPropertiesScroll) newPropertiesScroll.scrollTop = oldSeriesPropertiesScroll;
 
       if (typeof host.querySelectorAll === "function") {
         this.bindEvents(host, p, iterations);
