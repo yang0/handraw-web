@@ -811,3 +811,32 @@
 @media(prefers-reduced-motion:reduce){
   .batch-series-thumb-overlay{transition:none}
 }
+
+
+/* #144 polish: consistent vertical rhythm and picker cards within one sidebar. */
+.batch-series-shared{gap:16px}
+.batch-series-selected-settings{gap:12px}
+.batch-series-selected-field .batch-row-layout-btn.make-image-picker-card{
+  width:100%;max-width:100%;min-height:76px;
+  display:flex;align-items:center;gap:8px;padding:10px;
+  border-radius:8px;background:var(--paper-bg);
+  border:1px solid var(--line-soft);
+  color:var(--ink-main);text-align:left;box-shadow:none
+}
+.batch-series-selected-field .batch-row-layout-btn.make-image-picker-card.is-selected{
+  border-color:var(--vermilion);background:var(--paper-card)
+}
+.batch-series-selected-field .batch-row-layout-btn.make-image-picker-card:hover{
+  border-color:var(--line-strong)
+}
+.batch-series-selected-field .batch-row-layout-thumb-wrap.make-image-picker-thumb{
+  flex:0 0 36px;width:36px;height:44px;border-radius:6px;
+  border:1px solid var(--line-soft)
+}
+.batch-series-selected-field .batch-row-layout-info.make-image-picker-info{gap:2px}
+.batch-series-selected-field .batch-row-layout-code.make-image-picker-badge{color:var(--vermilion)}
+.batch-series-selected-field .batch-row-layout-name.make-image-picker-name{
+  color:var(--ink-main);font-size:12px;line-height:1.45;font-weight:650;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.batch-series-selected-field .batch-row-layout-thumb{object-fit:contain}
