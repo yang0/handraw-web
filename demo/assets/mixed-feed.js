@@ -175,7 +175,6 @@
     var discussion = st.discussions && st.discussions[String(w.id)];
     var commentCount = Array.isArray(w.comments) ? w.comments.length :
       Number(w.replyCount || (discussion && discussion.replyCount) || 0);
-    var hasTalk = commentCount > 0;
     var codes = [].concat(Array.isArray(w.styles) ? w.styles : [])
       .concat(w.layout || "").filter(Boolean).slice(0, 2);
     var ratio = mediaRatio(w) || "3 / 4";
