@@ -126,6 +126,9 @@ def main():
                 if kind=="quick":
                     # #139: leave the results pane visually clean, with no duplicate page heading.
                     expect(page.locator(".make-image-head")).to_have_count(0)
+                    expect(page.locator("#make-settings-title")).to_have_count(0)
+                    expect(page.locator(".make-image-properties > .creation-section-head")).to_have_count(0)
+                    expect(page.locator(".make-image-properties")).to_have_attribute("aria-label", "画面属性")
                     expect(page.locator(".make-image-results-intro")).to_have_count(0)
                     expect(page.locator("#make-content-title")).to_have_count(0)
                     expect(page.locator(".make-image-conversation")).to_have_attribute("aria-label","生成结果与创作输入")
