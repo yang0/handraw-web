@@ -43,7 +43,7 @@ function renderTheme(text, hint) {
 const forkHtml = renderTheme(original, original);
 assert.equal((forkHtml.match(/id="make-image-subject"/g) || []).length, 1);
 assert.match(forkHtml, /id="make-image-subject"[\s\S]*?天上·瑶台仙境：[\s\S]*?<\/textarea>/);
-assert.match(forkHtml, /id="make-image-clear-subject"/);
+assert.doesNotMatch(forkHtml, /id="make-image-clear-subject"/);
 assert.match(forkHtml, /FE-051/);
 assert.match(forkHtml, /EC-024/);
 assert.doesNotMatch(forkHtml, /make-image-subject-banner|换成你的主题|原作主题：/);
