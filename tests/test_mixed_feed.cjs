@@ -47,7 +47,8 @@ const resourceOnly = makeItems(state, resources, [], { tab: "resource" });
 assert.equal(resourceOnly.length, 10);
 const html = renderCard({ kind: "work", data: { ...works[0], title: "<script>" } }, state);
 assert.ok(!html.includes("<script>"), "work title must be escaped");
-assert.ok(html.includes("用同款做一张"), "remix entry exists");
+assert.ok(!html.includes("用同款做一张") && !html.includes("hw-mf-remix"), "work card has no redundant bottom remix CTA");
+assert.ok(html.includes("hw-mf-author-avatar") && html.includes("hw-mf-stats"), "work author and stats remain");
 // Creation target ratios can differ from actual saved images: the card must
 // shrink/grow to the real bitmap ratio, rather than letterbox the picture.
 const ratioHtml = renderCard({ kind: "work", data: {
@@ -68,6 +69,10 @@ assert.match(noMetaHtml, /class="hw-mf-media has-ratio hw-progressive-media"/);
 assert.match(noMetaHtml, /aspect-ratio:3 \/ 4/, "unknown ratio still reserves card height");
 const resourceHtml = renderCard({ kind:"resource", data:resources[0]}, state);
 assert.match(resourceHtml, /class="hw-mf-media has-ratio hw-progressive-media"/);
+assert.ok(!resourceHtml.includes("查看用法") && !resourceHtml.includes("hw-mf-footer"), "resource card hides bottom usage/footer");
+assert.ok(!resourceHtml.includes("#FA-0"), "resource card does not display its ID at bottom");
+assert.match(resourceHtml, /画风 0/, "resource title remains clickable");
+assert.match(resourceHtml, /href="\/main\/FA-0"/, "resource detail link remains");
 const visualTopicHtml = renderCard({ kind:"topic", data:{id:"t_visual",title:"图文",images:["\/images\/t.png"]}},state);
 assert.match(visualTopicHtml, /hw-progressive-media/);
 
