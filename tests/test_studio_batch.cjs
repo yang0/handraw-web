@@ -1374,7 +1374,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
   const html = fakeHost.innerHTML;
   assert.ok(html.includes('id="batch-btn-reset"'), "Must render #batch-btn-reset");
-  assert.ok(html.includes("清空表单"), "Reset button must have text 清空表单");
+  assert.ok(html.includes('aria-label="清空表单"'), "Compact reset must retain a descriptive accessible label");
 
   const btnReset = fakeHost.querySelector("#batch-btn-reset");
   assert.ok(btnReset, "Should find #batch-btn-reset");
