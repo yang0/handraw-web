@@ -140,6 +140,26 @@ def main():
                     geometry(page,width,kind)
                     page.locator("#make-image-prompt-toggle").click()
                     geometry(page,width,kind)
+                    # #138: constrain the desktop workspace height to verify independent scrolling and fixed composer.
+                    if width > 980:
+                        page.locator("#fixture").evaluate("el => el.style.height = '780px'")
+                        page.evaluate("fixture.render()")
+                        dock = page.evaluate("""() => {
+                            const rect = s => document.querySelector(s).getBoundingClientRect();
+                            const sidebar = document.querySelector(".make-image-properties");
+                            const output = document.querySelector(".make-image-output-scroll");
+                            const composer = rect(".make-image-composer");
+                            const stage = rect(".make-image-conversation");
+                            const host = rect("#fixture");
+                            return {sidebarHeight:sidebar.clientHeight, sidebarScroll:sidebar.scrollHeight,
+                                sidebarOverflow:getComputedStyle(sidebar).overflowY,
+                                outputScrollbar:getComputedStyle(output).scrollbarWidth,
+                                composerBottom:composer.bottom, stageBottom:stage.bottom, hostBottom:host.bottom};
+                        }""")
+                        assert dock["sidebarScroll"] > dock["sidebarHeight"] + 2, dock
+                        assert dock["sidebarOverflow"] == "auto", dock
+                        assert dock["outputScrollbar"] == "none", dock
+                        assert dock["composerBottom"] <= dock["stageBottom"] and dock["stageBottom"] <= dock["hostBottom"], dock
                     # The action stays reachable with both panels expanded.
                     page.locator("#make-image-btn-run").scroll_into_view_if_needed()
                     check_bar(page,"#make-image-btn-run")
