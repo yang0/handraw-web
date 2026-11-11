@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import re
+import threading
 import sqlite3
 import time
 from functools import lru_cache
@@ -222,7 +223,9 @@ SCENARIOS_POST_MIGRATION_HOOKS: dict[int, Any] = {
 # ---------------------------------------------------------------------------
 
 SCENARIOS_CACHE_TTL_SECONDS = 120
-_SCENARIOS_CACHE: dict[str, tuple[dict[str, Any], str, float]] = {}
+_SCENARIOS_CACHE: dict[tuple[Any, ...], tuple[dict[str, Any], str, float]] = {}
+_SCENARIOS_CACHE_LOCK = threading.Lock()
+_scenarios_cache_generation = 0
 
 
 @lru_cache(maxsize=4)
@@ -257,7 +260,10 @@ def _scenario_cache_key(date_key: str) -> str | None:
 
 def invalidate_scenarios_cache() -> None:
     """Invalidate home-scene cards in this worker and other Redis workers."""
-    _SCENARIOS_CACHE.clear()
+    global _scenarios_cache_generation
+    with _SCENARIOS_CACHE_LOCK:
+        _SCENARIOS_CACHE.clear()
+        _scenarios_cache_generation += 1
     redis_url = os.environ.get("HANDRAW_REDIS_URL", "").strip()
     if redis_url:
         try:
@@ -393,7 +399,7 @@ def _cached_scenarios_current(conn: Any, payload: dict[str, Any]) -> bool:
     from .works_feed import is_valid_work_row
 
     cards = {
-        str(sample["id"]): str(sample["coverUrl"])
+        str(sample["id"]): sample
         for scenario in payload.get("items", [])
         for sample in scenario.get("samples", [])
     }
@@ -402,7 +408,7 @@ def _cached_scenarios_current(conn: Any, payload: dict[str, Any]) -> bool:
     placeholders = ",".join("?" for _ in cards)
     rows = conn.execute(
         f"""
-        SELECT w.id, w.status, w.images_json,
+        SELECT w.id, w.status, w.images_json, w.title, w.author_name, w.author_username,
                cover.storage_key AS selected_cover_url
         FROM works w
         LEFT JOIN media_assets cover ON cover.id=w.cover_media_id
@@ -413,7 +419,14 @@ def _cached_scenarios_current(conn: Any, payload: dict[str, Any]) -> bool:
     if len(rows) != len(cards):
         return False
     for row in rows:
-        if not is_valid_work_row(row) or _cover_for_work(row) != cards[row["id"]]:
+        sample = cards[row["id"]]
+        if (
+            not is_valid_work_row(row)
+            or _cover_for_work(row) != sample["coverUrl"]
+            or (row["title"] or "") != sample["title"]
+            or (row["author_name"] or row["author_username"] or "") != sample["author"]
+            or (row["author_username"] or "") != sample["authorUsername"]
+        ):
             return False
     return True
 
@@ -434,25 +447,25 @@ def get_public_home_scenarios(
     Returns (payload_dict, etag_str).
     """
     from .services import _seed_filter
+    from .seed import is_demo_mode
     from .works_feed import is_valid_work_row
 
     conn = db.get_conn()
     if not date_key:
         date_key = _now_iso()[:10]
 
-    now_mono = time.monotonic()
-    cache_key = _scenario_cache_key(date_key)
-    cache_entry = _SCENARIOS_CACHE.get(cache_key) if cache_key is not None else None
+    with _SCENARIOS_CACHE_LOCK:
+        generation = _scenarios_cache_generation
+    revision_key = _scenario_cache_key(date_key)
+    cache_key = (db, revision_key, max_samples_per_scenario, is_demo_mode())
+    with _SCENARIOS_CACHE_LOCK:
+        cache_entry = _SCENARIOS_CACHE.get(cache_key) if revision_key is not None else None
     if cache_entry is not None:
         payload, etag, expires_at = cache_entry
-        if now_mono < expires_at and _cached_scenarios_current(conn, payload):
-            return payload, etag
-        else:
-            if cache_key is not None:
-                _SCENARIOS_CACHE.pop(cache_key, None)
-
-    # Evict any other entries to prevent memory inflation from variable date queries
-    _SCENARIOS_CACHE.clear()
+        if time.monotonic() < expires_at and _cached_scenarios_current(conn, payload):
+            with _SCENARIOS_CACHE_LOCK:
+                if generation == _scenarios_cache_generation:
+                    return payload, etag
 
     seed_clause, seed_params = _seed_filter("w.id", "works")
 
@@ -467,26 +480,33 @@ def get_public_home_scenarios(
     globally_claimed_work_ids: set[str] = set()
     scenario_samples_map: dict[str, list[dict[str, Any]]] = {}
 
-    # Pass 1: Collect pinned works for each scenario in sort_order (pinned works take precedence)
-    for sc in sc_rows:
-        s_key = sc["key"]
+    pins_by_scenario: dict[str, list[Any]] = {}
+    if sc_rows:
         pinned_rows = conn.execute(
             f"""
-            SELECT spw.work_id, spw.sort_order AS pin_order, w.*,
+            SELECT spw.scenario_key, w.id, w.status, w.images_json,
+                   w.title, w.author_name, w.author_username,
                    cover.storage_key AS selected_cover_url
             FROM scenario_pinned_works spw
+            JOIN home_scenarios sc ON sc.key = spw.scenario_key AND sc.is_enabled = 1
             JOIN works w ON w.id = spw.work_id
             LEFT JOIN media_assets cover ON cover.id = w.cover_media_id
-            WHERE spw.scenario_key = ?
-              AND w.status = 'published'
+            WHERE w.status = 'published'
               AND {seed_clause}
-            ORDER BY spw.sort_order ASC, spw.created_at ASC
+            ORDER BY spw.scenario_key, spw.sort_order ASC, spw.created_at ASC, spw.work_id
             """,
-            (s_key, *seed_params),
+            seed_params,
         ).fetchall()
+        for row in pinned_rows:
+            pins_by_scenario.setdefault(row["scenario_key"], []).append(row)
 
+    # Claim pins across all scenarios before selecting automatic samples.
+    for sc in sc_rows:
+        s_key = sc["key"]
         picked_samples: list[dict[str, Any]] = []
-        for pr in pinned_rows:
+        for pr in pins_by_scenario.get(s_key, ()):
+            if len(picked_samples) >= max_samples_per_scenario:
+                break
             if not is_valid_work_row(pr):
                 continue
             wid = pr["id"]
@@ -508,14 +528,14 @@ def get_public_home_scenarios(
                     "isPinned": True,
                 }
             )
-            if len(picked_samples) >= max_samples_per_scenario:
-                break
         scenario_samples_map[s_key] = picked_samples
 
     # Pass 2: Prepare candidate lists for each scenario (using date_key and engagement weighting)
     candidates_by_scenario: dict[str, list[dict[str, Any]]] = {}
     for sc in sc_rows:
         s_key = sc["key"]
+        if len(scenario_samples_map[s_key]) >= max_samples_per_scenario:
+            continue
         try:
             match_rules = json.loads(sc["match_rules_json"] or "{}")
         except Exception:
@@ -524,7 +544,8 @@ def get_public_home_scenarios(
         match_sql, match_params = build_scenario_match_clause(match_rules, table_alias="w")
         candidate_rows = conn.execute(
             f"""
-            SELECT w.*, cover.storage_key AS selected_cover_url
+            SELECT w.id, w.status, w.images_json, w.title, w.author_name, w.author_username,
+                   w.likes, w.cheers, cover.storage_key AS selected_cover_url
             FROM works w
             LEFT JOIN media_assets cover ON cover.id = w.cover_media_id
             WHERE w.status = 'published'
@@ -568,7 +589,7 @@ def get_public_home_scenarios(
                 }
             )
 
-        scored_cands.sort(key=lambda x: x["score"], reverse=True)
+        scored_cands.sort(key=lambda x: (-x["score"], x["id"]))
         candidates_by_scenario[s_key] = scored_cands
 
     # Pass 2: Round-robin allocation across scenarios
@@ -659,10 +680,13 @@ def get_public_home_scenarios(
     raw_json = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     etag = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()[:16]
 
-    if cache_key is not None:
-        _SCENARIOS_CACHE[cache_key] = (
-            payload, etag, time.monotonic() + SCENARIOS_CACHE_TTL_SECONDS,
-        )
+    if revision_key is not None:
+        with _SCENARIOS_CACHE_LOCK:
+            if generation == _scenarios_cache_generation:
+                _SCENARIOS_CACHE.clear()
+                _SCENARIOS_CACHE[cache_key] = (
+                    payload, etag, time.monotonic() + SCENARIOS_CACHE_TTL_SECONDS,
+                )
     return payload, etag
 
 

@@ -787,32 +787,15 @@ def get_secrets_cache(conn: sqlite3.Connection | None = None, force: bool = Fals
     now = time.time()
     secrets: list[str] = []
     conn = _runtime_connection(conn)
-    if conn is None and os.environ.get("HANDRAW_DATABASE_URL", "").strip():
-        raise SecretsScanError("PostgreSQL runtime database is not bound; cannot inspect protected prompts")
-    if conn is not None:
-        try:
-            rows = conn.execute(
-                "SELECT DISTINCT secret_blackbox_prompt FROM catalog_assets WHERE secret_blackbox_prompt IS NOT NULL AND TRIM(secret_blackbox_prompt) <> ''"
-            ).fetchall()
-            secrets = [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
-        except Exception as exc:
-            raise SecretsScanError(f"Failed to query catalog secrets: {exc}") from exc
-    else:
-        try:
-            from .config import get_db_path
-            target = get_db_path()
-            if not Path(target).exists():
-                raise SecretsScanError(f"Database path not found: {target}")
-            one_shot = sqlite3.connect(str(target), timeout=5.0)
-            try:
-                rows = one_shot.execute(
-                    "SELECT DISTINCT secret_blackbox_prompt FROM catalog_assets WHERE secret_blackbox_prompt IS NOT NULL AND TRIM(secret_blackbox_prompt) <> ''"
-                ).fetchall()
-                secrets = [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
-            finally:
-                one_shot.close()
-        except Exception as exc:
-            raise SecretsScanError(f"Failed to query catalog secrets from db path: {exc}") from exc
+    if conn is None:
+        raise SecretsScanError("Runtime database is not bound; cannot inspect protected prompts")
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT secret_blackbox_prompt FROM catalog_assets WHERE secret_blackbox_prompt IS NOT NULL AND TRIM(secret_blackbox_prompt) <> ''"
+        ).fetchall()
+        secrets = [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
+    except Exception as exc:
+        raise SecretsScanError(f"Failed to query catalog secrets: {exc}") from exc
 
     secrets.sort()
     vhash = hashlib.sha256(repr(secrets).encode("utf-8")).hexdigest()
@@ -1005,27 +988,12 @@ def get_valid_catalog_codes(conn: sqlite3.Connection | None = None) -> dict[str,
 
     rows: list[Any] = []
     conn = _runtime_connection(conn)
-    if conn is None and os.environ.get("HANDRAW_DATABASE_URL", "").strip():
-        # Do not load a stale SQLite catalog in a PostgreSQL-only process.
+    if conn is None:
         return static
-    if conn is not None:
-        try:
-            rows = conn.execute("SELECT code, kind FROM catalog_assets").fetchall()
-        except Exception:
-            rows = []
-    else:
-        try:
-            from .config import get_db_path
-
-            target = get_db_path()
-            if target and Path(target).is_file():
-                one_shot = sqlite3.connect(str(target), timeout=5.0)
-                try:
-                    rows = one_shot.execute("SELECT code, kind FROM catalog_assets").fetchall()
-                finally:
-                    one_shot.close()
-        except Exception:
-            rows = []
+    try:
+        rows = conn.execute("SELECT code, kind FROM catalog_assets").fetchall()
+    except Exception:
+        rows = []
 
     for r in rows:
         code = str(r[0] if isinstance(r, (tuple, list)) else r["code"]).strip().upper()

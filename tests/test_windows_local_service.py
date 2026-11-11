@@ -43,8 +43,8 @@ class WindowsLocalServiceScriptTests(unittest.TestCase):
         script = (REPO / "ops" / "start-latest.ps1").read_text(encoding="utf-8-sig")
         self.assertIn("$env:HANDRAW_DEMO_MODE = if ($Demo) { '1' } else { '0' }", script)
         self.assertIn("if ($Demo) { 3097 } else { 3080 }", script)
-        self.assertIn("demo_v2.db", script)
-        self.assertIn("handraw_v2.db", script)
+        self.assertIn("$env:HANDRAW_DATABASE_URL = $env:HANDRAW_DEMO_DATABASE_URL", script)
+        self.assertIn("--format=custom", script)
         # The flag must be set before launching the Python child process.
         self.assertLess(
             script.index("$env:HANDRAW_DEMO_MODE = if ($Demo)"),

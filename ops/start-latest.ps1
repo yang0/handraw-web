@@ -1,7 +1,6 @@
 ﻿param(
     [ValidateRange(1024, 65535)]
     [int]$Port = 0,
-    [string]$DatabasePath = '',
     [switch]$Demo,
     [switch]$NoBrowser
 )
@@ -15,21 +14,7 @@ $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $localDir = Join-Path $repo '.local'
 $latest = Join-Path $localDir 'latest'
-# -Demo runs on a private copy of the seed database, where the starter test
-# accounts (.local\starter_credentials.seed_v2.json) can log in.
 if (-not $Port) { $Port = if ($Demo) { 3097 } else { 3080 } }
-if (-not $DatabasePath) {
-    if ($Demo) {
-        $DatabasePath = Join-Path $localDir 'demo_v2.db'
-        if (-not (Test-Path $DatabasePath)) {
-            Copy-Item (Join-Path $localDir 'seed_v2.db') $DatabasePath
-            Write-Host "已从种子库创建演示库：$DatabasePath"
-        }
-    } else {
-        $DatabasePath = Join-Path $localDir 'handraw_v2.db'
-    }
-}
-$databaseFile = [IO.Path]::GetFullPath($DatabasePath)
 $recordFile = Join-Path $localDir "latest-run-$Port.json"
 $origin = "http://127.0.0.1:$Port"
 
@@ -68,8 +53,10 @@ function Stop-OldServer {
     $owner = Get-PortOwner
     if (-not $owner) { return }
     $commandLine = [string]$owner.CommandLine
-    $isHandraw = $commandLine -match '-m\s+backend\.server(?:\s|$)' -and
-        $commandLine.IndexOf($databaseFile, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $record = Read-RunRecord
+    $isHandraw = $record -and $record.pid -eq $owner.ProcessId -and
+        $record.creationTicks -eq $owner.CreationDate.ToUniversalTime().Ticks.ToString() -and
+        $commandLine -match '-m\s+backend\.server(?:\s|$)'
     if (-not $isHandraw) {
         throw "端口 $Port 被其他程序占用（PID $($owner.ProcessId)），未关闭任何程序。"
     }
@@ -84,21 +71,56 @@ function Stop-OldServer {
 }
 
 function Backup-Database([string]$python, [string]$commit) {
-    # The demo database is a disposable seed copy; only real data gets backups.
-    if ($Demo -or -not (Test-Path $databaseFile)) { return }
+    if ($Demo) { return }
     $record = Read-RunRecord
     if ($record -and $record.commit -eq $commit) { return }
     $backupDir = Join-Path $localDir 'backups'
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-    $baseName = [IO.Path]::GetFileNameWithoutExtension($databaseFile)
-    $target = Join-Path $backupDir ("$baseName-before-$commit-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.db')
-    # sqlite3 backup API copies a consistent snapshot even when WAL files exist.
-    & $python -X utf8 -c "import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()" $databaseFile $target
+    $target = Join-Path $backupDir ("handraw-before-$commit-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.dump')
+    $pgDump = (Get-Command pg_dump -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if (-not $pgDump) { $pgDump = 'D:\PostgreSQL\pgsql\bin\pg_dump.exe' }
+    $backupScript = @'
+import os
+import subprocess
+import sys
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+settings = conninfo_to_dict(os.environ['HANDRAW_DATABASE_URL'])
+env = dict(os.environ)
+if 'password' in settings:
+    env['PGPASSWORD'] = settings.pop('password')
+if 'sslpassword' in settings:
+    env['PGSSLPASSWORD'] = settings.pop('sslpassword')
+result = subprocess.run([
+    sys.argv[1], '--no-password', '--format=custom', '--file', sys.argv[2],
+    '--dbname', make_conninfo(**settings),
+], env=env)
+raise SystemExit(result.returncode)
+'@
+    & $python -X utf8 -c $backupScript $pgDump $target
     if ($LASTEXITCODE -ne 0) { throw '数据库备份失败，未启动新版本。' }
     Write-Host "代码有更新，已先备份数据库：$target"
 }
 
 try {
+    foreach ($envName in @('.env.local', '.env')) {
+        $envFile = Join-Path $repo $envName
+        if (Test-Path -LiteralPath $envFile -PathType Leaf) {
+            foreach ($line in Get-Content -LiteralPath $envFile -Encoding UTF8) {
+                if ($line -match '^\s*([A-Za-z_][A-Za-z_0-9]*)\s*=(.*)$' -and
+                    $null -eq [Environment]::GetEnvironmentVariable($Matches[1], 'Process')) {
+                    [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2].Trim(), 'Process')
+                }
+            }
+        }
+    }
+    if ($Demo) {
+        if (-not $env:HANDRAW_DEMO_DATABASE_URL -or $env:HANDRAW_DEMO_DATABASE_URL -eq $env:HANDRAW_DATABASE_URL) {
+            throw '请设置独立的 HANDRAW_DEMO_DATABASE_URL 演示库。'
+        }
+        $env:HANDRAW_DATABASE_URL = $env:HANDRAW_DEMO_DATABASE_URL
+    }
+    if (-not $env:HANDRAW_DATABASE_URL) { throw '请设置 HANDRAW_DATABASE_URL。' }
     $commit = Update-LatestCode
     $localPython = Join-Path $repo '.venv\Scripts\python.exe'
     if (Test-Path -LiteralPath $localPython -PathType Leaf) {
@@ -106,8 +128,8 @@ try {
     } else {
         $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     }
-    Stop-OldServer
     Backup-Database $python $commit
+    Stop-OldServer
 
     # Point the worktree's code at the main checkout's data and service configs.
     $env:HANDRAW_PRIVATE_STORAGE = $localDir
@@ -127,9 +149,9 @@ try {
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     $outLog = Join-Path $logDir "latest-$Port.out.log"
     $errLog = Join-Path $logDir "latest-$Port.err.log"
-    $serverArgs = @('-X', 'utf8', '-u', '-m', 'backend.server', '--port', [string]$Port, '--db', "`"$databaseFile`"")
-    Start-Process -FilePath $python -ArgumentList $serverArgs -WorkingDirectory $latest `
-        -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog | Out-Null
+    $serverArgs = @('-X', 'utf8', '-u', '-m', 'backend.server', '--port', [string]$Port)
+    $process = Start-Process -FilePath $python -ArgumentList $serverArgs -WorkingDirectory $latest `
+        -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
 
     $ready = $false
     for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
@@ -137,7 +159,9 @@ try {
         try { $ready = [bool](Invoke-RestMethod -Uri "$origin/api/health" -TimeoutSec 1).ok } catch { }
     }
     if (-not $ready) { throw "服务没有启动成功，请查看日志：$errLog" }
-    @{ commit = $commit; port = $Port; startedAt = (Get-Date).ToString('s') } |
+    $owner = Get-PortOwner
+    if (-not $owner -or $owner.ProcessId -ne $process.Id) { throw '服务端口的进程身份与启动记录不符。' }
+    @{ commit = $commit; port = $Port; pid = $process.Id; creationTicks = $owner.CreationDate.ToUniversalTime().Ticks.ToString() } |
         ConvertTo-Json | Set-Content -Path $recordFile -Encoding UTF8
 
     Write-Host ''

@@ -16,12 +16,13 @@ Environment=HANDRAW_HOST=127.0.0.1
 Environment=HANDRAW_PORT=3080
 Environment=HANDRAW_DEMO_MODE=0
 Environment=HANDRAW_PRIVATE_STORAGE=/var/lib/handraw/private
-Environment=HANDRAW_DB_PATH=/var/lib/handraw/private/handraw_v2.db
+Environment=HANDRAW_PG_RUNTIME_ACK=V3_NATIVE
+Environment=HANDRAW_REDIS_REQUIRED=1
 Environment=HANDRAW_UPLOADS_DIR=/var/lib/handraw/private/uploads
 Environment=HANDRAW_GENERATED_DIR=/var/lib/handraw/private/generated
 Environment=HANDRAW_IMAGE_CONFIG=/etc/handraw/image-service.json
 
-ExecStart=/srv/handraw-web/.venv/bin/python -m backend.server --host 127.0.0.1 --port 3080 --db /var/lib/handraw/private/handraw_v2.db
+ExecStart=/srv/handraw-web/.venv/bin/python -m backend.server --host 127.0.0.1 --port 3080
 Restart=on-failure
 RestartSec=5s
 UMask=0077

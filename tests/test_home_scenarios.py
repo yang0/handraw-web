@@ -427,18 +427,20 @@ class TestHomeScenarios(unittest.TestCase):
 
         # Call with date 1
         d1, etag1 = get_public_home_scenarios(self.db, date_key="2026-11-04")
-        self.assertIn("2026-11-04", _SCENARIOS_CACHE)
+        first_key = next(iter(_SCENARIOS_CACHE))
+        self.assertEqual(first_key[1], "2026-11-04")
         self.assertEqual(len(_SCENARIOS_CACHE), 1)
 
         # Calling with date 2 purges date 1 to prevent memory leak
         d2, etag2 = get_public_home_scenarios(self.db, date_key="2026-11-05")
-        self.assertNotIn("2026-11-04", _SCENARIOS_CACHE)
-        self.assertIn("2026-11-05", _SCENARIOS_CACHE)
+        self.assertNotIn(first_key, _SCENARIOS_CACHE)
+        second_key = next(iter(_SCENARIOS_CACHE))
+        self.assertEqual(second_key[1], "2026-11-05")
         self.assertEqual(len(_SCENARIOS_CACHE), 1)
 
         # Test TTL expiration: manually backdate expiry timestamp
-        payload, etag, _ = _SCENARIOS_CACHE["2026-11-05"]
-        _SCENARIOS_CACHE["2026-11-05"] = (payload, etag, time.monotonic() - 10)
+        payload, etag, _ = _SCENARIOS_CACHE[second_key]
+        _SCENARIOS_CACHE[second_key] = (payload, etag, time.monotonic() - 10)
 
         # Modifying work title
         conn.execute("UPDATE works SET title = '新修改的标题' WHERE id = 'w_cache_ttl'")

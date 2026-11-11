@@ -2,21 +2,14 @@
     [ValidateSet('start', 'stop', 'restart', 'status')]
     [string]$Action = 'status',
     [ValidateRange(1024, 65535)]
-    [int]$Port = 3080,
-    [string]$DatabasePath = ''
+    [int]$Port = 3080
 )
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not $DatabasePath) {
-    $DatabasePath = Join-Path $projectRoot '.local\handraw_v2.db'
-}
-$databaseFile = [IO.Path]::GetFullPath($DatabasePath)
 $localOrigin = "http://127.0.0.1:$Port"
 $browserOrigin = "http://localhost:$Port"
-$escapedDatabase = [regex]::Escape($databaseFile)
-$databaseArgument = '(?i)(?:^|\s)--db(?:\s+|=)(?:"' + $escapedDatabase + '"|' + $escapedDatabase + '(?=\s|$))'
 
 function Get-HandrawProcess {
     $owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
@@ -111,15 +104,10 @@ if missing:
     if (-not $isPg -and (Test-Path $envFile)) {
         $isPg = [bool](Select-String -Path $envFile -Pattern '^\s*HANDRAW_DATABASE_URL\s*=' -Quiet)
     }
-    if ($isPg) {
-        $infraScript = Join-Path $PSScriptRoot 'infra.ps1'
-        if (Test-Path $infraScript) {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $infraScript start
-        }
-        $serverArguments = @('-X', 'utf8', '-u', '-m', 'backend.server', '--port', [string]$Port)
-    } else {
-        $serverArguments = @('-X', 'utf8', '-u', '-m', 'backend.server', '--port', [string]$Port, '--db', "`"$databaseFile`"")
+    if ($isPg -and (Test-Path (Join-Path $PSScriptRoot 'infra.ps1'))) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'infra.ps1') start
     }
+    $serverArguments = @('-X', 'utf8', '-u', '-m', 'backend.server', '--port', [string]$Port)
     Start-Process -FilePath $python -ArgumentList $serverArguments -WorkingDirectory $projectRoot `
         -WindowStyle Hidden -RedirectStandardOutput $outputLog -RedirectStandardError $errorLog | Out-Null
     for ($attempt = 0; $attempt -lt 30; $attempt++) {

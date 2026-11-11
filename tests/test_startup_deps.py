@@ -44,7 +44,7 @@ class StartupDependenciesSelfCheckTests(unittest.TestCase):
                 f"Expected warning mentioning python-docx and requirements.txt, got {cm.output}",
             )
 
-    @patch.dict(os.environ, {"HANDRAW_DATABASE_URL": "", "HANDRAW_REDIS_URL": "", "HANDRAW_REDIS_REQUIRED": "0"})
+    @patch.dict(os.environ, {"HANDRAW_DATABASE_URL": "postgresql://localhost/test", "HANDRAW_PG_RUNTIME_ACK": "V3_NATIVE", "HANDRAW_REDIS_REQUIRED": "1"})
     @patch("backend.server._load_env_file_if_present")
     @patch("backend.observability.configure_logging")
     def test_server_startup_continues_when_fitz_missing(self, _logging, _env_file) -> None:
@@ -56,12 +56,18 @@ class StartupDependenciesSelfCheckTests(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=fake_import):
-            with patch("backend.server.init_database") as mock_init:
+            with patch("backend.postgres_db.PostgresDatabase") as mock_init:
                 with patch("backend.server.create_channel_server") as mock_srv:
-                    with patch("backend.server.GenerationReconciler"):
-                        with patch("backend.services.start_blackbox_backfill"):
-                            mock_srv.return_value.serve_forever.side_effect = KeyboardInterrupt
-                            with self.assertLogs("backend.server", level="WARNING") as cm:
-                                main(["--port", "3999", "--db", ":memory:"])
-                            self.assertTrue(any("PyMuPDF" in msg for msg in cm.output))
-                            mock_init.assert_called_once()
+                    with patch("backend.server.GenerationReconciler"), patch("backend.seed.ensure_seeded"), patch("backend.redis_rate_limit.ensure_ready"):
+                        mock_srv.return_value.serve_forever.side_effect = KeyboardInterrupt
+                        with self.assertLogs("backend.server", level="WARNING") as cm:
+                            main(["--port", "3999"])
+                        self.assertTrue(any("PyMuPDF" in msg for msg in cm.output))
+                        mock_init.assert_called_once_with("postgresql://localhost/test")
+
+    @patch.dict(os.environ, {"HANDRAW_DATABASE_URL": ""})
+    @patch("backend.server._load_env_file_if_present")
+    @patch("backend.observability.configure_logging")
+    def test_server_requires_postgres_url(self, _logging, _env_file) -> None:
+        with self.assertRaisesRegex(RuntimeError, "HANDRAW_DATABASE_URL"):
+            main([])

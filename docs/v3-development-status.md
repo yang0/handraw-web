@@ -18,7 +18,7 @@ Skill https://github.com/yang0/handraw-style （feature/skill-web-unification-v1
 5. **媒体资产标准化**：media_assets 写入持久化媒体 SHA-256、长宽、字节数与 MIME。work_media、generation_items 为数据库媒体身份，works.images_json 只是列表缓存。
 6. **私有对象存储**：新增 backend/object_storage.py，支持 S3/R2/MinIO；保留 /generated/ 和 /uploads/ 路由并在服务器做鉴权。文件写入和读取走私有桶，读取缺失本地缓存时验证权限后回源。可使用 HANDRAW_OBJECT_BUCKET、HANDRAW_OBJECT_ENDPOINT、HANDRAW_OBJECT_REGION、HANDRAW_OBJECT_PREFIX、HANDRAW_OBJECT_SSE；使用 boto3 的 AWS 凭证链。
 7. **多实例 Redis 任务协调**：新增 backend/redis_jobs.py。后台生图结果协调使用带续租的 SET NX 租约，避免多个进程同时轮询/补录相同批次；生成状态与计费仍以数据库为准。
-8. **全新 PostgreSQL 初始化**：新增 backend/postgres_v3_native.py 中的原生 FK、CHECK、权限和封面/媒体一致性触发器；ops/bootstrap_postgres_v3.py 从全新临时 SQLite 空白 schema 衍生所有业务辅助表，并在完全空白 PostgreSQL 中建立本地 V3 Schema，不导入任何用户数据。服务端启动检查 V3 的核心表和完整性约束。
+8. **全新 PostgreSQL 初始化**：`ops/bootstrap_postgres_v3.py` 从 PostgreSQL 基线创建业务表、外键、CHECK、封面和媒体一致性触发器。服务端启动检查 V3 核心表和完整性约束。当前运维步骤见 [数据库文档](database.md)。
 9. **Skill 上传合同**：一次上传返回唯一 workId、workIds 单元素数组、imageCount、coverMediaId、coverUrl。Skill 既有开发分支持久化服务器回执与封面身份。
 10. **权限安全**：默认不推断旧作品公开状态。匿名图片访问必须有有效 work/topic/asset 授权，且授权对象仍发布且图片仍属于该作品。管理员下架和图片槽位替换不会依靠遗留授权继续公开旧媒体。
 
@@ -32,7 +32,7 @@ python -m ops.bootstrap_postgres_v3 --apply
 
 服务端 PostgreSQL 运行需同时设置 HANDRAW_REDIS_REQUIRED=1、HANDRAW_REDIS_URL 和 HANDRAW_PG_RUNTIME_ACK=V3_NATIVE。
 
-注意：上面的代码已提交，但未在真实 PostgreSQL 服务及独立 S3/R2/MinIO 桶上运行过，因此不声称初始化已经验证成功。操作不会自动删除任何已有数据库。
+空库初始化已在隔离 PostgreSQL 16 环境验证。独立 S3/R2/MinIO 桶仍待验收。
 
 ## 暂不处理事项（用户明确要求先完成开发）
 

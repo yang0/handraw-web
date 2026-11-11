@@ -84,15 +84,15 @@ powershell.exe -ExecutionPolicy Bypass -File .\ops\infra.ps1 redis-cli
 & "D:\PostgreSQL\pgsql\bin\pg_restore.exe" -U postgres -h 127.0.0.1 -d handraw_v2 -c "D:\PostgreSQL\handraw_v2_backup.dump"
 ```
 
-### 3.4 从 SQLite 快照迁移数据到 PostgreSQL
+### 3.4 初始化空库与升级现有库
 
 ```powershell
-# 设置临时环境变量（严格防止覆盖生产库）
-$env:HANDRAW_PG_STAGING_URL = "postgresql://postgres@127.0.0.1:5432/handraw_v2"
-$env:HANDRAW_ALLOW_PG_STAGING = "YES"
+# HANDRAW_DATABASE_URL 指向已创建的空 PostgreSQL 库
+$env:HANDRAW_ALLOW_PG_BOOTSTRAP = "YES"
+python -m ops.bootstrap_postgres_v3 --apply
 
-# 迁移并进行校验和一致性核对
-python ops/sqlite_to_postgres.py --sqlite-snapshot .local/handraw_v2.db --execute
+# 对已有 V3 库，仅应用增量索引迁移。此例通过本地 pg_service.conf 选定连接。
+psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_110_home_scenario_ratio.sql
 ```
 
 ---
@@ -144,12 +144,14 @@ HANDRAW_BASE_URL=http://localhost:3080
 
 # PostgreSQL 16
 HANDRAW_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/handraw_v2
-HANDRAW_PG_RUNTIME_ACK=STAGING_ONLY
+HANDRAW_PG_RUNTIME_ACK=V3_NATIVE
 
 # Redis (RESP2 协议必须带上 ?protocol=2)
 HANDRAW_REDIS_URL=redis://127.0.0.1:6379/0?protocol=2
 HANDRAW_REDIS_REQUIRED=1
 ```
+
+`start-demo.bat` 通过 `HANDRAW_DEMO_DATABASE_URL` 连接单独初始化的 PostgreSQL 演示库。
 
 ### 5.2 启动与管理
 

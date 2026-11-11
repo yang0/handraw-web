@@ -29,24 +29,25 @@
 │ ai_client（文本模型） · runtime_policy（安全策略） · security（密码、会话）   │
 └──────────────────────────────────────────────────────────────────────────────┘
                     ▼
-┌──────────────── 数据层  backend/db.py ───────────────────────────────────────┐
-│ Database：线程本地连接，WAL，_write_lock + BEGIN IMMEDIATE；migrations 注册表 │
+┌──────────────── 数据层  backend/postgres_db.py ─────────────────────────────┐
+│ PostgreSQL 连接池、请求级连接回收、事务、V3 结构检查                         │
 └──────────────────────────────────────────────────────────────────────────────┘
                     ▼
-  SQLite（.local/handraw_v2.db）   文件：.local/uploads、.local/demo_generated
+  PostgreSQL 为权威数据源，Redis 用于跨进程限流和缓存失效
+  文件：.local/uploads、.local/demo_generated
   外部：生图网关（image-service.json）、文本模型（ai-service.json）、
         Skill 仓库 E:\handraw-style（画风、图型引用文件与示例图）
 ```
 
-HTTP、数据库、外部调用都用标准库：`http.server.ThreadingHTTPServer`、`sqlite3`、`http.client` / `urllib`。第三方依赖见 `requirements.txt`：Pillow（图片校验、缩略图）、python-docx 与 PyMuPDF（文档导入，缺失时该格式解析失败）。
+HTTP 使用 `http.server.ThreadingHTTPServer`。数据库使用 psycopg 和 psycopg-pool，Redis 使用 redis-py。图片与文档处理依赖见 `requirements.txt`。
 
 ## 2. 进程与入口
 
-`python -m backend.server [--port 3080] [--host] [--db] [--reset-db] [--demo-mode]`，`main()` 依次执行：
+`python -m backend.server [--port 3080] [--host]` 启动服务。
 
-1. `init_database`：`Database.migrate()` → `ensure_seeded` → `mark_legacy_imports_failed`。
+1. 读取 `HANDRAW_DATABASE_URL`，检查 Redis 和 V3 数据库结构，确保站点默认配置存在。
 2. `create_channel_server(port, "main", db)`：一个监听端口；同时创建文档导入管理器 `get_import_manager(db)`。
-3. 启动后台线程：`GenerationReconciler`（默认每 15 秒，`HANDRAW_RECONCILE_INTERVAL`）、`start_blackbox_backfill`。
+3. 启动 `GenerationReconciler` 后台线程。
 4. `serve_forever()`。
 
 `create_channel_server(port, role, db)` 的 `role` 参数（`main` / `studio` / `forum` / `admin`）只在测试或本地多端口时使用；生产只起 `main`，按 Host 选页面：
@@ -145,27 +146,23 @@ server._handle_post
 
 ## 4. 数据层与并发模型
 
-| 项 | 实现（`backend/db.py`） |
+| 项 | 实现（`backend/postgres_db.py`） |
 |---|---|
-| 连接 | 每线程一个 `sqlite3` 连接（`threading.local`），`isolation_level=None`（手动事务），`check_same_thread=False` |
-| PRAGMA | `journal_mode=WAL`、`synchronous=NORMAL`、`foreign_keys=ON`、`busy_timeout=10000` |
-| 写 | `db.transaction()`：进程级 `threading.RLock`（`_write_lock`）+ `BEGIN IMMEDIATE`，异常回滚 |
-| 读 | `db.get_conn().execute(...)`，不加锁；WAL 下读不阻塞写 |
-| 迁移 | `migrate()` 持写锁；每条迁移的 DDL 与 `schema_migrations` 记录拼成一个 `BEGIN IMMEDIATE … COMMIT` 脚本执行 |
+| 连接 | 从 psycopg 连接池借用线程本地连接，请求结束后归还 |
+| 写 | `db.transaction()` 管理事务。业务并发由 PostgreSQL 约束、行锁或 advisory lock 协调 |
+| 读 | `db.get_conn().execute(...)`，由 PostgreSQL 管理语句快照 |
+| 迁移 | 新库从 PostgreSQL 基线初始化，已有库追加原生迁移。详见 [数据库运维](database.md) |
 
 约定：
 
 - **外部调用不持锁**。生图网关、文本模型、文件下载都放在事务之外，用状态列（`prompt_ready`、`status`）衔接前后两个事务。
-- **GET 不写库**。有记录的例外：`api_tokens.last_used_at`（每 5 分钟最多一次）、图库读时回填（拿不到写锁就跳过）。
-- **幂等靠唯一索引**，不靠应用层先查后写（见 `database.md` §4.1）。
-- 写锁是进程内锁，只在单进程部署下成立。多进程或多机部署需要重新设计（见 §8）。
+- 用唯一索引和事务实现跨进程写入幂等。
 
 后台线程：
 
 | 线程 | 周期 | 工作 |
 |---|---|---|
-| `GenerationReconciler` | 15 秒（5–120 可调） | 对账生图任务、补 `prompt_ready`、黑盒回填 |
-| `start_blackbox_backfill` | 启动时一次 | 黑盒回填 |
+| `GenerationReconciler` | 15 秒（5–120 可调） | 对账生图任务、补 `prompt_ready` |
 | 文档导入管理器 | 队列驱动 | 导入任务；看门狗把超时任务置 `failed`；约每小时清理 24 小时未引用的导入图与 30 天墓碑 |
 ## 5. 前端架构
 
@@ -240,14 +237,12 @@ boot 载荷（`version: 4`）主要字段：`serverBacked`、`loggedIn`、`user`
 4. 错误：抛 `ServiceError(message, status=, code=)`，由分发层统一转成 JSON。
 5. 幂等：可重试的写接口接收 `requestId`，用部分唯一索引保证。
 6. 令牌：需要 Skill 访问时，在 `_enforce_token_scope` 加白名单并选定 scope。
-7. 测试：`tests/` 下用临时库（`HANDRAW_DB_PATH` 或 `Database(tmp)`），不连项目库。
+7. 数据库集成测试使用独立 PostgreSQL 测试库。
 
 ### 7.2 新增迁移
 
-1. 在 `work_schema.py` 定义 SQL 常量，追加到 `WORK_MIGRATIONS` 末尾，版本号 67 起，名称匹配 `^[0-9]{3}_[a-z0-9_]+$`。
-2. 只用 `CREATE … IF NOT EXISTS`、`ALTER TABLE … ADD COLUMN … DEFAULT`。SQLite 的 `ADD COLUMN` 没有 `IF NOT EXISTS`，靠迁移原子性保证不重复执行。
-3. 需要 Python 处理数据时，DDL 写 `SELECT 1;`，函数登记到 `WORK_POST_MIGRATION_HOOKS`，必须幂等。
-4. 用旧结构的库和空库各跑一次测试；更新 `database.md`。
+1. 编写独立 PostgreSQL 增量迁移，并在同一事务内记录版本。
+2. 用现有结构升级和全新初始化各验收一次。更新 [数据库运维](database.md)。
 
 ### 7.3 新增前端页面
 
@@ -266,12 +261,11 @@ for f in tests/*.cjs; do node "$f" || exit 1; done
 
 | # | 问题 | 影响 | 位置 |
 |---|---|---|---|
-| 1 | 写锁是进程内 `RLock` | 只能单进程部署；多进程时互斥只剩 SQLite 的 `BEGIN IMMEDIATE` + `busy_timeout` | `db.py:33` |
 | 2 | boot 一次下发全部已发布作品、帖子、回复、目录覆盖层，无分页 | 每次打开页面的耗时与载荷随内容量线性增长 | `services.build_boot_payload` |
 | 3 | 超大文件 | `studio-app.js` 15237 行、`services.py` 4752 行、`server.py` 3299 行、`admin_services.py` 3010 行；改动冲突多、审查难 | — |
 | 4 | 路由是长 if 链，模块路由用 `except ImportError` 静默降级 | 模块内部任何 ImportError 都会让整组接口变成 404，而不是启动失败 | `server._handle_get` / `_handle_post` |
 | 5 | 同步提交生图时，任何异常（含 28 秒超时）立即退款 | 与对账线程「未知状态不退款」原则不一致；上游已受理的任务会变成免费成图或丢图 | `server.py:3013-3017` |
-| 6 | 收入通知触发器的 `kind` 列表与实际流水不符 | 解锁分成、赞赏、悬赏奖金无通知 | `feature_schema.py:62`，见 `database.md` §5 |
+| 6 | 收入通知触发器的 `kind` 列表与实际流水不符 | 解锁分成、赞赏、悬赏奖金无通知 | `feature_schema.py:62` |
 | 7 | `sessions.token` 明文存库 | 数据库泄露即可冒用会话；`api_tokens` 已做哈希 | `services.py:418` |
 | 8 | 迁移后钩子在提交之后执行 | 钩子失败时版本已记为完成，不会自动重跑 | `db.py:146` |
 | 9 | 角色判断写法不一致 | `prepare_cloud_generation` 只认 `admin` / `reviewer`，`operator` 不算员工；`post_routes` 认三者 | `services.py:3920`、`post_routes.py:24` |

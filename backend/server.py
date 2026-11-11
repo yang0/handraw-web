@@ -81,7 +81,6 @@ from .config import (
     DEMO_DIR,
     SESSION_COOKIE_NAME,
     SESSION_TTL_SECONDS,
-    get_db_path,
     get_generated_dir,
     get_image_config_path,
     get_storage_root,
@@ -2574,7 +2573,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/public/home-scenarios":
             from .home_scenarios import get_public_home_scenarios
             payload, etag = get_public_home_scenarios(self.db)
-            self._send_cached_json(payload, etag=etag, cache_control="public, max-age=300")
+            self._send_cached_json(payload, etag=etag, cache_control="public, no-cache")
             return
 
         if req_path == "/__demo_state":
@@ -4386,9 +4385,6 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Handraw Web single-backend server")
     parser.add_argument("--port", type=int, default=3080, help="Single HTTP port for all frontends (default: 3080)")
     parser.add_argument("--host", type=str, default="", help="Bind host; wildcard requires HANDRAW_ALLOW_PUBLIC_BIND=1")
-    parser.add_argument("--db", type=str, default="", help="Optional custom SQLite DB path")
-    parser.add_argument("--reset-db", action="store_true", help="Reset seed data on startup")
-    parser.add_argument("--demo-mode", action="store_true", help="Explicitly enable isolated demo/test routes")
     args = parser.parse_args(argv)
     from .observability import configure_logging
     configure_logging(port=args.port)
@@ -4396,44 +4392,31 @@ def main(argv: list[str] | None = None) -> None:
 
     from .redis_rate_limit import ensure_ready as ensure_redis_ready
     pg_url = os.environ.get("HANDRAW_DATABASE_URL", "").strip()
-    if pg_url:
-        # Fail closed: production always needs distributed authentication
-        # limits and a database staged with the full schema.
-        if os.environ.get("HANDRAW_REDIS_REQUIRED", "").strip().lower() not in {"1", "true", "yes"}:
-            raise RuntimeError("PostgreSQL 模式要求 HANDRAW_REDIS_REQUIRED=1")
-        if os.environ.get("HANDRAW_PG_RUNTIME_ACK", "") != "V3_NATIVE":
-            raise RuntimeError(
-                "PostgreSQL 模式只接受全新 V3 原生数据库；"
-                "先运行 python -m ops.bootstrap_postgres_v3 --apply，"
-                "再设置 HANDRAW_PG_RUNTIME_ACK=V3_NATIVE"
-            )
+    if not pg_url:
+        raise RuntimeError("请设置 HANDRAW_DATABASE_URL，指向 Handraw PostgreSQL 数据库")
+    if os.environ.get("HANDRAW_REDIS_REQUIRED", "").strip().lower() not in {"1", "true", "yes"}:
+        raise RuntimeError("PostgreSQL 服务要求 HANDRAW_REDIS_REQUIRED=1")
+    if os.environ.get("HANDRAW_PG_RUNTIME_ACK", "") != "V3_NATIVE":
+        raise RuntimeError(
+            "请先为新建空库运行 python -m ops.bootstrap_postgres_v3 --apply，"
+            "再设置 HANDRAW_PG_RUNTIME_ACK=V3_NATIVE"
+        )
     ensure_redis_ready()
 
-    if args.demo_mode:
-        # Seed data and demo handlers share the same explicit opt-in switch.
-        os.environ["HANDRAW_DEMO_MODE"] = "1"
-
-    if pg_url:
-        if args.db or args.reset_db or args.demo_mode:
-            raise RuntimeError("PostgreSQL 模式不允许 --db、--reset-db 或 --demo-mode")
-        from .postgres_db import PostgresDatabase
-        db = PostgresDatabase(pg_url)
-        db.migrate()
-        # Production-like initialization contains only site policy defaults;
-        # no demo users, no old SQLite source, and no migration of user data.
-        from .seed import ensure_seeded
-        ensure_seeded(db)
-    else:
-        db = init_database(args.db or get_db_path(), force_reset=args.reset_db)
+    from .postgres_db import PostgresDatabase
+    from .seed import ensure_seeded
+    db = PostgresDatabase(pg_url)
+    db.migrate()
+    ensure_seeded(db)
 
     requested_host = args.host or None
-    server = create_channel_server(args.port, "main", db, host=requested_host, demo_mode=args.demo_mode or None)
+    server = create_channel_server(args.port, "main", db, host=requested_host)
     reconciler = GenerationReconciler(db).start()
     # Fresh V3 has no legacy data and therefore no background blackbox
     # backfill. Protected prompts are verified synchronously on publication.
     import_manager = getattr(server, "import_manager", None)
 
-    print("Handraw Web single backend running (PostgreSQL V3 + Redis)" if pg_url else "Handraw Web single backend running (SQLite WAL + safe bind):")
+    print("Handraw Web single backend running (PostgreSQL V3 + Redis)")
     print(f"  [bind] {getattr(server, 'bind_host', '127.0.0.1')}")
     print(f"  [首页]   http://localhost:{args.port}/")
     print(f"  [创作台] http://localhost:{args.port}/studio/")
