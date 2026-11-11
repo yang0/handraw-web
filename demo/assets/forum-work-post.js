@@ -86,7 +86,9 @@
       return {
         url,
         scope: ["image", "group", "missing"].includes(snapshot.scope) ? snapshot.scope : "missing",
-        assets: acc.list
+        assets: acc.list,
+        prompt: typeof snapshot.prompt === "string" ? snapshot.prompt : "",
+        promptScope: snapshot.promptScope === "image" ? "image" : "missing"
       };
     }).filter(Boolean);
   }
@@ -296,17 +298,29 @@
     return model.forkUrl + sep + "image=" + index;
   }
 
+  function promptForImage(model, imageUrl) {
+    if (!model || model.locked) return "";
+    const images = Array.isArray(model.images) ? model.images : [];
+    if (model.source === "work" && images.length > 1) {
+      const image = (model.imageAssets || []).find((item) => item.url === imageUrl);
+      return image?.promptScope === "image" ? String(image.prompt || "") : "";
+    }
+    return String(model.prompt || "");
+  }
+
   function renderPrompt(model, imageUrl) {
     const t = "生图提示词";
+    const currentPrompt = promptForImage(model, imageUrl);
     let body;
     if (model.locked) {
       body = `<p class="fwp-locked">${esc(model.unavailableText || "解锁后查看提示词")}</p>`;
-    } else if (!model.prompt) {
-      body = `<p class="fwp-missing">${esc(model.unavailableText || "作者暂未公开提示词")}</p>`;
+    } else if (!currentPrompt) {
+      const missing = model.source === "work" && model.images?.length > 1 ? "当前图片未公开独立提示词" : model.unavailableText || "作者暂未公开提示词";
+      body = `<p class="fwp-missing">${esc(missing)}</p>`;
     } else {
-      body = `<pre class="fwp-prompt-text">${esc(model.prompt)}</pre>`;
+      body = `<pre class="fwp-prompt-text">${esc(currentPrompt)}</pre>`;
     }
-    const copyBtn = (!model.locked && model.prompt)
+    const copyBtn = (!model.locked && currentPrompt)
       ? `<button type="button" class="fwp-copy" data-fwp-copy>复制</button>`
       : "";
     let forkHtml = "";
@@ -316,7 +330,7 @@
     } else if (!model.locked) {
       forkHtml = `<button type="button" class="fwp-fork is-disabled" disabled>暂不可做同款</button>`;
     }
-    return `<div class="fwp-prompt">
+    return `<div class="fwp-prompt" data-fwp-prompt>
   <div class="fwp-prompt-head">
     <h3 class="fwp-prompt-title">${t}</h3>
     ${copyBtn}${forkHtml}
@@ -482,6 +496,15 @@
             if (dlBtn) dlBtn.setAttribute("href", src);
             const assetsPanel = scope.querySelector("[data-fwp-assets]");
             if (assetsPanel) assetsPanel.innerHTML = renderAssetContents(model, src);
+            const promptPanel = scope.querySelector("[data-fwp-prompt]");
+            if (promptPanel) {
+              const replacement = document.createElement("div");
+              replacement.innerHTML = renderPrompt(model, src);
+              if (replacement.firstElementChild) {
+                promptPanel.replaceWith(replacement.firstElementChild);
+                bindPromptCopy(scope, model, src);
+              }
+            }
             const forkLink = scope.querySelector("[data-fwp-fork]");
             if (forkLink) forkLink.setAttribute("href", forkUrlForImage(model, src));
             refreshCoverButton();
@@ -494,10 +517,15 @@
       }
     }
 
+    bindPromptCopy(scope, model, main?.getAttribute("data-hw-src") || "");
+  }
+
+  function bindPromptCopy(scope, model, imageUrl) {
     const copyBtn = scope.querySelector("[data-fwp-copy]");
-    if (copyBtn && !model.locked && model.prompt) {
+    const prompt = promptForImage(model, imageUrl);
+    if (copyBtn && prompt) {
       copyBtn.addEventListener("click", () => {
-        const text = String(model.prompt || "");
+        const text = prompt;
         if (!text) return;
         const clip = typeof navigator !== 'undefined' && navigator.clipboard;
         if (clip && typeof clip.writeText === "function") {
@@ -515,5 +543,5 @@
     }
   }
 
-  window.HandrawForumWork = { fromTopic, render, bind, formatWorkPrompt };
+  window.HandrawForumWork = { fromTopic, render, bind, formatWorkPrompt, promptForImage };
 })();

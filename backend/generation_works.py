@@ -185,7 +185,8 @@ def generation_image_assets(
 
     Match by persisted media URL, never by array index alone: async batch
     completions, cover changes and retries must not attach another image's
-    style/layout. No prompts or private recipe definitions leave this function.
+    style/layout plus already-approved visible prompts for uniquely owned image slots.
+    Raw prompts and private recipe definitions never leave this function.
     An empty result means only work-level metadata is available.
     """
     keys = work_row.keys() if hasattr(work_row, "keys") else work_row
@@ -245,14 +246,24 @@ def generation_image_assets(
             )
             source_styles, source_layout = extract_generation_styles_and_layout(conn, source)
             styles, layout = item_styles or source_styles, item_layout or source_layout
-            if not styles and not layout:
+            # Only a one-output generation row proves that a row-level prompt
+            # belongs to this particular image. Use the pre-screened public
+            # visible_prompt and fail closed on any masked source or work.
+            source_keys = source.keys()
+            work_prompt_safe = "prompt_has_secret" in keys and work_row["prompt_has_secret"] == 0
+            public_prompt = ""
+            if (len(items) == 1 and work_prompt_safe and
+                    source["prompt_masked"] == 0 and source["visible_prompt"] is not None):
+                public_prompt = str(source["visible_prompt"] or "").strip()
+            if not styles and not layout and not public_prompt:
                 by_url[url] = {"url": url, "styles": [], "layout": "", "scope": "missing"}
                 continue
-            # A snapshot on the item itself is definitively per-image; a
-            # one-output generation slot has equally unambiguous provenance.
             scope = "image" if item_styles or item_layout or len(items) == 1 else "group"
             by_url[url] = {
-                "url": url, "styles": styles, "layout": layout, "scope": scope,
+                "url": url, "styles": styles, "layout": layout,
+                "scope": scope if styles or layout else "missing",
+                "prompt": public_prompt,
+                "promptScope": "image" if public_prompt else "missing",
             }
     if not by_url:
         return []
