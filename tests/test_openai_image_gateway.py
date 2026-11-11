@@ -22,7 +22,7 @@ from backend.server import (
     create_channel_server,
     init_database,
 )
-from backend.services import register_user
+from backend.services import prepare_cloud_generation, register_user
 
 
 ORIGIN = "http://trusted.test"
@@ -516,6 +516,80 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
             "SELECT status, error_msg FROM studio_generations WHERE id = 'gen_oai_orphan_1'"
         ).fetchone()
         self.assertEqual(row["status"], "refunded")
+
+    def test_http_400_logs_traceback_and_surfaces_sanitized_upstream_detail(self) -> None:
+        self.gw_state.mode = "http_error"
+        self.gw_state.error_status = 400
+        self.gw_state.error_body = {
+            "error": {
+                "message": "unsupported size parameter via https://gw.test/v1?token=qsec99 Bearer up-tok-999 api_key=mysec888",
+                "code": "invalid_request",
+            }
+        }
+        with self.assertLogs("backend.server", level="ERROR") as cm:
+            st, res = self._req(
+                "POST",
+                "/api/studio/generate",
+                {"prompt": "错误诊断测试", "requestId": "req-oai-err-400"},
+                cookie=self.cookie,
+            )
+        self.assertEqual(st, 502)
+        self.assertTrue(res.get("refunded"))
+        self.assertIn("HTTP 400", res["error"])
+        self.assertIn("unsupported size parameter", res["error"])
+        self.assertIn("[redacted]", res["error"])
+        for secret in ("qsec99", "up-tok-999", "mysec888"):
+            self.assertNotIn(secret, res["error"])
+            self.assertNotIn(secret, "\n".join(cm.output))
+        log_text = "\n".join(cm.output)
+        self.assertIn("endpoint=/v1/images/generations", log_text)
+        self.assertIn("model=gptfree-pool/gpt-image-2.6", log_text)
+        self.assertIn("size=1152x1536", log_text)
+        self.assertIn("refs=0", log_text)
+        self.assertIn("duration_ms=", log_text)
+        self.assertIn("Traceback", log_text)
+
+        row = self.db.get_conn().execute(
+            "SELECT status, error_msg FROM studio_generations WHERE request_id = 'req-oai-err-400'"
+        ).fetchone()
+        self.assertEqual(row["status"], "refunded")
+        self.assertIn("unsupported size parameter", row["error_msg"])
+
+    def test_prepare_cloud_generation_marks_openai_protocol_before_compose(self) -> None:
+        reconciler = GenerationReconciler(self.db)
+        mid_compose_protocols: list[str] = []
+
+        def fake_compose(*args, **kwargs):
+            row = self.db.get_conn().execute(
+                "SELECT system_append_json FROM studio_generations WHERE request_id = 'req-oai-early-mark'"
+            ).fetchone()
+            mid_compose_protocols.append(json.loads(row["system_append_json"]).get("gatewayProtocol", ""))
+            reconciler.reconcile_once()
+            return "composed clean prompt"
+
+        before_reqs = len(self.gw_state.requests)
+        with patch("backend.services._compose_skill_prompt", side_effect=fake_compose):
+            prep = prepare_cloud_generation(
+                self.db,
+                self.user,
+                {
+                    "prompt": "早期协议标记测试",
+                    "style1": "FX-OAI-PAID",
+                    "requestId": "req-oai-early-mark",
+                    "confirmCost": True,
+                },
+                gateway_protocol="openai",
+            )
+        self.assertEqual(mid_compose_protocols, ["openai"])
+        self.assertEqual(len(self.gw_state.requests), before_reqs, "Reconciler must skip OpenAI task during prompt compose")
+        after_row = self.db.get_conn().execute(
+            "SELECT system_append_json FROM studio_generations WHERE id = ?",
+            (prep["genId"],),
+        ).fetchone()
+        self.assertEqual(json.loads(after_row["system_append_json"]).get("gatewayProtocol"), "openai")
+        # Clean up inflight row so subsequent tests aren't counted against max_inflight
+        from backend.services import refund_failed_cloud_generation
+        refund_failed_cloud_generation(self.db, prep["genId"], "cleanup")
 
 
 if __name__ == "__main__":

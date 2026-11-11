@@ -21,11 +21,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import traceback
 from typing import Any
 
 from .ai_client import chat
 from .config import CONTENT_DIR
 from .db import Database
+from .observability import local_debug_stacks_enabled
 from .services import ServiceError, consume_daily_usage
 
 logger = logging.getLogger(__name__)
@@ -277,7 +279,20 @@ def execute_batch_plan(
         reason = str(meta.get("reason") or "empty")
         if not re.fullmatch(r"(?:no_key|timeout|network|empty|too_large|invalid_json|http_\d{3})", reason):
             reason = "unknown"
-        logger.warning("event=batch_plan_failed stage=upstream reason=%s mode=%s count=%d", reason, norm_mode, cnt)
+        elapsed_ms = meta.get("elapsed_ms", 0)
+        logger.warning(
+            "event=batch_plan_failed stage=upstream reason=%s mode=%s count=%d elapsed_ms=%s",
+            reason, norm_mode, cnt, elapsed_ms,
+        )
+        if local_debug_stacks_enabled():
+            logging.getLogger("handraw.trace").info(
+                "batch_plan_upstream_failed reason=%s mode=%s count=%d elapsed_ms=%s\n%s",
+                reason,
+                norm_mode,
+                cnt,
+                elapsed_ms,
+                "".join(traceback.format_stack(limit=15)).rstrip(),
+            )
         if norm_mode == "ai":
             message = "AI 规划服务响应超时，请稍后重试" if reason == "timeout" else (
                 "AI 图型推荐不可用，请检查 AI 服务配置后重试" if reason == "no_key" else
@@ -331,6 +346,7 @@ def execute_batch_plan(
             logger.warning(
                 "event=batch_plan_failed stage=%s reason=%s mode=%s count=%d response_chars=%d error_type=%s",
                 stage, reason, norm_mode, cnt, len(response_text), type(exc).__name__,
+                exc_info=True,
             )
             if norm_mode == "ai":
                 message = "AI 返回的规划格式无法解析，请重试" if stage == "invalid_json" else "AI 推荐结果不完整或包含无效图型，请重试"

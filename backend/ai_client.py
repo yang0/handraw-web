@@ -16,10 +16,12 @@ import socket
 import ssl
 import threading
 import time
+import traceback
 import urllib.parse
 from typing import Any
 
 from backend.config import load_ai_config
+from backend.observability import extract_http_error_summary, local_debug_stacks_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +229,37 @@ def chat(
             status_code = response.status
 
             if status_code < 200 or status_code >= 300:
-                logger.warning("AI HTTP error %d on attempt %d for %s (model: %s)", status_code, attempt, api_url, model)
+                err_raw = b""
+                if not timed_out and time.monotonic() < deadline:
+                    try:
+                        chunk = response.read(16384)
+                        if isinstance(chunk, bytes):
+                            err_raw = chunk
+                        elif isinstance(chunk, str):
+                            err_raw = chunk.encode("utf-8", errors="ignore")
+                    except Exception:
+                        err_raw = b""
+                err_summary = extract_http_error_summary(err_raw)
+                elapsed_ms = int((time.monotonic() - start_time) * 1000)
+                logger.warning(
+                    "AI HTTP error %d on attempt %d for %s (model: %s, elapsed_ms=%d, body_len=%d): %s",
+                    status_code,
+                    attempt,
+                    api_url,
+                    model,
+                    elapsed_ms,
+                    len(err_raw),
+                    err_summary or "-",
+                )
+                if local_debug_stacks_enabled():
+                    logging.getLogger("handraw.trace").info(
+                        "ai_http_error status=%d attempt=%d url=%s model=%s\n%s",
+                        status_code,
+                        attempt,
+                        api_url,
+                        model,
+                        "".join(traceback.format_stack(limit=15)).rstrip(),
+                    )
                 rem_after = deadline - time.monotonic()
                 if 500 <= status_code <= 599 and attempt < max_attempts and rem_after > 0.05 and not timed_out:
                     last_reason = f"http_{status_code}"
@@ -262,7 +294,13 @@ def chat(
             try:
                 data = json.loads(resp_bytes.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError) as j_err:
-                logger.warning("AI response is not valid JSON on attempt %d: %s", attempt, j_err)
+                logger.warning(
+                    "AI response is not valid JSON on attempt %d (elapsed_ms=%d): %s",
+                    attempt,
+                    int((time.monotonic() - start_time) * 1000),
+                    j_err,
+                    exc_info=True,
+                )
                 return "", _meta(False, "invalid_json")
 
             choices = data.get("choices") or []
@@ -276,16 +314,35 @@ def chat(
             return content, _meta(True, "")
 
         except (socket.timeout, TimeoutError):
-            logger.warning("AI request timed out on attempt %d", attempt)
+            logger.warning(
+                "AI request timed out on attempt %d (elapsed_ms=%d)",
+                attempt,
+                int((time.monotonic() - start_time) * 1000),
+                exc_info=True,
+            )
             return "", _meta(False, "timeout")
 
         except (ConnectionRefusedError, ConnectionResetError, BrokenPipeError, socket.error) as exc:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
             if timed_out or time.monotonic() >= deadline:
-                logger.warning("AI request timed out on attempt %d (aborted by timer)", attempt)
+                logger.warning(
+                    "AI request timed out on attempt %d (aborted by timer, elapsed_ms=%d)",
+                    attempt,
+                    elapsed_ms,
+                    exc_info=True,
+                )
                 return "", _meta(False, "timeout")
 
             rem_after = deadline - time.monotonic()
-            logger.warning("AI connection error on attempt %d (%s) for %s (model: %s)", attempt, type(exc).__name__, api_url, model)
+            logger.warning(
+                "AI connection error on attempt %d (%s) for %s (model: %s, elapsed_ms=%d)",
+                attempt,
+                type(exc).__name__,
+                api_url,
+                model,
+                elapsed_ms,
+                exc_info=True,
+            )
             if attempt < max_attempts and rem_after > 0.05:
                 last_reason = "network"
                 if rem_after > 0.1:
@@ -298,7 +355,13 @@ def chat(
         except Exception as exc:
             if timed_out or time.monotonic() >= deadline:
                 return "", _meta(False, "timeout")
-            logger.warning("AI unretryable error on attempt %d (%s)", attempt, exc)
+            logger.warning(
+                "AI unretryable error on attempt %d (%s, elapsed_ms=%d)",
+                attempt,
+                exc,
+                int((time.monotonic() - start_time) * 1000),
+                exc_info=True,
+            )
             return "", _meta(False, "network")
 
         finally:

@@ -1355,7 +1355,7 @@ def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
     try:
         vhash, secrets, windows = get_secrets_cache(conn, force=True)
     except Exception:
-        logger.warning("run_blackbox_backfill aborted: failed to query catalog secrets (fail-closed, G1)")
+        logger.warning("run_blackbox_backfill aborted: failed to query catalog secrets (fail-closed, G1)", exc_info=True)
         return {"generations": 0, "works": 0, "topics": 0}
 
     preloaded = (vhash, secrets, windows)
@@ -1448,6 +1448,7 @@ def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
                                 masked = 0
                                 gen_updates.append((vis, masked, gid, raw_p))
             except Exception:
+                logger.warning("run_blackbox_backfill generation scan failed for id=%s", gid, exc_info=True)
                 has_errors = True
                 continue
 
@@ -1455,11 +1456,12 @@ def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
             try:
                 with db.transaction() as tx:
                     tx.executemany(
-                        "UPDATE studio_generations SET visible_prompt = ?, prompt_masked = ? WHERE id = ? AND prompt = ?",
+                        "UPDATE studio_generations SET visible_prompt = ?, prompt_masked = ? WHERE id = ? AND COALESCE(prompt, '') = ?",
                         gen_updates,
                     )
                 counts["generations"] += len(gen_updates)
             except Exception:
+                logger.warning("run_blackbox_backfill generation batch update failed (%d rows)", len(gen_updates), exc_info=True)
                 has_errors = True
 
     # 2. Backfill works where prompt_has_secret IS NULL (or all if force)
@@ -1483,15 +1485,17 @@ def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
                 has_sec = 1 if (check_text_has_secret(raw_p, conn, preloaded=preloaded) or check_text_has_secret(raw_s, conn, preloaded=preloaded)) else 0
                 work_updates.append((has_sec, wid, raw_p))
             except Exception:
+                logger.warning("run_blackbox_backfill work scan failed for id=%s", wid, exc_info=True)
                 has_errors = True
                 continue
 
         if work_updates:
             try:
                 with db.transaction() as tx:
-                    tx.executemany("UPDATE works SET prompt_has_secret = ? WHERE id = ? AND prompt = ?", work_updates)
+                    tx.executemany("UPDATE works SET prompt_has_secret = ? WHERE id = ? AND COALESCE(prompt, '') = ?", work_updates)
                 counts["works"] += len(work_updates)
             except Exception:
+                logger.warning("run_blackbox_backfill work batch update failed (%d rows)", len(work_updates), exc_info=True)
                 has_errors = True
 
     # 3. Backfill forum_topics where recipe_has_secret IS NULL (or all if force)
@@ -1518,15 +1522,17 @@ def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
                     has_sec = 0
                 topic_updates.append((has_sec, tid, raw_rj))
             except Exception:
+                logger.warning("run_blackbox_backfill topic scan failed for id=%s", tid, exc_info=True)
                 has_errors = True
                 continue
 
         if topic_updates:
             try:
                 with db.transaction() as tx:
-                    tx.executemany("UPDATE forum_topics SET recipe_has_secret = ? WHERE id = ? AND recipe_json = ?", topic_updates)
+                    tx.executemany("UPDATE forum_topics SET recipe_has_secret = ? WHERE id = ? AND COALESCE(recipe_json, '') = ?", topic_updates)
                 counts["topics"] += len(topic_updates)
             except Exception:
+                logger.warning("run_blackbox_backfill topic batch update failed (%d rows)", len(topic_updates), exc_info=True)
                 has_errors = True
 
     # Persist the scanned hash in site_settings only if no errors occurred (G2, H2)
@@ -1544,7 +1550,7 @@ def run_blackbox_backfill(db: Database, force: bool = False) -> dict[str, int]:
                 )
             _LAST_SCANNED_SECRETS_HASH = vhash
         except Exception:
-            logger.warning("Failed to persist blackbox_secrets_hash to site_settings")
+            logger.warning("Failed to persist blackbox_secrets_hash to site_settings", exc_info=True)
     else:
         logger.warning("run_blackbox_backfill completed with errors; scan hash NOT persisted so next run will rescan (H2)")
 
@@ -5981,11 +5987,18 @@ def _compose_skill_prompt(
             mode=str(mode or ""),
         )
     except Exception:  # noqa: BLE001 - never fail a paid generation on this
+        logger.warning("Skill prompt composition failed; falling back to plain prompt", exc_info=True)
         return ""
     return str(composed.get("prompt") or "").strip()
 
 
-def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
+def prepare_cloud_generation(
+    db: Database,
+    user: dict[str, Any] | None,
+    body: dict[str, Any],
+    *,
+    gateway_protocol: str = "",
+) -> dict[str, Any]:
     """Reserve one generation atomically and inject DB blackbox prompts.
 
     ``requestId``/``clientRequestId`` is scoped to the authenticated user. A
@@ -6379,7 +6392,16 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                 initial_prompt if recipe_id else initial_prompt[:4000],
                 initial_visible_prompt if (initial_visible_prompt is None or recipe_id) else initial_visible_prompt[:4000],
                 prompt_masked_init,
-                json.dumps({"systemAppend": system_append_list, "promptTrimmed": False, "recipeSnapshot": snap, "creationSource": creation_source}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "systemAppend": system_append_list,
+                        "promptTrimmed": False,
+                        "recipeSnapshot": snap,
+                        "creationSource": creation_source,
+                        **({"gatewayProtocol": "openai"} if str(gateway_protocol or "").strip().lower() == "openai" else {}),
+                    },
+                    ensure_ascii=False,
+                ),
                 cost_type,
                 credits_spent,
                 request_id,
@@ -6554,6 +6576,8 @@ def prepare_cloud_generation(db: Database, user: dict[str, Any] | None, body: di
                             "systemAppend": system_append_list,
                             "promptTrimmed": bool(prompt_trimmed),
                             "recipeSnapshot": snap,
+                            "creationSource": creation_source,
+                            **({"gatewayProtocol": "openai"} if str(gateway_protocol or "").strip().lower() == "openai" else {}),
                         },
                         ensure_ascii=False,
                     ),

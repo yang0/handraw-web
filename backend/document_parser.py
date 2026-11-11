@@ -21,6 +21,7 @@ from typing import Any, Dict
 
 from backend import ai_client
 from backend.config import load_ai_config
+from backend.observability import local_debug_stacks_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def extract_text_from_file(file_bytes: bytes, filename: str = "") -> str:
                 logger.info("Extracted %d chars from PDF via PyMuPDF", len(extracted))
                 return extracted
         except Exception as e:
-            logger.warning("PyMuPDF extraction failed: %s; trying pdfplumber", e)
+            logger.warning("PyMuPDF extraction failed: %s; trying pdfplumber", e, exc_info=local_debug_stacks_enabled())
 
         try:
             import pdfplumber
@@ -78,7 +79,7 @@ def extract_text_from_file(file_bytes: bytes, filename: str = "") -> str:
                     logger.info("Extracted %d chars from PDF via pdfplumber", len(extracted))
                     return extracted
         except Exception as e:
-            logger.warning("pdfplumber extraction failed: %s", e)
+            logger.warning("pdfplumber extraction failed: %s", e, exc_info=local_debug_stacks_enabled())
 
     # 2. DOCX / DOC Documents
     if lower_name.endswith(".docx") or lower_name.endswith(".doc") or file_bytes.startswith(b"PK\x03\x04") or file_bytes.startswith(b"\xd0\xcf\x11\xe0"):
@@ -114,7 +115,7 @@ def extract_text_from_file(file_bytes: bytes, filename: str = "") -> str:
                     logger.info("Extracted %d chars from DOCX via python-docx", len(extracted))
                     return extracted
             except Exception as e:
-                logger.warning("docx extraction failed: %s", e)
+                logger.warning("docx extraction failed: %s", e, exc_info=local_debug_stacks_enabled())
 
         # 2.2 Check if file is RTF
         if file_bytes.startswith(b"{\\rtf"):
@@ -282,7 +283,11 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
         if reason == "no_key":
             logger.info("No AI key configured; using heuristic parsing")
             return fallback_parse_article(clean_raw, filename, fallback_reason="no_key", truncated=truncated)
-        logger.warning("AI parse failed (%s); falling back to heuristic parsing", reason)
+        logger.warning(
+            "AI parse failed (%s, elapsed_ms=%s); falling back to heuristic parsing",
+            reason,
+            meta.get("elapsed_ms", 0),
+        )
         return fallback_parse_article(clean_raw, filename, fallback_reason="timeout_or_error", truncated=truncated)
 
     try:
@@ -298,7 +303,7 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
         try:
             parsed = json.loads(content_clean)
         except Exception:
-            logger.warning("AI parse returned non-JSON content; falling back to heuristic parsing")
+            logger.warning("AI parse returned non-JSON content; falling back to heuristic parsing", exc_info=local_debug_stacks_enabled())
             return fallback_parse_article(clean_raw, filename, fallback_reason="invalid_json", truncated=truncated)
 
         if isinstance(parsed, dict):
@@ -315,7 +320,7 @@ def ai_parse_article(raw_text: str, filename: str = "") -> Dict[str, Any]:
         else:
             return fallback_parse_article(clean_raw, filename, fallback_reason="invalid_json", truncated=truncated)
     except Exception as e:
-        logger.warning("AI parse processing failed (%s); falling back to heuristic parsing", e)
+        logger.warning("AI parse processing failed (%s); falling back to heuristic parsing", e, exc_info=local_debug_stacks_enabled())
         return fallback_parse_article(clean_raw, filename, fallback_reason="timeout_or_error", truncated=truncated)
 
 

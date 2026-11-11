@@ -17,6 +17,7 @@ import socket
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -90,6 +91,11 @@ from .config import (
     resolve_gateway_model,
 )
 from .db import Database, utc_now_iso
+from .observability import (
+    extract_http_error_summary,
+    local_debug_stacks_enabled,
+    sanitize_log_text,
+)
 from .security import build_session_cookie
 from .runtime_policy import (
     MAX_JSON_BODY_BYTES,
@@ -118,12 +124,14 @@ from .services import (
     build_boot_payload,
     build_skill_asset_content,
     build_skill_library_payload,
+    check_text_has_secret,
     complete_cloud_generation,
     claim_cloud_generation_submission,
     compute_public_asset_counts_and_creators,
     consume_daily_usage,
     delete_user_studio_workflow,
     forum_moderator_action,
+    get_secrets_cache,
     get_site_settings,
     get_public_generation_history,
     get_user_public_generations,
@@ -491,6 +499,51 @@ def _parse_created_at_dt(created_at_str: str | None) -> datetime | None:
         return dt
     except Exception:
         return None
+
+
+def _sanitize_gateway_error_detail(
+    raw_body: bytes | str | None,
+    *,
+    db: Database | None = None,
+    prompt: str = "",
+    api_key: str = "",
+) -> tuple[str, bool]:
+    """Return ``(safe_detail, secret_matched)`` safe for logs and bounded UI errors."""
+    detail = extract_http_error_summary(raw_body, max_len=280)
+    if not detail:
+        return "", False
+
+    secret_matched = False
+    clean_key = str(api_key or "").strip()
+    if len(clean_key) >= 4 and clean_key in detail:
+        detail = detail.replace(clean_key, "[redacted]")
+
+    clean_prompt = str(prompt or "").strip()
+    if len(clean_prompt) >= 24:
+        for idx in range(0, min(len(clean_prompt) - 23, 2000), 8):
+            chunk = clean_prompt[idx : idx + 24]
+            if chunk in detail:
+                secret_matched = True
+                return "[redacted prompt excerpt]", True
+
+    if db is not None:
+        try:
+            conn = db.get_conn()
+            _, secrets, _ = get_secrets_cache(conn)
+            if check_text_has_secret(detail, conn):
+                secret_matched = True
+                masked = detail
+                for sec in sorted(secrets, key=len, reverse=True):
+                    if sec and sec in masked:
+                        masked = masked.replace(sec, "[redacted]")
+                if check_text_has_secret(masked, conn):
+                    masked = "[redacted protected detail]"
+                detail = masked
+        except Exception:
+            logger.warning("Failed to scan upstream error detail for protected secrets", exc_info=True)
+            return "[redacted unverified upstream detail]", True
+
+    return sanitize_log_text(detail, max_len=280), secret_matched
 
 
 def _gateway_failure_is_definite(exc: BaseException) -> bool:
@@ -1909,6 +1962,20 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 self._request_id, method, path, code, max(0, elapsed_ms),
                 exc_info=(sys.exc_info()[0] is not None) if code >= 500 else False,
             )
+            if (
+                code >= 400
+                and sys.exc_info()[0] is None
+                and local_debug_stacks_enabled()
+                and (code >= 500 or path.startswith("/api/"))
+            ):
+                logging.getLogger("handraw.trace").info(
+                    "request_id=%s method=%s path=%s status=%s call_stack\n%s",
+                    self._request_id,
+                    method,
+                    path,
+                    code,
+                    "".join(traceback.format_stack(limit=16)).rstrip(),
+                )
         super().send_response(code, message)
         self.send_header("X-Request-ID", self._request_id)
 
@@ -1921,6 +1988,18 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 self._enforce_token_scope()
             callback()
         except ServiceError as se:
+            if 400 <= se.status < 500 and local_debug_stacks_enabled():
+                path = str(getattr(self, "path", "")).split("?", 1)[0].split("#", 1)[0]
+                path = re.sub(r"[\x00-\x20\x7f]", "_", path)[:512]
+                logging.getLogger("handraw.trace").info(
+                    "request_id=%s method=%s path=%s status=%s code=%s",
+                    self._request_id,
+                    getattr(self, "command", "UNKNOWN"),
+                    path,
+                    se.status,
+                    se.code,
+                    exc_info=True,
+                )
             err_body = {"ok": False, "error": se.message, "code": se.code}
             if getattr(se, "extra", None):
                 err_body.update(se.extra)
@@ -2691,7 +2770,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     }
                 )
             except Exception as exc:
-                logger.warning("Gateway task polling failed: %s", type(exc).__name__)
+                logger.warning("Gateway task polling failed: %s", type(exc).__name__, exc_info=True)
                 self._send_json({"status": "error", "message": "云端任务轮询异常"}, status=502)
             return
 
@@ -3646,10 +3725,22 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 return
 
             user = self._current_user(required=True)
-            prep = prepare_cloud_generation(self.db, user, body)
-            gen_id = prep["genId"]
             is_openai_gw = str(cfg.get("protocol") or "").strip().lower() == "openai"
+            prep = prepare_cloud_generation(
+                self.db,
+                user,
+                body,
+                gateway_protocol="openai" if is_openai_gw else "",
+            )
+            gen_id = prep["genId"]
             submitted = False
+            gw_started_at = 0.0
+            endpoint = ""
+            gw_model = ""
+            gw_size = size_for_ratio(str(body.get("ratio") or "3:4"))
+            full_prompt = ""
+            refs: list[dict[str, str]] = []
+            req_log_id = getattr(self, "_request_id", "") or str(prep.get("requestId") or "")
             try:
                 claim = claim_cloud_generation_submission(self.db, user, gen_id)
                 if not claim.get("claimed"):
@@ -3745,16 +3836,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 gw_model = str(cfg.get("model") or prep.get("model") or "gpt-image-2").strip()
                 gw_quality = str(cfg.get("quality") or "auto").strip() or "auto"
                 gw_timeout = int(cfg.get("timeout") or (180 if is_openai_gw else 28))
+                gw_size = size_for_ratio(ratio)
 
                 if is_openai_gw:
+                    endpoint = "/v1/images/edits" if refs else "/v1/images/generations"
                     record_cloud_generation_task_id(self.db, gen_id, task_id)
                     _mark_generation_gateway_protocol(self.db, gen_id, "openai")
                     submitted = True
+                    gw_started_at = time.monotonic()
+                    logger.info(
+                        "Gateway submit start: request_id=%s gen_id=%s protocol=openai endpoint=%s model=%s size=%s quality=%s refs=%d",
+                        req_log_id, gen_id, endpoint, gw_model, gw_size, gw_quality, len(refs),
+                    )
                     gw_res = openai_image_gateway_request(
                         cfg,
                         full_prompt,
                         model=gw_model,
-                        size=size_for_ratio(ratio),
+                        size=gw_size,
                         quality=gw_quality,
                         refs=refs or None,
                         timeout=gw_timeout,
@@ -3768,8 +3866,18 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                                 local_urls.append(local_url)
                     complete_cloud_generation(self.db, gen_id, task_id, local_urls)
                     if not local_urls:
+                        gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
+                        logger.error(
+                            "Gateway empty response: request_id=%s gen_id=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f",
+                            req_log_id, gen_id, endpoint, gw_model, gw_size, len(refs), gw_elapsed_ms,
+                        )
                         self._send_json({"ok": False, "refunded": True, "error": "生图网关未返回有效图片（已自动退还额度/积分）"}, status=502)
                         return
+                    gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
+                    logger.info(
+                        "Gateway submit ok: request_id=%s gen_id=%s endpoint=%s model=%s images=%d duration_ms=%.1f",
+                        req_log_id, gen_id, endpoint, gw_model, len(local_urls), gw_elapsed_ms,
+                    )
                     actual_id = task_id
                     gw_out: dict[str, Any] = {
                         "ok": True,
@@ -3790,7 +3898,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                         "client_task_id": task_id,
                         "prompt": full_prompt,
                         "model": gw_model,
-                        "size": size_for_ratio(ratio),
+                        "size": gw_size,
                         "quality": gw_quality,
                     }
                     if refs:
@@ -3801,6 +3909,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
                     record_cloud_generation_task_id(self.db, gen_id, task_id)
                     submitted = True
+                    gw_started_at = time.monotonic()
+                    logger.info(
+                        "Gateway submit start: request_id=%s gen_id=%s protocol=image-tasks endpoint=%s model=%s size=%s quality=%s refs=%d",
+                        req_log_id, gen_id, endpoint, gw_model, gw_size, gw_quality, len(refs),
+                    )
                     gw_res = gateway_request(endpoint, payload=gw_payload, timeout=gw_timeout)
                     actual_id = str(gw_res.get("id") or task_id)
                     complete_cloud_generation(self.db, gen_id, actual_id)
@@ -3826,31 +3939,93 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     gw_out["promptMasked"] = True
                 self._send_json(gw_out)
             except Exception as exc:
+                gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
+                gw_proto = "openai" if is_openai_gw else "image-tasks"
+                gw_api_key = str(cfg.get("key") or "") if isinstance(cfg, dict) else ""
+                try:
+                    raw_exc_str = str(exc)
+                except Exception:
+                    raw_exc_str = ""
+                _, exc_str_secret = _sanitize_gateway_error_detail(
+                    raw_exc_str, db=self.db, prompt=full_prompt, api_key=gw_api_key,
+                )
+                gw_exc_info: Any = False if exc_str_secret else True
+                tb_frames = (
+                    "\nTraceback (redacted exception message):\n" + "".join(traceback.format_tb(exc.__traceback__)).rstrip()
+                    if exc_str_secret and exc.__traceback__
+                    else ""
+                )
                 if not submitted:
-                    logger.warning("Gateway call not submitted (%s): %s", type(exc).__name__, exc)
+                    logger.error(
+                        "Gateway call not submitted: request_id=%s gen_id=%s protocol=%s error_type=%s err=%s%s",
+                        req_log_id,
+                        gen_id,
+                        gw_proto,
+                        type(exc).__name__,
+                        sanitize_log_text(raw_exc_str) if not exc_str_secret else "[redacted]",
+                        tb_frames,
+                        exc_info=gw_exc_info,
+                    )
                     refund_failed_cloud_generation(self.db, gen_id, "生图网关连接失败")
                     self._send_json({"ok": False, "refunded": True, "error": "生图网关连接失败（已自动退还额度/积分）"}, status=502)
                 elif is_openai_gw or _gateway_failure_is_definite(exc):
                     if isinstance(exc, urllib.error.HTTPError):
+                        err_body_bytes = b""
                         try:
-                            err_body = exc.read().decode("utf-8", errors="ignore")
+                            try:
+                                raw_read = exc.read(16384)
+                            except TypeError:
+                                raw_read = exc.read()[:16384]
+                            if isinstance(raw_read, bytes):
+                                err_body_bytes = raw_read
+                            elif isinstance(raw_read, str):
+                                err_body_bytes = raw_read.encode("utf-8", errors="ignore")
                         except Exception:
-                            err_body = ""
-                        logger.warning("Gateway error: HTTP %s (body length: %s)", exc.code, len(err_body))
-                        err_msg = f"网关请求失败 (HTTP {exc.code})"
+                            err_body_bytes = b""
+                        detail, secret_matched = _sanitize_gateway_error_detail(
+                            err_body_bytes, db=self.db, prompt=full_prompt, api_key=gw_api_key,
+                        )
+                        logger.error(
+                            "Gateway error: request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d status=%s duration_ms=%.1f body_len=%d detail=%s%s",
+                            req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
+                            exc.code, gw_elapsed_ms, len(err_body_bytes), detail or "-", tb_frames,
+                            exc_info=gw_exc_info,
+                        )
+                        err_msg = f"网关请求失败 (HTTP {exc.code}): {detail}" if (detail and not secret_matched) else f"网关请求失败 (HTTP {exc.code})"
                     elif isinstance(exc, (socket.timeout, TimeoutError)) or (
                         isinstance(exc, urllib.error.URLError)
                         and isinstance(getattr(exc, "reason", None), (socket.timeout, TimeoutError))
                     ):
-                        logger.warning("Gateway exception: %s", type(exc).__name__)
+                        logger.error(
+                            "Gateway timeout: request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f error_type=%s%s",
+                            req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
+                            gw_elapsed_ms, type(exc).__name__, tb_frames,
+                            exc_info=gw_exc_info,
+                        )
                         err_msg = "生图网关请求超时"
                     else:
-                        logger.warning("Gateway exception: %s", type(exc).__name__)
+                        detail, _secret_matched = _sanitize_gateway_error_detail(
+                            getattr(exc, "reason", None) or raw_exc_str,
+                            db=self.db,
+                            prompt=full_prompt,
+                            api_key=gw_api_key,
+                        )
+                        logger.error(
+                            "Gateway exception: %s (request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f detail=%s)%s",
+                            type(exc).__name__, req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
+                            gw_elapsed_ms, detail or "-", tb_frames,
+                            exc_info=gw_exc_info,
+                        )
                         err_msg = "生图网关连接失败"
                     refund_failed_cloud_generation(self.db, gen_id, err_msg)
                     self._send_json({"ok": False, "refunded": True, "error": f"{err_msg}（已自动退还额度/积分）"}, status=502)
                 else:
-                    logger.warning("Gateway exception: %s (status unknown, gen_id: %s)", type(exc).__name__, gen_id)
+                    logger.warning(
+                        "Gateway exception: %s (status unknown, gen_id=%s request_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f)%s",
+                        type(exc).__name__, gen_id, req_log_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
+                        gw_elapsed_ms, tb_frames,
+                        exc_info=gw_exc_info,
+                    )
                     confirming_out = {
                         "ok": True,
                         "genId": gen_id,

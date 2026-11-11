@@ -11,6 +11,7 @@ routes and concurrency invariants pass PostgreSQL integration tests.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -20,6 +21,8 @@ from psycopg import connect, sql
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.pq import TransactionStatus
 from psycopg_pool import ConnectionPool
+
+from .observability import local_debug_stacks_enabled, sanitize_log_text
 
 
 class HybridRow(dict):
@@ -205,8 +208,33 @@ class PgConnection:
         try:
             cur.execute(q, tuple(params or ()))
             return PgCursor(cur, returning_identity=identity)
-        except BaseException:
+        except BaseException as exc:
             cur.close()
+            if not isinstance(exc, (KeyboardInterrupt, SystemExit)) and local_debug_stacks_enabled():
+                logging.getLogger("handraw.trace").info(
+                    "pg_execute_error statement=%s",
+                    sanitize_log_text(q, max_len=160),
+                    exc_info=True,
+                )
+            raise
+
+    def executemany(self, statement, seq_of_params):
+        rows = [tuple(p) for p in seq_of_params]
+        q = _rewrite(str(statement))
+        cur = self._db.cursor()
+        try:
+            if rows:
+                cur.executemany(q, rows)
+            return PgCursor(cur)
+        except BaseException as exc:
+            cur.close()
+            if not isinstance(exc, (KeyboardInterrupt, SystemExit)) and local_debug_stacks_enabled():
+                logging.getLogger("handraw.trace").info(
+                    "pg_executemany_error statement=%s rows=%d",
+                    sanitize_log_text(q, max_len=160),
+                    len(rows),
+                    exc_info=True,
+                )
             raise
 
     def commit(self):

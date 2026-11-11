@@ -16,6 +16,17 @@
   const E = window.HANDRAW_CANVAS_ENGINE;
   const { App, esc, toast, channelUrl } = S;
 
+  function reportUnexpectedRuntimeError(err) {
+    if (
+      err instanceof TypeError ||
+      err instanceof ReferenceError ||
+      err instanceof SyntaxError ||
+      err instanceof RangeError
+    ) {
+      window.HandrawErrors?.report?.(err, { kind: "render" });
+    }
+  }
+
   const UPLOAD_STORAGE_KEY = "handraw_canvas_uploads_v3";
   const CUSTOM_ASSET_CATS_KEY = "handraw_custom_asset_cats_v3";
   const PREFS_STORAGE_KEY = "handraw_canvas_prefs_v10";
@@ -6719,7 +6730,16 @@
                   } : {})
                 })
               });
-              data = await resp.json();
+              const serverReqId = (typeof resp.headers?.get === "function" && resp.headers.get("X-Request-ID")) || "";
+              try {
+                data = await resp.json();
+              } catch (parseErr) {
+                data = { ok: false, error: `HTTP ${resp.status}`, requestId: serverReqId };
+                console.error("[Studio Generate] non-JSON response", { status: resp.status, requestId: serverReqId }, parseErr);
+              }
+              if (serverReqId && data && typeof data === "object" && !data.requestId) {
+                data.requestId = serverReqId;
+              }
               if (isStaleScope(runEpoch, runScope)) return;
               if (
                 batchAttempt === 0 &&
@@ -6783,6 +6803,16 @@
             if (!resp.ok || !data.ok) {
               const err = new Error(data.error || `HTTP ${resp.status}`);
               err.status = resp.status;
+              err.code = data.code || "";
+              err.requestId = data.requestId || requestId;
+              console.error("[Studio Generate] API failed", {
+                status: resp.status,
+                code: err.code,
+                requestId: err.requestId,
+                batchId,
+                slotKey: currentSlotKey,
+                error: err.message
+              });
               throw err;
             }
             if (typeof data.credits === "number") App.state.credits = data.credits;
@@ -6844,6 +6874,13 @@
         } catch (itemErr) {
           if (isStaleScope(runEpoch, runScope)) return;
           if (batchRun.cancelled) return;
+          console.error("[Studio Generate] slot exception", {
+            slotKey: currentSlotKey,
+            requestId: itemErr?.requestId || activeReqId || requestId,
+            status: itemErr?.status,
+            code: itemErr?.code
+          }, itemErr);
+          reportUnexpectedRuntimeError(itemErr);
           itemFailed = true;
           itemErrorMsg = itemErr?.message || "生成失败";
           lastFailureError = itemErrorMsg;
@@ -7157,6 +7194,8 @@
       return completedCount > 0;
     } catch (err) {
       if (isStaleScope(runEpoch, runScope)) return false;
+      console.error("[Studio Generate] batch run exception", err);
+      reportUnexpectedRuntimeError(err);
       ctrl.data.status = "error";
       if (activeLoopNode) activeLoopNode.data.status = "idle";
       for (const dn of dispNodes) {
@@ -16483,6 +16522,9 @@
               renderQuickStart();
               try {
                 await runLoopNode(bp.loop.id);
+              } catch (err) {
+                console.error("[Studio Batch] quick run exception", err);
+                reportUnexpectedRuntimeError(err);
               } finally {
                 if (quickBusy?.scope === scope && quickBusy.id === bp.ctrl.id) quickBusy = null;
                 renderQuickStart();
@@ -16495,6 +16537,9 @@
               renderQuickStart();
               try {
                 await runOutputControlNode(bp.ctrl.id, { onlyItemIdx: rowIndex });
+              } catch (err) {
+                console.error("[Studio Batch] single row exception", { rowIndex }, err);
+                reportUnexpectedRuntimeError(err);
               } finally {
                 if (quickBusy?.scope === scope && quickBusy.id === bp.ctrl.id) quickBusy = null;
                 renderQuickStart();
