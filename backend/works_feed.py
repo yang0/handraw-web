@@ -154,6 +154,49 @@ def is_valid_work_row(row: sqlite3.Row | dict[str, Any]) -> bool:
         return False
 
 
+
+def _load_feed_comments(conn: sqlite3.Connection, work_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Batch-load comments for one page, not the entire published catalog."""
+    if not work_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in work_ids)
+    comments_by_work: dict[str, list[dict[str, Any]]] = {}
+    comment_filter, comment_ids = _seed_filter("id", "work_comments")
+    for cm in conn.execute(
+        f"""SELECT work_id, id, author_username, author_name, text, time_label, created_at
+            FROM work_comments
+            WHERE work_id IN ({placeholders}) AND status = 'published' AND {comment_filter}
+            ORDER BY created_at ASC, id ASC""",
+        (*work_ids, *comment_ids),
+    ).fetchall():
+        comments_by_work.setdefault(cm["work_id"], []).append({
+            "id": cm["id"], "user": cm["author_username"], "name": cm["author_name"],
+            "text": cm["text"], "time": cm["time_label"] or cm["created_at"],
+        })
+
+    reply_filter, reply_ids = _seed_filter("fr.id", "forum_replies")
+    seen_ids = {wid: {c["id"] for c in comments} for wid, comments in comments_by_work.items()}
+    for fr in conn.execute(
+        f"""SELECT crt.target_id AS work_id, fr.id, fr.author_username, fr.author_name,
+                   fr.text, fr.time_label, fr.created_at
+            FROM forum_replies fr
+            JOIN curation_resource_topics crt ON crt.topic_id = fr.topic_id AND crt.kind = 'work'
+            WHERE crt.target_id IN ({placeholders})
+              AND fr.status = 'published' AND {reply_filter}
+            ORDER BY fr.created_at ASC, fr.id ASC""",
+        (*work_ids, *reply_ids),
+    ).fetchall():
+        seen = seen_ids.setdefault(fr["work_id"], set())
+        if fr["id"] in seen:
+            continue
+        seen.add(fr["id"])
+        comments_by_work.setdefault(fr["work_id"], []).append({
+            "id": fr["id"], "user": fr["author_username"], "name": fr["author_name"],
+            "text": fr["text"], "time": fr["time_label"] or fr["created_at"],
+        })
+    return comments_by_work
+
+
 def get_works_feed(
     db: Database,
     params: dict[str, Any],
@@ -280,47 +323,6 @@ def get_works_feed(
         total_single if fmt == "single" else (total_multi if fmt == "multi" else total_all)
     )
 
-    # Comments by work (for serialization)
-    comment_filter, comment_ids = _seed_filter("id", "work_comments")
-    comments_by_work: dict[str, list[dict[str, Any]]] = {}
-    for cm in conn.execute(
-        f"SELECT * FROM work_comments WHERE status = 'published' AND {comment_filter} ORDER BY created_at ASC, id ASC",
-        comment_ids,
-    ).fetchall():
-        comments_by_work.setdefault(cm["work_id"], []).append(
-            {
-                "id": cm["id"],
-                "user": cm["author_username"],
-                "name": cm["author_name"],
-                "text": cm["text"],
-                "time": cm["time_label"] or cm["created_at"],
-            }
-        )
-
-    # Also read comments from forum_replies via curation_resource_topics
-    reply_filter, reply_ids = _seed_filter("fr.id", "forum_replies")
-    for fr in conn.execute(
-        f"""
-        SELECT crt.target_id AS work_id, fr.id, fr.author_username, fr.author_name, fr.text, fr.time_label, fr.created_at
-        FROM forum_replies fr
-        JOIN curation_resource_topics crt ON crt.topic_id = fr.topic_id AND crt.kind = 'work'
-        WHERE fr.status = 'published' AND {reply_filter}
-        ORDER BY fr.created_at ASC, fr.id ASC
-        """,
-        reply_ids,
-    ).fetchall():
-        work_list = comments_by_work.setdefault(fr["work_id"], [])
-        if not any(c["id"] == fr["id"] for c in work_list):
-            work_list.append(
-                {
-                    "id": fr["id"],
-                    "user": fr["author_username"],
-                    "name": fr["author_name"],
-                    "text": fr["text"],
-                    "time": fr["time_label"] or fr["created_at"],
-                }
-            )
-
     unlocked_set = _get_unlocked_set(conn, current_user)
 
     # User like & collection target sets for fast lookup
@@ -417,6 +419,7 @@ def get_works_feed(
                 (*base_params, *page_ids),
             ).fetchall()
             row_map = {r["id"]: r for r in work_rows}
+            comments_by_work = _load_feed_comments(conn, [r["id"] for r in work_rows])
             items = []
             for pid in page_ids:
                 row = row_map.get(pid)
@@ -480,6 +483,7 @@ def get_works_feed(
         return_rows = rows
         next_cursor = None
 
+    comments_by_work = _load_feed_comments(conn, [r["id"] for r in return_rows])
     items = []
     for row in return_rows:
         if is_valid_work_row(row):
