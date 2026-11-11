@@ -1251,100 +1251,59 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 }
 
 // ==========================================
-// Requirement 17: Global References Row relocated outside 更多设置 collapsible
+// Requirement 17: Reference attachments in the ChatGPT-style bottom composer
 // ==========================================
 {
-  // Test both modes with moreSettingsOpen = false (the default state)
   for (const mode of ["fixed", "ai"]) {
     const fakeHost = createFakeDom();
     const graph = createTestBatchGraph({
-      batchLayoutMode: mode,
-      layout: "SC-001",
-      tones: ["TN-001"],
-      assets: [{ id: "AST-001", name: "测试参考图", image: "/uploads/test.webp" }],
-      batchRows: mode === "ai" ? [{ theme: "行1", layout: "SC-001" }] : []
+      batchLayoutMode:mode,
+      layout:"SC-001",
+      assets:[{id:"AST-001",name:"整套参考",image:"/uploads/global.webp"}],
+      batchRows:mode === "ai" ? [{theme:"第一张",layout:"SC-001",assetItems:[{id:"AST-002",name:"本图参考",image:"/uploads/local.webp"}]}] : []
     });
     const parts = {
-      ctrl: graph.nodes.find(n => n.type === "output_control"),
-      loop: graph.nodes.find(n => n.type === "loop"),
-      skill: graph.nodes.find(n => n.type === "skill_params"),
-      text: graph.nodes.find(n => n.type === "text_input"),
-      asset: graph.nodes.find(n => n.type === "asset")
+      ctrl:graph.nodes.find(n=>n.type === "output_control"),
+      loop:graph.nodes.find(n=>n.type === "loop"),
+      skill:graph.nodes.find(n=>n.type === "skill_params"),
+      text:graph.nodes.find(n=>n.type === "text_input"),
+      asset:graph.nodes.find(n=>n.type === "asset")
     };
-
-    HandrawBatchCreate.moreSettingsOpen = false;
-    HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {});
-
+    HandrawBatchCreate.selectedSeriesIndex = 0;
+    HandrawBatchCreate.seriesComposerMode = "series";
+    HandrawBatchCreate.render(fakeHost,{parts,graph,catalog:sharedCatalog},{});
     const html = fakeHost.innerHTML;
+    assert.ok(html.includes('class="batch-series-shared"'), "Shared settings section exists");
+    assert.ok(html.includes('class="batch-series-selected-settings"'), "Selected image section exists");
+    assert.ok(html.includes('class="batch-series-main-card"'), "One focused main image exists");
+    assert.ok(html.includes('id="batch-series-thumbs"'), "Vertical thumbnail rail exists");
+    assert.ok(html.includes('id="batch-btn-pick-global-refs"'), "Global + is embedded in composer");
+    assert.ok(html.includes('data-remove-global-ref="0"'), "Global attachment can be removed from composer");
+    assert.ok(html.includes('/uploads/global.webp'), "Global attachment displays its actual image");
+    assert.ok(!html.includes('id="batch-more-row-refs"'), "No second global reference list in sidebar");
+    assert.ok(!html.includes('id="batch-concurrency"'), "Concurrency is fixed and not exposed");
+    const idxShared=html.indexOf('class="batch-series-shared"'),
+          idxSelected=html.indexOf('class="batch-series-selected-settings"'),
+          idxMain=html.indexOf('id="batch-series-main"'),
+          idxDock=html.indexOf('class="batch-series-dock"');
+    assert.ok(idxShared<idxSelected && idxSelected<idxMain && idxMain<idxDock,
+      "Shared and selected settings precede main viewer and dock");
 
-    // 1. Must contain #batch-more-row-refs
-    assert.ok(html.includes('id="batch-more-row-refs"'), `#batch-more-row-refs must be present in ${mode} mode`);
-
-    // 2. Content comes first; shared references remain visible in the settings column.
-    const idxPickers = html.indexOf("batch-pickers-row");
-    const idxGlobalRefs = html.indexOf('id="batch-more-row-refs"');
-    const idxPlanCard = html.indexOf("batch-plan-card");
-    const idxMoreSettingsToggle = html.indexOf('id="batch-toggle-more-settings"');
-
-    assert.ok(idxPickers !== -1, "Pickers row must exist");
-    assert.ok(idxGlobalRefs !== -1, "Global refs row must exist");
-    assert.ok(idxPlanCard !== -1, "Plan card must exist");
-    assert.ok(idxMoreSettingsToggle !== -1, "More settings toggle must exist");
-
-    assert.ok(idxPickers < idxGlobalRefs, "Global refs row must come after pickers row");
-    assert.ok(idxGlobalRefs < idxMoreSettingsToggle, "Shared references remain in the left settings column");
-    assert.ok(idxMoreSettingsToggle < idxPlanCard, "Series planning must sit in the right bottom dock, after shared properties");
-    assert.ok(html.includes('class="batch-series-dock"'), "One bottom dock owns planning and generation");
-    assert.ok(html.includes('id="batch-plan-options-toggle"'), "Planning parameters must be collapsible");
-    assert.ok(html.includes('class="batch-series-footer-actions"'), "Secondary AI planning and primary generation must share one action row");
-    assert.ok(html.indexOf('id="batch-btn-plan"') > idxPlanCard, "AI planning action belongs with dock");
-    assert.ok(html.indexOf('id="batch-btn-start"') > html.indexOf('id="batch-btn-plan"'), "Generation remains the final primary action");
-
-    // 3. More settings body must NOT contain #batch-more-row-refs or #batch-btn-pick-global-refs
-    const moreSettingsBodyMatch = html.match(/id="batch-body-more-settings"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/);
-    if (moreSettingsBodyMatch) {
-      assert.ok(
-        !moreSettingsBodyMatch[1].includes('id="batch-more-row-refs"'),
-        "batch-body-more-settings must NOT contain #batch-more-row-refs"
-      );
-      assert.ok(
-        !moreSettingsBodyMatch[1].includes('id="batch-btn-pick-global-refs"'),
-        "batch-body-more-settings must NOT contain #batch-btn-pick-global-refs"
-      );
+    if(mode === "ai") {
+      HandrawBatchCreate.seriesComposerMode = "image";
+      HandrawBatchCreate.render(fakeHost,{parts,graph,catalog:sharedCatalog},{});
+      assert.ok(fakeHost.innerHTML.includes('/uploads/local.webp'), "Selected image reference is shown in composer");
+      assert.ok(fakeHost.innerHTML.includes('data-remove-series-ref="0"'), "Selected attachment has remove button");
+      assert.ok(fakeHost.innerHTML.includes('data-pick-row-refs-idx="0"'), "Composer + picks only the selected image");
+      assert.ok(!fakeHost.innerHTML.includes('id="batch-btn-pick-global-refs"'), "No duplicate reference picker in per-image mode");
     }
-
-    // 4. Verify contents of #batch-more-row-refs
-    assert.ok(html.includes('class="make-image-field-label">参考图</span>'), "Must have field label 参考图");
-    assert.ok(html.includes('id="batch-btn-pick-global-refs"'), "Must have button #batch-btn-pick-global-refs");
-    assert.ok(html.includes('id="batch-global-refs-thumbs"'), "Must have thumbs container #batch-global-refs-thumbs");
-    assert.ok(html.includes('data-remove-global-ref="0"'), "Must render clear button for existing global ref");
   }
-
-  // Also verify empty state hint
-  {
-    const fakeHostEmpty = createFakeDom();
-    const graphEmpty = createTestBatchGraph({
-      batchLayoutMode: "fixed",
-      assets: []
-    });
-    const partsEmpty = {
-      ctrl: graphEmpty.nodes.find(n => n.type === "output_control"),
-      loop: graphEmpty.nodes.find(n => n.type === "loop"),
-      skill: graphEmpty.nodes.find(n => n.type === "skill_params"),
-      text: graphEmpty.nodes.find(n => n.type === "text_input"),
-      asset: graphEmpty.nodes.find(n => n.type === "asset")
-    };
-    HandrawBatchCreate.moreSettingsOpen = false;
-    HandrawBatchCreate.render(fakeHostEmpty, { parts: partsEmpty, graph: graphEmpty, catalog: sharedCatalog }, {});
-    const htmlEmpty = fakeHostEmpty.innerHTML;
-    assert.ok(htmlEmpty.includes("未指定，可点此添加（最多 4 张）"), "Empty state must display hint text");
-  }
-
-  console.log("✓ Requirement 17 Passed: Global References Row relocated outside 更多设置 collapsible (between Row 2 and Set Planning card)");
+  HandrawBatchCreate.seriesComposerMode = "series";
+  console.log("✓ Requirement 17 Passed: composer attachments switch between global and selected-image references");
 }
 
 // ==========================================
-// Requirement 18: Form Reset (清空表单) in Batch and Make-Image
+// // Requirement 18: Form Reset (清空表单) in Batch and Make-Image
 // ==========================================
 {
   // 1. Batch Form Reset
