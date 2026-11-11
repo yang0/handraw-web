@@ -693,7 +693,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   // M1: ctrl.data.count reset to 1, folded into batchCount (6 * 3 = 18 <= 20)
   assert.equal(parts.ctrl.data.count, 1, "ctrl.data.count must be reset to 1");
   assert.equal(parts.loop.data.batchCount, 10, "Legacy ctrl count folds into the new 10-image maximum");
-  assert.ok(fakeHost.innerHTML.includes("已按每行一张折算，共 18 张"), "Must display conversion notice in plan notice");
+  assert.ok(fakeHost.innerHTML.includes("已按每行一张折算，共 10 张"), "Conversion notice uses the new 10-image cap");
 
   const parsed = parseHtml(fakeHost.innerHTML);
   const costWrap = parsed.querySelector(".batch-cost-wrap");
