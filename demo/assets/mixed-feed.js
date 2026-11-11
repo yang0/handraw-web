@@ -265,6 +265,31 @@
     }).catch(function () { st.homeScenariosFailed = true; })
       .finally(function () { loadingScenarios = false; });
   }
+  function resultsHtml(st, items, create) {
+    var visible = items.slice(0, visibleCount);
+    return       '<div class="hw-mf-subhead"><h2>' + (currentTab === "latest" ? '最近更新' :
+        currentTab === "work" ? '全部作品' : currentTab === "resource" ? '发现画风与图型' :
+          currentTab === "topic" ? '社区经验与讨论' : '发现值得复刻的灵感') + '</h2>' +
+      '<span>' + (items.length ? '已找到 ' + items.length + ' 条内容' : '暂无匹配内容') + '</span></div>' +
+      (visible.length ? '<div class="hw-mf-grid">' + visible.map(function (item) {
+        return renderCard(item, st);
+      }).join("") + '</div>' :
+        '<div class="hw-mf-empty"><h2>暂时没有匹配的内容</h2><p>换个关键词，或从创作台开始你的第一张作品。</p>' +
+        '<a href="' + create + '">开始创作 ↗</a></div>') +
+      (visible.length < items.length ? '<div class="hw-mf-pager"><button type="button" id="hw-mf-more">加载更多</button>' +
+        '<div id="hw-mf-sentinel" aria-hidden="true"></div></div>' : '') +
+      '';
+  }
+  function refreshResults(root) {
+    var panel = root.querySelector(".hw-mf-results");
+    if (!panel) { render(root); return; }
+    if (observer) { observer.disconnect(); observer = null; }
+    var st = App && App.state || {};
+    var items = makeItems(st, App.styles, App.layouts, { tab: currentTab, query: query });
+    panel.innerHTML = resultsHtml(st, items, url("studio", { entry: "quick" }));
+    bind(root, items);
+    bindMediaRatios(root);
+  }
   function bind(root, items) {
     root.querySelectorAll("[data-mf-tab]").forEach(function (btn) {
       btn.onclick = function () {
@@ -275,16 +300,28 @@
     });
     var inp = root.querySelector("#hw-mf-search");
     if (inp) {
-      inp.oninput = function () {
+      var composing = false;
+      function scheduleSearch() {
         query = inp.value;
         window.clearTimeout(searchTimer);
         searchTimer = window.setTimeout(function () {
-          if (!inp.isConnected) return;
+          if (!inp.isConnected || composing) return;
           visibleCount = 24;
-          render(root);
-          var next = root.querySelector("#hw-mf-search");
-          if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
+          // Keep the live input/caret intact during debounced CJK search.
+          refreshResults(root);
         }, 200);
+      }
+      inp.oncompositionstart = function () {
+        composing = true;
+        window.clearTimeout(searchTimer);
+      };
+      inp.oncompositionend = function () {
+        composing = false;
+        scheduleSearch();
+      };
+      inp.oninput = function (event) {
+        if (composing || (event && event.isComposing)) return;
+        scheduleSearch();
       };
     }
     var more = root.querySelector("#hw-mf-more");
@@ -350,17 +387,7 @@
       '</div>' +
       '<div class="hw-mf-shortcuts"><span>快速做一张</span><div class="hw-mf-scenarios">' +
       scenarioChips(st) + '</div></div>' +
-      '<div class="hw-mf-subhead"><h2>' + (currentTab === "latest" ? '最近更新' :
-        currentTab === "work" ? '全部作品' : currentTab === "resource" ? '发现画风与图型' :
-          currentTab === "topic" ? '社区经验与讨论' : '发现值得复刻的灵感') + '</h2>' +
-      '<span>' + (items.length ? '已找到 ' + items.length + ' 条内容' : '暂无匹配内容') + '</span></div>' +
-      (visible.length ? '<div class="hw-mf-grid">' + visible.map(function (item) {
-        return renderCard(item, st);
-      }).join("") + '</div>' :
-        '<div class="hw-mf-empty"><h2>暂时没有匹配的内容</h2><p>换个关键词，或从创作台开始你的第一张作品。</p>' +
-        '<a href="' + create + '">开始创作 ↗</a></div>') +
-      (visible.length < items.length ? '<div class="hw-mf-pager"><button type="button" id="hw-mf-more">加载更多</button>' +
-        '<div id="hw-mf-sentinel" aria-hidden="true"></div></div>' : '') +
+      '<div class="hw-mf-results">' + resultsHtml(st, items, create) + '</div>' +
       '</div>';
     bind(root, items);
     bindMediaRatios(root);
