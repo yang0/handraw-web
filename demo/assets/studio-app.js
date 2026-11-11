@@ -12781,6 +12781,12 @@
       const lp = E.makeLoopNode(468, 200, {
         loopMode: "prompts",
         promptListText: "春日阳光下的街角手账\n午后一杯热咖啡的治愈时光\n暮色中的旧书摊与晚霞",
+        batchLayoutMode: "ai",
+        batchRows: [
+          {theme:"春日阳光下的街角手账",layout:"",assetItems:[]},
+          {theme:"午后一杯热咖啡的治愈时光",layout:"",assetItems:[]},
+          {theme:"暮色中的旧书摊与晚霞",layout:"",assetItems:[]}
+        ],
         maxIterations: 200
       });
       const ctrl = E.makeOutputControlNode(880, 200, { mode: "graphic-text", count: 1, ratio: "3:4" });
@@ -12797,7 +12803,7 @@
         ],
         selectedIds: []
       };
-      tab = createWorkflowTab({ title: "批量生成", blueprint: "loop_100", graph, makeActive: false });
+      tab = createWorkflowTab({ title: "系列图", blueprint: "loop_100", graph, makeActive: false });
       tab.batchStart = true;
     }
     activateWorkflowTab(tab.id);
