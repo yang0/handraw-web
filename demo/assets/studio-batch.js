@@ -731,7 +731,7 @@
                       activeIndex, ratio:currentRatio, style1:style1Id, style2:style2Id,
                       isFusion, colorLabel:colorObj?.name_zh || colorObj?.name || selectedColors[0] || "",
                       outputModeLabel:OUTPUT_MODE_OPTIONS.find(x => x.id === currentMode)?.label || currentMode
-                    }) : '<div class="batch-series-empty">填写主题并规划画面，或添加一张。</div>'}
+                    }) : `<div class="batch-series-empty" role="status">${this.isPlanning ? "正在根据新母题规划系列图…" : "请规划新母题，图片将在这里显示"}</div>`}
                   </div>
                   <div class="batch-series-thumbs-rail">
                     <div class="batch-series-thumbs" id="batch-series-thumbs" role="tablist" aria-label="切换系列图">
@@ -1921,7 +1921,7 @@
             }
             return false;
           } finally {
-            if (revision === self.planRevision) self.isPlanning = false;
+            self.isPlanning = false;
             btnPlan.disabled = false;
             const labelSpan = btnPlan.querySelector("span");
             if (labelSpan) labelSpan.textContent = "AI 规划这套图";
