@@ -894,12 +894,8 @@
 
     getRowStatus(rowIndex, busy, currentStep, itemResult, activeIndex = null) {
       const isStale = Boolean(this.activeBatchId && itemResult?.batchId && itemResult.batchId !== this.activeBatchId);
-      if (!isStale && itemResult?.imageUrl) {
-        return { key: "done", label: "完成", className: "is-done" };
-      }
-      if (!isStale && (itemResult?.failed || (itemResult && !itemResult.imageUrl && itemResult.error))) {
-        return { key: "failed", label: "失败", className: "is-failed" };
-      }
+      // An in-flight retry owns the current slot even if its previous
+      // failed result is still attached to the display node.
       if (busy) {
         const activeSet = this.progressState?.batchId === this.activeBatchId
           ? this.progressState?.activeIndices : null;
@@ -910,9 +906,13 @@
         if (isCurrentActive) {
           return { key: "generating", label: "生成中", className: "is-generating" };
         }
-        return { key: "waiting", label: "等待", className: "is-waiting" };
       }
-
+      if (!isStale && itemResult?.imageUrl) {
+        return { key: "done", label: "完成", className: "is-done" };
+      }
+      if (!isStale && (itemResult?.failed || (itemResult && !itemResult.imageUrl && itemResult.error))) {
+        return { key: "failed", label: "失败", className: "is-failed" };
+      }
       return { key: "waiting", label: "等待", className: "is-waiting" };
     }
 
@@ -2281,9 +2281,12 @@
       root.querySelectorAll("[data-retry-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-retry-idx"));
-          if (!isNaN(idx)) {
+          if (Number.isInteger(idx) && idx >= 0 && idx < self.resolveIterations().length) {
             if (self.actions?.runSingleRow) {
-              self.actions.runSingleRow(idx);
+              btn.disabled = true;
+              Promise.resolve().then(() => self.actions.runSingleRow(idx))
+                .catch(err => global.HANDRAW_SHARED?.toast?.(err?.message || "重试未能启动"))
+                .finally(() => { btn.disabled = false; });
             } else {
               const S = global.HANDRAW_SHARED;
               if (S?.toast) S.toast("当前操作不可用（缺少 action: runSingleRow）");
