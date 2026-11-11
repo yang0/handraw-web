@@ -384,8 +384,8 @@
       // M1: ctrl.data.count folded into batchCount if > 1, then reset to 1
       if (p.ctrl?.data && Number(p.ctrl.data.count) > 1) {
         const rawCtrlCount = Math.round(Number(p.ctrl.data.count));
-        const currentBatchCount = Math.max(1, Math.min(20, Number(ld.batchCount) || 6));
-        const foldedCount = Math.max(1, Math.min(20, currentBatchCount * rawCtrlCount));
+        const currentBatchCount = Math.max(1, Math.min(10, Number(ld.batchCount) || 3));
+        const foldedCount = Math.max(1, Math.min(10, currentBatchCount * rawCtrlCount));
         p.loop.data.batchCount = foldedCount;
         p.ctrl.data.count = 1;
         this.planNotice = `已按每行一张折算，共 ${foldedCount} 张`;
@@ -429,7 +429,7 @@
       }
       const batchLayoutMode = ld.batchLayoutMode;
       const batchSeed = ld.batchSeed != null ? ld.batchSeed : (td.text || "");
-      const batchCount = Math.max(1, Math.min(20, Number(ld.batchCount) || 6));
+      const batchCount = Math.max(1, Math.min(10, Number(ld.batchCount) || 3));
       const batchLayoutReq = ld.batchLayoutReq || "";
       const batchRows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
       const promptListText = typeof ld.promptListText === "string" ? ld.promptListText : "";
@@ -461,13 +461,14 @@
         : (busy && typeof ld.activeIndex === "number" ? ld.activeIndex
           : (busy && currentStep < totalSteps ? currentStep : null));
 
-      const fixedThemes = promptListText.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+      const fixedThemes = promptListText.split(/\r?\n/).map(x=>x.trim());
       this.selectedSeriesIndex = Math.max(0,Math.min(this.selectedSeriesIndex || 0,Math.max(0,iterations.length-1)));
       const selectedIndex = this.selectedSeriesIndex;
       const selectedIter = iterations[selectedIndex] || null;
       const selectedRow = batchLayoutMode === "ai" ? (batchRows[selectedIndex] || {}) : {};
       const selectedRefs = Array.isArray(selectedRow.assetItems) ? selectedRow.assetItems : [];
-      const selectedTheme = batchLayoutMode === "ai" ? (selectedRow.theme || "") : (fixedThemes[selectedIndex] || "");
+      const selectedTheme = batchLayoutMode === "ai" ? (selectedRow.theme || "")
+        : (batchRows[selectedIndex]?.theme ?? fixedThemes[selectedIndex] ?? "");
       const composerMode = this.seriesComposerMode === "image" && selectedIter ? "image" : "series";
       const composerRefs = composerMode === "image" ? selectedRefs : globalAssetItems;
       const oldSeriesPropertiesScroll = this.hostElement.querySelector(".batch-series-properties")?.scrollTop || 0;
@@ -633,7 +634,7 @@
                   <div class="batch-series-section-title">
                     <strong>图 ${selectedIndex + 1}</strong>
                     <span>单张属性</span>
-                    <button type="button" class="batch-series-delete" data-del-row-idx="${selectedIndex}" aria-label="删除图 ${selectedIndex + 1}" ${!selectedIter || busy ? "disabled" : ""}>删除</button>
+                    <button type="button" class="batch-series-delete" data-del-row-idx="${selectedIndex}" aria-label="删除图 ${selectedIndex + 1}" ${!selectedIter || busy || totalCount<=1 ? "disabled" : ""}>删除</button>
                   </div>
                   ${selectedIter ? `
                     <div class="batch-series-selected-field">
@@ -646,7 +647,7 @@
               </section>
               <section class="creation-content batch-series-content" aria-label="系列图单图工作区">
                 <div class="batch-series-toolbar">
-                  <button type="button" class="btn btn-sm" id="batch-btn-add-row" ${busy ? "disabled" : ""}>＋ 添加画面</button>
+                  <button type="button" class="btn btn-sm" id="batch-btn-add-row" ${busy || totalCount >= 10 ? "disabled" : ""}>＋ 添加画面</button>
                 </div>
                 <div class="batch-series-stage" aria-label="选中图片及其他画面缩略图">
                   <div class="batch-series-main-card" id="batch-series-main">
@@ -1517,19 +1518,37 @@
         };
       }
 
-      // (b) Count input (M1: write batchCount and enforce ctrl.count = 1)
+      // A count change is authoritative for the image slots, not just an
+      // annotation in the composer. Keep the user's existing themes in order.
+      const syncSeriesCount = (requestedCount) => {
+        const count = Math.max(1,Math.min(10,Math.round(Number(requestedCount) || 3)));
+        const savedRows = Array.isArray(loop.data.batchRows) && loop.data.batchRows.length
+          ? loop.data.batchRows.slice()
+          : String(loop.data.promptListText || "").split(/\r?\n/).filter(x=>x.trim())
+              .map(theme=>({theme,layout:"",assetItems:[]}));
+        const rows = savedRows.slice(0,count);
+        while (rows.length < count) rows.push({theme:"",layout:"",assetItems:[]});
+        loop.data.batchCount = count;
+        loop.data.batchRows = rows;
+        loop.data.promptListText = rows.map(row=>String(row?.theme || "")).join("\n");
+        if (ctrl?.data) ctrl.data.count=1;
+        self.selectedSeriesIndex = Math.min(self.selectedSeriesIndex || 0,count-1);
+        return rows;
+      };
       const countInput = root.querySelector("#batch-count-input");
       if (countInput) {
         countInput.oninput = () => {
-          const val = Math.max(1, Math.min(20, Number(countInput.value) || 6));
-          loop.data.batchCount = val;
-          if (ctrl?.data) {
-            ctrl.data.count = 1;
+          const value = Number(countInput.value);
+          if (Number.isFinite(value) && value >= 1) {
+            loop.data.batchCount = Math.max(1,Math.min(10,Math.round(value)));
           }
-
+          if (ctrl?.data) ctrl.data.count=1;
         };
         countInput.onchange = () => {
-          if (self.actions?.persistDraft) self.actions.persistDraft();
+          const count = Math.max(1,Math.min(10,Math.round(Number(countInput.value) || 3)));
+          countInput.value=String(count);
+          syncSeriesCount(count);
+          markDirty();
         };
       }
 
@@ -1574,7 +1593,7 @@
           if (lines.length > 0) {
             loop.data.batchRows = lines.map((line) => ({ theme: line, layout: skill.data.layout || "" }));
           } else {
-            const cnt = Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6));
+            const cnt = Math.max(1, Math.min(10, Number(loop.data.batchCount) || 3));
             loop.data.batchRows = Array.from({ length: cnt }, () => ({ theme: "", layout: skill.data.layout || "" }));
           }
           markDirty();
@@ -1649,7 +1668,7 @@
 
           const reqBody = {
             seed,
-            count: Math.max(1, Math.min(20, Number(loop.data.batchCount) || 6)),
+            count: Math.max(1, Math.min(10, Number(loop.data.batchCount) || 3)),
             layoutMode: currentMode,
             // Never leak the previously selected fixed layout into AI recommendations.
             fixedLayout: currentMode === "fixed" ? (skill.data.layout || "") : "",
@@ -1848,11 +1867,17 @@
       if (btnAddRow) {
         btnAddRow.onclick = () => {
           const nextIndex = self.resolveIterations().length;
+          if (nextIndex >= 10) {
+            global.HANDRAW_SHARED?.toast?.("系列图最多 10 张");
+            return;
+          }
           ensureSeriesRow(nextIndex);
           const row = loop.data.batchRows[nextIndex];
           row.theme = "";
           row.layout = skill.data.layout || "";
           row.assetItems = [];
+          loop.data.batchCount = nextIndex+1;
+          loop.data.promptListText = loop.data.batchRows.map(r=>r.theme || "").join("\n");
           self.selectedSeriesIndex = nextIndex;
           self.seriesComposerMode = "image";
           markDirty();
@@ -2128,7 +2153,7 @@
           }
 
           loop.data.batchSeed = "";
-          loop.data.batchCount = 6;
+          loop.data.batchCount = 3;
           loop.data.batchLayoutMode = "ai";
           loop.data.batchLayoutReq = "";
           loop.data.promptListText = "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集";
@@ -2199,14 +2224,29 @@
           }
           const currentIters = self.resolveIterations();
           const totalCount = currentIters.length;
-          const incompleteIndex = loop.data.batchLayoutMode === "ai" && Array.isArray(loop.data.batchRows)
-            ? loop.data.batchRows.findIndex(row => !String(row?.theme || "").trim()) : -1;
+          const selectedCount = Math.max(1,Math.min(10,Number(loop.data.batchCount) || 3));
+          if (loop.data.batchRows?.length !== selectedCount
+            && self.resolveIterations().length !== selectedCount) {
+            syncSeriesCount(selectedCount);
+            markDirty();
+            global.HANDRAW_SHARED?.toast?.("已同步张数，请补齐未填写的主题或重新 AI 规划");
+            return;
+          }
+          const incompleteIndex = Array.isArray(loop.data.batchRows) && loop.data.batchRows.length
+            ? loop.data.batchRows.slice(0,selectedCount).findIndex(row => !String(row?.theme || "").trim()) : -1;
           if (incompleteIndex >= 0) {
             global.HANDRAW_SHARED?.toast?.(`请填写第 ${incompleteIndex + 1} 张画面的主题后再生成`);
             self.selectedSeriesIndex = incompleteIndex;
             self.seriesComposerMode = "image";
             self.render();
             self.hostElement?.querySelector(`[data-series-theme-idx="${incompleteIndex}"]`)?.focus();
+            return;
+          }
+
+          if (totalCount !== selectedCount) {
+            syncSeriesCount(selectedCount);
+            markDirty();
+            global.HANDRAW_SHARED?.toast?.("已按选定张数更新画面，请确认主题后再生成");
             return;
           }
 
