@@ -4,7 +4,6 @@ from __future__ import annotations
 import threading
 import time
 import unittest
-from unittest.mock import patch
 
 from backend import works_feed
 
@@ -33,7 +32,7 @@ class PopularFeedSessionCacheTests(unittest.TestCase):
         works_feed._store_popular_session("a", (["old"], now, None, ()))
         works_feed._store_popular_session("b", (["b"], now, None, ()))
         works_feed._store_popular_session("a", (["new"], now, None, ()))
-        for n in range(works_feed._MAX_POPULAR_SESSIONS - 2):
+        for n in range(works_feed._MAX_POPULAR_SESSIONS - 1):
             works_feed._store_popular_session(str(n), ([str(n)], now, None, ()))
         self.assertIsNone(works_feed._get_popular_session("b"))
         self.assertEqual(works_feed._get_popular_session("a")[0], ["new"])
