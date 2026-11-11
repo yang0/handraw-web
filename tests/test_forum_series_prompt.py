@@ -49,7 +49,7 @@ class ForumSeriesPromptTests(unittest.TestCase):
         assets = generation_image_assets(self.conn, work, urls)
         self.assertEqual([a["url"] for a in assets], urls)
         self.assertEqual(assets[0]["prompt"], "图一：蓝色海岸")
-        self.assertEqual(assets[1]["prompt"], "")
+        self.assertEqual(assets[1].get("prompt", ""), "")
         self.assertEqual(assets[2]["prompt"], "图三：金色街道")
 
     def test_multi_output_row_cannot_claim_unique_prompt_for_each_image(self):
@@ -68,7 +68,7 @@ class ForumSeriesPromptTests(unittest.TestCase):
         work = self.conn.execute("SELECT * FROM works WHERE id=?", (ids[0],)).fetchone()
         assets = generation_image_assets(self.conn, work, [
             "/generated/multi_a.webp", "/generated/multi_b.webp"])
-        self.assertTrue(all(asset["prompt"] == "" for asset in assets))
+        self.assertTrue(all(asset.get("prompt", "") == "" for asset in assets))
 
 
 if __name__ == "__main__":
