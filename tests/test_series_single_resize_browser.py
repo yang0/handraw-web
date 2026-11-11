@@ -13,7 +13,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from playwright.sync_api import sync_playwright
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:  # Optional browser E2E dependency is absent on Python shard runners.
+    sync_playwright = None
 
 from backend.server import create_channel_server, init_database
 from backend.services import register_user
@@ -77,6 +80,7 @@ def _launch_chromium(pw):
         return pw.chromium.launch(headless=True)
 
 
+@unittest.skipUnless(sync_playwright is not None, "Playwright is not installed on this runner")
 class SeriesSingleResizeBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
