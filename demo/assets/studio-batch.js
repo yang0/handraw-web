@@ -646,22 +646,22 @@
                 </div>
               </section>
               <section class="creation-content batch-series-content" aria-label="系列图单图工作区">
-                <div class="batch-series-toolbar">
-                  <button type="button" class="btn btn-sm" id="batch-btn-add-row" ${busy || totalCount >= 10 ? "disabled" : ""}>＋ 添加画面</button>
-                </div>
                 <div class="batch-series-stage" aria-label="选中图片及其他画面缩略图">
                   <div class="batch-series-main-card" id="batch-series-main">
                     ${selectedIter ? this.renderSeriesCard(selectedIter, selectedIndex, {
                       mode:batchLayoutMode, rows:batchRows, globalLayout:sd.layout || "",
                       fixedThemes, result:slotResults[selectedIndex], busy, currentStep,
                       activeIndex, ratio:currentRatio
-                    }) : '<div class="batch-series-empty">在下方输入整套主题，点击「AI 规划」；也可以直接添加画面。</div>'}
+                    }) : '<div class="batch-series-empty">填写主题并规划画面，或添加一张。</div>'}
                   </div>
-                  <div class="batch-series-thumbs" id="batch-series-thumbs" role="tablist" aria-label="切换系列图">
-                    ${iterations.map((iter,idx)=>this.renderSeriesThumb(iter,idx,{
-                       selectedIndex,result:slotResults[idx],globalLayout:sd.layout || "",
-                       busy,currentStep,activeIndex
-                    })).join("")}
+                  <div class="batch-series-thumbs-rail">
+                    <div class="batch-series-thumbs" id="batch-series-thumbs" role="tablist" aria-label="切换系列图">
+                      ${iterations.map((iter,idx)=>this.renderSeriesThumb(iter,idx,{
+                         selectedIndex,result:slotResults[idx],globalLayout:sd.layout || "",
+                         busy,currentStep,activeIndex
+                      })).join("")}
+                    </div>
+                    <button type="button" class="batch-series-add-slot" id="batch-btn-add-row" aria-label="添加画面" title="添加画面" ${busy || totalCount >= 10 ? "disabled" : ""}>+</button>
                   </div>
                 </div>
                 <div class="batch-series-dock" role="group" aria-label="系列图输入与生成">
@@ -782,10 +782,8 @@
         selectedIndex:selected,result:results[idx],globalLayout:skill.layout || "",
         busy,currentStep:loop.currentStep || 0,activeIndex
       })).join("");
-      const countEl = host.querySelector(".batch-series-toolbar strong");
-      if (countEl) countEl.textContent = String(count);
-      const activeEl = host.querySelector(".batch-series-toolbar small");
-      if (activeEl) activeEl.textContent = `· 当前图 ${selected+1}`;
+      const addButton=host.querySelector("#batch-btn-add-row");
+      if (addButton) addButton.disabled=busy || count>=10;
       this.bindEvents(main, parts, iterations);
       this.bindEvents(thumbs, parts, iterations);
       if (global.HANDRAW_SHARED?.triggerImageLoaders) {
