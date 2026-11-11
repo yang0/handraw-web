@@ -171,3 +171,37 @@
 .make-image-chat-workspace .make-image-btn-run{flex:1}
 }
 @media(prefers-reduced-motion:reduce){.make-image-pending-symbol,.make-image-pending-shimmer{animation:none!important}}
+
+/* #139: quiet ChatGPT-like attachment strip inside the composer. */
+.make-image-chat-workspace .make-image-composer-attachments {
+  display:flex; align-items:center; flex-wrap:wrap; gap:8px;
+  padding:2px 0 10px; max-height:130px; overflow-y:auto;
+}
+.make-image-chat-workspace .make-image-ref-thumb {
+  position:relative; flex:0 0 60px; width:60px; height:60px;
+  box-sizing:border-box; border:1px solid var(--line-soft);
+  border-radius:10px; overflow:visible; background:var(--paper-inset);
+}
+.make-image-chat-workspace .make-image-ref-thumb .make-image-slot-thumb-wrap {
+  width:100%; height:100%; border:0; border-radius:9px; overflow:hidden;
+}
+.make-image-chat-workspace .make-image-ref-thumb .make-image-slot-thumb-wrap img {
+  display:block; width:100%; height:100%; object-fit:cover;
+}
+.make-image-chat-workspace .make-image-ref-thumb .make-image-slot-clear {
+  top:-7px; right:-7px; width:22px; height:22px; border-radius:50%;
+  background:var(--ink-main); color:white; font-size:14px; z-index:2;
+}
+.make-image-chat-workspace .make-image-composer-bottom {
+  display:flex; align-items:center; flex-wrap:wrap; gap:10px;
+}
+.make-image-chat-workspace .make-image-composer-bottom > .make-image-action-bar {
+  flex:1 1 360px; min-width:0;
+}
+.make-image-chat-workspace .make-image-composer #make-image-subject {
+  display:block; width:100%; min-height:80px; margin:0 0 8px;
+}
+@media (max-width:540px) {
+ .make-image-chat-workspace .make-image-composer-bottom > .make-image-action-bar {flex-basis:calc(100% - 48px);}
+ .make-image-chat-workspace .make-image-ref-thumb {flex-basis:54px;width:54px;height:54px;}
+}
