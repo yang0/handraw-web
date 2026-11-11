@@ -132,6 +132,8 @@
       this.seriesComposerMode = "series";
       this.planNotice = "";
       this.isPlanning = false;
+      this.plannedSeed = null;
+      this.planRevision = 0;
       this.progressState = null;
       this.lastSummary = "";
     }
@@ -392,6 +394,40 @@
       `;
     }
 
+    clearSeriesForNewPlan(count) {
+      const p = this.getParts();
+      if (!p) return;
+      const n = Math.max(1, Math.min(10, Number(count) || 3));
+      p.loop.data.batchRows = Array.from({length:n}, () => ({theme:"",layout:"",assetItems:[]}));
+      p.loop.data.promptListText = Array(n).fill("").join("\n");
+      p.loop.data.batchCount = n;
+      p.loop.data.status = "idle";
+      p.loop.data.currentStep = 0;
+      delete p.loop.data.activeBatchId;
+      delete p.loop.data.activeIndex;
+      if (p.ctrl?.data) {
+        p.ctrl.data.status = "idle";
+        delete p.ctrl.data.activeBatchId;
+        delete p.ctrl.data.activeBatchTotal;
+      }
+      this.activeBatchId = null;
+      this.progressState = null;
+      this.seriesOutcomes = new Map();
+      this.selectedSeriesIndex = 0;
+      this.lastSummary = "";
+      this.lastPlanUndo = null;
+      if (this.context) {
+        this.context.results = [];
+        (this.context.displays || []).forEach(display => {
+          if (!display?.data) return;
+          display.data.items = [];
+          display.data.status = "idle";
+          delete display.data.activeBatchId;
+        });
+      }
+      this.actions?.clearWorkspaceResults?.(p.ctrl?.id);
+    }
+
     render(host, context, actions) {
       if (host) this.hostElement = host;
       if (context) this.context = context;
@@ -467,6 +503,7 @@
       }
       const batchLayoutMode = ld.batchLayoutMode;
       const batchSeed = ld.batchSeed != null ? ld.batchSeed : (td.text || "");
+      if (this.plannedSeed === null) this.plannedSeed = String(ld.batchPlannedSeed ?? batchSeed).trim();
       const batchCount = Math.max(1, Math.min(10, Number(ld.batchCount) || 3));
       const batchLayoutReq = ld.batchLayoutReq || "";
       const batchRows = Array.isArray(ld.batchRows) ? ld.batchRows : [];
@@ -1599,6 +1636,7 @@
         seedInput.oninput = () => {
           loop.data.batchSeed = seedInput.value;
           if (text) text.data.text = seedInput.value;
+          if (self.isPlanning) ++self.planRevision;
         };
         seedInput.onblur = () => {
           if (self.actions?.persistDraft) self.actions.persistDraft();
@@ -1767,7 +1805,8 @@
 
           // Direct action: no confirmation modal. Preserve the existing
           // planning data so a user can undo an accidental re-plan.
-          const priorPlan = hasExisting ? {
+          const seedChanged = String(loop.data.batchSeed || text?.data?.text || "").trim() !== self.plannedSeed;
+          const priorPlan = hasExisting && !seedChanged ? {
             promptListText: loop.data.promptListText || "",
             batchRows: JSON.parse(JSON.stringify(loop.data.batchRows || []))
           } : null;
@@ -1779,8 +1818,16 @@
             self.seriesComposerMode = "series";
             self.render();
             self.hostElement?.querySelector("#batch-seed-input")?.focus();
-            return;
+            return false;
           }
+          if (self.isPlanning) return false;
+          const revision = ++self.planRevision;
+          self.isPlanning = true;
+          self.planNotice = "正在规划新系列…";
+          self.clearSeriesForNewPlan(loop.data.batchCount);
+          self.seriesComposerMode = "series";
+          self.render();
+          self.actions?.persistDraft?.();
 
           const reqBody = {
             seed,
@@ -1814,6 +1861,7 @@
                   body: JSON.stringify(reqBody)
                 }));
             const data = await resp.json();
+            if (revision !== self.planRevision || seed !== String(loop.data.batchSeed || "").trim()) return false;
             if (!resp.ok || !data.ok) {
               const requestId = String(data.requestId || resp.headers?.get("X-Request-ID") || "");
               const incident = /^[a-f0-9]{32}$/i.test(requestId) ? `（问题编号：${requestId}）` : "";
@@ -1851,6 +1899,8 @@
 
             self.selectedSeriesIndex = 0;
             self.seriesComposerMode = "image";
+            self.plannedSeed = seed;
+            loop.data.batchPlannedSeed = seed;
             if (currentMode === "fixed" && data.defaultLayoutUsed && items.length > 0 && items[0].layout) {
               const defLayout = items[0].layout;
               if (skill?.data) {
@@ -1861,10 +1911,17 @@
             }
 
             markDirty();
+            return true;
           } catch (err) {
-            const S = global.HANDRAW_SHARED;
-            if (S?.toast) S.toast(`规划失败：${err.message || err}`);
+            if (revision === self.planRevision) {
+              self.planNotice = "规划失败，请重试；旧规划与结果已清除";
+              self.render();
+              const S = global.HANDRAW_SHARED;
+              if (S?.toast) S.toast(`规划失败：${err.message || err}`);
+            }
+            return false;
           } finally {
+            if (revision === self.planRevision) self.isPlanning = false;
             btnPlan.disabled = false;
             const labelSpan = btnPlan.querySelector("span");
             if (labelSpan) labelSpan.textContent = "AI 规划这套图";
@@ -2392,6 +2449,20 @@
           if (currentBusy) {
             const S = global.HANDRAW_SHARED;
             if (S?.toast) S.toast("任务处理中，暂不能清空或再次生成");
+            return;
+          }
+          const currentSeed = String(loop.data.batchSeed || text?.data?.text || "").trim();
+          if (self.isPlanning) return;
+          if (currentSeed !== self.plannedSeed) {
+            // A changed mother theme cannot generate from the previous slot list.
+            const planned = await btnPlan?.onclick?.();
+            if (!planned) return;
+            const freshRows = loop.data.batchRows || [];
+            if (freshRows.length && freshRows.every(row => String(row?.theme || "").trim()) && self.actions?.run) {
+              await self.actions.run();
+            } else {
+              global.HANDRAW_SHARED?.toast?.("新母题已规划，请补充各张主题后生成");
+            }
             return;
           }
           const currentIters = self.resolveIterations();
