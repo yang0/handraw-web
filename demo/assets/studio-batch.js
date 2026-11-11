@@ -311,15 +311,28 @@
       if (image) {
         media = `<button type="button" class="batch-iter-thumb-btn is-generated batch-series-image" data-zoom-src="${esc(image)}" data-zoom-title="${esc(label)}" aria-label="放大查看图 ${idx + 1}"><img data-hw-src="${esc(image)}" alt="${esc(label)}" loading="lazy" /></button>`;
       } else if (status.key === "generating") {
-        media = `<div class="batch-series-pending" role="status" aria-label="图 ${idx + 1} 生成中"><span class="batch-series-pending-mark" aria-hidden="true">·</span><span class="batch-series-shimmer" aria-hidden="true"></span><span class="batch-series-pending-label">正在生成图 ${idx + 1}…</span></div>`;
+        // Share the same shimmer and breathing symbol used by 单图.
+        media = `<div class="batch-series-pending" role="status" aria-label="图 ${idx + 1} 生成中">
+          <div class="make-image-pending-art batch-series-pending-art">
+            <span class="make-image-pending-symbol" aria-hidden="true">✦</span>
+            <span class="make-image-pending-shimmer" aria-hidden="true"></span>
+          </div>
+          <span class="make-image-pending-caption">正在生成图 ${idx + 1}…</span>
+        </div>`;
       } else if (status.key === "failed") {
         media = `<div class="batch-series-failed" role="status"><span>图 ${idx + 1} 生成失败</span><small>可重试这张图片</small></div>`;
       } else {
-        media = `<div class="batch-iter-placeholder batch-series-placeholder" role="img" aria-label="图 ${idx + 1} 待生成">
+        media = `<div class="batch-iter-placeholder batch-series-placeholder" role="group" aria-label="图 ${idx + 1} 待生成">
           <span class="batch-series-placeholder-glow" aria-hidden="true"></span>
-          <span class="batch-series-placeholder-symbol" aria-hidden="true">◇</span>
-          <span class="batch-series-placeholder-title">图 ${idx + 1}</span>
-          <small>等待创作</small>
+          <div class="batch-series-placeholder-center">
+            <span class="batch-series-placeholder-symbol" aria-hidden="true">◇</span>
+            <strong class="batch-series-placeholder-title">图 ${idx + 1}</strong>
+            <span class="batch-series-placeholder-note">准备好开始创作</span>
+            <button type="button" class="batch-series-generate-one" data-generate-series-idx="${idx}" ${opts.busy ? "disabled" : ""}>
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></svg>
+              <span>生成这张</span>
+            </button>
+          </div>
         </div>`;
       }
       const action = image
@@ -2059,6 +2072,38 @@
         loop.data.batchConcurrency = Math.max(1, Math.min(4, Number(concurrencyControl.value) || 3));
         markDirty();
       };
+
+      // #146: single-frame generation uses the same supported, isolated
+      // per-row action as a failed-frame retry; never trigger full batch here.
+      root.querySelectorAll("[data-generate-series-idx]").forEach(btn => {
+        btn.onclick = () => {
+          const idx = Number(btn.getAttribute("data-generate-series-idx"));
+          if (!Number.isInteger(idx) || idx < 0 || idx >= self.resolveIterations().length) return;
+          const isBusy = typeof self.actions?.isBusy === "function"
+            ? self.actions.isBusy() : Boolean(self.context?.busy || self.progressState?.busy);
+          if (isBusy) return;
+          const row = loop.data.batchRows?.[idx];
+          const themes = String(loop.data.promptListText || "").split(/\r?\n/);
+          const theme = String(row?.theme ?? themes[idx] ?? "").trim();
+          if (!theme) {
+            global.HANDRAW_SHARED?.toast?.(`请先填写图 ${idx+1} 的主题`);
+            self.selectedSeriesIndex = idx;
+            self.seriesComposerMode = "image";
+            self.render();
+            self.hostElement?.querySelector(`[data-series-theme-idx="${idx}"]`)?.focus();
+            return;
+          }
+          if (typeof self.actions?.runSingleRow === "function") {
+            btn.disabled = true;
+            Promise.resolve(self.actions.runSingleRow(idx)).catch(error => {
+              btn.disabled = false;
+              global.HANDRAW_SHARED?.toast?.(error?.message || "单张生成未能启动");
+            });
+          } else {
+            global.HANDRAW_SHARED?.toast?.("当前单张生图操作不可用");
+          }
+        };
+      });
 
       // 7. Preview Row Retries & Results
       root.querySelectorAll("[data-retry-idx]").forEach((btn) => {
