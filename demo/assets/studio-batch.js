@@ -689,39 +689,39 @@
                     `}
                     <div class="batch-series-composer-bottom">
                       ${composerMode === "series"
-                        ? `<button type="button" class="batch-series-add-reference" id="batch-btn-pick-global-refs" aria-label="添加整套参考图" title="添加整套参考图" ${busy ? "disabled" : ""}>＋</button>`
-                        : `<button type="button" class="batch-series-add-reference" data-pick-row-refs-idx="${selectedIndex}" aria-label="添加图 ${selectedIndex+1} 参考图" title="添加本图参考图" ${busy ? "disabled" : ""}>＋</button>`}
-                      <span>${composerMode === "series" ? "写下整套主题及随机图型等要求" : `正在编辑图 ${selectedIndex + 1} 的主题`}</span>
+                        ? `<button type="button" class="batch-series-add-reference make-image-add-reference" id="batch-btn-pick-global-refs" aria-label="添加整套参考图" title="添加整套参考图" ${busy ? "disabled" : ""}>+</button>`
+                        : `<button type="button" class="batch-series-add-reference make-image-add-reference" data-pick-row-refs-idx="${selectedIndex}" aria-label="添加图 ${selectedIndex+1} 参考图" title="添加本图参考图" ${busy ? "disabled" : ""}>+</button>`}
+                      <div class="batch-series-footer-actions">
+                        <label class="batch-series-count" for="batch-count-input">
+                          <span>张数</span>
+                          <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" ${busy ? "disabled" : ""} />
+                        </label>
+                        <button type="button" class="btn btn-sm batch-series-plan-btn batch-plan-trigger" id="batch-btn-plan" ${busy ? "disabled" : ""}>
+                          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M7.5.5c.2 2.6 1.8 4.2 4.4 4.4.2 0 .2.3 0 .4-2.6.2-4.2 1.8-4.4 4.4 0 .2-.3.2-.4 0-.2-2.6-1.8-4.2-4.4-4.4-.2-.2-.3-.2-.4 0z"/></svg>
+                          <span>AI 规划</span>
+                        </button>
+                        ${busy ? `
+                          <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止生成"}</button>
+                        ` : `
+                          <button type="button" class="btn btn-primary make-image-btn-run batch-series-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>生成系列图 · ${totalCount} 张</button>
+                        `}
+                      </div>
                     </div>
                   </div>
-                <div class="batch-series-footer">
-                  <div class="batch-series-footer-meta">
-                    <div class="batch-cost-wrap">
-                      ${this.renderCostHtml(totalCount)}
-                      ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
-                    </div>
-                    ${this.planNotice ? `<span class="batch-plan-notice" role="status">${esc(this.planNotice)}</span>` : ""}
-                    ${this.lastPlanUndo ? '<button type="button" class="batch-series-undo" id="batch-undo-plan">撤销规划</button>' : ""}
-                  </div>
-                  <div class="batch-series-footer-actions">
-                    <div class="batch-plan-action-wrap">
-                      <button type="button" class="btn btn-sm batch-series-plan-btn batch-plan-trigger" id="batch-btn-plan" ${busy ? "disabled" : ""}>
-                        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M7.5.5c.2 2.6 1.8 4.2 4.4 4.4.2 0 .2.3 0 .4-2.6.2-4.2 1.8-4.4 4.4 0 .2-.3.2-.4 0-.2-2.6-1.8-4.2-4.4-4.4-.2 0-.2-.3 0-.4 2.6-.2 4.2-1.8 4.4-4.4.2-.2.3-.2.4 0z"/></svg>
-                        <span>AI 规划</span>
-                      </button>
-                    </div>
-                    <div class="batch-btn-wrap">
-                      <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) || slotResults.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
-                      <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" aria-label="清空表单" title="清空表单" ${busy ? "disabled" : ""}>清空</button>
-                      ${busy ? `
-                        <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止生成"}</button>
-                      ` : `
-                        <button type="button" class="make-image-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>生成系列图 · ${totalCount} 张</button>
-                      `}
+                  <div class="batch-series-footer">
+                    <div class="batch-series-footer-meta">
+                      <div class="batch-cost-wrap" aria-live="polite">
+                        ${this.renderCostHtml(totalCount)}
+                        ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
+                      </div>
+                      <div class="batch-series-secondary-actions">
+                        ${this.planNotice ? `<span class="batch-plan-notice" role="status">${esc(this.planNotice)}</span>` : ""}
+                        ${this.lastPlanUndo ? '<button type="button" class="batch-series-undo" id="batch-undo-plan">撤销规划</button>' : ""}
+                        <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) || slotResults.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
+                        <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" aria-label="清空表单" title="清空表单" ${busy ? "disabled" : ""}>清空</button>
+                      </div>
                     </div>
                   </div>
-                </div>
-
                 </div>
               </section>
 
