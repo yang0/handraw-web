@@ -16531,7 +16531,17 @@
               }
             },
             runSingleRow: async (rowIndex) => {
-              if (!bp || isBatchCurrentBusy()) return;
+              if (!bp) return false;
+              // Reconcile persisted "generating" flags BEFORE acquiring the
+              // quick-submit lock. Otherwise the lock itself prevents recovery,
+              // and runOutputControlNode rejects the retry as already running.
+              if (!_activeBatchRun || _activeBatchRun.ctrlId !== bp.ctrl.id) {
+                reconcileDetachedBatchState(bp);
+              }
+              if (isBatchCurrentBusy()) {
+                toast("该系列图仍有生成任务进行中，请查看进度或停止后再重试");
+                return false;
+              }
               const scope = activeCacheScope;
               quickBusy = { id: bp.ctrl.id, scope };
               renderQuickStart();
