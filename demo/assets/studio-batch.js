@@ -256,13 +256,14 @@
       const ariaLabel = hasSpecific ? `图型版式：${effectiveId} ${nameText}` : `跟随全局图型 ${effectiveId} ${nameText}`;
 
       return `
-        <button type="button" class="btn batch-row-layout-btn" data-pick-layout-idx="${idx}" data-hover-src="${esc(thumbUrl)}" data-hover-code="${esc(codeText)}" data-hover-name="${esc(nameText)}" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
-          <span class="batch-row-layout-thumb-wrap" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}">
+        <button type="button" class="btn batch-row-layout-btn make-image-picker-card ${hasSpecific ? "is-selected" : ""}" data-pick-layout-idx="${idx}" data-hover-src="${esc(thumbUrl)}" data-hover-code="${esc(codeText)}" data-hover-name="${esc(nameText)}" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
+          <span class="batch-row-layout-thumb-wrap make-image-picker-thumb" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}">
             <img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />
           </span>
-          <span class="batch-row-layout-info">
-            <span class="batch-row-layout-code">${esc(codeText)}</span>
-            <span class="batch-row-layout-name">${esc(nameText)}</span>
+          <span class="batch-row-layout-info make-image-picker-info">
+            <span class="batch-row-layout-code make-image-picker-badge">${esc(codeText)}</span>
+            <strong class="batch-row-layout-name make-image-picker-name">${esc(nameText)}</strong>
+            <span class="make-image-picker-hint">点击更换</span>
           </span>
         </button>
       `;
