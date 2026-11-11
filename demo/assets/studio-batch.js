@@ -723,7 +723,9 @@
                   <div class="batch-series-footer">
                     <div class="batch-series-footer-meta">
                       <div class="batch-cost-wrap" aria-live="polite">
-                        ${this.renderCostHtml(totalCount)}
+                        ${slotResults.some(result=>result?.imageUrl)
+                          ? `<span class="batch-cost-text">已生成 ${slotResults.filter(r=>r?.imageUrl).length} 张 · ${this.renderCostHtml(totalCount - slotResults.filter(r=>r?.imageUrl).length)}</span>`
+                          : this.renderCostHtml(totalCount)}
                         ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
                       </div>
                       <div class="batch-series-secondary-actions">
@@ -896,7 +898,7 @@
       }
     }
 
-    resetBatchProgress({ totalCount = 0, batchId = null, singleSlotIndex = null } = {}) {
+    resetBatchProgress({ totalCount = 0, batchId = null, singleSlotIndex = null, existingCompleted = null } = {}) {
       if (batchId) this.activeBatchId = batchId;
       const host = this.hostElement;
       if (singleSlotIndex !== null) {
@@ -952,15 +954,27 @@
       }
 
       if (!this.context) this.context = {};
-      this.context.results = [];
-      this.progressState = { completedCount: 0, failedCount: 0, totalCount, activeIndex: 0, activeIndices: [0], busy: true, isStopping: false, batchId: this.activeBatchId };
-      this.seriesOutcomes = new Map();
+      const preserved = existingCompleted instanceof Map
+        ? [...existingCompleted.entries()].filter(([,item])=>Boolean(item?.imageUrl)) : [];
+      this.seriesOutcomes = new Map(preserved.map(([index,item])=>[
+        index,{...item,batchId:this.activeBatchId}
+      ]));
+      this.context.results = preserved.map(([index,item])=>({
+        ...item,index,batchId:this.activeBatchId
+      }));
+      const activeIndex = Array.from({length:totalCount},(_,i)=>i).find(i=>!this.seriesOutcomes.has(i));
+      this.progressState = {
+        completedCount: preserved.length, failedCount:0, totalCount,
+        activeIndex:activeIndex ?? null,
+        activeIndices:activeIndex == null ? [] : [activeIndex],
+        busy:true,isStopping:false,batchId:this.activeBatchId
+      };
 
       if (!host) return;
       if (host.querySelector("#batch-series-main")) {
         this.refreshSeriesCards();
         const dlAll = host.querySelector("#batch-btn-download-all");
-        if (dlAll) dlAll.disabled = true;
+        if (dlAll) dlAll.disabled = preserved.length === 0;
         const btnReset = host.querySelector("#batch-btn-reset");
         if (btnReset) btnReset.disabled = true;
         const btnStart = host.querySelector("#batch-btn-start");
