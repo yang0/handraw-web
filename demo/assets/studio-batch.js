@@ -1247,6 +1247,45 @@
         }
       };
 
+      // #141: keep the planned card editable in-place. Creating a per-card
+      // override in fixed mode transitions to row mode without losing themes.
+      const ensureSeriesRow = (index) => {
+        if (loop.data.batchLayoutMode !== "ai" || !Array.isArray(loop.data.batchRows) || !loop.data.batchRows.length) {
+          const themes = String(loop.data.promptListText || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+          loop.data.batchRows = themes.map(theme => ({theme, layout: skill.data.layout || "", assetItems: []}));
+          loop.data.batchLayoutMode = "ai";
+        }
+        while (loop.data.batchRows.length <= index) {
+          loop.data.batchRows.push({theme:"", layout:skill.data.layout || "", assetItems:[]});
+        }
+        return loop.data.batchRows[index];
+      };
+
+      root.querySelectorAll("[data-series-theme-idx]").forEach(input => {
+        const idx = Number(input.getAttribute("data-series-theme-idx"));
+        if (!Number.isFinite(idx)) return;
+        const syncTheme = () => {
+          if (loop.data.batchLayoutMode === "ai") {
+            const row = ensureSeriesRow(idx);
+            row.theme = input.value;
+            loop.data.promptListText = loop.data.batchRows.map(r => r.theme || "").join("\n");
+          } else {
+            const lines = String(loop.data.promptListText || "").split(/\r?\n/).filter(x => x.trim());
+            if (idx < lines.length) {
+              lines[idx] = input.value.replace(/\r?\n/g, " ").trim();
+              loop.data.promptListText = lines.join("\n");
+            }
+          }
+        };
+        input.oninput = syncTheme;
+        input.onblur = () => {
+          syncTheme();
+          if (self.actions?.persistDraft) self.actions.persistDraft();
+          else markDirty();
+        };
+      });
+
+
       // 1. Output Generation Mode
       root.querySelectorAll("[data-set-mode]").forEach((btn) => {
         btn.onclick = () => {
@@ -1535,6 +1574,8 @@
           loop.data.promptListText = promptsInput.value;
           loop.data.batchRows = [];
           self.updatePreviewAndCost(root);
+          self.refreshSeriesCards();
+
         };
         promptsInput.onblur = () => {
           loop.data.promptListText = promptsInput.value;
@@ -1572,12 +1613,10 @@
           }
           self.hideHoverPreview(true);
           const idx = Number(btn.getAttribute("data-pick-layout-idx"));
-          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
-          const currentRow = loop.data.batchRows[idx];
-          const curLayout = currentRow.layout || "";
-
+          const currentRow = loop.data.batchLayoutMode === "ai" ? loop.data.batchRows?.[idx] : null;
+          const curLayout = currentRow?.layout || skill.data.layout || "";
           const onPick = (pickedId) => {
-            currentRow.layout = pickedId || "";
+            ensureSeriesRow(idx).layout = pickedId || "";
             markDirty();
           };
 
@@ -1599,9 +1638,8 @@
       root.querySelectorAll("[data-pick-row-refs-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-pick-row-refs-idx"));
-          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
-          const currentRow = loop.data.batchRows[idx];
-          const curRefs = Array.isArray(currentRow.assetItems) ? currentRow.assetItems : [];
+          const currentRow = loop.data.batchLayoutMode === "ai" ? loop.data.batchRows?.[idx] : null;
+          const curRefs = Array.isArray(currentRow?.assetItems) ? currentRow.assetItems : [];
 
           if (self.actions?.openReferencePicker) {
             self.actions.openReferencePicker({
@@ -1610,7 +1648,7 @@
               maxCount: 3,
               title: `第 ${idx + 1} 张参考图（最多 3 张）`,
               onConfirm: (selectedItems) => {
-                currentRow.assetItems = selectedItems;
+                ensureSeriesRow(idx).assetItems = selectedItems;
                 markDirty();
               }
             });
@@ -1624,8 +1662,7 @@
       root.querySelectorAll("[data-row-skip-global]").forEach((chk) => {
         chk.onchange = () => {
           const idx = Number(chk.getAttribute("data-row-skip-global"));
-          if (!Array.isArray(loop.data.batchRows) || !loop.data.batchRows[idx]) return;
-          loop.data.batchRows[idx].skipGlobalRefs = Boolean(chk.checked);
+          ensureSeriesRow(idx).skipGlobalRefs = Boolean(chk.checked);
           markDirty();
         };
       });
@@ -1633,9 +1670,14 @@
       root.querySelectorAll("[data-del-row-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-del-row-idx"));
-          if (!Array.isArray(loop.data.batchRows)) return;
-          loop.data.batchRows.splice(idx, 1);
-          loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
+          if (loop.data.batchLayoutMode === "ai" && Array.isArray(loop.data.batchRows)) {
+            loop.data.batchRows.splice(idx, 1);
+            loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
+          } else {
+            const lines = String(loop.data.promptListText || "").split(/\r?\n/).filter(Boolean);
+            lines.splice(idx, 1);
+            loop.data.promptListText = lines.join("\n");
+          }
           markDirty();
         };
       });
@@ -1643,6 +1685,14 @@
       const btnAddRow = root.querySelector("#batch-btn-add-row");
       if (btnAddRow) {
         btnAddRow.onclick = () => {
+          const nextIndex = self.resolveIterations().length;
+          ensureSeriesRow(nextIndex);
+          const row = loop.data.batchRows[nextIndex];
+          row.theme = "";
+          row.layout = skill.data.layout || "";
+          row.assetItems = [];
+          markDirty();
+          return;
           if (!Array.isArray(loop.data.batchRows)) loop.data.batchRows = [];
           loop.data.batchRows.push({
             theme: "",
