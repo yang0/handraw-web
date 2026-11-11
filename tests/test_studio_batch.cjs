@@ -1018,13 +1018,14 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
     const html = fakeHost.innerHTML;
 
-    // 1. Single bottom dock with a concise seed input and collapsible parameters.
-    assert.ok(html.includes('class="batch-series-dock"'), "Planning and generation must share one bottom dock");
-    assert.ok(html.includes('class="batch-plan-card batch-series-planner"'), "Planning input belongs to the right dock");
-    assert.ok(html.includes('id="batch-seed-input"'), "Seed input must be available without opening options");
-    assert.ok(html.includes('id="batch-plan-options-toggle"'), "Planning parameters need a collapsible toggle");
-    assert.ok(html.includes('id="batch-plan-options"'), "Planning parameters must stay reachable");
-    assert.ok(html.includes('aria-expanded="false"'), "Parameter options start collapsed by default");
+    // #143: count and layout strategy belong to the shared upper sidebar.
+    assert.ok(html.includes('class="batch-series-shared"'), "Upper shared properties are visible");
+    assert.ok(html.includes('class="batch-series-selected-settings"'), "Lower image-specific properties exist");
+    assert.ok(html.includes('id="batch-count-input"'), "Series count is on the left");
+    assert.ok(html.includes('id="batch-strategy-fixed"'), "Fixed layout strategy remains on the left");
+    assert.ok(html.includes('class="batch-series-dock"'), "Bottom dock retains planning and generating actions");
+    assert.ok(html.includes('data-series-composer-mode="series"'), "Composer has a mother-theme mode");
+    assert.ok(html.includes('data-series-composer-mode="image"'), "Composer can edit selected image theme");
 
     // 2. Segmented Control for Strategy: NOT .btn, but .batch-strategy-seg-btn
     assert.ok(html.includes("batch-strategy-seg"), "Must render .batch-strategy-seg container");
@@ -1079,7 +1080,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     }
   }
 
-  console.log("✓ Requirement 12 Passed: Right-bottom planning dock, collapsible params and secondary AI plan verified");
+  console.log("✓ Requirement 12 Passed: Left-side count/strategy and bottom composer primary/secondary actions verified");
 }
 
 // ==========================================
