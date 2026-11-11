@@ -85,6 +85,9 @@ from .config import (
     get_image_config_path,
     get_storage_root,
     get_uploads_dir,
+    load_image_config,
+    open_url,
+    resolve_gateway_model,
 )
 from .db import Database, utc_now_iso
 from .security import build_session_cookie
@@ -194,21 +197,8 @@ def size_for_ratio(ratio: str) -> str:
     return "1152x1536"
 
 
-def load_image_service_config() -> dict[str, str]:
-    cfg_path = get_image_config_path()
-    if cfg_path.is_file():
-        try:
-            data = json.loads(cfg_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                key = str(data.get("key") or data.get("api_key") or "").strip()
-                if key:
-                    base = str(data.get("url") or data.get("base_url") or "https://chatgpt2api.handraw-style.com").rstrip("/")
-                    if base.endswith("/v1"):
-                        base = base[:-3]
-                    return {"base_url": base, "key": key}
-        except Exception:
-            pass
-    return {}
+def load_image_service_config() -> dict[str, Any]:
+    return load_image_config()
 
 
 class GatewayNotConfigured(RuntimeError):
@@ -229,7 +219,107 @@ def gateway_request(path: str, payload: dict[str, Any] | None = None, timeout: i
         headers["Content-Type"] = "application/json"
         data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST" if payload is not None else "GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with open_url(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+_MIME_EXT_MAP = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+
+
+def _build_multipart_form_data(
+    fields: list[tuple[str, str]],
+    files: list[tuple[str, str, str, bytes]],
+) -> tuple[str, bytes]:
+    boundary = f"----HandrawFormBoundary{uuid.uuid4().hex}"
+    chunks: list[bytes] = []
+    for name, val in fields:
+        safe_name = str(name).replace('"', "").replace("\r", "").replace("\n", "")
+        chunks.append(
+            (
+                f'--{boundary}\r\n'
+                f'Content-Disposition: form-data; name="{safe_name}"\r\n\r\n'
+                f'{val}\r\n'
+            ).encode("utf-8")
+        )
+    for field_name, filename, content_type, data in files:
+        safe_field = str(field_name).replace('"', "").replace("\r", "").replace("\n", "")
+        safe_file = str(filename).replace('"', "").replace("\r", "").replace("\n", "")
+        chunks.append(
+            (
+                f'--{boundary}\r\n'
+                f'Content-Disposition: form-data; name="{safe_field}"; filename="{safe_file}"\r\n'
+                f'Content-Type: {content_type}\r\n\r\n'
+            ).encode("utf-8")
+            + data
+            + b"\r\n"
+        )
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return f"multipart/form-data; boundary={boundary}", b"".join(chunks)
+
+
+def openai_image_gateway_request(
+    cfg: dict[str, Any],
+    prompt: str,
+    *,
+    model: str,
+    size: str,
+    quality: str = "auto",
+    refs: list[dict[str, str]] | None = None,
+    timeout: int = 180,
+) -> dict[str, Any]:
+    """Call an OpenAI-compatible /v1/images/generations or /v1/images/edits endpoint."""
+    if not cfg or not cfg.get("key"):
+        raise GatewayNotConfigured("未检测到本地生图网关配置 image-service.json")
+    raw_api_base = str(cfg.get("api_base_url") or "").strip().rstrip("/")
+    if not raw_api_base:
+        base = str(cfg.get("base_url") or "").strip().rstrip("/")
+        raw_api_base = base if base.endswith("/v1") else f"{base}/v1"
+    headers = {
+        "Authorization": f"Bearer {cfg['key']}",
+        "User-Agent": "HandrawWeb2/2.0",
+    }
+    files: list[tuple[str, str, str, bytes]] = []
+    for idx, ref in enumerate(refs or []):
+        if not isinstance(ref, dict) or not ref.get("b64_json"):
+            continue
+        raw_bytes = base64.b64decode(str(ref["b64_json"]))
+        mime = str(ref.get("mime_type") or "image/png").split(";")[0].strip().lower()
+        ext = _MIME_EXT_MAP.get(mime, ".png")
+        files.append(("image", f"ref_{idx}{ext}", mime, raw_bytes))
+    if files:
+        url = f"{raw_api_base}/images/edits"
+        ctype, data_bytes = _build_multipart_form_data(
+            [
+                ("model", model),
+                ("prompt", prompt),
+                ("n", "1"),
+                ("size", size),
+                ("quality", quality),
+            ],
+            files,
+        )
+        headers["Content-Type"] = ctype
+    else:
+        url = f"{raw_api_base}/images/generations"
+        headers["Content-Type"] = "application/json"
+        data_bytes = json.dumps(
+            {
+                "model": model,
+                "prompt": prompt,
+                "n": 1,
+                "size": size,
+                "quality": quality,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+    with open_url(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -290,7 +380,6 @@ def download_and_cache_generated_image(remote_url: str, filename_stem: str) -> s
     cfg = load_image_service_config()
     gateway_base = str(cfg.get("base_url") or "")
     current_url = str(remote_url or "")
-    opener = urllib.request.build_opener(_NoRedirectHandler())
     for _ in range(4):
         if not _remote_image_url_allowed(current_url, gateway_base):
             raise RuntimeError("网关返回了不安全的图片地址")
@@ -301,7 +390,7 @@ def download_and_cache_generated_image(remote_url: str, filename_stem: str) -> s
             headers["Authorization"] = f"Bearer {cfg['key']}"
         req = urllib.request.Request(current_url, headers=headers)
         try:
-            resp = opener.open(req, timeout=45)
+            resp = open_url(req, timeout=45, extra_handlers=(_NoRedirectHandler(),))
         except urllib.error.HTTPError as he:
             if he.code in (301, 302, 303, 307, 308) and he.headers.get("Location"):
                 current_url = urllib.parse.urljoin(current_url, he.headers["Location"])
@@ -334,7 +423,56 @@ def _cache_gateway_item_image(item: Any, filename_stem: str) -> str | None:
         raise RuntimeError(f"网关返回了不受支持的 Base64 图片：{exc}") from exc
 
 
+def _row_gateway_protocol(raw_system_append: Any) -> str:
+    if not raw_system_append:
+        return "image-tasks"
+    try:
+        data = json.loads(raw_system_append) if isinstance(raw_system_append, str) else raw_system_append
+        if isinstance(data, dict) and str(data.get("gatewayProtocol") or "").lower() == "openai":
+            return "openai"
+    except Exception:
+        pass
+    return "image-tasks"
+
+
+def _get_generation_gateway_protocol(db: Database, gen_id: str) -> str:
+    if not gen_id:
+        return "image-tasks"
+    row = db.get_conn().execute(
+        "SELECT system_append_json FROM studio_generations WHERE id = ?",
+        (gen_id,),
+    ).fetchone()
+    return _row_gateway_protocol(row["system_append_json"] if row else None)
+
+
+def _mark_generation_gateway_protocol(db: Database, gen_id: str, protocol: str) -> None:
+    """Persist non-sensitive protocol metadata so reconciler/tasks match the submitter."""
+    if not gen_id or protocol != "openai":
+        return
+    with db.transaction() as tx:
+        row = tx.execute(
+            "SELECT system_append_json FROM studio_generations WHERE id = ?",
+            (gen_id,),
+        ).fetchone()
+        data: dict[str, Any] = {}
+        if row and row["system_append_json"]:
+            try:
+                parsed = json.loads(row["system_append_json"])
+                if isinstance(parsed, dict):
+                    data = parsed
+            except Exception:
+                data = {}
+        if data.get("gatewayProtocol") == protocol:
+            return
+        data["gatewayProtocol"] = protocol
+        tx.execute(
+            "UPDATE studio_generations SET system_append_json = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False), gen_id),
+        )
+
+
 RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES = 30
+RECONCILE_OPENAI_ORPHAN_TIMEOUT_MINUTES = 5
 
 
 def _parse_created_at_dt(created_at_str: str | None) -> datetime | None:
@@ -413,7 +551,7 @@ class GenerationReconciler:
             logger.warning("worker=generation-reconciler phase=blackbox-backfill failed", exc_info=True)
         rows = self.db.get_conn().execute(
             """
-            SELECT id, task_id, request_id, status, created_at
+            SELECT id, task_id, request_id, status, created_at, system_append_json
             FROM studio_generations
             WHERE engine = 'live' AND COALESCE(deleted_at, '') = ''
               AND status IN ('queued', 'running')
@@ -427,6 +565,16 @@ class GenerationReconciler:
                 logger.warning("Reconciliation interrupted: Redis leadership lost")
                 break
             generation_id = str(row["id"])
+            if _row_gateway_protocol(row["system_append_json"]) == "openai":
+                created_dt = _parse_created_at_dt(row["created_at"])
+                if created_dt and created_dt < (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_OPENAI_ORPHAN_TIMEOUT_MINUTES)):
+                    refund_failed_cloud_generation(
+                        self.db,
+                        generation_id,
+                        "同步生图任务超时未完成，已退还",
+                    )
+                    handled += 1
+                continue
             task_id = str(row["task_id"] or "").strip()
             # If the submit process died before receiving an upstream id, use
             # the stable request id only to look for an already-created task.
@@ -2365,7 +2513,6 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             cfg = load_image_service_config()
             settings = get_site_settings(self.db.get_conn())
             econ = settings.get("economy", {})
-            gw = settings.get("gateway", {})
             self._send_json(
                 {
                     "liveImageEnabled": bool(cfg),
@@ -2373,7 +2520,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     "demoMode": self._demo_enabled(),
                     "rechargeEnabled": recharge_enabled(),
                     "trustedOrigins": sorted(trusted_origins()),
-                    "model": gw.get("model", "gpt-image-2"),
+                    "model": resolve_gateway_model(settings, cfg),
                     "dailyFreeQuota": int(econ.get("daily_free_quota", 3)),
                     "creditPerImage": int(econ.get("studio_credit_per_image", 2)),
                 }
@@ -2510,6 +2657,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             gen_id = str(task_ref.get("genId") or "")
             if not gen_id:
                 self._send_json({"error": "task not found"}, status=404)
+                return
+            if _get_generation_gateway_protocol(self.db, gen_id) == "openai":
+                self._send_json({"status": rec_status or "running", "images": []})
                 return
             try:
                 res = gateway_request(f"/api/image-tasks?ids={urllib.parse.quote(task_id)}")
@@ -3498,6 +3648,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             user = self._current_user(required=True)
             prep = prepare_cloud_generation(self.db, user, body)
             gen_id = prep["genId"]
+            is_openai_gw = str(cfg.get("protocol") or "").strip().lower() == "openai"
             submitted = False
             try:
                 claim = claim_cloud_generation_submission(self.db, user, gen_id)
@@ -3591,49 +3742,95 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     "SELECT prompt FROM studio_generations WHERE id = ?", (gen_id,)
                 ).fetchone()
                 full_prompt = (grow["prompt"] if grow else "") or prep["finalPrompt"]
-                gw_payload: dict[str, Any] = {
-                    "client_task_id": task_id,
-                    "prompt": full_prompt,
-                    "model": prep["model"],
-                    "size": size_for_ratio(ratio),
-                    "quality": "auto",
-                }
-                if refs:
-                    gw_payload["images"] = refs
-                    endpoint = "/api/image-tasks/edits"
-                else:
-                    endpoint = "/api/image-tasks/generations"
+                gw_model = str(cfg.get("model") or prep.get("model") or "gpt-image-2").strip()
+                gw_quality = str(cfg.get("quality") or "auto").strip() or "auto"
+                gw_timeout = int(cfg.get("timeout") or (180 if is_openai_gw else 28))
 
-                record_cloud_generation_task_id(self.db, gen_id, task_id)
-                submitted = True
-                gw_res = gateway_request(endpoint, payload=gw_payload, timeout=28)
-                actual_id = str(gw_res.get("id") or task_id)
-                complete_cloud_generation(self.db, gen_id, actual_id)
-                gw_out = {
-                    "ok": True,
-                    "genId": gen_id,
-                    "requestId": prep.get("requestId") or "",
-                    "idempotent": bool(prep.get("idempotent")),
-                    "taskId": actual_id,
-                    "status": gw_res.get("status") or "queued",
-                    "costType": prep["costType"],
-                    "creditsSpent": prep["creditsSpent"],
-                    "credits": prep["credits"],
-                    "freeQuotaRemaining": prep["freeQuotaRemaining"],
-                }
+                if is_openai_gw:
+                    record_cloud_generation_task_id(self.db, gen_id, task_id)
+                    _mark_generation_gateway_protocol(self.db, gen_id, "openai")
+                    submitted = True
+                    gw_res = openai_image_gateway_request(
+                        cfg,
+                        full_prompt,
+                        model=gw_model,
+                        size=size_for_ratio(ratio),
+                        quality=gw_quality,
+                        refs=refs or None,
+                        timeout=gw_timeout,
+                    )
+                    data_items = gw_res.get("data") or []
+                    local_urls: list[str] = []
+                    if isinstance(data_items, list):
+                        for idx, image_item in enumerate(data_items):
+                            local_url = _cache_gateway_item_image(image_item, f"{task_id}_{idx}")
+                            if local_url:
+                                local_urls.append(local_url)
+                    complete_cloud_generation(self.db, gen_id, task_id, local_urls)
+                    if not local_urls:
+                        self._send_json({"ok": False, "refunded": True, "error": "生图网关未返回有效图片（已自动退还额度/积分）"}, status=502)
+                        return
+                    actual_id = task_id
+                    gw_out: dict[str, Any] = {
+                        "ok": True,
+                        "genId": gen_id,
+                        "requestId": prep.get("requestId") or "",
+                        "idempotent": bool(prep.get("idempotent")),
+                        "taskId": actual_id,
+                        "status": "success",
+                        "images": local_urls,
+                        "finalPrompt": prep.get("finalPrompt") or "",
+                        "costType": prep["costType"],
+                        "creditsSpent": prep["creditsSpent"],
+                        "credits": prep["credits"],
+                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
+                    }
+                else:
+                    gw_payload: dict[str, Any] = {
+                        "client_task_id": task_id,
+                        "prompt": full_prompt,
+                        "model": gw_model,
+                        "size": size_for_ratio(ratio),
+                        "quality": gw_quality,
+                    }
+                    if refs:
+                        gw_payload["images"] = refs
+                        endpoint = "/api/image-tasks/edits"
+                    else:
+                        endpoint = "/api/image-tasks/generations"
+
+                    record_cloud_generation_task_id(self.db, gen_id, task_id)
+                    submitted = True
+                    gw_res = gateway_request(endpoint, payload=gw_payload, timeout=gw_timeout)
+                    actual_id = str(gw_res.get("id") or task_id)
+                    complete_cloud_generation(self.db, gen_id, actual_id)
+                    gw_out = {
+                        "ok": True,
+                        "genId": gen_id,
+                        "requestId": prep.get("requestId") or "",
+                        "idempotent": bool(prep.get("idempotent")),
+                        "taskId": actual_id,
+                        "status": gw_res.get("status") or "queued",
+                        "costType": prep["costType"],
+                        "creditsSpent": prep["creditsSpent"],
+                        "credits": prep["credits"],
+                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
+                    }
                 if "systemAppend" in prep:
                     gw_out["systemAppend"] = prep["systemAppend"]
                 if prep.get("recipeId"):
                     gw_out["recipeId"] = prep["recipeId"]
                 if prep.get("promptTrimmed"):
                     gw_out["promptTrimmed"] = True
+                if prep.get("promptMasked"):
+                    gw_out["promptMasked"] = True
                 self._send_json(gw_out)
             except Exception as exc:
                 if not submitted:
                     logger.warning("Gateway call not submitted (%s): %s", type(exc).__name__, exc)
                     refund_failed_cloud_generation(self.db, gen_id, "生图网关连接失败")
                     self._send_json({"ok": False, "refunded": True, "error": "生图网关连接失败（已自动退还额度/积分）"}, status=502)
-                elif _gateway_failure_is_definite(exc):
+                elif is_openai_gw or _gateway_failure_is_definite(exc):
                     if isinstance(exc, urllib.error.HTTPError):
                         try:
                             err_body = exc.read().decode("utf-8", errors="ignore")
@@ -3641,6 +3838,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                             err_body = ""
                         logger.warning("Gateway error: HTTP %s (body length: %s)", exc.code, len(err_body))
                         err_msg = f"网关请求失败 (HTTP {exc.code})"
+                    elif isinstance(exc, (socket.timeout, TimeoutError)) or (
+                        isinstance(exc, urllib.error.URLError)
+                        and isinstance(getattr(exc, "reason", None), (socket.timeout, TimeoutError))
+                    ):
+                        logger.warning("Gateway exception: %s", type(exc).__name__)
+                        err_msg = "生图网关请求超时"
                     else:
                         logger.warning("Gateway exception: %s", type(exc).__name__)
                         err_msg = "生图网关连接失败"

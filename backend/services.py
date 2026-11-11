@@ -18,7 +18,7 @@ from typing import Any
 
 logger = logging.getLogger("backend.services")
 
-from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
+from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, resolve_gateway_model
 from .db import Database, local_today_str, utc_now_iso
 from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
 from .runtime_policy import sanitize_media_url, sanitize_plain_text, sanitize_rich_html, env_flag
@@ -5878,7 +5878,7 @@ def _cloud_generation_result(
         "credits": int(wallet["balance"]) if wallet else 0,
         "freeQuotaRemaining": max(0, max_free - used),
         "reservationDate": row["reservation_date"] or "",
-        "model": str(settings.get("gateway", {}).get("model", "gpt-image-2")),
+        "model": resolve_gateway_model(settings),
     }
     if was_masked:
         res["promptMasked"] = True

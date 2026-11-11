@@ -11,7 +11,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .config import CONTENT_DIR, get_image_config_path, get_uploads_dir
+from .config import CONTENT_DIR, get_image_config_path, get_uploads_dir, load_image_config, open_url, resolve_gateway_model
 from .db import Database, local_today_str, utc_now_iso
 from .runtime_policy import sanitize_media_url
 from .security import generate_api_key, hash_password
@@ -3300,16 +3300,12 @@ def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe:
     gw_settings = settings.get("gateway", {})
 
     cfg_path = get_image_config_path()
-    file_cfg: dict[str, Any] = {}
-    if cfg_path.is_file():
-        try:
-            file_cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception:
-            file_cfg = {}
-
-    raw_url = str(file_cfg.get("url") or file_cfg.get("base_url") or "http://127.0.0.1:5005").rstrip("/")
-    base_url = raw_url[:-3] if raw_url.endswith("/v1") else raw_url
-    api_key = str(file_cfg.get("key") or file_cfg.get("api_key") or "")
+    file_cfg = load_image_config()
+    base_url = str(file_cfg.get("base_url") or "http://127.0.0.1:5005")
+    api_base_url = str(file_cfg.get("api_base_url") or f"{base_url}/v1")
+    api_key = str(file_cfg.get("key") or "")
+    protocol = str(file_cfg.get("protocol") or "image-tasks")
+    display_url = api_base_url if protocol == "openai" else base_url
 
     probe_result: dict[str, Any] = {
         "probed": False,
@@ -3321,11 +3317,11 @@ def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe:
         t0 = time.time()
         try:
             req = urllib.request.Request(
-                f"{base_url}/v1/models",
+                f"{api_base_url}/models",
                 headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
                 method="GET",
             )
-            with urllib.request.urlopen(req, timeout=2.5) as resp:
+            with open_url(req, timeout=2.5) as resp:
                 latency = int((time.time() - t0) * 1000)
                 probe_result = {
                     "probed": True,
@@ -3367,11 +3363,12 @@ def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe:
     return {
         "gateway": {
             "configFileExists": cfg_path.is_file(),
-            "baseUrl": base_url,
+            "baseUrl": display_url,
             "apiKeyMasked": _mask_secret_key(api_key),
-            "model": gw_settings.get("model", file_cfg.get("model", "gpt-image-2")),
-            "timeoutSeconds": int(gw_settings.get("timeout_seconds", 35)),
-            "quality": gw_settings.get("quality", "auto"),
+            "model": resolve_gateway_model(settings, file_cfg),
+            "protocol": protocol,
+            "timeoutSeconds": int(file_cfg.get("timeout") or gw_settings.get("timeout_seconds", 35)),
+            "quality": str(file_cfg.get("quality") or gw_settings.get("quality", "auto")),
             "allowSampleFallback": bool(gw_settings.get("allow_sample_fallback", True)),
         },
         "probe": probe_result,
