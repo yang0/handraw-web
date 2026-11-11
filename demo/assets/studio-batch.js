@@ -717,7 +717,7 @@
                     </div>
                     <div class="batch-btn-wrap">
                       <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) || slotResults.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
-                      <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空</button>
+                      <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" aria-label="清空表单" title="清空表单" ${busy ? "disabled" : ""}>清空</button>
                       ${busy ? `
                         <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止生成"}</button>
                       ` : `
