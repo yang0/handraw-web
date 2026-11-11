@@ -321,12 +321,6 @@
         ? `${ratioPair[0]} / ${ratioPair[1]}` : "3 / 4";
       this.hostElement.innerHTML = `
         <div class="make-image-container make-image-chat-container">
-          <div class="make-image-head">
-            <div class="make-image-head-left">
-              <h1 class="make-image-title">做图</h1>
-              <p class="make-image-lede">选择画风、图型与主题色，填写创作主题，快速生成高画质手绘图。</p>
-            </div>
-          </div>
           ${forkSource ? `
             <div class="make-image-fork-banner" style="background:var(--paper-soft,#f4efe6);border:1px solid var(--brand-vermilion,#e15b3c);border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:13px;display:flex;justify-content:space-between;align-items:center;">
               <span>⚡ <strong>配方来自 @${esc(forkSource.authorName || forkSource.author)}</strong></span>
@@ -520,8 +514,7 @@
 
 
               </section>
-              <section class="creation-content make-image-conversation" aria-labelledby="make-content-title">
-                <div class="creation-section-head make-image-results-intro"><h2 id="make-content-title">生成画面</h2><p>图片从这里开始显示，下方输入你的创作主题。</p></div>
+              <section class="creation-content make-image-conversation" aria-label="生成结果与创作输入">
                 <div class="make-image-output-scroll" role="region" aria-label="生成结果" tabindex="0">
                   ${busy ? `<div class="make-image-pending" role="status" aria-label="图片生成中"><div class="make-image-pending-art" style="aspect-ratio:${esc(previewRatio)}"><span class="make-image-pending-symbol" aria-hidden="true">✦</span><span class="make-image-pending-shimmer" aria-hidden="true"></span></div><p class="make-image-pending-caption">正在生成画面…</p></div>` : ""}
                   ${!busy && !results.length ? `<div class="make-image-output-empty"><strong>让灵感从这里开始</strong><p>在下方输入主题，选好左侧属性后开始生成。</p></div>` : ""}
