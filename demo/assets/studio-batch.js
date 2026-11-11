@@ -314,7 +314,7 @@
         // Share the same shimmer and breathing symbol used by 单图.
         media = `<div class="batch-series-pending" role="status" aria-label="图 ${idx + 1} 生成中">
           <div class="make-image-pending-art batch-series-pending-art" style="aspect-ratio:${esc(aspect)}">
-            <span class="make-image-pending-symbol" aria-hidden="true">✦</span>
+            <span class="make-image-pending-symbol" aria-hidden="true">&#10022;</span>
             <span class="make-image-pending-shimmer" aria-hidden="true"></span>
           </div>
           <span class="make-image-pending-caption">正在生成图 ${idx + 1}…</span>
