@@ -1018,37 +1018,36 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
     const html = fakeHost.innerHTML;
 
-    // #143: count and layout strategy belong to the shared upper sidebar.
-    assert.ok(html.includes('class="batch-series-shared"'), "Upper shared properties are visible");
-    assert.ok(html.includes('class="batch-series-selected-settings"'), "Lower image-specific properties exist");
-    assert.ok(html.includes('id="batch-count-input"'), "Series count is on the left");
-    assert.ok(html.includes('id="batch-strategy-fixed"'), "Fixed layout strategy remains on the left");
-    assert.ok(html.includes('class="batch-series-dock"'), "Bottom dock retains planning and generating actions");
+    // #144: a continuous sidebar; count joins AI and generate in the composer.
+    assert.ok(html.includes('class="batch-series-shared"'), "Shared properties exist");
+    assert.ok(html.includes('class="batch-series-selected-settings"'), "Selected image properties directly follow shared fields");
+    assert.ok(html.includes('class="batch-series-count"'), "Series count belongs to composer action row");
+    assert.ok(html.includes('id="batch-count-input"'), "Series count remains configurable");
+    assert.ok(html.includes('id="batch-strategy-fixed"'), "Layout strategy remains in left sidebar");
+    assert.ok(html.includes('class="batch-series-dock"'), "Bottom dock contains planning and generating actions");
     assert.ok(html.includes('data-series-composer-mode="series"'), "Composer has a mother-theme mode");
     assert.ok(html.includes('data-series-composer-mode="image"'), "Composer can edit selected image theme");
 
-    // 2. Segmented Control for Strategy: NOT .btn, but .batch-strategy-seg-btn
-    assert.ok(html.includes("batch-strategy-seg"), "Must render .batch-strategy-seg container");
-    assert.ok(html.includes('id="batch-strategy-fixed"'), "Must render #batch-strategy-fixed");
-    assert.ok(html.includes('id="batch-strategy-ai"'), "Must render #batch-strategy-ai");
-    assert.ok(html.includes("batch-strategy-seg-btn"), "Must use .batch-strategy-seg-btn class");
-
-    // Make sure strategy items do not use button classes that look like action buttons
+    // 2. Match the single-image picker/segmented button visual language.
+    assert.ok(html.includes('class="make-image-btn-group" role="group" aria-label="图型策略"'),
+      "Layout strategy should use the single-image button group");
+    assert.ok(html.includes('id="batch-strategy-fixed"'));
+    assert.ok(html.includes('id="batch-strategy-ai"'));
     const stratFixedTag = html.match(/<button[^>]*id="batch-strategy-fixed"[^>]*>/);
     const stratAiTag = html.match(/<button[^>]*id="batch-strategy-ai"[^>]*>/);
-    assert.ok(stratFixedTag, "#batch-strategy-fixed button tag must exist");
-    assert.ok(stratAiTag, "#batch-strategy-ai button tag must exist");
-    const stratFixedClass = stratFixedTag[0].match(/class="([^"]*)"/)?.[1] || "";
-    const stratAiClass = stratAiTag[0].match(/class="([^"]*)"/)?.[1] || "";
-    assert.ok(!stratFixedClass.split(/\s+/).includes("btn"), "#batch-strategy-fixed must NOT have class .btn");
-    assert.ok(!stratAiClass.split(/\s+/).includes("btn"), "#batch-strategy-ai must NOT have class .btn");
-
-    // 3. Fixed layout picker button has class btn btn-sm and NOT btn-primary
+    assert.ok(stratFixedTag && stratAiTag);
+    for (const tag of [stratFixedTag[0],stratAiTag[0]]) {
+      assert.match(tag,/class="btn btn-sm /,"Strategy buttons must reuse single-image btn btn-sm classes");
+    }
     if (mode === "fixed") {
-      const pickBtnTag = html.match(/<button[^>]*id="batch-btn-pick-fixed-layout"[^>]*>/);
-      assert.ok(pickBtnTag, "#batch-btn-pick-fixed-layout must exist");
-      const pickBtnClass = pickBtnTag[0].match(/class="([^"]*)"/)?.[1] || "";
-      assert.ok(!pickBtnClass.includes("btn-primary"), "#batch-btn-pick-fixed-layout must NOT be btn-primary");
+      assert.ok(stratFixedTag[0].includes("btn-primary is-active"),"Fixed is highlighted if selected");
+      assert.ok(html.includes('class="make-image-pickers-row batch-series-fixed-picker"'),
+        "Fixed strategy reveals a single-image style layout picker card");
+      assert.ok(html.includes('data-pick-kind="layout"'),"Fixed strategy has a real layout picker");
+    } else {
+      assert.ok(stratAiTag[0].includes("btn-primary is-active"),"AI strategy is highlighted if selected");
+      assert.ok(!html.includes('class="make-image-pickers-row batch-series-fixed-picker"'),
+        "AI strategy hides default layout picker");
     }
 
     // 4. AI planning is secondary, generation is visually primary.
@@ -1080,7 +1079,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     }
   }
 
-  console.log("✓ Requirement 12 Passed: Left-side count/strategy and bottom composer primary/secondary actions verified");
+  console.log("✓ Requirement 12 Passed: single-image controls, conditional layout picker and composer-side count verified");
 }
 
 // ==========================================
@@ -1384,9 +1383,9 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
   assert.equal(parts.loop.data.batchSeed, "", "batchSeed must reset to empty");
   assert.equal(parts.loop.data.batchCount, 6, "batchCount must reset to 6");
-  assert.equal(parts.loop.data.batchLayoutMode, "fixed", "batchLayoutMode must reset to fixed");
+  assert.equal(parts.loop.data.batchLayoutMode, "ai", "New series reset defaults to AI layout recommendations");
   assert.equal(parts.loop.data.batchLayoutReq, "", "batchLayoutReq must reset to empty");
-  assert.equal(parts.loop.data.batchRows.length, 0, "batchRows must reset to empty array");
+  assert.equal(parts.loop.data.batchRows.length, 3, "Default AI mode includes three editable example image rows");
   assert.equal(
     parts.loop.data.promptListText,
     "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集",
