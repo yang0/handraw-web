@@ -185,8 +185,8 @@ def generation_image_assets(
 
     Match by persisted media URL, never by array index alone: async batch
     completions, cover changes and retries must not attach another image's
-    style/layout plus already-approved visible prompts for uniquely owned image slots.
-    Raw prompts and private recipe definitions never leave this function.
+    style/layout and safe, explicitly saved per-image theme textbox text.
+    AI-expanded prompts and private recipe definitions never leave this function.
     An empty result means only work-level metadata is available.
     """
     keys = work_row.keys() if hasattr(work_row, "keys") else work_row
@@ -246,15 +246,34 @@ def generation_image_assets(
             )
             source_styles, source_layout = extract_generation_styles_and_layout(conn, source)
             styles, layout = item_styles or source_styles, item_layout or source_layout
-            # Only a one-output generation row proves that a row-level prompt
-            # belongs to this particular image. Use the pre-screened public
-            # visible_prompt and fail closed on any masked source or work.
-            source_keys = source.keys()
+            # The forum's "生图提示词" is the creator's per-image THEME textbox,
+            # never the AI-expanded cloud/visible prompt. Resolve only explicit
+            # persisted theme fields bound to this exact media URL.
             work_prompt_safe = "prompt_has_secret" in keys and work_row["prompt_has_secret"] == 0
             public_prompt = ""
-            if (len(items) == 1 and work_prompt_safe and
-                    source["prompt_masked"] == 0 and source["visible_prompt"] is not None):
-                public_prompt = str(source["visible_prompt"] or "").strip()
+            if work_prompt_safe and source["prompt_masked"] == 0:
+                candidate = ""
+                if item_dict:
+                    candidate = str(item_dict.get("theme") or
+                                    (item_dict.get("recipeSnapshot") or {}).get("theme") or "").strip()
+                if not candidate:
+                    try:
+                        system_data = json.loads(source["system_append_json"] or "{}")
+                    except (TypeError, ValueError):
+                        system_data = {}
+                    if isinstance(system_data, dict):
+                        snapshot = system_data.get("recipeSnapshot")
+                        if isinstance(snapshot, dict) and len(items) == 1:
+                            candidate = str(snapshot.get("theme") or "").strip()
+                if candidate:
+                    # Apply the same deny-on-error secret inspection as the
+                    # original public work, even for newly added theme fields.
+                    from .services import check_text_has_secret
+                    try:
+                        if not check_text_has_secret(candidate, conn):
+                            public_prompt = candidate
+                    except Exception:
+                        pass
             if not styles and not layout and not public_prompt:
                 by_url[url] = {"url": url, "styles": [], "layout": "", "scope": "missing"}
                 continue
