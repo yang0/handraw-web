@@ -745,45 +745,54 @@
     }
 
 
-    /* Repaint the SAME card grid for live progress, including concurrent slots;
-       never append a second results list or detach the whole form. */
+
+    /* Refresh only the focused image and its navigator during concurrent progress.
+       Preserve the composer focus, entered text, and independent left-side scroll. */
     refreshSeriesCards() {
       const host = this.hostElement;
-      const grid = host?.querySelector(".batch-series-grid");
+      const main = host?.querySelector("#batch-series-main");
+      const thumbs = host?.querySelector("#batch-series-thumbs");
       const parts = this.getParts();
-      if (!grid || !parts) return;
+      if (!main || !thumbs || !parts) return;
       const iterations = this.resolveIterations();
       const loop = parts.loop?.data || {};
       const ctrl = parts.ctrl?.data || {};
       const skill = parts.skill?.data || {};
-      const isBusy = typeof this.progressState?.busy === "boolean" ? this.progressState.busy : Boolean(this.context?.busy);
-      const active = this.progressState?.activeIndices || [];
-      const activeIndex = active.length ? active[0] :
-        this.progressState?.activeIndex ?? (isBusy ? Number(loop.activeIndex ?? 0) : null);
+      const busy = typeof this.progressState?.busy === "boolean" ? this.progressState.busy : Boolean(this.context?.busy);
+      const activeIndices = this.progressState?.activeIndices || [];
+      const activeIndex = activeIndices.length ? activeIndices[0]
+        : this.progressState?.activeIndex ?? (busy ? Number(loop.activeIndex ?? 0) : null);
       const displays = this.context?.displays || [];
       const gallery = displays.some(d => d.data?.kind === "batch_gallery");
-      const oldScroll = host.querySelector(".batch-series-scroll")?.scrollTop || 0;
-      grid.innerHTML = iterations.length ? iterations.map((iter, idx) => {
-        const cachedResult = this.seriesOutcomes?.get(idx);
-        const cachedContext = (this.context?.results || []).find(r => r.index === idx);
-        const displayResult = isBusy ? null : this.getItemResult(idx, displays, gallery);
-        return this.renderSeriesCard(iter, idx, {
-          mode: loop.batchLayoutMode || "fixed",
-          rows: loop.batchRows || [],
-          fixedThemes: String(loop.promptListText || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean),
-          globalLayout: skill.layout || "",
-          ratio: ctrl.ratio || "3:4",
-          result: cachedResult || cachedContext || displayResult,
-          busy: isBusy, currentStep: loop.currentStep || 0, activeIndex
-        });
-      }).join("") : '<div class="batch-series-empty">还没有画面。在下方输入系列母题并使用 AI 规划，或点击「添加画面」开始。</div>';
-      const cardCount = host.querySelector(".batch-series-toolbar strong");
-      if (cardCount) cardCount.textContent = String(iterations.length);
-      const scroll = host.querySelector(".batch-series-scroll");
-      if (scroll) scroll.scrollTop = oldScroll;
-      this.bindEvents(grid, parts, iterations);
+      const results = iterations.map((_,idx) => {
+        const cached = this.seriesOutcomes?.get(idx);
+        const contextResult = (this.context?.results || []).find(r => r.index === idx);
+        const displayed = busy ? null : this.getItemResult(idx, displays, gallery);
+        return cached || contextResult || displayed;
+      });
+      const count = iterations.length;
+      this.selectedSeriesIndex = Math.max(0,Math.min(this.selectedSeriesIndex || 0,Math.max(0,count-1)));
+      const selected = this.selectedSeriesIndex;
+      const mode = loop.batchLayoutMode || "fixed";
+      const fixedThemes = String(loop.promptListText || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      main.innerHTML = iterations[selected] ? this.renderSeriesCard(iterations[selected],selected,{
+        mode,rows:loop.batchRows || [],fixedThemes,globalLayout:skill.layout || "",
+        ratio:ctrl.ratio || "3:4",result:results[selected],busy,
+        currentStep:loop.currentStep || 0,activeIndex
+      }) : '<div class="batch-series-empty">写下系列母题并规划画面，或者直接添加一张。</div>';
+      thumbs.innerHTML = iterations.map((iter,idx)=>this.renderSeriesThumb(iter,idx,{
+        selectedIndex:selected,result:results[idx],globalLayout:skill.layout || "",
+        busy,currentStep:loop.currentStep || 0,activeIndex
+      })).join("");
+      const countEl = host.querySelector(".batch-series-toolbar strong");
+      if (countEl) countEl.textContent = String(count);
+      const activeEl = host.querySelector(".batch-series-toolbar small");
+      if (activeEl) activeEl.textContent = `· 当前图 ${selected+1}`;
+      this.bindEvents(main, parts, iterations);
+      this.bindEvents(thumbs, parts, iterations);
       if (global.HANDRAW_SHARED?.triggerImageLoaders) {
-        global.HANDRAW_SHARED.triggerImageLoaders(grid);
+        global.HANDRAW_SHARED.triggerImageLoaders(main);
+        global.HANDRAW_SHARED.triggerImageLoaders(thumbs);
       }
     }
 
@@ -883,7 +892,7 @@
       const host = this.hostElement;
       if (singleSlotIndex !== null) {
         this.seriesOutcomes?.delete(singleSlotIndex);
-        if (host?.querySelector(".batch-series-grid")) {
+        if (host?.querySelector("#batch-series-main")) {
           if (this.context && Array.isArray(this.context.results)) {
             this.context.results = this.context.results.filter(r => r.index !== singleSlotIndex);
           }
@@ -939,7 +948,7 @@
       this.seriesOutcomes = new Map();
 
       if (!host) return;
-      if (host.querySelector(".batch-series-grid")) {
+      if (host.querySelector("#batch-series-main")) {
         this.refreshSeriesCards();
         const dlAll = host.querySelector("#batch-btn-download-all");
         if (dlAll) dlAll.disabled = true;
@@ -1094,7 +1103,7 @@
       }
 
       // #141: the series grid is the only source of visible status/results.
-      if (host.querySelector(".batch-series-grid")) {
+      if (host.querySelector("#batch-series-main")) {
         if (updatedIndex !== null && updatedIndex !== undefined && itemResult) {
           if (!this.seriesOutcomes) this.seriesOutcomes = new Map();
           this.seriesOutcomes.set(updatedIndex, itemResult);
@@ -1232,7 +1241,7 @@
         this.context.results.push(resultObj);
       }
 
-      if (host.querySelector(".batch-series-grid")) {
+      if (host.querySelector("#batch-series-main")) {
         if (!this.seriesOutcomes) this.seriesOutcomes = new Map();
         this.seriesOutcomes.set(index, res);
         const dlAll = host.querySelector("#batch-btn-download-all");
