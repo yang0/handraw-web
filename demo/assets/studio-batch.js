@@ -294,7 +294,7 @@
     renderSeriesCard(iter, idx, opts = {}) {
       const mode = opts.mode || "fixed";
       const row = mode === "ai" ? (opts.rows?.[idx] || {}) : {};
-      const theme = mode === "ai" ? (row.theme || "") : (iter.theme || iter.title || "");
+      const theme = mode === "ai" ? (row.theme || "") : (opts.fixedThemes?.[idx] ?? iter.theme ?? iter.title ?? "");
       const refs = Array.isArray(row.assetItems) ? row.assetItems : [];
       const globalLayout = opts.globalLayout || "";
       const layoutId = (mode === "ai" && row.layout) || iter.layout || globalLayout;
@@ -703,6 +703,7 @@
                   <div class="batch-series-grid">
                     ${iterations.length ? iterations.map((iter, idx) => this.renderSeriesCard(iter, idx, {
                       mode: batchLayoutMode, rows: batchRows, globalLayout: sd.layout || "",
+                      fixedThemes: promptListText.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
                       result: slotResults[idx], busy, currentStep, activeIndex, ratio: currentRatio
                     })).join("") : `<div class="batch-series-empty">还没有画面。可在左侧用 AI 规划，或点击「添加画面」开始。</div>`}
                   </div>
@@ -771,6 +772,7 @@
         return this.renderSeriesCard(iter, idx, {
           mode: loop.batchLayoutMode || "fixed",
           rows: loop.batchRows || [],
+          fixedThemes: String(loop.promptListText || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean),
           globalLayout: skill.layout || "",
           ratio: ctrl.ratio || "3:4",
           result: cachedResult || cachedContext || displayResult,
