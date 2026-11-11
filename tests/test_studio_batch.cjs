@@ -353,7 +353,7 @@ function parseHtml(html) {
         }
       }
       if (selector === "[data-generate-series-idx]") {
-        const regex = /data-generate-series-idx="(\\d+)"/g;
+        const regex = /data-generate-series-idx="([0-9]+)"/g;
         let match;
         while ((match = regex.exec(html)) !== null) {
           const val = match[1];
