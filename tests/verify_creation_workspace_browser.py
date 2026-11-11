@@ -66,7 +66,7 @@ BOOT = r"""
     ensureAssetItems:items=>{parts.asset.data.items=items;render();},
     run:()=>{
       runs++;context.busy=true;
-      const completed=new Map([...controller.seriesOutcomes?.entries()||[]]
+      const completed=new Map(Array.from(controller.seriesOutcomes?.entries() || [])
         .filter(([,item])=>Boolean(item?.imageUrl)));
       controller.resetBatchProgress?.({
         totalCount:parts.loop.data.batchRows?.length || 3,
