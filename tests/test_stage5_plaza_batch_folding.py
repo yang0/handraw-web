@@ -179,6 +179,45 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(ids.count(self.batch_wids[0]), 1)
 
+    def test_feed_comment_queries_are_limited_to_page_ids(self):
+        # A small page must not fetch comments for every work on the site.
+        for sort in ("newest", "popular"):
+            statements = []
+            self.conn.set_trace_callback(statements.append)
+            try:
+                feed = get_works_feed(self.db, {"sort": sort, "limit": 1})
+            finally:
+                self.conn.set_trace_callback(None)
+            self.assertEqual(len(feed["items"]), 1)
+            comment_reads = [
+                sql.lower() for sql in statements
+                if "from work_comments" in sql.lower()
+            ]
+            reply_reads = [
+                sql.lower() for sql in statements
+                if "from forum_replies fr" in sql.lower()
+                and "join curation_resource_topics" in sql.lower()
+            ]
+            self.assertEqual(len(comment_reads), 1)
+            self.assertEqual(len(reply_reads), 1)
+            self.assertTrue(all("work_id in (" in sql for sql in comment_reads))
+            self.assertTrue(all("crt.target_id in (" in sql for sql in reply_reads))
+
+    def test_empty_feed_does_not_query_work_comments(self):
+        statements = []
+        self.conn.set_trace_callback(statements.append)
+        try:
+            feed = get_works_feed(self.db, {"q": "no-match-feed-175"})
+        finally:
+            self.conn.set_trace_callback(None)
+        self.assertEqual(feed["items"], [])
+        self.assertFalse(any("from work_comments" in s.lower() for s in statements))
+        self.assertFalse(any(
+            "from forum_replies fr" in s.lower()
+            and "join curation_resource_topics" in s.lower()
+            for s in statements
+        ))
+
     def test_moderator_hidden_run_is_not_repromoted(self):
         work_id = self.batch_wids[0]
         res = admin_moderate_work(self.db, self.admin, work_id, "delete")
