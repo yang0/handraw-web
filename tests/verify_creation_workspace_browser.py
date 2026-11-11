@@ -133,6 +133,29 @@ def main():
                     assert page.evaluate("fixture.counts().pickers")==1
                     page.locator("#make-image-open-ref-picker").click()
                     assert page.evaluate("fixture.counts().refs")==1
+                    # #139: attachments are image-only and sit above the topic textarea.
+                    expect(page.locator("#make-image-btn-again")).to_have_count(0)
+                    expect(page.locator("#make-image-btn-new-theme")).to_have_count(0)
+                    expect(page.locator("#make-image-clear-subject")).to_have_count(0)
+                    expect(page.locator(".make-image-composer label")).to_have_count(0)
+                    page.evaluate("""() => {
+                        fixture.parts.asset.data.items = [
+                          {image:fixture.pixel,name:"人物参考"},
+                          {image:fixture.pixel,name:"构图参考"}
+                        ];
+                        fixture.render();
+                    }""")
+                    expect(page.locator(".make-image-composer-attachments .make-image-ref-thumb")).to_have_count(2)
+                    expect(page.locator(".make-image-ref-thumb img")).to_have_count(2)
+                    expect(page.locator(".make-image-slot-meta")).to_have_count(0)
+                    assert page.evaluate("""() => {
+                        const box=s=>document.querySelector(s).getBoundingClientRect();
+                        return box(".make-image-composer-attachments").bottom <= box("#make-image-subject").top;
+                    }""")
+                    page.locator('[data-del-ref="0"]').click()
+                    expect(page.locator(".make-image-ref-thumb")).to_have_count(1)
+                    assert len(page.evaluate("fixture.parts.asset.data.items")) == 1
+
                     page.locator('[data-set-ratio="1:1"]').click()
                     assert page.evaluate("fixture.parts.ctrl.data.ratio")=="1:1"
                     page.locator("#make-image-more-toggle").click()
