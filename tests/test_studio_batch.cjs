@@ -1450,6 +1450,8 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   });
 
   const fakeHost = createFakeDom();
+  HandrawBatchCreate.selectedSeriesIndex = 0;
+  HandrawBatchCreate.seriesComposerMode = "series";
   HandrawBatchCreate.render(fakeHost, {
     parts: partsNoLayout,
     graph: graphNoLayout,
@@ -1458,7 +1460,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   }, {});
 
   const placeholders = fakeHost.querySelectorAll(".batch-iter-placeholder");
-  assert.equal(placeholders.length, 3, "Table must render 3 .batch-iter-placeholder elements when no layout");
+  assert.equal(placeholders.length, 1, "One focused image placeholder, not three card placeholders");
   const thumbBtns = fakeHost.querySelectorAll(".batch-iter-thumb-btn");
   assert.equal(thumbBtns.length, 0, "Table must NOT render any .batch-iter-thumb-btn when no layout");
   assert.ok(!fakeHost.innerHTML.includes("/images/poster-demo-autumn-equinox.webp"), "Must NOT include autumn equinox demo image");
@@ -1503,9 +1505,9 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   const placeholdersLayout = fakeHost.querySelectorAll(".batch-iter-placeholder");
   assert.equal(placeholdersLayout.length, 0, "Table must NOT render placeholders when layout is selected");
   const thumbBtnsLayout = fakeHost.querySelectorAll(".batch-iter-thumb-btn");
-  assert.equal(thumbBtnsLayout.length, 3, "Table must render 3 .batch-iter-thumb-btn elements");
+  assert.equal(thumbBtnsLayout.length, 1, "One focused main-image zoom button");
   const badgesLayout = fakeHost.querySelectorAll(".batch-iter-schematic-badge");
-  assert.equal(badgesLayout.length, 3, "Each layout schematic must have 版式示意 badge");
+  assert.equal(badgesLayout.length, 1, "Only the focused main image shows a schematic badge");
   assert.equal(thumbBtnsLayout[0].getAttribute("data-zoom-src"), "/images/sc-021.webp");
 
   // 4. AI recommended layout mode with diverse layouts
@@ -1541,8 +1543,18 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     loggedIn: true
   }, {});
 
-  assert.equal(fakeHost.querySelectorAll(".batch-iter-thumb-btn").length, 2, "Rows 1 and 2 with layout must have thumb buttons");
-  assert.equal(fakeHost.querySelectorAll(".batch-iter-placeholder").length, 1, "Row 3 without layout must have placeholder box");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-thumb-btn").length, 1, "Only the selected image has a large zoom button");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-placeholder").length, 0, "Selected row 1 shows layout; unselected row 3 stays a small thumbnail");
+  HandrawBatchCreate.selectedSeriesIndex = 2;
+  HandrawBatchCreate.render(fakeHost, {
+    parts: partsAi, graph: graphAi, catalog: sharedCatalog, loggedIn:true
+  }, {});
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-placeholder").length, 1,
+    "Choosing picture 3 moves its empty state into the main image");
+  assert.equal(fakeHost.querySelectorAll(".batch-iter-thumb-btn").length, 0,
+    "No zoom target before selected picture 3 has a layout or result");
+  HandrawBatchCreate.selectedSeriesIndex = 0;
+
 
   // 5. Generated state: itemResult?.imageUrl overrides schematic
   const fakeDisplays = [{
@@ -1565,7 +1577,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   assert.ok(fakeHost.innerHTML.includes("/generated/real_output_1.webp"), "Row 0 must render real generated imageUrl");
   assert.ok(fakeHost.innerHTML.includes("is-generated"), "Row 0 button must have is-generated class");
 
-  console.log("✓ Requirement 19 Passed: Batch Iteration Thumbnail Clean Semantics & Placeholder verified");
+  console.log("✓ Requirement 19 Passed: One focused preview and a separate multi-picture thumbnail navigator");
 }
 
 console.log("\n==========================================");
