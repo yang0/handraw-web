@@ -218,6 +218,37 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
             for s in statements
         ))
 
+    def test_viewer_queries_are_scoped_to_selected_page(self):
+        for sort_mode in ("newest", "popular"):
+            statements = []
+            self.conn.set_trace_callback(statements.append)
+            try:
+                result = get_works_feed(self.db, {"sort": sort_mode, "limit": 1}, self.alice)
+            finally:
+                self.conn.set_trace_callback(None)
+            self.assertEqual(len(result["items"]), 1)
+            for table in ("unlocks", "interactions", "collections"):
+                matching = [sql.lower() for sql in statements if f"from {table}" in sql.lower()]
+                self.assertEqual(len(matching), 1, (sort_mode, table, matching))
+                self.assertTrue(all("target_id in (" in sql for sql in matching), matching)
+            own = [sql.lower() for sql in statements
+                   if "from works where author_username" in sql.lower()]
+            self.assertEqual(len(own), 1)
+            self.assertIn("id in (", own[0])
+
+    def test_empty_page_skips_viewer_state_queries(self):
+        statements = []
+        self.conn.set_trace_callback(statements.append)
+        try:
+            result = get_works_feed(
+                self.db, {"q": "missing-page-viewer-183"}, self.alice
+            )
+        finally:
+            self.conn.set_trace_callback(None)
+        self.assertEqual(result["items"], [])
+        for table in ("unlocks", "interactions", "collections"):
+            self.assertFalse(any(f"from {table}" in sql.lower() for sql in statements))
+
     def test_moderator_hidden_run_is_not_repromoted(self):
         work_id = self.batch_wids[0]
         res = admin_moderate_work(self.db, self.admin, work_id, "delete")

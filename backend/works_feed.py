@@ -103,6 +103,43 @@ def _get_unlocked_set(conn: sqlite3.Connection, user: dict[str, Any] | None) -> 
     return unlocked
 
 
+def _feed_viewer_state(conn, user: dict[str, Any] | None, work_ids: list[str]):
+    """Resolve personalized flags only for the visible page (max 100 works)."""
+    if not user or not work_ids:
+        return set(), set(), set()
+    uid = user.get("id")
+    if not uid:
+        return set(), set(), set()
+    placeholders = ", ".join("?" for _ in work_ids)
+    unlock_filter, unlock_ids = _seed_filter("target_id", "works")
+    unlocked = {row["target_id"] for row in conn.execute(
+        f"""SELECT target_id FROM unlocks
+            WHERE user_id = ? AND status = 'settled' AND target_type = 'work'
+              AND target_id IN ({placeholders}) AND {unlock_filter}""",
+        (uid, *work_ids, *unlock_ids),
+    ).fetchall()}
+    if user.get("username"):
+        own_filter, own_ids = _seed_filter("id", "works")
+        unlocked.update(row["id"] for row in conn.execute(
+            f"""SELECT id FROM works WHERE author_username = ?
+                AND id IN ({placeholders}) AND {own_filter}""",
+            (user["username"], *work_ids, *own_ids),
+        ).fetchall())
+    liked = {row["target_id"] for row in conn.execute(
+        f"""SELECT target_id FROM interactions
+            WHERE user_id = ? AND target_type = 'work'
+              AND target_id IN ({placeholders})""",
+        (uid, *work_ids),
+    ).fetchall()}
+    collected = {row["target_id"] for row in conn.execute(
+        f"""SELECT target_id FROM collections
+            WHERE user_id = ? AND bucket = 'works'
+              AND target_id IN ({placeholders})""",
+        (uid, *work_ids),
+    ).fetchall()}
+    return unlocked, liked, collected
+
+
 def _ratio_to_dims(ratio: str | None) -> tuple[int, int, float]:
     r = str(ratio or "3:4").strip()
     lookup = {
@@ -345,24 +382,6 @@ def get_works_feed(
         total_single if fmt == "single" else (total_multi if fmt == "multi" else total_all)
     )
 
-    unlocked_set = _get_unlocked_set(conn, current_user)
-
-    # User like & collection target sets for fast lookup
-    liked_ids: set[str] = set()
-    collected_ids: set[str] = set()
-    if current_user:
-        uid = int(current_user["id"])
-        liked_rows = conn.execute(
-            "SELECT target_id FROM interactions WHERE user_id = ? AND target_type = 'work'",
-            (uid,),
-        ).fetchall()
-        liked_ids = {r["target_id"] for r in liked_rows}
-        col_rows = conn.execute(
-            "SELECT target_id FROM collections WHERE user_id = ? AND bucket = 'works'",
-            (uid,),
-        ).fetchall()
-        collected_ids = {r["target_id"] for r in col_rows}
-
     # -------------------------------------------------------------
     # Sort Mode 1: "popular" -> Frozen session pagination
     # -------------------------------------------------------------
@@ -441,7 +460,9 @@ def get_works_feed(
                 (*base_params, *page_ids),
             ).fetchall()
             row_map = {r["id"]: r for r in work_rows}
-            comments_by_work = _load_feed_comments(conn, [r["id"] for r in work_rows])
+            page_work_ids = [r["id"] for r in work_rows]
+            comments_by_work = _load_feed_comments(conn, page_work_ids)
+            unlocked_set, liked_ids, collected_ids = _feed_viewer_state(conn, current_user, page_work_ids)
             items = []
             for pid in page_ids:
                 row = row_map.get(pid)
@@ -505,7 +526,9 @@ def get_works_feed(
         return_rows = rows
         next_cursor = None
 
-    comments_by_work = _load_feed_comments(conn, [r["id"] for r in return_rows])
+    page_work_ids = [r["id"] for r in return_rows]
+    comments_by_work = _load_feed_comments(conn, page_work_ids)
+    unlocked_set, liked_ids, collected_ids = _feed_viewer_state(conn, current_user, page_work_ids)
     items = []
     for row in return_rows:
         if is_valid_work_row(row):
