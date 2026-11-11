@@ -399,13 +399,14 @@ def main():
                         titleCenter:title.top+title.height/2,
                         aiCenter:ai.top+ai.height/2,
                         fixedCenter:fixed.top+fixed.height/2,
-                        neutral:getComputedStyle(document.querySelector('#batch-strategy-ai')).backgroundColor,
+                        selected:getComputedStyle(document.querySelector('#batch-strategy-ai')).backgroundColor,
+                        inactive:getComputedStyle(document.querySelector('#batch-strategy-fixed')).backgroundColor,
                         primary:getComputedStyle(run).backgroundColor
                       };
                     }""")
                     assert abs(same_row["titleCenter"]-same_row["aiCenter"])<20,same_row
                     assert abs(same_row["aiCenter"]-same_row["fixedCenter"])<12,same_row
-                    assert same_row["neutral"]!=same_row["primary"],same_row
+                    assert same_row["selected"]==same_row["primary"] and same_row["inactive"]!=same_row["primary"],same_row
                     assert page.locator("#batch-strategy-ai").get_attribute("class").find("btn-primary is-active") >= 0
                     expect(page.locator(".batch-series-properties [data-pick-layout-idx='0']")).to_be_visible()
                     expect(page.locator("#batch-concurrency")).to_have_count(0)
