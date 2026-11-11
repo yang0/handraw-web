@@ -313,13 +313,13 @@
       }).join("");
       let media;
       if (image) {
-        media = `<button type="button" class="batch-iter-thumb-btn is-generated batch-series-image" data-zoom-src="${esc(image)}" data-zoom-title="${esc(label)}" aria-label="查看第 ${idx + 1} 张生成图片"><img data-hw-src="${esc(image)}" src="${esc(image)}" alt="${esc(label)}" loading="lazy" /></button>`;
+        media = `<button type="button" class="batch-iter-thumb-btn is-generated batch-series-image" data-zoom-src="${esc(image)}" data-zoom-title="${esc(label)}" aria-label="查看第 ${idx + 1} 张生成图片"><img data-hw-src="${esc(image)}" alt="${esc(label)}" loading="lazy" /></button>`;
       } else if (status.key === "generating") {
         media = `<div class="batch-series-pending" role="status" aria-label="第 ${idx + 1} 张图片生成中"><span class="batch-series-pending-mark" aria-hidden="true">·</span><span class="batch-series-shimmer" aria-hidden="true"></span><span class="batch-series-pending-label">正在生成…</span></div>`;
       } else if (status.key === "failed") {
         media = `<div class="batch-series-failed" role="status"><span>本张生成失败</span><small>可在卡片内单独重试</small></div>`;
       } else if (layoutImg) {
-        media = `<button type="button" class="batch-iter-thumb-btn is-schematic batch-series-image" data-zoom-src="${esc(layoutImg)}" data-zoom-title="版式示意 · ${esc(layoutId)}" aria-label="查看第 ${idx + 1} 张版式示意"><img data-hw-src="${esc(layoutImg)}" src="${esc(layoutImg)}" alt="版式示意" loading="lazy" /><span class="batch-iter-schematic-badge">版式示意</span></button>`;
+        media = `<button type="button" class="batch-iter-thumb-btn is-schematic batch-series-image" data-zoom-src="${esc(layoutImg)}" data-zoom-title="版式示意 · ${esc(layoutId)}" aria-label="查看第 ${idx + 1} 张版式示意"><img data-hw-src="${esc(layoutImg)}" alt="版式示意" loading="lazy" /><span class="batch-iter-schematic-badge">版式示意</span></button>`;
       } else {
         media = `<div class="batch-iter-placeholder batch-series-placeholder" role="img" aria-label="第 ${idx + 1} 张待生成"><span aria-hidden="true">·</span><small>等待创作</small></div>`;
       }
