@@ -317,17 +317,20 @@ def main():
                       const r=s=>document.querySelector(s).getBoundingClientRect();
                       const p=r('.batch-series-properties'),c=r('.batch-series-content'),
                             dock=r('.batch-series-dock'),left=r('#batch-btn-plan'),
-                            right=r('#batch-btn-start'),grid=r('.batch-series-grid');
+                            right=r('#batch-btn-start'),grid=r('.batch-series-grid'),
+                            seed=r('#batch-seed-input'),footer=r('.batch-series-footer');
                       return {
                         planWithinContent:dock.left>=c.left-1 && dock.right<=c.right+1,
                         actionOrder:left.left<right.right,
+                        sameActionRow:Math.abs(left.top-right.top)<12,
+                        seedFullyVisible:seed.top>=dock.top-1 && seed.bottom<=footer.top+1,
                         dockBelowCards:dock.top>=grid.top,
                         dockBottom:dock.bottom<=c.bottom+2
                       };
                     }""")
                     assert dock_layout["planWithinContent"] and dock_layout["dockBelowCards"] and dock_layout["dockBottom"],dock_layout
-                    if width>540:
-                        assert dock_layout["actionOrder"],dock_layout
+                    assert dock_layout["seedFullyVisible"],dock_layout
+                    assert dock_layout["actionOrder"] and dock_layout["sameActionRow"],dock_layout
                     page.locator("#batch-plan-options-toggle").click()
                     expect(page.locator("#batch-plan-options-toggle")).to_have_attribute("aria-expanded","true")
                     expect(page.locator("#batch-count-input")).to_be_visible()
