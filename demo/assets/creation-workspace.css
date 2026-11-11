@@ -840,3 +840,107 @@
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis
 }
 .batch-series-selected-field .batch-row-layout-thumb{object-fit:contain}
+
+
+/* #145: concise series editor, secondary controls neutral; only Run is primary. */
+.batch-series-properties .make-image-btn-group .btn.btn-primary.is-active{
+  background:var(--paper-inset);border-color:var(--ink-muted);
+  color:var(--ink-main);box-shadow:inset 0 -2px 0 var(--vermilion)
+}
+.batch-series-properties .make-image-btn-group .btn.btn-primary.is-active:hover{
+  background:var(--paper-card);border-color:var(--vermilion)
+}
+.batch-series-layout-strategy{
+  display:flex;flex-direction:row;align-items:center;justify-content:space-between;
+  flex-wrap:wrap;gap:8px;margin:0
+}
+.batch-series-layout-strategy>.make-image-field-label{flex:0 0 auto;white-space:nowrap}
+.batch-series-layout-strategy>.make-image-btn-group{
+  display:flex;align-items:center;flex-wrap:nowrap;gap:5px;min-width:0
+}
+.batch-series-layout-strategy .make-image-btn-group>.btn{
+  min-width:0;padding:7px 10px;font-size:12px;white-space:nowrap
+}
+.batch-series-workspace .batch-series-fixed-picker{
+  grid-template-columns:repeat(2,minmax(0,1fr));margin:0
+}
+.batch-series-workspace .batch-series-fixed-picker>.make-image-picker-card{
+  grid-column:1/-1
+}
+/* Clear the unused heading row and let the single picture fill the stage. */
+.batch-series-content>.batch-series-stage{padding-top:0}
+.batch-series-main-card{
+  background:transparent;border:none;border-radius:16px;
+  box-shadow:none;overflow:hidden
+}
+.batch-series-focused{position:relative;border:0;background:transparent}
+.batch-series-focused .batch-series-visual{
+  background:transparent;border:0;border-radius:16px;overflow:hidden;
+}
+.batch-series-floating-action{
+  position:absolute;right:14px;bottom:14px;z-index:10;
+  display:flex;gap:8px;align-items:center
+}
+.batch-series-floating-action .btn{
+  border-radius:9px;padding:8px 12px;
+  background:var(--paper-card);box-shadow:0 2px 12px rgba(33,28,24,.12)
+}
+.batch-series-focused .batch-series-placeholder{
+  background:
+    radial-gradient(ellipse 42% 34% at 50% 46%,rgba(195,180,155,.18),transparent 95%),
+    linear-gradient(135deg,var(--paper-card),var(--paper-inset) 55%,var(--paper-card));
+  border:0;border-radius:16px;gap:9px;isolation:isolate
+}
+.batch-series-placeholder-glow{
+  position:absolute;width:min(42%,180px);aspect-ratio:1;
+  border-radius:50%;background:radial-gradient(circle,rgba(198,153,120,.20),rgba(198,153,120,0) 75%);
+  filter:blur(8px);pointer-events:none
+}
+.batch-series-placeholder-symbol{
+  font-size:46px;font-weight:300;line-height:1;color:var(--vermilion);
+  opacity:.55;transform:translateY(-2px)
+}
+.batch-series-placeholder-title{
+  font-size:14px;font-weight:650;letter-spacing:.03em;color:var(--ink-main)
+}
+.batch-series-placeholder small{font-size:11px;letter-spacing:.08em;color:var(--ink-muted)}
+.batch-series-thumbs-rail{
+  min-width:0;min-height:0;display:flex;flex-direction:column;gap:7px
+}
+.batch-series-thumbs-rail>.batch-series-thumbs{flex:1 1 auto;min-height:0}
+.batch-series-thumb-picture{
+  width:100%;aspect-ratio:4/3;max-height:none
+}
+.batch-series-add-slot{
+  flex:0 0 34px;width:100%;display:grid;place-items:center;
+  border:1px solid var(--line-soft);border-radius:8px;
+  font-size:20px;line-height:1;background:var(--paper-card);
+  color:var(--ink-muted);cursor:pointer
+}
+.batch-series-add-slot:hover:not(:disabled){
+  color:var(--vermilion);border-color:var(--vermilion)
+}
+.batch-series-add-slot:focus-visible{outline:2px solid var(--vermilion);outline-offset:2px}
+.batch-series-add-slot:disabled{opacity:.4;cursor:default}
+.batch-series-composer-bottom .batch-series-run-btn{
+  background:var(--vermilion);color:#fff;border-color:var(--vermilion)
+}
+.batch-series-composer-bottom .batch-series-plan-btn{
+  background:var(--paper-bg);color:var(--ink-main);border-color:var(--line-strong)
+}
+@media(min-width:981px){
+  .batch-series-content>.batch-series-stage{
+    grid-template-columns:minmax(0,1fr) clamp(84px,9vw,106px)
+  }
+}
+@media(max-width:540px){
+  .batch-series-content>.batch-series-stage{
+    grid-template-columns:minmax(0,1fr) 72px;gap:7px
+  }
+  .batch-series-thumb-picture{aspect-ratio:4/3;max-height:none}
+  .batch-series-layout-strategy .make-image-btn-group>.btn{
+    padding:6px 7px;font-size:11px
+  }
+  .batch-series-add-slot{flex-basis:30px}
+  .batch-series-placeholder-symbol{font-size:38px}
+}
