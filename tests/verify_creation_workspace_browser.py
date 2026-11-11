@@ -308,6 +308,12 @@ def main():
                     expect(page.locator(".batch-series-thumbs")).to_be_visible()
                     expect(page.locator(".batch-series-thumb")).to_have_count(3)
                     expect(page.locator(".batch-series-focused")).to_have_count(1)
+                    preview_badge=page.evaluate("""() => {
+                      const badge=document.querySelector('.batch-series-focused .batch-iter-schematic-badge');
+                      const frame=document.querySelector('.batch-series-main-card');
+                      return badge && frame ? {badge:badge.getBoundingClientRect().width,frame:frame.getBoundingClientRect().width} : null;
+                    }""")
+                    assert preview_badge is not None and preview_badge["badge"] < preview_badge["frame"] / 2, preview_badge
                     expect(page.locator(".batch-series-grid")).to_have_count(0)
                     expect(page.locator(".batch-series-properties .batch-series-shared")).to_be_visible()
                     expect(page.locator(".batch-series-properties .batch-series-selected-settings")).to_be_visible()
