@@ -315,7 +315,7 @@
     if (model.locked) {
       body = `<p class="fwp-locked">${esc(model.unavailableText || "解锁后查看提示词")}</p>`;
     } else if (!currentPrompt) {
-      const missing = model.source === "work" && model.images?.length > 1 ? "当前图片未公开独立提示词" : model.unavailableText || "作者暂未公开提示词";
+      const missing = model.source === "work" && model.images?.length > 1 ? "当前图片未记录独立主题文本" : model.unavailableText || "作者暂未公开提示词";
       body = `<p class="fwp-missing">${esc(missing)}</p>`;
     } else {
       body = `<pre class="fwp-prompt-text">${esc(currentPrompt)}</pre>`;

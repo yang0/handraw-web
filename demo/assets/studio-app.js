@@ -6715,7 +6715,12 @@
                   style2: rec.style2Id || "",
                   layout: sp.layout || rec.layoutId || "",
                   refImages,
-                  recipeSnapshot: sp.recipeSnapshot,
+                  // Preserve the exact user-entered per-image theme for the
+                  // public series detail. The cloudPrompt remains separate.
+                  recipeSnapshot: {
+                    ...(sp.recipeSnapshot || {}),
+                    theme: sp.theme || ""
+                  },
                   creationSource,
                   batchId,
                   batchIndex: i,
