@@ -1015,10 +1015,13 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
     const html = fakeHost.innerHTML;
 
-    // 1. Planning Inputs Panel & Tag
-    assert.ok(html.includes("batch-plan-inputs-panel"), "Must render .batch-plan-inputs-panel");
-    assert.ok(html.includes("batch-plan-inputs-tag"), "Must render .batch-plan-inputs-tag");
-    assert.ok(html.includes("规划输入"), "Must display 规划输入 tag");
+    // 1. Single bottom dock with a concise seed input and collapsible parameters.
+    assert.ok(html.includes('class="batch-series-dock"'), "Planning and generation must share one bottom dock");
+    assert.ok(html.includes('class="batch-plan-card batch-series-planner"'), "Planning input belongs to the right dock");
+    assert.ok(html.includes('id="batch-seed-input"'), "Seed input must be available without opening options");
+    assert.ok(html.includes('id="batch-plan-options-toggle"'), "Planning parameters need a collapsible toggle");
+    assert.ok(html.includes('id="batch-plan-options"'), "Planning parameters must stay reachable");
+    assert.ok(html.includes('aria-expanded="false"'), "Parameter options start collapsed by default");
 
     // 2. Segmented Control for Strategy: NOT .btn, but .batch-strategy-seg-btn
     assert.ok(html.includes("batch-strategy-seg"), "Must render .batch-strategy-seg container");
@@ -1044,10 +1047,12 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
       assert.ok(!pickBtnClass.includes("btn-primary"), "#batch-btn-pick-fixed-layout must NOT be btn-primary");
     }
 
-    // 4. Hero Plan Button has unique hero class and SVG icon
-    assert.ok(html.includes("batch-btn-plan-hero"), "#batch-btn-plan must have class .batch-btn-plan-hero");
-    assert.ok(html.includes("batch-plan-icon"), "Plan button must contain .batch-plan-icon SVG");
-    assert.ok(html.includes("AI 规划这套图"), "Plan button must display 'AI 规划这套图'");
+    // 4. AI planning is secondary, generation is visually primary.
+    assert.ok(html.includes("batch-series-plan-btn"), "#batch-btn-plan must use quiet secondary styling");
+    assert.ok(html.includes('id="batch-btn-plan"'), "AI planning action must remain accessible");
+    assert.ok(html.includes('id="batch-btn-start"'), "Primary generation action must remain accessible");
+    assert.ok(html.includes("AI 规划"), "Planning button must be labelled");
+    assert.ok(html.includes("生成系列图"), "Generation remains a separate final action");
 
     // 5. Test keyboard navigation on strategy toggle
     const btnStratFixed = fakeHost.querySelector("#batch-strategy-fixed");
@@ -1071,7 +1076,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     }
   }
 
-  console.log("✓ Requirement 12 Passed: Unified Planning Inputs Section, Segmented Control & Unique Hero Plan Button verified");
+  console.log("✓ Requirement 12 Passed: Right-bottom planning dock, collapsible params and secondary AI plan verified");
 }
 
 // ==========================================
