@@ -1231,6 +1231,8 @@
       cd.ratio = draft.ratio || "3:4";
       cd.mode = draft.mode === "pure-image" ? "pure" : (draft.mode || "graphic-text");
       cd.count = 1;
+      // A new fork must not reuse reference images from the previous draft.
+      if (p.asset?.data) p.asset.data.items = [];
 
       this.actions?.markDirtyAndRender();
     }
