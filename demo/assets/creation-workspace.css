@@ -111,11 +111,17 @@
 
 /* #138 Single-image split workspace; the batch page is unchanged. */
 .ic-quick-stage:has(.make-image-chat-container){overflow:hidden;padding-bottom:14px}
-.make-image-chat-container{display:flex;flex-direction:column;height:100%;max-height:100%;min-height:520px}
+/* Fit the actual stage height (including short laptop viewports) so the sidebar, not the clipped parent, owns vertical overflow. */
+.make-image-chat-container{display:flex;flex-direction:column;height:100%;max-height:100%;min-height:0}
 .make-image-chat-layout{display:flex;flex:1 1 auto;min-height:0}
 .make-image-main-grid.creation-workspace.make-image-chat-workspace{display:grid;grid-template-columns:minmax(300px,.92fr) minmax(0,1.85fr);gap:0;padding:0;width:100%;height:100%;min-height:0;align-items:stretch;overflow:hidden}
 .make-image-chat-workspace>.make-image-properties,.make-image-chat-workspace>.make-image-conversation{min-width:0;min-height:0;gap:14px;box-sizing:border-box}
-.make-image-chat-workspace>.make-image-properties{grid-column:1;grid-row:1;padding:22px 20px;border:0;border-right:1px solid var(--line-soft);overflow-x:hidden;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent;overscroll-behavior:contain}
+.make-image-chat-workspace>.make-image-properties{grid-column:1;grid-row:1;padding:22px 20px;border:0;border-right:1px solid var(--line-soft);overflow-x:hidden;overflow-y:auto;scrollbar-width:auto;scrollbar-color:var(--ink-muted) var(--paper-inset);overscroll-behavior:contain}
+/* Keep a noticeable native scrollbar when the property content overflows, without showing one on short content. */
+.make-image-chat-workspace>.make-image-properties::-webkit-scrollbar{width:11px}
+.make-image-chat-workspace>.make-image-properties::-webkit-scrollbar-track{background:var(--paper-inset);border-radius:8px}
+.make-image-chat-workspace>.make-image-properties::-webkit-scrollbar-thumb{background:var(--ink-muted);border:2px solid var(--paper-inset);border-radius:8px}
+.make-image-chat-workspace>.make-image-properties::-webkit-scrollbar-thumb:hover{background:var(--ink-main)}
 .make-image-chat-workspace>.make-image-conversation{grid-column:2;grid-row:1;padding:22px 24px 18px;overflow:hidden;display:flex;flex-direction:column;background:var(--paper-bg)}
 .make-image-output-scroll{min-height:0;flex:1 1 auto;overflow-x:hidden;overflow-y:auto;padding:6px 2px 18px;scrollbar-width:none;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .make-image-output-scroll::-webkit-scrollbar{display:none}
