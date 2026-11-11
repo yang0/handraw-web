@@ -179,9 +179,12 @@ class PgCursor:
 class PgConnection:
     dialect = "postgresql"
 
-    def __init__(self, connection):
+    def __init__(self, connection, *, identity_cache=None, identity_lock=None):
         self._db = connection
-        self._identity: dict[str, str | None] = {}
+        # A pool shares one schema. Reuse this read-only metadata across its
+        # connections instead of querying information_schema on each checkout.
+        self._identity: dict[str, str | None] = identity_cache if identity_cache is not None else {}
+        self._identity_lock = identity_lock if identity_lock is not None else threading.RLock()
 
     def execute(self, statement, params=()):
         source = str(statement)
@@ -190,17 +193,20 @@ class PgConnection:
         match = re.match(r"\s*INSERT\s+INTO\s+([A-Za-z_][A-Za-z_0-9]*)\b", q, re.I)
         if match:
             table = match.group(1)
-            if table not in self._identity:
-                # Only tables with a PostgreSQL IDENTITY column need RETURNING.
-                with self._db.cursor() as introspect:
-                    introspect.execute(
-                        """SELECT column_name FROM information_schema.columns
-                           WHERE table_schema='public' AND table_name=%s
-                             AND is_identity='YES'""", (table,)
-                    )
-                    rows = introspect.fetchall()
-                self._identity[table] = rows[0][0] if rows else None
-            identity_col = self._identity.get(table)
+            with self._identity_lock:
+                if table not in self._identity:
+                    # One metadata round trip per table per database instance.
+                    # The lock prevents duplicate introspection on concurrent
+                    # request threads and never spans the user INSERT.
+                    with self._db.cursor() as introspect:
+                        introspect.execute(
+                            """SELECT column_name FROM information_schema.columns
+                               WHERE table_schema='public' AND table_name=%s
+                                 AND is_identity='YES'""", (table,)
+                        )
+                        rows = introspect.fetchall()
+                    self._identity[table] = rows[0][0] if rows else None
+                identity_col = self._identity[table]
             if identity_col and not re.search(r"\bRETURNING\b", q, re.I):
                 q = q.rstrip().rstrip(";") + f' RETURNING "{identity_col}"'
                 identity = True
@@ -264,6 +270,8 @@ class PostgresDatabase:
         self.db_path = "PostgreSQL (configured URL)"
         self._dsn = dsn
         self._local = threading.local()
+        self._identity_cache: dict[str, str | None] = {}
+        self._identity_lock = threading.RLock()
         self._write_lock = threading.RLock()  # legacy local critical sections only
         size = min(32, max(2, int(os.environ.get("HANDRAW_PG_POOL_SIZE", "12"))))
         self._pool = ConnectionPool(
@@ -279,7 +287,8 @@ class PostgresDatabase:
             raw.execute("SET statement_timeout = '30s'")
             raw.execute("SET lock_timeout = '5s'")
             raw.execute("SET idle_in_transaction_session_timeout = '60s'")
-            wrapper = PgConnection(raw)
+            wrapper = PgConnection(raw, identity_cache=self._identity_cache,
+                                   identity_lock=self._identity_lock)
             self._local.wrapper = wrapper
         return wrapper
 
