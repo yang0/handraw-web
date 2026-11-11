@@ -171,26 +171,45 @@ def main():
                     geometry(page,width,kind)
                     page.locator("#make-image-prompt-toggle").click()
                     geometry(page,width,kind)
-                    # #138: constrain the desktop workspace height to verify independent scrolling and fixed composer.
+                    # #140: test real short-stage heights (the former 520px minimum
+                    # could make the hidden parent clip the sidebar before it scrolled).
                     if width > 980:
+                        for stage_height in [650, 430, 340]:
+                            page.locator("#fixture").evaluate("(el, h) => el.style.height = h + 'px'", stage_height)
+                            page.evaluate("fixture.render()")
+                            dock = page.evaluate("""() => {
+                                const rect = s => document.querySelector(s).getBoundingClientRect();
+                                const sidebar = document.querySelector(".make-image-properties");
+                                const output = document.querySelector(".make-image-output-scroll");
+                                const composer = rect(".make-image-composer");
+                                const stage = rect(".make-image-conversation");
+                                const host = rect("#fixture");
+                                const workspace = rect(".make-image-chat-container");
+                                const previousOutputScroll = output.scrollTop;
+                                const beforeScroll = sidebar.scrollTop = 0;
+                                sidebar.scrollTop = sidebar.scrollHeight;
+                                return {
+                                    sidebarHeight:sidebar.clientHeight, sidebarScroll:sidebar.scrollHeight,
+                                    sidebarOverflow:getComputedStyle(sidebar).overflowY,
+                                    sidebarScrollbar:getComputedStyle(sidebar).scrollbarWidth,
+                                    scrollbarThumb:getComputedStyle(sidebar).scrollbarColor,
+                                    sidebarScrollTop:sidebar.scrollTop,
+                                    outputUntouched:output.scrollTop === previousOutputScroll,
+                                    outputScrollbar:getComputedStyle(output).scrollbarWidth,
+                                    composerBottom:composer.bottom, stageBottom:stage.bottom,
+                                    hostBottom:host.bottom, hostHeight:host.height, workspaceHeight:workspace.height
+                                };
+                            }""")
+                            assert dock["workspaceHeight"] <= dock["hostHeight"] + 2, (stage_height, dock)
+                            assert dock["sidebarScroll"] > dock["sidebarHeight"] + 2, (stage_height, dock)
+                            assert dock["sidebarScrollTop"] > 2, (stage_height, dock)
+                            assert dock["sidebarOverflow"] == "auto", (stage_height, dock)
+                            assert dock["sidebarScrollbar"] != "none", (stage_height, dock)
+                            assert dock["outputScrollbar"] == "none" and dock["outputUntouched"], (stage_height, dock)
+                            assert dock["composerBottom"] <= dock["stageBottom"] + 1 and dock["stageBottom"] <= dock["hostBottom"], (stage_height, dock)
+                        # Return to the wider evidence fixture for the original screenshot.
                         page.locator("#fixture").evaluate("el => el.style.height = '650px'")
                         page.evaluate("fixture.render()")
-                        dock = page.evaluate("""() => {
-                            const rect = s => document.querySelector(s).getBoundingClientRect();
-                            const sidebar = document.querySelector(".make-image-properties");
-                            const output = document.querySelector(".make-image-output-scroll");
-                            const composer = rect(".make-image-composer");
-                            const stage = rect(".make-image-conversation");
-                            const host = rect("#fixture");
-                            return {sidebarHeight:sidebar.clientHeight, sidebarScroll:sidebar.scrollHeight,
-                                sidebarOverflow:getComputedStyle(sidebar).overflowY,
-                                outputScrollbar:getComputedStyle(output).scrollbarWidth,
-                                composerBottom:composer.bottom, stageBottom:stage.bottom, hostBottom:host.bottom};
-                        }""")
-                        assert dock["sidebarScroll"] > dock["sidebarHeight"] + 2, dock
-                        assert dock["sidebarOverflow"] == "auto", dock
-                        assert dock["outputScrollbar"] == "none", dock
-                        assert dock["composerBottom"] <= dock["stageBottom"] and dock["stageBottom"] <= dock["hostBottom"], dock
                     # The action stays reachable with both panels expanded.
                     page.locator("#make-image-btn-run").scroll_into_view_if_needed()
                     check_bar(page,"#make-image-btn-run")
