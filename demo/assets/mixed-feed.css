@@ -162,7 +162,6 @@
 }
 .hw-mf-photo-label--resource { background: rgba(142, 76, 48, .88); }
 .hw-mf-body { padding: 10px 11px 11px; }
-.hw-mf-type { display: block; color: var(--mf-red); font-size: 10.5px; font-weight: 800; margin-bottom: 4px; }
 .hw-mf-title {
   display: -webkit-box;
   overflow: hidden;
@@ -193,7 +192,6 @@
 }
 .hw-mf-remix:hover { text-decoration: underline; }
 .hw-mf-card--topic { border-top: 3px solid #9a8165; }
-.hw-mf-card--topic .hw-mf-type { color: #86674a; }
 .hw-mf-card--resource { border-top: 3px solid #d0b9a0; }
 .hw-mf-excerpt {
   display: -webkit-box; overflow: hidden; -webkit-line-clamp: 4;
