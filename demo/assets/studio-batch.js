@@ -340,18 +340,19 @@
       const result = opts.result || {};
       const status = this.getRowStatus(idx, opts.busy, opts.currentStep || 0, result, opts.activeIndex);
       const isSelected = idx === opts.selectedIndex;
-      const layoutId = iter?.layout || opts.globalLayout || "";
-      const layoutImg = layoutId ? this.getResourceInfo(layoutId, "layouts")?.image : (iter?.sampleImg || "");
-      const image = result.imageUrl || layoutImg || "";
-      const cls = result.imageUrl ? "is-generated" : layoutImg ? "is-schematic" : "is-empty";
+      // Unrendered slots are numbered placeholders, never layout samples.
+      // Finished slots reveal the label only on hover/keyboard focus.
+      const image = result.imageUrl || "";
       const thumb = image
         ? `<img data-hw-src="${esc(image)}" alt="" loading="lazy" />`
-        : `<span class="batch-series-thumb-empty" aria-hidden="true">${idx + 1}</span>`;
+        : `<span class="batch-series-thumb-empty" aria-hidden="true">图${idx + 1}</span>`;
       return `
-        <button type="button" class="batch-series-thumb ${isSelected ? "is-selected" : ""} ${status.className}" data-series-select-idx="${idx}" role="tab" aria-selected="${isSelected}" aria-label="切换到图 ${idx + 1}，${esc(status.label)}" title="图 ${idx + 1} · ${esc(status.label)}">
-          <span class="batch-series-thumb-picture ${cls}">${thumb}${status.key === "generating" ? '<span class="batch-series-thumb-pulse" aria-hidden="true"></span>' : ""}</span>
-          <span class="batch-series-thumb-number">图 ${idx + 1}</span>
-          <span class="batch-series-thumb-status">${esc(status.label)}</span>
+        <button type="button" class="batch-series-thumb ${image ? "has-result" : "is-unrendered"} ${isSelected ? "is-selected" : ""} ${status.className}" data-series-select-idx="${idx}" role="tab" aria-selected="${isSelected}" aria-label="切换到图 ${idx + 1}，${esc(status.label)}" title="图 ${idx + 1} · ${esc(status.label)}">
+          <span class="batch-series-thumb-picture ${image ? "is-generated" : "is-empty"}">
+            ${thumb}
+            ${image ? `<span class="batch-series-thumb-overlay" aria-hidden="true">图${idx + 1}</span>` : ""}
+            ${status.key === "generating" ? '<span class="batch-series-thumb-pulse" aria-hidden="true"></span>' : ""}
+          </span>
         </button>
       `;
     }
@@ -470,31 +471,7 @@
             <div class="make-image-main-grid creation-workspace batch-series-workspace">
               <section class="creation-settings batch-series-properties" aria-label="系列图属性">
                 <div class="batch-series-shared">
-                  <div class="batch-series-section-title">整套设置</div>
-              <div class="batch-series-top-controls">
-                <label class="batch-count-wrap" for="batch-count-input"><span class="make-image-field-label">张数</span>
-                  <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" ${busy ? "disabled" : ""} />
-                </label>
-                <div class="batch-strategy-wrap">
-                  <span class="make-image-field-label">图型策略</span>
-                  <div class="batch-strategy-seg" role="group" aria-label="图型策略">
-                    <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "fixed" ? "is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}" ${busy ? "disabled" : ""}>固定图型</button>
-                    <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "ai" ? "is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}" ${busy ? "disabled" : ""}>AI 推荐</button>
-                  </div>
-                </div>
-              </div>
-              ${batchLayoutMode === "fixed" ? `
-                <div class="batch-series-fixed-layout">
-                  <span class="make-image-field-label">整套默认图型</span>
-                  <button type="button" class="btn btn-sm" id="batch-btn-pick-fixed-layout" ${busy ? "disabled" : ""}>选择默认图型${layoutObj?.id ? ` · ${esc(layoutObj.id)}` : ""}</button>
-                </div>
-              ` : ""}
-              ${batchLayoutMode === "fixed" ? `
-                <details class="batch-series-bulk-input">
-                  <summary>批量粘贴主题</summary>
-                  <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="4" aria-label="每行输入一张图片主题" placeholder="每行一个主题…">${esc(promptListText)}</textarea>
-                </details>
-              ` : ""}
+                  
               <!-- Row 1: Output Mode (Left) + Fusion Toggle in ONE Row -->
               <div class="make-image-top-row batch-top-row">
                 <div class="make-image-inline-group">
@@ -514,6 +491,26 @@
                   </div>
                 </div>
               </div>
+
+              <!-- Layout strategy follows the style mode, using the exact single-image control vocabulary. -->
+              <div class="make-image-inline-group batch-series-layout-strategy">
+                <span class="make-image-field-label">图型策略</span>
+                <div class="make-image-btn-group" role="group" aria-label="图型策略">
+                  <button type="button" class="btn btn-sm ${batchLayoutMode === "ai" ? "btn-primary is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}" ${busy ? "disabled" : ""}>AI 推荐</button>
+                  <button type="button" class="btn btn-sm ${batchLayoutMode === "fixed" ? "btn-primary is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}" ${busy ? "disabled" : ""}>固定图型</button>
+                </div>
+              </div>
+              ${batchLayoutMode === "fixed" ? `
+                <div class="make-image-pickers-row batch-series-fixed-picker">
+                  ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
+                </div>
+              ` : ""}
+              ${batchLayoutMode === "fixed" ? `
+                <details class="batch-series-bulk-input">
+                  <summary>批量粘贴主题</summary>
+                  <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="4" aria-label="每行输入一张图片主题" placeholder="每行一个主题…">${esc(promptListText)}</textarea>
+                </details>
+              ` : ""}
 
               <!-- Row 2: Fixed Parameter Picker Cards (Style1, Style2 if fusion, Color) -->
               <div class="make-image-pickers-row batch-pickers-row ${isFusion ? "has-style2" : ""}">
