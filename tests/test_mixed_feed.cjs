@@ -97,6 +97,7 @@ assert.ok(textHtml.includes("hw-mf-author-avatar"), "discussion cards include au
 assert.ok(html.includes("hw-mf-author-avatar"), "work cards include author avatar");
 // #169: category text should not occupy an extra line in masonry cards.
 assert.ok(!html.includes("hw-mf-type") && !html.includes("创作作品"), "work body omits redundant type line");
+assert.match(html, /width="28" height="28"/, "work icon is legible at 28px");
 assert.match(html, /src="\/assets\/feed-icons\/work\.png"/, "work category uses a transparent hand-drawn icon before the title");
 assert.doesNotMatch(html, /hw-mf-photo-label/, "no text overlays on work image");
 const activeDiscussionWork = renderCard({ kind: "work", data: { ...works[0], replyCount: 4 } }, state);
