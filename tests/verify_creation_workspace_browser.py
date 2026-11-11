@@ -32,6 +32,13 @@ BOOT = r"""
   };
   catalog.resourceMap = new Map([...catalog.styles,...catalog.layouts].map(r=>[r.id,r]));
   window.HANDRAW_SHARED = {App:{options:{}},toast:msg=>window.notice=msg};
+  window.HandrawImageLoader = {scan:root=>{
+    root.querySelectorAll("img[data-hw-src]").forEach(img=>{
+      const url=img.getAttribute("data-hw-src");
+      if(url && img.getAttribute("src")!==url) img.setAttribute("src",url);
+    });
+  }};
+  window.HANDRAW_SHARED.triggerImageLoaders = root=>window.HandrawImageLoader.scan(root);
   window.HandrawStudioPromptEngine = {
     assembleControlPrompt:()=>parts.text.data.text,
     resolveControlRecipe:()=>({}),
@@ -334,6 +341,25 @@ def main():
                     expect(page.locator("#batch-btn-stop")).to_be_visible()
                     expect(page.locator(".batch-series-pending")).to_be_visible()
                     expect(page.locator(".batch-results-section")).to_have_count(0)
+                    # Live progress replaces media on the SAME planned card; no extra result list.
+                    page.evaluate("""() => fixture.controller.updateProgress({
+                      updatedIndex:0,
+                      itemResult:{imageUrl:fixture.pixel,title:"第1张成图"},
+                      completedCount:1,failedCount:0,totalCount:3,
+                      activeIndex:1,activeIndices:[1],busy:true
+                    })""")
+                    expect(page.locator('[data-batch-row="0"] .is-generated')).to_have_count(1)
+                    expect(page.locator('[data-batch-row="1"] .batch-series-pending')).to_have_count(1)
+                    expect(page.locator(".batch-series-card")).to_have_count(3)
+                    expect(page.locator(".batch-results-section")).to_have_count(0)
+                    page.evaluate("""() => fixture.controller.updateProgress({
+                      updatedIndex:1,
+                      itemResult:{failed:true,error:"模拟供应商失败"},
+                      completedCount:1,failedCount:1,totalCount:3,
+                      activeIndex:2,activeIndices:[2],busy:true
+                    })""")
+                    expect(page.locator('[data-batch-row="1"] [data-retry-idx="1"]')).to_be_visible()
+                    expect(page.locator('[data-batch-row="2"] .batch-series-pending')).to_be_visible()
                     page.locator("#batch-btn-stop").click()
                     expect(page.locator("#batch-btn-stop")).to_be_disabled()
                     assert page.evaluate("fixture.counts().cancels")==1
