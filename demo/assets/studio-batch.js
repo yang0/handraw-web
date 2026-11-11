@@ -1523,7 +1523,7 @@
       // A count change is authoritative for the image slots, not just an
       // annotation in the composer. Keep the user's existing themes in order.
       const syncSeriesCount = (requestedCount) => {
-        const count = Math.max(1,Math.min(10,Math.round(Number(requestedCount) || 3)));
+        const count = Math.max(1,Math.min(10,Math.round(Number.isFinite(Number(requestedCount)) ? Number(requestedCount) : 3)));
         const savedRows = Array.isArray(loop.data.batchRows) && loop.data.batchRows.length
           ? loop.data.batchRows.slice()
           : String(loop.data.promptListText || "").split(/\r?\n/).filter(x=>x.trim())
@@ -1547,7 +1547,7 @@
           if (ctrl?.data) ctrl.data.count=1;
         };
         countInput.onchange = () => {
-          const count = Math.max(1,Math.min(10,Math.round(Number(countInput.value) || 3)));
+          const count = Math.max(1,Math.min(10,Math.round(countInput.value.trim()!=="" && Number.isFinite(Number(countInput.value)) ? Number(countInput.value) : 3)));
           countInput.value=String(count);
           syncSeriesCount(count);
           markDirty();
