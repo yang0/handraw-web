@@ -101,7 +101,7 @@ def load(page, kind):
     html=(ROOT/"demo/studio.html").read_text()
     for rel in re.findall(r'href="/([^"?]+\.css)', html):
         page.add_style_tag(path=str(ROOT/"demo"/rel))
-    page.add_style_tag(content="body{margin:0;overflow:auto}#fixture{max-width:1440px;margin:0 auto;padding:24px;box-sizing:border-box}")
+    page.add_style_tag(content="body{margin:0;overflow:auto}#fixture{max-width:1440px;margin:0 auto;padding:24px;box-sizing:border-box;height:calc(100dvh - 16px)}")
     for name in ["studio-make-image.js","studio-batch.js"]:
         page.add_script_tag(path=str(ROOT/"demo/assets"/name))
     image="data:image/webp;base64,"+base64.b64encode((ROOT/"demo/starter/bear-and-bird.webp").read_bytes()).decode()
@@ -122,6 +122,8 @@ def main():
                 evidence.append({"kind":kind,"width":width,**geometry(page,width,kind)})
                 expect(page.locator(".creation-content")).to_be_visible()
                 expect(page.locator(".creation-settings")).to_be_visible()
+                if kind=="batch":
+                    page.locator("#batch-btn-start").scroll_into_view_if_needed()
                 check_bar(page, "#make-image-btn-run" if kind=="quick" else "#batch-btn-start")
                 if kind=="quick":
                     # #139: leave the results pane visually clean, with no duplicate page heading.
