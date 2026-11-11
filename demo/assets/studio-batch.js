@@ -2164,7 +2164,7 @@
       const btnDownloadAll = root.querySelector("#batch-btn-download-all");
       if (btnDownloadAll) {
         btnDownloadAll.onclick = async () => {
-          const results = self.context?.results || [];
+          const results = [...(self.context?.results || [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
           if (!results.length) return;
           btnDownloadAll.disabled = true;
           btnDownloadAll.textContent = "正在下载…";
