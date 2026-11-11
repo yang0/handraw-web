@@ -716,6 +716,7 @@
 
                 <div class="batch-btn-wrap">
                   ${busy ? `<span class="batch-busy-hint">任务处理中，暂不能清空或再次生成</span>` : ""}
+                  <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
                   <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
                   ${busy ? `
                     <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止"}</button>
@@ -940,6 +941,8 @@
       if (!host) return;
       if (host.querySelector(".batch-series-grid")) {
         this.refreshSeriesCards();
+        const dlAll = host.querySelector("#batch-btn-download-all");
+        if (dlAll) dlAll.disabled = true;
         const btnReset = host.querySelector("#batch-btn-reset");
         if (btnReset) btnReset.disabled = true;
         const btnStart = host.querySelector("#batch-btn-start");
@@ -1232,6 +1235,8 @@
       if (host.querySelector(".batch-series-grid")) {
         if (!this.seriesOutcomes) this.seriesOutcomes = new Map();
         this.seriesOutcomes.set(index, res);
+        const dlAll = host.querySelector("#batch-btn-download-all");
+        if (dlAll) dlAll.disabled = false;
         return;
       }
       let resultsSec = host.querySelector(".batch-results-section");
