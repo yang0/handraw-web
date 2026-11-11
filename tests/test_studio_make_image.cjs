@@ -649,11 +649,6 @@ function createTestGraph(options = {}) {
       sandbox.document.activeElement = this;
     }
   };
-  const clearSubjBtn = {
-    id: "make-image-clear-subject",
-    style: { display: "none" },
-    onclick: null
-  };
   const promptPreview = {
     id: "make-image-prompt",
     value: ""
@@ -661,7 +656,6 @@ function createTestGraph(options = {}) {
 
   const elementsById = new Map([
     ["make-image-subject", subjInput],
-    ["make-image-clear-subject", clearSubjBtn],
     ["make-image-prompt", promptPreview]
   ]);
 
@@ -715,7 +709,6 @@ function createTestGraph(options = {}) {
   assert.equal(markDirtyAndRenderCalls, 0, "markDirtyAndRender must NOT be called on input");
   assert.equal(sandbox.document.activeElement, subjInput, "document.activeElement must still be the textarea");
   assert.equal(txt.data.text, "暖", "td.text must update in memory immediately");
-  assert.equal(clearSubjBtn.style.display, "", "Clear subject button must be shown when text is present");
   assert.match(promptPreview.value, /暖/, "Prompt preview must synchronize immediately");
 
   // 3. User types full string: '暖阳下的单车少女'
@@ -737,12 +730,10 @@ function createTestGraph(options = {}) {
   assert.equal(markDirtyAndRenderCalls, 0, "markDirtyAndRender must not be called on blur to prevent swallowing clicks on clear/run buttons");
   assert.ok(persistDraftCalls > 0, "persistDraft must be called on change/blur to persist draft without re-rendering");
 
-  // 5. Clicking clear subject button
-  assert.ok(typeof clearSubjBtn.onclick === "function", "Clear button must have onclick listener");
-  clearSubjBtn.onclick();
-  assert.equal(txt.data.text, "", "Data text cleared");
-  assert.equal(markDirtyAndRenderCalls, 1, "markDirtyAndRender called on clear");
-  assert.equal(sandbox.document.activeElement, subjInput, "Focus returned to textarea on clear");
+  // #139: no separate clear-theme action; the user edits the text directly.
+  assert.ok(!makeImageSource.includes('id="make-image-clear-subject"'));
+  assert.ok(!makeImageSource.includes('id="make-image-btn-again"'));
+  assert.ok(!makeImageSource.includes('id="make-image-btn-new-theme"'));
 
   console.log("✓ Test 10 Passed: Subject input focus preservation & no re-render on input verified.");
 }
