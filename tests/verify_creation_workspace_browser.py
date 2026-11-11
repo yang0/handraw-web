@@ -78,13 +78,13 @@ def geometry(page, width, kind):
     assert not data["overflow"], (width, data)
     c, s = data["content"], data["settings"]
     if width > 980:
-        if kind == "quick":
-            assert c["x"] >= s["right"] and abs(c["y"] - s["y"]) < 2, data
-        else:
-            assert s["x"] >= c["right"] and abs(c["y"] - s["y"]) < 2, data
+        assert c["x"] >= s["right"] and abs(c["y"] - s["y"]) < 2, data
         assert c["w"] > s["w"], data
     else:
-        assert abs(s["x"] - c["x"]) < 2 and s["y"] >= c["bottom"], data
+        if kind == "quick":
+            assert abs(s["x"] - c["x"]) < 2 and s["y"] >= c["bottom"], data
+        else:
+            assert abs(s["x"] - c["x"]) < 2 and c["y"] >= s["bottom"], data
     return data
 
 def check_bar(page, selector):
@@ -292,11 +292,24 @@ def main():
                     assert page.evaluate("fixture.counts().cancels")==1
                     geometry(page,width,kind)
                 else:
+                    # #141: one live card grid; no separate edit, status or result lists.
+                    expect(page.locator(".batch-series-workspace")).to_be_visible()
+                    expect(page.locator(".batch-series-grid")).to_be_visible()
+                    expect(page.locator(".batch-edit-table")).to_have_count(0)
+                    expect(page.locator(".batch-preview-table")).to_have_count(0)
+                    expect(page.locator(".batch-results-section")).to_have_count(0)
+                    page.locator(".batch-series-bulk-input summary").click()
                     page.locator("#batch-prompts-input").fill("山间晨雾\n湖边暮色")
+                    page.locator("#batch-prompts-input").blur()
+                    expect(page.locator(".batch-series-card")).to_have_count(2)
+                    expect(page.locator(".batch-series-theme-input")).to_have_count(2)
+                    page.locator('[data-series-theme-idx="0"]').fill("晨间山谷")
+                    page.locator('[data-series-theme-idx="0"]').blur()
+                    assert "晨间山谷" in page.evaluate("fixture.parts.loop.data.promptListText")
                     expect(page.locator(".batch-cost-text")).to_contain_text("2 张")
                     expect(page.locator("#batch-btn-start")).to_be_enabled()
                     page.locator("#batch-strategy-ai").click()
-                    assert page.locator(".batch-edit-row").count()==2
+                    expect(page.locator(".batch-series-card")).to_have_count(2)
                     page.locator("#batch-mode-fusion").click()
                     page.locator('[data-pick-kind="style1"]').press("Space")
                     assert page.evaluate("fixture.counts().pickers")==1
@@ -306,17 +319,19 @@ def main():
                     geometry(page,width,kind)
                     page.locator("#batch-seed-input").fill("城市散步")
                     page.locator("#batch-btn-plan").click()
-                    expect(page.locator(".batch-edit-row")).to_have_count(3)
+                    expect(page.locator(".batch-series-card")).to_have_count(3)
+                    expect(page.locator(".batch-series-card .batch-status-badge")).to_have_count(3)
                     geometry(page,width,kind)
-                    if width<=600:
-                        assert page.locator(".batch-edit-table").evaluate("el=>el.scrollWidth<=el.clientWidth+1")
+                    page.locator('[data-pick-row-refs-idx="0"]').click()
+                    assert page.evaluate("fixture.counts().refs")==2
                     page.locator("#batch-concurrency").select_option("2")
-                    assert page.evaluate("fixture.parts.loop.data.batchConcurrency")==2
                     page.locator("#batch-btn-start").scroll_into_view_if_needed()
                     check_bar(page,"#batch-btn-start")
                     page.screenshot(path=str(OUT/f"{kind}-{width}.png"),full_page=True)
                     page.locator("#batch-btn-start").click()
                     expect(page.locator("#batch-btn-stop")).to_be_visible()
+                    expect(page.locator(".batch-series-pending")).to_be_visible()
+                    expect(page.locator(".batch-results-section")).to_have_count(0)
                     page.locator("#batch-btn-stop").click()
                     expect(page.locator("#batch-btn-stop")).to_be_disabled()
                     assert page.evaluate("fixture.counts().cancels")==1
