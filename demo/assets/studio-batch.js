@@ -717,7 +717,7 @@
 
                 <div class="batch-btn-wrap">
                   ${busy ? `<span class="batch-busy-hint">任务处理中，暂不能清空或再次生成</span>` : ""}
-                  <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
+                  <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) || slotResults.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
                   <button type="button" class="btn btn-sm batch-btn-reset" id="batch-btn-reset" ${busy ? "disabled" : ""}>清空表单</button>
                   ${busy ? `
                     <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止"}</button>
@@ -2164,7 +2164,16 @@
       const btnDownloadAll = root.querySelector("#batch-btn-download-all");
       if (btnDownloadAll) {
         btnDownloadAll.onclick = async () => {
-          const results = [...(self.context?.results || [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+          let results = (self.context?.results || []).filter(r => r?.imageUrl);
+          if (!results.length) {
+            const displays = self.context?.displays || [];
+            const gallery = displays.some(d => d.data?.kind === "batch_gallery");
+            results = self.resolveIterations().map((_, idx) => {
+              const item = self.getItemResult(idx, displays, gallery);
+              return item?.imageUrl ? {...item, index:idx} : null;
+            }).filter(Boolean);
+          }
+          results = [...results].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
           if (!results.length) return;
           btnDownloadAll.disabled = true;
           btnDownloadAll.textContent = "正在下载…";
