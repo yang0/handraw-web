@@ -208,7 +208,7 @@ function parseHtml(html) {
         return m ? { textContent: m[1] } : null;
       }
       if (selector === ".batch-cost-wrap") {
-        const m = html.match(/<div class="batch-cost-wrap">([\s\S]*?)<\/div>/);
+        const m = html.match(/<div class="batch-cost-wrap"[^>]*>([\s\S]*?)<\/div>/);
         return m ? { innerHTML: m[1] } : null;
       }
       if (selector === ".batch-preview-title") {
