@@ -454,13 +454,47 @@
         : (busy && typeof ld.activeIndex === "number" ? ld.activeIndex
           : (busy && currentStep < totalSteps ? currentStep : null));
 
-      const oldSeriesScroll = this.hostElement.querySelector(".batch-series-scroll")?.scrollTop || 0;
+      const fixedThemes = promptListText.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+      this.selectedSeriesIndex = Math.max(0,Math.min(this.selectedSeriesIndex || 0,Math.max(0,iterations.length-1)));
+      const selectedIndex = this.selectedSeriesIndex;
+      const selectedIter = iterations[selectedIndex] || null;
+      const selectedRow = batchLayoutMode === "ai" ? (batchRows[selectedIndex] || {}) : {};
+      const selectedRefs = Array.isArray(selectedRow.assetItems) ? selectedRow.assetItems : [];
+      const selectedTheme = batchLayoutMode === "ai" ? (selectedRow.theme || "") : (fixedThemes[selectedIndex] || "");
+      const composerMode = this.seriesComposerMode === "image" && selectedIter ? "image" : "series";
+      const composerRefs = composerMode === "image" ? selectedRefs : globalAssetItems;
       const oldSeriesPropertiesScroll = this.hostElement.querySelector(".batch-series-properties")?.scrollTop || 0;
       this.hostElement.innerHTML = `
         <div class="make-image-container batch-container batch-series-container">
           <form class="make-image-form creation-form batch-series-form" novalidate onsubmit="return false;">
             <div class="make-image-main-grid creation-workspace batch-series-workspace">
-              <section class="creation-settings batch-series-properties" aria-label="系列图设置">
+              <section class="creation-settings batch-series-properties" aria-label="系列图属性">
+                <div class="batch-series-shared">
+                  <div class="batch-series-section-title">整套设置</div>
+              <div class="batch-series-top-controls">
+                <label class="batch-count-wrap" for="batch-count-input"><span class="make-image-field-label">张数</span>
+                  <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" ${busy ? "disabled" : ""} />
+                </label>
+                <div class="batch-strategy-wrap">
+                  <span class="make-image-field-label">图型策略</span>
+                  <div class="batch-strategy-seg" role="group" aria-label="图型策略">
+                    <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "fixed" ? "is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}" ${busy ? "disabled" : ""}>固定图型</button>
+                    <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "ai" ? "is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}" ${busy ? "disabled" : ""}>AI 推荐</button>
+                  </div>
+                </div>
+              </div>
+              ${batchLayoutMode === "fixed" ? `
+                <div class="batch-series-fixed-layout">
+                  <span class="make-image-field-label">整套默认图型</span>
+                  <button type="button" class="btn btn-sm" id="batch-btn-pick-fixed-layout" ${busy ? "disabled" : ""}>选择默认图型${layoutObj?.id ? ` · ${esc(layoutObj.id)}` : ""}</button>
+                </div>
+              ` : ""}
+              ${batchLayoutMode === "fixed" ? `
+                <details class="batch-series-bulk-input">
+                  <summary>批量粘贴主题</summary>
+                  <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="4" aria-label="每行输入一张图片主题" placeholder="每行一个主题…">${esc(promptListText)}</textarea>
+                </details>
+              ` : ""}
               <!-- Row 1: Output Mode (Left) + Fusion Toggle in ONE Row -->
               <div class="make-image-top-row batch-top-row">
                 <div class="make-image-inline-group">
@@ -502,26 +536,6 @@
                     `).join("")}
                   </div>
                   <input type="text" class="make-image-input make-image-ratio-input" id="batch-ratio-input" value="${esc(currentRatio)}" pattern="[0-9]+(?:\\.[0-9]+)?:[0-9]+(?:\\.[0-9]+)?" placeholder="宽:高" aria-label="比例数值" />
-                </div>
-              </div>
-
-              <!-- Global References Row (Independent row outside collapsible) -->
-              <div class="make-image-more-row batch-global-refs-row" id="batch-more-row-refs">
-                <span class="make-image-field-label">参考图</span>
-                <button type="button" class="btn btn-sm" id="batch-btn-pick-global-refs">选择参考图</button>
-                <div class="make-image-more-thumbs batch-global-refs-thumbs" id="batch-global-refs-thumbs">
-                  ${globalAssetItems.length ? globalAssetItems.map((ast, idx) => `
-                    <div class="make-image-slot-card is-inline">
-                      <div class="make-image-slot-thumb-wrap">
-                        ${ast.image ? `<img data-hw-src="${esc(ast.image)}" alt="${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}" loading="lazy" />` : ""}
-                        <button type="button" class="make-image-slot-clear" data-remove-global-ref="${idx}" title="移除">×</button>
-                      </div>
-                      <div class="make-image-slot-meta">
-                        <span class="make-image-slot-code">${esc(ast.id || `REF-${idx + 1}`)}</span>
-                        <span class="make-image-slot-title">${esc(ast.name || ast.id || `参考图 ${idx + 1}`)}</span>
-                      </div>
-                    </div>
-                  `).join("") : `<span class="make-image-picker-hint">未指定，可点此添加（最多 4 张）</span>`}
                 </div>
               </div>
 
@@ -616,93 +630,73 @@
               </div>
 
 
-            <label style="display:flex;align-items:center;gap:8px;font-size:12px;">同时生成
-              <select class="hw-input" id="batch-concurrency" aria-label="批量生图并发数量" ${busy ? "disabled" : ""}>
-                ${[1,2,3,4].map((n) => `<option value="${n}" ${Number(ld.batchConcurrency || 3) === n ? "selected" : ""}>${n} 张</option>`).join("")}
-              </select>
-            </label>
+
+                </div>
+                <div class="batch-series-selected-settings" aria-label="当前选中图片属性">
+                  <div class="batch-series-section-title">
+                    <strong>图 ${selectedIndex + 1}</strong>
+                    <span>单张属性</span>
+                    <button type="button" class="batch-series-delete" data-del-row-idx="${selectedIndex}" aria-label="删除图 ${selectedIndex + 1}" ${!selectedIter || busy ? "disabled" : ""}>删除</button>
+                  </div>
+                  ${selectedIter ? `
+                    <div class="batch-series-selected-field">
+                      <span class="make-image-field-label">本图图型</span>
+                      ${this.renderRowLayoutButtonHtml(selectedRow, selectedIndex, sd.layout || "")}
+                    </div>
+                    <label class="batch-series-global-toggle"><input type="checkbox" data-row-skip-global="${selectedIndex}" ${selectedRow.skipGlobalRefs ? "checked" : ""} ${busy ? "disabled" : ""} />本图不使用整套参考图</label>
+                    <div class="batch-series-selected-ref-summary">本图参考图 ${selectedRefs.length} 张 · 在右侧输入框添加</div>
+                  ` : '<p class="batch-series-selected-empty">先规划图片或添加一张。</p>'}
+                </div>
               </section>
-              <section class="creation-content batch-series-content" aria-label="系列图卡片工作区">
+              <section class="creation-content batch-series-content" aria-label="系列图单图工作区">
                 <div class="batch-series-toolbar">
-                  <span>系列画面 <strong>${totalCount}</strong> 张</span>
+                  <span>系列图 <strong>${totalCount}</strong> 张 <small>· 当前图 ${selectedIndex + 1}</small></span>
                   <button type="button" class="btn btn-sm" id="batch-btn-add-row" ${busy ? "disabled" : ""}>＋ 添加画面</button>
                 </div>
-                <div class="batch-series-scroll" role="region" aria-label="系列画面编辑与生成结果" tabindex="0">
-                  <div class="batch-series-grid">
-                    ${iterations.length ? iterations.map((iter, idx) => this.renderSeriesCard(iter, idx, {
-                      mode: batchLayoutMode, rows: batchRows, globalLayout: sd.layout || "",
-                      fixedThemes: promptListText.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
-                      result: slotResults[idx], busy, currentStep, activeIndex, ratio: currentRatio
-                    })).join("") : `<div class="batch-series-empty">还没有画面。在下方输入系列母题并使用 AI 规划，或点击「添加画面」开始。</div>`}
+                <div class="batch-series-stage" aria-label="选中图片及其他画面缩略图">
+                  <div class="batch-series-main-card" id="batch-series-main">
+                    ${selectedIter ? this.renderSeriesCard(selectedIter, selectedIndex, {
+                      mode:batchLayoutMode, rows:batchRows, globalLayout:sd.layout || "",
+                      fixedThemes, result:slotResults[selectedIndex], busy, currentStep,
+                      activeIndex, ratio:currentRatio
+                    }) : '<div class="batch-series-empty">在下方输入整套主题，点击「AI 规划」；也可以直接添加画面。</div>'}
+                  </div>
+                  <div class="batch-series-thumbs" id="batch-series-thumbs" role="tablist" aria-label="切换系列图">
+                    ${iterations.map((iter,idx)=>this.renderSeriesThumb(iter,idx,{
+                       selectedIndex,result:slotResults[idx],globalLayout:sd.layout || "",
+                       busy,currentStep,activeIndex
+                    })).join("")}
                   </div>
                 </div>
-              <div class="batch-series-dock" role="group" aria-label="系列图规划与生成">
-        <div class="batch-plan-card batch-series-planner">
-          <div class="batch-series-seed-line">
-            <label class="batch-series-seed-label" for="batch-seed-input">系列母题</label>
-            <input type="text" class="make-image-input batch-seed-input" id="batch-seed-input" placeholder="描述整套系列图想表达的主题…" value="${esc(batchSeed)}" ${busy ? "disabled" : ""} />
-          </div>
-          <div class="batch-series-options-wrap">
-            <button type="button" class="batch-series-options-toggle" id="batch-plan-options-toggle" aria-controls="batch-plan-options" aria-expanded="${this.planOptionsOpen ? "true" : "false"}">
-              <span>规划参数 <small>${batchCount} 张 · ${batchLayoutMode === "fixed" ? "固定图型" : "AI 推荐图型"}</small></span>
-              <span class="make-image-toggle-icon" aria-hidden="true">${this.planOptionsOpen ? "▲" : "▼"}</span>
-            </button>
-            <div id="batch-plan-options" class="batch-series-options-body" ${this.planOptionsOpen ? "" : "hidden"}>
-              <div class="batch-series-options-grid">
-                    <div class="batch-count-wrap">
-                      <label for="batch-count-input" class="make-image-field-label">张数</label>
-                      <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" />
+                <div class="batch-series-dock" role="group" aria-label="系列图输入与生成">
+                  <div class="batch-series-composer">
+                    <div class="batch-series-composer-modes" role="group" aria-label="主题编辑范围">
+                      <button type="button" data-series-composer-mode="series" class="${composerMode === "series" ? "is-active" : ""}" aria-pressed="${composerMode === "series"}">整套母题</button>
+                      <button type="button" data-series-composer-mode="image" class="${composerMode === "image" ? "is-active" : ""}" aria-pressed="${composerMode === "image"}" ${!selectedIter ? "disabled" : ""}>图 ${selectedIndex + 1} 主题</button>
                     </div>
-
-                    <div class="batch-strategy-wrap">
-                      <span class="make-image-field-label">图型策略</span>
-                      <div class="batch-strategy-seg" role="group" aria-label="图型策略">
-                        <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "fixed" ? "is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}">固定图型</button>
-                        <button type="button" class="batch-strategy-seg-btn ${batchLayoutMode === "ai" ? "is-active" : ""}" id="batch-strategy-ai" aria-pressed="${batchLayoutMode === "ai"}">AI 推荐图型</button>
-                      </div>
-                    </div>
-
-              </div>
-                  <!-- 规划第二行: 固定图型/图型要求 + 右下角【AI 规划这套图】主操作 -->
-                  <div class="batch-plan-row-b-wrap">
-                    ${batchLayoutMode === "fixed" ? `
-                      <div class="batch-plan-row-b batch-fixed-layout-row">
-                        <span class="make-image-field-label">固定图型</span>
-                        <button type="button" class="btn btn-sm" id="batch-btn-pick-fixed-layout">选择图型</button>
-                        <div class="batch-fixed-layout-card-wrap">
-                          ${layoutObj?.id ? `
-                            <div class="make-image-slot-card is-inline batch-chip" data-pick-kind="layout">
-                              <div class="make-image-slot-thumb-wrap">
-                                ${layoutObj.image ? `<img data-hw-src="${esc(layoutObj.image)}" alt="${esc(layoutObj.name || layoutObj.id)}" loading="lazy" />` : ""}
-                                <button type="button" class="make-image-slot-clear" data-clear-kind="layout" title="清除">×</button>
-                              </div>
-                              <div class="make-image-slot-meta">
-                                <span class="make-image-slot-code">${esc(layoutObj.id)}</span>
-                                <span class="make-image-slot-title">${esc(layoutObj.name || layoutObj.id)}</span>
-                              </div>
-                            </div>
-                          ` : `<span class="make-image-picker-hint">未选图型（将使用默认版式）</span>`}
-                        </div>
-                      </div>
+                    ${composerRefs.length ? `
+                      <div class="batch-series-composer-attachments" aria-label="${composerMode === "image" ? "本图参考图" : "整套参考图"}">
+                        ${composerRefs.map((ref,refIndex)=>{
+                          const url=typeof ref === "string" ? ref : (ref.image || ref.url || "");
+                          const name=typeof ref === "string" ? `参考图 ${refIndex+1}` : (ref.name || ref.id || `参考图 ${refIndex+1}`);
+                          return !url ? "" : `<div class="batch-series-attachment">
+                            <img src="${esc(url)}" alt="${esc(name)}" loading="lazy" />
+                            <button type="button" ${composerMode === "image" ? `data-remove-series-ref="${refIndex}"` : `data-remove-global-ref="${refIndex}"`} aria-label="移除参考图 ${refIndex+1}" title="移除">×</button>
+                          </div>`;
+                        }).join("")}
+                      </div>` : ""}
+                    ${composerMode === "series" ? `
+                      <textarea class="make-image-textarea batch-series-composer-input" id="batch-seed-input" rows="3" placeholder="描述整套系列图，如：四张城市漫游插画，每张随机不同图型…" aria-label="整套系列图规划主题" ${busy ? "disabled" : ""}>${esc(batchSeed)}</textarea>
                     ` : `
-                      <div class="batch-plan-row-b batch-ai-layout-row">
-                        <span class="make-image-field-label">图型要求</span>
-                        <input type="text" class="make-image-input batch-layout-req-input" id="batch-layout-req-input" placeholder="例如：前 3 张分镜、后面图鉴，不要封面图（可留空）" value="${esc(batchLayoutReq)}" />
-                      </div>
+                      <textarea class="make-image-textarea batch-series-composer-input batch-series-theme-input" id="batch-series-theme-${selectedIndex}" data-series-theme-idx="${selectedIndex}" rows="3" placeholder="描述图 ${selectedIndex+1} 的画面内容…" aria-label="图 ${selectedIndex+1} 创作主题" ${busy ? "disabled" : ""}>${esc(selectedTheme)}</textarea>
                     `}
-
-
+                    <div class="batch-series-composer-bottom">
+                      ${composerMode === "series"
+                        ? `<button type="button" class="batch-series-add-reference" id="batch-btn-pick-global-refs" aria-label="添加整套参考图" title="添加整套参考图" ${busy ? "disabled" : ""}>＋</button>`
+                        : `<button type="button" class="batch-series-add-reference" data-pick-row-refs-idx="${selectedIndex}" aria-label="添加图 ${selectedIndex+1} 参考图" title="添加本图参考图" ${busy ? "disabled" : ""}>＋</button>`}
+                      <span>${composerMode === "series" ? "写下整套主题及随机图型等要求" : `正在编辑图 ${selectedIndex + 1} 的主题`}</span>
+                    </div>
                   </div>
-              ${batchLayoutMode === "fixed" ? `
-                <details class="batch-series-bulk-input">
-                  <summary>批量粘贴主题（可选）</summary>
-                  <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="5" aria-label="批量粘贴主题，每行一张" placeholder="每行一张画面主题…">${esc(promptListText)}</textarea>
-                </details>
-              ` : ""}
-
-            </div>
-          </div>
-        </div>
                 <div class="batch-series-footer">
                   <div class="batch-series-footer-meta">
                     <div class="batch-cost-wrap">
@@ -730,15 +724,15 @@
                     </div>
                   </div>
                 </div>
-              </div>
+
+                </div>
               </section>
+
             </div>
           </form>
         </div>
       `;
-      const newSeriesScroll = this.hostElement.querySelector(".batch-series-scroll");
       const newPropertiesScroll = this.hostElement.querySelector(".batch-series-properties");
-      if (newSeriesScroll) newSeriesScroll.scrollTop = oldSeriesScroll;
       if (newPropertiesScroll) newPropertiesScroll.scrollTop = oldSeriesPropertiesScroll;
 
       if (typeof host.querySelectorAll === "function") {
