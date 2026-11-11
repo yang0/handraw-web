@@ -37,9 +37,9 @@ class ForumSeriesPromptTests(unittest.TestCase):
                 """,
                 (
                     f"prompt_slot_{index}", self.user["id"], self.user["username"],
-                    "系列图", "graphic-text", prompt,
-                    "" if masked else prompt, masked,
-                    json.dumps([f"/generated/prompt_{index}.webp"]),
+                    "系列图", "graphic-text", "模型完整展开提示词（不是主题）",
+                    "" if masked else "模型完整展开提示词（不是主题）", masked,
+                    json.dumps([{"imageUrl": f"/generated/prompt_{index}.webp", "theme": prompt}]),
                     f"2026-11-11T00:0{index}:00Z", "prompt_batch", index, 3,
                 ),
             )
