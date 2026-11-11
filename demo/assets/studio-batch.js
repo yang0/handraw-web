@@ -735,8 +735,10 @@
       const newPropertiesScroll = this.hostElement.querySelector(".batch-series-properties");
       if (newPropertiesScroll) newPropertiesScroll.scrollTop = oldSeriesPropertiesScroll;
 
-      if (typeof host.querySelectorAll === "function") {
-        this.bindEvents(host, p, iterations);
+      // Re-render may be triggered by a thumbnail/composer click without an
+      // explicit host argument. Always bind to the persistent hostElement.
+      if (typeof this.hostElement?.querySelectorAll === "function") {
+        this.bindEvents(this.hostElement, p, iterations);
       }
 
       if (global.HANDRAW_SHARED?.triggerImageLoaders) {
