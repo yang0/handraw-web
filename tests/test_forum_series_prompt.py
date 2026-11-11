@@ -52,6 +52,49 @@ class ForumSeriesPromptTests(unittest.TestCase):
         self.assertEqual(assets[1].get("prompt", ""), "")
         self.assertEqual(assets[2]["prompt"], "图三：金色街道")
 
+    def test_saved_request_snapshot_theme_overrides_composed_visible_prompt(self):
+        self.conn.execute(
+            """
+            INSERT INTO studio_generations (
+              id,user_id,username,tab_title,mode,prompt,visible_prompt,prompt_masked,
+              system_append_json,items_json,status,created_at,visibility,engine
+            ) VALUES ('theme_snapshot',?,?,?,?,?,?,?,?,?,'success',
+                      '2026-11-11T00:00:00Z','public','live')
+            """,
+            (
+                self.user["id"], self.user["username"], "单张主题", "graphic-text",
+                "完整模型执行提示词，含画风、图型、系统指令",
+                "完整模型执行提示词，含画风、图型、系统指令",
+                0,
+                json.dumps({"recipeSnapshot": {"theme": "阳光下的小猫"}}),
+                json.dumps(["/generated/theme_snapshot.webp"]),
+            ),
+        )
+        ids = project_generation_to_works(self.conn, "theme_snapshot")
+        work = self.conn.execute("SELECT * FROM works WHERE id=?", (ids[0],)).fetchone()
+        assets = generation_image_assets(self.conn, work, ["/generated/theme_snapshot.webp"])
+        self.assertEqual(assets[0]["prompt"], "阳光下的小猫")
+        self.assertNotIn("完整模型执行提示词", assets[0]["prompt"])
+
+    def test_no_theme_never_falls_back_to_full_visible_prompt(self):
+        self.conn.execute(
+            """
+            INSERT INTO studio_generations (
+              id,user_id,username,tab_title,mode,prompt,visible_prompt,prompt_masked,
+              items_json,status,created_at,visibility,engine
+            ) VALUES ('no_theme',?,?,?,?,?,?,?,'["/generated/no_theme.webp"]',
+                      'success','2026-11-11T00:00:00Z','public','live')
+            """,
+            (
+                self.user["id"], self.user["username"], "旧版作品", "graphic-text",
+                "旧版展开完整提示词", "旧版展开完整提示词", 0,
+            ),
+        )
+        ids = project_generation_to_works(self.conn, "no_theme")
+        work = self.conn.execute("SELECT * FROM works WHERE id=?", (ids[0],)).fetchone()
+        assets = generation_image_assets(self.conn, work, ["/generated/no_theme.webp"])
+        self.assertEqual(assets[0].get("prompt", ""), "")
+
     def test_multi_output_row_cannot_claim_unique_prompt_for_each_image(self):
         self.conn.execute(
             """
