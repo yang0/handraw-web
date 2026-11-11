@@ -54,7 +54,7 @@ BOOT = r"""
   ]})});
   const controller = kind === "quick" ? new HandrawMakeImage.MakeImageController() : HandrawBatchCreate;
   const context = {parts,graph:{nodes:[],edges:[]},catalog,busy:false,results:[],displays:[],loggedIn:true,freeQuotaRemaining:2,siteSettings:{}};
-  let runs=0, cancels=0, pickers=0, refs=0, saves=0;
+  let runs=0, cancels=0, pickers=0, refs=0, saves=0, singles=[];
   const host = document.getElementById("fixture");
   const render = () => controller.render(host,context,actions);
   const actions = {
@@ -64,10 +64,27 @@ BOOT = r"""
     openAssetPicker:()=>pickers++,
     openReferencePicker:()=>refs++,
     ensureAssetItems:items=>{parts.asset.data.items=items;render();},
-    run:()=>{runs++;context.busy=true;render();},
+    run:()=>{
+      runs++;context.busy=true;
+      const completed=new Map([...controller.seriesOutcomes?.entries()||[]]
+        .filter(([,item])=>Boolean(item?.imageUrl)));
+      controller.resetBatchProgress?.({
+        totalCount:parts.loop.data.batchRows?.length || 3,
+        batchId:"ui-batch",existingCompleted:completed
+      });
+      render();
+    },
+    runSingleRow:idx=>{
+      singles.push(idx);context.busy=true;
+      controller.resetBatchProgress?.({
+        totalCount:parts.loop.data.batchRows?.length || 3,
+        batchId:"ui-single",singleSlotIndex:idx
+      });
+      render();
+    },
     cancel:()=>{cancels++;return true;}
   };
-  window.fixture = {parts,context,controller,render,counts:()=>({runs,cancels,pickers,refs,saves}),pixel};
+  window.fixture = {parts,context,controller,render,counts:()=>({runs,cancels,pickers,refs,saves,singles}),pixel};
   render();
 }
 """
@@ -312,6 +329,22 @@ def main():
                     expect(page.locator(".batch-series-toolbar")).to_have_count(0)
                     expect(page.locator(".batch-series-focused .batch-series-card-head")).to_have_count(0)
                     expect(page.locator(".batch-series-focused .batch-series-placeholder")).to_be_visible()
+                    expect(page.locator(".batch-series-generate-one")).to_be_visible()
+                    expect(page.locator(".batch-series-generate-one svg")).to_have_count(1)
+                    centered=page.evaluate("""() => {
+                      const main=document.querySelector('.batch-series-main-card').getBoundingClientRect();
+                      const center=document.querySelector('.batch-series-placeholder-center').getBoundingClientRect();
+                      const button=document.querySelector('.batch-series-generate-one').getBoundingClientRect();
+                      const mid=r=>({x:r.left+r.width/2,y:r.top+r.height/2});
+                      return {
+                        dx:Math.abs(mid(main).x-mid(center).x),
+                        dy:Math.abs(mid(main).y-mid(center).y),
+                        buttonDx:Math.abs(mid(main).x-mid(button).x),
+                        buttonInside:button.top>=main.top && button.bottom<=main.bottom
+                      };
+                    }""")
+                    assert centered["dx"]<5 and centered["buttonDx"]<5 and centered["dy"]<max(45,width*.07),centered
+                    assert centered["buttonInside"],centered
                     expect(page.locator("#batch-btn-add-row")).to_be_visible()
                     expect(page.locator(".batch-series-bulk-input")).to_have_count(0)
                     expect(page.locator("#batch-prompts-input")).to_have_count(0)
@@ -415,6 +448,12 @@ def main():
                       const picker=el.getBoundingClientRect();
                       return picker.top>=color.bottom-2;
                     }""")
+                    consistent_width=page.evaluate("""() => {
+                      const main=document.querySelector('.batch-pickers-row [data-pick-kind="style1"]').getBoundingClientRect();
+                      const layout=document.querySelector('.batch-series-fixed-picker [data-pick-kind="layout"]').getBoundingClientRect();
+                      return {style:main.width,layout:layout.width,diff:Math.abs(main.width-layout.width)};
+                    }""")
+                    assert consistent_width["diff"]<2,consistent_width
                     page.locator(".batch-series-fixed-picker [data-pick-kind='layout']").click()
                     assert page.evaluate("fixture.counts().pickers")==1
                     # Count drives actual prepared slots, not just an input annotation.
@@ -489,8 +528,29 @@ def main():
                     page.locator("#batch-btn-start").scroll_into_view_if_needed()
                     check_bar(page,"#batch-btn-start")
                     page.screenshot(path=str(OUT/f"{kind}-{width}.png"),full_page=True)
+                    # Direct generation of selected picture 3 must use one slot,
+                    # not the batch CTA. Reuse the single-image shimmer.
+                    page.locator('[data-series-select-idx="2"]').click()
+                    page.locator('[data-generate-series-idx="2"]').click()
+                    assert page.evaluate("fixture.counts().singles")==[2]
+                    assert page.evaluate("fixture.counts().runs")==0
+                    expect(page.locator(".batch-series-focused .batch-series-pending")).to_be_visible()
+                    expect(page.locator(".batch-series-focused .make-image-pending-art")).to_be_visible()
+                    expect(page.locator(".batch-series-focused .make-image-pending-shimmer")).to_be_visible()
+                    page.evaluate("""() => {
+                      fixture.context.busy=false;
+                      fixture.controller.updateProgress({
+                        updatedIndex:2,
+                        itemResult:{imageUrl:fixture.pixel,title:"图3已单独生成"},
+                        completedCount:1,failedCount:0,totalCount:3,
+                        activeIndex:null,activeIndices:[],busy:false,batchId:"ui-single"
+                      });
+                    }""")
+                    expect(page.locator('.batch-series-thumb[data-series-select-idx="2"].has-result')).to_have_count(1)
                     page.locator('[data-series-select-idx="0"]').click()
                     page.locator("#batch-btn-start").click()
+                    assert page.evaluate("fixture.counts().runs")==1
+                    expect(page.locator('.batch-series-thumb[data-series-select-idx="2"].has-result')).to_have_count(1)
                     expect(page.locator("#batch-btn-stop")).to_be_visible()
                     expect(page.locator(".batch-series-focused .batch-series-pending")).to_be_visible()
                     expect(page.locator(".batch-series-thumb")).to_have_count(3)
@@ -500,7 +560,7 @@ def main():
                     page.evaluate("""() => fixture.controller.updateProgress({
                       updatedIndex:0,
                       itemResult:{imageUrl:fixture.pixel,title:"第1张成图"},
-                      completedCount:1,failedCount:0,totalCount:3,
+                      completedCount:2,failedCount:0,totalCount:3,
                       activeIndex:1,activeIndices:[1],busy:true
                     })""")
                     expect(page.locator('.batch-series-focused[data-batch-row="0"] .is-generated')).to_have_count(1)
@@ -518,11 +578,11 @@ def main():
                     page.evaluate("""() => fixture.controller.updateProgress({
                       updatedIndex:1,
                       itemResult:{failed:true,error:"模拟生成失败"},
-                      completedCount:1,failedCount:1,totalCount:3,
-                      activeIndex:2,activeIndices:[2],busy:true
+                      completedCount:2,failedCount:1,totalCount:3,
+                      activeIndex:null,activeIndices:[],busy:true
                     })""")
                     expect(page.locator('.batch-series-focused[data-batch-row="1"] [data-retry-idx="1"]')).to_be_visible()
-                    expect(page.locator('.batch-series-thumb[data-series-select-idx="2"].is-generating')).to_have_count(1)
+                    expect(page.locator('.batch-series-thumb[data-series-select-idx="2"].has-result')).to_have_count(1)
                     page.locator("#batch-btn-stop").click()
                     expect(page.locator("#batch-btn-stop")).to_be_disabled()
                     assert page.evaluate("fixture.counts().cancels")==1
