@@ -639,3 +639,175 @@
 
 /* Keep zoom affordance without zooming the entire canvas or stretching the layout hint. */
 .batch-series-focused .batch-iter-thumb-btn:hover{transform:none;opacity:1}
+
+
+/* #144: One continuous property rail, using the same picker and segmented
+   button vocabulary as the single-image page. Selection is a subsection,
+   not a second independently-sized scroll pane. */
+@media(min-width:981px){
+  .batch-series-workspace>.batch-series-properties{
+    display:flex;flex-direction:column;gap:0;min-height:0;
+    padding:20px;overflow-x:hidden;overflow-y:auto;
+    scrollbar-width:auto;overscroll-behavior:contain
+  }
+  .batch-series-workspace>.batch-series-properties>.batch-series-shared,
+  .batch-series-workspace>.batch-series-properties>.batch-series-selected-settings{
+    display:flex;flex-direction:column;flex:0 0 auto;
+    width:100%;min-width:0;min-height:auto;overflow:visible;
+    padding:0;background:transparent;border:0
+  }
+}
+.batch-series-workspace>.batch-series-properties>.batch-series-shared,
+.batch-series-workspace>.batch-series-properties>.batch-series-selected-settings{
+  background:transparent;border:0;box-shadow:none
+}
+.batch-series-selected-settings{
+  padding:0;margin-top:22px;border:0;gap:12px
+}
+.batch-series-selected-settings>.batch-series-section-title{
+  justify-content:flex-start;gap:8px
+}
+.batch-series-selected-settings>.batch-series-section-title .batch-series-delete{
+  margin-left:auto
+}
+.batch-series-layout-strategy{
+  display:flex;flex-direction:column;align-items:flex-start;gap:7px;
+  margin:0 0 2px;min-width:0
+}
+.batch-series-layout-strategy>.make-image-btn-group{
+  display:flex;align-items:center;flex-wrap:wrap;gap:6px
+}
+.batch-series-fixed-picker,
+.batch-series-workspace .batch-series-fixed-picker{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;margin:0 0 4px
+}
+.batch-series-fixed-picker>.make-image-picker-card{
+  min-width:0;width:100%;box-sizing:border-box
+}
+/* Thumbnail placeholders carry only image numbers; completed thumbnails have
+   a hover/focus-only translucent image label to preserve image surface area. */
+.batch-series-thumb{
+  gap:0;padding:5px;position:relative
+}
+.batch-series-thumb-picture{max-height:106px}
+.batch-series-thumb-empty{
+  font-size:14px;font-weight:650;color:var(--ink-muted);white-space:nowrap
+}
+.batch-series-thumb-overlay{
+  position:absolute;inset:0;z-index:2;display:flex;align-items:center;
+  justify-content:center;background:rgba(27,27,27,.48);color:#fff;
+  border-radius:6px;font-size:13px;font-weight:750;
+  opacity:0;pointer-events:none;transition:opacity .14s ease
+}
+.batch-series-thumb.has-result:hover .batch-series-thumb-overlay,
+.batch-series-thumb.has-result:focus-visible .batch-series-thumb-overlay{
+  opacity:1
+}
+.batch-series-thumb-number,.batch-series-thumb-status{display:none!important}
+.batch-series-thumb-pulse{pointer-events:none}
+.batch-series-dock{
+  padding:12px 14px 10px;
+  background:var(--paper-card);
+  border-radius:16px;
+}
+.batch-series-dock>.batch-series-composer{
+  flex:0 1 auto;padding:0;gap:6px;min-height:0;overflow-x:hidden
+}
+.batch-series-composer-bottom{
+  display:flex;align-items:center;flex-wrap:wrap;gap:9px;
+  width:100%;min-width:0
+}
+.batch-series-composer-bottom>.batch-series-add-reference.make-image-add-reference{
+  display:grid;place-items:center;
+  flex:0 0 38px;width:38px;height:38px;
+  border-radius:50%;font-size:24px;line-height:1;
+  color:var(--ink-main);background:var(--paper-inset);
+  border:1px solid var(--line-strong);padding:0;cursor:pointer
+}
+.batch-series-composer-bottom>.batch-series-add-reference.make-image-add-reference:hover{
+  color:var(--vermilion);border-color:var(--vermilion)
+}
+.batch-series-composer-bottom>.batch-series-add-reference.make-image-add-reference:focus-visible{
+  outline:2px solid var(--vermilion);outline-offset:2px
+}
+.batch-series-composer-bottom>.batch-series-footer-actions{
+  flex:1 1 auto;min-width:0;
+  display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px
+}
+.batch-series-count{
+  display:inline-flex;align-items:center;gap:5px;
+  color:var(--ink-muted);font-size:11px;white-space:nowrap
+}
+.batch-series-count>.batch-count-input{
+  width:50px;min-width:0;min-height:36px;
+  padding:6px 4px;text-align:center;font-size:12px
+}
+.batch-series-composer-bottom .batch-series-plan-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-height:38px;gap:6px;padding:8px 12px;border-radius:10px;
+  border:1px solid var(--line-strong);
+  color:var(--ink-main);background:var(--paper-bg);
+  font-size:12px;font-weight:650;white-space:nowrap;cursor:pointer
+}
+.batch-series-composer-bottom .batch-series-plan-btn:hover:not(:disabled){
+  border-color:var(--vermilion);background:var(--paper-inset)
+}
+.batch-series-composer-bottom .batch-series-run-btn,
+.batch-series-composer-bottom .batch-stop-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-height:40px;border-radius:10px;padding:8px 14px;
+  font-size:12px;font-weight:700;white-space:nowrap
+}
+.batch-series-dock>.batch-series-footer{
+  border:0;border-top:1px solid var(--line-soft);margin-top:10px;
+  padding:8px 0 0;gap:0;min-height:0
+}
+.batch-series-footer-meta{
+  display:flex;justify-content:space-between;align-items:center;
+  flex-wrap:wrap;gap:7px
+}
+.batch-series-secondary-actions{
+  display:flex;align-items:center;justify-content:flex-end;
+  gap:6px;flex-wrap:wrap
+}
+.batch-series-secondary-actions>button.btn{
+  min-height:28px;font-size:11px;padding:4px 7px
+}
+.batch-series-secondary-actions #batch-btn-download-all:disabled{display:none}
+.batch-series-composer-input.make-image-textarea{margin-bottom:3px}
+@media(max-width:980px){
+  .batch-series-workspace>.batch-series-properties{
+    display:flex;flex-direction:column;gap:0;padding:16px;overflow:visible
+  }
+  .batch-series-workspace>.batch-series-properties>.batch-series-shared,
+  .batch-series-workspace>.batch-series-properties>.batch-series-selected-settings{
+    flex:0 0 auto;min-height:0;padding:0;overflow:visible
+  }
+}
+@media(max-width:540px){
+  .batch-series-dock{padding:10px 11px}
+  .batch-series-composer-bottom{gap:6px;flex-wrap:nowrap}
+  .batch-series-composer-bottom>.batch-series-add-reference.make-image-add-reference{
+    flex-basis:34px;width:34px;height:34px;font-size:22px
+  }
+  .batch-series-composer-bottom>.batch-series-footer-actions{
+    gap:5px;flex:1 1 auto;flex-wrap:wrap
+  }
+  .batch-series-count{font-size:10px;gap:3px}
+  .batch-series-count>.batch-count-input{
+    width:37px;min-height:34px;padding:4px 2px;font-size:11px
+  }
+  .batch-series-composer-bottom .batch-series-plan-btn{
+    min-height:36px;padding:6px 7px;gap:4px;font-size:11px
+  }
+  .batch-series-composer-bottom .batch-series-plan-btn svg{width:13px;height:13px}
+  .batch-series-composer-bottom .batch-series-run-btn,
+  .batch-series-composer-bottom .batch-stop-btn{
+    min-height:36px;padding:6px 8px;font-size:11px
+  }
+  .batch-series-dock>.batch-series-footer{padding-top:6px;margin-top:7px}
+}
+@media(prefers-reduced-motion:reduce){
+  .batch-series-thumb-overlay{transition:none}
+}
