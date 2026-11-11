@@ -317,7 +317,7 @@
       } else {
         media = `<div class="batch-iter-placeholder batch-series-placeholder" role="img" aria-label="图 ${idx + 1} 待生成">
           <span class="batch-series-placeholder-glow" aria-hidden="true"></span>
-          <span class="batch-series-placeholder-symbol" aria-hidden="true">✧</span>
+          <span class="batch-series-placeholder-symbol" aria-hidden="true">◇</span>
           <span class="batch-series-placeholder-title">图 ${idx + 1}</span>
           <small>等待创作</small>
         </div>`;
