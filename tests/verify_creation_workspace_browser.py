@@ -308,12 +308,26 @@ def main():
                     expect(page.locator(".batch-series-thumbs")).to_be_visible()
                     expect(page.locator(".batch-series-thumb")).to_have_count(3)
                     expect(page.locator(".batch-series-focused")).to_have_count(1)
-                    preview_badge=page.evaluate("""() => {
-                      const badge=document.querySelector('.batch-series-focused .batch-iter-schematic-badge');
-                      const frame=document.querySelector('.batch-series-main-card');
-                      return badge && frame ? {badge:badge.getBoundingClientRect().width,frame:frame.getBoundingClientRect().width} : null;
+                    # #145: no heading or border around the focused placeholder.
+                    expect(page.locator(".batch-series-toolbar")).to_have_count(0)
+                    expect(page.locator(".batch-series-focused .batch-series-card-head")).to_have_count(0)
+                    expect(page.locator(".batch-series-focused .batch-series-placeholder")).to_be_visible()
+                    expect(page.locator("#batch-btn-add-row")).to_be_visible()
+                    expect(page.locator(".batch-series-bulk-input")).to_have_count(0)
+                    expect(page.locator("#batch-prompts-input")).to_have_count(0)
+                    expect(page.locator("[data-row-skip-global]")).to_have_count(0)
+                    frame=page.evaluate("""() => {
+                      const p=document.querySelector('.batch-series-main-card');
+                      const picture=document.querySelector('.batch-series-thumb-picture');
+                      const stage=document.querySelector('.batch-series-stage');
+                      return {
+                        border:getComputedStyle(p).borderTopWidth,
+                        rectangle:picture.getBoundingClientRect().width>picture.getBoundingClientRect().height,
+                        thumbAtRight:picture.getBoundingClientRect().left>p.getBoundingClientRect().right-2,
+                        stageWidth:stage.getBoundingClientRect().width
+                      };
                     }""")
-                    assert preview_badge is not None and preview_badge["badge"] < preview_badge["frame"] / 2, preview_badge
+                    assert frame["border"]=="0px" and frame["rectangle"] and frame["thumbAtRight"],frame
                     expect(page.locator(".batch-series-grid")).to_have_count(0)
                     expect(page.locator(".batch-series-properties .batch-series-shared")).to_be_visible()
                     expect(page.locator(".batch-series-properties .batch-series-selected-settings")).to_be_visible()
@@ -343,6 +357,22 @@ def main():
                     expect(page.locator(".batch-series-fixed-picker")).to_have_count(0)
                     expect(page.locator(".batch-series-layout-strategy")).to_be_visible()
                     expect(page.locator(".batch-series-layout-strategy .make-image-btn-group")).to_be_visible()
+                    same_row=page.evaluate("""() => {
+                      const title=document.querySelector('.batch-series-layout-strategy>.make-image-field-label').getBoundingClientRect();
+                      const ai=document.querySelector('#batch-strategy-ai').getBoundingClientRect();
+                      const fixed=document.querySelector('#batch-strategy-fixed').getBoundingClientRect();
+                      const run=document.querySelector('#batch-btn-start');
+                      return {
+                        titleCenter:title.top+title.height/2,
+                        aiCenter:ai.top+ai.height/2,
+                        fixedCenter:fixed.top+fixed.height/2,
+                        neutral:getComputedStyle(document.querySelector('#batch-strategy-ai')).backgroundColor,
+                        primary:getComputedStyle(run).backgroundColor
+                      };
+                    }""")
+                    assert abs(same_row["titleCenter"]-same_row["aiCenter"])<20,same_row
+                    assert abs(same_row["aiCenter"]-same_row["fixedCenter"])<12,same_row
+                    assert same_row["neutral"]!=same_row["primary"],same_row
                     assert page.locator("#batch-strategy-ai").get_attribute("class").find("btn-primary is-active") >= 0
                     expect(page.locator(".batch-series-properties [data-pick-layout-idx='0']")).to_be_visible()
                     expect(page.locator("#batch-concurrency")).to_have_count(0)
@@ -350,6 +380,8 @@ def main():
                     expect(page.locator(".batch-series-dock #batch-seed-input")).to_be_visible()
                     expect(page.locator(".batch-series-dock #batch-btn-plan")).to_be_visible()
                     expect(page.locator(".batch-series-dock #batch-btn-start")).to_be_visible()
+                    expect(page.locator("#batch-btn-start")).to_have_text("生成系列图")
+                    assert not any(ch.isdigit() for ch in page.locator("#batch-btn-start").inner_text())
                     expect(page.locator(".batch-series-composer-attachments")).to_have_count(0)
                     expect(page.locator(".batch-series-composer-bottom > .batch-series-add-reference")).to_be_visible()
                     assert page.locator(".batch-series-composer-bottom").evaluate("""node => {
@@ -378,18 +410,31 @@ def main():
                     page.locator("#batch-strategy-fixed").click()
                     expect(page.locator(".batch-series-fixed-picker [data-pick-kind='layout']")).to_be_visible()
                     assert page.locator("#batch-strategy-fixed").get_attribute("class").find("btn-primary is-active")>=0
+                    assert page.locator(".batch-series-fixed-picker").evaluate("""el => {
+                      const color=document.querySelector('.batch-pickers-row [data-pick-kind="color"]').getBoundingClientRect();
+                      const picker=el.getBoundingClientRect();
+                      return picker.top>=color.bottom-2;
+                    }""")
                     page.locator(".batch-series-fixed-picker [data-pick-kind='layout']").click()
                     assert page.evaluate("fixture.counts().pickers")==1
-                    page.locator(".batch-series-bulk-input summary").click()
-                    page.locator("#batch-prompts-input").fill("山间晨雾\n湖边暮色")
-                    page.locator("#batch-prompts-input").blur()
-                    expect(page.locator(".batch-series-thumb")).to_have_count(2)
+                    # Count drives actual prepared slots, not just an input annotation.
+                    expect(page.locator("#batch-count-input")).to_have_attribute("min","1")
+                    expect(page.locator("#batch-count-input")).to_have_attribute("max","10")
+                    page.locator("#batch-count-input").fill("11")
+                    page.locator("#batch-count-input").blur()
+                    expect(page.locator("#batch-count-input")).to_have_value("10")
+                    expect(page.locator(".batch-series-thumb")).to_have_count(10)
+                    page.locator("#batch-count-input").fill("0")
+                    page.locator("#batch-count-input").blur()
+                    expect(page.locator("#batch-count-input")).to_have_value("1")
+                    expect(page.locator(".batch-series-thumb")).to_have_count(1)
+                    page.locator("#batch-count-input").fill("3")
+                    page.locator("#batch-count-input").blur()
+                    expect(page.locator("#batch-count-input")).to_have_value("3")
+                    expect(page.locator(".batch-series-thumb")).to_have_count(3)
                     expect(page.locator(".batch-series-focused")).to_have_count(1)
-                    page.locator("#batch-count-input").fill("4")
-                    assert page.evaluate("fixture.parts.loop.data.batchCount")==4
                     page.locator("#batch-strategy-ai").click()
                     expect(page.locator(".batch-series-fixed-picker")).to_have_count(0)
-                    expect(page.locator(".batch-series-thumb")).to_have_count(2)
                     page.locator("#batch-mode-fusion").click()
                     page.locator('[data-pick-kind="style1"]').press("Space")
                     assert page.evaluate("fixture.counts().pickers")==2
