@@ -247,6 +247,17 @@ function parseHtml(html) {
           matches.forEach(() => results.push({}));
         }
       }
+      if (selector === ".batch-series-theme-input") {
+        const regex = /<textarea[^>]*class="[^"]*batch-series-theme-input[^"]*"[^>]*data-series-theme-idx="(\d+)"[^>]*>([\s\S]*?)<\/textarea>/g;
+        let m;
+        while ((m = regex.exec(html)) !== null) {
+          const idx = m[1];
+          results.push({
+            getAttribute: (name) => name === "data-series-theme-idx" ? idx : null,
+            value: m[2], oninput:null, onblur:null
+          });
+        }
+      }
       if (selector === ".batch-row-theme-input") {
         const regex = /class="[^"]*batch-row-theme-input[^"]*"[^>]*data-row-idx="(\d+)"[^>]*value="([^"]*)"/g;
         let match;
@@ -1121,23 +1132,29 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
   HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {});
 
-  // 1. Verify batch-row-theme-input has readonly in HTML
+  // #141: one editable card per row; no modal-only readonly theme field.
   assert.ok(
-    fakeHost.innerHTML.includes('class="make-image-input batch-row-theme-input" data-row-idx="0" value="主题第一张" placeholder="输入该张画面主题..." readonly'),
-    "batch-row-theme-input must be readonly"
+    fakeHost.innerHTML.includes('class="make-image-textarea batch-series-theme-input" data-series-theme-idx="0"'),
+    "Series card theme must be an inline textarea"
   );
+  assert.ok(!fakeHost.innerHTML.includes('class="make-image-input batch-row-theme-input"'),
+    "Legacy readonly editor must be removed");
+  assert.ok(!fakeHost.innerHTML.includes("batch-preview-table") &&
+    !fakeHost.innerHTML.includes("batch-edit-table") &&
+    !fakeHost.innerHTML.includes("batch-results-section"),
+    "Edit, progress and results must share one card grid");
 
-  // 2. Verify click handler is bound
-  const themeInputs = fakeHost.querySelectorAll(".batch-row-theme-input");
+  const themeInputs = fakeHost.querySelectorAll(".batch-series-theme-input");
   assert.equal(themeInputs.length, 2);
-  assert.equal(typeof themeInputs[0].onclick, "function", "batch-row-theme-input must have onclick function");
+  assert.equal(typeof themeInputs[0].oninput, "function", "Inline theme must update the model directly");
+  assert.equal(typeof themeInputs[0].onblur, "function", "Inline theme must persist the draft");
 
-  // 3. Verify list table theme label has click handler
-  const iterLabels = fakeHost.querySelectorAll("[data-iter-theme-idx]");
-  assert.ok(iterLabels.length >= 2, "Must render iter theme click targets");
-  assert.equal(typeof iterLabels[0].onclick, "function", "iter theme target must have onclick function");
+  themeInputs[0].value = "卡片内直接修改主题";
+  themeInputs[0].oninput();
+  assert.equal(parts.loop.data.batchRows[0].theme, "卡片内直接修改主题");
 
-  console.log("✓ Requirement 14 Passed: Theme inputs are readonly and click handlers open theme modal");
+  console.log("✓ Requirement 14 Passed: Cards edit themes inline with a single progress/results area");
+
 }
 
 // ==========================================
