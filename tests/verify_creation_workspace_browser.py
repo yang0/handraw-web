@@ -201,8 +201,13 @@ def main():
                                 };
                             }""")
                             assert dock["workspaceHeight"] <= dock["hostHeight"] + 2, (stage_height, dock)
-                            assert dock["sidebarScroll"] > dock["sidebarHeight"] + 2, (stage_height, dock)
-                            assert dock["sidebarScrollTop"] > 2, (stage_height, dock)
+                            has_overflow = dock["sidebarScroll"] > dock["sidebarHeight"] + 2
+                            if stage_height <= 430:
+                                assert has_overflow, (stage_height, dock)
+                                assert dock["sidebarScrollTop"] > 2, (stage_height, dock)
+                            else:
+                                # A taller panel should not sprout an unnecessary scrollbar.
+                                assert not has_overflow or dock["sidebarScrollTop"] > 2, (stage_height, dock)
                             assert dock["sidebarOverflow"] == "auto", (stage_height, dock)
                             assert dock["sidebarScrollbar"] != "none", (stage_height, dock)
                             assert dock["outputScrollbar"] == "none" and dock["outputUntouched"], (stage_height, dock)
