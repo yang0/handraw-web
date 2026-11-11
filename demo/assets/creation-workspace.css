@@ -117,6 +117,15 @@
 .make-image-main-grid.creation-workspace.make-image-chat-workspace{display:grid;grid-template-columns:minmax(300px,.92fr) minmax(0,1.85fr);gap:0;padding:0;width:100%;height:100%;min-height:0;align-items:stretch;overflow:hidden}
 .make-image-chat-workspace>.make-image-properties,.make-image-chat-workspace>.make-image-conversation{min-width:0;min-height:0;gap:14px;box-sizing:border-box}
 .make-image-chat-workspace>.make-image-properties{grid-column:1;grid-row:1;padding:22px 20px;border:0;border-right:1px solid var(--line-soft);overflow-x:hidden;overflow-y:auto;scrollbar-width:auto;scrollbar-color:var(--ink-muted) var(--paper-inset);overscroll-behavior:contain}
+/* #140: A flex-column scroll panel must not shrink its content to fit the viewport.
+   Collapsible cards themselves use overflow:hidden to round their corners; if the
+   flex algorithm shrinks a card, its expanded body is clipped rather than included
+   in the sidebar scrollHeight. Keep each section at its natural full height. */
+@media (min-width:981px) {
+  .make-image-chat-workspace > .make-image-properties > * {
+    flex-shrink:0;
+  }
+}
 /* Keep a noticeable native scrollbar when the property content overflows, without showing one on short content. */
 .make-image-chat-workspace>.make-image-properties::-webkit-scrollbar{width:11px}
 .make-image-chat-workspace>.make-image-properties::-webkit-scrollbar-track{background:var(--paper-inset);border-radius:8px}
