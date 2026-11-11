@@ -1429,7 +1429,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   // 2. Check disabled state when busy
   HandrawBatchCreate.context.busy = true;
   HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog, busy: true }, {});
-  assert.ok(fakeHost.innerHTML.includes('id="batch-btn-reset" disabled'), "#batch-btn-reset must be disabled when busy");
+  assert.match(fakeHost.innerHTML, /id="batch-btn-reset"[^>]*disabled/, "#batch-btn-reset must be disabled when busy");
   HandrawBatchCreate.context.busy = false;
 
   // 3. Verify Make-Image source contains #make-image-btn-reset
