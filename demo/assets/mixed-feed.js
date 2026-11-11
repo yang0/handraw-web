@@ -183,9 +183,9 @@
       '" aria-label="查看作品：' + esc(titleOf(w)) +
       '" data-hw-refine-ratio="true" style="aspect-ratio:' + ratio + '">' +
       '<img data-hw-src="' + esc(photo) + '" alt="' + esc(titleOf(w)) + '" loading="lazy">' +
-      '<span class="hw-mf-photo-label">作品</span></a>' +
+      '</a>' +
       '<div class="hw-mf-body">' +
-      '<a class="hw-mf-title" href="' + workDetailHref(w, st) + '">' + esc(titleOf(w)) + '</a>' +
+      '<a class="hw-mf-title" href="' + workDetailHref(w, st) + '"><img class="hw-mf-title-icon" src="/assets/feed-icons/work.png" alt="" aria-hidden="true" width="20" height="20" decoding="async">' + esc(titleOf(w)) + '</a>' +
       (codes.length ? '<div class="hw-mf-codes">' + codes.map(function (s) {
         return '<span>' + esc(s) + '</span>';
       }).join("") + '</div>' : "") +
@@ -204,9 +204,9 @@
       '" aria-label="查看' + kind + '：' + esc(titleOf(r)) +
       '" data-hw-refine-ratio="true" style="aspect-ratio:' + ratio + '">' +
       '<img data-hw-src="' + esc(img) + '" alt="' + esc(titleOf(r)) + '" loading="lazy">' +
-      '<span class="hw-mf-photo-label hw-mf-photo-label--resource">' + kind + '资源</span></a>' +
+      '</a>' +
       '<div class="hw-mf-body">' +
-      '<a class="hw-mf-title" href="' + href + '">' + esc(S.resourceLabel ? S.resourceLabel(r) : titleOf(r)) + '</a>' +
+      '<a class="hw-mf-title" href="' + href + '">' + (kind === "图型" ? '<img class="hw-mf-title-icon" src="/assets/feed-icons/layout.png" alt="" aria-hidden="true" width="20" height="20" decoding="async">' : '<img class="hw-mf-title-icon" src="/assets/feed-icons/style.png" alt="" aria-hidden="true" width="20" height="20" decoding="async">') + esc(S.resourceLabel ? S.resourceLabel(r) : titleOf(r)) + '</a>' +
       '</div></article>';
   }
   function topicCard(t, st) {
@@ -224,7 +224,7 @@
         '<img data-hw-src="' + esc(img) + '" alt="' +
         esc(titleOf(t)) + '" loading="lazy"></span>' : "") +
       '<div class="hw-mf-body">' +
-      '<span class="hw-mf-title">' + esc(titleOf(t)) + '</span>' +
+      '<span class="hw-mf-title"><img class="hw-mf-title-icon" src="/assets/feed-icons/discussion.png" alt="" aria-hidden="true" width="20" height="20" decoding="async">' + esc(titleOf(t)) + '</span>' +
       (abstract ? '<p class="hw-mf-excerpt">' + esc(abstract) + '</p>' : "") +
       '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" src="' + esc(avatarFor(t, st)) + '">' + esc(authorOf(t)) + '</span>' +
       '<span class="hw-mf-stats">💬 ' + esc(replies) + '</span></div>' +

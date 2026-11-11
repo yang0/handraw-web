@@ -97,12 +97,17 @@ assert.ok(textHtml.includes("hw-mf-author-avatar"), "discussion cards include au
 assert.ok(html.includes("hw-mf-author-avatar"), "work cards include author avatar");
 // #169: category text should not occupy an extra line in masonry cards.
 assert.ok(!html.includes("hw-mf-type") && !html.includes("创作作品"), "work body omits redundant type line");
-assert.match(html, /<span class="hw-mf-photo-label">作品<\/span><\/a>/, "work image shows a short top-left work badge");
+assert.match(html, /src="\/assets\/feed-icons\/work\.png"/, "work category uses a transparent hand-drawn icon before the title");
+assert.doesNotMatch(html, /hw-mf-photo-label/, "no text overlays on work image");
 const activeDiscussionWork = renderCard({ kind: "work", data: { ...works[0], replyCount: 4 } }, state);
-assert.match(activeDiscussionWork, /<span class="hw-mf-photo-label">作品<\/span>/, "work badge remains the same even with replies");
+assert.match(activeDiscussionWork, /src="\/assets\/feed-icons\/work\.png"/, "work icon remains even with replies");
 assert.doesNotMatch(activeDiscussionWork, /正在讨论/, "work does not replace type badge with discussion status");
 assert.ok(!resourceHtml.includes("hw-mf-type") && !resourceHtml.includes("可复用画风"), "resource body omits redundant type line");
-assert.match(resourceHtml, /hw-mf-photo-label--resource/, "resource retains image-level type marker");
+assert.match(resourceHtml, /src="\/assets\/feed-icons\/style\.png"/, "style icon precedes resource name");
+assert.doesNotMatch(resourceHtml, /hw-mf-photo-label|画风资源|图型资源/, "resource image has no type label");
+const layoutHtml = renderCard({kind:"resource",data:{id:"SC-001",kind:"layout",name:"布局示例",image:"/layout.webp"}},state);
+assert.match(layoutHtml, /src="\/assets\/feed-icons\/layout\.png"/, "layout resource has its own icon");
+assert.match(textHtml, /src="\/assets\/feed-icons\/discussion\.png"/, "discussion icon precedes title");
 assert.ok(!textHtml.includes("hw-mf-type") && !textHtml.includes("社区讨论"), "discussion body omits redundant type line");
 // Loading the next page must append cards instead of recreating prior image elements.
 let fullRenders = 0;
