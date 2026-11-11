@@ -2384,6 +2384,9 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         "siteSettings": {
             "announcement": settings.get("announcement", {}),
             "economy": settings.get("economy", {}),
+            "forum": {
+                "featured_sidebar_limit": max(1, min(5, int(settings.get("forum", {}).get("featured_sidebar_limit", 5)))),
+            },
         },
     }
 
