@@ -43,7 +43,7 @@ BOOT = r"""
     assembleControlPrompt:()=>parts.text.data.text,
     resolveControlRecipe:()=>({}),
     resolveLoopIterations:()=> {
-      const rows = parts.loop.data.batchLayoutMode === "ai"
+      const rows = Array.isArray(parts.loop.data.batchRows) && parts.loop.data.batchRows.length
         ? parts.loop.data.batchRows
         : parts.loop.data.promptListText.split("\n").filter(s=>s.trim()).map(theme=>({theme}));
       return rows.map((r,i)=>({theme:r.theme,title:r.theme,shortLabel:r.theme,layout:r.layout||"SC-001",index:i}));
