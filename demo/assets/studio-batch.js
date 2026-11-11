@@ -428,7 +428,7 @@
       const iterations = this.resolveIterations();
       const totalCount = Math.min(200, iterations.length * perIterCount);
 
-      const busy = Boolean(this.context?.busy);
+      const busy = typeof this.progressState?.busy === "boolean" ? this.progressState.busy : Boolean(this.context?.busy);
       const displays = Array.isArray(this.context?.displays) ? this.context.displays : [];
       const results = Array.isArray(this.context?.results) ? this.context.results : [];
 
@@ -756,7 +756,7 @@
       const loop = parts.loop?.data || {};
       const ctrl = parts.ctrl?.data || {};
       const skill = parts.skill?.data || {};
-      const isBusy = Boolean(this.progressState?.busy || this.context?.busy);
+      const isBusy = typeof this.progressState?.busy === "boolean" ? this.progressState.busy : Boolean(this.context?.busy);
       const active = this.progressState?.activeIndices || [];
       const activeIndex = active.length ? active[0] :
         this.progressState?.activeIndex ?? (isBusy ? Number(loop.activeIndex ?? 0) : null);
