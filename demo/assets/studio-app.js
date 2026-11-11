@@ -13086,6 +13086,11 @@
     cd.mode = ["graphic-text", "pure", "poster", "series"].includes(forkMode) ? forkMode : "graphic-text";
     cd.count = 1;
 
+    // A fork is a new recipe, not a continuation of the previous quick draft.
+    // Never inherit private reference assets from the previously active graph.
+    // The from-work recipe endpoint does not grant those assets to a forker.
+    if (p.asset?.data) p.asset.data.items = [];
+
     markActiveTabDirty();
     persistOpenTabs();
     if (CS.stageView === "quick") renderQuickStart();
