@@ -861,27 +861,30 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     loggedIn: true
   }, fakeActions);
 
-  const layoutBtns = fakeHost.querySelectorAll("[data-pick-layout-idx]");
-  assert.equal(layoutBtns.length, 2, "Must render 2 layout buttons for the 2 batch rows");
+  HandrawBatchCreate.selectedSeriesIndex = 0;
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog, loggedIn:true }, fakeActions);
+  let layoutBtns = fakeHost.querySelectorAll("[data-pick-layout-idx]");
+  assert.equal(layoutBtns.length, 1, "Only the selected image's layout editor should appear");
 
-  // Row 0: specific layout SC-001
+  // Selected image 1: specific layout SC-001
   const btn0 = layoutBtns[0];
-  assert.ok(btn0.innerHTML.includes("<img"), "Row 0 layout button must contain <img>");
-  assert.ok(btn0.innerHTML.includes("data-hw-src="), "Row 0 layout button must contain data-hw-src for lazy loading");
-  assert.ok(!btn0.innerHTML.includes(" src="), "Row 0 layout button must NOT contain src attribute (lazy loader only)");
-  assert.ok(btn0.innerHTML.includes("SC-001"), "Row 0 layout button must show SC-001");
-  assert.ok(btn0.innerHTML.includes("居中卡片"), "Row 0 layout button must show SC-001 title");
-  assert.ok(!btn0.innerHTML.includes("跟随全局"), "Row 0 specific layout must not say 跟随全局 in visible text");
+  assert.ok(btn0.innerHTML.includes("<img"), "Selected layout should show a thumbnail");
+  assert.ok(btn0.innerHTML.includes("data-hw-src="), "Selected layout uses lazy loader");
+  assert.ok(!btn0.innerHTML.includes(" src="), "Selected layout should not bypass lazy loader");
+  assert.ok(btn0.innerHTML.includes("SC-001"), "Image 1 uses its own SC-001 layout");
+  assert.ok(btn0.innerHTML.includes("居中卡片"), "Image 1 displays the layout label");
 
-  // Row 1: global layout fallback SC-021
-  const btn1 = layoutBtns[1];
-  assert.ok(btn1.innerHTML.includes("<img"), "Row 1 layout button must contain <img>");
-  assert.ok(btn1.innerHTML.includes("data-hw-src="), "Row 1 layout button must contain data-hw-src for lazy loading");
-  assert.ok(!btn1.innerHTML.includes(" src="), "Row 1 layout button must NOT contain src attribute (lazy loader only)");
-  assert.ok(btn1.innerHTML.includes("SC-021"), "Row 1 layout button must show global layout SC-021");
-  assert.ok(btn1.innerHTML.includes("双拼信息卡"), "Row 1 layout button must show SC-021 title");
-  assert.ok(!btn1.innerHTML.includes("跟随全局"), "Row 1 layout button visible text must NOT include 跟随全局");
-  assert.ok(btn1.title.includes("跟随全局图型 SC-021"), "Row 1 title must explain 跟随全局图型 SC-021");
+  HandrawBatchCreate.selectedSeriesIndex = 1;
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog, loggedIn:true }, fakeActions);
+  layoutBtns = fakeHost.querySelectorAll("[data-pick-layout-idx]");
+  assert.equal(layoutBtns.length, 1, "Image switching must not show a second layout editor");
+  const btn1 = layoutBtns[0];
+  assert.ok(btn1.innerHTML.includes("SC-021"), "Image 2 follows global layout SC-021");
+  assert.ok(btn1.innerHTML.includes("双拼信息卡"), "Image 2 exposes global layout title");
+  assert.ok(btn1.title.includes("跟随全局图型 SC-021"), "Image 2 explains inherited layout");
+
+  HandrawBatchCreate.selectedSeriesIndex = 0;
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog, loggedIn:true }, fakeActions);
 
   // Verify click calls openAssetPicker (shared picker mechanism)
   btn0.onclick();
@@ -908,7 +911,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
 
   // Requirement 10: Batch preview iteration thumbnail zoom button verification
   const zoomBtns = fakeHost.querySelectorAll(".batch-iter-thumb-btn");
-  assert.ok(zoomBtns.length > 0, "Batch preview table must wrap thumbnail in .batch-iter-thumb-btn");
+  assert.equal(zoomBtns.length, 1, "Only the focused main image has a zoom button");
   const zb0 = zoomBtns[0];
   assert.ok(zb0.getAttribute("data-zoom-src"), ".batch-iter-thumb-btn must have data-zoom-src");
   assert.ok(zb0.getAttribute("data-zoom-title"), ".batch-iter-thumb-btn must have data-zoom-title");
