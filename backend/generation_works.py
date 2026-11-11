@@ -265,7 +265,7 @@ def generation_image_assets(
     if not by_url:
         return []
     return [
-        by_url.get(url, {"url": url, "styles": [], "layout": "", "scope": "missing", "prompt": "", "promptScope": "missing"})
+        by_url.get(url, {"url": url, "styles": [], "layout": "", "scope": "missing"})
         for url in image_urls
     ]
 
