@@ -349,6 +349,7 @@ def main():
                       activeIndex:1,activeIndices:[1],busy:true
                     })""")
                     expect(page.locator('[data-batch-row="0"] .is-generated')).to_have_count(1)
+                    expect(page.locator("#batch-btn-download-all")).to_be_enabled()
                     expect(page.locator('[data-batch-row="1"] .batch-series-pending')).to_have_count(1)
                     expect(page.locator(".batch-series-card")).to_have_count(3)
                     expect(page.locator(".batch-results-section")).to_have_count(0)
