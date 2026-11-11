@@ -530,10 +530,6 @@
                 <div class="make-image-results-section">
                   <div class="make-image-results-head">
                     <h3 style="margin:0;font-size:15px;font-weight:700;">生成结果 (${results.length} 张)</h3>
-                    <div style="display:flex;gap:8px;">
-                      <button type="button" class="btn btn-sm" id="make-image-btn-again">再来一张</button>
-                      <button type="button" class="btn btn-sm" id="make-image-btn-new-theme">换个主题</button>
-                    </div>
                   </div>
                   <div class="make-image-results-grid">
                     ${results.map((r, idx) => `
@@ -556,46 +552,24 @@
 
                 </div>
                 <div class="make-image-composer">
-              <!-- Row 3: Topic / Subject Input -->
-              <div class="make-image-field-wrap">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                  <label for="make-image-subject" class="make-image-field-label" style="margin-bottom:0;">创作主题</label>
-                  <button type="button" class="btn btn-sm" id="make-image-clear-subject" style="font-size:11.5px;padding:2px 8px;color:var(--ink-muted);${topicText ? "" : "display:none;"}">清空主题</button>
-                </div>
-                <textarea
-                  id="make-image-subject"
-                  class="make-image-textarea"
-                  rows="6"
-                  placeholder="输入你想创作的画面内容或主题，例如：暖阳下的单车少女，在咖啡馆门口停留"
-                  aria-label="创作主题"
-                >${esc(topicText)}</textarea>
-              </div>
-
-                    <!-- 7. 参考图：【选择参考图】+ 已选缩略图同一行 -->
-                    <div class="make-image-more-row">
-                      <span class="make-image-more-label">参考图</span>
-                      <button type="button" class="make-image-add-reference" id="make-image-open-ref-picker" title="添加参考图" aria-label="添加参考图">+</button>
-                      <div class="make-image-more-thumbs" id="make-image-refs-row">
+                  ${refItems.length ? `<div class="make-image-composer-attachments" id="make-image-refs-row" aria-label="已选参考图">
                         ${refItems.map((u, idx) => {
                           const imgUrl = typeof u === "string" ? u : (u.image || u.url || "");
                           const imgName = typeof u === "string" ? `P${idx + 1}` : (u.name || u.id || `P${idx + 1}`);
                           return `
-                            <div class="make-image-slot-card is-inline" data-ref-card="${idx}">
+                            <div class="make-image-ref-thumb" data-ref-card="${idx}">
                               <div class="make-image-slot-thumb-wrap">
                                 <img src="${esc(imgUrl)}" alt="${esc(imgName)}" />
-                                <button type="button" class="make-image-slot-clear" data-del-ref="${idx}" title="删除此参考图">×</button>
+                                <button type="button" class="make-image-slot-clear" data-del-ref="${idx}" title="移除参考图" aria-label="移除参考图 ${idx + 1}">×</button>
                               </div>
-                              <div class="make-image-slot-meta">
-                                <span class="make-image-slot-code">P${idx + 1}</span>
-                                <span class="make-image-slot-title">${esc(imgName)}</span>
-                              </div>
+
                             </div>
                           `;
                         }).join("")}
-                      </div>
-                    </div>
-                <p class="creation-help">参考图为选填，可用于人物、姿势或构图参考。</p>
-
+                  </div>` : ""}
+                  <textarea id="make-image-subject" class="make-image-textarea" rows="4" placeholder="描述你想创作的画面内容或主题…" aria-label="创作主题">${esc(topicText)}</textarea>
+                  <div class="make-image-composer-bottom">
+                    <button type="button" class="make-image-add-reference" id="make-image-open-ref-picker" title="添加参考图" aria-label="添加参考图">+</button>
               <div class="make-image-action-bar">
                 <div class="make-image-cost" aria-live="polite">
                   ${this.renderCostHtml()}
@@ -609,6 +583,7 @@
                   </button>
                 </div>
               </div>
+                  </div>
                 </div>
               </section>
             </div>
@@ -700,14 +675,6 @@
 
       // 3. Subject input
       const subjInput = root.querySelector("#make-image-subject");
-      const clearSubjBtn = root.querySelector("#make-image-clear-subject");
-
-      const updateClearSubjBtn = () => {
-        if (clearSubjBtn) {
-          clearSubjBtn.style.display = subjInput && subjInput.value ? "" : "none";
-        }
-      };
-
       let debounceTimer = null;
       const flushPersist = () => {
         if (debounceTimer) {
@@ -725,7 +692,6 @@
         subjInput.oninput = () => {
           td.text = subjInput.value;
           this.syncPromptPreview();
-          updateClearSubjBtn();
           if (debounceTimer) clearTimeout(debounceTimer);
           debounceTimer = setTimeout(() => {
             debounceTimer = null;
@@ -735,22 +701,10 @@
         subjInput.onchange = () => {
           td.text = subjInput.value;
           this.syncPromptPreview();
-          updateClearSubjBtn();
           flushPersist();
         };
         subjInput.onblur = () => {
           flushPersist();
-        };
-      }
-
-      // Clear subject button
-      if (clearSubjBtn) {
-        clearSubjBtn.onclick = () => {
-          td.text = "";
-          td.subjectHint = "";
-          this.actions?.markDirtyAndRender();
-          const input = this.hostElement?.querySelector("#make-image-subject");
-          if (input) input.focus();
         };
       }
 
@@ -1113,23 +1067,6 @@
         };
       });
 
-      const againBtn = root.querySelector("#make-image-btn-again");
-      if (againBtn) {
-        againBtn.onclick = () => {
-          this.actions?.run();
-        };
-      }
-
-      const newThemeBtn = root.querySelector("#make-image-btn-new-theme");
-      if (newThemeBtn) {
-        newThemeBtn.onclick = () => {
-          td.text = "";
-          td.subjectHint = "";
-          this.actions?.markDirtyAndRender();
-          const input = this.hostElement?.querySelector("#make-image-subject");
-          if (input) input.focus();
-        };
-      }
     }
 
     syncPromptPreview() {
