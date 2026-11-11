@@ -1,6 +1,7 @@
 """Extract image dimensions safely from local media storage."""
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from PIL import Image
 
@@ -15,6 +16,17 @@ def _path_is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+@lru_cache(maxsize=2048)
+def _cached_image_size(path: str, mtime_ns: int, file_size: int) -> tuple[int, int] | None:
+    """File-versioned Pillow header probe; bounded process-local cache.
+
+    Only successful probes are cached long-term in practice; the caller avoids
+    probing missing files, while corrupt files can be retried after replacement.
+    """
+    with Image.open(path) as img:
+        return int(img.width), int(img.height)
 
 
 def is_square(w: int, h: int) -> bool:
@@ -53,8 +65,11 @@ def image_size(url: str | None) -> tuple[int, int] | None:
             if not _path_is_within(target, root_dir) or not target.is_file():
                 return None
             try:
-                with Image.open(target) as img:
-                    return int(img.width), int(img.height)
+                stat = target.stat()
+            except OSError:
+                return None
+            try:
+                return _cached_image_size(str(target), stat.st_mtime_ns, stat.st_size)
             except Exception:
                 return None
     return None
