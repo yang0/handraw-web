@@ -944,3 +944,110 @@
   .batch-series-add-slot{flex-basis:30px}
   .batch-series-placeholder-symbol{font-size:38px}
 }
+
+
+/* #146 — Single-image visual parity for the series inspector.
+   The shape and colors below intentionally reuse the same UI tokens rather
+   than the older neutralized series-only active buttons. */
+@media(min-width:981px){
+  .batch-series-workspace>.batch-series-properties{
+    padding:22px 20px;border-right:1px solid var(--line-soft)
+  }
+}
+.batch-series-workspace>.batch-series-properties>.batch-series-shared{
+  gap:14px
+}
+.batch-series-workspace>.batch-series-properties>.batch-series-selected-settings{
+  gap:14px;margin-top:20px
+}
+.batch-series-properties .make-image-btn-group .btn.btn-primary.is-active{
+  background:var(--vermilion);border-color:var(--vermilion);
+  color:#fff;box-shadow:none
+}
+.batch-series-properties .make-image-btn-group .btn.btn-primary.is-active:hover{
+  background:var(--vermilion);border-color:var(--vermilion);color:#fff
+}
+.batch-series-workspace .batch-series-fixed-picker,
+.batch-series-workspace .batch-pickers-row{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  align-items:stretch;gap:10px;width:100%
+}
+.batch-series-workspace .batch-series-fixed-picker>.make-image-picker-card{
+  grid-column:auto;min-width:0;width:100%;box-sizing:border-box
+}
+.batch-series-selected-field .batch-row-layout-btn.make-image-picker-card{
+  width:calc(50% - 5px);max-width:calc(50% - 5px);min-width:0;
+  box-sizing:border-box;min-height:76px
+}
+/* The only empty-state focal point is its centered content and one action. */
+.batch-series-focused .batch-series-visual{
+  display:flex;align-items:center;justify-content:center;
+}
+.batch-series-focused .batch-series-placeholder{
+  position:absolute;inset:0;margin:0;padding:18px;
+  box-sizing:border-box;min-width:0;min-height:0;width:100%;height:100%;
+  display:grid;place-items:center;text-align:center
+}
+.batch-series-placeholder-center{
+  position:relative;z-index:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:8px;
+  min-width:0;max-width:100%;text-align:center
+}
+.batch-series-placeholder-center .batch-series-placeholder-symbol{
+  display:block;font-size:45px;line-height:1.15;margin-bottom:2px
+}
+.batch-series-placeholder-center .batch-series-placeholder-title{
+  display:block;font-size:15px;font-weight:700;color:var(--ink-main);
+  letter-spacing:.02em
+}
+.batch-series-placeholder-center .batch-series-placeholder-note{
+  display:block;color:var(--ink-muted);font-size:12px
+}
+.batch-series-generate-one{
+  appearance:none;display:inline-flex;justify-content:center;align-items:center;
+  gap:8px;margin-top:16px;min-height:42px;min-width:126px;
+  padding:10px 16px;border-radius:11px;
+  border:1px solid var(--vermilion);background:var(--vermilion);
+  color:#fff;font:inherit;font-size:13px;font-weight:700;
+  cursor:pointer;box-shadow:0 5px 16px rgba(143,67,47,.14);
+  transition:filter .15s ease,transform .15s ease
+}
+.batch-series-generate-one:hover:not(:disabled){filter:brightness(.94);transform:translateY(-1px)}
+.batch-series-generate-one:focus-visible{outline:2px solid var(--vermilion);outline-offset:3px}
+.batch-series-generate-one:disabled{opacity:.5;cursor:wait}
+.batch-series-generate-one svg{flex:0 0 auto}
+.batch-series-focused .batch-series-pending{
+  position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;flex-direction:column;gap:12px;
+  padding:16px;text-align:center;background:transparent
+}
+.batch-series-focused .batch-series-pending-art{
+  flex:0 1 auto;display:grid;place-items:center;position:relative;
+  min-width:0;min-height:100px;
+  width:min(56%,290px);max-height:calc(100% - 55px);
+  aspect-ratio:3/4;border:0;border-radius:14px;
+  background:linear-gradient(110deg,var(--paper-inset),var(--paper-card),var(--paper-inset));
+  overflow:hidden
+}
+.batch-series-focused .batch-series-pending .make-image-pending-caption{
+  padding:0;position:relative;flex:0 0 auto;color:var(--ink-muted)
+}
+.batch-series-focused .batch-series-failed{
+  position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;text-align:center
+}
+@media(max-width:980px){
+  .batch-series-workspace>.batch-series-properties{
+    padding:20px;border-right:0
+  }
+}
+@media(max-width:540px){
+  .batch-series-workspace>.batch-series-properties{padding:14px}
+  .batch-series-placeholder-center .batch-series-placeholder-symbol{font-size:36px}
+  .batch-series-placeholder-center .batch-series-placeholder-title{font-size:13px}
+  .batch-series-generate-one{margin-top:10px;min-height:38px;padding:8px 11px}
+  .batch-series-focused .batch-series-pending-art{width:min(68%,230px)}
+}
+@media(prefers-reduced-motion:reduce){
+  .batch-series-generate-one{transition:none}
+}
