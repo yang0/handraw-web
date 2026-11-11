@@ -193,7 +193,6 @@
       }).join("") + '</div>' : "") +
       '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" src="' + esc(avatarFor(w, st)) + '">' + esc(authorOf(w)) + '</span>' +
       '<span class="hw-mf-stats">♡ ' + esc(likes) + (commentCount ? ' · 💬 ' + esc(commentCount) : "") + '</span></div>' +
-      '<a class="hw-mf-remix" href="' + url("studio", { fork: w.id }) + '">用同款做一张 ↗</a>' +
       '</div></article>';
   }
   function resourceCard(r) {
@@ -210,8 +209,7 @@
       '<span class="hw-mf-photo-label hw-mf-photo-label--resource">' + kind + '资源</span></a>' +
       '<div class="hw-mf-body"><span class="hw-mf-type">可复用' + kind + '</span>' +
       '<a class="hw-mf-title" href="' + href + '">' + esc(S.resourceLabel ? S.resourceLabel(r) : titleOf(r)) + '</a>' +
-      '<div class="hw-mf-footer"><span class="hw-mf-author">#' + esc(r.id) + '</span>' +
-      '<span class="hw-mf-stats">查看用法 ↗</span></div></div></article>';
+      '</div></article>';
   }
   function topicCard(t, st) {
     var img = firstImage(t.images);
