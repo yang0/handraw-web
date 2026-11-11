@@ -140,6 +140,10 @@
 @keyframes make-image-shimmer{to{transform:translateX(110%)}}
 @keyframes make-image-breathe{50%{opacity:1;transform:scale(1.08)}}
 .make-image-chat-workspace .make-image-composer{flex:0 0 auto;padding:12px 14px;background:var(--paper-card);border:1px solid var(--line-strong);border-radius:16px;box-shadow:0 7px 24px rgba(43,38,35,.09)}
+/* Extreme short stages: keep the dock inside the visible right pane; its own content stays reachable. */
+@media(min-width:981px){
+.make-image-chat-workspace .make-image-composer{box-sizing:border-box;max-height:calc(100% - 38px);overflow-y:auto}
+}
 .make-image-chat-workspace .make-image-composer .make-image-field-wrap{gap:5px}
 .make-image-chat-workspace .make-image-composer #make-image-subject{min-height:76px;max-height:180px;padding:8px 0;font-size:14px;line-height:1.6;border:0;outline:none;background:transparent;box-shadow:none;resize:vertical}
 .make-image-chat-workspace .make-image-composer #make-image-subject:focus-visible{outline:none;border:0}
