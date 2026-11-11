@@ -352,6 +352,17 @@ function parseHtml(html) {
           matches.forEach(() => results.push({}));
         }
       }
+      if (selector === "[data-generate-series-idx]") {
+        const regex = /data-generate-series-idx="(\\d+)"/g;
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+          const val = match[1];
+          results.push({
+            getAttribute: (attr) => attr === "data-generate-series-idx" ? val : null,
+            onclick: null, disabled: false
+          });
+        }
+      }
       if (selector === "[data-retry-idx]") {
         const regex = /data-retry-idx="(\d+)"/g;
         let match;
@@ -396,6 +407,61 @@ function createFakeDom() {
 }
 
 console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
+// #146: the selected empty state owns one direct per-image generation action.
+// A successful output never exposes a second billable submit button.
+{
+  const fakeHost = createFakeDom();
+  const graph = createTestBatchGraph({
+    batchLayoutMode:"ai",
+    batchCount:2,
+    batchRows:[
+      {theme:"清晨海边",layout:"SC-001"},
+      {theme:"落日山谷",layout:"SC-001"}
+    ]
+  });
+  const parts = {
+    ctrl:graph.nodes.find(n=>n.type==="output_control"),
+    loop:graph.nodes.find(n=>n.type==="loop"),
+    skill:graph.nodes.find(n=>n.type==="skill_params"),
+    text:graph.nodes.find(n=>n.type==="text_input"),
+    asset:graph.nodes.find(n=>n.type==="asset")
+  };
+  const calls = [];
+  HandrawBatchCreate.selectedSeriesIndex=1;
+  HandrawBatchCreate.seriesComposerMode="image";
+  HandrawBatchCreate.render(fakeHost,{parts,graph,catalog:sharedCatalog,busy:false},{
+    isBusy:()=>false,runSingleRow:index=>calls.push(index)
+  });
+  assert.ok(fakeHost.innerHTML.includes('class="batch-series-placeholder-center"'),
+    "Empty primary canvas content must be centered in one wrapper");
+  assert.ok(fakeHost.innerHTML.includes('class="batch-series-generate-one"'),
+    "Empty primary canvas must expose a prominent one-image submit button");
+  assert.ok(fakeHost.innerHTML.includes("data-generate-series-idx=\"1\""),
+    "Submit button must point to the active picture, not the entire series");
+  assert.ok(fakeHost.innerHTML.includes('<svg viewBox="0 0 24 24"'),
+    "Per-image submit control needs its own icon");
+  assert.ok(!fakeHost.innerHTML.includes('batch-series-card-head'),
+    "No empty picture title row should consume preview height");
+  const one = fakeHost.querySelectorAll("[data-generate-series-idx]");
+  assert.equal(one.length,1);
+  assert.equal(typeof one[0].onclick,"function");
+  one[0].onclick();
+  assert.deepEqual(calls,[1],"Direct generate must dispatch only selected picture 2");
+  const appSource=fs.readFileSync("demo/assets/studio-app.js","utf8");
+  assert.ok(appSource.includes("const completedBefore = new Map()"),
+    "Full-series runner must collect prior completed slots");
+  assert.ok(appSource.includes(".filter(i=>!completedBefore.has(i))"),
+    "Worker pool must exclude completed slot indexes");
+  assert.ok(appSource.includes("preserveCompleted: completedBefore.size ? completedBefore : null"),
+    "Display syncing must retain previously successful output");
+  assert.ok(appSource.includes("confirmPotentialGenerationCost(pendingCount)"),
+    "Cost confirmation must use remaining count only");
+  HandrawBatchCreate.selectedSeriesIndex=0;
+  HandrawBatchCreate.seriesComposerMode="series";
+  console.log("✓ Issue #146: one-image submit and skip-completed run contract passed");
+}
+
+
 
 // ==========================================
 // Requirement 1: 固定图型 (Fixed Layout)
