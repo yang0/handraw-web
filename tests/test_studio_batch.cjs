@@ -1273,8 +1273,13 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     assert.ok(idxMoreSettingsToggle !== -1, "More settings toggle must exist");
 
     assert.ok(idxPickers < idxGlobalRefs, "Global refs row must come after pickers row");
-    assert.ok(idxPlanCard < idxPickers, "Planning must precede the shared settings column");
-    assert.ok(idxPlanCard < idxMoreSettingsToggle, "Set planning card must come before more settings");
+    assert.ok(idxGlobalRefs < idxMoreSettingsToggle, "Shared references remain in the left settings column");
+    assert.ok(idxMoreSettingsToggle < idxPlanCard, "Series planning must sit in the right bottom dock, after shared properties");
+    assert.ok(html.includes('class="batch-series-dock"'), "One bottom dock owns planning and generation");
+    assert.ok(html.includes('id="batch-plan-options-toggle"'), "Planning parameters must be collapsible");
+    assert.ok(html.includes('class="batch-series-footer-actions"'), "Secondary AI planning and primary generation must share one action row");
+    assert.ok(html.indexOf('id="batch-btn-plan"') > idxPlanCard, "AI planning action belongs with dock");
+    assert.ok(html.indexOf('id="batch-btn-start"') > html.indexOf('id="batch-btn-plan"'), "Generation remains the final primary action");
 
     // 3. More settings body must NOT contain #batch-more-row-refs or #batch-btn-pick-global-refs
     const moreSettingsBodyMatch = html.match(/id="batch-body-more-settings"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/);
