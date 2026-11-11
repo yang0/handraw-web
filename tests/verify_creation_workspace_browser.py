@@ -22,7 +22,7 @@ BOOT = r"""
     skill: {id:"skill",data:{style1:"FF-001",style2:"",layout:"SC-001",colors:[],tones:[],moods:[]}},
     text: {id:"text",data:{text:"暖阳下的单车少女"}},
     asset: {id:"asset",data:{items:[]}},
-    loop: {id:"loop",data:{batchLayoutMode:"fixed",batchCount:3,batchSeed:"都市慢生活",promptListText:"咖啡馆\n公园\n书店",batchRows:[]}},
+    loop: {id:"loop",data:{batchLayoutMode:"ai",batchCount:3,batchSeed:"都市慢生活",promptListText:"咖啡馆\n公园\n书店",batchRows:[{theme:"咖啡馆",layout:"SC-001"},{theme:"公园",layout:"SC-001"},{theme:"书店",layout:"SC-001"}]}},
     ctrl: {id:"ctrl",data:{mode:"graphic-text",ratio:"3:4",count:1}}
   };
   const catalog = {
@@ -317,8 +317,14 @@ def main():
                     expect(page.locator(".batch-series-grid")).to_have_count(0)
                     expect(page.locator(".batch-series-properties .batch-series-shared")).to_be_visible()
                     expect(page.locator(".batch-series-properties .batch-series-selected-settings")).to_be_visible()
-                    expect(page.locator(".batch-series-properties #batch-count-input")).to_be_visible()
+                    expect(page.locator(".batch-series-properties #batch-count-input")).to_have_count(0)
+                    expect(page.locator(".batch-series-dock #batch-count-input")).to_be_visible()
                     expect(page.locator(".batch-series-properties #batch-strategy-fixed")).to_be_visible()
+                    expect(page.locator("#batch-strategy-ai")).to_have_attribute("aria-pressed","true")
+                    expect(page.locator(".batch-series-fixed-picker")).to_have_count(0)
+                    expect(page.locator(".batch-series-layout-strategy")).to_be_visible()
+                    expect(page.locator(".batch-series-layout-strategy .make-image-btn-group")).to_be_visible()
+                    assert page.locator("#batch-strategy-ai").get_attribute("class").find("btn-primary is-active") >= 0
                     expect(page.locator(".batch-series-properties [data-pick-layout-idx='0']")).to_be_visible()
                     expect(page.locator("#batch-concurrency")).to_have_count(0)
                     expect(page.locator("#batch-layout-req-input")).to_have_count(0)
@@ -326,12 +332,35 @@ def main():
                     expect(page.locator(".batch-series-dock #batch-btn-plan")).to_be_visible()
                     expect(page.locator(".batch-series-dock #batch-btn-start")).to_be_visible()
                     expect(page.locator(".batch-series-composer-attachments")).to_have_count(0)
+                    expect(page.locator(".batch-series-composer-bottom > .batch-series-add-reference")).to_be_visible()
+                    assert page.locator(".batch-series-composer-bottom").evaluate("""node => {
+                      const plus=node.querySelector(".batch-series-add-reference").getBoundingClientRect();
+                      const plan=node.querySelector("#batch-btn-plan").getBoundingClientRect();
+                      const count=node.querySelector("#batch-count-input").getBoundingClientRect();
+                      const generate=node.querySelector("#batch-btn-start").getBoundingClientRect();
+                      return plus.left < count.left && count.left < plan.left && plan.left < generate.right;
+                    }""")
+                    assert "写下整套主题及随机" not in page.locator(".batch-series-composer-bottom").inner_text()
                     assert page.evaluate("""() => {
                       const r=s=>document.querySelector(s).getBoundingClientRect();
                       const a=r('.batch-series-shared'),b=r('.batch-series-selected-settings'),
                             main=r('.batch-series-main-card'),thumb=r('.batch-series-thumbs');
-                      return b.top>=a.bottom-1 && thumb.left>=main.right-1;
+                      const panel=document.querySelector('.batch-series-properties');
+                      return b.top>=a.bottom-1 && thumb.left>=main.right-1
+                        && getComputedStyle(panel).overflowY==="auto" === (innerWidth>980);
                     }""")
+                    # Before generation each thumbnail is a simple 图N placeholder.
+                    expect(page.locator(".batch-series-thumb img")).to_have_count(0)
+                    assert page.locator('.batch-series-thumb[data-series-select-idx="0"] .batch-series-thumb-empty').inner_text()=="图1"
+                    assert page.locator('.batch-series-thumb[data-series-select-idx="1"] .batch-series-thumb-empty').inner_text()=="图2"
+                    expect(page.locator(".batch-series-thumb-number")).to_have_count(0)
+                    expect(page.locator(".batch-series-thumb-status")).to_have_count(0)
+                    # Fixed layout reveals a real picker matching the single-image cards.
+                    page.locator("#batch-strategy-fixed").click()
+                    expect(page.locator(".batch-series-fixed-picker [data-pick-kind='layout']")).to_be_visible()
+                    assert page.locator("#batch-strategy-fixed").get_attribute("class").find("btn-primary is-active")>=0
+                    page.locator(".batch-series-fixed-picker [data-pick-kind='layout']").click()
+                    assert page.evaluate("fixture.counts().pickers")==1
                     page.locator(".batch-series-bulk-input summary").click()
                     page.locator("#batch-prompts-input").fill("山间晨雾\n湖边暮色")
                     page.locator("#batch-prompts-input").blur()
@@ -340,10 +369,11 @@ def main():
                     page.locator("#batch-count-input").fill("4")
                     assert page.evaluate("fixture.parts.loop.data.batchCount")==4
                     page.locator("#batch-strategy-ai").click()
+                    expect(page.locator(".batch-series-fixed-picker")).to_have_count(0)
                     expect(page.locator(".batch-series-thumb")).to_have_count(2)
                     page.locator("#batch-mode-fusion").click()
                     page.locator('[data-pick-kind="style1"]').press("Space")
-                    assert page.evaluate("fixture.counts().pickers")==1
+                    assert page.evaluate("fixture.counts().pickers")==2
                     # Mother-theme input includes natural-language layout requests.
                     page.locator("#batch-seed-input").fill("城市散步，三张图片采用随机图型")
                     page.locator("#batch-btn-pick-global-refs").click()
@@ -371,7 +401,7 @@ def main():
                     })""")
                     assert theme_diag["rows"][1]["theme"]=="午后公园的暖光与树影",theme_diag
                     page.locator('[data-pick-layout-idx="1"]').click()
-                    assert page.evaluate("fixture.counts().pickers")==2
+                    assert page.evaluate("fixture.counts().pickers")==3
                     # Current-picture refs belong inside composer, independent of global refs.
                     page.locator('[data-pick-row-refs-idx="1"]').click()
                     assert page.evaluate("fixture.counts().refs")==2
@@ -410,6 +440,13 @@ def main():
                       activeIndex:1,activeIndices:[1],busy:true
                     })""")
                     expect(page.locator('.batch-series-focused[data-batch-row="0"] .is-generated')).to_have_count(1)
+                    expect(page.locator('.batch-series-thumb[data-series-select-idx="0"].has-result img')).to_have_count(1)
+                    expect(page.locator('.batch-series-thumb[data-series-select-idx="0"] .batch-series-thumb-overlay')).to_have_count(1)
+                    # Text overlays exist only as hover/focus affordances over completed pictures.
+                    overlay=page.locator('.batch-series-thumb[data-series-select-idx="0"] .batch-series-thumb-overlay')
+                    assert float(overlay.evaluate("el => getComputedStyle(el).opacity")) == 0
+                    page.locator('.batch-series-thumb[data-series-select-idx="0"]').hover()
+                    expect(overlay).to_have_css("opacity","1")
                     expect(page.locator("#batch-btn-download-all")).to_be_enabled()
                     expect(page.locator('.batch-series-thumb[data-series-select-idx="1"].is-generating')).to_have_count(1)
                     page.locator('[data-series-select-idx="1"]').click()
