@@ -1774,15 +1774,6 @@
           row.layout = skill.data.layout || "";
           row.assetItems = [];
           markDirty();
-          return;
-          if (!Array.isArray(loop.data.batchRows)) loop.data.batchRows = [];
-          loop.data.batchRows.push({
-            theme: "",
-            layout: skill.data.layout || "",
-            assetItems: [],
-            skipGlobalRefs: false
-          });
-          markDirty();
         };
       }
 
