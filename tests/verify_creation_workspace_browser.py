@@ -124,6 +124,11 @@ def main():
                 expect(page.locator(".creation-settings")).to_be_visible()
                 check_bar(page, "#make-image-btn-run" if kind=="quick" else "#batch-btn-start")
                 if kind=="quick":
+                    # #139: leave the results pane visually clean, with no duplicate page heading.
+                    expect(page.locator(".make-image-head")).to_have_count(0)
+                    expect(page.locator(".make-image-results-intro")).to_have_count(0)
+                    expect(page.locator("#make-content-title")).to_have_count(0)
+                    expect(page.locator(".make-image-conversation")).to_have_attribute("aria-label","生成结果与创作输入")
                     # Input persists through changes in the other column.
                     page.locator("#make-image-subject").fill("纸上风景与城市散步")
                     page.locator("#make-image-mode-fusion").click()
