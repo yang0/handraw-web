@@ -1408,10 +1408,14 @@
             row.theme = input.value;
             loop.data.promptListText = loop.data.batchRows.map(r => r.theme || "").join("\n");
           } else {
-            const lines = String(loop.data.promptListText || "").split(/\r?\n/).filter(x => x.trim());
+            const rows = Array.isArray(loop.data.batchRows) && loop.data.batchRows.length
+              ? loop.data.batchRows : null;
+            const lines = rows ? rows.map(r=>r.theme || "")
+              : String(loop.data.promptListText || "").split(/\r?\n/);
             if (idx < lines.length) {
               lines[idx] = input.value.replace(/\r?\n/g, " ").trim();
               loop.data.promptListText = lines.join("\n");
+              if (rows?.[idx]) rows[idx].theme=lines[idx];
             }
           }
         };
@@ -1704,19 +1708,24 @@
               throw new Error((data.error || `HTTP ${resp.status}`) + incident);
             }
 
-            const items = Array.isArray(data.items) ? data.items : [];
+            const items = Array.isArray(data.items) ? data.items.slice(0,reqBody.count) : [];
+            // A provider may return fewer slots than requested. Pad with
+            // editable, intentionally empty themes rather than silently
+            // generating fewer pictures or inventing content.
+            while (items.length < reqBody.count) items.push({subject:"",layout:""});
             if (priorPlan) {
               self.lastPlanUndo = priorPlan;
               // Replan undo is an inline affordance, not a disruptive dialog.
               self.planNotice = "规划已更新，可点击撤销恢复原列表";
             }
-            if (currentMode === "fixed") {
-              loop.data.promptListText = items.map((it) => it.subject).join("\n");
-              loop.data.batchRows = [];
-            } else {
-              loop.data.batchRows = items.map((it) => ({ theme: it.subject, layout: it.layout || "" }));
-              loop.data.promptListText = items.map((it) => it.subject).join("\n");
-            }
+            loop.data.batchCount = reqBody.count;
+            loop.data.batchRows = items.map(it=>({
+              theme:String(it.subject || ""),
+              // Fixed mode always inherits the shared layout.
+              layout:currentMode === "fixed" ? "" : (it.layout || ""),
+              assetItems:[]
+            }));
+            loop.data.promptListText = loop.data.batchRows.map(row=>row.theme).join("\n");
 
             if (data.source === "template") {
               self.planNotice = priorPlan ? "模板规划已更新，可撤销" : "未使用 AI 规划，已按模板生成";
@@ -1726,7 +1735,7 @@
 
             self.selectedSeriesIndex = 0;
             self.seriesComposerMode = "image";
-            if (data.defaultLayoutUsed && items.length > 0 && items[0].layout) {
+            if (currentMode === "fixed" && data.defaultLayoutUsed && items.length > 0 && items[0].layout) {
               const defLayout = items[0].layout;
               if (skill?.data) {
                 skill.data.layout = defLayout;
@@ -1851,14 +1860,18 @@
       root.querySelectorAll("[data-del-row-idx]").forEach((btn) => {
         btn.onclick = () => {
           const idx = Number(btn.getAttribute("data-del-row-idx"));
-          if (loop.data.batchLayoutMode === "ai" && Array.isArray(loop.data.batchRows)) {
+          const count = self.resolveIterations().length;
+          if (count <= 1) return;
+          if (Array.isArray(loop.data.batchRows) && loop.data.batchRows.length) {
             loop.data.batchRows.splice(idx, 1);
-            loop.data.promptListText = loop.data.batchRows.map((r) => r.theme).filter(Boolean).join("\n");
+            loop.data.promptListText = loop.data.batchRows.map((r) => r.theme || "").join("\n");
           } else {
             const lines = String(loop.data.promptListText || "").split(/\r?\n/).filter(Boolean);
             lines.splice(idx, 1);
             loop.data.promptListText = lines.join("\n");
           }
+          loop.data.batchCount = Math.max(1,Math.min(10,count-1));
+          self.selectedSeriesIndex=Math.min(self.selectedSeriesIndex,count-2);
           markDirty();
         };
       });
