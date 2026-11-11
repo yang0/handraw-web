@@ -142,7 +142,7 @@ def main():
                     geometry(page,width,kind)
                     # #138: constrain the desktop workspace height to verify independent scrolling and fixed composer.
                     if width > 980:
-                        page.locator("#fixture").evaluate("el => el.style.height = '780px'")
+                        page.locator("#fixture").evaluate("el => el.style.height = '650px'")
                         page.evaluate("fixture.render()")
                         dock = page.evaluate("""() => {
                             const rect = s => document.querySelector(s).getBoundingClientRect();
