@@ -706,6 +706,7 @@
                       ${busy ? `<span class="batch-busy-status">${this.formatProgressStatus({ completedCount, totalCount: totalSteps, activeIndex, activeIndices, failedCount, isStopping })}</span>` : (this.lastSummary ? `<span class="batch-summary-status">${esc(this.lastSummary)}</span>` : "")}
                     </div>
                     ${this.planNotice ? `<span class="batch-plan-notice" role="status">${esc(this.planNotice)}</span>` : ""}
+                    ${this.lastPlanUndo ? '<button type="button" class="batch-series-undo" id="batch-undo-plan">撤销规划</button>' : ""}
                   </div>
                   <div class="batch-series-footer-actions">
                     <div class="batch-plan-action-wrap">
@@ -713,7 +714,6 @@
                         <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M7.5.5c.2 2.6 1.8 4.2 4.4 4.4.2 0 .2.3 0 .4-2.6.2-4.2 1.8-4.4 4.4 0 .2-.3.2-.4 0-.2-2.6-1.8-4.2-4.4-4.4-.2 0-.2-.3 0-.4 2.6-.2 4.2-1.8 4.4-4.4.2-.2.3-.2.4 0z"/></svg>
                         <span>AI 规划</span>
                       </button>
-                      ${this.lastPlanUndo ? '<button type="button" class="btn btn-sm" id="batch-undo-plan">撤销规划</button>' : ""}
                     </div>
                     <div class="batch-btn-wrap">
                       <button type="button" class="btn btn-sm" id="batch-btn-download-all" ${results.some(r => r?.imageUrl) || slotResults.some(r => r?.imageUrl) ? "" : "disabled"}>全部下载</button>
@@ -1459,6 +1459,9 @@
           loop.data.batchSeed = seedInput.value;
           if (text) text.data.text = seedInput.value;
         };
+        seedInput.onblur = () => {
+          if (self.actions?.persistDraft) self.actions.persistDraft();
+        };
       }
 
       // (b) Count input (M1: write batchCount and enforce ctrl.count = 1)
@@ -1470,6 +1473,13 @@
           if (ctrl?.data) {
             ctrl.data.count = 1;
           }
+          const summary = root.querySelector("#batch-plan-options-toggle small");
+          if (summary) {
+            summary.textContent = `${val} 张 · ${loop.data.batchLayoutMode === "ai" ? "AI 推荐图型" : "固定图型"}`;
+          }
+        };
+        countInput.onchange = () => {
+          if (self.actions?.persistDraft) self.actions.persistDraft();
         };
       }
 
