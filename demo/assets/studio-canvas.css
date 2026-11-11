@@ -742,7 +742,9 @@ body.ic-studio-body .hw-topbar {
 .ic-ing-thumb {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
+  background: var(--ic-surface);
   display: block;
   pointer-events: none;
 }
@@ -842,7 +844,9 @@ body.ic-studio-body .hw-topbar {
 .ic-gen-img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
+  background: var(--ic-surface);
   display: block;
   pointer-events: none;
 }
@@ -2070,7 +2074,7 @@ body.ic-studio-body .hw-topbar {
   width: 48px;
   height: 36px;
   border-radius: 6px;
-  object-fit: cover;
+  object-fit: contain;
   flex-shrink: 0;
   background: var(--ic-surface);
 }
@@ -2362,7 +2366,7 @@ body.ic-studio-body .hw-topbar {
   width: 34px;
   height: 28px;
   border-radius: 5px;
-  object-fit: cover;
+  object-fit: contain;
   flex-shrink: 0;
   border: 1px solid var(--ic-border);
 }
@@ -2532,7 +2536,9 @@ body.ic-studio-body .hw-topbar {
 .ic-v4-slot-thumb {
   width: 100%;
   height: 68px;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
+  background: var(--ic-surface);
   display: block;
 }
 
@@ -2865,7 +2871,9 @@ body.ic-studio-body .hw-topbar {
 .ic-disp-item img {
   width: 100%;
   aspect-ratio: 4 / 3;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
+  background: var(--ic-surface);
   display: block;
   cursor: zoom-in;
 }
@@ -2880,8 +2888,10 @@ body.ic-studio-body .hw-topbar {
 
 .ic-disp-single-wrap img {
   width: 100%;
-  max-height: 224px;
-  object-fit: cover;
+  height: 224px;
+  object-fit: contain;
+  object-position: center;
+  background: var(--ic-surface);
   display: block;
   cursor: zoom-in;
 }
@@ -3164,7 +3174,7 @@ body.ic-studio-body .hw-topbar {
   width: 32px;
   height: 22px;
   border-radius: 4px;
-  object-fit: cover;
+  object-fit: contain;
   flex-shrink: 0;
   border: 1px solid var(--ic-border);
 }
@@ -3536,7 +3546,9 @@ body.ic-studio-body .hw-topbar {
 .ic-disp-gal-cell img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
+  background: var(--ic-surface);
   display: block;
 }
 
