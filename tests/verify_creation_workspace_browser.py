@@ -356,7 +356,14 @@ def main():
                     expect(page.locator(".batch-series-properties [data-pick-layout-idx='1']")).to_be_visible()
                     page.locator("#batch-series-theme-1").fill("午后公园的暖光与树影")
                     page.locator("#batch-series-theme-1").blur()
-                    assert page.evaluate("fixture.parts.loop.data.batchRows[1].theme")=="午后公园的暖光与树影"
+                    theme_diag=page.evaluate("""() => ({
+                      mode:fixture.parts.loop.data.batchLayoutMode,
+                      rows:fixture.parts.loop.data.batchRows,
+                      promptListText:fixture.parts.loop.data.promptListText,
+                      selected:fixture.controller.selectedSeriesIndex,
+                      editor:document.querySelector('#batch-series-theme-1')?.value
+                    })""")
+                    assert theme_diag["rows"][1]["theme"]=="午后公园的暖光与树影",theme_diag
                     page.locator('[data-pick-layout-idx="1"]').click()
                     assert page.evaluate("fixture.counts().pickers")==2
                     # Current-picture refs belong inside composer, independent of global refs.
