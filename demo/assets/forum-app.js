@@ -172,6 +172,36 @@
     navHistoryDepth: 0
   };
 
+  // Derived from the public, already-visibility-filtered boot topics. No extra
+  // network requests: category/search renders reuse this snapshot for 60s.
+  const FEATURED_CACHE_TTL_MS = 60 * 1000;
+  let featuredSidebarCache = null;
+  function featuredSidebarTopics(topics, siteSettings, nowMs = Date.now()) {
+    const configured = Number(siteSettings?.forum?.featured_sidebar_limit ?? 5);
+    const limit = Number.isInteger(configured) ? Math.max(1, Math.min(5, configured)) : 5;
+    if (featuredSidebarCache &&
+        featuredSidebarCache.topics === topics &&
+        featuredSidebarCache.limit === limit &&
+        nowMs >= featuredSidebarCache.at &&
+        nowMs - featuredSidebarCache.at < FEATURED_CACHE_TTL_MS) {
+      return featuredSidebarCache.items;
+    }
+    const visible = (Array.isArray(topics) ? topics : []).filter(t =>
+      t && t.featured === true && t.status !== "hidden" &&
+      t.status !== "deleted" && t.status !== "paused" &&
+      t.status !== "draft" && t.visibility !== "private"
+    );
+    visible.sort((a, b) => {
+      const score = (t) => Number(t.likes || 0) + 2 * Number(t.favorites || 0) + Number(t.replyCount || 0);
+      return score(b) - score(a) ||
+        Number(b.activityAtMs || b.publishedAtMs || 0) - Number(a.activityAtMs || a.publishedAtMs || 0);
+    });
+    const items = visible.slice(0, limit);
+    featuredSidebarCache = { topics, limit, at: nowMs, items };
+    return items;
+  }
+  function invalidateFeaturedSidebar() { featuredSidebarCache = null; }
+
   let draftAccount = null;
   let draftSaveTimer = null;
   const draftKey = () => `handraw_forum_draft_v2:${S.App.state?.user?.id || "guest"}`;
@@ -3163,6 +3193,10 @@
             method: "POST",
             body: { topicId: topic.id, op }
           });
+          invalidateFeaturedSidebar();
+          if (["feature", "unfeature", "hide", "delete"].includes(op)) {
+            await S.refreshFromServer();
+          }
           if (op === "hide") {
             toast("🛡️ 版务操作生效：已隐藏该违规帖子");
             openForumList(true);
@@ -3915,6 +3949,7 @@
     }
 
     const allTopics = App.state.topics || [];
+    const featuredSidebar = featuredSidebarTopics(allTopics, App.state.siteSettings);
 
     const cats = [
       { key: "all", label: "📋 全部社区讨论", count: allTopics.length },
@@ -4075,28 +4110,28 @@
             </p>
           </div>
 
-          <div class="forum-side-card">
-            <div style="font-weight:800;font-size:13.8px;margin-bottom:10px;">画风与图型入口</div>
-            <div style="display:grid;gap:8px;">
-              ${["FA-001", "SC-021", "FX-001", "IG-001"]
-                .map((id) => {
-                  const item = App.resourceMap.get(id);
-                  if (!item) return "";
-                  const wc = S.getAssetWorkCount(id);
-                  return `
-                    <a href="${esc(channelUrl("main", { view: "asset", id }))}" style="display:flex;align-items:center;gap:10px;padding:6px;border-radius:8px;background:var(--paper-bg);">
-                      <img src="${esc(item.image)}" alt="" style="width:42px;height:42px;border-radius:6px;object-fit:cover;" />
-                      <div style="min-width:0;flex:1;">
-                        <div style="font-size:12px;font-weight:800;color:var(--vermilion);">${esc(item.id)}</div>
-                        <div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(item.name)}</div>
-                      </div>
-                      <span style="font-size:11px;color:var(--ink-muted);">${wc}作品 ↗</span>
-                    </a>
-                  `;
-                })
-                .join("")}
+          <section class="forum-featured-panel" aria-label="社区精华帖">
+            <div class="forum-featured-header">
+              <div class="forum-featured-emblem" aria-hidden="true">✦</div>
+              <div>
+                <div class="forum-featured-eyebrow">EDITOR'S PICKS · 社区沉淀</div>
+                <h2>精华帖 <span>精选阅读</span></h2>
+              </div>
             </div>
-          </div>
+            <div class="forum-featured-list">
+              ${featuredSidebar.length ? featuredSidebar.map((t, i) => `
+                <a class="forum-featured-link" href="${esc(channelUrl("forum", {view:"topic", id:t.id}))}">
+                  <span class="forum-featured-num" aria-hidden="true">${String(i + 1).padStart(2,"0")}</span>
+                  <span class="forum-featured-detail">
+                    <span class="forum-featured-title">${esc(t.title)}</span>
+                    <span class="forum-featured-meta">${esc(t.categoryLabel || t.category || "社区讨论")} · ${esc(t.authorName || t.author || "创作者")}</span>
+                  </span>
+                  <span class="forum-featured-arrow" aria-hidden="true">↗</span>
+                </a>
+              `).join("") : `<div class="forum-featured-empty">还没有精华帖<br/><span>期待第一篇值得收藏的分享。</span></div>`}
+            </div>
+            <div class="forum-featured-tail"><span>由社区管理团队甄选</span><span>✳</span></div>
+          </section>
         </aside>
       </div>
     `;
@@ -4203,6 +4238,7 @@
             body: { topicId: tid, op }
           });
           await S.refreshFromServer();
+          invalidateFeaturedSidebar();
           toast(op === "delete" ? "帖子已成功删除" : "版务操作已生效");
           renderForum();
         } catch (err) {

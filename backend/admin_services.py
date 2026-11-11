@@ -3481,10 +3481,16 @@ def admin_update_settings(
         actor = require_staff(user, allowed_roles=("admin", "operator"))
     else:
         actor = require_staff(user, allowed_roles=("admin",))
-    if sec not in ("economy", "announcement", "moderation", "gateway"):
+    if sec not in ("economy", "announcement", "moderation", "gateway", "forum"):
         raise ServiceError(f"不支持的配置分组：{sec}")
     if not isinstance(values, dict):
         raise ServiceError("配置项内容格式错误")
+    if sec == "forum":
+        if set(values) != {"featured_sidebar_limit"}:
+            raise ServiceError("论坛设置只允许修改精华帖展示条数")
+        raw_limit = values["featured_sidebar_limit"]
+        if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or not 1 <= raw_limit <= 5:
+            raise ServiceError("精华帖展示条数必须为 1～5 的整数")
     now_iso = utc_now_iso()
 
     with db.transaction() as tx:

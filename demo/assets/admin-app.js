@@ -1600,6 +1600,19 @@
             </label>
           </div>
           <button class="adm-btn adm-btn-primary" id="btn-save-mod">💾 保存风控策略</button>
+        </div>
+        <div class="adm-panel">
+          <div class="adm-panel-head">
+            <h3 class="adm-panel-title">✦ 论坛精华帖展示</h3>
+            <span class="adm-badge published">仅超级管理员可配置</span>
+          </div>
+          <div class="adm-field">
+            <label for="cfg-forum-featured-limit">右侧精华帖显示数量</label>
+            <input class="adm-input" type="number" id="cfg-forum-featured-limit" min="1" max="5" step="1"
+                   value="${esc(Math.max(1, Math.min(5, Number(s.forum?.featured_sidebar_limit ?? 5) || 5)))}" />
+            <p style="font-size:12px;color:var(--ink-muted);margin:7px 0 0;">默认 5 条，最多 5 条。只显示管理员或版主已设置的公开精华帖；列表采用短时缓存。</p>
+          </div>
+          <button class="adm-btn adm-btn-primary" id="btn-save-forum-featured">💾 保存展示数量</button>
         </div>` : ""}
       </div>
 
@@ -3542,6 +3555,31 @@
           toast("审核风控策略已更新生效");
         } catch (err) {
           toast(err.message, true);
+        }
+      };
+    }
+
+    const btnSaveFeatured = document.getElementById("btn-save-forum-featured");
+    if (btnSaveFeatured) {
+      btnSaveFeatured.onclick = async () => {
+        const input = document.getElementById("cfg-forum-featured-limit");
+        const limit = Number(input?.value);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 5) {
+          toast("精华帖数量请输入 1～5 的整数", true);
+          return;
+        }
+        try {
+          btnSaveFeatured.disabled = true;
+          const res = await api("/api/admin/settings", {
+            method: "POST",
+            body: { section: "forum", values: { featured_sidebar_limit: limit }, reason: "设置论坛右侧精华帖展示数量" }
+          });
+          state.data.settings = res.settings;
+          toast("论坛精华帖展示数量已保存");
+        } catch (err) {
+          toast(err.message, true);
+        } finally {
+          btnSaveFeatured.disabled = false;
         }
       };
     }

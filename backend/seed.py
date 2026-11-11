@@ -68,6 +68,9 @@ DEFAULT_SITE_SETTINGS: dict[str, object] = {
         "cta_label": "去创作台体验 ↗",
         "cta_channel": "studio",
     },
+    "forum": {
+        "featured_sidebar_limit": 5,
+    },
     "moderation": {
         "auto_pause_report_threshold": 3,
         "community_asset_default_status": "published",
