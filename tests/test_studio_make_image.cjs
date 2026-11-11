@@ -420,11 +420,12 @@ function createTestGraph(options = {}) {
 // Test 6: Fork (?fork={workId}) Draft Application
 // ==========================================
 {
-  const graph = createTestGraph();
+  const graph = createTestGraph({ assets: [{ id: "OLD", image: "/private-old.png" }] });
   const sp = graph.nodes.find((n) => n.type === "skill_params");
   const txt = graph.nodes.find((n) => n.type === "text_input");
   const ctrl = graph.nodes.find((n) => n.type === "output_control");
-  const parts = { ctrl, skill: sp, text: txt };
+  const asset = graph.nodes.find((n) => n.type === "asset");
+  const parts = { ctrl, skill: sp, text: txt, asset };
 
   const tabs = [{ id: "tab-quick", quickStart: true, graph }];
   const controller = new HandrawMakeImage.MakeImageController();
@@ -457,6 +458,8 @@ function createTestGraph(options = {}) {
   assert.equal(ctrl.data.ratio, "1:1");
   assert.equal(ctrl.data.mode, "pure");
   assert.equal(ctrl.data.count, 1, "Count must strictly be 1");
+  assert.equal(asset.data.items.length, 0, "Fork must discard private references from the previous draft");
+  assert.equal(Engine.resolveControlRecipe(graph, ctrl, sharedCatalog).assetItems.length, 0, "Fork request must not use stale references");
   assert.ok(dirtyCalled, "markDirtyAndRender was called");
 
   console.log("✓ Test 6 Passed: Fork Draft Application verified.");
