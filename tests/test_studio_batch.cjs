@@ -1139,30 +1139,40 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     asset: graph.nodes.find(n => n.type === "asset")
   };
 
+  HandrawBatchCreate.seriesComposerMode = "image";
+  HandrawBatchCreate.selectedSeriesIndex = 0;
   HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {});
 
-  // #141: one editable card per row; no modal-only readonly theme field.
-  assert.ok(
-    fakeHost.innerHTML.includes('class="make-image-textarea batch-series-theme-input" data-series-theme-idx="0"'),
-    "Series card theme must be an inline textarea"
-  );
+  assert.ok(fakeHost.innerHTML.includes('class="make-image-textarea batch-series-composer-input batch-series-theme-input"'),
+    "Only the selected image's theme is editable in the bottom composer");
   assert.ok(!fakeHost.innerHTML.includes('class="make-image-input batch-row-theme-input"'),
-    "Legacy readonly editor must be removed");
+    "Legacy readonly table editor must remain absent");
   assert.ok(!fakeHost.innerHTML.includes("batch-preview-table") &&
     !fakeHost.innerHTML.includes("batch-edit-table") &&
     !fakeHost.innerHTML.includes("batch-results-section"),
-    "Edit, progress and results must share one card grid");
+    "One focused viewer must replace old edit, preview and result lists");
 
-  const themeInputs = fakeHost.querySelectorAll("[data-series-theme-idx]");
-  assert.equal(themeInputs.length, 2);
-  assert.equal(typeof themeInputs[0].oninput, "function", "Inline theme must update the model directly");
-  assert.equal(typeof themeInputs[0].onblur, "function", "Inline theme must persist the draft");
-
-  themeInputs[0].value = "卡片内直接修改主题";
+  let themeInputs = fakeHost.querySelectorAll("[data-series-theme-idx]");
+  assert.equal(themeInputs.length, 1, "Exactly one bottom textarea for the selected card");
+  assert.equal(typeof themeInputs[0].oninput, "function");
+  themeInputs[0].value = "图 1 的独立主题";
   themeInputs[0].oninput();
-  assert.equal(parts.loop.data.batchRows[0].theme, "卡片内直接修改主题");
+  assert.equal(parts.loop.data.batchRows[0].theme, "图 1 的独立主题");
+  assert.equal(parts.loop.data.batchRows[1].theme, "主题第二张", "Editing image 1 must not overwrite image 2");
 
-  console.log("✓ Requirement 14 Passed: Cards edit themes inline with a single progress/results area");
+  HandrawBatchCreate.selectedSeriesIndex = 1;
+  HandrawBatchCreate.render(fakeHost, { parts, graph, catalog: sharedCatalog }, {});
+  themeInputs = fakeHost.querySelectorAll("[data-series-theme-idx]");
+  assert.equal(themeInputs.length, 1);
+  assert.ok(fakeHost.innerHTML.includes("主题第二张"), "Image 2's theme follows selection");
+  themeInputs[0].value = "图 2 的独立主题";
+  themeInputs[0].oninput();
+  assert.equal(parts.loop.data.batchRows[1].theme,"图 2 的独立主题");
+  assert.equal(parts.loop.data.batchRows[0].theme,"图 1 的独立主题");
+
+  HandrawBatchCreate.seriesComposerMode = "series";
+  HandrawBatchCreate.selectedSeriesIndex = 0;
+  console.log("✓ Requirement 14 Passed: focused composer and image-specific themes remain isolated");
 
 }
 
