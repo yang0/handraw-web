@@ -184,9 +184,8 @@
       '" aria-label="查看作品：' + esc(titleOf(w)) +
       '" data-hw-refine-ratio="true" style="aspect-ratio:' + ratio + '">' +
       '<img data-hw-src="' + esc(photo) + '" alt="' + esc(titleOf(w)) + '" loading="lazy">' +
-      (hasTalk ? '<span class="hw-mf-photo-label">💬 正在讨论</span>' : "") + '</a>' +
+      '<span class="hw-mf-photo-label">作品</span></a>' +
       '<div class="hw-mf-body">' +
-      '<span class="hw-mf-type">创作作品</span>' +
       '<a class="hw-mf-title" href="' + workDetailHref(w, st) + '">' + esc(titleOf(w)) + '</a>' +
       (codes.length ? '<div class="hw-mf-codes">' + codes.map(function (s) {
         return '<span>' + esc(s) + '</span>';
@@ -207,7 +206,7 @@
       '" data-hw-refine-ratio="true" style="aspect-ratio:' + ratio + '">' +
       '<img data-hw-src="' + esc(img) + '" alt="' + esc(titleOf(r)) + '" loading="lazy">' +
       '<span class="hw-mf-photo-label hw-mf-photo-label--resource">' + kind + '资源</span></a>' +
-      '<div class="hw-mf-body"><span class="hw-mf-type">可复用' + kind + '</span>' +
+      '<div class="hw-mf-body">' +
       '<a class="hw-mf-title" href="' + href + '">' + esc(S.resourceLabel ? S.resourceLabel(r) : titleOf(r)) + '</a>' +
       '</div></article>';
   }
@@ -225,7 +224,7 @@
         'style="aspect-ratio:' + (mediaRatio(t) || "4 / 3") + '">' +
         '<img data-hw-src="' + esc(img) + '" alt="' +
         esc(titleOf(t)) + '" loading="lazy"></span>' : "") +
-      '<div class="hw-mf-body"><span class="hw-mf-type">社区讨论</span>' +
+      '<div class="hw-mf-body">' +
       '<span class="hw-mf-title">' + esc(titleOf(t)) + '</span>' +
       (abstract ? '<p class="hw-mf-excerpt">' + esc(abstract) + '</p>' : "") +
       '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" src="' + esc(avatarFor(t, st)) + '">' + esc(authorOf(t)) + '</span>' +
