@@ -247,7 +247,7 @@ function parseHtml(html) {
           matches.forEach(() => results.push({}));
         }
       }
-      if (selector === ".batch-series-theme-input") {
+      if (selector === ".batch-series-theme-input" || selector === "[data-series-theme-idx]") {
         const regex = /<textarea[^>]*class="[^"]*batch-series-theme-input[^"]*"[^>]*data-series-theme-idx="(\d+)"[^>]*>([\s\S]*?)<\/textarea>/g;
         let m;
         while ((m = regex.exec(html)) !== null) {
@@ -1144,7 +1144,7 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     !fakeHost.innerHTML.includes("batch-results-section"),
     "Edit, progress and results must share one card grid");
 
-  const themeInputs = fakeHost.querySelectorAll(".batch-series-theme-input");
+  const themeInputs = fakeHost.querySelectorAll("[data-series-theme-idx]");
   assert.equal(themeInputs.length, 2);
   assert.equal(typeof themeInputs[0].oninput, "function", "Inline theme must update the model directly");
   assert.equal(typeof themeInputs[0].onblur, "function", "Inline theme must persist the draft");
