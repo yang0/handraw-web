@@ -6499,7 +6499,10 @@
       // slot has an independent id and stable output position.
       const runningIndices = new Set();
       let stopLaunching = false;
-      const requestedConcurrency = Number(activeLoopNode?.data?.batchConcurrency || ctrl.data.batchConcurrency || 3);
+      // #143: the Series editor has no manual concurrency knob; run up to 4
+      // in flight, bounded below by the existing plan/slot scheduler.
+      const requestedConcurrency = CS.stageView === "batch" ? 4
+        : Number(activeLoopNode?.data?.batchConcurrency || ctrl.data.batchConcurrency || 3);
       const concurrency = resolvedOnlyIdx !== null ? 1 : Math.max(1,
         Math.min(4, Number.isFinite(requestedConcurrency) ? requestedConcurrency : 3));
       const slotIndexes = resolvedOnlyIdx === null ? plan.specs.map((_, i) => i) : [resolvedOnlyIdx];
