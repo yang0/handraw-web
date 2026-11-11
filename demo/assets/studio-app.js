@@ -16414,15 +16414,26 @@
         };
         const busy = isBatchCurrentBusy();
         const displays = bp ? getDownstreamDisplayNodes(bp.ctrl.id) : [];
-        const results = displays.flatMap((dn) =>
-          (dn.data.items || []).filter((it) => it.imageUrl).map((it, index) => ({
-            id: `${dn.id}:${index}`,
-            imageUrl: it.imageUrl,
-            title: it.title || "生成结果",
-            node: dn,
-            item: it,
-            index
-          }))
+        // Each standalone display contains items[0], but that is NOT image
+        // slot 0 of the series. Derive the canonical series index from the
+        // display node slotIndex; gallery entries use their array position.
+        // Reusing the per-node item index caused image 3 to also render as 1.
+        const results = displays.flatMap((dn, displayIndex) =>
+          (dn.data.items || []).flatMap((it, itemIndex) => {
+            if (!it?.imageUrl) return [];
+            const slotIndex = dn.data.kind === "batch_gallery"
+              ? itemIndex
+              : Number.isInteger(dn.data.slotIndex) ? dn.data.slotIndex : displayIndex;
+            if (Number.isInteger(it.slotIndex) && it.slotIndex !== slotIndex) return [];
+            return [{
+              id: `${dn.id}:${slotIndex}`,
+              imageUrl: it.imageUrl,
+              title: it.title || "生成结果",
+              node: dn,
+              item: it,
+              index: slotIndex
+            }];
+          })
         );
         const markDirtyAndRender = () => {
           markActiveTabDirty();
