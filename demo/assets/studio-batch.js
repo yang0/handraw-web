@@ -128,6 +128,8 @@
       this.actions = null;
       this.moreSettingsOpen = false;
       this.planOptionsOpen = false;
+      this.selectedSeriesIndex = 0;
+      this.seriesComposerMode = "series";
       this.planNotice = "";
       this.isPlanning = false;
       this.progressState = null;
@@ -291,64 +293,66 @@
     }
 
 
-    /* #141: One card per planned output, across editing, generation and completion. */
+
+    /* #143: A single focused image, with other frames as a vertical navigator.
+       Cards stay in the existing workflow graph; only the presentation changes. */
     renderSeriesCard(iter, idx, opts = {}) {
       const mode = opts.mode || "fixed";
       const row = mode === "ai" ? (opts.rows?.[idx] || {}) : {};
-      const theme = mode === "ai" ? (row.theme || "") : (opts.fixedThemes?.[idx] ?? iter.theme ?? iter.title ?? "");
-      const refs = Array.isArray(row.assetItems) ? row.assetItems : [];
-      const globalLayout = opts.globalLayout || "";
-      const layoutId = (mode === "ai" && row.layout) || iter.layout || globalLayout;
+      const theme = mode === "ai" ? (row.theme || "") : (opts.fixedThemes?.[idx] ?? iter?.theme ?? "");
+      const layoutId = (mode === "ai" && row.layout) || iter?.layout || opts.globalLayout || "";
       const layoutRes = layoutId ? this.getResourceInfo(layoutId, "layouts") : null;
-      const layoutImg = layoutRes?.image || iter.sampleImg || "";
+      const layoutImg = layoutRes?.image || iter?.sampleImg || "";
       const image = opts.result?.imageUrl || "";
       const status = this.getRowStatus(idx, opts.busy, opts.currentStep || 0, opts.result, opts.activeIndex);
       const ratio = String(opts.ratio || "3:4").split(":").map(Number);
       const aspect = ratio.length === 2 && ratio.every(n => Number.isFinite(n) && n > 0)
         ? `${ratio[0]} / ${ratio[1]}` : "3 / 4";
       const label = theme || `第 ${idx + 1} 张画面`;
-      const refHtml = refs.slice(0, 3).map((r, i) => {
-        const url = typeof r === "string" ? r : (r.image || r.url || "");
-        const name = typeof r === "string" ? `参考图 ${i + 1}` : (r.name || r.id || `参考图 ${i + 1}`);
-        return url ? `<img src="${esc(url)}" alt="${esc(name)}" loading="lazy" />` : "";
-      }).join("");
       let media;
       if (image) {
-        media = `<button type="button" class="batch-iter-thumb-btn is-generated batch-series-image" data-zoom-src="${esc(image)}" data-zoom-title="${esc(label)}" aria-label="查看第 ${idx + 1} 张生成图片"><img data-hw-src="${esc(image)}" alt="${esc(label)}" loading="lazy" /></button>`;
+        media = `<button type="button" class="batch-iter-thumb-btn is-generated batch-series-image" data-zoom-src="${esc(image)}" data-zoom-title="${esc(label)}" aria-label="放大查看图 ${idx + 1}"><img data-hw-src="${esc(image)}" alt="${esc(label)}" loading="lazy" /></button>`;
       } else if (status.key === "generating") {
-        media = `<div class="batch-series-pending" role="status" aria-label="第 ${idx + 1} 张图片生成中"><span class="batch-series-pending-mark" aria-hidden="true">·</span><span class="batch-series-shimmer" aria-hidden="true"></span><span class="batch-series-pending-label">正在生成…</span></div>`;
+        media = `<div class="batch-series-pending" role="status" aria-label="图 ${idx + 1} 生成中"><span class="batch-series-pending-mark" aria-hidden="true">·</span><span class="batch-series-shimmer" aria-hidden="true"></span><span class="batch-series-pending-label">正在生成图 ${idx + 1}…</span></div>`;
       } else if (status.key === "failed") {
-        media = `<div class="batch-series-failed" role="status"><span>本张生成失败</span><small>可在卡片内单独重试</small></div>`;
+        media = `<div class="batch-series-failed" role="status"><span>图 ${idx + 1} 生成失败</span><small>可重试这张图片</small></div>`;
       } else if (layoutImg) {
-        media = `<button type="button" class="batch-iter-thumb-btn is-schematic batch-series-image" data-zoom-src="${esc(layoutImg)}" data-zoom-title="版式示意 · ${esc(layoutId)}" aria-label="查看第 ${idx + 1} 张版式示意"><img data-hw-src="${esc(layoutImg)}" alt="版式示意" loading="lazy" /><span class="batch-iter-schematic-badge">版式示意</span></button>`;
+        media = `<button type="button" class="batch-iter-thumb-btn is-schematic batch-series-image" data-zoom-src="${esc(layoutImg)}" data-zoom-title="图型示意 · ${esc(layoutId)}" aria-label="查看图 ${idx + 1} 图型示意"><img data-hw-src="${esc(layoutImg)}" alt="图型示意" loading="lazy" /><span class="batch-iter-schematic-badge">图型示意</span></button>`;
       } else {
-        media = `<div class="batch-iter-placeholder batch-series-placeholder" role="img" aria-label="第 ${idx + 1} 张待生成"><span aria-hidden="true">·</span><small>等待创作</small></div>`;
+        media = `<div class="batch-iter-placeholder batch-series-placeholder" role="img" aria-label="图 ${idx + 1} 待生成"><span aria-hidden="true">·</span><small>待生成</small></div>`;
       }
-      const footer = image
-        ? `<a class="btn btn-sm batch-btn-dl" href="${esc(image)}" download="series-${idx + 1}.webp">下载图片</a>`
+      const action = image
+        ? `<a class="btn btn-sm batch-btn-dl" href="${esc(image)}" download="series-${idx + 1}.webp">下载这张</a>`
         : status.key === "failed" ? `<button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${idx}">重试这张</button>` : "";
       return `
-        <article class="batch-series-card ${status.className}" data-batch-row="${idx}" data-row-idx="${idx}">
+        <article class="batch-series-card batch-series-focused ${status.className}" data-batch-row="${idx}" data-row-idx="${idx}">
           <div class="batch-series-card-head">
-            <strong>${String(idx + 1).padStart(2, "0")}</strong>
+            <strong>图 ${idx + 1}</strong>
             <span class="batch-status-badge is-${esc(status.key)}" aria-live="polite">${esc(status.label)}</span>
-            <button type="button" class="batch-series-delete" data-del-row-idx="${idx}" aria-label="删除第 ${idx + 1} 张画面" title="删除此张" ${opts.busy ? "disabled" : ""}>×</button>
+            ${action}
           </div>
           <div class="batch-series-visual" style="aspect-ratio:${esc(aspect)}">${media}</div>
-          <div class="batch-series-card-editor">
-            <label class="batch-series-card-label" for="batch-series-theme-${idx}">画面主题</label>
-            <textarea id="batch-series-theme-${idx}" class="make-image-textarea batch-series-theme-input" data-series-theme-idx="${idx}" rows="3" placeholder="描述这张画面的内容…" ${opts.busy ? "disabled" : ""}>${esc(theme)}</textarea>
-            <div class="batch-series-card-settings">
-              ${this.renderRowLayoutButtonHtml(row, idx, globalLayout)}
-              <button type="button" class="batch-series-ref-picker" data-pick-row-refs-idx="${idx}" aria-label="调整第 ${idx + 1} 张参考图" ${opts.busy ? "disabled" : ""}>
-                ${refHtml || '<span class="batch-series-plus">＋</span>'}
-                <span>参考图${refs.length ? ` · ${refs.length}` : ""}</span>
-              </button>
-            </div>
-            <label class="batch-series-global-toggle"><input type="checkbox" data-row-skip-global="${idx}" ${row.skipGlobalRefs ? "checked" : ""} ${opts.busy ? "disabled" : ""} />不使用全局参考图</label>
-          </div>
-          <div class="batch-series-card-foot">${footer}</div>
         </article>
+      `;
+    }
+
+    renderSeriesThumb(iter, idx, opts = {}) {
+      const result = opts.result || {};
+      const status = this.getRowStatus(idx, opts.busy, opts.currentStep || 0, result, opts.activeIndex);
+      const isSelected = idx === opts.selectedIndex;
+      const layoutId = iter?.layout || opts.globalLayout || "";
+      const layoutImg = layoutId ? this.getResourceInfo(layoutId, "layouts")?.image : (iter?.sampleImg || "");
+      const image = result.imageUrl || layoutImg || "";
+      const cls = result.imageUrl ? "is-generated" : layoutImg ? "is-schematic" : "is-empty";
+      const thumb = image
+        ? `<img data-hw-src="${esc(image)}" alt="" loading="lazy" />`
+        : `<span class="batch-series-thumb-empty" aria-hidden="true">${idx + 1}</span>`;
+      return `
+        <button type="button" class="batch-series-thumb ${isSelected ? "is-selected" : ""} ${status.className}" data-series-select-idx="${idx}" role="tab" aria-selected="${isSelected}" aria-label="切换到图 ${idx + 1}，${esc(status.label)}" title="图 ${idx + 1} · ${esc(status.label)}">
+          <span class="batch-series-thumb-picture ${cls}">${thumb}${status.key === "generating" ? '<span class="batch-series-thumb-pulse" aria-hidden="true"></span>' : ""}</span>
+          <span class="batch-series-thumb-number">图 ${idx + 1}</span>
+          <span class="batch-series-thumb-status">${esc(status.label)}</span>
+        </button>
       `;
     }
 
