@@ -331,11 +331,7 @@
           <form class="make-image-form creation-form make-image-chat-layout" novalidate onsubmit="return false;">
             <div class="make-image-main-grid creation-workspace make-image-chat-workspace">
 
-              <section class="creation-settings make-image-properties" aria-labelledby="make-settings-title">
-                <div class="creation-section-head">
-                  <h2 id="make-settings-title">画面属性</h2>
-                  <p>搭配画风与图型，确定画面的视觉表达。</p>
-                </div>
+              <section class="creation-settings make-image-properties" aria-label="画面属性">
               <!-- Row 1: Output Mode & Fusion Toggle in ONE Row (left-aligned) -->
               <div class="make-image-top-row">
                 <div class="make-image-inline-group">
