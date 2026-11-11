@@ -3977,7 +3977,7 @@
 
   const BATCH_GALLERY_THRESHOLD = 6;
 
-  function syncControlDisplayNodes(ctrlNode, count, { markGenerating = false, onlyDispNodeId = null, onlyItemIdx = null, batchId = null } = {}) {
+  function syncControlDisplayNodes(ctrlNode, count, { markGenerating = false, onlyDispNodeId = null, onlyItemIdx = null, batchId = null, preserveCompleted = null } = {}) {
     if (!ctrlNode || ctrlNode.type !== "output_control") return { nodes: [], createdCount: 0, isBatchGallery: false };
     const safeCount = Math.max(1, Math.min(200, Math.round(Number(count) || 1)));
     const existing = getDownstreamDisplayNodes(ctrlNode.id);
@@ -4017,6 +4017,11 @@
         ensureEdge(ctrlNode.id, galNode.id);
       }
 
+      // Moving from N independent display nodes to the >6 gallery must
+      // retain previously finished slots in their original positions.
+      const preservedGalleryItems = preserveCompleted instanceof Map
+        ? Array.from({length:safeCount},(_,idx)=>preserveCompleted.get(idx) || null)
+        : null;
       if (markGenerating) {
         galNode.data.status = "generating";
         galNode.data.elapsedSec = 0;
@@ -4026,7 +4031,7 @@
             galNode.data.items[onlyItemIdx] = null;
           }
         } else {
-          galNode.data.items = [];
+          galNode.data.items = preservedGalleryItems || [];
           delete galNode.data.error;
           delete galNode.data.pendingTaskId;
           delete galNode.data.pendingRequestId;
@@ -4082,7 +4087,12 @@
         ensureEdge(ctrlNode.id, disp.id);
       }
 
-      const shouldMarkThis = markGenerating && (
+      const preservedItem = preserveCompleted instanceof Map ? preserveCompleted.get(i) : null;
+      if (preservedItem?.imageUrl) {
+        disp.data.items = [preservedItem];
+        disp.data.status = "done";
+      }
+      const shouldMarkThis = markGenerating && !preservedItem?.imageUrl && (
         (!onlyDispNodeId && onlyItemIdx === null) ||
         (onlyDispNodeId && disp.id === onlyDispNodeId) ||
         (onlyItemIdx !== null && onlyItemIdx === i)
@@ -6379,7 +6389,27 @@
       resolvedOnlyDispId = existingBefore[resolvedOnlyIdx].id;
     }
 
-    if (!confirmPotentialGenerationCost(resolvedOnlyIdx === null ? plan.specs.length : 1)) return false;
+    // #146: a series run reuses successful output slots. A single-image
+    // action remains an intentional regeneration and never skips itself.
+    const isSeriesFill = creationSource === "batch" && resolvedOnlyIdx === null && plan.kind === "loop";
+    const completedBefore = new Map();
+    if (isSeriesFill) {
+      const gallery = existingBefore[0]?.data?.kind === "batch_gallery";
+      plan.specs.forEach((spec, index) => {
+        const item = gallery ? existingBefore[0]?.data?.items?.[index]
+          : existingBefore[index]?.data?.items?.[0];
+        const expectedKey = spec.slotKey || String(index);
+        // Do not attach a result from a different logical slot.
+        if (item?.imageUrl && item.slotKey === expectedKey) completedBefore.set(index, item);
+      });
+      if (completedBefore.size === plan.specs.length) {
+        if (!silent) toast("本系列图片已全部生成，无需重复提交；如需重做请单独选择图片。");
+        return true;
+      }
+    }
+    const pendingCount = resolvedOnlyIdx === null
+      ? plan.specs.length - completedBefore.size : 1;
+    if (!confirmPotentialGenerationCost(pendingCount)) return false;
 
     const batchId = (resolvedOnlyIdx !== null && ctrl.data.activeBatchId) ? ctrl.data.activeBatchId : makeStableRequestId("batch");
     ctrl.data.activeBatchId = batchId;
@@ -6388,7 +6418,8 @@
       markGenerating: true,
       onlyDispNodeId: resolvedOnlyDispId,
       onlyItemIdx: resolvedOnlyIdx,
-      batchId
+      batchId,
+      preserveCompleted: completedBefore.size ? completedBefore : null
     });
 
     ctrl.data.status = "generating";
@@ -6411,14 +6442,16 @@
         window.HandrawBatchCreate.resetBatchProgress({
           totalCount: plan.specs.length,
           batchId,
-          singleSlotIndex: resolvedOnlyIdx
+          singleSlotIndex: resolvedOnlyIdx,
+          existingCompleted: completedBefore
         });
       }
       window.HandrawBatchCreate.updateProgress({
-        completedCount: 0,
+        completedCount: completedBefore.size,
         failedCount: 0,
         totalCount: plan.specs.length,
-        activeIndex: resolvedOnlyIdx !== null ? resolvedOnlyIdx : 0,
+        activeIndex: resolvedOnlyIdx !== null ? resolvedOnlyIdx
+          : plan.specs.findIndex((_,i)=>!completedBefore.has(i)),
         busy: true,
         batchId
       });
@@ -6485,7 +6518,15 @@
       const allItems = [];
       const completedSlots = new Set();
       const failedSlots = new Set();
-      let completedCount = 0;
+      const existingItems = Array.from(completedBefore.entries()).map(([index,item])=>({
+        index,item
+      }));
+      for (const {index,item} of existingItems) {
+        completedSlots.add(plan.specs[index].slotKey || String(index));
+      }
+      const allItemsFromBefore = existingItems.map(({item})=>item);
+      allItems.push(...allItemsFromBefore);
+      let completedCount = completedSlots.size;
       let failedCount = 0;
 
       if (activeLoopNode && resolvedOnlyIdx === null) {
@@ -6505,7 +6546,9 @@
         : Number(activeLoopNode?.data?.batchConcurrency || ctrl.data.batchConcurrency || 3);
       const concurrency = resolvedOnlyIdx !== null ? 1 : Math.max(1,
         Math.min(4, Number.isFinite(requestedConcurrency) ? requestedConcurrency : 3));
-      const slotIndexes = resolvedOnlyIdx === null ? plan.specs.map((_, i) => i) : [resolvedOnlyIdx];
+      const slotIndexes = resolvedOnlyIdx === null
+        ? plan.specs.map((_,i)=>i).filter(i=>!completedBefore.has(i))
+        : [resolvedOnlyIdx];
       if (resolvedOnlyIdx !== null) {
         for (let i = 0; i < plan.specs.length; i++) {
           if (i === resolvedOnlyIdx) continue;
