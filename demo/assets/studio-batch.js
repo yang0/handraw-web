@@ -435,7 +435,7 @@
       const isBatchGallery = displays.some((d) => d.data?.kind === "batch_gallery");
       // The displayed slot results are the source of truth. Node progress can
       // be stale (0/2) after a re-render even while both images are visible.
-      const slotResults = iterations.map((_, index) => this.getItemResult(index, displays, isBatchGallery));
+      const slotResults = iterations.map((_, index) => this.seriesOutcomes?.get(index) || (this.context?.results || []).find(r => r.index === index) || this.getItemResult(index, displays, isBatchGallery));
       const progress = this.progressState?.batchId === this.activeBatchId ? this.progressState : null;
       const currentStep = ld.currentStep || 0;
       const totalSteps = ld.totalSteps || totalCount;
@@ -744,6 +744,48 @@
       }
     }
 
+
+    /* Repaint the SAME card grid for live progress, including concurrent slots;
+       never append a second results list or detach the whole form. */
+    refreshSeriesCards() {
+      const host = this.hostElement;
+      const grid = host?.querySelector(".batch-series-grid");
+      const parts = this.getParts();
+      if (!grid || !parts) return;
+      const iterations = this.resolveIterations();
+      const loop = parts.loop?.data || {};
+      const ctrl = parts.ctrl?.data || {};
+      const skill = parts.skill?.data || {};
+      const isBusy = Boolean(this.progressState?.busy || this.context?.busy);
+      const active = this.progressState?.activeIndices || [];
+      const activeIndex = active.length ? active[0] :
+        this.progressState?.activeIndex ?? (isBusy ? Number(loop.activeIndex ?? 0) : null);
+      const displays = this.context?.displays || [];
+      const gallery = displays.some(d => d.data?.kind === "batch_gallery");
+      const oldScroll = host.querySelector(".batch-series-scroll")?.scrollTop || 0;
+      grid.innerHTML = iterations.length ? iterations.map((iter, idx) => {
+        const cachedResult = this.seriesOutcomes?.get(idx);
+        const cachedContext = (this.context?.results || []).find(r => r.index === idx);
+        const displayResult = isBusy ? null : this.getItemResult(idx, displays, gallery);
+        return this.renderSeriesCard(iter, idx, {
+          mode: loop.batchLayoutMode || "fixed",
+          rows: loop.batchRows || [],
+          globalLayout: skill.layout || "",
+          ratio: ctrl.ratio || "3:4",
+          result: cachedResult || cachedContext || displayResult,
+          busy: isBusy, currentStep: loop.currentStep || 0, activeIndex
+        });
+      }).join("") : '<div class="batch-series-empty">还没有画面。可在左侧用 AI 规划，或点击「添加画面」开始。</div>';
+      const cardCount = host.querySelector(".batch-series-toolbar strong");
+      if (cardCount) cardCount.textContent = String(iterations.length);
+      const scroll = host.querySelector(".batch-series-scroll");
+      if (scroll) scroll.scrollTop = oldScroll;
+      this.bindEvents(grid, parts, iterations);
+      if (global.HANDRAW_SHARED?.triggerImageLoaders) {
+        global.HANDRAW_SHARED.triggerImageLoaders(grid);
+      }
+    }
+
     getItemResult(rowIndex, displays, isBatchGallery) {
       if (!displays || !displays.length) return null;
       if (isBatchGallery) {
@@ -839,6 +881,16 @@
       if (batchId) this.activeBatchId = batchId;
       const host = this.hostElement;
       if (singleSlotIndex !== null) {
+        this.seriesOutcomes?.delete(singleSlotIndex);
+        if (host?.querySelector(".batch-series-grid")) {
+          if (this.context && Array.isArray(this.context.results)) {
+            this.context.results = this.context.results.filter(r => r.index !== singleSlotIndex);
+          }
+          this.progressState = { ...(this.progressState || {}), busy:true, batchId:this.activeBatchId,
+            activeIndex:singleSlotIndex, activeIndices:[singleSlotIndex] };
+          this.refreshSeriesCards();
+          return;
+        }
         if (this.context && Array.isArray(this.context.results)) {
           this.context.results = this.context.results.filter((r) => r.index !== singleSlotIndex);
         }
@@ -882,9 +934,18 @@
 
       if (!this.context) this.context = {};
       this.context.results = [];
-      this.progressState = { completedCount: 0, failedCount: 0, totalCount, activeIndex: 0, activeIndices: [], busy: true, isStopping: false, batchId: this.activeBatchId };
+      this.progressState = { completedCount: 0, failedCount: 0, totalCount, activeIndex: 0, activeIndices: [0], busy: true, isStopping: false, batchId: this.activeBatchId };
+      this.seriesOutcomes = new Map();
 
       if (!host) return;
+      if (host.querySelector(".batch-series-grid")) {
+        this.refreshSeriesCards();
+        const btnReset = host.querySelector("#batch-btn-reset");
+        if (btnReset) btnReset.disabled = true;
+        const btnStart = host.querySelector("#batch-btn-start");
+        if (btnStart) btnStart.disabled = true;
+        return;
+      }
 
       const resultsSec = host.querySelector(".batch-results-section");
       if (resultsSec && typeof resultsSec.remove === "function") {
@@ -1029,6 +1090,17 @@
         }
       }
 
+      // #141: the series grid is the only source of visible status/results.
+      if (host.querySelector(".batch-series-grid")) {
+        if (updatedIndex !== null && updatedIndex !== undefined && itemResult) {
+          if (!this.seriesOutcomes) this.seriesOutcomes = new Map();
+          this.seriesOutcomes.set(updatedIndex, itemResult);
+          if (itemResult.imageUrl) this.appendResultCard(itemResult, updatedIndex);
+        }
+        this.refreshSeriesCards();
+        return;
+      }
+
       // 3. Update specific completed or failed row
       if (updatedIndex !== null && updatedIndex !== undefined) {
         const row = host.querySelector(`tr[data-batch-row="${updatedIndex}"]`);
@@ -1157,6 +1229,11 @@
         this.context.results.push(resultObj);
       }
 
+      if (host.querySelector(".batch-series-grid")) {
+        if (!this.seriesOutcomes) this.seriesOutcomes = new Map();
+        this.seriesOutcomes.set(index, res);
+        return;
+      }
       let resultsSec = host.querySelector(".batch-results-section");
       if (!resultsSec) {
         const container = host.querySelector(".batch-container") || host;
