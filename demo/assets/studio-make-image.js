@@ -264,7 +264,7 @@
       const p = this.getParts();
       if (!p) {
         this.hostElement.innerHTML = `
-          <div class="make-image-container make-image-chat-container">
+          <div class="make-image-container">
             <div style="padding:48px 24px;text-align:center;color:var(--ink-muted);">
               <h3>正在载入创作工作流…</h3>
             </div>
@@ -313,8 +313,14 @@
       const statusText = this.context?.statusText || "";
       const forkSource = this.context?.forkSource || this.forkSource || null;
 
+      const oldPropertiesScroll = this.hostElement.querySelector(".make-image-properties")?.scrollTop || 0;
+      const oldOutputScroll = this.hostElement.querySelector(".make-image-output-scroll")?.scrollTop || 0;
+      const oldResultCount = this.lastResultCount || 0;
+      const ratioPair = currentRatio.split(":").map(Number);
+      const previewRatio = ratioPair.length === 2 && ratioPair.every(n => Number.isFinite(n) && n > 0)
+        ? `${ratioPair[0]} / ${ratioPair[1]}` : "3 / 4";
       this.hostElement.innerHTML = `
-        <div class="make-image-container">
+        <div class="make-image-container make-image-chat-container">
           <div class="make-image-head">
             <div class="make-image-head-left">
               <h1 class="make-image-title">做图</h1>
