@@ -212,6 +212,70 @@ def main():
                             assert dock["sidebarScrollbar"] != "none", (stage_height, dock)
                             assert dock["outputScrollbar"] == "none" and dock["outputUntouched"], (stage_height, dock)
                             assert dock["composerBottom"] <= dock["stageBottom"] + 1 and dock["stageBottom"] <= dock["hostBottom"], (stage_height, dock)
+
+                            # #140 follow-up: toggles must remain fully rendered in all four
+                            # collapsed/expanded combinations, not just expose a sidebar scrollbar.
+                            if stage_height <= 430:
+                                for more_open, prompt_open in [(False, False), (True, False), (False, True), (True, True)]:
+                                    for selector, target in [
+                                        ("#make-image-more-toggle", more_open),
+                                        ("#make-image-prompt-toggle", prompt_open)
+                                    ]:
+                                        control = page.locator(selector)
+                                        if control.get_attribute("aria-expanded") != str(target).lower():
+                                            control.click()
+                                        expect(control).to_have_attribute("aria-expanded", str(target).lower())
+                                    card_state = page.evaluate("""() => {
+                                        const sidebar = document.querySelector(".make-image-properties");
+                                        const output = document.querySelector(".make-image-output-scroll");
+                                        const sidebarBox = sidebar.getBoundingClientRect();
+                                        const previousOutputScroll = output.scrollTop;
+                                        const cards = [...sidebar.querySelectorAll(":scope > .make-image-collapsible-card")];
+                                        const panels = cards.map(card => {
+                                            const toggle = card.querySelector(".make-image-collapsible-toggle");
+                                            const body = card.querySelector(".make-image-collapsible-body");
+                                            const cardBox = card.getBoundingClientRect();
+                                            const toggleBox = toggle.getBoundingClientRect();
+                                            const bodyBox = body.getBoundingClientRect();
+                                            return {
+                                                expanded:toggle.getAttribute("aria-expanded") === "true",
+                                                hidden:body.hidden,
+                                                cardHeight:cardBox.height,
+                                                contentsHeight:toggleBox.height + (body.hidden ? 0 : bodyBox.height),
+                                                scrollHeight:card.scrollHeight,
+                                                clientHeight:card.clientHeight,
+                                                toggleHeight:toggleBox.height
+                                            };
+                                        });
+                                        sidebar.scrollTop = sidebar.scrollHeight;
+                                        const lastCardBox = cards[cards.length - 1].getBoundingClientRect();
+                                        return {
+                                            panels,
+                                            lastCardBottom:lastCardBox.bottom,
+                                            sidebarBottom:sidebarBox.bottom,
+                                            sidebarScroll:sidebar.scrollHeight,
+                                            sidebarHeight:sidebar.clientHeight,
+                                            sidebarScrollTop:sidebar.scrollTop,
+                                            rightScrollUnchanged:output.scrollTop === previousOutputScroll
+                                        };
+                                    }""")
+                                    assert len(card_state["panels"]) == 2, card_state
+                                    for index, should_expand in enumerate((more_open, prompt_open)):
+                                        card = card_state["panels"][index]
+                                        assert card["expanded"] == should_expand and card["hidden"] != should_expand, (stage_height, card_state)
+                                        assert card["toggleHeight"] >= 32, (stage_height, card_state)
+                                        # A clipped flex child reports a shorter box than its own body.
+                                        assert card["cardHeight"] >= card["contentsHeight"] - 2, (stage_height, card_state)
+                                        assert card["scrollHeight"] <= card["clientHeight"] + 3, (stage_height, card_state)
+                                    assert card_state["sidebarScroll"] > card_state["sidebarHeight"] + 2, (stage_height, card_state)
+                                    assert card_state["sidebarScrollTop"] > 2, (stage_height, card_state)
+                                    assert card_state["lastCardBottom"] <= card_state["sidebarBottom"] + 2, (stage_height, card_state)
+                                    assert card_state["rightScrollUnchanged"], (stage_height, card_state)
+                                    if width == 1440 and stage_height == 430:
+                                        page.screenshot(
+                                            path=str(OUT / f"quick-collapsible-{int(more_open)}-{int(prompt_open)}.png"),
+                                            full_page=True
+                                        )
                         # Return to the wider evidence fixture for the original screenshot.
                         page.locator("#fixture").evaluate("el => el.style.height = '650px'")
                         page.evaluate("fixture.render()")
