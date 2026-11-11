@@ -301,9 +301,6 @@
       const mode = opts.mode || "fixed";
       const row = mode === "ai" ? (opts.rows?.[idx] || {}) : {};
       const theme = mode === "ai" ? (row.theme || "") : (opts.fixedThemes?.[idx] ?? iter?.theme ?? "");
-      const layoutId = (mode === "ai" && row.layout) || iter?.layout || opts.globalLayout || "";
-      const layoutRes = layoutId ? this.getResourceInfo(layoutId, "layouts") : null;
-      const layoutImg = layoutRes?.image || iter?.sampleImg || "";
       const image = opts.result?.imageUrl || "";
       const status = this.getRowStatus(idx, opts.busy, opts.currentStep || 0, opts.result, opts.activeIndex);
       const ratio = String(opts.ratio || "3:4").split(":").map(Number);
@@ -317,22 +314,21 @@
         media = `<div class="batch-series-pending" role="status" aria-label="图 ${idx + 1} 生成中"><span class="batch-series-pending-mark" aria-hidden="true">·</span><span class="batch-series-shimmer" aria-hidden="true"></span><span class="batch-series-pending-label">正在生成图 ${idx + 1}…</span></div>`;
       } else if (status.key === "failed") {
         media = `<div class="batch-series-failed" role="status"><span>图 ${idx + 1} 生成失败</span><small>可重试这张图片</small></div>`;
-      } else if (layoutImg) {
-        media = `<button type="button" class="batch-iter-thumb-btn is-schematic batch-series-image" data-zoom-src="${esc(layoutImg)}" data-zoom-title="图型示意 · ${esc(layoutId)}" aria-label="查看图 ${idx + 1} 图型示意"><img data-hw-src="${esc(layoutImg)}" alt="图型示意" loading="lazy" /><span class="batch-iter-schematic-badge">图型示意</span></button>`;
       } else {
-        media = `<div class="batch-iter-placeholder batch-series-placeholder" role="img" aria-label="图 ${idx + 1} 待生成"><span aria-hidden="true">·</span><small>待生成</small></div>`;
+        media = `<div class="batch-iter-placeholder batch-series-placeholder" role="img" aria-label="图 ${idx + 1} 待生成">
+          <span class="batch-series-placeholder-glow" aria-hidden="true"></span>
+          <span class="batch-series-placeholder-symbol" aria-hidden="true">✧</span>
+          <span class="batch-series-placeholder-title">图 ${idx + 1}</span>
+          <small>等待创作</small>
+        </div>`;
       }
       const action = image
         ? `<a class="btn btn-sm batch-btn-dl" href="${esc(image)}" download="series-${idx + 1}.webp">下载这张</a>`
         : status.key === "failed" ? `<button type="button" class="btn btn-sm batch-btn-retry" data-retry-idx="${idx}">重试这张</button>` : "";
       return `
         <article class="batch-series-card batch-series-focused ${status.className}" data-batch-row="${idx}" data-row-idx="${idx}">
-          <div class="batch-series-card-head">
-            <strong>图 ${idx + 1}</strong>
-            <span class="batch-status-badge is-${esc(status.key)}" aria-live="polite">${esc(status.label)}</span>
-            ${action}
-          </div>
           <div class="batch-series-visual" style="aspect-ratio:${esc(aspect)}">${media}</div>
+          ${action ? `<div class="batch-series-floating-action">${action}</div>` : ""}
         </article>
       `;
     }
@@ -510,24 +506,18 @@
                   <button type="button" class="btn btn-sm ${batchLayoutMode === "fixed" ? "btn-primary is-active" : ""}" id="batch-strategy-fixed" aria-pressed="${batchLayoutMode === "fixed"}" ${busy ? "disabled" : ""}>固定图型</button>
                 </div>
               </div>
-              ${batchLayoutMode === "fixed" ? `
-                <div class="make-image-pickers-row batch-series-fixed-picker">
-                  ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
-                </div>
-              ` : ""}
-              ${batchLayoutMode === "fixed" ? `
-                <details class="batch-series-bulk-input">
-                  <summary>批量粘贴主题</summary>
-                  <textarea class="make-image-textarea batch-prompts-textarea" id="batch-prompts-input" rows="4" aria-label="每行输入一张图片主题" placeholder="每行一个主题…">${esc(promptListText)}</textarea>
-                </details>
-              ` : ""}
-
               <!-- Row 2: Fixed Parameter Picker Cards (Style1, Style2 if fusion, Color) -->
               <div class="make-image-pickers-row batch-pickers-row ${isFusion ? "has-style2" : ""}">
                 ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
                 ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
                 ${this.renderPickerSlot("color", "主题色", colorObj, true)}
               </div>
+              ${batchLayoutMode === "fixed" ? `
+                <div class="make-image-pickers-row batch-series-fixed-picker">
+                  ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
+                </div>
+              ` : ""}
+
 
               ${isFusion ? `
                 <div class="make-image-style-note" role="note">角色画风决定人物与主体的画法，场景画风决定背景与环境</div>
@@ -650,14 +640,12 @@
                       <span class="make-image-field-label">本图图型</span>
                       ${this.renderRowLayoutButtonHtml(selectedRow, selectedIndex, sd.layout || "")}
                     </div>
-                    <label class="batch-series-global-toggle"><input type="checkbox" data-row-skip-global="${selectedIndex}" ${selectedRow.skipGlobalRefs ? "checked" : ""} ${busy ? "disabled" : ""} />本图不使用整套参考图</label>
                     <div class="batch-series-selected-ref-summary">本图参考图 ${selectedRefs.length} 张 · 在右侧输入框添加</div>
                   ` : '<p class="batch-series-selected-empty">先规划图片或添加一张。</p>'}
                 </div>
               </section>
               <section class="creation-content batch-series-content" aria-label="系列图单图工作区">
                 <div class="batch-series-toolbar">
-                  <span>系列图 <strong>${totalCount}</strong> 张 <small>· 当前图 ${selectedIndex + 1}</small></span>
                   <button type="button" class="btn btn-sm" id="batch-btn-add-row" ${busy ? "disabled" : ""}>＋ 添加画面</button>
                 </div>
                 <div class="batch-series-stage" aria-label="选中图片及其他画面缩略图">
@@ -704,7 +692,7 @@
                       <div class="batch-series-footer-actions">
                         <label class="batch-series-count" for="batch-count-input">
                           <span>张数</span>
-                          <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="20" value="${batchCount}" ${busy ? "disabled" : ""} />
+                          <input type="number" class="make-image-input batch-count-input" id="batch-count-input" min="1" max="10" value="${batchCount}" ${busy ? "disabled" : ""} />
                         </label>
                         <button type="button" class="btn btn-sm batch-series-plan-btn batch-plan-trigger" id="batch-btn-plan" ${busy ? "disabled" : ""}>
                           <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M7.5.5c.2 2.6 1.8 4.2 4.4 4.4.2 0 .2.3 0 .4-2.6.2-4.2 1.8-4.4 4.4 0 .2-.3.2-.4 0-.2-2.6-1.8-4.2-4.4-4.4-.2-.2-.3-.2-.4 0z"/></svg>
@@ -713,7 +701,7 @@
                         ${busy ? `
                           <button type="button" class="btn btn-sm batch-stop-btn" id="batch-btn-stop" ${isStopping ? "disabled" : ""}>${isStopping ? "正在停止…" : "停止生成"}</button>
                         ` : `
-                          <button type="button" class="btn btn-primary make-image-btn-run batch-series-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>生成系列图 · ${totalCount} 张</button>
+                          <button type="button" class="btn btn-primary make-image-btn-run batch-series-run-btn" id="batch-btn-start" ${totalCount === 0 ? "disabled" : ""}>生成系列图</button>
                         `}
                       </div>
                     </div>
