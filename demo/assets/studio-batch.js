@@ -421,7 +421,16 @@
       const colorObj = selectedColors[0] ? this.getResourceInfo(selectedColors[0], "colors") : null;
 
       // Set Planning specifics
-      const batchLayoutMode = ld.batchLayoutMode || (Array.isArray(ld.batchRows) && ld.batchRows.length > 0 ? "ai" : "fixed");
+      // If a series workflow has not chosen a strategy yet, default to AI
+      // recommendations without rewriting explicitly saved fixed strategies.
+      if (!ld.batchLayoutMode) {
+        ld.batchLayoutMode = "ai";
+        if (!Array.isArray(ld.batchRows) || !ld.batchRows.length) {
+          ld.batchRows = String(ld.promptListText || "").split(/\r?\n/)
+            .map(x => x.trim()).filter(Boolean).map(theme => ({theme,layout:"",assetItems:[]}));
+        }
+      }
+      const batchLayoutMode = ld.batchLayoutMode;
       const batchSeed = ld.batchSeed != null ? ld.batchSeed : (td.text || "");
       const batchCount = Math.max(1, Math.min(20, Number(ld.batchCount) || 6));
       const batchLayoutReq = ld.batchLayoutReq || "";
@@ -1528,10 +1537,7 @@
           if (ctrl?.data) {
             ctrl.data.count = 1;
           }
-          const summary = root.querySelector("#batch-plan-options-toggle small");
-          if (summary) {
-            summary.textContent = `${val} 张 · ${loop.data.batchLayoutMode === "ai" ? "AI 推荐图型" : "固定图型"}`;
-          }
+
         };
         countInput.onchange = () => {
           if (self.actions?.persistDraft) self.actions.persistDraft();
@@ -2134,10 +2140,10 @@
 
           loop.data.batchSeed = "";
           loop.data.batchCount = 6;
-          loop.data.batchLayoutMode = "fixed";
+          loop.data.batchLayoutMode = "ai";
           loop.data.batchLayoutReq = "";
-          loop.data.batchRows = [];
           loop.data.promptListText = "早八一杯热美式\n晚霞中的单车\n周末雨天读旧诗集";
+          loop.data.batchRows = loop.data.promptListText.split("\n").map(theme=>({theme,layout:"",assetItems:[]}));
           loop.data.status = "idle";
           loop.data.currentStep = 0;
           delete loop.data.activeBatchId;
