@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import sqlite3
+import threading
 import time
 from typing import Any
 import uuid
@@ -23,17 +24,38 @@ logger = logging.getLogger("handraw.works_feed")
 # session_id -> (ordered_ids: list[str], created_at_ts: float)
 _FEED_POPULAR_SESSIONS: dict[str, tuple[list[str], float]] = {}
 _SESSION_TTL_SECONDS = 1800.0  # 30 minutes
+_MAX_POPULAR_SESSIONS = 128
+_FEED_SESSION_LOCK = threading.RLock()
 
 
 def _clean_expired_sessions() -> None:
     now = time.time()
-    expired = [
-        sid
-        for sid, val in _FEED_POPULAR_SESSIONS.items()
-        if len(val) >= 2 and (now - val[1]) > _SESSION_TTL_SECONDS
-    ]
-    for sid in expired:
-        _FEED_POPULAR_SESSIONS.pop(sid, None)
+    with _FEED_SESSION_LOCK:
+        expired = [
+            sid for sid, val in _FEED_POPULAR_SESSIONS.items()
+            if len(val) >= 2 and (now - val[1]) > _SESSION_TTL_SECONDS
+        ]
+        for sid in expired:
+            _FEED_POPULAR_SESSIONS.pop(sid, None)
+
+
+def _get_popular_session(session_id: str):
+    with _FEED_SESSION_LOCK:
+        value = _FEED_POPULAR_SESSIONS.get(session_id)
+        if value and time.time() - value[1] > _SESSION_TTL_SECONDS:
+            _FEED_POPULAR_SESSIONS.pop(session_id, None)
+            return None
+        return value
+
+
+def _store_popular_session(session_id: str, value) -> None:
+    with _FEED_SESSION_LOCK:
+        # Remove any old entry so insertion order reflects the latest snapshot.
+        _FEED_POPULAR_SESSIONS.pop(session_id, None)
+        while len(_FEED_POPULAR_SESSIONS) >= _MAX_POPULAR_SESSIONS:
+            oldest = next(iter(_FEED_POPULAR_SESSIONS))
+            _FEED_POPULAR_SESSIONS.pop(oldest, None)
+        _FEED_POPULAR_SESSIONS[session_id] = value
 
 
 def encode_cursor(data: dict[str, Any]) -> str:
@@ -355,9 +377,10 @@ def get_works_feed(
 
         # Retrieve or initialize frozen session
         cur_uid = current_user["id"] if current_user else None
-        cur_filter = (fmt, access, asset, author, q)
+        cur_filter = (fmt, access, asset, author, q, ids_param, scenario_param)
 
-        if offset > 0 and session_id not in _FEED_POPULAR_SESSIONS:
+        sess_data = _get_popular_session(session_id)
+        if offset > 0 and sess_data is None:
             return {
                 "ok": True,
                 "items": [],
@@ -370,7 +393,6 @@ def get_works_feed(
                 "needsRefresh": True,
             }
 
-        sess_data = _FEED_POPULAR_SESSIONS.get(session_id)
         if sess_data:
             ordered_ids = sess_data[0]
             if len(sess_data) >= 4:
@@ -401,7 +423,7 @@ def get_works_feed(
             """
             id_rows = conn.execute(pop_sql, base_params).fetchall()
             ordered_ids = [r["id"] for r in id_rows]
-            _FEED_POPULAR_SESSIONS[session_id] = (ordered_ids, time.time(), cur_uid, cur_filter)
+            _store_popular_session(session_id, (ordered_ids, time.time(), cur_uid, cur_filter))
 
         total_session_items = len(ordered_ids)
         page_ids = ordered_ids[offset : offset + limit]
