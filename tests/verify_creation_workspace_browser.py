@@ -301,101 +301,114 @@ def main():
                     assert page.evaluate("fixture.counts().cancels")==1
                     geometry(page,width,kind)
                 else:
-                    # #141: one live card grid; no separate edit, status or result lists.
-                    expect(page.locator(".batch-series-workspace")).to_be_visible()
-                    expect(page.locator(".batch-series-grid")).to_be_visible()
-                    # #142: shared settings remain left; all planning lives in the
-                    # same bottom-right dock as the generation action.
-                    expect(page.locator(".batch-series-content > .batch-series-dock")).to_be_visible()
-                    expect(page.locator(".batch-series-properties .batch-plan-card")).to_have_count(0)
+                    # #143: single focused picture + vertical thumbnail navigation
+                    # and upper shared / lower selected-image settings.
+                    expect(page.locator(".batch-series-stage")).to_be_visible()
+                    expect(page.locator(".batch-series-main-card")).to_be_visible()
+                    expect(page.locator(".batch-series-thumbs")).to_be_visible()
+                    expect(page.locator(".batch-series-thumb")).to_have_count(3)
+                    expect(page.locator(".batch-series-focused")).to_have_count(1)
+                    expect(page.locator(".batch-series-grid")).to_have_count(0)
+                    expect(page.locator(".batch-series-properties .batch-series-shared")).to_be_visible()
+                    expect(page.locator(".batch-series-properties .batch-series-selected-settings")).to_be_visible()
+                    expect(page.locator(".batch-series-properties #batch-count-input")).to_be_visible()
+                    expect(page.locator(".batch-series-properties #batch-strategy-fixed")).to_be_visible()
+                    expect(page.locator(".batch-series-properties [data-pick-layout-idx='0']")).to_be_visible()
+                    expect(page.locator("#batch-concurrency")).to_have_count(0)
+                    expect(page.locator("#batch-layout-req-input")).to_have_count(0)
                     expect(page.locator(".batch-series-dock #batch-seed-input")).to_be_visible()
                     expect(page.locator(".batch-series-dock #batch-btn-plan")).to_be_visible()
                     expect(page.locator(".batch-series-dock #batch-btn-start")).to_be_visible()
-                    expect(page.locator("#batch-plan-options-toggle")).to_have_attribute("aria-expanded","false")
-                    expect(page.locator("#batch-plan-options")).to_be_hidden()
-                    dock_layout=page.evaluate("""() => {
+                    expect(page.locator(".batch-series-composer-attachments")).to_have_count(0)
+                    assert page.evaluate("""() => {
                       const r=s=>document.querySelector(s).getBoundingClientRect();
-                      const p=r('.batch-series-properties'),c=r('.batch-series-content'),
-                            dock=r('.batch-series-dock'),left=r('#batch-btn-plan'),
-                            right=r('#batch-btn-start'),grid=r('.batch-series-grid'),
-                            seed=r('#batch-seed-input'),footer=r('.batch-series-footer');
-                      return {
-                        planWithinContent:dock.left>=c.left-1 && dock.right<=c.right+1,
-                        actionOrder:left.left<right.right,
-                        sameActionRow:Math.abs(left.top-right.top)<12,
-                        seedFullyVisible:seed.top>=dock.top-1 && seed.bottom<=footer.top+1,
-                        dockBelowCards:dock.top>=grid.top,
-                        dockBottom:dock.bottom<=c.bottom+2
-                      };
+                      const a=r('.batch-series-shared'),b=r('.batch-series-selected-settings'),
+                            main=r('.batch-series-main-card'),thumb=r('.batch-series-thumbs');
+                      return b.top>=a.bottom-1 && thumb.left>=main.right-1;
                     }""")
-                    assert dock_layout["planWithinContent"] and dock_layout["dockBelowCards"] and dock_layout["dockBottom"],dock_layout
-                    assert dock_layout["seedFullyVisible"],dock_layout
-                    assert dock_layout["actionOrder"] and dock_layout["sameActionRow"],dock_layout
-                    page.locator("#batch-plan-options-toggle").click()
-                    expect(page.locator("#batch-plan-options-toggle")).to_have_attribute("aria-expanded","true")
-                    expect(page.locator("#batch-count-input")).to_be_visible()
-                    expect(page.locator(".batch-edit-table")).to_have_count(0)
-                    expect(page.locator(".batch-preview-table")).to_have_count(0)
-                    expect(page.locator(".batch-results-section")).to_have_count(0)
                     page.locator(".batch-series-bulk-input summary").click()
                     page.locator("#batch-prompts-input").fill("山间晨雾\n湖边暮色")
                     page.locator("#batch-prompts-input").blur()
-                    expect(page.locator(".batch-series-card")).to_have_count(2)
-                    expect(page.locator(".batch-series-theme-input")).to_have_count(2)
-                    page.locator('[data-series-theme-idx="0"]').fill("晨间山谷")
-                    page.locator('[data-series-theme-idx="0"]').blur()
-                    assert "晨间山谷" in page.evaluate("fixture.parts.loop.data.promptListText")
-                    expect(page.locator(".batch-cost-text")).to_contain_text("2 张")
-                    expect(page.locator("#batch-btn-start")).to_be_enabled()
+                    expect(page.locator(".batch-series-thumb")).to_have_count(2)
+                    expect(page.locator(".batch-series-focused")).to_have_count(1)
+                    page.locator("#batch-count-input").fill("4")
+                    assert page.evaluate("fixture.parts.loop.data.batchCount")==4
                     page.locator("#batch-strategy-ai").click()
-                    expect(page.locator("#batch-plan-options-toggle")).to_have_attribute("aria-expanded","true")
-                    expect(page.locator("#batch-layout-req-input")).to_be_visible()
-                    expect(page.locator(".batch-series-card")).to_have_count(2)
+                    expect(page.locator(".batch-series-thumb")).to_have_count(2)
                     page.locator("#batch-mode-fusion").click()
                     page.locator('[data-pick-kind="style1"]').press("Space")
                     assert page.evaluate("fixture.counts().pickers")==1
+                    # Mother-theme input includes natural-language layout requests.
+                    page.locator("#batch-seed-input").fill("城市散步，三张图片采用随机图型")
                     page.locator("#batch-btn-pick-global-refs").click()
                     assert page.evaluate("fixture.counts().refs")==1
-                    page.locator("#batch-toggle-more-settings").click()
-                    geometry(page,width,kind)
-                    page.locator("#batch-seed-input").fill("城市散步")
-                    page.locator("#batch-plan-options-toggle").click()
-                    expect(page.locator("#batch-plan-options")).to_be_hidden()
-                    expect(page.locator("#batch-seed-input")).to_have_value("城市散步")
                     page.locator("#batch-btn-plan").click()
-                    expect(page.locator(".batch-series-card")).to_have_count(3)
-                    expect(page.locator(".batch-series-card .batch-status-badge")).to_have_count(3)
-                    geometry(page,width,kind)
-                    page.locator('[data-pick-row-refs-idx="0"]').click()
+                    expect(page.locator(".batch-series-thumb")).to_have_count(3)
+                    expect(page.locator(".batch-series-focused")).to_have_count(1)
+                    expect(page.locator(".batch-series-thumb[aria-selected='true']")).to_have_count(1)
+                    expect(page.locator("#batch-series-theme-0")).to_have_value("晨间咖啡")
+                    expect(page.locator(".batch-series-selected-settings strong")).to_contain_text("图 1")
+                    expect(page.locator(".batch-series-focused[data-batch-row='0']")).to_be_visible()
+                    page.locator('[data-series-select-idx="1"]').click()
+                    expect(page.locator(".batch-series-selected-settings strong")).to_contain_text("图 2")
+                    expect(page.locator(".batch-series-focused[data-batch-row='1']")).to_be_visible()
+                    expect(page.locator("#batch-series-theme-1")).to_have_value("午后公园")
+                    expect(page.locator(".batch-series-properties [data-pick-layout-idx='1']")).to_be_visible()
+                    page.locator("#batch-series-theme-1").fill("午后公园的暖光与树影")
+                    page.locator("#batch-series-theme-1").blur()
+                    assert page.evaluate("fixture.parts.loop.data.batchRows[1].theme")=="午后公园的暖光与树影"
+                    page.locator('[data-pick-layout-idx="1"]').click()
+                    assert page.evaluate("fixture.counts().pickers")==2
+                    # Current-picture refs belong inside composer, independent of global refs.
+                    page.locator('[data-pick-row-refs-idx="1"]').click()
                     assert page.evaluate("fixture.counts().refs")==2
-                    page.locator("#batch-concurrency").select_option("2")
+                    page.evaluate("""() => {
+                      fixture.parts.loop.data.batchRows[1].assetItems=[
+                        {id:"A-01",name:"独立参考",image:fixture.pixel}];
+                      fixture.render();
+                    }""")
+                    expect(page.locator(".batch-series-composer-attachments .batch-series-attachment")).to_have_count(1)
+                    expect(page.locator('.batch-series-attachment [data-remove-series-ref="0"]')).to_be_visible()
+                    page.locator('.batch-series-attachment [data-remove-series-ref="0"]').click()
+                    assert page.evaluate("fixture.parts.loop.data.batchRows[1].assetItems.length")==0
+                    page.locator('[data-series-select-idx="0"]').click()
+                    expect(page.locator("#batch-series-theme-0")).to_have_value("晨间咖啡")
+                    expect(page.locator(".batch-series-selected-settings strong")).to_contain_text("图 1")
+                    page.locator('[data-series-select-idx="1"]').click()
+                    expect(page.locator("#batch-series-theme-1")).to_have_value("午后公园的暖光与树影")
+                    page.locator('[data-series-composer-mode="series"]').click()
+                    expect(page.locator("#batch-seed-input")).to_have_value("城市散步，三张图片采用随机图型")
+                    page.locator('[data-series-composer-mode="image"]').click()
                     page.locator("#batch-btn-start").scroll_into_view_if_needed()
                     check_bar(page,"#batch-btn-start")
                     page.screenshot(path=str(OUT/f"{kind}-{width}.png"),full_page=True)
+                    page.locator('[data-series-select-idx="0"]').click()
                     page.locator("#batch-btn-start").click()
                     expect(page.locator("#batch-btn-stop")).to_be_visible()
-                    expect(page.locator(".batch-series-pending")).to_be_visible()
+                    expect(page.locator(".batch-series-focused .batch-series-pending")).to_be_visible()
+                    expect(page.locator(".batch-series-thumb")).to_have_count(3)
                     expect(page.locator(".batch-results-section")).to_have_count(0)
-                    # Live progress replaces media on the SAME planned card; no extra result list.
+                    # Concurrent progress updates the selected main image and
+                    # other thumbnail statuses, not a second result list.
                     page.evaluate("""() => fixture.controller.updateProgress({
                       updatedIndex:0,
                       itemResult:{imageUrl:fixture.pixel,title:"第1张成图"},
                       completedCount:1,failedCount:0,totalCount:3,
                       activeIndex:1,activeIndices:[1],busy:true
                     })""")
-                    expect(page.locator('[data-batch-row="0"] .is-generated')).to_have_count(1)
+                    expect(page.locator('.batch-series-focused[data-batch-row="0"] .is-generated')).to_have_count(1)
                     expect(page.locator("#batch-btn-download-all")).to_be_enabled()
-                    expect(page.locator('[data-batch-row="1"] .batch-series-pending')).to_have_count(1)
-                    expect(page.locator(".batch-series-card")).to_have_count(3)
-                    expect(page.locator(".batch-results-section")).to_have_count(0)
+                    expect(page.locator('.batch-series-thumb[data-series-select-idx="1"].is-generating')).to_have_count(1)
+                    page.locator('[data-series-select-idx="1"]').click()
+                    expect(page.locator(".batch-series-focused .batch-series-pending")).to_be_visible()
                     page.evaluate("""() => fixture.controller.updateProgress({
                       updatedIndex:1,
-                      itemResult:{failed:true,error:"模拟供应商失败"},
+                      itemResult:{failed:true,error:"模拟生成失败"},
                       completedCount:1,failedCount:1,totalCount:3,
                       activeIndex:2,activeIndices:[2],busy:true
                     })""")
-                    expect(page.locator('[data-batch-row="1"] [data-retry-idx="1"]')).to_be_visible()
-                    expect(page.locator('[data-batch-row="2"] .batch-series-pending')).to_be_visible()
+                    expect(page.locator('.batch-series-focused[data-batch-row="1"] [data-retry-idx="1"]')).to_be_visible()
+                    expect(page.locator('.batch-series-thumb[data-series-select-idx="2"].is-generating')).to_have_count(1)
                     page.locator("#batch-btn-stop").click()
                     expect(page.locator("#batch-btn-stop")).to_be_disabled()
                     assert page.evaluate("fixture.counts().cancels")==1
