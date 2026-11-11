@@ -12782,6 +12782,7 @@
         loopMode: "prompts",
         promptListText: "春日阳光下的街角手账\n午后一杯热咖啡的治愈时光\n暮色中的旧书摊与晚霞",
         batchLayoutMode: "ai",
+        batchCount: 3,
         batchRows: [
           {theme:"春日阳光下的街角手账",layout:"",assetItems:[]},
           {theme:"午后一杯热咖啡的治愈时光",layout:"",assetItems:[]},
