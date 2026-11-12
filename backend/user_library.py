@@ -338,7 +338,7 @@ def is_media_referenced(
         """
         SELECT 1 FROM user_uploads
         WHERE (image_url = ? OR file_path = ?)
-          AND (? IS NULL OR id <> ?)
+          AND (CAST(? AS text) IS NULL OR id <> ?)
         LIMIT 1
         """,
         (clean_url, clean_path, exclude_upload_id, exclude_upload_id),

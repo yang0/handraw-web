@@ -27,13 +27,17 @@ class HybridRow(dict):
 
 @lru_cache(maxsize=512)
 def _placeholders(query: str) -> str:
-    """Bind positional parameters outside SQL strings and comments."""
+    """Convert qmark parameters and escape literal driver-format percent signs."""
     buf = []
     i = 0
     mode = ""
     while i < len(query):
         c = query[i]
         nxt = query[i + 1] if i + 1 < len(query) else ""
+        if c == "%":
+            buf.append("%%")
+            i += 1
+            continue
         if not mode:
             if c == "'":
                 mode = "'"
@@ -112,7 +116,7 @@ class PgConnection:
         return hashlib.sha256(repr(database_endpoint).encode("utf-8")).hexdigest()
 
     def execute(self, statement, params=()):
-        q = _placeholders(str(statement))
+        q = _placeholders(str(statement)) if params else str(statement)
         cur = self._db.cursor()
         try:
             cur.execute(q, tuple(params) if params else None)
@@ -129,7 +133,7 @@ class PgConnection:
 
     def executemany(self, statement, seq_of_params):
         rows = [tuple(p) for p in seq_of_params]
-        q = _placeholders(str(statement))
+        q = _placeholders(str(statement)) if rows else str(statement)
         cur = self._db.cursor()
         try:
             if rows:

@@ -3483,7 +3483,8 @@ def send_encourage_tip(
 
             payee_row = tx.execute(
                 "SELECT id, username, display_name, status FROM users WHERE username = ? OR id = ?",
-                (payee_name, payee_name),
+                (payee_name, int(payee_name) if payee_name.isascii() and payee_name.isdecimal()
+                 and len(payee_name) <= 19 and int(payee_name) <= 9223372036854775807 else None),
             ).fetchone()
             if not payee_row or payee_row["status"] != "active":
                 raise ServiceError("官方资源赞赏暂未开放", status=400, code="official_tips_disabled")
