@@ -1,7 +1,6 @@
 """Round-4 review fixes: the governance regression and the remaining leaks."""
 from __future__ import annotations
 
-import sqlite3
 import os
 from unittest.mock import patch
 import unittest
@@ -176,111 +175,6 @@ class ForkTargetValidationTests(_Base):
             "SELECT fork_work_id FROM studio_generations WHERE id = ?", (prepared["genId"],)
         ).fetchone()["fork_work_id"]
         self.assertEqual(stored, "")
-
-
-class PurgeScriptTests(unittest.TestCase):
-    def setUp(self):
-        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
-
-    def test_purge_identifies_and_removes_unbacked_fork_rows(self):
-        from ops import purge_publish_time_forks as purge
-
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "purge.db"
-            db = server.init_database(path)
-            try:
-                user, _ = register_user(db, "purge_u", "password-a")
-                work = publish_user_work(
-                    db, user, {"title": "脏数据作品", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
-                )
-                db.get_conn().execute(
-                    "INSERT INTO work_forks (work_id, user_id, first_generation_id, created_at) VALUES (?,?,?,?)",
-                    (work["workId"], 999, "", "2026-01-01T00:00:00Z"),
-                )
-                db.get_conn().execute("UPDATE works SET forks = 1 WHERE id = ?", (work["workId"],))
-                db.get_conn().commit()
-                db.close_thread_conn()
-            finally:
-                db.get_conn().close()
-                db.close()
-
-            conn = sqlite3.connect(str(path))
-            conn.row_factory = sqlite3.Row
-            try:
-                todo = purge.plan(conn)
-                self.assertEqual(len(todo), 1)
-                purge.apply(conn, todo)
-                forks = conn.execute("SELECT forks FROM works").fetchone()["forks"]
-                self.assertEqual(int(forks), 0, "purge must recompute the cached counter")
-            finally:
-                conn.close()
-
-    def test_purge_catches_a_borrowed_generation_id(self):
-        # A fork row pointing at another user's successful generation is still
-        # bogus: the generation must belong to the forker and name this work.
-        from ops import purge_publish_time_forks as purge
-        from backend.services import complete_cloud_generation, prepare_cloud_generation
-
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "borrow.db"
-            db = server.init_database(path)
-            try:
-                victim, _ = register_user(db, "purge_victim", "password-v")
-                attacker, _ = register_user(db, "purge_attacker", "password-t")
-                parent = publish_user_work(
-                    db, victim, {"title": "被刷作品", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
-                )
-                prepared = prepare_cloud_generation(
-                    db, victim, {"prompt": "受害者的生成", "requestId": "victim-gen"}
-                )
-                complete_cloud_generation(db, prepared["genId"], "tv", ["/generated/v.webp"])
-                db.get_conn().execute(
-                    "INSERT INTO work_forks (work_id, user_id, first_generation_id, created_at) VALUES (?,?,?,?)",
-                    (parent["workId"], attacker["id"], prepared["genId"], "2026-01-01T00:00:00Z"),
-                )
-                db.get_conn().commit()
-                db.close_thread_conn()
-            finally:
-                db.get_conn().close()
-                db.close()
-
-            conn = sqlite3.connect(str(path))
-            conn.row_factory = sqlite3.Row
-            try:
-                todo = purge.plan(conn)
-                self.assertEqual(len(todo), 1, "a borrowed generation id must be flagged")
-                purge.apply(conn, todo)
-                self.assertEqual(int(conn.execute("SELECT COUNT(*) FROM work_forks").fetchone()[0]), 0)
-            finally:
-                conn.close()
-
-    def test_backup_uses_the_sqlite_api_and_contains_data(self):
-        from ops import purge_publish_time_forks as purge
-
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "backupdb.db"
-            db = server.init_database(path)
-            try:
-                user, _ = register_user(db, "purge_bk", "password-a")
-                publish_user_work(
-                    db, user, {"title": "备份作品", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
-                )
-                db.close_thread_conn()
-                conn = sqlite3.connect(str(path))
-                conn.row_factory = sqlite3.Row
-                try:
-                    backup_path = purge.backup(conn, path)
-                finally:
-                    conn.close()
-            finally:
-                db.get_conn().close()
-                db.close()
-            check = sqlite3.connect(str(backup_path))
-            try:
-                rows = int(check.execute("SELECT COUNT(*) FROM works").fetchone()[0])
-            finally:
-                check.close()
-            self.assertEqual(rows, 1, "the backup must include committed rows")
 
 
 class ReceiptTransparencyTests(_Base):

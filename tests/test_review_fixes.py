@@ -151,7 +151,8 @@ class ConvergeAllStatusesTests(unittest.TestCase):
         try:
             todo = converge_work_comments.plan(conn)
             self.assertEqual(len(todo), 2, "hidden comments must not be dropped by the migration")
-            converge_work_comments.apply(conn, todo)
+            with conn:
+                converge_work_comments.apply(conn, todo)
             rows = {
                 row["legacy_source"]: row["status"]
                 for row in conn.execute("SELECT legacy_source, status FROM forum_replies").fetchall()

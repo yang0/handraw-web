@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,6 +10,7 @@ from unittest.mock import patch
 
 from backend import admin_services, resource_discussions, server, services
 from ops import converge_asset_comments, converge_work_comments, ensure_resource_topics
+from tests.maintenance_support import fill_resource_topics, migrate_asset_comments, migrate_work_comments
 
 IMG = "/images/individual/FA/FA-013.webp"
 
@@ -147,21 +147,16 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Dry run
-        conn_raw = sqlite3.connect(str(self.path))
-        conn_raw.row_factory = sqlite3.Row
-        try:
-            asset_todo, unmapped, work_todo, skipped = converge_asset_comments.plan(conn_raw)
-            self.assertEqual(len(asset_todo), 2)
-            cnt = conn_raw.execute("SELECT COUNT(*) FROM forum_replies WHERE legacy_source LIKE 'asset_comments:%'").fetchone()[0]
-            self.assertEqual(cnt, 0)
-        finally:
-            conn_raw.close()
+        asset_todo, _, _, _ = converge_asset_comments.plan(conn)
+        self.assertEqual(len(asset_todo), 2)
+        cnt = conn.execute("SELECT COUNT(*) FROM forum_replies WHERE legacy_source LIKE 'asset_comments:%'").fetchone()[0]
+        self.assertEqual(cnt, 0)
 
         # Check notifications count before apply
         notif_before = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
 
         # Run apply
-        ret = converge_asset_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_asset_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Check notifications count after apply (must not trigger new notifications)
@@ -197,7 +192,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         self.assertEqual(origin, "submission")
 
         # Run apply again: idempotent, no duplicates
-        ret2 = converge_asset_comments.main(["--db", str(self.path), "--apply"])
+        ret2 = migrate_asset_comments(self.db)
         self.assertEqual(ret2, 0)
         cnt2 = conn.execute("SELECT COUNT(*) FROM forum_replies WHERE legacy_source LIKE 'asset_comments:%'").fetchone()[0]
         self.assertEqual(cnt2, 2)
@@ -215,16 +210,11 @@ class UnifiedRepliesTests(unittest.TestCase):
         creator_stats_len_before = len(creators_before)
 
         # Dry run
-        conn_raw = sqlite3.connect(str(self.path))
-        conn_raw.row_factory = sqlite3.Row
-        try:
-            needed_assets, needed_works = ensure_resource_topics.plan(conn_raw)
-            self.assertGreater(len(needed_assets), 500)
-        finally:
-            conn_raw.close()
+        needed_assets, _ = ensure_resource_topics.plan(self.db.get_conn())
+        self.assertGreater(len(needed_assets), 500)
 
         # Apply
-        ret = ensure_resource_topics.main(["--db", str(self.path), "--apply"])
+        ret = fill_resource_topics(self.db)
         self.assertEqual(ret, 0)
 
         # Verify all catalog resources have mapping
@@ -252,7 +242,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         self.assertEqual(len(creators_after), creator_stats_len_before)
 
         # Second run: idempotent, creates 0
-        ret2 = ensure_resource_topics.main(["--db", str(self.path), "--apply"])
+        ret2 = fill_resource_topics(self.db)
         self.assertEqual(ret2, 0)
 
     def test_j2_dedup_and_author_deleted_work_retention(self):
@@ -280,7 +270,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Run ensure_resource_topics
-        ret = ensure_resource_topics.main(["--db", str(self.path), "--apply"])
+        ret = fill_resource_topics(self.db)
         self.assertEqual(ret, 0)
 
         # Verify only ONE topic exists for this work
@@ -352,32 +342,6 @@ class UnifiedRepliesTests(unittest.TestCase):
         m_fixed = conn.execute("SELECT origin FROM curation_resource_topics WHERE target_id = 'TST-999'").fetchone()
         self.assertEqual(m_fixed["origin"], "submission")
 
-    def test_j5_wal_backup_verification(self):
-        """J5: SQLite Backup API accurately captures uncheckpointed WAL data and verifies."""
-        conn = self.db.get_conn()
-        conn.execute("PRAGMA journal_mode=WAL")
-        wal_tid = "topic_wal_uncheckpointed_1"
-        now = services.utc_now_iso()
-        conn.execute(
-            "INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?,'assets','画风与图型专区','WAL测试','','资源讨论','', '[]', '[]', '', '', 'published', 1000, '刚刚', ?, ?)",
-            (wal_tid, now, now),
-        )
-        conn.commit()
-
-        # Backup through backup function
-        bak_file = converge_asset_comments.backup(conn, self.path)
-        self.assertTrue(bak_file.is_file())
-
-        # Verify uncheckpointed data exists in backup
-        verify_conn = sqlite3.connect(str(bak_file))
-        try:
-            row = verify_conn.execute("SELECT id FROM forum_topics WHERE id = ?", (wal_tid,)).fetchone()
-            self.assertIsNotNone(row)
-            self.assertEqual(row[0], wal_tid)
-        finally:
-            verify_conn.close()
-            bak_file.unlink(missing_ok=True)
-
     def test_j12_community_vs_official_notifications(self):
         """J12: Community asset replies notify asset author (+1); official asset replies send 0 notifications."""
         conn = self.db.get_conn()
@@ -419,7 +383,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Run migration
-        ret = converge_asset_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_asset_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Verify old row status is 'migrated'
@@ -433,7 +397,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Re-run migration script
-        ret2 = converge_asset_comments.main(["--db", str(self.path), "--apply"])
+        ret2 = migrate_asset_comments(self.db)
         self.assertEqual(ret2, 0)
 
         # Assert no new reply was created
@@ -469,7 +433,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Run work migration
-        ret = converge_work_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_work_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Comment must be in forum_replies mapped to tid
@@ -641,7 +605,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         rep_id = conn.execute("SELECT id FROM reports WHERE target_id = 'wc_l1_1'").fetchone()[0]
 
         # Migrate
-        ret = converge_work_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_work_comments(self.db)
         self.assertEqual(ret, 0)
 
         # After migration: old row is migrated, reply is published in forum_replies
@@ -701,7 +665,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Migrate
-        ret = converge_work_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_work_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Verify created topics inherit governance
@@ -742,7 +706,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Migrate asset comments first
-        ret = converge_asset_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_asset_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Check created topic author
@@ -766,7 +730,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         now = services.utc_now_iso()
 
         # Run ensure_resource_topics once to map everything
-        ensure_resource_topics.main(["--db", str(self.path), "--apply"])
+        fill_resource_topics(self.db)
 
         # Now artificially inject a single lowercase-only mapping for FB-041
         tid_fb = "topic_fb041_test"
@@ -776,7 +740,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Run ensure_resource_topics: must not exit early, must normalize fb-041 to FB-041
-        ret = ensure_resource_topics.main(["--db", str(self.path), "--apply"])
+        ret = fill_resource_topics(self.db)
         self.assertEqual(ret, 0)
         row = conn.execute("SELECT target_id FROM curation_resource_topics WHERE kind = 'style' AND topic_id = ?", (tid_fb,)).fetchone()
         self.assertEqual(row["target_id"], "FB-041", "Mapping must be normalized to uppercase FB-041")
@@ -887,7 +851,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Migrate comment
-        ret = converge_work_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_work_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Verify migrated in work_comments and reply created
@@ -917,7 +881,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         self.assertEqual(w_row_after["status"], "migrated")
 
         # Re-running migration must NOT resurrect it
-        ret = converge_work_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_work_comments(self.db)
         self.assertEqual(ret, 0)
         self.assertIsNone(conn.execute("SELECT 1 FROM forum_replies WHERE legacy_source = ?", (f"work_comments:{cid}",)).fetchone())
 
@@ -950,7 +914,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Migrate comment
-        ret = converge_asset_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_asset_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Verify migrated in asset_comments and reply created
@@ -979,7 +943,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT status FROM asset_comments WHERE id = ?", (cid,)).fetchone()["status"], "migrated")
 
         # Re-run migration: must NOT resurrect
-        ret = converge_asset_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_asset_comments(self.db)
         self.assertEqual(ret, 0)
         self.assertIsNone(conn.execute("SELECT 1 FROM forum_replies WHERE legacy_source = ?", (f"asset_comments:{cid}",)).fetchone())
 
@@ -1024,7 +988,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Migrate
-        ret = converge_work_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_work_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Delete the replies in forum_replies
@@ -1051,7 +1015,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT status FROM work_comments WHERE id = ?", (cid2,)).fetchone()["status"], "migrated")
 
         # Re-running migration copies 0
-        ret = converge_work_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_work_comments(self.db)
         self.assertEqual(ret, 0)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM forum_replies WHERE legacy_source IN (?, ?)", (f"work_comments:{cid1}", f"work_comments:{cid2}")).fetchone()[0], 0)
 
@@ -1125,7 +1089,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.commit()
 
         # Run migration for w_hid and w_pau
-        ret = converge_work_comments.main(["--db", str(self.path), "--apply"])
+        ret = migrate_work_comments(self.db)
         self.assertEqual(ret, 0)
 
         # Check newly created topic for w_hid: status='hidden', status_source='work'

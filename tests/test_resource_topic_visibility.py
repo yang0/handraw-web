@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend import admin_services, post_routes, resource_discussions, server, services
-from ops import converge_asset_comments, ensure_resource_topics
+from ops import ensure_resource_topics
+from tests.maintenance_support import fill_resource_topics, migrate_asset_comments
 
 
 class ResourceTopicVisibilityTests(unittest.TestCase):
@@ -121,15 +122,11 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
         manifest_path = Path(self.temp_dir) / "manifest.json"
 
         # Step 1: Converge asset comments
-        converge_ret = converge_asset_comments.main(["--db", str(self.db_path), "--apply"])
+        converge_ret = migrate_asset_comments(self.db)
         self.assertEqual(converge_ret, 0)
 
         # Step 2: Ensure resource topics with manifest
-        ret = ensure_resource_topics.main([
-            "--db", str(self.db_path),
-            "--apply",
-            "--manifest", str(manifest_path),
-        ])
+        ret = fill_resource_topics(self.db, manifest_path)
         self.assertEqual(ret, 0)
 
         # Check mapping counts: catalog styles + catalog layouts
@@ -157,7 +154,7 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
     def test_02_asset_comments_converged_to_forum_replies(self):
         """2. Legacy asset comments converged to forum_replies with legacy_source."""
         conn = self.db.get_conn()
-        converge_asset_comments.main(["--db", str(self.db_path), "--apply"])
+        migrate_asset_comments(self.db)
 
         # Check migrated rows in forum_replies
         conn.commit()
@@ -180,8 +177,8 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
 
     def test_03_official_resource_visibility_threshold_in_boot(self):
         """3. Official resources without replies hidden from boot; with replies visible."""
-        converge_asset_comments.main(["--db", str(self.db_path), "--apply"])
-        ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+        migrate_asset_comments(self.db)
+        fill_resource_topics(self.db)
 
         boot = services.build_boot_payload(self.db, None)
         topic_ids = {t["id"] for t in boot.get("topics", [])}
@@ -215,8 +212,8 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
 
     def test_04_community_resources_visible_regardless_of_replies(self):
         """4. Community resources appear in forum topics even with 0 replies."""
-        converge_asset_comments.main(["--db", str(self.db_path), "--apply"])
-        ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+        migrate_asset_comments(self.db)
+        fill_resource_topics(self.db)
 
         conn = self.db.get_conn()
         official_ids = {r[0] for r in conn.execute(resource_discussions.official_topic_ids_sql()).fetchall()}
@@ -257,8 +254,8 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
     def test_05_dynamic_comment_and_moderation_flow(self):
         """5. Commenting makes official topic visible; hiding reply makes it disappear from boot; direct link works."""
         conn = self.db.get_conn()
-        converge_asset_comments.main(["--db", str(self.db_path), "--apply"])
-        ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+        migrate_asset_comments(self.db)
+        fill_resource_topics(self.db)
 
         fb041_row = conn.execute(
             "SELECT topic_id FROM curation_resource_topics WHERE kind = 'style' AND UPPER(target_id) = 'FB-041'"
@@ -294,8 +291,8 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
     def test_06_admin_views_with_hidden_replies(self):
         """6. Admin queries (admin=True) count/show topics with hidden replies."""
         conn = self.db.get_conn()
-        converge_asset_comments.main(["--db", str(self.db_path), "--apply"])
-        ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+        migrate_asset_comments(self.db)
+        fill_resource_topics(self.db)
 
         fb041_row = conn.execute(
             "SELECT topic_id FROM curation_resource_topics WHERE kind = 'style' AND UPPER(target_id) = 'FB-041'"
@@ -365,8 +362,8 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
     def test_08_creator_stats_match_visibility_threshold(self):
         """8. Creator statistics topicsCount matches visible topics."""
         conn = self.db.get_conn()
-        converge_asset_comments.main(["--db", str(self.db_path), "--apply"])
-        ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+        migrate_asset_comments(self.db)
+        fill_resource_topics(self.db)
 
         _, _, _, creators = services.compute_public_asset_counts_and_creators(conn)
         usernames = [c["username"] for c in creators]
@@ -419,7 +416,7 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
         conn.commit()
 
         # Run ensure_resource_topics
-        ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+        fill_resource_topics(self.db)
 
         # Check boot topics
         boot = services.build_boot_payload(self.db, None)

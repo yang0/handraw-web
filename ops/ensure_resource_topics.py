@@ -1,281 +1,153 @@
-"""Ensure discussion topics and submission mappings exist for all resources.
-
-Every official style and layout in ``catalog.json`` as well as every published
-work must have a permanent discussion topic in ``forum_topics`` mapped via
-``curation_resource_topics`` with ``origin='submission'``. This allows direct
-canonical addressing (e.g. ``/t/FB-041``) without requiring a first comment.
-
-Usage (dry run first, always):
-    python -X utf8 ops/ensure_resource_topics.py --db .local/handraw_v2.db
-    python -X utf8 ops/ensure_resource_topics.py --db .local/handraw_v2.db --apply
-"""
+"""Create missing canonical resource discussions and normalize unambiguous mappings."""
 from __future__ import annotations
 
-import argparse
 import json
-import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.resource_discussions import ensure_topic, static_catalog
+from ops.postgres_maintenance import backup_before_change, maintenance_parser, maintenance_transaction
 
 
-def _connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
+_NORMALIZABLE_MAPPINGS = """
+    SELECT kind, MIN(target_id) AS target_id, UPPER(target_id) AS norm_id
+    FROM curation_resource_topics
+    WHERE kind IN ('style', 'layout')
+    GROUP BY kind, UPPER(target_id)
+    HAVING COUNT(*) = 1 AND MIN(target_id) <> UPPER(target_id)
+"""
 
 
-def backup(conn: sqlite3.Connection, db_path: Path) -> Path:
-    """Copy the database through SQLite's backup API and verify integrity."""
-    target = db_path.with_name(db_path.name + f".bak-topics-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
-    dest = sqlite3.connect(str(target))
-    try:
-        conn.backup(dest)
-    finally:
-        dest.close()
-
-    verify = sqlite3.connect(str(target))
-    try:
-        verify.execute("SELECT COUNT(*) FROM forum_topics").fetchone()
-    except Exception as e:
-        target.unlink(missing_ok=True)
-        raise RuntimeError(f"备份数据库完整性验证失败：{e}") from e
-    finally:
-        verify.close()
-    return target
-
-
-def find_case_duplicates(conn: sqlite3.Connection) -> list[dict]:
-    """Find mappings with same code but different case (report only)."""
-    rows = conn.execute(
-        """
-        SELECT kind, UPPER(target_id) AS norm_id, COUNT(*) AS cnt, GROUP_CONCAT(target_id, ', ') AS targets
+def find_case_duplicates(conn) -> list[dict]:
+    rows = conn.execute("""
+        SELECT kind, UPPER(target_id) AS norm_id, COUNT(*) AS cnt,
+               STRING_AGG(target_id, ', ' ORDER BY target_id) AS targets
         FROM curation_resource_topics
         WHERE kind IN ('style', 'layout')
         GROUP BY kind, UPPER(target_id)
         HAVING COUNT(*) > 1
-        """
-    ).fetchall()
-    return [dict(r) for r in rows]
+    """)
+    return [dict(row) for row in rows]
 
 
-def find_normalizable_mappings(conn: sqlite3.Connection) -> list[dict]:
-    """Find single lowercase mappings that can be safely normalized to uppercase."""
-    rows = conn.execute(
-        """
-        SELECT kind, target_id, UPPER(target_id) AS norm_id
-        FROM curation_resource_topics
-        WHERE kind IN ('style', 'layout')
-          AND target_id <> UPPER(target_id)
-          AND NOT EXISTS (
-              SELECT 1 FROM curation_resource_topics m2
-              WHERE m2.kind = curation_resource_topics.kind
-                AND m2.target_id = UPPER(curation_resource_topics.target_id)
-          )
-        """
-    ).fetchall()
-    return [dict(r) for r in rows]
+def find_normalizable_mappings(conn) -> list[dict]:
+    return [dict(row) for row in conn.execute(_NORMALIZABLE_MAPPINGS)]
 
 
-def find_affected_exclusive_mappings(conn: sqlite3.Connection) -> int:
-    """Find historical exclusive mappings that have a non-empty author_username (report only)."""
-    row = conn.execute(
-        """
+def find_affected_exclusive_mappings(conn) -> int:
+    return int(conn.execute("""
         SELECT COUNT(*)
-        FROM curation_resource_topics m
-        JOIN catalog_assets a ON UPPER(a.code) = UPPER(m.target_id) AND a.kind = m.kind
-        JOIN forum_topics t ON t.id = m.topic_id
+        FROM curation_resource_topics AS m
+        JOIN catalog_assets AS a ON UPPER(a.code) = UPPER(m.target_id) AND a.kind = m.kind
+        JOIN forum_topics AS t ON t.id = m.topic_id
         WHERE a.source_type = 'exclusive' AND TRIM(COALESCE(t.author_username, '')) <> ''
-        """
-    ).fetchone()
-    return int(row[0] if row else 0)
+    """).fetchone()[0])
 
 
-def plan(conn: sqlite3.Connection) -> tuple[list[tuple[str, str, dict]], list[tuple[str, str, dict]]]:
-    """Return (needed_assets, needed_works)."""
-    # 1. Official styles & layouts from catalog.json
-    catalog = static_catalog()
+def plan(conn) -> tuple[list[tuple[str, str, dict]], list[tuple[str, str, dict]]]:
+    seen = {
+        (row["kind"], row["normalized_id"])
+        for row in conn.execute("""
+            SELECT kind, UPPER(target_id) AS normalized_id FROM curation_resource_topics
+            WHERE kind IN ('style', 'layout')
+        """)
+    }
     needed_assets: list[tuple[str, str, dict]] = []
-    for code, item in catalog.items():
+    for code, item in static_catalog().items():
         kind = str(item.get("kind") or "style")
-        if kind not in ("style", "layout"):
-            continue
-        norm_code = code.strip().upper().lstrip("#")
-        row = conn.execute(
-            "SELECT topic_id FROM curation_resource_topics WHERE kind = ? AND UPPER(target_id) = ?",
-            (kind, norm_code),
-        ).fetchone()
-        if not row:
-            needed_assets.append((kind, norm_code, item))
+        key = (kind, code.strip().upper().lstrip("#"))
+        if kind in ("style", "layout") and key not in seen:
+            seen.add(key)
+            needed_assets.append((*key, item))
 
-    # 1b. Published styles & layouts from catalog_assets (exclusive, community, etc.)
-    db_assets = conn.execute(
-        """
-        SELECT * FROM catalog_assets
-        WHERE status = 'published' AND kind IN ('style', 'layout')
-        """
-    ).fetchall()
-    for row in db_assets:
-        item = dict(row)
-        kind = str(item.get("kind") or "style")
-        norm_code = str(item.get("code") or "").strip().upper().lstrip("#")
-        if not norm_code:
-            continue
-        if any(a[0] == kind and a[1] == norm_code for a in needed_assets):
-            continue
-        exists = conn.execute(
-            "SELECT topic_id FROM curation_resource_topics WHERE kind = ? AND UPPER(target_id) = ?",
-            (kind, norm_code),
-        ).fetchone()
-        if not exists:
-            needed_assets.append((kind, norm_code, item))
+    for row in conn.execute("""
+        SELECT code, kind, source_type, name, description, image_url, author_username, author_name
+        FROM catalog_assets WHERE status = 'published' AND kind IN ('style', 'layout')
+        ORDER BY code
+    """):
+        key = (row["kind"], str(row["code"]).strip().upper().lstrip("#"))
+        if key[1] and key not in seen:
+            seen.add(key)
+            needed_assets.append((*key, dict(row)))
 
-    # 2. Published works without mapping
-    needed_works: list[tuple[str, str, dict]] = []
-    works = conn.execute(
-        """
-        SELECT w.* FROM works w
-        WHERE w.status = 'published'
-          AND NOT EXISTS (
-              SELECT 1 FROM curation_resource_topics m
-              WHERE m.kind = 'work' AND m.target_id = w.id
-          )
-        """
-    ).fetchall()
-    for work in works:
-        needed_works.append(("work", str(work["id"]), dict(work)))
-
+    needed_works = [
+        ("work", str(row["id"]), dict(row)) for row in conn.execute("""
+            SELECT w.id, w.title, w.author_username, w.author_name, w.notes, w.status, w.images_json
+            FROM works AS w
+            WHERE w.status = 'published' AND NOT EXISTS (
+                SELECT 1 FROM curation_resource_topics AS m WHERE m.kind = 'work' AND m.target_id = w.id
+            )
+            ORDER BY w.id
+        """)
+    ]
     return needed_assets, needed_works
 
 
-def apply(
-    conn: sqlite3.Connection,
-    needed_assets: list[tuple[str, str, dict]],
-    needed_works: list[tuple[str, str, dict]],
-) -> tuple[int, list[str]]:
-    # Normalize single lowercase mappings to uppercase where no uppercase mapping exists yet
-    conn.execute(
-        """
-        UPDATE curation_resource_topics
-        SET target_id = UPPER(target_id)
-        WHERE kind IN ('style', 'layout')
-          AND target_id <> UPPER(target_id)
-          AND NOT EXISTS (
-              SELECT 1 FROM curation_resource_topics m2
-              WHERE m2.kind = curation_resource_topics.kind
-                AND m2.target_id = UPPER(curation_resource_topics.target_id)
-          )
-        """
-    )
+def apply(conn, needed_assets: list[tuple[str, str, dict]], needed_works: list[tuple[str, str, dict]]) -> tuple[int, list[str]]:
+    conn.execute(f"""
+        UPDATE curation_resource_topics SET target_id = UPPER(target_id)
+        WHERE (kind, target_id) IN (SELECT kind, target_id FROM ({_NORMALIZABLE_MAPPINGS}) AS singleton)
+    """)
+    topic_ids = [
+        ensure_topic(conn, kind, code, resource, initial_origin="submission")
+        for kind, code, resource in needed_assets
+    ]
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for kind, work_id, resource in needed_works:
+        topic_id = ensure_topic(conn, kind, work_id, resource, initial_origin="submission", listed_at_ms=None)
+        conn.execute("""
+            INSERT INTO audit_logs (
+                actor_id, actor_username, actor_role, action, target_type, target_id,
+                reason, details_json, created_at
+            ) VALUES (NULL, 'system', 'system', 'work.prebuild_unlisted_topic', 'topic', ?, ?, ?, ?)
+        """, (
+            topic_id, f"Prebuilt unlisted topic {topic_id} for work {work_id}",
+            json.dumps({"work_id": work_id, "topic_id": topic_id}), now,
+        ))
+        topic_ids.append(topic_id)
+    return len(topic_ids), topic_ids
 
-    created_topic_ids: list[str] = []
-    for kind, target_id, res in needed_assets:
-        tid = ensure_topic(conn, kind, target_id, res, initial_origin="submission")
-        created_topic_ids.append(tid)
 
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for kind, target_id, res in needed_works:
-        tid = ensure_topic(conn, kind, target_id, res, initial_origin="submission", listed_at_ms=None)
-        try:
-            conn.execute(
-                """
-                INSERT INTO audit_logs (
-                    actor_id, actor_username, actor_role, action, target_type, target_id,
-                    reason, details_json, created_at
-                ) VALUES (NULL, 'system', 'system', 'work.prebuild_unlisted_topic', 'topic', ?, ?, ?, ?)
-                """,
-                (
-                    tid,
-                    f"Prebuilt unlisted topic {tid} for work {target_id}",
-                    json.dumps({"work_id": target_id, "topic_id": tid}, ensure_ascii=False),
-                    now_iso,
-                ),
-            )
-        except Exception:
-            pass
-        created_topic_ids.append(tid)
-
-    try:
-        from backend.generation_works import reconcile_work_topics
-        reconcile_work_topics(conn)
-    except Exception:
-        pass
-
-    conn.commit()
-    return len(created_topic_ids), created_topic_ids
+def write_manifest(path: Path, topic_ids: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "created_count": len(topic_ids),
+        "topic_ids": topic_ids,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Ensure discussion topics exist for all catalog resources and works.")
-    parser.add_argument("--db", required=True, help="Path to the SQLite database")
-    parser.add_argument("--apply", action="store_true", help="Write changes (default is a dry run)")
-    parser.add_argument("--manifest", default="", help="Path to write JSON manifest of created topic IDs")
+    parser = maintenance_parser("Ensure discussion topics exist for catalog resources and works.")
+    parser.add_argument("--manifest", type=Path, help="Path to write the topic manifest after commit")
     args = parser.parse_args(argv)
 
-    db_path = Path(args.db).resolve()
-    if not db_path.is_file():
-        print(f"数据库不存在：{db_path}", file=sys.stderr)
-        return 2
-
-    conn = _connect(db_path)
-    try:
-        dup_cases = find_case_duplicates(conn)
-        if dup_cases:
-            print("发现大小写不同的重复映射（需人工核查，不自动合并）：")
-            for d in dup_cases:
-                print(f"  {d['kind']} {d['norm_id']}: [{d['targets']}]")
-
+    topic_ids: list[str] = []
+    with maintenance_transaction(parser, write=args.apply) as (conn, dsn):
+        duplicates = find_case_duplicates(conn)
+        for row in duplicates:
+            print(f"重复映射，需人工核查：{row['kind']} {row['norm_id']} [{row['targets']}]")
         needed_assets, needed_works = plan(conn)
-        norm_mappings = find_normalizable_mappings(conn)
-        affected_exclusives = find_affected_exclusive_mappings(conn)
-        total_needed = len(needed_assets) + len(needed_works) + len(norm_mappings)
-        print(
-            f"待建讨论帖：资源 {len(needed_assets)} 个，作品 {len(needed_works)} 个，待规范化大小写映射 {len(norm_mappings)} 个 (共 {total_needed} 个)"
-        )
-        print(f"历史受影响的 exclusive 映射数：{affected_exclusives} 个")
-
+        normalized = find_normalizable_mappings(conn)
+        print(f"待建讨论帖：资源 {len(needed_assets)} 个，作品 {len(needed_works)} 个，待规范化映射 {len(normalized)} 个")
+        print(f"历史受影响的 exclusive 映射数：{find_affected_exclusive_mappings(conn)} 个")
         if not args.apply:
-            print("干跑完成，未写入。加 --apply 执行。")
+            print("检查完成。加 --apply 执行。")
             return 0
-        if total_needed == 0 and not dup_cases:
-            print("所有资源均已建立讨论帖子且映射规范，无需更新。")
-            if args.manifest:
-                manifest_path = Path(args.manifest).resolve()
-                manifest_path.parent.mkdir(parents=True, exist_ok=True)
-                manifest_data = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "created_count": 0,
-                    "topic_ids": [],
-                }
-                manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2), encoding="utf-8")
-                print(f"已写入回填清单：{manifest_path}")
-            return 0
+        if needed_assets or needed_works or normalized:
+            backup = backup_before_change(conn, dsn, args.backup_dir, "resource-topics-before")
+            print(f"已备份并通过验证：{backup}")
+            _, topic_ids = apply(conn, needed_assets, needed_works)
 
-        bak_path = backup(conn, db_path)
-        print(f"已备份并通过验证：{bak_path}")
-        created_count, created_topic_ids = apply(conn, needed_assets, needed_works)
-        print(f"已为 {created_count} 个资源创建帖子与映射（单项小写映射已规范化为大写）。")
-        if args.manifest:
-            manifest_path = Path(args.manifest).resolve()
-            manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            manifest_data = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "created_count": len(created_topic_ids),
-                "topic_ids": created_topic_ids,
-            }
-            manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"已写入回填清单：{manifest_path}")
-        return 0
-    finally:
-        conn.close()
+    if args.manifest:
+        write_manifest(args.manifest, topic_ids)
+    print(f"已为 {len(topic_ids)} 个资源建立讨论映射。")
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

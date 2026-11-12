@@ -25,7 +25,7 @@ from backend.services import (
     toggle_user_like,
     unlock_paid_item,
 )
-from ops import ensure_resource_topics
+from tests.maintenance_support import fill_resource_topics
 
 IMG = "/images/individual/FA/FA-013.webp"
 
@@ -88,7 +88,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         cls.paid_topic_id = pub_paid["topicId"]
 
         # Ensure topics for all catalog styles & layouts
-        ensure_resource_topics.main(["--db", str(cls.db_path), "--apply"])
+        fill_resource_topics(cls.db)
 
         # Fetch FB-041 topicId
         row = conn.execute(
@@ -650,7 +650,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         conn.commit()
 
         # Run ensure_resource_topics --apply
-        ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+        fill_resource_topics(self.db)
 
         with patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "1"}):
             # Check by-ref and /t/ for FX-001
@@ -694,7 +694,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
 
             # 3. Repeat run idempotency
             count_before = conn.execute("SELECT count(*) as cnt FROM curation_resource_topics").fetchone()["cnt"]
-            ensure_resource_topics.main(["--db", str(self.db_path), "--apply"])
+            fill_resource_topics(self.db)
             count_after = conn.execute("SELECT count(*) as cnt FROM curation_resource_topics").fetchone()["cnt"]
             self.assertEqual(count_before, count_after, "Repeat run must not create duplicate topics")
 

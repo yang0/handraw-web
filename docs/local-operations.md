@@ -113,6 +113,19 @@ python -m ops.refresh_content E:\handraw-style\skills\handdraw-style-prompter --
 
 `refresh_content` 仅在提供 `--sync-overrides` 时读取和更新数据库覆盖记录。
 
+### 3.6 历史评论、讨论映射与复刻计数
+
+以下命令默认只读。确认计划后加 `--apply` 执行。写入前会从同一 PostgreSQL 快照生成并检查归档，可用 `--backup-dir` 指定保存位置。
+
+```powershell
+python -m ops.converge_asset_comments
+python -m ops.converge_work_comments
+python -m ops.ensure_resource_topics --manifest .local/topic-backfill.json
+python -m ops.purge_publish_time_forks
+```
+
+`converge_asset_comments` 同时处理旧作品评论。评论复制保留可见状态与历史来源，抑制补发通知。讨论映射只规范同一编号的单条记录，重复的大小写映射保留以便核查。复刻清理按成功生成、发起人和父作品验证来源。
+
 ---
 
 ## 4. Redis 原生运维命令
@@ -209,7 +222,7 @@ $env:HANDRAW_REDIS_REQUIRED = "1"
 $env:HANDRAW_PG_STAGING_URL = "postgresql://postgres@127.0.0.1:5432/postgres"
 
 # 在独立 PostgreSQL 库运行存储、跨线程原子限流与并发扣费测试
-python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres tests.test_discourse_import tests.test_resource_redirect_transactions tests.test_postgres_operations tests.test_social_counters_postgres tests.test_v2_operations
+python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres tests.test_discourse_import tests.test_resource_redirect_transactions tests.test_postgres_operations tests.test_social_counters_postgres tests.test_v2_operations tests.test_ops_convergence
 
 # 运行 OAuth 流程测试
 python -m unittest tests/test_p2_growth_oauth.py -v

@@ -87,13 +87,14 @@ def restore_pg_archive(dsn: str, archive: Path) -> None:
         )
 
 
-def dump_snapshot(dsn: str, snapshot: str, directory: Path) -> Path:
+def dump_snapshot(dsn: str, snapshot: str, directory: Path, *, prefix: str = "social-counters-before") -> Path:
     directory = directory.resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    destination = directory / f"social-counters-before-{stamp}-{uuid4().hex[:8]}.dump"
+    destination = directory / f"{prefix}-{stamp}-{uuid4().hex[:8]}.dump"
     with TemporaryDirectory(prefix="handraw-pg-backup-", dir=directory) as temp:
         staging = Path(temp) / "snapshot.dump"
         write_pg_archive(dsn, snapshot, staging)
+        inspect_pg_archive(staging)
         staging.replace(destination)
     return destination
