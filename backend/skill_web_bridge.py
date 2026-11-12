@@ -128,9 +128,9 @@ def put_resource(db: Any, user: dict[str, Any], rid: str, body: dict[str, Any]) 
                  origin_json,visibility,schema_version,revision,created_at,updated_at)
                 VALUES (?,?,?,?,?,?,?,?,?,'private',1,1,?,?)""",
                 (rid, uid, *normalized, now, now))
-        event = tx.execute("INSERT INTO skill_resource_changes(user_id,resource_id,created_at) VALUES(?,?,?)",
+        event = tx.execute("INSERT INTO skill_resource_changes(user_id,resource_id,created_at) VALUES(?,?,?) RETURNING seq",
                            (uid, rid, now))
-        tx.execute("UPDATE skill_personal_resources SET change_seq=? WHERE id=?", (event.lastrowid, rid))
+        tx.execute("UPDATE skill_personal_resources SET change_seq=? WHERE id=?", (event.fetchone()[0], rid))
         current = tx.execute("SELECT * FROM skill_personal_resources WHERE id=?", (rid,)).fetchone()
     return {"ok": True, "resource": _resource(current)}
 
@@ -166,8 +166,8 @@ def delete_resource(db: Any, user: dict[str, Any], rid: str, body_revision: str)
             now = utc_now_iso()
             tx.execute("UPDATE skill_personal_resources SET deleted_at=?,updated_at=?,revision=revision+1 WHERE id=?",
                        (now, now, rid))
-            event=tx.execute("INSERT INTO skill_resource_changes(user_id,resource_id,created_at) VALUES(?,?,?)",(uid,rid,now))
-            tx.execute("UPDATE skill_personal_resources SET change_seq=? WHERE id=?", (event.lastrowid,rid))
+            event=tx.execute("INSERT INTO skill_resource_changes(user_id,resource_id,created_at) VALUES(?,?,?) RETURNING seq",(uid,rid,now))
+            tx.execute("UPDATE skill_personal_resources SET change_seq=? WHERE id=?", (event.fetchone()[0],rid))
         current=tx.execute("SELECT * FROM skill_personal_resources WHERE id=?", (rid,)).fetchone()
     return {"ok": True, "resource": _resource(current)}
 

@@ -272,7 +272,7 @@ def get_works_feed(
 
     # Author filter
     if author:
-        base_clauses.append("w.author_username = ? COLLATE NOCASE")
+        base_clauses.append("LOWER(w.author_username) = LOWER(?)")
         base_params.append(author)
 
     # Asset code filter (styles or layout)

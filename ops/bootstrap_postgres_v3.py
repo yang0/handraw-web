@@ -28,6 +28,7 @@ MIGRATIONS = (
     ROOT / "backend" / "postgres_112_cold_start_registry.sql",
     ROOT / "backend" / "postgres_113_forum_reply_notifications.sql",
     ROOT / "backend" / "postgres_114_growth_events.sql",
+    ROOT / "backend" / "postgres_115_published_author_feed.sql",
 )
 
 

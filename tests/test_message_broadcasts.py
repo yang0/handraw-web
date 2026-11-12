@@ -17,17 +17,15 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
 from http.server import ThreadingHTTPServer
-from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from tests.legacy_database import Database
 from backend.messaging import (
     send_message_broadcast,
     withdraw_message_broadcast,
@@ -35,16 +33,16 @@ from backend.messaging import (
     mark_message_broadcast_read,
     get_messages_unread_summary,
 )
-from tests.legacy_database import init_legacy_database
-from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
+from backend.seed import ensure_seeded
+from tests.postgres_support import isolated_pg_dsn, open_isolated_postgres
+from backend.server import HandrawRequestHandler, init_database, SESSION_COOKIE_NAME
 from backend.services import register_user, ServiceError
 
 
 class MessageBroadcastTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_broadcasts.db"
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
 
         # Create admin, operator, and standard users
         self.admin, _ = register_user(self.db, "admin_user", "AdminPass123!", display_name="超级管理员")
@@ -60,10 +58,6 @@ class MessageBroadcastTests(unittest.TestCase):
         self.u1, _ = register_user(self.db, "user_one", "Pass123!", display_name="用户一")
         self.u2, _ = register_user(self.db, "user_two", "Pass123!", display_name="用户二")
         self.u3, _ = register_user(self.db, "user_three", "Pass123!", display_name="用户三")
-
-    def tearDown(self):
-        self.db.close()
-        self.temp_dir.cleanup()
 
     def test_broadcast_row_growth_strictly_one_no_fanout(self):
         """CRITICAL: Assert sending a broadcast inserts exactly 1 row into message_broadcasts,
@@ -216,10 +210,11 @@ class MessageBroadcastTests(unittest.TestCase):
         self.assertEqual(ctx_min.exception.code, "rate_limited_minute")
 
         # Age the 1st broadcast by 2 minutes in DB to bypass minute limit
+        past = (datetime.now(timezone.utc) - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.db.transaction() as tx:
             tx.execute(
-                "UPDATE message_broadcasts SET published_at = datetime('now', '-2 minutes') WHERE id = ?",
-                (res1["broadcast"]["id"],),
+                "UPDATE message_broadcasts SET published_at = ? WHERE id = ?",
+                (past, res1["broadcast"]["id"]),
             )
 
         # 2nd broadcast now succeeds
@@ -231,7 +226,7 @@ class MessageBroadcastTests(unittest.TestCase):
         # Add 3 more broadcasts (aging each) to reach 5/day
         for i in range(3, 6):
             with self.db.transaction() as tx:
-                tx.execute("UPDATE message_broadcasts SET published_at = datetime('now', '-2 minutes')")
+                tx.execute("UPDATE message_broadcasts SET published_at = ?", (past,))
             res_i = send_message_broadcast(
                 self.db, self.admin, {"title": f"公告第{i}条", "body": "正文", "requestId": f"req_rate_{i}"}
             )
@@ -239,7 +234,7 @@ class MessageBroadcastTests(unittest.TestCase):
 
         # 6th broadcast fails with 429 (5/day limit)
         with self.db.transaction() as tx:
-            tx.execute("UPDATE message_broadcasts SET published_at = datetime('now', '-2 minutes')")
+            tx.execute("UPDATE message_broadcasts SET published_at = ?", (past,))
         with self.assertRaises(ServiceError) as ctx_day:
             send_message_broadcast(
                 self.db, self.admin, {"title": "公告第6条", "body": "正文", "requestId": "req_rate_6"}
@@ -262,9 +257,10 @@ class MessageBroadcastTests(unittest.TestCase):
 
         # 2. New user registers AFTER T1
         late_user, _ = register_user(self.db, "late_comer", "Pass123!", display_name="晚加入者")
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.db.transaction() as tx:
             # Explicitly set created_at to 1 hour in the future relative to audience_cutoff
-            tx.execute("UPDATE users SET created_at = datetime('now', '+1 hour') WHERE id = ?", (late_user["id"],))
+            tx.execute("UPDATE users SET created_at = ? WHERE id = ?", (future, late_user["id"]))
 
         conn = self.db.get_conn()
         late_row = conn.execute("SELECT * FROM users WHERE id = ?", (late_user["id"],)).fetchone()
@@ -333,29 +329,20 @@ class MessageBroadcastHTTPTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.port = 3105
-        cls.base_url = f"http://127.0.0.1:{cls.port}"
-        cls.temp_dir = tempfile.TemporaryDirectory()
-        cls.db_path = Path(cls.temp_dir.name) / "http_broadcasts.db"
-
-        cls.env_patch = {
-            "HANDRAW_DB_PATH": str(cls.db_path),
-            "HANDRAW_DEMO_MODE": "1",
-            "HANDRAW_ALLOWED_ORIGINS": f"http://127.0.0.1:{cls.port}",
-        }
-        cls.old_env = {}
-        for k, v in cls.env_patch.items():
-            cls.old_env[k] = os.environ.get(k)
-            os.environ[k] = v
-
-        cls.db = init_legacy_database(cls.db_path)
+        if not os.environ.get("HANDRAW_PG_STAGING_URL"):
+            raise unittest.SkipTest("Isolated PostgreSQL staging URL not provided")
+        cls.enterClassContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "1"}))
+        cls.db = init_database(cls.enterClassContext(isolated_pg_dsn()))
+        cls.addClassCleanup(cls.db.close)
         cls.admin, cls.token_admin = register_user(cls.db, "http_admin", "Password123!", display_name="超级管理员")
         with cls.db.transaction() as tx:
             tx.execute("UPDATE users SET role = 'admin' WHERE id = ?", (cls.admin["id"],))
 
         cls.user, cls.token_user = register_user(cls.db, "http_user", "Password123!", display_name="普通用户")
 
-        cls.httpd = ThreadingHTTPServer(("127.0.0.1", cls.port), HandrawRequestHandler)
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
+        cls.base_url = f"http://127.0.0.1:{cls.httpd.server_port}"
+        cls.enterClassContext(patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": cls.base_url}))
         cls.httpd.channel_role = "main"  # type: ignore[attr-defined]
         cls.httpd.db = cls.db  # type: ignore[attr-defined]
         cls.httpd.allow_demo_routes = True  # type: ignore[attr-defined]
@@ -367,13 +354,7 @@ class MessageBroadcastHTTPTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
-        cls.db.close()
-        cls.temp_dir.cleanup()
-        for k in cls.env_patch:
-            if cls.old_env.get(k) is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = cls.old_env[k]
+        cls.thread.join(timeout=5)
 
     def _req(self, method: str, path: str, token: str | None = None, body: dict[str, Any] | None = None):
         url = f"{self.base_url}{path}"

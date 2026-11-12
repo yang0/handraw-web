@@ -737,11 +737,11 @@ def grant_access(db: Database, user: dict[str, Any], body: dict[str, Any]) -> di
     results: list[dict[str, Any]] = []
     with db.transaction() as tx:
         for name in usernames:
-            exists = tx.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (name,)).fetchone()
-            if not exists:
+            account = tx.execute("SELECT username FROM users WHERE username = ?", (name,)).fetchone()
+            if not account:
                 results.append({"username": name, "ok": False, "error": "user_not_found"})
                 continue
-            real_name = str(tx.execute("SELECT username FROM users WHERE username = ? COLLATE NOCASE", (name,)).fetchone()["username"])
+            real_name = str(account["username"])
             for kind in kinds:
                 row = tx.execute(
                     "SELECT * FROM curation_review_access WHERE username = ? AND kind = ?",
@@ -842,7 +842,7 @@ def review_queue(db, user):
         old=tx.execute("SELECT * FROM curation_assignments WHERE reviewer_username=? AND status='active' ORDER BY created_at LIMIT 1",(reviewer,)).fetchone()
         if old:
             return {'ok':True,'access':eligible,'assignment':_assignment_view(tx,dict(old),_submission_row(tx,old['submission_id']))}
-        pending=tx.execute("SELECT * FROM curation_submissions WHERE status='pending' AND owner_username!=? COLLATE NOCASE ORDER BY created_at,id",(reviewer,)).fetchall()
+        pending=tx.execute("SELECT * FROM curation_submissions WHERE status='pending' AND LOWER(owner_username) <> LOWER(?) ORDER BY created_at,id",(reviewer,)).fetchall()
         for r in pending:
             sub=dict(r)
             if sub['kind'] not in eligible:
@@ -1017,7 +1017,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
     owner = sub["owner_username"]
     target_id = str(sub["target_id"])
     owner_row = tx.execute(
-        "SELECT id, display_name, honor_override FROM users WHERE username = ? COLLATE NOCASE",
+        "SELECT id, display_name, honor_override FROM users WHERE username = ?",
         (owner,),
     ).fetchone()
     owner_uid = int(owner_row["id"]) if owner_row else int(sub["owner_user_id"])
@@ -1708,7 +1708,7 @@ def publish_work_direct(
                 return _work_receipt(tx, wid, topic_id=topic_id, deduplicated=True)
 
         owner_row = tx.execute(
-            "SELECT id, display_name, honor_override FROM users WHERE username = ? COLLATE NOCASE",
+            "SELECT id, display_name, honor_override FROM users WHERE username = ?",
             (username,),
         ).fetchone()
         display = str(owner_row["display_name"]) if owner_row else username
@@ -1807,7 +1807,7 @@ def publish_work_direct(
                 (now_ms, now_iso, topic_id),
             )
         tx.execute(
-            "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
+            "INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?) ON CONFLICT DO NOTHING",
             (work_id, topic_id, now_iso),
         )
         reward_info = _reward_direct_work(
@@ -1907,7 +1907,7 @@ def _reward_direct_work(
 
     settings = get_site_settings(tx)
     econ = settings.get("economy", {})
-    owner_row = tx.execute("SELECT id, honor_override FROM users WHERE username = ? COLLATE NOCASE", (username,)).fetchone()
+    owner_row = tx.execute("SELECT id, honor_override FROM users WHERE username = ?", (username,)).fetchone()
     owner_uid = int(owner_row["id"]) if owner_row else int(uid)
     override = honor_override if honor_override is not None else (owner_row["honor_override"] if owner_row else None)
 
@@ -2018,7 +2018,7 @@ def _work_receipt(
     reward = 0
     if owner:
         owner_row = tx.execute(
-            "SELECT w.balance AS balance FROM wallets w JOIN users u ON u.id = w.user_id WHERE u.username = ? COLLATE NOCASE",
+            "SELECT w.balance AS balance FROM wallets w JOIN users u ON u.id = w.user_id WHERE u.username = ?",
             (owner,),
         ).fetchone()
         credits = int(owner_row["balance"]) if owner_row else 0

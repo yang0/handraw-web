@@ -1,6 +1,6 @@
 """Skill/Web v1 contract tests: private by default, scoped, idempotent.
 
-All data are disposable SQLite fixtures; no user or production resources.
+All data are disposable PostgreSQL fixtures; no user or production resources.
 """
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from tests.legacy_database import init_legacy_database
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
 from backend.server import HandrawRequestHandler
 from backend.services import register_user, publish_user_work, ServiceError
 from backend import skill_web_bridge as bridge
@@ -32,7 +33,6 @@ class SkillWebBridgeTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
         env = patch.dict(os.environ, {
-            "HANDRAW_DB_PATH": str(root / "test.db"),
             "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
             "HANDRAW_GENERATED_DIR": str(root / "generated"),
             "HANDRAW_DEMO_MODE": "1",
@@ -40,8 +40,8 @@ class SkillWebBridgeTests(unittest.TestCase):
         })
         env.start()
         self.addCleanup(env.stop)
-        self.db = init_legacy_database(root / "test.db")
-        self.addCleanup(self.db.close)
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
         self.owner, _ = register_user(self.db, "skill_owner", "Password123!", display_name="创作者")
         self.other, _ = register_user(self.db, "skill_other", "Password123!", display_name="另一位用户")
 
@@ -312,10 +312,8 @@ class SkillWebBridgeTests(unittest.TestCase):
 
     def test_new_database_has_no_legacy_skill_generation_tables(self):
         conn = self.db.get_conn()
-        from tests.legacy_migrations import POST_MIGRATION_HOOKS
-        self.assertNotIn(98, POST_MIGRATION_HOOKS)
         names = {row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
         )}
         for table in (
             "skill_generation_runs", "skill_generation_work_items",

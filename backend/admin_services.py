@@ -2868,11 +2868,11 @@ def admin_create_user(
             INSERT INTO users (
                 username, display_name, email, password_hash, password_algo,
                 role, status, bio, invite_code, api_key, created_at, last_login_at
-            ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', ?, 'active', ?, ?, ?, ?, '')
+            ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', ?, 'active', ?, ?, ?, ?, '') RETURNING id
             """,
             (uname, dname, email, hash_password(raw_pw), role, bio, uname, None, now_iso),
         )
-        uid = int(cur.lastrowid)
+        uid = int(cur.fetchone()[0])
         tx.execute(
             "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
             (uid, now_iso),

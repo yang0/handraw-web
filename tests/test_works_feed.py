@@ -4,15 +4,12 @@ from __future__ import annotations
 import json
 import os
 from unittest.mock import patch
-from pathlib import Path
-import sqlite3
-import tempfile
 import time
 from typing import Any
 import unittest
 
-from tests.legacy_database import init_legacy_database
-from backend import server
+from backend.postgres_db import PgConnection
+from tests.postgres_support import open_isolated_postgres
 from backend.services import (
     _seed_filter,
     publish_user_work,
@@ -29,7 +26,7 @@ from backend.works_feed import (
 
 
 def _insert_work(
-    conn: sqlite3.Connection,
+    conn: PgConnection,
     *,
     wid: str,
     title: str = "测试作品",
@@ -89,23 +86,11 @@ def _insert_work(
 class TestWorksFeed(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
-        self.tmp_dir = tempfile.TemporaryDirectory()
-        self.test_db = init_legacy_database(Path(self.tmp_dir.name) / "feed_test.db")
-        # Insert test users
-        with self.test_db.transaction() as tx:
-            tx.execute(
-                "INSERT OR IGNORE INTO users (id, username, display_name, role, status) VALUES (1, 'author_alice', '爱丽丝', 'user', 'active')"
-            )
-            tx.execute(
-                "INSERT OR IGNORE INTO users (id, username, display_name, role, status) VALUES (2, 'author_bob', '鲍勃', 'user', 'active')"
-            )
-            tx.execute(
-                "INSERT OR IGNORE INTO users (id, username, display_name, role, status) VALUES (3, 'admin_yang', '小杨', 'admin', 'active')"
-            )
-
-    def tearDown(self):
-        self.test_db.close()
-        self.tmp_dir.cleanup()
+        self.test_db = open_isolated_postgres(self)
+        register_user(self.test_db, "author_alice", "test-password!", display_name="爱丽丝")
+        register_user(self.test_db, "author_bob", "test-password!", display_name="鲍勃")
+        admin, _ = register_user(self.test_db, "admin_yang", "test-password!", display_name="小杨")
+        self.test_db.get_conn().execute("UPDATE users SET role = 'admin' WHERE id = ?", (admin["id"],))
 
     def test_admission_rules(self):
         conn = self.test_db.get_conn()
@@ -142,7 +127,6 @@ class TestWorksFeed(unittest.TestCase):
             )
             """
         )
-        conn.commit()
 
         feed = get_works_feed(self.test_db, {"sort": "newest", "limit": 20})
         self.assertTrue(feed["ok"])
@@ -176,13 +160,12 @@ class TestWorksFeed(unittest.TestCase):
                 published_at_ms=1000 + i * 10,
                 images=[f"/img_{i}.png"],
             )
-        conn.commit()
 
         all_fetched_ids: list[str] = []
         cursor = None
 
         while True:
-            params: dict[str, Any] = {"sort": "newest", "limit": 12, "author": "author_alice"}
+            params: dict[str, Any] = {"sort": "newest", "limit": 12, "author": "AuThOr_AlIcE"}
             if cursor:
                 params["cursor"] = cursor
             res = get_works_feed(self.test_db, params)
@@ -226,7 +209,6 @@ class TestWorksFeed(unittest.TestCase):
                 favorites=i,
                 cheers=i * 3,
             )
-        conn.commit()
 
         # First page: initialize frozen popular session
         page1 = get_works_feed(self.test_db, {"sort": "popular", "limit": 10, "author": "author_bob"})
@@ -239,7 +221,6 @@ class TestWorksFeed(unittest.TestCase):
         # Simulate concurrent mutations: another user likes/favorites items in page 2 and page 3
         conn.execute("UPDATE works SET likes = likes + 1000, favorites = favorites + 500 WHERE id = 'pop_05'")
         conn.execute("UPDATE works SET likes = likes + 2000, favorites = favorites + 800 WHERE id = 'pop_15'")
-        conn.commit()
 
         # Second page: should read from frozen session with cursor, immune to live score changes
         page2 = get_works_feed(self.test_db, {"sort": "popular", "limit": 10, "author": "author_bob", "cursor": next_cursor})
@@ -262,7 +243,6 @@ class TestWorksFeed(unittest.TestCase):
         _insert_work(conn, wid="w_f1", title="猫咪单图", author="author_alice", prompt="猫咪", images=["/cat.png"], styles=["FA-001"], price=0, published_at_ms=10)
         _insert_work(conn, wid="w_f2", title="猫咪多图", author="author_alice", prompt="猫咪", images=["/cat1.png", "/cat2.png"], layout="SC-001", price=5, published_at_ms=20)
         _insert_work(conn, wid="w_f3", title="小狗单图", author="author_bob", prompt="小狗", images=["/dog.png"], styles=["FA-002"], price=0, published_at_ms=30)
-        conn.commit()
 
         # Format filter
         single_res = get_works_feed(self.test_db, {"format": "single", "author": "author_alice"})
@@ -335,7 +315,6 @@ class TestWorksFeed(unittest.TestCase):
     def test_dimensions_enrichment(self):
         conn = self.test_db.get_conn()
         _insert_work(conn, wid="w_dims", title="比例作品", ratio="16:9", images=["/uploads/nonexistent_dummy.png"])
-        conn.commit()
 
         res = get_works_feed(self.test_db, {"ids": "w_dims"})
         self.assertTrue(res["ok"])
@@ -353,7 +332,6 @@ class TestWorksFeed(unittest.TestCase):
     def test_get_work_by_id(self):
         conn = self.test_db.get_conn()
         _insert_work(conn, wid="w_single_detail", title="单件作品", prompt="细节描述", price=0, prompt_has_secret=0)
-        conn.commit()
 
         # Published work found
         detail = get_work_by_id(self.test_db, "w_single_detail")

@@ -20,7 +20,6 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import Database
 from backend.db import utc_now_iso
 from backend.messaging import (
     block_user,
@@ -31,15 +30,15 @@ from backend.messaging import (
     send_direct_message,
     unblock_user,
 )
-from tests.legacy_database import init_legacy_database
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
 from backend.services import ServiceError, register_user, submit_abuse_report
 
 
 class DirectMessagingTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_dm.db"
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
 
         # Register users for testing
         self.alice, _ = register_user(self.db, "alice_dm", "password123")
@@ -50,10 +49,6 @@ class DirectMessagingTests(unittest.TestCase):
         with self.db.transaction() as tx:
             tx.execute("UPDATE users SET role = 'admin' WHERE id = ?", (self.admin["id"],))
         self.admin["role"] = "admin"
-
-    def tearDown(self):
-        self.db.close()
-        self.temp_dir.cleanup()
 
     def test_anti_replay_same_client_message_id(self):
         """Same clientMessageId should only write once and return the existing message."""
@@ -156,10 +151,11 @@ class DirectMessagingTests(unittest.TestCase):
 
         # Test 100 msgs/day
         # Simulate moving past 1-minute window by updating created_at on previous 10 messages
+        past = (datetime.now(timezone.utc) - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.db.transaction() as tx:
             tx.execute(
-                "UPDATE dm_messages SET created_at = datetime(created_at, '-2 minutes') WHERE sender_id = ?",
-                (self.alice["id"],),
+                "UPDATE dm_messages SET created_at = ? WHERE sender_id = ?",
+                (past, self.alice["id"]),
             )
 
         # Now insert up to 100 messages total for today
@@ -167,13 +163,12 @@ class DirectMessagingTests(unittest.TestCase):
             "SELECT COUNT(*) FROM dm_messages WHERE sender_id = ?", (self.alice["id"],)
         ).fetchone()[0]
         needed = 100 - current_count
-        now_iso = utc_now_iso()
         with self.db.transaction() as tx:
             for i in range(needed):
                 tx.execute(
                     "INSERT INTO dm_messages (conversation_id, sender_id, body, client_message_id, created_at) "
-                    "VALUES (1, ?, ?, ?, datetime('now', '-5 minutes'))",
-                    (self.alice["id"], f"bulk_{i}", f"cm_bulk_{i}"),
+                    "VALUES (1, ?, ?, ?, ?)",
+                    (self.alice["id"], f"bulk_{i}", f"cm_bulk_{i}", past),
                 )
 
         # 101st message today should be rejected with 429
@@ -194,10 +189,11 @@ class DirectMessagingTests(unittest.TestCase):
             self.assertTrue(res["ok"])
 
         # Age Charlie's previous messages past the 1-minute window
+        past = (datetime.now(timezone.utc) - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.db.transaction() as tx:
             tx.execute(
-                "UPDATE dm_messages SET created_at = datetime(created_at, '-2 minutes') WHERE sender_id = ?",
-                (self.charlie["id"],),
+                "UPDATE dm_messages SET created_at = ? WHERE sender_id = ?",
+                (past, self.charlie["id"]),
             )
 
         # Charlie messaging an existing contact (e.g. contact_0 again) is allowed
@@ -371,22 +367,19 @@ class DirectMessagingHTTPTests(unittest.TestCase):
         from http.server import ThreadingHTTPServer
         from backend.server import HandrawRequestHandler
 
-        self.temp_dir = tempfile.TemporaryDirectory()
-        root = Path(self.temp_dir.name)
-        self.db_path = root / "http_dm_test.db"
-        self.env = patch.dict(
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
                 "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test",
                 "HANDRAW_ENABLE_RECHARGE": "0",
             },
-        )
-        self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        ))
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -406,9 +399,6 @@ class DirectMessagingHTTPTests(unittest.TestCase):
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(timeout=5)
-        self.db.close()
-        self.env.stop()
-        self.temp_dir.cleanup()
 
     def _login(self, username: str) -> str:
         status, headers, _ = self.request(

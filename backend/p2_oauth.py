@@ -352,9 +352,9 @@ def complete_github(handler: Any, qs: dict[str, list[str]]) -> None:
             if other and other["provider_user_id"] != subject:
                 raise ServiceError("该账号已绑定其他 GitHub 身份，请先解除旧绑定", status=409)
             tx.execute(
-                """INSERT OR IGNORE INTO oauth_identities
+                """INSERT INTO oauth_identities
                    (provider,provider_user_id,user_id,provider_login,linked_at)
-                   VALUES('github',?,?,?,?)""",
+                   VALUES('github',?,?,?,?) ON CONFLICT DO NOTHING""",
                 (subject, user["id"], identity["login"], utc_now_iso()),
             )
             tx.execute(

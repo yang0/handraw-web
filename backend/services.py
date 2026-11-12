@@ -515,11 +515,11 @@ def register_user(
             INSERT INTO users (
                 username, display_name, email, password_hash, password_algo,
                 role, status, bio, invite_code, invited_by, api_key, created_at, last_login_at, nickname_locked
-            ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', 'user', 'active', 'Handraw 新锐社区创作者', ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', 'user', 'active', 'Handraw 新锐社区创作者', ?, ?, ?, ?, ?, ?) RETURNING id
             """,
             (uname, dname, clean_email, pw_hash, uname, inviter_row["username"] if inviter_row else "", api_key or None, now_iso, now_iso, 1),
         )
-        uid = int(cur.lastrowid)
+        uid = int(cur.fetchone()[0])
         tx.execute(
             "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
             (uid, now_iso),
@@ -2721,7 +2721,7 @@ def toggle_user_collection(
             norm_type, table = ("work", "works") if bucket == "works" else ("topic", "forum_topics")
             if counter_delta:
                 count_row = tx.execute(
-                    f"UPDATE {table} SET favorites = MAX(0, favorites + ?) WHERE id = ? RETURNING favorites",
+                    f"UPDATE {table} SET favorites = GREATEST(0, favorites + ?) WHERE id = ? RETURNING favorites",
                     (counter_delta, tid),
                 ).fetchone()
             else:
@@ -3167,7 +3167,7 @@ def toggle_user_like(
             table = "works" if norm_type == "work" else "forum_topics"
             if counter_delta:
                 count_row = tx.execute(
-                    f"UPDATE {table} SET likes = MAX(0, likes + ?) WHERE id = ? RETURNING likes",
+                    f"UPDATE {table} SET likes = GREATEST(0, likes + ?) WHERE id = ? RETURNING likes",
                     (counter_delta, tid),
                 ).fetchone()
             else:
@@ -3261,14 +3261,14 @@ def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, targ
 
         if target_type == "work":
             row = tx.execute(
-                "UPDATE works SET cheers = MAX(0, cheers + ?) WHERE id = ? RETURNING cheers", (delta, tid),
+                "UPDATE works SET cheers = GREATEST(0, cheers + ?) WHERE id = ? RETURNING cheers", (delta, tid),
             ).fetchone()
             if not row:
                 raise ServiceError("未找到目标内容", status=404)
             new_cheers = int(row["cheers"])
         elif target:
             row = tx.execute(
-                "UPDATE catalog_assets SET cheers = MAX(0, cheers + ?) WHERE code = ? RETURNING cheers",
+                "UPDATE catalog_assets SET cheers = GREATEST(0, cheers + ?) WHERE code = ? RETURNING cheers",
                 (delta, target["id"]),
             ).fetchone()
             if not row:
@@ -6588,7 +6588,7 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) ->
             # outside today's counter and must not reduce the new day's quota.
             if reservation_date == today:
                 tx.execute(
-                    "UPDATE wallets SET free_quota_used = MAX(0, free_quota_used - ?), updated_at = ? WHERE user_id = ? AND free_quota_date = ?",
+                    "UPDATE wallets SET free_quota_used = GREATEST(0, free_quota_used - ?), updated_at = ? WHERE user_id = ? AND free_quota_date = ?",
                     (units, now_iso, uid, reservation_date),
                 )
         elif int(row["credits_spent"] or 0) > 0:
@@ -6687,9 +6687,9 @@ def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_url
                         continue
                     tx.execute(
                         """
-                        INSERT OR IGNORE INTO studio_generation_media
+                        INSERT INTO studio_generation_media
                             (id, generation_id, user_id, media_url, media_kind, storage_path, visibility, created_at)
-                        VALUES (?, ?, ?, ?, 'generated', ?, 'private', ?)
+                        VALUES (?, ?, ?, ?, 'generated', ?, 'private', ?) ON CONFLICT DO NOTHING
                         """,
                         (
                             f"gm_{gen_id}_{idx}",
@@ -7058,11 +7058,11 @@ def import_discourse_users_batch(
                     username, display_name, email, password_hash, password_algo,
                     discourse_salt, discourse_user_id, role, status, bio,
                     invite_code, api_key, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', '原 Discourse 社区老用户迁移账号', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', '原 Discourse 社区老用户迁移账号', ?, ?, ?) RETURNING id
                 """,
                 (uname, dname, email, pw_hash, pw_algo, disc_salt, disc_id, role, uname, api_key or None, created_at),
             )
-            uid = int(cur.lastrowid)
+            uid = int(cur.fetchone()[0])
             tx.execute(
                 "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
                 (uid, now_iso),

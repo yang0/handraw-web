@@ -351,7 +351,7 @@ def comment(db,user,kind,target_id,text,request_id=None):
                 if existing_topic:
                     tid = str(existing_topic["id"])
                     tx.execute(
-                        "INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?)",
+                        "INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'submission', ?) ON CONFLICT DO NOTHING",
                         (target, tid, S.utc_now_iso()),
                     )
                 else:

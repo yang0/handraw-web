@@ -316,7 +316,7 @@ def _calibrate_seed_period_horizons(db: Database) -> None:
             )
         # Ensure historical Hall-of-Fame flagship work_101 reflects cumulative multi-month engagement
         tx.execute(
-            "UPDATE works SET cheers = MAX(cheers, 238), likes = MAX(likes, 356), favorites = MAX(favorites, 310), forks = MAX(forks, 136) WHERE id = 'work_101'"
+            "UPDATE works SET cheers = GREATEST(cheers, 238), likes = GREATEST(likes, 356), favorites = GREATEST(favorites, 310), forks = GREATEST(forks, 136) WHERE id = 'work_101'"
         )
         for code, (days_ago, lbl, is_new) in SEED_ASSET_TIMELINE_DAYS.items():
             pub_ms = now_ms - int(days_ago * 86_400_000)
@@ -349,8 +349,8 @@ def _seed_default_forum_moderators(db: Database) -> None:
             if urow:
                 tx.execute(
                     """
-                    INSERT OR IGNORE INTO forum_moderators (user_id, username, category, title, appointed_by, note, created_at)
-                    VALUES (?, ?, ?, ?, 'yang0', ?, ?)
+                    INSERT INTO forum_moderators (user_id, username, category, title, appointed_by, note, created_at)
+                    VALUES (?, ?, ?, ?, 'yang0', ?, ?) ON CONFLICT DO NOTHING
                     """,
                     (int(urow["id"]), urow["username"], cat, title, note, now_iso),
                 )
@@ -400,8 +400,8 @@ def _seed_default_asset_social(db: Database) -> None:
         for cid, code, kind, uname, aname, txt, tlabel in sample_comments:
             tx.execute(
                 """
-                INSERT OR IGNORE INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'published', ?, ?)
+                INSERT INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'published', ?, ?) ON CONFLICT DO NOTHING
                 """,
                 (cid, code, kind, uname, aname, txt, tlabel, now_iso),
             )
@@ -424,11 +424,11 @@ def _seed_default_operator_user(db: Database) -> None:
             INSERT INTO users (
                 username, display_name, email, password_hash, password_algo,
                 role, status, bio, invite_code, api_key, created_at, last_login_at
-            ) VALUES ('ops_lin', '林运营 · 社区增长官', 'ops_lin@handraw-style.com', ?, 'pbkdf2_sha256', 'operator', 'active', 'Handraw 社区活动、榜单与兑换码增长运营', 'ops_lin', ?, ?, ?)
+            ) VALUES ('ops_lin', '林运营 · 社区增长官', 'ops_lin@handraw-style.com', ?, 'pbkdf2_sha256', 'operator', 'active', 'Handraw 社区活动、榜单与兑换码增长运营', 'ops_lin', ?, ?, ?) RETURNING id
             """,
             (pw_hash, generate_api_key(), now_iso, now_iso),
         )
-        uid = int(cur.lastrowid)
+        uid = int(cur.fetchone()[0])
         tx.execute(
             "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 160, '', 0, '', 0, ?)",
             (uid, now_iso),
@@ -455,7 +455,7 @@ def _ensure_default_site_settings(db: Database) -> None:
     with db.transaction() as tx:
         for key, value in DEFAULT_SITE_SETTINGS.items():
             tx.execute(
-                "INSERT OR IGNORE INTO site_settings (key, value_json, updated_by, updated_at) VALUES (?, ?, 'system', ?)",
+                "INSERT INTO site_settings (key, value_json, updated_by, updated_at) VALUES (?, ?, 'system', ?) ON CONFLICT DO NOTHING",
                 (key, json.dumps(value, ensure_ascii=False), now_iso),
             )
 
@@ -566,7 +566,7 @@ def ensure_seeded(db: Database, force_reset: bool = False) -> None:
                 INSERT INTO users (
                     username, display_name, email, password_hash, password_algo,
                     role, status, bio, invite_code, api_key, created_at, last_login_at
-                ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', ?, 'active', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'pbkdf2_sha256', ?, 'active', ?, ?, ?, ?, ?) RETURNING id
                 """,
                 (
                     uname,
@@ -581,7 +581,7 @@ def ensure_seeded(db: Database, force_reset: bool = False) -> None:
                     now_iso,
                 ),
             )
-            uid = int(cur.lastrowid)
+            uid = int(cur.fetchone()[0])
             user_id_by_username[uname] = uid
             tx.execute(
                 """
@@ -822,15 +822,15 @@ def ensure_seeded(db: Database, force_reset: bool = False) -> None:
         for bucket, id_list in init_cols.items():
             for tid in id_list or []:
                 tx.execute(
-                    "INSERT OR IGNORE INTO collections (user_id, bucket, target_id, created_at) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO collections (user_id, bucket, target_id, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
                     (yang_id, bucket, str(tid), now_iso),
                 )
 
         for unlocked_id in seed_raw.get("initialUnlockedIds") or []:
             tx.execute(
                 """
-                INSERT OR IGNORE INTO unlocks (user_id, author_username, target_type, target_id, cost, author_share, status, created_at)
-                VALUES (?, 'ip_maker', 'work', ?, 10, 8, 'settled', ?)
+                INSERT INTO unlocks (user_id, author_username, target_type, target_id, cost, author_share, status, created_at)
+                VALUES (?, 'ip_maker', 'work', ?, 10, 8, 'settled', ?) ON CONFLICT DO NOTHING
                 """,
                 (yang_id, str(unlocked_id), now_iso),
             )

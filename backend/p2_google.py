@@ -180,9 +180,9 @@ def complete_google(handler: Any, qs: dict[str, list[str]]) -> None:
             if current and current["provider_user_id"] != subject:
                 raise ServiceError("此账号已有其他 Google 身份绑定", status=409)
             tx.execute(
-                """INSERT OR IGNORE INTO oauth_identities
+                """INSERT INTO oauth_identities
                    (provider,provider_user_id,user_id,provider_login,linked_at)
-                   VALUES('google',?,?,?,?)""",
+                   VALUES('google',?,?,?,?) ON CONFLICT DO NOTHING""",
                 (subject, user["id"], identity["email"], utc_now_iso())
             )
             tx.execute(

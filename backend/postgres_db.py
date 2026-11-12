@@ -4,10 +4,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import re
 import threading
 from contextlib import contextmanager
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 from psycopg import connect, sql
 from psycopg.conninfo import conninfo_to_dict
@@ -18,7 +17,7 @@ from .observability import local_debug_stacks_enabled, sanitize_log_text
 
 
 class HybridRow(dict):
-    """SQL row supports both sqlite3.Row['name'] and sqlite3.Row[0]."""
+    """A result row with named and positional column access."""
 
     def __getitem__(self, key):
         if isinstance(key, int):
@@ -26,8 +25,9 @@ class HybridRow(dict):
         return super().__getitem__(key)
 
 
+@lru_cache(maxsize=512)
 def _placeholders(query: str) -> str:
-    """Translate SQLite qmarks only outside SQL string/comment literals."""
+    """Bind positional parameters outside SQL strings and comments."""
     buf = []
     i = 0
     mode = ""
@@ -72,78 +72,11 @@ def _placeholders(query: str) -> str:
     return "".join(buf)
 
 
-def _rewrite(query: str) -> str:
-    q = _placeholders(query)
-    if re.search(r"\b(PRAGMA|sqlite_master|last_insert_rowid|executescript)\b", q, re.I):
-        raise ValueError("Unsupported SQLite-specific SQL in PostgreSQL runtime")
-    ignore = bool(re.match(r"\s*INSERT\s+OR\s+IGNORE\s+INTO\b", q, re.I))
-    if ignore:
-        q = re.sub(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", "INSERT INTO", q, count=1, flags=re.I)
-        if "ON CONFLICT" not in q.upper():
-            q = q.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
-    if re.search(r"\bINSERT\s+OR\s+REPLACE\b", q, re.I):
-        raise ValueError("INSERT OR REPLACE requires an explicit UPSERT before PG deployment")
-    # The development schema uses SQLite's built-in NOCASE collation. On PG,
-    # make explicit case-insensitive comparisons rather than requiring a
-    # non-portable ICU collation installed by the database administrator.
-    case_cmp = re.compile(
-        r"\b([A-Za-z_][A-Za-z0-9_.]*)\s*(=|!=|<>)\s*(%s)\s+COLLATE\s+NOCASE\b",
-        re.I,
-    )
-    q = case_cmp.sub(
-        lambda m: f"lower({m.group(1)}::text) {m.group(2)} lower({m.group(3)}::text)", q,
-    )
-    case_column = re.compile(
-        r"\b([A-Za-z_][A-Za-z0-9_.]*)\s+COLLATE\s+NOCASE\s*(=|!=|<>)\s*(%s)",
-        re.I,
-    )
-    q = case_column.sub(
-        lambda m: f"lower({m.group(1)}::text) {m.group(2)} lower({m.group(3)}::text)", q,
-    )
-    q = re.sub(r"\s+COLLATE\s+NOCASE\b", "", q, flags=re.I)
-    # SQLite expression compatibility for frequently used time literals.
-    q = re.sub(r"\bstrftime\(\s*'%s'\s*,\s*'now'\s*\)",
-               "floor(extract(epoch from now()))::bigint", q, flags=re.I)
-    q = re.sub(r"\bstrftime\(\s*'%Y-%m-%d'\s*,\s*'now'\s*\)",
-               "(now() at time zone 'utc')::date::text", q, flags=re.I)
-    q = re.sub(r"\bstrftime\(\s*'%Y-%m-%dT%H:%M:%SZ'\s*,\s*'now'\s*\)",
-               """to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')""", q, flags=re.I)
-    q = re.sub(r"\bdate\(\s*'now'\s*\)", "(now() at time zone 'utc')::date::text", q, flags=re.I)
-    q = re.sub(r"\bdate\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)",
-               lambda m: "left(" + m.group(1) + ",10)", q, flags=re.I)
-    q = re.sub(r"\bstrftime\(\s*'%s'\s*,\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)",
-               lambda m: "floor(extract(epoch from (" + m.group(1) + ")::timestamp))::bigint", q, flags=re.I)
-    q = re.sub(r"\bCOALESCE\(\s*gw\.rowid\s*,\s*0\s*\)", "0", q, flags=re.I)
-    q = re.sub(r"\bgw\.rowid\b", "0", q, flags=re.I)
-    q = re.sub(r"\browid\b", "id", q, flags=re.I)
-    # SQLite MAX(x,y) is scalar; PostgreSQL MAX() is an aggregate.
-    # The site uses MAX(0, counter - n) for atomic nonnegative decrements.
-    # SQLite also accepts MAX(column, literal) as a scalar function, while
-    # PostgreSQL reserves MAX(column) for aggregate calculations.
-    q = re.sub(
-        r"\bMAX\(\s*([A-Za-z_][A-Za-z_0-9.]*|[-+]?\d+)\s*,",
-        lambda m: "GREATEST(" + m.group(1) + ",", q, flags=re.I,
-    )
-    q = re.sub(
-        r"\bMIN\(\s*([A-Za-z_][A-Za-z_0-9.]*|[-+]?\d+)\s*,",
-        lambda m: "LEAST(" + m.group(1) + ",", q, flags=re.I,
-    )
-    if re.search(r"\b(strftime|julianday|json_extract|datetime\s*\()\s*\(", q, re.I):
-        raise ValueError("SQLite SQL expression needs explicit PostgreSQL port")
-    return q
-
-
 class PgCursor:
-    def __init__(self, cursor, *, returning_identity: bool = False):
+    def __init__(self, cursor):
         self._cur = cursor
         self.rowcount = cursor.rowcount
         self.description = cursor.description
-        self.lastrowid = None
-        self._preloaded = []
-        if returning_identity:
-            result = cursor.fetchone()
-            if result:
-                self.lastrowid = int(result[0])
 
     def _row(self, raw):
         if raw is None:
@@ -153,8 +86,6 @@ class PgCursor:
         return HybridRow({col.name: value for col, value in zip(self.description, raw)})
 
     def fetchone(self):
-        if self._preloaded:
-            return self._preloaded.pop(0)
         return self._row(self._cur.fetchone())
 
     def fetchall(self):
@@ -173,7 +104,6 @@ class PgConnection:
 
     def __init__(self, connection):
         self._db = connection
-        self._identity: dict[str, str | None] = {}
 
     @cached_property
     def cache_scope(self) -> str:
@@ -182,30 +112,11 @@ class PgConnection:
         return hashlib.sha256(repr(database_endpoint).encode("utf-8")).hexdigest()
 
     def execute(self, statement, params=()):
-        source = str(statement)
-        q = _rewrite(source)
-        identity = False
-        match = re.match(r"\s*INSERT\s+INTO\s+([A-Za-z_][A-Za-z_0-9]*)\b", q, re.I)
-        if match:
-            table = match.group(1)
-            if table not in self._identity:
-                # Only tables with a PostgreSQL IDENTITY column need RETURNING.
-                with self._db.cursor() as introspect:
-                    introspect.execute(
-                        """SELECT column_name FROM information_schema.columns
-                           WHERE table_schema='public' AND table_name=%s
-                             AND is_identity='YES'""", (table,)
-                    )
-                    rows = introspect.fetchall()
-                self._identity[table] = rows[0][0] if rows else None
-            identity_col = self._identity.get(table)
-            if identity_col and not re.search(r"\bRETURNING\b", q, re.I):
-                q = q.rstrip().rstrip(";") + f' RETURNING "{identity_col}"'
-                identity = True
+        q = _placeholders(str(statement))
         cur = self._db.cursor()
         try:
             cur.execute(q, tuple(params) if params else None)
-            return PgCursor(cur, returning_identity=identity)
+            return PgCursor(cur)
         except BaseException as exc:
             cur.close()
             if not isinstance(exc, (KeyboardInterrupt, SystemExit)) and local_debug_stacks_enabled():
@@ -218,7 +129,7 @@ class PgConnection:
 
     def executemany(self, statement, seq_of_params):
         rows = [tuple(p) for p in seq_of_params]
-        q = _rewrite(str(statement))
+        q = _placeholders(str(statement))
         cur = self._db.cursor()
         try:
             if rows:

@@ -180,10 +180,10 @@ def send_direct_message(db: Database, user: dict[str, Any], body: dict[str, Any]
         ).fetchone()
         if not conv:
             inserted_conversation = tx.execute(
-                "INSERT INTO dm_conversations (user_low_id, user_high_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO dm_conversations (user_low_id, user_high_id, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id",
                 (u_low, u_high, now_iso, now_iso),
             )
-            conv_id = int(inserted_conversation.lastrowid)
+            conv_id = int(inserted_conversation.fetchone()[0])
             tx.execute(
                 "INSERT INTO dm_members (conversation_id, user_id, last_read_message_id, read_at) VALUES (?, ?, 0, NULL), (?, ?, 0, NULL)",
                 (conv_id, u_low, conv_id, u_high),
@@ -192,10 +192,10 @@ def send_direct_message(db: Database, user: dict[str, Any], body: dict[str, Any]
             conv_id = int(conv["id"])
 
         inserted_message = tx.execute(
-            "INSERT INTO dm_messages (conversation_id, sender_id, body, client_message_id, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO dm_messages (conversation_id, sender_id, body, client_message_id, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
             (conv_id, sender_id, clean_body, client_msg_id, now_iso),
         )
-        msg_id = int(inserted_message.lastrowid)
+        msg_id = int(inserted_message.fetchone()[0])
 
         tx.execute(
             "UPDATE dm_conversations SET last_message_id = ?, updated_at = ? WHERE id = ?",
@@ -210,7 +210,7 @@ def send_direct_message(db: Database, user: dict[str, Any], body: dict[str, Any]
 
         # Durably record contact history for new contact rate limit
         tx.execute(
-            "INSERT OR IGNORE INTO dm_contact_history (sender_id, recipient_id, first_contact_date, first_contact_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO dm_contact_history (sender_id, recipient_id, first_contact_date, first_contact_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
             (sender_id, recipient_id, today_str, now_iso),
         )
 
@@ -505,7 +505,7 @@ def block_user(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict
     now_iso = utc_now_iso()
     with db.transaction() as tx:
         tx.execute(
-            "INSERT OR IGNORE INTO dm_blocks (user_id, blocked_user_id, created_at) VALUES (?, ?, ?)",
+            "INSERT INTO dm_blocks (user_id, blocked_user_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             (uid, target_id, now_iso),
         )
 
@@ -608,11 +608,11 @@ def send_message_broadcast(db: Database, user: dict[str, Any], body: dict[str, A
         inserted_broadcast = tx.execute(
             """
             INSERT INTO message_broadcasts (sender_id, title, body, audience_cutoff, request_id, published_at, withdrawn_at)
-            VALUES (?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, NULL) RETURNING id
             """,
             (admin_id, raw_title, raw_body, audience_cutoff, raw_req_id, now_iso),
         )
-        bc_id = int(inserted_broadcast.lastrowid)
+        bc_id = int(inserted_broadcast.fetchone()[0])
 
     return {
         "ok": True,
@@ -760,8 +760,8 @@ def mark_message_broadcast_read(db: Database, user: dict[str, Any], broadcast_id
     with db.transaction() as tx:
         tx.execute(
             """
-            INSERT OR IGNORE INTO message_broadcast_reads (broadcast_id, user_id, read_at)
-            VALUES (?, ?, ?)
+            INSERT INTO message_broadcast_reads (broadcast_id, user_id, read_at)
+            VALUES (?, ?, ?) ON CONFLICT DO NOTHING
             """,
             (broadcast_id, uid, now_iso),
         )

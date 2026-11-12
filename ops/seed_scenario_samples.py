@@ -298,7 +298,7 @@ def find_author_user(db: PostgresDatabase, username: str) -> dict[str, Any]:
     if not clean:
         raise ValueError("必须指定 --author <username>")
     row = db.get_conn().execute(
-        "SELECT id, username, display_name, role, status FROM users WHERE username = ? COLLATE NOCASE",
+        "SELECT id, username, display_name, role, status FROM users WHERE username = ?",
         (clean,),
     ).fetchone()
     if not row:

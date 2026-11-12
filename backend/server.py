@@ -3725,7 +3725,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 with self.db.transaction() as tx:
                     tx.execute("DELETE FROM studio_import_jobs WHERE id = ?", (job_id,))
                     tx.execute(
-                        "UPDATE daily_usage SET count = MAX(0, count - 1) WHERE user_id = ? AND scope = 'parse' AND usage_date = ?",
+                        "UPDATE daily_usage SET count = GREATEST(0, count - 1) WHERE user_id = ? AND scope = 'parse' AND usage_date = ?",
                         (user_id, today),
                     )
                 raise ServiceError("导入队列已满，请稍后再试", status=429, code="import_queue_full") from exc
