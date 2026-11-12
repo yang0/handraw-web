@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import http.server
+import io
 import json
+import logging
 import socket
 import threading
 import time
@@ -13,6 +15,28 @@ from backend import ai_client, document_parser, skill_prompt
 
 
 class AIClientTests(unittest.TestCase):
+    def test_timeout_only_formats_a_traceback_when_debug_stacks_are_enabled(self):
+        formatted = []
+
+        class TraceFormatter(logging.Formatter):
+            def formatException(self, exc_info):
+                formatted.append(exc_info)
+                return "fixture traceback"
+
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        handler.setFormatter(TraceFormatter("%(message)s"))
+        connection = MagicMock()
+        connection.getresponse.side_effect = socket.timeout("fixture timeout")
+        with patch.object(ai_client.logger, "handlers", [handler]), patch.object(ai_client.logger, "propagate", False), patch.object(ai_client.logger, "level", logging.WARNING), patch("backend.ai_client.DirectHTTPConnection", return_value=connection), patch("backend.ai_client.load_ai_config", return_value={"url": "http://127.0.0.1:1", "key": "fixture", "model": "m"}):
+            for debug in (False, True):
+                with self.subTest(debug=debug), patch("backend.ai_client.local_debug_stacks_enabled", return_value=debug):
+                    text, meta = ai_client.chat([{"role": "user", "content": "fixture"}])
+                    self.assertEqual(text, "")
+                    self.assertEqual(meta["reason"], "timeout")
+                    self.assertEqual(len(formatted), int(debug))
+        self.assertIn("AI request timed out", output.getvalue())
+
     def test_no_key_configured_skips_request(self):
         with patch("backend.ai_client.load_ai_config", return_value={"url": "http://127.0.0.1:3065/v1", "key": "", "model": "test"}):
             text, meta = ai_client.chat([{"role": "user", "content": "hi"}], timeout=10)

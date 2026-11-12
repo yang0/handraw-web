@@ -318,7 +318,7 @@ def chat(
                 "AI request timed out on attempt %d (elapsed_ms=%d)",
                 attempt,
                 int((time.monotonic() - start_time) * 1000),
-                exc_info=True,
+                exc_info=local_debug_stacks_enabled(),
             )
             return "", _meta(False, "timeout")
 
@@ -329,7 +329,7 @@ def chat(
                     "AI request timed out on attempt %d (aborted by timer, elapsed_ms=%d)",
                     attempt,
                     elapsed_ms,
-                    exc_info=True,
+                    exc_info=local_debug_stacks_enabled(),
                 )
                 return "", _meta(False, "timeout")
 
