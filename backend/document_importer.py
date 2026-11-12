@@ -566,11 +566,9 @@ class ImportManager:
         self._watchdog_thread = None
         self._started = False
 
-        # S6: Remove stopped instance from cache
-        key = str(self.db.db_path)
         with _IMPORT_MANAGERS_LOCK:
-            if _IMPORT_MANAGERS.get(key) is self:
-                del _IMPORT_MANAGERS[key]
+            if getattr(self.db, "_import_manager", None) is self:
+                self.db._import_manager = None
 
     def submit_job(self, user_id: int, file_name: str, file_bytes: bytes) -> str:
         job_id = f"imp_{uuid.uuid4().hex}"
@@ -942,16 +940,14 @@ class ImportManager:
                     logger.error("Failed to clean up job media for job %s: %s", job_id, exc)
 
 
-_IMPORT_MANAGERS: dict[str, ImportManager] = {}
 _IMPORT_MANAGERS_LOCK = threading.Lock()
 
 
 def get_import_manager(db: Database) -> ImportManager:
     """Retrieve or create a singleton ImportManager for the given database."""
-    key = str(db.db_path)
     with _IMPORT_MANAGERS_LOCK:
-        mgr = _IMPORT_MANAGERS.get(key)
+        mgr = getattr(db, "_import_manager", None)
         if mgr is None or not getattr(mgr, "_started", False) or (getattr(mgr, "_stop", None) and mgr._stop.is_set()):
             mgr = ImportManager(db).start()
-            _IMPORT_MANAGERS[key] = mgr
+            db._import_manager = mgr
         return mgr

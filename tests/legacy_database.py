@@ -64,6 +64,9 @@ class Database:
             self._local.conn = None
 
     def close(self) -> None:
+        manager = getattr(self, "_import_manager", None)
+        if manager is not None:
+            manager.stop()
         with self._conns_lock:
             conns = list(self._all_conns)
             self._all_conns.clear()

@@ -282,5 +282,8 @@ class PostgresDatabase:
         self.close_thread_conn()
 
     def close(self):
+        manager = getattr(self, "_import_manager", None)
+        if manager is not None:
+            manager.stop()
         self.close_thread_conn()
         self._pool.close()
