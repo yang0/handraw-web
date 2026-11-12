@@ -219,7 +219,7 @@ SCENARIOS_POST_MIGRATION_HOOKS: dict[int, Any] = {
 }
 
 # ---------------------------------------------------------------------------
-# In-Memory Server Cache
+# Home Scenario Cache
 # ---------------------------------------------------------------------------
 
 SCENARIOS_CACHE_TTL_SECONDS = 120
@@ -244,17 +244,61 @@ def _scenario_revision_key() -> str:
     return prefix + ":home-scenarios:revision"
 
 
-def _scenario_cache_key(date_key: str) -> str | None:
+def _scenario_cache_keys(date_key: str, conn, sample_limit: int, demo_mode: bool):
     redis_url = os.environ.get("HANDRAW_REDIS_URL", "").strip()
     if not redis_url:
-        return date_key
+        return date_key, None, None
     try:
-        revision = _scenario_redis_client(redis_url).get(_scenario_revision_key()) or "0"
-        return f"{date_key}:{revision}"
+        client = _scenario_redis_client(redis_url)
+        revision_key = _scenario_revision_key()
+        revision = client.get(revision_key)
+        if revision is None:
+            initial_revision = str(time.time_ns())
+            revision = initial_revision if client.set(revision_key, initial_revision, nx=True) else client.get(revision_key)
+        if not revision or not re.fullmatch(r"[0-9]{1,19}", revision):
+            return None, None, None
+        scope = getattr(conn, "cache_scope", None)
+        payload_key = None
+        if scope:
+            dimensions = (scope, date_key, sample_limit, demo_mode)
+            digest = hashlib.sha256(repr(dimensions).encode("utf-8")).hexdigest()
+            payload_key = f"{revision_key}:payload:v1:{revision}:{digest}"
+        return (redis_url, revision_key, date_key, revision), client, payload_key
     except Exception:
         # Multi-worker mode cannot safely serve a stale per-process cache
         # if the shared revision is unreachable.
         logger.warning("Home-scenario Redis cache revision unavailable; bypassing local cache")
+        return None, None, None
+
+
+def _scenario_etag(raw_json: str) -> str:
+    return hashlib.sha256(raw_json.encode("utf-8")).hexdigest()[:16]
+
+
+def _read_shared_scenarios(client, key: str, date_key: str):
+    started = time.monotonic()
+    try:
+        with client.pipeline() as pipe:
+            raw, remaining_ms = pipe.get(key).pttl(key).execute()
+        if not raw or remaining_ms <= 0:
+            return None
+        payload = json.loads(raw)
+        if (
+            payload["ok"] is not True or payload["dateKey"] != date_key
+            or not isinstance(payload["items"], list) or payload["total"] != len(payload["items"])
+        ):
+            return None
+        for item in payload["items"]:
+            if not isinstance(item["samples"], list):
+                return None
+            for sample in item["samples"]:
+                if not all(isinstance(sample[field], str) for field in ("id", "coverUrl", "title", "author", "authorUsername")):
+                    return None
+        return payload, _scenario_etag(raw), started + remaining_ms / 1000
+    except (KeyError, TypeError, ValueError):
+        return None
+    except Exception:
+        logger.warning("Home-scenario Redis payload unavailable; querying PostgreSQL")
         return None
 
 
@@ -443,7 +487,7 @@ def get_public_home_scenarios(
     Ensures that within the same day's results across all scenarios, each work appears at most once:
       1. Pinned works take precedence and claim slots first.
       2. Auto-filling proceeds in scenario sort_order, skipping works already claimed.
-    Supports in-memory caching with a short TTL (120s) fallback.
+    Shares revision-scoped responses through Redis with a short in-process cache.
     Returns (payload_dict, etag_str).
     """
     from .services import _seed_filter
@@ -456,15 +500,20 @@ def get_public_home_scenarios(
 
     with _SCENARIOS_CACHE_LOCK:
         generation = _scenarios_cache_generation
-    revision_key = _scenario_cache_key(date_key)
-    cache_key = (db, revision_key, max_samples_per_scenario, is_demo_mode())
+    demo_mode = is_demo_mode()
+    version, redis_client, payload_key = _scenario_cache_keys(date_key, conn, max_samples_per_scenario, demo_mode)
+    cache_key = (db, version, max_samples_per_scenario, demo_mode)
     with _SCENARIOS_CACHE_LOCK:
-        cache_entry = _SCENARIOS_CACHE.get(cache_key) if revision_key is not None else None
+        cache_entry = _SCENARIOS_CACHE.get(cache_key) if version is not None else None
+    if cache_entry is None and payload_key:
+        cache_entry = _read_shared_scenarios(redis_client, payload_key, date_key)
     if cache_entry is not None:
         payload, etag, expires_at = cache_entry
         if time.monotonic() < expires_at and _cached_scenarios_current(conn, payload):
             with _SCENARIOS_CACHE_LOCK:
                 if generation == _scenarios_cache_generation:
+                    _SCENARIOS_CACHE.clear()
+                    _SCENARIOS_CACHE[cache_key] = cache_entry
                     return payload, etag
 
     seed_clause, seed_params = _seed_filter("w.id", "works")
@@ -678,15 +727,21 @@ def get_public_home_scenarios(
     }
 
     raw_json = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    etag = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()[:16]
+    etag = _scenario_etag(raw_json)
 
-    if revision_key is not None:
+    if version is not None:
         with _SCENARIOS_CACHE_LOCK:
-            if generation == _scenarios_cache_generation:
+            current = generation == _scenarios_cache_generation
+            if current:
                 _SCENARIOS_CACHE.clear()
                 _SCENARIOS_CACHE[cache_key] = (
                     payload, etag, time.monotonic() + SCENARIOS_CACHE_TTL_SECONDS,
                 )
+        if current and payload_key:
+            try:
+                redis_client.set(payload_key, raw_json, ex=SCENARIOS_CACHE_TTL_SECONDS)
+            except Exception:
+                logger.warning("Home-scenario Redis payload write failed")
     return payload, etag
 
 

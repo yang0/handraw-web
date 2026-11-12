@@ -166,6 +166,8 @@ python -m ops.seed_scenario_samples --author <官方账号> --scenario comic_4pa
 
 ### 4.3 缓存清理
 
+首页场景的公开响应由同一部署的 Web 进程通过 Redis 共享，有效期为 120 秒。响应按 PostgreSQL 实例和库、日期、缓存版本、样本上限和演示模式隔离。命中后仍会批量核对作品的公开状态和展示字段。Redis 不可用时直接查询 PostgreSQL。
+
 ```powershell
 # 查看所有 Handraw 业务限流 Key
 & "D:\Program Files\Redis\redis-cli.exe" keys "handraw:*:rate:*"

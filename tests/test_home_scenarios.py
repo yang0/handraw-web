@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -414,6 +415,7 @@ class TestHomeScenarios(unittest.TestCase):
         self.assertNotIn("w_empty_img", sample_ids)
 
     def test_cache_ttl_and_single_entry(self) -> None:
+        self.enterContext(mock.patch.dict(os.environ, {"HANDRAW_REDIS_URL": ""}))
         conn = self.db.get_conn()
         _insert_work(
             conn,

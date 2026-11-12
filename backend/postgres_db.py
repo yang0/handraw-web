@@ -1,11 +1,13 @@
 """PostgreSQL connection pool, transactions, and application SQL adapter."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
 import threading
 from contextlib import contextmanager
+from functools import cached_property
 
 from psycopg import connect, sql
 from psycopg.conninfo import conninfo_to_dict
@@ -172,6 +174,12 @@ class PgConnection:
     def __init__(self, connection):
         self._db = connection
         self._identity: dict[str, str | None] = {}
+
+    @cached_property
+    def cache_scope(self) -> str:
+        info = self._db.info
+        database_endpoint = (info.host, info.port, info.dbname)
+        return hashlib.sha256(repr(database_endpoint).encode("utf-8")).hexdigest()
 
     def execute(self, statement, params=()):
         source = str(statement)
