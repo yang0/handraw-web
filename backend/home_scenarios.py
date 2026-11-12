@@ -17,10 +17,10 @@ import os
 import re
 import threading
 import time
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from .postgres_db import PgConnection
+from .redis_cache import redis_cache_client as _scenario_redis_client
 
 if TYPE_CHECKING:
     from .db import Database
@@ -180,15 +180,6 @@ SCENARIOS_CACHE_TTL_SECONDS = 120
 _SCENARIOS_CACHE: dict[tuple[Any, ...], tuple[dict[str, Any], str, float]] = {}
 _SCENARIOS_CACHE_LOCK = threading.Lock()
 _scenarios_cache_generation = 0
-
-
-@lru_cache(maxsize=4)
-def _scenario_redis_client(redis_url: str):
-    import redis
-    return redis.Redis.from_url(
-        redis_url, socket_connect_timeout=2, socket_timeout=2,
-        decode_responses=True,
-    )
 
 
 def _scenario_revision_key() -> str:

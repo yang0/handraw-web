@@ -210,7 +210,7 @@ jobs:
           tests.test_comment_led_forum tests.test_cover_image
           tests.test_article_plan tests.test_batch_plan tests.test_batch_size_mismatch
           tests.test_direct_messages tests.test_message_broadcasts tests.test_admin_user_delete_foreign_keys
-          tests.test_works_feed
+          tests.test_works_feed tests.test_works_feed_cache
 
   creation-workspace-browser:
     runs-on: ubuntu-latest

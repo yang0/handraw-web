@@ -173,6 +173,8 @@ python -m ops.seed_scenario_samples --author <官方账号> --scenario comic_4pa
 
 首页场景的公开响应由同一部署的 Web 进程通过 Redis 共享，有效期为 120 秒。响应按 PostgreSQL 实例和库、日期、缓存版本、样本上限和演示模式隔离。命中后仍会批量核对作品的公开状态和展示字段。Redis 不可用时直接查询 PostgreSQL。
 
+热门作品的冻结排序也由 Redis 共享。每个数据库最多保留 128 个浏览会话，单个会话 30 分钟后过期。排序按用户、筛选条件和演示模式核对，作品内容和可见性在每页读取时查询数据库。Redis 故障时可继续使用本进程创建的临时会话，其他进程会提示重新刷新。
+
 ```powershell
 # 查看所有 Handraw 业务限流 Key
 & "D:\Program Files\Redis\redis-cli.exe" keys "handraw:*:rate:*"

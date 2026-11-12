@@ -4,14 +4,14 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import threading
-import time
 from typing import Any
 
 from .postgres_db import PgConnection
 import uuid
 
 from .db import Database
+from .feed_sessions import PopularSession, PopularSessions, session_filter_key
+from .seed import is_demo_mode
 from .media_dims import image_size
 from .ranking import WORK_POPULAR_EXPR, normalize_sort
 from .services import (
@@ -20,44 +20,6 @@ from .services import (
 )
 
 logger = logging.getLogger("handraw.works_feed")
-
-# In-memory store for frozen popular browsing sessions.
-# session_id -> (ordered_ids: list[str], created_at_ts: float)
-_FEED_POPULAR_SESSIONS: dict[str, tuple[list[str], float]] = {}
-_SESSION_TTL_SECONDS = 1800.0  # 30 minutes
-_MAX_POPULAR_SESSIONS = 128
-_FEED_SESSION_LOCK = threading.RLock()
-
-
-def _clean_expired_sessions() -> None:
-    now = time.time()
-    with _FEED_SESSION_LOCK:
-        expired = [
-            sid for sid, val in _FEED_POPULAR_SESSIONS.items()
-            if len(val) >= 2 and (now - val[1]) > _SESSION_TTL_SECONDS
-        ]
-        for sid in expired:
-            _FEED_POPULAR_SESSIONS.pop(sid, None)
-
-
-def _get_popular_session(session_id: str):
-    with _FEED_SESSION_LOCK:
-        value = _FEED_POPULAR_SESSIONS.get(session_id)
-        if value and time.time() - value[1] > _SESSION_TTL_SECONDS:
-            _FEED_POPULAR_SESSIONS.pop(session_id, None)
-            return None
-        return value
-
-
-def _store_popular_session(session_id: str, value) -> None:
-    with _FEED_SESSION_LOCK:
-        # Remove any old entry so insertion order reflects the latest snapshot.
-        _FEED_POPULAR_SESSIONS.pop(session_id, None)
-        while len(_FEED_POPULAR_SESSIONS) >= _MAX_POPULAR_SESSIONS:
-            oldest = next(iter(_FEED_POPULAR_SESSIONS))
-            _FEED_POPULAR_SESSIONS.pop(oldest, None)
-        _FEED_POPULAR_SESSIONS[session_id] = value
-
 
 def encode_cursor(data: dict[str, Any]) -> str:
     """Encode dictionary into URL-safe base64 string."""
@@ -226,7 +188,6 @@ def get_works_feed(
     current_user: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Retrieve paginated public works feed with filters, stable keyset/frozen ordering, and dimensions."""
-    _clean_expired_sessions()
     conn = db.get_conn()
 
     # Parse limit (default 24, clamped 1..100)
@@ -376,45 +337,21 @@ def get_works_feed(
             session_id = str(params.get("session_id") or uuid.uuid4().hex[:16])
             offset = 0
 
-        # Retrieve or initialize frozen session
-        cur_uid = current_user["id"] if current_user else None
-        cur_filter = (fmt, access, asset, author, q, ids_param, scenario_param)
-
-        sess_data = _get_popular_session(session_id)
-        if offset > 0 and sess_data is None:
+        # Bind frozen ordering to the database, actor, filters, and demo mode.
+        filters = (fmt, access, asset, author, q, ids_param, scenario_param)
+        filter_key = session_filter_key(current_user["id"] if current_user else None, filters, is_demo_mode())
+        sessions = PopularSessions(db, conn)
+        session = sessions.get(session_id)
+        if session is not None and session.filter_key != filter_key:
+            session = None
+        if offset > 0 and session is None:
             return {
-                "ok": True,
-                "items": [],
-                "nextCursor": None,
-                "hasMore": False,
-                "total": 0,
-                "counts": counts,
-                "sessionId": session_id,
-                "sessionExpired": True,
-                "needsRefresh": True,
+                "ok": True, "items": [], "nextCursor": None, "hasMore": False,
+                "total": 0, "counts": counts, "sessionId": session_id,
+                "sessionExpired": True, "needsRefresh": True,
             }
 
-        if sess_data:
-            ordered_ids = sess_data[0]
-            if len(sess_data) >= 4:
-                _, _, sess_uid, sess_filter = sess_data
-                if sess_uid != cur_uid or sess_filter != cur_filter:
-                    if offset > 0:
-                        return {
-                            "ok": True,
-                            "items": [],
-                            "nextCursor": None,
-                            "hasMore": False,
-                            "total": 0,
-                            "counts": counts,
-                            "sessionId": session_id,
-                            "sessionExpired": True,
-                            "needsRefresh": True,
-                        }
-                    else:
-                        sess_data = None
-
-        if not sess_data:
+        if session is None:
             pop_sql = f"""
                 {cte_sql}
                 SELECT id
@@ -423,9 +360,10 @@ def get_works_feed(
                 ORDER BY {WORK_POPULAR_EXPR} DESC, published_at_ms DESC, id DESC
             """
             id_rows = conn.execute(pop_sql, base_params).fetchall()
-            ordered_ids = [r["id"] for r in id_rows]
-            _store_popular_session(session_id, (ordered_ids, time.time(), cur_uid, cur_filter))
+            session = PopularSession(filter_key, tuple(row["id"] for row in id_rows))
+            sessions.put(session_id, session)
 
+        ordered_ids = session.ordered_ids
         total_session_items = len(ordered_ids)
         page_ids = ordered_ids[offset : offset + limit]
         next_offset = offset + len(page_ids)
