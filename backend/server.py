@@ -3679,6 +3679,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             today = local_today_str()
 
             with self.db.transaction() as tx:
+                # Admission spans all request workers and connection pools.
+                # Hold only while checking capacity and reserving the job.
+                tx.execute("SELECT pg_advisory_xact_lock(186, 206)")
                 active_job = tx.execute(
                     "SELECT 1 FROM studio_import_jobs WHERE user_id = ? AND status IN ('queued', 'running') LIMIT 1",
                     (user_id,),
