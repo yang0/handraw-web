@@ -141,6 +141,27 @@ class ForumResourceTests(unittest.TestCase):
             tx.execute("UPDATE catalog_assets SET status='hidden' WHERE code=?",(layout,))
         self.assertEqual(R.related_items(self.db,None,'style',style,'layouts')['total'],0)
 
+    def test_related_arrays_reject_malformed_shapes_and_match_exact_codes(self):
+        with self.db.transaction() as tx:
+            for n, (styles, images) in enumerate([
+                ('["FA-001"]', '["/images/FA-001.webp"]'),
+                ('["FA-0010"]', '["/images/FA-001.webp"]'),
+                ('not-json', '["/images/FA-001.webp"]'),
+                ('{"FA-001": true}', '["/images/FA-001.webp"]'),
+                ('["FA-001"]', 'not-json'),
+                ('["FA-001"]', '{}'),
+                ('["FA-001"]', '[ ]'),
+            ]):
+                tx.execute(
+                    "INSERT INTO works (id,author_username,author_name,title,images_json,styles_json,"
+                    "layout_code,prompt,status,published_at_ms,created_at,updated_at) "
+                    "VALUES (?,'qa','QA','literal % query',?,?,'SC-001','prompt','published',1,'','')",
+                    (f'json_boundary_{n}', images, styles))
+        result = R.related_items(self.db,None,'style','FA-001','works',q='%')
+        self.assertEqual([r['id'] for r in result['items']], ['json_boundary_0'])
+        self.assertEqual(result['total'], 1)
+        self.assertTrue(R.related_items(self.db,None,'layout','SC-001','styles')['items'])
+
     def test_hidden_overrides_thread_moderation_and_comment_authority(self):
         result,subs=self.batch();self.approve_all()
         sub=subs['style'];target=sub['targetId']

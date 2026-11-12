@@ -327,14 +327,22 @@ def _page(offset,limit,maximum):
     return offset,min(limit,maximum)
 
 
+def _style_array(alias):
+    return f"CASE WHEN {alias}.styles_json IS JSON ARRAY THEN {alias}.styles_json::jsonb ELSE '[]'::jsonb END"
+
+
 def _membership(alias):
-    return f"EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid({alias}.styles_json) THEN {alias}.styles_json ELSE '[]' END) j WHERE j.value=?)"
+    return f"({_style_array(alias)}) @> jsonb_build_array(CAST(? AS text))"
+
+
+def _has_images(alias):
+    return f"CASE WHEN {alias}.images_json IS JSON ARRAY THEN jsonb_array_length({alias}.images_json::jsonb) > 0 ELSE FALSE END"
 
 
 def _sql_page(conn,table,where,args,q,sort,offset,limit,kind):
     alias='w' if table=='works' else 't'
     if q:
-        where += f' AND (instr(lower({alias}.title),?)>0 OR instr(lower({alias}.author_name),?)>0 OR instr(lower({alias}.id),?)>0)'
+        where += f' AND (strpos(lower({alias}.title),?)>0 OR strpos(lower({alias}.author_name),?)>0 OR strpos(lower({alias}.id),?)>0)'
         args += [q,q,q]
     count=int(conn.execute(f'SELECT COUNT(*) FROM {table} {alias} WHERE {where}',args).fetchone()[0])
     # One popularity formula per object type, shared with the rest of the app.
@@ -381,7 +389,7 @@ def _related_page(db,kind,target,resource,mapping,tab,q,sort,offset,limit):
     if tab=='works':
         sf,sp=S._seed_filter('w.id','works')
         match=_membership('w') if kind=='style' else 'w.layout_code=?'
-        return _sql_page(conn,'works',f"w.status='published' AND w.images_json IS NOT NULL AND TRIM(w.images_json) NOT IN ('', '[]', 'null') AND json_valid(w.images_json) = 1 AND {sf} AND {match}",list(sp)+[target],q,sort,offset,limit,'work')
+        return _sql_page(conn,'works',f"w.status='published' AND {_has_images('w')} AND {sf} AND {match}",list(sp)+[target],q,sort,offset,limit,'work')
     if tab=='topics':
         sf,sp=S._seed_filter('t.id','topics')
         match=_membership('t') if kind=='style' else ('t.layout_code=?' if kind=='layout' else 't.work_id=?')
@@ -398,9 +406,9 @@ def _related_page(db,kind,target,resource,mapping,tab,q,sort,offset,limit):
         sf,sp=S._seed_filter('w.id','works')
         match=_membership('w') if kind=='style' else 'w.layout_code=?'
         if asset_kind=='style':
-            sql=f"SELECT j.value code,COUNT(DISTINCT w.id) n FROM works w,json_each(CASE WHEN json_valid(w.styles_json) THEN w.styles_json ELSE '[]' END) j WHERE w.status='published' AND w.images_json IS NOT NULL AND TRIM(w.images_json) NOT IN ('', '[]', 'null') AND json_valid(w.images_json) = 1 AND {sf} AND {match} GROUP BY j.value"
+            sql=f"SELECT j.value code,COUNT(DISTINCT w.id) n FROM works w,jsonb_array_elements_text({_style_array('w')}) AS j(value) WHERE w.status='published' AND {_has_images('w')} AND {sf} AND {match} GROUP BY j.value"
         else:
-            sql=f"SELECT w.layout_code code,COUNT(DISTINCT w.id) n FROM works w WHERE w.status='published' AND w.images_json IS NOT NULL AND TRIM(w.images_json) NOT IN ('', '[]', 'null') AND json_valid(w.images_json) = 1 AND {sf} AND {match} AND w.layout_code<>'' GROUP BY w.layout_code"
+            sql=f"SELECT w.layout_code code,COUNT(DISTINCT w.id) n FROM works w WHERE w.status='published' AND {_has_images('w')} AND {sf} AND {match} AND w.layout_code<>'' GROUP BY w.layout_code"
         grouped=[(r['code'],r['n']) for r in conn.execute(sql,list(sp)+[target]).fetchall()]
     # Only grouped catalog IDs are materialized to combine static and DB metadata.
     cards=[]
