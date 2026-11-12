@@ -225,7 +225,6 @@ assert.equal(isFreshRelease({ publishedAtMs: now + 1 }, now), false);
 // surfacing a failure, and appends a width hint so the server can serve a
 // right-sized thumbnail instead of the original file.
 assert.match(loader, /MAX_ACTIVE\s*=\s*6/);
-assert.match(loader, /START_INTERVAL\s*=\s*40/);
 assert.match(loader, /MAX_RETRIES\s*=\s*2/);
 assert.match(loader, /data-hw-src/);
 assert.match(loader, /data-hw-width/);
@@ -288,7 +287,7 @@ assert.match(loader, /"w=" \+ width|"&" : "\?"/, "a width bucket is appended to 
   }
 
   const images = Array.from({ length: 10 }, () => new FakeElement());
-  images.forEach((img, idx) => { img.dataset.hwSrc = `/queue-${idx}.webp`; });
+  images.forEach((img, idx) => { img.dataset.hwSrc = `/images/queue-${idx}.webp`; });
   images[9].visible = false;
   const document = {
     readyState: "complete",
@@ -330,8 +329,11 @@ assert.match(loader, /"w=" \+ width|"&" : "\?"/, "a width bucket is appended to 
   assert.equal(starts.length, 0, "data-hw-src must not request before intersection");
   io.show(images.slice(0, 9));
   advance(1000);
-  assert.ok(starts.length >= 6, "the feed keeps six requests in flight");
-  assert.ok(starts.length <= 9, "no more than the visible images start");
+  const {MAX_ACTIVE,START_INTERVAL}=window.HandrawImageLoader.constants;
+  assert.ok(Number.isFinite(START_INTERVAL)&&START_INTERVAL>0,"request pacing must have a positive interval");
+  assert.equal(starts.length,MAX_ACTIVE,"visible pending images fill the concurrency limit without exceeding it");
+  for(let index=1;index<starts.length;index++)
+    assert.ok(starts[index].at-starts[index-1].at>=START_INTERVAL,"real request starts must honor the configured pacing interval");
   assert.match(starts[0].value, /w=\d+/, "requests carry a width bucket");
 
   // A dropped request is retried without surfacing a failure. Free the other

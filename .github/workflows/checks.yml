@@ -28,7 +28,7 @@ jobs:
       - run: node tests/test_task_journey.cjs
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
-      - run: node tests/test_article_blocks.cjs && node tests/test_article_replanning.cjs && node tests/test_studio_generate_pending.cjs && node tests/test_parameter_canvas.cjs
+      - run: node tests/test_article_blocks.cjs && node tests/test_article_replanning.cjs && node tests/test_studio_generate_pending.cjs && node tests/test_parameter_canvas.cjs && node tests/test_v2_studio_state.cjs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
