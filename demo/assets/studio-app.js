@@ -51,10 +51,15 @@
   let activeCacheScope = "guest";
   let cacheScopeEpoch = 0;
   let _workspaceHydrationController = null;
+  const _workspaceCollectionsReady=new Set();
+  const _workspaceCollectionsLoading=new Map();
+  let _articleOpenSerial=0;
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
   let _articlesSyncVersion = 0;
   const _articleCloudBases = new Map();
+  const _articleCloudSnapshots = new Map();
+  let _articlesSyncPromise = null;
   let _articlesCloudConflict = false;
   let _articlesSyncedVersion = 0;
   let _articlesSyncInFlight = false;
@@ -66,6 +71,7 @@
     }
   }
   let _activeBatchRun = null;
+  let _activeArticleBatchRun = null;
 
   function isExplicitDemoMode() {
     const queryMode = new URLSearchParams(window.location.search || "").get("demo_mode");
@@ -122,7 +128,10 @@
 
   function writeJsonStorage(key, val) {
     try {
-      localStorage.setItem(scopedStorageKey(key), JSON.stringify(val));
+      // Only the warm cache is bounded; loaded pages remain available in
+      // memory and older runs are always recoverable from PostgreSQL.
+      const cached=key===HISTORY_STORAGE_KEY && Array.isArray(val)?val.slice(0,40):val;
+      localStorage.setItem(scopedStorageKey(key), JSON.stringify(cached));
     } catch (_) {}
   }
 
@@ -150,6 +159,9 @@
     articleListQuery: "",
     articleListFilter: "all",
     historyPage: 1,
+    historyCursor: "",
+    historyLoading: false,
+    historyError: "",
     historyFilter: "all",
     historyQuery: "",
     historyStatusFilter: "all",
@@ -191,12 +203,18 @@
   const DOM = {};
 
   function resetStudioMemoryForScope(scope) {
+    window.HandrawParameterCanvas?.reset();
+    _workspaceCollectionsReady.clear();
+    _workspaceCollectionsLoading.clear();
+    _articleOpenSerial+=1;
     const changed = activeCacheScope !== scope;
     if (!changed && CS.tabs.length) return false;
 
     cacheScopeEpoch += 1;
     _articlesSyncVersion = 0;
     _articleCloudBases.clear();
+    _articleCloudSnapshots.clear();
+    _articlesSyncPromise = null;
     _articlesCloudConflict = false;
     _articlesSyncedVersion = 0;
     _articlesSyncInFlight = false;
@@ -266,6 +284,9 @@
     CS.historySelectedPreview = {};
     CS.stageView = "canvas";
     CS.historyPage = 1;
+    CS.historyCursor = "";
+    CS.historyLoading = false;
+    CS.historyError = "";
     CS.historyFilter = "all";
     CS.historyQuery = "";
     CS.historyStatusFilter = "all";
@@ -274,6 +295,8 @@
     CS.historyReturnUrl = "";
     _activeBatchRun = null;
     CS.activeBatchRun = null;
+    _activeArticleBatchRun = null;
+    CS.activeArticleBatchRun = null;
     return true;
   }
 
@@ -697,99 +720,191 @@
       .catch(() => null);
   }
 
-  function scheduleCloudArticlesSync() {
-    if (!App.state || !App.state.serverBacked || !App.state.loggedIn) {
-      setArticlesSyncStatus("local");
-      return;
-    }
-    _articlesSyncVersion += 1;
-    if (_articlesCloudConflict) {
-      setArticlesSyncStatus("conflict");
-      return;
-    }
-    setArticlesSyncStatus("pending");
-    if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
-    const requestScope = activeCacheScope;
-    const requestEpoch = cacheScopeEpoch;
-    const send = async () => {
-      _articlesSyncTimer = null;
-      if (requestScope !== activeCacheScope || requestEpoch !== cacheScopeEpoch) return;
-      if (_articlesSyncInFlight) return; // The running request will send newer changes afterward.
-      _articlesSyncInFlight = true;
-      const sentVersion = _articlesSyncVersion;
-      const payload = {
-        articles: (CS.myArticles || []).map((art) => ({
-          ...art,
-          baseUpdatedAtMs: _articleCloudBases.get(String(art.id)) ?? 0
-        }))
-      };
-      setArticlesSyncStatus("syncing");
-      let response = null;
-      let httpStatus = 0;
-      try {
-        const resp = await fetch("/api/studio/articles", {
-          method: "POST", credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        httpStatus = resp.status;
-        response = await resp.json().catch(() => ({}));
-      } catch (_) {
-        response = null;
-      } finally {
-        if (requestScope !== activeCacheScope || requestEpoch !== cacheScopeEpoch) return;
-        _articlesSyncInFlight = false;
-      }
-      if (httpStatus === 409 && (response?.code === "article_version_conflict" || response?.code === "article_deleted")) {
-        _articlesCloudConflict = true;
-        writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
-          createdAt: Date.now(),
-          articles: JSON.parse(JSON.stringify(CS.myArticles || [])),
-          activeId: CS.activeArticleId || ""
-        });
-        setArticlesSyncStatus("conflict");
-        toast("云端版本冲突，已停止自动覆盖并保留本地备份。请先恢复为新文章，或下载 Markdown 后人工合并。");
-        return;
-      }
-      if (httpStatus >= 200 && httpStatus < 300 && response?.ok) {
-        Object.entries(response.versions || {}).forEach(([id, version]) => {
-          _articleCloudBases.set(id, Number(version));
-        });
-        _articlesSyncedVersion = Math.max(_articlesSyncedVersion, sentVersion);
-        if (_articlesSyncVersion === sentVersion) setArticlesSyncStatus("synced");
-      } else {
-        setArticlesSyncStatus("failed");
-      }
-      if (_articlesSyncVersion > sentVersion && !_articlesCloudConflict) {
-        if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
-        _articlesSyncTimer = setTimeout(send, 200);
-      }
+  const ARTICLE_RUNTIME_FIELDS = new Set([
+    "imageUrl", "status", "errorText", "errorMsg", "taskId", "requestId", "genId", "batchId",
+    "batchIndex", "batchTotal", "generationMode", "demoMode", "variants", "_genCount", "engine",
+    "selectedMediaId", "illustrationId", "activeAttemptId", "resultEpoch", "updatedAt", "generatedAt"
+  ]);
+
+  function articleCloudPayload(article) {
+    return {
+      id: article.id, articleTitle: article.articleTitle || article.title || "未命名文章",
+      markdown: article.markdown || "",
+      cards: (article.cards || []).map(card => Object.fromEntries(
+        Object.entries(card).filter(([key]) => !ARTICLE_RUNTIME_FIELDS.has(key)))),
+      style1: article.style1 || "", layout: article.layout || "", status: "ready",
+      runCount: article.runCount || 0, createdAtMs: article.createdAtMs || 0,
+      settings: { ...(article.settings || {}),
+        coverRatio: article.coverRatio || article.settings?.coverRatio || "2.35:1",
+        inlineRatio: article.inlineRatio || article.settings?.inlineRatio || "4:3" }
     };
-    _articlesSyncTimer = setTimeout(send, 450);
   }
 
-  async function hydrateCloudStudioWorkspace() {
+  async function flushCloudArticlesSync() {
+    if (!App.state?.serverBacked || !App.state?.loggedIn) return true;
+    if (_articlesCloudConflict) return false;
+    if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
+    _articlesSyncTimer = null;
+    if (_articlesSyncPromise) return _articlesSyncPromise;
+    const requestScope = activeCacheScope, requestEpoch = cacheScopeEpoch;
+    const sameScope = () => requestScope === activeCacheScope && requestEpoch === cacheScopeEpoch;
+    _articlesSyncInFlight = true;
+    const operation = (async () => {
+      try {
+        while (sameScope()) {
+          const changed = (CS.myArticles || []).filter(article=>!article._summary).map(articleCloudPayload)
+            .filter(article => _articleCloudSnapshots.get(String(article.id)) !== JSON.stringify(article))
+            .slice(0, 50);
+          if (!changed.length) {
+            _articlesSyncedVersion = _articlesSyncVersion;
+            setArticlesSyncStatus("synced");
+            return true;
+          }
+          setArticlesSyncStatus("syncing");
+          const response = await fetch("/api/studio/articles", {
+            method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ articles: changed.map(article => ({ ...article,
+              baseUpdatedAtMs: _articleCloudBases.get(String(article.id)) ?? 0 })) })
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!sameScope()) return false;
+          if (response.status === 409) {
+            _articlesCloudConflict = true;
+            writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, { createdAt: Date.now(),
+              articles: JSON.parse(JSON.stringify(CS.myArticles || [])), activeId: CS.activeArticleId || "" });
+            setArticlesSyncStatus("conflict");
+            toast("另一窗口已更新文章，已保留本地稿并停止覆盖。请合并内容或另存为新文章。");
+            return false;
+          }
+          if (!response.ok || !result.ok) {
+            setArticlesSyncStatus("failed");
+            return false;
+          }
+          for (const article of changed) {
+            const id = String(article.id);
+            if (result.versions?.[id] == null) {
+              setArticlesSyncStatus("failed");
+              return false;
+            }
+            _articleCloudBases.set(id, Number(result.versions[id]));
+            _articleCloudSnapshots.set(id, JSON.stringify(article));
+          }
+        }
+        return false;
+      } catch (_) {
+        if (sameScope()) setArticlesSyncStatus("failed");
+        return false;
+      }
+    })();
+    _articlesSyncPromise = operation;
+    try { return await operation; }
+    finally {
+      if (_articlesSyncPromise === operation) {
+        _articlesSyncPromise = null;
+        _articlesSyncInFlight = false;
+      }
+    }
+  }
+
+  function scheduleCloudArticlesSync() {
+    if (!App.state?.serverBacked || !App.state?.loggedIn) { setArticlesSyncStatus("local"); return; }
+    _articlesSyncVersion += 1;
+    if (_articlesCloudConflict) { setArticlesSyncStatus("conflict"); return; }
+    setArticlesSyncStatus("pending");
+    if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
+    _articlesSyncTimer = setTimeout(() => { void flushCloudArticlesSync(); }, 450);
+  }
+
+  async function selectArticleCardImage(target, card, imageUrl) {
+    if (App.state?.serverBacked && App.state?.loggedIn) {
+      if (!(await flushCloudArticlesSync())) throw new Error("文章尚未保存到云端");
+      const result = await S.apiJson(`/api/studio/articles/${encodeURIComponent(target.art.id)}`, {});
+      const current = result?.article?.cards?.find(item => item.id === card.id);
+      if (!current) throw new Error("配图位已删除");
+      if (card.resultEpoch != null && card.resultEpoch !== current.resultEpoch)
+        throw new Error("配图状态已在其他窗口更新，请刷新后重选");
+      const selection = await S.apiJson(`/api/studio/articles/${encodeURIComponent(target.art.id)}/illustrations/${encodeURIComponent(card.id)}/selection`, {
+        method: "POST", body: { baseResultEpoch: current.resultEpoch, imageUrl }
+      });
+      card.resultEpoch = selection.resultEpoch;
+      card.selectedMediaId = selection.selectedMediaId;
+    }
+    if (card.imageUrl && card.imageUrl !== imageUrl)
+      window.HandrawArticleWorkbench?.pushVariant(card, card.imageUrl, "之前使用的图片");
+    card.imageUrl = imageUrl;
+    card.status = imageUrl ? "done" : "pending";
+    card.errorText = "";
+    commitArticleTargetChanges(target, { bumpTime: true });
+  }
+
+  async function ensureWorkspaceCollection(collection) {
+    if(!App.state?.loggedIn||!App.state?.serverBacked||_workspaceCollectionsReady.has(collection)) return;
+    if(_workspaceCollectionsLoading.has(collection)) return _workspaceCollectionsLoading.get(collection);
+    const promise=hydrateCloudStudioWorkspace({collection});
+    _workspaceCollectionsLoading.set(collection,promise);
+    try {await promise;} finally {if(_workspaceCollectionsLoading.get(collection)===promise) _workspaceCollectionsLoading.delete(collection);}
+  }
+
+  async function loadMoreStudioHistory() {
+    if(!CS.historyCursor||CS.historyLoading) return;
+    const epoch=cacheScopeEpoch,scope=activeCacheScope;
+    CS.historyLoading=true;CS.historyError="";
+    if(CS.stageView==="history") renderHistoryStage();
+    try {await hydrateCloudStudioWorkspace({collection:"history",cursor:CS.historyCursor});}
+    finally {
+      if(!isStaleScope(epoch,scope)) {
+        CS.historyLoading=false;
+        if(CS.stageView==="history") renderHistoryStage();
+      }
+    }
+  }
+
+  async function loadArticleDocument(id) {
+    const epoch=cacheScopeEpoch,scope=activeCacheScope;
+    const result=await S.apiJson(`/api/studio/articles/${encodeURIComponent(id)}`);
+    if(isStaleScope(epoch,scope)) return false;
+    const previous=findArticleById(id),article=result.article;
+    if(!article) throw new Error("文章不存在");
+    const payload=articleCloudPayload(article);
+    if(previous && !previous._summary && _articleCloudSnapshots.has(id) &&
+        JSON.stringify(articleCloudPayload(previous))!==_articleCloudSnapshots.get(id))
+      throw new Error("当前文章有未保存内容，请先保存后再重新载入");
+    CS.myArticles=(CS.myArticles || []).map(item=>item.id===id?{...article,_summary:false}:item);
+    if(!previous) CS.myArticles.push({...article,_summary:false});
+    _articleCloudBases.set(id,Number(article.updatedAtMs));
+    _articleCloudSnapshots.set(id,JSON.stringify(payload));
+    writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
+    return true;
+  }
+
+  async function hydrateCloudStudioWorkspace({collection="",cursor=""}={}) {
     if (!App.state || !App.state.serverBacked) return;
     const requestScope = activeCacheScope;
     const requestEpoch = cacheScopeEpoch;
-    if (_workspaceHydrationController) {
+    if (!collection && _workspaceHydrationController) {
       try {
         _workspaceHydrationController.abort();
       } catch (_) {}
     }
-    _workspaceHydrationController = typeof AbortController !== "undefined" ? new AbortController() : null;
+    if(!collection) _workspaceHydrationController = typeof AbortController !== "undefined" ? new AbortController() : null;
     try {
-      const resp = await fetch("/api/studio/workspace", {
+      const resp = await fetch(collection?`/api/studio/workspace?collection=${encodeURIComponent(collection)}${cursor?"&cursor="+encodeURIComponent(cursor):""}`:"/api/studio/workspace?bootstrap=1", {
         credentials: "include",
-        signal: _workspaceHydrationController ? _workspaceHydrationController.signal : undefined
+        signal: !collection && _workspaceHydrationController ? _workspaceHydrationController.signal : undefined
       });
-      if (!resp.ok) return;
+      if (!resp.ok) throw new Error("云端记录载入失败，请重试");
       const ws = await resp.json();
       if (requestScope !== activeCacheScope || requestEpoch !== cacheScopeEpoch) return;
+      while(ws.articleCursor) {
+        const page=await S.apiJson(`/api/studio/articles?page=1&cursor=${encodeURIComponent(ws.articleCursor)}`);
+        if(requestScope!==activeCacheScope||requestEpoch!==cacheScopeEpoch) return;
+        ws.articles.push(...(page.items||[]));ws.articleCursor=page.nextCursor;
+      }
+      if(collection) _workspaceCollectionsReady.add(collection);
       if (Array.isArray(ws.officialPresets)) {
         CS.officialPresetMeta = ws.officialPresets;
       }
-      CS.pendingTasks = Array.isArray(ws.pendingTasks)
+      if(Array.isArray(ws.pendingTasks)) CS.pendingTasks = Array.isArray(ws.pendingTasks)
         ? ws.pendingTasks.filter((task) => task && (task.taskId || task.requestId || task.genId))
         : [];
       if (ws.loggedIn) {
@@ -830,10 +945,11 @@
           ws.articles.forEach((ra) => {
             if (!ra || !ra.id) return;
             _articleCloudBases.set(String(ra.id), Number(ra.updatedAtMs) || 0);
+            if(!ra._summary) _articleCloudSnapshots.set(String(ra.id), JSON.stringify(articleCloudPayload(ra)));
             const prev = (CS.myArticles || []).find((a) => a.id === ra.id);
             // A newer local/offline draft must be recoverable before the
             // cloud workspace replaces its in-memory representation.
-            if (prev && Number(prev.updatedAtMs || 0) > Number(ra.updatedAtMs || 0) &&
+            if (prev && !prev._summary && Number(prev.updatedAtMs || 0) > Number(ra.updatedAtMs || 0) &&
                 (String(prev.markdown || "") !== String(ra.markdown || "") ||
                  JSON.stringify(prev.cards || []) !== JSON.stringify(ra.cards || []))) {
               const saved = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
@@ -849,6 +965,8 @@
               ...(prev || {}),
               id: ra.id,
               articleTitle: ra.articleTitle || "未命名文章",
+              _summary:Boolean(ra._summary),
+              settings:ra.settings||{},coverRatio:ra.coverRatio||"2.35:1",inlineRatio:ra.inlineRatio||"4:3",
               markdown: ra.markdown || "",
               cards: Array.isArray(ra.cards) ? ra.cards : [],
               style1: ra.style1 || "",
@@ -859,6 +977,9 @@
               updatedAtMs: Number(ra.updatedAtMs) || Date.now(),
               timeLabel: typeof formatArticleTimeLabel === "function" ? formatArticleTimeLabel(Number(ra.updatedAtMs) || Date.now()) : "近期"
             });
+            if(ra._summary && prev && !prev._summary && Number(prev.updatedAtMs)===Number(ra.updatedAtMs))
+              artMap.set(ra.id,prev);
+
           });
           (CS.myArticles || []).forEach((a) => {
             if (!a || !a.id || serverIds.has(a.id)) return;
@@ -903,9 +1024,10 @@
           for (const sRow of ws.history) {
             curHist = upsertHistoryEntry(curHist, sRow, { isServer: true });
           }
-          CS.generationHistory = curHist;
+          CS.generationHistory = curHist.sort((a,b)=>(Date.parse(b.createdAtISO||b.createdAt)||0)-(Date.parse(a.createdAtISO||a.createdAt)||0));
           writeJsonStorage(HISTORY_STORAGE_KEY, CS.generationHistory);
         }
+        if(collection==="history") {CS.historyCursor=ws.nextCursor||"";CS.historyError="";}
       } else if (Array.isArray(CS.officialPresetMeta)) {
         // Refresh official preset overrides even for guests
         const officialList = buildOfficialPresetWorkflows();
@@ -914,6 +1036,8 @@
         writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
       }
     } catch (_) {
+      if(collection==="history" && !isStaleScope(requestEpoch,requestScope))
+        CS.historyError="云端记录载入失败，请重试";
       // Abort and stale responses are expected during account switches. Do
       // not let an old account repopulate the newly selected cache scope.
     } finally {
@@ -1096,17 +1220,9 @@
   }
 
   function ensureArticleWorkspace() {
-    if (isArticleGraph(CS.graph)) {
-      return CS.tabs.find((t) => t.id === CS.activeTabId) || null;
-    }
-    let target = findArticleWorkspaceTab();
-    if (!target) {
-      const g = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, { withPresetAssets: false });
-      // Created on demand only; it is not offered as a preset tab any more.
-      target = createWorkflowTab({ title: "文章配图", blueprint: "article", graph: g, makeActive: false });
-    }
-    activateWorkflowTab(target.id);
-    return target;
+    // Article documents have their own store and never allocate a canvas tab.
+    ensureMyArticlesInitialized();
+    return null;
   }
 
   function pickReturnCanvasTab(excludeId) {
@@ -1134,39 +1250,18 @@
 
   function switchIntoArticleMode() {
     syncAllTabsArticlesIntoStore();
-    const cur = CS.tabs.find((t) => t.id === CS.activeTabId);
-    if (cur && !isArticleTab(cur)) {
-      writeScopedReturnTab(cur.id);
-    } else if (!readScopedReturnTab()) {
-      writeScopedReturnTab(pickReturnCanvasTab(CS.activeTabId));
-    }
-    ensureArticleWorkspace();
     ensureMyArticlesInitialized();
-
     if (CS.stageView !== "preview" || CS.articleSubView !== "editor" || !CS.articleEditorDraft) {
-      const targetId = CS.activeArticleId || null;
-      openUnifiedArticleEditor(targetId, { createNew: !targetId, renderNow: false });
+      const targetId=CS.activeArticleId || null;
+      openUnifiedArticleEditor(targetId,{createNew:!targetId,renderNow:false});
     } else {
-      CS.stageView = "preview";
-      CS.articleSubView = "editor";
+      CS.stageView="preview";
+      CS.articleSubView="editor";
     }
   }
 
   function switchToCanvasFromArticle() {
-    const remembered = readScopedReturnTab();
-    let targetId = remembered;
-    if (!targetId) {
-      targetId = pickReturnCanvasTab(CS.activeTabId);
-    }
-    if (!targetId) {
-      // No non-article return tab exists: activate a clean quick graph so the
-      // article graph is not left displayed on canvas. The article original
-      // graph is retained in its own tab.
-      ensureQuickTab();
-      targetId = CS.activeTabId;
-    }
-    activateWorkflowTab(targetId, { switchToCanvas: true });
-    delete CS.articleReturnTab;
+    CS.stageView="canvas";
   }
 
   function activateWorkflowTab(tabId, { autoFit = false, switchToCanvas = false } = {}) {
@@ -1374,6 +1469,13 @@
   }
 
   function renderWorkflowsStage() {
+    void ensureWorkspaceCollection("workflows").then(()=>{
+      if(CS.stageView==="workflows" && _workspaceCollectionsReady.has("workflows")) renderLoadedWorkflowsStage();
+    });
+    renderLoadedWorkflowsStage();
+  }
+
+  function renderLoadedWorkflowsStage() {
     if (!DOM.workflowsStage) return;
     if (CS.stageView !== "workflows") {
       DOM.workflowsStage.style.display = "none";
@@ -1461,7 +1563,7 @@
                             ${typePills ? `<div class="ic-wf-card-tags">${typePills}</div>` : ""}
                           </div>
                           <div class="ic-wf-card-actions">
-                            <button type="button" class="btn btn-sm btn-primary" data-wf-open="${esc(wf.id)}">打开</button>
+                            <button type="button" class="btn btn-sm btn-primary" data-wf-open="${esc(wf.id)}">查看存档</button>
                             <button type="button" class="btn btn-sm" data-wf-dl="${esc(wf.id)}">导出 JSON</button>
                             <button type="button" class="btn btn-sm" data-wf-rm="${esc(wf.id)}" title="删除此工作流">删除</button>
                           </div>
@@ -1512,26 +1614,32 @@
     }
 
     DOM.workflowsStage.querySelectorAll("[data-wf-open]").forEach((btn) => {
-      btn.onclick = () => {
-        const wid = btn.getAttribute("data-wf-open");
-        const wf = (CS.savedWorkflows || []).find((x) => x.id === wid);
-        if (!wf) return;
-        CS.stageView = "canvas";
-        try {
-          if (window.location.search.includes("view=")) {
-            window.history.replaceState(null, "", window.location.pathname);
-          }
-        } catch (_) {}
-        createWorkflowTab({
-          title: wf.title,
-          blueprint: wf.blueprint,
-          graph: wf.graph,
-          savedId: wf.id,
-          makeActive: true,
-          autoFit: true,
-          switchToCanvas: true
-        });
-        toast(`✨ 已打开工作流《${wf.title}》`);
+      btn.onclick=()=>{
+        const wf=(CS.savedWorkflows || []).find(item=>item.id===btn.getAttribute("data-wf-open"));
+        if(!wf) return;
+        const articleNodes=(wf.graph?.nodes || []).filter(node=>node.type==="article_plan");
+        S.openModal({title:wf.title || "旧工作流存档",html:`
+          <p>原有参数和连线已保留。转换会创建独立的参数画布，不修改此存档。</p>
+          <p>存档含 ${(wf.graph?.nodes || []).length} 个节点、${(wf.graph?.edges || []).length} 条连线。</p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:20px;">
+            <button type="button" class="btn" id="legacy-export">导出原文件</button>
+            <button type="button" class="btn btn-primary" id="legacy-convert">${articleNodes.length?"提取到文章工作台":"转为参数画布"}</button>
+          </div>`});
+        document.getElementById("legacy-export").onclick=()=>exportWorkflowJsonFile(wf);
+        document.getElementById("legacy-convert").onclick=async()=>{
+          try {
+            if(articleNodes.length) {
+              const articles=articleNodes.map(node=>syncPlanNodeToMyArticles(JSON.parse(JSON.stringify(node)))).filter(Boolean);
+              persistMyArticles();S.closeModal();
+              if(articles[0]) openUnifiedArticleEditor(articles[0].id,{renderNow:true});
+              toast(`已提取 ${articles.length} 篇独立文章，原存档保留`);
+              return;
+            }
+            const graph=E.convertLegacyCanvas(wf.graph,Catalog);
+            S.closeModal();switchCreationStage("canvas");
+            if(await window.HandrawParameterCanvas.importDocument({name:wf.title,graph})) toast("已创建独立参数画布，请预览并确认组合");
+          } catch(error) {toast(error.message || "无法转换，可导出原文件保留");}
+        };
       };
     });
 
@@ -2171,7 +2279,8 @@
   }
 
   // 2) Asset Picker Modal (我的图库 / 官方示例 / 本地上传 + 角色/道具/场景/其他分类)
-  function openAssetPickerModal(targetOrOptions, options = {}) {
+  async function openAssetPickerModal(targetOrOptions, options = {}) {
+    await ensureWorkspaceCollection("uploads");
     let curItems = [];
     let isNode = false;
     let onCommitCallback = null;
@@ -4432,82 +4541,25 @@
     });
   }
 
-  function syncPlanNodeToMyArticles(planNode, { tabId = CS.activeTabId, bumpTime = false, hostGraph = CS.graph } = {}) {
+  function syncPlanNodeToMyArticles(planNode) {
+    // One-time extraction of legacy article nodes. Existing documents always win;
+    // subsequent canvas changes cannot overwrite them or create extra articles.
     if (!planNode || planNode.type !== "article_plan") return null;
     ensureMyArticlesInitialized();
-
-    const pd = planNode.data || (planNode.data = {});
-    const ctrl =
-      (hostGraph?.nodes || []).find((n) => n.id === pd.sourceControlId && n.type === "output_control") ||
-      (hostGraph?.edges || [])
-        .filter((e) => e.to === planNode.id)
-        .map((e) => (hostGraph.nodes || []).find((n) => n.id === e.from))
-        .find((n) => n && n.type === "output_control") ||
-      null;
-    const rec = ctrl && hostGraph ? E.resolveControlRecipe(hostGraph, ctrl, Catalog) : null;
-
-    let existing = pd.articleId ? CS.myArticles.find((a) => a.id === pd.articleId) : null;
-    if (!existing) {
-      existing = CS.myArticles.find((a) => a.linkedPlanNodeId === planNode.id) || null;
-      if (existing) pd.articleId = existing.id;
+    const data = planNode.data || {};
+    let article = CS.myArticles.find(a => a.id === data.articleId || a.linkedPlanNodeId === planNode.id);
+    if (!article) {
+      article = { ...JSON.parse(JSON.stringify(data)), id: data.articleId || E.uid("art"),
+        createdAtMs: Date.now(), updatedAtMs: Date.now() };
+      CS.myArticles.unshift(article);
+      data.articleId = article.id;
+      persistMyArticles();
     }
-
-    // If markdown changed to a distinct article and the previous article already had generated images or custom edits,
-    // keep the old article in history and start a fresh article record!
-    if (
-      existing &&
-      existing.markdown &&
-      pd.markdown &&
-      existing.markdown !== pd.markdown &&
-      existing.articleTitle !== pd.articleTitle &&
-      ((existing.cards || []).some((c) => c.imageUrl) || (existing.cards || []).some((c) => c.promptCustomized))
-    ) {
-      existing.linkedPlanNodeId = null;
-      existing.linkedTabId = null;
-      existing = null;
-      pd.articleId = null;
-    }
-
-    const now = Date.now();
-    if (!existing) {
-      const newId = pd.articleId || E.uid("art");
-      pd.articleId = newId;
-      existing = {
-        id: newId,
-        articleTitle: pd.articleTitle || "未命名文章",
-        markdown: pd.markdown || E.DEFAULT_STARTER_ARTICLE_MD,
-        cards: JSON.parse(JSON.stringify(pd.cards || [])),
-        status: pd.status || "ready",
-        createdAtMs: now,
-        updatedAtMs: now,
-        timeLabel: formatArticleTimeLabel(now),
-        linkedTabId: tabId || null,
-        linkedPlanNodeId: planNode.id,
-        style1: rec?.style1Id || "",
-        layout: rec?.layoutId || "",
-        runCount: pd.runCount || 0
-      };
-      CS.myArticles.unshift(existing);
-    } else {
-      existing.articleTitle = pd.articleTitle || existing.articleTitle || "未命名文章";
-      existing.markdown = pd.markdown || existing.markdown || E.DEFAULT_STARTER_ARTICLE_MD;
-      existing.cards = JSON.parse(JSON.stringify(pd.cards || []));
-      existing.status = pd.status || "ready";
-      existing.linkedTabId = tabId || existing.linkedTabId || null;
-      existing.linkedPlanNodeId = planNode.id;
-      existing.runCount = pd.runCount ?? existing.runCount ?? 0;
-      if (rec?.style1Id) existing.style1 = rec.style1Id;
-      if (rec?.layoutId) existing.layout = rec.layoutId;
-      if (bumpTime) {
-        existing.updatedAtMs = now;
-        existing.timeLabel = formatArticleTimeLabel(now);
-      } else if (!existing.timeLabel) {
-        existing.timeLabel = formatArticleTimeLabel(existing.updatedAtMs || now);
-      }
-    }
-
-    persistMyArticles();
-    return existing;
+    data.articleId = article.id;
+    delete article.linkedPlanNodeId;
+    delete article.linkedTabId;
+    delete article.sourceControlId;
+    return article;
   }
 
   function syncAllTabsArticlesIntoStore() {
@@ -4533,116 +4585,29 @@
   function resolveArticleTarget(idOrNode) {
     ensureMyArticlesInitialized();
     if (!idOrNode) return null;
-
-    if (typeof idOrNode === "object" && idOrNode.planNode) {
-      return idOrNode;
+    let article = null;
+    if (typeof idOrNode === "object") {
+      const node = idOrNode.planNode || idOrNode;
+      const key = idOrNode.art?.id || node._articleRef?.id || node.data?.articleId || node.id;
+      article = CS.myArticles.find(a => a.id === key) || node._articleRef || null;
+      if (!article && node.type === "article_plan") article = syncPlanNodeToMyArticles(node);
+    } else {
+      article = CS.myArticles.find(a => a.id === String(idOrNode) || a.linkedPlanNodeId === String(idOrNode));
     }
-
-    if (typeof idOrNode === "object" && idOrNode.type === "article_plan") {
-      if (idOrNode._isVirtualArticle && idOrNode._articleRef) {
-        return { art: idOrNode._articleRef, planNode: idOrNode, hostTab: null, isActiveCanvas: false };
-      }
-      const inActive = (CS.graph?.nodes || []).some((n) => n.id === idOrNode.id);
-      if (inActive) {
-        const art = syncPlanNodeToMyArticles(idOrNode, { tabId: CS.activeTabId, bumpTime: false, hostGraph: CS.graph });
-        return { art, planNode: idOrNode, hostTab: CS.tabs.find((t) => t.id === CS.activeTabId) || null, isActiveCanvas: true };
-      }
-      const bgTab = (CS.tabs || []).find((t) => t.id !== CS.activeTabId && (t.graph?.nodes || []).some((n) => n.id === idOrNode.id));
-      if (bgTab) {
-        const art = syncPlanNodeToMyArticles(idOrNode, { tabId: bgTab.id, bumpTime: false, hostGraph: bgTab.graph });
-        return { art, planNode: idOrNode, hostTab: bgTab, isActiveCanvas: false };
-      }
-      const art = CS.myArticles.find((a) => a.id === idOrNode.id || a.id === idOrNode.data?.articleId) || null;
-      return { art, planNode: idOrNode, hostTab: null, isActiveCanvas: false };
-    }
-
-    const key = String(idOrNode);
-    // 1. Check active canvas graph
-    const activeNode = (CS.graph?.nodes || []).find(
-      (n) => n.type === "article_plan" && (n.id === key || n.data?.articleId === key)
-    );
-    if (activeNode) {
-      const art = syncPlanNodeToMyArticles(activeNode, { tabId: CS.activeTabId, bumpTime: false, hostGraph: CS.graph });
-      return {
-        art,
-        planNode: activeNode,
-        hostTab: CS.tabs.find((t) => t.id === CS.activeTabId) || null,
-        isActiveCanvas: true
-      };
-    }
-
-    // 2. Check other open tabs
-    for (const t of CS.tabs || []) {
-      if (t.id === CS.activeTabId) continue;
-      const tabNode = (t.graph?.nodes || []).find(
-        (n) => n.type === "article_plan" && (n.id === key || n.data?.articleId === key)
-      );
-      if (tabNode) {
-        const art = syncPlanNodeToMyArticles(tabNode, { tabId: t.id, bumpTime: false, hostGraph: t.graph });
-        return { art, planNode: tabNode, hostTab: t, isActiveCanvas: false };
-      }
-    }
-
-    // 3. Check standalone historical article in CS.myArticles
-    const art = CS.myArticles.find((a) => a.id === key || a.linkedPlanNodeId === key) || null;
-    if (!art) return null;
-
-    // Double-check if linkedPlanNodeId still lives in active canvas or another tab
-    if (art.linkedPlanNodeId) {
-      const linkedActive = (CS.graph?.nodes || []).find((n) => n.id === art.linkedPlanNodeId && n.type === "article_plan");
-      if (linkedActive) {
-        return {
-          art,
-          planNode: linkedActive,
-          hostTab: CS.tabs.find((t) => t.id === CS.activeTabId) || null,
-          isActiveCanvas: true
-        };
-      }
-      for (const t of CS.tabs || []) {
-        if (t.id === CS.activeTabId) continue;
-        const linkedTabNode = (t.graph?.nodes || []).find((n) => n.id === art.linkedPlanNodeId && n.type === "article_plan");
-        if (linkedTabNode) {
-          return { art, planNode: linkedTabNode, hostTab: t, isActiveCanvas: false };
-        }
-      }
-    }
-
-    const virtualNode = {
-      id: art.id,
-      type: "article_plan",
-      _isVirtualArticle: true,
-      _articleRef: art,
-      data: art
-    };
-    return { art, planNode: virtualNode, hostTab: null, isActiveCanvas: false };
+    if (!article) return null;
+    // Rendering adapter only; it is never added to or executed by a graph.
+    const planNode = { id: article.id, type: "article_plan", _isVirtualArticle: true,
+      _articleRef: article, data: article };
+    return { art: article, planNode, hostTab: null, isActiveCanvas: false };
   }
 
   function commitArticleTargetChanges(target, { bumpTime = false } = {}) {
-    if (!target || !target.planNode) return;
-    if (target.isActiveCanvas) {
-      syncArticlePlanDisplayNodes(target.planNode);
-      syncPlanNodeToMyArticles(target.planNode, { tabId: CS.activeTabId, bumpTime, hostGraph: CS.graph });
-      markActiveTabDirty();
-      persistOpenTabs();
-      return;
+    if (!target?.art) return;
+    if (bumpTime) {
+      target.art.updatedAtMs = Date.now();
+      target.art.timeLabel = formatArticleTimeLabel(target.art.updatedAtMs);
     }
-    if (target.hostTab && target.hostTab.graph) {
-      syncPlanNodeToMyArticles(target.planNode, {
-        tabId: target.hostTab.id,
-        bumpTime,
-        hostGraph: target.hostTab.graph
-      });
-      persistOpenTabs();
-      return;
-    }
-    if (target.art) {
-      if (bumpTime) {
-        const now = Date.now();
-        target.art.updatedAtMs = now;
-        target.art.timeLabel = formatArticleTimeLabel(now);
-      }
-      persistMyArticles();
-    }
+    persistMyArticles();
   }
 
   function publishArticleToForum(targetOrId) {
@@ -5672,7 +5637,7 @@
       list.unshift(normalized);
     }
 
-    return list.slice(0, 40);
+    return list;
   }
 
   function buildRecipeSummaryText(rec, ctrlNode) {
@@ -5931,6 +5896,15 @@
     const card = (planNode.data.cards || []).find((c) => c.id === cardId);
     if (!card || card.status === "generating") return false;
     const previousImageUrl = card.imageUrl || "";
+    let submittedInput = "";
+    let submittedRequestId = "";
+    const inputKey = () => JSON.stringify({
+      card: articleCloudPayload(target.art).cards.find(item => item.id === card.id),
+      style1: target.art.style1, layout: target.art.layout,
+      imageUrl: card.imageUrl || "", resultEpoch: card.resultEpoch
+    });
+    const currentCard = () => (target.art.cards || []).includes(card) &&
+      (!submittedInput || inputKey() === submittedInput);
     if (batchId) {
       card.batchId = batchId;
       card.batchIndex = batchIndex;
@@ -5941,19 +5915,6 @@
       if (!silent) toast("这张图的完整提示词超过 4000 字符，请精简后再生成；没有扣费");
       return false;
     }
-
-    const hostGraph = target.isActiveCanvas ? CS.graph : target.hostTab?.graph || null;
-    const ctrl =
-      hostGraph
-        ? (hostGraph.nodes || []).find((n) => n.id === planNode.data.sourceControlId && n.type === "output_control") ||
-          (hostGraph.edges || [])
-            .filter((e) => e.to === planNode.id)
-            .map((e) => (hostGraph.nodes || []).find((n) => n.id === e.from))
-            .find((n) => n && n.type === "output_control") ||
-          null
-        : null;
-
-    if (target.isActiveCanvas && ctrl && !checkExclusiveGateForControl(ctrl)) return false;
 
     const useLiveApi = isLiveGenerationEnabled();
     const useDemo = isDemoGenerationEnabled();
@@ -5969,7 +5930,7 @@
       replacing: Boolean(card.imageUrl)
     }))) return false;
     if (isStaleScope(runEpoch, runScope) || card.status === "generating") return false;
-    if (card.status !== "error" || !card.taskId) card.requestId = "";
+    if (card.status !== "error") card.requestId = "";
 
     const hadDisplayBefore = target.isActiveCanvas
       ? getDownstreamDisplayNodes(planNode.id).some((d) => d.data?.planCardId === card.id)
@@ -5982,7 +5943,7 @@
     if (target.isActiveCanvas) renderWorldNodes();
 
     try {
-      const rec = ctrl && hostGraph ? E.resolveControlRecipe(hostGraph, ctrl, Catalog) : null;
+      const rec = null;
       if (rec?.audience) recordRecentFieldValue("audience", rec.audience);
       if (rec?.businessScene) recordRecentFieldValue("businessScene", rec.businessScene);
 
@@ -6003,8 +5964,8 @@
       const uniquePool = [...new Set(fallbackPool)];
 
       let imgUrl = "";
-      const cardS1 = rec?.style1Id || target.art?.style1 || "";
-      const cardS2 = rec?.style2Id || "";
+      const cardS1 = card.style1 || target.art?.style1 || "";
+      const cardS2 = card.style2 || "";
       const cardLay = card.layoutId || rec?.layoutId || target.art?.layout || "";
       const cardS1Res = cardS1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS1) || rec?.style1Res) : rec?.style1Res;
       const cardS2Res = cardS2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS2) || rec?.style2Res) : rec?.style2Res;
@@ -6020,10 +5981,13 @@
         layoutName: cardLayRes?.name || cardLayRes?.title || "",
         subject: cardSubj
       };
+      submittedInput = inputKey();
 
       if (useLiveApi) {
-        const refImages = (rec?.assetItems || []).map((a) => a.image).filter(Boolean);
+        const refImages = card.refImages || [];
+        if (!(await flushCloudArticlesSync())) throw new Error("文章尚未保存到云端，请先处理保存状态");
         const requestId = card.requestId = ensureStableRequestId(card.requestId, `article_${card.id || "card"}`);
+        submittedRequestId = requestId;
         card.taskId = "";
         commitArticleTargetChanges(target, { bumpTime: false });
         const resp = await fetch("/api/studio/generate", {
@@ -6043,6 +6007,8 @@
             refImages,
             recipeSnapshot: card.recipeSnapshot,
             creationSource: "article",
+            articleId: target.art.id,
+            cardId: card.id,
             ...(card.batchId ? {
               batchId: card.batchId,
               batchIndex: card.batchIndex || 0,
@@ -6056,12 +6022,17 @@
         });
         const data = await resp.json();
         if (isStaleScope(runEpoch, runScope)) return false;
-        if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        if (!resp.ok || !data.ok) {
+          const error = new Error(data.error || `HTTP ${resp.status}`);
+          error.terminal = resp.status >= 400 && resp.status < 500 && resp.status !== 408;
+          throw error;
+        }
         if (typeof data.credits === "number") App.state.credits = data.credits;
         if (typeof data.freeQuotaRemaining === "number") App.state.freeQuotaRemaining = data.freeQuotaRemaining;
         if (S.renderChrome) S.renderChrome();
         const activeReqId = data.requestId || requestId;
         const activeGenId = data.genId || "";
+        submittedRequestId = activeReqId;
         card.genId = activeGenId;
         card.requestId = activeReqId;
         if (data.imageUrl) {
@@ -6096,7 +6067,23 @@
         }
       }
 
-      if (isStaleScope(runEpoch, runScope)) return false;
+      if (isStaleScope(runEpoch, runScope) || !currentCard()) return false;
+      if (App.state?.serverBacked && App.state?.loggedIn) {
+        if (useLiveApi) {
+          const saved = await S.apiJson(`/api/studio/articles/${encodeURIComponent(target.art.id)}`);
+          if (isStaleScope(runEpoch, runScope) || !currentCard()) return false;
+          const accepted = saved?.article?.cards?.find(item => item.id === card.id);
+          if (!accepted || accepted.prompt !== card.prompt)
+            throw new Error("文章配图已在其他窗口修改，请刷新查看；本次结果保留在生图历史");
+          imgUrl = accepted.imageUrl || "";
+          card.resultEpoch = accepted.resultEpoch;
+          card.selectedMediaId = accepted.selectedMediaId;
+          submittedInput = inputKey();
+          if (!imgUrl) throw new Error("本次结果未应用到当前配图位，请刷新查看生图历史");
+        } else {
+          await selectArticleCardImage(target, card, imgUrl);
+        }
+      }
       if (previousImageUrl && previousImageUrl !== imgUrl) {
         window.HandrawArticleWorkbench?.pushVariant(card, previousImageUrl, "之前的成图");
       }
@@ -6112,7 +6099,7 @@
       });
       if (!skipHistory) {
         planNode.data.runCount = (planNode.data.runCount || 0) + 1;
-        recordArticlePlanHistory(target.isActiveCanvas ? ctrl : null, planNode);
+        recordArticlePlanHistory(null, planNode);
       }
       commitArticleTargetChanges(target, { bumpTime: !skipHistory });
       if (!silent) {
@@ -6124,7 +6111,7 @@
       }
       return true;
     } catch (err) {
-      if (isStaleScope(runEpoch, runScope)) return false;
+      if (isStaleScope(runEpoch, runScope) || !currentCard()) return false;
       card.status = "error";
       card.errorText = String(err?.message || err || "").slice(0, 60);
       if (err.terminal) card.requestId = "";
@@ -6134,6 +6121,12 @@
     } finally {
       if (controller) _generationControllers.delete(controller);
       if (!isStaleScope(runEpoch, runScope)) {
+        if (!currentCard() && (target.art.cards || []).includes(card) && card.status === "generating" &&
+            card.requestId === submittedRequestId) {
+          card.status = card.imageUrl ? "done" : "pending";
+          card.taskId = "";
+          card.requestId = "";
+        }
         commitArticleTargetChanges(target, { bumpTime: false });
         renderFullPreviewStage();
         if (target.isActiveCanvas) {
@@ -6154,7 +6147,7 @@
     const target = resolveArticleTarget(planNodeOrArtId);
     const planNode = target?.planNode || null;
     if (!planNode || planNode.type !== "article_plan" || planNode.data.status === "generating") return false;
-    if (_activeBatchRun) {
+    if (_activeArticleBatchRun) {
       if (!silent) toast("另一批图片正在生成，请等待完成或停止后再操作");
       return false;
     }
@@ -6181,19 +6174,6 @@
       if (!silent) toast("本次选中的配图有提示词超过 4000 字符，请先精简；没有扣费");
       return false;
     }
-
-    const hostGraph = target.isActiveCanvas ? CS.graph : target.hostTab?.graph || null;
-    const ctrl =
-      hostGraph
-        ? (hostGraph.nodes || []).find((n) => n.id === planNode.data.sourceControlId && n.type === "output_control") ||
-          (hostGraph.edges || [])
-            .filter((e) => e.to === planNode.id)
-            .map((e) => (hostGraph.nodes || []).find((n) => n.id === e.from))
-            .find((n) => n && n.type === "output_control") ||
-          null
-        : null;
-
-    if (target.isActiveCanvas && ctrl && !checkExclusiveGateForControl(ctrl)) return false;
 
     const useLiveApi = isLiveGenerationEnabled();
     const useDemo = isDemoGenerationEnabled();
@@ -6226,10 +6206,9 @@
       total: effectiveTargets.length, completed: 0, failed: 0, running: 0,
       parallel: selection.parallel, startedAt: Date.now(), ids: effectiveTargets.map(x=>x.id) };
     CS.lastArticleBatchSummary = null;
-    _activeBatchRun = batchRun;
-    CS.activeBatchRun = batchRun;
+    _activeArticleBatchRun = batchRun;
+    CS.activeArticleBatchRun = batchRun;
     planNode.data.status = "generating";
-    if (ctrl) ctrl.data.status = "generating";
     commitArticleTargetChanges(target, { bumpTime: true });
     renderFullPreviewStage();
     if (target.isActiveCanvas) renderWorldNodes();
@@ -6283,20 +6262,19 @@
         return okCount > 0;
       }
       planNode.data.runCount = (planNode.data.runCount || 0) + 1;
-      recordArticlePlanHistory(target.isActiveCanvas ? ctrl : null, planNode);
+      recordArticlePlanHistory(null, planNode);
       commitArticleTargetChanges(target, { bumpTime: true });
       if (!silent) {
         toast(`批量完成：成功 ${okCount} 张，失败 ${batchRun.failed} 张，跳过 ${allCards.length-effectiveTargets.length} 张；失败项可以单独重试。`);
       }
       return okCount > 0;
     } finally {
-      if (_activeBatchRun === batchRun) {
-        _activeBatchRun = null;
-        CS.activeBatchRun = null;
+      if (_activeArticleBatchRun === batchRun) {
+        _activeArticleBatchRun = null;
+        CS.activeArticleBatchRun = null;
       }
       if (!isStaleScope(runEpoch, runScope)) {
         planNode.data.status = "ready";
-        if (ctrl) ctrl.data.status = "done";
         if (CS.lastArticleBatchSummary) CS.lastArticleBatchSummary.running = 0;
         commitArticleTargetChanges(target, { bumpTime: false });
         renderFullPreviewStage();
@@ -7777,6 +7755,7 @@
   }
 
   function openHistoryPage() {
+    void ensureWorkspaceCollection("history").then(()=>{if(CS.stageView==="history") renderHistoryStage();});
     if (CS.stageView === "history") return;
     flushUnifiedArticleEditor();
     CS.historyReturnStage = CS.stageView;
@@ -7801,109 +7780,17 @@
     openHistoryPage();
   }
 
-  function restoreHistoryEntryToCanvas(entryId) {
+  async function restoreHistoryEntryToCanvas(entryId) {
     ensureGenerationHistoryInitialized();
-    const h = (CS.generationHistory || []).find((item) => item.id === entryId);
-    if (!h) return;
-
-    const articleHistory = h.mode === "article-illust" && !!h.markdown;
-    if (articleHistory !== isArticleGraph(CS.graph)) {
-      if (articleHistory) {
-        switchIntoArticleMode();
-      } else {
-        switchToCanvasFromArticle();
-      }
-    }
-
-    pushUndo();
-    const histItems = JSON.parse(JSON.stringify(h.items || []));
-
-    if (h.mode === "article-illust" && h.markdown) {
-      let ctrl = getNodeById(h.ctrlId) || CS.graph.nodes.find((n) => n.type === "output_control");
-      if (!ctrl) {
-        ctrl = E.makeOutputControlNode(488, 176, { mode: "article-illust" });
-        CS.graph.nodes.push(ctrl);
-      } else {
-        ctrl.data.mode = "article-illust";
-      }
-      const { node: planNode } = ensureArticlePlanNodeForControl(ctrl, { forceRebuild: false });
-      if (planNode) {
-        planNode.data.markdown = h.markdown;
-        const blocks = E.parseArticleReadonlyBlocks(h.markdown);
-        const h1 = blocks.find((b) => b.kind === "h1");
-        if (h1) planNode.data.articleTitle = h1.text;
-        const h2Indices = blocks.filter((b) => b.kind === "h2").map((b) => b.idx);
-        planNode.data.cards = histItems.map((it, idx) => ({
-          id: it.id || E.uid("pcard"),
-          role: it.role || (idx === 0 ? "cover" : "inline"),
-          title: it.title || (idx === 0 ? "文章封面" : `插图 ${idx}`),
-          afterBlockIdx: (it.role || (idx === 0 ? "cover" : "inline")) === "cover" ? -1 : (h2Indices[idx - 1] ?? Math.max(0, blocks.length - 1)),
-          ratio: it.ratio || (idx === 0 ? "2.35:1" : "4:3"),
-          prompt: it.prompt || h.prompt || "",
-          imageUrl: it.imageUrl || "",
-          status: it.imageUrl ? "done" : "idle"
-        }));
-        planNode.data.status = "done";
-        syncArticlePlanDisplayNodes(planNode);
-        syncPlanNodeToMyArticles(planNode, { tabId: CS.activeTabId, bumpTime: true, hostGraph: CS.graph });
-      }
-      CS.stageView = "preview";
-      CS.articleSubView = "detail";
-      CS.previewTab = "article";
-      try {
-        const u = new URL(window.location.href);
-        u.searchParams.delete("view");
-        u.searchParams.delete("tab");
-        u.searchParams.set("entry", "article");
-        window.history.replaceState(null, "", u.pathname + u.search);
-      } catch (_) {}
-      fullRenderCanvas();
-      persistOpenTabs();
-      requestAnimationFrame(() => fitView());
-      toast(`↩ 已将 ${h.timeShort} 的文章配图记录恢复到文章模式！`);
+    const h = (CS.generationHistory || []).find(item => item.id === entryId);
+    if (!h || h.creationSource !== "canvas") return;
+    if (!h.runId) {
+      toast("旧工作流记录保留在存档中，可导出原文件或显式转换为独立参数画布");
       return;
     }
-
-    let ctrl = getNodeById(h.ctrlId) || CS.graph.nodes.find((n) => n.type === "output_control");
-    if (!ctrl) {
-      ctrl = E.makeOutputControlNode(488, 176, { mode: h.mode || "graphic-text" });
-      CS.graph.nodes.push(ctrl);
-    }
-    const { nodes: dispNodes, isBatchGallery } = syncControlDisplayNodes(ctrl, Math.max(1, histItems.length));
-    if (isBatchGallery && dispNodes[0]) {
-      const gn = dispNodes[0];
-      gn.data.status = "done";
-      gn.data.kind = "batch_gallery";
-      gn.data.mode = h.mode || "graphic-text";
-      gn.data.markdown = h.markdown || "";
-      gn.data.updatedAt = `恢复自 ${h.timeShort}`;
-      gn.data.page = 1;
-      gn.data.totalTarget = histItems.length;
-      gn.data.items = histItems;
-    } else {
-      dispNodes.forEach((dn, i) => {
-        dn.data.status = "done";
-        dn.data.mode = h.mode || "graphic-text";
-        dn.data.markdown = h.markdown || "";
-        dn.data.updatedAt = `恢复自 ${h.timeShort}`;
-        dn.data.items = histItems[i] ? [histItems[i]] : [];
-      });
-    }
-
-    CS.stageView = "canvas";
-    try {
-      if (window.location.search.includes("view=")) {
-        window.history.replaceState(null, "", window.location.pathname);
-      }
-    } catch (_) {}
-    fullRenderCanvas();
-    persistOpenTabs();
-    requestAnimationFrame(() => fitView());
-    toast(
-      isBatchGallery
-        ? `↩ 已将 ${h.timeShort} 的 ${histItems.length} 张成图恢复到画布「批量图集」节点！`
-        : `↩ 已将 ${h.timeShort} 的历史版本恢复到画布 ${dispNodes.length} 个「图片显示」节点！`
-    );
+    switchCreationStage("canvas");
+    try { await window.HandrawParameterCanvas?.openRun(h.runId); }
+    catch (error) { toast(error.message || "批次载入失败，请重试"); }
   }
 
   function resolveShareTitle(h, item = null, options = {}) {
@@ -8051,7 +7938,7 @@
       <div class="ic-pv-topbar ic-history-topbar">
         <div style="display:flex;align-items:center;gap:10px;min-width:0;">
           <span style="font-size:14px;font-weight:900;color:var(--ic-ink);">🕒 生图历史 · ${imageCounts.all} 张</span>
-          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">${allHist.length} 次生成 · 按分类查看图片张数</span>
+          <span style="font-size:12px;color:var(--ic-muted);" class="hide-sm">已载入 ${allHist.length} 次生成 · 按分类查看图片张数</span>
         </div>
 
         <div class="ic-history-controls">
@@ -8130,7 +8017,7 @@
                             </div>
 
                             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
-                              ${h.recipeId && historyRecordCategory(h) === "quick" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-redo-recipe="${esc(h.recipeId)}" style="font-weight:800;">使用原配方</button>` : historyRecordCategory(h) === "canvas" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">恢复到画布</button>` : historyRecordCategory(h) !== "other" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-open-mode="${historyRecordCategory(h)}" style="font-weight:800;">${({quick: "去做图", batch: "去批量", article: "去文章配图"})[historyRecordCategory(h)]}</button>` : ""}
+                              ${h.recipeId && historyRecordCategory(h) === "quick" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-redo-recipe="${esc(h.recipeId)}" style="font-weight:800;">使用原配方</button>` : historyRecordCategory(h) === "canvas" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-restore="${esc(h.id)}" style="font-weight:800;">查看批次</button>` : historyRecordCategory(h) !== "other" ? `<button type="button" class="btn btn-sm btn-primary" data-hist-open-mode="${historyRecordCategory(h)}" style="font-weight:800;">${({quick: "去做图", batch: "去批量", article: "去文章配图"})[historyRecordCategory(h)]}</button>` : ""}
                               ${detailHref && imageCount > 1 ? `<button type="button" class="btn btn-sm" data-hist-expand-batch="${esc(h.id)}" aria-expanded="${batchExpanded}">${batchExpanded ? "收起图片" : `展开全部 ${imageCount} 张`}</button>` : ""}
                               <button type="button" class="btn btn-sm" data-hist-zip="${esc(h.id)}" ${!(h.items || []).some((it) => it.imageUrl) ? "disabled" : ""} style="color:#1f6f4a;border-color:rgba(31,111,74,0.35);font-weight:750;">📦 下载 ZIP</button>
                               <button type="button" class="btn btn-sm" data-hist-del="${esc(h.id)}" style="color:#dc2626;" title="删除此条历史记录">🗑️ 删除</button>
@@ -8226,10 +8113,16 @@
                 </div>
               `
           }
+          ${CS.historyError?`<p role="alert">${esc(CS.historyError)}</p>`:""}
+          ${CS.historyCursor?`<button type="button" class="btn btn-sm" data-hist-more ${CS.historyLoading?"disabled":""}>${CS.historyLoading?"正在载入…":"加载更早的记录"}</button>`:CS.historyError?'<button type="button" class="btn btn-sm" data-hist-reload>重新载入云端记录</button>':""}
         </div>
       </div>
     `;
 
+    DOM.historyStage.querySelector("[data-hist-more]")?.addEventListener("click",()=>{void loadMoreStudioHistory();});
+    DOM.historyStage.querySelector("[data-hist-reload]")?.addEventListener("click",()=>{
+      void ensureWorkspaceCollection("history").then(()=>{if(CS.stageView==="history") renderHistoryStage();});
+    });
     const scBeforeFocus = DOM.historyStage.querySelector("#hist-page-scroll");
     if (scBeforeFocus && prevScrollTop) scBeforeFocus.scrollTop = prevScrollTop;
     if (wasSearchFocused) {
@@ -12022,14 +11915,11 @@
         ensureGenerationHistoryInitialized();
         const picked = await window.HandrawArticleWorkbench.chooseHistory(CS.generationHistory || []);
         if (!picked) return;
-        if (card.imageUrl && card.imageUrl !== picked.url)
-          window.HandrawArticleWorkbench.pushVariant(card, card.imageUrl, "之前的成图");
-        card.imageUrl = picked.url;
-        card.status = "done";
-        card.errorText = "";
+        const t = resolveArticleTarget(planNode);
+        try { await selectArticleCardImage(t, card, picked.url); }
+        catch (error) { toast(error.message); return; }
         card.imageSource = "my-history";
         card.historyImageTitle = picked.title;
-        const t = resolveArticleTarget(planNode);
         commitArticleTargetChanges(t, {bumpTime:true});
         renderFullPreviewStage();
         toast("已从个人生图历史插入图片，未产生生成费用");
@@ -12042,13 +11932,11 @@
         if (!card || card.status === "generating") return;
         const selected = await window.HandrawArticleWorkbench.chooseVariant(card);
         if (!selected || !selected.imageUrl || selected.imageUrl === card.imageUrl) return;
-        window.HandrawArticleWorkbench.pushVariant(card, card.imageUrl, "之前使用的图片");
-        card.imageUrl = selected.imageUrl;
-        card.status = "done";
         const t = resolveArticleTarget(planNode);
-        commitArticleTargetChanges(t, {bumpTime:true});
+        try { await selectArticleCardImage(t, card, selected.imageUrl); }
+        catch (error) { toast(error.message); return; }
         renderFullPreviewStage();
-        toast("已切换图片版本，其他候选仍然保留");
+        toast("已切换采用图片，其他候选仍然保留");
       };
     });
 
@@ -12566,6 +12454,21 @@
       return;
     }
 
+    const activeSummary=CS.activeArticleId && findArticleById(CS.activeArticleId);
+    if(activeSummary?._summary) {
+      DOM.previewStage.innerHTML='<p style="padding:32px" role="status">正在加载文章…</p>';
+      if(CS.articleLoadingId!==activeSummary.id) {
+        CS.articleLoadingId=activeSummary.id;
+        const epoch=cacheScopeEpoch,scope=activeCacheScope;
+        void loadArticleDocument(activeSummary.id).then(loaded=>{
+          if(loaded&&!isStaleScope(epoch,scope)&&CS.activeArticleId===activeSummary.id) renderFullPreviewStage();
+        }).catch(error=>toast(error.message||"文章加载失败，请重试")).finally(()=>{
+          if(!isStaleScope(epoch,scope)&&CS.articleLoadingId===activeSummary.id) CS.articleLoadingId=null;
+        });
+      }
+      return;
+    }
+
     if (CS.articleSubView === "reader" && CS.activeArticleId) {
       renderArticlePreviewPage(CS.activeArticleId);
       return;
@@ -12599,32 +12502,18 @@
     DOM.root.setAttribute("data-canvas-theme", CS.canvasTheme);
     DOM.root.classList.toggle("edges-hidden", CS.edgesHidden);
 
-    if (DOM.canvasStage) {
-      DOM.canvasStage.style.display = CS.stageView === "canvas" ? "block" : "none";
-      DOM.canvasStage.classList.toggle("shelf-collapsed", !CS.shelfOpen);
-      DOM.canvasStage.classList.toggle("minimap-hidden", !CS.minimapOpen);
-
-      if (CS.stageView === "canvas" && typeof window !== "undefined" && window.innerWidth <= 768) {
-        let mobileBanner = DOM.canvasStage.querySelector("#canvas-mobile-prompt-banner");
-        if (!mobileBanner) {
-          mobileBanner = document.createElement("div");
-          mobileBanner.id = "canvas-mobile-prompt-banner";
-          mobileBanner.className = "canvas-mobile-prompt-banner";
-          mobileBanner.innerHTML = `
-            <p>请在电脑上使用画布</p>
-            <button type="button" class="btn btn-primary btn-sm" id="canvas-mobile-go-make">用做图打开</button>
-          `;
-          DOM.canvasStage.prepend(mobileBanner);
-          mobileBanner.querySelector("#canvas-mobile-go-make").onclick = () => switchCreationStage("quick");
-        }
-      } else if (DOM.canvasStage) {
-        const mobileBanner = DOM.canvasStage.querySelector("#canvas-mobile-prompt-banner");
-        if (mobileBanner) mobileBanner.remove();
-      }
-    }
-
-    if (DOM.workbenchBar) {
-      DOM.workbenchBar.style.display = CS.stageView === "canvas" ? "" : "none";
+    // Legacy graphs remain an internal implementation of the quick/batch
+    // forms. They are never the parameter canvas document or its execution.
+    if (DOM.canvasStage) DOM.canvasStage.style.display="none";
+    if (DOM.workbenchBar) DOM.workbenchBar.style.display="none";
+    if (DOM.parameterStage) {
+      DOM.parameterStage.style.display=CS.stageView==="canvas"?"flex":"none";
+      if(CS.stageView==="canvas") window.HandrawParameterCanvas?.mount(DOM.parameterStage,{
+        scope:activeCacheScope,api:S.apiJson,
+        loggedIn:()=>Boolean(App.state?.loggedIn && App.state?.serverBacked),
+        resources:kind=>kind==="style"?Catalog.styles:Catalog.layouts,
+        pickReferences:settings=>openAssetPickerModal(settings)
+      });
     }
 
     renderCreationModeBar();
@@ -12636,43 +12525,9 @@
     renderQuickStart();
 
     if (DOM.bottomRight) {
-      const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
-      const curTab = CS.tabs.find((t) => t.id === CS.activeTabId);
-      DOM.bottomRight.style.display = (CS.stageView === "canvas" && !isShowingTemplateLib) ? "flex" : "none";
-      if (isShowingTemplateLib) {
-        DOM.bottomRight.innerHTML = "";
-      } else {
-        DOM.bottomRight.innerHTML = `
-        <button type="button" class="ic-canvas-save-btn ${curTab?.dirty ? "is-dirty" : ""}" id="bl-save-wf" title="保存当前工作流到「工作流」 (Ctrl+S)">
-          <span>保存</span>
-          ${curTab?.dirty ? `<span class="ic-save-dirty-dot" title="有未保存改动"></span>` : ""}
-        </button>
-        <div class="ic-float-pill">
-          <button type="button" class="ic-icon-btn ${CS.minimapOpen ? "is-active" : ""}" id="bl-minimap">缩略图</button>
-          <div class="ic-divider-v"></div>
-          <button type="button" class="ic-icon-btn" id="bl-zoom-out">−</button>
-          <button type="button" class="ic-icon-btn" id="bl-zoom-pct" style="min-width:50px;font-family:var(--font-mono);">${Math.round(CS.vk * 100)}%</button>
-          <button type="button" class="ic-icon-btn" id="bl-zoom-in">＋</button>
-          <button type="button" class="ic-icon-btn" id="bl-fit">适应</button>
-        </div>
-      `;
-        DOM.zoomPctBtn = DOM.bottomRight.querySelector("#bl-zoom-pct");
-
-        DOM.bottomRight.querySelector("#bl-save-wf").onclick = () => saveCurrentWorkflow(false);
-        DOM.bottomRight.querySelector("#bl-minimap").onclick = () => {
-          CS.minimapOpen = !CS.minimapOpen;
-          savePrefs();
-          renderMinimap();
-          renderTopAndBottomDocks();
-        };
-        DOM.bottomRight.querySelector("#bl-zoom-out").onclick = () => zoomAroundCenter(1 / 1.2);
-        DOM.bottomRight.querySelector("#bl-zoom-in").onclick = () => zoomAroundCenter(1.2);
-        DOM.bottomRight.querySelector("#bl-zoom-pct").onclick = () => {
-          CS.vk = 1;
-          applyViewportTransform();
-        };
-        DOM.bottomRight.querySelector("#bl-fit").onclick = () => fitView();
-      }
+      DOM.bottomRight.style.display = "none";
+      DOM.bottomRight.innerHTML = "";
+      DOM.zoomPctBtn = null;
     }
   }
 
@@ -13344,36 +13199,7 @@
       draft.isNewDraft = false;
     }
 
-    // Text-only save: never rebuild cards here. Cards are rebuilt only by explicit planning.
-    if (targetArt.linkedPlanNodeId) {
-      let hostGraph = null;
-      let hostTabId = targetArt.linkedTabId || null;
-      const planNodeId = targetArt.linkedPlanNodeId;
-      const activeNode = (CS.graph?.nodes || []).find((n) => n.id === planNodeId);
-      if (activeNode && activeNode.data) {
-        hostGraph = CS.graph;
-        hostTabId = CS.activeTabId;
-      } else {
-        for (const t of CS.tabs || []) {
-          const tabNode = (t.graph?.nodes || []).find((n) => n.id === planNodeId);
-          if (tabNode && tabNode.data) {
-            hostGraph = t.graph;
-            hostTabId = t.id;
-            break;
-          }
-        }
-      }
-      if (hostGraph) {
-        const planNode = hostGraph.nodes.find((n) => n.id === planNodeId);
-        if (planNode && planNode.data) {
-          planNode.data.articleTitle = targetArt.articleTitle;
-          planNode.data.markdown = targetArt.markdown;
-          targetArt.linkedTabId = hostTabId;
-          if (hostTabId === CS.activeTabId) markActiveTabDirty();
-        }
-      }
-    }
-
+    // Saving the current document never writes into a canvas or rebuilds slots.
     persistMyArticles();
     return targetArt;
   }
@@ -14095,6 +13921,7 @@
   }
 
   function openUnifiedArticleEditor(articleId = null, { createNew = false, renderNow = true } = {}) {
+    const openSerial=++_articleOpenSerial;
     flushUnifiedArticleEditor();
     if (!createNew) syncAllTabsArticlesIntoStore();
     ensureMyArticlesInitialized();
@@ -14121,6 +13948,14 @@
         art = sorted.length ? sorted[0] : null;
       }
       if (art) {
+        if(art._summary) {
+          const epoch=cacheScopeEpoch,scope=activeCacheScope;
+          void loadArticleDocument(art.id).then(loaded=>{
+            if(loaded&&!isStaleScope(epoch,scope)&&openSerial===_articleOpenSerial) openUnifiedArticleEditor(art.id,{createNew:false,renderNow});
+          }).catch(error=>toast(error.message||"文章加载失败，请重试"));
+          return;
+        }
+
         CS.activeArticleId = art.id;
         CS.activePlanNodeId = art.linkedPlanNodeId || null;
         draft = draftFromArticle(art);
@@ -14184,39 +14019,9 @@
       builtArticleTitle = title || (draft.title || "");
       builtMarkdown = draft.markdown || md;
     } else {
-      const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
-        withPresetAssets: false
-      });
-
-      const tmpSkill = tmpGraph.nodes.find(
-        (n) => n.type === "skill_params" || n.type === "skill"
-      );
-      if (tmpSkill) {
-        tmpSkill.data = tmpSkill.data || {};
-        tmpSkill.data.style1 = styleId || "FA-001";
-        tmpSkill.data.layout = layoutId || "IG-001";
-      }
-
-      const tmpText = tmpGraph.nodes.find((n) => n.type === "text_input");
-      if (tmpText) {
-        tmpText.data = tmpText.data || {};
-        tmpText.data.text = md;
-        tmpText.data.value = md;
-        tmpText.data.markdown = md;
-      }
-
-      const tmpCtrl = tmpGraph.nodes.find(
-        (n) => n.type === "output_control" && n.data?.mode === "article-illust"
-      ) || tmpGraph.nodes.find((n) => n.type === "output_control");
-      if (tmpCtrl) {
-        tmpCtrl.data = tmpCtrl.data || {};
-        tmpCtrl.data.mode = "article-illust";
-        tmpCtrl.data.coverRatio = coverRatio || "2.35:1";
-        tmpCtrl.data.inlineRatio = inlineRatio || "4:3";
-        tmpCtrl.data.status = "ready";
-      }
-
-      const built = E.buildArticlePlanData(md, tmpCtrl, tmpGraph, Catalog);
+      const built = E.buildArticleDocument(md, {
+        styleId, layoutId, coverRatio, inlineRatio
+      }, Catalog);
       if (title) built.articleTitle = title;
       builtArticleTitle = built.articleTitle;
       builtMarkdown = built.markdown;
@@ -15142,17 +14947,17 @@
     }
 
     // Real task state is derived from settled card requests, never fake progress.
-    const batchState = _activeBatchRun || CS.lastArticleBatchSummary;
+    const batchState = _activeArticleBatchRun || CS.lastArticleBatchSummary;
     const batchSummaryHtml = batchState && Array.isArray(batchState.ids || CS.lastArticleBatchSummary?.ids)
       ? `<section class="hw-article-generation-summary" aria-live="polite">
-          <div class="hw-article-summary-head"><strong>${_activeBatchRun ? "正在并发生图" : "本批生成结果"}</strong>
+          <div class="hw-article-summary-head"><strong>${_activeArticleBatchRun ? "正在并发生图" : "本批生成结果"}</strong>
           <span>${batchState.completed ?? batchState.finished ?? 0} / ${batchState.total} 已处理 · ${batchState.parallel || 1} 路并发</span></div>
           <div class="hw-article-summary-meter" role="progressbar" aria-label="本批生成进度" aria-valuemin="0"
             aria-valuemax="${batchState.total}" aria-valuenow="${batchState.completed ?? batchState.finished ?? 0}">
             <span style="width:${Math.round(100 * (batchState.completed ?? batchState.finished ?? 0) / Math.max(1,batchState.total))}%"></span>
           </div>
           <p>成功 ${batchState.succeeded ?? 0} 张 · 失败 ${batchState.failed ?? 0} 张 · 跳过 ${batchState.skipped ?? 0} 张
-            ${_activeBatchRun ? " · 运行中 " + (_activeBatchRun.running || 0) + " 张" : " · 失败项可单独重试"}</p>
+            ${_activeArticleBatchRun ? " · 运行中 " + (_activeArticleBatchRun.running || 0) + " 张" : " · 失败项可单独重试"}</p>
         </section>` : "";
 
     // Construct #art-editor-flow HTML
@@ -15894,18 +15699,7 @@
     const applyLocalTemplatePlan = async () => {
       CS.articlePlanError = null;
       CS.articleDocReplacedNotice = false;
-      const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
-        withPresetAssets: false
-      });
-      const tmpCtrl = tmpGraph.nodes.find(
-        (n) => n.type === "output_control" && n.data?.mode === "article-illust"
-      ) || tmpGraph.nodes.find((n) => n.type === "output_control");
-      if (tmpCtrl) {
-        tmpCtrl.data = tmpCtrl.data || {};
-        tmpCtrl.data.coverRatio = draft.coverRatio || "2.35:1";
-        tmpCtrl.data.inlineRatio = draft.inlineRatio || "4:3";
-      }
-      const built = E.buildArticlePlanData(draft.markdown || "", tmpCtrl, tmpGraph, Catalog);
+      const built = E.buildArticleDocument(draft.markdown || "", draft, Catalog);
       const templateCards = (built.cards || []).map((c) =>
         Object.assign({}, c, {
           planSource: "template",
@@ -16069,25 +15863,7 @@
 
         const data = await resp.json();
 
-        const tmpGraph = E.createBlueprintGraph("article", Catalog, window.HANDRAW_MOCK, {
-          withPresetAssets: false
-        });
-        const tmpCtrl = tmpGraph.nodes.find(
-          (n) => n.type === "output_control" && n.data?.mode === "article-illust"
-        ) || tmpGraph.nodes.find((n) => n.type === "output_control");
-        if (tmpCtrl) {
-          tmpCtrl.data = tmpCtrl.data || {};
-          tmpCtrl.data.coverRatio = draft.coverRatio || "2.35:1";
-          tmpCtrl.data.inlineRatio = draft.inlineRatio || "4:3";
-        }
-
-        const aiCards = E.buildArticlePlanFromAi(data, {
-          ctrlNode: tmpCtrl,
-          graph: tmpGraph,
-          catalog: Catalog,
-          coverRatio: draft.coverRatio || "2.35:1",
-          inlineRatio: draft.inlineRatio || "4:3"
-        });
+        const aiCards = E.buildArticleDocumentFromAi(data, draft, Catalog);
 
         const review = await window.HandrawArticleReview.reviewPlan(aiCards, {
           source: data.source, articleType: data.articleType,
@@ -16321,33 +16097,10 @@
 
   function switchCreationStage(next) {
     if (next !== "article") flushUnifiedArticleEditor();
-    if (next === "article") {
-      switchIntoArticleMode();
-    } else if (next === "canvas" && (CS.stageView === "preview" || CS.stageView === "article" || isArticleGraph(CS.graph))) {
-      switchToCanvasFromArticle();
-    } else if (next === "quick") {
-      if (CS.stageView === "preview" || CS.stageView === "article" || isArticleGraph(CS.graph)) {
-        const fallbackId = readScopedReturnTab() || pickReturnCanvasTab(CS.activeTabId);
-        if (fallbackId) {
-          activateWorkflowTab(fallbackId);
-        }
-        delete CS.articleReturnTab;
-      }
-      ensureQuickTab();
-      CS.stageView = "quick";
-    } else if (next === "batch") {
-      if (CS.stageView === "preview" || CS.stageView === "article" || isArticleGraph(CS.graph)) {
-        const fallbackId = readScopedReturnTab() || pickReturnCanvasTab(CS.activeTabId);
-        if (fallbackId) {
-          activateWorkflowTab(fallbackId);
-        }
-        delete CS.articleReturnTab;
-      }
-      ensureBatchTab();
-      CS.stageView = "batch";
-    } else {
-      CS.stageView = next;
-    }
+    if(next==="article") switchIntoArticleMode();
+    else if(next==="quick") {ensureQuickTab();CS.stageView="quick";}
+    else if(next==="batch") {ensureBatchTab();CS.stageView="batch";}
+    else CS.stageView=next;
     const url = new URL(window.location.href);
     url.searchParams.delete("view");
     url.searchParams.delete("tab");
@@ -16358,7 +16111,7 @@
     url.searchParams.set("entry", next === "quick" ? "quick" : next === "batch" ? "batch" : next === "article" ? "article" : "canvas");
     window.history.replaceState(null, "", url.pathname + url.search);
     fullRenderCanvas();
-    if (next === "canvas") requestAnimationFrame(() => fitView());
+
   }
 
   function renderCreationModeBar() {
@@ -16876,6 +16629,10 @@
   }
 
   function fullRenderCanvas() {
+    if (!["quick","batch"].includes(CS.stageView)) {
+      renderTopAndBottomDocks();
+      return;
+    }
     syncAllDownstreamArticlePlans();
     if (CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length)) {
       if (DOM.nodesLayer) DOM.nodesLayer.innerHTML = "";
@@ -17231,10 +16988,12 @@
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        saveCurrentWorkflow(false);
+        if(CS.stageView==="canvas") void window.HandrawParameterCanvas?.saveCurrent();
+        else saveCurrentWorkflow(false);
         return;
       }
 
+      if(CS.stageView==="canvas") return;
       const tag = (e.target && e.target.tagName) || "";
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) {
         if (e.key === "Escape") e.target.blur();
@@ -17286,7 +17045,8 @@
       <header class="ic-workbench-bar" id="ic-workbench-bar"></header>
       <div class="ic-stage-wrap" id="ic-stage-wrap">
         <section class="ic-quick-stage" id="ic-quick-stage" style="display:none;"></section>
-        <div class="ic-canvas-stage" id="ic-canvas-stage">
+        <section class="pc-stage" id="ic-parameter-stage" style="display:none;"></section>
+        <div class="ic-canvas-stage" id="ic-canvas-stage" style="display:none;">
           <div class="ic-viewport is-pan-tool" id="ic-viewport">
             <div class="ic-grid-layer" id="ic-grid-layer"></div>
             <div class="ic-world" id="ic-world">
@@ -17311,6 +17071,7 @@
     DOM.workbenchBar = document.getElementById("ic-workbench-bar");
     DOM.stageWrap = document.getElementById("ic-stage-wrap");
     DOM.canvasStage = document.getElementById("ic-canvas-stage");
+    DOM.parameterStage = document.getElementById("ic-parameter-stage");
     DOM.viewport = document.getElementById("ic-viewport");
     DOM.grid = document.getElementById("ic-grid-layer");
     DOM.world = document.getElementById("ic-world");
@@ -17494,6 +17255,15 @@
       isStaleScope,
       ensureStableRequestId,
       generateSinglePlanCard,
+      resolveArticleTarget,
+      syncArticleEditorDraftToHistory,
+      planUnifiedArticleDraft,
+      flushCloudArticlesSync,
+      selectArticleCardImage,
+      articleCloudPayload,
+      loadArticleDocument,
+      hydrateCloudStudioWorkspace,
+      loadMoreStudioHistory,
       runOutputControlNode,
       pollCloudTask,
       resumePendingCloudTasks,

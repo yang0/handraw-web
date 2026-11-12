@@ -186,7 +186,7 @@ class DocumentImportWorkflowTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.uploads_dir = Path(self.temp_dir.name) / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
-        self.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(self.uploads_dir)})
+        self.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(self.uploads_dir),"HANDRAW_PRIVATE_STORAGE":self.temp_dir.name})
         self.env_patch.start()
         self.db_path = Path(self.temp_dir.name) / "test.db"
         self.db = open_isolated_postgres(self)
@@ -416,8 +416,8 @@ class DocumentImportWorkflowTests(unittest.TestCase):
         with self.db.transaction() as tx:
             tx.execute(
                 """
-                INSERT INTO studio_import_jobs (id, user_id, status, file_name, created_at, updated_at)
-                VALUES (?, ?, 'running', 'slow.docx', ?, ?)
+                INSERT INTO studio_import_jobs (id, user_id, status, file_name, created_at, updated_at,lease_until)
+                VALUES (?, ?, 'running', 'slow.docx', ?, ?,now()-interval '1 second')
                 """,
                 (job_id, self.user["id"], old_time, old_time),
             )
@@ -837,7 +837,8 @@ class ImportHttpApiTests(unittest.TestCase):
         cls.temp_dir = tempfile.TemporaryDirectory()
         cls.uploads_dir = Path(cls.temp_dir.name) / "uploads"
         cls.uploads_dir.mkdir(parents=True, exist_ok=True)
-        cls.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(cls.uploads_dir), "HANDRAW_DEMO_MODE": "0", "HANDRAW_ALLOWED_ORIGINS": "https://studio.handraw-style.com"})
+        cls.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(cls.uploads_dir),"HANDRAW_PRIVATE_STORAGE":cls.temp_dir.name,
+            "HANDRAW_AI_CONFIG":str(Path(cls.temp_dir.name)/"absent-ai.json"), "HANDRAW_DEMO_MODE": "0", "HANDRAW_ALLOWED_ORIGINS": "https://studio.handraw-style.com"})
         cls.env_patch.start()
         cls.db_path = Path(cls.temp_dir.name) / "http_test.db"
         cls.db = open_isolated_postgres(cls, seed=True)

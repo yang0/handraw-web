@@ -35,6 +35,6 @@ assert.match(importer,/result\.markdown = editor\.value/);
 assert.doesNotMatch(importer,/hw-document-fidelity-columns/);
 assert.doesNotMatch(importer,/最多展示前 7,500 字符/);
 assert.match(studio,/baseUpdatedAtMs: _articleCloudBases\.get/);
-assert.match(studio,/article_version_conflict/);
+assert.match(studio,/response\.status === 409/);
 assert.match(studio,/ARTICLE_CONFLICT_BACKUP_KEY/);
-console.log("article P1: plan review, single editable import and version conflict recovery contracts OK");
+console.log("article P1: plan review, single editable import and save conflict recovery contracts OK");

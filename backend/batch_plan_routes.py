@@ -273,6 +273,7 @@ def execute_batch_plan(
         {"role": "user", "content": user_prompt},
     ]
 
+    db.release_request_connection()
     response_text, meta = chat(messages, temperature=0.7, timeout=30.0, json_mode=True)
 
     if not meta.get("ok") or not response_text:

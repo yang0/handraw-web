@@ -160,7 +160,9 @@ const {
       ]
     }
   };
-  const target1 = { planNode: planNode1, art: {}, isActiveCanvas: false };
+  planNode1.data.id = "article_1";
+  const target1 = { planNode: planNode1, art: planNode1.data, isActiveCanvas: false };
+  setPrivateState({myArticles: [target1.art]});
 
   let pollCount1 = 0;
   fetchHandler = async (url) => {
@@ -200,7 +202,7 @@ const {
     return { ok: true, status: 200, json: async () => ({}) };
   };
 
-  const res1 = await generateSinglePlanCard(target1, "card_1");
+  const res1 = await generateSinglePlanCard(target1, "card_1", {skipCostConfirmation:true});
   assert.equal(res1, true);
   assert.equal(pollCount1, 2, "Should poll twice before succeeding");
   const card1 = planNode1.data.cards[0];
@@ -222,7 +224,9 @@ const {
       ]
     }
   };
-  const target2 = { planNode: planNode2, art: {}, isActiveCanvas: false };
+  planNode2.data.id = "article_2";
+  const target2 = { planNode: planNode2, art: planNode2.data, isActiveCanvas: false };
+  setPrivateState({myArticles: [target2.art]});
 
   fetchHandler = async (url) => {
     if (url.includes("/api/studio/generate")) {
@@ -242,7 +246,7 @@ const {
     return { ok: true, status: 200, json: async () => ({}) };
   };
 
-  const res2 = await generateSinglePlanCard(target2, "card_2");
+  const res2 = await generateSinglePlanCard(target2, "card_2", {skipCostConfirmation:true});
   assert.equal(res2, false);
   const card2 = planNode2.data.cards[0];
   assert.equal(card2.status, "error");
@@ -264,7 +268,9 @@ const {
       ]
     }
   };
-  const target3 = { planNode: planNode3, art: {}, isActiveCanvas: false };
+  planNode3.data.id = "article_3";
+  const target3 = { planNode: planNode3, art: planNode3.data, isActiveCanvas: false };
+  setPrivateState({myArticles: [target3.art]});
 
   fetchHandler = async (url) => {
     if (url.includes("/api/studio/generate")) {
@@ -277,7 +283,7 @@ const {
     return { ok: true, status: 200, json: async () => ({}) };
   };
 
-  const res3 = await generateSinglePlanCard(target3, "card_3");
+  const res3 = await generateSinglePlanCard(target3, "card_3", {skipCostConfirmation:true});
   assert.equal(res3, false);
   const card3 = planNode3.data.cards[0];
   assert.equal(card3.status, "error");
@@ -632,8 +638,8 @@ const {
   assert.equal(activeDisp.data.status, "done");
   assert.equal(activeDisp.data.items.length, 1);
   assert.equal(activeDisp.data.items[0].imageUrl, "/images/resumed-canvas.webp");
-  assert.equal(activeDisp.data.pendingTaskId, undefined, "pendingTaskId must be cleared");
-  assert.equal(activeDisp.data.pendingRequestId, undefined, "pendingRequestId must be cleared");
+  assert.ok(!activeDisp.data.pendingTaskId, "pendingTaskId must be cleared");
+  assert.ok(!activeDisp.data.pendingRequestId, "pendingRequestId must be cleared");
   assert.equal(activeDisp.data.pendingSpec?.req_resume_canvas_1, undefined, "pendingSpec must be cleared");
   assert.equal(activeCtrl.data.status, "done", "active ctrl node status should be updated to done");
 
@@ -645,7 +651,7 @@ const {
   assert.equal(tabDisp.data.status, "done", "snapshot node status must also be done");
   assert.equal(tabDisp.data.items.length, 1);
   assert.equal(tabDisp.data.items[0].imageUrl, "/images/resumed-canvas.webp");
-  assert.equal(tabDisp.data.pendingRequestId, undefined);
+  assert.ok(!tabDisp.data.pendingRequestId);
 
   // -------------------------------------------------------------
   // Test 9: Recovery failure when task fails -> card marked error
@@ -777,8 +783,8 @@ const {
   assert.equal(inactiveDisp.data.status, "done");
   assert.equal(inactiveDisp.data.items.length, 1);
   assert.equal(inactiveDisp.data.items[0].imageUrl, "/images/inactive-canvas.webp");
-  assert.equal(inactiveDisp.data.pendingTaskId, undefined);
-  assert.equal(inactiveDisp.data.pendingRequestId, undefined);
+  assert.ok(!inactiveDisp.data.pendingTaskId);
+  assert.ok(!inactiveDisp.data.pendingRequestId);
   assert.equal(inactiveCtrl.data.status, "done");
   // Active tab graph should not be corrupted
   assert.equal(activeTabGraph.nodes[0].id, "ctrl_active_other");
@@ -798,7 +804,9 @@ const {
       ]
     }
   };
-  const target11 = { planNode: planNode11, art: {}, isActiveCanvas: false };
+  planNode11.data.id = "article_11";
+  const target11 = { planNode: planNode11, art: planNode11.data, isActiveCanvas: false };
+  setPrivateState({myArticles: [target11.art]});
 
   const postRequestIds11 = [];
   fetchHandler = async (url, opts) => {
@@ -821,12 +829,12 @@ const {
     return { ok: true, status: 200, json: async () => ({}) };
   };
 
-  const res11_1 = await generateSinglePlanCard(target11, "card_11");
+  const res11_1 = await generateSinglePlanCard(target11, "card_11", {skipCostConfirmation:true});
   assert.equal(res11_1, false);
   assert.equal(planNode11.data.cards[0].status, "error");
   assert.equal(postRequestIds11.length, 1);
 
-  const res11_2 = await generateSinglePlanCard(target11, "card_11");
+  const res11_2 = await generateSinglePlanCard(target11, "card_11", {skipCostConfirmation:true});
   assert.equal(res11_2, false);
   assert.equal(postRequestIds11.length, 2);
   assert.notEqual(postRequestIds11[0], postRequestIds11[1], "Terminal failure retry must generate a different requestId");
@@ -845,7 +853,9 @@ const {
       ]
     }
   };
-  const target12 = { planNode: planNode12, art: {}, isActiveCanvas: false };
+  planNode12.data.id = "article_12";
+  const target12 = { planNode: planNode12, art: planNode12.data, isActiveCanvas: false };
+  setPrivateState({myArticles: [target12.art]});
 
   const postRequestIds12 = [];
   fetchHandler = async (url, opts) => {
@@ -868,12 +878,12 @@ const {
     return { ok: true, status: 200, json: async () => ({}) };
   };
 
-  const res12_1 = await generateSinglePlanCard(target12, "card_12");
+  const res12_1 = await generateSinglePlanCard(target12, "card_12", {skipCostConfirmation:true});
   assert.equal(res12_1, false);
   assert.equal(planNode12.data.cards[0].status, "error");
   assert.equal(postRequestIds12.length, 1);
 
-  const res12_2 = await generateSinglePlanCard(target12, "card_12");
+  const res12_2 = await generateSinglePlanCard(target12, "card_12", {skipCostConfirmation:true});
   assert.equal(res12_2, false);
   assert.equal(postRequestIds12.length, 2);
   assert.equal(postRequestIds12[0], postRequestIds12[1], "Timeout retry must reuse the same requestId");
@@ -1016,7 +1026,161 @@ const {
   assert.equal(postRequestIds14.length, 2);
   assert.equal(postRequestIds14[0], postRequestIds14[1], "Canvas timeout retry must reuse same requestId");
 
-  console.log("All studio generate pending and recovery tests passed (14/14).");
+  // 15: Current article documents do not read or mutate any canvas/form graph.
+  const api = win.HANDRAW_STUDIO_TESTING;
+  const unrelatedGraph = {nodes:[{id:"unrelated",type:"output_control",data:{prompt:"keep form"}}],edges:[]};
+  const unrelatedTab = {id:"unrelated-tab",graph:unrelatedGraph};
+  setPrivateState({myArticles:[],graph:unrelatedGraph,tabs:[unrelatedTab]});
+  const graphBefore = JSON.stringify(unrelatedGraph);
+  const firstDoc = {id:"doc-one",title:"Same",markdown:"Same body",cards:[]};
+  const secondDoc = {...firstDoc,id:"doc-two"};
+  api.syncArticleEditorDraftToHistory(firstDoc);
+  api.syncArticleEditorDraftToHistory(secondDoc);
+  api.syncArticleEditorDraftToHistory({...firstDoc,title:"Edited",markdown:"Edited body"});
+  assert.equal(win.CS.myArticles.length,2,"Edits update one current document; identical new IDs stay distinct");
+  assert.equal(api.resolveArticleTarget("doc-one").art.markdown,"Edited body");
+  assert.equal(api.resolveArticleTarget("doc-two").art.markdown,"Same body");
+  assert.equal(api.resolveArticleTarget("doc-one").isActiveCanvas,false);
+  assert.equal(JSON.stringify(unrelatedGraph),graphBefore);
+  assert.equal(win.CS.tabs.length,1);
+
+  // 16: Standalone planning takes article settings without a temporary graph.
+  vm.runInContext(fs.readFileSync("demo/assets/studio-prompt-engine.js","utf8"),context);
+  const documentEngine = win.HANDRAW_CANVAS_ENGINE;
+  const planned = documentEngine.buildArticleDocument("# Article\n\nIntro\n\n## Section\n\nParagraph",{
+    styleId:"FA-001",layoutId:"IG-001",coverRatio:"16:9",inlineRatio:"4:3"
+  });
+  assert.equal(planned.cards.length,2);
+  assert.equal(planned.cards[0].ratio,"16:9");
+  assert.ok(planned.cards.every(card=>card.prompt.includes("#FA-001")));
+  assert.equal(JSON.stringify(unrelatedGraph),graphBefore);
+  const aiPlan = documentEngine.buildArticleDocumentFromAi({cover:{subject:"Cover idea"},illustrations:[{
+    subject:"Inline idea",afterBlockIdx:2,anchorText:"Section"
+  }]},{styleId:"FB-001",coverRatio:"3:2",inlineRatio:"4:3"});
+  assert.equal(aiPlan.length,2);
+  assert.ok(aiPlan[0].prompt.includes("#FB-001"));
+
+  // 17: More than 50 documents save in bounded chunks; simultaneous callers
+  // share one serial operation and runtime updates produce no document writes.
+  win.HANDRAW_SHARED.App.state.serverBacked = true;
+  const cloudDocs = Array.from({length:121},(_,i)=>({id:`cloud-${i}`,articleTitle:`Doc ${i}`,
+    markdown:"body",createdAtMs:1,cards:[{id:"cover",prompt:"drawing",imageUrl:"/images/current.webp",status:"done"}]}));
+  setPrivateState({myArticles:cloudDocs});
+  let activeSaves=0,maxActiveSaves=0;
+  const saveBatches=[];
+  fetchHandler=async(url,opts)=>{
+    assert.equal(url,"/api/studio/articles");
+    const batch=JSON.parse(opts.body).articles;
+    saveBatches.push(batch);
+    activeSaves++;
+    maxActiveSaves=Math.max(maxActiveSaves,activeSaves);
+    await new Promise(resolve=>setImmediate(resolve));
+    activeSaves--;
+    return {ok:true,status:200,json:async()=>({ok:true,versions:Object.fromEntries(batch.map(article=>[article.id,100]))})};
+  };
+  assert.deepEqual(await Promise.all([api.flushCloudArticlesSync(),api.flushCloudArticlesSync()]),[true,true]);
+  assert.deepEqual(saveBatches.map(batch=>batch.length),[50,50,21]);
+  assert.equal(maxActiveSaves,1);
+  assert.ok(!("imageUrl" in saveBatches[0][0].cards[0]));
+  cloudDocs[0].cards[0].status="generating";
+  cloudDocs[0].cards[0].taskId="runtime-task";
+  assert.equal(await api.flushCloudArticlesSync(),true);
+  assert.equal(saveBatches.length,3,"Task progress must not autosave the entire article collection");
+
+  // 18: An edit during an outstanding save is sent afterward with the returned
+  // concurrency token, never acknowledged as already saved or sent in parallel.
+  const edited = {id:"edit-in-flight",articleTitle:"Draft",markdown:"A",cards:[],createdAtMs:1};
+  setPrivateState({myArticles:[edited]});
+  const writes=[];
+  let releaseFirst;
+  fetchHandler=async(url,opts)=>{
+    const article=JSON.parse(opts.body).articles[0];
+    writes.push(article);
+    if(writes.length===1) await new Promise(resolve=>{releaseFirst=resolve;});
+    return {ok:true,status:200,json:async()=>({ok:true,versions:{[article.id]:200+writes.length}})};
+  };
+  const saving = api.flushCloudArticlesSync();
+  assert.equal(typeof releaseFirst,"function");
+  edited.markdown="B";
+  releaseFirst();
+  assert.equal(await saving,true);
+  assert.deepEqual(writes.map(article=>article.markdown),["A","B"]);
+  assert.equal(writes[1].baseUpdatedAtMs,201);
+
+  // 19: A late local result cannot overwrite an edited illustration or leave
+  // its old browser-only generating flag stuck on the new configuration.
+  win.HANDRAW_SHARED.App.state.serverBacked = false;
+  const editedCard={id:"late-card",title:"Card",prompt:"Original",status:"pending",imageUrl:""};
+  const lateArticle={id:"late-article",articleTitle:"Late",markdown:"body",cards:[editedCard]};
+  setPrivateState({myArticles:[lateArticle],engineMode:"api",serverCfg:{liveImageEnabled:true}});
+  fetchHandler=async(url)=>{
+    if(url.includes("/api/studio/generate")) return {ok:true,status:202,json:async()=>({ok:true,requestId:"late-request"})};
+    if(url.includes("/api/studio/tasks")) {
+      editedCard.prompt="User changed it";
+      return {ok:true,status:200,json:async()=>({status:"success",images:["/images/obsolete.webp"]})};
+    }
+    return {ok:true,status:200,json:async()=>({})};
+  };
+  assert.equal(await generateSinglePlanCard("late-article","late-card",{skipCostConfirmation:true}),false);
+  assert.equal(editedCard.prompt,"User changed it");
+  assert.equal(editedCard.imageUrl,"");
+  assert.equal(editedCard.status,"pending");
+  assert.equal(JSON.stringify(unrelatedGraph),graphBefore);
+
+  // 20: Summary-only records are never submitted as empty article documents.
+  win.HANDRAW_SHARED.App.state.serverBacked = true;
+  const summary={id:"summary-only",articleTitle:"Summary",updatedAtMs:1,_summary:true,cards:[]};
+  setPrivateState({myArticles:[summary]});
+  fetchHandler=async()=>{throw new Error("A summary must not trigger an autosave");};
+  assert.equal(await api.flushCloudArticlesSync(),true);
+  let detailReads=0;
+  fetchHandler=async(url)=>{
+    assert.equal(url,"/api/studio/articles/summary-only");detailReads++;
+    return {ok:true,status:200,json:async()=>({ok:true,article:{id:"summary-only",articleTitle:"Full",markdown:"Full private body",cards:[],updatedAtMs:2}})};
+  };
+  assert.equal(await api.loadArticleDocument("summary-only"),true);
+  assert.equal(detailReads,1);
+  assert.equal(win.CS.myArticles[0].markdown,"Full private body");
+  assert.equal(win.CS.myArticles[0]._summary,false);
+  fetchHandler=async()=>{throw new Error("Just reading an article must not autosave it");};
+  assert.equal(await api.flushCloudArticlesSync(),true);
+  win.HANDRAW_SHARED.App.state.serverBacked = false;
+
+  // 21: A real HTTP conflict stops autosave and preserves an independent local
+  // recovery copy, including edits made while the failed save was outstanding.
+  win.HANDRAW_SHARED.App.state.serverBacked = true;
+  setPrivateState({myArticles:[{id:"conflict-local",articleTitle:"Local",markdown:"Keep this draft",cards:[]}]});
+  fetchHandler=async()=>({ok:false,status:409,json:async()=>({code:"article_version_conflict"})});
+  assert.equal(await api.flushCloudArticlesSync(),false);
+  const recovery=api.readScopedCache("handraw_article_conflict_backup_v1");
+  assert.equal(recovery.articles[0].markdown,"Keep this draft");
+  fetchHandler=async()=>{throw new Error("Conflicting drafts must not automatically retry and overwrite");};
+  assert.equal(await api.flushCloudArticlesSync(),false);
+  win.HANDRAW_SHARED.App.state.serverBacked = false;
+
+  // History continuation must preserve more than forty distinct runs, retry
+  // the same boundary after transport failure, and ignore another account.
+  win.HANDRAW_SHARED.App.state.serverBacked = true;
+  setPrivateState({generationHistory:[]});
+  const historyPage=(start,stop)=>Array.from({length:stop-start},(_,n)=>({id:`paged_${start+n}`,runId:`run_${start+n}`,kind:"single",createdAtISO:new Date(1800000000000-(start+n)*1000).toISOString(),engine:"live",items:[]}));
+  fetchHandler=async()=>({ok:true,status:200,json:async()=>({loggedIn:true,history:historyPage(0,40),nextCursor:"older-page"})});
+  await api.hydrateCloudStudioWorkspace({collection:"history"});
+  assert.equal(win.CS.generationHistory.length,40);assert.equal(win.CS.historyCursor,"older-page");
+  fetchHandler=async url=>{assert.ok(url.endsWith("cursor=older-page"));throw new Error("lost response");};
+  await api.loadMoreStudioHistory();assert.equal(win.CS.historyCursor,"older-page");assert.ok(win.CS.historyError);
+  fetchHandler=async url=>({ok:true,status:200,json:async()=>({loggedIn:true,history:historyPage(40,80),nextCursor:""})});
+  await api.loadMoreStudioHistory();assert.equal(win.CS.generationHistory.length,80);assert.equal(win.CS.historyCursor,"");
+  assert.equal(win.CS.generationHistory[0].id,"paged_0");assert.equal(win.CS.generationHistory[79].id,"paged_79");
+  assert.equal(new Set(win.CS.generationHistory.map(h=>h.id)).size,80);
+  assert.equal(api.readScopedCache("handraw_gen_history_v4").length,40,"The local warm cache stays bounded while all fetched pages remain visible");
+  let releaseHistory;win.CS.historyCursor="late";
+  fetchHandler=async()=>new Promise(resolve=>releaseHistory=()=>resolve({ok:true,status:200,json:async()=>({loggedIn:true,history:historyPage(80,90),nextCursor:"wrong-account"})}));
+  const latePage=api.loadMoreStudioHistory();api.switchScope("user:another-account");releaseHistory();await latePage;
+  assert.equal(win.CS.historyCursor,"");assert.equal(win.CS.historyLoading,false);
+  assert.ok(!(win.CS.generationHistory||[]).some(h=>h.id==="paged_80"));
+  win.HANDRAW_SHARED.App.state.serverBacked = false;
+
+  console.log("All studio generation, document isolation, save and history tests passed (24/24).");
 })().catch((err) => {
   console.error(err);
   process.exit(1);

@@ -599,7 +599,8 @@ def _project_generation_impl(
         source_index = int(source_row["batch_index"] or 0) if batch_id else 0
         subindex = per_source_count.get(owner_generation_id, 0)
         per_source_count[owner_generation_id] = subindex + 1
-        normalized_images.append((source_index * 1000 + subindex, url, ""))
+        position=len(normalized_images) if source_row.get("item_id") else source_index*1000+subindex
+        normalized_images.append((position, url, ""))
     record_public_work(
         conn, user_id=int(row["user_id"]), source="web",
         external_run_id=batch_id or gen_id, work_id=wid,

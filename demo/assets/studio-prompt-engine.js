@@ -1599,8 +1599,25 @@
     return blocks;
   }
 
-  function assembleArticleCardFullPrompt(graph, ctrlNode, catalog, slotInfo = {}) {
-    const rec = ctrlNode ? resolveControlRecipe(graph, ctrlNode, catalog) : null;
+  function articleRecipe(options, catalog) {
+    const resources = catalog?.resourceMap;
+    return {
+      style1Id: options.styleId || options.style1 || "",
+      style2Id: options.style2 || "",
+      layoutId: options.layoutId || options.layout || "",
+      userNoteText: options.note || "",
+      fusionToggleOn: Boolean(options.style2),
+      colorResources: [], toneResources: [], allMoods: options.moods || [],
+      assetItems: (options.refImages || []).map(image => ({ id: "", name: "参考素材", image })),
+      whitespace: options.whitespace || "", audience: "", businessScene: "",
+      style1Res: resources?.get(options.styleId || options.style1),
+      style2Res: resources?.get(options.style2),
+      layoutRes: resources?.get(options.layoutId || options.layout)
+    };
+  }
+
+  function assembleArticleCardFullPrompt(graph, ctrlNode, catalog, slotInfo = {}, articleOptions = null) {
+    const rec = articleOptions ? articleRecipe(articleOptions, catalog) : ctrlNode ? resolveControlRecipe(graph, ctrlNode, catalog) : null;
     const role = slotInfo.role === "cover" ? "cover" : "inline";
     const ratio = slotInfo.ratio || (role === "cover" ? "2.35:1" : "4:3");
     const subjectLine = String(slotInfo.subject || "").trim() || "温暖手绘编辑风叙事插画";
@@ -1674,8 +1691,8 @@
     return lines.join("\n");
   }
 
-  function buildArticlePlanData(rawMd, ctrlNode, graph, catalog, { withSampleImages = false } = {}) {
-    const rec = ctrlNode ? resolveControlRecipe(graph, ctrlNode, catalog) : null;
+  function buildArticlePlanData(rawMd, ctrlNode, graph, catalog, { withSampleImages = false, articleOptions = null } = {}) {
+    const rec = articleOptions ? articleRecipe(articleOptions, catalog) : ctrlNode ? resolveControlRecipe(graph, ctrlNode, catalog) : null;
     const effectiveMd =
       String(rawMd || (rec && rec.articleSource) || "").trim() || DEFAULT_STARTER_ARTICLE_MD;
     const blocks = parseArticleReadonlyBlocks(effectiveMd);
@@ -1690,7 +1707,7 @@
     const leadBlock = blocks.find((b) => b !== h1Block && (b.kind === "p" || b.kind === "blockquote"));
     const leadSnippet = leadBlock ? leadBlock.text.slice(0, 88) : articleTitle;
 
-    const cd = (ctrlNode && ctrlNode.data) || {};
+    const cd = articleOptions || (ctrlNode && ctrlNode.data) || {};
     const coverRatio = cd.coverRatio || "2.35:1";
     const inlineRatio = cd.inlineRatio || "4:3";
 
@@ -1716,7 +1733,7 @@
           role: "cover",
           ratio: coverRatio,
           subject: coverSubject
-        }),
+        }, articleOptions),
         promptCustomized: false,
         sampleImg: sampleImgs[0],
         imageUrl: withSampleImages ? sampleImgs[0] : "",
@@ -1755,7 +1772,7 @@
           role: "inline",
           ratio: inlineRatio,
           subject
-        }),
+        }, articleOptions),
         promptCustomized: false,
         sampleImg: sImg,
         imageUrl: withSampleImages ? sImg : "",
@@ -1796,7 +1813,7 @@
     };
   }
 
-  function buildArticlePlanFromAi(resp, { ctrlNode, graph, catalog, coverRatio, inlineRatio } = {}) {
+  function buildArticlePlanFromAi(resp, { ctrlNode, graph, catalog, coverRatio, inlineRatio, articleOptions = null } = {}) {
     if (!resp || typeof resp !== "object") {
       const empty = [];
       empty.cards = empty;
@@ -1841,7 +1858,7 @@
           role: "cover",
           ratio: cRatio,
           subject: covSubject
-        }),
+        }, articleOptions),
         promptCustomized: false,
         sampleImg: sampleImgs[0],
         imageUrl: "",
@@ -1879,7 +1896,7 @@
           role: "inline",
           ratio: iRatio,
           subject: cleanSubj
-        }),
+        }, articleOptions),
         promptCustomized: false,
         sampleImg: sampleImgs[(idx + 1) % sampleImgs.length],
         imageUrl: "",
@@ -1889,6 +1906,54 @@
 
     cards.cards = cards;
     return cards;
+  }
+
+  function buildArticleDocument(markdown, options = {}, catalog = null) {
+    return buildArticlePlanData(markdown, null, null, catalog, { articleOptions: options });
+  }
+
+  function buildArticleDocumentFromAi(response, options = {}, catalog = null) {
+    return buildArticlePlanFromAi(response, {
+      catalog, articleOptions: options,
+      coverRatio: options.coverRatio, inlineRatio: options.inlineRatio
+    });
+  }
+
+  function convertLegacyCanvas(graph, catalog) {
+    const source=JSON.parse(JSON.stringify(graph || {}));
+    if(!Array.isArray(source.nodes)||!Array.isArray(source.edges)) throw new Error("存档格式不完整，可先导出原文件");
+    if(source.nodes.some(node=>["article_plan","article"].includes(node.type)))
+      throw new Error("文章请提取到文章工作台，不能作为画布任务执行");
+    if(source.nodes.every(node=>["parameter","combine","output"].includes(node.type))) return source;
+    const rows=[];
+    for(const control of source.nodes.filter(node=>node.type==="output_control")) {
+      if(!["single","graphic-text","image-only"].includes(control.data?.mode || "single"))
+        throw new Error("此存档含专用套图步骤，请保留原文件并在新画布中重新配置");
+      const rec=resolveControlRecipe(source,control,catalog);
+      if(rec.fissionNodes?.length || (rec.loopNodes?.length || 0)>1)
+        throw new Error("此存档包含动态裂变或多重循环，请导出原文件并在新画布中逐组配置");
+      const iterations=rec.loopNode?resolveLoopIterations(source,rec.loopNode,rec,catalog):[{theme:rec.combinedText}];
+      const count=Math.max(1,Number(control.data?.count)||1);
+      if(!Number.isInteger(count)||rows.length+iterations.length*count>200) throw new Error("转换后的计划超过 200 张，请拆分配置");
+      for(const iteration of iterations) {
+        let prompt=String(iteration.theme || rec.combinedText || "").trim();
+        if(!prompt) throw new Error("旧工作流缺少主题，请保留原文件并在新画布中补充");
+        const notes=[["受众",rec.audience],["应用场景",rec.businessScene],["图型玩法",rec.sc021Type],
+                     ["姓名",rec.sc022Name],["拼音",rec.sc022Pinyin],["背景",rec.sc022Bg]];
+        prompt+="\n"+notes.filter(([,value])=>value).map(([label,value])=>`【${label}】：${value}`).join("\n");
+        const spec={prompt:prompt.trim(),style1:iteration.style1 || rec.style1Id || "",style2:rec.fusionToggleOn?rec.style2Id || "":"",
+          layout:iteration.layout || rec.layoutId || "",ratio:control.data?.ratio || "3:4",
+          refImages:(iteration.assetItems || rec.assetItems || []).map(item=>item.image).filter(Boolean),
+          colors:rec.colorIds || [],tones:rec.toneIds || [],moods:rec.allMoods || [],whitespace:rec.whitespace || "",
+          mode:control.data?.mode==="image-only"?"image-only":"graphic-text"};
+        for(let n=0;n<count;n++) rows.push(JSON.parse(JSON.stringify(spec)));
+      }
+    }
+    if(!rows.length) throw new Error("此存档没有可转换的输出，请导出原文件保留");
+    const nodes=Object.keys(rows[0]).map((parameter,index)=>({id:"legacy_"+parameter,type:"parameter",parameter,
+      values:rows.map(row=>row[parameter]),x:32+(index%3)*335,y:32+Math.floor(index/3)*330}));
+    nodes.push({id:"legacy_output",type:"output",mode:"zip",repeat:1,x:1060,y:160});
+    return {format:1,nodes,edges:nodes.filter(node=>node.type==="parameter").map(node=>({from:node.id,to:"legacy_output"}))};
   }
 
   function buildEditorSegments(markdown, cards) {
@@ -2411,6 +2476,9 @@
     assembleArticleCardFullPrompt,
     buildArticlePlanData,
     buildArticlePlanFromAi,
+    buildArticleDocument,
+    buildArticleDocumentFromAi,
+    convertLegacyCanvas,
     buildEditorSegments,
     createBlueprintGraph,
     autoArrangeGraph

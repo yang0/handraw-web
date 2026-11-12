@@ -297,6 +297,7 @@ def execute_article_plan(
         {"role": "user", "content": user_prompt},
     ]
 
+    db.release_request_connection()
     response_text, meta = chat(messages, temperature=0.4, timeout=30.0)
 
     if not meta.get("ok") or not response_text:

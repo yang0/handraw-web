@@ -142,8 +142,8 @@ assert.ok(!styles.includes("column-count: 3"),
 assert.ok(studio.includes('id="studio-mode-workflows"'), "Workflow shortcut should be beside generation history");
 assert.ok(studio.includes('id="studio-mode-history"'));
 assert.ok(!studio.includes('id="tb-open-wflib"'), "Remove workflow button from canvas tab bar");
-assert.ok(studio.includes('DOM.workbenchBar.style.display = CS.stageView === "canvas" ? "" : "none"'),
-  "Hide canvas tabs on standalone workflow library");
+assert.match(studio, /DOM\.workbenchBar\.style\.display\s*=\s*"none"/,
+  "Legacy form tabs stay hidden in the independent parameter canvas and library");
 const workflowStart = studio.indexOf("  function renderWorkflowsStage() {");
 const workflowEnd = studio.indexOf("  /*", workflowStart + 20);
 const workflow = studio.slice(workflowStart, workflowEnd > workflowStart ? workflowEnd : undefined);
@@ -196,11 +196,11 @@ const workflowData = {
     }
   ]
 };
-const wfSourceStart = studio.indexOf("  function renderWorkflowsStage() {");
+const wfSourceStart = studio.indexOf("  function renderLoadedWorkflowsStage() {");
 const wfSourceEnd = studio.indexOf("  /* ======================== UNDO/REDO", wfSourceStart);
 assert.ok(wfSourceStart >= 0 && wfSourceEnd > wfSourceStart);
 const renderWorkflow = new Function("DOM", "CS", "esc", "ensureDefaultSavedWorkflows", "document",
-  studio.slice(wfSourceStart, wfSourceEnd) + "\nreturn renderWorkflowsStage;")(
+  studio.slice(wfSourceStart, wfSourceEnd) + "\nreturn renderLoadedWorkflowsStage;")(
     { workflowsStage: workflowStage }, workflowData, (v) => String(v), () => {}, { activeElement: null }
   );
 renderWorkflow();
@@ -214,5 +214,25 @@ for (const action of ["data-wf-open", "data-wf-dl", "data-wf-rm"]) {
 }
 assert.ok(workflowStage.innerHTML.includes("2 个节点"), "Card should show node count");
 assert.ok(workflowStage.innerHTML.includes("1 条连线"), "Card should show edge count");
+
+// Even when quick/batch tabs exist, their save/zoom controls cannot operate
+// over the independent canvas. Check the real dock renderer with DOM stubs.
+const docksStart=studio.indexOf("  function renderTopAndBottomDocks() {");
+const docksEnd=studio.indexOf("  /* ======================== CONTEXT MENU",docksStart);
+const dockDom={root:{setAttribute(){},classList:{toggle(){}}},canvasStage:{style:{}},workbenchBar:{style:{}},parameterStage:{style:{}},bottomRight:{style:{},innerHTML:"legacy controls"}};
+const dockState={stageView:"canvas",tabs:[{id:"quick-tab"}],graph:{nodes:[{id:"quick-input"}]}};
+let mounted=0;
+const docks=new Function("DOM","CS","window","activeCacheScope","S","App","Catalog","openAssetPickerModal",
+  "renderCreationModeBar","renderWorkbenchBar","renderCanvasToolstrip","renderFullPreviewStage","renderHistoryStage","renderWorkflowsStage","renderQuickStart",
+  studio.slice(docksStart,docksEnd)+"\nreturn renderTopAndBottomDocks;")(
+    dockDom,dockState,{HandrawParameterCanvas:{mount(){mounted++;}}},"owner",{apiJson(){}},{state:{}},{},()=>{},
+    ...Array.from({length:7},()=>()=>{})
+  );
+const before=JSON.stringify(dockState);docks();
+assert.equal(mounted,1);assert.equal(dockDom.parameterStage.style.display,"flex");
+assert.equal(dockDom.canvasStage.style.display,"none");assert.equal(dockDom.workbenchBar.style.display,"none");
+assert.equal(dockDom.bottomRight.style.display,"none");assert.equal(dockDom.bottomRight.innerHTML,"");
+assert.equal(JSON.stringify(dockState),before,"Showing the canvas must not alter another form's graph");
+dockState.stageView="quick";docks();assert.equal(mounted,1);assert.equal(dockDom.parameterStage.style.display,"none");
 
 console.log("Studio history and workflows: shared responsive navigation gutters, responsive cards and actions passed");

@@ -280,13 +280,13 @@ def refresh_run_status(tx: PgConnection, run_id: str) -> str:
     if not run:
         raise ValueError("Generation run does not exist")
     rows = tx.execute(
-        "SELECT position,status FROM generation_items WHERE run_id=?",
+        "SELECT position,ordinal,status FROM generation_items WHERE run_id=? AND retired_at IS NULL",
         (run_id,),
     ).fetchall()
     positions: dict[int, set[str]] = {}
     for row in rows:
         position = int(row["position"])
-        slot = position // 1000 if run["source"] == "web" else position
+        slot = int(row["ordinal"]) if row["ordinal"] is not None else position // 1000 if run["source"] == "web" else position
         positions.setdefault(slot, set()).add(str(row["status"]))
     terminal = {"success", "failed", "cancelled"}
     if len(positions) < int(run["expected_count"]) or any(
@@ -373,30 +373,35 @@ def record_public_work(
 
     now = _now()
     previous_media_urls = work_images(tx, work_id) if work["run_id"] else []
+    explicit_tasks = tx.execute(
+        "SELECT 1 FROM studio_generations WHERE run_id=? AND item_id IS NOT NULL LIMIT 1", (run_id,),
+    ).fetchone()
     # Unlink cover before replacing the ordered collection; DB triggers enforce
     # that a new cover belongs to this work.
     tx.execute("UPDATE works SET run_id=?, cover_media_id=NULL WHERE id=?", (run_id, work_id))
     tx.execute("DELETE FROM work_media WHERE work_id=?", (work_id,))
-    # Replace successful snapshots, but do not erase failed/pending slots that
-    # belong to the same logical batch. A retried successful position overrides
-    # that position's earlier failure, while other failures remain auditable.
-    tx.execute(
-        "DELETE FROM generation_items WHERE run_id=? AND status='success'",
-        (run_id,),
-    )
+    # A task is a stable execution identity, not a replaceable publication
+    # snapshot. Preserve its references, configuration and creation timestamp.
+    # Successful outputs omitted from the new gallery become inactive in place.
+    if not explicit_tasks:
+        tx.execute(
+            """UPDATE generation_items SET status='cancelled',media_id=NULL,
+                      error_code='',updated_at=?
+               WHERE run_id=? AND status='success' AND NOT(position=ANY(?))""",
+            (now, run_id, [entry[0] for entry in entries]),
+        )
     for rank, (position, media_id, _) in enumerate(entries):
-        tx.execute(
-            "DELETE FROM generation_items WHERE run_id=? AND position=?",
-            (run_id, position),
-        )
-        tx.execute(
-            """
-            INSERT INTO generation_items
-              (id,run_id,position,status,media_id,created_at,updated_at)
-            VALUES (?,?,?,'success',?,?,?)
-            """,
-            (_stable_id("item", run_id, position), run_id, position, media_id, now, now),
-        )
+        if not explicit_tasks:
+            tx.execute(
+                """
+                INSERT INTO generation_items
+                  (id,run_id,position,status,media_id,created_at,updated_at)
+                VALUES (?,?,?,'success',?,?,?)
+                ON CONFLICT(run_id,position) DO UPDATE SET status='success',
+                    media_id=excluded.media_id,error_code='',updated_at=excluded.updated_at
+                """,
+                (_stable_id("item", run_id, position), run_id, position, media_id, now, now),
+            )
         tx.execute(
             "INSERT INTO work_media(work_id,media_id,position) VALUES (?,?,?)",
             (work_id, media_id, rank),
@@ -522,7 +527,7 @@ def cancel_unsubmitted_web_slots(
         raise ServiceError("取消图片索引必须为非负整数", status=400, code="invalid_cancel_positions")
     with db.transaction() as tx:
         query = (
-            "SELECT id,expected_count FROM generation_runs "
+            "SELECT id,expected_count,creation_mode FROM generation_runs "
             "WHERE user_id=? AND source='web' AND external_run_id=?"
         )
         query += " FOR UPDATE"
@@ -548,23 +553,25 @@ def cancel_unsubmitted_web_slots(
                 (uid, batch_id, pos),
             ).fetchone()
             existing = tx.execute(
-                "SELECT status FROM generation_items WHERE run_id=? AND position=?",
-                (run["id"], pos * 1000),
+                "SELECT position,status FROM generation_items WHERE run_id=? AND (ordinal=? OR (ordinal IS NULL AND position=?))",
+                (run["id"], pos,pos*1000),
             ).fetchone()
             if gateway or (existing and existing["status"] == "success"):
                 skipped.append(pos)
                 continue
+            position=int(existing["position"]) if existing else pos*1000 if run["creation_mode"]=="other" else pos
             tx.execute(
                 """
                 INSERT INTO generation_items
-                    (id,run_id,position,status,media_id,error_code,created_at,updated_at)
-                VALUES (?, ?, ?, 'cancelled', NULL, '', ?, ?)
+                    (id,run_id,position,ordinal,status,media_id,error_code,created_at,updated_at)
+                VALUES (?, ?, ?, ?, 'cancelled', NULL, '', ?, ?)
                 ON CONFLICT(run_id,position) DO UPDATE SET
+                    ordinal=COALESCE(generation_items.ordinal,excluded.ordinal),
                     status='cancelled',media_id=NULL,error_code='',updated_at=excluded.updated_at
                 WHERE generation_items.status <> 'success'
                 """,
-                (_stable_id("item", run["id"], pos * 1000),
-                 run["id"], pos * 1000, now, now),
+                (_stable_id("item", run["id"], position),
+                 run["id"], position,None if run["creation_mode"]=="other" else pos, now, now),
             )
             cancelled.append(pos)
 

@@ -43,62 +43,18 @@ assert(!studioAppSource.includes('preview-btn-back-editor-2'), "Duplicate #previ
 console.log("✓ Test 1 Passed: Segmented switch markup and duplicate button removal verified.\n");
 
 // ==========================================
-// Test 2: Canvas First Entry Template Library
-// ==========================================
-console.log("Checking Test 2: Canvas Template Library...");
-
-assert(quickCreateCss.includes(".ic-canvas-template-library"), "quick-create.css must define .ic-canvas-template-library");
-assert(quickCreateCss.includes(".ic-tmpl-grid"), "quick-create.css must define .ic-tmpl-grid");
-assert(quickCreateCss.includes(".ic-tmpl-card"), "quick-create.css must define .ic-tmpl-card");
-
-assert(studioAppSource.includes("renderCanvasTemplateLibrary"), "studio-app.js must implement renderCanvasTemplateLibrary");
-assert(studioAppSource.includes('bp: "single"'), "Template library must support single image template");
-assert(studioAppSource.includes('bp: "loop_100"'), "Template library must support loop_100 template");
-assert(studioAppSource.includes('bp: "style_ab"'), "Template library must support style_ab template");
-assert(studioAppSource.includes('bp: "ip_story"'), "Template library must support ip_story template");
-assert(studioAppSource.includes('bp: "omnimedia"'), "Template library must support omnimedia template");
-assert(studioAppSource.includes('bp: "fusion"'), "Template library must support fusion template");
-assert(studioAppSource.includes('bp: "blank"'), "Template library must support blank template");
-
-// Check that hydrateTabsAndUrlParams does NOT force default 3 tabs when localStorage is empty
-assert(studioAppSource.includes("CS.tabs = [];"), "Empty localStorage must initialize CS.tabs to empty array");
-
-// 2.2 Template library hides floating toolstrip, minimap, and save button
-assert(
-  studioAppSource.includes('const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);'),
-  "studio-app.js must detect whether template library is currently showing"
-);
-assert(
-  quickCreateCss.includes(".ic-canvas-stage:has(.ic-canvas-template-library) .ic-canvas-toolstrip"),
-  "quick-create.css must hide .ic-canvas-toolstrip when template library is present"
-);
-assert(
-  quickCreateCss.includes(".ic-canvas-stage:has(.ic-canvas-template-library) .ic-bottom-right-dock"),
-  "quick-create.css must hide .ic-bottom-right-dock when template library is present"
-);
-assert(
-  quickCreateCss.includes(".ic-canvas-stage:has(.ic-canvas-template-library) .ic-minimap"),
-  "quick-create.css must hide .ic-minimap when template library is present"
-);
-
-// Check function renderCanvasToolstrip hides toolstrip on template library
-const toolstripMatch = studioAppSource.match(/function renderCanvasToolstrip\(\)\s*\{([\s\S]*?)\n  \}/);
-assert(toolstripMatch, "renderCanvasToolstrip function must be found");
-assert(toolstripMatch[1].includes('DOM.canvasToolstrip.style.display = "none";'), "renderCanvasToolstrip must hide toolstrip when template library is showing");
-assert(toolstripMatch[1].includes('DOM.canvasToolstrip.style.display = "";'), "renderCanvasToolstrip must restore toolstrip when template is active");
-
-// Check function renderMinimap hides minimap on template library
-const minimapMatch = studioAppSource.match(/function renderMinimap\(\)\s*\{([\s\S]*?)\n  \}/);
-assert(minimapMatch, "renderMinimap function must be found");
-assert(minimapMatch[1].includes('!isShowingTemplateLib'), "renderMinimap must hide minimap window when template library is showing");
-
-// Check function renderTopAndBottomDocks hides bottomRight (save button & minimap button) on template library
-const docksMatch = studioAppSource.match(/function renderTopAndBottomDocks\(\)\s*\{([\s\S]*?)\n  \}/);
-assert(docksMatch, "renderTopAndBottomDocks function must be found");
-assert(docksMatch[1].includes('DOM.bottomRight.style.display = (CS.stageView === "canvas" && !isShowingTemplateLib) ? "flex" : "none";'), "renderTopAndBottomDocks must hide bottom-right bar when template library is showing");
-assert(docksMatch[1].includes('DOM.bottomRight.innerHTML = "";'), "renderTopAndBottomDocks must clear bottom-right dock when template library is showing");
-
-console.log("✓ Test 2 Passed: Canvas Template Library on first entry & dock hiding verified.\n");
+// Test 2: The parameter canvas owns a fresh document, independent of forms.
+const vm=require("node:vm");
+const sandbox={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname,"../demo/assets/parameter-canvas.js"),"utf8"),sandbox);
+const parameterApi=sandbox.window.HandrawParameterCanvas.testing;
+const firstCanvas=parameterApi.blank(),secondCanvas=parameterApi.blank();
+assert.notEqual(firstCanvas.id,secondCanvas.id);
+assert(firstCanvas.graph.nodes.every(node=>["parameter","combine","output"].includes(node.type)));
+assert(!("articleId" in firstCanvas));
+assert(!("formId" in firstCanvas));
+console.log("✓ Test 2 Passed: Independent parameter document identity verified.\n");
 
 // ==========================================
 // Test 3: Zero Emoji in Prompt Engine & Blueprint Defs
@@ -176,19 +132,12 @@ assert(!studioAppSource.includes("选题裂变(10条)"), "studio-app.js must not
 console.log("✓ Test 4 Passed: Terminology substitutions & internal counts stripped.\n");
 
 // ==========================================
-// Test 5: Secondary Cost Confirmation (> 20 items)
-// ==========================================
-console.log("Checking Test 5: Secondary Cost Confirmation (> 20 items)...");
-
-assert(studioAppSource.includes("confirmSecondaryBatchCost"), "studio-app.js must implement confirmSecondaryBatchCost");
-assert(studioAppSource.includes("confirmPotentialGenerationCost"), "studio-app.js must have confirmPotentialGenerationCost");
-
-// Check threshold logic in confirmPotentialGenerationCost
-const fnMatch = studioAppSource.match(/function confirmPotentialGenerationCost[\s\S]*?^  \}/m);
-assert(fnMatch, "confirmPotentialGenerationCost function must be found");
-assert(fnMatch[0].includes("count > 20"), "confirmPotentialGenerationCost must check if count > 20 for secondary confirmation");
-
-console.log("✓ Test 5 Passed: Secondary cost confirmation for > 20 items verified.\n");
+// Test 5: The selected plan has an explicit price and affordability boundary.
+const preview={quote:{freeRemaining:3,unitPrice:2,balance:100}};
+assert.equal(parameterApi.selectedQuote(preview,21).total,36);
+assert.equal(parameterApi.selectedQuote(preview,21).affordable,true);
+assert.equal(parameterApi.selectedQuote({quote:{...preview.quote,balance:35}},21).affordable,false);
+console.log("✓ Test 5 Passed: Batch price and affordability verified.\n");
 
 // ==========================================
 // Test 6: Blank Canvas Bug Guard

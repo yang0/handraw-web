@@ -267,6 +267,11 @@ class PostgresDatabase:
                 raise RuntimeError(
                     "Missing PostgreSQL billing schema. Apply backend/postgres_111_payment_billing.sql"
                 )
+            cursor.execute("""SELECT to_regclass('public.article_illustrations') IS NOT NULL
+                              AND to_regclass('public.studio_canvases') IS NOT NULL
+                              AND EXISTS(SELECT 1 FROM public.schema_migrations WHERE version=118)""")
+            if not cursor.fetchone()[0]:
+                raise RuntimeError("Missing studio schema. Apply backend/postgres_118_studio_model.sql and run ops/upgrade_studio_model.py before starting this code")
         return []
 
     def close_thread_conn(self):
@@ -276,9 +281,15 @@ class PostgresDatabase:
             self._pool.putconn(wrapper._db)
 
     def release_request_connection(self):
+        wrapper = getattr(self._local, "wrapper", None)
+        if wrapper and wrapper._db.info.transaction_status != TransactionStatus.IDLE:
+            raise RuntimeError("Cannot release a PostgreSQL connection inside an active transaction")
         self.close_thread_conn()
 
     def close(self):
+        dispatcher = getattr(self, "_canvas_dispatcher", None)
+        if dispatcher is not None:
+            dispatcher.stop()
         manager = getattr(self, "_import_manager", None)
         if manager is not None:
             manager.stop()

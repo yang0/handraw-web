@@ -601,96 +601,92 @@ class GenerationReconciler:
             run_blackbox_backfill(self.db)
         except Exception:
             logger.warning("worker=generation-reconciler phase=blackbox-backfill failed", exc_info=True)
-        rows = self.db.get_conn().execute(
-            """
-            SELECT id, task_id, request_id, status, created_at, system_append_json
-            FROM studio_generations
-            WHERE engine = 'live' AND COALESCE(deleted_at, '') = ''
-              AND status IN ('queued', 'running')
-            ORDER BY created_at ASC
-            LIMIT 50
-            """
-        ).fetchall()
         handled = 0
-        for row in rows:
-            if lease is not None and not lease.valid():
-                logger.warning("Reconciliation interrupted: Redis leadership lost")
-                break
-            generation_id = str(row["id"])
-            if _row_gateway_protocol(row["system_append_json"]) == "openai":
-                created_dt = _parse_created_at_dt(row["created_at"])
-                if created_dt and created_dt < (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_OPENAI_ORPHAN_TIMEOUT_MINUTES)):
-                    refund_failed_cloud_generation(
-                        self.db,
-                        generation_id,
-                        "同步生图任务超时未完成，已退还",
-                    )
-                    handled += 1
-                continue
-            task_id = str(row["task_id"] or "").strip()
-            # If the submit process died before receiving an upstream id, use
-            # the stable request id only to look for an already-created task.
-            # Never submit a replacement request from this worker.
-            lookup_id = task_id or str(row["request_id"] or "").strip()
-            if not lookup_id:
-                continue
-            cached_urls_for_task: list[str] = []
-            try:
-                result = gateway_request(f"/api/image-tasks?ids={urllib.parse.quote(lookup_id)}", timeout=12)
-                items = result.get("items") or []
-                if not items:
+        from .generation_polling import polling_claims
+        with polling_claims(self.db, interval_seconds=self.interval_seconds) as rows:
+            for row in rows:
+                if lease is not None and not lease.valid():
+                    logger.warning("Reconciliation interrupted: Redis leadership lost")
+                    break
+                generation_id = str(row["id"])
+                if _row_gateway_protocol(row["system_append_json"]) == "openai":
                     created_dt = _parse_created_at_dt(row["created_at"])
-                    if created_dt and created_dt < (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES)):
+                    if created_dt and created_dt < (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_OPENAI_ORPHAN_TIMEOUT_MINUTES)):
                         refund_failed_cloud_generation(
                             self.db,
                             generation_id,
-                            "网关未收到任务，已退还",
+                            "同步生图任务超时未完成，已退还",
+                            poll_claim_token=row["poll_claim_token"],
                         )
                         handled += 1
                     continue
-                item = items[0] if isinstance(items[0], dict) else {}
-                actual_id = str(item.get("id") or lookup_id)
-                if not task_id and actual_id:
-                    complete_cloud_generation(self.db, generation_id, actual_id)
-                    task_id = actual_id
-                status = str(item.get("status") or "running").lower()
-                if status in ("success", "succeeded", "completed", "done"):
-                    data = item.get("data") or []
-                    local_urls: list[str] = []
-                    for idx, image_item in enumerate(data):
-                        local_url = _cache_gateway_item_image(image_item, f"{actual_id}_{idx}")
-                        if local_url:
-                            local_urls.append(local_url)
-                            cached_urls_for_task.append(local_url)
-                    # A download/validation exception keeps the row pending so
-                    # the next pass can retry; do not mark success with a
-                    # missing private artifact.
-                    complete_cloud_generation(self.db, generation_id, actual_id, local_urls)
-                    handled += 1
-                elif status in ("failed", "error", "cancelled", "canceled"):
-                    refund_failed_cloud_generation(
-                        self.db,
-                        generation_id,
-                        f"云端任务失败 ({status})",
-                    )
-                    handled += 1
-            except Exception:
-                # This attempt may already have downloaded private files even
-                # when its DB completion failed. Do not delete synchronously:
-                # an earlier callback may have referenced the same content.
-                if cached_urls_for_task:
-                    try:
-                        from .media_gc import queue_media_cleanup
-                        with self.db.transaction() as tx:
-                            for url in set(cached_urls_for_task):
-                                if url.startswith(("/generated/", "/uploads/")):
-                                    queue_media_cleanup(tx, url, delay_seconds=86400)
-                    except Exception:
-                        logger.exception("worker=media-gc could not queue gateway orphan")
-                # Network errors, 404s and malformed gateway responses are
-                # unknown state. Keep the original charge and retry later.
-                logger.warning("worker=generation-reconciler generation_id=%s polling failed; will retry", generation_id, exc_info=True)
-                continue
+                task_id = str(row["task_id"] or "").strip()
+                # If the submit process died before receiving an upstream id, use
+                # the stable request id only to look for an already-created task.
+                # Never submit a replacement request from this worker.
+                lookup_id = task_id or str(row["request_id"] or "").strip()
+                if not lookup_id:
+                    continue
+                cached_urls_for_task: list[str] = []
+                try:
+                    result = gateway_request(f"/api/image-tasks?ids={urllib.parse.quote(lookup_id)}", timeout=12)
+                    items = result.get("items") or []
+                    if not items:
+                        created_dt = _parse_created_at_dt(row["created_at"])
+                        if created_dt and created_dt < (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_UNRECEIVED_TASK_TIMEOUT_MINUTES)):
+                            refund_failed_cloud_generation(
+                                self.db,
+                                generation_id,
+                                "网关未收到任务，已退还",
+                                poll_claim_token=row["poll_claim_token"],
+                            )
+                            handled += 1
+                        continue
+                    item = items[0] if isinstance(items[0], dict) else {}
+                    actual_id = str(item.get("id") or lookup_id)
+                    if not task_id and actual_id:
+                        complete_cloud_generation(self.db, generation_id, actual_id, poll_claim_token=row["poll_claim_token"])
+                        task_id = actual_id
+                    status = str(item.get("status") or "running").lower()
+                    if status in ("success", "succeeded", "completed", "done"):
+                        data = item.get("data") or []
+                        local_urls: list[str] = []
+                        for idx, image_item in enumerate(data):
+                            local_url = _cache_gateway_item_image(image_item, f"{actual_id}_{idx}")
+                            if local_url:
+                                local_urls.append(local_url)
+                                cached_urls_for_task.append(local_url)
+                        # A download/validation exception keeps the row pending so
+                        # the next pass can retry; do not mark success with a
+                        # missing private artifact.
+                        complete_cloud_generation(self.db, generation_id, actual_id, local_urls, poll_claim_token=row["poll_claim_token"])
+                        handled += 1
+                    elif status in ("failed", "error", "cancelled", "canceled"):
+                        refund_failed_cloud_generation(
+                            self.db,
+                            generation_id,
+                            f"云端任务失败 ({status})",
+                            poll_claim_token=row["poll_claim_token"],
+                        )
+                        handled += 1
+                except Exception:
+                    # This attempt may already have downloaded private files even
+                    # when its DB completion failed. Do not delete synchronously:
+                    # an earlier callback may have referenced the same content.
+                    if cached_urls_for_task:
+                        try:
+                            from .media_gc import queue_media_cleanup
+                            with self.db.transaction() as tx:
+                                for url in set(cached_urls_for_task):
+                                    if url.startswith(("/generated/", "/uploads/")):
+                                        queue_media_cleanup(tx, url, delay_seconds=86400)
+                        except Exception:
+                            logger.exception("worker=media-gc could not queue gateway orphan")
+                    # Network errors, 404s and malformed gateway responses are
+                    # unknown state. Keep the original charge and retry later.
+                    row["_poll_failed"] = True
+                    logger.warning("worker=generation-reconciler generation_id=%s polling failed; will retry", generation_id, exc_info=True)
+                    continue
         return handled
 
     def _run(self) -> None:
@@ -1923,6 +1919,342 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
     return enriched.encode("utf-8")
 
 
+def execute_studio_generation(db, user, body, *, demo_mode=False, request_log_id=""):
+    """Shared generation reservation, gateway dispatch and settlement for all entries."""
+    cfg = load_image_service_config()
+    simulation = str(body.get("simulateGateway") or "").strip().lower()
+    if simulation and not demo_mode:
+        raise ServiceError("演示/测试接口未启用", status=404, code="demo_disabled")
+    if not cfg and not simulation:
+        return ({"ok": False, "liveImageEnabled": False, "demoMode": demo_mode, "error": "本地未配置 image-service.json，无法进行真实生图"}, 503)
+        return
+
+    is_openai_gw = str(cfg.get("protocol") or "").strip().lower() == "openai"
+    prep = prepare_cloud_generation(
+        db,
+        user,
+        body,
+        gateway_protocol="openai" if is_openai_gw else "",
+    )
+    gen_id = prep["genId"]
+    submitted = False
+    gw_started_at = 0.0
+    endpoint = ""
+    gw_model = ""
+    gw_size = size_for_ratio(str(body.get("ratio") or "3:4"))
+    full_prompt = ""
+    refs: list[dict[str, str]] = []
+    req_log_id = request_log_id or str(prep.get("requestId") or "")
+    try:
+        claim = claim_cloud_generation_submission(db, user, gen_id)
+        if not claim.get("claimed"):
+            existing = get_user_studio_task(
+                db,
+                user,
+                task_id=str(claim.get("taskId") or ""),
+                request_id=str(prep.get("requestId") or body.get("requestId") or body.get("clientRequestId") or ""),
+            )
+            existing = existing or {}
+            response = {
+                "ok": True,
+                "genId": gen_id,
+                "requestId": prep.get("requestId") or "",
+                "clientRequestId": prep.get("clientRequestId") or prep.get("requestId") or "",
+                "idempotent": True,
+                "taskId": existing.get("taskId") or claim.get("taskId") or "",
+                "status": existing.get("status") or claim.get("status") or "queued",
+                "images": existing.get("images") or [],
+                "error": existing.get("error") or "",
+                "costType": prep.get("costType") or "",
+                "creditsSpent": prep.get("creditsSpent") or 0,
+                "credits": prep.get("credits") or 0,
+                "freeQuotaRemaining": prep.get("freeQuotaRemaining") or 0,
+            }
+            if "systemAppend" in prep:
+                response["systemAppend"] = prep["systemAppend"]
+            if prep.get("recipeId"):
+                response["recipeId"] = prep["recipeId"]
+            if prep.get("promptTrimmed"):
+                response["promptTrimmed"] = True
+            if prep.get("promptMasked"):
+                response["promptMasked"] = True
+            response["finalPrompt"] = prep.get("finalPrompt") or ""
+            return (response, 202 if response["status"] in ("queued", "running") else 200)
+            return
+        if simulation == "fail":
+            raise RuntimeError("模拟云端网关连接超时异常")
+        if simulation == "ok":
+            fake_tid = f"sim_{uuid.uuid4().hex[:10]}"
+            complete_cloud_generation(db, gen_id, fake_tid, ["/images/poster-demo-autumn-equinox.webp"])
+            sim_res = {
+                "ok": True,
+                "genId": gen_id,
+                "requestId": prep.get("requestId") or "",
+                "idempotent": bool(prep.get("idempotent")),
+                "taskId": fake_tid,
+                "status": "success",
+                "images": ["/images/poster-demo-autumn-equinox.webp"],
+                "finalPrompt": prep.get("finalPrompt") or "",
+                "costType": prep["costType"],
+                "creditsSpent": prep["creditsSpent"],
+                "credits": prep["credits"],
+                "freeQuotaRemaining": prep["freeQuotaRemaining"],
+            }
+            if "systemAppend" in prep:
+                sim_res["systemAppend"] = prep["systemAppend"]
+            if prep.get("recipeId"):
+                sim_res["recipeId"] = prep["recipeId"]
+            if prep.get("promptTrimmed"):
+                sim_res["promptTrimmed"] = True
+            if prep.get("promptMasked"):
+                sim_res["promptMasked"] = True
+            return (sim_res, 200)
+            return
+
+        ratio = str(body.get("ratio") or "3:4")
+        use_ch001 = bool(body.get("useCh001"))
+        custom_ref = str(body.get("customRefImg") or "")
+        ref_images = body.get("refImages") or []
+        request_id = str(prep.get("requestId") or body.get("requestId") or body.get("clientRequestId") or "").strip()
+        task_id = request_id if request_id else str(uuid.uuid4())
+        refs: list[dict[str, str]] = []
+
+        if use_ch001:
+            resolved = resolve_local_ref_image("/images/characters/CH-001.webp", db=db, user=user)
+            if resolved:
+                refs.append(resolved)
+        if custom_ref:
+            resolved = resolve_local_ref_image(custom_ref, db=db, user=user)
+            if resolved:
+                refs.append(resolved)
+        if isinstance(ref_images, list):
+            for r_str in ref_images[:6]:
+                resolved = resolve_local_ref_image(str(r_str), db=db, user=user)
+                if resolved:
+                    refs.append(resolved)
+
+        grow = db.get_conn().execute(
+            "SELECT prompt FROM studio_generations WHERE id = ?", (gen_id,)
+        ).fetchone()
+        full_prompt = (grow["prompt"] if grow else "") or prep["finalPrompt"]
+        gw_model = str(cfg.get("model") or prep.get("model") or "gpt-image-2").strip()
+        gw_quality = str(cfg.get("quality") or "auto").strip() or "auto"
+        gw_timeout = int(cfg.get("timeout") or (180 if is_openai_gw else 28))
+        gw_size = size_for_ratio(ratio)
+
+        if is_openai_gw:
+            endpoint = "/v1/images/edits" if refs else "/v1/images/generations"
+            record_cloud_generation_task_id(db, gen_id, task_id)
+            _mark_generation_gateway_protocol(db, gen_id, "openai")
+            submitted = True
+            gw_started_at = time.monotonic()
+            logger.info(
+                "Gateway submit start: request_id=%s gen_id=%s protocol=openai endpoint=%s model=%s size=%s quality=%s refs=%d",
+                req_log_id, gen_id, endpoint, gw_model, gw_size, gw_quality, len(refs),
+            )
+            db.release_request_connection()
+            gw_res = openai_image_gateway_request(
+                cfg,
+                full_prompt,
+                model=gw_model,
+                size=gw_size,
+                quality=gw_quality,
+                refs=refs or None,
+                timeout=gw_timeout,
+            )
+            data_items = gw_res.get("data") or []
+            local_urls: list[str] = []
+            if isinstance(data_items, list):
+                for idx, image_item in enumerate(data_items):
+                    local_url = _cache_gateway_item_image(image_item, f"{task_id}_{idx}")
+                    if local_url:
+                        local_urls.append(local_url)
+            complete_cloud_generation(db, gen_id, task_id, local_urls)
+            if not local_urls:
+                gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
+                logger.error(
+                    "Gateway empty response: request_id=%s gen_id=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f",
+                    req_log_id, gen_id, endpoint, gw_model, gw_size, len(refs), gw_elapsed_ms,
+                )
+                return ({"ok": False, "refunded": True, "error": "生图网关未返回有效图片（已自动退还额度/积分）"}, 502)
+                return
+            gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
+            logger.info(
+                "Gateway submit ok: request_id=%s gen_id=%s endpoint=%s model=%s images=%d duration_ms=%.1f",
+                req_log_id, gen_id, endpoint, gw_model, len(local_urls), gw_elapsed_ms,
+            )
+            actual_id = task_id
+            gw_out: dict[str, Any] = {
+                "ok": True,
+                "genId": gen_id,
+                "requestId": prep.get("requestId") or "",
+                "idempotent": bool(prep.get("idempotent")),
+                "taskId": actual_id,
+                "status": "success",
+                "images": local_urls,
+                "finalPrompt": prep.get("finalPrompt") or "",
+                "costType": prep["costType"],
+                "creditsSpent": prep["creditsSpent"],
+                "credits": prep["credits"],
+                "freeQuotaRemaining": prep["freeQuotaRemaining"],
+            }
+        else:
+            gw_payload: dict[str, Any] = {
+                "client_task_id": task_id,
+                "prompt": full_prompt,
+                "model": gw_model,
+                "size": gw_size,
+                "quality": gw_quality,
+            }
+            if refs:
+                gw_payload["images"] = refs
+                endpoint = "/api/image-tasks/edits"
+            else:
+                endpoint = "/api/image-tasks/generations"
+
+            record_cloud_generation_task_id(db, gen_id, task_id)
+            submitted = True
+            gw_started_at = time.monotonic()
+            logger.info(
+                "Gateway submit start: request_id=%s gen_id=%s protocol=image-tasks endpoint=%s model=%s size=%s quality=%s refs=%d",
+                req_log_id, gen_id, endpoint, gw_model, gw_size, gw_quality, len(refs),
+            )
+            db.release_request_connection()
+            gw_res = gateway_request(endpoint, payload=gw_payload, timeout=gw_timeout)
+            actual_id = str(gw_res.get("id") or task_id)
+            complete_cloud_generation(db, gen_id, actual_id)
+            gw_out = {
+                "ok": True,
+                "genId": gen_id,
+                "requestId": prep.get("requestId") or "",
+                "idempotent": bool(prep.get("idempotent")),
+                "taskId": actual_id,
+                "status": gw_res.get("status") or "queued",
+                "costType": prep["costType"],
+                "creditsSpent": prep["creditsSpent"],
+                "credits": prep["credits"],
+                "freeQuotaRemaining": prep["freeQuotaRemaining"],
+            }
+        if "systemAppend" in prep:
+            gw_out["systemAppend"] = prep["systemAppend"]
+        if prep.get("recipeId"):
+            gw_out["recipeId"] = prep["recipeId"]
+        if prep.get("promptTrimmed"):
+            gw_out["promptTrimmed"] = True
+        if prep.get("promptMasked"):
+            gw_out["promptMasked"] = True
+        return (gw_out, 200)
+    except Exception as exc:
+        gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
+        gw_proto = "openai" if is_openai_gw else "image-tasks"
+        gw_api_key = str(cfg.get("key") or "") if isinstance(cfg, dict) else ""
+        try:
+            raw_exc_str = str(exc)
+        except Exception:
+            raw_exc_str = ""
+        _, exc_str_secret = _sanitize_gateway_error_detail(
+            raw_exc_str, db=db, prompt=full_prompt, api_key=gw_api_key,
+        )
+        gw_exc_info: Any = False if exc_str_secret else True
+        tb_frames = (
+            "\nTraceback (redacted exception message):\n" + "".join(traceback.format_tb(exc.__traceback__)).rstrip()
+            if exc_str_secret and exc.__traceback__
+            else ""
+        )
+        if not submitted:
+            logger.error(
+                "Gateway call not submitted: request_id=%s gen_id=%s protocol=%s error_type=%s err=%s%s",
+                req_log_id,
+                gen_id,
+                gw_proto,
+                type(exc).__name__,
+                sanitize_log_text(raw_exc_str) if not exc_str_secret else "[redacted]",
+                tb_frames,
+                exc_info=gw_exc_info,
+            )
+            refund_failed_cloud_generation(db, gen_id, "生图网关连接失败")
+            return ({"ok": False, "refunded": True, "error": "生图网关连接失败（已自动退还额度/积分）"}, 502)
+        elif is_openai_gw or _gateway_failure_is_definite(exc):
+            if isinstance(exc, urllib.error.HTTPError):
+                err_body_bytes = b""
+                try:
+                    try:
+                        raw_read = exc.read(16384)
+                    except TypeError:
+                        raw_read = exc.read()[:16384]
+                    if isinstance(raw_read, bytes):
+                        err_body_bytes = raw_read
+                    elif isinstance(raw_read, str):
+                        err_body_bytes = raw_read.encode("utf-8", errors="ignore")
+                except Exception:
+                    err_body_bytes = b""
+                detail, secret_matched = _sanitize_gateway_error_detail(
+                    err_body_bytes, db=db, prompt=full_prompt, api_key=gw_api_key,
+                )
+                logger.error(
+                    "Gateway error: request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d status=%s duration_ms=%.1f body_len=%d detail=%s%s",
+                    req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
+                    exc.code, gw_elapsed_ms, len(err_body_bytes), detail or "-", tb_frames,
+                    exc_info=gw_exc_info,
+                )
+                err_msg = f"网关请求失败 (HTTP {exc.code}): {detail}" if (detail and not secret_matched) else f"网关请求失败 (HTTP {exc.code})"
+            elif isinstance(exc, (socket.timeout, TimeoutError)) or (
+                isinstance(exc, urllib.error.URLError)
+                and isinstance(getattr(exc, "reason", None), (socket.timeout, TimeoutError))
+            ):
+                logger.error(
+                    "Gateway timeout: request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f error_type=%s%s",
+                    req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
+                    gw_elapsed_ms, type(exc).__name__, tb_frames,
+                    exc_info=gw_exc_info,
+                )
+                err_msg = "生图网关请求超时"
+            else:
+                detail, _secret_matched = _sanitize_gateway_error_detail(
+                    getattr(exc, "reason", None) or raw_exc_str,
+                    db=db,
+                    prompt=full_prompt,
+                    api_key=gw_api_key,
+                )
+                logger.error(
+                    "Gateway exception: %s (request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f detail=%s)%s",
+                    type(exc).__name__, req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
+                    gw_elapsed_ms, detail or "-", tb_frames,
+                    exc_info=gw_exc_info,
+                )
+                err_msg = "生图网关连接失败"
+            refund_failed_cloud_generation(db, gen_id, err_msg)
+            return ({"ok": False, "refunded": True, "error": f"{err_msg}（已自动退还额度/积分）"}, 502)
+        else:
+            logger.warning(
+                "Gateway exception: %s (status unknown, gen_id=%s request_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f)%s",
+                type(exc).__name__, gen_id, req_log_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
+                gw_elapsed_ms, tb_frames,
+                exc_info=gw_exc_info,
+            )
+            confirming_out = {
+                "ok": True,
+                "genId": gen_id,
+                "requestId": prep.get("requestId") or "",
+                "idempotent": bool(prep.get("idempotent")),
+                "taskId": task_id,
+                "status": "queued",
+                "confirming": True,
+                "costType": prep["costType"],
+                "creditsSpent": prep["creditsSpent"],
+                "credits": prep["credits"],
+                "freeQuotaRemaining": prep["freeQuotaRemaining"],
+            }
+            if "systemAppend" in prep:
+                confirming_out["systemAppend"] = prep["systemAppend"]
+            if prep.get("recipeId"):
+                confirming_out["recipeId"] = prep["recipeId"]
+            if prep.get("promptTrimmed"):
+                confirming_out["promptTrimmed"] = True
+            return (confirming_out, 200)
+    return
+
+
 class HandrawRequestHandler(BaseHTTPRequestHandler):
     server_version = "HandrawWeb/2.0"
 
@@ -2617,13 +2949,53 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             return
 
         if req_path == "/api/studio/workspace":
+            if q1("bootstrap")=="1":
+                from .studio_workspace import bootstrap_workspace
+                self._send_json(bootstrap_workspace(self.db,self._current_user(required=False)))
+                return
             user = self._current_user(required=False)
-            self._send_json(get_studio_workspace(self.db, user))
+            collection=q1("collection")
+            if collection and collection not in ("history","workflows","uploads"):
+                raise ServiceError("工作区集合无效",status=400,code="invalid_collection")
+            self._send_json(get_studio_workspace(self.db, user,collection=collection or None,history_cursor=q1("cursor") or ""))
+            return
+
+        if req_path == "/api/studio/canvases":
+            user = self._current_user(required=True)
+            from .studio_paging import page_canvases
+            self._send_json(page_canvases(self.db,user,cursor=q1("cursor") or ""))
+            return
+
+        canvas_runs = re.fullmatch(r"/api/studio/canvases/([^/]+)/runs",req_path)
+        if canvas_runs:
+            from .canvas_runs import list_canvas_runs
+            self._send_json(list_canvas_runs(self.db,self._current_user(required=True),canvas_runs.group(1),cursor=q1("cursor") or ""))
+            return
+        canvas_run = re.fullmatch(r"/api/studio/canvas-runs/([^/]+)",req_path)
+        if canvas_run:
+            from .canvas_runs import get_canvas_run
+            self._send_json(get_canvas_run(self.db,self._current_user(required=True),canvas_run.group(1)))
+            return
+        canvas_detail = re.fullmatch(r"/api/studio/canvases/([^/]+)", req_path)
+        if canvas_detail:
+            from .studio_canvases import get_canvas
+            self._send_json(get_canvas(self.db,self._current_user(required=True),canvas_detail.group(1)))
             return
 
         if req_path == "/api/studio/articles":
             user = self._current_user(required=True)
+            if q1("page")=="1":
+                from .studio_workspace import page_articles
+                self._send_json(page_articles(self.db,user,cursor=q1("cursor") or ""))
+                return
             self._send_json(list_user_studio_articles(self.db, user))  # type: ignore[arg-type]
+            return
+
+        article_detail = re.fullmatch(r"/api/studio/articles/([^/]+)", req_path)
+        if article_detail:
+            from .studio_articles import get_article
+            user = self._current_user(required=True)
+            self._send_json(get_article(self.db, user, article_detail.group(1)))
             return
 
         if req_path == "/api/studio/history" or req_path.startswith("/api/studio/history/"):
@@ -2751,6 +3123,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"status": rec_status or "running", "images": []})
                 return
             try:
+                self.db.release_request_connection()
                 res = gateway_request(f"/api/image-tasks?ids={urllib.parse.quote(task_id)}")
                 items = res.get("items") or []
                 if not items:
@@ -3585,6 +3958,28 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             return
 
         # Studio Cloud Persistence, Generation & ZIP Export
+        if req_path == "/api/studio/canvases":
+            from .studio_canvases import save_canvas
+            self._send_json(save_canvas(self.db,self._current_user(required=True),body))
+            return
+        canvas_retry=re.fullmatch(r"/api/studio/canvas-runs/([^/]+)/retry",req_path)
+        if canvas_retry:
+            from .canvas_runs import retry_canvas_run
+            self._send_json(retry_canvas_run(self.db,self._current_user(required=True),canvas_retry.group(1),body))
+            return
+        canvas_delete=re.fullmatch(r"/api/studio/canvases/([^/]+)/delete",req_path)
+        if canvas_delete:
+            user=self._current_user(required=True)
+            self.db.get_conn().execute("UPDATE studio_canvases SET deleted_at=now() WHERE id=? AND user_id=?",(canvas_delete.group(1),user["id"]))
+            self._send_json({"ok":True})
+            return
+        canvas_action = re.fullmatch(r"/api/studio/canvases/([^/]+)/(preview|runs)",req_path)
+        if canvas_action:
+            from .studio_canvases import preview_canvas,submit_canvas
+            user = self._current_user(required=True)
+            self._send_json(preview_canvas(self.db,user,canvas_action.group(1)) if canvas_action.group(2)=="preview"
+                            else submit_canvas(self.db,user,canvas_action.group(1),body))
+            return
         if req_path == "/api/studio/workflows":
             user = self._current_user(required=True)
             self._send_json(save_user_studio_workflow(self.db, user, body))  # type: ignore[arg-type]
@@ -3599,6 +3994,14 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             user = self._current_user(required=True)
             articles = body.get("articles") if isinstance(body.get("articles"), list) else (body.get("_list") or [])
             self._send_json(sync_user_studio_articles(self.db, user, articles))  # type: ignore[arg-type]
+            return
+
+        article_selection = re.fullmatch(r"/api/studio/articles/([^/]+)/illustrations/([^/]+)/selection", req_path)
+        if article_selection:
+            from .studio_articles import select_illustration_media
+            self._send_json(select_illustration_media(
+                self.db, self._current_user(required=True), article_selection.group(1), article_selection.group(2), body,
+            ))
             return
 
         if req_path == "/api/studio/articles/delete":
@@ -3678,60 +4081,64 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             now = utc_now_iso()
             today = local_today_str()
 
-            with self.db.transaction() as tx:
-                # Admission spans all request workers and connection pools.
-                # Hold only while checking capacity and reserving the job.
-                tx.execute("SELECT pg_advisory_xact_lock(186, 206)")
-                active_job = tx.execute(
-                    "SELECT 1 FROM studio_import_jobs WHERE user_id = ? AND status IN ('queued', 'running') LIMIT 1",
-                    (user_id,),
-                ).fetchone()
-                if active_job:
-                    raise ServiceError("已有导入任务正在进行中，请稍后再试", status=429, code="import_in_progress")
+            from .import_jobs import persist_input,discard_input
+            self.db.release_request_connection()
+            input_key,input_digest=persist_input(job_id,file_bytes)
+            try:
+                with self.db.transaction() as tx:
+                    # Admission spans all request workers and connection pools.
+                    # Hold only while checking capacity and reserving the job.
+                    tx.execute("SELECT pg_advisory_xact_lock(186, 206)")
+                    active_job = tx.execute(
+                        "SELECT 1 FROM studio_import_jobs WHERE user_id = ? AND status IN ('queued', 'running') LIMIT 1",
+                        (user_id,),
+                    ).fetchone()
+                    if active_job:
+                        raise ServiceError("已有导入任务正在进行中，请稍后再试", status=429, code="import_in_progress")
 
-                queued_count = tx.execute(
-                    "SELECT COUNT(1) as cnt FROM studio_import_jobs WHERE status = 'queued'",
-                ).fetchone()
-                if (queued_count and int(queued_count["cnt"]) >= 20) or mgr.queue.full():
-                    raise ServiceError("导入队列已满，请稍后再试", status=429, code="import_queue_full")
+                    queued_count = tx.execute(
+                        "SELECT COUNT(1) as cnt FROM studio_import_jobs WHERE status IN ('queued','running')",
+                    ).fetchone()
+                    if (queued_count and int(queued_count["cnt"]) >= 20) or mgr.queue.full():
+                        raise ServiceError("导入队列已满，请稍后再试", status=429, code="import_queue_full")
 
-                usage_row = tx.execute(
-                    "SELECT count FROM daily_usage WHERE user_id = ? AND scope = 'parse' AND usage_date = ?",
-                    (user_id, today),
-                ).fetchone()
-                current_usage = int(usage_row["count"]) if usage_row else 0
-                if current_usage >= 20:
-                    raise ServiceError("今日文档解析次数已达上限（20次/天），请明天再试", status=429, code="rate_limited")
+                    usage_row = tx.execute(
+                        "SELECT count FROM daily_usage WHERE user_id = ? AND scope = 'parse' AND usage_date = ?",
+                        (user_id, today),
+                    ).fetchone()
+                    current_usage = int(usage_row["count"]) if usage_row else 0
+                    if current_usage >= 20:
+                        raise ServiceError("今日文档解析次数已达上限（20次/天），请明天再试", status=429, code="rate_limited")
 
-                tx.execute(
-                    """
-                    INSERT INTO daily_usage (user_id, scope, usage_date, count)
-                    VALUES (?, 'parse', ?, 1)
-                    ON CONFLICT (user_id, scope, usage_date)
-                    DO UPDATE SET count = daily_usage.count + 1
-                    """,
-                    (user_id, today),
-                )
+                    tx.execute(
+                        """
+                        INSERT INTO daily_usage (user_id, scope, usage_date, count)
+                        VALUES (?, 'parse', ?, 1)
+                        ON CONFLICT (user_id, scope, usage_date)
+                        DO UPDATE SET count = daily_usage.count + 1
+                        """,
+                        (user_id, today),
+                    )
 
-                tx.execute(
-                    """
-                    INSERT INTO studio_import_jobs
-                    (id, user_id, status, progress_done, progress_total, error, result_json, file_name, created_at, updated_at)
-                    VALUES (?, ?, 'queued', 0, 0, '', '', ?, ?, ?)
-                    """,
-                    (job_id, user_id, file_name, now, now),
-                )
+                    tx.execute(
+                        """
+                        INSERT INTO studio_import_jobs
+                        (id, user_id, status, progress_done, progress_total, error, result_json, file_name, created_at, updated_at,input_storage_key,input_sha256)
+                        VALUES (?, ?, 'queued', 0, 0, '', '', ?, ?, ?,?,?)
+                        """,
+                        (job_id, user_id, file_name, now, now,input_key,input_digest),
+                    )
+
+            except BaseException:
+                discard_input(input_key)
+                raise
 
             try:
                 mgr.enqueue_job(job_id, user_id, file_name, file_bytes)
-            except Exception as exc:
-                with self.db.transaction() as tx:
-                    tx.execute("DELETE FROM studio_import_jobs WHERE id = ?", (job_id,))
-                    tx.execute(
-                        "UPDATE daily_usage SET count = GREATEST(0, count - 1) WHERE user_id = ? AND scope = 'parse' AND usage_date = ?",
-                        (user_id, today),
-                    )
-                raise ServiceError("导入队列已满，请稍后再试", status=429, code="import_queue_full") from exc
+            except Exception:
+                # The committed input is durable and discoverable without the
+                # hint. Never remove a task another process may already own.
+                logger.warning("Import wake-up hint failed for %s; database workers will recover it",job_id,exc_info=True)
 
             self._send_json({"ok": True, "importId": job_id})
             return
@@ -3779,336 +4186,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             return
 
         if req_path == "/api/studio/generate":
-            cfg = load_image_service_config()
-            simulation = str(body.get("simulateGateway") or "").strip().lower()
-            if simulation and not self._demo_enabled():
-                self._require_demo_mode()
-            if not cfg and not simulation:
-                self._send_json({"ok": False, "liveImageEnabled": False, "demoMode": self._demo_enabled(), "error": "本地未配置 image-service.json，无法进行真实生图"}, status=503)
-                return
-
-            user = self._current_user(required=True)
-            is_openai_gw = str(cfg.get("protocol") or "").strip().lower() == "openai"
-            prep = prepare_cloud_generation(
-                self.db,
-                user,
-                body,
-                gateway_protocol="openai" if is_openai_gw else "",
+            for key in ("_canvasDispatchToken","_canvasResourceInputs","_canvasRunId"):
+                body.pop(key,None)
+            payload,status=execute_studio_generation(
+                self.db,self._current_user(required=True),body,
+                demo_mode=self._demo_enabled(),request_log_id=getattr(self,"_request_id",""),
             )
-            gen_id = prep["genId"]
-            submitted = False
-            gw_started_at = 0.0
-            endpoint = ""
-            gw_model = ""
-            gw_size = size_for_ratio(str(body.get("ratio") or "3:4"))
-            full_prompt = ""
-            refs: list[dict[str, str]] = []
-            req_log_id = getattr(self, "_request_id", "") or str(prep.get("requestId") or "")
-            try:
-                claim = claim_cloud_generation_submission(self.db, user, gen_id)
-                if not claim.get("claimed"):
-                    existing = get_user_studio_task(
-                        self.db,
-                        user,
-                        task_id=str(claim.get("taskId") or ""),
-                        request_id=str(prep.get("requestId") or body.get("requestId") or body.get("clientRequestId") or ""),
-                    )
-                    existing = existing or {}
-                    response = {
-                        "ok": True,
-                        "genId": gen_id,
-                        "requestId": prep.get("requestId") or "",
-                        "clientRequestId": prep.get("clientRequestId") or prep.get("requestId") or "",
-                        "idempotent": True,
-                        "taskId": existing.get("taskId") or claim.get("taskId") or "",
-                        "status": existing.get("status") or claim.get("status") or "queued",
-                        "images": existing.get("images") or [],
-                        "error": existing.get("error") or "",
-                        "costType": prep.get("costType") or "",
-                        "creditsSpent": prep.get("creditsSpent") or 0,
-                        "credits": prep.get("credits") or 0,
-                        "freeQuotaRemaining": prep.get("freeQuotaRemaining") or 0,
-                    }
-                    if "systemAppend" in prep:
-                        response["systemAppend"] = prep["systemAppend"]
-                    if prep.get("recipeId"):
-                        response["recipeId"] = prep["recipeId"]
-                    if prep.get("promptTrimmed"):
-                        response["promptTrimmed"] = True
-                    if prep.get("promptMasked"):
-                        response["promptMasked"] = True
-                    response["finalPrompt"] = prep.get("finalPrompt") or ""
-                    self._send_json(response, status=202 if response["status"] in ("queued", "running") else 200)
-                    return
-                if simulation == "fail":
-                    raise RuntimeError("模拟云端网关连接超时异常")
-                if simulation == "ok":
-                    fake_tid = f"sim_{uuid.uuid4().hex[:10]}"
-                    complete_cloud_generation(self.db, gen_id, fake_tid, ["/images/poster-demo-autumn-equinox.webp"])
-                    sim_res = {
-                        "ok": True,
-                        "genId": gen_id,
-                        "requestId": prep.get("requestId") or "",
-                        "idempotent": bool(prep.get("idempotent")),
-                        "taskId": fake_tid,
-                        "status": "success",
-                        "images": ["/images/poster-demo-autumn-equinox.webp"],
-                        "finalPrompt": prep.get("finalPrompt") or "",
-                        "costType": prep["costType"],
-                        "creditsSpent": prep["creditsSpent"],
-                        "credits": prep["credits"],
-                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
-                    }
-                    if "systemAppend" in prep:
-                        sim_res["systemAppend"] = prep["systemAppend"]
-                    if prep.get("recipeId"):
-                        sim_res["recipeId"] = prep["recipeId"]
-                    if prep.get("promptTrimmed"):
-                        sim_res["promptTrimmed"] = True
-                    if prep.get("promptMasked"):
-                        sim_res["promptMasked"] = True
-                    self._send_json(sim_res)
-                    return
-
-                ratio = str(body.get("ratio") or "3:4")
-                use_ch001 = bool(body.get("useCh001"))
-                custom_ref = str(body.get("customRefImg") or "")
-                ref_images = body.get("refImages") or []
-                request_id = str(prep.get("requestId") or body.get("requestId") or body.get("clientRequestId") or "").strip()
-                task_id = request_id if request_id else str(uuid.uuid4())
-                refs: list[dict[str, str]] = []
-
-                if use_ch001:
-                    resolved = resolve_local_ref_image("/images/characters/CH-001.webp", db=self.db, user=user)
-                    if resolved:
-                        refs.append(resolved)
-                if custom_ref:
-                    resolved = resolve_local_ref_image(custom_ref, db=self.db, user=user)
-                    if resolved:
-                        refs.append(resolved)
-                if isinstance(ref_images, list):
-                    for r_str in ref_images[:6]:
-                        resolved = resolve_local_ref_image(str(r_str), db=self.db, user=user)
-                        if resolved:
-                            refs.append(resolved)
-
-                grow = self.db.get_conn().execute(
-                    "SELECT prompt FROM studio_generations WHERE id = ?", (gen_id,)
-                ).fetchone()
-                full_prompt = (grow["prompt"] if grow else "") or prep["finalPrompt"]
-                gw_model = str(cfg.get("model") or prep.get("model") or "gpt-image-2").strip()
-                gw_quality = str(cfg.get("quality") or "auto").strip() or "auto"
-                gw_timeout = int(cfg.get("timeout") or (180 if is_openai_gw else 28))
-                gw_size = size_for_ratio(ratio)
-
-                if is_openai_gw:
-                    endpoint = "/v1/images/edits" if refs else "/v1/images/generations"
-                    record_cloud_generation_task_id(self.db, gen_id, task_id)
-                    _mark_generation_gateway_protocol(self.db, gen_id, "openai")
-                    submitted = True
-                    gw_started_at = time.monotonic()
-                    logger.info(
-                        "Gateway submit start: request_id=%s gen_id=%s protocol=openai endpoint=%s model=%s size=%s quality=%s refs=%d",
-                        req_log_id, gen_id, endpoint, gw_model, gw_size, gw_quality, len(refs),
-                    )
-                    gw_res = openai_image_gateway_request(
-                        cfg,
-                        full_prompt,
-                        model=gw_model,
-                        size=gw_size,
-                        quality=gw_quality,
-                        refs=refs or None,
-                        timeout=gw_timeout,
-                    )
-                    data_items = gw_res.get("data") or []
-                    local_urls: list[str] = []
-                    if isinstance(data_items, list):
-                        for idx, image_item in enumerate(data_items):
-                            local_url = _cache_gateway_item_image(image_item, f"{task_id}_{idx}")
-                            if local_url:
-                                local_urls.append(local_url)
-                    complete_cloud_generation(self.db, gen_id, task_id, local_urls)
-                    if not local_urls:
-                        gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
-                        logger.error(
-                            "Gateway empty response: request_id=%s gen_id=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f",
-                            req_log_id, gen_id, endpoint, gw_model, gw_size, len(refs), gw_elapsed_ms,
-                        )
-                        self._send_json({"ok": False, "refunded": True, "error": "生图网关未返回有效图片（已自动退还额度/积分）"}, status=502)
-                        return
-                    gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
-                    logger.info(
-                        "Gateway submit ok: request_id=%s gen_id=%s endpoint=%s model=%s images=%d duration_ms=%.1f",
-                        req_log_id, gen_id, endpoint, gw_model, len(local_urls), gw_elapsed_ms,
-                    )
-                    actual_id = task_id
-                    gw_out: dict[str, Any] = {
-                        "ok": True,
-                        "genId": gen_id,
-                        "requestId": prep.get("requestId") or "",
-                        "idempotent": bool(prep.get("idempotent")),
-                        "taskId": actual_id,
-                        "status": "success",
-                        "images": local_urls,
-                        "finalPrompt": prep.get("finalPrompt") or "",
-                        "costType": prep["costType"],
-                        "creditsSpent": prep["creditsSpent"],
-                        "credits": prep["credits"],
-                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
-                    }
-                else:
-                    gw_payload: dict[str, Any] = {
-                        "client_task_id": task_id,
-                        "prompt": full_prompt,
-                        "model": gw_model,
-                        "size": gw_size,
-                        "quality": gw_quality,
-                    }
-                    if refs:
-                        gw_payload["images"] = refs
-                        endpoint = "/api/image-tasks/edits"
-                    else:
-                        endpoint = "/api/image-tasks/generations"
-
-                    record_cloud_generation_task_id(self.db, gen_id, task_id)
-                    submitted = True
-                    gw_started_at = time.monotonic()
-                    logger.info(
-                        "Gateway submit start: request_id=%s gen_id=%s protocol=image-tasks endpoint=%s model=%s size=%s quality=%s refs=%d",
-                        req_log_id, gen_id, endpoint, gw_model, gw_size, gw_quality, len(refs),
-                    )
-                    gw_res = gateway_request(endpoint, payload=gw_payload, timeout=gw_timeout)
-                    actual_id = str(gw_res.get("id") or task_id)
-                    complete_cloud_generation(self.db, gen_id, actual_id)
-                    gw_out = {
-                        "ok": True,
-                        "genId": gen_id,
-                        "requestId": prep.get("requestId") or "",
-                        "idempotent": bool(prep.get("idempotent")),
-                        "taskId": actual_id,
-                        "status": gw_res.get("status") or "queued",
-                        "costType": prep["costType"],
-                        "creditsSpent": prep["creditsSpent"],
-                        "credits": prep["credits"],
-                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
-                    }
-                if "systemAppend" in prep:
-                    gw_out["systemAppend"] = prep["systemAppend"]
-                if prep.get("recipeId"):
-                    gw_out["recipeId"] = prep["recipeId"]
-                if prep.get("promptTrimmed"):
-                    gw_out["promptTrimmed"] = True
-                if prep.get("promptMasked"):
-                    gw_out["promptMasked"] = True
-                self._send_json(gw_out)
-            except Exception as exc:
-                gw_elapsed_ms = (time.monotonic() - gw_started_at) * 1000.0 if gw_started_at else 0.0
-                gw_proto = "openai" if is_openai_gw else "image-tasks"
-                gw_api_key = str(cfg.get("key") or "") if isinstance(cfg, dict) else ""
-                try:
-                    raw_exc_str = str(exc)
-                except Exception:
-                    raw_exc_str = ""
-                _, exc_str_secret = _sanitize_gateway_error_detail(
-                    raw_exc_str, db=self.db, prompt=full_prompt, api_key=gw_api_key,
-                )
-                gw_exc_info: Any = False if exc_str_secret else True
-                tb_frames = (
-                    "\nTraceback (redacted exception message):\n" + "".join(traceback.format_tb(exc.__traceback__)).rstrip()
-                    if exc_str_secret and exc.__traceback__
-                    else ""
-                )
-                if not submitted:
-                    logger.error(
-                        "Gateway call not submitted: request_id=%s gen_id=%s protocol=%s error_type=%s err=%s%s",
-                        req_log_id,
-                        gen_id,
-                        gw_proto,
-                        type(exc).__name__,
-                        sanitize_log_text(raw_exc_str) if not exc_str_secret else "[redacted]",
-                        tb_frames,
-                        exc_info=gw_exc_info,
-                    )
-                    refund_failed_cloud_generation(self.db, gen_id, "生图网关连接失败")
-                    self._send_json({"ok": False, "refunded": True, "error": "生图网关连接失败（已自动退还额度/积分）"}, status=502)
-                elif is_openai_gw or _gateway_failure_is_definite(exc):
-                    if isinstance(exc, urllib.error.HTTPError):
-                        err_body_bytes = b""
-                        try:
-                            try:
-                                raw_read = exc.read(16384)
-                            except TypeError:
-                                raw_read = exc.read()[:16384]
-                            if isinstance(raw_read, bytes):
-                                err_body_bytes = raw_read
-                            elif isinstance(raw_read, str):
-                                err_body_bytes = raw_read.encode("utf-8", errors="ignore")
-                        except Exception:
-                            err_body_bytes = b""
-                        detail, secret_matched = _sanitize_gateway_error_detail(
-                            err_body_bytes, db=self.db, prompt=full_prompt, api_key=gw_api_key,
-                        )
-                        logger.error(
-                            "Gateway error: request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d status=%s duration_ms=%.1f body_len=%d detail=%s%s",
-                            req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
-                            exc.code, gw_elapsed_ms, len(err_body_bytes), detail or "-", tb_frames,
-                            exc_info=gw_exc_info,
-                        )
-                        err_msg = f"网关请求失败 (HTTP {exc.code}): {detail}" if (detail and not secret_matched) else f"网关请求失败 (HTTP {exc.code})"
-                    elif isinstance(exc, (socket.timeout, TimeoutError)) or (
-                        isinstance(exc, urllib.error.URLError)
-                        and isinstance(getattr(exc, "reason", None), (socket.timeout, TimeoutError))
-                    ):
-                        logger.error(
-                            "Gateway timeout: request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f error_type=%s%s",
-                            req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
-                            gw_elapsed_ms, type(exc).__name__, tb_frames,
-                            exc_info=gw_exc_info,
-                        )
-                        err_msg = "生图网关请求超时"
-                    else:
-                        detail, _secret_matched = _sanitize_gateway_error_detail(
-                            getattr(exc, "reason", None) or raw_exc_str,
-                            db=self.db,
-                            prompt=full_prompt,
-                            api_key=gw_api_key,
-                        )
-                        logger.error(
-                            "Gateway exception: %s (request_id=%s gen_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f detail=%s)%s",
-                            type(exc).__name__, req_log_id, gen_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
-                            gw_elapsed_ms, detail or "-", tb_frames,
-                            exc_info=gw_exc_info,
-                        )
-                        err_msg = "生图网关连接失败"
-                    refund_failed_cloud_generation(self.db, gen_id, err_msg)
-                    self._send_json({"ok": False, "refunded": True, "error": f"{err_msg}（已自动退还额度/积分）"}, status=502)
-                else:
-                    logger.warning(
-                        "Gateway exception: %s (status unknown, gen_id=%s request_id=%s protocol=%s endpoint=%s model=%s size=%s refs=%d duration_ms=%.1f)%s",
-                        type(exc).__name__, gen_id, req_log_id, gw_proto, endpoint or "-", gw_model or "-", gw_size, len(refs),
-                        gw_elapsed_ms, tb_frames,
-                        exc_info=gw_exc_info,
-                    )
-                    confirming_out = {
-                        "ok": True,
-                        "genId": gen_id,
-                        "requestId": prep.get("requestId") or "",
-                        "idempotent": bool(prep.get("idempotent")),
-                        "taskId": task_id,
-                        "status": "queued",
-                        "confirming": True,
-                        "costType": prep["costType"],
-                        "creditsSpent": prep["creditsSpent"],
-                        "credits": prep["credits"],
-                        "freeQuotaRemaining": prep["freeQuotaRemaining"],
-                    }
-                    if "systemAppend" in prep:
-                        confirming_out["systemAppend"] = prep["systemAppend"]
-                    if prep.get("recipeId"):
-                        confirming_out["recipeId"] = prep["recipeId"]
-                    if prep.get("promptTrimmed"):
-                        confirming_out["promptTrimmed"] = True
-                    self._send_json(confirming_out)
+            self._send_json(payload,status=status)
             return
 
         if req_path == "/api/studio/export-zip":
@@ -4473,6 +4557,8 @@ def main(argv: list[str] | None = None) -> None:
     requested_host = args.host or None
     server = create_channel_server(args.port, "main", db, host=requested_host)
     reconciler = GenerationReconciler(db).start()
+    from .canvas_dispatcher import get_canvas_dispatcher
+    canvas_dispatcher=get_canvas_dispatcher(db).start()
     # Fresh V3 has no legacy data and therefore no background blackbox
     # backfill. Protected prompts are verified synchronously on publication.
     import_manager = getattr(server, "import_manager", None)
@@ -4490,6 +4576,7 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        canvas_dispatcher.stop()
         reconciler.stop()
         if import_manager and hasattr(import_manager, "stop"):
             import_manager.stop()

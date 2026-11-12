@@ -8,6 +8,20 @@ vm.createContext(ctx);
 vm.runInContext(code, ctx);
 const E = ctx.window.HANDRAW_CANVAS_ENGINE;
 
+// Explicit conversion copies configuration, preserving the archived graph.
+const legacy={nodes:[
+  {id:"text",type:"text_input",data:{text:"A woodland cabin"}},
+  {id:"skill",type:"skill_params",data:{style1:"FA-001",layout:"IG-001",audience:"Readers"}},
+  {id:"output",type:"output_control",data:{mode:"single",count:2,ratio:"16:9"}}
+],edges:[{from:"text",to:"output"},{from:"skill",to:"output"}]};
+const beforeLegacy=JSON.stringify(legacy);
+const converted=E.convertLegacyCanvas(legacy,{resourceMap:new Map(),styles:[],layouts:[],colors:[],tones:[]});
+assert.equal(JSON.stringify(legacy),beforeLegacy);
+assert.equal(converted.nodes.find(n=>n.parameter==="prompt").values.length,2);
+assert.ok(converted.nodes.find(n=>n.parameter==="prompt").values.every(v=>v.includes("A woodland cabin")));
+assert.equal(converted.nodes.find(n=>n.type==="output").mode,"zip");
+assert.throws(()=>E.convertLegacyCanvas({nodes:[{type:"article_plan"}],edges:[]},{}),/文章/);
+
 console.log("Starting Article Blocks & Prompt Engine Tests...");
 
 // Test Article F1

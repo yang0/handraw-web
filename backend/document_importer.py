@@ -22,6 +22,7 @@ from backend import ai_client
 from backend.config import get_uploads_dir
 from backend.db import Database, utc_now_iso
 from backend.document_structure import DocumentImportError, extract_document_structure
+from backend.import_jobs import persist_input, discard_input, read_input, claim_input, finish_input, cleanup_abandoned_inputs
 from backend.runtime_policy import validate_image_bytes
 
 logger = logging.getLogger(__name__)
@@ -401,6 +402,7 @@ def save_uploaded_image_bytes(
 
     public_url = f"/uploads/{fname}"
     from .media_storage import persist_media_bytes
+    db.release_request_connection()
     persist_media_bytes(public_url, payload, mime=mime)
     try:
         with db.transaction() as tx:
@@ -448,7 +450,7 @@ def _cleanup_job_media(db: Database, user_id: int, image_urls: list[str]) -> Non
 
 
 def mark_legacy_imports_failed(db: Database) -> int:
-    """Mark any leftover queued or running import jobs as failed on server startup."""
+    """Retire only jobs from the old input-less queue, never another worker's job."""
     try:
         with db.transaction() as tx:
             cur = tx.execute(
@@ -457,7 +459,7 @@ def mark_legacy_imports_failed(db: Database) -> int:
                 SET status = 'failed',
                     error = '服务重启，请重新导入',
                     updated_at = ?
-                WHERE status IN ('queued', 'running')
+                WHERE status IN ('queued', 'running') AND input_storage_key='' AND lease_token IS NULL
                 """,
                 (utc_now_iso(),),
             )
@@ -522,7 +524,7 @@ class ImportManager:
         watchdog_interval: float = 30.0,
     ) -> None:
         self.db = db
-        self.queue: queue.Queue[tuple[str, int, str, bytes]] = queue.Queue(maxsize=max_queue)
+        self.queue: queue.Queue[str] = queue.Queue(maxsize=max_queue)
         self.num_workers = num_workers
         self.watchdog_interval = watchdog_interval
         self.workers: list[threading.Thread] = []
@@ -530,6 +532,9 @@ class ImportManager:
         self._stop = threading.Event()
         self._started = False
         self._last_media_cleanup = 0.0
+        self._claims: dict[str,str] = {}
+        self._claims_lock = threading.Lock()
+        self._local = threading.local()
 
     def start(self) -> "ImportManager":
         if self._started:
@@ -557,11 +562,22 @@ class ImportManager:
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
+        # Relinquish this manager's tasks before joining slow AI calls. Their
+        # old callbacks are fenced; a replacement process can recover the input.
+        with self._claims_lock:
+            claims=list(self._claims.items())
+        if claims:
+            with self.db.transaction() as tx:
+                for jid,token in claims:
+                    tx.execute("UPDATE studio_import_jobs SET status='queued',lease_token=NULL,lease_until=NULL "
+                               "WHERE id=? AND lease_token=? AND status='running'",(jid,token))
         for t in self.workers:
             if t.is_alive():
                 t.join(timeout=max(0.1, timeout / max(1, len(self.workers))))
         if self._watchdog_thread and self._watchdog_thread.is_alive():
             self._watchdog_thread.join(timeout=0.5)
+        for jid,_ in claims:
+            finish_input(self.db,jid)
         self.workers.clear()
         self._watchdog_thread = None
         self._started = False
@@ -573,62 +589,69 @@ class ImportManager:
     def submit_job(self, user_id: int, file_name: str, file_bytes: bytes) -> str:
         job_id = f"imp_{uuid.uuid4().hex}"
         now = utc_now_iso()
-        with self.db.transaction() as tx:
-            tx.execute(
-                """
-                INSERT INTO studio_import_jobs
-                (id, user_id, status, progress_done, progress_total, error, result_json, file_name, created_at, updated_at)
-                VALUES (?, ?, 'queued', 0, 0, '', '', ?, ?, ?)
-                """,
-                (job_id, int(user_id), file_name or "", now, now),
-            )
-
+        self.db.release_request_connection()
+        key,digest=persist_input(job_id,file_bytes)
         try:
-            self.queue.put_nowait((job_id, int(user_id), file_name, file_bytes))
-        except queue.Full:
             with self.db.transaction() as tx:
-                tx.execute("DELETE FROM studio_import_jobs WHERE id = ?", (job_id,))
-            raise DocumentImportError("导入队列已满，请稍后再试")
-
+                tx.execute("SELECT pg_advisory_xact_lock(186,206)")
+                if tx.execute("SELECT COUNT(*) FROM studio_import_jobs WHERE status IN ('queued','running')").fetchone()[0]>=self.queue.maxsize:
+                    raise DocumentImportError("导入队列已满，请稍后再试")
+                tx.execute(
+                    """INSERT INTO studio_import_jobs
+                       (id,user_id,status,file_name,created_at,updated_at,input_storage_key,input_sha256)
+                       VALUES(?,?,'queued',?,?,?,?,?)""",(job_id,int(user_id),file_name or "",now,now,key,digest),
+                )
+        except BaseException:
+            discard_input(key)
+            raise
+        self._notify(job_id)
         return job_id
 
     def enqueue_job(self, job_id: str, user_id: int, file_name: str, file_bytes: bytes) -> None:
-        """Enqueue an already-persisted job row."""
+        """Notify workers; durable input must already be part of the queued row."""
+        row=self.db.get_conn().execute("SELECT input_storage_key,status FROM studio_import_jobs WHERE id=? AND user_id=?",(job_id,user_id)).fetchone()
+        if not row or not row["input_storage_key"] and row["status"] not in ('done','failed'):
+            raise DocumentImportError("导入原文件尚未持久化")
+        self._notify(job_id)
+
+    def _notify(self,job_id):
         try:
-            self.queue.put_nowait((job_id, int(user_id), file_name, file_bytes))
-        except queue.Full as exc:
-            raise DocumentImportError("导入队列已满，请稍后再试") from exc
+            self.queue.put_nowait(job_id)
+        except queue.Full:
+            # Hints can be dropped: workers also scan committed database jobs.
+            pass
 
     def _watchdog_loop(self) -> None:
         while not self._stop.is_set():
-            self._check_timeouts_and_cleanup()
+            try:
+                self._check_timeouts_and_cleanup()
+            finally:
+                self.db.close_thread_conn()
             self._stop.wait(self.watchdog_interval)
 
     def _check_timeouts_and_cleanup(self) -> None:
-        # 1. Check for expired running jobs
+        # Only expired leases are recoverable. Creation time does not make a
+        # currently owned job stale, including jobs owned by another pool.
         try:
             with self.db.transaction() as tx:
-                rows = tx.execute("SELECT id, user_id, created_at, updated_at FROM studio_import_jobs WHERE status = 'running'").fetchall()
-                now_dt = datetime.now(timezone.utc)
-                for r in rows:
-                    time_str = r["created_at"] or r["updated_at"]
-                    try:
-                        job_dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-                        if (now_dt - job_dt).total_seconds() > MAX_JOB_DURATION_SECONDS:
-                            tx.execute(
-                                "UPDATE studio_import_jobs SET status = 'failed', error = '处理超时', updated_at = ? WHERE id = ? AND status = 'running'",
-                                (utc_now_iso(), r["id"]),
-                            )
-                            logger.warning("Watchdog marked job %s as failed due to timeout", r["id"])
-                    except Exception:
-                        pass
+                expired=tx.execute(
+                    """UPDATE studio_import_jobs SET
+                         status=CASE WHEN claim_count<3 AND input_storage_key<>'' THEN 'queued' ELSE 'failed' END,
+                         error=CASE WHEN claim_count<3 AND input_storage_key<>'' THEN '' ELSE '处理超时' END,
+                         lease_token=NULL,lease_until=NULL,updated_at=?
+                       WHERE status='running' AND lease_until<=now() RETURNING id,status""",(utc_now_iso(),),
+                ).fetchall()
+            for row in expired:
+                if row["status"]=="failed":
+                    finish_input(self.db,row["id"])
         except Exception as exc:
-            logger.warning("Watchdog check failed: %s", exc)
+            logger.warning("Watchdog check failed: %s",exc)
 
         # 2. Periodic unreferenced media cleanup (once per hour)
         if time.monotonic() - self._last_media_cleanup > 3600.0:
             try:
                 cleanup_unreferenced_import_media(self.db, max_age_hours=24)
+                cleanup_abandoned_inputs(self.db)
                 try:
                     from .user_library import cleanup_expired_library_tombstones
                     cleanup_expired_library_tombstones(self.db, max_age_days=30)
@@ -640,41 +663,81 @@ class ImportManager:
 
     def _worker_loop(self) -> None:
         while not self._stop.is_set():
+            job=None
             try:
-                item = self.queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-
-            job_id, user_id, file_name, file_bytes = item
-            try:
-                self._process_job(job_id, user_id, file_name, file_bytes)
+                # Queue entries are wake-up hints and contain no original file.
+                while True:
+                    try:
+                        self.queue.get_nowait()
+                        self.queue.task_done()
+                    except queue.Empty:
+                        break
+                with self._claims_lock:
+                    if self._stop.is_set():
+                        break
+                    job=claim_input(self.db,MAX_JOB_DURATION_SECONDS)
+                    if job:
+                        self._claims[job["id"]]=job["lease_token"]
+                if not job:
+                    self.db.release_request_connection()
+                    self._stop.wait(0.2)
+                    continue
+                job_id=job["id"]
+                token=job["lease_token"]
+                self._local.claim=(job_id,token)
+                self.db.release_request_connection()
+                content=read_input(job)
+                self._process_job(job_id,int(job["user_id"]),job["file_name"],content)
             except Exception as exc:
-                logger.exception("Unexpected error processing import job %s: %s", job_id, exc)
-                try:
-                    with self.db.transaction() as tx:
-                        tx.execute(
-                            "UPDATE studio_import_jobs SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND status = 'running'",
-                            (str(exc) or "解析失败", utc_now_iso(), job_id),
-                        )
-                except Exception:
-                    pass
+                if job and not self._stop.is_set():
+                    try:
+                        with self.db.transaction() as tx:
+                            tx.execute(
+                                "UPDATE studio_import_jobs SET status=?,error=?,lease_token=NULL,lease_until=NULL,updated_at=? "
+                                "WHERE id=? AND status='running' AND lease_token=?",
+                                ("queued" if self._stop.is_set() else "failed","" if self._stop.is_set() else (str(exc) or "解析失败")[:300],
+                                 utc_now_iso(),job["id"],job["lease_token"]),
+                            )
+                    except Exception:
+                        logger.exception("Could not finalize import job %s",job["id"])
+                else:
+                    logger.exception("Could not claim import job")
+                    self._stop.wait(0.5)
             finally:
-                self.queue.task_done()
+                if job:
+                    if not self._stop.is_set():
+                        try:
+                            finish_input(self.db,job["id"])
+                        except Exception:
+                            logger.exception("Could not clean terminal import input %s",job["id"])
+                    with self._claims_lock:
+                        if self._claims.get(job["id"])==job["lease_token"]:
+                            self._claims.pop(job["id"],None)
+                    self._local.claim=None
                 self.db.close_thread_conn()
 
     def _process_job(self, job_id: str, user_id: int, file_name: str, file_bytes: bytes) -> None:
+        claim=getattr(self._local,"claim",None)
+        token=claim[1] if claim and claim[0]==job_id else None
         start_time = time.monotonic()
         deadline = start_time + MAX_JOB_DURATION_SECONDS
 
         def _assert_not_timed_out() -> None:
+            if self._stop.is_set():
+                raise DocumentImportError("导入工作进程已停止")
             if time.monotonic() > deadline:
                 raise DocumentImportError("处理超时")
+            if token is not None and not self.db.get_conn().execute(
+                "SELECT 1 FROM studio_import_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_until>now()",
+                (job_id,token),
+            ).fetchone():
+                raise DocumentImportError("导入任务已由其他工作进程接管")
 
         # 1. Update status to running in short transaction
         with self.db.transaction() as tx:
             tx.execute(
-                "UPDATE studio_import_jobs SET status = 'running', updated_at = ? WHERE id = ?",
-                (utc_now_iso(), job_id),
+                "UPDATE studio_import_jobs SET status = 'running', updated_at = ? WHERE id = ? AND lease_token IS NOT DISTINCT FROM ?",
+                (utc_now_iso(), job_id,token),
             )
 
         saved_image_urls: list[str] = []
@@ -726,8 +789,8 @@ class ImportManager:
 
             with self.db.transaction() as tx:
                 tx.execute(
-                    "UPDATE studio_import_jobs SET progress_total = ?, progress_done = 0, updated_at = ? WHERE id = ? AND status = 'running'",
-                    (total_segments, utc_now_iso(), job_id),
+                    "UPDATE studio_import_jobs SET progress_total = ?, progress_done = 0, updated_at = ? WHERE id = ? AND status = 'running' AND lease_token IS NOT DISTINCT FROM ?",
+                    (total_segments, utc_now_iso(), job_id,token),
                 )
 
             # 5. Process segments with AI (NO DB TRANSACTION HELD DURING AI CALLS)
@@ -764,6 +827,7 @@ class ImportManager:
                     {"role": "system", "content": AI_SEGMENT_SYSTEM_PROMPT},
                     {"role": "user", "content": seg_orig_text},
                 ]
+                self.db.release_request_connection()
                 content, meta = ai_client.chat(
                     messages,
                     temperature=0.1,
@@ -811,8 +875,8 @@ class ImportManager:
                 # Update progress in short transaction
                 with self.db.transaction() as tx:
                     tx.execute(
-                        "UPDATE studio_import_jobs SET progress_done = ?, updated_at = ? WHERE id = ? AND status = 'running'",
-                        (idx + 1, utc_now_iso(), job_id),
+                        "UPDATE studio_import_jobs SET progress_done = ?, updated_at = ? WHERE id = ? AND status = 'running' AND lease_token IS NOT DISTINCT FROM ?",
+                        (idx + 1, utc_now_iso(), job_id,token),
                     )
 
             _assert_not_timed_out()
@@ -921,9 +985,10 @@ class ImportManager:
                         result_json = ?,
                         error = '',
                         updated_at = ?
-                    WHERE id = ? AND status = 'running'
+                    WHERE id = ? AND status = 'running' AND lease_token IS NOT DISTINCT FROM ?
+                      AND (lease_until IS NULL OR lease_until>now())
                     """,
-                    (total_segments, json.dumps(result_payload, ensure_ascii=False), utc_now_iso(), job_id),
+                    (total_segments, json.dumps(result_payload, ensure_ascii=False), utc_now_iso(), job_id,token),
                 )
                 if cur.rowcount > 0:
                     is_done = True

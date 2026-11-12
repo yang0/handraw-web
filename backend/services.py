@@ -4918,7 +4918,7 @@ def fork_generation_recipe(
 
 
 def _canonical_studio_history(
-    conn: PgConnection, user_id: int, legacy_ui_entries: list[dict[str, Any]],
+    conn: PgConnection, legacy_ui_entries: list[dict[str, Any]], *, runs,
 ) -> list[dict[str, Any]]:
     """Use generation_runs/items as the only logical task/media truth.
 
@@ -4931,17 +4931,24 @@ def _canonical_studio_history(
         str(entry.get("batchId") or entry.get("id") or ""): entry
         for entry in legacy_ui_entries
     }
-    runs = conn.execute(
-        """
-        SELECT r.*, w.id AS work_id
-        FROM generation_runs r
-        LEFT JOIN works w ON w.run_id=r.id
-        WHERE r.user_id=?
-        ORDER BY r.created_at DESC, r.id DESC
-        LIMIT 120
-        """,
-        (user_id,),
-    ).fetchall()
+    slots_by_run = {}
+    run_ids = [r["id"] for r in runs]
+    if run_ids:
+        for slot in conn.execute(
+            """SELECT i.run_id,i.id,i.position,i.status,i.error_code,
+                      COALESCE(result.storage_key,primary_media.storage_key) AS image_url,
+                      am.ordinal AS output_ordinal
+               FROM generation_items i
+               LEFT JOIN LATERAL (
+                 SELECT g.id FROM studio_generations g WHERE g.item_id=i.id AND g.status='success'
+                 ORDER BY g.attempt_no DESC,g.id DESC LIMIT 1
+               ) attempt ON true
+               LEFT JOIN generation_attempt_media am ON am.attempt_id=attempt.id
+               LEFT JOIN media_assets result ON result.id=am.media_id
+               LEFT JOIN media_assets primary_media ON primary_media.id=i.media_id
+               WHERE i.run_id=ANY(?) AND i.retired_at IS NULL ORDER BY i.run_id,i.position,am.ordinal""", (run_ids,),
+        ).fetchall():
+            slots_by_run.setdefault(slot["run_id"], []).append(slot)
     result: list[dict[str, Any]] = []
     for run in runs:
         source = str(run["source"])
@@ -4949,22 +4956,12 @@ def _canonical_studio_history(
         # The legacy UI entry still provides the Web recipe canvas snapshot.
         # Do not resurrect generations deleted by their owner.
         existing = by_web_key.get(key) if source == "web" else None
-        if source == "web" and not existing:
+        if source == "web" and not existing and run["creation_mode"] != "canvas":
             continue
         if source not in ("web", "skill", "api"):
             continue
         work_id = str(run["work_id"] or "")
-        slots = conn.execute(
-            """
-            SELECT i.id, i.position, i.status, i.error_code,
-                   m.storage_key AS image_url
-            FROM generation_items i
-            LEFT JOIN media_assets m ON m.id=i.media_id
-            WHERE i.run_id=?
-            ORDER BY i.position ASC
-            """,
-            (run["id"],),
-        ).fetchall()
+        slots = slots_by_run.get(run["id"], [])
         original_by_url = {
             str(item.get("imageUrl") or ""): item
             for item in (existing or {}).get("items", [])
@@ -4972,6 +4969,7 @@ def _canonical_studio_history(
         }
         completed: list[dict[str, Any]] = []
         output_slots: list[dict[str, Any]] = []
+        seen_tasks = set()
         for slot in slots:
             url = str(slot["image_url"] or "")
             state = str(slot["status"])
@@ -4982,10 +4980,14 @@ def _canonical_studio_history(
                 "imageUrl": url if state == "success" else "",
                 "errorCode": str(slot["error_code"] or ""),
             }
-            output_slots.append(public_slot)
+            if public_slot["id"] not in seen_tasks:
+                output_slots.append(public_slot)
+                seen_tasks.add(public_slot["id"])
             if state == "success" and url:
                 img = dict(original_by_url.get(url, {}))
                 img.update(public_slot)
+                if slot["output_ordinal"] is not None:
+                    img["id"] = f"{public_slot['id']}:media:{slot['output_ordinal']}"
                 if work_id:
                     img["workId"] = work_id
                 completed.append(img)
@@ -5004,10 +5006,11 @@ def _canonical_studio_history(
                 "recipeSummary": "", "prompt": safe_topic, "markdown": "",
                 "items": completed, "engine": "upload" if source == "skill" else source,
                 "taskId": "", "requestId": str(run["request_id"] or ""),
-                "error": "", "recipeId": "", "creationSource": source,
+                "error": "", "recipeId": "", "creationSource": run["creation_mode"] if source == "web" else source,
                 "promptMasked": bool(masked),
             }
         entry["runId"] = str(run["id"])
+        entry["canvasId"] = run["canvas_id"] or ""
         entry["status"] = str(run["status"])
         entry["createdAt"] = format_short_time(run["created_at"])
         entry["createdAtISO"] = str(run["created_at"])
@@ -5018,10 +5021,10 @@ def _canonical_studio_history(
         entry["workId"] = work_id
         entry["source"] = source
         result.append(entry)
-    return result[:40]
+    return result
 
 
-def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
+def get_studio_workspace(db: Database, user: dict[str, Any] | None, *, collection=None, history_cursor="", history_limit=40) -> dict[str, Any]:
     conn = db.get_conn()
     presets = [
         dict(r)
@@ -5037,7 +5040,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
     for r in conn.execute(
         "SELECT * FROM studio_workflows WHERE user_id = ? AND is_official_preset = 0 ORDER BY updated_at_ms DESC",
         (uid,),
-    ).fetchall():
+    ).fetchall() if collection in (None,"workflows") else []:
         try:
             g = json.loads(r["graph_json"])
         except Exception:
@@ -5053,29 +5056,63 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
         )
 
     arts = []
-    for r in conn.execute("SELECT * FROM studio_articles WHERE user_id = ? AND COALESCE(deleted_at, '') = '' ORDER BY updated_at_ms DESC", (uid,)).fetchall():
+    for r in conn.execute("SELECT * FROM studio_articles WHERE user_id = ? AND COALESCE(deleted_at, '') = '' ORDER BY updated_at_ms DESC", (uid,)).fetchall() if collection is None else []:
         arts.append(
             {
                 "id": r["id"],
                 "articleTitle": r["article_title"],
                 "markdown": r["markdown"],
                 "cards": json.loads(r["cards_json"] or "[]"),
+                "_illustrationsReady":r["illustrations_ready"],
                 "style1": r["style1"],
                 "layout": r["layout_code"],
                 "status": r["status"],
                 "runCount": int(r["run_count"]),
                 "createdAtMs": int(r["created_at_ms"]),
                 "updatedAtMs": int(r["updated_at_ms"]),
+                "writeSeq": int(r["write_seq"]),
+                "settings": r["settings_json"],
+                "coverRatio": r["settings_json"].get("coverRatio", "2.35:1"),
+                "inlineRatio": r["settings_json"].get("inlineRatio", "4:3"),
             }
         )
 
+    from .studio_articles import hydrate_cards
+    article_cards = hydrate_cards(conn, [article["id"] for article in arts])
+    for article in arts:
+        if article.pop("_illustrationsReady") or article_cards.get(article["id"]):
+            article["cards"] = article_cards[article["id"]]
     hist = []
     pending_tasks = []
     history_filter, history_ids = _seed_filter("id", "generations")
-    for r in conn.execute(
-        f"SELECT * FROM studio_generations WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND {history_filter} ORDER BY created_at DESC LIMIT 400",
-        (uid, *history_ids),
-    ).fetchall():
+    from .studio_paging import page_history_runs
+    selected_runs, history_after = page_history_runs(conn, uid, cursor=history_cursor, limit=history_limit) if collection in (None,"history") else ([], "")
+    selected_web_keys = [r["external_run_id"] for r in selected_runs if r["source"] == "web"]
+    execution_rows = conn.execute(
+        f"SELECT * FROM studio_generations WHERE user_id = ? AND COALESCE(deleted_at, '') = '' AND {history_filter} "
+        "AND (run_id=ANY(?) OR batch_id=ANY(?) OR (batch_id='' AND id=ANY(?))) ORDER BY created_at DESC,id DESC",
+        (uid, *history_ids, [r["id"] for r in selected_runs], selected_web_keys, selected_web_keys),
+    ).fetchall() if selected_runs else []
+    recipe_ids = list({r["recipe_id"] for r in execution_rows if r["recipe_id"]})
+    recipe_subjects = {r["id"]: r["subject"] for r in conn.execute(
+        "SELECT id,subject FROM studio_recipes WHERE user_id=? AND id=ANY(?)", (uid,recipe_ids),
+    ).fetchall()} if recipe_ids else {}
+    asset_codes = set()
+    for row in execution_rows:
+        asset_codes.update(str(row["recipe_summary"] or "").upper().replace("#", "").split())
+        try:
+            asset_codes.update(str(v.get("code") or "").upper().lstrip("#") for v in json.loads(row["system_append_json"] or "{}").get("systemAppend", []) if isinstance(v,dict))
+        except (ValueError, TypeError, AttributeError):
+            pass
+    asset_prices = {str(r["code"]).upper(): r for r in conn.execute(
+        "SELECT code,unlock_cost,source_type FROM catalog_assets WHERE UPPER(code)=ANY(?)", (list(asset_codes),),
+    ).fetchall()} if asset_codes else {}
+    work_by_external = {str(r["external_run_id"]): r["id"] for r in conn.execute(
+        "SELECT gr.external_run_id,w.id FROM generation_runs gr JOIN works w ON w.run_id=gr.id "
+        "WHERE gr.user_id=? AND gr.source='web' AND gr.external_run_id=ANY(?)",
+        (uid,list({str(r["batch_id"] or r["id"]) for r in execution_rows})),
+    ).fetchall()} if execution_rows else {}
+    for r in execution_rows:
         r_keys = r.keys() if hasattr(r, "keys") else r
         vis_prompt, was_masked = get_generation_visible_prompt(r)
 
@@ -5100,7 +5137,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
                 except Exception:
                     pass
             for c_clean in codes_to_check:
-                ca = conn.execute("SELECT unlock_cost, source_type FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (c_clean, c_clean)).fetchone()
+                ca = asset_prices.get(c_clean)
                 if ca and (int(ca["unlock_cost"] or 0) > 0 or ca["source_type"] == "exclusive"):
                     is_paid = True
                     break
@@ -5141,9 +5178,9 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
         if "subject" in r_keys and r["subject"]:
             user_topic = str(r["subject"]).strip()
         elif "recipe_id" in r_keys and r["recipe_id"]:
-            rcp = conn.execute("SELECT subject FROM studio_recipes WHERE id = ?", (r["recipe_id"],)).fetchone()
-            if rcp and rcp["subject"]:
-                user_topic = str(rcp["subject"]).strip()
+            recipe_subject = recipe_subjects.get(r["recipe_id"])
+            if recipe_subject:
+                user_topic = str(recipe_subject).strip()
         if not user_topic:
             user_topic = "手绘创作"
 
@@ -5173,18 +5210,11 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
         # Link the history item to the single work of its canonical run.
         # Its image slots do not have separate work IDs.
         logical_key = hist_entry["batchId"] or str(r["id"])
-        canonical_work = conn.execute(
-            """
-            SELECT w.id FROM generation_runs gr
-            JOIN works w ON w.run_id=gr.id
-            WHERE gr.user_id=? AND gr.source='web' AND gr.external_run_id=?
-            """,
-            (uid, logical_key),
-        ).fetchone()
-        if canonical_work:
-            hist_entry["workId"] = canonical_work["id"]
+        canonical_work_id = work_by_external.get(logical_key)
+        if canonical_work_id:
+            hist_entry["workId"] = canonical_work_id
             for item in items:
-                item["workId"] = canonical_work["id"]
+                item["workId"] = canonical_work_id
         if snap:
             hist_entry["recipeSnapshot"] = snap
         if was_masked:
@@ -5250,7 +5280,7 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
         group["imageCount"] = len(group["items"])
         if group.get("promptMasked"):
             group["prompt"] = ""
-    hist = _canonical_studio_history(conn, uid, history_runs)
+    hist = _canonical_studio_history(conn, history_runs, runs=selected_runs) if collection in (None,"history") else []
 
     uploads = [
         {
@@ -5261,14 +5291,21 @@ def get_studio_workspace(db: Database, user: dict[str, Any] | None) -> dict[str,
             "image": r["image_url"],
             "custom": True,
         }
-        for r in conn.execute("SELECT * FROM user_uploads WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", (uid,)).fetchall()
+        for r in (conn.execute("SELECT * FROM user_uploads WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", (uid,)).fetchall()
+                  if collection in (None,"uploads") else [])
     ]
 
+    if collection:
+        result = {"loggedIn":True,collection:{"history":hist,"workflows":wfs,"uploads":uploads}[collection]}
+        if collection == "history":
+            result["nextCursor"] = history_after
+        return result
     return {
         "loggedIn": True,
         "workflows": wfs,
         "articles": arts,
         "history": hist,
+        "historyCursor": history_after,
         "pendingTasks": pending_tasks,
         "uploads": uploads,
         "officialPresets": presets,
@@ -5309,92 +5346,8 @@ def delete_user_studio_workflow(db: Database, user: dict[str, Any], wf_id: str) 
 
 
 def sync_user_studio_articles(db: Database, user: dict[str, Any], articles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Atomically sync up to 50 articles with optional optimistic concurrency.
-
-    New clients include baseUpdatedAtMs from the last confirmed server revision.
-    A conflict aborts the entire batch, preserving both the remote article and
-    the local draft. Legacy clients lacking a base remain supported.
-    """
-    uid = int(user["id"])
-    now_ms = int(time.time() * 1000)
-    versions: dict[str, int] = {}
-    with db.transaction() as tx:
-        for art in (articles or [])[:50]:
-            if not isinstance(art, dict) or not art.get("id"):
-                continue
-            aid = str(art["id"])
-            existing = tx.execute(
-                "SELECT * FROM studio_articles WHERE id = ?",
-                (aid,),
-            ).fetchone()
-            if existing:
-                if int(existing["user_id"] or 0) != uid:
-                    raise ServiceError("无权修改其他用户的文章", status=403, code="article_forbidden")
-                if str(existing["deleted_at"] or "").strip():
-                    if "baseUpdatedAtMs" in art:
-                        raise ServiceError("文章已经删除，请将本地内容另存为新文章", status=409, code="article_deleted")
-                    # Compatibility with legacy clients: never resurrect a
-                    # previously deleted article, and do not fail the batch.
-                    continue
-                # A full-workspace sync may include untouched articles. Do not
-                # bump their revisions or manufacture cross-tab conflicts.
-                new_title = str(art.get("articleTitle") or "未命名文章")[:140]
-                new_cards = json.dumps(art.get("cards") or [], ensure_ascii=False)
-                unchanged = (
-                    existing["article_title"] == new_title
-                    and str(existing["markdown"] or "") == str(art.get("markdown") or "")
-                    and str(existing["cards_json"] or "[]") == new_cards
-                    and str(existing["style1"] or "") == str(art.get("style1") or "")
-                    and str(existing["layout_code"] or "") == str(art.get("layout") or "")
-                    and str(existing["status"] or "") == str(art.get("status") or "ready")
-                    and int(existing["run_count"] or 0) == int(art.get("runCount") or 0)
-                )
-                if unchanged:
-                    versions[aid] = int(existing["updated_at_ms"] or 0)
-                    continue
-            if "baseUpdatedAtMs" in art:
-                try:
-                    base = int(art["baseUpdatedAtMs"])
-                except (ValueError, TypeError) as exc:
-                    raise ServiceError("文章基准版本无效", status=400, code="invalid_article_version") from exc
-                current = int(existing["updated_at_ms"] or 0) if existing else 0
-                if base != current:
-                    raise ServiceError(
-                        "文章在其他窗口或设备已更新，当前本地修改未覆盖云端；请备份后重新加载",
-                        status=409, code="article_version_conflict",
-                    )
-            # Never rely on the browser clock to establish server revision.
-            next_version = max(now_ms, (int(existing["updated_at_ms"] or 0) + 1) if existing else 1)
-            tx.execute(
-                """
-                INSERT INTO studio_articles (id, user_id, article_title, markdown, cards_json, style1, layout_code, status, run_count, created_at_ms, updated_at_ms)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    article_title = excluded.article_title,
-                    markdown = excluded.markdown,
-                    cards_json = excluded.cards_json,
-                    style1 = excluded.style1,
-                    layout_code = excluded.layout_code,
-                    status = excluded.status,
-                    run_count = excluded.run_count,
-                    updated_at_ms = excluded.updated_at_ms
-                WHERE studio_articles.user_id = excluded.user_id AND COALESCE(studio_articles.deleted_at, '') = ''
-                """,
-                (
-                    aid, uid,
-                    str(art.get("articleTitle") or "未命名文章")[:140],
-                    str(art.get("markdown") or ""),
-                    json.dumps(art.get("cards") or [], ensure_ascii=False),
-                    str(art.get("style1") or ""),
-                    str(art.get("layout") or ""),
-                    str(art.get("status") or "ready"),
-                    int(art.get("runCount") or 0),
-                    int(art.get("createdAtMs") or now_ms),
-                    next_version,
-                ),
-            )
-            versions[aid] = next_version
-    return {"ok": True, "versions": versions}
+    from .studio_articles import save_articles
+    return save_articles(db, user, articles)
 
 
 def delete_user_studio_article(db: Database, user: dict[str, Any], article_id: str) -> dict[str, Any]:
@@ -5963,6 +5916,9 @@ def prepare_cloud_generation(
     uid = int(user["id"])
     uname = user["username"]
 
+    from .studio_execution import apply_source_input
+    apply_source_input(db, user, body)
+
     # A canvas batch sends independent gateway requests but represents one
     # logical public work. Validate the group boundary server-side.
     batch_id = str(body.get("batchId") or "").strip()
@@ -5985,6 +5941,13 @@ def prepare_cloud_generation(
     r_whitespace = ""
     r_ratio = "3:4"
     r_mode = "graphic-text"
+    if body.get("canvasId"):
+        r_colors=list(body.get("colors") or [])
+        r_tones=list(body.get("tones") or [])
+        r_moods=list(body.get("moods") or [])
+        r_whitespace=str(body.get("whitespace") or "")
+        r_ratio=str(body.get("ratio") or "3:4")
+        r_mode=str(body.get("mode") or "graphic-text")
     if recipe_id:
         r_row = db.get_conn().execute(
             "SELECT * FROM studio_recipes WHERE id = ? AND user_id = ?",
@@ -6068,15 +6031,15 @@ def prepare_cloud_generation(
     layout = str(body.get("layout") or "").strip().upper().lstrip("#")
 
     # If codes were embedded in raw_prompt:
-    if not style1:
+    if not style1 and not body.get("canvasId"):
         m_s = re.search(r"(?:【画风】|画风|Style|角色风格)[：:\s]*#?([A-Za-z0-9_-]+)", raw_prompt)
         if m_s:
             style1 = m_s.group(1).strip().upper().lstrip("#")
-    if not style2:
+    if not style2 and not body.get("canvasId"):
         m_s2 = re.search(r"(?:【场景风格】|场景风格|Scene Style)[：:\s]*#?([A-Za-z0-9_-]+)", raw_prompt)
         if m_s2:
             style2 = m_s2.group(1).strip().upper().lstrip("#")
-    if not layout:
+    if not layout and not body.get("canvasId"):
         m_l = re.search(r"(?:【图型】|图型|Layout)[：:\s]*#?([A-Za-z0-9_-]+)", raw_prompt)
         if m_l:
             layout = m_l.group(1).strip().upper().lstrip("#")
@@ -6109,6 +6072,8 @@ def prepare_cloud_generation(
     injected_notes: list[str] = []
 
     with db.transaction() as tx:
+        from .studio_execution import lock_generation_actor
+        lock_generation_actor(tx,uid)
         settings = get_site_settings(tx)
         econ = settings.get("economy", {})
         gateway = settings.get("gateway", {})
@@ -6207,6 +6172,8 @@ def prepare_cloud_generation(
             from . import resource_registry
             res = resource_registry.resolve(tx, code, viewer=user, purpose="generate")
             if not res:
+                if body.get("canvasId"):
+                    raise ServiceError("批次资源已不可用",status=403,code="asset_unavailable")
                 continue
             if not res.get("canUse"):
                 hidden_by = (res.get("access") or {}).get("hiddenBy")
@@ -6221,7 +6188,12 @@ def prepare_cloud_generation(
             if (ca and (int(ca["unlock_cost"] or 0) > 0 or ca["source_type"] == "exclusive")) or int(res.get("unlock_cost") or 0) > 0 or res.get("source_type") == "exclusive":
                 is_paid_resource = True
 
-            inject = (res.get("access") or {}).get("inject")
+            frozen=(body.get("_canvasResourceInputs") or {}).get(code)
+            if frozen:
+                res={**res,"_raw_definition":frozen["_raw_definition"],
+                     "secret_blackbox_prompt":frozen["secret_blackbox_prompt"]}
+                is_paid_resource = is_paid_resource or frozen["private"]
+            inject = frozen["inject"] if frozen else (res.get("access") or {}).get("inject")
             if inject == "blackbox":
                 secret = (res.get("secret_blackbox_prompt") or "").strip()
                 if secret:
@@ -6234,9 +6206,14 @@ def prepare_cloud_generation(
                     system_append_list.append({"type": "asset_instructions", "code": code})
                     injected_definitions.append(raw_def)
 
+        canvas_user_prompt=raw_prompt
+        if body.get("canvasId"):
+            parameters=[("画幅比例",r_ratio),("创作模式",r_mode),("配色","、".join(r_colors)),
+                        ("色调","、".join(r_tones)),("氛围","、".join(r_moods)),("留白",r_whitespace)]
+            canvas_user_prompt += "\n"+"\n".join(f"【{label}】：{value}" for label,value in parameters if value)
         # Length check before charging (X6)
-        if recipe_id:
-            recipe_full_prompt = build_recipe_gateway_prompt(raw_prompt, injected_notes)
+        if recipe_id or body.get("canvasId"):
+            recipe_full_prompt = build_recipe_gateway_prompt(canvas_user_prompt, injected_notes)
             if len(recipe_full_prompt) > 4000:
                 if not raw_prompt.strip():
                     raise ServiceError("所选资源系统说明超过 4000 字上限，请精简所选资源", status=400, code="prompt_too_long")
@@ -6249,6 +6226,14 @@ def prepare_cloud_generation(
         wallet_query += " FOR UPDATE"
         w = tx.execute(wallet_query, (uid,)).fetchone()
         used = int(w["free_quota_used"]) if (w and w["free_quota_date"] == today) else 0
+        if body.get("canvasId"):
+            plan=tx.execute("SELECT plan_json FROM generation_runs WHERE id=?",(body["_canvasRunId"],)).fetchone()["plan_json"]
+            if plan.get("unitPrice")!=per_img_cost:
+                raise ServiceError("批次价格已变化，请重新预览确认",status=409,code="canvas_price_changed")
+            spent=int(tx.execute("SELECT COALESCE(SUM(credits_spent),0) FROM studio_generations WHERE run_id=? AND status<>'refunded'",
+                                 (body["_canvasRunId"],)).fetchone()[0])
+            if spent+(0 if used<max_free else per_img_cost)>plan["maxCredits"]:
+                raise ServiceError("本批次已达到确认的积分上限",status=409,code="canvas_budget_exhausted")
         if used < max_free:
             tx.execute(
                 "UPDATE wallets SET free_quota_date = ?, free_quota_used = ?, updated_at = ? WHERE user_id = ?",
@@ -6284,7 +6269,7 @@ def prepare_cloud_generation(
             client_scan_failed = True
 
         # Initial prompt without skill (written in Transaction A)
-        if recipe_id:
+        if recipe_id or body.get("canvasId"):
             initial_visible_prompt = raw_prompt
         else:
             cleaned_visible = raw_prompt
@@ -6299,9 +6284,12 @@ def prepare_cloud_generation(
             prompt_masked_init = 1
         else:
             prompt_masked_init = 0
+        if body.get("canvasId") and is_paid_resource:
+            initial_visible_prompt=""
+            prompt_masked_init=1
 
-        if recipe_id:
-            initial_prompt = build_recipe_gateway_prompt(raw_prompt, injected_notes)
+        if recipe_id or body.get("canvasId"):
+            initial_prompt = build_recipe_gateway_prompt(canvas_user_prompt, injected_notes)
         else:
             cleaned = raw_prompt
             if injected_notes:
@@ -6400,10 +6388,9 @@ def prepare_cloud_generation(
                 "SELECT id FROM generation_runs WHERE id=? FOR UPDATE",
                 (canonical_run_id,),
             ).fetchone()
-            slot_position = batch_index * 1000
             prior_slot = tx.execute(
-                "SELECT status FROM generation_items WHERE run_id=? AND position=?",
-                (canonical_run_id, slot_position),
+                "SELECT status FROM generation_items WHERE run_id=? AND (ordinal=? OR (ordinal IS NULL AND position=?))",
+                (canonical_run_id, batch_index,batch_index*1000),
             ).fetchone()
             if prior_slot and prior_slot["status"] == "cancelled":
                 if body.get("retryCancelled") is not True:
@@ -6411,10 +6398,6 @@ def prepare_cloud_generation(
                         "该图片已被取消；如需重新生成，请明确选择重试",
                         status=409, code="generation_slot_cancelled",
                     )
-                tx.execute(
-                    "DELETE FROM generation_items WHERE run_id=? AND position=? AND status='cancelled'",
-                    (canonical_run_id, slot_position),
-                )
         tx.execute(
             "UPDATE generation_runs SET original_request=? WHERE id=?",
             (user_subject, canonical_run_id),
@@ -6429,14 +6412,17 @@ def prepare_cloud_generation(
                 """,
                 (gen_id, uid, today, now_iso),
             )
+        from .studio_execution import attach_attempt
+        attach_attempt(tx, uid, canonical_run_id, gen_id, body)
         inserted = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
 
     prompt_trimmed = False
     # Outside transaction: model call for freshly inserted rows
     if needs_compose:
+        db.release_request_connection()
         composed = None
         try:
-            if recipe_id:
+            if recipe_id or body.get("canvasId"):
                 composed = _compose_skill_prompt(
                     style1 or style2,
                     layout,
@@ -6455,7 +6441,7 @@ def prepare_cloud_generation(
             logger.exception("Failed to compose skill prompt for generation %s", gen_id)
             composed = None
 
-        if recipe_id:
+        if recipe_id or body.get("canvasId"):
             if composed:
                 full_test = build_recipe_gateway_prompt(composed, injected_notes)
                 if len(full_test) > 4000:
@@ -6485,7 +6471,7 @@ def prepare_cloud_generation(
             if client_scan_failed:
                 final_vis_prompt = None
                 final_masked = 0
-            elif client_prompt_has_secret:
+            elif body.get("canvasId") and is_paid_resource or client_prompt_has_secret:
                 final_vis_prompt = ""
                 final_masked = 1
             elif skill_visible_prompt_text:
@@ -6550,11 +6536,12 @@ def prepare_cloud_generation(
     return result
 
 
-def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) -> None:
+def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str, *, poll_claim_token=None) -> None:
     now_iso = utc_now_iso()
     today = local_today_str()
     with db.transaction() as tx:
-        row = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
+        from .studio_execution import lock_attempt
+        row = lock_attempt(tx, gen_id, poll_claim_token=poll_claim_token)
         if not row or row["status"] in ("refunded", "success"):
             return
         uid = int(row["user_id"])
@@ -6603,11 +6590,16 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) ->
         # fails. Do not create a public work for a fully failed run.
         logical_key = str(row["batch_id"] or "") or gen_id
         from .generation_v3 import _stable_id
-        canonical_run_id = _stable_id("run", uid, "web", logical_key)
+        canonical_run_id = row["run_id"] or _stable_id("run", uid, "web", logical_key)
         exists = tx.execute(
             "SELECT 1 FROM generation_runs WHERE id=?", (canonical_run_id,),
         ).fetchone()
-        if exists:
+        from .studio_execution import is_current_attempt
+        current_attempt = is_current_attempt(tx, row)
+        if exists and current_attempt and row["item_id"]:
+            tx.execute("UPDATE generation_items SET status='failed',media_id=NULL,error_code='gateway_failed',updated_at=? WHERE id=? AND status<>'success'",
+                       (now_iso,row["item_id"]))
+        elif exists and current_attempt:
             position = (
                 int(row["batch_index"] or 0) * 1000
                 if row["batch_id"] else 0
@@ -6627,22 +6619,25 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str) ->
         # V3: use ONE slot-driven state machine for success, failure and
         # cancellation. Gateway execution rows are billing facts, not another
         # authoritative logical-run state.
-        if exists:
+        if exists and current_attempt:
             from .generation_v3 import refresh_run_status
             refresh_run_status(tx, canonical_run_id)
 
 
-def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_urls: list[str] | None = None) -> None:
+def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_urls: list[str] | None = None, *, poll_claim_token=None) -> None:
+    if image_urls is not None:
+        image_urls = list(dict.fromkeys(str(url or "").strip() for url in image_urls if str(url or "").strip()))
     if image_urls is not None and not any(str(url or "").strip() for url in image_urls):
         # Gateway status "success" is not success for the user if every
         # image download/validation failed. Never consume quota and leave
         # a permanently empty public generation in its place.
-        refund_failed_cloud_generation(db, gen_id, "生图任务未返回可保存的有效图片")
+        refund_failed_cloud_generation(db, gen_id, "生图任务未返回可保存的有效图片", poll_claim_token=poll_claim_token)
         return
     with db.transaction() as tx:
-        generation = tx.execute(
-            "SELECT user_id, fork_work_id, engine, status FROM studio_generations WHERE id = ?", (gen_id,)
-        ).fetchone()
+        from .studio_execution import lock_attempt
+        generation = lock_attempt(tx, gen_id, poll_claim_token=poll_claim_token)
+        if not generation or generation["status"] in ("refunded", "success"):
+            return
         if image_urls is not None:
             tx.execute(
                 "UPDATE studio_generations SET status = 'success', task_id = ?, items_json = ? WHERE id = ? AND status NOT IN ('refunded', 'success')",
@@ -6696,6 +6691,11 @@ def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_url
                             utc_now_iso(),
                         ),
                     )
+            from .studio_execution import record_attempt_media, is_current_attempt
+            if generation and not already_refunded:
+                record_attempt_media(tx, generation, image_urls or [])
+            if not is_current_attempt(tx, generation):
+                return
             # Public success must not be committed without its canonical works.
             # Projection errors roll back this transaction instead of silently hiding images.
             from .generation_works import project_generation_to_works

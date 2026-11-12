@@ -345,6 +345,13 @@ def is_media_referenced(
         return True
 
     if clean_url:
+        from .studio_media import studio_media_referenced
+        try:
+            if studio_media_referenced(conn,clean_url):
+                return True
+        except Exception:
+            logger.warning("Could not verify normalized studio media references; retaining object",exc_info=True)
+            return True
         # 2. Only valid, currently published grants can keep an object alive.
         # A stale grant for a hidden/deleted work cannot pin an orphan forever.
         if _check_query(

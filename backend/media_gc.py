@@ -112,6 +112,7 @@ def drain_media_gc(db: Any, *, limit: int = 20) -> dict[str, int]:
                 stats["referenced"] += 1
                 continue
 
+            db.release_request_connection()
             delete_private_object(url)
             local_path_for_url(url).unlink(missing_ok=True)
             with db.transaction() as tx:
@@ -127,6 +128,10 @@ def drain_media_gc(db: Any, *, limit: int = 20) -> dict[str, int]:
                         SELECT 1 FROM work_media WHERE work_media.media_id=media_assets.id
                     ) AND NOT EXISTS (
                         SELECT 1 FROM generation_items WHERE generation_items.media_id=media_assets.id
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM article_illustrations WHERE article_illustrations.selected_media_id=media_assets.id
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM generation_attempt_media WHERE generation_attempt_media.media_id=media_assets.id
                     )
                     """,
                     (url,),

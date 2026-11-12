@@ -31,6 +31,7 @@ MIGRATIONS = (
     ROOT / "backend" / "postgres_115_published_author_feed.sql",
     ROOT / "backend" / "postgres_116_wallet_notifications.sql",
     ROOT / "backend" / "postgres_117_unique_index_names.sql",
+    ROOT / "backend" / "postgres_118_studio_model.sql",
 )
 
 
