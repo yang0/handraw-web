@@ -5918,6 +5918,7 @@ def prepare_cloud_generation(
 
     from .studio_execution import apply_source_input
     apply_source_input(db, user, body)
+    document_source = bool(body.get("canvasId") or body.get("articleId"))
 
     # A canvas batch sends independent gateway requests but represents one
     # logical public work. Validate the group boundary server-side.
@@ -5941,7 +5942,7 @@ def prepare_cloud_generation(
     r_whitespace = ""
     r_ratio = "3:4"
     r_mode = "graphic-text"
-    if body.get("canvasId"):
+    if document_source:
         r_colors=list(body.get("colors") or [])
         r_tones=list(body.get("tones") or [])
         r_moods=list(body.get("moods") or [])
@@ -6207,12 +6208,12 @@ def prepare_cloud_generation(
                     injected_definitions.append(raw_def)
 
         canvas_user_prompt=raw_prompt
-        if body.get("canvasId"):
+        if document_source:
             parameters=[("画幅比例",r_ratio),("创作模式",r_mode),("配色","、".join(r_colors)),
                         ("色调","、".join(r_tones)),("氛围","、".join(r_moods)),("留白",r_whitespace)]
             canvas_user_prompt += "\n"+"\n".join(f"【{label}】：{value}" for label,value in parameters if value)
         # Length check before charging (X6)
-        if recipe_id or body.get("canvasId"):
+        if recipe_id or document_source:
             recipe_full_prompt = build_recipe_gateway_prompt(canvas_user_prompt, injected_notes)
             if len(recipe_full_prompt) > 4000:
                 if not raw_prompt.strip():
@@ -6269,7 +6270,7 @@ def prepare_cloud_generation(
             client_scan_failed = True
 
         # Initial prompt without skill (written in Transaction A)
-        if recipe_id or body.get("canvasId"):
+        if recipe_id or document_source:
             initial_visible_prompt = raw_prompt
         else:
             cleaned_visible = raw_prompt
@@ -6288,7 +6289,7 @@ def prepare_cloud_generation(
             initial_visible_prompt=""
             prompt_masked_init=1
 
-        if recipe_id or body.get("canvasId"):
+        if recipe_id or document_source:
             initial_prompt = build_recipe_gateway_prompt(canvas_user_prompt, injected_notes)
         else:
             cleaned = raw_prompt

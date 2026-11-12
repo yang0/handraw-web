@@ -5901,6 +5901,7 @@
     const inputKey = () => JSON.stringify({
       card: articleCloudPayload(target.art).cards.find(item => item.id === card.id),
       style1: target.art.style1, layout: target.art.layout,
+      settings: target.art.settings, coverRatio: target.art.coverRatio, inlineRatio: target.art.inlineRatio,
       imageUrl: card.imageUrl || "", resultEpoch: card.resultEpoch
     });
     const currentCard = () => (target.art.cards || []).includes(card) &&
@@ -5965,8 +5966,8 @@
 
       let imgUrl = "";
       const cardS1 = card.style1 || target.art?.style1 || "";
-      const cardS2 = card.style2 || "";
-      const cardLay = card.layoutId || rec?.layoutId || target.art?.layout || "";
+      const cardS2 = (card.style2 ?? target.art?.settings?.style2) || "";
+      const cardLay = card.layoutId || card.layout || rec?.layoutId || target.art?.layout || "";
       const cardS1Res = cardS1 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS1) || rec?.style1Res) : rec?.style1Res;
       const cardS2Res = cardS2 && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardS2) || rec?.style2Res) : rec?.style2Res;
       const cardLayRes = cardLay && Catalog?.resourceMap ? (Catalog.resourceMap.get(cardLay) || rec?.layoutRes) : rec?.layoutRes;
@@ -6000,7 +6001,9 @@
             // Article cards already contain the complete user-visible prompt.
             // Prevent the backend from silently composing another AI prompt.
             promptFromSkill: Boolean(sourcePrompt),
-            ratio: card.ratio || (card.role === "cover" ? "2.35:1" : "4:3"),
+            ratio: card.ratio || (card.role === "cover"
+              ? target.art.coverRatio || target.art.settings?.coverRatio || "2.35:1"
+              : target.art.inlineRatio || target.art.settings?.inlineRatio || "4:3"),
             style1: cardS1,
             style2: cardS2,
             layout: cardLay,

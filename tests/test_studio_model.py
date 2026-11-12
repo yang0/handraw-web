@@ -355,6 +355,89 @@ class StudioModelTests(unittest.TestCase):
         with self.assertRaises(ServiceError):
             self.attempt(**body)
 
+    def test_article_defaults_are_effective_inputs_and_unsaved_modes_are_rejected(self):
+        cover = {key: value for key, value in self.card.items() if key != "ratio"}
+        self.save(
+            cards=[cover, {**cover, "id": "inline", "role": "inline", "colors": []}],
+            settings={
+                "coverRatio": "16:9",
+                "inlineRatio": "3:2",
+                "mode": "image-only",
+                "colors": ["C-01"],
+            },
+        )
+        source = {
+            "creationSource": "article",
+            "articleId": "article",
+            "cardId": "cover",
+        }
+        body = dict(source)
+        apply_source_input(self.db, self.user, body)
+        self.assertEqual(body["ratio"], "16:9")
+        self.assertEqual(body["mode"], "image-only")
+        self.assertEqual(body["colors"], ["C-01"])
+        inline = {**source, "cardId": "inline"}
+        apply_source_input(self.db, self.user, inline)
+        self.assertEqual(inline["ratio"], "3:2")
+        self.assertEqual(
+            inline["colors"], [], "An explicit empty selection clears article defaults"
+        )
+        for override in (
+            {"mode": "graphic-text"},
+            {"colors": ["C-02"]},
+            {"tones": ["T-01"]},
+            {"whitespace": "wide"},
+        ):
+            with self.subTest(override=override), self.assertRaises(ServiceError):
+                apply_source_input(self.db, self.user, {**source, **override})
+        body = {
+            **source,
+            "historyId": "unrelated",
+            "generationId": "unrelated",
+            "customRefImg": "another-form",
+            "useCh001": True,
+        }
+        apply_source_input(self.db, self.user, body)
+        self.assertTrue(
+            all(
+                key not in body
+                for key in ("historyId", "generationId", "customRefImg", "useCh001")
+            )
+        )
+
+    def test_default_ratio_change_invalidates_only_inheriting_illustrations(self):
+        cover = {key: value for key, value in self.card.items() if key != "ratio"}
+        self.save(cards=[cover], settings={"coverRatio": "16:9"})
+        self.attempt(gid="inherited")
+        self.save(cards=[cover], settings={"coverRatio": "1:1"})
+        with self.db.transaction() as tx:
+            record_attempt_media(
+                tx,
+                tx.execute(
+                    "SELECT * FROM studio_generations WHERE id='inherited'"
+                ).fetchone(),
+                ["/images/stale-ratio.webp"],
+            )
+        slot = get_article(self.db, self.user, "article")["article"]["cards"][0]
+        self.assertEqual(slot["imageUrl"], "")
+        self.save(settings={"coverRatio": "16:9"})  # explicit 3:4 on this card
+        self.attempt(gid="explicit")
+        self.save(settings={"coverRatio": "1:1"})
+        with self.db.transaction() as tx:
+            record_attempt_media(
+                tx,
+                tx.execute(
+                    "SELECT * FROM studio_generations WHERE id='explicit'"
+                ).fetchone(),
+                ["/images/explicit-ratio.webp"],
+            )
+        self.assertEqual(
+            get_article(self.db, self.user, "article")["article"]["cards"][0][
+                "imageUrl"
+            ],
+            "/images/explicit-ratio.webp",
+        )
+
     def test_projection_keeps_task_identity_and_one_task_for_multiple_media(self):
         self.save()
         rid, iid = self.attempt()

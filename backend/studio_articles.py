@@ -61,17 +61,28 @@ def spec_hash(spec):
 
 def execution_spec(card, article):
     """Resolve article defaults once; neither canvas nor form state is input."""
+    settings = article.get("settings_json") or {}
+    cover = card.get("role") == "cover"
     return {
         "prompt": str(card.get("prompt") or card.get("title") or "手绘文章配图"),
+        "subject": str(
+            card.get("subject") or card.get("theme") or card.get("title") or ""
+        ).strip(),
         "ratio": card.get("ratio")
-        or ("2.35:1" if card.get("role") == "cover" else "4:3"),
+        or settings.get("coverRatio" if cover else "inlineRatio")
+        or ("2.35:1" if cover else "4:3"),
         "style1": card.get("style1") or article["style1"] or "",
-        "style2": card.get("style2") or "",
+        "style2": card.get("style2", settings.get("style2", "")) or "",
         "layout": card.get("layoutId")
         or card.get("layout")
         or article["layout_code"]
         or "",
         "refImages": card.get("refImages") or [],
+        "mode": card.get("mode") or settings.get("mode") or "graphic-text",
+        "colors": card.get("colors", settings.get("colors", [])) or [],
+        "tones": card.get("tones", settings.get("tones", [])) or [],
+        "moods": card.get("moods", settings.get("moods", [])) or [],
+        "whitespace": card.get("whitespace", settings.get("whitespace", "")) or "",
     }
 
 
@@ -118,7 +129,8 @@ def sync_illustrations(tx, uid, article_id, cards):
         ).fetchall()
     }
     article = tx.execute(
-        "SELECT style1,layout_code FROM studio_articles WHERE id=?", (article_id,)
+        "SELECT style1,layout_code,settings_json FROM studio_articles WHERE id=?",
+        (article_id,),
     ).fetchone()
     seen = set()
     for index, card in enumerate(cards):

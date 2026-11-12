@@ -146,7 +146,7 @@ def apply_source_input(db, user, body):
         row = (
             db.get_conn()
             .execute(
-                "SELECT i.*,a.style1,a.layout_code FROM article_illustrations i JOIN studio_articles a ON a.id=i.article_id "
+                "SELECT i.*,a.style1,a.layout_code,a.settings_json FROM article_illustrations i JOIN studio_articles a ON a.id=i.article_id "
                 "WHERE a.id=? AND a.user_id=? AND a.deleted_at='' AND i.deleted_at IS NULL "
                 "AND (i.local_id=? OR i.id=?)",
                 (
@@ -171,6 +171,21 @@ def apply_source_input(db, user, body):
                     "配图要求已修改，请先保存后生成", code="illustration_changed"
                 )
         body.update(effective)
+        for key in (
+            "historyId",
+            "generationId",
+            "useCh001",
+            "customRefImg",
+            "topic",
+            "theme",
+        ):
+            body.pop(key, None)
+        saved_card = row["spec_json"]
+        body["promptFromSkill"] = bool(str(saved_card.get("prompt") or "").strip())
+        body["recipeSnapshot"] = {
+            key: effective[key] for key in ("style1", "style2", "layout")
+        }
+        body["recipeSnapshot"]["subject"] = body["subject"]
         body["illustrationSpecHash"] = row["spec_hash"]
         body["illustrationEpoch"] = row["result_epoch"]
 

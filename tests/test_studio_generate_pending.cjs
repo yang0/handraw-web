@@ -1180,7 +1180,19 @@ const {
   assert.ok(!(win.CS.generationHistory||[]).some(h=>h.id==="paged_80"));
   win.HANDRAW_SHARED.App.state.serverBacked = false;
 
-  console.log("All studio generation, document isolation, save and history tests passed (24/24).");
+  // Article defaults are independent of any canvas/form, including when a
+  // card inherits its ratio instead of repeating it in the slot.
+  const inherited={id:"default-article",coverRatio:"16:9",settings:{style2:"FA-002"},cards:[{id:"cover-default",role:"cover",prompt:"Saved cat",status:"ready"}]};
+  setPrivateState({myArticles:[inherited]});
+  let sentDefaults;
+  fetchHandler=async(url,options)=>{
+    if(url==="/api/studio/generate") {sentDefaults=JSON.parse(options.body);return {ok:true,status:200,json:async()=>({ok:true,imageUrl:"/images/default-cat.webp",requestId:"default-request"})};}
+    return {ok:true,status:200,json:async()=>({})};
+  };
+  assert.equal(await api.generateSinglePlanCard(inherited.id,"cover-default",{skipCostConfirmation:true}),true);
+  assert.equal(sentDefaults.ratio,"16:9");assert.equal(sentDefaults.style2,"FA-002");
+
+  console.log("All studio generation, document isolation, save and history tests passed (25/25).");
 })().catch((err) => {
   console.error(err);
   process.exit(1);

@@ -173,6 +173,77 @@ class StudioModelHTTPTests(unittest.TestCase):
                 400,
             )
 
+    def test_article_http_uses_saved_defaults_and_ignores_other_history_context(self):
+        saved = self.request(
+            "/api/studio/articles",
+            {
+                "articles": [
+                    {
+                        "id": "defaults",
+                        "articleTitle": "Independent",
+                        "markdown": "Body",
+                        "cards": [
+                            {"id": "cover", "role": "cover", "prompt": "watercolor cat"}
+                        ],
+                        "settings": {
+                            "coverRatio": "16:9",
+                            "mode": "image-only",
+                            "colors": ["C-01"],
+                        },
+                    }
+                ]
+            },
+        )
+        self.assertEqual(saved[0], 200)
+        source = {
+            "creationSource": "article",
+            "articleId": "defaults",
+            "cardId": "cover",
+        }
+        self.assertEqual(
+            self.request(
+                "/api/studio/generate",
+                {**source, "mode": "graphic-text", "requestId": "bad-override"},
+            )[0],
+            409,
+        )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute("SELECT COUNT(*) FROM studio_generations")
+            .fetchone()[0],
+            0,
+        )
+        with patch(
+            "backend.server.openai_image_gateway_request",
+            return_value={"data": [{"b64_json": "fixture"}]},
+        ) as gateway:
+            status, generated = self.request(
+                "/api/studio/generate",
+                {
+                    **source,
+                    "historyId": "missing-unrelated-history",
+                    "useCh001": True,
+                    "customRefImg": "/private/unrelated.webp",
+                    "requestId": "saved-defaults",
+                },
+            )
+        self.assertEqual(status, 200, generated)
+        prompt = gateway.call_args.args[1]
+        self.assertIn("16:9", prompt)
+        self.assertIn("image-only", prompt)
+        self.assertIn("C-01", prompt)
+        self.assertIsNone(gateway.call_args.kwargs["refs"])
+        row = (
+            self.db.get_conn()
+            .execute(
+                "SELECT input_json FROM studio_generations WHERE request_id='saved-defaults'"
+            )
+            .fetchone()
+        )
+        self.assertEqual(row["input_json"]["mode"], "image-only")
+        self.assertEqual(row["input_json"]["ratio"], "16:9")
+        self.assertEqual(row["input_json"]["colors"], ["C-01"])
+
     def test_articles_have_distinct_ids_owner_scoped_slots_and_no_canvas_dependency(
         self,
     ):
