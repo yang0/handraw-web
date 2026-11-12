@@ -245,9 +245,10 @@ class NativePostgresTests(unittest.TestCase):
                    VALUES('pg_review_work','NeW_Pg_UsEr','Test','Test','',1,'now','now')"""
             )
             self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), {"style", "work"})
-            tx.execute("CREATE TABLE cold_start_registry(kind TEXT,item_id TEXT)")
-            self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), {"style", "work"})
-            tx.execute("INSERT INTO cold_start_registry VALUES('user',?)", (newcomer["username"],))
+            tx.execute(
+                "INSERT INTO cold_start_registry (pack_id, kind, item_id, created_at) VALUES ('pg-test','user',?,'')",
+                (newcomer["username"],),
+            )
             self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), set())
         # Concurrent PG transactions must not overspend a wallet or mint
         # a duplicate ledger entry. Each thread owns a pooled connection.
