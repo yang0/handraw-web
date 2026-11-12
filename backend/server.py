@@ -3131,9 +3131,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
     def _handle_post(self) -> None:
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
-        if req_path == "/api/webhooks/lemonsqueezy":
+        if req_path == "/api/webhooks/creem":
             self._body_consumed = True
-            from .billing import MAX_WEBHOOK_BYTES, process_lemonsqueezy_webhook
+            from .billing import MAX_WEBHOOK_BYTES, process_creem_webhook
             try:
                 hook_size = int(self.headers.get("Content-Length") or "0")
             except ValueError as exc:
@@ -3144,11 +3144,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 raise ServiceError("Webhook 请求体过大", status=413, code="webhook_payload_too_large")
             raw_hook_body = self.rfile.read(hook_size)
             self._send_json(
-                process_lemonsqueezy_webhook(
+                process_creem_webhook(
                     self.db,
                     raw_hook_body,
-                    self.headers.get("X-Signature") or "",
-                    self.headers.get("X-Event-Name") or "",
+                    self.headers.get("creem-signature") or self.headers.get("X-Creem-Signature") or "",
                 )
             )
             return
@@ -3371,8 +3370,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     self.db,
                     user,  # type: ignore[arg-type]
                     m_billing_sync.group(1),
+                    checkout_id=str(body.get("checkoutId") or ""),
                     provider_order_id=str(body.get("providerOrderId") or ""),
-                    provider_order_identifier=str(body.get("providerOrderIdentifier") or ""),
+                    redirect_query=str(body.get("redirectQuery") or ""),
                 )
             )
             return

@@ -265,14 +265,16 @@
     }
 
     if (App.view === "wallet") {
-      const ordId = (p.get("order") || "").trim();
+      const ordId = (p.get("order") || p.get("request_id") || "").trim();
       if (/^ord_[a-zA-Z0-9_-]{8,64}$/.test(ordId)) {
-        const rawLsOrder = (p.get("ls_order") || "").trim();
-        const rawLsIdent = (p.get("ls_ident") || "").trim();
+        const rawCheckoutId = (p.get("checkout_id") || "").trim();
+        const rawOrderId = (p.get("order_id") || "").trim();
+        const rawSig = (p.get("signature") || "").trim();
         UI.pendingPaymentSync = {
           orderId: ordId,
-          providerOrderId: /^\d{1,24}$/.test(rawLsOrder) ? rawLsOrder : "",
-          providerOrderIdentifier: /^[a-zA-Z0-9-]{8,80}$/.test(rawLsIdent) ? rawLsIdent : "",
+          checkoutId: /^ch_[a-zA-Z0-9_-]{6,80}$/.test(rawCheckoutId) ? rawCheckoutId : "",
+          providerOrderId: /^ord_[a-zA-Z0-9_-]{6,80}$/.test(rawOrderId) ? rawOrderId : "",
+          redirectQuery: rawSig ? String(window.location.search || "").replace(/^\?/, "") : "",
           autoAttempted: false,
         };
       }
@@ -3312,8 +3314,9 @@
         const res = await S.apiJson(`/api/billing/orders/${encodeURIComponent(syncInfo.orderId)}/sync`, {
           method: "POST",
           body: {
+            checkoutId: syncInfo.checkoutId || "",
             providerOrderId: syncInfo.providerOrderId || "",
-            providerOrderIdentifier: syncInfo.providerOrderIdentifier || "",
+            redirectQuery: syncInfo.redirectQuery || "",
           },
         });
         if (res && res.order && res.order.status === "paid") {
@@ -3323,7 +3326,7 @@
           await S.refreshFromServer();
           toast(res.applied ? `💎 在线充值已到账 +${res.order.credits}✦！当前可用 ${res.credits}✦` : `✅ 该订单已入账（当前可用 ${res.credits}✦）`);
         } else if (!quiet) {
-          toast("订单暂未完成付款或正在等待 Webhook 回执，稍后可点击刷新");
+          toast("订单暂未完成付款或正在等待确认，稍后可点击核验");
         }
         await fetchWalletOrders(true);
       } catch (err) {
@@ -3362,7 +3365,7 @@
             <div>
               <h3 style="margin:0;font-size:17px;">💎 在线积分充值</h3>
               <p style="margin:4px 0 0;font-size:12.8px;color:var(--ink-muted);">
-                通过 Lemon Squeezy 安全收银台付款，支付完成后积分自动入账${billing.testMode ? "（当前处于 Test Mode 测试环境，仅用于联调测试）" : ""}。
+                通过 Creem 安全收银台付款（支持支付宝 / 银行卡），支付完成后积分自动入账${billing.testMode ? "（当前处于 Test Mode 测试环境，仅用于联调测试）" : ""}。
               </p>
             </div>
             ${billing.testMode ? `<span class="hw-order-status is-pending">Test Mode</span>` : ""}
@@ -3418,7 +3421,9 @@
                   ${ordersList
                     .map((ord) => {
                       const sm = orderStatusMeta[ord.status] || { cls: "is-pending", label: ord.status };
-                      const amtText = `¥${(Number(ord.amountCents || 0) / 100).toFixed(2).replace(/\.00$/, "")}`;
+                      const cur = String(ord.currency || billing.currency || "USD").toUpperCase();
+                      const sym = cur === "CNY" ? "¥" : cur === "EUR" ? "€" : cur === "GBP" ? "£" : "$";
+                      const amtText = `${sym}${(Number(ord.amountCents || 0) / 100).toFixed(2).replace(/\.00$/, "")}`;
                       return `
                         <div class="hw-order-row">
                           <div style="min-width:0;">
@@ -3435,6 +3440,11 @@
                             ${
                               ord.status === "pending" && ord.checkoutUrl
                                 ? `<a class="btn btn-sm btn-primary" href="${esc(ord.checkoutUrl)}" target="_blank" rel="noopener">去支付</a>`
+                                : ""
+                            }
+                            ${
+                              ord.status === "pending"
+                                ? `<button type="button" class="btn btn-sm" data-billing-sync-order="${esc(ord.id)}" data-billing-checkout="${esc(ord.checkoutId || "")}" ${UI.walletSyncBusy ? "disabled" : ""}>核验到账</button>`
                                 : ""
                             }
                           </div>
@@ -3554,7 +3564,7 @@
           });
           UI.walletOrdersLoadedFor = "";
           if (res && res.checkoutUrl) {
-            toast("正在前往 Lemon Squeezy 收银台…");
+            toast("正在前往 Creem 收银台…");
             window.location.href = res.checkoutUrl;
             return;
           }
@@ -3565,6 +3575,20 @@
           UI.walletCheckoutPackId = "";
           if (App.view === "wallet") renderMain();
         }
+      };
+    });
+
+    root.querySelectorAll("[data-billing-sync-order]").forEach((btn) => {
+      btn.onclick = async () => {
+        const ordId = btn.getAttribute("data-billing-sync-order");
+        if (!ordId) return;
+        await syncOrderStatus(
+          {
+            orderId: ordId,
+            checkoutId: btn.getAttribute("data-billing-checkout") || "",
+          },
+          { quiet: false }
+        );
       };
     });
 

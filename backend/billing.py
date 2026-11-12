@@ -1,4 +1,4 @@
-"""Lemon Squeezy credit recharge checkout, webhook verification, and order sync."""
+"""Creem credit recharge checkout, webhook verification, and order sync."""
 from __future__ import annotations
 
 import datetime as _dt
@@ -28,7 +28,16 @@ from .services import ServiceError, apply_wallet_delta, utc_now_iso
 logger = logging.getLogger("backend.billing")
 trace_logger = logging.getLogger("handraw.trace")
 
-LEMON_API_BASE = "https://api.lemonsqueezy.com"
+CREEM_LIVE_API_BASE = "https://api.creem.io"
+CREEM_TEST_API_BASE = "https://test-api.creem.io"
+CREEM_REDIRECT_SIGNED_KEYS = (
+    "checkout_id",
+    "order_id",
+    "customer_id",
+    "subscription_id",
+    "product_id",
+    "request_id",
+)
 MAX_WEBHOOK_BYTES = 512 * 1024
 
 
@@ -42,7 +51,7 @@ def _serialize_order(row: Any) -> dict[str, Any]:
         "packId": str(row["pack_id"]),
         "credits": int(row["credits"]),
         "amountCents": int(row["amount_cents"]),
-        "currency": str(row["currency"] or "CNY"),
+        "currency": str(row["currency"] or "USD"),
         "status": str(row["status"] or "pending"),
         "checkoutId": str(row["checkout_id"] or ""),
         "checkoutUrl": str(row["checkout_url"] or "") if row["status"] == "pending" else "",
@@ -123,15 +132,22 @@ def _wallet_balance(conn: Any, user_id: int) -> int:
     return int(row["balance"]) if row else 0
 
 
-def _lemon_api_request(
+def _creem_api_base(api_key: str, test_mode: bool) -> str:
+    if test_mode or str(api_key or "").startswith("creem_test_"):
+        return CREEM_TEST_API_BASE
+    return CREEM_LIVE_API_BASE
+
+
+def _creem_api_request(
     method: str,
     path: str,
     api_key: str,
     payload: dict[str, Any] | None = None,
     *,
+    test_mode: bool = True,
     timeout: float = 20.0,
 ) -> dict[str, Any]:
-    url = f"{LEMON_API_BASE}{path}"
+    url = f"{_creem_api_base(api_key, test_mode)}{path}"
     data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     for attempt in range(2):
         req = urllib.request.Request(
@@ -139,9 +155,9 @@ def _lemon_api_request(
             data=data_bytes,
             method=method.upper(),
             headers={
-                "Accept": "application/vnd.api+json",
-                "Content-Type": "application/vnd.api+json",
-                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
                 "User-Agent": "HandrawWeb/2.0",
                 "Connection": "close",
             },
@@ -152,7 +168,7 @@ def _lemon_api_request(
                 raw = resp.read().decode("utf-8")
                 parsed = json.loads(raw) if raw else {}
                 if not isinstance(parsed, dict):
-                    raise RuntimeError("Invalid Lemon Squeezy response payload")
+                    raise RuntimeError("Invalid Creem response payload")
                 return parsed
         except urllib.error.HTTPError as exc:
             elapsed_ms = (_dt.datetime.now(_dt.timezone.utc) - started).total_seconds() * 1000
@@ -163,7 +179,7 @@ def _lemon_api_request(
                 pass
             detail = extract_http_error_summary(err_bytes)
             logger.warning(
-                "Lemon Squeezy API error: method=%s path=%s status=%s elapsed_ms=%.1f body_len=%d detail=%s",
+                "Creem API error: method=%s path=%s status=%s elapsed_ms=%.1f body_len=%d detail=%s",
                 method.upper(),
                 path,
                 exc.code,
@@ -173,7 +189,7 @@ def _lemon_api_request(
             )
             if local_debug_stacks_enabled():
                 trace_logger.warning(
-                    "Lemon Squeezy API error trace: method=%s path=%s status=%s\n%s",
+                    "Creem API error trace: method=%s path=%s status=%s\n%s",
                     method.upper(),
                     path,
                     exc.code,
@@ -184,7 +200,7 @@ def _lemon_api_request(
             elapsed_ms = (_dt.datetime.now(_dt.timezone.utc) - started).total_seconds() * 1000
             if attempt == 0 and isinstance(exc, (urllib.error.URLError, OSError, TimeoutError)):
                 logger.warning(
-                    "Lemon Squeezy API transient transport error (retrying): method=%s path=%s elapsed_ms=%.1f err=%s",
+                    "Creem API transient transport error (retrying): method=%s path=%s elapsed_ms=%.1f err=%s",
                     method.upper(),
                     path,
                     elapsed_ms,
@@ -192,7 +208,7 @@ def _lemon_api_request(
                 )
                 continue
             logger.exception(
-                "Lemon Squeezy API transport failed: method=%s path=%s elapsed_ms=%.1f err=%s",
+                "Creem API transport failed: method=%s path=%s elapsed_ms=%.1f err=%s",
                 method.upper(),
                 path,
                 elapsed_ms,
@@ -200,6 +216,63 @@ def _lemon_api_request(
             )
             raise ServiceError("暂时无法连接支付网关，请稍后重试", status=502, code="payment_gateway_error") from exc
     raise ServiceError("暂时无法连接支付网关，请稍后重试", status=502, code="payment_gateway_error")
+
+
+def _extract_entity_id(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("id") or "").strip()
+    return str(value or "").strip()
+
+
+def verify_webhook_signature(raw_body: bytes, signature_header: str, secret: str) -> bool:
+    clean_sig = str(signature_header or "").strip().lower()
+    if not clean_sig or not secret:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest().lower()
+    return hmac.compare_digest(expected, clean_sig)
+
+
+def verify_creem_redirect_signature(query_string: str, api_key: str) -> bool:
+    """Verify Creem's redirect URL `signature` parameter (SHA-256 over pipe-delimited params + salt)."""
+    clean_query = str(query_string or "").lstrip("?").strip()
+    if not clean_query or not api_key:
+        return False
+    pairs = urllib.parse.parse_qsl(clean_query, keep_blank_values=False)
+    signature = ""
+    all_parts: list[str] = []
+    creem_only_parts: list[str] = []
+    for key, value in pairs:
+        if key == "signature":
+            signature = str(value or "").strip().lower()
+            continue
+        if value in (None, "", "null"):
+            continue
+        item = f"{key}={value}"
+        all_parts.append(item)
+        if key in CREEM_REDIRECT_SIGNED_KEYS:
+            creem_only_parts.append(item)
+    if not signature:
+        return False
+
+    candidates = []
+    if all_parts:
+        candidates.append("|".join([*all_parts, f"salt={api_key}"]))
+    if creem_only_parts and creem_only_parts != all_parts:
+        candidates.append("|".join([*creem_only_parts, f"salt={api_key}"]))
+    for raw_data in candidates:
+        expected = hashlib.sha256(raw_data.encode("utf-8")).hexdigest().lower()
+        if hmac.compare_digest(signature, expected):
+            return True
+    return False
+
+
+def _creem_compatible_origin(origin: str) -> str:
+    """Rewrite numeric loopback IPs to `localhost` because Creem's URL validator rejects literal IPs."""
+    parsed = urllib.parse.urlparse(origin)
+    if (parsed.hostname or "").lower() in {"127.0.0.1", "::1"}:
+        port_part = f":{parsed.port}" if parsed.port else ""
+        return f"{parsed.scheme}://localhost{port_part}"
+    return origin
 
 
 def create_checkout_order(
@@ -222,15 +295,9 @@ def create_checkout_order(
     uid = int(user["id"])
     order_id = f"ord_{uuid.uuid4().hex}"
     now = utc_now_iso()
-    main_origin = resolve_main_portal_origin(request_headers, server_port=server_port)
-    redirect_url = (
-        f"{main_origin}/?view=wallet"
-        f"&order={urllib.parse.quote(order_id)}"
-        f"&ls_order=[order_id]"
-        f"&ls_ident=[order_identifier]"
-    )
-    variant_id = str(package["variant_id"])
-    store_id = str(cfg["store_id"])
+    main_origin = _creem_compatible_origin(resolve_main_portal_origin(request_headers, server_port=server_port))
+    redirect_url = f"{main_origin}/?view=wallet&order={urllib.parse.quote(order_id)}"
+    product_id = str(package["product_id"])
     test_mode = bool(cfg.get("test_mode", True))
 
     with db.transaction() as tx:
@@ -245,9 +312,9 @@ def create_checkout_order(
             (
                 order_id,
                 uid,
-                "lemonsqueezy",
+                "creem",
                 clean_pack_id,
-                variant_id,
+                product_id,
                 int(package["credits"]),
                 int(package["price_cents"]),
                 str(cfg["currency"]),
@@ -264,42 +331,29 @@ def create_checkout_order(
             ),
         )
 
-    checkout_data: dict[str, Any] = {
-        "custom": {
+    checkout_payload: dict[str, Any] = {
+        "product_id": product_id,
+        "request_id": order_id,
+        "units": 1,
+        "success_url": redirect_url,
+        "metadata": {
             "order_id": order_id,
             "user_id": str(uid),
             "pack_id": clean_pack_id,
-        }
+        },
     }
     user_email = str(user.get("email") or "").strip()
     if user_email and "@" in user_email and not user_email.endswith(".invalid"):
-        checkout_data["email"] = user_email
-    display_name = str(user.get("display_name") or user.get("username") or "").strip()
-    if display_name:
-        checkout_data["name"] = display_name[:120]
-
-    checkout_payload = {
-        "data": {
-            "type": "checkouts",
-            "attributes": {
-                "product_options": {
-                    "enabled_variants": [int(variant_id)],
-                    "redirect_url": redirect_url,
-                    "receipt_button_text": "返回 Handraw 积分钱包",
-                    "receipt_link_url": redirect_url,
-                },
-                "checkout_data": checkout_data,
-                "test_mode": test_mode,
-            },
-            "relationships": {
-                "store": {"data": {"type": "stores", "id": store_id}},
-                "variant": {"data": {"type": "variants", "id": variant_id}},
-            },
-        }
-    }
+        checkout_payload["customer"] = {"email": user_email}
 
     try:
-        res = _lemon_api_request("POST", "/v1/checkouts", cfg["api_key"], checkout_payload)
+        res = _creem_api_request(
+            "POST",
+            "/v1/checkouts",
+            cfg["api_key"],
+            checkout_payload,
+            test_mode=test_mode,
+        )
     except Exception:
         with db.transaction() as tx:
             tx.execute(
@@ -308,10 +362,8 @@ def create_checkout_order(
             )
         raise
 
-    data = res.get("data") if isinstance(res.get("data"), dict) else {}
-    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
-    checkout_id = str(data.get("id") or "").strip()
-    checkout_url = str(attrs.get("url") or "").strip()
+    checkout_id = str(res.get("id") or "").strip()
+    checkout_url = str(res.get("checkout_url") or "").strip()
     if not checkout_id or not checkout_url:
         with db.transaction() as tx:
             tx.execute(
@@ -335,14 +387,6 @@ def create_checkout_order(
     }
 
 
-def verify_webhook_signature(raw_body: bytes, signature_header: str, secret: str) -> bool:
-    clean_sig = str(signature_header or "").strip().lower()
-    if not clean_sig or not secret:
-        return False
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest().lower()
-    return hmac.compare_digest(expected, clean_sig)
-
-
 def _merge_meta_json(existing_raw: Any, patch: dict[str, Any]) -> str:
     try:
         base = json.loads(existing_raw) if isinstance(existing_raw, str) and existing_raw else {}
@@ -354,13 +398,51 @@ def _merge_meta_json(existing_raw: Any, patch: dict[str, Any]) -> str:
     return json.dumps(base, ensure_ascii=False)
 
 
+def _assert_live_mode_allowed(cfg_test_mode: bool, payload_mode: str) -> None:
+    clean_mode = str(payload_mode or "").strip().lower()
+    if not cfg_test_mode and clean_mode in {"test", "sandbox", "local"}:
+        raise ServiceError("正式环境不接受测试模式支付订单", status=400, code="test_mode_mismatch")
+
+
+def _assert_creem_order_matches_local(
+    local_order: Any,
+    *,
+    checkout_id: str,
+    product_id: str,
+    provider_order_obj: Mapping[str, Any],
+) -> None:
+    expected_checkout = str(local_order["checkout_id"] or "").strip()
+    if expected_checkout and checkout_id and expected_checkout != checkout_id:
+        raise ServiceError("收银台会话标识与订单不匹配", status=400, code="checkout_id_mismatch")
+
+    expected_product = str(local_order["variant_id"] or "").strip()
+    if product_id and expected_product and product_id != expected_product:
+        raise ServiceError("支付商品规格与订单不匹配", status=400, code="product_mismatch")
+
+    expected_currency = str(local_order["currency"] or "").strip().upper()
+    got_currency = str(provider_order_obj.get("currency") or "").strip().upper()
+    if expected_currency and got_currency and got_currency != expected_currency:
+        raise ServiceError("支付币种与订单不匹配", status=400, code="currency_mismatch")
+
+    expected_cents = int(local_order["amount_cents"] or 0)
+    raw_paid = provider_order_obj.get("amount_paid")
+    raw_amount = provider_order_obj.get("amount")
+    paid_val = raw_paid if isinstance(raw_paid, (int, float)) else raw_amount
+    if isinstance(paid_val, (int, float)) and expected_cents > 0 and int(round(paid_val)) < expected_cents:
+        # Allow discount_amount only if total order base price itself >= expected_cents
+        base_val = raw_amount if isinstance(raw_amount, (int, float)) else paid_val
+        if int(round(base_val)) < expected_cents:
+            raise ServiceError("支付金额低于订单应收金额", status=400, code="amount_mismatch")
+
+
 def _settle_paid_order_tx(
     tx: Any,
     *,
     order_id: str,
     provider_order_id: str,
     provider_order_number: str = "",
-    variant_id: str = "",
+    product_id: str = "",
+    provider: str = "creem",
     meta_patch: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int, bool]:
     query = "SELECT * FROM payment_orders WHERE id = ?"
@@ -370,20 +452,21 @@ def _settle_paid_order_tx(
     if not order:
         raise ServiceError("充值订单不存在", status=404, code="order_not_found")
 
+    clean_provider = str(order["provider"] or provider or "creem").strip().lower()
     clean_provider_order_id = str(provider_order_id or "").strip()
     if not clean_provider_order_id:
         raise ServiceError("缺少上游订单号", status=400, code="missing_provider_order_id")
 
     conflict = tx.execute(
-        "SELECT id FROM payment_orders WHERE provider = 'lemonsqueezy' AND provider_order_id = ? AND id <> ?",
-        (clean_provider_order_id, order_id),
+        "SELECT id FROM payment_orders WHERE provider = ? AND provider_order_id = ? AND id <> ?",
+        (clean_provider, clean_provider_order_id, order_id),
     ).fetchone()
     if conflict:
         raise ServiceError("该支付单号已绑定其他充值订单", status=409, code="provider_order_conflict")
 
-    expected_variant = str(order["variant_id"] or "").strip()
-    if variant_id and expected_variant and str(variant_id).strip() != expected_variant:
-        raise ServiceError("支付商品规格与订单不匹配", status=400, code="variant_mismatch")
+    expected_product = str(order["variant_id"] or "").strip()
+    if product_id and expected_product and str(product_id).strip() != expected_product:
+        raise ServiceError("支付商品规格与订单不匹配", status=400, code="product_mismatch")
 
     uid = int(order["user_id"])
     cur_status = str(order["status"] or "")
@@ -400,13 +483,14 @@ def _settle_paid_order_tx(
 
     credits = int(order["credits"])
     now = utc_now_iso()
+    event_prefix = "creem" if clean_provider == "creem" else clean_provider
     new_bal, applied = apply_wallet_delta(
         tx,
         uid,
         credits,
         "recharge",
         f"在线充值积分到账 (+{credits} 积分)",
-        event_key=f"ls_order_{clean_provider_order_id}",
+        event_key=f"{event_prefix}_order_{clean_provider_order_id}",
         ref_type="payment_order",
         ref_id=order_id,
     )
@@ -439,13 +523,14 @@ def _settle_paid_order_tx(
 def _refund_order_tx(
     tx: Any,
     *,
+    provider: str = "creem",
     provider_order_id: str,
     order_id_hint: str = "",
     meta_patch: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, int | None, bool]:
     clean_poid = str(provider_order_id or "").strip()
-    query = "SELECT * FROM payment_orders WHERE provider = 'lemonsqueezy' AND provider_order_id = ?"
-    params: tuple[Any, ...] = (clean_poid,)
+    query = "SELECT * FROM payment_orders WHERE provider = ? AND provider_order_id = ?"
+    params: tuple[Any, ...] = (provider, clean_poid)
     if getattr(tx, "dialect", "") == "postgresql":
         query += " FOR UPDATE"
     order = tx.execute(query, params).fetchone() if clean_poid else None
@@ -459,6 +544,7 @@ def _refund_order_tx(
 
     uid = int(order["user_id"])
     oid = str(order["id"])
+    effective_poid = clean_poid or str(order["provider_order_id"] or "").strip()
     was_paid = str(order["status"] or "") == "paid"
     now = utc_now_iso()
     new_meta = _merge_meta_json(order["meta_json"], meta_patch or {})
@@ -469,15 +555,16 @@ def _refund_order_tx(
     )
     applied = False
     new_bal: int | None = None
-    if was_paid and clean_poid:
+    if was_paid and effective_poid:
         credits = int(order["credits"])
+        event_prefix = "creem" if provider == "creem" else provider
         new_bal, applied = apply_wallet_delta(
             tx,
             uid,
             -credits,
             "recharge_refund",
             f"充值订单退款扣回 (-{credits} 积分)",
-            event_key=f"ls_refund_{clean_poid}",
+            event_key=f"{event_prefix}_refund_{effective_poid}",
             ref_type="payment_order",
             ref_id=oid,
             allow_negative=True,
@@ -494,11 +581,20 @@ def _refund_order_tx(
     return _serialize_order(refreshed), new_bal, applied
 
 
-def process_lemonsqueezy_webhook(
+def _extract_creem_order_id_hint(obj: Mapping[str, Any]) -> str:
+    req_id = str(obj.get("request_id") or "").strip()
+    if req_id:
+        return req_id
+    metadata = obj.get("metadata")
+    if isinstance(metadata, dict):
+        return str(metadata.get("order_id") or "").strip()
+    return ""
+
+
+def process_creem_webhook(
     db: Database,
     raw_body: bytes,
     signature_header: str,
-    event_name_header: str = "",
 ) -> dict[str, Any]:
     cfg = load_payment_config()
     secret = str(cfg.get("webhook_secret") or "").strip()
@@ -506,7 +602,7 @@ def process_lemonsqueezy_webhook(
         raise ServiceError("Webhook 密钥尚未配置", status=503, code="webhook_not_configured")
 
     if not verify_webhook_signature(raw_body, signature_header, secret):
-        logger.warning("Lemon Squeezy webhook rejected: invalid X-Signature")
+        logger.warning("Creem webhook rejected: invalid creem-signature")
         raise ServiceError("Webhook 签名校验失败", status=401, code="invalid_webhook_signature")
 
     try:
@@ -517,44 +613,35 @@ def process_lemonsqueezy_webhook(
     if not isinstance(payload, dict):
         raise ServiceError("Webhook 载荷格式无效", status=400, code="invalid_webhook_payload")
 
-    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    event_type = str(payload.get("eventType") or "").strip()
+    webhook_event_id = str(payload.get("id") or "").strip()
+    obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
 
-    event_name = str(meta.get("event_name") or event_name_header or "").strip()
-    provider_order_id = str(data.get("id") or "").strip()
-    cfg_store_id = str(cfg.get("store_id") or "").strip()
-    payload_store_id = str(attrs.get("store_id") or "").strip()
-    if cfg_store_id and payload_store_id and payload_store_id != cfg_store_id:
-        logger.warning("Lemon Squeezy webhook store_id mismatch: expected=%s got=%s", cfg_store_id, payload_store_id)
-        raise ServiceError("Webhook 商店编号不匹配", status=400, code="store_mismatch")
+    order_obj = obj.get("order") if isinstance(obj.get("order"), dict) else {}
+    checkout_obj = obj.get("checkout") if isinstance(obj.get("checkout"), dict) else (obj if event_type == "checkout.completed" else {})
+    txn_obj = obj.get("transaction") if isinstance(obj.get("transaction"), dict) else {}
 
-    payload_test_mode = bool(attrs.get("test_mode", False))
-    if not bool(cfg.get("test_mode", True)) and payload_test_mode:
-        logger.warning("Lemon Squeezy webhook rejected test_mode order in live mode: poid=%s", provider_order_id)
-        raise ServiceError("正式环境拒绝处理测试模式订单", status=400, code="test_mode_mismatch")
+    payload_mode = str(
+        obj.get("mode") or order_obj.get("mode") or checkout_obj.get("mode") or ""
+    ).strip()
+    _assert_live_mode_allowed(bool(cfg.get("test_mode", True)), payload_mode)
 
-    webhook_id = str(meta.get("webhook_id") or "").strip()
+    provider_order_id = (
+        _extract_entity_id(order_obj)
+        or _extract_entity_id(txn_obj.get("order") if txn_obj else "")
+    )
+    checkout_id = _extract_entity_id(checkout_obj) or _extract_entity_id(obj if obj.get("object") == "checkout" else "")
     body_digest = hashlib.sha256(raw_body).hexdigest()[:24]
-    event_key = f"{event_name}:{provider_order_id or 'none'}:{webhook_id or body_digest}"
-
-    custom_data = meta.get("custom_data") if isinstance(meta.get("custom_data"), dict) else {}
-    order_id = str(custom_data.get("order_id") or "").strip()
-    custom_uid = str(custom_data.get("user_id") or "").strip()
-    first_item = attrs.get("first_order_item") if isinstance(attrs.get("first_order_item"), dict) else {}
-    variant_id = str(first_item.get("variant_id") or "").strip()
-    order_number = str(attrs.get("order_number") or "").strip()
-    order_status = str(attrs.get("status") or "").strip().lower()
-    is_refunded = bool(attrs.get("refunded", False))
+    event_key = f"{event_type}:{provider_order_id or checkout_id or 'none'}:{webhook_event_id or body_digest}"
 
     now = utc_now_iso()
     with db.transaction() as tx:
         dup = tx.execute(
-            "SELECT id FROM payment_webhook_events WHERE provider = 'lemonsqueezy' AND event_key = ?",
+            "SELECT id FROM payment_webhook_events WHERE provider = 'creem' AND event_key = ?",
             (event_key,),
         ).fetchone()
         if dup:
-            return {"ok": True, "duplicate": True, "event": event_name}
+            return {"ok": True, "duplicate": True, "event": event_type}
 
         tx.execute(
             """
@@ -563,18 +650,18 @@ def process_lemonsqueezy_webhook(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "lemonsqueezy",
+                "creem",
                 event_key,
-                event_name or "unknown",
+                event_type or "unknown",
                 provider_order_id,
                 1,
                 json.dumps(
                     {
-                        "event_name": event_name,
-                        "order_id": order_id,
+                        "event_type": event_type,
+                        "webhook_event_id": webhook_event_id,
+                        "checkout_id": checkout_id,
                         "provider_order_id": provider_order_id,
-                        "status": order_status,
-                        "refunded": is_refunded,
+                        "mode": payload_mode,
                     },
                     ensure_ascii=False,
                 ),
@@ -583,95 +670,125 @@ def process_lemonsqueezy_webhook(
             ),
         )
 
-        if event_name == "order_created":
-            if order_status != "paid" or is_refunded:
+        if event_type == "checkout.completed":
+            checkout_status = str(obj.get("status") or "").strip().lower()
+            order_status = str(order_obj.get("status") or "").strip().lower()
+            if (checkout_status and checkout_status != "completed") or (order_status and order_status != "paid"):
                 tx.execute(
-                    "UPDATE payment_webhook_events SET status = 'ignored_unpaid' WHERE provider = 'lemonsqueezy' AND event_key = ?",
+                    "UPDATE payment_webhook_events SET status = 'ignored_unpaid' WHERE provider = 'creem' AND event_key = ?",
                     (event_key,),
                 )
-                return {"ok": True, "ignored": True, "reason": "not_paid", "event": event_name}
-            if not order_id:
-                tx.execute(
-                    "UPDATE payment_webhook_events SET status = 'ignored_no_order_id' WHERE provider = 'lemonsqueezy' AND event_key = ?",
-                    (event_key,),
-                )
-                logger.warning("Lemon Squeezy webhook missing custom_data.order_id for poid=%s", provider_order_id)
-                return {"ok": True, "ignored": True, "reason": "missing_order_id", "event": event_name}
+                return {"ok": True, "ignored": True, "reason": "not_paid", "event": event_type}
 
-            target_row = tx.execute("SELECT user_id FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
-            if not target_row:
+            local_order_id = _extract_creem_order_id_hint(obj)
+            target_row = None
+            if local_order_id:
+                target_row = tx.execute("SELECT * FROM payment_orders WHERE id = ?", (local_order_id,)).fetchone()
+            elif checkout_id:
+                target_row = tx.execute(
+                    "SELECT * FROM payment_orders WHERE provider = 'creem' AND checkout_id = ?",
+                    (checkout_id,),
+                ).fetchone()
+                if target_row:
+                    local_order_id = str(target_row["id"])
+
+            if not local_order_id or not target_row:
                 tx.execute(
-                    "UPDATE payment_webhook_events SET status = 'ignored_unknown_order' WHERE provider = 'lemonsqueezy' AND event_key = ?",
+                    "UPDATE payment_webhook_events SET status = 'ignored_unknown_order' WHERE provider = 'creem' AND event_key = ?",
                     (event_key,),
                 )
-                logger.warning("Lemon Squeezy webhook referenced unknown order_id=%s poid=%s", order_id, provider_order_id)
-                return {"ok": True, "ignored": True, "reason": "unknown_order", "event": event_name}
+                logger.warning(
+                    "Creem webhook missing or unknown order: req=%s chk=%s poid=%s",
+                    local_order_id,
+                    checkout_id,
+                    provider_order_id,
+                )
+                return {"ok": True, "ignored": True, "reason": "unknown_order", "event": event_type}
+
+            metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+            custom_uid = str(metadata.get("user_id") or "").strip()
             if custom_uid and custom_uid != str(target_row["user_id"]):
                 raise ServiceError("Webhook 用户标识不匹配", status=400, code="user_mismatch")
 
+            product_id = _extract_entity_id(obj.get("product") or order_obj.get("product"))
+            _assert_creem_order_matches_local(
+                target_row,
+                checkout_id=checkout_id,
+                product_id=product_id,
+                provider_order_obj=order_obj,
+            )
+
             settled_order, new_bal, applied = _settle_paid_order_tx(
                 tx,
-                order_id=order_id,
-                provider_order_id=provider_order_id,
-                provider_order_number=order_number,
-                variant_id=variant_id,
+                order_id=local_order_id,
+                provider_order_id=provider_order_id or f"chk_{checkout_id}",
+                provider_order_number=str(order_obj.get("transaction") or provider_order_id),
+                product_id=product_id,
+                provider="creem",
                 meta_patch={
                     "settledVia": "webhook",
-                    "providerCurrency": str(attrs.get("currency") or ""),
-                    "providerTotal": attrs.get("total"),
+                    "creemEventId": webhook_event_id,
+                    "providerCurrency": str(order_obj.get("currency") or ""),
+                    "providerAmount": order_obj.get("amount"),
+                    "providerAmountPaid": order_obj.get("amount_paid"),
+                    "providerTransaction": str(order_obj.get("transaction") or ""),
                 },
             )
             tx.execute(
-                "UPDATE payment_webhook_events SET status = 'processed' WHERE provider = 'lemonsqueezy' AND event_key = ?",
+                "UPDATE payment_webhook_events SET status = 'processed' WHERE provider = 'creem' AND event_key = ?",
                 (event_key,),
             )
             return {
                 "ok": True,
-                "event": event_name,
+                "event": event_type,
                 "applied": applied,
                 "order": settled_order,
                 "credits": new_bal,
             }
 
-        if event_name == "order_refunded" or (event_name == "order_updated" and is_refunded):
+        if event_type == "refund.created":
+            refund_status = str(obj.get("status") or "").strip().lower()
+            if refund_status and refund_status not in {"succeeded", "refunded", "completed"}:
+                tx.execute(
+                    "UPDATE payment_webhook_events SET status = 'ignored_refund_status' WHERE provider = 'creem' AND event_key = ?",
+                    (event_key,),
+                )
+                return {"ok": True, "ignored": True, "reason": refund_status, "event": event_type}
+
+            local_order_hint = _extract_creem_order_id_hint(checkout_obj) if isinstance(checkout_obj, dict) else ""
+            if not local_order_hint and isinstance(obj.get("metadata"), dict):
+                local_order_hint = str(obj["metadata"].get("order_id") or "").strip()
+
             refunded_order, new_bal, applied = _refund_order_tx(
                 tx,
+                provider="creem",
                 provider_order_id=provider_order_id,
-                order_id_hint=order_id,
-                meta_patch={"refundedVia": "webhook"},
+                order_id_hint=local_order_hint,
+                meta_patch={
+                    "refundedVia": "webhook",
+                    "refundId": str(obj.get("id") or ""),
+                    "refundReason": str(obj.get("reason") or ""),
+                    "refundAmount": obj.get("refund_amount"),
+                    "refundCurrency": str(obj.get("refund_currency") or ""),
+                },
             )
             tx.execute(
-                "UPDATE payment_webhook_events SET status = ? WHERE provider = 'lemonsqueezy' AND event_key = ?",
+                "UPDATE payment_webhook_events SET status = ? WHERE provider = 'creem' AND event_key = ?",
                 ("processed" if refunded_order else "ignored_unknown_order", event_key),
             )
             return {
                 "ok": True,
-                "event": event_name,
+                "event": event_type,
                 "applied": applied,
                 "order": refunded_order,
                 "credits": new_bal,
             }
 
         tx.execute(
-            "UPDATE payment_webhook_events SET status = 'ignored_event' WHERE provider = 'lemonsqueezy' AND event_key = ?",
+            "UPDATE payment_webhook_events SET status = 'ignored_event' WHERE provider = 'creem' AND event_key = ?",
             (event_key,),
         )
-        return {"ok": True, "ignored": True, "event": event_name}
-
-
-def _parse_iso_utc(raw: str) -> _dt.datetime | None:
-    text = str(raw or "").strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        dt = _dt.datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=_dt.timezone.utc)
-    return dt.astimezone(_dt.timezone.utc)
+        return {"ok": True, "ignored": True, "event": event_type}
 
 
 def sync_payment_order_from_provider(
@@ -679,8 +796,9 @@ def sync_payment_order_from_provider(
     user: dict[str, Any],
     order_id: str,
     *,
+    checkout_id: str = "",
     provider_order_id: str = "",
-    provider_order_identifier: str = "",
+    redirect_query: str = "",
 ) -> dict[str, Any]:
     uid = int(user["id"])
     clean_order_id = str(order_id or "").strip()
@@ -692,7 +810,15 @@ def sync_payment_order_from_provider(
     if not order:
         raise ServiceError("充值订单不存在", status=404, code="order_not_found")
 
-    if str(order["status"] or "") == "paid":
+    cur_status = str(order["status"] or "")
+    if cur_status == "paid":
+        return {
+            "ok": True,
+            "order": _serialize_order(order),
+            "credits": _wallet_balance(conn, uid),
+            "applied": False,
+        }
+    if cur_status == "refunded":
         return {
             "ok": True,
             "order": _serialize_order(order),
@@ -704,9 +830,17 @@ def sync_payment_order_from_provider(
     if not cfg.get("enabled"):
         raise ServiceError("在线充值尚未配置完成", status=503, code="billing_not_configured")
 
-    clean_poid = str(provider_order_id or order["provider_order_id"] or "").strip()
-    clean_ident = str(provider_order_identifier or "").strip()
-    if not clean_poid or not clean_poid.isdigit() or not clean_ident:
+    stored_checkout_id = str(order["checkout_id"] or "").strip()
+    supplied_checkout_id = str(checkout_id or "").strip()
+    if supplied_checkout_id and stored_checkout_id and supplied_checkout_id != stored_checkout_id:
+        raise ServiceError("收银台会话标识校验失败", status=403, code="checkout_id_mismatch")
+
+    clean_redirect_query = str(redirect_query or "").strip()
+    if clean_redirect_query and "signature=" in clean_redirect_query:
+        if not verify_creem_redirect_signature(clean_redirect_query, cfg["api_key"]):
+            raise ServiceError("回跳签名校验失败", status=403, code="redirect_signature_mismatch")
+
+    if not stored_checkout_id:
         return {
             "ok": True,
             "order": _serialize_order(order),
@@ -715,52 +849,59 @@ def sync_payment_order_from_provider(
             "pendingProof": True,
         }
 
-    res = _lemon_api_request("GET", f"/v1/orders/{clean_poid}", cfg["api_key"])
-    data = res.get("data") if isinstance(res.get("data"), dict) else {}
-    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    test_mode = bool(cfg.get("test_mode", True))
+    res = _creem_api_request(
+        "GET",
+        f"/v1/checkouts?checkout_id={urllib.parse.quote(stored_checkout_id)}",
+        cfg["api_key"],
+        test_mode=test_mode,
+    )
+    order_obj = res.get("order") if isinstance(res.get("order"), dict) else {}
+    payload_mode = str(res.get("mode") or order_obj.get("mode") or "").strip()
+    _assert_live_mode_allowed(test_mode, payload_mode)
 
-    ls_ident = str(attrs.get("identifier") or "").strip()
-    if not ls_ident or not hmac.compare_digest(ls_ident, clean_ident):
-        raise ServiceError("订单回执校验失败", status=403, code="order_identifier_mismatch")
-
-    cfg_store_id = str(cfg.get("store_id") or "").strip()
-    if str(attrs.get("store_id") or "").strip() != cfg_store_id:
-        raise ServiceError("支付订单所属商店不匹配", status=400, code="store_mismatch")
-
-    if not bool(cfg.get("test_mode", True)) and bool(attrs.get("test_mode", False)):
-        raise ServiceError("正式环境不接受测试模式支付订单", status=400, code="test_mode_mismatch")
-
-    ls_status = str(attrs.get("status") or "").strip().lower()
-    if ls_status != "paid" or bool(attrs.get("refunded", False)):
+    creem_status = str(res.get("status") or "").strip().lower()
+    creem_order_status = str(order_obj.get("status") or "").strip().lower()
+    if creem_status != "completed" or (creem_order_status and creem_order_status != "paid"):
         return {
             "ok": True,
             "order": _serialize_order(order),
             "credits": _wallet_balance(conn, uid),
             "applied": False,
-            "providerStatus": ls_status,
+            "providerStatus": creem_status or "pending",
         }
 
-    first_item = attrs.get("first_order_item") if isinstance(attrs.get("first_order_item"), dict) else {}
-    variant_id = str(first_item.get("variant_id") or "").strip()
-    if variant_id != str(order["variant_id"] or "").strip():
-        raise ServiceError("支付商品与待支付订单不一致", status=400, code="variant_mismatch")
+    hinted_order_id = _extract_creem_order_id_hint(res)
+    if hinted_order_id and hinted_order_id != clean_order_id:
+        raise ServiceError("上游收银台关联订单不匹配", status=403, code="order_reference_mismatch")
 
-    ls_created = _parse_iso_utc(str(attrs.get("created_at") or ""))
-    local_created = _parse_iso_utc(str(order["created_at"] or ""))
-    if ls_created and local_created and (ls_created + _dt.timedelta(seconds=60)) < local_created:
-        raise ServiceError("支付订单时间早于充值单创建时间", status=400, code="order_timestamp_mismatch")
+    remote_poid = _extract_entity_id(order_obj)
+    supplied_poid = str(provider_order_id or "").strip()
+    if supplied_poid and remote_poid and supplied_poid != remote_poid:
+        raise ServiceError("订单回执校验失败", status=403, code="provider_order_mismatch")
+
+    product_id = _extract_entity_id(res.get("product") or order_obj.get("product"))
+    _assert_creem_order_matches_local(
+        order,
+        checkout_id=str(res.get("id") or stored_checkout_id).strip(),
+        product_id=product_id,
+        provider_order_obj=order_obj,
+    )
 
     with db.transaction() as tx:
         settled_order, new_bal, applied = _settle_paid_order_tx(
             tx,
             order_id=clean_order_id,
-            provider_order_id=clean_poid,
-            provider_order_number=str(attrs.get("order_number") or ""),
-            variant_id=variant_id,
+            provider_order_id=remote_poid or f"chk_{stored_checkout_id}",
+            provider_order_number=str(order_obj.get("transaction") or remote_poid),
+            product_id=product_id,
+            provider="creem",
             meta_patch={
                 "settledVia": "return_sync",
-                "providerCurrency": str(attrs.get("currency") or ""),
-                "providerTotal": attrs.get("total"),
+                "providerCurrency": str(order_obj.get("currency") or ""),
+                "providerAmount": order_obj.get("amount"),
+                "providerAmountPaid": order_obj.get("amount_paid"),
+                "providerTransaction": str(order_obj.get("transaction") or ""),
             },
         )
     return {

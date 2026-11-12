@@ -195,43 +195,43 @@ def load_ai_config() -> dict:
 DEFAULT_PAYMENT_PACKAGES: list[dict[str, Any]] = [
     {
         "id": "pack_50",
-        "title": "50 积分加油包",
+        "title": "50 积分尝鲜包",
         "description": "可生成约 25 张云端高清图像，永久有效",
         "credits": 50,
-        "price_cents": 500,
-        "price_display": "¥5",
+        "price_cents": 100,
+        "price_display": "$1",
         "badge": "",
-        "variant_id": "",
+        "product_id": "",
     },
     {
         "id": "pack_100",
-        "title": "100 积分加油包",
+        "title": "100 积分标准包",
         "description": "常用创作补充包，可生成约 50 张图像",
         "credits": 100,
-        "price_cents": 990,
-        "price_display": "¥9.9",
-        "badge": "热销",
-        "variant_id": "",
+        "price_cents": 199,
+        "price_display": "$1.99",
+        "badge": "推荐",
+        "product_id": "",
     },
     {
         "id": "pack_200",
-        "title": "200 积分加油包",
+        "title": "200 积分进阶包",
         "description": "高性价比进阶包，可生成约 100 张图像",
         "credits": 200,
-        "price_cents": 1900,
-        "price_display": "¥19",
+        "price_cents": 399,
+        "price_display": "$3.99",
         "badge": "",
-        "variant_id": "",
+        "product_id": "",
     },
     {
         "id": "pack_500",
         "title": "500 积分加油包",
         "description": "高频创作囤货包，优惠幅度最大",
         "credits": 500,
-        "price_cents": 4500,
-        "price_display": "¥45",
+        "price_cents": 699,
+        "price_display": "$6.99",
         "badge": "超值",
-        "variant_id": "",
+        "product_id": "",
     },
 ]
 
@@ -253,8 +253,14 @@ def _parse_bool_flag(raw: Any, default: bool = False) -> bool:
     return default
 
 
+def _format_price_display(price_cents: int, currency: str) -> str:
+    cur = (currency or "USD").strip().upper()
+    sym = "¥" if cur == "CNY" else ("€" if cur == "EUR" else ("£" if cur == "GBP" else "$"))
+    return f"{sym}{price_cents / 100:.2f}".removesuffix(".00")
+
+
 def load_payment_config() -> dict[str, Any]:
-    """Load Lemon Squeezy billing configuration from file and env overrides."""
+    """Load Creem billing configuration from file and environment overrides."""
     data: dict[str, Any] = {}
     cfg_path = get_payment_config_path()
     if cfg_path.is_file():
@@ -265,15 +271,16 @@ def load_payment_config() -> dict[str, Any]:
         except Exception:
             return {}
 
-    provider = str(os.environ.get("HANDRAW_PAYMENT_PROVIDER") or data.get("provider") or "lemonsqueezy").strip().lower()
-    store_id = str(os.environ.get("HANDRAW_LEMON_STORE_ID") or data.get("store_id") or "").strip()
-    api_key = str(os.environ.get("HANDRAW_LEMON_API_KEY") or data.get("api_key") or "").strip()
-    webhook_secret = str(os.environ.get("HANDRAW_LEMON_WEBHOOK_SECRET") or data.get("webhook_secret") or "").strip()
-    currency = str(os.environ.get("HANDRAW_LEMON_CURRENCY") or data.get("currency") or "CNY").strip().upper() or "CNY"
-    test_mode = _parse_bool_flag(
-        os.environ.get("HANDRAW_LEMON_TEST_MODE") if "HANDRAW_LEMON_TEST_MODE" in os.environ else data.get("test_mode"),
-        default=True,
+    provider = str(os.environ.get("HANDRAW_PAYMENT_PROVIDER") or data.get("provider") or "creem").strip().lower()
+    api_key = str(os.environ.get("HANDRAW_CREEM_API_KEY") or data.get("api_key") or "").strip()
+    webhook_secret = str(os.environ.get("HANDRAW_CREEM_WEBHOOK_SECRET") or data.get("webhook_secret") or "").strip()
+    currency = str(os.environ.get("HANDRAW_CREEM_CURRENCY") or data.get("currency") or "USD").strip().upper() or "USD"
+    raw_test_flag = (
+        os.environ.get("HANDRAW_CREEM_TEST_MODE") if "HANDRAW_CREEM_TEST_MODE" in os.environ else data.get("test_mode")
     )
+    test_mode = _parse_bool_flag(raw_test_flag, default=True)
+    if api_key.startswith("creem_test_"):
+        test_mode = True
 
     raw_packages = data.get("packages")
     if not isinstance(raw_packages, list):
@@ -285,7 +292,7 @@ def load_payment_config() -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         pack_id = str(item.get("id") or "").strip()
-        variant_id = str(item.get("variant_id") or "").strip()
+        product_id = str(item.get("product_id") or "").strip()
         try:
             credits = int(item.get("credits") or 0)
             price_cents = int(item.get("price_cents") or 0)
@@ -293,8 +300,14 @@ def load_payment_config() -> dict[str, Any]:
             continue
         if not pack_id or pack_id in seen_ids or credits <= 0 or price_cents <= 0:
             continue
-        if variant_id.startswith("VARIANT_ID_") or not variant_id.isdigit():
-            variant_id = ""
+        if (
+            not product_id
+            or product_id.startswith("PRODUCT_ID_")
+            or product_id.startswith("YOUR_")
+            or not product_id.startswith("prod_")
+            or len(product_id) <= 8
+        ):
+            product_id = ""
         seen_ids.add(pack_id)
         packages.append(
             {
@@ -303,23 +316,21 @@ def load_payment_config() -> dict[str, Any]:
                 "description": str(item.get("description") or "").strip(),
                 "credits": credits,
                 "price_cents": price_cents,
-                "price_display": str(item.get("price_display") or f"¥{price_cents / 100:.2f}").strip(),
+                "price_display": str(item.get("price_display") or _format_price_display(price_cents, currency)).strip(),
                 "badge": str(item.get("badge") or "").strip(),
-                "variant_id": variant_id,
+                "product_id": product_id,
             }
         )
 
-    active_packages = [p for p in packages if p["variant_id"]]
+    active_packages = [p for p in packages if p["product_id"]]
     configured = bool(
-        provider == "lemonsqueezy"
-        and store_id.isdigit()
+        provider == "creem"
         and api_key
         and not api_key.startswith("YOUR_")
         and active_packages
     )
     return {
         "provider": provider,
-        "store_id": store_id,
         "api_key": api_key,
         "webhook_secret": webhook_secret,
         "currency": currency,
@@ -336,9 +347,9 @@ def get_public_billing_summary(cfg: dict[str, Any] | None = None) -> dict[str, A
     if not resolved or not resolved.get("enabled"):
         return {
             "enabled": False,
-            "provider": str((resolved or {}).get("provider") or "lemonsqueezy"),
+            "provider": str((resolved or {}).get("provider") or "creem"),
             "testMode": bool((resolved or {}).get("test_mode", True)),
-            "currency": str((resolved or {}).get("currency") or "CNY"),
+            "currency": str((resolved or {}).get("currency") or "USD"),
             "packages": [],
         }
     return {
