@@ -1045,8 +1045,10 @@ const {
   assert.equal(win.CS.tabs.length,1);
 
   // 16: Standalone planning takes article settings without a temporary graph.
+  const originalDocumentEngine = win.HANDRAW_CANVAS_ENGINE;
   vm.runInContext(fs.readFileSync("demo/assets/studio-prompt-engine.js","utf8"),context);
   const documentEngine = win.HANDRAW_CANVAS_ENGINE;
+  originalDocumentEngine.parseArticleReadonlyBlocks=documentEngine.parseArticleReadonlyBlocks;
   const planned = documentEngine.buildArticleDocument("# Article\n\nIntro\n\n## Section\n\nParagraph",{
     styleId:"FA-001",layoutId:"IG-001",coverRatio:"16:9",inlineRatio:"4:3"
   });
@@ -1192,7 +1194,36 @@ const {
   assert.equal(await api.generateSinglePlanCard(inherited.id,"cover-default",{skipCostConfirmation:true}),true);
   assert.equal(sentDefaults.ratio,"16:9");assert.equal(sentDefaults.style2,"FA-002");
 
-  console.log("All studio generation, document isolation, save and history tests passed (25/25).");
+  // Demo samples belong to the visitor view, never to an authenticated user's
+  // empty private library where hydration could mistake them for lost drafts.
+  win.HANDRAW_SHARED.App.state.demoMode=true;win.HANDRAW_SHARED.App.state.loggedIn=true;
+  win.HANDRAW_SHARED.App.state.serverBacked=true;api.switchScope("user_demo_empty");
+  api.ensureMyArticlesInitialized();assert.equal(win.CS.myArticles.length,0);
+  fetchHandler=async()=>({ok:true,status:200,json:async()=>({loggedIn:true,articles:[],pendingTasks:[]})});
+  await api.hydrateCloudStudioWorkspace();assert.equal(win.CS.myArticles.length,0);
+  assert.equal(api.readScopedCache("handraw_article_conflict_backup_v1",null),null);
+  const offline={id:"private-offline",markdown:"Keep this private draft",cards:[]};
+  setPrivateState({myArticles:[offline]});api.ensureMyArticlesInitialized();assert.equal(win.CS.myArticles[0],offline);
+  win.HANDRAW_SHARED.App.state.loggedIn=false;api.switchScope("guest_demo_samples");
+  api.ensureMyArticlesInitialized();assert.ok(win.CS.myArticles.length>0);
+  win.HANDRAW_SHARED.App.state.demoMode=false;win.HANDRAW_SHARED.App.state.serverBacked=false;
+
+  // Summary thumbnails are not a complete slot list. Do not parse a missing
+  // summary body as the engine's starter article or report its cover as 1/1.
+  const progressSummary={id:"progress-summary",_summary:true,illustrationCount:3,selectedImageCount:1,cards:[{imageUrl:"/cover.webp"}]};
+  assert.equal(api.articleImageProgress(progressSummary).total,3);
+  assert.equal(api.articleImageProgress(progressSummary).ready,1);
+  assert.equal(api.articleImageProgress({...progressSummary,_summary:false,cards:[]}).total,0);
+  assert.ok(!api.extractArticlePlainExcerpt("").includes("留白工作法"));
+  assert.ok(!api.extractArticlePlainExcerpt("").includes("日历"));
+  api.switchScope("user_summary_counts");win.HANDRAW_SHARED.App.state.serverBacked=true;
+  fetchHandler=async()=>({ok:true,status:200,json:async()=>({loggedIn:true,articles:[progressSummary]})});
+  await api.hydrateCloudStudioWorkspace();
+  assert.equal(api.articleImageProgress(win.CS.myArticles[0]).total,3);
+  assert.equal(api.articleImageProgress(win.CS.myArticles[0]).ready,1);
+  win.HANDRAW_SHARED.App.state.serverBacked=false;
+
+  console.log("All studio generation, document isolation, save and history tests passed (29/29).");
 })().catch((err) => {
   console.error(err);
   process.exit(1);

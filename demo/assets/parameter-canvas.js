@@ -14,6 +14,17 @@
       {id:"output",type:"output",mode:"cartesian",repeat:1,x:700,y:135}
     ],edges:[{from:"theme",to:"combine"},{from:"style",to:"combine"},{from:"combine",to:"output"}]}};
   }
+  function arrangeNodes(nodes,dimensions) {
+    let y=32;
+    for(let start=0;start<nodes.length;start+=3) {
+      const row=nodes.slice(start,start+3);let x=32,height=0;
+      for(const node of row) {
+        const box=dimensions.get(node.id)||{},w=Number(box.width)||276,h=Number(box.height)||330;
+        node.x=x;node.y=y;x+=w+60;height=Math.max(height,h);
+      }
+      y+=height+40;
+    }
+  }
   function selectedQuote(preview,count) {
     const q=preview.quote,free=Math.min(count,q.freeRemaining),total=(count-free)*q.unitPrice;
     return {count,freeUsed:free,paidCount:count-free,total,affordable:total<=q.balance};
@@ -311,7 +322,9 @@
       else if(action==="add-value") node.values.push(["refImages","colors","tones","moods"].includes(node.parameter)?[]:node.parameter==="ratio"?"3:4":node.parameter==="mode"?"graphic-text":"");
       else if(action==="disconnect") current.doc.graph.edges=current.doc.graph.edges.filter(e=>!(e.from===button.dataset.from&&e.to===node.id));
       else if(["parameter","combine","output"].includes(action)) {const field=root.querySelector("#pc-add-parameter").value;current.doc.graph.nodes.push({id:uid("node"),type:action,parameter:field,values:[["refImages","colors","tones","moods"].includes(field)?[]:field==="ratio"?"3:4":field==="mode"?"graphic-text":""],mode:"cartesian",repeat:1,x:40+(current.doc.graph.nodes.length%3)*335,y:40+Math.floor(current.doc.graph.nodes.length/3)*330});}
-      else if(action==="arrange") current.doc.graph.nodes.forEach((n,i)=>{n.x=32+(i%3)*335;n.y=32+Math.floor(i/3)*330;});
+      else if(action==="arrange") arrangeNodes(current.doc.graph.nodes,new Map(
+        Array.from(root.querySelectorAll("[data-card]")).map(card=>[card.dataset.card,{width:card.offsetWidth,height:card.offsetHeight}])
+      ));
       else return;
       current.edit(true);
     };
@@ -331,5 +344,5 @@
     else if(changedRoot) {render();bind();}
   }
   global.HandrawParameterCanvas={mount,saveCurrent:()=>current?.save(),openRun:id=>current?.openRun(id),importDocument:document=>current?.importDocument(document),reset:()=>{current?.close();current=null;root=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes};
 })(window);

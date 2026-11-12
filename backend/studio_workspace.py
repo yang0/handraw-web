@@ -32,12 +32,17 @@ def page_articles(db, user, *, cursor="", limit=50):
         db.get_conn()
         .execute(
             """SELECT a.id,a.article_title,a.status,a.run_count,a.created_at_ms,a.updated_at_ms,
-                  a.write_seq,a.settings_json,a.style1,a.layout_code,cover.storage_key AS cover_url
+                  a.write_seq,a.settings_json,a.style1,a.layout_code,cover.storage_key AS cover_url,
+                  slots.total AS illustration_count,slots.ready AS selected_image_count
            FROM studio_articles a
            LEFT JOIN LATERAL (
              SELECT m.storage_key FROM article_illustrations i JOIN media_assets m ON m.id=i.selected_media_id
              WHERE i.article_id=a.id AND i.deleted_at IS NULL ORDER BY (i.role='cover') DESC,i.sort_order,i.id LIMIT 1
            ) cover ON true
+           LEFT JOIN LATERAL (
+             SELECT COUNT(*) AS total,COUNT(i.selected_media_id) AS ready
+             FROM article_illustrations i WHERE i.article_id=a.id AND i.deleted_at IS NULL
+           ) slots ON true
            WHERE a.user_id=? AND a.deleted_at=''"""
             + boundary
             + " ORDER BY a.updated_at_ms DESC,a.id ASC LIMIT ?",
@@ -60,6 +65,8 @@ def page_articles(db, user, *, cursor="", limit=50):
             "style1": r["style1"],
             "layout": r["layout_code"],
             "_summary": True,
+            "illustrationCount": r["illustration_count"],
+            "selectedImageCount": r["selected_image_count"],
             "coverRatio": r["settings_json"].get("coverRatio", "2.35:1"),
             "inlineRatio": r["settings_json"].get("inlineRatio", "4:3"),
             "cards": [{"imageUrl": r["cover_url"], "role": "cover"}]

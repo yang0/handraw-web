@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from backend.db import utc_now_iso
-from backend.generation_v3 import ensure_run
+from backend.generation_v3 import ensure_run, _upsert_media
 from backend.services import (
     register_user,
     get_studio_workspace,
@@ -246,3 +246,49 @@ class StudioWorkspaceQueryTests(unittest.TestCase):
                 for call in execute.call_args_list
             )
         )
+
+    def test_article_summary_counts_current_slots_without_reading_private_body(self):
+        url = "/images/summary-cover.webp"
+        with self.db.transaction() as tx:
+            _upsert_media(tx, owner_id=self.user["id"], url=url)
+        sync_user_studio_articles(
+            self.db,
+            self.user,
+            [
+                {
+                    "id": "progress",
+                    "articleTitle": "Actual document",
+                    "markdown": "Private body",
+                    "cards": [
+                        {
+                            "id": "cover",
+                            "role": "cover",
+                            "prompt": "cover",
+                            "imageUrl": url,
+                        },
+                        {"id": "pending", "role": "inline", "prompt": "pending"},
+                        {
+                            "id": "removed",
+                            "role": "inline",
+                            "prompt": "removed",
+                            "imageUrl": url,
+                        },
+                    ],
+                }
+            ],
+        )
+        self.db.get_conn().execute(
+            "UPDATE article_illustrations SET deleted_at=? WHERE article_id='progress' AND local_id='removed'",
+            (utc_now_iso(),),
+        )
+        summary = next(
+            item
+            for item in page_articles(self.db, self.user)["items"]
+            if item["id"] == "progress"
+        )
+        self.assertEqual(summary["illustrationCount"], 2)
+        self.assertEqual(summary["selectedImageCount"], 1)
+        self.assertEqual(summary["cards"][0]["imageUrl"], url)
+        self.assertNotIn("markdown", summary)
+        other, _ = register_user(self.db, "summary_other", "FixturePass123!")
+        self.assertEqual(page_articles(self.db, other)["items"], [])

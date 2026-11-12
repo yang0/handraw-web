@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -10,6 +10,17 @@ function store(t,api,scope="user:canvas") {
 }
 function preview() {return {planHash:"hash",quote:{freeRemaining:1,unitPrice:2,balance:10},items:[{ordinal:0,spec:{prompt:"A"}},{ordinal:1,spec:{prompt:"B"}}]};}
 function run(id="run") {return {id,status:"success",items:[],count:0,retryQuote:{total:0,unitPrice:2},spentCredits:0,maxCredits:0};}
+
+test("arranging tall candidate nodes preserves specs and keeps every pair separate",()=>{
+  const nodes=Array.from({length:7},(_,n)=>({id:"n"+n,type:n%2?"output":"parameter",values:["keep"],x:0,y:0}));
+  const sizes=new Map(nodes.map((node,n)=>[node.id,{width:n%2?252:276,height:[428,418,233,303,750,199,510][n]}]));
+  const before=JSON.stringify(nodes.map(({x,y,...spec})=>spec));arrangeNodes(nodes,sizes);
+  assert.equal(JSON.stringify(nodes.map(({x,y,...spec})=>spec)),before);
+  for(let i=0;i<nodes.length;i++) for(let j=i+1;j<nodes.length;j++) {
+    const a=nodes[i],b=nodes[j],as=sizes.get(a.id),bs=sizes.get(b.id);
+    assert.ok(a.x+as.width<=b.x||b.x+bs.width<=a.x||a.y+as.height<=b.y||b.y+bs.height<=a.y,`${a.id} overlaps ${b.id}`);
+  }
+});
 
 test("canvas saves serialize and include edits made while the first save is outstanding",async t=>{
   storage.clear();const writes=[];let release;

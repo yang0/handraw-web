@@ -966,6 +966,7 @@
               id: ra.id,
               articleTitle: ra.articleTitle || "未命名文章",
               _summary:Boolean(ra._summary),
+              illustrationCount:ra.illustrationCount,selectedImageCount:ra.selectedImageCount,
               settings:ra.settings||{},coverRatio:ra.coverRatio||"2.35:1",inlineRatio:ra.inlineRatio||"4:3",
               markdown: ra.markdown || "",
               cards: Array.isArray(ra.cards) ? ra.cards : [],
@@ -4501,7 +4502,7 @@
 
   function ensureMyArticlesInitialized() {
     if (!Array.isArray(CS.myArticles)) {
-      CS.myArticles = isExplicitDemoMode() ? createSeededMyArticles() : [];
+      CS.myArticles = isExplicitDemoMode() && !App.state?.loggedIn ? createSeededMyArticles() : [];
       writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
     }
   }
@@ -12132,7 +12133,7 @@
   }
 
   function extractArticlePlainExcerpt(md) {
-    const blocks = E.parseArticleReadonlyBlocks(md || "");
+    const blocks = E.parseArticleReadonlyBlocks(md || "", { noStarter: true });
     const bodyText = blocks
       .filter((b) => b.kind !== "h1" && b.kind !== "hr")
       .map((b) => b.text)
@@ -12140,6 +12141,13 @@
       .replace(/\s+/g, " ")
       .trim();
     return bodyText || "点击进入文章配图编排页，可调整封面与章节插图提示词并批量生成配图。";
+  }
+
+  function articleImageProgress(article) {
+    const cards = article.cards || [];
+    return article._summary
+      ? { total: Number(article.illustrationCount) || 0, ready: Number(article.selectedImageCount) || 0 }
+      : { total: cards.length, ready: cards.filter(card => card.imageUrl).length };
   }
 
   function removeArticleFromWorkspace(aid) {
@@ -12208,8 +12216,7 @@
     const filter = CS.articleListFilter || "all";
 
     const filtered = sortedArticles.filter((a) => {
-      const cards = a.cards || [];
-      const readyCnt = cards.filter((c) => c.imageUrl).length;
+      const readyCnt = articleImageProgress(a).ready;
       if (filter === "ready" && readyCnt === 0) return false;
       if (filter === "pending" && readyCnt > 0) return false;
       if (q) {
@@ -12259,7 +12266,7 @@
               <div style="padding:72px 24px;text-align:center;background:var(--ic-panel-solid);border:1px dashed var(--ic-border-strong);border-radius:18px;color:var(--ic-muted);">
                 <div style="font-size:28px;margin-bottom:8px;">📄</div>
                 <div style="font-size:14.5px;font-weight:800;color:var(--ic-ink);">没有找到匹配的历史文章</div>
-                <div style="font-size:12.5px;margin-top:4px;">可尝试清空筛选关键词，或返回无限画布通过「文章配图」创建新文章</div>
+                <div style="font-size:12.5px;margin-top:4px;">可尝试清空筛选关键词，或点击「新建文章」开始写作</div>
               </div>
             `
               : `
@@ -12273,7 +12280,8 @@
                       readyCards[0]?.imageUrl ||
                       "";
                     const generating = isArticleGenerating(a);
-                    const excerpt = extractArticlePlainExcerpt(a.markdown);
+                    const progress = articleImageProgress(a);
+                    const excerpt = a._summary ? "打开文章查看正文与配图。" : extractArticlePlainExcerpt(a.markdown);
                     return `
                       <article class="ic-art-page-card" data-open-art-id="${esc(a.id)}">
                         <div class="ic-art-page-cover">
@@ -12300,8 +12308,8 @@
                               generating
                                 ? "⏳ 正在生图…"
                                 : readyCards.length > 0
-                                  ? `✓ 已配图 ${readyCards.length}/${ordered.length}`
-                                  : `● 待生图 (${ordered.length} 卡位)`
+                                  ? `✓ 已配图 ${progress.ready}/${progress.total}`
+                                  : `● 待生图 (${progress.total} 卡位)`
                             }
                           </span>
                         </div>
@@ -13063,7 +13071,8 @@
                   .map((a) => {
                     const isCur = activeArtId && a.id === activeArtId;
                     const cards = sortPlanCardsInDocOrder(a.cards || []);
-                    const readyCnt = cards.filter((c) => c.imageUrl).length;
+                    const progress = articleImageProgress(a);
+                    const readyCnt = progress.ready;
                     const thumbUrl =
                       cards.find((c) => c.role === "cover" && c.imageUrl)?.imageUrl ||
                       cards.find((c) => c.imageUrl)?.imageUrl ||
@@ -13087,7 +13096,7 @@
                                 : `
                                   <span>${esc(a.timeLabel || formatArticleTimeLabel(a.updatedAtMs))}</span>
                                   <span>·</span>
-                                  <span style="color:${readyCnt > 0 ? "#1f6f4a" : "var(--ic-muted)"};font-weight:750;">配图 ${readyCnt}/${cards.length}</span>
+                                  <span style="color:${readyCnt > 0 ? "#1f6f4a" : "var(--ic-muted)"};font-weight:750;">配图 ${readyCnt}/${progress.total}</span>
                                 `
                             }
                           </div>
@@ -15921,23 +15930,23 @@
         if (nImages > 0 || mPrompts > 0) {
           let clause = "";
           if (nImages > 0 && mPrompts > 0) {
-            clause = `当前有 ${nImages} 张已生成配图、${mPrompts} 张调过提示词。重新规划后它们会从文章中移除。`;
+            clause = `当前有 ${nImages} 张已生成配图、${mPrompts} 张调过提示词。`;
           } else if (nImages > 0) {
-            clause = `当前有 ${nImages} 张已生成配图。重新规划后它们会从文章中移除。`;
+            clause = `当前有 ${nImages} 张已生成配图。`;
           } else {
-            clause = `当前有 ${mPrompts} 张调过提示词。重新规划后它们会从文章中移除。`;
+            clause = `当前有 ${mPrompts} 张调过提示词。`;
           }
 
           S.openModal({
-            title: "重新规划会替换现有配图位",
+            title: "重新规划配图位",
             sizeClass: "modal-small ic-modal",
             html: `
               <div style="font-size:14px;line-height:1.6;color:var(--ink-body);padding:8px 0 16px;">
-                ${esc(clause)}
+                ${esc(clause)}已有图片和自定义参数会保留；接下来可在配图建议中确认调整，取消勾选的图位才会移除。
               </div>
               <div class="ic-modal-actions" style="display:flex;justify-content:flex-end;gap:10px;">
                 <button type="button" class="btn btn-sm" id="art-overwrite-cancel">取消</button>
-                <button type="button" class="btn btn-sm btn-primary" id="art-overwrite-confirm">确定替换</button>
+                <button type="button" class="btn btn-sm btn-primary" id="art-overwrite-confirm">继续规划</button>
               </div>
             `,
             onMount(root) {
@@ -17222,6 +17231,9 @@
       articleCloudPayload,
       loadArticleDocument,
       hydrateCloudStudioWorkspace,
+      ensureMyArticlesInitialized,
+      articleImageProgress,
+      extractArticlePlainExcerpt,
       loadMoreStudioHistory,
       runOutputControlNode,
       pollCloudTask,

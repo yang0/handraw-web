@@ -29,7 +29,7 @@ assert.match(studio, /CS\.engineMode\s*=\s*configured \? "api" : CS\.demoMode \?
 assert.match(studio, /isDemoGenerationEnabled\(\)/);
 assert.match(studio, /generationMode = useLiveApi \? "live" : "demo"/);
 assert.match(studio, /demoMode: isDemoGenerationEnabled\(\)/);
-assert.match(studio, /isExplicitDemoMode\(\) \? createSeededMyArticles\(\) : \[\]/);
+assert.match(studio, /isExplicitDemoMode\(\) && !App\.state\?\.loggedIn \? createSeededMyArticles\(\) : \[\]/);
 assert.match(studio, /isExplicitDemoMode\(\) \? createSeededGenerationHistory\(\) : \[\]/);
 assert.match(studio, /requestId/);
 assert.match(studio, /confirmCost: true/);
