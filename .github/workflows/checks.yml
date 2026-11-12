@@ -177,6 +177,8 @@ jobs:
           python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres
           tests.test_discourse_import tests.test_resource_redirect_transactions tests.test_postgres_operations
           tests.test_social_counters_postgres tests.test_v2_operations tests.test_ops_convergence tests.test_cold_start
+          tests.test_home_scenarios tests.test_unified_replies tests.test_resource_topic_visibility
+          tests.test_round4_fixes tests.test_seed_starter_library
 
   creation-workspace-browser:
     runs-on: ubuntu-latest

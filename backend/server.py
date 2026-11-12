@@ -4402,7 +4402,7 @@ def create_channel_server(
     return srv
 
 
-def init_database(db_path: Path | str | None = None, force_reset: bool = False) -> Database:
+def init_database(db_path: Path | str, force_reset: bool = False) -> Database:
     db = Database(db_path)
     db.migrate()
     ensure_seeded(db, force_reset=force_reset)

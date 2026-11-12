@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Iterator
 from zoneinfo import ZoneInfo
 
-from .config import get_db_path
 from .migrations import MIGRATIONS, POST_MIGRATION_HOOKS
 
 logger = logging.getLogger("handraw.db")
@@ -31,8 +30,8 @@ def local_today_str() -> str:
 
 
 class Database:
-    def __init__(self, db_path: Path | str | None = None) -> None:
-        self.db_path = Path(db_path) if db_path else get_db_path()
+    def __init__(self, db_path: Path | str) -> None:
+        self.db_path = Path(db_path)
         self._write_lock = threading.RLock()
         self._local = threading.local()
         self._all_conns: set[sqlite3.Connection] = set()
@@ -210,17 +209,3 @@ class Database:
 
             _run_pending_hooks(up_to_version=None)
         return applied_names
-
-
-_DEFAULT_DB: Database | None = None
-_DB_INIT_LOCK = threading.Lock()
-
-
-def get_database(db_path: Path | str | None = None) -> Database:
-    global _DEFAULT_DB
-    target = Path(db_path).resolve() if db_path else get_db_path()
-    with _DB_INIT_LOCK:
-        if _DEFAULT_DB is None or _DEFAULT_DB.db_path.resolve() != target:
-            _DEFAULT_DB = Database(target)
-            _DEFAULT_DB.migrate()
-        return _DEFAULT_DB

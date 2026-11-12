@@ -34,13 +34,6 @@ def get_storage_root() -> Path:
     return (WEB_ROOT / ".local").resolve()
 
 
-def get_db_path() -> Path:
-    explicit = os.environ.get("HANDRAW_DB_PATH")
-    if explicit:
-        return Path(explicit).resolve()
-    return get_storage_root() / "handraw_v2.db"
-
-
 def get_uploads_dir() -> Path:
     explicit = os.environ.get("HANDRAW_UPLOADS_DIR")
     if explicit:

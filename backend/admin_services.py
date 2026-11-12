@@ -472,7 +472,10 @@ def admin_get_dashboard(db: Database, user: dict[str, Any] | None) -> dict[str, 
     users_active = int(conn.execute(f"SELECT COUNT(*) FROM users WHERE status = 'active' AND {user_seed_filter}", user_seed_params).fetchone()[0])
     users_frozen = int(conn.execute(f"SELECT COUNT(*) FROM users WHERE status = 'frozen' AND {user_seed_filter}", user_seed_params).fetchone()[0])
     users_staff = int(conn.execute(f"SELECT COUNT(*) FROM users WHERE role IN ('admin', 'reviewer') AND {user_seed_filter}", user_seed_params).fetchone()[0])
-    discourse_migrated = int(conn.execute(f"SELECT COUNT(*) FROM users WHERE (discourse_user_id IS NOT NULL OR bio LIKE '%Discourse%') AND {user_seed_filter}", user_seed_params).fetchone()[0])
+    discourse_migrated = int(conn.execute(
+        f"SELECT COUNT(*) FROM users WHERE (discourse_user_id IS NOT NULL OR LOWER(bio) LIKE ?) AND {user_seed_filter}",
+        ("%discourse%", *user_seed_params),
+    ).fetchone()[0])
 
     # Works KPIs
     works_total = int(conn.execute(f"SELECT COUNT(*) FROM works WHERE {work_seed_filter}", work_seed_params).fetchone()[0])

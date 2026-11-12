@@ -4,31 +4,27 @@ from __future__ import annotations
 import json
 import os
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from backend import admin_services, resource_discussions, server, services
+from backend import admin_services, resource_discussions, services
 from ops import converge_asset_comments, converge_work_comments, ensure_resource_topics
 from tests.maintenance_support import fill_resource_topics, migrate_asset_comments, migrate_work_comments
+
+from tests.postgres_support import open_isolated_postgres
 
 IMG = "/images/individual/FA/FA-013.webp"
 
 
 class UnifiedRepliesTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory()
-        self.path = Path(self.temp.name) / "test.db"
-        self._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test", "HANDRAW_DEMO_MODE": "0"})
-        self._env.start()
-        self.db = server.init_database(self.path)
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test", "HANDRAW_DEMO_MODE": "0"}))
+        self.db = open_isolated_postgres(self)
         self.author, _ = services.register_user(self.db, "uni_author", "password-author")
         self.reader, _ = services.register_user(self.db, "uni_reader", "password-reader")
         self.admin, _ = services.register_user(self.db, "uni_admin", "password-admin")
         self.operator, _ = services.register_user(self.db, "uni_operator", "password-operator")
         self.db.get_conn().execute("UPDATE users SET role = 'admin' WHERE username = 'uni_admin'")
         self.db.get_conn().execute("UPDATE users SET role = 'operator' WHERE username = 'uni_operator'")
-        self.db.get_conn().commit()
         self.admin = dict(self.db.get_conn().execute("SELECT * FROM users WHERE username = 'uni_admin'").fetchone())
         self.operator = dict(self.db.get_conn().execute("SELECT * FROM users WHERE username = 'uni_operator'").fetchone())
 
@@ -40,12 +36,6 @@ class UnifiedRepliesTests(unittest.TestCase):
         )
         self.work_id = published["workId"]
         self.work_topic_id = published["topicId"]
-
-    def tearDown(self):
-        self.db.get_conn().close()
-        self.db.close()
-        self._env.stop()
-        self.temp.cleanup()
 
     def test_comment_on_official_style_and_work_stored_in_forum_replies(self):
         """1. Comments on styles and works go to forum_replies, old tables unchanged."""
@@ -144,7 +134,6 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.execute(
             "INSERT INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at, status_actor_role) VALUES ('ac_legacy_2', 'FA-013', 'style', 'uni_reader', '读者', '旧评论2(隐藏)', 'hidden', '刚刚', '2026-01-01T01:00:00Z', 'admin')"
         )
-        conn.commit()
 
         # Dry run
         asset_todo, _, _, _ = converge_asset_comments.plan(conn)
@@ -267,7 +256,6 @@ class UnifiedRepliesTests(unittest.TestCase):
             """,
             (del_topic_id, del_work_id, now, now),
         )
-        conn.commit()
 
         # Run ensure_resource_topics
         ret = fill_resource_topics(self.db)
@@ -283,8 +271,7 @@ class UnifiedRepliesTests(unittest.TestCase):
         self.assertEqual(topic_rows[0]["status_actor_role"], "author")
 
         # 2. Case normalization: fb-041 and FB-041 only create 1 topic and 1 mapping
-        conn.execute("INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'FB-041', 'topic_fb041_test', 'official', ?)", (now,))
-        conn.commit()
+        conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'FB-041', 'topic_fb041_test', 'official', ?) ON CONFLICT DO NOTHING", (now,))
         tid1 = resource_discussions.ensure_topic(conn, "style", "fb-041", {"name": "FB-041", "description": "test"})
         tid2 = resource_discussions.ensure_topic(conn, "style", "FB-041", {"name": "FB-041", "description": "test"})
         self.assertEqual(tid1, tid2)
@@ -314,7 +301,6 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.execute("INSERT INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at) VALUES ('ac_tst_1', 'TST-999', 'style', 'uni_reader', '读者', '文本1', 'published', '刚刚', ?)", (now,))
         conn.execute("INSERT INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at) VALUES ('ac_tst_2', 'TST-999', 'style', 'uni_reader', '读者', '文本2', 'published', '刚刚', ?)", (now,))
         conn.execute("INSERT INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at) VALUES ('ac_tst_3', 'TST-999', 'style', 'uni_reader', '读者', '文本3', 'published', '刚刚', ?)", (now,))
-        conn.commit()
 
         # Inject failure on comment 2 by inserting a duplicate reply id or triggering a mock error in apply
         todo, unmapped, work_todo, skipped = converge_asset_comments.plan(conn)
@@ -325,7 +311,8 @@ class UnifiedRepliesTests(unittest.TestCase):
         # Make item 1 fail by pointing to a nonexistent topic_id with foreign key enabled
         corrupted_todo[1]["topicId"] = "nonexistent_topic_foreign_key_fail"
 
-        copied, failures = converge_asset_comments.apply(conn, corrupted_todo, unmapped, work_todo)
+        with self.db.transaction() as tx:
+            copied, failures = converge_asset_comments.apply(tx, corrupted_todo, unmapped, work_todo)
         self.assertEqual(copied, 2)
         self.assertEqual(len(failures), 1)
 
@@ -334,7 +321,8 @@ class UnifiedRepliesTests(unittest.TestCase):
         self.assertEqual(m_check["origin"], "official")
 
         # Now fix the failure and rerun
-        copied2, failures2 = converge_asset_comments.apply(conn, todo, unmapped, work_todo)
+        with self.db.transaction() as tx:
+            copied2, failures2 = converge_asset_comments.apply(tx, todo, unmapped, work_todo)
         self.assertEqual(copied2, 1)  # only the remaining 1 copied
         self.assertEqual(len(failures2), 0)
 
@@ -355,7 +343,6 @@ class UnifiedRepliesTests(unittest.TestCase):
             """,
             (now, now),
         )
-        conn.commit()
 
         notif_author_before = conn.execute("SELECT COUNT(*) FROM notifications WHERE user_id = ?", (self.author["id"],)).fetchone()[0]
 
@@ -377,10 +364,9 @@ class UnifiedRepliesTests(unittest.TestCase):
         """K2: Migrated comments marked status='migrated'; deleted reply does not re-publish or appear in admin."""
         conn = self.db.get_conn()
         now = services.utc_now_iso()
-        conn.execute("INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'MIG-01', 'topic_mig01', 'official', ?)", (now,))
+        conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'MIG-01', 'topic_mig01', 'official', ?) ON CONFLICT DO NOTHING", (now,))
         conn.execute("INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES ('topic_mig01','assets','画风与图型专区','MIG-01','','资源讨论','', '[]', '[\"MIG-01\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (now, now))
         conn.execute("INSERT INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at) VALUES ('ac_mig_1', 'MIG-01', 'style', 'uni_reader', '读者', '即将迁移的内容', 'published', '刚刚', ?)", (now,))
-        conn.commit()
 
         # Run migration
         ret = migrate_asset_comments(self.db)
@@ -394,7 +380,6 @@ class UnifiedRepliesTests(unittest.TestCase):
         rep = conn.execute("SELECT id FROM forum_replies WHERE legacy_source = 'asset_comments:ac_mig_1'").fetchone()
         self.assertIsNotNone(rep)
         conn.execute("DELETE FROM forum_replies WHERE id = ?", (rep[0],))
-        conn.commit()
 
         # Re-run migration script
         ret2 = migrate_asset_comments(self.db)
@@ -430,7 +415,6 @@ class UnifiedRepliesTests(unittest.TestCase):
             (tid, wid, now, now),
         )
         conn.execute("INSERT INTO work_comments (id, work_id, author_username, author_name, text, status, time_label, created_at) VALUES ('wc_k3_1', ?, 'uni_reader', '读者', '旧评论K3', 'published', '刚刚', ?)", (wid, now))
-        conn.commit()
 
         # Run work migration
         ret = migrate_work_comments(self.db)
@@ -462,7 +446,6 @@ class UnifiedRepliesTests(unittest.TestCase):
         )
         conn.execute("INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?,'assets','画风与图型专区','K4-001','','资源讨论','', '[]', '[\"K4-001\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (tid, now, now))
         conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'k4-001', ?, 'submission', ?)", (tid, now))
-        conn.commit()
 
         # Comment on uppercase K4-001
         res = resource_discussions.comment(self.db, self.reader, "style", "K4-001", "测试大小写复用")
@@ -476,17 +459,17 @@ class UnifiedRepliesTests(unittest.TestCase):
         """K5: Migration returns non-zero exit code when failures occur; mapping remains non-submission."""
         conn = self.db.get_conn()
         now = services.utc_now_iso()
-        conn.execute("INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'FAIL-01', 'topic_fail01', 'official', ?)", (now,))
+        conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'FAIL-01', 'topic_fail01', 'official', ?) ON CONFLICT DO NOTHING", (now,))
         conn.execute("INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES ('topic_fail01','assets','画风与图型专区','FAIL-01','','资源讨论','', '[]', '[\"FAIL-01\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (now, now))
         conn.execute("INSERT INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at) VALUES ('ac_fail_1', 'FAIL-01', 'style', 'uni_reader', '读者', '文本', 'published', '刚刚', ?)", (now,))
-        conn.commit()
 
         todo, unmapped, work_todo, _ = converge_asset_comments.plan(conn)
         item_fail = [t for t in todo if t["legacySource"] == "asset_comments:ac_fail_1"][0]
         # Make it point to an invalid foreign key topic
         item_fail["topicId"] = "invalid_fk_topic"
 
-        copied, failures = converge_asset_comments.apply(conn, [item_fail], unmapped, [])
+        with self.db.transaction() as tx:
+            copied, failures = converge_asset_comments.apply(tx, [item_fail], unmapped, [])
         self.assertEqual(copied, 0)
         self.assertGreater(len(failures), 0)
 
@@ -508,9 +491,8 @@ class UnifiedRepliesTests(unittest.TestCase):
             (now, now),
         )
         conn.execute("INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?,'assets','画风与图型专区','K6-001','','资源讨论','', '[]', '[\"K6-001\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (tid, now, now))
-        conn.execute("INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'K6-001', ?, 'official', ?)", (tid, now))
+        conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'K6-001', ?, 'official', ?) ON CONFLICT DO NOTHING", (tid, now))
         conn.execute("INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, mounted_style, mounted_layout, likes, accepted, status, time_label, created_at) VALUES ('rep_k6_1', ?, 'uni_reader', '读者', '非submission回复', '', '', 0, 0, 'published', '刚刚', ?)", (tid, now))
-        conn.commit()
 
         # 1. resource_comments
         res = forum_resources.resource_comments(self.db, self.reader, "style", "K6-001")
@@ -538,8 +520,7 @@ class UnifiedRepliesTests(unittest.TestCase):
             (now, now),
         )
         conn.execute("INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?,'assets','画风与图型专区','PLC-01','','资源讨论','', '[]', '[\"PLC-01\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (tid_ph, now, now))
-        conn.execute("INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'PLC-01', ?, 'submission', ?)", (tid_ph, now))
-        conn.commit()
+        conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'PLC-01', ?, 'submission', ?) ON CONFLICT DO NOTHING", (tid_ph, now))
 
         # In boot: hidden
         boot = services.build_boot_payload(self.db, None)
@@ -551,7 +532,6 @@ class UnifiedRepliesTests(unittest.TestCase):
 
         # 2. Add 1 hidden reply to placeholder
         conn.execute("INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, mounted_style, mounted_layout, likes, accepted, status, time_label, created_at) VALUES ('rep_k7_hid', ?, 'uni_reader', '读者', '隐藏内容', '', '', 0, 0, 'hidden', '刚刚', ?)", (tid_ph, now))
-        conn.commit()
 
         # In boot: still hidden (no published replies)
         boot2 = services.build_boot_payload(self.db, None)
@@ -563,7 +543,6 @@ class UnifiedRepliesTests(unittest.TestCase):
 
         # 3. Add 1 published reply to placeholder
         conn.execute("INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, mounted_style, mounted_layout, likes, accepted, status, time_label, created_at) VALUES ('rep_k7_pub', ?, 'uni_reader', '读者', '公开内容', '', '', 0, 0, 'published', '刚刚', ?)", (tid_ph, now))
-        conn.commit()
 
         # In boot: now visible!
         boot3 = services.build_boot_payload(self.db, None)
@@ -572,10 +551,9 @@ class UnifiedRepliesTests(unittest.TestCase):
         # 4. User curation submission topic (has curation_submissions row): 0 replies is visible
         tid_sub = "topic_k7_submission"
         conn.execute("INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?,'assets','画风与图型专区','SUB-01','uni_author','作者','', '[]', '[\"SUB-01\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (tid_sub, now, now))
-        conn.execute("INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'SUB-01', ?, 'submission', ?)", (tid_sub, now))
+        conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'SUB-01', ?, 'submission', ?) ON CONFLICT DO NOTHING", (tid_sub, now))
         conn.execute("INSERT INTO curation_submissions (id, topic_id, owner_username, owner_user_id, kind, target_id, status, current_revision, request_id, created_at, updated_at) VALUES ('sub_k7_1', ?, 'uni_author', 1, 'style', 'SUB-01', 'pending', 1, 'req_1', ?, ?)", (tid_sub, now, now))
         conn.execute("INSERT INTO curation_versions (id, submission_id, revision, payload_json, created_at) VALUES ('ver_k7_1', 'sub_k7_1', 1, '{}', ?)", (now,))
-        conn.commit()
 
         boot4 = services.build_boot_payload(self.db, None)
         self.assertIn(tid_sub, [t["id"] for t in boot4["topics"]], "User submission topic must be visible even with 0 replies")
@@ -601,7 +579,6 @@ class UnifiedRepliesTests(unittest.TestCase):
             """,
             (self.reader["id"], self.reader["username"], now),
         )
-        conn.commit()
         rep_id = conn.execute("SELECT id FROM reports WHERE target_id = 'wc_l1_1'").fetchone()[0]
 
         # Migrate
@@ -662,7 +639,6 @@ class UnifiedRepliesTests(unittest.TestCase):
                 (wid, f"标题_{wid}", st, src, act, rsn, now, now),
             )
             conn.execute("INSERT INTO work_comments (id, work_id, author_username, author_name, text, status, time_label, created_at) VALUES (?, ?, 'uni_reader', '读者', '旧评论', 'published', '刚刚', ?)", (f"wc_{wid}", wid, now))
-        conn.commit()
 
         # Migrate
         ret = migrate_work_comments(self.db)
@@ -703,7 +679,6 @@ class UnifiedRepliesTests(unittest.TestCase):
             (now, now),
         )
         conn.execute("INSERT INTO asset_comments (id, asset_code, asset_kind, author_username, author_name, text, status, time_label, created_at) VALUES ('ac_l3_1', 'CMM-L3', 'style', 'uni_reader', '读者', '旧评论', 'published', '刚刚', ?)", (now,))
-        conn.commit()
 
         # Migrate asset comments first
         ret = migrate_asset_comments(self.db)
@@ -735,9 +710,8 @@ class UnifiedRepliesTests(unittest.TestCase):
         # Now artificially inject a single lowercase-only mapping for FB-041
         tid_fb = "topic_fb041_test"
         conn.execute("DELETE FROM curation_resource_topics WHERE kind = 'style' AND UPPER(target_id) = 'FB-041'")
-        conn.execute("INSERT OR REPLACE INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?, 'assets', '画风与图型专区', 'FB-041讨论', '', '资源讨论', '', '[]', '[\"FB-041\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (tid_fb, now, now))
+        conn.execute("INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?, 'assets', '画风与图型专区', 'FB-041讨论', '', '资源讨论', '', '[]', '[\"FB-041\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (tid_fb, now, now))
         conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'fb-041', ?, 'submission', ?)", (tid_fb, now))
-        conn.commit()
 
         # Run ensure_resource_topics: must not exit early, must normalize fb-041 to FB-041
         ret = fill_resource_topics(self.db)
@@ -747,7 +721,6 @@ class UnifiedRepliesTests(unittest.TestCase):
 
         # Add a published reply to topic
         conn.execute("INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, mounted_style, mounted_layout, likes, accepted, status, time_label, created_at) VALUES ('rep_l4_pub', ?, 'uni_reader', '读者', 'FB-041回复', '', '', 0, 0, 'published', '刚刚', ?)", (tid_fb, now))
-        conn.commit()
 
         # Test read consistency across /t/, by-ref, and boot
         # 1. By-ref
@@ -770,10 +743,9 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn = self.db.get_conn()
         now = services.utc_now_iso()
         tid = "topic_l5_off"
-        conn.execute("INSERT OR REPLACE INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?, 'assets', '画风与图型专区', '官方讨论', '', '资源讨论', '', '[]', '[\"FB-041\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (tid, now, now))
-        conn.execute("INSERT OR REPLACE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'FB-041', ?, 'submission', ?)", (tid, now))
+        conn.execute("INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, summary, images_json, styles_json, layout_code, work_id, status, published_at_ms, created_label, created_at, updated_at) VALUES (?, 'assets', '画风与图型专区', '官方讨论', '', '资源讨论', '', '[]', '[\"FB-041\"]', '', '', 'published', 1000, '刚刚', ?, ?)", (tid, now, now))
+        conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('style', 'FB-041', ?, 'submission', ?) ON CONFLICT (kind, target_id) DO UPDATE SET topic_id = excluded.topic_id, origin = excluded.origin", (tid, now))
         conn.execute("INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, mounted_style, mounted_layout, likes, accepted, status, time_label, created_at) VALUES ('rep_l5_pub', ?, 'uni_reader', '读者', '公开讨论内容', '', '', 0, 0, 'published', '刚刚', ?)", (tid, now))
-        conn.commit()
 
         _, _, _, creators = services.compute_public_asset_counts_and_creators(conn)
         usernames = [c["username"] for c in creators]
@@ -799,7 +771,6 @@ class UnifiedRepliesTests(unittest.TestCase):
             conn.execute("INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, mounted_style, mounted_layout, likes, accepted, status, time_label, created_at) VALUES (?, ?, 'uni_reader', '读者', ?, '', '', 0, 0, 'published', '刚刚', ?)", (f"rep_l6_{i}", tid, f"回复_{i}", now))
         # 1 hidden reply in forum_replies (not counted)
         conn.execute("INSERT INTO forum_replies (id, topic_id, author_username, author_name, text, mounted_style, mounted_layout, likes, accepted, status, time_label, created_at) VALUES ('rep_l6_hid', ?, 'uni_reader', '读者', '隐藏', '', '', 0, 0, 'hidden', '刚刚', ?)", (tid, now))
-        conn.commit()
 
         res = admin_services.admin_list_works(self.db, self.admin)
         work_item = [w for w in res["items"] if w["id"] == wid][0]
@@ -818,11 +789,11 @@ class UnifiedRepliesTests(unittest.TestCase):
             (wid, now, now),
         )
         conn.execute("INSERT INTO work_comments (id, work_id, author_username, author_name, text, status, time_label, created_at) VALUES ('wc_l7_1', ?, 'uni_reader', '读者', '旧评论', 'published', '刚刚', ?)", (wid, now))
-        conn.commit()
 
         todo = converge_work_comments.plan(conn)
         todo_item = [t for t in todo if t["workId"] == wid][0]
-        res = converge_work_comments.apply(conn, [todo_item])
+        with self.db.transaction() as tx:
+            res = converge_work_comments.apply(tx, [todo_item])
 
         # Assert res is exact tuple, not int subclass
         self.assertIs(type(res), tuple)
@@ -848,7 +819,6 @@ class UnifiedRepliesTests(unittest.TestCase):
             "INSERT INTO work_comments (id, work_id, author_username, author_name, text, status, time_label, created_at) VALUES (?, ?, 'uni_reader', '读者', 'M1待删评论', 'published', '刚刚', ?)",
             (cid, wid, now),
         )
-        conn.commit()
 
         # Migrate comment
         ret = migrate_work_comments(self.db)
@@ -911,7 +881,6 @@ class UnifiedRepliesTests(unittest.TestCase):
             "INSERT INTO asset_comments (id, asset_kind, asset_code, author_username, author_name, text, status, time_label, created_at) VALUES (?, 'style', ?, 'uni_reader', '读者', 'M1待删资源评论', 'published', '刚刚', ?)",
             (cid, acode, now),
         )
-        conn.commit()
 
         # Migrate comment
         ret = migrate_asset_comments(self.db)
@@ -974,18 +943,15 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.execute("INSERT INTO work_comments (id, work_id, author_username, author_name, text, status, time_label, created_at) VALUES (?, ?, 'uni_author', '作者', '举报评论2', 'published', '刚刚', ?)", (cid2, wid, now))
 
         # Open reports before migration
-        conn.execute(
-            "INSERT INTO reports (reporter_id, reporter_username, target_type, target_id, target_title, reason, detail, status, created_at) VALUES (?, ?, 'comment', ?, '评论1', 'spam', '垃圾信息', 'open', ?)",
+        rep1_id = conn.execute(
+            "INSERT INTO reports (reporter_id, reporter_username, target_type, target_id, target_title, reason, detail, status, created_at) VALUES (?, ?, 'comment', ?, '评论1', 'spam', '垃圾信息', 'open', ?) RETURNING id",
             (int(self.reader["id"]), self.reader["username"], cid1, now),
-        )
-        rep1_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        ).fetchone()[0]
 
-        conn.execute(
-            "INSERT INTO reports (reporter_id, reporter_username, target_type, target_id, target_title, reason, detail, status, created_at) VALUES (?, ?, 'comment', ?, '评论2', 'spam', '垃圾信息', 'open', ?)",
+        rep2_id = conn.execute(
+            "INSERT INTO reports (reporter_id, reporter_username, target_type, target_id, target_title, reason, detail, status, created_at) VALUES (?, ?, 'comment', ?, '评论2', 'spam', '垃圾信息', 'open', ?) RETURNING id",
             (int(self.reader["id"]), self.reader["username"], cid2, now),
-        )
-        rep2_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        conn.commit()
+        ).fetchone()[0]
 
         # Migrate
         ret = migrate_work_comments(self.db)
@@ -994,7 +960,6 @@ class UnifiedRepliesTests(unittest.TestCase):
         # Delete the replies in forum_replies
         for cid in (cid1, cid2):
             conn.execute("DELETE FROM forum_replies WHERE legacy_source = ?", (f"work_comments:{cid}",))
-        conn.commit()
 
         # Both legacy comments are 'migrated'
         self.assertEqual(conn.execute("SELECT status FROM work_comments WHERE id = ?", (cid1,)).fetchone()["status"], "migrated")
@@ -1086,7 +1051,6 @@ class UnifiedRepliesTests(unittest.TestCase):
         conn.execute("INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES ('work', ?, ?, 'work_mirror', ?)", (w_mod_ctrl, t_mod_ctrl, now))
         conn.execute("INSERT INTO work_comments (id, work_id, author_username, author_name, text, status, time_label, created_at) VALUES ('wc_m2_mod_ctrl', ?, 'uni_reader', '读者', '旧评', 'published', '刚刚', ?)", (w_mod_ctrl, now))
 
-        conn.commit()
 
         # Run migration for w_hid and w_pau
         ret = migrate_work_comments(self.db)

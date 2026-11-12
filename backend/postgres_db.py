@@ -204,7 +204,7 @@ class PgConnection:
                 identity = True
         cur = self._db.cursor()
         try:
-            cur.execute(q, tuple(params or ()))
+            cur.execute(q, tuple(params) if params else None)
             return PgCursor(cur, returning_identity=identity)
         except BaseException as exc:
             cur.close()

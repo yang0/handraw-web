@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 import time
 import unittest
@@ -11,21 +10,22 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from backend import admin_services, post_routes, resource_discussions, server, services
+from backend import admin_services, post_routes, resource_discussions, services
+from backend.seed import ensure_seeded
 from ops import ensure_resource_topics
 from tests.maintenance_support import fill_resource_topics, migrate_asset_comments
+from tests.postgres_support import open_isolated_postgres
 
 
 class ResourceTopicVisibilityTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.db_path = Path(self.temp_dir) / "test_vis.db"
-        self._env = patch.dict(os.environ, {
+        self.temp_dir = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(os.environ, {
             "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test",
             "HANDRAW_DEMO_MODE": "1",
-        })
-        self._env.start()
-        self.db = server.init_database(self.db_path)
+        }))
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
 
         # Register users
         self.author, _ = services.register_user(self.db, "vis_author", "pass-author")
@@ -33,65 +33,35 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
         self.admin, _ = services.register_user(self.db, "vis_admin", "pass-admin")
         conn = self.db.get_conn()
         conn.execute("UPDATE users SET role = 'admin' WHERE username = 'vis_admin'")
-        conn.commit()
         self.admin = dict(conn.execute("SELECT * FROM users WHERE username = 'vis_admin'").fetchone())
 
         self._seed_preview_dataset(conn)
-
-    def tearDown(self):
-        self.db.get_conn().close()
-        self.db.close()
-        self._env.stop()
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _seed_preview_dataset(self, conn):
         """Seed dataset mirroring preview environment described in Section 0 & 6."""
         now = services.utc_now_iso()
         now_ms = int(time.time() * 1000)
 
-        # 9 community assets: USR-S01..S05, USR-L01..L04
-        for i in range(1, 6):
-            code = f"USR-S0{i}"
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO catalog_assets (
-                    code, kind, source_type, author_username, author_name, name,
-                    image_url, status, published_at_ms, created_at, updated_at
-                ) VALUES (?, 'style', 'community', 'vis_author', '社区创作者', ?, '/img/demo.png', 'published', ?, ?, ?)
-                """,
-                (code, f"社区画风 {code}", now_ms, now, now),
-            )
-        for i in range(1, 5):
-            code = f"USR-L0{i}"
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO catalog_assets (
-                    code, kind, source_type, author_username, author_name, name,
-                    image_url, status, published_at_ms, created_at, updated_at
-                ) VALUES (?, 'layout', 'community', 'vis_author', '社区创作者', ?, '/img/demo.png', 'published', ?, ?, ?)
-                """,
-                (code, f"社区图型 {code}", now_ms, now, now),
-            )
-
-        # Exclusive assets: FX-001 (style), LX-001 (layout) with yang0 as author
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO catalog_assets (
+        assets = [
+            *((f"USR-S0{i}", "style", "community", "vis_author", "社区创作者", f"社区画风 USR-S0{i}", "/img/demo.png")
+              for i in range(1, 6)),
+            *((f"USR-L0{i}", "layout", "community", "vis_author", "社区创作者", f"社区图型 USR-L0{i}", "/img/demo.png")
+              for i in range(1, 5)),
+            ("FX-001", "style", "exclusive", "yang0", "yang0", "专属水墨FX", "/img/fx.png"),
+            ("LX-001", "layout", "exclusive", "yang0", "yang0", "专属版式LX", "/img/lx.png"),
+        ]
+        conn.executemany("""
+            INSERT INTO catalog_assets (
                 code, kind, source_type, author_username, author_name, name,
                 image_url, status, published_at_ms, created_at, updated_at
-            ) VALUES ('FX-001', 'style', 'exclusive', 'yang0', 'yang0', '专属水墨FX', '/img/fx.png', 'published', ?, ?, ?)
-            """,
-            (now_ms, now, now),
-        )
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO catalog_assets (
-                code, kind, source_type, author_username, author_name, name,
-                image_url, status, published_at_ms, created_at, updated_at
-            ) VALUES ('LX-001', 'layout', 'exclusive', 'yang0', 'yang0', '专属版式LX', '/img/lx.png', 'published', ?, ?, ?)
-            """,
-            (now_ms, now, now),
-        )
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'published', ?, ?, ?)
+            ON CONFLICT (code) DO UPDATE SET
+                kind = excluded.kind, source_type = excluded.source_type,
+                author_username = excluded.author_username, author_name = excluded.author_name,
+                name = excluded.name, image_url = excluded.image_url, status = excluded.status,
+                published_at_ms = excluded.published_at_ms, created_at = excluded.created_at,
+                updated_at = excluded.updated_at
+        """, [(*asset, now_ms, now, now) for asset in assets])
 
         # 8 published comments in asset_comments (FA-001×2, SC-021×2, FX-001, IG-001, LX-001, USR-S04)
         comments = [
@@ -107,14 +77,13 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
         for cid, code, kind, text in comments:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO asset_comments (
+                INSERT INTO asset_comments (
                     id, asset_code, asset_kind, author_username, author_name, text,
                     status, time_label, created_at
                 ) VALUES (?, ?, ?, 'vis_reader', '读者', ?, 'published', '刚刚', ?)
                 """,
                 (cid, code, kind, text, now),
             )
-        conn.commit()
 
     def test_01_backfill_mapping_counts_and_manifest(self):
         """1. Backfill mapping count and manifest generation."""
@@ -157,7 +126,6 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
         migrate_asset_comments(self.db)
 
         # Check migrated rows in forum_replies
-        conn.commit()
         migrated = conn.execute(
             "SELECT COUNT(*) FROM forum_replies WHERE legacy_source LIKE 'asset_comments:%'"
         ).fetchone()[0]
@@ -281,7 +249,6 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
 
         # Moment 3: Admin hides the reply -> disappears from public boot; direct link still resolves
         conn.execute("UPDATE forum_replies SET status = 'hidden' WHERE id = ?", (reply_id,))
-        conn.commit()
 
         boot3 = services.build_boot_payload(self.db, None)
         self.assertNotIn(fb041_tid, {t["id"] for t in boot3["topics"]})
@@ -311,7 +278,6 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
             """,
             (fb041_tid, now),
         )
-        conn.commit()
 
         # Public boot hides FB-041
         boot = services.build_boot_payload(self.db, None)
@@ -342,7 +308,8 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
             "author_username": "yang0",
             "author_name": "yang0",
         }
-        tid_ex = resource_discussions.ensure_topic(conn, "style", "FX-999", res_exclusive)
+        with self.db.transaction() as tx:
+            tid_ex = resource_discussions.ensure_topic(tx, "style", "FX-999", res_exclusive)
         topic_ex = dict(conn.execute("SELECT * FROM forum_topics WHERE id = ?", (tid_ex,)).fetchone())
         self.assertEqual(topic_ex["author_username"], "", "Exclusive asset topic must have empty author_username")
         self.assertEqual(topic_ex["author_name"], "资源讨论", "Exclusive asset topic must have author_name='资源讨论'")
@@ -354,7 +321,8 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
             "author_username": "yang0",
             "author_name": "yang0",
         }
-        tid_ov = resource_discussions.ensure_topic(conn, "style", "OV-999", res_override)
+        with self.db.transaction() as tx:
+            tid_ov = resource_discussions.ensure_topic(tx, "style", "OV-999", res_override)
         topic_ov = dict(conn.execute("SELECT * FROM forum_topics WHERE id = ?", (tid_ov,)).fetchone())
         self.assertEqual(topic_ov["author_username"], "", "Official override topic must have empty author_username")
         self.assertEqual(topic_ov["author_name"], "资源讨论")
@@ -409,11 +377,11 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
             (now_ms, now, now),
         )
         # Ensure a topic mapping exists for w_draft to test suppression
-        tid_draft = resource_discussions.ensure_topic(
-            conn, 'work', 'w_draft',
-            {'title': '草稿作品', 'images_json': '["/img/w3.png"]'}
-        )
-        conn.commit()
+        with self.db.transaction() as tx:
+            tid_draft = resource_discussions.ensure_topic(
+                tx, 'work', 'w_draft',
+                {'title': '草稿作品', 'images_json': '["/img/w3.png"]'},
+            )
 
         # Run ensure_resource_topics
         fill_resource_topics(self.db)
@@ -451,7 +419,7 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
             # Insert custom community asset (not in seed_ids)
             conn.execute(
                 """
-                INSERT OR REPLACE INTO catalog_assets (
+                INSERT INTO catalog_assets (
                     code, kind, source_type, author_username, author_name, name,
                     image_url, status, published_at_ms, created_at, updated_at
                 ) VALUES ('PROD-S01', 'style', 'community', 'vis_author', '社区创作者', '生产社区画风',
@@ -459,11 +427,11 @@ class ResourceTopicVisibilityTests(unittest.TestCase):
                 """,
                 (now_ms, now, now),
             )
-            tid = resource_discussions.ensure_topic(
-                conn, "style", "PROD-S01",
-                {"name": "生产社区画风", "source_type": "community", "author_username": "vis_author", "author_name": "社区创作者"}
-            )
-            conn.commit()
+            with self.db.transaction() as tx:
+                tid = resource_discussions.ensure_topic(
+                    tx, "style", "PROD-S01",
+                    {"name": "生产社区画风", "source_type": "community", "author_username": "vis_author", "author_name": "社区创作者"},
+                )
 
             boot = services.build_boot_payload(self.db, None)
             boot_tids = {t["id"] for t in boot.get("topics", [])}

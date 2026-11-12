@@ -3,21 +3,14 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
-from backend import server
 from backend.services import build_boot_payload
 from ops import seed_starter_library
+from tests.postgres_support import open_isolated_postgres
 
 class StarterLibraryTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "starter.db")
-
-    def tearDown(self):
-        self.db.get_conn().close()
-        self.db.close()
-        self.temp.cleanup()
+        self.db = open_isolated_postgres(self)
 
     def test_plan_uses_generated_illustrations_and_known_resources(self):
         plan = seed_starter_library.build_plan(self.db)

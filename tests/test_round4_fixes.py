@@ -4,10 +4,7 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
-from backend import server
 from backend.admin_services import admin_moderate_work, admin_resolve_report
 from backend.services import (
     build_boot_payload,
@@ -18,31 +15,24 @@ from backend.services import (
     submit_abuse_report,
 )
 
+from tests.postgres_support import open_isolated_postgres
+
 IMG = "/images/individual/FA/FA-013.webp"
 
 
 class _Base(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
-        self.temp = TemporaryDirectory()
-        self.path = Path(self.temp.name) / "db.sqlite"
-        self.db = server.init_database(self.path)
+        self.db = open_isolated_postgres(self)
         self.author, _ = register_user(self.db, "g_author", "password-a")
         register_user(self.db, "g_admin", "password-admin")
         self.db.get_conn().execute("UPDATE users SET role = 'admin' WHERE username = 'g_admin'")
-        self.db.get_conn().commit()
         self.admin = dict(
             self.db.get_conn().execute("SELECT * FROM users WHERE username = 'g_admin'").fetchone()
         )
         self.work = publish_user_work(
             self.db, self.author, {"title": "治理作品", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
         )
-
-    def tearDown(self):
-        self.db.close_thread_conn()
-        self.db.get_conn().close()
-        self.db.close()
-        self.temp.cleanup()
 
     def _statuses(self):
         work = self.db.get_conn().execute(
@@ -216,23 +206,16 @@ class RotationRevokesSessionsTests(unittest.TestCase):
     def test_rotation_drops_live_sessions(self):
         from ops import rotate_starter_credentials as rot
 
-        with TemporaryDirectory() as tmp:
-            db = server.init_database(Path(tmp) / "rot2.db")
-            try:
-                user, _ = register_user(db, "linnan", "handraw-starter-2026")
-                db.get_conn().execute(
-                    "INSERT INTO sessions (token, user_id, user_agent, ip_addr, expires_at, created_at) VALUES (?,?,?,?,?,?)",
-                    ("tok-old", user["id"], "ua", "127.0.0.1", 9999999999, "2026-01-01T00:00:00Z"),
-                )
-                db.get_conn().commit()
-                todo = rot.plan(db)
-                rot.apply(db, todo)
-                remaining = db.get_conn().execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-                self.assertEqual(remaining, 0, "rotating credentials must invalidate live sessions")
-            finally:
-                db.close_thread_conn()
-                db.get_conn().close()
-                db.close()
+        db = open_isolated_postgres(self)
+        user, _ = register_user(db, "linnan", "handraw-starter-2026")
+        db.get_conn().execute(
+            "INSERT INTO sessions (token, user_id, user_agent, ip_addr, expires_at, created_at) VALUES (?,?,?,?,?,?)",
+            ("tok-old", user["id"], "ua", "127.0.0.1", 9999999999, "2026-01-01T00:00:00Z"),
+        )
+        todo = rot.plan(db)
+        rot.apply(db, todo)
+        remaining = db.get_conn().execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        self.assertEqual(remaining, 0, "rotating credentials must invalidate live sessions")
 
 
 if __name__ == "__main__":

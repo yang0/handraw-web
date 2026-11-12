@@ -26,6 +26,7 @@ MIGRATIONS = (
     ROOT / "backend" / "postgres_110_home_scenario_ratio.sql",
     ROOT / "backend" / "postgres_111_payment_billing.sql",
     ROOT / "backend" / "postgres_112_cold_start_registry.sql",
+    ROOT / "backend" / "postgres_113_forum_reply_notifications.sql",
 )
 
 

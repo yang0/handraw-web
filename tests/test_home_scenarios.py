@@ -4,15 +4,12 @@ from __future__ import annotations
 import io
 import json
 import os
-from pathlib import Path
-import sqlite3
-import tempfile
 import time
 from typing import Any
 import unittest
 from unittest import mock
 
-from backend.db import Database
+from backend.postgres_db import PgConnection
 from backend.home_scenarios import (
     _SCENARIOS_CACHE,
     DEFAULT_SCENARIOS,
@@ -31,10 +28,11 @@ from backend.home_scenarios import (
 )
 from backend.services import ServiceError, set_work_visibility
 from backend.works_feed import get_works_feed
+from tests.postgres_support import open_isolated_postgres
 
 
 def _insert_work(
-    conn: sqlite3.Connection,
+    conn: PgConnection,
     *,
     wid: str,
     title: str = "测试作品",
@@ -97,11 +95,10 @@ def _insert_work(
 
 class TestHomeScenarios(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_scenarios.db"
-        self.db = Database(self.db_path)
-        self.db.migrate()
+        self.enterContext(mock.patch.dict(os.environ, {"HANDRAW_REDIS_URL": "", "HANDRAW_DEMO_MODE": "0"}))
+        self.db = open_isolated_postgres(self)
         invalidate_scenarios_cache()
+        self.addCleanup(invalidate_scenarios_cache)
         self.admin_user = {
             "id": 1,
             "username": "admin_user",
@@ -131,27 +128,23 @@ class TestHomeScenarios(unittest.TestCase):
             "status": "active",
         }
 
-    def tearDown(self) -> None:
-        invalidate_scenarios_cache()
-        self.db.close_thread_conn()
-        self.db.get_conn().close()
-        self.db.close()
-        self.temp_dir.cleanup()
-
-    def test_migration_086_and_tables(self) -> None:
+    def test_native_schema_and_tables(self) -> None:
         conn = self.db.get_conn()
         tables = [
-            r["name"]
+            r["table_name"]
             for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
             ).fetchall()
         ]
         self.assertIn("home_scenarios", tables)
         self.assertIn("scenario_pinned_works", tables)
 
         cols = [
-            r["name"]
-            for r in conn.execute("PRAGMA table_info(home_scenarios)").fetchall()
+            r["column_name"]
+            for r in conn.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'home_scenarios'
+            """).fetchall()
         ]
         for expected_col in [
             "key",
@@ -191,11 +184,9 @@ class TestHomeScenarios(unittest.TestCase):
         conn.execute(
             "UPDATE home_scenarios SET title = '自定义小红书标题' WHERE key = 'xiaohongshu'"
         )
-        conn.commit()
 
         # Run post migration hook again
         seed_default_home_scenarios_hook(conn)
-        conn.commit()
 
         updated_row = conn.execute(
             "SELECT title FROM home_scenarios WHERE key = 'xiaohongshu'"
@@ -227,7 +218,6 @@ class TestHomeScenarios(unittest.TestCase):
             layout="USR-001",
             status="published",
         )
-        conn.commit()
 
         # Ecommerce rules search keywords including "结构"
         ec_rules = next(s["match_rules"] for s in DEFAULT_SCENARIOS if s["key"] == "ecommerce")
@@ -273,7 +263,6 @@ class TestHomeScenarios(unittest.TestCase):
             ratio="3:4",
             status="published",
         )
-        conn.commit()
 
         # 1. Unpinned: w_cross_1 is claimed by the first scenario (xiaohongshu, sort_order 10)
         # and should not appear in subsequent scenarios (gzh_inline, sort_order 20, etc.)
@@ -290,7 +279,6 @@ class TestHomeScenarios(unittest.TestCase):
         conn.execute(
             "INSERT INTO scenario_pinned_works (scenario_key, work_id, sort_order, created_at) VALUES ('gzh_inline', 'w_cross_1', 10, '2026-11-04T10:00:00Z')"
         )
-        conn.commit()
 
         data2, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
         xhs = next(it for it in data2["items"] if it["key"] == "xiaohongshu")
@@ -324,7 +312,6 @@ class TestHomeScenarios(unittest.TestCase):
                 status="published",
                 likes=i * 5,
             )
-        conn.commit()
 
         # Call with date_key
         data1, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
@@ -390,7 +377,6 @@ class TestHomeScenarios(unittest.TestCase):
             status="published",
             images=[],
         )
-        conn.commit()
 
         # Pin the hidden work and published work to xiaohongshu
         conn.execute(
@@ -399,7 +385,6 @@ class TestHomeScenarios(unittest.TestCase):
         conn.execute(
             "INSERT INTO scenario_pinned_works (scenario_key, work_id, sort_order, created_at) VALUES ('xiaohongshu', 'w_pub_1', 2, '2026-11-04T10:00:00Z')"
         )
-        conn.commit()
 
         data, etag = get_public_home_scenarios(self.db, date_key="2026-11-04")
         self.assertTrue(data["ok"])
@@ -415,7 +400,6 @@ class TestHomeScenarios(unittest.TestCase):
         self.assertNotIn("w_empty_img", sample_ids)
 
     def test_cache_ttl_and_single_entry(self) -> None:
-        self.enterContext(mock.patch.dict(os.environ, {"HANDRAW_REDIS_URL": ""}))
         conn = self.db.get_conn()
         _insert_work(
             conn,
@@ -425,7 +409,6 @@ class TestHomeScenarios(unittest.TestCase):
             ratio="3:4",
             status="published",
         )
-        conn.commit()
 
         # Call with date 1
         d1, etag1 = get_public_home_scenarios(self.db, date_key="2026-11-04")
@@ -446,7 +429,6 @@ class TestHomeScenarios(unittest.TestCase):
 
         # Modifying work title
         conn.execute("UPDATE works SET title = '新修改的标题' WHERE id = 'w_cache_ttl'")
-        conn.commit()
 
         # Calling again re-evaluates because TTL expired
         d3, etag3 = get_public_home_scenarios(self.db, date_key="2026-11-05")
@@ -465,7 +447,6 @@ class TestHomeScenarios(unittest.TestCase):
             layout="SB-002",
             status="published",
         )
-        conn.commit()
 
         d1, _ = get_public_home_scenarios(self.db, date_key="2026-11-04")
         comic1 = next(it for it in d1["items"] if it["key"] == "comic_4panel")
@@ -553,7 +534,6 @@ class TestHomeScenarios(unittest.TestCase):
             status="published",
             images=["/img/ig.png"],
         )
-        conn.commit()
 
         comic_feed = get_works_feed(self.db, {"scenario": "comic_4panel"})
         comic_ids = [w["id"] for w in comic_feed["items"]]
@@ -620,7 +600,6 @@ class TestHomeScenarios(unittest.TestCase):
             "INSERT INTO users (id, username, display_name, password_hash, invite_code, role, status, created_at) VALUES (?, ?, ?, 'h', ?, ?, 'active', ?)",
             (1, "yang0", "Yang", "inv_yang0", "admin", "2026-11-04T10:00:00Z"),
         )
-        conn.commit()
         seed_default_home_scenarios_hook(conn)
 
         img_url = "/generated/seed_sample_comic_4panel_1_0.png"
@@ -687,7 +666,6 @@ class TestHomeScenarios(unittest.TestCase):
             "INSERT INTO users (id, username, display_name, password_hash, invite_code, role, status, created_at) VALUES (?, ?, ?, 'h', ?, ?, 'active', ?)",
             (1, "yang0", "Yang", "inv_yang0", "admin", "2026-11-04T10:00:00Z"),
         )
-        conn.commit()
         seed_default_home_scenarios_hook(conn)
 
         img_url = "/generated/seed_sample_comic_4panel_1_0.png"
@@ -724,7 +702,6 @@ class TestHomeScenarios(unittest.TestCase):
             "INSERT INTO users (id, username, display_name, password_hash, invite_code, role, status, created_at) VALUES (?, ?, ?, 'h', ?, ?, 'active', ?)",
             (1, "yang0", "Yang", "inv_yang0", "admin", "2026-11-04T10:00:00Z"),
         )
-        conn.commit()
         seed_default_home_scenarios_hook(conn)
 
         # Simulate work 48fa481b: published direct, then failed at FK, user hid it
@@ -742,7 +719,6 @@ class TestHomeScenarios(unittest.TestCase):
         conn.execute(
             "UPDATE works SET request_id = 'seed_sample_comic_4panel_1' WHERE id = '48fa481b-9f24-4748-b69a-27c39836d630'"
         )
-        conn.commit()
 
         # Run script with max_total_generations=0 (no new images generated)
         from ops.seed_scenario_samples import run_seed_scenario_samples
