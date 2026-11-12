@@ -14029,51 +14029,7 @@
       builtArticleTitle = built.articleTitle;
       builtMarkdown = built.markdown;
 
-      const oldCards = Array.isArray(target.art?.cards) ? target.art.cards : [];
-      const newCards = Array.isArray(built.cards) ? built.cards : [];
-      const consumed = new Set();
-
-      matchedCards = newCards.map((card, idx) => {
-        const role = card.role;
-        let hit = null;
-
-        if (role === "cover") {
-          hit = oldCards.find((o) => o.role === "cover" && !consumed.has(o));
-        } else {
-          const afterBlockIdx = card.afterBlockIdx;
-          const cardTitle = card.title;
-          hit = oldCards.find((o) => {
-            if (consumed.has(o)) return false;
-            if (o.role !== role) return false;
-            if (o.title !== cardTitle) return false;
-            if (afterBlockIdx != null && o.afterBlockIdx != null) {
-              return o.afterBlockIdx === afterBlockIdx;
-            }
-            return true;
-          });
-          if (!hit) {
-            hit = oldCards.find((o) =>
-              !consumed.has(o) &&
-              o.role === role &&
-              o.title === cardTitle &&
-              o.section === card.section
-            );
-          }
-        }
-
-        if (!hit) return card;
-        consumed.add(hit);
-
-        const merged = Object.assign({}, card);
-        if (hit.id != null) merged.id = hit.id;
-        if (hit.imageUrl != null) merged.imageUrl = hit.imageUrl;
-        if (hit.status != null) merged.status = hit.status;
-        if (hit.promptCustomized === true && hit.prompt != null) {
-          merged.promptCustomized = true;
-          merged.prompt = hit.prompt;
-        }
-        return merged;
-      });
+      matchedCards = E.reconcileArticlePlan(built.cards, target.art?.cards).cards;
     }
 
     const planNode = target.planNode;

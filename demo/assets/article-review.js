@@ -4,7 +4,8 @@
   const esc = (v)=>String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const purpose = (c)=>String(c.purpose||"").trim() || (c.role==="cover" ? "为整篇文章建立视觉主题" : "辅助理解这一段的核心内容");
   function reviewPlan(cards, meta={}) {
-    const list = Array.isArray(cards) ? cards : [];
+    const reconciled=global.HANDRAW_CANVAS_ENGINE.reconcileArticlePlan(cards,meta.existingCards);
+    const list=reconciled.cards,retained=new Set(reconciled.retainedIds);
     if (!list.length) return Promise.resolve({approved:false,cards:[]});
     return new Promise((resolve)=>{
       const overlay=document.createElement("div");
@@ -20,7 +21,8 @@
         <div class="hw-art-review-list" role="group" aria-label="选择需要应用的配图建议">
           ${list.map((c,i)=>`<label class="hw-art-review-choice">
             <input type="checkbox" data-art-review-check="${i}" checked />
-            <span class="hw-art-review-main"><strong>${esc(c.role==="cover"?"封面":c.title||"正文插图 "+i)}</strong>
+            <span class="hw-art-review-main"><strong>${esc(c.role==="cover"?"封面":c.title||"正文插图 "+i)}${retained.has(c.id)?" · 保留原图位":""}</strong>
+            ${c.imageUrl?`<small>已保留采用图片${retained.has(c.id)?"；未匹配到新建议，取消勾选才会移除":""}</small>`:retained.has(c.id)?"<small>未匹配到新建议，默认保留；取消勾选才会移除</small>":""}
             <small>${esc(c.role==="cover"?"文章开头":c.anchorText?"位于「"+c.anchorText+"」之后":"正文第 "+((Number(c.afterBlockIdx)||0)+1)+" 段之后")}</small>
             <span class="hw-art-review-purpose"><b>推荐理由</b> ${esc(purpose(c))}</span>
             <span class="hw-art-review-subject"><b>画面建议</b> ${esc(c.subject||"待调整")}</span>
@@ -37,8 +39,8 @@
       const summary=overlay.querySelector(".hw-art-review-summary");
       function update(){
         const count=checks().filter(x=>x.checked).length;
-        summary.textContent=`已选 ${count} / ${list.length} 张 · 不会在此步骤扣除生图费用`;
-        apply.disabled=count===0;
+        summary.textContent=`已选 ${count} / ${list.length} 张 · 最多 200 个图位 · 不会在此步骤扣除生图费用`;
+        apply.disabled=count===0||count>200;
       }
       function finish(approved) {
         if(settled)return;

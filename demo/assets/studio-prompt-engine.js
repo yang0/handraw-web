@@ -1919,6 +1919,40 @@
     });
   }
 
+  function reconcileArticlePlan(proposed, existing) {
+    const copy=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
+    const old=(Array.isArray(existing)?existing:[]).filter(c=>c&&typeof c==="object");
+    const suggestions=(Array.isArray(proposed)?proposed:[]).filter(c=>c&&typeof c==="object");
+    const role=card=>card.role==="cover"?"cover":"inline";
+    const normalize=value=>String(value||"").replace(/^#+\s*/,"").replace(/\s+/g," ").trim();
+    const anchors=card=>new Set([card.anchorText,card.anchorHeading].map(normalize).filter(Boolean));
+    const sameAnchor=(a,b)=>[...anchors(a)].some(value=>anchors(b).has(value));
+    const consumed=new Set(),usedIds=new Set();
+    const preserve=["imageUrl","status","errorText","errorMsg","taskId","requestId","genId","batchId","batchIndex","batchTotal",
+      "variants","_genCount","selectedMediaId","illustrationId","activeAttemptId","resultEpoch","generationMode","demoMode",
+      "style1","style2","layoutId","layout","ratio","refImages","mode","colors","tones","moods","whitespace"];
+    const cards=suggestions.map(card=>{
+      let matches=old.filter(o=>!consumed.has(o)&&role(o)===role(card)&&card.id&&o.id===card.id);
+      if(!matches.length && role(card)==="cover" && suggestions.filter(c=>role(c)==="cover").length===1)
+        matches=old.filter(o=>!consumed.has(o)&&role(o)==="cover");
+      if(!matches.length && anchors(card).size) {
+        matches=old.filter(o=>!consumed.has(o)&&role(o)===role(card)&&sameAnchor(o,card));
+        if(matches.length===1 && suggestions.filter(c=>role(c)===role(card)&&sameAnchor(c,matches[0])).length!==1) matches=[];
+      }
+      const hit=matches.length===1?matches[0]:null;
+      const merged=copy(hit?{...hit,...card}:card);
+      if(hit) {
+        consumed.add(hit);merged.id=hit.id;
+        for(const key of preserve) if(Object.prototype.hasOwnProperty.call(hit,key)) merged[key]=copy(hit[key]);
+        if(hit.promptCustomized===true) {merged.promptCustomized=true;merged.prompt=hit.prompt;}
+      }
+      if(!merged.id || usedIds.has(merged.id) || (!hit&&old.some(o=>o.id===merged.id))) merged.id=uid("pcard");
+      usedIds.add(merged.id);return merged;
+    });
+    const retained=old.filter(card=>!consumed.has(card));
+    return {cards:[...cards,...retained.map(copy)],retainedIds:retained.map(card=>card.id)};
+  }
+
   function convertLegacyCanvas(graph, catalog) {
     const source=JSON.parse(JSON.stringify(graph || {}));
     if(!Array.isArray(source.nodes)||!Array.isArray(source.edges)) throw new Error("存档格式不完整，可先导出原文件");
@@ -2478,6 +2512,7 @@
     buildArticlePlanFromAi,
     buildArticleDocument,
     buildArticleDocumentFromAi,
+    reconcileArticlePlan,
     convertLegacyCanvas,
     buildEditorSegments,
     createBlueprintGraph,
