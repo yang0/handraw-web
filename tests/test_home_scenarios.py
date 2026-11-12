@@ -622,10 +622,13 @@ class TestHomeScenarios(unittest.TestCase):
         seed_default_home_scenarios_hook(conn)
 
         img_url = "/generated/seed_sample_comic_4panel_1_0.png"
-        with mock.patch("ops.seed_scenario_samples.generate_and_cache_sample_image", return_value=img_url):
+        with (
+            mock.patch("ops.seed_scenario_samples.compose_prompt", return_value={"prompt": "示例提示词"}),
+            mock.patch("ops.seed_scenario_samples.generate_and_cache_sample_image", return_value=img_url),
+        ):
             from ops.seed_scenario_samples import run_seed_scenario_samples
             res = run_seed_scenario_samples(
-                self.db_path,
+                self.db,
                 author_username="yang0",
                 scenario_filter="comic_4panel",
                 max_total_generations=1,
@@ -686,12 +689,15 @@ class TestHomeScenarios(unittest.TestCase):
         seed_default_home_scenarios_hook(conn)
 
         img_url = "/generated/seed_sample_comic_4panel_1_0.png"
-        with mock.patch("ops.seed_scenario_samples.generate_and_cache_sample_image", return_value=img_url):
+        with (
+            mock.patch("ops.seed_scenario_samples.compose_prompt", return_value={"prompt": "示例提示词"}),
+            mock.patch("ops.seed_scenario_samples.generate_and_cache_sample_image", return_value=img_url),
+        ):
             with mock.patch("ops.seed_scenario_samples.grant_studio_media_public", side_effect=ServiceError("模拟授权失败", status=500)):
                 from ops.seed_scenario_samples import run_seed_scenario_samples
                 with self.assertRaises(RuntimeError) as ctx:
                     run_seed_scenario_samples(
-                        self.db_path,
+                        self.db,
                         author_username="yang0",
                         scenario_filter="comic_4panel",
                         max_total_generations=1,
@@ -739,7 +745,7 @@ class TestHomeScenarios(unittest.TestCase):
         # Run script with max_total_generations=0 (no new images generated)
         from ops.seed_scenario_samples import run_seed_scenario_samples
         res = run_seed_scenario_samples(
-            self.db_path,
+            self.db,
             author_username="yang0",
             scenario_filter="comic_4panel",
             max_total_generations=0,

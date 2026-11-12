@@ -10,17 +10,17 @@ Per requirements:
 - Reuses existing image generation calling code (backend.server.gateway_request, download_and_cache_generated_image).
 - Configuration read from HANDRAW_IMAGE_CONFIG / HANDRAW_AI_CONFIG.
 - Publishes via backend.curation.publish_work_direct with admin account.
-- CLI arguments: --db (required), --dry-run, --scenario, --max.
+- CLI reads HANDRAW_DATABASE_URL and previews by default. Use --apply to publish.
 - Idempotent: does not regenerate existing works (keyed by requestId).
 """
 from __future__ import annotations
 
-import argparse
 from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
+from typing import Any, Mapping
 import sys
 import time
 import urllib.parse
@@ -62,7 +62,7 @@ def ensure_env_configs() -> None:
 ensure_env_configs()
 
 from backend.curation import publish_work_direct
-from backend.db import Database
+from backend.postgres_db import PostgresDatabase
 from backend.home_scenarios import (
     DEFAULT_SCENARIOS,
     admin_pin_scenario_work,
@@ -78,6 +78,7 @@ from backend.server import (
 from backend.services import _seed_filter, grant_studio_media_public, set_work_visibility
 from backend.skill_prompt import compose_prompt
 from backend.works_feed import is_valid_work_row
+from ops.postgres_maintenance import backup_before_change, configure_transaction, maintenance_database, maintenance_parser
 
 SCENARIO_SAMPLE_PRESETS: dict[str, list[dict[str, Any]]] = {
     "xiaohongshu": [
@@ -291,7 +292,7 @@ SCENARIO_SAMPLE_PRESETS: dict[str, list[dict[str, Any]]] = {
 }
 
 
-def find_author_user(db: Database, username: str) -> dict[str, Any]:
+def find_author_user(db: PostgresDatabase, username: str) -> dict[str, Any]:
     """Retrieve existing active user by username, or error out. Never creates accounts."""
     clean = (username or "").strip()
     if not clean:
@@ -359,14 +360,14 @@ def generate_and_cache_sample_image(prompt_text: str, ratio: str, request_id: st
 
 
 def _ensure_scenario_work_configured(
-    db: Database,
+    db: PostgresDatabase,
     author_user: dict[str, Any],
     *,
     scenario_key: str,
     scenario_title: str,
     preset: dict[str, Any],
     req_id: str,
-    work_row: sqlite3.Row | dict[str, Any],
+    work_row: Mapping[str, Any],
     idx: int,
     dry_run: bool = False,
 ) -> list[str]:
@@ -410,7 +411,7 @@ def _ensure_scenario_work_configured(
                         error_msg, created_at, request_id
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, 'single',
-                        ?, ?, ?, '', '',
+                        ?, ?, ?, 0, '',
                         ?, 'live', 'free', 0, ?, 'success',
                         '', ?, ?
                     )
@@ -495,8 +496,8 @@ def _ensure_scenario_work_configured(
     return repaired
 
 
-def _run_seed_scenario_samples_impl(
-    db: Database,
+def run_seed_scenario_samples(
+    db: PostgresDatabase,
     author_username: str,
     dry_run: bool = False,
     scenario_filter: str | None = None,
@@ -504,7 +505,6 @@ def _run_seed_scenario_samples_impl(
     max_total_generations: int | None = None,
 ) -> dict[str, Any]:
     """Execute scenario sample seed plan on an open Database."""
-    db.migrate()
     conn = db.get_conn()
 
     author_user = find_author_user(db, author_username)
@@ -512,15 +512,26 @@ def _run_seed_scenario_samples_impl(
 
     seed_clause, seed_params = _seed_filter("w.id", "works")
 
+    scenario_clause = " AND key = ?" if scenario_filter else ""
     scenarios = conn.execute(
-        "SELECT * FROM home_scenarios WHERE is_enabled = 1 ORDER BY sort_order ASC"
+        f"SELECT * FROM home_scenarios WHERE is_enabled = 1{scenario_clause} ORDER BY sort_order",
+        (scenario_filter,) if scenario_filter else (),
     ).fetchall()
-
-    if scenario_filter:
-        scenarios = [s for s in scenarios if s["key"] == scenario_filter]
-        if not scenarios:
-            logger.warning("No scenario found with key '%s'", scenario_filter)
-            return {"ok": True, "planned": [], "executed": []}
+    request_ids = [
+        f"seed_sample_{scenario['key']}_{idx + 1}"
+        for scenario in scenarios
+        for idx in range(len(SCENARIO_SAMPLE_PRESETS.get(scenario["key"], ())))
+    ]
+    existing_works = {}
+    if request_ids:
+        placeholders = ", ".join("?" for _ in request_ids)
+        existing_works = {
+            row["request_id"]: row for row in conn.execute(
+                f"""SELECT id, title, prompt, images_json, status, request_id FROM works
+                    WHERE author_username = ? AND request_id <> '' AND request_id IN ({placeholders})""",
+                (author_user["username"], *request_ids),
+            )
+        }
 
     planned: list[dict[str, Any]] = []
     executed: list[dict[str, Any]] = []
@@ -557,10 +568,7 @@ def _run_seed_scenario_samples_impl(
             req_id = f"seed_sample_{s_key}_{idx + 1}"
 
             # 1. Check if work already exists in DB by request_id
-            existing_work = conn.execute(
-                "SELECT id, title, prompt, images_json, status FROM works WHERE request_id = ?",
-                (req_id,),
-            ).fetchone()
+            existing_work = existing_works.get(req_id)
 
             if existing_work:
                 work_id = str(existing_work["id"])
@@ -586,7 +594,7 @@ def _run_seed_scenario_samples_impl(
                             "scenarioKey": s_key,
                             "workId": work_id,
                             "requestId": req_id,
-                            "imageUrl": json.loads(existing_work["images_json"] or "[]")[0] if existing_work["images_json"] else "",
+                            "imageUrl": next(iter(json.loads(existing_work["images_json"] or "[]")), ""),
                             "title": existing_work["title"],
                             "repaired": repaired,
                         }
@@ -607,8 +615,7 @@ def _run_seed_scenario_samples_impl(
                 continue
 
             if max_total_generations is not None and total_generated >= max_total_generations:
-                logger.info("Reached max_total_generations limit (%d), stopping.", max_total_generations)
-                break
+                continue
 
             plan_item = {
                 "scenarioKey": s_key,
@@ -620,6 +627,8 @@ def _run_seed_scenario_samples_impl(
             planned.append(plan_item)
 
             if dry_run:
+                total_generated += 1
+                existing_count += 1
                 logger.info(
                     "[DRY-RUN] Would generate for '%s': title='%s', style='%s', layout='%s', reqId='%s'",
                     s_key, preset["title"], preset["style"], preset["layout"], req_id
@@ -713,7 +722,8 @@ def _run_seed_scenario_samples_impl(
                 }
             )
 
-    invalidate_scenarios_cache()
+    if not dry_run:
+        invalidate_scenarios_cache()
     return {
         "ok": True,
         "dryRun": dry_run,
@@ -724,52 +734,37 @@ def _run_seed_scenario_samples_impl(
     }
 
 
-def run_seed_scenario_samples(
-    db_path: str | Path,
-    author_username: str,
-    dry_run: bool = False,
-    scenario_filter: str | None = None,
-    max_per_scenario: int = 3,
-    max_total_generations: int | None = None,
-) -> dict[str, Any]:
-    """Execute scenario sample seed plan with safe DB lifecycle management."""
-    db = Database(str(db_path))
-    try:
-        return _run_seed_scenario_samples_impl(
-            db,
-            author_username=author_username,
-            dry_run=dry_run,
-            scenario_filter=scenario_filter,
-            max_per_scenario=max_per_scenario,
-            max_total_generations=max_total_generations,
-        )
-    finally:
-        db.close()
+def main(argv: list[str] | None = None) -> int:
+    parser = maintenance_parser("Seed sample works for home scenarios.")
+    parser.add_argument("--author", required=True, help="Existing user who will publish the samples.")
+    parser.add_argument("--dry-run", action="store_true", help="Preview generation (the default).")
+    parser.add_argument("--scenario", help="Run only for this scenario key.")
+    parser.add_argument("--max", type=int, default=3, help="Max sample works per scenario (default: 3).")
+    parser.add_argument("--max-total", type=int, help="Max total works to generate across scenarios.")
+    args = parser.parse_args(argv)
+    if args.apply and args.dry_run:
+        parser.error("Choose either --apply or --dry-run")
 
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Seed sample works for home scenarios.")
-    parser.add_argument("--db", required=True, help="Path to SQLite database file.")
-    parser.add_argument("--author", required=True, help="Username of existing user to publish samples as.")
-    parser.add_argument("--dry-run", action="store_true", help="Print generation plan without calling gateway or modifying DB.")
-    parser.add_argument("--scenario", default=None, help="Filter to run only for a specific scenario key.")
-    parser.add_argument("--max", type=int, default=3, help="Max sample works to generate per scenario (default: 3).")
-    parser.add_argument("--max-total", type=int, default=None, help="Max total works to generate across all scenarios.")
-
-    args = parser.parse_args()
-    db_path = Path(args.db).resolve()
-    if not db_path.exists():
-        logger.error("Database file not found: %s", db_path)
-        sys.exit(1)
-
-    result = run_seed_scenario_samples(
-        db_path=db_path,
-        author_username=args.author,
-        dry_run=args.dry_run,
-        scenario_filter=args.scenario,
-        max_per_scenario=args.max,
-        max_total_generations=args.max_total,
-    )
+    options = {
+        "author_username": args.author, "scenario_filter": args.scenario,
+        "max_per_scenario": args.max, "max_total_generations": args.max_total,
+    }
+    with maintenance_database(parser) as (db, dsn):
+        conn = db.get_conn()
+        if args.apply and not conn.execute("SELECT pg_try_advisory_lock(186, 194)").fetchone()[0]:
+            raise RuntimeError("Another scenario sample seeding process is active")
+        try:
+            with db.transaction() as tx:
+                configure_transaction(tx, write=False)
+                result = run_seed_scenario_samples(db, dry_run=True, **options)
+                if args.apply and (result["planned"] or result["executed"]):
+                    backup = backup_before_change(tx, dsn, args.backup_dir, "scenario-samples-before")
+                    print(f"已验证备份：{backup}")
+            if args.apply and (result["planned"] or result["executed"]):
+                result = run_seed_scenario_samples(db, **options)
+        finally:
+            if args.apply:
+                conn.execute("SELECT pg_advisory_unlock(186, 194)")
     print("\n--- SEED EXECUTION SUMMARY ---")
     print(f"Dry Run: {result['dryRun']}")
     print(f"Planned Generations: {result['plannedCount']}")
@@ -778,6 +773,8 @@ def main() -> None:
         rep = f" (repaired: {', '.join(ex['repaired'])})" if ex.get("repaired") else ""
         print(f"  [{ex['scenarioKey']}] Work: {ex['workId']}, Title: {ex['title']}, Image: {ex['imageUrl']}{rep}")
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

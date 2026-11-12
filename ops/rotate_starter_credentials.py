@@ -6,30 +6,32 @@ Api-Key minted for it.  This rotates both: the password becomes random and the
 Api-Key is reissued, invalidating anything that leaked.
 
 Usage:
-    python -X utf8 ops/rotate_starter_credentials.py --db .local/handraw_v2.db
-    python -X utf8 ops/rotate_starter_credentials.py --db .local/handraw_v2.db --apply
+    python -X utf8 ops/rotate_starter_credentials.py
+    python -X utf8 ops/rotate_starter_credentials.py --apply
 """
 from __future__ import annotations
 
-import argparse
-import json
 import secrets
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-STARTER_USERNAMES = ("linnan", "chenmo", "yuzi_art", "helan", "tangyuan")
+from ops.label_starter_accounts import STARTER_USERNAMES
+from ops.postgres_maintenance import backup_before_change, configure_transaction, maintenance_database, maintenance_parser
+from ops.starter_credentials import write_credentials
 
 
 def plan(db) -> list[dict]:
     conn = db.get_conn()
-    out = []
-    for username in STARTER_USERNAMES:
-        row = conn.execute("SELECT username FROM users WHERE username = ?", (username,)).fetchone()
-        if row:
-            out.append({"username": username})
-    return out
+    placeholders = ", ".join("?" for _ in STARTER_USERNAMES)
+    found = {
+        row["username"] for row in conn.execute(
+            f"SELECT username FROM users WHERE username IN ({placeholders})",
+            STARTER_USERNAMES,
+        )
+    }
+    return [{"username": name} for name in STARTER_USERNAMES if name in found]
 
 
 def apply(db, todo: list[dict]) -> list[dict]:
@@ -56,31 +58,20 @@ def apply(db, todo: list[dict]) -> list[dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Rotate starter account passwords and API keys.")
-    parser.add_argument("--db", required=True)
-    parser.add_argument("--apply", action="store_true")
+    parser = maintenance_parser("Rotate starter account passwords and API keys.")
     args = parser.parse_args(argv)
-
-    from backend.db import Database
-
-    db = Database(Path(args.db).resolve())
-    db.migrate()
-    try:
+    with maintenance_database(parser) as (db, dsn), db.transaction() as conn:
+        configure_transaction(conn, write=args.apply)
         todo = plan(db)
         print(f"待轮换账号：{len(todo)} 个（{', '.join(i['username'] for i in todo)}）")
-        if not args.apply:
-            print("干跑完成，未写入。加 --apply 执行。")
+        if not args.apply or not todo:
             return 0
+        backup = backup_before_change(conn, dsn, args.backup_dir, "starter-rotation-before")
+        print(f"已验证备份：{backup}")
         rotated = apply(db, todo)
-        out = Path(args.db).resolve().parent / f"starter_credentials.{Path(args.db).stem}.json"
-        out.write_text(json.dumps(rotated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"已轮换 {len(rotated)} 个账号的密码与 Api-Key，凭据写入 {out}")
-        print("请确认该文件位于 .gitignore 覆盖范围内，并在首次登录后再次修改密码。")
-        return 0
-    finally:
-        db.close_thread_conn()
-        db.get_conn().close()
-        db.close()
+        out = write_credentials(rotated)
+    print(f"已轮换 {len(rotated)} 个账号的密码与 Api-Key，凭据写入 {out}")
+    return 0
 
 
 if __name__ == "__main__":

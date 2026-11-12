@@ -13,6 +13,7 @@ from unittest.mock import patch
 from backend.resource_discussions import ensure_topic
 from backend.services import register_user
 from ops import converge_asset_comments, converge_work_comments, ensure_resource_topics, purge_publish_time_forks
+from ops import label_starter_accounts, rotate_starter_credentials, seed_scenario_samples, seed_starter_library
 from ops.postgres_backup import restore_pg_archive
 from tests.postgres_support import isolated_pg_dsn
 
@@ -25,8 +26,11 @@ class MaintenancePostgresTests(unittest.TestCase):
         self.dsn = self.enterContext(isolated_pg_dsn())
         self.db = PostgresDatabase(self.dsn)
         self.addCleanup(self.db.close)
-        self.enterContext(patch.dict(os.environ, {"HANDRAW_DATABASE_URL": self.dsn, "HANDRAW_DEMO_MODE": "0"}))
         self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.dict(os.environ, {
+            "HANDRAW_DATABASE_URL": self.dsn, "HANDRAW_DEMO_MODE": "0",
+            "HANDRAW_PRIVATE_STORAGE": str(self.directory),
+        }))
         self.conn = self.db.get_conn()
 
     def make_work(self, work_id="legacy-work", forks=0):
@@ -52,6 +56,61 @@ class MaintenancePostgresTests(unittest.TestCase):
             result = module.main(["--backup-dir", str(self.directory), *args])
         self.assertEqual(result, 0, stdout.getvalue())
         return stdout.getvalue()
+
+    def test_starter_cli_creates_labels_and_rotates_credentials(self):
+        self.run_command(seed_starter_library)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0], 0)
+        self.assertFalse(list(self.directory.iterdir()))
+        self.run_command(seed_starter_library, "--apply")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0], 5)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM works").fetchone()[0], 10)
+        self.run_command(seed_starter_library, "--apply")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM works").fetchone()[0], 10)
+        self.conn.execute("UPDATE users SET display_name = '旧展示名' WHERE username = 'linnan'")
+        self.run_command(label_starter_accounts, "--apply")
+        self.run_command(label_starter_accounts, "--apply")
+        self.assertEqual(self.conn.execute("""
+            SELECT COUNT(*) FROM users WHERE display_name LIKE ? AND role = 'user'
+        """, ("官方示例·%",)).fetchone()[0], 5)
+        self.assertEqual(len(list(self.directory.glob("starter-labels-before-*.dump"))), 1)
+
+        before = self.conn.execute("SELECT username, api_key FROM users ORDER BY username").fetchall()
+        self.assertGreater(self.conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0], 0)
+        self.run_command(rotate_starter_credentials)
+        self.assertEqual(self.conn.execute("SELECT username, api_key FROM users ORDER BY username").fetchall(), before)
+        output = self.run_command(rotate_starter_credentials, "--apply")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0], 0)
+        new_keys = {row["username"]: row["api_key"] for row in self.conn.execute("SELECT username, api_key FROM users")}
+        for row in before:
+            self.assertNotEqual(row["api_key"], new_keys[row["username"]])
+        self.assertTrue(all(key not in output for key in new_keys.values()))
+        self.assertEqual(len(list(self.directory.glob("starter_credentials.*.json"))), 2)
+
+    def test_scenario_cli_dry_run_and_apply_with_mock_image_gateway(self):
+        self.conn.execute("""
+            INSERT INTO users (username, display_name, password_hash, invite_code, role, created_at)
+            VALUES ('official', '官方', 'hash', 'official-code', 'admin', '')
+        """)
+        options = ("--author", "official", "--scenario", "comic_4panel", "--max-total", "1")
+        image = "/generated/seed_sample_comic_4panel_1_0.png"
+        with (
+            patch.object(seed_scenario_samples, "compose_prompt", return_value={"prompt": "四格示例"}),
+            patch.object(seed_scenario_samples, "generate_and_cache_sample_image", return_value=image) as gateway,
+        ):
+            self.assertIn("Planned Generations: 1", self.run_command(seed_scenario_samples, *options))
+            self.assertFalse(list(self.directory.iterdir()))
+            gateway.assert_not_called()
+            self.assertIn("Executed Generations: 1", self.run_command(seed_scenario_samples, *options, "--apply"))
+            self.run_command(seed_scenario_samples, *options, "--apply", "--max-total", "0")
+            gateway.assert_called_once()
+        row = self.conn.execute("""
+            SELECT w.status, p.scenario_key, g.media_url FROM works AS w
+            JOIN scenario_pinned_works AS p ON p.work_id = w.id
+            JOIN media_public_grants AS g ON g.target_id = w.id AND g.revoked_at IS NULL
+            WHERE w.request_id = 'seed_sample_comic_4panel_1'
+        """).fetchone()
+        self.assertEqual(tuple(row.values()), ("published", "comic_4panel", image))
+        self.assertEqual(len(list(self.directory.glob("scenario-samples-before-*.dump"))), 1)
 
     def test_work_cli_reuses_topic_and_preserves_hidden_state(self):
         self.make_work()

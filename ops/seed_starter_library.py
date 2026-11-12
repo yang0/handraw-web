@@ -10,18 +10,20 @@ all describe the same thing.  The accounts are still labelled 官方示例: thes
 official examples, not community submissions.
 
 Usage:
-    python -X utf8 ops/seed_starter_library.py --db .local/handraw_v2.db
-    python -X utf8 ops/seed_starter_library.py --db .local/handraw_v2.db --apply
+    python -X utf8 ops/seed_starter_library.py
+    python -X utf8 ops/seed_starter_library.py --apply
 """
 from __future__ import annotations
 
-import argparse
-import json
 import secrets
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+from ops.postgres_maintenance import backup_before_change, configure_transaction, is_transaction_conflict, maintenance_database, maintenance_parser
+from ops.starter_credentials import write_credentials
 
 
 def _random_password() -> str:
@@ -175,9 +177,15 @@ def build_plan(db) -> dict:
 
     conn = db.get_conn()
     plan = {"creators": [], "works": [], "skipped": []}
+    usernames = tuple(creator[0] for creator in CREATORS)
+    placeholders = ", ".join("?" for _ in usernames)
+    existing_users = {
+        row["username"] for row in conn.execute(
+            f"SELECT username FROM users WHERE username IN ({placeholders})", usernames,
+        )
+    }
     for username, display, works in CREATORS:
-        exists = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
-        plan["creators"].append({"username": username, "displayName": display, "exists": bool(exists)})
+        plan["creators"].append({"username": username, "displayName": display, "exists": username in existing_users})
         for work in works:
             image = _resolve_image(work["style"], work.get("image", ""))
             if not image:
@@ -229,22 +237,17 @@ def apply_plan(db, plan: dict) -> dict:
             publish_user_work(db, dict(row), work)
             created_works += 1
         except Exception as exc:  # noqa: BLE001 - report and continue seeding
+            if is_transaction_conflict(exc):
+                raise
             plan["skipped"].append({"title": work["title"], "reason": str(exc)[:120]})
     return {"users": created_users, "works": created_works, "credentials": credentials}
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Seed a starter library of reference examples.")
-    parser.add_argument("--db", required=True, help="Path to the SQLite database")
-    parser.add_argument("--apply", action="store_true", help="Write changes (default is a dry run)")
+    parser = maintenance_parser("Seed a starter library of reference examples.")
     args = parser.parse_args(argv)
-
-    from backend.db import Database
-
-    db_path = Path(args.db).resolve()
-    db = Database(db_path)
-    db.migrate()
-    try:
+    with maintenance_database(parser) as (db, dsn), db.transaction() as conn:
+        configure_transaction(conn, write=args.apply)
         plan = build_plan(db)
         print(f"计划创建账号 {sum(1 for c in plan['creators'] if not c['exists'])} 个，作品 {len(plan['works'])} 件")
         for work in plan["works"]:
@@ -256,19 +259,14 @@ def main(argv: list[str] | None = None) -> int:
         if not args.apply:
             print("干跑完成，未写入。加 --apply 执行。")
             return 0
+        backup = backup_before_change(conn, dsn, args.backup_dir, "starter-library-before")
+        print(f"已验证备份：{backup}")
         result = apply_plan(db, plan)
-        print(f"已创建账号 {result['users']} 个，作品 {result['works']} 件。")
-        if result.get("credentials"):
-            out = Path(args.db).resolve().parent / "starter_credentials.json"
-            out.write_text(
-                json.dumps(result["credentials"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
-            print(f"账号凭据已写入 {out}（请妥善保管并在首次登录后修改密码）")
-        return 0
-    finally:
-        db.close_thread_conn()
-        db.get_conn().close()
-        db.close()
+        out = write_credentials(result["credentials"]) if result["credentials"] else None
+    print(f"已创建账号 {result['users']} 个，处理作品 {result['works']} 件。")
+    if out:
+        print(f"账号凭据已写入 {out}")
+    return 0
 
 
 if __name__ == "__main__":

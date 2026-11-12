@@ -9,14 +9,6 @@ from backend import server
 from backend.services import build_boot_payload
 from ops import seed_starter_library
 
-# The style art is a deployment asset (gitignored, ~47 MB) copied from the
-# handraw-style package, so a clean checkout has none.  The seed tests only make
-# sense where those images are present.
-_STYLE_ART = Path(__file__).resolve().parent.parent / "images" / "individual"
-_HAS_ART = _STYLE_ART.is_dir() and any(_STYLE_ART.rglob("*.webp"))
-
-
-@unittest.skipUnless(_HAS_ART, "style art not installed in this checkout")
 class StarterLibraryTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
@@ -60,9 +52,14 @@ class StarterLibraryTests(unittest.TestCase):
             )
 
         showcase = [t for t in boot["topics"] if t.get("category") == "showcase"]
-        self.assertEqual(len(showcase), len(plan["works"]), "every work topic lands in 晒作品")
-        for topic in showcase:
-            self.assertTrue(topic.get("workId"), "a work topic must expose its work id")
+        self.assertEqual(showcase, [], "work discussions appear in the forum after their first comment")
+        topics = self.db.get_conn().execute("""
+            SELECT t.work_id, t.listed_at_ms FROM forum_topics AS t
+            JOIN curation_resource_topics AS m ON m.topic_id = t.id AND m.kind = 'work'
+            WHERE t.category = 'showcase'
+        """).fetchall()
+        self.assertEqual({row["work_id"] for row in topics}, {work["id"] for work in boot["works"]})
+        self.assertTrue(all(row["listed_at_ms"] is None for row in topics))
 
     def test_seeding_twice_does_not_duplicate(self):
         plan = seed_starter_library.build_plan(self.db)

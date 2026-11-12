@@ -94,6 +94,7 @@ python -m ops.bootstrap_postgres_v3 --apply
 # 对已有 V3 库，使用本地 pg_service.conf 选择连接，应用缺失的增量迁移。
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_110_home_scenario_ratio.sql
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_111_payment_billing.sql
+psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_112_cold_start_registry.sql
 ```
 
 服务启动前需完成 111。此前已建好支付表并登记 111 的库可直接启动，也可重复运行迁移。
@@ -125,6 +126,19 @@ python -m ops.purge_publish_time_forks
 ```
 
 `converge_asset_comments` 同时处理旧作品评论。评论复制保留可见状态与历史来源，抑制补发通知。讨论映射只规范同一编号的单条记录，重复的大小写映射保留以便核查。复刻清理按成功生成、发起人和父作品验证来源。
+
+### 3.7 种子内容与示例账号
+
+这些命令也读取 `HANDRAW_DATABASE_URL`。默认只读预览，`--apply` 在写入前验证 PostgreSQL 备份。账号种子和轮换生成的凭据保存到私有存储目录。
+
+```powershell
+python -m ops.seed_starter_library
+python -m ops.label_starter_accounts
+python -m ops.rotate_starter_credentials
+python -m ops.seed_scenario_samples --author <官方账号> --scenario comic_4panel --max-total 1
+```
+
+场景示例仅在应用阶段调用配置的模型和生图服务。冷启动内容包见 [冷启动内容管理](cold-start-operations.md)。
 
 ---
 

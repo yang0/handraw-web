@@ -19,21 +19,33 @@ def maintenance_parser(description: str) -> argparse.ArgumentParser:
 
 @contextmanager
 def maintenance_transaction(parser: argparse.ArgumentParser, *, write: bool):
-    import psycopg
-    from backend.postgres_db import PgConnection
+    with maintenance_database(parser) as (db, dsn), db.transaction() as conn:
+        configure_transaction(conn, write=write)
+        yield conn, dsn
+
+
+@contextmanager
+def maintenance_database(parser: argparse.ArgumentParser):
+    from backend.postgres_db import PostgresDatabase
 
     dsn = os.environ.get("HANDRAW_DATABASE_URL", "").strip()
     if not dsn:
         parser.error("Set HANDRAW_DATABASE_URL to the target PostgreSQL database")
-    with psycopg.connect(dsn, connect_timeout=5) as raw:
-        if write:
-            raw.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-            raw.execute("SET LOCAL lock_timeout = '5s'")
-            if not raw.execute("SELECT pg_try_advisory_xact_lock(186, 192)").fetchone()[0]:
-                raise RuntimeError("Another historical data maintenance transaction is active")
-        else:
-            raw.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        yield PgConnection(raw), dsn
+    db = PostgresDatabase(dsn)
+    try:
+        yield db, dsn
+    finally:
+        db.close()
+
+
+def configure_transaction(conn, *, write: bool):
+    if write:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        conn.execute("SET LOCAL lock_timeout = '5s'")
+        if not conn.execute("SELECT pg_try_advisory_xact_lock(186, 192)").fetchone()[0]:
+            raise RuntimeError("Another data maintenance transaction is active")
+    else:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
 
 
 def backup_before_change(conn, dsn: str, directory: Path, prefix: str) -> Path:

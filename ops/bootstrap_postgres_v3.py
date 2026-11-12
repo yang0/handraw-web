@@ -25,6 +25,7 @@ BASELINE_PATH = ROOT / "backend" / "postgres_v3_baseline.sql"
 MIGRATIONS = (
     ROOT / "backend" / "postgres_110_home_scenario_ratio.sql",
     ROOT / "backend" / "postgres_111_payment_billing.sql",
+    ROOT / "backend" / "postgres_112_cold_start_registry.sql",
 )
 
 
