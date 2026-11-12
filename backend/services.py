@@ -18,7 +18,7 @@ from typing import Any
 
 logger = logging.getLogger("backend.services")
 
-from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, resolve_gateway_model
+from .config import CONTENT_DIR, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, get_public_billing_summary, resolve_gateway_model
 from .db import Database, local_today_str, utc_now_iso
 from .seed import DEFAULT_SITE_SETTINGS, DEMO_DEFAULT_PASSWORD, is_demo_mode, is_seed_username, seed_ids
 from .runtime_policy import sanitize_media_url, sanitize_plain_text, sanitize_rich_html, env_flag
@@ -2369,6 +2369,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         grouped.setdefault(item['topicId'],[]).append(item)
     for topic in payload['topics']:
         topic['submissions']=grouped.get(topic['id'],[])
+    payload["billing"] = get_public_billing_summary()
     if current_user:
         payload['user']['reviewAccess']=review_access(db,current_user)
     return payload

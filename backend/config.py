@@ -191,3 +191,172 @@ def load_ai_config() -> dict:
         "model": os.environ.get("HANDRAW_AI_MODEL", "deepseek-v4.1-flash"),
     }
 
+
+DEFAULT_PAYMENT_PACKAGES: list[dict[str, Any]] = [
+    {
+        "id": "pack_50",
+        "title": "50 积分加油包",
+        "description": "可生成约 25 张云端高清图像，永久有效",
+        "credits": 50,
+        "price_cents": 500,
+        "price_display": "¥5",
+        "badge": "",
+        "variant_id": "",
+    },
+    {
+        "id": "pack_100",
+        "title": "100 积分加油包",
+        "description": "常用创作补充包，可生成约 50 张图像",
+        "credits": 100,
+        "price_cents": 990,
+        "price_display": "¥9.9",
+        "badge": "热销",
+        "variant_id": "",
+    },
+    {
+        "id": "pack_200",
+        "title": "200 积分加油包",
+        "description": "高性价比进阶包，可生成约 100 张图像",
+        "credits": 200,
+        "price_cents": 1900,
+        "price_display": "¥19",
+        "badge": "",
+        "variant_id": "",
+    },
+    {
+        "id": "pack_500",
+        "title": "500 积分加油包",
+        "description": "高频创作囤货包，优惠幅度最大",
+        "credits": 500,
+        "price_cents": 4500,
+        "price_display": "¥45",
+        "badge": "超值",
+        "variant_id": "",
+    },
+]
+
+
+def get_payment_config_path() -> Path:
+    return Path(os.environ.get("HANDRAW_PAYMENT_CONFIG", str(WEB_ROOT / "payment-service.json")))
+
+
+def _parse_bool_flag(raw: Any, default: bool = False) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return default
+    text = str(raw).strip().lower()
+    if text in {"1", "true", "yes", "on", "enable", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disable", "disabled"}:
+        return False
+    return default
+
+
+def load_payment_config() -> dict[str, Any]:
+    """Load Lemon Squeezy billing configuration from file and env overrides."""
+    data: dict[str, Any] = {}
+    cfg_path = get_payment_config_path()
+    if cfg_path.is_file():
+        try:
+            loaded = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            return {}
+
+    provider = str(os.environ.get("HANDRAW_PAYMENT_PROVIDER") or data.get("provider") or "lemonsqueezy").strip().lower()
+    store_id = str(os.environ.get("HANDRAW_LEMON_STORE_ID") or data.get("store_id") or "").strip()
+    api_key = str(os.environ.get("HANDRAW_LEMON_API_KEY") or data.get("api_key") or "").strip()
+    webhook_secret = str(os.environ.get("HANDRAW_LEMON_WEBHOOK_SECRET") or data.get("webhook_secret") or "").strip()
+    currency = str(os.environ.get("HANDRAW_LEMON_CURRENCY") or data.get("currency") or "CNY").strip().upper() or "CNY"
+    test_mode = _parse_bool_flag(
+        os.environ.get("HANDRAW_LEMON_TEST_MODE") if "HANDRAW_LEMON_TEST_MODE" in os.environ else data.get("test_mode"),
+        default=True,
+    )
+
+    raw_packages = data.get("packages")
+    if not isinstance(raw_packages, list):
+        raw_packages = DEFAULT_PAYMENT_PACKAGES
+
+    packages: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in raw_packages:
+        if not isinstance(item, dict):
+            continue
+        pack_id = str(item.get("id") or "").strip()
+        variant_id = str(item.get("variant_id") or "").strip()
+        try:
+            credits = int(item.get("credits") or 0)
+            price_cents = int(item.get("price_cents") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not pack_id or pack_id in seen_ids or credits <= 0 or price_cents <= 0:
+            continue
+        if variant_id.startswith("VARIANT_ID_") or not variant_id.isdigit():
+            variant_id = ""
+        seen_ids.add(pack_id)
+        packages.append(
+            {
+                "id": pack_id,
+                "title": str(item.get("title") or f"{credits} 积分加油包").strip(),
+                "description": str(item.get("description") or "").strip(),
+                "credits": credits,
+                "price_cents": price_cents,
+                "price_display": str(item.get("price_display") or f"¥{price_cents / 100:.2f}").strip(),
+                "badge": str(item.get("badge") or "").strip(),
+                "variant_id": variant_id,
+            }
+        )
+
+    active_packages = [p for p in packages if p["variant_id"]]
+    configured = bool(
+        provider == "lemonsqueezy"
+        and store_id.isdigit()
+        and api_key
+        and not api_key.startswith("YOUR_")
+        and active_packages
+    )
+    return {
+        "provider": provider,
+        "store_id": store_id,
+        "api_key": api_key,
+        "webhook_secret": webhook_secret,
+        "currency": currency,
+        "test_mode": test_mode,
+        "packages": packages,
+        "active_packages": active_packages,
+        "enabled": configured,
+    }
+
+
+def get_public_billing_summary(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return non-secret public billing configuration for frontend wallet views."""
+    resolved = load_payment_config() if cfg is None else cfg
+    if not resolved or not resolved.get("enabled"):
+        return {
+            "enabled": False,
+            "provider": str((resolved or {}).get("provider") or "lemonsqueezy"),
+            "testMode": bool((resolved or {}).get("test_mode", True)),
+            "currency": str((resolved or {}).get("currency") or "CNY"),
+            "packages": [],
+        }
+    return {
+        "enabled": True,
+        "provider": resolved["provider"],
+        "testMode": bool(resolved["test_mode"]),
+        "currency": resolved["currency"],
+        "packages": [
+            {
+                "id": p["id"],
+                "title": p["title"],
+                "description": p["description"],
+                "credits": int(p["credits"]),
+                "priceCents": int(p["price_cents"]),
+                "priceDisplay": p["price_display"],
+                "badge": p["badge"],
+            }
+            for p in resolved["active_packages"]
+        ],
+    }
+

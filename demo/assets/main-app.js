@@ -57,6 +57,13 @@
     authOnSuccess: null,
     authReturnSnapshot: null,
     walletShareItem: null,
+    walletOrders: null,
+    walletOrdersLoadedFor: "",
+    walletOrdersLoading: false,
+    walletOrdersError: "",
+    walletCheckoutPackId: "",
+    pendingPaymentSync: null,
+    walletSyncBusy: false,
     navHistoryDepth: 0
   };
 
@@ -255,6 +262,20 @@
       App.view = view;
     } else {
       App.view = !view && p.get("q") ? "styles" : "discover";
+    }
+
+    if (App.view === "wallet") {
+      const ordId = (p.get("order") || "").trim();
+      if (/^ord_[a-zA-Z0-9_-]{8,64}$/.test(ordId)) {
+        const rawLsOrder = (p.get("ls_order") || "").trim();
+        const rawLsIdent = (p.get("ls_ident") || "").trim();
+        UI.pendingPaymentSync = {
+          orderId: ordId,
+          providerOrderId: /^\d{1,24}$/.test(rawLsOrder) ? rawLsOrder : "",
+          providerOrderIdentifier: /^[a-zA-Z0-9-]{8,80}$/.test(rawLsIdent) ? rawLsIdent : "",
+          autoAttempted: false,
+        };
+      }
     }
 
     if (p.get("filterAsset")) {
@@ -3257,11 +3278,175 @@
   /* ======================== 3. CREDITS WALLET & FLYWHEEL CENTER ======================== */
   function renderWalletCenter(root) {
     if (!App.state.loggedIn) {
-      openAuthPage("登录后即可查看积分钱包、签到领额度与管理已授权设备", () => switchView("wallet"));
+      openAuthPage("登录后即可查看积分钱包、签到领额度与在线充值积分", () => switchView("wallet"));
       return;
     }
     const s = App.state;
     const shareTarget = UI.walletShareItem;
+    const billing = s.billing || {};
+    const packages = billing.enabled && Array.isArray(billing.packages) ? billing.packages : [];
+    const curUser = s.user?.username || "";
+
+    async function fetchWalletOrders(force = false) {
+      if (!s.serverBacked || !curUser) return;
+      if (UI.walletOrdersLoading) return;
+      if (!force && UI.walletOrdersLoadedFor === curUser && Array.isArray(UI.walletOrders)) return;
+      UI.walletOrdersLoading = true;
+      UI.walletOrdersError = "";
+      try {
+        const res = await S.apiJson("/api/billing/orders");
+        UI.walletOrders = Array.isArray(res.orders) ? res.orders : [];
+        UI.walletOrdersLoadedFor = curUser;
+      } catch (err) {
+        UI.walletOrdersError = (err && err.message) || "加载订单失败";
+      } finally {
+        UI.walletOrdersLoading = false;
+        if (App.view === "wallet") renderMain();
+      }
+    }
+
+    async function syncOrderStatus(syncInfo, { quiet = false } = {}) {
+      if (!s.serverBacked || !syncInfo || !syncInfo.orderId || UI.walletSyncBusy) return;
+      UI.walletSyncBusy = true;
+      try {
+        const res = await S.apiJson(`/api/billing/orders/${encodeURIComponent(syncInfo.orderId)}/sync`, {
+          method: "POST",
+          body: {
+            providerOrderId: syncInfo.providerOrderId || "",
+            providerOrderIdentifier: syncInfo.providerOrderIdentifier || "",
+          },
+        });
+        if (res && res.order && res.order.status === "paid") {
+          UI.pendingPaymentSync = null;
+          UI.walletOrdersLoadedFor = "";
+          syncUrl(false);
+          await S.refreshFromServer();
+          toast(res.applied ? `💎 在线充值已到账 +${res.order.credits}✦！当前可用 ${res.credits}✦` : `✅ 该订单已入账（当前可用 ${res.credits}✦）`);
+        } else if (!quiet) {
+          toast("订单暂未完成付款或正在等待 Webhook 回执，稍后可点击刷新");
+        }
+        await fetchWalletOrders(true);
+      } catch (err) {
+        if (!quiet) toast(`同步订单状态失败：${err.message}`);
+      } finally {
+        UI.walletSyncBusy = false;
+        if (App.view === "wallet") renderMain();
+      }
+    }
+
+    if (s.serverBacked && billing.enabled && UI.walletOrdersLoadedFor !== curUser && !UI.walletOrdersLoading) {
+      fetchWalletOrders(false);
+    }
+    if (s.serverBacked && UI.pendingPaymentSync && !UI.pendingPaymentSync.autoAttempted) {
+      UI.pendingPaymentSync.autoAttempted = true;
+      syncOrderStatus(UI.pendingPaymentSync, { quiet: false });
+    }
+
+    const headerActionHtml = s.demoMode
+      ? `<button type="button" class="btn" data-topup="50">演示积分充值（不涉及付款）</button>`
+      : packages.length
+      ? `<a class="btn btn-primary" href="#wallet-recharge-section">立即充值积分</a>`
+      : `<span class="hw-wallet-payment-status">现金充值暂未开放，可通过签到、活动兑换与社区贡献获得积分。</span>`;
+
+    const orderStatusMeta = {
+      paid: { cls: "is-paid", label: "已到账" },
+      pending: { cls: "is-pending", label: "待支付" },
+      failed: { cls: "is-failed", label: "已失败" },
+      refunded: { cls: "is-refunded", label: "已退款" },
+    };
+
+    const billingSectionHtml = packages.length
+      ? `
+        <div class="studio-step-card" id="wallet-recharge-section" style="margin-bottom:18px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <div>
+              <h3 style="margin:0;font-size:17px;">💎 在线积分充值</h3>
+              <p style="margin:4px 0 0;font-size:12.8px;color:var(--ink-muted);">
+                通过 Lemon Squeezy 安全收银台付款，支付完成后积分自动入账${billing.testMode ? "（当前处于 Test Mode 测试环境，仅用于联调测试）" : ""}。
+              </p>
+            </div>
+            ${billing.testMode ? `<span class="hw-order-status is-pending">Test Mode</span>` : ""}
+          </div>
+          ${
+            UI.pendingPaymentSync
+              ? `<div style="margin-top:12px;padding:10px 12px;border-radius:8px;background:rgba(184,134,11,0.1);font-size:13px;">
+                   ${UI.walletSyncBusy ? "⏳ 正在核验订单支付状态…" : `订单 <code>${esc(UI.pendingPaymentSync.orderId)}</code> 待确认入账，如刚完成支付可点击下方刷新按钮。`}
+                 </div>`
+              : ""
+          }
+          <div class="hw-billing-grid">
+            ${packages
+              .map((pkg) => {
+                const busy = UI.walletCheckoutPackId === pkg.id;
+                return `
+                  <div class="hw-billing-card">
+                    ${pkg.badge ? `<span class="hw-billing-badge">${esc(pkg.badge)}</span>` : ""}
+                    <div style="font-size:13px;font-weight:700;color:var(--ink-muted);">${esc(pkg.title)}</div>
+                    <div class="hw-billing-credits">+${pkg.credits} ✦</div>
+                    <div style="font-size:12.5px;color:var(--ink-muted);min-height:34px;">${esc(pkg.description || "")}</div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px;">
+                      <span class="hw-billing-price">${esc(pkg.priceDisplay)}</span>
+                      <button type="button" class="btn btn-sm btn-primary" data-billing-pack="${esc(pkg.id)}" ${busy ? "disabled" : ""}>
+                        ${busy ? "创建订单…" : "立即充值"}
+                      </button>
+                    </div>
+                  </div>
+                `;
+              })
+              .join("")}
+          </div>
+        </div>
+      `
+      : "";
+
+    const ordersList = Array.isArray(UI.walletOrders) ? UI.walletOrders : [];
+    const ordersSectionHtml = packages.length
+      ? `
+        <div class="studio-step-card" id="wallet-orders-section" style="margin-bottom:20px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+            <h3 style="margin:0;font-size:16px;">🧾 充值订单记录</h3>
+            <button type="button" class="btn btn-sm" id="wallet-btn-refresh-orders" ${UI.walletOrdersLoading ? "disabled" : ""}>
+              ${UI.walletOrdersLoading ? "刷新中…" : "刷新订单状态"}
+            </button>
+          </div>
+          ${
+            UI.walletOrdersError
+              ? `<div style="font-size:13px;color:var(--vermilion);">${esc(UI.walletOrdersError)}</div>`
+              : !ordersList.length
+              ? `<div style="font-size:13px;color:var(--ink-muted);">暂无充值订单记录。</div>`
+              : `<div class="hw-order-list">
+                  ${ordersList
+                    .map((ord) => {
+                      const sm = orderStatusMeta[ord.status] || { cls: "is-pending", label: ord.status };
+                      const amtText = `¥${(Number(ord.amountCents || 0) / 100).toFixed(2).replace(/\.00$/, "")}`;
+                      return `
+                        <div class="hw-order-row">
+                          <div style="min-width:0;">
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                              <strong>+${ord.credits} ✦ 积分</strong>
+                              <span>${esc(amtText)}</span>
+                              <span class="hw-order-status ${sm.cls}">${esc(sm.label)}</span>
+                            </div>
+                            <div style="font-size:12px;color:var(--ink-muted);margin-top:4px;word-break:break-all;">
+                              单号：<code>${esc(ord.id)}</code> · ${esc(String(ord.createdAt || "").slice(0, 19).replace("T", " "))}
+                            </div>
+                          </div>
+                          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            ${
+                              ord.status === "pending" && ord.checkoutUrl
+                                ? `<a class="btn btn-sm btn-primary" href="${esc(ord.checkoutUrl)}" target="_blank" rel="noopener">去支付</a>`
+                                : ""
+                            }
+                          </div>
+                        </div>
+                      `;
+                    })
+                    .join("")}
+                </div>`
+          }
+        </div>
+      `
+      : "";
 
     root.innerHTML = `
       <section class="hw-editorial-strip">
@@ -3271,7 +3456,7 @@
           <p class="hw-editorial-sub">今日免费云端生图额度：<strong>${s.freeQuotaRemaining} / ${s.freeQuotaMax} 次</strong> · 积分在主站、在线创作台与定制论坛实时互通。</p>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          ${s.demoMode ? `<button type="button" class="btn" data-topup="50">演示积分充值（不涉及付款）</button>` : `<span class="hw-wallet-payment-status">现金充值暂未开放，可通过签到、活动兑换与社区贡献获得积分。</span>`}
+          ${headerActionHtml}
         </div>
       </section>
 
@@ -3280,6 +3465,9 @@
           ? `<div style="margin-bottom:18px;">${S.renderInlineSharePanelHtml(shareTarget.itemType || "style", shareTarget.item)}</div>`
           : ""
       }
+
+      ${billingSectionHtml}
+      ${ordersSectionHtml}
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px;margin-bottom:20px;">
         <div class="studio-step-card" style="margin:0;">
@@ -3351,6 +3539,45 @@
         UI.walletShareItem = null;
         renderMain();
       });
+    }
+
+    root.querySelectorAll("[data-billing-pack]").forEach((btn) => {
+      btn.onclick = async () => {
+        const packId = btn.getAttribute("data-billing-pack");
+        if (!packId || UI.walletCheckoutPackId) return;
+        UI.walletCheckoutPackId = packId;
+        renderMain();
+        try {
+          const res = await S.apiJson("/api/billing/checkout", {
+            method: "POST",
+            body: { packId },
+          });
+          UI.walletOrdersLoadedFor = "";
+          if (res && res.checkoutUrl) {
+            toast("正在前往 Lemon Squeezy 收银台…");
+            window.location.href = res.checkoutUrl;
+            return;
+          }
+          toast("未获取到收银台链接，请稍后重试");
+        } catch (err) {
+          toast(`创建充值订单失败：${err.message}`);
+        } finally {
+          UI.walletCheckoutPackId = "";
+          if (App.view === "wallet") renderMain();
+        }
+      };
+    });
+
+    const refreshOrdersBtn = root.querySelector("#wallet-btn-refresh-orders");
+    if (refreshOrdersBtn) {
+      refreshOrdersBtn.onclick = async () => {
+        if (UI.pendingPaymentSync) {
+          await syncOrderStatus(UI.pendingPaymentSync, { quiet: false });
+        } else {
+          await Promise.all([fetchWalletOrders(true), S.refreshFromServer()]);
+          toast("订单与积分余额已刷新");
+        }
+      };
     }
 
     root.querySelectorAll("[data-topup]").forEach((btn) => {

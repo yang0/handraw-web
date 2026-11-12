@@ -2586,6 +2586,17 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(snap)
             return
 
+        if req_path == "/api/billing/plans":
+            from .billing import get_billing_public_state
+            self._send_json({"ok": True, **get_billing_public_state()})
+            return
+
+        if req_path == "/api/billing/orders":
+            user = self._current_user(required=True)
+            from .billing import list_user_payment_orders
+            self._send_json(list_user_payment_orders(self.db, int(user["id"]), limit=int(q1("limit") or 20)))  # type: ignore[index]
+            return
+
         # Studio Config, Workspace & Task Polling
         if req_path == "/api/studio/config":
             cfg = load_image_service_config()
@@ -3120,6 +3131,27 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
     def _handle_post(self) -> None:
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        if req_path == "/api/webhooks/lemonsqueezy":
+            self._body_consumed = True
+            from .billing import MAX_WEBHOOK_BYTES, process_lemonsqueezy_webhook
+            try:
+                hook_size = int(self.headers.get("Content-Length") or "0")
+            except ValueError as exc:
+                raise ServiceError("Content-Length 无效", status=400, code="invalid_content_length") from exc
+            if hook_size <= 0:
+                raise ServiceError("Webhook 请求体为空", status=400, code="empty_webhook_body")
+            if hook_size > MAX_WEBHOOK_BYTES:
+                raise ServiceError("Webhook 请求体过大", status=413, code="webhook_payload_too_large")
+            raw_hook_body = self.rfile.read(hook_size)
+            self._send_json(
+                process_lemonsqueezy_webhook(
+                    self.db,
+                    raw_hook_body,
+                    self.headers.get("X-Signature") or "",
+                    self.headers.get("X-Event-Name") or "",
+                )
+            )
+            return
         self._enforce_write_origin()
         if req_path == "/api/client-errors":
             self._enforce_auth_rate_limit("client_error", "", per_ip_only=True)
@@ -3314,6 +3346,35 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                 raise ServiceError("现金充值尚未接入可信支付回调", status=503, code="payment_disabled")
             user = self._current_user(required=True)
             self._send_json(topup_credits_for_user(self.db, user, int(body.get("amount") or 50)))  # type: ignore[arg-type]
+            return
+
+        if req_path == "/api/billing/checkout":
+            user = self._current_user(required=True)
+            from .billing import create_checkout_order
+            self._send_json(
+                create_checkout_order(
+                    self.db,
+                    user,  # type: ignore[arg-type]
+                    str(body.get("packId") or ""),
+                    request_headers={k: v for k, v in self.headers.items()},
+                    server_port=getattr(self.server, "server_port", None),
+                )
+            )
+            return
+
+        m_billing_sync = re.fullmatch(r"/api/billing/orders/([^/]+)/sync", req_path)
+        if m_billing_sync:
+            user = self._current_user(required=True)
+            from .billing import sync_payment_order_from_provider
+            self._send_json(
+                sync_payment_order_from_provider(
+                    self.db,
+                    user,  # type: ignore[arg-type]
+                    m_billing_sync.group(1),
+                    provider_order_id=str(body.get("providerOrderId") or ""),
+                    provider_order_identifier=str(body.get("providerOrderIdentifier") or ""),
+                )
+            )
             return
 
         # Collections, Cheers, Tips, Paid Unlocks & Reports

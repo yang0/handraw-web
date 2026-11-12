@@ -1655,7 +1655,8 @@
       return true;
     }
     if ((App.state.credits || 0) < cost) {
-      toast(`积分不足（需 ${cost} 积分，当前 ${App.state.credits} 积分），快去分享、兑换或签到赚积分吧！`);
+      const hint = App.state?.billing?.enabled ? "可前往「积分钱包」充值、签到或兑换积分！" : "快去分享、兑换或签到赚积分吧！";
+      toast(`积分不足（需 ${cost} 积分，当前 ${App.state.credits} 积分），${hint}`);
       return false;
     }
 
@@ -2509,7 +2510,8 @@
             }
             const latestCredits = Number(App.state.credits != null ? App.state.credits : (App.state.user?.credits || 0));
             if (latestCredits < selectedAmount) {
-              toast(`当前积分不足（需 ${selectedAmount}✦，可用 ${latestCredits}✦），先去签到或创作赚积分吧！`);
+              const tipHint = App.state?.billing?.enabled ? "先去积分钱包充值或签到赚积分吧！" : "先去签到或创作赚积分吧！";
+              toast(`当前积分不足（需 ${selectedAmount}✦，可用 ${latestCredits}✦），${tipHint}`);
               return;
             }
 
@@ -2592,7 +2594,8 @@
       return false;
     }
     if ((App.state.credits || 0) < amount) {
-      toast(`当前积分不足 ${amount} 积分，先去签到或创作赚积分吧！`);
+      const tipHint = App.state?.billing?.enabled ? "先去积分钱包充值或签到赚积分吧！" : "先去签到或创作赚积分吧！";
+      toast(`当前积分不足 ${amount} 积分，${tipHint}`);
       return false;
     }
     const authorLabel = targetObj.authorName || "社区创作者";

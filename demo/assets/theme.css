@@ -4060,3 +4060,75 @@ img[data-hw-src].hw-img-failed {
   .hw-personal-gallery-upload-form { padding: 12px; }
   .hw-personal-gallery-upload-fields { grid-template-columns: minmax(0, 1fr); }
 }
+
+.hw-billing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.hw-billing-card {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  background: var(--paper-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  min-width: 0;
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.hw-billing-card:hover {
+  border-color: var(--vermilion);
+  box-shadow: 0 4px 14px rgba(32, 24, 18, 0.06);
+}
+.hw-billing-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(183, 66, 39, 0.12);
+  color: var(--vermilion);
+}
+.hw-billing-credits {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--ink-main);
+}
+.hw-billing-price {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--vermilion);
+  font-variant-numeric: tabular-nums;
+}
+.hw-order-list {
+  display: grid;
+  gap: 8px;
+}
+.hw-order-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--paper-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.hw-order-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.hw-order-status.is-paid { background: rgba(39, 122, 87, 0.12); color: var(--jade); }
+.hw-order-status.is-pending { background: rgba(184, 134, 11, 0.14); color: #8c6300; }
+.hw-order-status.is-failed { background: rgba(183, 66, 39, 0.12); color: var(--vermilion); }
+.hw-order-status.is-refunded { background: rgba(90, 86, 80, 0.14); color: var(--ink-muted); }

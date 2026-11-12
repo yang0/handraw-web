@@ -18,6 +18,7 @@ community_auth.json
 credentials.json
 image-service.json
 ai-service.json
+payment-service.json
 *.log
 *.zip
 *.tar.gz

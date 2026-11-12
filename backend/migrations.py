@@ -779,5 +779,53 @@ MIGRATIONS.extend(SKILL_WEB_MIGRATIONS)
 from .generation_v3 import V3_MIGRATIONS
 MIGRATIONS.extend(V3_MIGRATIONS)
 
+MIGRATIONS.append(
+    (
+        111,
+        "111_payment_billing_orders",
+        """
+        CREATE TABLE IF NOT EXISTS payment_orders (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            provider TEXT NOT NULL DEFAULT 'lemonsqueezy',
+            pack_id TEXT NOT NULL,
+            variant_id TEXT NOT NULL DEFAULT '',
+            credits INTEGER NOT NULL,
+            amount_cents INTEGER NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL DEFAULT 'CNY',
+            status TEXT NOT NULL DEFAULT 'pending',
+            checkout_id TEXT NOT NULL DEFAULT '',
+            checkout_url TEXT NOT NULL DEFAULT '',
+            provider_order_id TEXT NOT NULL DEFAULT '',
+            provider_order_number TEXT NOT NULL DEFAULT '',
+            test_mode INTEGER NOT NULL DEFAULT 0,
+            meta_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            paid_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_payment_orders_user
+            ON payment_orders(user_id, created_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_orders_provider_order
+            ON payment_orders(provider, provider_order_id)
+            WHERE provider_order_id <> '';
+
+        CREATE TABLE IF NOT EXISTS payment_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT NOT NULL DEFAULT 'lemonsqueezy',
+            event_key TEXT NOT NULL,
+            event_name TEXT NOT NULL,
+            provider_order_id TEXT NOT NULL DEFAULT '',
+            signature_valid INTEGER NOT NULL DEFAULT 0,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'processed',
+            created_at TEXT NOT NULL,
+            UNIQUE(provider, event_key)
+        );
+        """,
+    )
+)
+
 # Ensure migrations execute in strictly ascending numerical order
 MIGRATIONS.sort(key=lambda m: m[0])
