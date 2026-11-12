@@ -115,6 +115,26 @@ class PostgresOperationsTests(unittest.TestCase):
                 reconcile_social_counters.main(["--apply", "--backup-dir", str(self.root)])
         self.assertEqual(self.read_counts(), before)
 
+    def test_reconcile_preserves_weighted_heat_for_tipped_works(self):
+        self.seed_social_drift()
+        self.conn.execute("UPDATE works SET tips=2 WHERE id='same-id'")
+        self.conn.execute("""
+            INSERT INTO works(id, author_username, author_name, title, prompt, published_at_ms, created_at, updated_at,
+                              cheers, tips)
+            VALUES ('tip-record-only', 'author', 'Author', 'Work', '', 1, '', '', 12, 0)
+        """)
+        self.conn.execute("""
+            INSERT INTO tip_requests(user_id, target_type, target_id, amount, created_at)
+            VALUES (51, 'work', 'tip-record-only', 2, '')
+        """)
+        with patch.object(reconcile_social_counters, "dump_snapshot", return_value=self.root / "test.dump"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(reconcile_social_counters.main(["--apply", "--backup-dir", str(self.root)]), 0)
+        self.assertEqual(self.read_counts(), ((1, 1, 7, 1), (2, 0)))
+        self.assertEqual(self.conn.execute(
+            "SELECT cheers FROM works WHERE id='tip-record-only'",
+        ).fetchone()[0], 12)
+
     def seed_asset(self, code, cost, source="official"):
         self.conn.execute("""
             INSERT INTO catalog_assets(code, name, kind, source_type, definition, unlock_cost,

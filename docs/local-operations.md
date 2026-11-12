@@ -99,6 +99,8 @@ psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_110_home_
 
 以下命令连接 `HANDRAW_DATABASE_URL` 指定的 PostgreSQL 库。计数对账默认只读。`--apply` 在写入前使用 `pg_dump` 备份同一快照，随后在单个事务中修复计数。有并发冲突时事务回滚，可重新执行。备份默认写入私有存储下的 `backups`。
 
+收到过赞赏的作品保留 `cheers`。赞赏按权重计入热度，并可与手动鼓励共享同一条互动记录。对账仍核对这类作品的点赞、收藏和复刻计数。
+
 ```powershell
 python -m ops.reconcile_social_counters
 python -m ops.reconcile_social_counters --apply

@@ -32,17 +32,22 @@ WITH interaction_counts AS (
     GROUP BY target_id
 ), fork_counts AS (
     SELECT work_id, count(*) AS forks FROM public.work_forks GROUP BY work_id
+), tipped_works AS (
+    SELECT DISTINCT target_id FROM public.tip_requests WHERE target_type = 'work'
 ), work_counts AS (
     SELECT w.id, w.likes AS cached_likes, w.favorites AS cached_favorites,
            w.cheers AS cached_cheers, w.forks AS cached_forks,
            coalesce(i.work_likes, 0) AS true_likes,
            coalesce(c.work_favorites, 0) AS true_favorites,
-           coalesce(i.cheers, 0) AS true_cheers,
+           -- Tips add weighted heat and can share the same interaction as a manual cheer.
+           CASE WHEN w.tips > 0 OR t.target_id IS NOT NULL THEN w.cheers
+                ELSE coalesce(i.cheers, 0) END AS true_cheers,
            coalesce(f.forks, 0) AS true_forks
     FROM public.works AS w
     LEFT JOIN interaction_counts AS i ON i.target_id = w.id
     LEFT JOIN collection_counts AS c ON c.target_id = w.id
     LEFT JOIN fork_counts AS f ON f.work_id = w.id
+    LEFT JOIN tipped_works AS t ON t.target_id = w.id
 ), topic_counts AS (
     SELECT t.id, t.likes AS cached_likes, t.favorites AS cached_favorites,
            coalesce(i.topic_likes, 0) AS true_likes,

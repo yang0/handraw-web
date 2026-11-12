@@ -2606,6 +2606,15 @@ def attach_generation_social_counts(
         item["favorited"] = bool(wid in viewer_favs)
 
 
+def _lock_social_wallet(tx, user_id: int) -> int:
+    # Serialize changes from the same actor before reading their interaction state.
+    query = "SELECT balance FROM wallets WHERE user_id = ?"
+    if getattr(tx, "dialect", "") == "postgresql":
+        query += " FOR UPDATE"
+    row = tx.execute(query, (user_id,)).fetchone()
+    return int(row["balance"]) if row else 0
+
+
 def toggle_user_collection(
     db: Database,
     user: dict[str, Any],
@@ -2644,7 +2653,7 @@ def toggle_user_collection(
             tid = str(primary["target_id"])
 
     if bucket == "works":
-        w_chk = db.get_conn().execute("SELECT id, status FROM works WHERE id = ?", (tid,)).fetchone()
+        w_chk = db.get_conn().execute("SELECT status FROM works WHERE id = ?", (tid,)).fetchone()
         if not w_chk or str(w_chk["status"]) != "published":
             raise ServiceError("作品不存在或已下架", status=404)
 
@@ -2654,6 +2663,7 @@ def toggle_user_collection(
         tid = _generation_work_id(db.get_conn(), tid)
 
     with db.transaction() as tx:
+        bal = _lock_social_wallet(tx, uid)
         existing = tx.execute(
             "SELECT 1 FROM collections WHERE user_id = ? AND bucket = ? AND target_id = ?",
             (uid, bucket, tid),
@@ -2666,38 +2676,34 @@ def toggle_user_collection(
         else:
             should_collect = not bool(existing)
 
-        rewarded = 0
+        rewarded = counter_delta = 0
         if existing and not should_collect:
-            tx.execute("DELETE FROM collections WHERE user_id = ? AND bucket = ? AND target_id = ?", (uid, bucket, tid))
+            counter_delta = -tx.execute(
+                "DELETE FROM collections WHERE user_id = ? AND bucket = ? AND target_id = ?", (uid, bucket, tid),
+            ).rowcount
             collected = False
-            if bucket == "works":
-                tx.execute("UPDATE works SET favorites = MAX(0, favorites - 1) WHERE id = ?", (tid,))
-            elif bucket == "topics":
-                tx.execute("UPDATE forum_topics SET favorites = MAX(0, favorites - 1) WHERE id = ?", (tid,))
         elif not existing and should_collect:
             if bucket in ("styles", "layouts") and resource_entry and not resource_entry.get("canCollect"):
                 raise ServiceError("该资源暂不支持收藏", status=403)
-            tx.execute(
-                "INSERT INTO collections (user_id, bucket, target_id, created_at) VALUES (?, ?, ?, ?)",
+            counter_delta = tx.execute(
+                """INSERT INTO collections (user_id, bucket, target_id, created_at) VALUES (?, ?, ?, ?)
+                   ON CONFLICT (user_id, bucket, target_id) DO NOTHING""",
                 (uid, bucket, tid, now),
-            )
+            ).rowcount
             collected = True
-            if bucket == "works":
-                tx.execute("UPDATE works SET favorites = favorites + 1 WHERE id = ?", (tid,))
-            elif bucket == "topics":
-                tx.execute("UPDATE forum_topics SET favorites = favorites + 1 WHERE id = ?", (tid,))
 
             # Generation-history favorites now share the works bucket, but
             # an alias must not grant first-collect bonus credits. Preserve
             # the original API's no-reward rule after canonicalization.
-            if not from_generation_history:
-                u_row = tx.execute("SELECT first_collect_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
-                if u_row and not int(u_row["first_collect_rewarded"]):
+            if counter_delta and not from_generation_history:
+                claimed = tx.execute(
+                    "UPDATE users SET first_collect_rewarded = 1 WHERE id = ? AND first_collect_rewarded = 0", (uid,),
+                ).rowcount
+                if claimed:
                     settings = get_site_settings(tx)
                     bonus = int(settings.get("economy", {}).get("first_collect_credits", 2))
-                    tx.execute("UPDATE users SET first_collect_rewarded = 1 WHERE id = ?", (uid,))
                     if bonus > 0:
-                        apply_wallet_delta(
+                        bal, applied = apply_wallet_delta(
                             tx,
                             uid,
                             bonus,
@@ -2705,16 +2711,22 @@ def toggle_user_collection(
                             f"首次使用云端收藏夹激励（{title_label or tid}）",
                             event_key=f"first_collect_{uid}",
                         )
-                        rewarded = bonus
+                        rewarded = bonus if applied else 0
         else:
             collected = bool(existing)
 
-        if bucket == "works":
-            norm_type = "work"
-            new_favorites = int(tx.execute("SELECT favorites FROM works WHERE id = ?", (tid,)).fetchone()["favorites"])
-        elif bucket == "topics":
-            norm_type = "topic"
-            new_favorites = int(tx.execute("SELECT favorites FROM forum_topics WHERE id = ?", (tid,)).fetchone()["favorites"])
+        if bucket in ("works", "topics"):
+            norm_type, table = ("work", "works") if bucket == "works" else ("topic", "forum_topics")
+            if counter_delta:
+                count_row = tx.execute(
+                    f"UPDATE {table} SET favorites = MAX(0, favorites + ?) WHERE id = ? RETURNING favorites",
+                    (counter_delta, tid),
+                ).fetchone()
+            else:
+                count_row = tx.execute(f"SELECT favorites FROM {table} WHERE id = ?", (tid,)).fetchone()
+            if not count_row:
+                raise ServiceError("未找到目标内容", status=404)
+            new_favorites = int(count_row["favorites"])
         elif bucket == "generations":
             norm_type = "generation"
             fav_cnt = tx.execute(
@@ -2737,7 +2749,6 @@ def toggle_user_collection(
             )
             new_favorites = base_fav + live_fav
 
-        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
         return {
             "ok": True,
             "targetType": norm_type,
@@ -3028,6 +3039,31 @@ def set_comment_visibility(tx, table: str, comment_id: str, status: str, actor_r
     return True
 
 
+def _insert_interaction(tx, user_id: int, interaction_type: str, target_id: str, created_at: str) -> bool:
+    return bool(tx.execute(
+        """INSERT INTO interactions (user_id, target_type, target_id, stamp_label, created_at)
+           VALUES (?, ?, ?, '', ?)
+           ON CONFLICT (user_id, target_type, target_id, stamp_label) DO NOTHING""",
+        (user_id, interaction_type, target_id, created_at),
+    ).rowcount)
+
+
+def _grant_first_cheer(tx, user_id: int, balance: int, reason: str) -> tuple[int, int]:
+    claimed = tx.execute(
+        "UPDATE users SET first_cheer_rewarded = 1 WHERE id = ? AND first_cheer_rewarded = 0", (user_id,),
+    ).rowcount
+    if not claimed:
+        return balance, 0
+    settings = get_site_settings(tx)
+    bonus = int(settings.get("economy", {}).get("first_cheer_credits", 2))
+    if bonus <= 0:
+        return balance, 0
+    balance, applied = apply_wallet_delta(
+        tx, user_id, bonus, "first_cheer", reason, event_key=f"first_cheer_{user_id}",
+    )
+    return balance, bonus if applied else 0
+
+
 def toggle_user_like(
     db: Database,
     user: dict[str, Any],
@@ -3071,8 +3107,9 @@ def toggle_user_like(
             itype = "like_work"
 
     with db.transaction() as tx:
+        bal = _lock_social_wallet(tx, uid)
         if norm_type == "work":
-            w_row = tx.execute("SELECT id, title, author_name, author_username, run_id, likes, status FROM works WHERE id = ?", (tid,)).fetchone()
+            w_row = tx.execute("SELECT title, author_username, run_id, status FROM works WHERE id = ?", (tid,)).fetchone()
             if not w_row or str(w_row["status"]) != "published":
                 raise ServiceError("作品不存在或已下架", status=404)
             # Generated works have one canonical social identity. Do not let
@@ -3082,7 +3119,7 @@ def toggle_user_like(
                 raise ServiceError("不能为自己的生图历史点赞", status=403, code="self_like_forbidden")
             title_lbl = w_row["title"]
         elif norm_type == "topic":
-            t_row = tx.execute("SELECT id, title, author_name, likes FROM forum_topics WHERE id = ?", (tid,)).fetchone()
+            t_row = tx.execute("SELECT title FROM forum_topics WHERE id = ?", (tid,)).fetchone()
             if not t_row:
                 raise ServiceError("帖子不存在", status=404)
             title_lbl = t_row["title"]
@@ -3108,51 +3145,34 @@ def toggle_user_like(
         else:
             should_like = not bool(existing)
 
-        rewarded = 0
+        rewarded = counter_delta = 0
         if existing and not should_like:
-            tx.execute(
+            counter_delta = -tx.execute(
                 "DELETE FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ''",
                 (uid, itype, tid),
-            )
+            ).rowcount
             liked = False
-            if norm_type == "work":
-                tx.execute("UPDATE works SET likes = MAX(0, likes - 1) WHERE id = ?", (tid,))
-            elif norm_type == "topic":
-                tx.execute("UPDATE forum_topics SET likes = MAX(0, likes - 1) WHERE id = ?", (tid,))
         elif not existing and should_like:
-            tx.execute(
-                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-                (uid, itype, tid, now),
-            )
+            counter_delta = int(_insert_interaction(tx, uid, itype, tid, now))
             liked = True
-            if norm_type == "work":
-                tx.execute("UPDATE works SET likes = likes + 1 WHERE id = ?", (tid,))
-            elif norm_type == "topic":
-                tx.execute("UPDATE forum_topics SET likes = likes + 1 WHERE id = ?", (tid,))
 
-            if norm_type != "generation":
-                u_row = tx.execute("SELECT first_cheer_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
-                if u_row and not int(u_row["first_cheer_rewarded"]):
-                    settings = get_site_settings(tx)
-                    bonus = int(settings.get("economy", {}).get("first_cheer_credits", 2))
-                    tx.execute("UPDATE users SET first_cheer_rewarded = 1 WHERE id = ?", (uid,))
-                    if bonus > 0:
-                        apply_wallet_delta(
-                            tx,
-                            uid,
-                            bonus,
-                            "first_cheer",
-                            f"友善社区互动：首次点赞《{title_lbl[:20]}》",
-                            event_key=f"first_cheer_{uid}",
-                        )
-                        rewarded = bonus
+            if counter_delta and norm_type != "generation":
+                bal, rewarded = _grant_first_cheer(tx, uid, bal, f"友善社区互动：首次点赞《{title_lbl[:20]}》")
         else:
             liked = bool(existing)
 
-        if norm_type == "work":
-            new_likes = int(tx.execute("SELECT likes FROM works WHERE id = ?", (tid,)).fetchone()["likes"])
-        elif norm_type == "topic":
-            new_likes = int(tx.execute("SELECT likes FROM forum_topics WHERE id = ?", (tid,)).fetchone()["likes"])
+        if norm_type in ("work", "topic"):
+            table = "works" if norm_type == "work" else "forum_topics"
+            if counter_delta:
+                count_row = tx.execute(
+                    f"UPDATE {table} SET likes = MAX(0, likes + ?) WHERE id = ? RETURNING likes",
+                    (counter_delta, tid),
+                ).fetchone()
+            else:
+                count_row = tx.execute(f"SELECT likes FROM {table} WHERE id = ?", (tid,)).fetchone()
+            if not count_row:
+                raise ServiceError("未找到目标内容", status=404)
+            new_likes = int(count_row["likes"])
         elif norm_type == "generation":
             new_likes = int(
                 tx.execute(
@@ -3174,8 +3194,6 @@ def toggle_user_like(
             )
             new_likes = base_likes + live_cnt
 
-        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
-
     return {
         "ok": True,
         "targetType": norm_type,
@@ -3190,19 +3208,22 @@ def toggle_user_like(
 def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, target_id: str, stamp_label: str = "") -> dict[str, Any]:
     if target_type not in ("work", "asset"):
         raise ServiceError("不支持的鼓励对象类型")
-    tid = (target_id or "").strip()
-    stamp = (stamp_label or "").strip()[:20]
-    if stamp:
+    if (stamp_label or "").strip():
         raise ServiceError("印章功能已下线", status=400, code="stamp_retired")
+    tid = (target_id or "").strip()
     uid = int(user["id"])
     now = utc_now_iso()
 
     with db.transaction() as tx:
-        is_official_asset = False
+        bal = _lock_social_wallet(tx, uid)
         if target_type == "work":
-            target = tx.execute("SELECT id, title, author_name, cheers, stamp_counts_json FROM works WHERE id = ?", (tid,)).fetchone()
+            target = tx.execute("SELECT author_name FROM works WHERE id = ?", (tid,)).fetchone()
+            if not target:
+                raise ServiceError("未找到目标内容", status=404)
+            author_name = target["author_name"]
+            target_predicate, target_params = "target_id = ?", (tid,)
         else:
-            clean_code = tid.strip().upper().lstrip("#")
+            clean_code = tid.upper().lstrip("#")
             from . import resource_registry
             cat_res = resource_registry.resolve(tx, clean_code, viewer=user, purpose="stamp")
             if not cat_res:
@@ -3210,85 +3231,53 @@ def toggle_user_cheer(db: Database, user: dict[str, Any], target_type: str, targ
             if not cat_res.get("canStamp", True):
                 raise ServiceError("该资源暂不支持盖章", status=403)
             tid = cat_res["code"]
-            target = tx.execute("SELECT code AS id, name AS title, author_name, cheers, stamp_counts_json FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (tid, clean_code)).fetchone()
-            if not target:
-                is_official_asset = True
-                c_row = tx.execute("SELECT COUNT(*) AS cnt FROM interactions WHERE target_type = 'asset' AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ''", (clean_code, clean_code)).fetchone()
-                target = {
-                    "id": clean_code,
-                    "title": cat_res.get("name") or clean_code,
-                    "author_name": cat_res.get("author_name") or cat_res.get("author") or "官方资源",
-                    "cheers": int(c_row["cnt"] if c_row else 0),
-                    "stamp_counts_json": "{}",
-                }
+            target = tx.execute(
+                "SELECT code AS id, author_name FROM catalog_assets WHERE code = ? OR UPPER(code) = ?",
+                (tid, tid.upper()),
+            ).fetchone()
+            author_name = target["author_name"] if target else (
+                cat_res.get("author_name") or cat_res.get("author") or "官方资源"
+            )
+            target_predicate, target_params = "(target_id = ? OR UPPER(target_id) = ?)", (tid, tid.upper())
 
-        if not target:
-            raise ServiceError("未找到目标内容", status=404)
-
+        interaction_filter = f"target_type = ? AND {target_predicate} AND stamp_label = ''"
         existing = tx.execute(
-            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type = ? AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ?",
-            (uid, target_type, tid, tid, stamp),
+            f"SELECT 1 FROM interactions WHERE user_id = ? AND {interaction_filter} LIMIT 1",
+            (uid, target_type, *target_params),
         ).fetchone()
-
+        cheered = not bool(existing)
         rewarded = 0
-        if existing and not stamp:
-            tx.execute(
-                "DELETE FROM interactions WHERE user_id = ? AND target_type = ? AND (target_id = ? OR UPPER(target_id) = ?) AND stamp_label = ''",
-                (uid, target_type, tid, tid),
-            )
-            new_cheers = max(0, int(target["cheers"]) - 1)
-            if target_type == "work":
-                tx.execute("UPDATE works SET cheers = ? WHERE id = ?", (new_cheers, tid))
-            elif not is_official_asset:
-                tx.execute("UPDATE catalog_assets SET cheers = ? WHERE code = ?", (new_cheers, tid))
-            cheered = False
-        elif existing and stamp:
-            cheered = True
-            new_cheers = int(target["cheers"])
+        if cheered:
+            delta = int(_insert_interaction(tx, uid, target_type, tid, now))
+            if delta:
+                bal, rewarded = _grant_first_cheer(tx, uid, bal, f"友善社区互动：首次送上鼓励支持 @{author_name}")
         else:
-            tx.execute(
-                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, ?, ?)",
-                (uid, target_type, tid, stamp, now),
-            )
-            tx.execute(
-                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-                (uid, target_type, tid, now),
-            )
-            new_cheers = int(target["cheers"]) + 1
-            if not is_official_asset:
-                stamps_dict = json.loads(target["stamp_counts_json"] or "{}")
-                if stamp:
-                    prev = int(stamps_dict.get(stamp, 0))
-                    stamps_dict[stamp] = prev + 1
-                if target_type == "work":
-                    tx.execute(
-                        "UPDATE works SET cheers = ?, stamp_counts_json = ? WHERE id = ?",
-                        (new_cheers, json.dumps(stamps_dict, ensure_ascii=False), tid),
-                    )
-                else:
-                    tx.execute(
-                        "UPDATE catalog_assets SET cheers = ?, stamp_counts_json = ? WHERE code = ?",
-                        (new_cheers, json.dumps(stamps_dict, ensure_ascii=False), tid),
-                    )
-            cheered = True
+            delta = -tx.execute(
+                f"DELETE FROM interactions WHERE user_id = ? AND {interaction_filter}",
+                (uid, target_type, *target_params),
+            ).rowcount
 
-            u_row = tx.execute("SELECT first_cheer_rewarded FROM users WHERE id = ?", (uid,)).fetchone()
-            if u_row and not int(u_row["first_cheer_rewarded"]):
-                settings = get_site_settings(tx)
-                bonus = int(settings.get("economy", {}).get("first_cheer_credits", 2))
-                tx.execute("UPDATE users SET first_cheer_rewarded = 1 WHERE id = ?", (uid,))
-                if bonus > 0:
-                    apply_wallet_delta(
-                        tx,
-                        uid,
-                        bonus,
-                        "first_cheer",
-                        f"友善社区互动：首次送上鼓励支持 @{target['author_name']}",
-                        event_key=f"first_cheer_{uid}",
-                    )
-                    rewarded = bonus
+        if target_type == "work":
+            row = tx.execute(
+                "UPDATE works SET cheers = MAX(0, cheers + ?) WHERE id = ? RETURNING cheers", (delta, tid),
+            ).fetchone()
+            if not row:
+                raise ServiceError("未找到目标内容", status=404)
+            new_cheers = int(row["cheers"])
+        elif target:
+            row = tx.execute(
+                "UPDATE catalog_assets SET cheers = MAX(0, cheers + ?) WHERE code = ? RETURNING cheers",
+                (delta, target["id"]),
+            ).fetchone()
+            if not row:
+                raise ServiceError("未找到目标内容", status=404)
+            new_cheers = int(row["cheers"])
+        else:
+            new_cheers = int(tx.execute(
+                f"SELECT COUNT(*) FROM interactions WHERE {interaction_filter}",
+                (target_type, *target_params),
+            ).fetchone()[0])
 
-        bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
     return {"ok": True, "cheered": cheered, "cheers": new_cheers, "rewarded": rewarded, "credits": bal}
 
 
@@ -3331,6 +3320,7 @@ def send_encourage_tip(
     clean_req_id = str(request_id or "").strip() or None
 
     with db.transaction() as tx:
+        viewer_balance = _lock_social_wallet(tx, uid)
         # Resolve binding if target is topic
         if raw_type == "topic":
             mapping = tx.execute(
@@ -3375,11 +3365,9 @@ def send_encourage_tip(
                 p_id = str(prev_req["target_id"]).strip()
                 p_amt = int(prev_req["amount"])
                 if p_type == raw_type and p_id == tid and p_amt == amt:
-                    bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-                    cur_bal = int(bal_row["balance"]) if bal_row else 0
                     return {
                         "ok": True,
-                        "credits": cur_bal,
+                        "credits": viewer_balance,
                         "amount": amt,
                         "duplicate": True,
                         "targetType": raw_type,
@@ -3578,25 +3566,14 @@ def send_encourage_tip(
             norm_asset = _infer_asset_kind(tid)
             itype = f"like_{norm_asset}"
 
-        already_liked = tx.execute(
-            "SELECT 1 FROM interactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND stamp_label = ''",
-            (uid, itype, tid),
-        ).fetchone()
-        if not already_liked:
-            tx.execute(
-                "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-                (uid, itype, tid, now_ts),
-            )
+        if _insert_interaction(tx, uid, itype, tid, now_ts):
             if raw_type == "work":
                 tx.execute("UPDATE works SET likes = likes + 1 WHERE id = ?", (tid,))
             elif raw_type == "topic":
                 tx.execute("UPDATE forum_topics SET likes = likes + 1 WHERE id = ?", (tid,))
 
         # Also maintain generic interaction record for cheers
-        tx.execute(
-            "INSERT OR IGNORE INTO interactions (user_id, target_type, target_id, stamp_label, created_at) VALUES (?, ?, ?, '', ?)",
-            (uid, raw_type, tid, now_ts),
-        )
+        _insert_interaction(tx, uid, raw_type, tid, now_ts)
 
         # Record in tip_requests table for idempotency and persistent rate limiting
         tx.execute(
