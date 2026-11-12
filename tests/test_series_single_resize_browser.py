@@ -18,8 +18,8 @@ try:
 except ImportError:  # Optional browser E2E dependency is absent on Python shard runners.
     sync_playwright = None
 
-from tests.legacy_database import init_legacy_database
-from backend.server import create_channel_server
+from tests.postgres_support import isolated_pg_dsn
+from backend.server import create_channel_server, init_database
 from backend.services import register_user
 
 PNG_1X1_BYTES = base64.b64decode(
@@ -85,9 +85,9 @@ def _launch_chromium(pw):
 class SeriesSingleResizeBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.temp_dir = tempfile.TemporaryDirectory()
-        root = Path(cls.temp_dir.name)
-        cls.db_path = root / "series_browser.db"
+        if not os.environ.get("HANDRAW_PG_STAGING_URL"):
+            raise unittest.SkipTest("Isolated PostgreSQL staging URL not provided")
+        root = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
         cls.img_cfg = root / "image-service.json"
 
         cls.gw_state = _GatewayState()
@@ -105,18 +105,17 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
             }),
             encoding="utf-8",
         )
-        cls.env = patch.dict(
+        cls.enterClassContext(patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(cls.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "0",
                 "HANDRAW_IMAGE_CONFIG": str(cls.img_cfg),
             },
-        )
-        cls.env.start()
-        cls.db = init_legacy_database(cls.db_path)
+        ))
+        cls.db = init_database(cls.enterClassContext(isolated_pg_dsn()))
+        cls.addClassCleanup(cls.db.close)
         cls.user, _ = register_user(cls.db, "series_e2e", "Password123!")
 
         cls.server = create_channel_server(0, "main", cls.db)
@@ -145,18 +144,12 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.server.shutdown()
+        cls.server.import_manager.stop()
         cls.server.server_close()
         cls.thread.join(timeout=5)
         cls.gw_server.shutdown()
         cls.gw_server.server_close()
         cls.gw_thread.join(timeout=5)
-        cls.db.close_thread_conn()
-        cls.db.close()
-        cls.env.stop()
-        try:
-            cls.temp_dir.cleanup()
-        except Exception:
-            pass
 
     @classmethod
     def _login(cls, username: str, password: str) -> str:
@@ -222,6 +215,9 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
 
                 page.on("response", on_response)
 
+                def is_generation_success(response):
+                    return response.url.endswith("/api/studio/generate") and response.status == 200
+
                 # Sign in cleanly through the browser context so session cookies match HTTP origin.
                 login_resp = page.request.post(
                     f"{self.base}/api/auth/login",
@@ -274,7 +270,8 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                 gw_calls_before_heal = len(self.gw_state.calls)
                 gen_events.clear()
 
-                page.locator('[data-generate-series-idx="0"]').click()
+                with page.expect_response(is_generation_success, timeout=15000):
+                    page.locator('[data-generate-series-idx="0"]').click()
                 page.wait_for_selector('[data-series-select-idx="0"].has-result', timeout=10000)
 
                 self.assertEqual([e["status"] for e in gen_events], [409, 200], gen_events)
@@ -313,7 +310,8 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                 theme_input = page.locator('[data-series-theme-idx="2"]')
                 theme_input.fill("图3雨后茶馆")
 
-                page.locator('[data-generate-series-idx="2"]').click()
+                with page.expect_response(is_generation_success, timeout=15000):
+                    page.locator('[data-generate-series-idx="2"]').click()
                 page.wait_for_selector('[data-series-select-idx="2"].has-result', timeout=10000)
 
                 self.assertEqual([e["status"] for e in gen_events], [200], gen_events)
@@ -368,7 +366,8 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                 # 5) Retry failed Frame 1 on recovery -> succeeds with all 3 series thumbs rendered.
                 page.set_viewport_size({"width": 1440, "height": 900})
                 gen_events.clear()
-                page.locator('[data-retry-idx="1"]').click()
+                with page.expect_response(is_generation_success, timeout=15000):
+                    page.locator('[data-retry-idx="1"]').click()
                 page.wait_for_selector('[data-series-select-idx="1"].has-result', timeout=10000)
                 self.assertEqual([e["status"] for e in gen_events], [200], gen_events)
                 self.assertEqual(gen_events[0]["req"].get("batchId"), frame2_batch_id)

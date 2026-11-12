@@ -56,9 +56,9 @@ class StartupDependenciesSelfCheckTests(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=fake_import):
-            with patch("backend.postgres_db.PostgresDatabase") as mock_init:
+            with patch("backend.server.Database") as mock_init:
                 with patch("backend.server.create_channel_server") as mock_srv:
-                    with patch("backend.server.GenerationReconciler"), patch("backend.seed.ensure_seeded"), patch("backend.redis_rate_limit.ensure_ready"):
+                    with patch("backend.server.GenerationReconciler"), patch("backend.server.ensure_seeded"), patch("backend.redis_rate_limit.ensure_ready"):
                         mock_srv.return_value.serve_forever.side_effect = KeyboardInterrupt
                         with self.assertLogs("backend.server", level="WARNING") as cm:
                             main(["--port", "3999"])

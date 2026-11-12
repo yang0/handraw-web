@@ -231,7 +231,7 @@ class BrowserRenderTests(unittest.TestCase):
             headers={"Origin": "http://trusted.test"},
         )
         self.assertEqual(response.status, 200, response.text())
-        self.page.goto(self.base + "/admin.html", wait_until="networkidle", timeout=20000)
+        self.page.goto(self.base + "/admin.html", wait_until="domcontentloaded", timeout=20000)
         self.page.locator('[data-nav-mod="governance"]').first.click()
         self.page.locator('[data-subtab="governance:topics_list"]').first.click()
         self.page.wait_for_function(
