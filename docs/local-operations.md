@@ -96,9 +96,12 @@ psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_110_home_
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_111_payment_billing.sql
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_112_cold_start_registry.sql
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_113_forum_reply_notifications.sql
+psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_114_growth_events.sql
 ```
 
 服务启动前需完成 111。此前已建好支付表并登记 111 的库可直接启动，也可重复运行迁移。
+
+113 为新论坛回复启用通知。114 开始记录新的增长里程碑，并保留现有增长事件。解读升级前的激活率时，应以当时实际记录的事件为准。
 
 ### 3.5 社交计数对账与官方目录
 

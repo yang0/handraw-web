@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .db import utc_now_iso
@@ -19,11 +19,15 @@ def record_visit(db: Any, user: dict | None) -> None:
     if not user or user.get("status") != "active":
         return
     with db.transaction() as tx:
-        tx.execute(
-            """INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
-               VALUES(?,'site_visit',date('now'),?)""",
-            (int(user["id"]), utc_now_iso()),
-        )
+        _record_site_visit(tx, int(user["id"]), utc_now_iso())
+
+
+def _record_site_visit(tx, user_id: int, now: str) -> None:
+    tx.execute(
+        """INSERT INTO growth_events (user_id, event_name, event_day, happened_at)
+           VALUES (?, 'site_visit', ?, ?) ON CONFLICT DO NOTHING""",
+        (user_id, now[:10], now),
+    )
 
 
 def record_login(db: Any, user: dict, user_agent: str) -> bool:
@@ -58,11 +62,7 @@ def record_login(db: Any, user: dict, user_agent: str) -> bool:
                ON CONFLICT(user_id,fingerprint) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
             (uid, fingerprint, label, now, now),
         )
-        tx.execute(
-            """INSERT OR IGNORE INTO growth_events(user_id,event_name,event_day,happened_at)
-               VALUES(?,'site_visit',date('now'),?)""",
-            (uid, now),
-        )
+        _record_site_visit(tx, uid, now)
         if known_before and not prior:
             tx.execute(
                 """INSERT INTO notifications(user_id,kind,title,target_type,target_id,created_at)
@@ -82,86 +82,54 @@ def log_funnel_view(db: Any, event_name: str) -> None:
         )
 
 
+_COHORTS_SQL = """
+    SELECT left(u.created_at, 10) AS day,
+           COUNT(*) AS registered,
+           COUNT(v.user_id) AS verified,
+           COUNT(*) FILTER (
+               WHERE (a.happened_at::timestamptz - u.created_at::timestamptz)
+                   BETWEEN interval '0 seconds' AND interval '7 days'
+           ) AS activated_7d,
+           COUNT(*) FILTER (WHERE left(u.created_at, 10) <= ?) AS eligible_d7,
+           COUNT(r.user_id) FILTER (WHERE left(u.created_at, 10) <= ?) AS retained_d7
+    FROM users AS u
+    LEFT JOIN verified_emails AS v ON v.user_id = u.id
+    LEFT JOIN LATERAL (
+        SELECT g.happened_at
+        FROM growth_events AS g
+        WHERE g.user_id = u.id
+          AND g.event_name IN ('first_collection', 'first_work', 'first_topic', 'first_generation')
+        ORDER BY g.happened_at
+        LIMIT 1
+    ) AS a ON true
+    LEFT JOIN growth_events AS r
+        ON r.user_id = u.id AND r.event_name = 'site_visit'
+        AND r.event_day = to_char(left(u.created_at, 10)::date + 7, 'YYYY-MM-DD')
+    WHERE u.created_at >= ? AND u.role = 'user' AND u.discourse_user_id IS NULL
+    GROUP BY left(u.created_at, 10) ORDER BY day
+"""
+
+
 def growth_report(db: Any, actor: dict, days: int = 30) -> dict:
     if actor.get("role") not in {"admin", "operator"} and actor.get("managementRole") not in {"admin", "operator"}:
         raise ServiceError("无权查看增长指标", status=403, code="forbidden")
     days = max(7, min(90, int(days)))
     conn = db.get_conn()
-    # PostgreSQL is the authoritative production DB. Keep the date math
-    # portable instead of sending SQLite julianday/strftime to its adapter.
-    if getattr(conn, "dialect", "") == "postgresql":
-        funnel = [dict(x) for x in conn.execute(
-            """
-            SELECT (to_timestamp(created_at) AT TIME ZONE 'UTC')::date::text AS day,
-                   event_name, COUNT(*) AS total
-            FROM auth_funnel_events
-            WHERE created_at >= floor(extract(epoch FROM now())) - ? * 86400
-            GROUP BY day,event_name ORDER BY day
-            """, (days,),
-        ).fetchall()]
-        cohorts = [dict(x) for x in conn.execute(
-            """
-            WITH activation AS (
-                SELECT user_id, MIN(happened_at) AS first_at
-                FROM growth_events
-                WHERE event_name IN
-                    ('first_collection','first_work','first_topic','first_generation')
-                GROUP BY user_id
-            )
-            SELECT LEFT(u.created_at,10) AS day,
-                   COUNT(*) AS registered,
-                   COUNT(DISTINCT CASE WHEN v.user_id IS NOT NULL THEN u.id END) AS verified,
-                   COUNT(DISTINCT CASE WHEN a.user_id IS NOT NULL THEN u.id END) AS activated_7d,
-                   COUNT(DISTINCT CASE WHEN LEFT(u.created_at,10)::date
-                       <= CURRENT_DATE - 8 THEN u.id END) AS eligible_d7,
-                   COUNT(DISTINCT CASE WHEN r.user_id IS NOT NULL
-                       AND LEFT(u.created_at,10)::date <= CURRENT_DATE - 8
-                       THEN u.id END) AS retained_d7
-            FROM users u
-            LEFT JOIN verified_emails v ON v.user_id=u.id
-            LEFT JOIN activation a ON a.user_id=u.id
-               AND (a.first_at::timestamptz-u.created_at::timestamptz)
-                   BETWEEN interval '0 seconds' AND interval '7 days'
-            LEFT JOIN growth_events r ON r.user_id=u.id AND r.event_name='site_visit'
-               AND r.event_day::date=LEFT(u.created_at,10)::date+7
-            WHERE LEFT(u.created_at,10)::date >= CURRENT_DATE - ? AND u.role='user'
-              AND u.discourse_user_id IS NULL
-            GROUP BY LEFT(u.created_at,10) ORDER BY day
-            """, (days,),
-        ).fetchall()]
-    else:
-        funnel = [dict(x) for x in conn.execute(
-            """SELECT date(created_at,'unixepoch') AS day,event_name,COUNT(*) AS total
-               FROM auth_funnel_events
-               WHERE created_at >= strftime('%s','now',? || ' days')
-               GROUP BY day,event_name ORDER BY day""", (str(-days),)
-        ).fetchall()]
-        cohorts = [dict(x) for x in conn.execute(
-            """SELECT date(u.created_at) AS day,
-                      COUNT(*) AS registered,
-                      COUNT(DISTINCT CASE WHEN v.user_id IS NOT NULL THEN u.id END) AS verified,
-                      COUNT(DISTINCT CASE WHEN a.user_id IS NOT NULL THEN u.id END) AS activated_7d,
-                      COUNT(DISTINCT CASE WHEN date(u.created_at) <= date('now','-8 days')
-                          THEN u.id END) AS eligible_d7,
-                      COUNT(DISTINCT CASE WHEN r.user_id IS NOT NULL
-                          AND date(u.created_at) <= date('now','-8 days') THEN u.id END) AS retained_d7
-               FROM users u
-               LEFT JOIN verified_emails v ON v.user_id=u.id
-               LEFT JOIN (
-                   SELECT g.user_id,MIN(g.happened_at) AS first_at
-                   FROM growth_events g
-                   WHERE g.event_name IN ('first_collection','first_work','first_topic','first_generation')
-                   GROUP BY g.user_id
-               ) a ON a.user_id=u.id
-                    AND julianday(a.first_at)-julianday(u.created_at) BETWEEN 0 AND 7
-               LEFT JOIN growth_events r ON r.user_id=u.id AND r.event_name='site_visit'
-                    AND julianday(r.event_day)-julianday(date(u.created_at)) = 7
-               WHERE date(u.created_at)>=date('now',? || ' days')
-                 AND u.role='user'
-                 AND u.discourse_user_id IS NULL
-               GROUP BY date(u.created_at) ORDER BY day""",
-            (str(-days),)
-        ).fetchall()]
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=days)
+    eligible_day = (now.date() - timedelta(days=8)).isoformat()
+    funnel = [dict(row) for row in conn.execute(
+        """
+        SELECT (to_timestamp(created_at) AT TIME ZONE 'UTC')::date::text AS day,
+               event_name, COUNT(*) AS total
+        FROM auth_funnel_events
+        WHERE created_at >= ?
+        GROUP BY day, event_name ORDER BY day, event_name
+        """, (int(start.timestamp()),),
+    )]
+    cohorts = [dict(row) for row in conn.execute(
+        _COHORTS_SQL, (eligible_day, eligible_day, start.date().isoformat()),
+    )]
     total = lambda key: sum(int(d.get(key) or 0) for d in cohorts)
     registered = total("registered")
     d7_eligible = total("eligible_d7")

@@ -1,17 +1,17 @@
 """P2 integration regression: growth cohort, security signals and OAuth binding.
 
-All network-based provider calls are mocked. Tests use isolated SQLite storage.
+All network-based provider calls are mocked. Tests use isolated PostgreSQL storage.
 """
 import os
 import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit, parse_qs
 
-from backend.server import init_database
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
 from backend.services import ServiceError, login_user, register_user, update_my_profile
 from backend import p2_growth, p2_oauth, p2_google
 
@@ -47,27 +47,22 @@ class FakeHandler:
 
 class P2IdentityGrowthTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.env = patch.dict(os.environ, {
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(os.environ, {
             "HANDRAW_DEMO_MODE": "1",
-            "HANDRAW_PRIVATE_STORAGE": self.tmp.name,
+            "HANDRAW_PRIVATE_STORAGE": tmp,
             "HANDRAW_GITHUB_CLIENT_ID": "test-id",
             "HANDRAW_GITHUB_CLIENT_SECRET": "test-secret",
             "HANDRAW_GITHUB_CALLBACK_URL": "http://localhost:3080/api/auth/github/callback",
             "HANDRAW_GOOGLE_CLIENT_ID": "google-test-client",
             "HANDRAW_GOOGLE_CLIENT_SECRET": "google-test-secret",
             "HANDRAW_GOOGLE_CALLBACK_URL": "http://localhost:3080/api/auth/google/callback",
-        })
-        self.env.start()
-        self.db = init_database(Path(self.tmp.name) / "p2.db")
+        }))
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
         self.seed = dict(self.db.get_conn().execute(
             "SELECT * FROM users WHERE username='su_editorial'"
         ).fetchone())
-
-    def tearDown(self):
-        self.db.close()
-        self.env.stop()
-        self.tmp.cleanup()
 
     def _begin_oauth(self, mode="login", user=None):
         handler = FakeHandler(self.db, user)
@@ -139,6 +134,54 @@ class P2IdentityGrowthTests(unittest.TestCase):
         ).fetchall()}
         self.assertIn("first_work", events)
         self.assertIn("first_topic", events)
+
+    def test_cohort_retention_and_activation_use_utc_and_first_event(self):
+        kept, _ = register_user(self.db, "cohort_kept", "StrongPass2026!")
+        late, _ = register_user(self.db, "cohort_late", "StrongPass2026!")
+        conn = self.db.get_conn()
+        conn.execute("SET TIME ZONE 'Pacific/Auckland'")
+        for user in (kept, late):
+            conn.execute("UPDATE users SET created_at = '2030-01-02T12:00:00Z' WHERE id = ?", (user["id"],))
+        conn.execute("""
+            INSERT INTO verified_emails (user_id, email, verified_at)
+            VALUES (?, 'verified@example.test', '2030-01-04T00:00:00Z')
+        """, (kept["id"],))
+        conn.executemany("""
+            INSERT INTO growth_events (user_id, event_name, event_day, happened_at)
+            VALUES (?, ?, ?, ?)
+        """, [
+            (kept["id"], "first_collection", "2030-01-03", "2030-01-03T00:00:00Z"),
+            (kept["id"], "first_generation", "2030-01-06", "2030-01-06T00:00:00Z"),
+            (kept["id"], "site_visit", "2030-01-09", "2030-01-09T00:00:00Z"),
+            (late["id"], "first_generation", "2030-01-09", "2030-01-09T12:00:01Z"),
+            (late["id"], "site_visit", "2030-01-10", "2030-01-10T00:00:00Z"),
+        ])
+        with patch.object(p2_growth, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime(2030, 1, 10, 23, 59, tzinfo=timezone.utc)
+            report = p2_growth.growth_report(self.db, {"role": "admin"}, days=7)
+            self.assertEqual(report["cohorts"], [])
+            report = p2_growth.growth_report(self.db, {"role": "admin"}, days=8)
+        self.assertEqual(report["cohorts"], [{
+            "day": "2030-01-02", "registered": 2, "verified": 1,
+            "activated_7d": 1, "eligible_d7": 2, "retained_d7": 1,
+        }])
+        self.assertEqual(report["summary"]["retentionD7Rate"], 50)
+        self.assertEqual(conn.execute("""
+            SELECT event_day FROM growth_events WHERE user_id = ? AND event_name = 'email_verified'
+        """, (kept["id"],)).fetchone()[0], "2030-01-04")
+
+    def test_native_generation_milestone_is_created_once_per_day(self):
+        user, _ = register_user(self.db, "generation_p2", "StrongPass2026!")
+        conn = self.db.get_conn()
+        conn.execute("""
+            INSERT INTO generation_runs (id, user_id, source, external_run_id, expected_count, created_at, updated_at)
+            VALUES ('milestone-run', ?, 'web', 'milestone-external', 2, '2026-01-01T00:00:00Z', '')
+        """, (user["id"],))
+        query = "SELECT COUNT(*) FROM growth_events WHERE user_id = ? AND event_name = 'first_generation'"
+        self.assertEqual(conn.execute(query, (user["id"],)).fetchone()[0], 0)
+        conn.execute("UPDATE generation_runs SET status = 'partial' WHERE id = 'milestone-run'")
+        conn.execute("UPDATE generation_runs SET status = 'success' WHERE id = 'milestone-run'")
+        self.assertEqual(conn.execute(query, (user["id"],)).fetchone()[0], 1)
 
     def test_new_browser_environment_alert_is_not_sent_on_first_login(self):
         created, _ = register_user(self.db, "browser_p2", "StrongPass2026!", "browser@example.test")
