@@ -3,17 +3,15 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
-import sqlite3
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
+from tests.postgres_support import open_isolated_postgres
 from backend.curation import publish_work_direct
-from tests.legacy_database import Database
 from backend.generation_works import project_generation_to_works
 from backend.resource_discussions import comment
-from tests.legacy_database import init_legacy_database
 from backend.services import publish_forum_reply_post, register_user, ServiceError
 
 
@@ -21,7 +19,7 @@ class Stage2TopicWritesTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_stage2.db"
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "test_author", "pass-author-123")
         self.commenter, _ = register_user(self.db, "test_commenter", "pass-comment-123")
 

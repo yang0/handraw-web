@@ -13,7 +13,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import resource_discussions, services
 from backend import server as server_module
 from backend.config import SESSION_COOKIE_NAME
@@ -44,7 +44,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         cls._env.start()
         cls.temp = TemporaryDirectory()
         cls.db_path = Path(cls.temp.name) / "post_routes.db"
-        cls.db = init_legacy_database(cls.db_path)
+        cls.db = open_isolated_postgres(cls, seed=True)
 
         # Register users
         cls.author, _ = register_user(cls.db, "pr_author", "pass-author")
@@ -420,9 +420,10 @@ class PostRoutesHTTPTests(unittest.TestCase):
         conn.commit()
 
         # Ensure discussion topic exists
-        topic_id = resource_discussions.ensure_topic(
-            conn, "style", "PAID-STYLE-1", {"name": "付费画风", "source_type": "community", "author_username": "pr_author"}
-        )
+        with self.db.transaction():
+            topic_id = resource_discussions.ensure_topic(
+                conn, "style", "PAID-STYLE-1", {"name": "付费画风", "source_type": "community", "author_username": "pr_author"}
+            )
         conn.commit()
 
         # 1. Anonymous request: definition is hidden
@@ -469,10 +470,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         conn = self.db.get_conn()
         now = services.utc_now_iso()
         conn.execute(
-            """
-            INSERT OR IGNORE INTO catalog_assets (code, kind, name, description, image_url, definition, author_username, author_name, source_type, status, unlock_cost, published_at_ms, created_at, updated_at)
-            VALUES ('PAID-STYLE-AUTH', 'style', '作者付费画风', '测试', '/img/paid.webp', 'AUTH_SECRET_STYLE_DEF', 'pr_author', '作者', 'community', 'published', 25, 1000, ?, ?)
-            """,
+            "INSERT INTO catalog_assets (code, kind, name, description, image_url, definition, author_username, author_name, source_type, status, unlock_cost, published_at_ms, created_at, updated_at)\n            VALUES ('PAID-STYLE-AUTH', 'style', '作者付费画风', '测试', '/img/paid.webp', 'AUTH_SECRET_STYLE_DEF', 'pr_author', '作者', 'community', 'published', 25, 1000, ?, ?) ON CONFLICT DO NOTHING",
             (now, now),
         )
         conn.commit()
@@ -639,13 +637,11 @@ class PostRoutesHTTPTests(unittest.TestCase):
 
         # 1. Insert published exclusive and community assets
         conn.execute(
-            """INSERT OR REPLACE INTO catalog_assets (code, kind, name, status, source_type, author_username, image_url, published_at_ms, created_at, updated_at)
-               VALUES ('FX-001', 'style', '独家画风FX', 'published', 'exclusive', 'official', '/fx.png', 1700000000000, ?, ?)""",
+            "INSERT INTO catalog_assets (code, kind, name, status, source_type, author_username, image_url, published_at_ms, created_at, updated_at)\n               VALUES ('FX-001', 'style', '独家画风FX', 'published', 'exclusive', 'official', '/fx.png', 1700000000000, ?, ?) ON CONFLICT (code) DO UPDATE SET kind = excluded.kind, name = excluded.name, status = excluded.status, source_type = excluded.source_type, author_username = excluded.author_username, image_url = excluded.image_url, published_at_ms = excluded.published_at_ms, created_at = excluded.created_at, updated_at = excluded.updated_at",
             (now, now)
         )
         conn.execute(
-            """INSERT OR REPLACE INTO catalog_assets (code, kind, name, status, source_type, author_username, image_url, published_at_ms, created_at, updated_at)
-               VALUES ('USR-L02', 'layout', '社区图型L02', 'published', 'community', 'pr_author', '/l02.png', 1700000000000, ?, ?)""",
+            "INSERT INTO catalog_assets (code, kind, name, status, source_type, author_username, image_url, published_at_ms, created_at, updated_at)\n               VALUES ('USR-L02', 'layout', '社区图型L02', 'published', 'community', 'pr_author', '/l02.png', 1700000000000, ?, ?) ON CONFLICT (code) DO UPDATE SET kind = excluded.kind, name = excluded.name, status = excluded.status, source_type = excluded.source_type, author_username = excluded.author_username, image_url = excluded.image_url, published_at_ms = excluded.published_at_ms, created_at = excluded.created_at, updated_at = excluded.updated_at",
             (now, now)
         )
         conn.commit()
@@ -731,7 +727,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
 
         # Setup test data:
         # FB-041: ensure seed exists in asset_social_seeds
-        conn.execute("INSERT OR REPLACE INTO asset_social_seeds (asset_code, base_likes, base_favorites) VALUES ('FB-041', 5, 2)")
+        conn.execute("INSERT INTO asset_social_seeds (asset_code, base_likes, base_favorites) VALUES ('FB-041', 5, 2) ON CONFLICT (asset_code) DO UPDATE SET base_likes = excluded.base_likes, base_favorites = excluded.base_favorites")
         # SC-021: ensure NO seed exists in asset_social_seeds
         conn.execute("DELETE FROM asset_social_seeds WHERE asset_code = 'SC-021'")
         # Insert lowercase target_id interaction & collection records for FB-041 (must NOT be counted)
@@ -814,7 +810,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         try:
             # Ensure official_tip_payee is EMPTY initially
             conn.execute(
-                "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', json_object('official_tip_payee', ''), 'system', '2026-11-01T00:00:00Z')"
+                "INSERT INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', jsonb_build_object('official_tip_payee', '')::text, 'system', '2026-11-01T00:00:00Z') ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
             )
             conn.commit()
 
@@ -831,7 +827,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
 
             # B. Configure non-existent payee username
             conn.execute(
-                "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', json_object('official_tip_payee', 'nonexistent_user_999'), 'system', '2026-11-01T00:00:00Z')"
+                "INSERT INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', jsonb_build_object('official_tip_payee', 'nonexistent_user_999')::text, 'system', '2026-11-01T00:00:00Z') ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
             )
             conn.commit()
             with self.assertRaises(services.ServiceError) as cm:
@@ -842,7 +838,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
             # C. Configure inactive payee (status != 'active')
             conn.execute("UPDATE users SET status = 'suspended' WHERE id = ?", (payee_uid,))
             conn.execute(
-                "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', json_object('official_tip_payee', ?), 'system', '2026-11-01T00:00:00Z')",
+                "INSERT INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', jsonb_build_object('official_tip_payee', CAST(? AS text))::text, 'system', '2026-11-01T00:00:00Z') ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_by = excluded.updated_by, updated_at = excluded.updated_at",
                 (payee_username,),
             )
             conn.commit()

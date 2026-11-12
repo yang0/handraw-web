@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend.services import register_user
 from backend.generation_works import project_generation_to_works, generation_image_assets
 
@@ -12,7 +12,7 @@ from backend.generation_works import project_generation_to_works, generation_ima
 class ForumSeriesPromptTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.folder.name) / "series.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.user, _ = register_user(self.db, "seriesprompt", "Password123!")
         self.conn = self.db.get_conn()
 
@@ -43,7 +43,8 @@ class ForumSeriesPromptTests(unittest.TestCase):
                     f"2026-11-11T00:0{index}:00Z", "prompt_batch", index, 3,
                 ),
             )
-            ids = project_generation_to_works(self.conn, f"prompt_slot_{index}")
+            with self.db.transaction():
+                ids = project_generation_to_works(self.conn, f"prompt_slot_{index}")
         work = self.conn.execute("SELECT * FROM works WHERE id=?", (ids[0],)).fetchone()
         urls = [f"/generated/prompt_{i}.webp" for i in range(3)]
         assets = generation_image_assets(self.conn, work, urls)
@@ -70,7 +71,8 @@ class ForumSeriesPromptTests(unittest.TestCase):
                 json.dumps(["/generated/theme_snapshot.webp"]),
             ),
         )
-        ids = project_generation_to_works(self.conn, "theme_snapshot")
+        with self.db.transaction():
+            ids = project_generation_to_works(self.conn, "theme_snapshot")
         work = self.conn.execute("SELECT * FROM works WHERE id=?", (ids[0],)).fetchone()
         assets = generation_image_assets(self.conn, work, ["/generated/theme_snapshot.webp"])
         self.assertEqual(assets[0]["prompt"], "阳光下的小猫")
@@ -90,7 +92,8 @@ class ForumSeriesPromptTests(unittest.TestCase):
                 "旧版展开完整提示词", "旧版展开完整提示词", 0,
             ),
         )
-        ids = project_generation_to_works(self.conn, "no_theme")
+        with self.db.transaction():
+            ids = project_generation_to_works(self.conn, "no_theme")
         work = self.conn.execute("SELECT * FROM works WHERE id=?", (ids[0],)).fetchone()
         assets = generation_image_assets(self.conn, work, ["/generated/no_theme.webp"])
         self.assertEqual(assets[0].get("prompt", ""), "")
@@ -107,7 +110,8 @@ class ForumSeriesPromptTests(unittest.TestCase):
              "整组提示", "整组提示", 0,
              json.dumps(["/generated/multi_a.webp","/generated/multi_b.webp"])),
         )
-        ids = project_generation_to_works(self.conn, "group_images")
+        with self.db.transaction():
+            ids = project_generation_to_works(self.conn, "group_images")
         work = self.conn.execute("SELECT * FROM works WHERE id=?", (ids[0],)).fetchone()
         assets = generation_image_assets(self.conn, work, [
             "/generated/multi_a.webp", "/generated/multi_b.webp"])

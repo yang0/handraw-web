@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server
 from backend.admin_services import admin_moderate_work, admin_resolve_report
 from backend.services import publish_user_work, register_user, set_work_visibility, submit_abuse_report
@@ -21,7 +21,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class StatusProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "prov.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "prov_author", "password-a")
         register_user(self.db, "prov_admin", "password-admin")
         self.db.get_conn().execute("UPDATE users SET role = 'admin' WHERE username = 'prov_admin'")

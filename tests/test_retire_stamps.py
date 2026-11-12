@@ -11,20 +11,18 @@ Covers:
 from __future__ import annotations
 
 import json
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.ranking import (
     WORK_POPULAR_EXPR,
     sort_works,
     work_popular_score,
     work_popular_sql,
 )
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawRequestHandler
 from backend.services import (
     ServiceError,
@@ -38,7 +36,7 @@ class RetireStampsBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_stamps.db"
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.user_a, self.token_a = register_user(self.db, "alice_stamp", "Pass1234!")
         self.user_b, self.token_b = register_user(self.db, "bob_stamp", "Pass1234!")
 
@@ -130,11 +128,15 @@ class RetireStampsBackendTests(unittest.TestCase):
     def test_expression_index_v3_used_by_order_by(self) -> None:
         """5. Query planner uses idx_works_popular_v3."""
         conn = self.db.get_conn()
-        plan = conn.execute(
-            f"EXPLAIN QUERY PLAN SELECT id FROM works WHERE status = 'published' ORDER BY {WORK_POPULAR_EXPR} DESC, published_at_ms DESC"
-        ).fetchall()
-        details = " ".join(str(r["detail"]) for r in plan)
-        self.assertIn("idx_works_popular_v3", details)
+        # This tiny fixture otherwise favors a sequential scan. Verify that
+        # the index can supply the requested order without a separate sort.
+        with self.db.transaction() as tx:
+            tx.execute("SET LOCAL enable_seqscan = off")
+            plan = tx.execute(
+                f"EXPLAIN (FORMAT JSON) SELECT id FROM works WHERE status = 'published' ORDER BY {WORK_POPULAR_EXPR} DESC, published_at_ms DESC"
+            ).fetchone()[0][0]["Plan"]
+        self.assertEqual(plan["Node Type"], "Index Scan")
+        self.assertEqual(plan["Index Name"], "pg_idx_works_popular_v3")
 
 
 if __name__ == "__main__":

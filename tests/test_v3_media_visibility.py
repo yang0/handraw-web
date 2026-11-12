@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.server import _is_published_media
 from backend.services import register_user, set_work_visibility, utc_now_iso
 
@@ -18,7 +18,7 @@ class GeneratedMediaVisibilityTests(unittest.TestCase):
         }))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.db = Database(Path(self.tmp.name) / "media_visibility.db")
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         self.addCleanup(self.db.close)
         self.author, _ = register_user(

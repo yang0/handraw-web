@@ -6,7 +6,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import tempfile
 import threading
 import time
@@ -19,8 +18,8 @@ import docx
 import fitz
 from PIL import Image
 
+from tests.postgres_support import open_isolated_postgres
 from backend import ai_client
-from tests.legacy_database import Database
 from backend.db import utc_now_iso
 from backend.document_importer import (
     ImportManager,
@@ -30,7 +29,6 @@ from backend.document_importer import (
     verify_fidelity,
 )
 from backend.document_structure import DocumentImportError, extract_document_structure
-from tests.legacy_database import init_legacy_database
 from backend.server import create_channel_server
 
 
@@ -191,18 +189,13 @@ class DocumentImportWorkflowTests(unittest.TestCase):
         self.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(self.uploads_dir)})
         self.env_patch.start()
         self.db_path = Path(self.temp_dir.name) / "test.db"
-        self.db = Database(self.db_path)
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         from backend.services import register_user
         self.user, self.token = register_user(self.db, "import_tester", "password123")
 
     def tearDown(self):
         self.env_patch.stop()
-        from backend.document_importer import _IMPORT_MANAGERS, _IMPORT_MANAGERS_LOCK
-        with _IMPORT_MANAGERS_LOCK:
-            mgr = _IMPORT_MANAGERS.pop(str(self.db_path), None)
-            if mgr:
-                mgr.stop()
         self.db.close()
         self.temp_dir.cleanup()
 
@@ -368,7 +361,7 @@ class DocumentImportWorkflowTests(unittest.TestCase):
                 def another_writer():
                     nonlocal write_success
                     with self.db.transaction() as tx:
-                        tx.execute("INSERT OR REPLACE INTO daily_usage (user_id, scope, usage_date, count) VALUES (999, 'test', '2026-10-31', 1)")
+                        tx.execute("INSERT INTO daily_usage (user_id, scope, usage_date, count) VALUES (999, 'test', '2026-10-31', 1) ON CONFLICT (user_id, scope, usage_date) DO UPDATE SET count = excluded.count")
                     write_success = True
 
                 writer_thread = threading.Thread(target=another_writer)
@@ -847,7 +840,7 @@ class ImportHttpApiTests(unittest.TestCase):
         cls.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(cls.uploads_dir), "HANDRAW_DEMO_MODE": "0", "HANDRAW_ALLOWED_ORIGINS": "https://studio.handraw-style.com"})
         cls.env_patch.start()
         cls.db_path = Path(cls.temp_dir.name) / "http_test.db"
-        cls.db = init_legacy_database(cls.db_path)
+        cls.db = open_isolated_postgres(cls, seed=True)
         from backend.services import register_user
         cls.u1, cls.tok1 = register_user(cls.db, "import_user_1", "password123")
         cls.u2, cls.tok2 = register_user(cls.db, "import_user_2", "password123")
@@ -988,7 +981,7 @@ class ImportHttpApiTests(unittest.TestCase):
         from backend.db import local_today_str
         with self.db.transaction() as tx:
             tx.execute(
-                "INSERT OR REPLACE INTO daily_usage (user_id, scope, usage_date, count) VALUES (?, 'parse', ?, 20)",
+                "INSERT INTO daily_usage (user_id, scope, usage_date, count) VALUES (?, 'parse', ?, 20) ON CONFLICT (user_id, scope, usage_date) DO UPDATE SET count = excluded.count",
                 (self.u1["id"], local_today_str()),
             )
         status_limit, resp_limit = self._request(

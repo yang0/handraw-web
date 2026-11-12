@@ -16,7 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server as server_module
 from backend.config import SESSION_COOKIE_NAME
 from backend.server import create_channel_server
@@ -33,7 +33,7 @@ class _HttpBase(unittest.TestCase):
         cls._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"})
         cls._env.start()
         cls.temp = TemporaryDirectory()
-        cls.db = init_legacy_database(Path(cls.temp.name) / "http.db")
+        cls.db = open_isolated_postgres(cls, seed=True)
         cls.author, _ = register_user(cls.db, "hv_author", "password-a")
         register_user(cls.db, "hv_admin", "password-admin")
         cls.db.get_conn().execute("UPDATE users SET role = 'admin' WHERE username = 'hv_admin'")

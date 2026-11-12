@@ -9,13 +9,22 @@ from unittest.mock import patch
 from ops.bootstrap_postgres_v3 import bootstrap
 
 
-def open_isolated_postgres(case):
+def open_isolated_postgres(case, *, seed: bool = False):
     from backend.postgres_db import PostgresDatabase
 
     if not os.environ.get("HANDRAW_PG_STAGING_URL"):
-        case.skipTest("Isolated PostgreSQL staging URL not provided")
-    db = PostgresDatabase(case.enterContext(isolated_pg_dsn()))
-    case.addCleanup(db.close)
+        import unittest
+        raise unittest.SkipTest("Isolated PostgreSQL staging URL not provided")
+    if isinstance(case, type):
+        dsn = case.enterClassContext(isolated_pg_dsn())
+        db = PostgresDatabase(dsn)
+        case.addClassCleanup(db.close)
+    else:
+        db = PostgresDatabase(case.enterContext(isolated_pg_dsn()))
+        case.addCleanup(db.close)
+    if seed:
+        from backend.seed import ensure_seeded
+        ensure_seeded(db)
     return db
 
 

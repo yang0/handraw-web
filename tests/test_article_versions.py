@@ -2,14 +2,14 @@
 import tempfile
 import unittest
 from pathlib import Path
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.services import ServiceError, register_user, sync_user_studio_articles
 
 
 class ArticleVersionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.db = Database(Path(self.temp.name) / "version.db")
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         self.alice, _ = register_user(self.db, "version_alice", "Pass12345!", "version-alice@example.com", "Alice", "invite-a")
         self.bob, _ = register_user(self.db, "version_bob", "Pass12345!", "version-bob@example.com", "Bob", "invite-b")

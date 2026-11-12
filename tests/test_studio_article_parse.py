@@ -17,8 +17,8 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.postgres_support import open_isolated_postgres
 from backend.document_parser import parse_article_file
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawRequestHandler
 from backend.services import register_user
 
@@ -31,7 +31,6 @@ class StudioArticleParseTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -43,7 +42,7 @@ class StudioArticleParseTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         register_user(self.db, "parse_tester", "password123")
 
         self.httpd = urllib.request.http.server.ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)  # type: ignore[attr-defined]
@@ -166,9 +165,9 @@ class StudioArticleParseTests(unittest.TestCase):
         self.assertEqual(status_b, 200, "Another user should not be affected by user A's limit")
 
         # 服务重启（新建 Database 实例）后用户 A 的计数仍然持久化存在
-        from tests.legacy_database import Database
+        from backend.postgres_db import PostgresDatabase as Database
         from backend.services import consume_daily_usage
-        restarted_db = Database(self.db_path)
+        restarted_db = Database(self.db._dsn)
         try:
             allowed = consume_daily_usage(restarted_db, user_a["id"], "parse", 20)
             self.assertFalse(allowed, "Count should persist in DB across server restarts")

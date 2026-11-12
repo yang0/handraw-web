@@ -19,7 +19,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend.server import HandrawRequestHandler
 from backend.services import register_user
 
@@ -32,7 +32,6 @@ class ApiTokensTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -41,7 +40,7 @@ class ApiTokensTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]

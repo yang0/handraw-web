@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.generation_works import project_generation_to_works
 from backend.services import register_user, utc_now_iso
 from backend.works_feed import get_works_feed, get_work_by_id
@@ -29,7 +29,7 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
             },
         )
         self._env.start()
-        self.db = Database(self.db_path)
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         self.conn = self.db.get_conn()
 
@@ -78,7 +78,8 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
                 gen_batch_row["subject"]
             ),
         )
-        self.batch_wids = project_generation_to_works(self.conn, gen_batch_row)
+        with self.db.transaction():
+            self.batch_wids = project_generation_to_works(self.conn, gen_batch_row)
         self.assertEqual(len(self.batch_wids), 1)
 
         # 2. Create a single-image generation for Alice
@@ -116,7 +117,8 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
                 gen_single_row["subject"]
             ),
         )
-        self.single_wids = project_generation_to_works(self.conn, gen_single_row)
+        with self.db.transaction():
+            self.single_wids = project_generation_to_works(self.conn, gen_single_row)
         self.assertEqual(len(self.single_wids), 1)
 
         # 3. Create a legacy work (no generation)
@@ -183,11 +185,9 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
         # A small page must not fetch comments for every work on the site.
         for sort in ("newest", "popular"):
             statements = []
-            self.conn.set_trace_callback(statements.append)
-            try:
+            with patch.object(self.conn, "execute", wraps=self.conn.execute) as execute:
                 feed = get_works_feed(self.db, {"sort": sort, "limit": 1})
-            finally:
-                self.conn.set_trace_callback(None)
+            statements = [call.args[0] for call in execute.call_args_list]
             self.assertEqual(len(feed["items"]), 1)
             comment_reads = [
                 sql.lower() for sql in statements
@@ -205,11 +205,9 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
 
     def test_empty_feed_does_not_query_work_comments(self):
         statements = []
-        self.conn.set_trace_callback(statements.append)
-        try:
+        with patch.object(self.conn, "execute", wraps=self.conn.execute) as execute:
             feed = get_works_feed(self.db, {"q": "no-match-feed-175"})
-        finally:
-            self.conn.set_trace_callback(None)
+        statements = [call.args[0] for call in execute.call_args_list]
         self.assertEqual(feed["items"], [])
         self.assertFalse(any("from work_comments" in s.lower() for s in statements))
         self.assertFalse(any(
@@ -223,7 +221,8 @@ class Stage5PlazaBatchFoldingTests(unittest.TestCase):
         res = admin_moderate_work(self.db, self.admin, work_id, "delete")
         self.assertTrue(res["ok"])
         # Replaying a generation cannot recreate a deleted/hidden work.
-        project_generation_to_works(self.conn, "gen_batch_4img")
+        with self.db.transaction():
+            project_generation_to_works(self.conn, "gen_batch_4img")
         feed = get_works_feed(self.db, {"sort": "newest"})
         self.assertNotIn(work_id, [row["id"] for row in feed["items"]])
         self.assertEqual(feed["total"], 2)

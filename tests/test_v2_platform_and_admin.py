@@ -1,6 +1,6 @@
 """Comprehensive integration tests for Handraw Web 2.0 full-stack platform & Admin Console.
 
-Runs entirely against an isolated temporary SQLite WAL database (never touching production or .local DB).
+Runs entirely against an isolated temporary PostgreSQL database.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend.server import HandrawRequestHandler
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,14 +86,13 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
             os.environ,
             {
                 "HANDRAW_DEMO_MODE": "1",
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(self.uploads_dir),
                 "HANDRAW_GENERATED_DIR": str(self.generated_dir),
             },
         )
         self.env_patch.start()
 
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -279,8 +278,9 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         tok_raw = "hwt_test_token_yang0_bb_export"
         tok_hash = hashlib.sha256(tok_raw.encode("utf-8")).hexdigest()
         self.db.get_conn().execute(
-            "INSERT OR REPLACE INTO api_tokens (id, user_id, name, scopes, token_hash, created_at) "
-            "VALUES ('tok_bb_test', (SELECT id FROM users WHERE username = 'yang0'), 'Test', '[\"library\"]', ?, '2026-10-31T00:00:00Z')",
+            "INSERT INTO api_tokens (id, user_id, name, scopes, token_hash, created_at) "
+            "VALUES ('tok_bb_test', (SELECT id FROM users WHERE username = 'yang0'), 'Test', '[\"library\"]', ?, '2026-10-31T00:00:00Z') "
+            "ON CONFLICT (id) DO UPDATE SET token_hash=EXCLUDED.token_hash, scopes=EXCLUDED.scopes",
             (tok_hash,),
         )
         code_sk, _ = admin.request(
@@ -673,8 +673,9 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         tok_sync = "hwt_test_token_yang0_sync"
         tok_sync_hash = hashlib.sha256(tok_sync.encode("utf-8")).hexdigest()
         self.db.get_conn().execute(
-            "INSERT OR REPLACE INTO api_tokens (id, user_id, name, scopes, token_hash, created_at) "
-            "VALUES ('tok_sync_test', (SELECT id FROM users WHERE username = 'yang0'), 'Test', '[\"library\"]', ?, '2026-10-31T00:00:00Z')",
+            "INSERT INTO api_tokens (id, user_id, name, scopes, token_hash, created_at) "
+            "VALUES ('tok_sync_test', (SELECT id FROM users WHERE username = 'yang0'), 'Test', '[\"library\"]', ?, '2026-10-31T00:00:00Z') "
+            "ON CONFLICT (id) DO UPDATE SET token_hash=EXCLUDED.token_hash, scopes=EXCLUDED.scopes",
             (tok_sync_hash,),
         )
 

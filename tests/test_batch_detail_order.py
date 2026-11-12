@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.generation_works import project_generation_to_works
 from backend.post_routes import _handle_detail
 from backend.recipe_routes import draft_recipe_from_work
@@ -26,7 +26,7 @@ class BatchDetailOrderTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.tmp = tempfile.TemporaryDirectory()
-        self.db = Database(Path(self.tmp.name) / "batch.db")
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         author, _ = register_user(
             self.db, "batch_order_author", "IsolatedBatchPassword!",

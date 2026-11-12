@@ -8,6 +8,17 @@ concurrency:
 jobs:
   interaction-journey-regression:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: handraw_pg_staging
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres -d handraw_pg_staging" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      HANDRAW_PG_STAGING_URL: postgresql://postgres:postgres@127.0.0.1:5432/handraw_pg_staging
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,6 +43,23 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: handraw_pg_staging
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres -d handraw_pg_staging" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      HANDRAW_REDIS_URL: redis://127.0.0.1:6379/0
+      HANDRAW_REDIS_PREFIX: handraw:ci
+      HANDRAW_PG_STAGING_URL: postgresql://postgres:postgres@127.0.0.1:5432/handraw_pg_staging
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

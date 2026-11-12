@@ -15,9 +15,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.db import utc_now_iso
-from tests.legacy_database import init_legacy_database
 from backend.services import (
     ServiceError,
     get_user_public_generations,
@@ -26,7 +25,7 @@ from backend.services import (
     serialize_public_generation_history,
     register_user,
 )
-from tests.work_schema import deduplicate_generation_history
+from tests.postgres_maintenance import deduplicate_generation_history
 
 CODE_RE = re.compile(r"^(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+$")
 
@@ -41,7 +40,6 @@ class GenerationDuplicatesAndCodesTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -51,7 +49,7 @@ class GenerationDuplicatesAndCodesTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
 
         conn = self.db.get_conn()
         # Clean any seeded generations for test users to have clean baselines
@@ -146,7 +144,7 @@ class GenerationDuplicatesAndCodesTests(unittest.TestCase):
 
         with self.db.transaction() as tx:
             # Temporarily drop partial index to simulate pre-index duplicate rows
-            tx.execute("DROP INDEX IF EXISTS idx_studio_gen_user_request")
+            tx.execute("DROP INDEX IF EXISTS pg_idx_studio_gen_user_request")
             tx.execute(
                 """
                 INSERT INTO studio_generations (
@@ -181,7 +179,7 @@ class GenerationDuplicatesAndCodesTests(unittest.TestCase):
         with self.db.transaction() as tx:
             tx.execute(
                 """
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_studio_gen_user_request
+                CREATE UNIQUE INDEX IF NOT EXISTS pg_idx_studio_gen_user_request
                     ON studio_generations(user_id, request_id)
                     WHERE request_id <> ''
                 """

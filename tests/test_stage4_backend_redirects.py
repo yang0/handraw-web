@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.generation_works import project_generation_to_works
 from backend.post_routes import _handle_detail, _handle_t_redirect, _resolve_ref_to_topic_id
 from backend.services import register_user, utc_now_iso
@@ -28,7 +28,7 @@ class Stage4BackendRedirectsTests(unittest.TestCase):
             },
         )
         self._env.start()
-        self.db = Database(self.db_path)
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         self.conn = self.db.get_conn()
 
@@ -122,7 +122,8 @@ class Stage4BackendRedirectsTests(unittest.TestCase):
         }
 
         # V3 projects all four images into a single canonical work
-        work_ids = project_generation_to_works(self.conn, gen_row)
+        with self.db.transaction():
+            work_ids = project_generation_to_works(self.conn, gen_row)
         self.assertEqual(len(work_ids), 1)
 
         # Check detail for first work's topic

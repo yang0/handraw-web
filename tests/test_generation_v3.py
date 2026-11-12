@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
+from psycopg.errors import RaiseException
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.generation_v3 import (
     ensure_run, record_public_work, reserve_skill_run,
     record_skill_uploaded_item, uploaded_skill_images, work_images,
@@ -22,7 +22,7 @@ class GenerationV3Tests(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.db = Database(Path(self.tmp.name) / "v3.db")
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         self.addCleanup(self.db.close)
         self.creator, _ = register_user(self.db, "v3_creator", "SecurePassword123!")
@@ -45,8 +45,8 @@ class GenerationV3Tests(unittest.TestCase):
     def test_fresh_schema_excludes_legacy_skill_history_tables(self):
         conn = self.db.get_conn()
         names = {
-            row["name"] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
+            row["table_name"] for row in conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
             )
         }
         self.assertTrue({"generation_runs", "generation_items",
@@ -54,7 +54,7 @@ class GenerationV3Tests(unittest.TestCase):
         self.assertNotIn("skill_generation_runs", names)
         self.assertNotIn("skill_generation_work_items", names)
         self.assertNotIn("skill_history_publications", names)
-        self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+        self.assertEqual(conn.execute("SHOW session_replication_role").fetchone()[0], "origin")
 
     def test_out_of_order_batch_has_one_work_and_first_successful_cover(self):
         wid = self._new_work()
@@ -215,13 +215,13 @@ class GenerationV3Tests(unittest.TestCase):
                 ordered_images=[(0, "/generated/one.png", "")],
                 expected_count=1,
             )
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(RaiseException):
             with self.db.transaction() as tx:
                 tx.execute(
                     "UPDATE works SET cover_media_id=? WHERE id=?",
                     ("missing_media", wid),
                 )
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(RaiseException):
             with self.db.transaction() as tx:
                 tx.execute(
                     "DELETE FROM work_media WHERE work_id=?", (wid,),
@@ -316,7 +316,7 @@ class GenerationV3Tests(unittest.TestCase):
                 ordered_images=[(0, "/generated/one.webp", "")],
                 expected_count=1,
             )
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(RaiseException):
             with self.db.transaction() as tx:
                 tx.execute(
                     "UPDATE works SET images_json=? WHERE id=?",

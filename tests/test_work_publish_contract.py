@@ -17,7 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server as server_module
 from backend.config import SESSION_COOKIE_NAME
 from backend.server import create_channel_server
@@ -30,7 +30,7 @@ class EntryContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = TemporaryDirectory()
-        cls.db = init_legacy_database(Path(cls.temp.name) / "entry.db")
+        cls.db = open_isolated_postgres(cls, seed=True)
         register_user(cls.db, "skill_user", "password-1")
         cls.server = create_channel_server(0, "main", cls.db)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)

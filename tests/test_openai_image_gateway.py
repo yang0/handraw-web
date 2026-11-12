@@ -15,9 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.postgres_support import open_isolated_postgres
 from backend.config import load_image_config, normalize_image_protocol, resolve_gateway_model
 from backend.db import local_today_str
-from tests.legacy_database import init_legacy_database
 from backend.server import (
     GenerationReconciler,
     create_channel_server,
@@ -244,7 +244,6 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
         cls.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(cls.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "0",
@@ -253,19 +252,11 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
             },
         )
         cls.env.start()
-        cls.db = init_legacy_database(cls.db_path)
+        cls.db = open_isolated_postgres(cls, seed=True)
 
         with cls.db.transaction() as tx:
             tx.execute(
-                """
-                INSERT OR IGNORE INTO catalog_assets (
-                    code, name, kind, source_type, tier, unlock_cost, image_url,
-                    author_username, status, secret_blackbox_prompt, published_at_ms, created_at, updated_at
-                ) VALUES (
-                    'FX-OAI-PAID', '隐藏画风测试', 'style', 'exclusive', 'S', 0, '/img.webp',
-                    'admin', 'published', ?, 1700000000000, '2026-10-31T00:00:00Z', '2026-10-31T00:00:00Z'
-                )
-                """,
+                "INSERT INTO catalog_assets (\n                    code, name, kind, source_type, tier, unlock_cost, image_url,\n                    author_username, status, secret_blackbox_prompt, published_at_ms, created_at, updated_at\n                ) VALUES (\n                    'FX-OAI-PAID', '隐藏画风测试', 'style', 'exclusive', 'S', 0, '/img.webp',\n                    'admin', 'published', ?, 1700000000000, '2026-10-31T00:00:00Z', '2026-10-31T00:00:00Z'\n                ) ON CONFLICT DO NOTHING",
                 (PAID_SECRET,),
             )
 
@@ -274,7 +265,7 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
         with cls.db.transaction() as tx:
             tx.execute("UPDATE users SET role = 'admin' WHERE id = ?", (cls.admin["id"],))
             tx.execute(
-                "INSERT OR IGNORE INTO unlocks (user_id, target_type, target_id, cost, status, created_at) VALUES (?, 'asset', 'FX-OAI-PAID', 0, 'settled', '2026-10-31T00:00:00Z')",
+                "INSERT INTO unlocks (user_id, target_type, target_id, cost, status, created_at) VALUES (?, 'asset', 'FX-OAI-PAID', 0, 'settled', '2026-10-31T00:00:00Z') ON CONFLICT DO NOTHING",
                 (cls.user["id"],),
             )
 

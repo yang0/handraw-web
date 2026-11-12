@@ -17,7 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server as server_module
 from backend.server import create_channel_server
 
@@ -28,7 +28,7 @@ class ClientIpResolutionTests(unittest.TestCase):
         cls._env = patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0", "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test"})
         cls._env.start()
         cls.temp = TemporaryDirectory()
-        cls.db = init_legacy_database(Path(cls.temp.name) / "ip.db")
+        cls.db = open_isolated_postgres(cls, seed=True)
         cls.server = create_channel_server(0, "main", cls.db)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()

@@ -26,8 +26,8 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
+from tests.postgres_support import open_isolated_postgres
 from backend import admin_services as A, curation as C, services as S
-from tests.legacy_database import init_legacy_database
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 
 
@@ -40,14 +40,13 @@ class WorkPromptSubjectTests(unittest.TestCase):
             os.environ,
             {
                 "HANDRAW_DEMO_MODE": "0",
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_PRIVATE_STORAGE": self.tmp.name,
                 "HANDRAW_ALLOWED_ORIGINS": "http://127.0.0.1:3094,http://localhost:3094,http://trusted.test",
                 "HANDRAW_ENABLE_RECHARGE": "0",
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.user, token = S.register_user(self.db, "alice", "alice-pass-123")
         self.reviewer, _ = S.register_user(self.db, "rev_a", "rev-pass-123")
         self.admin, token_admin = S.register_user(self.db, "admin_user", "admin-pass-123")

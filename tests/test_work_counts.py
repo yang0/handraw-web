@@ -12,7 +12,7 @@ from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server
 from backend.services import (
     build_boot_payload,
@@ -30,7 +30,7 @@ class WorkCounterTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "counts.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "cnt_author", "password-a")
         self.reader, _ = register_user(self.db, "cnt_reader", "password-b")
         self.published = publish_user_work(

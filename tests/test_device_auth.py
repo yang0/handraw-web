@@ -21,7 +21,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend.server import HandrawRequestHandler
 from backend import device_auth as DA
 from backend.services import (
@@ -40,7 +40,6 @@ class DeviceAuthTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -49,7 +48,7 @@ class DeviceAuthTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -480,6 +479,8 @@ class DeviceAuthTests(unittest.TestCase):
                 results.append(r)
             except ServiceError as e:
                 errors.append(e)
+            finally:
+                self.db.close_thread_conn()
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(6)]
         for t in threads:
@@ -574,6 +575,7 @@ class DeviceAuthTests(unittest.TestCase):
 
         barrier = threading.Barrier(24)
         results = []
+        errors = []
 
         def worker(idx: int) -> None:
             barrier.wait()
@@ -582,6 +584,10 @@ class DeviceAuthTests(unittest.TestCase):
                 results.append("ok")
             except ServiceError as e:
                 results.append(e.code)
+            except Exception as e:
+                errors.append(e)
+            finally:
+                self.db.close_thread_conn()
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(24)]
         for t in threads:
@@ -590,6 +596,7 @@ class DeviceAuthTests(unittest.TestCase):
             t.join()
 
         # Exactly 24 responses: at most 20 not_found (404), rest rate_limited (429)
+        self.assertEqual(errors, [])
         self.assertEqual(len(results), 24)
         not_found_count = results.count("not_found")
         rate_limited_count = results.count("rate_limited")

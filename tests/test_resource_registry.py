@@ -28,7 +28,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 from backend import resource_registry
 from backend.services import (
@@ -55,7 +55,6 @@ class ResourceRegistryTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -64,7 +63,7 @@ class ResourceRegistryTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -138,21 +137,13 @@ class ResourceRegistryTests(unittest.TestCase):
 
             # Insert an exclusive asset: FX-001
             tx.execute(
-                """
-                INSERT OR REPLACE INTO catalog_assets
-                    (code, kind, source_type, author_username, author_name, name, unlock_cost, image_url, description, definition, secret_blackbox_prompt, status, published_at_ms, created_at, updated_at)
-                VALUES ('FX-001', 'style', 'exclusive', 'yang0', '创始人', '黑盒专属画风', 0, '/images/fx-001.webp', '官网独占黑盒', '', 'SECRET_BLACKBOX_GUIDANCE', 'published', 1000, ?, ?)
-                """,
+                "INSERT INTO catalog_assets\n                    (code, kind, source_type, author_username, author_name, name, unlock_cost, image_url, description, definition, secret_blackbox_prompt, status, published_at_ms, created_at, updated_at)\n                VALUES ('FX-001', 'style', 'exclusive', 'yang0', '创始人', '黑盒专属画风', 0, '/images/fx-001.webp', '官网独占黑盒', '', 'SECRET_BLACKBOX_GUIDANCE', 'published', 1000, ?, ?) ON CONFLICT (code) DO UPDATE SET kind = excluded.kind, source_type = excluded.source_type, author_username = excluded.author_username, author_name = excluded.author_name, name = excluded.name, unlock_cost = excluded.unlock_cost, image_url = excluded.image_url, description = excluded.description, definition = excluded.definition, secret_blackbox_prompt = excluded.secret_blackbox_prompt, status = excluded.status, published_at_ms = excluded.published_at_ms, created_at = excluded.created_at, updated_at = excluded.updated_at",
                 (now, now),
             )
 
             # Insert a community paid asset: USR-S99
             tx.execute(
-                """
-                INSERT OR REPLACE INTO catalog_assets
-                    (code, kind, source_type, author_username, author_name, name, unlock_cost, image_url, description, definition, secret_blackbox_prompt, status, published_at_ms, created_at, updated_at)
-                VALUES ('USR-S99', 'style', 'community', 'creator99', '创作者99', '付费社区画风', 10, '/images/usr-99.webp', '社区付费', '社区付费提示词定义', '', 'published', 1000, ?, ?)
-                """,
+                "INSERT INTO catalog_assets\n                    (code, kind, source_type, author_username, author_name, name, unlock_cost, image_url, description, definition, secret_blackbox_prompt, status, published_at_ms, created_at, updated_at)\n                VALUES ('USR-S99', 'style', 'community', 'creator99', '创作者99', '付费社区画风', 10, '/images/usr-99.webp', '社区付费', '社区付费提示词定义', '', 'published', 1000, ?, ?) ON CONFLICT (code) DO UPDATE SET kind = excluded.kind, source_type = excluded.source_type, author_username = excluded.author_username, author_name = excluded.author_name, name = excluded.name, unlock_cost = excluded.unlock_cost, image_url = excluded.image_url, description = excluded.description, definition = excluded.definition, secret_blackbox_prompt = excluded.secret_blackbox_prompt, status = excluded.status, published_at_ms = excluded.published_at_ms, created_at = excluded.created_at, updated_at = excluded.updated_at",
                 (now, now),
             )
 

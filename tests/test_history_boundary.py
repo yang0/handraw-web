@@ -15,9 +15,9 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.postgres_support import open_isolated_postgres
 from backend import skill_prompt
 
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawRequestHandler, load_localized_json
 from backend.services import (
     complete_cloud_generation,
@@ -69,7 +69,6 @@ class HistoryBoundaryTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -79,7 +78,7 @@ class HistoryBoundaryTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.user, _ = register_user(self.db, "creator_alice", "Password123!")
 
         self.httpd = urllib.request.http.server.ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)  # type: ignore[attr-defined]
@@ -254,22 +253,11 @@ class HistoryBoundaryTests(unittest.TestCase):
         # Insert a paid catalog asset
         with self.db.transaction() as tx:
             tx.execute(
-                """
-                INSERT OR REPLACE INTO catalog_assets (
-                    code, kind, name, description, definition, secret_blackbox_prompt,
-                    unlock_cost, source_type, status, image_url, published_at_ms, created_at, updated_at
-                ) VALUES (
-                    'PAID-01', 'style', '高级水彩私享画风', '独家付费手绘风格', '【绝密水彩画风定义：层叠温润渲染】', '',
-                    15, 'exclusive', 'published', '/images/paid01.webp', 1700000000000, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z'
-                )
-                """
+                "INSERT INTO catalog_assets (\n                    code, kind, name, description, definition, secret_blackbox_prompt,\n                    unlock_cost, source_type, status, image_url, published_at_ms, created_at, updated_at\n                ) VALUES (\n                    'PAID-01', 'style', '高级水彩私享画风', '独家付费手绘风格', '【绝密水彩画风定义：层叠温润渲染】', '',\n                    15, 'exclusive', 'published', '/images/paid01.webp', 1700000000000, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z'\n                ) ON CONFLICT (code) DO UPDATE SET kind = excluded.kind, name = excluded.name, description = excluded.description, definition = excluded.definition, secret_blackbox_prompt = excluded.secret_blackbox_prompt, unlock_cost = excluded.unlock_cost, source_type = excluded.source_type, status = excluded.status, image_url = excluded.image_url, published_at_ms = excluded.published_at_ms, created_at = excluded.created_at, updated_at = excluded.updated_at"
             )
             # Give user unlock record for PAID-01
             tx.execute(
-                """
-                INSERT OR REPLACE INTO unlocks (user_id, target_type, target_id, cost, status, created_at)
-                VALUES (?, 'asset', 'PAID-01', 15, 'settled', '2026-11-01T00:00:00Z')
-                """,
+                "INSERT INTO unlocks (user_id, target_type, target_id, cost, status, created_at)\n                VALUES (?, 'asset', 'PAID-01', 15, 'settled', '2026-11-01T00:00:00Z') ON CONFLICT (id) DO UPDATE SET user_id = excluded.user_id, target_type = excluded.target_type, target_id = excluded.target_id, cost = excluded.cost, status = excluded.status, created_at = excluded.created_at",
                 (self.user["id"],),
             )
 

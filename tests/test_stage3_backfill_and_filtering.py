@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.resource_discussions import (
     ensure_topic,
     record_atomic_reply_and_listing,
@@ -38,7 +38,7 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
             },
         )
         self._env.start()
-        self.db = Database(self.db_path)
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         self.conn = self.db.get_conn()
 
@@ -75,10 +75,11 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
                 "SELECT * FROM works WHERE id=?", (wid,),
             ).fetchone()
             self.assertIsNotNone(row)
-            result.append(ensure_topic(
-                self.conn, "work", wid, dict(row),
-                initial_origin="submission", listed_at_ms=None,
-            ))
+            with self.db.transaction():
+                result.append(ensure_topic(
+                    self.conn, "work", wid, dict(row),
+                    initial_origin="submission", listed_at_ms=None,
+                ))
         self.conn.commit()
         return result
 

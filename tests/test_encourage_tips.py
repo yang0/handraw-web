@@ -14,14 +14,12 @@ Covers Codex requirements:
 from __future__ import annotations
 
 import json
-import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Any
 import unittest
 
-from tests.legacy_database import Database
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend.services import (
     ServiceError,
     apply_wallet_delta,
@@ -36,7 +34,7 @@ class TestEncourageTips(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_tips.db"
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
 
         # Register users
         self.u_author, _ = register_user(self.db, "author_user", "Pass123!Safe")

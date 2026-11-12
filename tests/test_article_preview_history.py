@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server as server_module
 from backend.server import create_channel_server
 from backend.services import register_user
@@ -34,7 +34,7 @@ class ArticlePreviewHistoryTests(unittest.TestCase):
             },
         )
         cls._env.start()
-        cls.db = init_legacy_database(Path(cls.temp.name) / "browser_studio.db")
+        cls.db = open_isolated_postgres(cls, seed=True)
         register_user(cls.db, "studio_author", "password-s")
         cls.server = create_channel_server(0, "main", cls.db)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)

@@ -36,7 +36,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend.server import (
     HandrawRequestHandler,
     GenerationReconciler,
@@ -126,7 +126,7 @@ class ParseCreatedAtTests(unittest.TestCase):
         self.assertEqual(dt.tzinfo, timezone.utc)
         self.assertEqual(dt.hour, 12)
 
-    def test_sqlite_space_datetime_parsing(self):
+    def test_space_separated_datetime_parsing(self):
         dt = _parse_created_at_dt("2026-11-03 12:00:00")
         self.assertIsNotNone(dt)
         self.assertEqual(dt.tzinfo, timezone.utc)
@@ -143,7 +143,7 @@ class RecordCloudGenerationTaskIdTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "task_id_test.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.user, _ = register_user(self.db, "record_user", "password-123")
         self.uid = self.user["id"]
 
@@ -200,7 +200,6 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
         cls.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(cls.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "0",
@@ -209,7 +208,7 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
             },
         )
         cls.env.start()
-        cls.db = init_legacy_database(cls.db_path)
+        cls.db = open_isolated_postgres(cls, seed=True)
         cls.user, _ = register_user(cls.db, "gen_tester", "Password123!")
 
         cls.server = create_channel_server(0, "main", cls.db)
@@ -454,15 +453,15 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
         self.assertTrue(next_res.get("ok"))
 
     def test_pre_submission_record_task_id_failure_refunds_immediately(self):
-        """Failure in record_cloud_generation_task_id (sqlite3.OperationalError) refunds immediately."""
-        import sqlite3
+        """Failure in record_cloud_generation_task_id (SerializationFailure) refunds immediately."""
+        from psycopg.errors import SerializationFailure
         conn = self.db.get_conn()
         uid = self.user["id"]
         today = local_today_str()
         conn.execute("UPDATE wallets SET free_quota_used = 0, balance = 20, free_quota_date = ? WHERE user_id = ?", (today, uid))
         conn.commit()
 
-        with patch("backend.server.record_cloud_generation_task_id", side_effect=sqlite3.OperationalError("database locked")):
+        with patch("backend.server.record_cloud_generation_task_id", side_effect=SerializationFailure("serialization conflict")):
             status, res = self._post_generate({
                 "prompt": "记录task_id失败测试",
                 "requestId": "req_db_locked_1",
@@ -585,7 +584,7 @@ class ReconcilerUnreceivedTaskRefundTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "reconciler_test.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.user, _ = register_user(self.db, "reconcile_user", "password-123")
         self.uid = self.user["id"]
 

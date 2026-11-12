@@ -14,8 +14,9 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.postgres_support import open_isolated_postgres
+from backend.db import utc_now_iso
 from backend.runtime_policy import bind_host, recharge_enabled, sanitize_html
-from tests.legacy_database import init_legacy_database
 from backend.server import (
     GenerationReconciler,
     HandrawRequestHandler,
@@ -32,7 +33,6 @@ class SecurityHTTPTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(root / "security.db"),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -41,7 +41,7 @@ class SecurityHTTPTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(root / "security.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -206,8 +206,8 @@ class SecurityHTTPTests(unittest.TestCase):
         uid = self.db.get_conn().execute("SELECT id FROM users WHERE username='su_editorial'").fetchone()["id"]
         with self.db.transaction() as tx:
             tx.execute(
-                "INSERT INTO studio_generations (id,user_id,username,task_id,status,created_at) VALUES (?,?,?,?,?,datetime('now'))",
-                ("gen-security", uid, "su_editorial", "owned-task", "running"),
+                "INSERT INTO studio_generations (id,user_id,username,task_id,status,created_at) VALUES (?,?,?,?,?,?)",
+                ("gen-security", uid, "su_editorial", "owned-task", "running", utc_now_iso()),
             )
         self.assertEqual(self.request("GET", "/api/studio/tasks?id=owned-task")[0], 401)
         other_cookie = self.login("lin_sketch")
@@ -240,8 +240,8 @@ class SecurityHTTPTests(unittest.TestCase):
         uid = self.db.get_conn().execute("SELECT id FROM users WHERE username='su_editorial'").fetchone()["id"]
         with self.db.transaction() as tx:
             tx.execute(
-                "INSERT INTO studio_generations (id,user_id,username,task_id,request_id,engine,status,created_at) VALUES (?,?,?,?,?,?,?,datetime('now'))",
-                ("gen-reconcile", uid, "su_editorial", "known-task", "stable-reconcile", "live", "queued"),
+                "INSERT INTO studio_generations (id,user_id,username,task_id,request_id,engine,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                ("gen-reconcile", uid, "su_editorial", "known-task", "stable-reconcile", "live", "queued", utc_now_iso()),
             )
         png_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         with patch(

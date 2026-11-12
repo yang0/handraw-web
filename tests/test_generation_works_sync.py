@@ -4,15 +4,13 @@ import concurrent.futures
 import json
 import os
 from unittest.mock import patch
-import sqlite3
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
 import unittest
 
-from tests.legacy_database import Database
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend.generation_works import (
     derive_item_key,
     project_generation_to_works,
@@ -38,7 +36,7 @@ class TestGenerationWorksSync(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_gen_works.db"
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.user_author, self.token_author = register_user(self.db, "author_yang", "Pass1234!", display_name="杨凌")
         self.user_reader, self.token_reader = register_user(self.db, "reader_lin", "Pass1234!", display_name="小林")
         self.user_other, self.token_other = register_user(self.db, "reader_other", "Pass1234!", display_name="路人")
@@ -70,9 +68,12 @@ class TestGenerationWorksSync(unittest.TestCase):
         conn.commit()
 
         # Step 1: project_generation_to_works 3 times
-        wids_1 = project_generation_to_works(conn, gen_id)
-        wids_2 = project_generation_to_works(conn, gen_id)
-        wids_3 = project_generation_to_works(conn, gen_id)
+        with self.db.transaction():
+            wids_1 = project_generation_to_works(conn, gen_id)
+        with self.db.transaction():
+            wids_2 = project_generation_to_works(conn, gen_id)
+        with self.db.transaction():
+            wids_3 = project_generation_to_works(conn, gen_id)
 
         self.assertEqual(len(wids_1), 1)
         self.assertEqual(wids_1, wids_2)
@@ -130,7 +131,8 @@ class TestGenerationWorksSync(unittest.TestCase):
         )
         conn.commit()
         for _ in range(3):
-            work_ids = project_generation_to_works(conn, "gen_multi_v3")
+            with self.db.transaction():
+                work_ids = project_generation_to_works(conn, "gen_multi_v3")
             self.assertEqual(len(work_ids), 1)
         conn.commit()
         work = conn.execute("SELECT images_json FROM works WHERE id=?", (work_ids[0],)).fetchone()
@@ -163,7 +165,8 @@ class TestGenerationWorksSync(unittest.TestCase):
                 "春日小镇", json.dumps([f"/generated/out_{index}.webp"]),
                 f"2026-10-02T10:0{index}:00Z", "batch_unique_v3", index, 2,
             ))
-            work_ids.extend(project_generation_to_works(conn, gid))
+            with self.db.transaction():
+                work_ids.extend(project_generation_to_works(conn, gid))
         conn.commit()
         self.assertEqual(work_ids[0], work_ids[1])
         rows = conn.execute(
@@ -182,8 +185,10 @@ class TestGenerationWorksSync(unittest.TestCase):
         self.assertEqual(json.loads(discussion["images_json"]),
                          ["/generated/out_0.webp", "/generated/out_1.webp"])
         for _ in range(2):
-            project_generation_to_works(conn, "gen_batch_slot_0")
-            project_generation_to_works(conn, "gen_batch_slot_1")
+            with self.db.transaction():
+                project_generation_to_works(conn, "gen_batch_slot_0")
+            with self.db.transaction():
+                project_generation_to_works(conn, "gen_batch_slot_1")
         self.assertEqual(conn.execute(
             "SELECT COUNT(*) FROM works WHERE id=? AND run_id IS NOT NULL", (work_ids[0],)
         ).fetchone()[0], 1)
@@ -206,7 +211,8 @@ class TestGenerationWorksSync(unittest.TestCase):
                 json.dumps([f"/generated/removal_{index}.webp"]),
                 "2026-11-07T00:00:00Z", "removal_batch", index, 3,
             ))
-            works = project_generation_to_works(conn, f"removal_slot_{index}")
+            with self.db.transaction():
+                works = project_generation_to_works(conn, f"removal_slot_{index}")
         conn.commit()
         self.assertEqual(len(works), 1)
         wid = works[0]
@@ -214,7 +220,8 @@ class TestGenerationWorksSync(unittest.TestCase):
             "UPDATE studio_generations SET deleted_at=? WHERE id=?",
             ("2026-11-07T01:00:00Z", "removal_slot_0"),
         )
-        sync_generation_visibility(conn, "removal_slot_0", "private", is_deleted=True)
+        with self.db.transaction():
+            sync_generation_visibility(conn, "removal_slot_0", "private", is_deleted=True)
         images = json.loads(conn.execute(
             "SELECT images_json FROM works WHERE id=?", (wid,)
         ).fetchone()[0])
@@ -227,9 +234,10 @@ class TestGenerationWorksSync(unittest.TestCase):
                 "UPDATE studio_generations SET deleted_at=? WHERE id=?",
                 ("2026-11-07T01:00:00Z", f"removal_slot_{idx}"),
             )
-            sync_generation_visibility(
-                conn, f"removal_slot_{idx}", "private", is_deleted=True
-            )
+            with self.db.transaction():
+                sync_generation_visibility(
+                    conn, f"removal_slot_{idx}", "private", is_deleted=True
+                )
         self.assertNotEqual(conn.execute(
             "SELECT status FROM works WHERE id=?", (wid,)
         ).fetchone()[0], "published")
@@ -247,7 +255,8 @@ class TestGenerationWorksSync(unittest.TestCase):
             """,
             (self.user_author["id"], now_iso),
         )
-        self.assertEqual(project_generation_to_works(conn, "gen_failed"), [])
+        with self.db.transaction():
+            self.assertEqual(project_generation_to_works(conn, "gen_failed"), [])
 
         # 2. Empty items generation -> not projected
         conn.execute(
@@ -257,7 +266,8 @@ class TestGenerationWorksSync(unittest.TestCase):
             """,
             (self.user_author["id"], now_iso),
         )
-        self.assertEqual(project_generation_to_works(conn, "gen_no_items"), [])
+        with self.db.transaction():
+            self.assertEqual(project_generation_to_works(conn, "gen_no_items"), [])
 
         # 3. Private generation -> not projected
         conn.execute(
@@ -267,7 +277,8 @@ class TestGenerationWorksSync(unittest.TestCase):
             """,
             (self.user_author["id"], now_iso),
         )
-        self.assertEqual(project_generation_to_works(conn, "gen_private"), [])
+        with self.db.transaction():
+            self.assertEqual(project_generation_to_works(conn, "gen_private"), [])
 
         # 4. Public generation projected, then made private / deleted
         conn.execute(
@@ -277,7 +288,8 @@ class TestGenerationWorksSync(unittest.TestCase):
             """,
             (self.user_author["id"], now_iso),
         )
-        wids = project_generation_to_works(conn, "gen_pub_then_del")
+        with self.db.transaction():
+            wids = project_generation_to_works(conn, "gen_pub_then_del")
         self.assertEqual(len(wids), 1)
         wid = wids[0]
 
@@ -325,7 +337,8 @@ class TestGenerationWorksSync(unittest.TestCase):
                     f"2026-11-01T10:00:0{index}Z",
                 ),
             )
-            self.assertEqual(len(project_generation_to_works(conn, gen_id)), 1)
+            with self.db.transaction():
+                self.assertEqual(len(project_generation_to_works(conn, gen_id)), 1)
         conn.commit()
 
         with self.assertRaises(ServiceError) as unauthorized:

@@ -1,4 +1,4 @@
-"""Community collection and review acceptance against a disposable SQLite database."""
+"""Community collection and review acceptance against a disposable PostgreSQL database."""
 import json
 import os
 from pathlib import Path
@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import curation as C, services as S, resource_discussions as D
 
 
@@ -16,7 +16,7 @@ class CurationTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.env=patch.dict(os.environ,{'HANDRAW_DEMO_MODE':'0','HANDRAW_PRIVATE_STORAGE':self.tmp.name,'HANDRAW_UPLOADS_DIR':str(Path(self.tmp.name)/'uploads')})
         self.env.start()
-        self.db=init_legacy_database(Path(self.tmp.name)/'curation.db')
+        self.db=open_isolated_postgres(self, seed=True)
         self.users={}
         self.tokens={}
         for name in ('author','review_a','review_b','review_c','outsider','admin_user'):

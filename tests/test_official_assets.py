@@ -32,10 +32,9 @@ from unittest.mock import patch
 
 from PIL import Image
 
+from tests.postgres_support import open_isolated_postgres
 from backend import resource_registry
 from backend import services as S
-from tests.legacy_database import Database
-from tests.legacy_database import init_legacy_database
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 
 
@@ -70,7 +69,6 @@ class TestOfficialAssets(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(self.uploads_dir),
                 "HANDRAW_GENERATED_DIR": str(self.generated_dir),
                 "HANDRAW_DATA_DIR": str(self.root),
@@ -81,7 +79,7 @@ class TestOfficialAssets(unittest.TestCase):
         )
         self.env.start()
 
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -348,7 +346,7 @@ class TestOfficialAssets(unittest.TestCase):
         corrupt_path.write_bytes(b"NOT_A_VALID_IMAGE_BYTES")
         with self.db.transaction() as tx:
             tx.execute(
-                "INSERT INTO user_uploads (user_id, image_url, file_path, name_zh, cat, sha256, created_at, updated_at) VALUES (?, ?, ?, '损坏图', 'other', 'dummy_sha', '2026-11-03', '2026-11-03')",
+                "INSERT INTO user_uploads (id, user_id, image_url, file_path, name_zh, cat, sha256, created_at, updated_at) VALUES ('corrupt-upload', ?, ?, ?, '损坏图', 'other', 'dummy_sha', '2026-11-03', '2026-11-03')",
                 (self.admin_user["id"], f"/uploads/{corrupt_name}", str(corrupt_path)),
             )
         p_corrupt = {

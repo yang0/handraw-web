@@ -17,7 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server as server_module
 from backend.admin_services import admin_moderate_topic, admin_resolve_report
 from backend.server import create_channel_server
@@ -30,7 +30,7 @@ class UnknownApiPathTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = TemporaryDirectory()
-        cls.db = init_legacy_database(Path(cls.temp.name) / "api404.db")
+        cls.db = open_isolated_postgres(cls, seed=True)
         cls.server = create_channel_server(0, "main", cls.db)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -78,7 +78,7 @@ class UnknownApiPathTests(unittest.TestCase):
 class TopicPauseProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "tp.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "tp_author", "password-a")
         register_user(self.db, "tp_admin", "password-admin")
         self.db.get_conn().execute("UPDATE users SET role = 'admin' WHERE username = 'tp_admin'")
@@ -142,7 +142,7 @@ class TopicPauseProvenanceTests(unittest.TestCase):
 class AuthorEditKeepsPromptTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "ae.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "ae_author", "password-a")
 
     def tearDown(self):

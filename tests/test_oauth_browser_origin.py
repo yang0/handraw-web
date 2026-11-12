@@ -1,4 +1,4 @@
-"""OAuth browser-cookie regressions with real HTTP and isolated SQLite storage.
+"""OAuth browser-cookie regressions with real HTTP and isolated PostgreSQL storage.
 
 Provider traffic is mocked; neither Google nor real user accounts are accessed.
 """
@@ -15,7 +15,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.server import HandrawRequestHandler
 
 
@@ -33,7 +33,7 @@ class OAuthHandler(HandrawRequestHandler):
 class OAuthBrowserOriginTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.db = Database(Path(self.temp.name) / 'oauth.db')
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), OAuthHandler)
         self.server.db = self.db

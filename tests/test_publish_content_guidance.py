@@ -8,7 +8,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import curation as C
 from backend import server
 from backend.services import (
@@ -23,7 +23,7 @@ from backend.services import (
 class PublishContentGuidanceTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "test_guidance.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "author_guidance", "password123")
 
     def tearDown(self):

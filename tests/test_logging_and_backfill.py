@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from tests.postgres_support import open_isolated_postgres
 from backend import ai_client
 from backend.observability import (
     configure_logging,
@@ -24,7 +25,6 @@ from backend.observability import (
     sanitize_log_text,
 )
 from backend.postgres_db import PgConnection
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawRequestHandler
 from backend.services import ServiceError, run_blackbox_backfill
 
@@ -212,11 +212,11 @@ class PostgresAndBackfillTests(unittest.TestCase):
 
     def test_run_blackbox_backfill_handles_null_recipe_json_and_logs_scan_exceptions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            db = init_legacy_database(Path(tmp) / "backfill_test.db")
+            db = open_isolated_postgres(self, seed=True)
             try:
                 with db.transaction() as tx:
                     # Recreate nullable recipe_json as in PostgreSQL schemas to verify NULL equality handling
-                    tx.execute("DROP TABLE forum_topics")
+                    tx.execute("DROP TABLE forum_topics CASCADE")
                     tx.execute(
                         "CREATE TABLE forum_topics (id TEXT PRIMARY KEY, recipe_json TEXT, recipe_has_secret INTEGER)"
                     )

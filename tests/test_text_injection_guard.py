@@ -14,6 +14,7 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from tests.postgres_support import open_isolated_postgres
 from backend.runtime_policy import (
     sanitize_html,
     sanitize_media_url,
@@ -21,7 +22,6 @@ from backend.runtime_policy import (
     sanitize_rich_html,
     sanitize_submission_body,
 )
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user, publish_forum_topic_post, publish_forum_reply_post
 
@@ -141,7 +141,6 @@ class TextInjectionIntegrationHTTPTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(self.uploads_dir),
                 "HANDRAW_GENERATED_DIR": str(self.generated_dir),
                 "HANDRAW_DEMO_MODE": "1",
@@ -149,7 +148,7 @@ class TextInjectionIntegrationHTTPTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]

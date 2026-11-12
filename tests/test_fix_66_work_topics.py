@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 import unittest
 import os
@@ -17,7 +16,7 @@ from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server, services
 from backend.curation import publish_work_direct
 from backend.resource_discussions import ensure_topic
@@ -28,7 +27,7 @@ class Fix66WorkTopicsTests(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "test_fix_66.db"
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = services.register_user(self.db, "test_author", "Pass1234!")
         self.admin, _ = services.register_user(self.db, "test_admin", "Pass1234!")
         conn = self.db.get_conn()
@@ -88,14 +87,15 @@ class Fix66WorkTopicsTests(unittest.TestCase):
             """,
             (wid, now, now),
         )
-        tid = ensure_topic(
-            conn,
-            "work",
-            wid,
-            {"title": "未入列作品", "images_json": '["/images/individual/FA/FA-013.webp"]'},
-            initial_origin="submission",
-            listed_at_ms=None,
-        )
+        with self.db.transaction():
+            tid = ensure_topic(
+                conn,
+                "work",
+                wid,
+                {"title": "未入列作品", "images_json": '["/images/individual/FA/FA-013.webp"]'},
+                initial_origin="submission",
+                listed_at_ms=None,
+            )
         conn.commit()
 
         # Check DB state

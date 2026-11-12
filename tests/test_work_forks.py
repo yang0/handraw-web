@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import init_legacy_database
+from tests.postgres_support import open_isolated_postgres
 from backend import server
 from backend.services import (
     complete_cloud_generation,
@@ -26,7 +26,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class ForkLineageTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "fork.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.a, _ = register_user(self.db, "fork_a", "password-a")
         self.b, _ = register_user(self.db, "fork_b", "password-b")
         self.c, _ = register_user(self.db, "fork_c", "password-c")

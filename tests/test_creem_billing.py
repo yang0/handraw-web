@@ -12,8 +12,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.postgres_support import open_isolated_postgres
 from backend.config import get_public_billing_summary, load_payment_config
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawHTTPServer, HandrawRequestHandler
 from backend.services import register_user
 
@@ -67,7 +67,7 @@ class CreemBillingTests(unittest.TestCase):
         )
         self.env_patch.start()
 
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.user_a, self.tok_a = register_user(self.db, "buyer_a", "Pass123456!", "buyera@example.test", "买家A")
         self.user_b, self.tok_b = register_user(self.db, "buyer_b", "Pass123456!", "buyerb@example.test", "买家B")
 
