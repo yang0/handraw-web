@@ -1,19 +1,16 @@
 """First-visit topic creation, including real PostgreSQL transaction boundaries."""
 import concurrent.futures
 import os
-from pathlib import Path
-import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from unittest.mock import patch
 
 from backend import resource_discussions
-from backend.db import Database
 from backend.server import create_channel_server
+from tests.postgres_support import isolated_pg_dsn
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -21,7 +18,20 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-class RedirectCases:
+@unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
+class PostgresRedirectTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from backend.postgres_db import PostgresDatabase
+
+        cls.enterClassContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
+        dsn = cls.enterClassContext(isolated_pg_dsn())
+        cls.db = PostgresDatabase(dsn)
+        cls.addClassCleanup(cls.db.close)
+        cls.db.migrate()
+        cls.start_server()
+        cls.addClassCleanup(cls.stop_server)
+
     def request(self, path):
         opener = urllib.request.build_opener(NoRedirect)
         try:
@@ -95,59 +105,6 @@ class RedirectCases:
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join(5)
-        cls.db.close()
-
-
-class SQLiteRedirectTests(RedirectCases, unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.environment = patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"})
-        cls.environment.start()
-        cls.temp = tempfile.TemporaryDirectory()
-        cls.db = Database(Path(cls.temp.name) / "redirect.db")
-        cls.db.migrate()
-        cls.start_server()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.stop_server()
-        cls.temp.cleanup()
-        cls.environment.stop()
-
-
-@unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL admin URL not provided")
-class PostgresRedirectTests(RedirectCases, unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        import psycopg
-        from psycopg import sql
-        from psycopg.conninfo import make_conninfo
-        from backend.postgres_db import PostgresDatabase
-        from ops.bootstrap_postgres_v3 import bootstrap
-        cls.admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
-        cls.database_name = "handraw_redirect_test_" + uuid.uuid4().hex[:12]
-        with psycopg.connect(cls.admin_dsn, autocommit=True) as admin:
-            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(cls.database_name)))
-        cls.addClassCleanup(cls.drop_database)
-        dsn = make_conninfo(cls.admin_dsn, dbname=cls.database_name)
-        cls.environment = patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0", "HANDRAW_ALLOW_PG_BOOTSTRAP": "YES"})
-        cls.environment.start()
-        cls.addClassCleanup(cls.environment.stop)
-        bootstrap(dsn=dsn, apply=True)
-        cls.db = PostgresDatabase(dsn)
-        cls.addClassCleanup(cls.db.close)
-        cls.db.migrate()
-        cls.start_server()
-        cls.addClassCleanup(cls.stop_server)
-
-    @classmethod
-    def drop_database(cls):
-        import psycopg
-        from psycopg import sql
-        # Only the explicitly created, random test database may be removed.
-        assert cls.database_name.startswith("handraw_redirect_test_")
-        with psycopg.connect(cls.admin_dsn, autocommit=True) as admin:
-            admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(cls.database_name)))
 
     def test_concurrent_creation_preserves_callers_transaction(self):
         barrier = threading.Barrier(2)

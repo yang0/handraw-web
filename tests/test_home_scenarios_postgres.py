@@ -3,38 +3,23 @@ from __future__ import annotations
 
 import os
 import unittest
-import uuid
 from unittest.mock import patch
 
 from backend.home_scenarios import get_public_home_scenarios, invalidate_scenarios_cache
-from ops.bootstrap_postgres_v3 import bootstrap
+from tests.postgres_support import isolated_pg_dsn
 
 
 @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
 class TestHomeScenariosPostgres(unittest.TestCase):
     def test_cache_scope_and_authoritative_visibility(self):
-        import psycopg
-        from psycopg import sql
-        from psycopg.conninfo import make_conninfo
-
         from backend.postgres_db import PostgresDatabase
 
-        admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
-        name = "handraw_scenarios_test_" + uuid.uuid4().hex[:12]
-        with psycopg.connect(admin_dsn, autocommit=True) as admin:
-            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-            dsn = make_conninfo(admin_dsn, dbname=name)
-            try:
-                with patch.dict(os.environ, {"HANDRAW_ALLOW_PG_BOOTSTRAP": "YES", "HANDRAW_REDIS_URL": "", "HANDRAW_DEMO_MODE": "0"}):
-                    bootstrap(dsn=dsn, apply=True)
-                    db = PostgresDatabase(dsn)
-                    try:
-                        self._check_public_scenarios(db)
-                    finally:
-                        db.close()
-            finally:
-                invalidate_scenarios_cache()
-                admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_REDIS_URL": "", "HANDRAW_DEMO_MODE": "0"}))
+        dsn = self.enterContext(isolated_pg_dsn())
+        db = PostgresDatabase(dsn)
+        self.addCleanup(db.close)
+        self.addCleanup(invalidate_scenarios_cache)
+        self._check_public_scenarios(db)
 
     def _check_public_scenarios(self, db):
         db.migrate()

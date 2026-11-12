@@ -189,10 +189,9 @@ Invoke-RestMethod -Uri "http://127.0.0.1:3080/api/works/feed"
 $env:HANDRAW_REDIS_URL = "redis://127.0.0.1:6379/0?protocol=2"
 $env:HANDRAW_REDIS_REQUIRED = "1"
 $env:HANDRAW_PG_STAGING_URL = "postgresql://postgres@127.0.0.1:5432/postgres"
-$env:HANDRAW_PG_PARITY_TEST = "YES"
 
-# 运行 10 项存储、跨线程原子限流与 PG 并发扣费测试
-python -m unittest tests/test_production_storage.py -v
+# 在独立 PostgreSQL 库运行存储、跨线程原子限流与并发扣费测试
+python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres tests.test_discourse_import tests.test_resource_redirect_transactions
 
 # 运行 OAuth 流程测试
 python -m unittest tests/test_p2_growth_oauth.py -v

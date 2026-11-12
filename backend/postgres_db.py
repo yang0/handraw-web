@@ -1,14 +1,4 @@
-"""PostgreSQL compatibility adapter for staged Handraw v2 accounts.
-
-This adapter is intentionally opt-in during parity testing. PostgreSQL schema
-must first be staged and verified: it cannot execute SQLite DDL/migrations.
-Unlike the production SQLite manager, it uses real DB transactions and a
-thread-local PG connection rather than a process-local write mutex.
-
-The SQL dialect shim is deliberately conservative: unsupported SQLite-specific
-SQL MUST raise an error. Do not use as the public default until all business
-routes and concurrency invariants pass PostgreSQL integration tests.
-"""
+"""PostgreSQL connection pool, transactions, and application SQL adapter."""
 from __future__ import annotations
 
 import logging
@@ -251,6 +241,15 @@ class PgConnection:
         return self._db.info.transaction_status == TransactionStatus.INTRANS
 
 
+def _configure_connection(connection):
+    # Configure each physical connection before it enters the pool.
+    connection.execute("""
+        SELECT set_config('statement_timeout', '30s', false),
+               set_config('lock_timeout', '5s', false),
+               set_config('idle_in_transaction_session_timeout', '60s', false)
+    """)
+
+
 class PostgresDatabase:
     """Thread-local psycopg connection with the Database.transaction contract."""
 
@@ -269,16 +268,13 @@ class PostgresDatabase:
         self._pool = ConnectionPool(
             conninfo=dsn, min_size=1, max_size=size, timeout=5.0,
             kwargs={"autocommit": True, "connect_timeout": 5},
-            open=True,
+            configure=_configure_connection, open=True,
         )
 
     def get_conn(self):
         wrapper = getattr(self._local, "wrapper", None)
         if wrapper is None or wrapper._db.closed:
             raw = self._pool.getconn()
-            raw.execute("SET statement_timeout = '30s'")
-            raw.execute("SET lock_timeout = '5s'")
-            raw.execute("SET idle_in_transaction_session_timeout = '60s'")
             wrapper = PgConnection(raw)
             self._local.wrapper = wrapper
         return wrapper
@@ -290,18 +286,21 @@ class PostgresDatabase:
             yield conn
 
     def migrate(self):
-        # Explicitly fail if migrations were not staged; NEVER execute SQLite
-        # DDL against PostgreSQL or silently initialize a second local DB.
+        # Startup validates the installed schema with the application's role.
+        # Schema changes are applied separately by the database owner.
         conn = self.get_conn()
         with conn._db.cursor() as cursor:
             cursor.execute(
                 """SELECT to_regclass('public.schema_migrations'),
                           to_regclass('public.users'),
+                          to_regclass('public.works'),
                           to_regclass('public.generation_runs'),
                           to_regclass('public.generation_items'),
                           to_regclass('public.media_assets'),
                           to_regclass('public.work_media'),
-                          to_regclass('public.media_gc_jobs')"""
+                          to_regclass('public.media_gc_jobs'),
+                          to_regclass('public.home_scenarios'),
+                          to_regclass('public.scenario_pinned_works')"""
             )
             required_tables = cursor.fetchone()
             if not all(required_tables):
@@ -313,42 +312,33 @@ class PostgresDatabase:
             if not cursor.fetchone():
                 raise RuntimeError("Missing native V3 schema baseline and media GC (migration 100)")
             cursor.execute(
-                """SELECT COUNT(*) FROM pg_trigger
-                   WHERE tgname IN ('v3_run_immutable','v3_media_immutable',
-                                    'v3_work_run_owner','v3_work_media_owner',
-                                    'v3_work_cover','v3_work_images_cache')
-                     AND NOT tgisinternal"""
+                """SELECT expected.trigger_name
+                   FROM (VALUES
+                       ('public.generation_runs'::regclass, 'v3_run_immutable'),
+                       ('public.generation_items'::regclass, 'v3_gen_item_owner'),
+                       ('public.media_assets'::regclass, 'v3_media_immutable'),
+                       ('public.work_media'::regclass, 'v3_work_media_owner'),
+                       ('public.work_media'::regclass, 'v3_cover_media_delete'),
+                       ('public.works'::regclass, 'v3_work_run_owner'),
+                       ('public.works'::regclass, 'v3_work_cover'),
+                       ('public.works'::regclass, 'v3_work_images_cache')
+                   ) AS expected(table_id, trigger_name)
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_trigger AS t
+                       WHERE t.tgrelid = expected.table_id AND t.tgname = expected.trigger_name
+                         AND t.tgenabled IN ('O', 'A') AND NOT t.tgisinternal
+                   )"""
             )
-            if int(cursor.fetchone()[0]) != 6:
-                raise RuntimeError("Native V3 integrity triggers are missing")
+            missing_triggers = [row[0] for row in cursor.fetchall()]
+            if missing_triggers:
+                raise RuntimeError("Native V3 integrity triggers missing or disabled: " + ", ".join(missing_triggers))
             cursor.execute("""
-                CREATE OR REPLACE FUNCTION json_valid(t text) RETURNS integer AS $func$
-                BEGIN
-                    IF t IS NULL THEN RETURN 0; END IF;
-                    RETURN CASE WHEN t IS JSON THEN 1 ELSE 0 END;
-                END;
-                $func$ LANGUAGE plpgsql IMMUTABLE;
-
-                CREATE OR REPLACE FUNCTION json_array_length(t text) RETURNS integer AS $func$
-                BEGIN
-                    IF t IS NULL OR NOT (t IS JSON) THEN RETURN 0; END IF;
-                    RETURN json_array_length(t::json);
-                EXCEPTION WHEN OTHERS THEN
-                    RETURN 0;
-                END;
-                $func$ LANGUAGE plpgsql IMMUTABLE;
-
-                CREATE OR REPLACE FUNCTION json_each(t text)
-                RETURNS TABLE (value text) AS $func$
-                BEGIN
-                    IF t IS NULL OR NOT (t IS JSON) THEN RETURN; END IF;
-                    RETURN QUERY
-                    SELECT elem FROM json_array_elements_text(t::json) AS elem;
-                EXCEPTION WHEN OTHERS THEN
-                    RETURN;
-                END;
-                $func$ LANGUAGE plpgsql IMMUTABLE;
+                SELECT to_regprocedure('public.json_valid(text)'),
+                       to_regprocedure('public.json_array_length(text)'),
+                       to_regprocedure('public.json_each(text)')
             """)
+            if not all(cursor.fetchone()):
+                raise RuntimeError("PostgreSQL V3 JSON functions are missing. Check the native schema installation.")
         return []
 
     def close_thread_conn(self):

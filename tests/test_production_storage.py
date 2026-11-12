@@ -1,7 +1,9 @@
-"""Production storage preflight tests; no live PostgreSQL/Redis is needed."""
-import importlib.util
+"""Storage contracts on native PostgreSQL and Redis."""
+import contextlib
+import hashlib
+import io
+import json
 import os
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,15 +11,7 @@ from unittest.mock import patch
 
 from backend import redis_rate_limit
 from backend.runtime_policy import check_auth_rate_limit
-from backend.security import hash_password, verify_password
-
-
-def load_stage_tool():
-    file = Path(__file__).resolve().parent.parent / "ops" / "sqlite_to_postgres.py"
-    spec = importlib.util.spec_from_file_location("handraw_pg_staging", file)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from tests.postgres_support import isolated_pg_dsn
 
 
 class DummyRedis:
@@ -88,447 +82,280 @@ class RedisRateLimitTests(unittest.TestCase):
         }), patch("backend.redis_rate_limit._connect", side_effect=OSError("outage")):
             self.assertFalse(redis_rate_limit.check_limit("login", "alice"))
 
-
-class PostgresSnapshotTests(unittest.TestCase):
+@unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
+class NativePostgresTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.path = Path(self.tmp.name) / "old.db"
-        with sqlite3.connect(self.path) as conn:
-            conn.executescript(
-                """CREATE TABLE users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                    email TEXT UNIQUE COLLATE NOCASE,
-                    display_name TEXT NOT NULL DEFAULT 'Legacy',
-                    password_hash TEXT NOT NULL,
-                    password_algo TEXT NOT NULL DEFAULT 'pbkdf2_sha256',
-                    discourse_salt TEXT NOT NULL DEFAULT '',
-                    discourse_user_id INTEGER,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    role TEXT NOT NULL DEFAULT 'user',
-                    last_login_at TEXT
-                );
-                CREATE TABLE sessions (
-                    token TEXT PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id),
-                    user_agent TEXT NOT NULL DEFAULT '',
-                    ip_addr TEXT NOT NULL DEFAULT '',
-                    expires_at INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL DEFAULT ''
-                );"""
-            )
-            self.legacy_hash = hash_password("OldUsersPassword!")
-            conn.execute(
-                "INSERT INTO users(username,email,password_hash) VALUES(?,?,?)",
-                ("legacy", "legacy@example.test", self.legacy_hash),
-            )
-            conn.execute(
-                "INSERT INTO sessions(token,user_id) VALUES(?,?)",
-                ("persisted-session", 1),
-            )
-        self.tool = load_stage_tool()
-
-    def _install_native_v3_guards_on_staging(self, dsn):
-        """Explicitly install V3 rules for legacy snapshot *parity* exercises.
-
-        The snapshot importer intentionally does not grant production readiness.
-        PostgreSQL runtime rejects that raw staging schema until the native
-        ownership, moderation and media triggers are installed.
-        Fresh production databases use ops.bootstrap_postgres_v3 instead.
-        """
-        import psycopg
-        from backend.postgres_v3_native import NATIVE_V3_SQL
-        with psycopg.connect(dsn) as pg:
-            pg.execute(NATIVE_V3_SQL)
-
-    def tearDown(self):
-        import gc
-        gc.collect()
-        self.tmp.cleanup()
-
-    def test_inspection_preserves_user_hashes_read_only(self):
-        result = self.tool.stage(self.path, "", False)
-        self.assertTrue(result["dryRun"])
-        self.assertTrue(result["sourceReadOnly"])
-        self.assertEqual(result["users"], 1)
-        self.assertEqual(result["sessions"], 1)
-        self.assertTrue(verify_password("OldUsersPassword!", self.legacy_hash))
-        snap_conn, _ = self.tool.read_snapshot(self.path)
-        try:
-            self.assertTrue(self.tool._is_nocase_column(
-                snap_conn, "users", "username"
-            ))
-        finally:
-            snap_conn.close()
-        with sqlite3.connect(self.path) as conn:
-            self.assertEqual(conn.execute(
-                "SELECT password_hash FROM users WHERE username='legacy'"
-            ).fetchone()[0], self.legacy_hash)
-
-    def test_missing_or_invalid_snapshot_is_refused(self):
-        with self.assertRaises(ValueError):
-            self.tool.stage(Path(self.tmp.name)/"missing.db", "", False)
-        with sqlite3.connect(self.path) as conn:
-            conn.execute("DELETE FROM sessions")
-            conn.execute("DELETE FROM users")
-        with self.assertRaises(ValueError):
-            self.tool.stage(self.path, "", False)
-
-    @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"),
-                         "Isolated PostgreSQL staging URL not provided")
-    def test_real_postgres_staging_preserves_login_hashes_and_casefold_uniqueness(self):
-        import uuid
-        import psycopg
-        from psycopg import sql
-        from psycopg.conninfo import make_conninfo
-        admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
-        database_name = "handraw_stage_" + uuid.uuid4().hex[:12]
-        with psycopg.connect(admin_dsn, autocommit=True) as admin:
-            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
-        dsn = make_conninfo(admin_dsn, dbname=database_name)
-        try:
-            result = self.tool.stage(self.path, dsn, True)
-            self.assertTrue(result["staged"])
-            self.assertEqual(result["users"], 1)
-            with psycopg.connect(dsn) as pg:
-                with pg.cursor() as cur:
-                    cur.execute(
-                        "SELECT id, username, email, password_hash FROM users WHERE username = %s",
-                        ("LeGaCy",)
-                    )
-                    row = cur.fetchone()
-                    self.assertEqual(row[0], 1)
-                    self.assertEqual(row[1], "legacy")
-                    self.assertTrue(verify_password("OldUsersPassword!", row[3]))
-                    cur.execute("SELECT token, user_id FROM sessions")
-                    self.assertEqual(cur.fetchall(), [("persisted-session", 1)])
-                    # Imported user can login with their existing password:
-                    # PostgreSQL adapter must create a valid session without signup.
-                    from backend.postgres_db import PostgresDatabase
-                    from backend.services import login_user
-                    app_db = PostgresDatabase(dsn)
-                    try:
-                        user, session = login_user(app_db, "LeGaCy", "OldUsersPassword!")
-                        self.assertEqual(user["id"], 1)
-                        self.assertEqual(user["username"], "legacy")
-                        self.assertTrue(session.startswith("hws_"))
-                        self.assertEqual(pg.execute(
-                            "SELECT COUNT(*) FROM sessions WHERE user_id=1"
-                        ).fetchone()[0], 2)
-                    finally:
-                        app_db.close()
-                    with self.assertRaises(psycopg.errors.UniqueViolation):
-                        cur.execute(
-                            "INSERT INTO users(username,email,password_hash) VALUES(%s,%s,%s)",
-                            ("LeGaCy", "another@example.test", self.legacy_hash)
-                        )
-        finally:
-            with psycopg.connect(admin_dsn, autocommit=True) as admin:
-                admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(database_name)))
-
-    @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL")
-                         and os.environ.get("HANDRAW_PG_PARITY_TEST") == "YES",
-                         "Full isolated PostgreSQL parity test is not enabled")
-    def test_full_v2_schema_and_existing_user_password_on_postgresql(self):
-        import uuid
-        import psycopg
-        from psycopg import sql
-        from psycopg.conninfo import make_conninfo
-        from backend.db import Database
-        from backend.services import register_user, login_user
         from backend.postgres_db import PostgresDatabase
 
-        database_name = "handraw_parity_" + uuid.uuid4().hex[:12]
-        admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
-        with psycopg.connect(admin_dsn, autocommit=True) as admin:
-            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
-        parity_dsn = make_conninfo(admin_dsn, dbname=database_name)
-        file = Path(self.tmp.name) / "whole_v2.db"
-        original = Database(file)
-        try:
-            original.migrate()
-            account, _ = register_user(original, "existing_user", "ExistingPassword2026!",
-                                       "existing-user@example.test", "旧用户昵称")
-            original_id = account["id"]
-            # Imported forum accounts must retain their historical login secret:
-            # no re-registration or forced password change for valid old hashes.
-            import hashlib
-            historical_password = "OriginalForumPassword2026!"
-            historical_salt = "forum-test-salt"
-            historical_hash = hashlib.pbkdf2_hmac(
-                "sha256", historical_password.encode(), historical_salt.encode(), 64000
-            ).hex()
-            historical, _ = register_user(
-                original, "forum_existing", "TemporaryRegistration2026!",
-                "forum-existing@example.test", "历史创作者"
-            )
-            historical_id = historical["id"]
-            with original.transaction() as tx:
-                tx.execute(
-                    """UPDATE users
-                       SET password_hash=?,password_algo='discourse_pbkdf2',
-                           discourse_salt=?,discourse_user_id=?
-                       WHERE id=?""",
-                    (historical_hash, historical_salt, 991100, historical_id)
-                )
-        finally:
-            original.close()
-            import gc
-            gc.collect()
+        self.dsn = self.enterContext(isolated_pg_dsn())
+        self.db = PostgresDatabase(self.dsn)
+        self.addCleanup(self.db.close)
+        self.db.migrate()
 
-        info = self.tool.stage(file, parity_dsn, True)
-        self.assertTrue(info["staged"])
-        self.assertGreater(info["tables"], 40)
-        self._install_native_v3_guards_on_staging(parity_dsn)
-        pg = PostgresDatabase(parity_dsn)
-        try:
-            pg.migrate()
-            user, session = login_user(pg, "existing-user@example.test", "ExistingPassword2026!")
-            self.assertEqual(user["id"], original_id)
-            self.assertEqual(user["display_name"], "旧用户昵称")
-            self.assertTrue(session.startswith("hws_"))
-            historical_user, historical_session = login_user(
-                pg, "FoRuM_ExIsTiNg", historical_password
-            )
-            self.assertEqual(historical_user["id"], historical_id)
-            self.assertEqual(historical_user["display_name"], "历史创作者")
-            self.assertTrue(historical_session.startswith("hws_"))
-            updated = pg.get_conn().execute(
-                "SELECT password_algo,discourse_salt FROM users WHERE id=?",
-                (historical_id,)
-            ).fetchone()
-            self.assertEqual(updated["password_algo"], "pbkdf2_sha256")
-            self.assertEqual(updated["discourse_salt"], "")
-            # A new user must also be able to register *after* the migration.
-            newcomer, token = register_user(pg, "new_pg_user", "BrandNewPassword2026!",
-                                           "new-pg-user@example.test", "新用户昵称")
-            self.assertNotEqual(newcomer["id"], original_id)
-            self.assertTrue(token.startswith("hws_"))
-            # Regression: authenticated boot formerly queried sqlite_master,
-            # then COLLATE NOCASE, while resolving earned reviewer access.
-            from backend.services import build_boot_payload
-            from backend.curation import _accepted_kinds_for
-            boot = build_boot_payload(pg, newcomer)
-            self.assertTrue(boot["loggedIn"])
-            self.assertEqual(boot["user"]["reviewAccess"]["kinds"], [])
-            with pg.transaction() as tx:
-                tx.execute(
-                    """INSERT INTO catalog_assets
-                       (code,kind,source_type,author_username,name,image_url,published_at_ms,created_at,updated_at)
-                       VALUES('pg_review_style','style','community','NeW_Pg_UsEr','Test','',1,'now','now')"""
-                )
-                tx.execute(
-                    """INSERT INTO works
-                       (id,author_username,author_name,title,prompt,published_at_ms,created_at,updated_at)
-                       VALUES('pg_review_work','NeW_Pg_UsEr','Test','Test','',1,'now','now')"""
-                )
-                self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), {"style", "work"})
-                tx.execute("CREATE TABLE cold_start_registry(kind TEXT,item_id TEXT)")
-                self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), {"style", "work"})
-                tx.execute("INSERT INTO cold_start_registry VALUES('user',?)", (newcomer["username"],))
-                self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), set())
-            # Concurrent PG transactions must not overspend a wallet or mint
-            # a duplicate ledger entry. Each thread owns a pooled connection.
-            from concurrent.futures import ThreadPoolExecutor
-            from backend.services import apply_wallet_delta, ServiceError
-            initial = int(pg.get_conn().execute(
-                "SELECT balance FROM wallets WHERE user_id=?", (newcomer["id"],)
-            ).fetchone()["balance"])
-            def spend(i):
-                try:
-                    with pg.transaction() as tx:
-                        apply_wallet_delta(
-                            tx, newcomer["id"], -1, "pg_parity_spend",
-                            "PG concurrent wallet test", event_key=f"pg-parity-{i}"
-                        )
-                    return True
-                except ServiceError as exc:
-                    if exc.code == "insufficient_credits":
-                        return False
-                    raise
-                finally:
-                    pg.close_thread_conn()
-            attempts = initial + 5
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                verdicts = list(pool.map(spend, range(attempts)))
-            self.assertEqual(verdicts.count(True), initial)
-            self.assertEqual(verdicts.count(False), 5)
-            self.assertEqual(pg.get_conn().execute(
-                "SELECT balance FROM wallets WHERE user_id=?", (newcomer["id"],)
-            ).fetchone()["balance"], 0)
-            self.assertEqual(pg.get_conn().execute(
-                "SELECT COUNT(*) FROM ledgers WHERE user_id=? AND kind='pg_parity_spend'",
-                (newcomer["id"],)
-            ).fetchone()[0], initial)
-        finally:
-            pg.close()
-            with psycopg.connect(admin_dsn, autocommit=True) as admin:
-                admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(database_name)))
-
-    @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
-    def test_batch_post_and_work_details_on_postgresql(self):
-        """Real fresh-V3 bootstrap: one generated work, three ordered images."""
-        import json
-        import uuid
-        import psycopg
-        from psycopg import sql
-        from psycopg.conninfo import make_conninfo
-        from types import SimpleNamespace
-        from backend.services import register_user
-        from backend.postgres_db import PostgresDatabase
-        from backend.generation_works import project_generation_to_works
-        from backend.works_feed import get_work_by_id
-        from backend.post_routes import _handle_detail
+    def test_bootstrap_refuses_existing_database_and_startup_is_read_only(self):
         from ops.bootstrap_postgres_v3 import bootstrap
 
+        with patch.dict(os.environ, {"HANDRAW_ALLOW_PG_BOOTSTRAP": "YES"}):
+            with self.assertRaisesRegex(RuntimeError, "Target is not empty"):
+                bootstrap(dsn=self.dsn, apply=True)
+        with self.db.transaction() as tx:
+            tx.execute("SET TRANSACTION READ ONLY")
+            self.db.migrate()
+
+    def test_startup_rejects_disabled_integrity_trigger(self):
+        with self.db.transaction() as tx:
+            tx.execute("ALTER TABLE work_media DISABLE TRIGGER v3_cover_media_delete")
+            with self.assertRaisesRegex(RuntimeError, "v3_cover_media_delete"):
+                self.db.migrate()
+
+    def test_pooled_connection_timeouts_are_configured_on_connect(self):
+        from backend.postgres_db import PostgresDatabase
+
+        with contextlib.closing(PostgresDatabase(self.dsn)) as db:
+            db._pool.wait()
+            first = db.get_conn()._db
+            self.assertEqual(first.execute("""
+                SELECT current_setting('statement_timeout'), current_setting('lock_timeout'),
+                       current_setting('idle_in_transaction_session_timeout')
+            """).fetchone(), ("30s", "5s", "1min"))
+            db.release_request_connection()
+            with patch.object(first, "execute", wraps=first.execute) as execute:
+                second = db.get_conn()._db
+                self.assertIs(second, first)
+                execute.assert_not_called()
+
+    def test_case_insensitive_login_unique_user_and_session_foreign_key(self):
+        from psycopg.errors import ForeignKeyViolation, UniqueViolation
+        from backend.services import login_user, register_user
+
+        user, _ = register_user(self.db, "legacy", "OldUsersPassword!", "legacy@example.test")
+        logged_in, token = login_user(self.db, "LeGaCy", "OldUsersPassword!")
+        self.assertEqual(logged_in["id"], user["id"])
+        self.assertTrue(token.startswith("hws_"))
+        conn = self.db.get_conn()
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE user_id = ?", (user["id"],),
+        ).fetchone()[0], 2)
+        other, _ = register_user(self.db, "another", "OtherUsersPassword!", "another@example.test")
+        with self.assertRaises(UniqueViolation):
+            conn.execute("UPDATE users SET username=? WHERE id=?", ("LeGaCy", other["id"]))
+        with self.assertRaises(ForeignKeyViolation):
+            conn.execute("INSERT INTO sessions(token,user_id,expires_at,created_at) VALUES ('orphan', -1, 0, '')")
+
+    def test_imported_discourse_account_boot_and_concurrent_wallet_spend(self):
+        from backend.services import login_user, register_user
+        from ops.import_discourse_users import main
+
+        pg = self.db
+        account, _ = register_user(
+            pg, "existing_user", "ExistingPassword2026!", "existing-user@example.test", "旧用户昵称",
+        )
+        original_id = account["id"]
+        historical_password = "OriginalForumPassword2026!"
+        historical_salt = "forum-test-salt"
+        historical_hash = hashlib.pbkdf2_hmac(
+            "sha256", historical_password.encode(), historical_salt.encode(), 64000
+        ).hex()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_file = Path(temp_dir) / "forum-export.json"
+            input_file.write_text(json.dumps([{
+                "id": 991100, "username": "forum_existing", "email": "forum-existing@example.test",
+                "name": "历史创作者", "password_hash": historical_hash, "salt": historical_salt,
+            }], ensure_ascii=False), encoding="utf-8")
+            with patch.dict(os.environ, {"HANDRAW_DATABASE_URL": self.dsn}):
+                for expected_imports in (1, 0):
+                    with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                        self.assertEqual(main(["--input", str(input_file)]), 0)
+                    self.assertEqual(json.loads(stdout.getvalue())["imported"], expected_imports)
+        historical = pg.get_conn().execute(
+            "SELECT id, password_hash FROM users WHERE username='forum_existing'"
+        ).fetchone()
+        historical_id = historical["id"]
+        self.assertEqual(historical["password_hash"], historical_hash)
+        user, session = login_user(pg, "existing-user@example.test", "ExistingPassword2026!")
+        self.assertEqual(user["id"], original_id)
+        self.assertEqual(user["display_name"], "旧用户昵称")
+        self.assertTrue(session.startswith("hws_"))
+        historical_user, historical_session = login_user(
+            pg, "FoRuM_ExIsTiNg", historical_password
+        )
+        self.assertEqual(historical_user["id"], historical_id)
+        self.assertEqual(historical_user["display_name"], "历史创作者")
+        self.assertTrue(historical_session.startswith("hws_"))
+        updated = pg.get_conn().execute(
+            "SELECT password_algo,discourse_salt FROM users WHERE id=?",
+            (historical_id,)
+        ).fetchone()
+        self.assertEqual(updated["password_algo"], "pbkdf2_sha256")
+        self.assertEqual(updated["discourse_salt"], "")
+        # A new user must also be able to register *after* the migration.
+        newcomer, token = register_user(pg, "new_pg_user", "BrandNewPassword2026!",
+                                       "new-pg-user@example.test", "新用户昵称")
+        self.assertNotEqual(newcomer["id"], original_id)
+        self.assertTrue(token.startswith("hws_"))
+        from backend.services import build_boot_payload
+        from backend.curation import _accepted_kinds_for
+        boot = build_boot_payload(pg, newcomer)
+        self.assertTrue(boot["loggedIn"])
+        self.assertEqual(boot["user"]["reviewAccess"]["kinds"], [])
+        with pg.transaction() as tx:
+            tx.execute(
+                """INSERT INTO catalog_assets
+                   (code,kind,source_type,author_username,name,image_url,published_at_ms,created_at,updated_at)
+                   VALUES('pg_review_style','style','community','NeW_Pg_UsEr','Test','',1,'now','now')"""
+            )
+            tx.execute(
+                """INSERT INTO works
+                   (id,author_username,author_name,title,prompt,published_at_ms,created_at,updated_at)
+                   VALUES('pg_review_work','NeW_Pg_UsEr','Test','Test','',1,'now','now')"""
+            )
+            self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), {"style", "work"})
+            tx.execute("CREATE TABLE cold_start_registry(kind TEXT,item_id TEXT)")
+            self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), {"style", "work"})
+            tx.execute("INSERT INTO cold_start_registry VALUES('user',?)", (newcomer["username"],))
+            self.assertEqual(_accepted_kinds_for(tx, newcomer["username"]), set())
+        # Concurrent PG transactions must not overspend a wallet or mint
+        # a duplicate ledger entry. Each thread owns a pooled connection.
+        from concurrent.futures import ThreadPoolExecutor
+        from backend.services import apply_wallet_delta, ServiceError
+        initial = int(pg.get_conn().execute(
+            "SELECT balance FROM wallets WHERE user_id=?", (newcomer["id"],)
+        ).fetchone()["balance"])
+        def spend(i):
+            try:
+                with pg.transaction() as tx:
+                    apply_wallet_delta(
+                        tx, newcomer["id"], -1, "pg_parity_spend",
+                        "PG concurrent wallet test", event_key=f"pg-parity-{i}"
+                    )
+                return True
+            except ServiceError as exc:
+                if exc.code == "insufficient_credits":
+                    return False
+                raise
+            finally:
+                pg.close_thread_conn()
+        attempts = initial + 5
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            verdicts = list(pool.map(spend, range(attempts)))
+        self.assertEqual(verdicts.count(True), initial)
+        self.assertEqual(verdicts.count(False), 5)
+        self.assertEqual(pg.get_conn().execute(
+            "SELECT balance FROM wallets WHERE user_id=?", (newcomer["id"],)
+        ).fetchone()["balance"], 0)
+        self.assertEqual(pg.get_conn().execute(
+            "SELECT COUNT(*) FROM ledgers WHERE user_id=? AND kind='pg_parity_spend'",
+            (newcomer["id"],)
+        ).fetchone()[0], initial)
+
+    def test_batch_post_and_work_details_on_postgresql(self):
+        from types import SimpleNamespace
+        from backend.generation_works import project_generation_to_works
+        from backend.post_routes import _handle_detail
+        from backend.services import register_user
+        from backend.works_feed import get_work_by_id
+
+        pg = self.db
         images = [
             "/images/individual/FA/FA-013.webp",
             "/images/individual/FA/FA-014.webp",
             "/images/individual/FA/FA-015.webp",
         ]
-        admin_dsn = os.environ["HANDRAW_PG_STAGING_URL"]
-        name = "handraw_v3_batch_" + uuid.uuid4().hex[:12]
-        with psycopg.connect(admin_dsn, autocommit=True) as admin:
-            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-        pg = None
-        try:
-            dsn = make_conninfo(admin_dsn, dbname=name)
-            with patch.dict(os.environ, {"HANDRAW_ALLOW_PG_BOOTSTRAP": "YES", "HANDRAW_DEMO_MODE": "0"}):
-                report = bootstrap(dsn=dsn, apply=True)
-                self.assertTrue(report["created"])
-                pg = PostgresDatabase(dsn)
-                pg.migrate()
-                author, _ = register_user(pg, "batch_order_author", "IsolatedBatchPassword!")
-                with pg.transaction() as tx:
-                    tx.execute(
-                        """
-                        INSERT INTO studio_generations
-                           (id,user_id,username,tab_title,mode,prompt,visible_prompt,
-                            items_json,engine,status,created_at,visibility)
-                        VALUES ('pg_order_v3',?,?,?,?,?,?,?,'live','success',?,'public')
-                        """,
-                        (
-                            author["id"], author["username"], "三张插画",
-                            "graphic-text", "春日主题", "春日主题",
-                            json.dumps([{"id": str(i), "imageUrl": image}
-                                        for i, image in enumerate(images)]),
-                            "2026-11-07T00:00:00Z",
-                        ),
-                    )
-                    work_ids = project_generation_to_works(tx, "pg_order_v3")
-                self.assertEqual(len(work_ids), 1)
-                work_id = work_ids[0]
-                # A post-detail GET must be strictly read-only.
-                pg.get_conn()._db.execute("SET default_transaction_read_only=on")
-                work = get_work_by_id(pg, work_id)
-                self.assertEqual(work["images"], images)
-                self.assertEqual(work["batchTotal"], 1)
-                conn = pg.get_conn()
-                topic = conn.execute(
-                    "SELECT id FROM forum_topics WHERE work_id=?", (work_id,),
-                ).fetchone()
-                self.assertIsNotNone(topic)
-                replies = []
-                handler = SimpleNamespace(
-                    db=pg,
-                    _current_user=lambda required=False: None,
-                    _send_json=replies.append,
-                )
-                self.assertTrue(_handle_detail(handler, topic["id"]))
-                self.assertEqual(replies[-1]["mount"]["work"]["images"], images)
-                self.assertEqual(conn.execute(
-                    "SELECT COUNT(*) FROM work_media WHERE work_id=?", (work_id,),
-                ).fetchone()[0], 3)
-        finally:
-            if pg:
-                pg.close()
-            with psycopg.connect(admin_dsn, autocommit=True) as admin:
-                admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+        author, _ = register_user(pg, "batch_order_author", "IsolatedBatchPassword!")
+        with pg.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO studio_generations
+                   (id,user_id,username,tab_title,mode,prompt,visible_prompt,
+                    items_json,engine,status,created_at,visibility)
+                VALUES ('pg_order_v3',?,?,?,?,?,?,?,'live','success',?,'public')
+                """,
+                (
+                    author["id"], author["username"], "三张插画",
+                    "graphic-text", "春日主题", "春日主题",
+                    json.dumps([{"id": str(i), "imageUrl": image}
+                                for i, image in enumerate(images)]),
+                    "2026-11-07T00:00:00Z",
+                ),
+            )
+            work_ids = project_generation_to_works(tx, "pg_order_v3")
+        self.assertEqual(len(work_ids), 1)
+        work_id = work_ids[0]
+        # A post-detail GET must be strictly read-only.
+        with pg.transaction() as tx:
+            tx.execute("SET TRANSACTION READ ONLY")
+            work = get_work_by_id(pg, work_id)
+            self.assertEqual(work["images"], images)
+            self.assertEqual(work["batchTotal"], 1)
+            conn = pg.get_conn()
+            topic = conn.execute(
+                "SELECT id FROM forum_topics WHERE work_id=?", (work_id,),
+            ).fetchone()
+            self.assertIsNotNone(topic)
+            replies = []
+            handler = SimpleNamespace(
+                db=pg,
+                _current_user=lambda required=False: None,
+                _send_json=replies.append,
+            )
+            self.assertTrue(_handle_detail(handler, topic["id"]))
+            self.assertEqual(replies[-1]["mount"]["work"]["images"], images)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM work_media WHERE work_id=?", (work_id,),
+            ).fetchone()[0], 3)
 
-    @unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
     def test_messaging_lifecycle_on_postgresql(self):
-        import uuid
-        import psycopg
-        from psycopg import sql
-        from psycopg.conninfo import make_conninfo
-        from backend.db import Database
         from backend.services import register_user, ServiceError
-        from backend.postgres_db import PostgresDatabase
         from backend.messaging import (
             send_direct_message, list_dm_messages, mark_dm_read, get_messages_unread_summary,
             block_user, unblock_user, send_message_broadcast, mark_message_broadcast_read,
             withdraw_message_broadcast,
         )
-        snapshot = Path(self.tmp.name) / 'messaging.db'
-        source = Database(snapshot)
-        try:
-            source.migrate()
-            users = [register_user(source, name, 'IsolatedMessagingPassword!')[0]
-                     for name in ('pg_dm_sender', 'pg_dm_recipient', 'pg_dm_admin')]
-            source.get_conn().execute("UPDATE users SET role='admin' WHERE id=?", (users[2]['id'],))
-            users[2]['role'] = 'admin'
-        finally:
-            source.close()
-        admin_dsn = os.environ['HANDRAW_PG_STAGING_URL']
-        name = 'handraw_dm_' + uuid.uuid4().hex[:12]
-        with psycopg.connect(admin_dsn, autocommit=True) as admin:
-            admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
-        pg = None
-        try:
-            dsn = make_conninfo(admin_dsn, dbname=name)
-            self.tool.stage(snapshot, dsn, True)
-            self._install_native_v3_guards_on_staging(dsn)
-            pg = PostgresDatabase(dsn)
-            pg.migrate()
-            sender, recipient, outsider = users
-            payload = {'recipientId': recipient['id'], 'body': 'Isolated PG message', 'clientMessageId': 'pg-dm-first'}
-            first = send_direct_message(pg, sender, payload)
-            self.assertTrue(first['ok'])
-            self.assertGreater(first['conversationId'], 0)
-            self.assertGreater(first['message']['id'], 0)
-            replay = send_direct_message(pg, sender, payload)
-            self.assertTrue(replay['replayed'])
-            self.assertEqual(replay['message']['id'], first['message']['id'])
-            second = send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-second'))
-            conv_id = first['conversationId']
-            self.assertEqual(second['conversationId'], conv_id)
-            cursor = mark_dm_read(pg, recipient, conv_id, {'messageId': second['message']['id']})
-            self.assertEqual(cursor['lastReadMessageId'], second['message']['id'])
-            cursor = mark_dm_read(pg, recipient, conv_id, {'messageId': first['message']['id']})
-            self.assertEqual(cursor['lastReadMessageId'], second['message']['id'])
-            self.assertEqual(get_messages_unread_summary(pg, recipient)['direct'], 0)
-            reply = send_direct_message(pg, recipient, {'recipientId': sender['id'], 'body': 'Isolated reply', 'clientMessageId': 'pg-dm-reply'})
-            self.assertEqual(reply['conversationId'], conv_id)
-            self.assertEqual(get_messages_unread_summary(pg, sender)['direct'], 1)
-            self.assertEqual(len(list_dm_messages(pg, sender, conv_id, {})['messages']), 3)
-            with self.assertRaises(ServiceError) as denied:
-                list_dm_messages(pg, outsider, conv_id, {})
-            self.assertEqual(denied.exception.status, 403)
-            block_user(pg, recipient, {'userId': sender['id']})
-            with self.assertRaises(ServiceError) as blocked:
-                send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-blocked'))
-            self.assertEqual(blocked.exception.code, 'dm_blocked')
-            unblock_user(pg, recipient, str(sender['id']))
-            sent = send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-after-unblock'))
-            self.assertTrue(sent['ok'])
-            broadcast = send_message_broadcast(pg, outsider, {'title': 'Isolated notice', 'body': 'Isolated broadcast', 'requestId': 'pg-broadcast'})
-            bc_id = broadcast['broadcast']['id']
-            self.assertGreater(bc_id, 0)
-            self.assertTrue(mark_message_broadcast_read(pg, sender, bc_id)['ok'])
-            self.assertTrue(withdraw_message_broadcast(pg, outsider, bc_id)['ok'])
-            self.assertEqual(pg.get_conn().execute('SELECT COUNT(*) FROM dm_messages').fetchone()[0], 4)
-            self.assertEqual(pg.get_conn().execute('SELECT COUNT(*) FROM dm_conversations').fetchone()[0], 1)
-        finally:
-            if pg:
-                pg.close()
-            with psycopg.connect(admin_dsn, autocommit=True) as admin:
-                admin.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(name)))
 
-    def test_fk_violations_cannot_migrate(self):
-        with sqlite3.connect(self.path) as conn:
-            conn.execute("INSERT INTO sessions(token,user_id) VALUES(?,?)", ("orphan", 999))
-        with self.assertRaises(ValueError):
-            self.tool.stage(self.path, "", False)
+        pg = self.db
+        sender, recipient, outsider = (
+            register_user(pg, name, "IsolatedMessagingPassword!")[0]
+            for name in ("pg_dm_sender", "pg_dm_recipient", "pg_dm_admin")
+        )
+        pg.get_conn().execute("UPDATE users SET role='admin' WHERE id=?", (outsider["id"],))
+        outsider["role"] = "admin"
+        payload = {'recipientId': recipient['id'], 'body': 'Isolated PG message', 'clientMessageId': 'pg-dm-first'}
+        first = send_direct_message(pg, sender, payload)
+        self.assertTrue(first['ok'])
+        self.assertGreater(first['conversationId'], 0)
+        self.assertGreater(first['message']['id'], 0)
+        replay = send_direct_message(pg, sender, payload)
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(replay['message']['id'], first['message']['id'])
+        second = send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-second'))
+        conv_id = first['conversationId']
+        self.assertEqual(second['conversationId'], conv_id)
+        cursor = mark_dm_read(pg, recipient, conv_id, {'messageId': second['message']['id']})
+        self.assertEqual(cursor['lastReadMessageId'], second['message']['id'])
+        cursor = mark_dm_read(pg, recipient, conv_id, {'messageId': first['message']['id']})
+        self.assertEqual(cursor['lastReadMessageId'], second['message']['id'])
+        self.assertEqual(get_messages_unread_summary(pg, recipient)['direct'], 0)
+        reply = send_direct_message(pg, recipient, {'recipientId': sender['id'], 'body': 'Isolated reply', 'clientMessageId': 'pg-dm-reply'})
+        self.assertEqual(reply['conversationId'], conv_id)
+        self.assertEqual(get_messages_unread_summary(pg, sender)['direct'], 1)
+        self.assertEqual(len(list_dm_messages(pg, sender, conv_id, {})['messages']), 3)
+        with self.assertRaises(ServiceError) as denied:
+            list_dm_messages(pg, outsider, conv_id, {})
+        self.assertEqual(denied.exception.status, 403)
+        block_user(pg, recipient, {'userId': sender['id']})
+        with self.assertRaises(ServiceError) as blocked:
+            send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-blocked'))
+        self.assertEqual(blocked.exception.code, 'dm_blocked')
+        unblock_user(pg, recipient, str(sender['id']))
+        sent = send_direct_message(pg, sender, dict(payload, clientMessageId='pg-dm-after-unblock'))
+        self.assertTrue(sent['ok'])
+        broadcast = send_message_broadcast(pg, outsider, {'title': 'Isolated notice', 'body': 'Isolated broadcast', 'requestId': 'pg-broadcast'})
+        bc_id = broadcast['broadcast']['id']
+        self.assertGreater(bc_id, 0)
+        self.assertTrue(mark_message_broadcast_read(pg, sender, bc_id)['ok'])
+        self.assertTrue(withdraw_message_broadcast(pg, outsider, bc_id)['ok'])
+        self.assertEqual(pg.get_conn().execute('SELECT COUNT(*) FROM dm_messages').fetchone()[0], 4)
+        self.assertEqual(pg.get_conn().execute('SELECT COUNT(*) FROM dm_conversations').fetchone()[0], 1)
 
 
 if __name__ == "__main__":

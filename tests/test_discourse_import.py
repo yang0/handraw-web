@@ -10,29 +10,26 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
-from backend.server import init_database
 from backend.services import (
     ServiceError,
     import_discourse_users_batch,
     login_user,
     register_user,
 )
+from tests.postgres_support import isolated_pg_dsn
 
 
+@unittest.skipUnless(os.environ.get("HANDRAW_PG_STAGING_URL"), "Isolated PostgreSQL staging URL not provided")
 class DiscourseImportTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "disc_test.db"
-        self.db = init_database(self.db_path)
+        from backend.postgres_db import PostgresDatabase
 
-    def tearDown(self) -> None:
-        self.db.close_thread_conn()
-        self.db.close()
-        self.temp_dir.cleanup()
+        dsn = self.enterContext(isolated_pg_dsn())
+        self.db = PostgresDatabase(dsn)
+        self.addCleanup(self.db.close)
 
     def test_discourse_pbkdf2_hash_login_and_upgrade(self):
         # 1. 一条带 Discourse PBKDF2 哈希的记录导入后，用正确密码能登录，并且登录后 password_algo 升级为 pbkdf2_sha256；错误密码不能登录
