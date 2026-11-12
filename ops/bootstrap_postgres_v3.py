@@ -22,17 +22,21 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 BASELINE_PATH = ROOT / "backend" / "postgres_v3_baseline.sql"
-MIGRATIONS = (ROOT / "backend" / "postgres_110_home_scenario_ratio.sql",)
+MIGRATIONS = (
+    ROOT / "backend" / "postgres_110_home_scenario_ratio.sql",
+    ROOT / "backend" / "postgres_111_payment_billing.sql",
+)
 
 
 def bootstrap(*, dsn: str, apply: bool) -> dict:
     ddl = BASELINE_PATH.read_text(encoding="utf-8")
     migrations = [path.read_text(encoding="utf-8") for path in MIGRATIONS]
+    all_sql = "\n".join([ddl, *migrations])
     report = {
         "ok": True, "mode": "fresh-v3-schema",
-        "tables": len(re.findall(r"^CREATE TABLE public\.", ddl, re.M)),
-        "foreignKeys": len(re.findall(r"\bFOREIGN KEY \(", ddl)),
-        "indexes": sum(len(re.findall(r"^CREATE (?:UNIQUE )?INDEX ", sql, re.M)) for sql in [ddl, *migrations]),
+        "tables": len(re.findall(r"^CREATE TABLE (?:IF NOT EXISTS )?public\.", all_sql, re.M)),
+        "foreignKeys": len(re.findall(r"\bREFERENCES public\.", all_sql)),
+        "indexes": len(re.findall(r"^CREATE (?:UNIQUE )?INDEX ", all_sql, re.M)),
         "migrationVersions": len(re.findall(r"^    \(\d+, '\d{3}_", ddl, re.M)) + len(migrations),
         "dryRun": not apply, "userDataTransferred": False,
         "destructiveOperations": False,

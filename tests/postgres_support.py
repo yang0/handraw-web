@@ -10,7 +10,7 @@ from ops.bootstrap_postgres_v3 import bootstrap
 
 
 @contextmanager
-def isolated_pg_dsn():
+def isolated_pg_dsn(*, initialize: bool = True):
     import psycopg
     from psycopg import sql
     from psycopg.conninfo import make_conninfo
@@ -22,8 +22,9 @@ def isolated_pg_dsn():
         admin.execute(sql.SQL("CREATE DATABASE {}").format(identifier))
         try:
             dsn = make_conninfo(admin_dsn, dbname=name)
-            with patch.dict(os.environ, {"HANDRAW_ALLOW_PG_BOOTSTRAP": "YES"}):
-                bootstrap(dsn=dsn, apply=True)
+            if initialize:
+                with patch.dict(os.environ, {"HANDRAW_ALLOW_PG_BOOTSTRAP": "YES"}):
+                    bootstrap(dsn=dsn, apply=True)
             yield dsn
         finally:
             admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(identifier))

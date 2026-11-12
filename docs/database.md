@@ -6,7 +6,7 @@
 
 - `backend/postgres_v3_baseline.sql` 是新库基线，包含身份列、外键、唯一索引，以及 V3 作品与媒体完整性约束。
 - `python -m ops.bootstrap_postgres_v3 --apply` 在空库事务中安装基线和后续迁移，并插入默认首页场景。连接配置见 [本地运维手册](local-operations.md)。
-- 已有库使用追加的 PostgreSQL SQL 迁移。110 为已发布作品的 `ratio` 建立部分索引。按 [运维命令](local-operations.md#34-初始化空库与升级现有库) 在单一事务中执行。索引构建会锁住作品表写入，迁移设置了锁等待和语句超时。代码回滚保留已提交的迁移。
+- 已有库使用追加的 PostgreSQL SQL 迁移。110 为已发布作品的 `ratio` 建立部分索引，构建时会锁住作品表写入。111 安装支付订单和 webhook 事件表。按 [运维命令](local-operations.md#34-初始化空库与升级现有库) 在单一事务中执行。启动时只检查所需结构和迁移版本。代码回滚保留已提交的迁移。
 
 ## 首页场景查询
 

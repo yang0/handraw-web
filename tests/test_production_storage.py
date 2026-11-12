@@ -102,6 +102,41 @@ class NativePostgresTests(unittest.TestCase):
             tx.execute("SET TRANSACTION READ ONLY")
             self.db.migrate()
 
+    def test_existing_v3_requires_explicit_billing_migration(self):
+        import psycopg
+        from backend.postgres_db import PostgresDatabase
+        from ops import bootstrap_postgres_v3
+
+        dsn = self.enterContext(isolated_pg_dsn(initialize=False))
+        previous_migrations = tuple(path for path in bootstrap_postgres_v3.MIGRATIONS if not path.name.startswith("postgres_111_"))
+        with patch.object(bootstrap_postgres_v3, "MIGRATIONS", previous_migrations), patch.dict(
+            os.environ, {"HANDRAW_ALLOW_PG_BOOTSTRAP": "YES"},
+        ):
+            bootstrap_postgres_v3.bootstrap(dsn=dsn, apply=True)
+
+        with contextlib.closing(PostgresDatabase(dsn)) as app_db:
+            with self.assertRaisesRegex(RuntimeError, "postgres_111_payment_billing.sql"):
+                app_db.migrate()
+            migration = next(path for path in bootstrap_postgres_v3.MIGRATIONS if path.name.startswith("postgres_111_"))
+            ddl = migration.read_text(encoding="utf-8")
+            with psycopg.connect(dsn) as conn:
+                conn.execute(ddl)
+                conn.execute("""
+                    INSERT INTO public.payment_webhook_events (event_key, event_name, created_at)
+                    VALUES ('fixture-event', 'order_created', '')
+                """)
+                conn.commit()
+                conn.execute(ddl)
+                self.assertEqual(conn.execute(
+                    "SELECT event_key FROM public.payment_webhook_events"
+                ).fetchall(), [("fixture-event",)])
+                self.assertEqual(conn.execute(
+                    "SELECT count(*) FROM public.schema_migrations WHERE version=111"
+                ).fetchone()[0], 1)
+            with app_db.transaction() as tx:
+                tx.execute("SET TRANSACTION READ ONLY")
+                app_db.migrate()
+
     def test_startup_rejects_disabled_integrity_trigger(self):
         with self.db.transaction() as tx:
             tx.execute("ALTER TABLE work_media DISABLE TRIGGER v3_cover_media_delete")

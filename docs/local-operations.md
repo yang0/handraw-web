@@ -80,9 +80,9 @@ powershell.exe -ExecutionPolicy Bypass -File .\ops\infra.ps1 redis-cli
 # 仅导出表结构
 & "D:\PostgreSQL\pgsql\bin\pg_dump.exe" -U postgres -h 127.0.0.1 -d handraw_v2 --schema-only -f "D:\PostgreSQL\schema.sql"
 
-# 恢复数据库（-c 清除原有对象后重建）
-& "D:\PostgreSQL\pgsql\bin\pg_restore.exe" -U postgres -h 127.0.0.1 -d handraw_v2 -c "D:\PostgreSQL\handraw_v2_backup.dump"
 ```
+
+数据库与私有媒体一起备份和恢复时，按 [隔离恢复手册](v2-operations.md) 执行。
 
 ### 3.4 初始化空库与升级现有库
 
@@ -91,9 +91,12 @@ powershell.exe -ExecutionPolicy Bypass -File .\ops\infra.ps1 redis-cli
 $env:HANDRAW_ALLOW_PG_BOOTSTRAP = "YES"
 python -m ops.bootstrap_postgres_v3 --apply
 
-# 对已有 V3 库，仅应用增量索引迁移。此例通过本地 pg_service.conf 选定连接。
+# 对已有 V3 库，使用本地 pg_service.conf 选择连接，应用缺失的增量迁移。
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_110_home_scenario_ratio.sql
+psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_111_payment_billing.sql
 ```
+
+服务启动前需完成 111。此前已建好支付表并登记 111 的库可直接启动，也可重复运行迁移。
 
 ### 3.5 社交计数对账与官方目录
 
@@ -206,7 +209,7 @@ $env:HANDRAW_REDIS_REQUIRED = "1"
 $env:HANDRAW_PG_STAGING_URL = "postgresql://postgres@127.0.0.1:5432/postgres"
 
 # 在独立 PostgreSQL 库运行存储、跨线程原子限流与并发扣费测试
-python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres tests.test_discourse_import tests.test_resource_redirect_transactions tests.test_postgres_operations
+python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres tests.test_discourse_import tests.test_resource_redirect_transactions tests.test_postgres_operations tests.test_social_counters_postgres tests.test_v2_operations
 
 # 运行 OAuth 流程测试
 python -m unittest tests/test_p2_growth_oauth.py -v
@@ -256,9 +259,9 @@ OAuth 回调即使最终以 303 返回登录页，也会额外记录 `event=oaut
 - **原因**：Python `redis` 客户端 5.x 默认使用 RESP3 协议发送 `HELLO` 握手命令，而 Redis 3.0.x 仅支持 RESP2。
 - **解决**：在连接字符串中显式指定协议版本：`redis://127.0.0.1:6379/0?protocol=2`。
 
-### 6.2 PostgreSQL 报 `PostgreSQL 模式不允许 --db`
-- **原因**：在开启 `HANDRAW_DATABASE_URL` 时，系统严禁传入 `--db` 或 `--reset-db` 参数以防误伤或回退至 SQLite。
-- **解决**：启动时省略 `--db` 参数，统一由环境变量驱动。
+### 6.2 启动时报 `unrecognized arguments: --db`
+
+- 删除启动命令里的 `--db` 或 `--reset-db`，在环境中设置 `HANDRAW_DATABASE_URL`。
 
 ### 6.3 端口占用快速查杀
 ```powershell

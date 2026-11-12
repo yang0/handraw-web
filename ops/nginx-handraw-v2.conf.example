@@ -1,7 +1,6 @@
 # Handraw Web 2.0 — unified single-port reverse proxy candidate (review before deploy)
 # Only a candidate: validate SSL cert locations and existing routing on the server.
-# The app still uses SQLite on its Python path; this Nginx config does NOT add
-# PostgreSQL/Redis support or replace the separate Discourse deployment.
+# The Python service manages PostgreSQL and Redis independently of this proxy.
 # Do not activate without backups, nginx -t, and an authorized deployment.
 
 #

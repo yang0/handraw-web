@@ -1,144 +1,44 @@
-# Handraw Web 2.0 运维与恢复
+# Handraw Web PostgreSQL 运维与恢复
 
-本文对应新版 Python 服务的运维操作约束。如果使用本地 PostgreSQL 16 + Redis 架构运行，完整的原生与脚本化运维命令参见 [本地 PostgreSQL + Redis 运维手册](local-operations.md)。
+工具入口为 `python -m ops.v2_manage`。备份和首个管理员使用 `HANDRAW_DATABASE_URL`。私有媒体位置沿用 `HANDRAW_PRIVATE_STORAGE`、`HANDRAW_UPLOADS_DIR` 和 `HANDRAW_GENERATED_DIR`，也可通过全局参数 `--uploads` 和 `--generated` 指定。安装与服务器版本兼容的 PostgreSQL 客户端工具 `pg_dump` 和 `pg_restore`。
 
-## 1. 路径与边界
-
-工具入口是 `ops/v2_manage.py`。默认读取当前 workspace 的 `.local/handraw_v2.db`、`.local/uploads` 和 `.local/demo_generated`；线上建议显式指定私有存储路径：
+## 备份和校验
 
 ```bash
-python3 ops/v2_manage.py \
-  --root /srv/handraw-web \
-  --db /var/lib/handraw/private/handraw_v2.db \
-  --uploads /var/lib/handraw/private/uploads \
-  --generated /var/lib/handraw/private/generated \
-  health --url http://127.0.0.1:3080/api/health
+python -m ops.v2_manage backup --output-dir /var/backups/handraw
+python -m ops.v2_manage verify --backup '/var/backups/handraw/<备份目录>'
 ```
 
-私有数据库、上传文件、生图文件和 `image-service.json` 不加入 Git。备份目录同样按敏感数据处理：目录权限建议 `700`，文件权限建议 `600`。
+每次备份创建新目录，包含 `database.dump`、`uploads/`、`generated/` 和 `manifest.json`。归档和迁移清单从同一 PostgreSQL 快照读取，运行期间未提交的写入不进入备份。清单记录源工作区和目标指纹、归档 SHA-256 以及媒体清单。数据库归档和媒体属于私有数据。
 
-## 2. 在线一致备份
+校验可以离线运行。配置源数据库 URL 和源媒体路径后，校验还会匹配源工作区指纹。数据库快照与文件复制分开执行。需要数据库与本地媒体的同一时间点时，备份期间暂停媒体写入和清理。对象存储中的文件需要单独备份。
 
-`backup` 使用 SQLite Online Backup API，不直接复制正在写入的 `.db-wal` 文件；因此应用可以在线运行，得到的是一个一致的 SQLite 快照。工具还会复制 `uploads` 与 `generated`，并生成 `manifest.json`：
+## 隔离恢复
+
+先创建独立空数据库，并通过 `HANDRAW_RESTORE_DATABASE_URL` 配置目标。使用有权在该库创建归档对象的角色。提供 `HANDRAW_DATABASE_URL` 时，工具会按备份时的源配置匹配指纹。异地恢复可以只配置目标库。两种方式都只连接目标库。
 
 ```bash
-python3 ops/v2_manage.py \
-  --root /srv/handraw-web \
-  --db /var/lib/handraw/private/handraw_v2.db \
-  --uploads /var/lib/handraw/private/uploads \
-  --generated /var/lib/handraw/private/generated \
-  backup --output-dir /var/backups/handraw-v2
+python -m ops.v2_manage restore --backup '/var/backups/handraw/<备份目录>' \
+  --restore-dir /var/lib/handraw/recovery-20261112 --dry-run
+python -m ops.v2_manage restore --backup '/var/backups/handraw/<备份目录>' \
+  --restore-dir /var/lib/handraw/recovery-20261112
 ```
 
-每次执行都会新建不可覆盖的时间戳目录，包含：
+工具先核对归档和媒体哈希，再把文件复制到新的私有根目录。数据库归档在单个 PostgreSQL 事务中恢复。归档执行失败时回滚新库并清理此次创建的媒体目录。工具校验恢复后的迁移记录并返回新媒体根目录。现有库和现有媒体路径继续服务。
 
-- `database.sqlite3`：一致快照，并经过 `integrity_check` 与 `foreign_key_check`；
-- `uploads/`、`generated/`：私有媒体及 SHA-256、大小、相对路径清单；
-- `manifest.json`：workspace 指纹、目标路径指纹、schema migration 版本、数据库和媒体 checksum。
+恢复后的对象归目标连接角色所有。切换前检查应用角色权限、迁移版本和数据，并按需要应用前向迁移。切换数据库连接和媒体根目录由维护者单独执行，代码回滚保留数据库迁移。
 
-manifest 不写入环境变量、API key、密码、Cookie 或其他凭据。备份数据库本身仍包含账号数据和密码哈希，不能按公开文件处理。
+## 首个管理员和健康检查
 
-验证备份：
+在初始化完成的 V3 业务库中创建首个管理员。
 
 ```bash
-python3 ops/v2_manage.py --root /srv/handraw-web \
-  --db /var/lib/handraw/private/handraw_v2.db \
-  --uploads /var/lib/handraw/private/uploads \
-  --generated /var/lib/handraw/private/generated \
-  verify --backup /var/backups/handraw-v2/handraw-v2-<timestamp>
+python -m ops.v2_manage bootstrap-admin \
+  --username owner_admin --display-name 'Handraw 主理人' --email owner@example.com
+
+python -m ops.v2_manage health --url http://127.0.0.1:3080/api/health
 ```
 
-验证会在任何恢复动作前检查 manifest、SQLite 完整性、所有私有媒体 checksum 以及当前 workspace/目标路径指纹。
+管理员密码通过交互输入两次，或使用 `--password-stdin` 从两行标准输入读取。并发执行时 PostgreSQL 事务只允许创建一个首个管理员。健康检查仅输出服务状态、HTTP 状态码、版本和数据库状态。
 
-## 3. 恢复前置条件与恢复
-
-恢复是显式维护动作。工具不会替你停止 systemd、worker、网关或其他写入进程；没有 `--stop-write` 会直接拒绝：
-
-```bash
-# 先由维护者停止应用及所有会写 SQLite/uploads/generated 的进程。
-sudo systemctl stop handraw-v2.service
-
-python3 ops/v2_manage.py \
-  --root /srv/handraw-web \
-  --db /var/lib/handraw/private/handraw_v2.db \
-  --uploads /var/lib/handraw/private/uploads \
-  --generated /var/lib/handraw/private/generated \
-  restore \
-  --backup /var/backups/handraw-v2/handraw-v2-<timestamp> \
-  --stop-write --dry-run
-
-python3 ops/v2_manage.py \
-  --root /srv/handraw-web \
-  --db /var/lib/handraw/private/handraw_v2.db \
-  --uploads /var/lib/handraw/private/uploads \
-  --generated /var/lib/handraw/private/generated \
-  restore \
-  --backup /var/backups/handraw-v2/handraw-v2-<timestamp> \
-  --stop-write
-
-sudo systemctl start handraw-v2.service
-```
-
-恢复流程：
-
-1. 先做完整预检，workspace 或数据库/uploads/generated 目标不一致就拒绝；
-2. 对当前状态再做一个 `handraw-v2-pre-restore-*` 备份；
-3. 检查备份 schema 版本；如果当前数据库版本更高，拒绝数据库降级；
-4. 原子替换数据库及私有媒体目录；
-5. 恢复后再次检查 checksum/integrity，失败则回滚到本次恢复前的路径；
-6. 成功后清理暂存旧路径，但恢复前备份仍保留。
-
-代码回滚不包含数据库回滚。即使恢复旧代码，也不能把数据库 migration 降回旧版本；需要先使用兼容旧代码的数据库策略，或制定单独的前向迁移方案。
-
-## 4. 健康状态
-
-新版服务暴露最小的 `/api/health`。工具只保留 `ok`、HTTP status、version 和 `db` 四个字段，不打印响应中可能出现的其他内容：
-
-```bash
-python3 ops/v2_manage.py health --url http://127.0.0.1:3080/api/health
-```
-
-systemd 示例固定绑定 `127.0.0.1`，由 Nginx 或其他受控反向代理转发。不要把 `HANDRAW_HOST` 改成公网通配地址，除非已经有单独的边界策略和审核记录。
-
-## 5. 首个真实 admin
-
-空的生产 SQLite 可以用 CLI 创建首个真实 admin；它不会加载演示 seed、不会写欢迎积分、不会设置默认密码，也不会把密码打印到终端：
-
-```bash
-umask 077
-python3 ops/v2_manage.py \
-  --root /srv/handraw-web \
-  --db /var/lib/handraw/private/handraw_v2.db \
-  bootstrap-admin \
-  --username owner_admin \
-  --display-name 'Handraw 主理人' \
-  --email owner@example.com
-```
-
-工具会交互式要求输入两次密码。密码至少 12 位，同时包含字母和数字；也可以用 `--password-stdin` 传入两行密码，但应确保 shell 历史和进程日志不会保存输入。已有 active admin 时会拒绝重复 bootstrap。`HANDRAW_DEMO_MODE=1` 时也会拒绝，避免把真实管理员写进演示库。
-
-## 6. systemd 示例
-
-`ops/handraw-v2.service.example` 是示例，不会自动安装。它明确指定 `/srv/handraw-web/.venv/bin/python`、`/etc/handraw/handraw-v2.env`、loopback 监听和 `/var/lib/handraw/private` 可写目录。部署前由维护者创建对应用户、目录、venv 和环境文件，并单独管理 image-service 凭据。
-
-示例检查：
-
-```bash
-sudo install -o root -g root -m 0644 ops/handraw-v2.service.example /etc/systemd/system/handraw-v2.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now handraw-v2.service
-sudo systemctl status handraw-v2.service
-```
-
-以上命令只是安装示例单元的操作说明；本次代码任务没有运行这些命令，也没有实际部署服务器。
-
-## 7. 自动备份计划（未配置）
-
-当前仓库没有自动备份 timer、cron 或远端对象存储凭据，不能把“工具可执行”描述成“已经自动备份”。如果维护者确认保留策略、磁盘和异地复制后，可安排类似计划任务：
-
-```cron
-# 示例：每天 03:15 UTC 执行；需要维护者自行配置、限权和轮换策略。
-15 3 * * * /srv/handraw-web/.venv/bin/python /srv/handraw-web/ops/v2_manage.py --root /srv/handraw-web --db /var/lib/handraw/private/handraw_v2.db --uploads /var/lib/handraw/private/uploads --generated /var/lib/handraw/private/generated backup --output-dir /var/backups/handraw-v2 >> /var/log/handraw-v2-backup.log 2>&1
-```
-
-配置后仍要定期执行 `verify`，并做一次隔离 workspace 的试恢复；仅有备份文件而没有恢复演练，不算完成灾备闭环。
+服务启停和连接示例见 [本地运维手册](local-operations.md)。
