@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
-import sqlite3
 import subprocess
 import sys
 import time
@@ -68,14 +68,22 @@ def _read_skill_json(skill_dir: Path, rel_subpath: str, git_ref: str | None = No
     return json.loads(text)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("skill", type=Path, help="Path to skills/handdraw-style-prompter")
     parser.add_argument("--accept", nargs="*", default=[], help="List or comma-separated asset codes to accept")
-    parser.add_argument("--db", type=Path, default=None, help="Path to SQLite database")
+    parser.add_argument("--sync-overrides", action="store_true",
+                        help="Read official codes and update overrides using HANDRAW_DATABASE_URL")
     parser.add_argument("--ref", type=str, default=None, help="Specific git ref to read from (defaults to ab79013/HEAD if in git)")
     parser.add_argument("--worktree", action="store_true", help="Read directly from working directory instead of git")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    dsn = None
+    if args.sync_overrides:
+        dsn = os.environ.get("HANDRAW_DATABASE_URL", "").strip()
+        if not dsn:
+            parser.error("Set HANDRAW_DATABASE_URL to sync PostgreSQL overrides")
+        import psycopg
 
     git_ref = False if args.worktree else args.ref
     skill_dir = args.skill.resolve()
@@ -154,24 +162,18 @@ def main() -> None:
                 if c:
                     known_codes.add(c)
 
-    db_official_codes: set[str] = set()
-    if args.db and args.db.is_file():
-        conn = sqlite3.connect(str(args.db))
-        try:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT code FROM catalog_assets WHERE source_type = 'official'").fetchall()
-            for r in rows:
-                db_official_codes.add(str(r["code"]).strip().upper())
-            known_codes.update(db_official_codes)
-        finally:
-            conn.close()
+    if dsn:
+        with psycopg.connect(dsn, connect_timeout=5) as conn:
+            conn.execute("SET TRANSACTION READ ONLY")
+            rows = conn.execute("SELECT code FROM public.catalog_assets WHERE source_type = 'official'")
+            known_codes.update(str(code).strip().upper() for code, in rows)
 
     # Direction locking check (锁方向)
     skill_codes = {item["id"] for item in skill_resources}
     unknown_codes = skill_codes - known_codes
     if unknown_codes:
         print(f"Error: Skill 仓库中出现新编号但未被放行: {sorted(unknown_codes)}", file=sys.stderr)
-        print("如需收编请使用 --accept 参数放行，或指定 --db 读取数据库中已建编号。", file=sys.stderr)
+        print("如需收编请使用 --accept 参数放行，或指定 --sync-overrides 同步数据库中已建编号。", file=sys.stderr)
         sys.exit(1)
 
     # Reconstruct resources list: preserve existing 534 entries unchanged, append new entries
@@ -221,27 +223,19 @@ def main() -> None:
     catalog_path.write_text(json.dumps(catalog_payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     editorial_path.write_text(json.dumps(editorial, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # If --db was provided, update catalog_assets official -> official_override
-    if args.db and args.db.is_file():
-        conn = sqlite3.connect(str(args.db))
-        try:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT code FROM catalog_assets WHERE source_type = 'official'").fetchall()
-            converted = []
-            now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            for r in rows:
-                code_val = str(r["code"]).strip().upper()
-                if code_val in index:
-                    conn.execute(
-                        "UPDATE catalog_assets SET source_type = 'official_override', updated_at = ? WHERE code = ?",
-                        (now_iso, code_val),
-                    )
-                    converted.append(code_val)
-            conn.commit()
-            if converted:
-                print(f"已将同时存在于 catalog.json 的 {len(converted)} 个官方资产更新为 official_override: {converted}")
-        finally:
-            conn.close()
+    if dsn:
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with psycopg.connect(dsn, connect_timeout=5) as conn:
+            converted = sorted(code for code, in conn.execute(
+                """
+                UPDATE public.catalog_assets SET source_type = 'official_override', updated_at = %s
+                WHERE source_type = 'official' AND code = ANY(%s::text[])
+                RETURNING code
+                """,
+                (now_iso, list(index)),
+            ))
+        if converted:
+            print(f"已将同时存在于 catalog.json 的 {len(converted)} 个官方资产更新为 official_override: {converted}")
 
     print(f"Refreshed {len(final_resources)} official resources. Counts: styles={counts['style']}, layouts={counts['layout']}, colors={counts['color']}")
     if existing_modifications:

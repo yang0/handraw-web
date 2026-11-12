@@ -1,4 +1,4 @@
-"""Operational scripts: legacy comment convergence and counter reconciliation."""
+"""Operational script for legacy comment convergence."""
 from __future__ import annotations
 
 import sqlite3
@@ -12,71 +12,15 @@ from backend import server
 from backend.services import (
     publish_user_work,
     register_user,
-    toggle_user_collection,
-    toggle_user_like,
 )
 
 sys_path_ok = True
 try:
-    from ops import converge_work_comments, reconcile_social_counters
+    from ops import converge_work_comments
 except ImportError:  # pragma: no cover - repo layout fallback
     sys_path_ok = False
 
 IMG = "/images/individual/FA/FA-013.webp"
-
-
-@unittest.skipUnless(sys_path_ok, "ops package not importable")
-class CounterReconcileTests(unittest.TestCase):
-    def setUp(self):
-        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
-        self.temp = TemporaryDirectory()
-        self.path = Path(self.temp.name) / "reconcile.db"
-        self.db = server.init_database(self.path)
-        self.author, _ = register_user(self.db, "rec_author", "password-a")
-        self.reader, _ = register_user(self.db, "rec_reader", "password-b")
-        published = publish_user_work(
-            self.db, self.author, {"title": "对账作品", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
-        )
-        self.work_id = published["workId"]
-
-    def tearDown(self):
-        self.db.get_conn().close()
-        self.db.close()
-        self.temp.cleanup()
-
-    def test_clean_database_reports_no_drift(self):
-        toggle_user_like(self.db, self.reader, "work", self.work_id)
-        conn = sqlite3.connect(str(self.path))
-        conn.row_factory = sqlite3.Row
-        try:
-            drift = reconcile_social_counters.compute(conn)
-        finally:
-            conn.close()
-        self.assertEqual(drift["works"], [])
-        self.assertEqual(drift["topics"], [])
-
-    def test_drift_is_detected_and_repaired(self):
-        toggle_user_like(self.db, self.reader, "work", self.work_id)
-        toggle_user_collection(self.db, self.reader, "works", self.work_id)
-        # Inject the historical bug: a stale cache that over-reports.
-        self.db.get_conn().execute(
-            "UPDATE works SET likes = 99, favorites = 42, cheers = 7 WHERE id = ?", (self.work_id,)
-        )
-        self.db.get_conn().commit()
-
-        conn = sqlite3.connect(str(self.path))
-        conn.row_factory = sqlite3.Row
-        try:
-            drift = reconcile_social_counters.compute(conn)
-            self.assertEqual(len(drift["works"]), 1)
-            self.assertEqual(drift["works"][0]["true_likes"], 1)
-            reconcile_social_counters.apply(conn, drift)
-            after = conn.execute("SELECT likes, favorites, cheers FROM works WHERE id = ?", (self.work_id,)).fetchone()
-        finally:
-            conn.close()
-        self.assertEqual(int(after["likes"]), 1)
-        self.assertEqual(int(after["favorites"]), 1)
-        self.assertEqual(int(after["cheers"]), 0)
 
 
 @unittest.skipUnless(sys_path_ok, "ops package not importable")

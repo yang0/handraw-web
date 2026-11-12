@@ -171,7 +171,7 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: >-
           python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres
-          tests.test_discourse_import tests.test_resource_redirect_transactions
+          tests.test_discourse_import tests.test_resource_redirect_transactions tests.test_postgres_operations
 
   creation-workspace-browser:
     runs-on: ubuntu-latest

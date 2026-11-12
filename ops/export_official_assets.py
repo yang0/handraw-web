@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import shutil
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,17 +15,15 @@ if str(REPO_ROOT) not in sys.path:
 from backend.config import get_uploads_dir
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, required=True, help="Path to SQLite database")
     parser.add_argument("--skill-root", type=Path, required=True, help="Path to <Skill>/skills/handdraw-style-prompter")
     parser.add_argument("--out", type=Path, default=Path(".local/export-official"), help="Output directory")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    db_path = args.db.resolve()
-    if not db_path.is_file():
-        print(f"Error: 数据库文件不存在: {db_path}", file=sys.stderr)
-        sys.exit(1)
+    dsn = os.environ.get("HANDRAW_DATABASE_URL", "").strip()
+    if not dsn:
+        parser.error("Set HANDRAW_DATABASE_URL to the target PostgreSQL database")
 
     skill_root = args.skill_root.resolve()
     if not skill_root.is_dir():
@@ -40,14 +37,18 @@ def main() -> None:
         sys.exit(1)
 
     # 1. Read official assets from DB
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(dsn, connect_timeout=5, row_factory=dict_row) as conn:
+        conn.execute("SET TRANSACTION READ ONLY")
         official_assets = conn.execute(
-            "SELECT * FROM catalog_assets WHERE source_type = 'official' ORDER BY code ASC"
+            """
+            SELECT code, kind, name, group_name, unlock_cost, description, image_url,
+                   CASE WHEN unlock_cost <= 0 THEN definition ELSE '' END AS definition
+            FROM public.catalog_assets WHERE source_type = 'official' ORDER BY code
+            """
         ).fetchall()
-    finally:
-        conn.close()
 
     if not official_assets:
         print("未找到 source_type='official' 的官方新增资产。")

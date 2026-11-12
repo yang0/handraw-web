@@ -11,8 +11,6 @@ Covers:
 8. Channel & Studio resolution: prepare_cloud_generation resolves FE-069 with prompt and definition.
 9. /t/{code} 302 redirect: 0 replies -> not in forum list; 1 reply -> in forum list.
 10. Skill library: official asset in 'official' bucket with official license; delete protection when referenced.
-11. Export script (ops/export_official_assets.py): collision protection (exit code 2), paid definition omission, --skill-root requirement.
-12. Refresh script (ops/refresh_content.py): directional locking (exit 1 on unaccepted new codes), --accept bypass, --db update to official_override.
 """
 from __future__ import annotations
 
@@ -21,8 +19,6 @@ import io
 import json
 import os
 import shutil
-import subprocess
-import sys
 import tempfile
 import threading
 import unittest
@@ -612,172 +608,6 @@ class TestOfficialAssets(unittest.TestCase):
         self.assertTrue(res_del_ok.get("ok"))
         row_del = self.db.get_conn().execute("SELECT code FROM catalog_assets WHERE code = 'FE-071'").fetchone()
         self.assertIsNone(row_del)
-
-    def test_11_export_official_assets_script(self) -> None:
-        """11. Export script (ops/export_official_assets.py):
-        - Missing --skill-root fails.
-        - Collision detection with mock skill exits code 2.
-        - Successful export writes files and paid asset definition is stripped."""
-        # Create an official free asset FE-069 and an official paid asset FE-070
-        now = "2026-11-03T12:00:00Z"
-        with self.db.transaction() as tx:
-            tx.execute(
-                """
-                INSERT INTO catalog_assets
-                    (code, name, kind, source_type, group_name, description, definition, unlock_cost, tier, image_url, status, published_at_ms, created_at, updated_at)
-                VALUES
-                    ('FE-069', '官方免费宋锦', 'style', 'official', 'FE 传统中国纹样', '描述1', '免费官方定义', 0, 'free', 'https://img.handraw-style.com/images/individual/FE/FE-069.webp', 'published', 1000, ?, ?),
-                    ('FE-070', '官方付费宋锦', 'style', 'official', 'FE 传统中国纹样', '描述2', '付费机密定义', 5, 'credit', 'https://img.handraw-style.com/images/individual/FE/FE-070.webp', 'published', 1000, ?, ?)
-                """,
-                (now, now, now, now),
-            )
-
-        # Setup mock skill repo
-        mock_skill = self.root / "mock_skill"
-        (mock_skill / "references").mkdir(parents=True, exist_ok=True)
-        (mock_skill / "images" / "individual" / "FE").mkdir(parents=True, exist_ok=True)
-
-        styles_data = [
-            {"number": "FE-001", "generation_name": "宋锦纹样平涂", "kind": "style", "group": "FE 传统中国纹样"}
-        ]
-        layouts_data = [
-            {"id": "SB-001", "name": "画中画构图", "kind": "layout", "group": "SB 社交长图排版"}
-        ]
-        (mock_skill / "references" / "styles.json").write_text(json.dumps(styles_data, ensure_ascii=False), encoding="utf-8")
-        (mock_skill / "references" / "layouts.json").write_text(json.dumps(layouts_data, ensure_ascii=False), encoding="utf-8")
-
-        export_out = self.root / "export_out"
-
-        # 11a: Run without --skill-root -> exits with error (non-zero)
-        cmd_no_root = [
-            sys.executable, "-X", "utf8", "ops/export_official_assets.py",
-            "--db", str(self.db_path),
-            "--out", str(export_out),
-        ]
-        res_no_root = subprocess.run(cmd_no_root, capture_output=True, text=True, encoding="utf-8")
-        self.assertNotEqual(res_no_root.returncode, 0)
-
-        # 11b: Collision check: Add FE-069 to mock skill repo
-        styles_collision = [
-            {"number": "FE-001", "generation_name": "宋锦纹样平涂", "kind": "style", "group": "FE 传统中国纹样"},
-            {"number": "FE-069", "generation_name": "Skill那边的重号项", "kind": "style", "group": "FE 传统中国纹样"},
-        ]
-        (mock_skill / "references" / "styles.json").write_text(json.dumps(styles_collision, ensure_ascii=False), encoding="utf-8")
-
-        cmd_collision = [
-            sys.executable, "-X", "utf8", "ops/export_official_assets.py",
-            "--db", str(self.db_path),
-            "--skill-root", str(mock_skill),
-            "--out", str(export_out),
-        ]
-        res_col = subprocess.run(cmd_collision, capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(res_col.returncode, 2, f"Expected exit code 2, got {res_col.returncode}\n{res_col.stdout}\n{res_col.stderr}")
-        self.assertIn("FE-069", res_col.stdout + res_col.stderr)
-        # Verify --out is empty or not created
-        if export_out.exists():
-            self.assertEqual(len(list(export_out.iterdir())), 0)
-
-        # 11c: Clean collision and export successfully
-        (mock_skill / "references" / "styles.json").write_text(json.dumps(styles_data, ensure_ascii=False), encoding="utf-8")
-        res_ok = subprocess.run(cmd_collision, capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(res_ok.returncode, 0, f"Failed export:\n{res_ok.stdout}\n{res_ok.stderr}")
-
-        exported_styles_file = export_out / "styles.json"
-        self.assertTrue(exported_styles_file.is_file())
-        exported_styles = json.loads(exported_styles_file.read_text(encoding="utf-8"))
-
-        item_069 = next((s for s in exported_styles if s["number"] == "FE-069"), None)
-        item_070 = next((s for s in exported_styles if s["number"] == "FE-070"), None)
-        self.assertIsNotNone(item_069)
-        self.assertIsNotNone(item_070)
-
-        # Free asset has definition
-        self.assertEqual(item_069.get("definition"), "免费官方定义")
-        # Paid asset has definition stripped per #21a
-        self.assertNotIn("definition", item_070)
-
-    def test_12_refresh_content_script(self) -> None:
-        """12. Refresh script (ops/refresh_content.py):
-        - Fails when new unaccepted IDs exist in skill repo.
-        - Succeeds when passed --accept.
-        - Updates DB official -> official_override when --db provided."""
-        # Setup mock skill repo
-        mock_skill = self.root / "mock_skill_refresh"
-        (mock_skill / "references").mkdir(parents=True, exist_ok=True)
-        (mock_skill / "images" / "individual" / "FE").mkdir(parents=True, exist_ok=True)
-
-        # Base existing catalog asset + 1 new unaccepted asset
-        styles_data = [
-            {"number": "FE-001", "generation_name": "宋锦纹样平涂", "group": "FE 传统中国纹样", "traits": "描述"},
-            {"number": "FE-099", "generation_name": "未放行的新画风", "group": "FE 传统中国纹样", "traits": "描述"},
-        ]
-        layouts_data = [
-            {"id": "SB-001", "name": "画中画构图", "category": "SB 社交长图排版", "keywords": ["构图"]}
-        ]
-        (mock_skill / "references" / "styles.json").write_text(json.dumps(styles_data, ensure_ascii=False), encoding="utf-8")
-        (mock_skill / "references" / "layouts.json").write_text(json.dumps(layouts_data, ensure_ascii=False), encoding="utf-8")
-
-        # 12a: Running refresh without --accept must exit with non-zero code
-        env_with_skill = os.environ.copy()
-        env_with_skill["HANDRAW_STYLE_SKILL_DIR"] = str(mock_skill)
-        cmd_fail = [
-            sys.executable, "-X", "utf8", "ops/refresh_content.py",
-            str(mock_skill),
-        ]
-        res_fail = subprocess.run(cmd_fail, capture_output=True, text=True, encoding="utf-8", env=env_with_skill)
-        self.assertNotEqual(res_fail.returncode, 0)
-        self.assertIn("FE-099", res_fail.stdout + res_fail.stderr)
-
-        # 12b: Running with --accept FE-099 succeeds and updates DB source_type to official_override
-        now = "2026-11-03T12:00:00Z"
-        with self.db.transaction() as tx:
-            tx.execute(
-                """
-                INSERT INTO catalog_assets
-                    (code, name, kind, source_type, group_name, description, definition, unlock_cost, tier, image_url, status, published_at_ms, created_at, updated_at)
-                VALUES
-                    ('FE-099', '未放行的新画风', 'style', 'official', 'FE 传统中国纹样', 'd', 'def', 0, 'free', '/img/fe99.webp', 'published', 1000, ?, ?)
-                """,
-                (now, now),
-            )
-
-        # We run this in a subshell or dry-run, but wait: refresh_content.py writes to plugin/content/catalog.json.
-        # To avoid modifying the real catalog.json in this test, let's patch CONTENT_DIR in a python one-liner call:
-        python_code = f"""
-import os, sys, shutil, json
-os.environ['HANDRAW_STYLE_SKILL_DIR'] = {repr(str(mock_skill))}
-from pathlib import Path
-import ops.refresh_content as rc
-        # Redirect catalog output to temp dir with custom base catalog & editorial
-temp_content = Path({repr(str(self.root / "content"))})
-temp_content.mkdir(parents=True, exist_ok=True)
-base_catalog = {{
-    "version": 1,
-    "source": "mock",
-    "counts": {{"style": 1, "layout": 1, "color": 0}},
-    "resources": [
-        {{"id": "FE-001", "kind": "style", "name": "宋锦纹样平涂", "group": "FE 传统中国纹样"}},
-        {{"id": "SB-001", "kind": "layout", "name": "画中画构图", "group": "SB 社交长图排版"}}
-    ]
-}}
-base_editorial = {{
-    "featured": [{{"id": "FE-001"}}],
-    "featured_layouts": [{{"id": "SB-001"}}],
-    "counts": {{"style": 1, "layout": 1, "color": 0}}
-}}
-(temp_content / "catalog.json").write_text(json.dumps(base_catalog), encoding="utf-8")
-(temp_content / "editorial.json").write_text(json.dumps(base_editorial), encoding="utf-8")
-rc.CONTENT_DIR = temp_content
-# Run main
-sys.argv = ['refresh_content.py', {repr(str(mock_skill))}, '--accept', 'FE-099', '--db', {repr(str(self.db_path))}]
-rc.main()
-"""
-        res_run = subprocess.run([sys.executable, "-X", "utf8", "-c", python_code], capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(res_run.returncode, 0, f"Error:\n{res_run.stdout}\n{res_run.stderr}")
-
-        # Check that DB row source_type changed to official_override
-        row_upd = self.db.get_conn().execute("SELECT source_type FROM catalog_assets WHERE code = 'FE-099'").fetchone()
-        self.assertEqual(row_upd["source_type"], "official_override")
 
     def test_13_concurrent_official_code_allocation(self) -> None:
         """13. Concurrency test: Two threads concurrently create FE series official assets.

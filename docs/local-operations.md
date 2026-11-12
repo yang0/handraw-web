@@ -95,6 +95,19 @@ python -m ops.bootstrap_postgres_v3 --apply
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_110_home_scenario_ratio.sql
 ```
 
+### 3.5 社交计数对账与官方目录
+
+以下命令连接 `HANDRAW_DATABASE_URL` 指定的 PostgreSQL 库。计数对账默认只读。`--apply` 在写入前使用 `pg_dump` 备份同一快照，随后在单个事务中修复计数。有并发冲突时事务回滚，可重新执行。备份默认写入私有存储下的 `backups`。
+
+```powershell
+python -m ops.reconcile_social_counters
+python -m ops.reconcile_social_counters --apply
+python -m ops.export_official_assets --skill-root E:\handraw-style\skills\handdraw-style-prompter
+python -m ops.refresh_content E:\handraw-style\skills\handdraw-style-prompter --sync-overrides
+```
+
+`refresh_content` 仅在提供 `--sync-overrides` 时读取和更新数据库覆盖记录。
+
 ---
 
 ## 4. Redis 原生运维命令
@@ -191,7 +204,7 @@ $env:HANDRAW_REDIS_REQUIRED = "1"
 $env:HANDRAW_PG_STAGING_URL = "postgresql://postgres@127.0.0.1:5432/postgres"
 
 # 在独立 PostgreSQL 库运行存储、跨线程原子限流与并发扣费测试
-python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres tests.test_discourse_import tests.test_resource_redirect_transactions
+python -m unittest -v tests.test_production_storage tests.test_home_scenarios_postgres tests.test_discourse_import tests.test_resource_redirect_transactions tests.test_postgres_operations
 
 # 运行 OAuth 流程测试
 python -m unittest tests/test_p2_growth_oauth.py -v
